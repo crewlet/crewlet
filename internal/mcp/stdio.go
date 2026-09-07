@@ -69,7 +69,7 @@ func newStdioTransport(spec Spec, log *slog.Logger) (sdk.Transport, *childProces
 //
 // WHOLE-ENVIRONMENT INHERITANCE IS DELIBERATE. MCP servers routinely read
 // undeclared conventional variables — PATH, HOME, the proxy variables, a
-// vendor SDK's own key — so narrowing this to the declared set breaks servers
+// third-party app SDK's own key — so narrowing this to the declared set breaks servers
 // that work today, in a way that surfaces as a server failing to start with an
 // error from someone else's code.
 //

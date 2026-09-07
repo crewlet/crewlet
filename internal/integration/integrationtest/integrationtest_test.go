@@ -58,7 +58,7 @@ func TestACompliantReconcilerWithFindingsPasses(t *testing.T) {
 // person reading a failing run sees it. What this asserts is only that the
 // subtest failed at all, because that is the property that matters: a suite
 // which quietly stopped checking a clause would look exactly like one where
-// every vendor complied.
+// every third-party app complied.
 func TestTheSuiteRejectsEachViolation(t *testing.T) {
 	cases := []struct {
 		name string

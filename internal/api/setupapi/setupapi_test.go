@@ -201,7 +201,7 @@ func TestAnUnconfiguredVendorSaysWhatItNeeds(t *testing.T) {
 	}
 }
 
-// The base every inbound vendor is built on is answered ONCE, not repeated in
+// The base every inbound third-party app is built on is answered ONCE, not repeated in
 // each tool: it is one setting, and asking for it seven times would ask the
 // operator to keep seven copies consistent.
 func TestThePublicBaseIsAnsweredOnce(t *testing.T) {
@@ -265,7 +265,7 @@ func TestASubmissionSealsTheSecretAndPointsTheConfigAtIt(t *testing.T) {
 	}
 	body := decode(t, res)
 
-	// The secret is sealed, under the name the vendor declared, and the
+	// The secret is sealed, under the name the third-party app declared, and the
 	// answer names it without carrying it.
 	names, _ := body["wrote_secrets"].([]any)
 	if len(names) != 1 || names[0] != "DATADOG_WEBHOOK_TOKEN" {
@@ -320,7 +320,7 @@ func TestAFieldCannotBeBothSuppliedAndGenerated(t *testing.T) {
 }
 
 // Only a MINTABLE field can be generated. Asking the engine to invent a
-// vendor's own API token would seal a value the vendor has never heard of and
+// third-party app's own API token would seal a value the third-party app has never heard of and
 // report the integration connected.
 func TestOnlyAMintableFieldCanBeGenerated(t *testing.T) {
 	t.Parallel()
@@ -435,7 +435,7 @@ func TestALiteralInTheConfigIsRefusedByPath(t *testing.T) {
 		t.Errorf("path = %v", body["path"])
 	}
 	// AND THE REFUSAL DOES NOT ECHO THE VALUE, which is the leak a
-	// vendor's own error string would have carried straight through.
+	// third-party app's own error string would have carried straight through.
 	if strings.Contains(res.Body.String(), "plain-token") {
 		t.Fatal("the refusal echoes the credential it refused to overwrite")
 	}
@@ -481,7 +481,7 @@ func TestRotatingASecretPublishesAnyway(t *testing.T) {
 // deployment is not something a disconnect button decides about on its own.
 //
 // Forced, because that is the path that still writes synchronously: the
-// ordinary one records the intent and lets the loop remove what the vendor
+// ordinary one records the intent and lets the loop remove what the third-party app
 // holds before the block goes.
 func TestDisconnectRemovesTheBlockAndNamesTheOrphans(t *testing.T) {
 	t.Parallel()
@@ -535,7 +535,7 @@ func TestDisconnectingWhatIsAbsentIsNotAnError(t *testing.T) {
 
 // --- the provisioning pass --------------------------------------------------- //
 
-// recordingPass stands in for a vendor's Reconcile. It records what it was
+// recordingPass stands in for a third-party app's Reconcile. It records what it was
 // given, which is the whole question these tests ask: does the route hand a
 // pass the two things that let it write, and only when it should.
 type recordingPass struct {
@@ -560,7 +560,7 @@ func (p *recordingPass) Run(ctx context.Context, in setup.PassInput) ([]integrat
 	p.mu.Unlock()
 	if watch != nil {
 		// Report what the context did rather than what it was: a pass
-		// that writes at a vendor cares only whether it was cut off.
+		// that writes at a third-party app cares only whether it was cut off.
 		select {
 		case <-ctx.Done():
 			watch <- ctx.Err()
@@ -722,7 +722,7 @@ func TestAProvisionPassGetsASinkAndABase(t *testing.T) {
 }
 
 // A CHECK IS THE SAME PASS WITH NEITHER. It answers "is it working now"
-// without the engine writing anything at the vendor.
+// without the engine writing anything at the third-party app.
 func TestACheckRunsTheSamePassReadOnly(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
@@ -746,7 +746,7 @@ func TestACheckRunsTheSamePassReadOnly(t *testing.T) {
 }
 
 // A PASS IS REFUSED AGAINST A HALF-CONFIGURED INTEGRATION, naming what is
-// missing. It writes at the vendor, so running it on a guess is worse than
+// missing. It writes at the third-party app, so running it on a guess is worse than
 // not running it.
 func TestAPassIsRefusedWhileSomethingIsOutstanding(t *testing.T) {
 	t.Parallel()
@@ -881,7 +881,7 @@ func TestAFailedPassIsRecordedAsAFault(t *testing.T) {
 	}
 }
 
-// A vendor with no pass says so rather than answering 404 or running nothing.
+// A third-party app with no pass says so rather than answering 404 or running nothing.
 func TestAVendorWithNoPassSaysSo(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
@@ -918,7 +918,7 @@ func TestAPassDeclaresTheCredentialItNeeds(t *testing.T) {
 		t.Errorf("label = %v", needs["label"])
 	}
 	if state["can_provision"] != true {
-		t.Error("can_provision is false on a vendor with a pass")
+		t.Error("can_provision is false on a third-party app with a pass")
 	}
 }
 
@@ -1080,7 +1080,7 @@ func TestAPassDoesNotSeeTheRequestBeingCancelled(t *testing.T) {
 	case err := <-pass.watchCtx:
 		if err != nil {
 			t.Fatalf("the pass saw %v from the request's context: a closed tab "+
-				"can abandon a run that is creating accounts at the vendor", err)
+				"can abandon a run that is creating accounts at the third-party app", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the pass never finished")
@@ -1090,7 +1090,7 @@ func TestAPassDoesNotSeeTheRequestBeingCancelled(t *testing.T) {
 
 // AN ORDINARY DISCONNECT ASKS, IT DOES NOT REMOVE.
 //
-// The block carries the credential the vendor teardown authenticates with, so
+// The block carries the credential the third-party app teardown authenticates with, so
 // dropping it here would strand every webhook and account the integration
 // still holds with nothing left to authenticate a second attempt. The intent
 // goes on the fleet row and the loop removes both, in that order.
@@ -1122,7 +1122,7 @@ func TestDisconnectRecordsTheIntentRatherThanRemovingTheBlock(t *testing.T) {
 		t.Error("the checkbox answer did not reach the row the teardown reads it from")
 	}
 	// DUE NOW, or the disconnect waits out a backoff nobody asked it to
-	// serve before anything at the vendor is touched.
+	// serve before anything at the third-party app is touched.
 	if !row.Due(pinned) {
 		t.Errorf("next attempt is %v, which is not due at %v", row.NextAttemptAt, pinned)
 	}
@@ -1131,11 +1131,11 @@ func TestDisconnectRecordsTheIntentRatherThanRemovingTheBlock(t *testing.T) {
 	// teardown finishes, not before.
 	state := decode(t, s.do(t, http.MethodGet, "/setup/integrations/github", "", nil))
 	if state["configured"] != true {
-		t.Error("the block was removed before the vendor teardown ran")
+		t.Error("the block was removed before the third-party app teardown ran")
 	}
 }
 
-// THE CHECKBOX DEFAULTS TO OFF. An account at a vendor is a colleague with
+// THE CHECKBOX DEFAULTS TO OFF. An account at a third-party app is a colleague with
 // history attached, and a disconnect that removed one because the field was
 // absent would be inferring the most destructive answer.
 func TestDisconnectDoesNotRemoveSeatsUnlessAsked(t *testing.T) {

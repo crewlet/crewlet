@@ -80,7 +80,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-// EVERY WORD COMES FROM THE ENGINE. Nothing about any vendor is in the
+// EVERY WORD COMES FROM THE ENGINE. Nothing about any third-party app is in the
 // component, which is what makes adding one a Go change and no screen work.
 test("the form is rendered from the requirement list", () => {
   render(

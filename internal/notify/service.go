@@ -32,7 +32,7 @@ const InboundGroup = "notify-inbound"
 
 // Parser turns one verified delivery into the notifications it implies.
 //
-// A vendor's whole inbound surface, and the ONLY thing a vendor must write
+// A third-party app's whole inbound surface, and the ONLY thing a third-party app must write
 // to be routed: the guards, the merge, the valve and the wake are all above
 // it. Returning several is normal — a comment naming three colleagues is
 // three notifications, one per recipient.
@@ -60,13 +60,13 @@ type Parser interface {
 type Routed struct {
 	Inbound
 
-	// To names the recipient in whatever terms the vendor could supply.
+	// To names the recipient in whatever terms the third-party app could supply.
 	To Recipient
 }
 
-// Recipient is an addressee, in any of the forms a vendor can name one.
+// Recipient is an addressee, in any of the forms a third-party app can name one.
 //
-// SEVERAL forms rather than one, because vendors genuinely differ in what
+// SEVERAL forms rather than one, because third-party apps genuinely differ in what
 // they put in a payload and a parser must not have to invent what it does
 // not know: a tracker names an account id, a code host a username, a chat
 // backend a user id, and only the engine's own producers know a handle.
@@ -81,7 +81,7 @@ type Recipient struct {
 	// Email is a plus-address or a declared address.
 	Email string
 
-	// ExternalIDs are the vendor's own identifiers, tried in the order
+	// ExternalIDs are the third-party app's own identifiers, tried in the order
 	// given within the notification's own source namespace. A slice
 	// because a payload often carries several candidates — an assignee
 	// id, a reporter login — and which one names a colleague is not
@@ -119,11 +119,11 @@ type Options struct {
 	// longer running.
 	Registry func() *Registry
 
-	// Prompts renders each vendor's trigger and answers its per-source
+	// Prompts renders each third-party app's trigger and answers its per-source
 	// questions.
 	Prompts Prompts
 
-	// Parsers are the vendors this node can route. A delivery from a
+	// Parsers are the third-party apps this node can route. A delivery from a
 	// source with no parser is recorded as skipped rather than dropped:
 	// "nobody parses this" and "nothing happened" send an operator to
 	// very different places.
@@ -155,7 +155,7 @@ type Service struct {
 
 	mu      sync.RWMutex
 	started bool
-	// parsers and prompts are guarded because a vendor can JOIN after the
+	// parsers and prompts are guarded because a third-party app can JOIN after the
 	// service is running — an extension registering a custom transport,
 	// or a backend that came up late — and the delivery path reads them
 	// on every event.
@@ -194,7 +194,7 @@ func New(opts Options) (*Service, error) {
 	return s, nil
 }
 
-// Register adds a vendor to a running service.
+// Register adds a third-party app to a running service.
 //
 // This is how a custom transport joins: an integration that is not one of
 // the shipped ones, or one that came up after boot. A source already claimed
@@ -203,7 +203,7 @@ func New(opts Options) (*Service, error) {
 // choice anybody made.
 //
 // The prompt may be nil, and then this source renders through the generic
-// fallback: a vendor that can say who a delivery is FOR is already useful,
+// fallback: a third-party app that can say who a delivery is FOR is already useful,
 // and requiring it to also write a prompt before it can be routed at all
 // would be a higher bar than the seam needs.
 func (s *Service) Register(p Parser, prompt Prompt) error {
@@ -222,13 +222,13 @@ func (s *Service) Register(p Parser, prompt Prompt) error {
 	return nil
 }
 
-// Prompts is the vendor registry as it stands right now.
+// Prompts is the third-party app registry as it stands right now.
 //
 // A READ OF THE LIVE VALUE, because the registry is not fixed at boot: an
 // apply calls [Service.Replace] for every integration the new revision
 // enables, and a caller holding a copy taken at construction would keep
-// rendering — and merging — with the vendors the process started with. The
-// second reader is the inbox coalescer, whose per-vendor supersede rules are
+// rendering — and merging — with the third-party apps the process started with. The
+// second reader is the inbox coalescer, whose per-third-party app supersede rules are
 // exactly what a stale copy would drop.
 //
 // A VALUE, and [Prompts.With] copies on write, so what the caller gets cannot
@@ -269,13 +269,13 @@ func (s *Service) Replace(p Parser, prompt Prompt) error {
 // Unregister removes a source's parser, reporting whether one was there.
 //
 // The counterpart of [Service.Replace], and the half that was missing: every
-// vendor reconciler converged only toward "configured", so setting
+// third-party app reconciler converged only toward "configured", so setting
 // `integrations.<vendor>.enabled: false` — the gesture an operator makes
 // after a credential leak — applied cleanly, changed nothing, and left the
 // boot-time parser routing deliveries under the credential being revoked.
 //
 // The PROMPT is deliberately left in place. Prompts are additive guidance
-// keyed by their own identity rather than by source, several vendors
+// keyed by their own identity rather than by source, several third-party apps
 // contribute overlapping text, and a seat that reads one for a surface it no
 // longer has is harmless where a seat missing one it does have is not.
 func (s *Service) Unregister(source string) bool {
@@ -463,11 +463,11 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 		Addressed:            prompt.Addressed(r.Inbound),
 	}
 	// The conversation key rides on the event so the inbox coalescer can
-	// partition by it without re-deriving a vendor's rule. Derived here,
-	// where the vendor's prompt is already in hand.
+	// partition by it without re-deriving a third-party app's rule. Derived here,
+	// where the third-party app's prompt is already in hand.
 	//
 	// THROUGH [Prompts.Key], which exists so the namespacing rule has one
-	// caller — a vendor's local key is namespaced by source precisely so a
+	// caller — a third-party app's local key is namespaced by source precisely so a
 	// Jira issue "42" and a GitLab issue "42" cannot merge into one trigger.
 	// This is that one caller; hand-rolling the same two steps beside it
 	// made the rule's home a function nothing called.
@@ -502,7 +502,7 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 
 // resolve runs the recipient cascade.
 //
-// Handle, then role, then email, then the vendor's own ids — most specific
+// Handle, then role, then email, then the third-party app's own ids — most specific
 // first, because each later form is a guess the earlier one did not need to
 // make. A handle names a seat exactly; an external id names one only if
 // somebody registered it.

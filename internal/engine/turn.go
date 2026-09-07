@@ -86,7 +86,7 @@ type Dispatcher struct {
 	// failing the dispatch over it would trade real work for a row.
 	Observe func(ctx context.Context, ev *events.Event)
 
-	// Prompts resolves the vendor registry a coalesced partition is merged
+	// Prompts resolves the third-party app registry a coalesced partition is merged
 	// with — see [Dispatcher.promptRegistry].
 	//
 	// nil is an empty registry, which merges with the generic fallback's
@@ -746,7 +746,7 @@ func (d *Dispatcher) noteCoalesced(ctx context.Context, handle, conversation str
 		AgentHandle: handle, ConversationKey: conversation,
 		// THE VENDOR NAMES THE INTEGRATION. A merge is always one
 		// conversation's worth of external notifications and a conversation
-		// belongs to one vendor, so the constituents cannot disagree and
+		// belongs to one third-party app, so the constituents cannot disagree and
 		// taking the first is a lookup rather than a choice.
 		NotificationSource: notificationSourceOf(routing.Events),
 		Count:              len(routing.Events),
@@ -791,14 +791,14 @@ func (d *Dispatcher) noteSkipped(ctx context.Context, handle string, all, surviv
 	}
 }
 
-// notificationSourceOf is the vendor a partition came from.
+// notificationSourceOf is the third-party app a partition came from.
 //
 // OFF THE TYPED PAYLOAD, not the envelope's Source. internal/notify stamps the
 // envelope "notify.slack" — it names the PRODUCER of the wake, which is the
 // notification service — so reading it here filed every coalescing record
 // under a source string no other notification event uses and no dashboard
 // filter matches, leaving every integration's coalesced count permanently
-// zero. The payload's own NotificationSource is the bare vendor name every
+// zero. The payload's own NotificationSource is the bare third-party app name every
 // other consumer reads.
 func notificationSourceOf(evs []*events.Event) string {
 	for _, ev := range evs {
@@ -883,7 +883,7 @@ func ReplyFor(evs []*events.Event) turn.Reply {
 			owed = turn.ReplyTool
 
 		case types.ExternalNotification{}.EventType():
-			// The vendor's own reading of its routing — see
+			// The third-party app's own reading of its routing — see
 			// [notify.Prompt.Addressed]. Absent decodes as false, so an
 			// event written by a build that predates the field is
 			// unaddressed rather than an obligation nobody recorded.

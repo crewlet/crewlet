@@ -19,10 +19,10 @@ import (
 // Gate G7's inbound half: a verified delivery becomes a woken seat, through
 // the whole spine, on a real node.
 //
-// The vendor is a STUB PARSER rather than a stub server, and deliberately:
+// The third-party app is a STUB PARSER rather than a stub server, and deliberately:
 // what these tests are about is the path from a raw webhook to a seat's
-// inbox — the guards, the valve, the prompt, the wake — which every vendor
-// shares and none of them owns. Each vendor's own parsing is tested against
+// inbox — the guards, the valve, the prompt, the wake — which every third-party app
+// shares and none of them owns. Each third-party app's own parsing is tested against
 // its own payloads.
 
 // stubVendor is a whole integration in ten lines: a source, a parser and a
@@ -137,7 +137,7 @@ func deliver(t *testing.T, n *node) {
 	}
 }
 
-// startInbound stands a node up with the stub vendor routed.
+// startInbound stands a node up with the stub third-party app routed.
 func startInbound(t *testing.T, amend func(string) string) (*node, *stubVendor) {
 	t.Helper()
 	vendor := &stubVendor{}
@@ -178,7 +178,7 @@ func TestAVerifiedDeliveryWakesTheSeat(t *testing.T) {
 	}
 	// The resolved recipient and the conversation key both ride along —
 	// the first is what a parser cannot know, the second is what lets the
-	// inbox coalesce without re-deriving a vendor's rule.
+	// inbox coalesce without re-deriving a third-party app's rule.
 	if got := woken.Metadata[notify.RecipientField]; got != "ceo" {
 		t.Fatalf("the recipient stamp reads %q", got)
 	}

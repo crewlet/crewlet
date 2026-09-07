@@ -23,7 +23,7 @@ import "strings"
 // the first line was paying for that shape with the description's content: a
 // tool whose usage rules, argument meanings or "call X first" precondition sit
 // below its opening sentence was advertised without them, and the model then
-// called it wrong. Vendor-authored MCP descriptions are routinely several
+// called it wrong. Third-party app-authored MCP descriptions are routinely several
 // paragraphs, and a catalogue is the only place they are ever shown.
 //
 // HERE, in the deepest package that needs it, because four callers render this

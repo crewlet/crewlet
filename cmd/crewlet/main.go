@@ -731,9 +731,9 @@ func runEngine(args []string, stderr io.Writer) error {
 	// a seat is not claimed until its per-role MCP children are up — one
 	// subprocess per server per seat, each a spawn and a handshake and a
 	// tools/list. On the Nimbus example that is 21 children, and the whole
-	// inbound edge — dashboard, REST, every vendor's webhook — was dark for
+	// inbound edge — dashboard, REST, every third-party app's webhook — was dark for
 	// as long as they took. Measured at 37 seconds with four seats and every
-	// vendor failing FAST; a company whose vendors actually answer takes
+	// third-party app failing FAST; a company whose third-party apps actually answer takes
 	// minutes, and it scales with seats times servers.
 	//
 	// Nothing here needs a started engine: the node exists, /health and
@@ -910,7 +910,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// The surface a DISCONNECT removes a block through, installed now
 	// because it is built here and the engine's loop started before it.
 	// Until it is set the loop refuses a disconnect rather than running
-	// the vendor teardown and leaving the block behind.
+	// the third-party app teardown and leaving the block behind.
 	e.UseConfigWriter(engineConfigWriter{surface: configSurface})
 	setupSurface := setupapi.New(setupapi.Options{
 		Company: func() *config.Company { return companyConfig(e) },
@@ -923,7 +923,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// wrote one down. That gap is the silent outage the whole
 		// secret_usable family exists to surface.
 		Resolve: e.LookupSecret,
-		// The vendors this build can provision over the API, the recorder
+		// The third-party apps this build can provision over the API, the recorder
 		// their minted credentials go through, and the fleet row a pass
 		// writes its findings to. That last one is the SAME row the
 		// reconcile loop writes: a pass an operator ran and a tick that
@@ -1023,7 +1023,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// The inbound edge. It republishes onto THIS node's queue and
 		// dedupes through the FLEET'S coordination store, which is what
 		// makes a delivery that lands on any node wake the seat's owner
-		// exactly once — a vendor retrying reaches whichever node the
+		// exactly once — a third-party app retrying reaches whichever node the
 		// load balancer picks, so a claim only this node could see would
 		// suppress nothing.
 		// The WRITE half of the counter, for POST /budgets/reset. On the

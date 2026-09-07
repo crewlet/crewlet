@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Prompt is everything the spine needs to know about ONE vendor.
+// Prompt is everything the spine needs to know about ONE third-party app.
 //
 // Four questions, and each is asked by a different part of the spine — which
 // is why they are one interface rather than four registries that could drift
@@ -22,9 +22,9 @@ import (
 //   - ConversationKey identifies the conversation, for inbox partitioning.
 //   - DigestBody is the supersede rule when several of them merge.
 //
-// A vendor implements it; nothing in the spine does. The generic fallback
+// A third-party app implements it; nothing in the spine does. The generic fallback
 // below is the answer for a source nobody has written one for — an extension's
-// own events, or a vendor added to config before its prompt exists — and it is
+// own events, or a third-party app added to config before its prompt exists — and it is
 // deliberately the most conservative reading of each question.
 type Prompt interface {
 	// Source is the integration name this prompt answers for.
@@ -56,7 +56,7 @@ type Prompt interface {
 	// message that was lost. An unaddressed one may end having done
 	// nothing at all, which is what makes triage cheap.
 	//
-	// Only the vendor can say which of its events are an ask. A tracker's
+	// Only the third-party app can say which of its events are an ask. A tracker's
 	// answer is its own routing reason (assigned, mentioned); a chat
 	// backend's is the channel type and whether the seat was named. So it
 	// is asked here rather than pattern-matched centrally, and the
@@ -81,7 +81,7 @@ type Prompt interface {
 	// already knows about, which is nearly everything: their own comment,
 	// their own assignment, their own edit.
 	//
-	// Only the vendor can say which of its event types are which, so it is
+	// Only the third-party app can say which of its event types are which, so it is
 	// asked here rather than pattern-matched on the name centrally. See
 	// [WakesActor] for what happens to a source with no registered prompt.
 	WakesActor(eventType string) bool
@@ -89,7 +89,7 @@ type Prompt interface {
 	// DigestBody is the per-source supersede rule for one constituent of a
 	// merged trigger.
 	//
-	// Some vendors re-emit their whole current state on every event — a
+	// Some third-party apps re-emit their whole current state on every event — a
 	// tracker sending the full issue description each time a field changes
 	// — so rendering N copies of it buries the one line that actually
 	// changed. Such a source returns "" for those event types and the
@@ -101,18 +101,18 @@ type Prompt interface {
 
 // Inbound is one notification as the spine sees it.
 //
-// The vendor's parser produces this; everything downstream reads it. It is
-// deliberately flat and stringly-typed in Metadata: what a vendor puts there is
+// The third-party app's parser produces this; everything downstream reads it. It is
+// deliberately flat and stringly-typed in Metadata: what a third-party app puts there is
 // its own business, and the spine's only interest is the handful of keys the
 // prompt itself reads back.
 type Inbound struct {
 	Source string
 
-	// EventType is the vendor's own name for what happened —
+	// EventType is the third-party app's own name for what happened —
 	// "issue_comment", "message", "pipeline.failed".
 	EventType string
 
-	// Sender is the vendor's external id for who sent it, resolved to a
+	// Sender is the third-party app's external id for who sent it, resolved to a
 	// colleague through Parties where one is known.
 	Sender string
 
@@ -125,7 +125,7 @@ type Inbound struct {
 	Metadata map[string]string
 }
 
-// Parties resolves a vendor's external id to a colleague in the org.
+// Parties resolves a third-party app's external id to a colleague in the org.
 //
 // An interface rather than the registry itself so a prompt can be built and
 // tested without an organization, and so the prompt package never becomes a
@@ -193,7 +193,7 @@ func cmpFirst(a, b string) string {
 // Prompts is the per-source registry.
 //
 // A VALUE built and passed, not a package-level map. A mutable global would
-// make registration order matter, leak one test's vendor into the next, and
+// make registration order matter, leak one test's third-party app into the next, and
 // give a process no way to run two companies with different integration sets —
 // which is exactly what an epoch swap is.
 type Prompts struct {
@@ -201,7 +201,7 @@ type Prompts struct {
 	fallback Prompt
 }
 
-// NewPrompts builds a registry over the given vendors.
+// NewPrompts builds a registry over the given third-party apps.
 //
 // A later entry for the same source REPLACES an earlier one, so a caller can
 // layer an override over the defaults without having to filter the list first.
@@ -216,7 +216,7 @@ func NewPrompts(prompts ...Prompt) Prompts {
 	return registry
 }
 
-// With returns a registry carrying one more vendor.
+// With returns a registry carrying one more third-party app.
 //
 // A COPY, so a service handing its registry to a delivery in flight cannot
 // have it change underneath: the value is read once per event and a
@@ -249,7 +249,7 @@ func (r Prompts) For(source string) Prompt {
 	return r.fallback
 }
 
-// Sources names the vendors with a prompt of their own, sorted.
+// Sources names the third-party apps with a prompt of their own, sorted.
 func (r Prompts) Sources() []string { return slices.Sorted(maps.Keys(r.bySource)) }
 
 // Key is the FULL conversation key for a notification: the source's own local

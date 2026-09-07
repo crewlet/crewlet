@@ -10,7 +10,7 @@ import (
 
 // A real Claude Code answer, trimmed to the fields the profile reads. Pinned
 // verbatim rather than hand-written so the built-in profile is measured
-// against what the vendor actually emits — a synthetic sample would agree
+// against what the third-party app actually emits — a synthetic sample would agree
 // with the profile by construction and prove nothing.
 const claudeCodeAnswer = `{"is_error":false,"duration_api_ms":2046,"num_turns":1,
 "stop_reason":"end_turn","session_id":"3f2a","total_cost_usd":0.0373944,
@@ -109,7 +109,7 @@ func TestAJSONAnswerIsFoundBehindABanner(t *testing.T) {
 }
 
 // A profile whose usage paths find nothing must SAY so, because a budget
-// built on estimates is a different promise from one built on the vendor's
+// built on estimates is a different promise from one built on the third-party app's
 // own counts — and `crewlet llm doctor` prints which.
 func TestUnreportedUsageIsMarkedRatherThanReportedAsZero(t *testing.T) {
 	t.Parallel()
@@ -138,7 +138,7 @@ func TestTextOutputIsTakenVerbatim(t *testing.T) {
 	}
 }
 
-// A vendor that reports a failure INSIDE a zero exit must not be read as a
+// A third-party app that reports a failure INSIDE a zero exit must not be read as a
 // successful answer.
 func TestAFailureFlagInsideAZeroExitIsAFailure(t *testing.T) {
 	t.Parallel()
@@ -158,7 +158,7 @@ func TestAFailureFlagInsideAZeroExitIsAFailure(t *testing.T) {
 	}
 }
 
-// Paths index into arrays as well as objects, because vendors put the answer
+// Paths index into arrays as well as objects, because third-party apps put the answer
 // in a list of content blocks as often as in a field.
 func TestPathsIndexIntoArrays(t *testing.T) {
 	t.Parallel()

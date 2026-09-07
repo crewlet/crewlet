@@ -11,7 +11,7 @@ import (
 // Turning one conversation's partition into one ask.
 //
 // [notify.Coalesce] renders the digest — the chronological list of what was
-// said, the latest message in full, the per-vendor supersede rules and the
+// said, the latest message in full, the per-third-party app supersede rules and the
 // same-sender duplicate collapse. This file is the frame that decides WHEN it
 // runs, what the merged event has to carry, and what happens when a partition
 // cannot be merged at all.
@@ -23,7 +23,7 @@ import (
 // [Engine.tuneBatching]), one layer up. What shipped was the BATCHING half:
 // five comments on one issue did become one turn rather than five. What that
 // turn was handed was the five enriched bodies concatenated — five copies of
-// the vendor's triage scaffolding, five "how to get full context" blocks
+// the third-party app's triage scaffolding, five "how to get full context" blocks
 // pointing at progressively staler state, and five separate asks, which a
 // model answers separately. The doc's headline promise, one notification for
 // the remaining messages, was half true: one TURN, five NOTIFICATIONS in it.
@@ -87,7 +87,7 @@ func mergeNotifications(prompts notify.Prompts, evs []*events.Event) (*events.Ev
 	return out, true
 }
 
-// prompts is the vendor registry the merge renders with.
+// prompts is the third-party app registry the merge renders with.
 //
 // A FUNCTION on the dispatcher rather than a captured value, for the reason
 // [Dispatcher.Conversation] is one: the dispatcher is built once and the
@@ -105,14 +105,14 @@ func (d *Dispatcher) promptRegistry() notify.Prompts {
 	return d.Prompts()
 }
 
-// notifyPrompts is the live vendor registry, or an empty one before the
+// notifyPrompts is the live third-party app registry, or an empty one before the
 // notification service has been started.
 //
 // ASKED OF THE SERVICE, never cached here. An apply calls [notify.Service.Replace]
 // for every integration the new revision enables, and the service is where
 // those land — so a copy taken when the service was built would go on merging
-// with the vendors the PROCESS started with, and a company that added Jira on
-// a later revision would silently lose that vendor's supersede rules from
+// with the third-party apps the PROCESS started with, and a company that added Jira on
+// a later revision would silently lose that third-party app's supersede rules from
 // every digest for the life of the node.
 func (e *Engine) notifyPrompts() notify.Prompts {
 	e.notify.mu.Lock()

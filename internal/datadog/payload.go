@@ -176,7 +176,7 @@ func TagValues(tags []string, key string) []string {
 //
 // Datadog sends an empty body unless the webhook definition carries one of
 // these, and the definition is written at Datadog rather than fixed by the
-// vendor. So the "Datadog alert format" is whatever this string says it is,
+// third-party app. So the "Datadog alert format" is whatever this string says it is,
 // and [decode] is the only reader of it. Two files would be two things to
 // keep equal, and the failure when they drifted would be a field that
 // silently arrived empty for every alert.

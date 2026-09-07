@@ -16,7 +16,7 @@ import (
 //
 // # It reports far more than it changes, and that is Jira's shape
 //
-// The other vendor commands are mostly WRITES: they create accounts and mint
+// The other third-party app commands are mostly WRITES: they create accounts and mint
 // the credentials the seats authenticate with. Jira issues neither — a Cloud
 // API token is created by the person it belongs to, and a Data Center
 // personal access token can only be minted for the calling user — so a

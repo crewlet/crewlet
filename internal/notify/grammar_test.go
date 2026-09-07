@@ -7,7 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
-// The two real grammars, declared the way a vendor package will declare
+// The two real grammars, declared the way a third-party app package will declare
 // them, so these tests exercise the shapes that actually ship.
 var (
 	markup = notify.MarkupGrammar{
@@ -39,7 +39,7 @@ func TestMarkupMentionsAreExact(t *testing.T) {
 		{"plain text with no mention", "U123", ""},
 		// An unresolved identity falls through to the collective check
 		// rather than matching everything: identities resolve against
-		// the vendor at connect, and every message before that would
+		// the third-party app at connect, and every message before that would
 		// otherwise read as a personal mention of every seat.
 		{"hey <@U123>", "", ""},
 		{"<!here> hey <@U123>", "", notify.FollowCollective},

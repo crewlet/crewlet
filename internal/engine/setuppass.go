@@ -20,24 +20,24 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 )
 
-// Running a vendor's provisioning from the API rather than from a shell.
+// Running a third-party app's provisioning from the API rather than from a shell.
 //
 // # This is where the loop's two deliberate absences are filled in
 //
-// The reconcile loop hands every vendor a pass with no sink and no webhook
+// The reconcile loop hands every third-party app a pass with no sink and no webhook
 // base, and states plainly why: a base is permission to register a hook and a
 // sink is permission to mint a credential, and neither is a decision a timer
 // gets to make. A pass here supplies both, because a person asked for it.
 //
-// The vendor function is the SAME one, in every case. Nothing about
+// The third-party app function is the SAME one, in every case. Nothing about
 // provisioning is reimplemented for the API: what an adapter does is resolve
 // the config, build the client, and hand over the sink and the base the loop
 // withholds.
 
-// setupPasses are the vendors this build can provision over the API.
+// setupPasses are the third-party apps this build can provision over the API.
 //
 // The three whose passes neither create an account nor issue a credential AT
-// the vendor. Each reads the instance, mints a webhook credential whose value
+// the third-party app. Each reads the instance, mints a webhook credential whose value
 // is the engine's own on both ends, and registers a hook, and none of them
 // produces anything a person then owns and has to be told about.
 //
@@ -50,7 +50,7 @@ import (
 // removed a seat.
 //
 // Mattermost is the same shape as GitLab and joins on the same terms. It is
-// the one vendor here that needs no public address at all: it holds an
+// the one third-party app here that needs no public address at all: it holds an
 // outbound websocket per seat and verifies no inbound delivery, so its pass
 // creates accounts and registers nothing.
 //
@@ -82,10 +82,10 @@ func (e *Engine) SetupRunner(now func() time.Time) *setup.Runner {
 	return setup.NewRunner(e.setupPasses(), e.setupDuty, now)
 }
 
-// setupDuty is the fleet lease one vendor's pass holds while it runs.
+// setupDuty is the fleet lease one third-party app's pass holds while it runs.
 //
 // The SAME mechanism the reconcile loop's singleton uses, under its own name,
-// so a pass and a loop tick for one vendor never overlap either. The TTL is
+// so a pass and a loop tick for one third-party app never overlap either. The TTL is
 // generous relative to a pass: a lease that expired mid-run would let a
 // second node start minting while the first was still writing.
 func (e *Engine) setupDuty(kind integration.Kind) setup.Duty {
@@ -96,11 +96,11 @@ func (e *Engine) setupDuty(kind integration.Kind) setup.Duty {
 	return setup.Duty(duty)
 }
 
-// setupLeaseTTL bounds how long one pass may hold its vendor.
+// setupLeaseTTL bounds how long one pass may hold its third-party app.
 //
 // Five minutes against passes measured in seconds: the value is a backstop
 // for a node that died mid-run, not a deadline for the work. Shorter would
-// risk a live pass losing its lease; much longer would leave a vendor locked
+// risk a live pass losing its lease; much longer would leave a third-party app locked
 // out after a crash for no benefit.
 const setupLeaseTTL = 5 * time.Minute
 
@@ -217,7 +217,7 @@ func (p *jiraPass) Run(ctx context.Context, in setup.PassInput) ([]integration.F
 
 // Teardown removes the webhook this pass registered.
 //
-// The vendor function is the same one a decommission from the command line
+// The third-party app function is the same one a decommission from the command line
 // would call, exactly as [jiraPass.Run] uses the same Reconcile the loop
 // does. Nothing about removal is reimplemented for the API.
 func (p *jiraPass) Teardown(ctx context.Context, in setup.TeardownInput) error {
@@ -450,7 +450,7 @@ func (p *mattermostPass) Run(ctx context.Context, in setup.PassInput) ([]integra
 		return nil, fmt.Errorf("engine: mattermost pass: %w", err)
 	}
 	// NO WEBHOOK BASE IS PASSED because there is nowhere to pass it: this
-	// vendor holds an outbound socket per seat and registers nothing. And
+	// third-party app holds an outbound socket per seat and registers nothing. And
 	// no rotation and no decommissioning, for the reasons GitLab's pass
 	// gives: both take working agents down and both stay deliberate
 	// command-line gestures.
@@ -470,7 +470,7 @@ func (*githubPass) Kind() integration.Kind { return integration.KindGitHub }
 
 // Needs is nil: GitHub issues nothing on a provisioner's behalf, so this pass
 // asks for no transient administrator credential. What it writes at the
-// vendor, it writes with the organization token already in the config.
+// third-party app, it writes with the organization token already in the config.
 func (*githubPass) Needs() *setup.Requirement { return nil }
 
 func (p *githubPass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
@@ -501,8 +501,8 @@ func (p *githubPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 // EVERY PASS THIS BUILD SERVES CAN ALSO BE TORN DOWN, asserted at compile
 // time rather than discovered when somebody presses Disconnect.
 //
-// [setup.Teardowner] is an OPTIONAL interface, which is what lets a vendor
-// that registers nothing decline it. That flexibility is also how a vendor
+// [setup.Teardowner] is an OPTIONAL interface, which is what lets a third-party app
+// that registers nothing decline it. That flexibility is also how a third-party app
 // silently loses its teardown: rename the method, change its signature, and
 // the type simply stops satisfying the interface, with nothing to say so
 // until a disconnect reports there is nothing to remove and leaves a live

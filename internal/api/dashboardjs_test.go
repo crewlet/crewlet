@@ -128,7 +128,7 @@ func TestTheShellLoadsFromTheBinary(t *testing.T) {
 	for _, m := range staticRef.FindAllStringSubmatch(string(body), -1) {
 		queue = append(queue, m[1])
 	}
-	// A bundled shell names few assets by design — an entry module, a vendor
+	// A bundled shell names few assets by design — an entry module, a third-party app
 	// chunk, a stylesheet, an icon. The floor is what distinguishes that from
 	// a shell that names NOTHING, which is what a build with a broken `base`
 	// produces: relative URLs that resolve against whichever of `/` or

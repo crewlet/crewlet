@@ -7,7 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 )
 
-// Findings reads this run as the vendor-neutral vocabulary.
+// Findings reads this run as the third-party app-neutral vocabulary.
 //
 // # Why the mapping lives here and the ordering does not
 //
@@ -15,7 +15,7 @@ import (
 // a project key in the company document that this instance does not have, and
 // only this package knows that is almost always a typo rather than a
 // permission problem. Which of several such observations an operator is shown
-// FIRST is not: that is a comparison across vendors, and five hand-written
+// FIRST is not: that is a comparison across third-party apps, and five hand-written
 // versions of it had already drifted (see integration.FindingKind.severity).
 // So this says what it found and [integration.Classify] says what it means.
 func (r *Result) Findings() []integration.Finding {
@@ -38,7 +38,7 @@ func (r *Result) Findings() []integration.Finding {
 	// integration on a block nobody can clear. Answering honestly needs
 	// the instance's own hook list compared against this deployment's
 	// public base URL, and that URL is not on the integrations block at
-	// all today: every vendor subcommand takes it as -public-url. So this
+	// all today: every third-party app subcommand takes it as -public-url. So this
 	// reports what a read of the instance can actually establish, and
 	// ingress stays with the subcommand that has the URL.
 
@@ -85,7 +85,7 @@ func (r *Result) Findings() []integration.Finding {
 	return out
 }
 
-// reasonOr falls back to a sentence when the vendor gave none, so a finding
+// reasonOr falls back to a sentence when the third-party app gave none, so a finding
 // never renders as a bare handle with a colon after it.
 func reasonOr(reason, fallback string) string {
 	if reason != "" {
@@ -99,7 +99,7 @@ func reasonOr(reason, fallback string) string {
 //
 // The same accessor GitLab and Mattermost export, for the same reason: a
 // caller deciding what a refusal MEANS needs the number, and the meaning is
-// decided once, in [integration.Reject], rather than per vendor.
+// decided once, in [integration.Reject], rather than per third-party app.
 func Status(err error) int {
 	var api *APIError
 	if errors.As(err, &api) {

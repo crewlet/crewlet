@@ -72,7 +72,7 @@ const Source = "setup"
 
 // Submission is one set of values for one integration.
 type Submission struct {
-	// Kind is the vendor these values belong to.
+	// Kind is the third-party app these values belong to.
 	Kind integration.Kind
 
 	// Values are keyed by [Requirement.Field]. A field the requirement
@@ -84,7 +84,7 @@ type Submission struct {
 	// Seat scopes a per-seat submission. Empty is company-wide.
 	Seat string
 
-	// Summary is the audit sentence. The caller supplies the vendor's
+	// Summary is the audit sentence. The caller supplies the third-party app's
 	// name and the verb; this package never puts a submitted VALUE in it,
 	// because the summary is stored on the revision and rendered on a
 	// screen.
@@ -151,7 +151,7 @@ func (w Writer) Write(ctx context.Context, reqs []Requirement, in Submission) (R
 	}
 
 	// The patch is built BEFORE anything is written, so a submission naming
-	// a field this vendor does not have is refused having changed nothing.
+	// a field this third-party app does not have is refused having changed nothing.
 	patch := map[string]any{}
 	type pending struct {
 		name  string
@@ -351,7 +351,7 @@ func fields(reqs []Requirement) []string {
 //
 // Merge-patch shaped: `integrations.datadog.route_to` becomes
 // {"integrations":{"datadog":{"route_to":"..."}}}, so two fields of one
-// vendor merge into one object rather than the second replacing the first.
+// third-party app merge into one object rather than the second replacing the first.
 //
 // A list position is REFUSED rather than guessed at. The grammar has one
 // (`roles[2].llm`), and a merge patch cannot address a list element at all:

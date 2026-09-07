@@ -27,8 +27,8 @@ import (
 // and a next-run projection are both measured against it.
 var pinned = time.Date(2026, 8, 23, 16, 0, 0, 0, time.UTC)
 
-// Nothing here is about which vendors the fixture names: the org block plus a
-// per-seat identity is the shape these answers project, and every vendor
+// Nothing here is about which third-party apps the fixture names: the org block plus a
+// per-seat identity is the shape these answers project, and every third-party app
 // carries it identically.
 const companyDoc = `
 name: Acme
@@ -707,7 +707,7 @@ func TestFleetCarriesEachNodesOwnLiveStatus(t *testing.T) {
 
 // CONFIGURED IS NOT ROUTED, and the answer says which.
 //
-// A vendor's webhook route verifies and stores deliveries as soon as its
+// A third-party app's webhook route verifies and stores deliveries as soon as its
 // config block is present; whether one then wakes a seat needs a parser, and
 // this build has parsers for three of the seven. Without this field the two
 // render identically — configured, secret present, deliveries arriving — so
@@ -744,7 +744,7 @@ func TestIntegrationsTellsRoutedFromMerelyConfigured(t *testing.T) {
 // A secret lives in the config as a ${VAR}. secret_present says an operator
 // wrote one down; only this process knows what it resolved to. The gap is
 // the failure that hides everywhere else: an unset variable renders as a
-// secret present, the vendor's settings page shows a healthy hook, and the
+// secret present, the third-party app's settings page shows a healthy hook, and the
 // route answers 503 to every delivery with nothing naming the variable.
 func TestIntegrationsTellsAResolvedSecretFromAConfiguredOne(t *testing.T) {
 	t.Parallel()
@@ -849,7 +849,7 @@ func TestAnApiWithNoEngineCannotSayWhatRoutes(t *testing.T) {
 
 // AN ENGINE THAT ROUTES NOTHING SAYS SO, rather than reading as unknown.
 //
-// The empty-but-not-nil case: notifications started and no vendor registered.
+// The empty-but-not-nil case: notifications started and no third-party app registered.
 // That is a real measurement and must not collapse into "cannot say".
 func TestAnEngineRoutingNothingIsNotUnknown(t *testing.T) {
 	t.Parallel()
@@ -889,7 +889,7 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 		t.Skipf("the dashboard tree is not in this checkout: %v", err)
 	}
 
-	// EVERY vendor, because the per-vendor detail fields (url, seats) only
+	// EVERY third-party app, because the per-third-party app detail fields (url, seats) only
 	// appear on the rows that have them — a fixture missing one reports its
 	// field as a mismatch that is really a gap in the fixture.
 	cfg := company(t)
@@ -906,7 +906,7 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 		t.Fatal("the answer carried no integrations, so this proves nothing")
 	}
 	// Across every row, not just the first: `url` and `seats` are
-	// per-vendor detail, so a field carried by ANY row is a field the
+	// per-third-party app detail, so a field carried by ANY row is a field the
 	// answer knows how to send.
 	sent := map[string]bool{}
 	for _, r := range rows {

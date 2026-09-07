@@ -282,7 +282,7 @@ is a prompt for an AI assistant. It carries the interview script, the
 invariants that the schema can't express, and the validation loop above.
 
 It is written provider-neutral — it's a markdown file, not a
-vendor format — so it works anywhere you can give an assistant
+third-party app format — so it works anywhere you can give an assistant
 instructions.
 
 **Claude Code** discovers skills automatically. Install it for one

@@ -22,7 +22,7 @@ import (
 //     so a company on four nodes ran four valves and a seat could emit four
 //     times its configured rate.
 //   - The webhook dedupe registry claimed first-claim-wins across a company.
-//     A vendor retrying a delivery to a different ingress node found no
+//     A third-party app retrying a delivery to a different ingress node found no
 //     claim, and the same push woke the same seat twice.
 //   - The turn-completion ledger is what stops a redelivered trigger being
 //     worked again. A redelivery that landed on a peer had no ledger to
@@ -77,7 +77,7 @@ const (
 	// ClaimTTL is how long an inbound delivery stays claimed.
 	//
 	// Sized to cover queue redelivery and an operator's replay, NOT a
-	// vendor's own retry schedule — those back off for far longer, in
+	// third-party app's own retry schedule — those back off for far longer, in
 	// minutes to hours, and only fire when the API layer failed to answer
 	// 2xx, which is exactly when the delivery was never claimed at all.
 	// Too long is visible in one direction only: a deliberate replay ten
@@ -168,7 +168,7 @@ type Claims interface {
 	// Claim records key and reports whether THIS caller was first.
 	//
 	// FAILS OPEN — an error yields (false, err) and the caller must
-	// PROCESS the delivery. A vendor's push suppressed because the store
+	// PROCESS the delivery. A third-party app's push suppressed because the store
 	// blinked is a wake that never happens, and nothing else will notice;
 	// a duplicated wake is a turn the completion ledger collapses.
 	Claim(ctx context.Context, key string, ttl time.Duration, now time.Time) (bool, error)
@@ -695,7 +695,7 @@ type SecretRecord struct {
 // A read that failed must never resolve as "this company has no such
 // credential": that renders as an unset ${VAR}, which downstream is an empty
 // string handed to a provider, which is an auth failure attributed to the
-// vendor. The three-valued answer is the whole point — held, definitively
+// third-party app. The three-valued answer is the whole point — held, definitively
 // absent, or unknown.
 type Secrets interface {
 	// Secret reads one sealed value.
@@ -750,7 +750,7 @@ type Secrets interface {
 // is standing state rather than a short-horizon question. One that expired
 // would make a converged integration read as one nobody has ever looked at,
 // on a timer nobody chose, and the loop would then re-provision against a
-// vendor it had already agreed with. There are at most as many keys here as
+// third-party app it had already agreed with. There are at most as many keys here as
 // there are surfaces, so nothing grows.
 type Integrations interface {
 	// IntegrationStatuses returns every recorded status, keyed by the
@@ -774,7 +774,7 @@ type Integrations interface {
 
 	// DeleteIntegrationStatus drops a surface's status once its block has
 	// left the company document. It removes the RECORD and nothing at the
-	// vendor: see internal/integration's package doc for why a deleted
+	// third-party app: see internal/integration's package doc for why a deleted
 	// block is not a request to destroy what a pass created.
 	DeleteIntegrationStatus(ctx context.Context, kind string) error
 }

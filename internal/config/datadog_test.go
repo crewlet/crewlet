@@ -80,7 +80,7 @@ func TestDatadogRefusesATagKeyThatCannotMatch(t *testing.T) {
 	}
 }
 
-// THE RESTATED CONSTANT. config is a leaf the vendor packages depend on, so
+// THE RESTATED CONSTANT. config is a leaf the third-party app packages depend on, so
 // the default tag key is spelled here as well as in internal/datadog. Two
 // spellings would route on one key and document the other, and every alert
 // would reach the fallback while looking correctly configured.
@@ -88,7 +88,7 @@ func TestTheDefaultHandleTagAgreesWithTheVendorPackage(t *testing.T) {
 	t.Parallel()
 	var block config.Datadog
 	if got := block.HandleTagOrDefault(); got != datadog.DefaultHandleTag {
-		t.Fatalf("config defaults the tag key to %q, the vendor package to %q",
+		t.Fatalf("config defaults the tag key to %q, the third-party app package to %q",
 			got, datadog.DefaultHandleTag)
 	}
 }
@@ -104,8 +104,8 @@ func TestAConfiguredHandleTagIsUsedAndFolded(t *testing.T) {
 }
 
 // THE ADDRESS A VENDOR REACHES THIS DEPLOYMENT ON is refused here rather than
-// discovered by the vendor. Every webhook URL is built on it, so a value
-// missing its scheme registers a hook the vendor reports as healthy and
+// discovered by the third-party app. Every webhook URL is built on it, so a value
+// missing its scheme registers a hook the third-party app reports as healthy and
 // delivers nowhere, which is the exact failure this field exists to close.
 func TestAPublicBaseURLWithoutASchemeIsRefused(t *testing.T) {
 	t.Parallel()
@@ -135,7 +135,7 @@ func TestAPublicBaseURLWithASchemeIsAccepted(t *testing.T) {
 
 // A TRAILING SLASH IS TRIMMED ONCE, here, rather than by each of the five
 // callers that build a URL on it. A base ending in "/" yields
-// "…//webhooks/jira", which some vendors normalise, some reject, and some
+// "…//webhooks/jira", which some third-party apps normalise, some reject, and some
 // accept while signing the unnormalised form.
 func TestTheWebhookBaseIsTrimmed(t *testing.T) {
 	t.Parallel()
@@ -213,7 +213,7 @@ func TestADataCenterURLStillNeedsASigningSecret(t *testing.T) {
 	}
 }
 
-// The host rule here and the vendor clients' own must agree, or a site the
+// The host rule here and the third-party app clients' own must agree, or a site the
 // validator calls Cloud is one the client registers a Data Center hook on.
 func TestTheCloudHostRuleMatchesTheVendorClients(t *testing.T) {
 	t.Parallel()

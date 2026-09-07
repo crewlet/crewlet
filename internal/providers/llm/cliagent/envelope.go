@@ -29,7 +29,7 @@ type EnvelopeCall struct {
 //
 // Four of them because models reach for all four under a contract that names
 // one, and refusing three of them buys nothing: the contract is a request, not
-// a schema the vendor enforces. Ordered by how strongly each implies "the
+// a schema the third-party app enforces. Ordered by how strongly each implies "the
 // note to the operator" rather than "the whole answer".
 var messageKeys = []string{"message", "content", "text", "response"}
 

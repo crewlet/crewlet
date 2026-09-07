@@ -10,7 +10,7 @@
 // running generated code is the failure the sandbox exists to prevent. So what
 // authenticates a request there is a credential that is worth nothing outside
 // one run and expires with it, and it rides in the path because the clients
-// are a vendor's OTLP exporter and a vendor's MCP client: neither takes an
+// are a third-party app's OTLP exporter and a third-party app's MCP client: neither takes an
 // arbitrary header the engine chooses.
 //
 // # Signed and self-describing, not a key into a map

@@ -127,7 +127,7 @@ func (p *Parser) Parse(_ context.Context, w types.RawWebhook, _ *notify.Registry
 		seen[handle] = true
 		out = append(out, notify.Routed{
 			Inbound: inbound(alert, via),
-			// A HANDLE, not an external id, and this is the one vendor
+			// A HANDLE, not an external id, and this is the one third-party app
 			// where that is right: a monitor tag is written by an
 			// operator reading the company document, so the word in it
 			// is the seat's own handle rather than an account Datadog
@@ -177,7 +177,7 @@ func inbound(alert Alert, via string) notify.Inbound {
 	}
 }
 
-// eventType is the vendor's own name for what happened, normalised.
+// eventType is the third-party app's own name for what happened, normalised.
 //
 // Lowercased with spaces collapsed to underscores, so "No Data" becomes
 // "no_data" and sits beside "issue_comment" and "pipeline.failed" in the

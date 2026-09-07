@@ -22,7 +22,7 @@ import (
 // # Why the sink is a required choice
 //
 // A run with nowhere to put what it mints creates live credentials at the
-// vendor and prints none of them — the worst outcome available, because
+// third-party app and prints none of them — the worst outcome available, because
 // every one has to be found and revoked by hand. So there is no default: the
 // operator says where, up front, and a run with no answer is refused before
 // it touches anything.
@@ -118,7 +118,7 @@ func (s sinkFlags) open(ctx context.Context, stdout io.Writer) (provision.TokenS
 // that saw only the environment read an EMPTY STRING for every one an
 // operator had already put in the store. That is not merely a missing value
 // for the GitLab signing secret: empty is the signal to MINT, so the run
-// replaced a working webhook secret at the vendor with a fresh one and broke
+// replaced a working webhook secret at the third-party app with a fresh one and broke
 // every delivery in flight until the config caught up. The store is where a
 // rotated secret lives; a tool that provisions against it has to read it.
 //
@@ -336,7 +336,7 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 // printPlan renders what a run intends to do.
 // The `what` names the credential a seat would have to reference, because
 // an empty plan is almost always a config that names none — and "nothing to
-// do" without saying what was looked for sends an operator to the vendor.
+// do" without saying what was looked for sends an operator to the third-party app.
 func printPlan(w io.Writer, plan *provision.Plan, what string) {
 	if plan.Empty() {
 		fmt.Fprintf(w, "No seat references %s, so there is nothing to provision.\n", what)
@@ -437,17 +437,17 @@ type vendorCommand struct {
 	run  func(args []string, stdout, stderr io.Writer) error
 }
 
-// vendorCommands is the whole vendor CLI surface, and it is the ONLY list.
+// vendorCommands is the whole third-party app CLI surface, and it is the ONLY list.
 //
 // Dispatch and usage both read this table because they were once two
-// hand-maintained lists, and vendors added since have drifted between them in
+// hand-maintained lists, and third-party apps added since have drifted between them in
 // both directions: one shipped with import and resync working and advertised
 // nowhere, and Confluence — which has an import and no provision — was
 // advertised with a `provision` subcommand that does not exist. Both are the
 // same defect, in opposite directions, and both are invisible to anyone not
 // reading the source. A table cannot drift from itself.
 //
-// Ordered per vendor, because the printed usage is this slice.
+// Ordered per third-party app, because the printed usage is this slice.
 var vendorCommands = map[string][]vendorCommand{
 	"gitlab": {
 		{"provision", "<company.yaml>", runGitLabProvision},
@@ -475,7 +475,7 @@ var vendorCommands = map[string][]vendorCommand{
 // errUnknownSub is `crewlet <vendor> <typo>`.
 //
 // A SENTINEL because the alternative for the caller is matching on the
-// message, and the one caller that has to tell "this vendor does not have
+// message, and the one caller that has to tell "this third-party app does not have
 // that command" from "that command ran and failed" is the test holding the
 // usage text and the dispatch table together.
 var errUnknownSub = errors.New("unknown command")
@@ -775,7 +775,7 @@ func skillsContainer(flagValue, envVar, fromConfig string) string {
 	return fromConfig
 }
 
-// webhookBase is the address a vendor reaches this deployment on: the flag
+// webhookBase is the address a third-party app reaches this deployment on: the flag
 // when one was passed, and the company document's own value otherwise.
 //
 // THE FLAG WINS, and only when it is non-empty. It is the one-off override —

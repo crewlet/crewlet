@@ -37,7 +37,7 @@ type Integrations struct {
 	// the endpoint rejects every request without it.
 	ForgeAppID string `yaml:"forge_app_id,omitempty" json:"forge_app_id,omitempty" desc:"Forge app id, verified against a relayed Cloud event's invocation token. Required for Jira or Confluence Cloud."`
 
-	// PublicBaseURL is where a vendor reaches THIS deployment: the HTTPS
+	// PublicBaseURL is where a third-party app reaches THIS deployment: the HTTPS
 	// base every webhook path is built on.
 	//
 	// # Why it belongs in the company document
@@ -47,20 +47,20 @@ type Integrations struct {
 	// things need it that are not a person running a command:
 	//
 	//   - The reconcile loop, to say anything at all about ingress. Every
-	//     vendor Result reports the hook a RUN registered, which is empty
+	//     third-party app Result reports the hook a RUN registered, which is empty
 	//     for a read-only pass by construction, so without this the loop
 	//     cannot tell a company whose webhook is missing from one it was
 	//     never asked to register. It therefore says nothing, which is
 	//     honest and useless.
-	//   - Anything that has to build a URL for a vendor to call back on,
+	//   - Anything that has to build a URL for a third-party app to call back on,
 	//     which is what a self-service app deployment needs.
 	//
 	// It is NOT a secret and should be a literal rather than a ${VAR}: a
 	// reference that resolves to nothing yields a hook pointing at "",
-	// which a vendor accepts and then delivers nowhere.
+	// which a third-party app accepts and then delivers nowhere.
 	//
 	// Empty is meaningful and is the default: it means this deployment has
-	// no address a vendor can reach, which is the honest state of an
+	// no address a third-party app can reach, which is the honest state of an
 	// engine on a laptop. Nothing is guessed from it, because a hook
 	// pointing at the wrong host is worse than no hook, and a subcommand's
 	// `-public-url` still overrides it for a one-off run.
@@ -72,7 +72,7 @@ type Integrations struct {
 //
 // Trimmed here rather than at each caller, because five of them would each
 // have to remember: a base ending in "/" yields "…//webhooks/jira", which
-// some vendors normalise, some reject, and some accept while signing the
+// some third-party apps normalise, some reject, and some accept while signing the
 // unnormalised form.
 func (i *Integrations) WebhookBase() string {
 	return strings.TrimRight(strings.TrimSpace(i.PublicBaseURL), "/")
@@ -82,14 +82,14 @@ func (i *Integrations) validate(path string) error {
 	var p problems
 
 	// A URL that is not one is refused HERE rather than discovered by a
-	// vendor. Every webhook path is built on this, so a value missing its
-	// scheme registers a hook the vendor reports as healthy and delivers
+	// third-party app. Every webhook path is built on this, so a value missing its
+	// scheme registers a hook the third-party app reports as healthy and delivers
 	// nowhere, which is the failure mode this whole field exists to close.
 	if base := strings.TrimSpace(i.PublicBaseURL); base != "" && !hasHTTPScheme(base) {
 		p.add(at(path, "public_base_url"), ErrUnknownValue,
 			"%q must start with http:// or https:// — it is the base every "+
 				"webhook URL is built on, so a value without a scheme yields "+
-				"an address the vendor accepts and never reaches", i.PublicBaseURL)
+				"an address the third-party app accepts and never reaches", i.PublicBaseURL)
 	}
 
 	if i.Jira != nil {
@@ -576,7 +576,7 @@ func (m *Mattermost) validate(path string) error {
 
 // IsAtlassianCloud reports an address that is an Atlassian-hosted site.
 //
-// The SAME rule the vendor clients apply (jira.DeploymentOf and
+// The SAME rule the third-party app clients apply (jira.DeploymentOf and
 // confluence.DeploymentOf), restated here because config is a leaf they
 // depend on. It exists because the validators used to decide "Cloud" from
 // cloud_id alone, and a Cloud site given by URL, which is how most companies
@@ -726,7 +726,7 @@ var GitLabAccessLevels = []GitLabAccessLevel{GitLabDeveloper, GitLabMaintainer}
 // identical values would be two `Valid()` methods to keep in step and two
 // chances for `auto` to come to mean different things.
 //
-// The FIELD names stay each vendor's own — `group_webhook` on GitLab,
+// The FIELD names stay each third-party app's own — `group_webhook` on GitLab,
 // `org_webhook` on GitHub — because those are the words their own
 // documentation uses.
 type ContainerWebhookMode string
@@ -799,7 +799,7 @@ type GitLabProvisioning struct {
 	// accounts is a standing power once it is kept. What that cost is a
 	// disconnect: removing an account needs the authority that created
 	// it, so with nothing held there was no way to take one away except
-	// by hand at the vendor, and every account this engine ever made
+	// by hand at the third-party app, and every account this engine ever made
 	// outlived the integration.
 	//
 	// It is a ${VAR} like every other credential here: the value is
@@ -987,8 +987,8 @@ func (d *Datadog) HandleTagOrDefault() string {
 		return strings.ToLower(tag)
 	}
 	// Restated rather than imported from internal/datadog: config is a
-	// leaf that the vendor packages depend on, and reaching the other way
-	// for one word would invert that. The vendor package's own constant
+	// leaf that the third-party app packages depend on, and reaching the other way
+	// for one word would invert that. The third-party app package's own constant
 	// carries the reasoning, and a test asserts the two agree.
 	return "crewlet"
 }

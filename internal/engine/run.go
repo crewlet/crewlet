@@ -202,7 +202,7 @@ type Engine struct {
 	learning *learning.Background
 
 	// notify is this node's inbound edge: the party registry, the
-	// notification service and the vendor transports. On the ENGINE
+	// notification service and the third-party app transports. On the ENGINE
 	// rather than on an epoch, because a transport holds live sockets and
 	// server-resolved identities — rebuilding it on every apply would
 	// drop every connection whenever an unrelated field changed. The
@@ -526,7 +526,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	}
 	e.startMaintenance(ctx)
 	// Beside the sweep, and a fleet singleton on the same terms: two nodes
-	// reconciling one vendor at the same moment can each create an identity
+	// reconciling one third-party app at the same moment can each create an identity
 	// for one seat, and no later pass can detect or repair that.
 	e.startIntegrations(ctx)
 	e.startMemorySync(ctx)

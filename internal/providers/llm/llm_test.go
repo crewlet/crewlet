@@ -8,7 +8,7 @@ import (
 
 // THE SET IS CLOSED, and empty means auto.
 //
-// Every backend maps these onto its vendor's own spelling, and as a bare
+// Every backend maps these onto its third-party app's own spelling, and as a bare
 // string that mapping was one typo away from silence: `"require"` fell through
 // both switches to a warning line and NO tool_choice on the wire, which reads
 // to a caller as the model having chosen not to call a tool. Empty stays valid

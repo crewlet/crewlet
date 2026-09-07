@@ -13,7 +13,7 @@ import (
 // The chain used to be config.EnvOnly(), so every Tier B ${VAR} an operator
 // had already put in the store resolved to the empty string. For a GitLab
 // signing secret that is not merely a missing value — empty is the signal to
-// MINT — so the run replaced a working webhook secret at the vendor with a
+// MINT — so the run replaced a working webhook secret at the third-party app with a
 // fresh one and broke every delivery in flight until the config caught up.
 func TestAProvisioningRunResolvesThroughTheSecretStore(t *testing.T) {
 	cfg := bootstrapWithKeyring(t, "k1")

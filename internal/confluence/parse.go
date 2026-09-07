@@ -37,7 +37,7 @@ import (
 // So the engine keeps its own list, of the only parties it can route to
 // anyway. A seat is subscribed to a page when it TOUCHED it — edited it, or
 // was mentioned on it — which is the same rule Confluence applies to people
-// and needs no vendor call to evaluate. It lives on the coordination store,
+// and needs no third-party app call to evaluate. It lives on the coordination store,
 // because a seat subscribed by a mention one node handled has to be found by
 // whichever node handles the next event.
 //
@@ -191,7 +191,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 		// the Forge relay lifts a container only when it was given one, and
 		// Confluence Cloud's own hook puts the page under "parent" with
 		// nothing beside the comment at all (measured against a live site).
-		// The page id is the whole conversation key for this vendor, so a
+		// The page id is the whole conversation key for this third-party app, so a
 		// comment read only from the sibling key had no key at all: it fell
 		// back to its own event id and coalesced with nothing, and three
 		// comments on one page while the seat was busy ran three turns, which
@@ -567,7 +567,7 @@ func storageOf(content map[string]any) string {
 // LeadsFrom maps each Confluence space key to the handle that owns it.
 //
 // The walk itself is [org.Organization.LeadsBy] — which seat owns a scope is
-// a question about the org chart, and this vendor's only contribution is
+// a question about the org chart, and this third-party app's only contribution is
 // naming the field and reporting what the walk found in its own vocabulary.
 func LeadsFrom(o *org.Organization) map[string]string {
 	leads, report := o.LeadsBy(org.Scope{

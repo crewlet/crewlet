@@ -127,7 +127,7 @@ func TestWithoutACompanyNothingIsSuppressed(t *testing.T) {
 }
 
 // The parse-time face of the same rule, where the identifiers are still the
-// vendor's own usernames.
+// third-party app's own usernames.
 func TestSuppressSelfDropsTheActorAndKeepsTheOrder(t *testing.T) {
 	targets := []string{"ana", "bo", "ana", "cy"}
 

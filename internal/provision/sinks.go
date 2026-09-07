@@ -247,7 +247,7 @@ func (s *EnvFileSink) NextStep() string {
 //
 // ATOMIC, because this file is the only record of a live credential: a
 // partial write from an interrupted run would lose the ones below the cut,
-// and they would still exist at the vendor.
+// and they would still exist at the third-party app.
 func (s *EnvFileSink) rewrite() error {
 	names := slices.Collect(maps.Keys(s.values))
 	// SORTED, so a rotation produces a diff an operator can read rather
@@ -320,7 +320,7 @@ type PrintSink struct {
 //
 // Refused rather than defaulted, because of WHEN a nil one fails: nothing
 // notices until Record writes the first credential, which is after the run
-// has already minted it against the vendor. The operator is then handed a
+// has already minted it against the third-party app. The operator is then handed a
 // panic in place of the token that now exists in GitLab and nowhere else.
 // A sink with nowhere to write is not a sink, so it is refused at the point
 // the caller can still do something about it — the same shape

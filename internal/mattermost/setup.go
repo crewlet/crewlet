@@ -8,7 +8,7 @@ import (
 
 // What an operator has to supply before agents can talk on Mattermost.
 //
-// THE SHORTEST LIST HERE, and for a reason worth stating: this vendor holds
+// THE SHORTEST LIST HERE, and for a reason worth stating: this third-party app holds
 // one outbound websocket per seat and verifies no inbound delivery, so it
 // needs no public address, no webhook secret and no shared token. A
 // self-hosted engine behind a firewall works with it unchanged, which is the
@@ -75,7 +75,7 @@ func Requirements(in *config.Mattermost, resolve func(string) (string, bool)) []
 	return reqs
 }
 
-// AdminCredential is the system-administrator token this vendor's
+// AdminCredential is the system-administrator token this third-party app's
 // provisioning and its teardown both authenticate with.
 //
 // Held rather than transient, for the reason [gitlab.AdminCredential] states

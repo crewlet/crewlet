@@ -20,7 +20,7 @@ import (
 //
 // # The one command with a human step in the middle
 //
-// Every other vendor's provisioning runs to completion unattended. Slack
+// Every other third-party app's provisioning runs to completion unattended. Slack
 // cannot: installing an app into a workspace is an OAuth grant, and OAuth
 // exists precisely so that a person decides. So this run creates and updates
 // the apps by itself, then hands the operator one authorize URL per seat and

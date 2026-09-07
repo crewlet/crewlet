@@ -143,7 +143,7 @@ func TestASecondCallIntoASeatDoesNotPruneUnderTheFirst(t *testing.T) {
 
 // The login is seeded in and a REFRESHED one is synced back out. Discarding
 // the file the CLI rewrote logs the whole fleet out at the next expiry,
-// because most vendors rotate the refresh token with the access token.
+// because most third-party apps rotate the refresh token with the access token.
 func TestARefreshedLoginIsSyncedBackToTheSharedDirectory(t *testing.T) {
 	ws := newWorkspace(t)
 	shared := filepath.Join(ws.CredentialsDir(), "creds.json")
@@ -185,7 +185,7 @@ func TestARefreshedLoginIsSyncedBackToTheSharedDirectory(t *testing.T) {
 }
 
 // A missing login is NOT a failure to acquire. The call then fails with the
-// vendor's own "not authenticated", which names the CLI; refusing here would
+// third-party app's own "not authenticated", which names the CLI; refusing here would
 // take a company down at boot over one provider's credentials.
 func TestAMissingLoginDoesNotRefuseTheCheckout(t *testing.T) {
 	ws := newWorkspace(t)
@@ -297,7 +297,7 @@ func TestReleaseIsIdempotent(t *testing.T) {
 	}
 }
 
-// A handle comes from a vendor's API, so it must not be able to escape the
+// A handle comes from a third-party app's API, so it must not be able to escape the
 // state directory or overrun NAME_MAX — while staying recognisable to an
 // operator looking at the directory.
 func TestSeatSlugIsSafeAndRecognisable(t *testing.T) {

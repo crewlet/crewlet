@@ -66,7 +66,7 @@ func Coalesce(prompts Prompts, evs []types.ExternalNotification, at []time.Time)
 // Carried alongside rather than read off the event because the ORDER is the
 // caller's fact: the events arrive from a broker partition, and their envelope
 // timestamps are what put them in sequence. A merge that sorted by something
-// on the payload would reorder a conversation whenever a vendor stamped its
+// on the payload would reorder a conversation whenever a third-party app stamped its
 // own clock.
 type constituent struct {
 	event types.ExternalNotification
@@ -75,7 +75,7 @@ type constituent struct {
 
 // chronological pairs each event with its timestamp and sorts.
 //
-// A STABLE sort, so two events sharing a timestamp — which a vendor emitting a
+// A STABLE sort, so two events sharing a timestamp — which a third-party app emitting a
 // burst routinely produces — keep the order the broker delivered them in.
 // Re-ordering them would rewrite the conversation on nothing but a tie.
 func chronological(evs []types.ExternalNotification, at []time.Time) []constituent {
@@ -94,7 +94,7 @@ func chronological(evs []types.ExternalNotification, at []time.Time) []constitue
 // digest renders the merged body: the earlier constituents in order, then the
 // latest one in full.
 //
-// The latest LAST and complete, because a vendor's prompt scaffolding — its
+// The latest LAST and complete, because a third-party app's prompt scaffolding — its
 // triage rules, its "how to get full context" block — is built into that body.
 // Rendering it once, from the most recent state, is what keeps a five-event
 // digest from repeating the same boilerplate five times with progressively
@@ -157,7 +157,7 @@ func effectiveBody(prompt Prompt, ev types.ExternalNotification) string {
 	return prompt.DigestBody(eventTypeOf(ev), rawBody(ev))
 }
 
-// eventTypeOf prefers the vendor's own metadata over the envelope field.
+// eventTypeOf prefers the third-party app's own metadata over the envelope field.
 //
 // A parser that carries a finer-grained type in metadata knows more than the
 // envelope's coarse one, and the supersede rules are written against the finer

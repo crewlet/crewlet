@@ -62,7 +62,7 @@ func TestTheSharedTransportKeepsTheProcessProxyAndHTTP2(t *testing.T) {
 		t.Error("the transport carries no proxy function")
 	}
 	if !transport.ForceAttemptHTTP2 {
-		t.Error("HTTP/2 was lost, which is the multiplexing vendor endpoints rely on")
+		t.Error("HTTP/2 was lost, which is the multiplexing third-party app endpoints rely on")
 	}
 	// The clone must not have disturbed the default itself: every caller
 	// that has not been migrated still uses it.
@@ -94,7 +94,7 @@ func TestEachClientKeepsItsOwnTimeout(t *testing.T) {
 // the process's ONE transport — so there is no such thing as "the idle
 // connections this client holds". Three providers had a Close that believed
 // otherwise, and calling one on a config swap would have dropped the warm
-// connections of every other provider, all seven vendor clients, every remote
+// connections of every other provider, all seven third-party app clients, every remote
 // MCP server and the sandbox control plane.
 //
 // The property is not a defect to fix — it is the unavoidable other side of
@@ -135,7 +135,7 @@ func TestClosingIdleConnectionsIsProcessWide(t *testing.T) {
 			"have reused one", got)
 	}
 
-	// A DIFFERENT client — another provider, another vendor — closes what it
+	// A DIFFERENT client — another provider, another third-party app — closes what it
 	// would reasonably believe are its own idle connections.
 	httpx.Client(0).CloseIdleConnections()
 

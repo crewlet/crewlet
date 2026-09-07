@@ -147,7 +147,7 @@ func TestACloudReplyRoutesOnItsPagesKey(t *testing.T) {
 }
 
 // AND A REPLY COALESCES WITH THE THREAD IT IS IN. The page is the
-// conversation for this vendor, so a comment and a reply to it are one
+// conversation for this third-party app, so a comment and a reply to it are one
 // trigger rather than two turns.
 func TestACloudReplyAndItsParentShareAConversation(t *testing.T) {
 	t.Parallel()

@@ -170,7 +170,7 @@ type Request struct {
 // ToolChoice is how hard a request pushes the model toward calling a tool.
 //
 // A NAMED TYPE over a closed set, because every backend has to map these onto
-// its vendor's own spelling and a bare string put that mapping one typo away
+// its third-party app's own spelling and a bare string put that mapping one typo away
 // from silence: `"require"` fell through both switches to a warning line and
 // NO tool_choice on the wire, which reads to a caller as the model choosing
 // not to call a tool. The set is small and closed, so it is a type.

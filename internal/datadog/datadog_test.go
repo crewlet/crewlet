@@ -199,7 +199,7 @@ func TestTheRecoveryRuleIsStatedTheSameWayTwice(t *testing.T) {
 	}
 }
 
-// The event type sits beside the other vendors' in the event store rather
+// The event type sits beside the other third-party apps' in the event store rather
 // than beside nothing.
 func TestEventTypeIsNormalised(t *testing.T) {
 	cases := map[string]string{

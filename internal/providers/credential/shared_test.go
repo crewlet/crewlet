@@ -261,7 +261,7 @@ func TestAnUnsharedPoolNeitherPublishesNorPulls(t *testing.T) {
 // THE PULL IS THE WHOLE POINT: a key a PEER benched must not be leased here.
 //
 // This is the case the subsystem exists for, and the one nothing exercised
-// before — with the pull missing, both nodes call the vendor and both get a
+// before — with the pull missing, both nodes call the third-party app and both get a
 // 429, which is the cost this pays a coordination read to avoid.
 func TestAPeersBenchStopsThisNodeLeasingTheKey(t *testing.T) {
 	t.Parallel()
@@ -452,7 +452,7 @@ func TestAnUnreadableLedgerLeavesEveryKeyAsItWas(t *testing.T) {
 }
 
 // THE SCOPE IS LOAD-BEARING. One key listed under two config entries is two
-// rate-limit buckets at the vendor — different models, possibly different
+// rate-limit buckets at the third-party app — different models, possibly different
 // endpoints — so a bare hint would turn one model's burst into a company-wide
 // outage.
 func TestOnePoolsBenchDoesNotReachAnotherEntryOnTheSameKey(t *testing.T) {
@@ -482,7 +482,7 @@ func TestOnePoolsBenchDoesNotReachAnotherEntryOnTheSameKey(t *testing.T) {
 
 // SHARE(nil) DETACHES WITHOUT FORGETTING. An epoch rebuilt on a node that has
 // lost its coordination store must stop publishing through a stale handle —
-// and must not hand out a key the vendor is still refusing.
+// and must not hand out a key the third-party app is still refusing.
 func TestDetachingKeepsTheBenchAndStopsPublishing(t *testing.T) {
 	t.Parallel()
 	p, _, _, ledger := sharedPool(t, "zulu", []string{"k0", "k1"}, Policy{RateLimit: time.Hour})

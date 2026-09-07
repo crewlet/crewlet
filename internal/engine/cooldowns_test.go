@@ -17,7 +17,7 @@ import (
 // and the certified suite passed — and nothing ever called it. Every case here
 // failed before this wiring existed, and none of them by erroring: a fleet
 // simply paid one 429 per node for what the first node already knew, which
-// looks from the outside exactly like a vendor being slow.
+// looks from the outside exactly like a third-party app being slow.
 
 // poolOf reaches the credential pool behind one configured provider.
 func poolOf(t *testing.T, e *engine.Engine, key string) *credential.Pool {
@@ -97,7 +97,7 @@ func TestABenchTakenHereIsPublishedToTheFleet(t *testing.T) {
 
 // THE SCOPE IS THE CONFIG ENTRY'S KEY, which is what keeps one entry's quota
 // out of another's. Two entries can list the same credential against different
-// models, and those are two rate-limit buckets at the vendor — a shared record
+// models, and those are two rate-limit buckets at the third-party app — a shared record
 // with no scope would turn one model's burst into a company-wide outage.
 func TestOneEntrysBenchDoesNotReachAnotherOnTheSameKey(t *testing.T) {
 	t.Parallel()

@@ -276,7 +276,7 @@ func (p *Parser) base(body map[string]any, parties notify.Parties) (notify.Inbou
 	meta := map[string]string{
 		// The one actor key every integration stamps, so the
 		// self-action guard is a spine rule rather than something each
-		// vendor remembered.
+		// third-party app remembered.
 		notify.ActorField:     personID(actor),
 		"actor_name":          firstOf(str(actor, "displayName"), str(actor, "name")),
 		"event_type":          event,
@@ -348,7 +348,7 @@ func timestampOf(body map[string]any) string {
 	case string:
 		// Some bridges send it already formatted. Passed through rather
 		// than re-parsed: a value this build cannot read is still the
-		// vendor's own answer to when it happened.
+		// third-party app's own answer to when it happened.
 		return v
 	case float64:
 		return time.UnixMilli(int64(v)).UTC().Format(time.RFC3339)

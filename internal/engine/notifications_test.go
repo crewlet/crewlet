@@ -160,7 +160,7 @@ func TestTheValveIsOffWithoutAStore(t *testing.T) {
 // correctly.
 //
 // It is a class, not a typo, so this checks all three at once: the failure
-// is silent per-integration, and a fourth vendor would repeat it.
+// is silent per-integration, and a fourth third-party app would repeat it.
 func TestEveryIntegrationResolvesItsAddress(t *testing.T) {
 	// NOT parallel: the addresses come from the process environment.
 	t.Setenv("TEST_MM_URL", "http://127.0.0.1:1")
@@ -196,7 +196,7 @@ integrations:
 	}
 
 	// The addresses are unreachable on purpose: what is under test is the
-	// string each wiring BUILT, not whether the vendor answered.
+	// string each wiring BUILT, not whether the third-party app answered.
 	mm := e.Mattermost()
 	if mm == nil {
 		t.Fatal("no chat transport was built")
@@ -247,8 +247,8 @@ integrations:
 //
 // Secrets live in the config as ${VAR}s. The edge's material was assembled
 // from the config WITHOUT resolving, so every route verified against the
-// literal "${GITLAB_SIGNING_SECRET}" — every delivery from every vendor
-// refused, with the vendor's settings page showing a healthy hook. Measured
+// literal "${GITLAB_SIGNING_SECRET}" — every delivery from every third-party app
+// refused, with the third-party app's settings page showing a healthy hook. Measured
 // against a real GitLab, where the only trace was one warning per delivery.
 //
 // And the literal is not a secret. It is a config field the dashboard
@@ -291,11 +291,11 @@ func TestAnUnconfiguredNodeHasNoWebhookSecrets(t *testing.T) {
 // A CONFIGURED VENDOR MUST ACTUALLY ROUTE, which is the whole distinction
 // RoutedSources exists to draw.
 //
-// Four vendors once had config models, webhook routes and generated schema
+// Four third-party apps once had config models, webhook routes and generated schema
 // and no parser behind any of them, so a company naming one got a block that
 // validated, appeared on the dashboard's Integrations room beside the
-// working ones, and woke nobody. This is what catches a vendor whose config
-// ships without its wiring — and, in the other direction, a vendor whose
+// working ones, and woke nobody. This is what catches a third-party app whose config
+// ships without its wiring — and, in the other direction, a third-party app whose
 // wiring is dropped from startNotifications by a refactor.
 func TestAConfiguredTrackerActuallyRoutes(t *testing.T) {
 	t.Parallel()
@@ -329,7 +329,7 @@ integrations:
 // a merge request" does. It had no parser, so the spine logged
 // inbound_source_unparsed and skipped every delivery: verified, stored,
 // counted on the dashboard, and read by nobody. That is precisely the shape
-// the comment above describes, and the vendor list here is what lets it
+// the comment above describes, and the third-party app list here is what lets it
 // happen again for the next one.
 func TestAConfiguredAlertingSurfaceActuallyRoutes(t *testing.T) {
 	t.Parallel()
@@ -459,7 +459,7 @@ func TestNoKnowledgeBackendIsANilInterface(t *testing.T) {
 // or setting `enabled: false`, the gesture after a credential leak — applied
 // cleanly and changed nothing: the boot-time parser went on routing
 // deliveries under the credential being revoked, RoutedSources went on
-// listing the vendor as reachable, and SecretsOf never consulted Enabled so
+// listing the third-party app as reachable, and SecretsOf never consulted Enabled so
 // the webhook route kept verifying and ingesting.
 func TestAVendorARevisionRetiresStopsRouting(t *testing.T) {
 	t.Parallel()
@@ -484,14 +484,14 @@ integrations:
 	}
 
 	if slices.Contains(e.RoutedSources(), "jira") {
-		t.Errorf("a retired vendor still routes: %v\n"+
+		t.Errorf("a retired third-party app still routes: %v\n"+
 			"its parser is live and handling deliveries under the credential "+
 			"the revision revoked", e.RoutedSources())
 	}
 	// And the ingest half agrees: a route with nothing to verify with
 	// answers 503 rather than accepting a delivery that goes nowhere.
 	if got := e.WebhookSecrets().Jira; got != "" {
-		t.Errorf("a retired vendor still verifies deliveries with %q", got)
+		t.Errorf("a retired third-party app still verifies deliveries with %q", got)
 	}
 }
 
@@ -524,10 +524,10 @@ integrations:
 		t.Fatalf("Apply: %v", err)
 	}
 	if got := e.WebhookSecrets().GitHub; got != "" {
-		t.Errorf("a disabled vendor still verifies deliveries with %q: the route "+
+		t.Errorf("a disabled third-party app still verifies deliveries with %q: the route "+
 			"ingests what the routing half will then drop", got)
 	}
 	if slices.Contains(e.RoutedSources(), "github") {
-		t.Errorf("a disabled vendor still routes: %v", e.RoutedSources())
+		t.Errorf("a disabled third-party app still routes: %v", e.RoutedSources())
 	}
 }

@@ -240,12 +240,12 @@ by a process that can reach the [coordination store](../concepts/coordination.md
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/setup/integrations` | What every integration this build can set up still needs, plus the address vendors reach this deployment on |
+| `GET` | `/setup/integrations` | What every integration this build can set up still needs, plus the address third-party apps reach this deployment on |
 | `GET` | `/setup/integrations/{kind}` | One integration's requirement list and state |
 | `POST` | `/setup/integrations/{kind}/inputs` | Supply or generate those values: credentials are sealed, the rest is patched into the company |
-| `DELETE` | `/setup/integrations/{kind}` | Disconnect: remove what the integration holds at the vendor, then its block |
-| `POST` | `/setup/integrations/{kind}/provision` | Run the vendor's provisioning pass: mint what it needs, register its webhook |
-| `POST` | `/setup/integrations/{kind}/check` | Run the same pass read-only, to see whether something fixed at the vendor took |
+| `DELETE` | `/setup/integrations/{kind}` | Disconnect: remove what the integration holds at the third-party app, then its block |
+| `POST` | `/setup/integrations/{kind}/provision` | Run the third-party app's provisioning pass: mint what it needs, register its webhook |
+| `POST` | `/setup/integrations/{kind}/check` | Run the same pass read-only, to see whether something fixed at the third-party app took |
 | `GET` | `/setup/integrations/{kind}/runs/{id}` | One pass, as the node that executed it remembers it |
 | `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` and `source`. **Never a value** |
 | `GET` | `/secrets/{name}` | The same fields for one name. `404 not_found` when it is unset |
@@ -256,7 +256,7 @@ by a process that can reach the [coordination store](../concepts/coordination.md
 
 **The body is the value, not a JSON wrapper.** A credential is arbitrary bytes
 — a PEM key has newlines, a token can hold anything — and an encoding step
-between the operator and the sequence the vendor compares is a `401` nobody
+between the operator and the sequence the third-party app compares is a `401` nobody
 can explain.
 
 **Reveal is opt-in on the wire**, not merely in the CLI. Without `?reveal=true`
@@ -368,13 +368,13 @@ across two requests.
 
 **Guarded in full, reads included**, on the same terms as `/config` and
 `/secrets`: this surface answers with the *names* of the credentials a company
-holds, which of them are unset, and the vendor pages an administrator would
+holds, which of them are unset, and the third-party app pages an administrator would
 visit. That is a map of what to attack, and it is not something the
 anonymous-read posture opens.
 
 ### The requirement list
 
-`GET /setup/integrations/{kind}` answers what that vendor needs, whether or
+`GET /setup/integrations/{kind}` answers what that third-party app needs, whether or
 not the company has configured it:
 
 ```json
@@ -406,8 +406,8 @@ not the company has configured it:
 ```
 
 `kind` is one of `secret`, `url`, `id`, `choice`, `text`, `handle`, `toggle`.
-Each vendor's own package declares its list, so the surface serves a vendor it
-has no screen for and the dashboard renders a vendor it has no code for.
+Each third-party app's own package declares its list, so the surface serves a third-party app it
+has no screen for and the dashboard renders a third-party app it has no code for.
 A `secret` is sealed and never echoed; a `toggle` is a JSON boolean in the
 document; a `handle` must name a seat this company has.
 
@@ -443,7 +443,7 @@ What the route does, in this order:
    list was read against. A submission built on an older one is refused
    *before anything is sealed*, so a caller working from a stale page does not
    end up with a credential in the store that nothing points at.
-2. **Seals every credential**, under the name the vendor declared or one
+2. **Seals every credential**, under the name the third-party app declared or one
    derived as `VENDOR_FIELD[_HANDLE]`. The row records `source: "setup"`.
 3. **Patches the document** with the non-secret values and, for a credential
    whose slot was empty, a whole `${VAR}` pointing at the name from step 2.
@@ -466,20 +466,20 @@ Refusals: `400 invalid_input`, `400 validation_error`, `404 unknown_kind`,
 
 ### Running the provisioning pass
 
-Some vendors need something done *at* them, not just written down: a webhook
-registered, a signing secret minted and pushed. That is the vendor's
+Some third-party apps need something done *at* them, not just written down: a webhook
+registered, a signing secret minted and pushed. That is the third-party app's
 provisioning pass, and `POST /setup/integrations/{kind}/provision` is what
 runs it.
 
-**The reconcile loop deliberately cannot do this.** It runs the same vendor
+**The reconcile loop deliberately cannot do this.** It runs the same third-party app
 function every few minutes with no sink and no public base, and those two
 absences are what make it safe unattended: a base is permission to register a
 webhook, and a sink is permission to mint a credential. This route supplies
 both, because a person asked for it.
 
 `can_provision` on a tool's state says whether this build has a pass for it.
-`needs_operator` is present only for a vendor whose pass still asks for a
-credential per run; no vendor in this build does. GitLab's group Owner token
+`needs_operator` is present only for a third-party app whose pass still asks for a
+credential per run; no third-party app in this build does. GitLab's group Owner token
 and Mattermost's system-admin token are ordinary **stored** requirements now,
 sealed in the fleet secret store with a `${VAR}` in the document like every
 other credential.
@@ -497,7 +497,7 @@ an integration is disconnected, so an operator knows exactly what to revoke.
 
 `DELETE /setup/integrations/{kind}` **asks**; it does not remove. It answers
 `202` and records the intent on the fleet row, and the reconcile loop removes
-what the integration holds at the vendor — the webhooks it registered, and the
+what the integration holds at the third-party app — the webhooks it registered, and the
 accounts it created when asked — before the block leaves the company document.
 
 That order is the whole design. The block carries the credential the teardown
@@ -514,13 +514,13 @@ looking connected.
 `remove_seats` is the console's *"also remove the accounts Crewlet created"*.
 It defaults to **false** and is never inferred: the engine's own webhooks come
 out either way, because nothing else uses them, but an account is a colleague
-at that vendor with history attached. Mattermost bots are **disabled** rather
+at that third-party app with history attached. Mattermost bots are **disabled** rather
 than deleted, because deleting a Mattermost user takes its posts with it.
 
-`force` drops the block immediately without waiting for the vendor, answers
+`force` drops the block immediately without waiting for the third-party app, answers
 `200`, and is the way out of a teardown that can never succeed — a revoked
 credential, an instance that is gone. It is the operator saying they will
-remove what the vendor holds themselves.
+remove what the third-party app holds themselves.
 
 Either way the sealed credentials are **named, not deleted**, in
 `orphaned_secrets`: one an operator may be sharing with another deployment is
@@ -531,16 +531,16 @@ Refusals: `503 no_status_store` on a node with no coordination, which has
 nowhere to record the intent — retry against a node that has one, or force it.
 
 Refusals worth knowing: `409 requirements_outstanding` names the fields still
-missing (a pass writes at the vendor and must not run against a
+missing (a pass writes at the third-party app and must not run against a
 half-configured integration), `409 no_public_base_url` when nothing has told
-the engine what address vendors reach it on, and `409 pass_in_flight` when
-another pass for the same vendor is already running. That last one is a
+the engine what address third-party apps reach it on, and `409 pass_in_flight` when
+another pass for the same third-party app is already running. That last one is a
 refusal rather than a queue on purpose: minting twice is not something a retry
 should paper over.
 
 `POST /setup/integrations/{kind}/check` runs the **same pass with neither**,
 which makes it read-only. It is what answers "did what I just fixed at the
-vendor take" without the engine writing anything.
+third-party app take" without the engine writing anything.
 
 Both record their outcome on the same fleet integration status the reconcile
 loop writes, through the same fold, so a pass run by hand and a tick that runs
@@ -560,7 +560,7 @@ because a company mid-edit looks exactly like one that removed a seat.
 
 ### Per-seat setup
 
-Slack is the one vendor whose credentials live on the **seat** rather than on
+Slack is the one third-party app whose credentials live on the **seat** rather than on
 the company: each agent has its own Slack app, so each has its own bot token
 and signing secret. Its tool state carries a `seats` array, one entry per agent
 seat, each with its own requirement list, its own `inbound_path`, and its own
@@ -1454,9 +1454,9 @@ webhook route answers `503` to every delivery.
 `secret_usable` is a claim about what this process **resolved**. A secret lives
 in the config as a `${VAR}`, so `secret_present: true, secret_usable: false` is
 a route refusing every delivery while the config shows a secret and the
-vendor's settings page shows a healthy hook — with nothing anywhere naming the
+third-party app's settings page shows a healthy hook — with nothing anywhere naming the
 variable. For GitLab the bar is higher than non-empty: the value must be
-`whsec_` over standard base64 of a 32-byte key, the only shape the vendor
+`whsec_` over standard base64 of a 32-byte key, the only shape the third-party app
 signs with. For Slack, whose material is one signing secret per seat, it is
 lower: **one** seat whose secret resolved makes the surface usable, because a
 delivery addressed to that seat's path would be accepted, and a seat whose own

@@ -181,8 +181,8 @@ func (n *fakeSecretsNode) client(t *testing.T) *secretsClient {
 //
 // A credential is arbitrary bytes — a PEM key has newlines, a token can hold
 // anything — and wrapping it in JSON puts an encoding step between the
-// operator and the byte sequence the vendor will compare. A value that came
-// back re-encoded would fail at the vendor with a 401 that names neither.
+// operator and the byte sequence the third-party app will compare. A value that came
+// back re-encoded would fail at the third-party app with a 401 that names neither.
 func TestSettingASecretSendsTheRawValue(t *testing.T) {
 	t.Parallel()
 	node := newFakeSecretsNode(t)

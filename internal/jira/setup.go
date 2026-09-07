@@ -17,7 +17,7 @@ import (
 // refusal reads.
 //
 // The org account is REQUIRED here where GitHub's is optional, because this
-// vendor has no fallback: without a credential the engine cannot resolve a
+// third-party app has no fallback: without a credential the engine cannot resolve a
 // seat's account id, and an issue assigned to an agent then reaches nobody.
 
 // Requirements says what this company still needs for Jira.

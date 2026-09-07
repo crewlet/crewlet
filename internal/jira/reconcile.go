@@ -176,7 +176,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		// The probe exists to fail here rather than midway, so what it
 		// reports has to say WHICH kind of failure it was: a refused
 		// credential is the operator's to fix and never clears on its
-		// own, where an unreachable vendor clears without anybody.
+		// own, where an unreachable third-party app clears without anybody.
 		return nil, fmt.Errorf(
 			"jira: the org credential in integrations.jira.token was refused, "+
 				"so nothing else this run reports would be trustworthy: %w",

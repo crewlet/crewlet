@@ -128,7 +128,7 @@ func TestAMissingSecretIsItsOwnError(t *testing.T) {
 
 // READS FAIL CLOSED. Everything else in this package answers safely and
 // carries on; an unreadable secret must raise, because "" becomes an empty
-// Bearer token hours later on a request whose 401 names the vendor.
+// Bearer token hours later on a request whose 401 names the third-party app.
 func TestAWrongKeyringRaisesRatherThanReturningNothing(t *testing.T) {
 	t.Parallel()
 	written := ring(t, "k1")

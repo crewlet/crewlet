@@ -12,7 +12,7 @@ import (
 )
 
 // bundleProvider is a cli-agent provider with a credential directory of its
-// own and nothing else — import and export never run the vendor's binary, so
+// own and nothing else — import and export never run the third-party app's binary, so
 // none has to exist.
 func bundleProvider(t *testing.T) []cliAgentProvider {
 	t.Helper()

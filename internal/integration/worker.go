@@ -25,8 +25,8 @@ var log = logging.Get("integration")
 // It is also what the control plane's own reconcile poll ticks at, and the
 // two cost about the same: a tick with nothing due is one duty claim and one
 // read of a coordination bucket holding at most seven keys, on a connection
-// the process already holds. Nothing is fetched from a vendor unless a
-// vendor is due.
+// the process already holds. Nothing is fetched from a third-party app unless a
+// third-party app is due.
 const Interval = 15 * time.Second
 
 // Reconciler is one surface's convergence step.
@@ -44,19 +44,19 @@ const Interval = 15 * time.Second
 // an implementation:
 //
 //   - MUST be idempotent. Every pass does the same work, and only what the
-//     vendor already has separates a repair from a no-op.
-//   - MUST NOT rotate a credential that still works. A vendor serves a token
+//     third-party app already has separates a repair from a no-op.
+//   - MUST NOT rotate a credential that still works. A third-party app serves a token
 //     once, so the tempting reading of "reconcile" is to mint every pass, and
 //     that is an outage on a timer: the engine is authenticating with the old
 //     value, and rotating revokes what every running agent is using. Check
 //     what the sink recorded (provision.TokenSink.Value) and keep a working
-//     credential. Rotation is an operator gesture on the vendor subcommand,
+//     credential. Rotation is an operator gesture on the third-party app subcommand,
 //     where somebody typed the flag.
 //   - MUST NOT delete anything a seat's departure implies. Decommissioning is
 //     the other flag on that subcommand, for the same reason.
 //   - SHOULD cost nothing when nothing has changed. A converged company is
 //     the steady state and it is the state this loop spends most of its life
-//     in, so a pass that re-reads every seat from the vendor every ten
+//     in, so a pass that re-reads every seat from the third-party app every ten
 //     minutes is the one design that makes the feature too expensive to leave
 //     switched on.
 type Reconciler interface {
@@ -68,7 +68,7 @@ type Reconciler interface {
 	//
 	// The two return values are different KINDS of answer and must not be
 	// collapsed. Findings are statements about the operator's world, which
-	// the loop classifies and reports. An error is the engine or the vendor
+	// the loop classifies and reports. An error is the engine or the third-party app
 	// failing to look at that world at all, which the loop records as a
 	// fault and retries.
 	//
@@ -93,16 +93,16 @@ type Reconciler interface {
 var ErrNotConfigured = errors.New("integration: this surface is not configured")
 
 // ErrCredentialRejected reports a pass that failed because the VENDOR refused
-// the credential, rather than because the vendor could not be reached.
+// the credential, rather than because the third-party app could not be reached.
 //
-// A vendor wraps this around its own error when it can tell the difference —
+// A third-party app wraps this around its own error when it can tell the difference —
 // an auth probe that came back 401 or 403 — and [Observe] then reports the
 // surface as the operator's to fix instead of folding it in with the
 // transport faults that clear on their own. Without it every refusal read as
 // "the engine is working on it", which is the one thing that is certainly not
 // happening: the credential will be refused identically on every pass until a
 // person changes it.
-var ErrCredentialRejected = errors.New("integration: the vendor refused this credential")
+var ErrCredentialRejected = errors.New("integration: the third-party app refused this credential")
 
 // ErrDisconnectUnavailable reports a node that cannot complete a disconnect
 // RIGHT NOW, as distinct from one that failed to.
@@ -115,19 +115,19 @@ var ErrCredentialRejected = errors.New("integration: the vendor refused this cre
 // disconnect that is simply early.
 var ErrDisconnectUnavailable = errors.New("integration: this node cannot complete a disconnect yet")
 
-// Reject marks err as a credential refusal when the vendor answered with an
+// Reject marks err as a credential refusal when the third-party app answered with an
 // authentication or authorization status, and returns it untouched otherwise.
 //
-// The POLICY lives here and the extraction stays with each vendor, because
+// The POLICY lives here and the extraction stays with each third-party app, because
 // they are different problems: which statuses mean "your credential is no
-// good" is one rule for every vendor, while digging the number out of a
-// refusal is a question about that vendor's own error type. Written per
-// vendor, the rule drifts — 401 alone in one place and 401-or-403 in the
+// good" is one rule for every third-party app, while digging the number out of a
+// refusal is a question about that third-party app's own error type. Written per
+// third-party app, the rule drifts — 401 alone in one place and 401-or-403 in the
 // next — and the surfaces that forgot 403 are exactly the ones that sit in
 // "the engine is working on it" forever.
 //
 // 401 and 403 only. A 429 is rate limiting and clears, a 404 is usually the
-// wrong host or project rather than the wrong key, and a 5xx is the vendor's
+// wrong host or project rather than the wrong key, and a 5xx is the third-party app's
 // own problem: every one of those is a genuine wait.
 func Reject(err error, status int) error {
 	if err == nil || (status != http.StatusUnauthorized && status != http.StatusForbidden) {
@@ -148,13 +148,13 @@ func (r Registration) kind() Kind {
 	return r.Only
 }
 
-// Disconnector removes a surface: what it holds at the vendor, and then its
+// Disconnector removes a surface: what it holds at the third-party app, and then its
 // block in the company document.
 //
 // ONE CALL FOR BOTH, and the ORDER inside it is the whole reason this is a
-// single seam rather than two. The block holds the credential the vendor
+// single seam rather than two. The block holds the credential the third-party app
 // teardown authenticates with, so removing it first strands whatever the
-// vendor still has. A caller holding two seams could do them the wrong way
+// third-party app still has. A caller holding two seams could do them the wrong way
 // round; one cannot.
 //
 // The implementation lives where config writes do. This package knows only
@@ -187,7 +187,7 @@ type Registration struct {
 	Disconnector Disconnector
 
 	// Settled overrides [Schedule.Settled] for this surface. Zero takes the
-	// schedule's own value, which is the right answer for a vendor with no
+	// schedule's own value, which is the right answer for a third-party app with no
 	// reason to differ. See [Schedule.next] for the one that does.
 	Settled time.Duration
 }
@@ -226,8 +226,8 @@ type Options struct {
 //
 // The sweep is a singleton because N nodes doing idempotent range deletes is
 // N times the writes for one table's benefit. Here it is correctness: two
-// nodes reconciling one surface at the same moment both read a vendor that
-// has no account for a seat, and both create one. The vendor ends up with two
+// nodes reconciling one surface at the same moment both read a third-party app that
+// has no account for a seat, and both create one. The third-party app ends up with two
 // identities for one agent and the engine records whichever wrote last, which
 // is not a state any later pass can detect or repair.
 type Worker struct {
@@ -375,7 +375,7 @@ func (w *Worker) Tick(ctx context.Context) {
 		if err != nil {
 			// UNKNOWN IS NOT LOST. A coordination store that could not
 			// answer must not be read as "the duty is mine": that is
-			// precisely the two-nodes-one-vendor case this singleton
+			// precisely the two-nodes-one-third-party app case this singleton
 			// exists to rule out, and it would be entered by a store
 			// blip rather than by a decision.
 			log.WarnContext(ctx, "integration_duty_unknown", "error", err,
@@ -492,7 +492,7 @@ func (w *Worker) tearDown(ctx context.Context, kind Kind, state State, now time.
 	state.NextAttemptAt = now.Add(w.schedule.Next(state.Report, state.Attempts, reg.Settled))
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := w.store.SaveIntegration(ctx, state); err != nil {
-		// The vendor work that DID land is durable; what is lost is the
+		// The third-party app work that DID land is durable; what is lost is the
 		// record of the attempt, so the next tick tries again over a
 		// teardown that is safe to repeat.
 		log.WarnContext(ctx, "integration_status_unrecorded",
@@ -525,7 +525,7 @@ func (w *Worker) reconcile(ctx context.Context, kind Kind, state State, now time
 	state.NextAttemptAt = now.Add(w.schedule.Next(state.Report, state.Attempts, reg.Settled))
 
 	if err := w.store.SaveIntegration(ctx, state); err != nil {
-		// The pass still happened, and its work at the vendor is durable.
+		// The pass still happened, and its work at the third-party app is durable.
 		// What is lost is the RECORD of it, so the next tick re-runs a
 		// pass that has nothing left to do, which is the cheap failure.
 		log.WarnContext(ctx, "integration_status_unrecorded",

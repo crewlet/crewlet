@@ -90,7 +90,7 @@ Treat `webhook_token` as a signing key. It is doing that job with none of the gu
 
 ### The payload template
 
-Datadog posts an **empty body** unless the webhook defines a payload template, and the template is written by whoever creates the webhook rather than fixed by the vendor. There is therefore no canonical Datadog alert shape: there is the shape this engine asks for, and this is it.
+Datadog posts an **empty body** unless the webhook defines a payload template, and the template is written by whoever creates the webhook rather than fixed by the third-party app. There is therefore no canonical Datadog alert shape: there is the shape this engine asks for, and this is it.
 
 ```json
 {

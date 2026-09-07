@@ -6,7 +6,7 @@
 // `GET /integrations` is registered as an ordinary read, so on the default
 // posture it serves without a token. What this surface answers is a different
 // class of thing: the NAMES of the credentials a company holds, which are
-// unset, the vendor pages an administrator would visit, and the fields a
+// unset, the third-party app pages an administrator would visit, and the fields a
 // caller can write. Adding that to the anonymous-read answer would hand an
 // unauthenticated reader a map of what to attack. So it is its own prefix,
 // added to the always-guarded list beside /config and /secrets, and every
@@ -53,14 +53,14 @@ var log = logging.Get("api.setup")
 //
 // Just inside the fleet lease a pass holds (internal/engine's
 // setupLeaseTTL, 5 minutes), because the lease is what stops two operators
-// minting at the same vendor at once and it is not renewed mid-pass. A pass
-// that outlived it would still be writing at the vendor with nothing left
+// minting at the same third-party app at once and it is not renewed mid-pass. A pass
+// that outlived it would still be writing at the third-party app with nothing left
 // holding anyone else off.
 const PassDeadline = 4 * time.Minute
 
 // MaxBody bounds one submission.
 //
-// Small on purpose: the largest thing a submission carries is a vendor API
+// Small on purpose: the largest thing a submission carries is a third-party app API
 // token, and every one of those is under a kilobyte. A cap this size makes
 // the route uninteresting as a way to spend memory, and a caller that hits it
 // has sent the wrong thing rather than a large one.
@@ -101,7 +101,7 @@ type Options struct {
 	// then answers `resolved: null` rather than claiming false.
 	Resolve func(string) (string, bool)
 
-	// Passes are the vendors this build can provision over the API. Nil
+	// Passes are the third-party apps this build can provision over the API. Nil
 	// serves the three pass routes as "not provisionable", which is the
 	// honest answer on a node with no secret store to mint into.
 	Passes *setup.Runner
@@ -163,7 +163,7 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /setup/integrations/{kind}", s.one)
 	mux.HandleFunc("POST /setup/integrations/{kind}/inputs", s.inputs)
 	mux.HandleFunc("DELETE /setup/integrations/{kind}", s.disconnect)
-	// The two that RUN something at the vendor, and the read that follows
+	// The two that RUN something at the third-party app, and the read that follows
 	// one. See pass.go for why check and provision are one function.
 	mux.HandleFunc("POST /setup/integrations/{kind}/provision", s.provision)
 	mux.HandleFunc("POST /setup/integrations/{kind}/check", s.check)
@@ -234,29 +234,29 @@ type ToolState struct {
 	// delivery for a reason no input fixes.
 	Satisfied bool `json:"satisfied"`
 
-	// InboundPath is where this vendor's deliveries arrive, and PublicURL
-	// is that path on the address vendors reach this deployment at. Empty
+	// InboundPath is where this third-party app's deliveries arrive, and PublicURL
+	// is that path on the address third-party apps reach this deployment at. Empty
 	// when the surface has no inbound route, or when no base is set.
 	InboundPath string `json:"inbound_path,omitempty"`
 	PublicURL   string `json:"public_url,omitempty"`
 
 	// CanProvision reports that this build runs a provisioning pass for
-	// this vendor, so the screen offers the button rather than discovering
+	// this third-party app, so the screen offers the button rather than discovering
 	// on a press that there is nothing behind it.
 	CanProvision bool `json:"can_provision"`
 
-	// NeedsOperator is the transient vendor administrator credential the
+	// NeedsOperator is the transient third-party app administrator credential the
 	// pass asks for on every run, or null. Never stored.
 	NeedsOperator *setup.Requirement `json:"needs_operator,omitempty"`
 
-	// Seats are the per-seat requirement lists, for a vendor whose
+	// Seats are the per-seat requirement lists, for a third-party app whose
 	// credentials live on the seat rather than on the company. Slack is
 	// the one: each agent has its own app, so each has its own bot token
 	// and signing secret, and a submission names the seat it is for.
 	Seats []SeatState `json:"seats,omitempty"`
 }
 
-// SeatState is one seat's setup for a per-seat vendor.
+// SeatState is one seat's setup for a per-seat third-party app.
 type SeatState struct {
 	Handle       string              `json:"handle"`
 	Name         string              `json:"name,omitempty"`
@@ -264,8 +264,8 @@ type SeatState struct {
 	Satisfied    bool                `json:"satisfied"`
 
 	// InboundPath is where this SEAT's deliveries arrive, which on a
-	// per-seat vendor differs per seat, and PublicURL is that path on the
-	// address vendors reach this deployment at.
+	// per-seat third-party app differs per seat, and PublicURL is that path on the
+	// address third-party apps reach this deployment at.
 	InboundPath string `json:"inbound_path,omitempty"`
 	PublicURL   string `json:"public_url,omitempty"`
 }
@@ -326,7 +326,7 @@ func (s *Service) one(w http.ResponseWriter, r *http.Request) {
 // state builds one tool's answer, or reports that this build has no setup for
 // it yet.
 //
-// AN EXPLICIT ABSENCE rather than an empty requirement list: a vendor whose
+// AN EXPLICIT ABSENCE rather than an empty requirement list: a third-party app whose
 // requirements nobody has written down would otherwise answer "nothing is
 // missing" and the screen would show a Connect button that collects nothing.
 func (s *Service) state(company *config.Company, kind integration.Kind) (ToolState, bool) {
@@ -351,7 +351,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		// surface on its own: one app relays both Jira and Confluence
 		// events, so the id is one value with two consumers. Listing it
 		// on both would be two forms writing one field, and giving it a
-		// vendor of its own would put a card on the screen for something
+		// third-party app of its own would put a card on the screen for something
 		// that is a delivery path rather than a tool. Jira is where an
 		// operator opens Atlassian first, so it is asked there.
 		reqs = append(reqs, s.forgeRequirement(company))
@@ -482,7 +482,7 @@ func slackSeats(company *config.Company, resolve func(string) (string, bool)) []
 	return out
 }
 
-// inboundPath is where a vendor's deliveries arrive.
+// inboundPath is where a third-party app's deliveries arrive.
 //
 // Only the surfaces this build serves setup for. It is the same path the
 // integrations answer reports, and the two are checked against each other by
@@ -679,13 +679,13 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ASKED FOR, NOT DONE HERE. The block stays in the document until the
-	// vendor teardown has run, because that block carries the credential
+	// third-party app teardown has run, because that block carries the credential
 	// the teardown authenticates with: removing it now would strand every
 	// webhook and account the integration still holds, with nothing left
 	// to authenticate a second attempt.
 	//
 	// FORCE is the exception, and it is the operator saying they will
-	// clean up at the vendor themselves. A vendor that will never accept
+	// clean up at the third-party app themselves. A third-party app that will never accept
 	// the delete — a revoked token, an instance that is gone — would
 	// otherwise hold the integration in Disconnecting for ever.
 	if !req.Force {
@@ -695,7 +695,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 					"detail": "this node has no fleet status store, so a disconnect " +
 						"cannot be recorded for the loop to act on",
 					"hint": "retry against a node with coordination, or force the " +
-						"disconnect and remove what the vendor holds by hand",
+						"disconnect and remove what the third-party app holds by hand",
 				})
 			return
 		}
@@ -711,7 +711,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 			"key": kind, "removed": false, "disconnecting": true,
 			"remove_seats": req.RemoveSeats,
 			"detail": "the engine is removing what this integration holds at the " +
-				"vendor; the block is dropped when that finishes",
+				"third-party app; the block is dropped when that finishes",
 		})
 		return
 	}
@@ -727,7 +727,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 		s.refuse(w, r, err, setup.Result{})
 		return
 	}
-	// FORCED, so whatever the vendor still holds is now the operator's to
+	// FORCED, so whatever the third-party app still holds is now the operator's to
 	// remove. The status row goes with the block: leaving one would report
 	// a surface that is no longer configured.
 	if s.status != nil {
@@ -819,7 +819,7 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 			"hint":   "run `crewlet secrets keygen` and install one",
 		})
 	default:
-		// THE DETAIL GOES TO THE LOG, never to the caller: a vendor's own
+		// THE DETAIL GOES TO THE LOG, never to the caller: a third-party app's own
 		// refusal can quote the config value it was given, which on a
 		// company holding a literal would echo the credential.
 		log.ErrorContext(r.Context(), "setup_write_failed",
@@ -837,15 +837,15 @@ func operatorOf(r *http.Request) string {
 // disconnectRequest is what the Disconnect dialog sends.
 type disconnectRequest struct {
 	// RemoveSeats is the checkbox: also remove the accounts this engine
-	// created at the vendor. False leaves them and removes only what the
+	// created at the third-party app. False leaves them and removes only what the
 	// engine registered for itself.
 	RemoveSeats bool `json:"remove_seats"`
 
-	// Force drops the block without waiting for the vendor teardown.
+	// Force drops the block without waiting for the third-party app teardown.
 	//
 	// The way out of a teardown that can never succeed: a revoked
 	// credential, an instance that no longer exists. It is the operator
-	// saying they will remove what the vendor holds themselves, so the
+	// saying they will remove what the third-party app holds themselves, so the
 	// answer names what was left behind.
 	Force bool `json:"force"`
 }

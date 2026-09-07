@@ -58,7 +58,7 @@ func buildProviders(c *config.Company, r *config.Resolver) (*phase.Registry, err
 // buildProvider constructs one backend.
 //
 // A provider whose credentials are missing still BUILDS. Every call then comes
-// back a clean 401, which names the provider and the vendor — far easier to
+// back a clean 401, which names the provider and the third-party app — far easier to
 // diagnose than a constructor that refused to exist and took the whole company
 // down at boot with a message about one key.
 func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm.Provider, error) {
@@ -68,7 +68,7 @@ func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm
 	// references verbatim — that is what keeps an exported revision free of
 	// resolved secrets — so a backend handed spec.APIKeys directly would
 	// send the literal "${ANTHROPIC_API_KEY}" as its credential and get a
-	// 401 that names the vendor rather than the misconfiguration.
+	// 401 that names the third-party app rather than the misconfiguration.
 	keys := spec.ResolvedKeys(r)
 	// The SAME resolution the keys get, for the other two scalars a Tier B
 	// document is allowed to write a reference into. Tier B stores "${VAR}"
@@ -104,7 +104,7 @@ func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm
 		// Name labels errors, logs and the chain's telemetry. An
 		// openai-compatible entry passes its CONFIG KEY so a failure names
 		// the endpoint that answered rather than claiming to be OpenAI;
-		// a plain openai entry leaves it empty and keeps the vendor's name.
+		// a plain openai entry leaves it empty and keeps the third-party app's name.
 		name := ""
 		if spec.Type == config.LLMOpenAICompatible {
 			name = key
@@ -139,7 +139,7 @@ func BuildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver) (*cl
 //
 // Its credentials do not arrive the way an API entry's do. A metered entry
 // has a list of keys and a pool that rotates them; this one has ONE login,
-// held by the vendor's CLI in a directory on disk, and at most a single
+// held by the third-party app's CLI in a directory on disk, and at most a single
 // long-lived token beside it. So there is no pool here and nothing to rotate
 // — the cooldowns an operator configured govern the chain's retry of this
 // provider, not a key inside it.

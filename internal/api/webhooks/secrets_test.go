@@ -19,7 +19,7 @@ import (
 // that absence is asserted rather than assumed.
 //
 // A field wired to the wrong secret is invisible until a real delivery from a
-// real vendor refuses to verify, with the vendor's settings page showing a
+// real third-party app refuses to verify, with the third-party app's settings page showing a
 // healthy hook. That is what the mapping is held to here.
 
 // gitLabFixtureSecret is whsec_ over standard base64 of a 32-byte key — the
@@ -31,7 +31,7 @@ const gitLabFixtureSecret = "whsec_YS1maXh0dXJlLXNpZ25pbmcta2V5LW9mLTMyYnl0ZXM="
 // a new key, never a new shape.
 const rotatedGitLabSecret = "whsec_YS1yb3RhdGVkLXNpZ25pbmcta2V5LW9mLTMyYnl0ZXM="
 
-// servedYAML is a whole company on the vendors this build serves.
+// servedYAML is a whole company on the third-party apps this build serves.
 var servedYAML = `
 name: Acme
 providers:
@@ -242,7 +242,7 @@ func TestARotatedSecretTakesEffectWithoutARestart(t *testing.T) {
 	// restart.
 	//
 	// Measured on GitLab because GitLab is a route a running company can
-	// have a secret on at all: a vendor this build does not serve has no
+	// have a secret on at all: a third-party app this build does not serve has no
 	// config able to give it one, so nothing there is ever rotated.
 	e := newEdge(t)
 	body := []byte(`{"object_kind":"issue"}`)
@@ -262,7 +262,7 @@ func TestARotatedSecretTakesEffectWithoutARestart(t *testing.T) {
 //
 // A secret lives in the config as a ${VAR}, and the gap between "written
 // down" and "resolved to something a route can check a signature with" is
-// invisible from every other surface: the config shows a secret, the vendor's
+// invisible from every other surface: the config shows a secret, the third-party app's
 // settings page shows a healthy hook, and every delivery is refused with
 // nothing naming the variable.
 func TestVerifiableNamesWhatCouldActuallyAcceptADelivery(t *testing.T) {
@@ -289,7 +289,7 @@ func TestVerifiableNamesWhatCouldActuallyAcceptADelivery(t *testing.T) {
 		{
 			// GitLab signs with the DECODED 32 bytes. A value that is not
 			// one cannot be the key for any delivery, however non-empty.
-			"gitlab holding a key the vendor could not have produced",
+			"gitlab holding a key the third-party app could not have produced",
 			webhooks.Secrets{GitLab: "whsec_c2hvcnQ="},
 			nil,
 		},
@@ -343,8 +343,8 @@ func literal(value string) string { return value }
 // resolved at construction, which is what makes rotating one a change to the
 // environment rather than to the company. This consumer did not resolve, and
 // the result was seven routes verifying against the literal string
-// "${GITLAB_SIGNING_SECRET}": every delivery from every vendor refused, with
-// the vendor's settings page showing a healthy hook. Measured against a real
+// "${GITLAB_SIGNING_SECRET}": every delivery from every third-party app refused, with
+// the third-party app's settings page showing a healthy hook. Measured against a real
 // GitLab.
 //
 // Worse than the outage is what the literal IS. A config field the dashboard

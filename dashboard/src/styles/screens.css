@@ -766,7 +766,7 @@
 
 /* One row per surface, laid out the way the console's own catalogue is: an
    icon tile, the name and what it is for, and the state on the right. The
-   tile is NEUTRAL on purpose. A vendor's brand mark would spend a hue on
+   tile is NEUTRAL on purpose. A third-party app's brand mark would spend a hue on
    "which integration", and colour here means state and nothing else. */
 /* ---- Integrations -------------------------------------------------------
    ONE CARD PER TOOL, not rows inside a panel, and the shape is the console's
@@ -845,7 +845,7 @@
   outline-offset: -2px;
 }
 
-/* The vendor's mark, in a circle the way the console draws it. Its colours
+/* The third-party app's mark, in a circle the way the console draws it. Its colours
    are the vendor's own; see ui/VendorMark.tsx for why that is the one
    exception to colour carrying state. */
 .int-brand {
@@ -1026,7 +1026,7 @@
 }
 
 /* A FINDING TAKES THE FULL WIDTH BENEATH ITS ROW rather than squeezing into
-   the detail line: it is a sentence, often a vendor's own error text, and
+   the detail line: it is a sentence, often a third-party app's own error text, and
    truncating the one line that says what to do is the opposite of useful. */
 .int-row-note {
   flex-basis: 100%;

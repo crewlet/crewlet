@@ -1,15 +1,15 @@
 // Package notify is the backend-neutral notification spine.
 //
-// Everything an inbound message needs on its way from a vendor's webhook to a
-// seat's turn, with no vendor in it: which conversation an event belongs to,
+// Everything an inbound message needs on its way from a third-party app's webhook to a
+// seat's turn, with no third-party app in it: which conversation an event belongs to,
 // how several events in one conversation merge into a single trigger, who the
 // parties are, which events a seat must not be woken by, and how often it may
 // be woken at all.
 //
-// The vendors sit on top and contribute only what is genuinely theirs — a
+// The third-party apps sit on top and contribute only what is genuinely theirs — a
 // parser, a transport, a prompt, a mention grammar. That split is load-bearing
-// rather than tidy: a spine built after its first vendor is a spine with that
-// vendor's assumptions welded into it, and the second vendor then arrives to
+// rather than tidy: a spine built after its first third-party app is a spine with that
+// third-party app's assumptions welded into it, and the second third-party app then arrives to
 // find its own shape unrepresentable.
 package notify
 
@@ -28,9 +28,9 @@ import (
 // it. Three readers, so one definition.
 //
 // It is STAMPED BY THE PRODUCER and read by everyone else. The notification
-// layer knows the vendor and can derive the key; the broker's partition
+// layer knows the third-party app and can derive the key; the broker's partition
 // function is then a field read that cannot disagree with what the producer
-// meant. Deriving it again at partition time would put vendor knowledge in the
+// meant. Deriving it again at partition time would put third-party app knowledge in the
 // queue layer and give two places a chance to answer differently.
 
 // KeyField is the payload field a producer stamps the key into.
@@ -40,7 +40,7 @@ const KeyField = "conversation_key"
 //
 // Stamped by the inbound service after the recipient cascade, because it is
 // the one fact about a notification a parser genuinely cannot know: which
-// seat a vendor's account id or email belongs to is answered by the org, not
+// seat a third-party app's account id or email belongs to is answered by the org, not
 // by the payload.
 const RecipientField = "recipient_handle"
 
@@ -48,11 +48,11 @@ const RecipientField = "recipient_handle"
 // arrived on — one of [types.ChannelKind].
 //
 // Stamped by the parser and never derived downstream, for the reason
-// [KeyField] gives: the raw value is vendor-specific (Mattermost says "D",
+// [KeyField] gives: the raw value is third-party app-specific (Mattermost says "D",
 // Slack says the id starts with "D", a tracker has no channel at all), and
-// mapping it anywhere but in the vendor's own parser puts vendor knowledge
+// mapping it anywhere but in the third-party app's own parser puts third-party app knowledge
 // in a layer that must not have it — where it would quietly mark arbitrary
-// surfaces as direct messages the first time a vendor changed its encoding.
+// surfaces as direct messages the first time a third-party app changed its encoding.
 //
 // A source with no channel concept stamps nothing, which reads back as
 // [types.ChannelUnknown]. That is a real answer for a tracker or a code
@@ -61,7 +61,7 @@ const ChannelKindField = "channel_kind"
 
 // EventPrefix namespaces the fallback key.
 //
-// Its own namespace so it can never collide with a derived key: a vendor's
+// Its own namespace so it can never collide with a derived key: a third-party app's
 // local key is namespaced by source, and no source is called "event".
 const EventPrefix = "event:"
 
@@ -74,9 +74,9 @@ const EventPrefix = "event:"
 // which is exactly the pre-coalescing dispatch path.
 func Fallback(eventID string) string { return EventPrefix + eventID }
 
-// Namespaced turns a vendor's SOURCE-LOCAL key into a global one.
+// Namespaced turns a third-party app's SOURCE-LOCAL key into a global one.
 //
-// Two vendors can and do mint the same local key — a Jira issue and a GitLab
+// Two third-party apps can and do mint the same local key — a Jira issue and a GitLab
 // issue are both plausibly "42" — and an un-namespaced key would merge their
 // events into one trigger. The prompt returns the local half precisely
 // so it never has to know this rule.

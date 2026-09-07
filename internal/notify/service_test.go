@@ -17,7 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
-// trackerParser is the vendor half of the seam: it declares a source and
+// trackerParser is the third-party app half of the seam: it declares a source and
 // turns a delivery into recipients. Everything the service does around that
 // — guards, valve, prompt, wake — is what these tests are about.
 type trackerParser struct {
@@ -226,7 +226,7 @@ func TestADeliveryWakesTheSeatItNames(t *testing.T) {
 	if n.NotificationSource != "tracker" || n.Sender != "ana" || n.Subject != "ENG-42" {
 		t.Fatalf("the wake reads %+v", n)
 	}
-	// The SALIENT body is the raw message; Body is the vendor's rendered
+	// The SALIENT body is the raw message; Body is the third-party app's rendered
 	// trigger. A worker filtering on the salient text must not be handed
 	// scaffolding.
 	if n.SalientBody == nil || *n.SalientBody != "please look" {
@@ -241,8 +241,8 @@ func TestADeliveryWakesTheSeatItNames(t *testing.T) {
 	if !n.ContextRequiresRecon {
 		t.Fatal("a pointer trigger did not ask for recon")
 	}
-	// The vendor's conversation key rides along so the inbox coalescer
-	// partitions without re-deriving the vendor's rule.
+	// The third-party app's conversation key rides along so the inbox coalescer
+	// partitions without re-deriving the third-party app's rule.
 	if got := n.Metadata[notify.KeyField]; got != "tracker:u-1" {
 		t.Fatalf("conversation key = %q", got)
 	}
@@ -277,7 +277,7 @@ func TestTheWakeEnvelopeCarriesTheConversationKey(t *testing.T) {
 		t.Fatalf("the seat was woken %d times", len(woken))
 	}
 	if got := notify.KeyOf(woken[0]); got != "tracker:u-1" {
-		t.Errorf("the partition function reads %q, want the vendor's key", got)
+		t.Errorf("the partition function reads %q, want the third-party app's key", got)
 	}
 }
 
@@ -310,7 +310,7 @@ func TestTwoDeliveriesInOneConversationShareAPartition(t *testing.T) {
 
 // Most webhooks concern nobody here. Recording a skip for each would bury
 // the ones that matter.
-// And a self-contained trigger does NOT ask for recon: the vendor decides
+// And a self-contained trigger does NOT ask for recon: the third-party app decides
 // per event type, and a service that answered for it would send every seat
 // looking behind a message that is already the whole context.
 func TestASelfContainedTriggerDoesNotAskForRecon(t *testing.T) {
@@ -372,7 +372,7 @@ func TestARecipientNobodyMatchesIsRecorded(t *testing.T) {
 	}
 }
 
-// Handle, role, email, then the vendor's own ids — most specific first,
+// Handle, role, email, then the third-party app's own ids — most specific first,
 // because each later form is a guess the earlier one did not need to make.
 func TestTheRecipientCascadeTriesEveryForm(t *testing.T) {
 	h := newService(t, nil)

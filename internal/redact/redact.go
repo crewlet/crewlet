@@ -12,7 +12,7 @@
 // nothing from the rest of Crewlet so every layer can depend on it.
 //
 // The patterns are a DENYLIST OF KNOWN CREDENTIAL SHAPES, which bounds what
-// this can promise: it catches the vendor prefixes and key formats below, not
+// this can promise: it catches the third-party app prefixes and key formats below, not
 // an arbitrary opaque secret. It is the last line, not the first — the first
 // is not putting a credential in the text.
 package redact

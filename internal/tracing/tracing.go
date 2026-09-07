@@ -53,9 +53,9 @@
 // excluded, or its path redacted before anything reads it.
 //
 // OUTBOUND HTTP. The LLM and embeddings clients share one builder and could
-// take an instrumented transport; the six vendor clients each build their own.
+// take an instrumented transport; the six third-party app clients each build their own.
 // The round is already spanned one layer up (`llm.round`), which is where the
-// latency an operator can act on lives, and a vendor call is made by a tool
+// latency an operator can act on lives, and a third-party app call is made by a tool
 // whose `tool.call` span covers it. Instrumenting the transports as well would
 // add a span per HTTP request underneath spans already reporting the same wait.
 package tracing

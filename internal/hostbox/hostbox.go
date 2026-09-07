@@ -178,7 +178,7 @@ func resolve(path string) (string, error) {
 // filesystem, and at [FileMode] so the secret is never briefly world-readable.
 //
 // A missing src is not an error — it is the ordinary case of a profile naming
-// a credential file this vendor does not use — and reports false.
+// a credential file this third-party app does not use — and reports false.
 func CopyFileAtomic(src, dst string) (bool, error) {
 	info, err := os.Stat(src)
 	if err != nil || !info.Mode().IsRegular() {

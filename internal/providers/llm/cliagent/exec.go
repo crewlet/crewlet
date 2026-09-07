@@ -28,7 +28,7 @@ const termGrace = 5 * time.Second
 // stderrTail is how many lines of a failed child's stderr are reported.
 //
 // A CLI that crashes on startup prints a stack trace; the first line names
-// the failure and the rest names the vendor's own internals. Fifty lines
+// the failure and the rest names the third-party app's own internals. Fifty lines
 // carries a real Node or Rust trace intact while keeping one bad provider out
 // of the log budget for every other seat. Same figure the MCP supervisor uses.
 const stderrTail = 50
@@ -258,7 +258,7 @@ type extracted struct {
 	// estimates. `crewlet llm doctor` prints which of the two a provider
 	// gets, because a budget built on estimates is a different promise.
 	reported bool
-	// failed is the CLI's own is_error flag, for a vendor that reports a
+	// failed is the CLI's own is_error flag, for a third-party app that reports a
 	// failure inside a successful exit.
 	failed bool
 }
@@ -290,7 +290,7 @@ func extractObject(p Profile, stdout string) extracted {
 	if !ok {
 		// Not JSON at all: the CLI printed prose, which is still an
 		// answer. Reporting an unparseable-output error here would fail
-		// a turn over a vendor's banner.
+		// a turn over a third-party app's banner.
 		return extracted{text: strings.TrimSpace(stdout)}
 	}
 	out := extracted{text: firstString(doc, p.TextPaths)}

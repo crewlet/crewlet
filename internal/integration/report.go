@@ -7,9 +7,9 @@ import (
 
 // Phase is where an integration has got to.
 //
-// One vocabulary for every surface. Vendors differ in what they call things,
+// One vocabulary for every surface. Third-party apps differ in what they call things,
 // but an integration always passes through the same stations: a credential,
-// sometimes an app or an approval, then identities, then the vendor applying
+// sometimes an app or an approval, then identities, then the third-party app applying
 // what it accepted.
 //
 // The phase is what an operator reads and what the cadence is derived from,
@@ -25,7 +25,7 @@ const (
 	PhaseUnconfigured Phase = "unconfigured"
 
 	// PhaseAwaitingAdmin means a person must install or approve something
-	// at the vendor before the engine can act: a Slack app a workspace
+	// at the third-party app before the engine can act: a Slack app a workspace
 	// administrator has to approve, a GitHub App installation, the
 	// Atlassian Forge app. The engine cannot do it and retrying does not
 	// help, but it resumes on its own the moment they finish.
@@ -35,18 +35,18 @@ const (
 	// work, and the next pass carries it forward.
 	PhaseProvisioning Phase = "provisioning"
 
-	// PhaseActivating means the vendor accepted something and has not
+	// PhaseActivating means the third-party app accepted something and has not
 	// applied it yet: a membership, a role, an install. Nobody has to act.
 	PhaseActivating Phase = "activating"
 
 	// PhaseDegraded means agents are working but something needs a person:
 	// access the operator's own scheme grants beyond what the engine asks
-	// for, a tier the company document names that the vendor does not
+	// for, a tier the company document names that the third-party app does not
 	// have, a webhook that cannot be registered.
 	PhaseDegraded Phase = "degraded"
 
 	// PhaseDisconnecting means the integration is being taken away and
-	// what the engine registered at the vendor is being removed. The
+	// what the engine registered at the third-party app is being removed. The
 	// engine's own work, and the last thing it does for this surface.
 	//
 	// The block stays in the company document for the whole of it. A
@@ -137,7 +137,7 @@ func (p Phase) String() string { return string(p) }
 //
 // This is the field the cadence turns on, and the distinction it draws is not
 // "is something wrong" but "is anybody going to fix it without being asked".
-// Nothing the engine or a vendor is doing needs a person told about it. What
+// Nothing the engine or a third-party app is doing needs a person told about it. What
 // a person owes needs saying plainly, and needs watching at a rate that
 // matches how they will actually get to it.
 type Actor string
@@ -150,7 +150,7 @@ const (
 	// ActorEngine means the next pass carries it forward.
 	ActorEngine Actor = "engine"
 
-	// ActorProvider means the vendor is applying what it already accepted.
+	// ActorProvider means the third-party app is applying what it already accepted.
 	ActorProvider Actor = "provider"
 
 	// ActorAdmin means a person must act AT THE VENDOR: install the app,
@@ -163,7 +163,7 @@ const (
 	// ActorOperator means a person must change THIS DEPLOYMENT'S OWN
 	// configuration: a ${VAR} that resolves to nothing, a public base URL
 	// nothing set, a tier the company document spells wrong. Re-checked
-	// slowly, because nothing at the vendor will ever change it and asking
+	// slowly, because nothing at the third-party app will ever change it and asking
 	// often only spends requests.
 	//
 	// Separate from ActorAdmin even though both are "a person", because
@@ -192,7 +192,7 @@ type Outcome string
 
 const (
 	// OutcomeSettled means observed matches desired. Still re-read on a
-	// slow cadence, because access removed by hand at the vendor is only
+	// slow cadence, because access removed by hand at the third-party app is only
 	// ever found by looking.
 	OutcomeSettled Outcome = "settled"
 	// OutcomeWaiting means something is in flight. Retried soon, with
@@ -208,7 +208,7 @@ const (
 //
 // Detail and ActionURL exist so a blocked integration can be acted on without
 // reading logs or guessing. They are filled only for an actor who is a
-// person: telling an operator that "the vendor is applying agent access" and
+// person: telling an operator that "the third-party app is applying agent access" and
 // giving them a link is an invitation to go and interfere with it.
 //
 // The zero value is NOT a valid report (PhaseReady is a claim, and the empty
@@ -237,7 +237,7 @@ func (r Report) Outcome() Outcome {
 	case r.Phase == PhaseReady:
 		return OutcomeSettled
 	case r.Phase == PhaseDisconnecting:
-		// WAITING even when the teardown is stuck on a vendor refusing
+		// WAITING even when the teardown is stuck on a third-party app refusing
 		// the delete. Blocked is for something a person can go and do,
 		// and there is nothing to do here but let the retries run or
 		// force the disconnect, which is a different gesture.

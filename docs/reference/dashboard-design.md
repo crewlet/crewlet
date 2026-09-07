@@ -36,11 +36,11 @@ node, a tool origin — is **neutral**, and its identity is carried by its name,
 its icon and its position. Those are stable, legible, and do not run out at
 eight.
 
-The one exception is a **vendor's own mark** on the Integrations screen
+The one exception is a **third-party app's own mark** on the Integrations screen
 (`ui/VendorMark.tsx`): Slack's four colours, Atlassian's blue, GitLab's orange,
-Datadog's violet, drawn as the vendor draws them. A mark is identity by
+Datadog's violet, drawn as the third-party app draws them. A mark is identity by
 definition, and a recoloured Slack mark is not Slack's. The exception is held
-to exactly that: a mark is drawn only beside the vendor's name, nothing reads
+to exactly that: a mark is drawn only beside the third-party app's name, nothing reads
 state from it, none of its hues is reused as a token, and the integration's
 STATE beside it is carried by the status tone like everything else. A tool the
 company has not set up keeps its mark, dimmed.
@@ -557,7 +557,7 @@ rendered idle from the first phase to the last.
 
 1. **Colour is state, never identity.** No hash-to-hue, no per-agent tint, no
    per-category chip colour. If you need to tell two things apart, use their
-   names. The vendor marks in `ui/VendorMark.tsx` are the one, bounded
+   names. The third-party app marks in `ui/VendorMark.tsx` are the one, bounded
    exception (see "The one rule" above); nothing else is.
 2. **No new colour, size, radius or spacing literal.** If a component needs
    one, the TOKEN is what gets added.

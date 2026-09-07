@@ -77,7 +77,7 @@ const DefaultPromotionJaccard = 0.6
 // PromotionUnit is one unit the pass considers, resolved fresh per tick.
 //
 // CONTAINER RESOLVED BY THE CALLER, not by the writer: which space or project
-// a unit files into is a fact about the ORG, and a vendor package that read
+// a unit files into is a fact about the ORG, and a third-party app package that read
 // it would have to know what a unit is. The writer's job is to create a page
 // in a container it is handed.
 type PromotionUnit struct {
@@ -137,7 +137,7 @@ type PromotionUnits func() []PromotionUnit
 // function of the live epoch, and a writer captured when the pass was built
 // is a writer captured before the knowledge backend was wired. That is not
 // hypothetical — the background passes are armed after the node exists and
-// BEFORE the inbound service builds its vendor clients, so a captured writer
+// BEFORE the inbound service builds its third-party app clients, so a captured writer
 // was nil for every company, and the only symptom was one boot line saying
 // no knowledge base was configured while one was.
 //

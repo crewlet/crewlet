@@ -6,14 +6,14 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 )
 
-// Findings reads this run as the vendor-neutral vocabulary.
+// Findings reads this run as the third-party app-neutral vocabulary.
 //
-// SHORT, and that is the vendor rather than an omission. Mattermost holds one
+// SHORT, and that is the third-party app rather than an omission. Mattermost holds one
 // outbound websocket per seat and verifies no inbound delivery, so there is no
 // ingress to judge and no webhook to be missing: every finding this host can
 // produce is about a seat's own identity.
 //
-// A seat this run KEPT is not a finding, for the reason every other vendor's
+// A seat this run KEPT is not a finding, for the reason every other third-party app's
 // mapping states: keeping is the successful outcome of a re-run, and reporting
 // it would make a converged company look like it had work outstanding.
 func (r *Result) Findings() []integration.Finding {

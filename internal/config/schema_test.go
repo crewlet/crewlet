@@ -476,8 +476,8 @@ units:
 		// a signing_secret with no bot_token. That seat block is refused
 		// outright now, so the schema stopped letting it through and the
 		// case stopped proving anything; GitLab's webhook token carries the
-		// same shape of rule on a vendor this build serves — a format
-		// contract with the vendor, checked in Go, invisible to the schema.
+		// same shape of rule on a third-party app this build serves — a format
+		// contract with the third-party app, checked in Go, invisible to the schema.
 		{
 			name: "a signing secret gitlab would refuse", tier: TierCompany, validatorOnly: true,
 			// Deliberately NOT a whsec_ token: GitLab accepts only

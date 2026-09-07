@@ -1,7 +1,7 @@
 /**
  * Confirming a provisioning pass, and collecting the credential it runs as.
  *
- * A pass is not a form submission: it goes and does things at the vendor that
+ * A pass is not a form submission: it goes and does things at the third-party app that
  * outlive the request. GitLab's creates a service account per agent, mints a
  * token on each and adds them to a group. So the button that starts one says
  * what it will do before it does it, rather than after.

@@ -3,16 +3,16 @@
  *
  * THE ONE PLACE THE DASHBOARD DRAWS SOMEBODY ELSE'S COLOURS. The design
  * rule is that colour carries state and never identity (see
- * reference/dashboard-design.md), and a vendor's mark is the deliberate
- * exception: its colours are the vendor's own, drawn as the vendor draws
+ * reference/dashboard-design.md), and a third-party app's mark is the deliberate
+ * exception: its colours are the third-party app's own, drawn as the third-party app draws
  * them, because identity is exactly what a mark is for and a recoloured
  * Slack mark is not Slack's. Nothing reads state from a mark, no mark is
- * used anywhere but beside the vendor's name, and no hue here is reused as
+ * used anywhere but beside the third-party app's name, and no hue here is reused as
  * a token, so the rule holds everywhere else.
  *
  * The Slack, Atlassian, GitHub and GitLab marks are the same drawings the
  * console uses. The Mattermost and Datadog marks are Simple Icons' renderings
- * (CC0 1.0), each in the vendor's own hue. Datadog draws its own mark as a
+ * (CC0 1.0), each in the third-party app's own hue. Datadog draws its own mark as a
  * violet tile with the dog knocked out of it, which needs a white plate
  * behind the dog; that plate does not follow the violet outline exactly, so
  * on a dark card it showed as a white sliver past the tile's edge. The

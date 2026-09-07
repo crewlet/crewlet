@@ -15,7 +15,7 @@ import (
 
 // Provisioning: one Slack app per agent seat.
 //
-// # Every other vendor creates ACCOUNTS; this one creates APPS
+// # Every other third-party app creates ACCOUNTS; this one creates APPS
 //
 // A Slack bot is not a user somebody administers into existence — it is an
 // app, defined by a manifest, created by the operator's own

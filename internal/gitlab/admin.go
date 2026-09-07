@@ -86,9 +86,9 @@ func (e *APIError) Error() string {
 // Status reports the HTTP status a call was refused with, or 0 when the
 // failure was not an API error.
 //
-// The same accessor every vendor client exports, for the same reason: a
+// The same accessor every third-party app client exports, for the same reason: a
 // caller deciding what a refusal MEANS needs the number, and the meaning is
-// decided once, in [integration.Reject], rather than per vendor.
+// decided once, in [integration.Reject], rather than per third-party app.
 func Status(err error) int {
 	var e *APIError
 	if errors.As(err, &e) {

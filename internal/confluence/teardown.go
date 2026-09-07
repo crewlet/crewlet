@@ -13,7 +13,7 @@ import (
 // no seats this engine made and none for a disconnect to remove.
 //
 // Matched by the NAME PREFIX rather than by target, which is the opposite of
-// Jira's rule and follows how each vendor lets a hook be identified.
+// Jira's rule and follows how each third-party app lets a hook be identified.
 // Confluence registers one hook per event, each carrying the event's own
 // token in its URL, so a target comparison would need the token this engine
 // no longer wants to resolve; the [HookNamePrefix] every one of them is

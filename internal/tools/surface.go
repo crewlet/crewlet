@@ -188,7 +188,7 @@ func (s *Surface) Phase() string { return s.phase }
 //
 // Idempotent: a model that activates the same tool twice has not made an
 // error worth reporting, and a duplicate in the offered list is a duplicate in
-// the request the vendor rejects.
+// the request the third-party app rejects.
 func (s *Surface) Activate(name string) bool {
 	if _, ok := s.universe.Lookup(name); !ok {
 		return false
@@ -443,7 +443,7 @@ func paramsOrEmpty(p map[string]any) map[string]any {
 	out := maps.Clone(p)
 	// AN OBJECT SCHEMA OR NOTHING. A tool's parameters reach two consumers
 	// that both require the top-level `type: "object"` the MCP spec
-	// mandates — a vendor's tool-definition API, which rejects the whole
+	// mandates — a third-party app's tool-definition API, which rejects the whole
 	// request, and the MCP server the bridge builds, whose AddTool PANICS —
 	// and for an MCP tool this map came off a third-party server's wire
 	// verbatim. A value off the wire must be a value rather than a panic,

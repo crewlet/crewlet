@@ -3,7 +3,7 @@
 //
 // # What this is for
 //
-// A subscription CLI in agent mode runs the executor itself: the vendor's own
+// A subscription CLI in agent mode runs the executor itself: the third-party app's own
 // loop drives the model, and the engine's job is to hand that loop the seat's
 // tools. Those tools cannot be shipped into the box — most are MCP children
 // holding the SEAT's credentials, several are engine control, and the whole
@@ -611,7 +611,7 @@ func (s *Session) handler(name string) mcp.ToolHandler {
 			// A SUSPEND CANNOT CROSS THIS BOUNDARY. It stops the
 			// ENGINE's tool loop with the call unanswered so the
 			// conversation can be persisted and re-entered; there is no
-			// engine loop here, and the conversation belongs to a vendor
+			// engine loop here, and the conversation belongs to a third-party app
 			// CLI that would simply hang. The tool that wants it is
 			// run_sandbox, which is offered to a bridged run as a
 			// handle-plus-wait pair instead — see the engine's bridge

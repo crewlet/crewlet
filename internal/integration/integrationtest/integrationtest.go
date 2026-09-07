@@ -1,12 +1,12 @@
 // Package integrationtest is the ONE suite every [integration.Reconciler]
 // passes, in the queuetest / coordtest / storetest tradition.
 //
-// # Why a shared suite rather than per-vendor tests
+// # Why a shared suite rather than per-third-party app tests
 //
 // [integration.Reconciler]'s doc states a safety contract in four clauses,
 // and until this package existed nothing anywhere enforced any of them. That
 // is the worst shape a rule can be in: written down, believed, and checked by
-// nobody. Seven vendors would each decide separately what "idempotent" and
+// nobody. Seven third-party apps would each decide separately what "idempotent" and
 // "must not rotate a working credential" mean, and the second reading is an
 // outage on a timer, because the loop runs unattended for the life of the
 // deployment.
@@ -23,7 +23,7 @@
 // and it asks that world how many writes it received. That second half is
 // [Reconciler.Mutations] and it is REQUIRED rather than optional, because it
 // is the one clause most likely to be wrong and a suite that quietly skipped
-// it would certify everything except the thing worth certifying. A vendor
+// it would certify everything except the thing worth certifying. A third-party app
 // harness that genuinely cannot count writes has to grow the ability rather
 // than be waived: a skip is not a pass.
 package integrationtest
@@ -44,7 +44,7 @@ import (
 // suite's own tests have to prove that every case CAN fail, and a case that
 // calls (*testing.T).Fatalf fails its parent too, so a deliberate violation
 // could not be asserted on from inside the same run. With a TB the cases are
-// drivable by a recorder. A vendor passes a real *testing.T and never sees
+// drivable by a recorder. A third-party app passes a real *testing.T and never sees
 // this type.
 type TB interface {
 	Helper()
@@ -54,7 +54,7 @@ type TB interface {
 
 // Case is one clause of the contract, drivable on its own.
 //
-// Exported so [Cases] can hand them to a recorder. A vendor calls [Run].
+// Exported so [Cases] can hand them to a recorder. A third-party app calls [Run].
 type Case struct {
 	Name string
 	Fn   func(t TB, r Reconciler)
@@ -73,7 +73,7 @@ func Cases() []Case {
 	}
 }
 
-// Reconciler is one vendor's entry into the suite.
+// Reconciler is one third-party app's entry into the suite.
 type Reconciler struct {
 	// New builds a reconciler against a world that is ALREADY CONVERGED:
 	// every seat has the identity the company asks for, every credential
@@ -86,7 +86,7 @@ type Reconciler struct {
 	// credential rotated every ten minutes for ever.
 	New func(t TB) integration.Reconciler
 
-	// Mutations counts every write the vendor has received since New.
+	// Mutations counts every write the third-party app has received since New.
 	//
 	// Required. See the package doc.
 	Mutations func() int
@@ -135,7 +135,7 @@ func kindIsStable(t TB, r Reconciler) {
 // THE LOAD-BEARING CLAUSE.
 //
 // The loop runs this every few minutes for the life of the deployment, so a
-// converged pass that writes is not a small inefficiency: at the vendors
+// converged pass that writes is not a small inefficiency: at the third-party apps
 // here, a write is an account created, a membership set, or a credential
 // minted. A credential minted every pass revokes the one every running agent
 // is authenticating with, from a loop whose whole promise is that it is safe
@@ -148,7 +148,7 @@ func convergedPassWritesNothing(t TB, r Reconciler) {
 	}
 	if after := r.Mutations(); after != before {
 		t.Fatalf("a pass over a converged world made %d write(s); the loop runs "+
-			"this every few minutes for ever, so a write here is a vendor "+
+			"this every few minutes for ever, so a write here is a third-party app "+
 			"mutation on a timer", after-before)
 	}
 }
@@ -182,7 +182,7 @@ func passesAgree(t TB, r Reconciler) {
 	}
 }
 
-// A vendor reports what it observed in the shared vocabulary and does not get
+// A third-party app reports what it observed in the shared vocabulary and does not get
 // to invent an eighth kind: an unknown one classifies as degraded with a
 // sentence nobody can act on.
 func findingsAreKnown(t TB, r Reconciler) {
@@ -224,7 +224,7 @@ func personFindingsAreActionable(t TB, r Reconciler) {
 // answer with findings.
 //
 // The two are opposite claims to the loop: an error is a fault it retries,
-// and an empty findings list is a statement that everything is fine. A vendor
+// and an empty findings list is a statement that everything is fine. A third-party app
 // that swallowed cancellation would have a node shutting down record every
 // integration as ready on its way out, and the next node to hold the duty
 // would trust that for a full settled interval.

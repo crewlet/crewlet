@@ -164,7 +164,7 @@ func TestNotDueIsNotReconciled(t *testing.T) {
 // THE SINGLETON'S POINT. A coordination store that could not say whether this
 // node holds the duty must not be read as "it is mine". Two nodes reconciling
 // one surface both see a seat with no account and both create one, and the
-// vendor ends up with two identities for one agent that no later pass can
+// third-party app ends up with two identities for one agent that no later pass can
 // detect or repair.
 func TestUnknownDutyDoesNotReconcile(t *testing.T) {
 	now := time.Now().UTC()
@@ -233,7 +233,7 @@ func TestAFaultIsAWaitAndDropsStaleFindings(t *testing.T) {
 		t.Fatalf("attempts is %d, want 1", row.Attempts)
 	}
 	if !strings.Contains(row.LastError, "502") {
-		t.Fatalf("LastError is %q, want the vendor's own message", row.LastError)
+		t.Fatalf("LastError is %q, want the third-party app's own message", row.LastError)
 	}
 	if row.Outcome != OutcomeWaiting {
 		t.Fatalf("a fault recorded outcome %q, want %q", row.Outcome, OutcomeWaiting)
@@ -410,7 +410,7 @@ func TestNewRefusesAnUnknownSurface(t *testing.T) {
 
 // Reconcilers with nowhere to record what they find are refused up front. A
 // worker that ran passes and dropped every result would look exactly like one
-// whose vendors were all healthy.
+// whose third-party apps were all healthy.
 func TestNewRefusesReconcilersWithNoStore(t *testing.T) {
 	_, err := New(Options{
 		Registrations: []Registration{{Reconciler: &fakeReconciler{kind: KindSlack}}},
@@ -433,7 +433,7 @@ func TestNewAcceptsNoReconcilers(t *testing.T) {
 }
 
 // A store that cannot record the result does not stop the pass, and does not
-// wedge the loop. The work at the vendor is already durable; what is lost is
+// wedge the loop. The work at the third-party app is already durable; what is lost is
 // the record of it, so the next tick re-runs a pass with nothing left to do.
 func TestASaveFailureDoesNotStopTheLoop(t *testing.T) {
 	r := &fakeReconciler{kind: KindGitLab}
@@ -489,7 +489,7 @@ func (f *fakeDisconnector) count() int {
 // Its block stays in the company document for the whole teardown, because
 // that block carries the credential the teardown authenticates with. A
 // reconcile over it would therefore find it configured, converge it, and
-// report it healthy while somebody was waiting for it to go — and on a vendor
+// report it healthy while somebody was waiting for it to go — and on a third-party app
 // whose pass registers hooks, it would put back exactly what the teardown was
 // removing.
 func TestATearingDownSurfaceIsTornDownRatherThanReconciled(t *testing.T) {
@@ -508,7 +508,7 @@ func TestATearingDownSurfaceIsTornDownRatherThanReconciled(t *testing.T) {
 		t.Fatalf("the teardown ran %d times, want 1", d.count())
 	}
 	if !d.removeSeats {
-		t.Error("the operator's answer about removing accounts did not reach the vendor")
+		t.Error("the operator's answer about removing accounts did not reach the third-party app")
 	}
 	// It finished, so the row is gone: nothing is left to reconcile.
 	if store.has(KindJira) {
@@ -528,7 +528,7 @@ func TestAFailedTeardownKeepsTheRowAndRetries(t *testing.T) {
 	w.Tick(context.Background())
 
 	if !store.has(KindJira) {
-		t.Fatal("a failed teardown forgot the row; the vendor still holds what it registered")
+		t.Fatal("a failed teardown forgot the row; the third-party app still holds what it registered")
 	}
 	row := store.get(t, KindJira)
 	if row.Report.Phase != PhaseDisconnecting {

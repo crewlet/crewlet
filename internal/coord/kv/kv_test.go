@@ -431,7 +431,7 @@ func TestFleetContract(t *testing.T) {
 // is the failure that matters here. SecretValues IS the engine's boot
 // snapshot: a name silently dropped from it resolves as an empty ${VAR} on
 // every node at once, which reaches a provider as an empty credential and
-// comes back as an auth failure blamed on the vendor. "I could not read it"
+// comes back as an auth failure blamed on the third-party app. "I could not read it"
 // has to be louder than "there is none".
 func TestAnUndecodableSecretIsRaisedNotSkipped(t *testing.T) {
 	nc := embeddedNATS(t)

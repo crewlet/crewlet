@@ -167,7 +167,7 @@ The OAuth exchange's answer names the app it was for, and the run **refuses a co
 
 It is a **secrets file** — written `0600` through a temp file and a rename, because a truncate-then-write interrupted half way would destroy values that cannot be read back. It is gitignored by name in the repo's own `.gitignore`; if you keep your company document elsewhere, gitignore it there too. Committing it publishes credentials nothing can rotate for you.
 
-Why a file at all, when no other vendor needs one: two of those four values have no field in the company config (nothing in the running engine reads a client id), and Slack has no method that reads them back. Deleting the ledger makes the next run create duplicate apps, since Slack has no API to list the ones you already have.
+Why a file at all, when no other third-party app needs one: two of those four values have no field in the company config (nothing in the running engine reads a client id), and Slack has no method that reads them back. Deleting the ledger makes the next run create duplicate apps, since Slack has no API to list the ones you already have.
 
 ### Bot scopes and events
 

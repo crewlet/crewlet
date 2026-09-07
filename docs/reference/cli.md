@@ -32,7 +32,7 @@ subcommand below is served by it.
 | `crewlet secrets rekey [-dry-run]` | Re-encrypt stored secrets under the active keyring key |
 | `crewlet llm list` | Every `cli-agent` provider the company declares, with its CLI, model and login state |
 | `crewlet llm doctor [KEY]` | Verify a subscription backend end to end — the CLI is installed, the login answers, a real completion returns, the CLI's own shell is refused and its web tool reaches the network (`-no-smoke` stops before all three real calls) |
-| `crewlet llm login <KEY>` | Establish the vendor's own login for a provider: brokered interactively, `-from-host` to adopt one this machine already has, `-capture-token` to mint a headless token into the [secret store](../concepts/secret-store.md) (add `-print-token` to send it to stdout and store nothing), `-token-stdin` for one you already hold |
+| `crewlet llm login <KEY>` | Establish the third-party app's own login for a provider: brokered interactively, `-from-host` to adopt one this machine already has, `-capture-token` to mint a headless token into the [secret store](../concepts/secret-store.md) (add `-print-token` to send it to stdout and store nothing), `-token-stdin` for one you already hold |
 | `crewlet llm status <KEY>` | Ask the CLI who it is currently logged in as |
 | `crewlet llm logout <KEY>` | Revoke locally and delete the provider's credential files |
 | `crewlet llm export <KEY> [-secret-store]` | Pack the login into one portable blob — stdout, or the secret store under the name the engine restores from on a fresh host |
@@ -49,7 +49,7 @@ subcommand below is served by it.
 
 ---
 
-> **Every command that reads the Tier B company document takes `-config`** (default `./crewlet.yaml`), and resolves its `${VAR}` references the way the engine does: **the secret store first, the process environment behind it**. A command that read the environment alone would see an empty string for every value already rotated into the store — and for `integrations.gitlab.signing_secret`, empty is the signal to *mint*, so a re-run would replace a working webhook secret at the vendor. With no bootstrap at that path, or one declaring no `secrets.keys`, the run resolves from the environment alone and says so on its first line. The one exception is the operator's own credential (`-admin-token` / `$GITLAB_ADMIN_TOKEN` and its siblings), which is read from the environment only — see [the secret store](../concepts/secret-store.md#what-still-has-to-be-in-the-environment).
+> **Every command that reads the Tier B company document takes `-config`** (default `./crewlet.yaml`), and resolves its `${VAR}` references the way the engine does: **the secret store first, the process environment behind it**. A command that read the environment alone would see an empty string for every value already rotated into the store — and for `integrations.gitlab.signing_secret`, empty is the signal to *mint*, so a re-run would replace a working webhook secret at the third-party app. With no bootstrap at that path, or one declaring no `secrets.keys`, the run resolves from the environment alone and says so on its first line. The one exception is the operator's own credential (`-admin-token` / `$GITLAB_ADMIN_TOKEN` and its siblings), which is read from the environment only — see [the secret store](../concepts/secret-store.md#what-still-has-to-be-in-the-environment).
 
 
 > **Every command except `crewlet run` logs at `warn`.** They open a store,
@@ -536,7 +536,7 @@ crewlet llm import <KEY>          # bundle on stdin
 ```
 
 The operator side of a [subscription LLM backend](../concepts/subscription-llm-backends.md):
-a `providers.llm` entry of `type: cli-agent` drives a vendor's own CLI under
+a `providers.llm` entry of `type: cli-agent` drives a third-party app's own CLI under
 the operator's Pro/Max plan instead of an API key, and the login that makes
 that work is established here rather than in the config document. `KEY` is the
 `providers.llm` key; commands that take one and are given none act on the only
@@ -554,11 +554,11 @@ reaches the network** (the one local tool every profile deliberately keeps
 on). Both are believed only on evidence a model cannot invent — the current
 clock, read by the tool.
 
-**`login`** has four shapes because the vendors do:
+**`login`** has four shapes because the third-party apps do:
 
 | Shape | When |
 |---|---|
-| *(no flag)* | Broker the vendor's own interactive login and keep the result |
+| *(no flag)* | Broker the third-party app's own interactive login and keep the result |
 | `-from-host` | Adopt a login this machine already has, e.g. from running the CLI by hand |
 | `-capture-token` | Mint a **headless token** into the secret store — the only shape a remote [code sandbox](../concepts/code-sandbox.md) can use, because a token is one scoped revocable variable and credential *files* never leave the engine host |
 | `-capture-token -print-token` | The same mint, written to **stdout** and stored nowhere — for an operator whose secrets live in somebody else's manager. It **refuses to run on a terminal**: this is a credential, and a token in a scrollback outlives the command, while a screen-share or a shell history outlives the scrollback. Pipe it or redirect it. The two-step alternative (`-capture-token`, then `secrets get -reveal`) writes the token into the store on the way past, which is precisely what this avoids. |
@@ -675,7 +675,7 @@ read as finished. A run that changed nothing prints no follow-up.
 | Flag | Description |
 |------|-------------|
 | `-admin-token` | Operator credential — a top-level group **Owner** PAT with `api` scope on GitLab.com, or an admin PAT self-managed. Falls back to `$GITLAB_ADMIN_TOKEN`. The seats' own tokens are what this run mints, so it cannot bootstrap itself from them. |
-| `-secret-store` / `-env-file PATH` / `-print` | Where minted credentials go — exactly one, and there is no default: a run with nowhere to put what it mints creates live credentials at the vendor and prints none of them. See [the secret store](../concepts/secret-store.md). |
+| `-secret-store` / `-env-file PATH` / `-print` | Where minted credentials go — exactly one, and there is no default: a run with nowhere to put what it mints creates live credentials at the third-party app and prints none of them. See [the secret store](../concepts/secret-store.md). |
 | `-public-url` | This deployment's public base URL; the group webhook is registered at `<url>/webhooks/gitlab`. Omit to skip webhook registration — a hook pointing at the wrong host is worse than none, because the instance then reports a healthy integration. |
 | `-rotate` | Mint a fresh token for every seat, including seats whose current one still works. **Restart the engine afterwards.** |
 | `-decommission` | Delete service accounts whose seats have left the config. Scoped **twice**: the username must start with `provisioning.username_prefix` (never empty — it defaults to `crewlet-`) *and* the account must be a member of this company's group, because either alone is too broad. That group scan is used in **both** modes and it is deliberate: every seat is made a member of `provisioning.group` whatever created it, so a managed account of this company is always in the group — while the instance's own service-account listing also holds every *other* company's accounts on the box, which a shared prefix would then sweep. Only the DELETE route differs by mode; sending one down the wrong route answers "no such account" for one that is still live. An account the instance refuses to delete because it is not a service account is reported rather than aborting — that refusal is GitLab catching what the scan should not have proposed, so it is a signal about the prefix. |
@@ -756,7 +756,7 @@ crewlet slack provision <company.yaml> [-secret-store | -env-file PATH | -print]
                                        [-no-install] [-dry-run]
 ```
 
-Every other vendor's provisioning runs unattended. **Slack cannot**, and that is not an implementation gap: installing an app into a workspace is an OAuth grant, and OAuth exists precisely so that a person decides. So the run creates and updates the apps by itself, then hands the operator one authorize URL per seat and takes the code back — and where there is nobody to ask (`-no-install`, `-dry-run`), it prints the URLs and stops rather than pretending.
+Every other third-party app's provisioning runs unattended. **Slack cannot**, and that is not an implementation gap: installing an app into a workspace is an OAuth grant, and OAuth exists precisely so that a person decides. So the run creates and updates the apps by itself, then hands the operator one authorize URL per seat and takes the code back — and where there is nobody to ask (`-no-install`, `-dry-run`), it prints the URLs and stops rather than pretending.
 
 For each seat whose `integrations.slack` credentials are whole `${VAR}` references it builds the canonical manifest ([`internal/slack`](../integrations/slack.md#bot-scopes-and-events) is the single source of truth for the scopes and events), creates or updates the app, records the **signing secret** into the variable `signing_secret` points at, and — after the click — the **bot token** into the one `bot_token` points at. A seat whose credentials are literals is one an operator manages by hand: it is reported and skipped, never rewritten.
 

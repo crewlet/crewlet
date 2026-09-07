@@ -80,7 +80,7 @@ func TestReplyIsDerivedForEveryLedgeredTriggerType(t *testing.T) {
 
 // THE VENDOR'S OWN READING OF ITS ROUTING. A notification is unaddressed
 // unless the source said somebody is waiting — see notify.Prompt.Addressed —
-// and the flag rides the event so the engine never has to know a vendor's
+// and the flag rides the event so the engine never has to know a third-party app's
 // event vocabulary.
 func TestAnAddressedNotificationOwesAnAnswer(t *testing.T) {
 	t.Parallel()

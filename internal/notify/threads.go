@@ -60,7 +60,7 @@ type MentionGrammar interface {
 	//
 	// An EMPTY selfIdentity must fall through to the collective check
 	// rather than matching everything: the identity is resolved against
-	// the vendor at connect, so every message arriving before that would
+	// the third-party app at connect, so every message arriving before that would
 	// otherwise read as a personal mention of every seat.
 	Detect(text, selfIdentity string) (FollowReason, bool)
 }

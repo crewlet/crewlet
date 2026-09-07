@@ -106,7 +106,7 @@ func parseLine(line string) (string, string, bool) {
 }
 
 // A RECORDED CREDENTIAL IS DURABLE BEFORE Record RETURNS. Buffering to a
-// flush opens a window where a token exists at the vendor and nowhere else:
+// flush opens a window where a token exists at the third-party app and nowhere else:
 // a crash there leaves it live, unrecorded, and nobody knows to revoke it.
 func TestARecordedCredentialIsDurableImmediately(t *testing.T) {
 	t.Parallel()
@@ -155,7 +155,7 @@ func TestDiscardRemovesEverythingTheRunRecorded(t *testing.T) {
 	}
 }
 
-// AN AWKWARD TOKEN SURVIVES EVERY SINK. These are the shapes real vendor
+// AN AWKWARD TOKEN SURVIVES EVERY SINK. These are the shapes real third-party app
 // credentials take, and each breaks a different naive implementation.
 func TestEverySinkCarriesAnAwkwardTokenVerbatim(t *testing.T) {
 	t.Parallel()
@@ -343,7 +343,7 @@ func TestSourcingARolledBackPrintStreamUnsetsEverything(t *testing.T) {
 // A SINK WITH NOWHERE TO WRITE IS REFUSED BEFORE ANYTHING IS MINTED.
 //
 // The failure a nil stream produces is otherwise the worst-timed one there
-// is: the run reaches the vendor, mints a live credential, and only then
+// is: the run reaches the third-party app, mints a live credential, and only then
 // discovers it has nothing to print it to — leaving a token that exists in
 // GitLab and in no operator's hands.
 func TestAPrintSinkWithNoStreamIsRefused(t *testing.T) {

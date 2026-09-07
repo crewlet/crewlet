@@ -165,7 +165,7 @@ func TestTheOpenCodeInvocationAlwaysStreamsJson(t *testing.T) {
 }
 
 // A custom base URL means the run's own declared provider; otherwise the model
-// is addressed under its vendor family.
+// is addressed under its third-party app family.
 func TestTheOpenCodeModelIsAddressedUnderTheRightProvider(t *testing.T) {
 	cases := []struct {
 		llm  sandbox.AgentLLM
@@ -187,7 +187,7 @@ func TestTheOpenCodeModelIsAddressedUnderTheRightProvider(t *testing.T) {
 	}
 }
 
-// A subscription entry's provider type is the same for every vendor, so
+// A subscription entry's provider type is the same for every third-party app, so
 // reading it would address a Claude subscription's model as an OpenAI one —
 // which is why the family comes from the declared type, not from the entry.
 func TestAnUnknownProviderTypeFallsBackToTheOpenAiFamily(t *testing.T) {

@@ -129,7 +129,7 @@ export const rest = {
     send("PATCH", path, body ?? {}, headers),
   // DELETE CARRIES A BODY HERE, which is unusual and deliberate: a
   // disconnect is not one act but a family of them, and which one it is —
-  // whether the accounts go too, whether to stop waiting for a vendor that
+  // whether the accounts go too, whether to stop waiting for a third-party app that
   // will never answer — are inputs to the deletion rather than separate
   // routes. Passing them as query parameters would put a destructive choice
   // in a proxy log.

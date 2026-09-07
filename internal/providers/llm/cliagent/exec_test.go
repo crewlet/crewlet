@@ -191,7 +191,7 @@ func TestASpentSubscriptionIsRateLimitedWithItsOwnResetTime(t *testing.T) {
 		t.Fatalf("error is not classified: %v", err)
 	}
 	if classified.RetryAfter < 30*time.Minute || classified.RetryAfter > 40*time.Minute {
-		t.Errorf("RetryAfter = %v, want the vendor's own reset instant", classified.RetryAfter)
+		t.Errorf("RetryAfter = %v, want the third-party app's own reset instant", classified.RetryAfter)
 	}
 }
 

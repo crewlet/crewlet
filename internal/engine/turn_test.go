@@ -46,8 +46,8 @@ func ev(kind string) *events.Event {
 			Sender: "ana", Subject: "a message", Body: "hello",
 		}, events.TraceContext{})
 		// AS internal/notify STAMPS IT: the envelope names the PRODUCER
-		// of the wake, not the vendor — "notify.slack", never "slack".
-		// A test that wrote the bare vendor name here asserted against a
+		// of the wake, not the third-party app — "notify.slack", never "slack".
+		// A test that wrote the bare third-party app name here asserted against a
 		// shape nothing publishes, and passed for a coalescing record that
 		// filed every merge under a source no dashboard filter matches.
 		e.Source = "notify.slack"
@@ -687,11 +687,11 @@ func TestAMergedPartitionIsRecordedWithItsConstituents(t *testing.T) {
 	}
 	// THE VENDOR, not the producer of the wake. internal/notify stamps the
 	// envelope "notify.slack"; every other notification event carries the
-	// bare vendor name, and a record that disagrees is filed under a source
+	// bare third-party app name, and a record that disagrees is filed under a source
 	// no dashboard filter matches — so the Integrations room reported zero
 	// coalesced merges for every integration.
 	if rec.NotificationSource != "slack" {
-		t.Errorf("source = %q, want the bare vendor name", rec.NotificationSource)
+		t.Errorf("source = %q, want the bare third-party app name", rec.NotificationSource)
 	}
 	// The SPAN they arrived in, which is what an operator reads to see how
 	// hard batching kicked in — the count alone cannot say whether it was
@@ -701,7 +701,7 @@ func TestAMergedPartitionIsRecordedWithItsConstituents(t *testing.T) {
 		t.Errorf("span = %s..%s", rec.FirstAt, rec.LastAt)
 	}
 	if rec.NotificationSource != "slack" {
-		t.Errorf("source = %q, want the vendor rather than the engine", rec.NotificationSource)
+		t.Errorf("source = %q, want the third-party app rather than the engine", rec.NotificationSource)
 	}
 }
 
@@ -892,7 +892,7 @@ func TestOnlyTheSandboxParkOffersItsDeliveryAsAnAnswer(t *testing.T) {
 //
 // Batching landed on its own: a partition of five already became one turn.
 // What that turn was HANDED was the five enriched bodies concatenated, because
-// notify.Coalesce was called by nothing — so the seat read the vendor's triage
+// notify.Coalesce was called by nothing — so the seat read the third-party app's triage
 // scaffolding five times, each copy pointing at staler state, and five separate
 // asks, which a model answers separately. The assertion that catches it is the
 // scaffolding count: a merged digest renders it ONCE.
@@ -933,7 +933,7 @@ func TestACoalescedConversationReachesTheTurnAsOneDigest(t *testing.T) {
 	// AND THE SCAFFOLDING RENDERS ONCE. This is the assertion that fails
 	// without the merge: three concatenated bodies carry three copies.
 	if n := strings.Count(ask, "TRIAGE SCAFFOLDING"); n != 1 {
-		t.Errorf("the vendor scaffolding rendered %d times, want once\ngot:\n%s", n, ask)
+		t.Errorf("the third-party app scaffolding rendered %d times, want once\ngot:\n%s", n, ask)
 	}
 	// The digest says it IS one, so the seat answers once rather than
 	// three times.

@@ -9,7 +9,7 @@ import (
 // What an operator has to supply before GitLab events reach a seat, and
 // before this engine can create the accounts those seats act as.
 //
-// # This is the first vendor whose pass CREATES something a person owns
+// # This is the first third-party app whose pass CREATES something a person owns
 //
 // A GitHub pass registers a hook. A GitLab pass creates a service account per
 // agent, mints a token on each, adds them to a group and registers a webhook.
@@ -135,7 +135,7 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 	return reqs
 }
 
-// AdminCredential is the group Owner token this vendor's provisioning and its
+// AdminCredential is the group Owner token this third-party app's provisioning and its
 // teardown both authenticate with.
 //
 // HELD, not transient, and that is a deliberate reversal. It used to be asked

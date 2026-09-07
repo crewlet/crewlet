@@ -50,7 +50,7 @@ var tagKeys = map[string]string{
 	// Which VENDOR a notification event concerns. A tag rather than a
 	// payload read for the same reason as `failed` below: a listing
 	// deliberately never selects the payload column, so the Integrations
-	// room aggregating "how many of this vendor's deliveries were dropped
+	// room aggregating "how many of this third-party app's deliveries were dropped
 	// by the routing gate" has no other way to read it. Rows written
 	// before this tag existed read back without it — a real discontinuity
 	// at that point in the timeline, not a bug to paper over.

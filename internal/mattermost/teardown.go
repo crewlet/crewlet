@@ -23,7 +23,7 @@ type TeardownOptions struct {
 // Teardown removes what this engine created in a Mattermost instance.
 //
 // NO WEBHOOKS TO WITHDRAW, and that is the whole difference from the other
-// vendors. Mattermost holds an outbound websocket per seat and verifies no
+// third-party apps. Mattermost holds an outbound websocket per seat and verifies no
 // inbound delivery, so this engine registers nothing at the instance that
 // would outlive a disconnect. Dropping the block is enough to stop every
 // socket.

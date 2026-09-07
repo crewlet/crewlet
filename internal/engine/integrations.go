@@ -39,10 +39,10 @@ const integrationDutyTTL = 3 * integration.Interval
 // Only the ones whose existing pass is READ-ONLY. This loop runs unattended
 // for the life of the deployment, so a pass that creates accounts or mints
 // credentials on its own is a different and much larger decision than
-// reporting what a vendor already has, and one an operator has to opt into
+// reporting what a third-party app already has, and one an operator has to opt into
 // rather than inherit from an upgrade.
 //
-// Jira and GitHub report rather than mint: neither vendor issues a credential
+// Jira and GitHub report rather than mint: neither third-party app issues a credential
 // on a provisioner's behalf, so their reconcile resolves each seat's identity
 // and reads the instance. Run with no sink and no webhook base, which is
 // exactly the posture `-dry-run` already uses on both subcommands, they write
@@ -51,12 +51,12 @@ const integrationDutyTTL = 3 * integration.Interval
 // GitLab, Mattermost and Slack are deliberately absent. Each of their passes
 // creates service accounts and mints tokens, and each refuses to run without
 // a sink to record them in, so there is no read-only posture to put them in
-// today. Wiring them here would mean the engine provisioning a vendor on its
+// today. Wiring them here would mean the engine provisioning a third-party app on its
 // own schedule, which is a behaviour an operator must ask for.
 func (e *Engine) startIntegrations(ctx context.Context) {
 	// NO COORDINATION STORE, NO LOOP. A node without one has nowhere to
 	// record what a pass finds, and a loop that ran anyway would spend a
-	// vendor's rate limit on an answer nothing could read.
+	// third-party app's rate limit on an answer nothing could read.
 	if e.backends == nil || e.backends.Fleet == nil {
 		log.InfoContext(ctx, "integration_reconciler_idle",
 			"detail", "this node has no coordination store, so there is "+
@@ -83,14 +83,14 @@ func (e *Engine) startIntegrations(ctx context.Context) {
 
 		// TEARDOWN ONLY. These passes CREATE accounts and mint tokens on
 		// them, which a timer must never do: a loop that converged them
-		// would provision a company's vendor on a schedule nobody asked
+		// would provision a company's third-party app on a schedule nobody asked
 		// for, and gitlab.Reconcile refuses outright without a sink for
 		// exactly that reason. They can still be REMOVED on a schedule,
 		// because removal is only ever the answer to somebody pressing
 		// Disconnect.
 		//
 		// Slack and Datadog are here for the opposite reason: they have
-		// no pass at all and register nothing at the vendor, so there is
+		// no pass at all and register nothing at the third-party app, so there is
 		// nothing to converge and nothing to withdraw. They still need a
 		// registration, because without one a disconnect asked for on
 		// either would sit on the fleet row for ever with the screen
@@ -113,7 +113,7 @@ func (e *Engine) startIntegrations(ctx context.Context) {
 		// surface would trade a working company for a dashboard field.
 		log.ErrorContext(ctx, "integration_reconciler_unavailable", "error", err,
 			"detail", "the company is running without integration status; "+
-				"the vendor subcommands still report the same findings")
+				"the third-party app subcommands still report the same findings")
 		return
 	}
 	e.integrations = worker

@@ -49,7 +49,7 @@ type State struct {
 	// LastError is the fault from the last pass that returned one, cleared
 	// by any pass that does not. A FAULT IS NOT A FINDING: a finding is a
 	// statement about the operator's world, and this is the engine or the
-	// vendor failing to look at it.
+	// third-party app failing to look at it.
 	LastError string `json:"last_error,omitempty"`
 
 	// LastAttemptAt and SettledAt are different questions and both are
@@ -70,14 +70,14 @@ type State struct {
 	//
 	// It is also what makes the teardown survive its own failures: the
 	// intent lives on the fleet row rather than in the request that
-	// asked, so a vendor refusing the delete leaves the surface
+	// asked, so a third-party app refusing the delete leaves the surface
 	// disconnecting and retrying rather than quietly connected again.
 	Disconnecting bool `json:"disconnecting,omitempty"`
 
 	// RemoveSeats carries the operator's answer to "also remove the
 	// accounts Crewlet created". The engine's own webhooks come out
 	// either way — it registered them and nothing else uses them — but
-	// an account may be a person's colleague in that vendor, so deleting
+	// an account may be a person's colleague in that third-party app, so deleting
 	// one is never inferred.
 	RemoveSeats bool `json:"remove_seats,omitempty"`
 }
@@ -120,7 +120,7 @@ func (s State) Due(now time.Time) bool { return !now.Before(s.NextAttemptAt) }
 
 // MaxLastErrorLength bounds the fault text one state carries.
 //
-// A wrapped error chain from a vendor client is a sentence or two; a client
+// A wrapped error chain from a third-party app client is a sentence or two; a client
 // that pastes a response body into its error is a megabyte, and this record
 // is written to a KV whose value size is a hard limit shared with every other
 // integration's state. Truncated rather than refused: the first sentence of a
@@ -133,7 +133,7 @@ const MaxLastErrorLength = 2000
 // Through [textcut.Ellipsis] rather than a slice, and through textcut rather
 // than a local helper: a plain detail[:n] splits whatever multi-byte
 // character straddles the cut, which the KV's JSON encoding then replaces
-// with U+FFFD, so a vendor error carrying an accented message reaches the
+// with U+FFFD, so a third-party app error carrying an accented message reaches the
 // operator garbled rather than merely shortened. That rule already has one
 // home in this tree and does not need a second, which is the whole reason
 // textcut exists.
@@ -165,7 +165,7 @@ type Store interface {
 	// Removing the block is the operator saying what the engine should
 	// stop talking to. It is NOT a request to destroy the accounts,
 	// memberships and webhooks a previous pass created: those stay until
-	// somebody types the vendor subcommand's decommission flag and reads
+	// somebody types the third-party app subcommand's decommission flag and reads
 	// what it is about to delete. See this package's doc.
 	ForgetIntegration(ctx context.Context, kind Kind) error
 }
@@ -195,7 +195,7 @@ func Observe(state State, kind Kind, findings []Finding, err error, now time.Tim
 		return state, true
 	case errors.Is(err, ErrCredentialRejected):
 		// NOT A WAIT. The case below treats a fault as one because almost
-		// every fault is a vendor briefly unreachable, and that reasoning
+		// every fault is a third-party app briefly unreachable, and that reasoning
 		// is exactly backwards here: a refused credential is refused
 		// identically on every subsequent pass, so reporting "the engine
 		// is working on it" tells an operator to wait for something that
@@ -207,7 +207,7 @@ func Observe(state State, kind Kind, findings []Finding, err error, now time.Tim
 		// every other kind reads and cannot drift from it.
 		//
 		// NO Detail, deliberately: the kind's own sentence is the
-		// headline, and the vendor's words go in LastError below. Putting
+		// headline, and the third-party app's words go in LastError below. Putting
 		// the raw error in both printed the same wrapped chain twice, one
 		// line under the other, and the chain is long enough that the two
 		// copies filled the row.
@@ -217,7 +217,7 @@ func Observe(state State, kind Kind, findings []Finding, err error, now time.Tim
 		state.Attempts++
 		state.LastError = truncateError(err.Error())
 	case err != nil:
-		// A FAULT IS A WAIT. Almost every one is a vendor briefly
+		// A FAULT IS A WAIT. Almost every one is a third-party app briefly
 		// unreachable, and none of the rest is fixed by giving up. The
 		// findings are DROPPED rather than kept: a pass that failed did
 		// not observe the world, and rendering a previous pass's
@@ -258,7 +258,7 @@ func Observe(state State, kind Kind, findings []Finding, err error, now time.Tim
 //
 // forget is true only on success. The caller removes the block in the same
 // step, and the order matters: the block is the credential the teardown
-// authenticates with, so removing it first would strand whatever the vendor
+// authenticates with, so removing it first would strand whatever the third-party app
 // still holds.
 func ObserveTeardown(state State, kind Kind, err error, now time.Time) (next State, forget bool) {
 	state.Kind = kind

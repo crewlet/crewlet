@@ -79,7 +79,7 @@ func (Prompt) ConversationKey(metadata map[string]string, _ string) string {
 // A tracker reports what somebody DID, not the outcome of what they did.
 // Every event here is one the actor already knows about — their own comment,
 // their own transition, their own edit — and the parser drops the actor's
-// copy at the door. The exception exists for a vendor that reports a
+// copy at the door. The exception exists for a third-party app that reports a
 // consequence the actor could not have seen coming, which is a code host's
 // failing pipeline, not an issue whose description was just saved.
 func (Prompt) WakesActor(string) bool { return false }

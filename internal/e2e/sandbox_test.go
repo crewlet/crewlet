@@ -45,9 +45,9 @@ func (n *node) conversation(t *testing.T, handle, key string) []ledger.Session {
 // GATE G6 — the golden coding turn.
 //
 // A real local sandbox, a real detached process, the real suspend and the real
-// resume. The one stub is the vendor endpoint, exactly as in the gate above:
+// resume. The one stub is the third-party app endpoint, exactly as in the gate above:
 // what is under test is the ENGINE's half of a coding turn, and a real coding
-// CLI would test the vendor's.
+// CLI would test the third-party app's.
 //
 // The "coding agent" here is a shell script installed as `claude` on the box's
 // PATH. That makes the whole detached protocol real — a process group, a

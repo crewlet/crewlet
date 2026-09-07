@@ -22,13 +22,13 @@ func TestNextTurnsOnTheActor(t *testing.T) {
 		t.Fatalf("an operator wait is %s, want the flat %s", operator, s.Operator)
 	}
 	if admin >= operator {
-		t.Fatalf("a person acting at the vendor (%s) is not watched more "+
+		t.Fatalf("a person acting at the third-party app (%s) is not watched more "+
 			"closely than a config nobody has edited (%s)", admin, operator)
 	}
 }
 
 // An operator wait is FLAT. Backing it off buys nothing, because nothing at
-// the vendor will ever change a ${VAR} this deployment did not set, and a
+// the third-party app will ever change a ${VAR} this deployment did not set, and a
 // stretching interval only delays noticing the moment somebody does.
 func TestOperatorWaitDoesNotBackOff(t *testing.T) {
 	s := DefaultSchedule
@@ -112,7 +112,7 @@ func TestSettledOverrideAppliesOnlyWhenReady(t *testing.T) {
 		t.Fatalf("a surface with no override waited %s, want the shared %s", got, s.Settled)
 	}
 	// The override is a SETTLED interval. A surface that is waiting on the
-	// vendor must not inherit it, or a rate-limited vendor would also be
+	// third-party app must not inherit it, or a rate-limited third-party app would also be
 	// the slowest one to finish provisioning.
 	working := Report{Phase: PhaseProvisioning, Actor: ActorEngine}
 	if got := s.Next(working, 1, slack); got != s.WaitingBase {
@@ -122,7 +122,7 @@ func TestSettledOverrideAppliesOnlyWhenReady(t *testing.T) {
 }
 
 // A zero duration means "look again immediately", so a schedule nobody wired
-// would be a pass every tick against every vendor's API.
+// would be a pass every tick against every third-party app's API.
 func TestWithDefaultsFillsEveryField(t *testing.T) {
 	got := Schedule{}.WithDefaults()
 	if got != DefaultSchedule {
@@ -149,7 +149,7 @@ func TestDefaultScheduleIsOrdered(t *testing.T) {
 		t.Errorf("WaitingBase %s is not below WaitingMax %s", s.WaitingBase, s.WaitingMax)
 	case s.AdminBase >= s.WaitingBase:
 		t.Errorf("a person acting now (%s) is watched no more closely than a "+
-			"vendor applying a grant (%s)", s.AdminBase, s.WaitingBase)
+			"third-party app applying a grant (%s)", s.AdminBase, s.WaitingBase)
 	case s.Operator <= s.AdminMax:
 		t.Errorf("an unedited config (%s) is retried as often as a person "+
 			"mid-install (%s)", s.Operator, s.AdminMax)

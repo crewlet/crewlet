@@ -60,7 +60,7 @@ test("a blocked surface says what to do and where", () => {
     />,
   );
   expect(screen.getByText(/swe has no Jira account/)).toBeTruthy();
-  expect(screen.getByText(/you, at the vendor/)).toBeTruthy();
+  expect(screen.getByText(/you, at the third-party app/)).toBeTruthy();
   expect(screen.getByRole("link").getAttribute("href")).toBe("https://jira.example.com/admin");
 });
 
@@ -234,14 +234,6 @@ test("an absent tool is a plain card with no disclosure and no badge", () => {
   expect(screen.getByText("Team communication")).toBeTruthy();
 });
 
-// CONNECTED FIRST. An operator comes here to finish something, so what is
-// already working belongs above the catalogue of what is not.
-test("a set-up tool sorts above one that is not", () => {
-  const rows = rowsOf({ key: "datadog", configured: true });
-  const order = [...CATALOG].sort((a, b) => Number(isSetUp(b, rows)) - Number(isSetUp(a, rows)));
-  expect(order[0]?.key).toBe("datadog");
-});
-
 // A READY PHASE DOES NOT SILENCE A REFUSED WEBHOOK SECRET.
 //
 // The loop says nothing about ingress at all: the Jira and GitHub passes run
@@ -327,7 +319,7 @@ test("the phase order is the engine's", () => {
 
 // --- the action slot -------------------------------------------------------- //
 
-import { actionFor, isSetUp, sectionsFor } from "./Integrations.tsx";
+import { actionFor, sectionsFor } from "./Integrations.tsx";
 import type { SetupToolState } from "~/protocol/types.ts";
 
 function toolState(over: Partial<SetupToolState>): SetupToolState {
@@ -393,12 +385,12 @@ test("a tool with no setup surface offers no action", () => {
   expect(actionFor(state, [])).toBeNull();
 });
 
-// --- a per-seat vendor ------------------------------------------------------ //
+// --- a per-seat third-party app ------------------------------------------------------ //
 
 // SLACK GETS A SECTION PER SEAT, because each agent has its own app and so its
 // own bot token. A seat with no app yet is exactly the seat somebody opened
 // this dialog to give one to, so it is listed too.
-test("a per-seat vendor becomes one section per agent", () => {
+test("a per-seat app becomes one section per agent", () => {
   const slackTool = toolState({
     key: "slack",
     configured: true,
@@ -415,7 +407,7 @@ test("a per-seat vendor becomes one section per agent", () => {
 
 // A company whose Slack block exists and whose seats hold no app is not
 // connected: nothing can post.
-test("a per-seat vendor with no seat set up is unfinished", () => {
+test("a per-seat app with no seat set up is unfinished", () => {
   const state = rollUp(slack, rowsOf({ key: "slack", configured: true }));
   const action = actionFor(state, [
     toolState({
@@ -513,7 +505,7 @@ test("a surface dropping nothing carries no note about it", () => {
 // --- disconnecting ---------------------------------------------------------- //
 
 // A TOOL NOBODY CONFIGURED HAS NOTHING TO DISCONNECT FROM, so it offers no
-// control for it. Otherwise a catalogue of six unconfigured vendors would
+// control for it. Otherwise a catalogue of six unconfigured third-party apps would
 // carry six buttons that undo nothing.
 test("an unconfigured tool offers no disconnect", () => {
   render(<EntryRow entry={slack} rows={rowsOf()} onDisconnect={() => {}} />);
@@ -570,4 +562,18 @@ test("a teardown outranks a failing surface", () => {
     ),
   );
   expect(state.tag).toBe("Disconnecting");
+});
+
+// ALPHABETICAL, and it replaced a connected-first sort deliberately.
+//
+// Connected-first reads well the first time and badly afterwards: the order
+// changes as an app connects or fails, so a row moves out from under the
+// cursor of somebody who came back to the same screen expecting it where it
+// was. A name does not move.
+test("the catalogue is ordered by name, whatever is connected", () => {
+  const names = [...CATALOG].sort((a, b) => a.name.localeCompare(b.name)).map((e) => e.name);
+  expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)));
+  // And the order does not depend on state: the same list, connected or not.
+  expect(names[0]).toBe("Atlassian");
+  expect(names.at(-1)).toBe("Slack");
 });

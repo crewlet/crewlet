@@ -437,7 +437,7 @@ func TestAReconcileNeverTakesAnAgentsIdentity(t *testing.T) {
 }
 
 // An unresolved ${VAR} is skipped and COUNTED. Registering the literal text
-// would match no payload any vendor sends, and the failure would surface as
+// would match no payload any third-party app sends, and the failure would surface as
 // a person who mysteriously never gets mentioned.
 func TestAnUnresolvedReferenceIsSkippedAndCounted(t *testing.T) {
 	o := company()

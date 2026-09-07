@@ -13,7 +13,7 @@ import (
 // approximation the budgets below were set against. A real tokenizer would give
 // different numbers, which would make every budget a value nobody could trace
 // to the failure that set it — and it would tie a pure text package to a model
-// vendor's vocabulary file.
+// third-party app's vocabulary file.
 //
 // "Character" means one Unicode CODE POINT. These prompts are dense with em
 // dashes and arrows; counting bytes instead would inflate every measurement by

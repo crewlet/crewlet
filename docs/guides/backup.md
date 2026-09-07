@@ -257,7 +257,7 @@ guarantee.
 
 Treat snapshots as defense in depth rather than the copy you must be able to
 trust: restoring one is a crash recovery, which is the least-proven surface of
-a pre-1.0 database engine, and the store's own vendor recommends keeping
+a pre-1.0 database engine, and the store's own third-party app recommends keeping
 independent backups. `crewlet backup` is the copy to trust — it is verified at
 the moment it is taken — and the cold runbook is the one whose restore
 exercises no recovery code at all.

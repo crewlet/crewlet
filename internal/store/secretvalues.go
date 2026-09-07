@@ -49,7 +49,7 @@ import (
 // safe answer and carries on. This one raises. An unreadable secret
 // resolving to "" does not fail here — it becomes an empty Bearer token
 // hours later and somewhere else entirely, on a request whose 401 names the
-// vendor rather than this store.
+// third-party app rather than this store.
 type SecretValues struct {
 	db     *DB
 	cipher secrets.Cipher

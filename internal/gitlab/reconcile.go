@@ -28,7 +28,7 @@ import (
 //
 // # A run that cannot record what it minted revokes it
 //
-// Between the vendor creating a token and the sink recording it there is a
+// Between the third-party app creating a token and the sink recording it there is a
 // window where the only copy of a live credential is in this process's
 // memory. If recording fails, the token exists, nothing can use it, and
 // nobody knows to remove it — so the run revokes what it minted and discards
@@ -784,7 +784,7 @@ const SigningSecretPrefix = whsec.Prefix
 // MintSigningSecret generates a Standard-Webhooks signing secret.
 //
 // The FORMAT lives in [whsec], with the three readers that must agree on it.
-// This is the vendor-facing name for it, because a caller here is asking
+// This is the third-party app-facing name for it, because a caller here is asking
 // GitLab a question and should not have to know which spec answers it.
 func MintSigningSecret() (string, error) { return whsec.Mint() }
 

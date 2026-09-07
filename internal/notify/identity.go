@@ -239,7 +239,7 @@ type Reconciliation struct {
 //
 // # Human ids need no integration
 //
-// Unlike agent identities, which each transport resolves against the vendor
+// Unlike agent identities, which each transport resolves against the third-party app
 // at connect, a human's ids are declared in config. Registration is
 // therefore synchronous and runs at boot and on every org swap, with no
 // network and nothing to await.
@@ -247,7 +247,7 @@ type Reconciliation struct {
 // lookup resolves ${VAR} references; nil reads the process environment. An
 // identity whose reference does not resolve is skipped and counted, never
 // registered as its literal text — a raw ${VAR} matches no payload any
-// vendor will ever send.
+// third-party app will ever send.
 func (r *Registry) ReconcileHumanContacts(o *org.Organization, lookup org.EnvLookup) Reconciliation {
 	var rec Reconciliation
 	desired := make(map[identityKey]string)

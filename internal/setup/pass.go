@@ -11,11 +11,11 @@ import (
 	"github.com/crewlet/crewlet/internal/provision"
 )
 
-// Running a vendor's provisioning pass from inside the engine.
+// Running a third-party app's provisioning pass from inside the engine.
 //
 // # What a pass is, and what makes this different from the loop
 //
-// The reconcile loop runs a vendor's own Reconcile every few minutes with NO
+// The reconcile loop runs a third-party app's own Reconcile every few minutes with NO
 // sink and NO webhook base, and those two absences are what make it safe to
 // run unattended: a base is permission to register a webhook, and a sink is
 // permission to mint a credential. Neither is something a timer may decide.
@@ -38,20 +38,20 @@ import (
 // dashboard and a tick that ran a minute later cannot disagree about what an
 // integration's state is: there is one classifier and one status row.
 
-// Pass runs one vendor's provisioning, with permission to write.
+// Pass runs one third-party app's provisioning, with permission to write.
 //
-// Kind is here rather than inferred so the registry is keyed by the vendor's
+// Kind is here rather than inferred so the registry is keyed by the third-party app's
 // own answer, the same shape [integration.Reconciler] uses.
 type Pass interface {
 	Kind() integration.Kind
 
-	// Run executes the vendor's existing Reconcile with a sink and a base.
+	// Run executes the third-party app's existing Reconcile with a sink and a base.
 	// It returns findings in the shared vocabulary, and an error only for
-	// a fault: something the engine or the vendor could not do at all,
+	// a fault: something the engine or the third-party app could not do at all,
 	// which is a different fact from anything the findings can express.
 	Run(ctx context.Context, in PassInput) ([]integration.Finding, error)
 
-	// Needs reports the transient vendor credential this pass requires, or
+	// Needs reports the transient third-party app credential this pass requires, or
 	// nil. A group Owner token or a Mattermost admin PAT is asked for on
 	// every run and never stored: it can create accounts, and a
 	// permanently held one turns a one-time grant into a standing power.
@@ -60,16 +60,16 @@ type Pass interface {
 
 // Teardowner is a [Pass] that can also remove what it registered.
 //
-// OPTIONAL, and the vendors that do not satisfy it are not oversights: Slack,
+// OPTIONAL, and the third-party apps that do not satisfy it are not oversights: Slack,
 // Mattermost and Datadog register no webhook from this engine, so a teardown
 // for them would have nothing to withdraw. A type assertion is what asks,
-// which keeps a vendor's answer in one place — the vendor — rather than in a
+// which keeps a third-party app's answer in one place — the third-party app — rather than in a
 // list here that has to be kept in step with it.
 type Teardowner interface {
 	Pass
 
-	// Teardown removes what this vendor's passes created. It is the only
-	// operation in this package that DESTROYS at a vendor, so it takes
+	// Teardown removes what this third-party app's passes created. It is the only
+	// operation in this package that DESTROYS at a third-party app, so it takes
 	// the operator's own answer about how far to go rather than
 	// inferring it.
 	//
@@ -88,11 +88,11 @@ type TeardownInput struct {
 	// way — this engine registered them, nothing else uses them, and one
 	// left behind delivers to a company that no longer has a block to
 	// route it. An ACCOUNT is different: it may be a colleague in that
-	// vendor with history attached, and deleting one because somebody
+	// third-party app with history attached, and deleting one because somebody
 	// pressed Disconnect is not a decision a button gets to make.
 	RemoveSeats bool
 
-	// Operator is the transient vendor credential, for a vendor whose
+	// Operator is the transient third-party app credential, for a third-party app whose
 	// [Pass.Needs] asks for one. Removing an account usually needs the
 	// same authority creating it did.
 	Operator string
@@ -104,7 +104,7 @@ type PassInput struct {
 	// difference from a loop tick.
 	Sink provision.TokenSink
 
-	// WebhookBase is the address vendors reach this deployment on, and
+	// WebhookBase is the address third-party apps reach this deployment on, and
 	// supplying it IS the permission to register a hook. Empty runs the
 	// pass read-only.
 	WebhookBase string
@@ -112,7 +112,7 @@ type PassInput struct {
 	// Seats narrows the run to these handles, empty meaning every seat.
 	Seats []string
 
-	// DryRun plans and validates without writing at the vendor.
+	// DryRun plans and validates without writing at the third-party app.
 	DryRun bool
 
 	// Recreate re-registers hooks with a fresh secret. DESTRUCTIVE across
@@ -120,18 +120,18 @@ type PassInput struct {
 	// company runs, so a caller must confirm it deliberately.
 	Recreate bool
 
-	// Operator is the transient vendor credential, when the pass needs
+	// Operator is the transient third-party app credential, when the pass needs
 	// one. Never persisted, and never logged.
 	Operator string
 }
 
-// ErrPassInFlight reports that this vendor's pass is already running.
+// ErrPassInFlight reports that this third-party app's pass is already running.
 var ErrPassInFlight = errors.New("setup: a pass for this integration is already running")
 
-// ErrNoPass reports a vendor this build cannot provision from the API.
+// ErrNoPass reports a third-party app this build cannot provision from the API.
 var ErrNoPass = errors.New("setup: no provisioning pass for this integration")
 
-// ErrNoTeardown reports a vendor that registers nothing to remove. Slack,
+// ErrNoTeardown reports a third-party app that registers nothing to remove. Slack,
 // Mattermost and Datadog register no webhook from this engine, so a
 // disconnect has only the company document to change.
 var ErrNoTeardown = errors.New("setup: nothing to remove at this integration")
@@ -156,7 +156,7 @@ type Run struct {
 	EndedAt   *time.Time            `json:"ended_at,omitempty"`
 	Findings  []integration.Finding `json:"findings,omitempty"`
 
-	// Error is the fault, if the pass could not run. NEVER the vendor's
+	// Error is the fault, if the pass could not run. NEVER the third-party app's
 	// raw message when that message can quote a config value: the caller
 	// maps it before it lands here.
 	Error string `json:"error,omitempty"`
@@ -176,7 +176,7 @@ type Duty func(ctx context.Context) (bool, error)
 
 // Runner executes passes and remembers what they did.
 type Runner struct {
-	// Passes are the vendors this build can provision, keyed by kind.
+	// Passes are the third-party apps this build can provision, keyed by kind.
 	passes map[integration.Kind]Pass
 
 	// Duty claims the fleet lease for one kind. Nil is a single node with
@@ -210,7 +210,7 @@ func NewRunner(passes []Pass, duty func(integration.Kind) Duty, now func() time.
 	}
 }
 
-// Serves reports whether this build can provision a vendor from the API.
+// Serves reports whether this build can provision a third-party app from the API.
 func (r *Runner) Serves(kind integration.Kind) bool {
 	if r == nil {
 		return false
@@ -219,7 +219,7 @@ func (r *Runner) Serves(kind integration.Kind) bool {
 	return ok
 }
 
-// Needs is the transient credential this vendor's pass asks for, or nil.
+// Needs is the transient credential this third-party app's pass asks for, or nil.
 func (r *Runner) Needs(kind integration.Kind) *Requirement {
 	if r == nil {
 		return nil
@@ -234,7 +234,7 @@ func (r *Runner) Needs(kind integration.Kind) *Requirement {
 // Start runs a pass, blocking until it finishes.
 //
 // BLOCKING, deliberately, and the caller decides what to do with that. A
-// GitHub pass is a handful of API calls; the vendors whose passes take
+// GitHub pass is a handful of API calls; the third-party apps whose passes take
 // minutes are not on this surface yet, and giving every one of them an
 // asynchronous shape today would be building the machinery for a case that
 // does not exist while making the one that does harder to reason about.
@@ -282,15 +282,15 @@ func (r *Runner) Start(ctx context.Context, kind integration.Kind, in PassInput,
 	return run, nil
 }
 
-// StartTeardown removes what a vendor holds, under the same guard a pass runs
+// StartTeardown removes what a third-party app holds, under the same guard a pass runs
 // beneath.
 //
 // THE SAME LEASE, deliberately. A teardown and a provisioning pass are the
-// two operations that write at the vendor, and letting them overlap is how a
+// two operations that write at the third-party app, and letting them overlap is how a
 // disconnect deletes a webhook the pass beside it is registering. Sharing the
 // claim means one of them waits, whichever arrives second.
 //
-// Returns [ErrNoTeardown] for a vendor that registers nothing to remove,
+// Returns [ErrNoTeardown] for a third-party app that registers nothing to remove,
 // which the caller reads as "there was nothing to do" rather than as a
 // failure: the disconnect still finishes.
 func (r *Runner) StartTeardown(
@@ -338,7 +338,7 @@ func (r *Runner) StartTeardown(
 	return run, nil
 }
 
-// Tears reports whether this build can remove what a vendor holds.
+// Tears reports whether this build can remove what a third-party app holds.
 func (r *Runner) Tears(kind integration.Kind) bool {
 	if r == nil {
 		return false

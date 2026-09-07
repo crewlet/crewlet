@@ -25,7 +25,7 @@ import (
 // A party registry is DERIVED from one org and answers for it permanently —
 // so an apply builds a new one, and everything reading parties reads it
 // through a function rather than holding it. A transport is the opposite: it
-// holds live sockets and resolved vendor identities, and rebuilding it on
+// holds live sockets and resolved third-party app identities, and rebuilding it on
 // every apply would drop every connection whenever an unrelated field
 // changed. So the registry is swapped and the transports are reconciled.
 
@@ -88,9 +88,9 @@ func (e *Engine) Registry() *notify.Registry {
 // seat on this node, sorted.
 //
 // NOT the integrations that are CONFIGURED, which is the distinction the
-// whole method exists for. A vendor's webhook route verifies and stores its
+// whole method exists for. A third-party app's webhook route verifies and stores its
 // deliveries as soon as its block is present; whether one then reaches an
-// agent depends on a parser existing, and four vendors have the first half
+// agent depends on a parser existing, and four third-party apps have the first half
 // and not the second. On every operator surface those look identical —
 // configured, secret present, deliveries arriving — so an integration that
 // ingests and routes nothing renders exactly like one that works.
@@ -143,7 +143,7 @@ func (e *Engine) Status() *notify.Statuses {
 // against an org that is no longer running, and a seat added by an apply
 // would be permanently unreachable with nothing failing.
 //
-// The vendor identities a transport resolved against a live server are
+// The third-party app identities a transport resolved against a live server are
 // re-registered into the new registry, because they are facts about the
 // SERVER rather than about the config — losing them on an apply would make
 // every agent's own message annotate as a stranger until something
@@ -340,7 +340,7 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 	return nil
 }
 
-// RouteInbound adds a vendor to this node's inbound edge after boot.
+// RouteInbound adds a third-party app to this node's inbound edge after boot.
 //
 // The seam a CUSTOM TRANSPORT joins through — an integration that is not one
 // of the shipped ones, or one that came up late. Refused rather than queued
@@ -577,11 +577,11 @@ func (e *Engine) stopNotifications(ctx context.Context) {
 	}
 }
 
-// errorText renders a vendor reconcile failure for a log line, including the
+// errorText renders a third-party app reconcile failure for a log line, including the
 // "it built but produced nothing" case that carries no error of its own.
 //
-// SHARED by every vendor reconciler, because each of them has the same two
-// ways to fail and a per-vendor copy would drift the first time one of them
+// SHARED by every third-party app reconciler, because each of them has the same two
+// ways to fail and a per-third-party app copy would drift the first time one of them
 // learned a third.
 func errorText(err error) string {
 	if err == nil {

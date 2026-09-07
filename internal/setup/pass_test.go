@@ -71,7 +71,7 @@ func TestASecondPassForOneVendorIsRefusedWhileTheFirstRuns(t *testing.T) {
 		t.Fatalf("second Start returned %v, want ErrPassInFlight", err)
 	}
 	if got := pass.count(); got != 1 {
-		t.Errorf("the pass ran %d times; the second call must not reach the vendor", got)
+		t.Errorf("the pass ran %d times; the second call must not reach the third-party app", got)
 	}
 
 	close(pass.release)
@@ -80,7 +80,7 @@ func TestASecondPassForOneVendorIsRefusedWhileTheFirstRuns(t *testing.T) {
 	}
 
 	// AND THE GUARD IS RELEASED. A claim that outlived its pass would lock
-	// the vendor out of every later attempt until the process restarted.
+	// the third-party app out of every later attempt until the process restarted.
 	done := newGate(integration.KindGitHub)
 	close(done.release)
 	r2 := NewRunner([]Pass{done}, nil, pinnedNow)
@@ -133,7 +133,7 @@ func TestALeaseHeldElsewhereIsInFlight(t *testing.T) {
 	}
 }
 
-// A vendor this build cannot provision is refused by name rather than
+// A third-party app this build cannot provision is refused by name rather than
 // reported as a pass that did nothing.
 func TestAVendorWithNoPassIsRefused(t *testing.T) {
 	r := NewRunner(nil, nil, pinnedNow)
@@ -141,20 +141,20 @@ func TestAVendorWithNoPassIsRefused(t *testing.T) {
 		t.Fatalf("err = %v, want ErrNoPass", err)
 	}
 	if r.Serves(integration.KindSlack) {
-		t.Error("Serves says a vendor with no pass is servable")
+		t.Error("Serves says a third-party app with no pass is servable")
 	}
 }
 
 // A FAILED PASS IS REMEMBERED AS FAILED, with the fault on the run, because
 // the screen polls this row after the request that started it has returned.
 func TestAFailedPassIsRecordedRatherThanForgotten(t *testing.T) {
-	boom := errors.New("vendor refused")
+	boom := errors.New("third-party app refused")
 	pass := &gatePass{kind: integration.KindGitHub, err: boom}
 	r := NewRunner([]Pass{pass}, nil, pinnedNow)
 
 	run, err := r.Start(context.Background(), integration.KindGitHub, PassInput{}, "run-1")
 	if !errors.Is(err, boom) {
-		t.Fatalf("err = %v, want the vendor's own failure", err)
+		t.Fatalf("err = %v, want the third-party app's own failure", err)
 	}
 	if run == nil {
 		t.Fatal("a failed pass returned no run, so nothing can be polled for it")

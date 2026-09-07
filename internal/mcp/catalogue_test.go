@@ -22,7 +22,7 @@ func TestACatalogueLineKeepsTheWholeDescription(t *testing.T) {
 		{"one line", "Read a file", "- get_file: Read a file"},
 		{
 			// The half a first-line-only renderer threw away: the argument
-			// rules and preconditions a vendor writes below its opening
+			// rules and preconditions a third-party app writes below its opening
 			// sentence, which is what a model needs to call the tool right.
 			"multi-line indents under its bullet",
 			"Read a file.\nAccepts a ref; returns base64 for binaries.",
@@ -52,7 +52,7 @@ func TestACatalogueLineKeepsTheWholeDescription(t *testing.T) {
 // nowhere.
 func TestACatalogueLineDropsNothing(t *testing.T) {
 	t.Parallel()
-	desc := strings.Repeat("a long paragraph of vendor guidance. ", 200)
+	desc := strings.Repeat("a long paragraph of third-party app guidance. ", 200)
 	got := mcp.CatalogueLine("get_file", desc)
 	if !strings.Contains(got, strings.TrimSpace(desc)) {
 		t.Error("a long description was shortened")

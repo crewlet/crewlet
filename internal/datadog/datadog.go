@@ -8,7 +8,7 @@
 // the only thing on it that could say whose problem that is, is the
 // MONITOR'S TAGS.
 //
-// So this is the one vendor whose routing is ownership rather than mention,
+// So this is the one third-party app whose routing is ownership rather than mention,
 // and the difference is not a gap to close later. Datadog's `@` syntax in a
 // monitor message is its OWN notification-target grammar, resolved by Datadog
 // against its integrations before the delivery is ever made: `@webhook-x` is
@@ -37,7 +37,7 @@
 //
 // Datadog posts an EMPTY BODY unless the webhook definition carries a payload
 // template, and the template is written by whoever creates the webhook rather
-// than fixed by the vendor. So there is no canonical Datadog alert shape to
+// than fixed by the third-party app. So there is no canonical Datadog alert shape to
 // decode: there is the shape this engine asks for, which
 // docs/integrations/datadog.md publishes and [Alert] decodes. Every field is
 // optional on the way in, because a template somebody edited is a

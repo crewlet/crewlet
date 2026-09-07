@@ -40,7 +40,7 @@ import (
 // Exported because the webhook edge needs it and lives outside this package:
 // it verifies with the VALUE, never with the reference, and a literal
 // "${GITLAB_SIGNING_SECRET}" reaching a verifier refuses every delivery the
-// vendor sends.
+// third-party app sends.
 func (e *Engine) Resolve(value string) string { return e.resolver().Value(value) }
 
 // LookupSecret answers what ONE ${VAR} name resolves to on this node, and

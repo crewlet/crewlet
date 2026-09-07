@@ -123,9 +123,9 @@ func (s Sources) recentRuns(ctx context.Context) []map[string]any {
 //
 // `routes` is the one thing here that is a property of the BUILD rather than
 // of the config, and it is the difference between an integration that works
-// and one that only looks like it does. A vendor's webhook route verifies and
+// and one that only looks like it does. A third-party app's webhook route verifies and
 // stores its deliveries as soon as its block is present; whether one then
-// wakes a seat needs a parser, and four vendors have the first half and not
+// wakes a seat needs a parser, and four third-party apps have the first half and not
 // the second. Without this field they render identically — configured, secret
 // present, deliveries arriving — so a company whose tracker is ingesting
 // hundreds of events that reach nobody looks exactly like one that is working.
@@ -211,7 +211,7 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		// Which is the question secret_usable answers, from what this
 		// process actually RESOLVED. The gap between the two is invisible
 		// from every other surface: an unset variable renders as a secret
-		// present, the vendor's settings page shows a healthy hook, and
+		// present, the third-party app's settings page shows a healthy hook, and
 		// every delivery is refused with nothing anywhere naming the
 		// variable. Null when this process cannot say — a standalone API —
 		// or when the surface has no secret to resolve, exactly as above.
@@ -321,9 +321,9 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	return body, nil
 }
 
-// inboundPath is where a vendor's deliveries arrive, so an operator can check
-// what they pasted into the vendor's settings page against what this engine
-// actually serves. Static per vendor — these are the routes webhooks.go
+// inboundPath is where a third-party app's deliveries arrive, so an operator can check
+// what they pasted into the third-party app's settings page against what this engine
+// actually serves. Static per third-party app — these are the routes webhooks.go
 // registers, and a disagreement between the two is a route nothing reaches.
 func inboundPath(kind string) string {
 	switch kind {
@@ -423,7 +423,7 @@ func (s Sources) countOutcomes(ctx context.Context, out *traffic) {
 	for _, row := range rows {
 		// THE INTEGRATION, not the event's Source: the source of an
 		// engine-published event names the engine, and what the row has
-		// to line up with is the inbound count for one vendor.
+		// to line up with is the inbound count for one third-party app.
 		source := integrationOf(row)
 		if source == "" {
 			continue
@@ -437,7 +437,7 @@ func (s Sources) countOutcomes(ctx context.Context, out *traffic) {
 	}
 }
 
-// integrationOf reads the vendor an outcome event concerns.
+// integrationOf reads the third-party app an outcome event concerns.
 //
 // FROM THE TAG, not the payload: a listing deliberately never selects the
 // payload column, so the tag is all a historical row carries — see

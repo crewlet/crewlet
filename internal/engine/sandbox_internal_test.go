@@ -83,7 +83,7 @@ func seatNamed(t *testing.T, c *Company, name string) *org.Role {
 // A coding run needs the model its seat was pointed at. Nothing filled this
 // before, so OpenCode — which must declare its own provider rather than read
 // a credential from the environment — resolved a bare model against its own
-// catalogue and the vendor's default endpoint.
+// catalogue and the third-party app's default endpoint.
 func TestTheSandboxGetsTheSeatsResolvedModel(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "sk-test")
 	c := companyFor(t, `
@@ -166,9 +166,9 @@ roles:
 	}
 }
 
-// A subscription entry's providers.llm type is "cli-agent" for every vendor,
+// A subscription entry's providers.llm type is "cli-agent" for every third-party app,
 // so a coding agent resolving "<family>/<model>" would address a Claude
-// subscription's "sonnet" as an OpenAI model. The profile's vendor is what
+// subscription's "sonnet" as an OpenAI model. The profile's third-party app is what
 // names the family.
 func TestASubscriptionSeatAddressesItsRealVendor(t *testing.T) {
 	state := t.TempDir()
@@ -192,10 +192,10 @@ roles:
 		t.Fatal("the sandbox got no model at all")
 	}
 	if got.ProviderType != "anthropic" {
-		t.Errorf("ProviderType = %q, want the CLI's own vendor family", got.ProviderType)
+		t.Errorf("ProviderType = %q, want the CLI's own third-party app family", got.ProviderType)
 	}
 	if got.BaseURL != "" {
-		t.Errorf("BaseURL = %q — a cli-agent entry talks to its vendor, so declaring "+
+		t.Errorf("BaseURL = %q — a cli-agent entry talks to its third-party app, so declaring "+
 			"a custom endpoint points the coding agent at nothing", got.BaseURL)
 	}
 }

@@ -347,7 +347,7 @@ func TestAMintedSecretVerifiesOnThisRoute(t *testing.T) {
 	if got := e.post(t, "/webhooks/gitlab",
 		body, vendorSignedDelivery(t, body, secret, "msg_1", pinned)).Code; got != http.StatusOK {
 		t.Fatalf("got %d — a secret this repository's own provisioner minted "+
-			"does not verify against a vendor-shaped signature", got)
+			"does not verify against a third-party app-shaped signature", got)
 	}
 }
 

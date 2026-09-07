@@ -26,7 +26,7 @@ type ConfigWriter interface {
 // where the API is, and the reconcile loop is armed when the engine itself is
 // CONSTRUCTED — several hundred milliseconds earlier, measured. A disconnect
 // ticking in that window reports [integration.ErrDisconnectUnavailable] and
-// the loop leaves the row untouched, rather than running the vendor teardown
+// the loop leaves the row untouched, rather than running the third-party app teardown
 // and finding it cannot remove the block: that would leave an integration
 // configured, live, and stripped of everything that made it work.
 func (e *Engine) UseConfigWriter(w ConfigWriter) { e.configWriter.Store(&w) }
@@ -42,14 +42,14 @@ func (e *Engine) configWriterOrNil() ConfigWriter {
 // vendorDisconnect removes one surface: what it holds, and then its block.
 //
 // THE ORDER IS THE WHOLE POINT and is why [integration.Disconnector] is one
-// call rather than two. The block carries the credential the vendor teardown
+// call rather than two. The block carries the credential the third-party app teardown
 // authenticates with, so removing it first strands every webhook and account
 // the integration still has, with nothing left to authenticate a second
 // attempt.
 type vendorDisconnect struct {
 	engine *Engine
 	kind   integration.Kind
-	// pass is nil for a vendor that registers nothing at all.
+	// pass is nil for a third-party app that registers nothing at all.
 	pass setup.Teardowner
 }
 
@@ -61,7 +61,7 @@ func (d vendorDisconnect) Disconnect(ctx context.Context, removeSeats bool) erro
 			// engine, and Slack's apps are made from the command line,
 			// so neither has anything this engine put there to take
 			// away. Dropping the block is the whole disconnect, and a
-			// vendor with no teardown must still HAVE a disconnector or
+			// third-party app with no teardown must still HAVE a disconnector or
 			// the intent sits on the row for ever.
 			return nil
 		}
@@ -69,7 +69,7 @@ func (d vendorDisconnect) Disconnect(ctx context.Context, removeSeats bool) erro
 	})
 }
 
-// dropBlock runs the vendor step and then removes the block, in that order.
+// dropBlock runs the third-party app step and then removes the block, in that order.
 func (e *Engine) dropBlock(
 	ctx context.Context, kind integration.Kind, vendor func(context.Context) error,
 ) error {
@@ -89,7 +89,7 @@ func (e *Engine) dropBlock(
 	}
 	patch := []byte(`{"integrations":{"` + string(kind) + `":null}}`)
 	if err := writer.Apply(ctx, patch, "disconnect "+string(kind), "reconcile loop"); err != nil {
-		// The vendor work IS done and is durable, so a retry re-runs a
+		// The third-party app work IS done and is durable, so a retry re-runs a
 		// teardown with nothing left to remove and then tries the block
 		// again. That is why every teardown is safe to repeat.
 		return fmt.Errorf("engine: remove the %s block: %w", kind, err)
@@ -99,11 +99,11 @@ func (e *Engine) dropBlock(
 
 // disconnectors pairs every pass this build can tear down with the seam the
 // loop removes it through.
-// EVERY SURFACE, not only the ones with something to remove. A vendor with no
+// EVERY SURFACE, not only the ones with something to remove. A third-party app with no
 // teardown still has a BLOCK, and a disconnect for it that no node could
 // complete would leave the intent on the fleet row for ever with the screen
 // reporting Disconnecting and nothing moving. Datadog and Slack are that
-// case: neither has anything this engine registered at the vendor.
+// case: neither has anything this engine registered at the third-party app.
 func (e *Engine) disconnectors() map[integration.Kind]integration.Disconnector {
 	tearers := map[integration.Kind]setup.Teardowner{}
 	for _, pass := range e.setupPasses() {

@@ -13,7 +13,7 @@ import (
 
 // The provisioning ledger: which Slack app belongs to which agent.
 //
-// # Why there is a file at all, when every other vendor has none
+// # Why there is a file at all, when every other third-party app has none
 //
 // Slack serves an app's credentials ONCE, at apps.manifest.create, and has
 // no method that reads them back. Two of the four — the client id and

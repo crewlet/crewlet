@@ -736,7 +736,7 @@ func TestASecondRunCreatesNothingAndRotatesEverything(t *testing.T) {
 	}
 }
 
-// A RUN THAT CANNOT RECORD WHAT IT MINTED REVOKES IT. Between the vendor
+// A RUN THAT CANNOT RECORD WHAT IT MINTED REVOKES IT. Between the third-party app
 // minting a token and the sink recording it, the only copy of a live
 // credential is in this process's memory — a failure there leaves it live,
 // unusable and unknown.

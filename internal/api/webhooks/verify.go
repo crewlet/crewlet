@@ -181,7 +181,7 @@ func equalHex(presented string, want []byte) bool {
 //
 // ONE FUNCTION rather than one per provider, because a constant-time compare
 // written twice is how one of the two stops being constant-time. It is named
-// for what it does rather than for a vendor, so a third provider in the same
+// for what it does rather than for a third-party app, so a third provider in the same
 // position reaches for it instead of copying it.
 //
 // The body is taken and ignored so this fits the same shape as its

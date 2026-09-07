@@ -53,7 +53,7 @@ type githubIdentities struct {
 // CONCURRENTLY and bounded — see [identityLookups]. Sequentially this is one
 // round trip per seat on the boot path, which on a company of thirty seats is
 // thirty timeouts end to end against a degraded API; unbounded it is thirty
-// simultaneous connections to one vendor, which is the shape an abuse
+// simultaneous connections to one third-party app, which is the shape an abuse
 // detector is built to notice.
 //
 // A seat whose lookup FAILS is left unresolved rather than failing the boot:

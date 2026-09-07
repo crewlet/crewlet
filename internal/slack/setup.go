@@ -10,7 +10,7 @@ import (
 //
 // # One app per agent, and the credentials are per seat
 //
-// Every other vendor here has one company-wide credential and, at most, a
+// Every other third-party app here has one company-wide credential and, at most, a
 // per-seat account behind it. Slack is the other way round: each agent has its
 // OWN Slack app, so the two values that matter, the bot token and the signing
 // secret, live on the seat rather than on the company. The company-wide block

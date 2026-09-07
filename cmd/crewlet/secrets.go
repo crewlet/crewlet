@@ -193,7 +193,7 @@ type secretTarget struct {
 	// where names the store, for the line printed after a write. Said
 	// EVERY TIME rather than only when it is the node-local one: an
 	// operator who cannot tell which of the two a rotation landed in has
-	// to find out by watching a vendor accept or reject a credential.
+	// to find out by watching a third-party app accept or reject a credential.
 	where string
 }
 
@@ -386,7 +386,7 @@ func setSecret(ctx context.Context, sv *secretTarget, name, value string,
 	fmt.Fprintf(stdout, "stored %s (%d bytes) as %s\n", name, len(value), who)
 	// SAID EVERY TIME, because the difference between the two stores is
 	// invisible afterwards and decides whether a fleet has the value: an
-	// operator who cannot tell which one they wrote finds out when a vendor
+	// operator who cannot tell which one they wrote finds out when a third-party app
 	// rejects a credential on the one node that never got it.
 	fmt.Fprintf(stdout, "written to %s\n", sv.where)
 	if !sv.fleet {
@@ -582,7 +582,7 @@ func currentOperator() string {
 // secretFromReader reads a piped secret.
 //
 // ONE trailing newline is stripped and no more, because `echo secret | ...`
-// is how this is used: a token carrying a newline fails at the vendor with a
+// is how this is used: a token carrying a newline fails at the third-party app with a
 // 401 that names neither the newline nor this command. Stripping MORE would
 // be wrong in the other direction — a secret may legitimately end in
 // whitespace, and silently altering it is a failure nobody can see.

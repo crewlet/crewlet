@@ -88,7 +88,7 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	//
 	// A server that will not start does not fail the apply. It costs that
 	// server's tools; refusing the epoch over it would take a working
-	// company down because one vendor's binary was missing.
+	// company down because one third-party app's binary was missing.
 	e.startSharedServers(ctx, c)
 	// The operator's ${var} map is CONFIG, so it is refreshed per epoch —
 	// unlike the skills themselves, which come from the knowledge base and

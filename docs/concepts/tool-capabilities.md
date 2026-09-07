@@ -162,7 +162,7 @@ the parent's explicit allowlist remains the curation, exactly as before.
 
 ## Why not classify with an LLM, or by tool name?
 
-- **By tool name** couples the engine to one vendor's tool catalogue
+- **By tool name** couples the engine to one third-party app's tool catalogue
   and silently fails open for every other.
 - **By an LLM pass at boot** would be non-deterministic and add latency
   and cost to startup for a yes/no the MCP spec already answers

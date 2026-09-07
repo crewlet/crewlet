@@ -41,7 +41,7 @@ func TestADerivedSecretNameIsAlwaysReferenceable(t *testing.T) {
 			setup.Requirement{Field: "bot_token", Seat: "nova.1-eu"},
 			"SLACK_BOT_TOKEN_NOVA_1_EU",
 		},
-		"the vendor's own declaration wins": {
+		"the third-party app's own declaration wins": {
 			integration.KindDatadog,
 			setup.Requirement{Field: "webhook_token", SecretName: "DD_TOKEN"},
 			"DD_TOKEN",
@@ -63,7 +63,7 @@ func TestADerivedSecretNameIsAlwaysReferenceable(t *testing.T) {
 // EVERY VENDOR KIND DERIVES A NAME THE GRAMMAR ACCEPTS, which is what lets
 // the slug skip the leading-digit rule: a derived name always begins with the
 // kind, and a kind that did not start with a letter would break that
-// silently, on one vendor, for the seats whose handles start with a digit.
+// silently, on one third-party app, for the seats whose handles start with a digit.
 func TestEveryVendorKindDerivesAReferenceableName(t *testing.T) {
 	t.Parallel()
 	for _, kind := range integration.Kinds {
@@ -133,7 +133,7 @@ func TestAPointerIsMintedReusedOrRefused(t *testing.T) {
 // --- resolution ------------------------------------------------------------ //
 
 // PRESENT AND RESOLVED ARE TWO FACTS, and the gap between them is the silent
-// outage: the config shows a secret, the vendor shows a healthy hook, and
+// outage: the config shows a secret, the third-party app shows a healthy hook, and
 // every delivery is refused with nothing naming the variable.
 func TestResolutionSeparatesWrittenDownFromUsable(t *testing.T) {
 	t.Parallel()
@@ -333,7 +333,7 @@ func TestTheSecretIsWrittenBeforeTheConfigPointsAtIt(t *testing.T) {
 	if !strings.Contains(rec.events[1], `"webhook_token":"${DATADOG_WEBHOOK_TOKEN}"`) {
 		t.Fatalf("the patch does not point at the secret: %s", rec.events[1])
 	}
-	// Both fields of one vendor merge into one object rather than the
+	// Both fields of one third-party app merge into one object rather than the
 	// second replacing the first.
 	if !strings.Contains(rec.events[1], `"route_to":"sre-lead"`) {
 		t.Fatalf("the patch lost the non-secret field: %s", rec.events[1])
@@ -369,7 +369,7 @@ func TestRotatingAValueStillAdvancesTheEpoch(t *testing.T) {
 	}
 }
 
-// A field the vendor does not declare is refused HAVING WRITTEN NOTHING.
+// A field the third-party app does not declare is refused HAVING WRITTEN NOTHING.
 // Ignoring it while answering 201 is the worst of both: the caller believes
 // the value landed and nothing holds it.
 func TestAnUnknownFieldIsRefusedBeforeAnythingIsWritten(t *testing.T) {

@@ -42,7 +42,7 @@ func mintInto(values map[string]string, reqs []setup.Requirement, generate []str
 		}
 		if !r.Mintable {
 			return fmt.Errorf(
-				"%s is not something this engine can generate; it comes from the vendor", field)
+				"%s is not something this engine can generate; it comes from the third-party app", field)
 		}
 		if _, supplied := values[field]; supplied {
 			return fmt.Errorf(
@@ -56,7 +56,7 @@ func mintInto(values map[string]string, reqs []setup.Requirement, generate []str
 // mint produces a shared token.
 //
 // crypto/rand's own text encoding: 26 base32 characters over 128 bits of
-// entropy, URL-safe and safe to paste into a vendor's header field, which is
+// entropy, URL-safe and safe to paste into a third-party app's header field, which is
 // where every token this mints ends up. The same generator the provisioning
 // passes already use, so a token minted from the dashboard and one minted
 // from the CLI are the same kind of thing.

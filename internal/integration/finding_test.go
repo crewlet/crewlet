@@ -23,7 +23,7 @@ var knownKinds = []FindingKind{
 }
 
 // A pass that found nothing is ready. This is the whole success path: a
-// vendor that converged reports an empty slice rather than having to remember
+// third-party app that converged reports an empty slice rather than having to remember
 // to say it is fine.
 func TestClassifyNoFindingsIsReady(t *testing.T) {
 	got := Classify(nil)
@@ -106,7 +106,7 @@ func TestSeverityIsAStrictOrder(t *testing.T) {
 		rank := kind.severity()
 		if other, dup := seen[rank]; dup {
 			t.Errorf("%s and %s share severity %d, so which one is reported "+
-				"depends on the order a vendor happened to emit them", kind, other, rank)
+				"depends on the order a third-party app happened to emit them", kind, other, rank)
 		}
 		seen[rank] = kind
 	}
@@ -193,7 +193,7 @@ func TestClassifyFallsBackToASentence(t *testing.T) {
 }
 
 // An action URL is for a person. Handing an operator a settings link for
-// "the vendor is applying agent access" invites them to interfere with a
+// "the third-party app is applying agent access" invites them to interfere with a
 // grant that is landing on its own.
 func TestClassifyDropsTheLinkWhenNobodyHasToAct(t *testing.T) {
 	for _, kind := range knownKinds {
@@ -209,7 +209,7 @@ func TestClassifyDropsTheLinkWhenNobodyHasToAct(t *testing.T) {
 	}
 }
 
-// Ties keep the vendor's own order, so a reconciler that walks its seats in a
+// Ties keep the third-party app's own order, so a reconciler that walks its seats in a
 // stable order reports a stable seat rather than a different one each pass.
 func TestClassifyKeepsEmissionOrderOnATie(t *testing.T) {
 	got := Classify([]Finding{
@@ -234,7 +234,7 @@ func TestOutcomeTurnsOnTheActorNotThePhase(t *testing.T) {
 		{"degraded on an admin", Report{Phase: PhaseDegraded, Actor: ActorAdmin}, OutcomeBlocked},
 		{"degraded on the operator", Report{Phase: PhaseDegraded, Actor: ActorOperator}, OutcomeBlocked},
 		{"degraded on the engine", Report{Phase: PhaseDegraded, Actor: ActorEngine}, OutcomeWaiting},
-		{"activating on the vendor", Report{Phase: PhaseActivating, Actor: ActorProvider}, OutcomeWaiting},
+		{"activating on the third-party app", Report{Phase: PhaseActivating, Actor: ActorProvider}, OutcomeWaiting},
 		{"provisioning", Report{Phase: PhaseProvisioning, Actor: ActorEngine}, OutcomeWaiting},
 		{"awaiting an admin", Report{Phase: PhaseAwaitingAdmin, Actor: ActorAdmin}, OutcomeBlocked},
 	}

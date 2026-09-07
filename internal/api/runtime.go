@@ -77,7 +77,7 @@ type RuntimeState struct {
 	// would be verified at all. Both depend on what the process resolved
 	// rather than on what the document says — a secret is a ${VAR}, and one
 	// that did not resolve renders as configured while the route answers
-	// 503 to every delivery and the vendor reports a healthy hook.
+	// 503 to every delivery and the third-party app reports a healthy hook.
 	//
 	// Nil is "cannot say", exactly as above, and an empty slice is the real
 	// claim that nothing here can verify anything.

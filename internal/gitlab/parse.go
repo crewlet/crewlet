@@ -35,7 +35,7 @@ import (
 // Routing reasons, doubling as the event types the prompt dispatches on.
 //
 // They read as "<object>.<what happened>" because that is what the recipient
-// needs to know first, and they are the vendor's own event vocabulary
+// needs to know first, and they are the third-party app's own event vocabulary
 // wherever GitLab has one.
 const (
 	IssueAssigned  = "issue.assigned"
@@ -328,7 +328,7 @@ func targetsOf(names []string, reason string) []target {
 // claim on their attention and the one the prompt renders differently.
 //
 // The ACTOR is not filtered here. It is stamped on the metadata under the
-// one key every vendor uses and suppressed by the spine, which knows the
+// one key every third-party app uses and suppressed by the spine, which knows the
 // exception ([Prompt.WakesActor]) and can resolve an actor across identity
 // namespaces — neither of which a parser comparing usernames can do.
 //

@@ -11,8 +11,8 @@ import (
 //
 // Every pass failure used to fold into activating/engine with the detail "the
 // last pass could not read this integration", on the reasoning that almost
-// every fault is a vendor briefly unreachable. That reasoning is exactly
-// backwards for a refusal: the vendor answered, and it will answer the same
+// every fault is a third-party app briefly unreachable. That reasoning is exactly
+// backwards for a refusal: the third-party app answered, and it will answer the same
 // way on every subsequent pass until a person changes the credential. The
 // screen told an operator the engine was working on it while the only action
 // that could fix it was theirs, and the dashboard drew it in the neutral tone
@@ -27,23 +27,23 @@ func TestARefusedCredentialIsTheOperatorsToFix(t *testing.T) {
 		t.Fatal("a refused credential forgot the surface; that is reserved for a block that left the company")
 	}
 	if got.Report.Phase != PhaseUnconfigured {
-		t.Errorf("phase = %q, want %q: a credential the vendor refuses means this deployment cannot talk to the surface at all",
+		t.Errorf("phase = %q, want %q: a credential the third-party app refuses means this deployment cannot talk to the surface at all",
 			got.Report.Phase, PhaseUnconfigured)
 	}
 	if got.Report.Actor != ActorOperator {
-		t.Errorf("actor = %q, want %q: no retry fixes a token the vendor will not accept",
+		t.Errorf("actor = %q, want %q: no retry fixes a token the third-party app will not accept",
 			got.Report.Actor, ActorOperator)
 	}
 	if len(got.Findings) != 1 || got.Findings[0].Kind != FindingCredentialRejected {
 		t.Errorf("findings = %+v, want one %q", got.Findings, FindingCredentialRejected)
 	}
 	if got.LastError == "" {
-		t.Error("the vendor's own words were dropped; they are what says which credential and why")
+		t.Error("the third-party app's own words were dropped; they are what says which credential and why")
 	}
 }
 
 // And a fault that is NOT a refusal keeps the wait, because that reasoning
-// still holds: an unreachable vendor clears without anybody doing anything.
+// still holds: an unreachable third-party app clears without anybody doing anything.
 func TestAnUnreachableVendorIsStillAWait(t *testing.T) {
 	now := time.Now().UTC()
 	got, _ := Observe(State{}, KindJira, nil, errors.New("dial tcp: i/o timeout"), now)
@@ -80,7 +80,7 @@ func TestOnlyAuthStatusesAreRefusals(t *testing.T) {
 // The block is still in the company document for the whole of a teardown —
 // it is the credential the teardown authenticates with — so a normal pass
 // over the same surface would find it configured and report it healthy. If a
-// failed teardown did not pin the phase, a vendor refusing the delete would
+// failed teardown did not pin the phase, a third-party app refusing the delete would
 // show a connected integration somebody had already asked to remove.
 func TestATeardownThatFailsKeepsTheSurfaceDisconnecting(t *testing.T) {
 	now := time.Now().UTC()
@@ -88,7 +88,7 @@ func TestATeardownThatFailsKeepsTheSurfaceDisconnecting(t *testing.T) {
 
 	got, forget := ObserveTeardown(start, KindJira, errors.New("jira: 403 on delete"), now)
 	if forget {
-		t.Fatal("a failed teardown forgot the row; the vendor still holds what it registered")
+		t.Fatal("a failed teardown forgot the row; the third-party app still holds what it registered")
 	}
 	if got.Report.Phase != PhaseDisconnecting {
 		t.Errorf("phase = %q, want %q", got.Report.Phase, PhaseDisconnecting)
@@ -100,7 +100,7 @@ func TestATeardownThatFailsKeepsTheSurfaceDisconnecting(t *testing.T) {
 		t.Error("the operator's answer to the checkbox was lost between attempts")
 	}
 	if got.LastError == "" {
-		t.Error("the vendor's own words were dropped; they are what says why it is stuck")
+		t.Error("the third-party app's own words were dropped; they are what says why it is stuck")
 	}
 	if got.Attempts != 1 {
 		t.Errorf("attempts = %d, want 1: the backoff is derived from it", got.Attempts)

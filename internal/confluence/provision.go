@@ -283,7 +283,7 @@ func sameEvents(have []string, want string) bool {
 	return len(have) == 1 && have[0] == want
 }
 
-// Findings reads this run as the vendor-neutral vocabulary.
+// Findings reads this run as the third-party app-neutral vocabulary.
 //
 // Only what a run that was ASKED to register can establish. A run with no
 // base registers nothing and reports nothing about ingress, for the reason
@@ -314,7 +314,7 @@ func (r *Result) Findings() []integration.Finding {
 //
 // The same accessor GitLab and Mattermost export, for the same reason: a
 // caller deciding what a refusal MEANS needs the number, and the meaning is
-// decided once, in [integration.Reject], rather than per vendor.
+// decided once, in [integration.Reject], rather than per third-party app.
 func Status(err error) int {
 	var api *APIError
 	if errors.As(err, &api) {

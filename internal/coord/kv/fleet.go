@@ -29,7 +29,7 @@ import (
 //
 //	rate       one window's width x a small factor — a window nobody writes
 //	           to again must age out, and nothing may outlive its successor
-//	claims     the dedupe window, minutes: long enough to cover a vendor's
+//	claims     the dedupe window, minutes: long enough to cover a third-party app's
 //	           retries and an operator's replay, short enough that a
 //	           deliberate re-send later is not swallowed
 //	ledger     turn-completion retention, days: it has to outlast the
@@ -60,7 +60,7 @@ import (
 //	           integration's reconcile status is standing state, and one
 //	           that expired would make a converged surface read as one
 //	           nobody has looked at, sending the loop to re-provision
-//	           against a vendor it had already agreed with
+//	           against a third-party app it had already agreed with
 //
 // Putting two of those in one bucket would give one of them the other's
 // retention, and every such mistake is silent — a cooldown that expired in a
@@ -1030,7 +1030,7 @@ func (f *FleetStore) Secret(ctx context.Context, name string) (coord.SecretRecor
 	case err != nil:
 		// RAISED. "No such credential" renders downstream as an unset
 		// ${VAR}, which is an empty string handed to a provider, which is
-		// an auth failure blamed on the vendor. An unreadable store must
+		// an auth failure blamed on the third-party app. An unreadable store must
 		// never be able to say it.
 		return coord.SecretRecord{}, false, unavailable("read the secret", err)
 	}

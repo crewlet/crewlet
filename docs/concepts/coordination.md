@@ -67,7 +67,7 @@ flowchart LR
 | `config` | Which company revision is current. The key's own revision is the fencing epoch | [Control Plane](control-plane.md) |
 | `status` | What each node managed to apply, and when it last said so | [Control Plane](control-plane.md) |
 | `ledger` | Has this trigger already been worked — read before a turn, written after one | [The completion ledger](seat-ownership.md#the-completion-ledger) |
-| `claims` | Has this inbound delivery been seen — the dedupe that used to be a per-process map, so a vendor's retry to a *different* ingress node woke the same seat twice | [Event System](event-system.md) |
+| `claims` | Has this inbound delivery been seen — the dedupe that used to be a per-process map, so a third-party app's retry to a *different* ingress node woke the same seat twice | [Event System](event-system.md) |
 | `rate` | The notification valve. Four nodes ran four of them, so a seat capped at five a second emitted twenty | [Event System](event-system.md) |
 | `cooldowns` | Which provider credential is cooling after a 429. Per-process monotonic values are not even *comparable* across nodes | [Deployment](../guides/deployment.md) |
 | `budgets` | Org and per-seat token spend. Caps stay config-derived in memory; only *usage* is shared, because a counter per node makes an org cap of 500 000 into N × 500 000 | [Deployment § Token budgets](../guides/deployment.md#token-budgets) |
@@ -84,7 +84,7 @@ A fleet is not configured — it is **discovered** from these, which is why addi
 
 The `cooldowns` slot is the one an operator sees behave differently the moment a second node joins, so it is worth stating what it actually does.
 
-A rate limit belongs to the **key**, at the vendor — not to the process that discovered it. Without sharing, four nodes each pay their own 429 to learn what the first one already knew, and with a two-key bag that is eight wasted calls and eight slowed turns for one quota window. The two halves of the fix are deliberately on different clocks:
+A rate limit belongs to the **key**, at the third-party app — not to the process that discovered it. Without sharing, four nodes each pay their own 429 to learn what the first one already knew, and with a two-key bag that is eight wasted calls and eight slowed turns for one quota window. The two halves of the fix are deliberately on different clocks:
 
 | Half | When | Why there |
 |---|---|---|
@@ -95,7 +95,7 @@ Three properties follow from that, and each is load-bearing:
 
 - **A record is an instant, not a duration.** A peer that received "cool for an hour" would restart the hour whenever it happened to read the record, so a key benched once would stay benched as long as anyone kept pulling.
 - **A pull extends, never shortens.** A peer's record is evidence a key is refused; the *absence* of one is not evidence a key works. So a node whose own 429 no peer heard about is never talked out of it — and an unreadable store is a no-op rather than a mass un-benching.
-- **The record is scoped by the provider entry, and carries a hint rather than the key.** One credential listed under a `fast` entry and a `smart` entry is two rate-limit buckets at the vendor; an unscoped record would turn one model's burst into a company-wide outage. And the ledger is a shared store, so what goes in it is 12 hex characters of SHA-256 — enough to tell a handful of keys apart in a log, not reversible.
+- **The record is scoped by the provider entry, and carries a hint rather than the key.** One credential listed under a `fast` entry and a `smart` entry is two rate-limit buckets at the third-party app; an unscoped record would turn one model's burst into a company-wide outage. And the ledger is a shared store, so what goes in it is 12 hex characters of SHA-256 — enough to tell a handful of keys apart in a log, not reversible.
 
 A node that has just started pulls **immediately** rather than waiting out its first interval: a fresh process has an empty bench, and the fleet may have a key cooling for the next hour. When one arrives that way the node says so — `credential_cooled_by_peer`, naming the provider, the key's hint and the time left — which is the only answer to the question this creates: *why is a key benched on a node that never saw a failure?*
 
@@ -114,7 +114,7 @@ That is a constraint rather than a preference. On the default embedded backend a
 | `leases` | the lease TTL (45 s by default) | The expiry **is** the mechanism: a renew rewrites the key and restarts the clock, so a node that stops renewing stops holding, and its seats become claimable without anything having to notice it died |
 | `epochs` | none | The fencing counter, and a fence that restarts is not a fence — a deleted key would hand the next owner a token a zombie is still writing under. It is a separate bucket from `leases` for exactly this: the two want opposite retentions |
 | `rate` | a few multiples of the window | A closed window must age out, and must never outlive its successor |
-| `claims` | 5 minutes | A vendor's redelivery and an operator's replay, not the vendor's full retry schedule |
+| `claims` | 5 minutes | A third-party app's redelivery and an operator's replay, not the third-party app's full retry schedule |
 | `ledger` | 7 days | Must outlast the queue's redelivery horizon **and** the scheduler's catchup ceiling — expiring a completion a tick could still evaluate lets that fire run twice |
 | `cooldowns` | 24 hours | The longest cooldown anything sets. A cooldown stores its own end instant, so the bucket only has to outlive the longest one |
 | `status` | 4 reconcile intervals (~60 s) | A node that stops reporting must **vanish** from the fleet view rather than linger as a healthy row nobody is writing |
@@ -123,7 +123,7 @@ That is a constraint rather than a preference. On the default embedded backend a
 | `fires` | 7 days | Must outlast the scheduler's catchup ceiling, for a sharper reason than the ledger's: a completion that expired early makes a turn re-run, while a claim that expired early makes the catchup pass dispatch a fire the fleet already ran |
 | `sandbox runs` | none | The sharpest version of the channel case: a run parked on a person's answer waits **days**, and its record is the only thing that knows a billed box exists. Its own pause reaper and terminal delete are what end it |
 | `channels` | none | A bucket's age cannot tell an **open** channel from a closed one, so a TTL would reap the authorization record of an ask still waiting for its answer. Closing an idle channel and deleting a closed one are decisions instead, taken by the [maintenance duty](seat-ownership.md#singleton-duties) |
-| `secrets` | none | A credential is not short-horizon state, and **an expiring secret is an outage on a timer** — one that arrives at the moment a vendor rejects a token every node believes it still has. A secret leaves when an operator unsets it |
+| `secrets` | none | A credential is not short-horizon state, and **an expiring secret is an outage on a timer** — one that arrives at the moment a third-party app rejects a token every node believes it still has. A secret leaves when an operator unsets it |
 
 Putting two of those in one bucket gives one of them the other's retention, and **every such mistake is silent** — a cooldown that expired in a second, a fleet view showing a node that died last week.
 

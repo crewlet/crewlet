@@ -1,6 +1,6 @@
 # Code Sandbox
 
-> **v1 status.** Both backends run — `e2b` (a remote VM per run, on the vendor
+> **v1 status.** Both backends run — `e2b` (a remote VM per run, on the third-party app
 > cloud or a self-hosted cluster) and `local` (the engine host, as a process
 > tree or in a container) — and the engine-fronted OTLP receiver is wired.
 > `providers.sandbox` is a **catalogue**: configure either backend or both, and
@@ -247,7 +247,7 @@ setup:
 
 `container` mode needs no such change.
 
-**Credentials.** When the role's resolved sandbox LLM provider is a [`cli-agent`](subscription-llm-backends.md) entry, the local backend seeds that provider's credential files into the box before the run and writes a **refreshed** one back afterwards — OAuth access tokens expire in hours and most vendors rotate the refresh token with them, so discarding the rewritten file would log the fleet out at the next expiry. A credential the operator has since removed with `crewlet llm logout` is never re-created from a box.
+**Credentials.** When the role's resolved sandbox LLM provider is a [`cli-agent`](subscription-llm-backends.md) entry, the local backend seeds that provider's credential files into the box before the run and writes a **refreshed** one back afterwards — OAuth access tokens expire in hours and most third-party apps rotate the refresh token with them, so discarding the rewritten file would log the fleet out at the next expiry. A credential the operator has since removed with `crewlet llm logout` is never re-created from a box.
 
 **Pause / resume works.** A run blocked on a human answer is genuinely suspended: `direct` SIGSTOPs the job's process group, `container` issues `docker pause`. Both hold memory, which is exactly why the same `default_pause_ttl_seconds` reaper bounds them as it bounds a billed E2B snapshot.
 
@@ -271,7 +271,7 @@ Claude Code **speaks the Anthropic API only**, so it needs an Anthropic-compatib
 
 Runs `opencode run "<brief>" --format json` and is **provider-agnostic**: it works with any OpenAI-compatible endpoint, so it reuses the LLM provider the role already has — no extra secret. An org whose only provider is OpenAI-compatible should keep `default_coding_agent: opencode` rather than pay for a parallel Anthropic credential.
 
-The runner **writes the provider configuration into the sandbox itself**: when the role's provider pins a custom `base_url`, it declares a custom provider (`crewlet`) in `opencode.json` with an explicit `baseURL` and the exact model, addressed as `crewlet/<model>` — bypassing OpenCode's Models.dev catalog and the vendor default endpoint, both of which would otherwise break a custom gateway (`ProviderModelNotFoundError`, or silently hitting `api.openai.com`). The API key is referenced via OpenCode's `{env:VAR}` interpolation, so the secret rides the sandbox env and is never written into the config payload. The same `opencode.json` sets `permission: "allow"` (headless runs have no human to approve a prompt — a gate left at `ask` is auto-rejected, which notably kills runs whose checkout lives outside OpenCode's cwd), `share: disabled`, and `autoupdate: false`.
+The runner **writes the provider configuration into the sandbox itself**: when the role's provider pins a custom `base_url`, it declares a custom provider (`crewlet`) in `opencode.json` with an explicit `baseURL` and the exact model, addressed as `crewlet/<model>` — bypassing OpenCode's Models.dev catalog and the third-party app default endpoint, both of which would otherwise break a custom gateway (`ProviderModelNotFoundError`, or silently hitting `api.openai.com`). The API key is referenced via OpenCode's `{env:VAR}` interpolation, so the secret rides the sandbox env and is never written into the config payload. The same `opencode.json` sets `permission: "allow"` (headless runs have no human to approve a prompt — a gate left at `ask` is auto-rejected, which notably kills runs whose checkout lives outside OpenCode's cwd), `share: disabled`, and `autoupdate: false`.
 
 OpenCode exposes no stable token/cost envelope, so those fields stay zero on its runs — honest accounting over fabricated numbers.
 
@@ -461,7 +461,7 @@ The coding agent calls the LLM itself, from inside the sandbox, so the engine ca
 
 What an operator should recognize:
 
-- **`SandboxCredentialError` at launch** — the seat runs code in a **remote** cell on a [`cli-agent` provider](subscription-llm-backends.md) whose login cannot follow it there. The credential *files* stay on the engine host (they carry a refresh token whose rotation is fleet state), so unless something in the run environment authenticates, the coding agent would fail at its first model call with the vendor's own "not authenticated" — minutes in, naming nothing you could act on. The run never starts, and the error carries **your** remedy of the two: a CLI that mints a headless token says "run `crewlet llm login <key> -capture-token`", and one that does not (Codex, Gemini CLI) says to give the seat `run_in: direct` or `run_in: container`.
+- **`SandboxCredentialError` at launch** — the seat runs code in a **remote** cell on a [`cli-agent` provider](subscription-llm-backends.md) whose login cannot follow it there. The credential *files* stay on the engine host (they carry a refresh token whose rotation is fleet state), so unless something in the run environment authenticates, the coding agent would fail at its first model call with the third-party app's own "not authenticated" — minutes in, naming nothing you could act on. The run never starts, and the error carries **your** remedy of the two: a CLI that mints a headless token says "run `crewlet llm login <key> -capture-token`", and one that does not (Codex, Gemini CLI) says to give the seat `run_in: direct` or `run_in: container`.
   A credential you declared yourself in `role.sandbox.env` counts — the check asks the CLI's profile which variable names authenticate and looks for those in the merged run environment, rather than trying to recognise a credential by inspection. That is what lets it be a refusal instead of a warning. An unresolved `${VAR}` lands as blank and does **not** count.
 - **`LocalSandboxError: refuses to touch …`** — a setup step tried to write a system path under `run_in: direct`, which has no filesystem virtualisation. Root the file under the box's `$HOME`, or move the seat to `run_in: container`.
 - **`LocalSandboxError: neither docker nor podman`** — `run_in: container` with no container runtime on the engine host's PATH. Install one, name it in `local.runtime`, or use `direct`.

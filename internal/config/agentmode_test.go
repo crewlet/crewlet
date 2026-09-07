@@ -8,7 +8,7 @@ import (
 // AGENT MODE IS NAMED, NEVER INFERRED.
 //
 // Both modes are defensible for the same CLI on the same seat — text mode is
-// predictable and works with no reachable API, agent mode gets the vendor's
+// predictable and works with no reachable API, agent mode gets the third-party app's
 // own harness — so a default would be a decision made for the operator on a
 // question they have to answer.
 func TestTheCLIModeIsAClosedSet(t *testing.T) {

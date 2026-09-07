@@ -299,7 +299,7 @@ func TestMigrationNeverOverwritesTheFleetsValue(t *testing.T) {
 
 // A ROW THAT COULD NOT BE COPIED IS NOT REMOVED. Deleting it would destroy a
 // credential this node is the only holder of, and the first symptom would be
-// a vendor 401 hours later on a node that never had the value.
+// a third-party app 401 hours later on a node that never had the value.
 func TestMigrationKeepsWhatItCouldNotCopy(t *testing.T) {
 	t.Parallel()
 	cipher := ring(t, "k1")

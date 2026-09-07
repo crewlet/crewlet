@@ -57,12 +57,12 @@ type Secrets struct {
 // NOT "is a secret configured", which is what every operator surface showed
 // before this: a secret lives in the config as a ${VAR}, and one that did not
 // resolve renders as present while the route answers 503 to every delivery
-// and the vendor's settings page reports a healthy hook. The config says set,
-// the vendor says fine, and the deliveries stop — with nothing anywhere
+// and the third-party app's settings page reports a healthy hook. The config says set,
+// the third-party app says fine, and the deliveries stop — with nothing anywhere
 // naming the variable.
 //
 // The rule is per surface and it is the ROUTE's own: GitLab needs a key the
-// vendor could have signed with, not merely a non-empty string, because a
+// third-party app could have signed with, not merely a non-empty string, because a
 // value that is not one cannot be the HMAC key for any delivery. Mattermost
 // is absent by design: it holds a websocket rather than a route, so there is
 // no delivery to verify at all, and the operator surface reads its absence
@@ -129,8 +129,8 @@ func (s Secrets) Verifiable() []string {
 //
 // The consequence was not a degraded route. It was SEVEN routes verifying
 // against the literal string "${GITLAB_SIGNING_SECRET}": every delivery from
-// every vendor refused, with the engine logging one warning per delivery and
-// the vendor's settings page showing a healthy hook. Measured against a real
+// every third-party app refused, with the engine logging one warning per delivery and
+// the third-party app's settings page showing a healthy hook. Measured against a real
 // GitLab. Worse than the outage is what the literal IS — a config field the
 // dashboard renders, not a secret — so a forged delivery would have verified
 // against a string an attacker could read.

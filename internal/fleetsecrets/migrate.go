@@ -55,7 +55,7 @@ const MigrateSource = "migrated"
 //
 // A row that cannot be copied is NOT removed, and the error is returned. The
 // alternative — logging and carrying on — would delete a credential this node
-// is the only holder of, and the first symptom would be a vendor 401 hours
+// is the only holder of, and the first symptom would be a third-party app 401 hours
 // later on a node that never had the value.
 func Migrate(ctx context.Context, from LocalStore, to *Store, now time.Time) ([]string, error) {
 	if from == nil || to == nil {

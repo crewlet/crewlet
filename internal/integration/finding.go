@@ -4,12 +4,12 @@ import "fmt"
 
 // FindingKind is one thing a pass observed that is not "fine".
 //
-// A CLOSED SET, and that is the whole point of this file. Seven vendors
+// A CLOSED SET, and that is the whole point of this file. Seven third-party apps
 // converge seven different surfaces, but what they can find is the same short
 // list every time: nothing to authenticate with, an app nobody installed, a
-// delivery path that goes nowhere, a seat with no account, a grant the vendor
+// delivery path that goes nowhere, a seat with no account, a grant the third-party app
 // has not applied, a grant that is too small, a grant that is too large. A
-// vendor contributes WHICH of these it found and about what; it does not get
+// third-party app contributes WHICH of these it found and about what; it does not get
 // to invent an eighth, and it does not get to decide what any of them means.
 type FindingKind string
 
@@ -20,19 +20,19 @@ const (
 	FindingCredentialMissing FindingKind = "credential_missing"
 
 	// FindingCredentialRejected is a credential that RESOLVED and that the
-	// vendor refused: a revoked token, a rotated key, an account that lost
+	// third-party app refused: a revoked token, a rotated key, an account that lost
 	// the access it was issued with.
 	//
 	// Distinct from [FindingCredentialMissing] because the fix is
 	// different — that one is a ${VAR} pointing at nothing, this one is a
-	// value the vendor will not accept — and distinct from a transport
+	// value the third-party app will not accept — and distinct from a transport
 	// fault because it NEVER clears on its own. Every pass will be refused
 	// identically until a person changes the credential, so reporting it
 	// as a wait leaves an operator watching a retry that cannot succeed.
 	FindingCredentialRejected FindingKind = "credential_rejected"
 
 	// FindingApprovalRequired is an app or scope a person must install or
-	// approve at the vendor. ActionURL carries where.
+	// approve at the third-party app. ActionURL carries where.
 	FindingApprovalRequired FindingKind = "approval_required"
 
 	// FindingIngressBlocked is a delivery path that cannot be established
@@ -45,25 +45,25 @@ const (
 	// establishing this time, and will try again.
 	FindingIngressPending FindingKind = "ingress_pending"
 
-	// FindingIdentityMissing is a seat with no account at the vendor yet.
+	// FindingIdentityMissing is a seat with no account at the third-party app yet.
 	// The engine's own work.
 	FindingIdentityMissing FindingKind = "identity_missing"
 
 	// FindingIdentityFailed is a seat whose account could not be created.
 	FindingIdentityFailed FindingKind = "identity_failed"
 
-	// FindingGrantPending is access the vendor accepted and has not applied
+	// FindingGrantPending is access the third-party app accepted and has not applied
 	// yet. Nobody has to act; it resolves on its own.
 	FindingGrantPending FindingKind = "grant_pending"
 
 	// FindingUnknownTier is an access tier the company document names that
-	// this vendor does not have. The engine falls back to the default tier,
+	// this third-party app does not have. The engine falls back to the default tier,
 	// so the seat under-grants rather than stopping, and the typo is
 	// reported instead of silently landing on a default.
 	FindingUnknownTier FindingKind = "unknown_tier"
 
 	// FindingGrantShort is a seat holding LESS than its tier asks for, in a
-	// way only a person at the vendor can widen.
+	// way only a person at the third-party app can widen.
 	FindingGrantShort FindingKind = "grant_short"
 
 	// FindingGrantExcess is a seat holding MORE than its tier asks for.
@@ -81,8 +81,8 @@ const (
 // # The ordering IS the contract, and it is what the hand-written classifiers
 // it replaces disagreed about
 //
-// The control plane this was ported from wrote one classifier per vendor,
-// five of them, each a switch over that vendor's own result struct. They had
+// The control plane this was ported from wrote one classifier per third-party app,
+// five of them, each a switch over that third-party app's own result struct. They had
 // already drifted on the question that matters most: WHERE THE EXCESS-ACCESS
 // ADVISORY SITS. Because that advisory reports READY, anything ranked below
 // it disappears when both are present.
@@ -107,7 +107,7 @@ const (
 // in all five, ranked below everything including the advisory.
 //
 // None of those is a hard bug to write. All of them are invisible from inside
-// one vendor's function, which is why the ordering lives here, once, with a
+// one third-party app's function, which is why the ordering lives here, once, with a
 // test that pins it.
 //
 // The rule the order encodes: rank by HOW MUCH OF THE INTEGRATION IS NOT
@@ -156,7 +156,7 @@ func (f FindingKind) severity() int {
 	}
 }
 
-// Verdict is the phase and actor a kind implies. Fixed per kind: a vendor
+// Verdict is the phase and actor a kind implies. Fixed per kind: a third-party app
 // says what it found, never what it means.
 func (f FindingKind) Verdict() (Phase, Actor) {
 	switch f {
@@ -166,7 +166,7 @@ func (f FindingKind) Verdict() (Phase, Actor) {
 		// UNCONFIGURED, which the phase doc defines as "cannot talk to
 		// the surface at all" — true of a refused credential exactly as
 		// it is of an absent one. And the OPERATOR's, not the engine's:
-		// no retry fixes a token the vendor will not accept.
+		// no retry fixes a token the third-party app will not accept.
 		return PhaseUnconfigured, ActorOperator
 	case FindingApprovalRequired:
 		return PhaseAwaitingAdmin, ActorAdmin
@@ -201,8 +201,8 @@ func (f FindingKind) Verdict() (Phase, Actor) {
 // sentence is the fallback prose for a finding that carried no detail of its
 // own, so a report is never blank.
 //
-// Deliberately generic: a vendor that can say something specific SHOULD, and
-// [Finding.Detail] is where it does. This exists so that a vendor which
+// Deliberately generic: a third-party app that can say something specific SHOULD, and
+// [Finding.Detail] is where it does. This exists so that a third-party app which
 // cannot still produces a sentence an operator can act on rather than a bare
 // phase name.
 func (f FindingKind) sentence(subject string) string {
@@ -214,21 +214,21 @@ func (f FindingKind) sentence(subject string) string {
 	case FindingCredentialMissing:
 		return "this integration has no usable credential" + about
 	case FindingCredentialRejected:
-		return "the vendor refused this integration's credential" + about
+		return "the third-party app refused this integration's credential" + about
 	case FindingApprovalRequired:
-		return "an administrator must approve this integration at the vendor" + about
+		return "an administrator must approve this integration at the third-party app" + about
 	case FindingIngressBlocked:
 		return "events cannot be delivered to this engine" + about
 	case FindingIngressPending:
-		return "still pointing the vendor at this engine" + about
+		return "still pointing the third-party app at this engine" + about
 	case FindingIdentityMissing:
 		return "creating agent identities" + about
 	case FindingIdentityFailed:
 		return "an agent identity could not be created" + about
 	case FindingGrantPending:
-		return "the vendor is applying agent access" + about
+		return "the third-party app is applying agent access" + about
 	case FindingUnknownTier:
-		return "the company names an access tier this vendor does not have" + about
+		return "the company names an access tier this third-party app does not have" + about
 	case FindingGrantShort:
 		return "an agent holds less access than its role asks for" + about
 	case FindingGrantExcess:
@@ -240,7 +240,7 @@ func (f FindingKind) sentence(subject string) string {
 
 // Finding is one observation from a pass.
 //
-// A vendor emits these and nothing else. It does not build a [Report], does
+// A third-party app emits these and nothing else. It does not build a [Report], does
 // not choose a phase, and does not decide which of its findings matters most,
 // because those three decisions are the ones that have to agree across every
 // surface and cannot be checked from inside any one of them.
@@ -261,7 +261,7 @@ type Finding struct {
 // Classify folds a pass's findings into the one report an operator reads.
 //
 // The worst finding wins, by [FindingKind.severity]. Ties keep the order the
-// vendor emitted them in, so a vendor that walks its seats in a stable order
+// third-party app emitted them in, so a third-party app that walks its seats in a stable order
 // reports a stable seat.
 //
 // When several findings share the winning kind, the count is named. "an agent
@@ -269,7 +269,7 @@ type Finding struct {
 // api-gateway (and 4 more)" send an operator to two very different jobs, and
 // the difference is invisible from a single seat's sentence.
 //
-// No findings is [Ready]. That is the whole of the success path: a vendor
+// No findings is [Ready]. That is the whole of the success path: a third-party app
 // that converged reports nothing, rather than having to remember to say so.
 func Classify(findings []Finding) Report {
 	if len(findings) == 0 {
@@ -307,7 +307,7 @@ func Classify(findings []Finding) Report {
 	report := Report{Phase: phase, Actor: actor, Detail: detail, ActionURL: worst.ActionURL}
 
 	// A person's job needs the sentence and the link; nobody else's does.
-	// Handing an operator a settings URL for "the vendor is applying agent
+	// Handing an operator a settings URL for "the third-party app is applying agent
 	// access" invites them to go and interfere with a grant that is landing
 	// on its own, and it is the one case where the honest answer is to say
 	// nothing yet.

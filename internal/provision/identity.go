@@ -2,14 +2,14 @@ package provision
 
 import "sync"
 
-// IdentityLookups bounds how many vendor identity lookups run at once.
+// IdentityLookups bounds how many third-party app identity lookups run at once.
 //
 // FIVE call sites fan out one HTTPS call per seat: internal/engine's three
 // credential resolvers — GitHub, GitLab, Jira — on the CONFIG APPLY path, and
 // internal/github's and internal/jira's reconcile, on the operator-invoked
 // `crewlet <vendor> provision`. Unbounded, a company of thirty seats with
-// thirty tokens opened thirty simultaneous connections to one vendor at every
-// boot and every apply, which is the shape a vendor's abuse detection is built
+// thirty tokens opened thirty simultaneous connections to one third-party app at every
+// boot and every apply, which is the shape a third-party app's abuse detection is built
 // to notice. engine/github.go's own comment asserted a bound ("bounded by the
 // number of distinct credentials") that is not a bound on anything the host
 // controls.
@@ -33,7 +33,7 @@ const IdentityLookups = 8
 // One helper rather than the same semaphore written five times: every caller
 // is the same loop over a different credential shape, and a bound applied in
 // only some of them is the drift this exists to prevent. It lives HERE rather
-// than in internal/engine, where it started, because engine imports the vendor
+// than in internal/engine, where it started, because engine imports the third-party app
 // packages — so a helper defined there is unreachable from exactly the two
 // call sites that were left unbounded, and the constant would have had to be
 // written down three times to reach them all.

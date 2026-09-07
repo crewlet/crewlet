@@ -2,10 +2,10 @@
  * Connecting an integration, from the requirement list the engine answers.
  *
  * NOTHING ABOUT ANY VENDOR IS IN THIS FILE. Every label, every help line,
- * every link to a vendor's own page arrives on the requirement, so adding a
- * vendor is a Go change and no screen work at all. That is the one structural
- * difference from the console, where each vendor's fields are inline in a
- * single very long component and the seventh vendor cost as much as the
+ * every link to a third-party app's own page arrives on the requirement, so adding a
+ * third-party app is a Go change and no screen work at all. That is the one structural
+ * difference from the console, where each third-party app's fields are inline in a
+ * single very long component and the seventh third-party app cost as much as the
  * first.
  *
  * # A secret is never rendered
@@ -74,7 +74,7 @@ export interface SetupSection {
   name: string;
   tool: SetupToolState;
   /**
-   * The seat this section is for, on a vendor whose credentials live on the
+   * The seat this section is for, on a third-party app whose credentials live on the
    * seat. Its requirements replace the tool's, and the submission names it.
    */
   seat?: string;
@@ -91,7 +91,7 @@ export function SetupDialog({
    * The surfaces this tool is made of. Usually one; Atlassian is three,
    * because a company thinks in Atlassian and the engine reaches it over
    * Jira, Confluence and the Forge relay. Each section submits to its own
-   * vendor block, which is what keeps every write atomic on the thing it
+   * third-party app block, which is what keeps every write atomic on the thing it
    * changes.
    */
   sections: SetupSection[];
@@ -104,7 +104,7 @@ export function SetupDialog({
 }) {
   const toast = useToast();
   // Keyed by SECTION rather than by vendor, because a per-seat vendor has
-  // one section per seat and they all carry the same vendor key.
+  // one section per seat and they all carry the same third-party app key.
   const shownBy = useMemo(() => {
     const out = new Map<string, SetupRequirement[]>();
     for (const section of sections) {
@@ -168,7 +168,7 @@ export function SetupDialog({
     setFieldErrors({});
 
     // ONE REQUEST PER SURFACE, and only for the surfaces that have
-    // something to send. Each is atomic on its own vendor block, so a
+    // something to send. Each is atomic on its own third-party app block, so a
     // refusal on the second leaves the first landed rather than half
     // applied to one document.
     const work = sections
@@ -262,8 +262,8 @@ export function SetupDialog({
                     Deliveries arrive at <code className="inline">{section.tool.public_url}</code>
                   </span>
                   <span className="t-caption">
-                    Paste that into the vendor's own settings. This engine registers no webhook for{" "}
-                    {section.name}.
+                    Paste that into the third-party app's own settings. This engine registers no
+                    webhook for {section.name}.
                   </span>
                 </span>
               </div>
@@ -350,7 +350,7 @@ export function SetupDialog({
                   <>
                     {" "}
                     <a href={r.vendor_url} target="_blank" rel="noreferrer">
-                      Open at the vendor
+                      Open the third-party app
                     </a>
                   </>
                 )}

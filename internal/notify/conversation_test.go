@@ -67,7 +67,7 @@ func TestStampingAnEventWithNoPayloadWorks(t *testing.T) {
 	}
 }
 
-// Two vendors mint the same local key routinely — a work item and an issue are
+// Two third-party apps mint the same local key routinely — a work item and an issue are
 // both plausibly "42" — and an un-namespaced key merges their events.
 func TestALocalKeyIsNamespacedByItsSource(t *testing.T) {
 	if a, b := notify.Namespaced("jira", "42"), notify.Namespaced("gitlab", "42"); a == b {

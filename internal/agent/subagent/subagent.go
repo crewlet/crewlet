@@ -458,7 +458,7 @@ func Permit(universe tools.Snapshot, parent, requested []string) Grant {
 	for _, name := range requested {
 		if seen[name] {
 			// A repeat is not a second rejection and not a second grant.
-			// Two ToolDefs with one name is a request some vendors refuse
+			// Two ToolDefs with one name is a request some third-party apps refuse
 			// outright, and reporting the same refusal twice reads to a
 			// model as two different problems.
 			continue

@@ -218,9 +218,9 @@ function actorLabel(actor: string | undefined): string {
     case "engine":
       return "the engine is working on it";
     case "provider":
-      return "the vendor is applying it";
+      return "the third-party app is applying it";
     case "admin":
-      return "you, at the vendor";
+      return "you, at the third-party app";
     case "operator":
       return "you, in the company configuration";
     default:
@@ -333,7 +333,7 @@ export function rollUp(entry: Entry, rows: Map<string, IntegrationRow>): EntrySt
       status: phaseLine ?? ingress,
       // ATTENTION MEANS A PERSON IS NEEDED, which is the actor's own
       // question and not "is the phase ready" (internal/integration/report.go:
-      // "Nothing the engine or a vendor is doing needs a person told about
+      // "Nothing the engine or a third-party app is doing needs a person told about
       // it"). Marking `provisioning` and `activating` amber told an operator
       // to act while the engine was still working, beside a tag drawn neutral
       // for the same phase.
@@ -454,7 +454,7 @@ function SurfaceRow({
         <span className="int-row-name">{surface.name}</span>
         <span className="int-row-detail int-row-facts">
           {/* WHERE DELIVERIES ARRIVE, which is what a reader can act on: it
-              is the address to paste at the vendor when a hook has to be
+              is the address to paste at the third-party app when a hook has to be
               registered by hand.
 
               The three raw counters that were here — in / dropped / merged —
@@ -540,7 +540,7 @@ function SurfaceRow({
  *
  * A PURE FUNCTION of (satisfied, phase, actor), so the action and the state
  * tag beside it can never tell an operator two different things. Empty means
- * no action: nothing a person does moves a surface the engine or the vendor
+ * no action: nothing a person does moves a surface the engine or the third-party app
  * is still working on.
  */
 export function actionFor(
@@ -554,7 +554,7 @@ export function actionFor(
   const configured = tools.filter((t) => t.configured);
   if (configured.length === 0) return { label: "Connect" };
   if (configured.some((t) => !t.satisfied)) return { label: "Continue" };
-  // A per-seat vendor with no seat set up yet is not connected, whatever its
+  // A per-seat third-party app with no seat set up yet is not connected, whatever its
   // company block says: a Slack company with no agent holding an app is a
   // company where nothing can post.
   if (configured.some((t) => t.seats && t.seats.length > 0 && !t.seats.some((s) => s.satisfied))) {
@@ -570,7 +570,7 @@ export function actionFor(
 
 /**
  * The sections of one tool's dialog: the surfaces the engine reaches it over,
- * and for a vendor whose credentials live on the SEAT, one per agent.
+ * and for a third-party app whose credentials live on the SEAT, one per agent.
  *
  * Slack is the per-seat one, because each agent has its own app. Every agent
  * gets a section whether or not it has one yet: a seat with no app is exactly
@@ -609,7 +609,7 @@ export function sectionsFor(
  *
  * The body is where the engine's own plumbing lives: a row per surface with
  * its counts, its path and what the reconcile loop last found, and for a
- * per-seat vendor a row per agent. None of that belongs in the header, which
+ * per-seat third-party app a row per agent. None of that belongs in the header, which
  * is what the previous layout got wrong: an operator scanning six
  * integrations wants six names and six states, not six paragraphs.
  */
@@ -838,18 +838,6 @@ function useSetup(): {
   };
 }
 
-/**
- * Whether this company has set a tool up at all.
- *
- * The sort key, and it reads the SAME rows the card does rather than the
- * setup listing: the listing is guarded, so a reader with no operator token
- * would otherwise see the whole catalogue reorder itself the moment they
- * signed in.
- */
-export function isSetUp(entry: Entry, rows: Map<string, IntegrationRow>): boolean {
-  return entry.surfaces.some((s) => rows.has(s.key));
-}
-
 /** Which catalogue row a surface belongs to, so a running pass disables it. */
 function entryOwning(surfaceKey: string): string {
   return CATALOG.find((e) => e.surfaces.some((s) => s.key === surfaceKey))?.key ?? surfaceKey;
@@ -872,7 +860,7 @@ export function Integrations() {
   const [lastRun, setLastRun] = useState<SetupRun | null>(null);
 
   /**
-   * Run a vendor's pass, or check it.
+   * Run a third-party app's pass, or check it.
    *
    * The outcome is a toast plus the run's own findings, and the row's state
    * tag updates on its own: the engine wrote the same fleet status the
@@ -924,7 +912,7 @@ export function Integrations() {
       />
 
       {/* THE ADDRESS EVERY INBOUND VENDOR IS BUILT ON, rendered once. It is
-          one setting, and a screen that asked for it per vendor would ask the
+          one setting, and a screen that asked for it per app would ask the
           operator to keep seven copies consistent. */}
       {setup.base && !setup.base.present && (
         <div className="banner caution">
@@ -971,7 +959,7 @@ export function Integrations() {
           kind={dropping.kind}
           onClose={() => setDropping(null)}
           // The row does not vanish here: the engine keeps the block until
-          // the vendor teardown succeeds, so what a re-read shows is the
+          // the third-party app teardown succeeds, so what a re-read shows is the
           // surface moving to Disconnecting.
           onDone={setup.reload}
         />
@@ -1032,18 +1020,20 @@ export function Integrations() {
 
       {loading && !data && <Skeleton rows={6} />}
       <QueryState error={error} loading={loading} empty={undefined}>
-        {/* CONNECTED FIRST, then the rest, in one flat list rather than
-            grouped into panels. This is the shape the console's own
-            Integrations page has, and the reason is the reading order: an
-            operator comes here to finish something, so what is already
-            working belongs above the catalogue of what is not, and a
-            capability heading over a group of one is chrome around a single
-            row. The catalogue's order still runs messaging, tasks, code,
-            observability, so related tools stay adjacent without the panel
-            around them. */}
+        {/* ALPHABETICAL, in one flat list rather than grouped into panels.
+            A capability heading over a group of one is chrome around a
+            single row, and the list is short enough that a reader looking
+            for a particular app finds it by name.
+
+            It replaces a connected-first sort. That put what was already
+            working at the top, which reads well the first time and badly
+            afterwards: a list whose order changes as an app connects or
+            fails moves a row out from under the cursor of somebody who
+            came back to the same screen expecting to find it where it
+            was. A name does not move. */}
         <div className="int-list">
           {[...CATALOG]
-            .sort((a, b) => Number(isSetUp(b, rows)) - Number(isSetUp(a, rows)))
+            .sort((a, b) => a.name.localeCompare(b.name))
             .map((entry) => (
               <EntryRow
                 key={entry.key}
@@ -1058,7 +1048,7 @@ export function Integrations() {
                   })
                 }
                 onPass={(tool, readOnly) => {
-                  // A pass that writes at the vendor is confirmed first, and
+                  // A pass that writes at the third-party app is confirmed first, and
                   // a pass that needs an administrator credential collects
                   // it there. A check writes nothing, so it runs on the
                   // press.

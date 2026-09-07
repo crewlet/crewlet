@@ -426,7 +426,7 @@ func TestConversationTranslation(t *testing.T) {
 			Role:    llm.RoleAssistant,
 			Content: "working",
 			// Reasoning must NOT go back: this endpoint has no field for
-			// it, and the vendors that emit it reject it on input.
+			// it, and the third-party apps that emit it reject it on input.
 			ReasoningContent: "secret thoughts",
 			ThinkingBlocks:   []llm.ThinkingBlock{{Type: "thinking", Thinking: "hmm"}},
 			ToolCalls: []llm.ToolCall{
@@ -681,7 +681,7 @@ func TestTemperatureAndMaxTokensDefaultsAndOverrides(t *testing.T) {
 
 // prompt_tokens is ALREADY the full prompt count and cached_tokens is a
 // SUBSET of it. This is the mirror image of the Anthropic backend and the
-// same invariant: InputTokens is the full prompt count, and the two vendors
+// same invariant: InputTokens is the full prompt count, and the two third-party apps
 // report it differently. Adding the cache figures here double-bills every
 // cached round.
 func TestInputTokensAreNotSummedWithTheCacheBreakdown(t *testing.T) {
@@ -817,7 +817,7 @@ func TestToolCallsAreTranslated(t *testing.T) {
 	}
 }
 
-// The CONFIGURED id, not the one the response echoes: a vendor alias resolving
+// The CONFIGURED id, not the one the response echoes: a third-party app alias resolving
 // to a dated snapshot would re-key the breakdown the day the alias moves.
 func TestTheCompletionNamesTheConfiguredModelNotTheEcho(t *testing.T) {
 	t.Parallel()

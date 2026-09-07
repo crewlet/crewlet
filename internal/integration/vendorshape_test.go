@@ -15,13 +15,13 @@ import (
 // EVERY VENDOR READS A REFUSAL THE SAME WAY.
 //
 // The rule about which statuses mean "your credential is no good" lives once,
-// in [integration.Reject]. What each vendor contributes is the number, dug
+// in [integration.Reject]. What each third-party app contributes is the number, dug
 // out of its own error type by its own Status accessor. That split only holds
-// if every vendor actually has the accessor: the three with an explicit auth
+// if every third-party app actually has the accessor: the three with an explicit auth
 // probe grew a private `rejected` helper instead, which was the same six
 // lines written three more times and left two shapes in the tree for one job.
 //
-// Pinned by CALLING each accessor, so a vendor that drops it or renames it
+// Pinned by CALLING each accessor, so a third-party app that drops it or renames it
 // fails to compile here rather than quietly going back to a private copy.
 func TestEveryVendorReportsARefusalStatus(t *testing.T) {
 	accessors := map[string]func(error) int{

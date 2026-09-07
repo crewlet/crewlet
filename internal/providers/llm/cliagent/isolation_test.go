@@ -108,7 +108,7 @@ func TestEveryShippedProfileDeclaresItsLocalToolsStance(t *testing.T) {
 	}
 }
 
-// The vendors that take their policy from a file get a file that parses and
+// The third-party apps that take their policy from a file get a file that parses and
 // says what the profile claims: local tools off, web on.
 func TestSeededSettingsFilesAreValidJSONThatKeepsTheWebOn(t *testing.T) {
 	cases := map[string]struct {
@@ -165,8 +165,8 @@ func TestSeededSettingsFilesAreValidJSONThatKeepsTheWebOn(t *testing.T) {
 func TestSeedFilesLandInTheirScope(t *testing.T) {
 	p := fakeProvider(t, nil, map[string]any{
 		"seed_files": []any{
-			map[string]any{"path": ".vendor/settings.json", "content": `{"home":true}`},
-			map[string]any{"path": ".vendor/project.json", "in": "work", "content": `{"work":true}`},
+			map[string]any{"path": ".third-party app/settings.json", "content": `{"home":true}`},
+			map[string]any{"path": ".third-party app/project.json", "in": "work", "content": `{"work":true}`},
 		},
 	})
 	co, err := p.ws.Acquire("seat-a", "call-1")
@@ -175,18 +175,18 @@ func TestSeedFilesLandInTheirScope(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = co.Release() })
 
-	home, err := os.ReadFile(filepath.Join(co.Home, ".vendor", "settings.json"))
+	home, err := os.ReadFile(filepath.Join(co.Home, ".third-party app", "settings.json"))
 	if err != nil || string(home) != `{"home":true}` {
 		t.Errorf("home seed = %q, %v", home, err)
 	}
-	work, err := os.ReadFile(filepath.Join(co.Work, ".vendor", "project.json"))
+	work, err := os.ReadFile(filepath.Join(co.Work, ".third-party app", "project.json"))
 	if err != nil || string(work) != `{"work":true}` {
 		t.Errorf("work seed = %q, %v", work, err)
 	}
-	if _, err := os.Stat(filepath.Join(co.Home, ".vendor", "project.json")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(co.Home, ".third-party app", "project.json")); !os.IsNotExist(err) {
 		t.Errorf("a work-scoped file was written into the home")
 	}
-	info, err := os.Stat(filepath.Join(co.Home, ".vendor", "settings.json"))
+	info, err := os.Stat(filepath.Join(co.Home, ".third-party app", "settings.json"))
 	if err == nil && info.Mode().Perm() != 0o600 {
 		t.Errorf("seed file mode = %o, want 0600", info.Mode().Perm())
 	}
@@ -291,7 +291,7 @@ func probeProblem(d Diagnosis) string {
 }
 
 // A profile that says "denied" and a CLI that ran the command is the finding
-// the probe exists for: the vendor's flag is not taking effect on this build.
+// the probe exists for: the third-party app's flag is not taking effect on this build.
 func TestDoctorReportsAShellThatRanDespiteTheProfile(t *testing.T) {
 	p := probeProvider(t, LocalToolsDenied, nowEpoch()+"\n", "ts="+nowEpoch())
 	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
@@ -304,12 +304,12 @@ func TestDoctorReportsAShellThatRanDespiteTheProfile(t *testing.T) {
 	}
 }
 
-// A vendor-default profile whose CLI ran the command is reported as what it
+// A `vendor-default` profile whose CLI ran the command is reported as what it
 // is — a CLI with a shell on the engine host — with the note the profile gave.
 func TestDoctorReportsAVendorDefaultShellHonestly(t *testing.T) {
 	p := probeProvider(t, LocalToolsVendorDefault, nowEpoch(), "ts="+nowEpoch())
 	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
-	if !strings.HasPrefix(d.LocalTools, "vendor default (no denial flag on this fake) — probe: SHELL RAN") {
+	if !strings.HasPrefix(d.LocalTools, "third-party app default (no denial flag on this fake) — probe: SHELL RAN") {
 		t.Errorf("LocalTools = %q", d.LocalTools)
 	}
 	joined := strings.Join(d.Problems, "\n")

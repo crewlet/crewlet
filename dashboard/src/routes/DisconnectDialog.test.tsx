@@ -3,7 +3,7 @@
  *
  * Removing what the engine registered for itself is never in question.
  * Removing the ACCOUNTS it created is a separate decision, because each is a
- * colleague at that vendor with history attached — so the checkbox is off
+ * colleague at that third-party app with history attached — so the checkbox is off
  * until somebody ticks it, and the request says so explicitly rather than
  * omitting the field and letting a default on the far side decide.
  */
@@ -59,7 +59,7 @@ test("ticking the box asks for the accounts too", async () => {
   expect(sent[0]!.body).toEqual({ remove_seats: true, force: false });
 });
 
-// FORCE IS NOT OFFERED UP FRONT. It leaves the vendor holding things nobody
+// FORCE IS NOT OFFERED UP FRONT. It leaves the third-party app holding things nobody
 // will remove, so it appears only once a teardown has actually failed —
 // otherwise it is just the easier button beside the correct one.
 test("forcing is offered only after a failure", async () => {

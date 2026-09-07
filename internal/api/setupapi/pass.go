@@ -14,14 +14,14 @@ import (
 	"github.com/google/uuid"
 )
 
-// Running a vendor's provisioning from the dashboard.
+// Running a third-party app's provisioning from the dashboard.
 //
 // # Two routes, one machine
 //
 // `provision` runs the pass with a sink and the public base, which is what
 // makes it able to mint a credential and register a webhook. `check` runs the
 // SAME pass with neither, which is what makes it read-only: a person asking
-// "is it working now" after fixing something at the vendor gets a fresh
+// "is it working now" after fixing something at the third-party app gets a fresh
 // answer without the engine writing anything.
 //
 // # The result goes where the loop's does
@@ -55,13 +55,13 @@ type Status interface {
 // provisionRequest is what the dashboard sends.
 type provisionRequest struct {
 	Seats []string `json:"seats"`
-	// DryRun plans and validates without writing at the vendor.
+	// DryRun plans and validates without writing at the third-party app.
 	DryRun bool `json:"dry_run"`
 	// Recreate re-registers hooks with a fresh secret. DESTRUCTIVE across
 	// deployments, so the dashboard gates it behind a typed confirmation
 	// and this route names that in its own answer.
 	Recreate bool `json:"recreate_webhooks"`
-	// OperatorCredential is the transient vendor administrator credential
+	// OperatorCredential is the transient third-party app administrator credential
 	// a pass may need. Never stored, never logged, and zeroed as soon as
 	// the pass returns.
 	OperatorCredential string `json:"operator_credential"`
@@ -85,7 +85,7 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 		httpjson.FailWith(w, http.StatusConflict, codeNotProvisionable, map[string]string{
 			"detail": "this build runs no provisioning pass for " + string(kind),
 			"hint": "its setup is the values on this surface; anything at the " +
-				"vendor is done there or with the crewlet command line",
+				"third-party app is done there or with the crewlet command line",
 		})
 		return
 	}
@@ -129,7 +129,7 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 			}
 			httpjson.Write(w, http.StatusConflict, map[string]any{
 				"error": string(codeRequirementsShort), "fields": names,
-				"hint": "supply these first; a pass writes at the vendor and " +
+				"hint": "supply these first; a pass writes at the third-party app and " +
 					"must not run against a half-configured integration",
 			})
 			return
@@ -148,7 +148,7 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 			// success. Refused by name instead.
 			httpjson.FailWith(w, http.StatusConflict, codeNoPublicBaseURL, map[string]string{
 				"config_path": "integrations.public_base_url",
-				"hint": "set the HTTPS address vendors reach this deployment on; " +
+				"hint": "set the HTTPS address third-party apps reach this deployment on; " +
 					"without it the pass can register no webhook",
 			})
 			return
@@ -184,7 +184,7 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 	defer cancel()
 	run, err := s.passes.Start(ctx, kind, in, uuid.NewString())
 	// THE TRANSIENT CREDENTIAL IS DROPPED THE MOMENT THE PASS RETURNS.
-	// It can create accounts at the vendor, and the difference between a
+	// It can create accounts at the third-party app, and the difference between a
 	// one-time grant and a standing power is exactly how long it is held.
 	in.Operator = ""
 	req.OperatorCredential = ""
@@ -224,10 +224,10 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 			"operator", operatorOf(r))
 		httpjson.Write(w, http.StatusBadGateway, map[string]any{
 			"error": string(codeVendorRefused), "run": run,
-			// The run carries the vendor's own sentence, which is what an
+			// The run carries the third-party app's own sentence, which is what an
 			// operator needs. It is safe here because the one refusal that
 			// could quote a config value no longer does.
-			"hint": "the vendor refused this pass; nothing it had already done " +
+			"hint": "the third-party app refused this pass; nothing it had already done " +
 				"is undone, and re-running is safe",
 		})
 		return
@@ -283,7 +283,7 @@ func (s *Service) record(ctx context.Context, kind integration.Kind, run *setup.
 	next.NextAttemptAt = now.Add(integration.Schedule{}.WithDefaults().
 		Next(next.Report, next.Attempts, 0))
 	if err := s.status.SaveIntegration(ctx, next); err != nil {
-		// The pass happened and its work at the vendor is durable. What is
+		// The pass happened and its work at the third-party app is durable. What is
 		// lost is the record, so the loop re-runs a pass with nothing left
 		// to do, which is the cheap failure.
 		log.WarnContext(ctx, "setup_status_unrecorded", "integration", kind, "error", err)

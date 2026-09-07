@@ -3,7 +3,7 @@
 //
 // # It is the KNOWLEDGE backend, and that is what makes it different
 //
-// The other vendors route events. This one also answers the Plan phase's
+// The other third-party apps route events. This one also answers the Plan phase's
 // "what do we already know about this" — a live CQL search at retrieval
 // time, run as the ASKING SEAT wherever that seat has its own Atlassian
 // credential, so Confluence enforces its own page permissions and the engine
@@ -618,17 +618,17 @@ func firstOf(values ...string) string {
 	return ""
 }
 
-// detailLimit bounds a vendor's own explanation of a refusal.
+// detailLimit bounds a third-party app's own explanation of a refusal.
 //
 // The whole account of what went wrong — a quota message, a permission
 // name, a validation list — and it reaches an operator and a model as the
-// error's text. Two kilobytes holds any of those; past that it is a vendor
+// error's text. Two kilobytes holds any of those; past that it is a third-party app
 // serving an HTML page where an API response belongs.
 const detailLimit = 2048
 
 // readDetail reads a refusal's body, SAYING when it cut.
 //
-// An unmarked cut leaves "the explanation is off-screen" and "the vendor
+// An unmarked cut leaves "the explanation is off-screen" and "the third-party app
 // explained itself badly" as the same string, which is the distinction the
 // reader most needs — and the read error is reported rather than dropped,
 // because a body that died mid-read is a different fact from a short one.
