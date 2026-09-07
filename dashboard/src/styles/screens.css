@@ -1041,6 +1041,23 @@
   cursor: pointer;
 }
 
+/* AN AGENT'S ROW IN A CARD'S ROSTER.
+ *
+ * The console's shape: the agent's own mark, then a name and one line under
+ * it, then what it holds on the right. The mark is what makes the roster read
+ * as a list of the company's agents rather than a list of settings, which is
+ * the whole reason the roster is there.
+ */
+.int-seat-row {
+  align-items: center;
+  gap: var(--space-3);
+}
+.int-seat-row .int-row-identity {
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
 /* The line between what connects an app and what configures it. Both halves
    are one form, and the rule is what keeps that from reading as one long
    list of unrelated questions. */

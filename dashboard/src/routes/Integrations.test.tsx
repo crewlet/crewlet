@@ -575,7 +575,7 @@ test("the card lists each agent and what it holds", () => {
                 requirements: [],
                 present: false,
                 satisfied: false,
-                detail: "no Datadog account yet",
+                detail: "not in Datadog yet, created on the next sync",
               },
             ],
           }),
@@ -589,7 +589,7 @@ test("the card lists each agent and what it holds", () => {
   // AND WHAT EACH ONE HOLDS. A roster of names with no state is a list of
   // agents, not an answer about the integration.
   expect(screen.getByText("mcp_env.datadog.DD_APP_KEY")).toBeTruthy();
-  expect(screen.getByText("no Datadog account yet")).toBeTruthy();
+  expect(screen.getByText("not in Datadog yet, created on the next sync")).toBeTruthy();
 });
 
 // AND A MULTI-SURFACE CARD SAYS WHICH SURFACE EACH ROW IS FOR.

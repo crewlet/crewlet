@@ -379,7 +379,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		summary = datadog.Summary()
 		reqs = datadog.Requirements(block, s.resolve)
 		seats = credentialSeats(company, s.resolve,
-			[]string{datadog.SeatEnv}, datadog.CredentialKeys, "Datadog account")
+			[]string{datadog.SeatEnv}, datadog.CredentialKeys, "Datadog", s.passes.Serves(kind))
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindGitHub:
@@ -387,7 +387,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		summary = github.Summary()
 		reqs = github.Requirements(block, s.resolve)
 		seats = credentialSeats(company, s.resolve,
-			[]string{github.SeatEnv}, github.CredentialKeys, "GitHub token")
+			[]string{github.SeatEnv}, github.CredentialKeys, "GitHub", false)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindJira:
@@ -403,7 +403,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		// operator opens Atlassian first, so it is asked there.
 		reqs = append(reqs, s.forgeRequirement(company))
 		seats = credentialSeats(company, s.resolve,
-			jira.SeatEnvs, jira.CredentialKeys, "Jira account")
+			jira.SeatEnvs, jira.CredentialKeys, "Jira", false)
 		// THE ATLASSIAN BLOCKS HAVE NO `enabled` FIELD. Their presence IS
 		// the switch, which is why a disconnect removes the block rather
 		// than flipping a flag, and why enabled tracks configured here
@@ -414,14 +414,14 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		summary = confluence.Summary()
 		reqs = confluence.Requirements(block, s.resolve)
 		seats = credentialSeats(company, s.resolve,
-			confluence.SeatEnvs, confluence.CredentialKeys, "Confluence account")
+			confluence.SeatEnvs, confluence.CredentialKeys, "Confluence", false)
 		configured, enabled = block != nil, block != nil
 	case integration.KindGitLab:
 		block := company.Integrations.GitLab
 		summary = gitlab.Summary()
 		reqs = gitlab.Requirements(block, s.resolve)
 		seats = credentialSeats(company, s.resolve,
-			[]string{gitlab.SeatEnv}, gitlab.CredentialKeys, "service account")
+			[]string{gitlab.SeatEnv}, gitlab.CredentialKeys, "GitLab", s.passes.Serves(kind))
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindMattermost:
@@ -543,7 +543,7 @@ func (s *Service) forgeRequirement(company *config.Company) setup.Requirement {
 // operator the half that cannot be acted on: the question is which of their
 // people can work in this app, and only a per-seat answer has it.
 func credentialSeats(company *config.Company, resolve func(string) (string, bool),
-	envs, keys []string, noun string,
+	envs, keys []string, app string, provisions bool,
 ) []SeatState {
 	out := []SeatState{}
 	for role := range company.EachRole() {
@@ -559,7 +559,17 @@ func credentialSeats(company *config.Company, resolve func(string) (string, bool
 		state.Present = stored != ""
 		switch {
 		case stored == "":
-			state.Detail = "no " + noun + " yet"
+			// WHAT HAPPENS NEXT, not just what is absent, and the two apps
+			// differ honestly: the reconcile loop creates the account where
+			// this build has a pass for it, and where the app issues no
+			// credential on a provisioner's behalf the next step is a
+			// person's.
+			if provisions {
+				state.Detail = "not in " + app + " yet, created on the next sync"
+				break
+			}
+			state.Detail = "no " + app + " credential yet, and " + app +
+				" issues none on request: add one to this seat's mcp_env"
 		default:
 			// RESOLVED, not merely written down. A ${VAR} naming a secret
 			// the store does not hold is the state that reads as configured

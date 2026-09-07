@@ -25,7 +25,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Button, Empty, Skeleton } from "~/ui/primitives.tsx";
+import { Avatar, Badge, Button, Empty, Skeleton } from "~/ui/primitives.tsx";
 import { Icon, type IconName } from "~/ui/Icon.tsx";
 import { VendorMark, type Vendor } from "~/ui/VendorMark.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -762,7 +762,14 @@ export function EntryRow({
               <SurfaceRow key={p.surface.key} surface={p.surface} row={p.row} />
             ))}
             {seats.map(({ seat, surface }) => (
-              <li key={`${surface}:${seat.handle}`} className="int-row">
+              <li key={`${surface}:${seat.handle}`} className="int-row int-seat-row">
+                {/* THE AGENT'S OWN MARK, the same one the org chart, the
+                    people list and every seat chip render. An agent should
+                    look like itself wherever it appears, which is also what
+                    the console does on its roster: a row of bare names reads
+                    as configuration, and a row with the agent's mark reads
+                    as the person it stands for. */}
+                <Avatar name={seat.name || seat.handle} size="sm" />
                 <div className="int-row-identity">
                   <span className="int-row-name">
                     {surface ? `${surface}: ` : ""}

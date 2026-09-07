@@ -114,7 +114,7 @@ test("a mintable secret offers no input", () => {
 
 // NO VALUE IS EVER RENDERED. A stored secret shows the ${VAR} it points at,
 // which is safe, and nothing else.
-test("a stored secret shows its pointer, never a value", () => {
+test("a stored secret is never rendered as a value", () => {
   const stored: SetupToolState = {
     ...tool,
     configured: true,
@@ -130,8 +130,15 @@ test("a stored secret shows its pointer, never a value", () => {
       onDone={() => {}}
     />,
   );
-  expect(screen.getByText(/Stored as \$\{DATADOG_WEBHOOK_TOKEN\}/)).toBeDefined();
+  // A mintable credential has no input in either form: there is nothing for
+  // a person to type, and the value has a shape they would get wrong.
   expect(container.querySelectorAll('input[type="password"]').length).toBe(0);
+  // AND THE FORM SAYS NOTHING ABOUT WHAT IS STORED. It used to name the
+  // ${VAR} here, which is a fact about this company rather than about the
+  // field, and it is what made the settings form a different screen from the
+  // connect form. Where a credential is kept is the Secrets screen's answer.
+  expect(screen.queryByText(/Stored as/)).toBeNull();
+  expect(screen.queryByText(/DATADOG_WEBHOOK_TOKEN/)).toBeNull();
 });
 
 // A FIX NARROWS TO THE FIELDS THAT CLEAR THE FINDING, which is what the
@@ -298,21 +305,41 @@ test("the connect form leads with the fields that establish the connection", () 
 // its operator has never seen: same fields, same order, same labels, with
 // only the title and the button naming which of the two things is happening.
 test("connecting and managing render one identical form", () => {
-  // PRESENT ON THE CONFIGURED SIDE, which is the whole test: a stored
-  // credential and a stored setting are exactly what used to turn this form
-  // into a different one — three inputs became three lines of text and a
-  // Replace button.
+  // EVERY STATE A FIELD CAN BE IN, on the configured side: a stored
+  // credential, a stored mintable credential, a stored setting, a stored
+  // choice. Each one of those was at some point what made the settings form
+  // a different screen.
   const requirements = (present: boolean) => [
     req({
       field: "site",
       label: "Datadog region",
       kind: "choice",
       connect: true,
+      required: false,
       present,
       value: present ? "datadoghq.com" : undefined,
       choices: [{ value: "datadoghq.com", label: "datadoghq.com" }],
     }),
-    req({ field: "api_key", label: "API key", kind: "secret", connect: true, present }),
+    req({
+      field: "api_key",
+      label: "API key",
+      kind: "secret",
+      connect: true,
+      secret_name: "DATADOG_API_KEY",
+      help: "Create one on your",
+      link_text: "API keys page",
+      vendor_url: "https://example.com/keys",
+      present,
+    }),
+    req({
+      field: "webhook_token",
+      label: "Shared token",
+      kind: "secret",
+      mintable: true,
+      secret_name: "DATADOG_WEBHOOK_TOKEN",
+      present,
+    }),
+    req({ field: "enabled", label: "Accept deliveries", kind: "toggle", present }),
     req({
       field: "route_to",
       label: "Fallback seat",
@@ -322,10 +349,14 @@ test("connecting and managing render one identical form", () => {
       choices: [{ value: "sre-lead", label: "SRE Lead (sre-lead)" }],
     }),
   ];
-  // THE CONTROLS, not just the labels. Comparing label text is what let the
-  // two forms drift: every label was identical while one form had inputs and
-  // the other had static text beside a button.
-  const shapeOf = (configured: boolean): string[] => {
+
+  // THE WHOLE SUBTREE, character for character, not a list of labels and not
+  // a list of controls. Both of those passed while the two forms visibly
+  // differed: the labels matched while one had inputs and the other had
+  // static text, and then the controls matched while the descriptions
+  // differed. The only assertion that cannot be satisfied by a form that
+  // looks different is the form itself.
+  const formOf = (configured: boolean): string => {
     const view = render(
       <SetupDialog
         sections={[
@@ -339,21 +370,24 @@ test("connecting and managing render one identical form", () => {
         onDone={() => {}}
       />,
     );
-    // THE FORM, not the footer. The title and the submit button are meant
-    // to say which of the two things is happening; everything above them is
-    // meant to be the same screen.
     const form = view.baseElement.querySelector(".int-form");
-    const shape = [...(form?.querySelectorAll("label, input, select, button") ?? [])].map((el) =>
-      el.tagName === "LABEL" || el.tagName === "BUTTON"
-        ? `${el.tagName}:${el.textContent}`
-        : `${el.tagName}:${(el as HTMLInputElement).type ?? ""}`,
-    );
+    // React mints an id per rendered field, so a second render of the same
+    // form has different ones. They are the only thing allowed to differ.
+    const html = (form?.innerHTML ?? "").replace(/\b(id|for|aria-describedby)="[^"]*"/g, "");
     view.unmount();
-    return shape;
+    return html;
   };
-  const connecting = shapeOf(false);
+  const connecting = formOf(false);
+  const settings = formOf(true);
   expect(connecting.length).toBeGreaterThan(0);
-  expect(connecting).toEqual(shapeOf(true));
+  if (connecting !== settings) {
+    const a = connecting.split("><");
+    const b = settings.split("><");
+    const diff = a
+      .map((x, i) => (x === b[i] ? "" : `\n  connect : ${x}\n  settings: ${b[i]}`))
+      .filter(Boolean);
+    throw new Error("the two forms differ:" + diff.join(""));
+  }
 });
 
 // A SETTINGS FORM OPENS ON WHAT IS ALREADY SET.

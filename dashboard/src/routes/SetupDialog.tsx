@@ -87,12 +87,6 @@ function sectionKey(section: SetupSection): string {
   return section.seat ? `${section.tool.key}/${section.seat}` : section.tool.key;
 }
 
-/** A satisfied secret shows what it points at; nothing else needs a note. */
-function pointerNote(r: SetupRequirement): string {
-  if (r.kind !== "secret" || !r.present) return "";
-  return r.secret_name ? "Stored as ${" + r.secret_name + "}" : "Already stored";
-}
-
 /** One engine surface inside a tool's dialog. */
 export interface SetupSection {
   /** The surface's own name: Jira, Confluence, the Forge relay. */
@@ -156,10 +150,6 @@ export function SetupDialog({
   }, [sections, blocks]);
   const shown = useMemo(() => [...shownBy.values()].flat(), [shownBy]);
 
-  // Which mintable secrets the operator asked to regenerate. A credential
-  // the engine generates has no input to type into, so rotating one is a
-  // deliberate press rather than an edit.
-  const [replacing, setReplacing] = useState<Record<string, boolean>>({});
   const [values, setValues] = useState<Record<string, string>>(() => {
     const initial: Record<string, string> = {};
     for (const section of sections) {
@@ -228,7 +218,12 @@ export function SetupDialog({
     const generate: string[] = [];
     for (const r of reqs) {
       if (r.kind === "secret" && r.mintable) {
-        if (!r.present || replacing[r.field]) generate.push(r.field);
+        // ONLY WHERE THERE IS NOTHING YET. A mintable credential this
+        // company already holds is left alone: regenerating one is a
+        // rotation, it revokes what every running seat is authenticating
+        // with, and it is not something a form does as a side effect of
+        // saving an unrelated field. That is the Secrets screen's job.
+        if (!r.present) generate.push(r.field);
         continue;
       }
       const value = values[r.field];
@@ -389,21 +384,12 @@ export function SetupDialog({
   // one function over every section's fields, and the link it draws has to
   // say which app it opens.
   function renderField(r: SetupRequirement, appName: string) {
-    const note = pointerNote(r);
     return (
       <div key={r.field} className="col gap-1">
         {r.kind === "secret" && r.mintable ? (
           <div className="field">
             <label>{r.label}</label>
-            {/* THE SAME SENTENCE EITHER WAY, with the stored state after
-                it, for the reason the ordinary credential field carries:
-                what this field IS does not depend on whether this company
-                has one yet, and swapping the whole description for a
-                pointer made one form read as two. */}
-            <span className="hint">
-              Crewlet generates this and seals it in the secret store.
-              {r.present && !replacing[r.field] ? ` ${note}.` : ""}
-            </span>
+            <span className="hint">Crewlet generates this and seals it in the secret store.</span>
             {/* A REFUSAL BELONGS BESIDE ITS FIELD EVEN WHEN THE FIELD HAS
                     NO INPUT. A mintable secret is exactly the case where the
                     engine can answer literal_in_config, because the operator
@@ -412,15 +398,6 @@ export function SetupDialog({
               <span className="hint field-error" role="alert">
                 {fieldErrors[r.field]}
               </span>
-            )}
-            {r.present && !replacing[r.field] && (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setReplacing((c) => ({ ...c, [r.field]: true }))}
-              >
-                Generate a new one
-              </Button>
             )}
           </div>
         ) : editable(r) ? (
@@ -478,12 +455,6 @@ export function SetupDialog({
                     {r.link_text ? "." : null}
                   </>
                 )}
-                {/* AND THE STORED STATE LAST. It is a fact about the field
-                    rather than a different control, and leading with it made
-                    the settings form read as a different screen from the
-                    connect form, which is the one thing these two are meant
-                    not to be. */}
-                {note && <> {note}, so leave it blank to keep the one you have.</>}
               </>
             }
           />
