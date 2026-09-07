@@ -784,7 +784,7 @@
 .int-card {
   background: var(--surface-1);
   border: 1px solid var(--border);
-  border-radius: var(--r-xl);
+  border-radius: var(--r-lg);
   overflow: hidden;
   transition: border-color var(--dur) var(--ease-out);
 }

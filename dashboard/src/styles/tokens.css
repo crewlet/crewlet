@@ -108,14 +108,10 @@
   /* ---- Radius -----------------------------------------------------------
      Four steps and a pill. The old system had ten distinct literal radii
      across 44 declarations. */
-  /* The design system's own steps (@crewlet/tokens --radius-*), so a card
-     here and a card in the console are cut the same. --r-xl is the card
-     radius; the console's integration cards and section panels use it. */
   --r-xs: 4px;
   --r-sm: 6px;
-  --r-md: 8px;
-  --r-lg: 12px;
-  --r-xl: 16px;
+  --r-md: 10px;
+  --r-lg: 14px;
   --r-full: 999px;
 
   /* ---- Layout ---------------------------------------------------------- */
@@ -162,45 +158,30 @@
      Light is the base definition. The ground is not pure white and the panels
      are: an off-white page with white cards is what gives a light UI depth
      without a single shadow doing the work. */
-  --bg: #ffffff;
-  --bg-sunken: #f4f4f5;
-  --surface-1: #f4f4f5;
-  --surface-2: #e9e9ec;
-  --surface-3: #e3e3e6;
-  --surface-inset: rgba(9, 9, 11, 0.04);
-  --surface-hover: rgba(9, 9, 11, 0.045);
-  --surface-active: rgba(9, 9, 11, 0.075);
+  --bg: #f4f5f7;
+  --bg-sunken: #eceef1;
+  --surface-1: #ffffff;
+  --surface-2: #f7f8fa;
+  --surface-3: #eef0f4;
+  --surface-inset: rgba(15, 20, 35, 0.04);
+  --surface-hover: rgba(15, 20, 35, 0.045);
+  --surface-active: rgba(15, 20, 35, 0.075);
   --surface-glass: rgba(255, 255, 255, 0.82);
 
-  --border-subtle: rgba(9, 9, 11, 0.07);
-  --border: #e4e4e7;
-  --border-strong: #d4d4d8;
+  --border-subtle: rgba(15, 20, 35, 0.07);
+  --border: rgba(15, 20, 35, 0.12);
+  --border-strong: rgba(15, 20, 35, 0.22);
 
   /* Every step below is measured against the WORST surface it can land on,
      which in light is --surface-3 (#eef0f4), not the white panel. Six steps
      of the old ramp fell under 4.5:1 because they were anchored to the panel
      and then used on a selected row. */
-  --text: #09090b; /*           conlet --text-primary */
-  --text-secondary: #52525b; /*  a step darker than conlet's #71717a, which
-                                  falls under 4.5:1 on --surface-3 */
-  --text-muted: #55555e;
-  --text-faint: #8f8f99; /*      DECORATION ONLY, never a fact */
-  --heading: #09090b;
+  --text: #14181f; /*           14.5:1 on the worst surface */
+  --text-secondary: #454c59; /*  7.3:1 */
+  --text-muted: #565d6a; /*      5.9:1 */
+  --text-faint: #767e8c; /*      3.5:1 — DECORATION ONLY, never a fact */
+  --heading: #0a0d13; /*        16.7:1 */
   --text-on-fill: #ffffff;
-
-  /* ---- Colour: the neutral solid fill -----------------------------------
-     The step a PRIMARY control is filled with. Deliberately not the accent:
-     the accent is the product's own violet and belongs to identity, so
-     spending it on every Connect button makes the one genuinely branded
-     surface indistinguishable from a row of ordinary actions. A neutral
-     inversion (near-black on light, near-white on dark) reads as "this is
-     the action" on both themes without borrowing the mark's colour, and it
-     is what the console's own primary button does. Its ink step is the
-     surface it sits on, so the pair inverts together and can never drift
-     into white-on-white. */
-  --fill-solid: #000000;
-  --fill-solid-hover: rgba(0, 0, 0, 0.85);
-  --fill-solid-ink: #ffffff;
 
   /* ---- Colour: accent ---------------------------------------------------
      One violet, and it is the mark's own colour, which is what keeps the logo
@@ -214,13 +195,13 @@
      `background:` with a hue token in it and the default text colour left on
      top. Only --accent is ever a fill behind text; a status is a soft tint
      plus its ink step, never a solid block with a label on it. */
-  --accent: #5469d4;
-  --accent-hover: #4759c2;
-  --accent-ink: #3b4b9c;
-  --accent-soft: rgba(84, 105, 212, 0.1);
-  --accent-line: rgba(84, 105, 212, 0.35);
+  --accent: #5b2fd6;
+  --accent-hover: #4d26bd;
+  --accent-ink: #5b2fd6;
+  --accent-soft: rgba(91, 47, 214, 0.1);
+  --accent-line: rgba(91, 47, 214, 0.35);
 
-  --focus: #5469d4;
+  --focus: #5b2fd6;
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--focus);
 
   /* ---- Colour: status ---------------------------------------------------
@@ -228,18 +209,18 @@
      amber is "a person is needed", red is failure, blue is neutral
      information. The old system had green meaning `idle` on a dot and
      `working` on an avatar, side by side on one screen. */
-  --positive: #27753b;
-  --positive-ink: #1f5f2c;
-  --positive-soft: rgba(70, 167, 88, 0.14);
-  --caution: #8a5a00;
-  --caution-ink: #6f4900;
-  --caution-soft: rgba(245, 158, 11, 0.16);
-  --critical: #c62d2d;
-  --critical-ink: #a81919;
-  --critical-soft: rgba(239, 68, 68, 0.12);
-  --info: #1f63c4;
-  --info-ink: #1a55b0;
-  --info-soft: rgba(59, 130, 246, 0.12);
+  --positive: #1c7a44;
+  --positive-ink: #186b3c;
+  --positive-soft: rgba(28, 122, 68, 0.12);
+  --caution: #856400;
+  --caution-ink: #755800;
+  --caution-soft: rgba(133, 100, 0, 0.13);
+  --critical: #c0271f;
+  --critical-ink: #b0231c;
+  --critical-soft: rgba(192, 39, 31, 0.11);
+  --info: #1a66b5;
+  --info-ink: #175a9f;
+  --info-soft: rgba(26, 102, 181, 0.11);
 
   /* ---- Colour: phase ----------------------------------------------------
      Onboarding / Execute / Review. Three, and they are the only categorical
@@ -253,9 +234,9 @@
   --phase-onboarding: #12558f;
   --phase-onboarding-ink: #134e83;
   --phase-execute: #7d54e8;
-  --phase-execute-ink: #5f36c0;
+  --phase-execute-ink: #6a3fd6;
   --phase-review: #0f7a5f;
-  --phase-review-ink: #0b5b47;
+  --phase-review-ink: #0d6b53;
 
   /* ---- Colour: data viz -------------------------------------------------
      FIVE chromatic series in a fixed order, plus a neutral residual bucket,
@@ -309,62 +290,49 @@
    saturated accent is what makes the accent mean "here". */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #15171c;
-    --bg-sunken: #101216;
-    --surface-1: #1c1e24;
-    --surface-2: #1f2127;
-    --surface-3: #22252b;
+    --bg: #0a0c11;
+    --bg-sunken: #06080b;
+    --surface-1: #101319;
+    --surface-2: #161a22;
+    --surface-3: #1e232d;
     --surface-inset: rgba(255, 255, 255, 0.035);
     --surface-hover: rgba(255, 255, 255, 0.045);
     --surface-active: rgba(255, 255, 255, 0.08);
-    --surface-glass: rgba(28, 30, 36, 0.82);
+    --surface-glass: rgba(16, 19, 25, 0.82);
 
-    --border-subtle: rgba(255, 255, 255, 0.08);
-    --border: #3f4145;
-    --border-strong: #4a4d52;
+    --border-subtle: rgba(255, 255, 255, 0.06);
+    --border: rgba(255, 255, 255, 0.11);
+    --border-strong: rgba(255, 255, 255, 0.2);
 
     /* Measured against --surface-3 (#1e232d), the worst surface a label lands
        on: a selected row inside a nested panel. */
-    --text: #fafafa; /*           conlet --text-primary */
-    --text-secondary: #c9ced8; /*  conlet --text-secondary */
-    /* A step lighter than the design system's --text-tertiary (#8c99ad).
-       That value clears 4.5:1 on the console's own card but not on this
-       dashboard's deepest surface, a selected row inside a nested panel,
-       where it lands at 4.18:1. --text-muted is a FACT step, so it takes the
-       lighter neighbour rather than the floor. */
-    --text-muted: #98a4b6;
-    --text-faint: #6a7280; /*      DECORATION ONLY */
-    --heading: #fafafa;
+    --text: #e9ebf0; /*           12.4:1 on the worst surface */
+    --text-secondary: #b0b6c2; /*  7.2:1 */
+    --text-muted: #9aa2b0; /*      5.1:1 */
+    --text-faint: #6a7280; /*      3.1:1 — DECORATION ONLY */
+    --heading: #f6f7fa; /*        13.8:1 */
     --text-on-fill: #ffffff;
 
-    --fill-solid: #ffffff;
-    --fill-solid-hover: rgba(255, 255, 255, 0.9);
-    --fill-solid-ink: #000000;
-
-    --accent: #5469d4;
-    --accent-hover: #6478e0;
-    --accent-ink: #9aabf0;
-    --accent-soft: rgba(84, 105, 212, 0.18);
-    --accent-line: rgba(84, 105, 212, 0.4);
+    --accent: #8347ff;
+    --accent-hover: #9463ff;
+    --accent-ink: #ab92ff;
+    --accent-soft: rgba(131, 71, 255, 0.18);
+    --accent-line: rgba(160, 130, 255, 0.4);
 
     --focus: #a084ff;
 
-    /* The fills are the design system's own semantic hues; the `-ink`
-       steps are the light tints the console's tags carry, which is what
-       lets a label clear 4.5:1 on a dark ground where the fill alone
-       cannot. */
-    --positive: #46a758;
-    --positive-ink: #86efac;
-    --positive-soft: rgba(70, 167, 88, 0.16);
-    --caution: #f59e0b;
-    --caution-ink: #fde68a;
-    --caution-soft: rgba(245, 158, 11, 0.16);
-    --critical: #ef4444;
-    --critical-ink: #fca5a5;
-    --critical-soft: rgba(239, 68, 68, 0.16);
-    --info: #3b82f6;
-    --info-ink: #93c5fd;
-    --info-soft: rgba(59, 130, 246, 0.16);
+    --positive: #3fa066;
+    --positive-ink: #74cf92;
+    --positive-soft: rgba(63, 160, 102, 0.16);
+    --caution: #c28d20;
+    --caution-ink: #e2ae50;
+    --caution-soft: rgba(194, 141, 32, 0.16);
+    --critical: #e05a5a;
+    --critical-ink: #ff8f8b;
+    --critical-soft: rgba(224, 90, 90, 0.16);
+    --info: #4590d8;
+    --info-ink: #7fb8f2;
+    --info-soft: rgba(69, 144, 216, 0.16);
 
     --phase-onboarding: #2f7ec4;
     --phase-onboarding-ink: #7fb8f2;
@@ -395,62 +363,47 @@
 /* An explicit choice wins in both directions, so the toggle works whichever
    way the operating system is set. */
 :root[data-theme="dark"] {
-  --bg: #15171c;
-  --bg-sunken: #101216;
-  --surface-1: #1c1e24;
-  --surface-2: #1f2127;
-  --surface-3: #22252b;
+  --bg: #0a0c11;
+  --bg-sunken: #06080b;
+  --surface-1: #101319;
+  --surface-2: #161a22;
+  --surface-3: #1e232d;
   --surface-inset: rgba(255, 255, 255, 0.035);
   --surface-hover: rgba(255, 255, 255, 0.045);
   --surface-active: rgba(255, 255, 255, 0.08);
-  --surface-glass: rgba(28, 30, 36, 0.82);
+  --surface-glass: rgba(16, 19, 25, 0.82);
 
-  --border-subtle: rgba(255, 255, 255, 0.08);
-  --border: #3f4145;
-  --border-strong: #4a4d52;
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border: rgba(255, 255, 255, 0.11);
+  --border-strong: rgba(255, 255, 255, 0.2);
 
-  /* Measured against --surface-3 (#1e232d), the worst surface a label lands
-     on: a selected row inside a nested panel. */
-  --text: #fafafa; /*           conlet --text-primary */
-  --text-secondary: #c9ced8; /*  conlet --text-secondary */
-  /* A step lighter than the design system's --text-tertiary (#8c99ad).
-     That value clears 4.5:1 on the console's own card but not on this
-     dashboard's deepest surface, a selected row inside a nested panel,
-     where it lands at 4.18:1. --text-muted is a FACT step, so it takes the
-     lighter neighbour rather than the floor. */
-  --text-muted: #98a4b6;
-  --text-faint: #6a7280; /*      DECORATION ONLY */
-  --heading: #fafafa;
+  --text: #e9ebf0;
+  --text-secondary: #b0b6c2;
+  --text-muted: #9aa2b0;
+  --text-faint: #6a7280;
+  --heading: #f6f7fa;
   --text-on-fill: #ffffff;
 
-  --fill-solid: #ffffff;
-  --fill-solid-hover: rgba(255, 255, 255, 0.9);
-  --fill-solid-ink: #000000;
-
-  --accent: #5469d4;
-  --accent-hover: #6478e0;
-  --accent-ink: #9aabf0;
-  --accent-soft: rgba(84, 105, 212, 0.18);
-  --accent-line: rgba(84, 105, 212, 0.4);
+  --accent: #8347ff;
+  --accent-hover: #9463ff;
+  --accent-ink: #ab92ff;
+  --accent-soft: rgba(131, 71, 255, 0.18);
+  --accent-line: rgba(160, 130, 255, 0.4);
 
   --focus: #a084ff;
 
-  /* The fills are the design system's own semantic hues; the `-ink`
-     steps are the light tints the console's tags carry, which is what
-     lets a label clear 4.5:1 on a dark ground where the fill alone
-     cannot. */
-  --positive: #46a758;
-  --positive-ink: #86efac;
-  --positive-soft: rgba(70, 167, 88, 0.16);
-  --caution: #f59e0b;
-  --caution-ink: #fde68a;
-  --caution-soft: rgba(245, 158, 11, 0.16);
-  --critical: #ef4444;
-  --critical-ink: #fca5a5;
-  --critical-soft: rgba(239, 68, 68, 0.16);
-  --info: #3b82f6;
-  --info-ink: #93c5fd;
-  --info-soft: rgba(59, 130, 246, 0.16);
+  --positive: #3fa066;
+  --positive-ink: #74cf92;
+  --positive-soft: rgba(63, 160, 102, 0.16);
+  --caution: #c28d20;
+  --caution-ink: #e2ae50;
+  --caution-soft: rgba(194, 141, 32, 0.16);
+  --critical: #e05a5a;
+  --critical-ink: #ff8f8b;
+  --critical-soft: rgba(224, 90, 90, 0.16);
+  --info: #4590d8;
+  --info-ink: #7fb8f2;
+  --info-soft: rgba(69, 144, 216, 0.16);
 
   --phase-onboarding: #2f7ec4;
   --phase-onboarding-ink: #7fb8f2;
@@ -469,8 +422,6 @@
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.5);
   --shadow-2: 0 6px 18px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
   --shadow-3: 0 24px 56px rgba(0, 0, 0, 0.62), 0 2px 10px rgba(0, 0, 0, 0.5);
-  /* On a dark ground a panel is lifted by the light along its top edge, not
-     by a shadow nobody can see against near-black. */
   --inset-hairline: inset 0 1px 0 rgba(255, 255, 255, 0.045);
 
   --scrollbar: rgba(255, 255, 255, 0.16);
