@@ -280,11 +280,15 @@ test("a field name shared by two surfaces holds two values", () => {
       onDone={() => {}}
     />,
   );
+  // Without the scheme, which a url field wears as an affix rather than
+  // holding in the box. What this asserts is that the two boxes hold
+  // DIFFERENT values, which is what one field name across two surfaces got
+  // wrong.
   expect((screen.getByLabelText("Jira site") as HTMLInputElement).value).toBe(
-    "https://acme.atlassian.net",
+    "acme.atlassian.net",
   );
   expect((screen.getByLabelText("Confluence site") as HTMLInputElement).value).toBe(
-    "https://acme.atlassian.net/wiki",
+    "acme.atlassian.net/wiki",
   );
 });
 

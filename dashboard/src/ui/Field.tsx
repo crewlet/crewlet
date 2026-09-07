@@ -13,6 +13,13 @@
  * of the accessibility tree as text. The field also refuses to carry a
  * `defaultValue` for a secret, because a value the engine has is a value this
  * page must never have received.
+ *
+ * A URL FIELD WEARS ITS SCHEME. Every config field of this kind is refused
+ * without one, so a person typing their site the way they say it out loud
+ * ("acme.atlassian.net") had a form that took the value, a Save that failed
+ * validation, and nothing on screen to say which of the two was wrong. The
+ * affix makes the requirement visible and satisfies it. See [schemeOf] for
+ * what happens to a value that brings its own.
  */
 
 import { useId, type ReactNode } from "react";
@@ -55,8 +62,28 @@ export function Field({
   const id = useId();
   const helpID = `${id}-help`;
   const errorID = `${id}-error`;
-  const describedBy = [help ? helpID : "", error ? errorID : ""].filter(Boolean).join(" ");
+  const affixID = `${id}-affix`;
   const picker = kind === "choice" || kind === "handle";
+
+  // THE AFFIX IS A DEFAULT, NOT A CAGE. It stands in for the scheme this
+  // field would otherwise be refused without, and it steps aside for a value
+  // that carries its own: a Data Center instance reachable only over http is
+  // a thing the config accepts, and an affix that silently rewrote it to
+  // https would point the engine at a port nothing answers on.
+  const own = kind === "url" ? schemeOf(value) : "";
+  const affix = kind === "url" && own !== "http://" ? "https://" : "";
+  const shown = affix ? value.slice(own.length) : value;
+  const describedBy = [affix ? affixID : "", help ? helpID : "", error ? errorID : ""]
+    .filter(Boolean)
+    .join(" ");
+
+  // What the box holds becomes the whole value again, with a scheme somebody
+  // typed or pasted taken as said rather than doubled onto the affix.
+  function changed(typed: string) {
+    if (!affix) return onChange(typed);
+    const carried = schemeOf(typed);
+    onChange(carried === "http://" ? typed : affix + typed.slice(carried.length));
+  }
 
   return (
     <div className="field">
@@ -81,6 +108,26 @@ export function Field({
             </option>
           ))}
         </select>
+      ) : affix ? (
+        <div className="input-affixed">
+          <span className="input-affix" id={affixID} aria-hidden="true">
+            {affix}
+          </span>
+          <input
+            id={id}
+            className="input"
+            inputMode="url"
+            value={shown}
+            placeholder={placeholder}
+            disabled={disabled}
+            autoComplete="off"
+            spellCheck={false}
+            autoFocus={autoFocus}
+            aria-describedby={describedBy || undefined}
+            aria-invalid={error ? true : undefined}
+            onChange={(e) => changed(e.target.value)}
+          />
+        </div>
       ) : (
         <input
           id={id}
@@ -100,8 +147,16 @@ export function Field({
           autoFocus={autoFocus}
           aria-describedby={describedBy || undefined}
           aria-invalid={error ? true : undefined}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={(e) => changed(e.target.value)}
         />
+      )}
+      {affix && (
+        // The affix is decoration to a sighted reader and part of the value
+        // to everybody else, so it is said once rather than read out as
+        // punctuation before the box.
+        <span className="sr-only" id={affixID}>
+          Begins with {affix}
+        </span>
       )}
       {help && (
         <span className="hint" id={helpID}>
@@ -115,4 +170,17 @@ export function Field({
       )}
     </div>
   );
+}
+
+/**
+ * The scheme a value already carries, or "".
+ *
+ * Only the two the config accepts, and matched case-insensitively because a
+ * pasted address is whatever the address bar had.
+ */
+function schemeOf(value: string): string {
+  const lower = value.toLowerCase();
+  if (lower.startsWith("https://")) return "https://";
+  if (lower.startsWith("http://")) return "http://";
+  return "";
 }

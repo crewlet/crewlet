@@ -517,6 +517,42 @@ a.brand:hover {
   line-height: var(--lh-normal);
   resize: vertical;
 }
+/* A url field wears the scheme it would otherwise be refused without. The
+   affix sits INSIDE the control's border rather than beside it, so the box
+   reads as one value: a separate chip in front of the input reads as two
+   fields, and the second of them looks optional. */
+.input-affixed {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding-left: var(--space-3);
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+.input-affixed:focus-within {
+  border-color: var(--accent);
+  background: var(--surface-1);
+}
+.input-affix {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  user-select: none;
+}
+/* The input keeps its own height and type styling and gives up the chrome
+   the wrapper now draws. */
+.input-affixed > .input {
+  border: none;
+  background: none;
+  padding-left: 0;
+}
+.input-affixed > .input:focus {
+  background: none;
+}
+
 .input:focus,
 .select:focus,
 .textarea:focus {
