@@ -44,6 +44,21 @@ var pattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 // nothing else.
 var wholeRef = regexp.MustCompile(`^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$`)
 
+// namePattern is the same identifier rule with no braces around it: the
+// NAME on its own, as a secret store row is keyed and as the environment
+// spells it.
+var namePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// ValidName reports whether a reference could ever name this variable.
+//
+// The check a store makes before it accepts a name, and it belongs here for
+// the reason the rest of this package does: a name outside the grammar is
+// one no ${VAR} in any config can reach, so a store that took "my token" or
+// "gitlab-token" would seal a value, list it, report success, and resolve
+// nothing forever. The failure surfaces as an empty credential at whichever
+// provider reads it, hours later and nowhere near the name that caused it.
+func ValidName(name string) bool { return namePattern.MatchString(name) }
+
 // Has reports whether a value carries at least one reference.
 //
 // "Carries a reference" means "substitution would actually change it",

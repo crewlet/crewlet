@@ -82,8 +82,12 @@ func (s *SecretValues) Set(ctx context.Context, name, value, by, source string, 
 	if s.cipher == nil {
 		return secrets.ErrNoKeyring
 	}
-	if name == "" {
-		return errors.New("store: a secret needs a name")
+	// THE SAME KEY SPACE the fleet's store enforces, checked here too
+	// because this is the path `crewlet secrets set` takes against a
+	// stopped node — and whatever lands here is migrated onto the fleet
+	// unchanged at the next start.
+	if err := secrets.CheckName(name); err != nil {
+		return err
 	}
 	// THE NAME IS BOUND IN as associated data, so a ciphertext moved to
 	// another row fails to decrypt instead of silently impersonating a

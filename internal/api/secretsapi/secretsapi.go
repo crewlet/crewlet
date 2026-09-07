@@ -189,8 +189,18 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 // operator and the byte sequence the third-party app will check.
 func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	if name == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_name"})
+	// BEFORE THE BODY, so a name the grammar cannot reference is refused
+	// without moving 64 KiB of credential through the process first. Only
+	// the write checks: an out-of-grammar row that already exists must
+	// stay readable and, above all, removable, so get and delete take the
+	// name as given.
+	if err := secrets.CheckName(name); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error":  "invalid_name",
+			"detail": err.Error(),
+			"hint": "a secret is keyed by environment-variable name, because " +
+				"that is what a ${VAR} in the company config resolves through",
+		})
 		return
 	}
 	if !s.sealed(w) {
