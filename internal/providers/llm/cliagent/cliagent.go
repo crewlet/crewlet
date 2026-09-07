@@ -296,7 +296,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	log.DebugContext(ctx, "cli_agent_call", "provider", p.key, "agent", p.agent, "model", p.model,
 		"seat", seat, "exit", res.exitCode, "elapsed_ms", time.Since(started).Milliseconds())
 
-	return p.completion(prompt, res)
+	return p.completion(ctx, prompt, res)
 }
 
 // argv is the invocation's arguments: the profile's completion argv, then the
@@ -314,7 +314,12 @@ func (p *Provider) argv() []string {
 
 // completion turns a finished invocation into an answer or a classified
 // failure.
-func (p *Provider) completion(prompt string, res *rawResult) (*llm.Completion, error) {
+//
+// It takes a context only to log with: an answer this backend hands back
+// EMPTY is a real outcome rather than an error (see the fall-through below),
+// and the one place that can say so is here, where the token counts that
+// explain it are still in hand.
+func (p *Provider) completion(ctx context.Context, prompt string, res *rawResult) (*llm.Completion, error) {
 	if res.timedOut {
 		return nil, p.fail(llm.KindTimeout, 0, fmt.Errorf(
 			"the CLI did not answer within %s — raise cli.timeout_seconds if this model "+
@@ -405,25 +410,27 @@ func (p *Provider) completion(prompt string, res *rawResult) (*llm.Completion, e
 				"providers.llm.%s.cli.overrides.text_paths. It printed:\n%s",
 			p.agent, PathList(p.profile.TextPaths), p.key, p.key, tail(res.stdout)))
 	}
-	if strings.TrimSpace(out.text) == "" {
-		// Located and EMPTY: the CLI exited 0, reported no error, and
-		// said nothing. A real outcome rather than a parse problem — a
-		// model that spent its whole answer on hidden reasoning does
-		// exactly this — and one this backend must not paper over,
-		// because there is no reply for the tool loop to correct and
-		// re-prompting on the caller's behalf is the retry the provider
-		// contract forbids.
-		//
-		// Names BOTH facts, because a reader who only sees "no output"
-		// goes looking for a crash that did not happen.
-		return nil, p.fail(llm.KindServer, 0, fmt.Errorf(
-			"the %s CLI exited 0 and answered with nothing: %s is present in its "+
-				"output and empty. Raise the model's effort, or point this entry "+
-				"at a stronger model — `crewlet llm doctor %s` runs a real "+
-				"completion and reports whether it answers at all.%s",
-			p.agent, PathList(p.profile.TextPaths), p.key, stderrDetail(res.stderr)))
-	}
-
+	// LOCATED AND EMPTY IS AN ANSWER OF NOTHING, NOT A FAULT. The CLI
+	// exited 0, reported no error, and the path this profile looks in
+	// resolved to an empty string — which is what a model that spent its
+	// whole output budget on hidden reasoning does. That is a MODEL
+	// outcome, and [llm.Provider] forbids a backend from deciding what a
+	// failure means beyond a coarse kind, so it must not be dressed as one:
+	// both API backends return exactly this shape (a Completion with empty
+	// Content) for the identical situation, and the tool loop is the frame
+	// that corrects it.
+	//
+	// It used to be a KindServer error, on the reasoning that there was no
+	// reply for the tool loop to correct. That was true only because the
+	// loop tested tool calls and never read Content; closing that gap is
+	// what makes this fall-through safe, and what stops one empty round
+	// from being reported as an outage of a CLI that demonstrably answered.
+	//
+	// Falls through rather than returning early so the round is charged:
+	// ParseEnvelope("") yields Message:"" and Parsed:false, so Content
+	// becomes "" with the vendor's real usage attached below — an empty
+	// answer costs tokens, and it was previously the one outcome that spent
+	// them without ever reaching a budget.
 	env := ParseEnvelope(out.text)
 	comp := &llm.Completion{
 		Model:        p.model,
@@ -459,6 +466,18 @@ func (p *Provider) completion(prompt string, res *rawResult) (*llm.Completion, e
 	} else {
 		comp.InputTokens = EstimateTokens(prompt)
 		comp.OutputTokens = EstimateTokens(out.text)
+	}
+
+	if strings.TrimSpace(comp.Content) == "" && len(comp.ToolCalls) == 0 {
+		// Warned rather than returned, because nothing above this frame
+		// can reconstruct WHY: the output token count is the evidence
+		// that the model worked and said nothing (a thinking-only round
+		// bills hundreds), and the text paths are the evidence a reader
+		// needs if it turns out to be profile drift after all. Same
+		// shape as agent/prefetch's own answered-nothing warning.
+		log.WarnContext(ctx, "cli_agent_answered_nothing", "provider", p.key,
+			"agent", p.agent, "model", p.model, "text_paths", PathList(p.profile.TextPaths),
+			"output_tokens", comp.OutputTokens, "reported_usage", out.reported)
 	}
 	return comp, nil
 }

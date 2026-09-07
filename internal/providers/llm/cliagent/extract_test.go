@@ -53,7 +53,7 @@ func TestInputTokensCarryTheWholePromptIncludingCache(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	prov := &Provider{profile: p, model: "sonnet"}
-	comp, err := prov.completion("prompt", &rawResult{stdout: claudeCodeAnswer})
+	comp, err := prov.completion(t.Context(), "prompt", &rawResult{stdout: claudeCodeAnswer})
 	if err != nil {
 		t.Fatalf("completion: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestUnreportedUsageIsMarkedRatherThanReportedAsZero(t *testing.T) {
 	}
 
 	prov := &Provider{profile: p, model: "m"}
-	comp, err := prov.completion("a prompt of some length", &rawResult{stdout: `{"result":"hi"}`})
+	comp, err := prov.completion(t.Context(), "a prompt of some length", &rawResult{stdout: `{"result":"hi"}`})
 	if err != nil {
 		t.Fatalf("completion: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestAFailureFlagInsideAZeroExitIsAFailure(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	prov := &Provider{profile: p, model: "sonnet"}
-	_, err = prov.completion("prompt", &rawResult{
+	_, err = prov.completion(t.Context(), "prompt", &rawResult{
 		stdout: `{"is_error":true,"result":"the model refused","type":"result"}`,
 	})
 	if err == nil {
@@ -226,7 +226,7 @@ func TestAClippedStdoutIsRefusedRatherThanParsed(t *testing.T) {
 	}
 
 	p := &Provider{profile: Profile{}, model: "m"}
-	_, err := p.completion("prompt", &rawResult{
+	_, err := p.completion(t.Context(), "prompt", &rawResult{
 		stdout: buf.String(), droppedStdout: buf.Truncated(),
 	})
 	if err == nil {
@@ -247,7 +247,7 @@ func TestAClippedStdoutIsRefusedRatherThanParsed(t *testing.T) {
 func TestAClippedStderrStillReturnsTheAnswer(t *testing.T) {
 	t.Parallel()
 	p := &Provider{profile: Profile{}, model: "m"}
-	comp, err := p.completion("prompt", &rawResult{
+	comp, err := p.completion(t.Context(), "prompt", &rawResult{
 		stdout: "the answer", stderr: "noise", droppedStderr: 4096,
 	})
 	if err != nil {
@@ -279,8 +279,15 @@ const claudeCodeEmptyAnswer = `{"duration_api_ms":11377,"stop_reason":"end_turn"
 "permission_denials":[],"is_error":false,"num_turns":1,"subtype":"success",
 "api_error_status":null,"result":"","type":"result","duration_ms":10207}`
 
-// An empty answer is an EMPTY ANSWER, never the envelope that carried it.
-func TestAnEmptyResultIsNotTheCLIsOwnTelemetry(t *testing.T) {
+// An empty answer is an EMPTY ANSWER, never the envelope that carried it —
+// and never a transport fault either.
+//
+// Two invariants in one case, because they are the same decision seen from
+// two sides: what the envelope must NOT become (the sentence a seat speaks),
+// and what an empty answer IS (a completion with no content, charged, for the
+// tool loop to correct — the shape both API backends return for a model that
+// thought and said nothing).
+func TestAnEmptyResultIsAChargedCompletionAndNotTheCLIsOwnTelemetry(t *testing.T) {
 	t.Parallel()
 	p, err := Load("claude-code", nil)
 	if err != nil {
@@ -295,22 +302,26 @@ func TestAnEmptyResultIsNotTheCLIsOwnTelemetry(t *testing.T) {
 	}
 
 	prov := &Provider{profile: p, model: "haiku", agent: "claude-code", key: "default"}
-	comp, err := prov.completion("prompt", &rawResult{stdout: claudeCodeEmptyAnswer})
-	if err == nil {
-		t.Fatalf("an empty answer was returned as a completion: %q", comp.Content)
+	comp, err := prov.completion(t.Context(), "prompt", &rawResult{stdout: claudeCodeEmptyAnswer})
+	if err != nil {
+		t.Fatalf("an empty answer was reported as a failure: %v", err)
 	}
-	// The failure must not be the envelope wearing an error's clothes
-	// either: a session id in a message a person reads is noise, and it is
-	// how the old fallback would leak back in.
-	if strings.Contains(err.Error(), "59756a06") {
-		t.Errorf("the raw envelope leaked into the message: %v", err)
+	if comp.Content != "" {
+		t.Errorf("content = %q, want the empty answer — the envelope that carried "+
+			"it is not the model's reply", comp.Content)
 	}
-	if !strings.Contains(err.Error(), "result") {
-		t.Errorf("the message does not name the path it found empty: %v", err)
+	if len(comp.ToolCalls) != 0 {
+		t.Errorf("tool calls = %v, want none", comp.ToolCalls)
 	}
-	if got := llm.KindOf(err); got != llm.KindServer {
-		t.Errorf("kind = %v, want server so the chain may try another member "+
-			"and the credential is not benched", got)
+	// CHARGED. The round burned 627 output tokens against the subscription
+	// whether or not it said anything, and the branch this replaced
+	// returned before the usage was ever attached — so an empty answer was
+	// the one outcome that spent tokens no budget ever saw.
+	if comp.OutputTokens != 627 {
+		t.Errorf("output tokens = %d, want 627 — an empty answer still costs", comp.OutputTokens)
+	}
+	if want := 9 + 10525 + 11308; comp.InputTokens != want {
+		t.Errorf("input tokens = %d, want %d", comp.InputTokens, want)
 	}
 }
 
@@ -327,7 +338,7 @@ func TestADriftedProfileFailsAndNamesTheOverride(t *testing.T) {
 	}
 
 	prov := &Provider{profile: p, model: "m", agent: "codex", key: "coding"}
-	if _, err := prov.completion("prompt", &rawResult{stdout: drifted}); err == nil {
+	if _, err := prov.completion(t.Context(), "prompt", &rawResult{stdout: drifted}); err == nil {
 		t.Fatal("a drifted profile produced a completion")
 	} else {
 		for _, want := range []string{"text_paths", "result", "crewlet llm doctor",
@@ -393,7 +404,7 @@ func TestAnUnrecognisedStreamIsAFailureRatherThanItsOwnLog(t *testing.T) {
 		t.Fatalf("an unrecognised stream extracted text = %q located = %v", got.text, got.located)
 	}
 	prov := &Provider{profile: p, model: "m", agent: "codex", key: "coding"}
-	if _, err := prov.completion("prompt", &rawResult{stdout: log}); err == nil {
+	if _, err := prov.completion(t.Context(), "prompt", &rawResult{stdout: log}); err == nil {
 		t.Fatal("an unrecognised stream produced a completion")
 	} else if !strings.Contains(err.Error(), "text_paths") {
 		t.Errorf("the message does not name the field to change: %v", err)
@@ -410,7 +421,7 @@ func TestNoOutputAtAllIsReportedAsNoOutput(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	prov := &Provider{profile: p, model: "haiku", agent: "claude-code", key: "default"}
-	_, err = prov.completion("prompt", &rawResult{stdout: "  \n ", stderr: "node: bad flag"})
+	_, err = prov.completion(t.Context(), "prompt", &rawResult{stdout: "  \n ", stderr: "node: bad flag"})
 	if err == nil {
 		t.Fatal("a silent CLI produced a completion")
 	}
@@ -438,7 +449,7 @@ func TestASpentPlanIsRecognisedEvenWhenTheAnswerIsNotLocated(t *testing.T) {
 	prov := &Provider{profile: p, model: "haiku", agent: "claude-code", key: "default"}
 	// Valid JSON with no `result` field: nothing for text_paths to find, and
 	// the vendor's sentinel sitting in a field this build never reads.
-	_, err = prov.completion("prompt", &rawResult{
+	_, err = prov.completion(t.Context(), "prompt", &rawResult{
 		stdout: `{"note":"Usage limit reached \u00b7 continuing automatically"}`})
 	if err == nil {
 		t.Fatal("a spent plan produced a completion")
@@ -473,7 +484,7 @@ func TestAMarkerThatCarriesAResetInstantYieldsARealRetryAfter(t *testing.T) {
 	// literal would quietly become a reset in the past and turn this into a
 	// test that asserts nothing.
 	reset := time.Now().Add(90 * time.Minute).Unix()
-	_, err = prov.completion("prompt", &rawResult{stdout: fmt.Sprintf(
+	_, err = prov.completion(t.Context(), "prompt", &rawResult{stdout: fmt.Sprintf(
 		`{"note":"quota spent|%d"}`, reset)})
 	if err == nil {
 		t.Fatal("a spent plan produced a completion")

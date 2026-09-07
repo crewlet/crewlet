@@ -390,12 +390,12 @@ between releases needs no override — the first path that resolves to a
 non-empty string wins, and an empty one falls through to the next.
 
 Four outcomes, kept apart on purpose, because three of them used to be
-one:
+one — and only two of them are failures:
 
 | What happened | What the engine does |
 |---|---|
 | A text path resolved to text | That text is the reply. |
-| A text path resolved and every one was **empty** | The CLI answered with nothing. A retryable `SERVER` failure naming every `text_paths` entry the profile declares — the [fallback chain](#falling-back-to-a-metered-key) walks to the next entry, and no credential is benched. |
+| A text path resolved and every one was **empty** | The CLI answered with nothing. **An answer, not a failure**: a completion with empty content and the round's real token usage attached, which is exactly what the `openai` and `anthropic` backends return for a model that spends its whole budget thinking. The [tool loop](agent-runtime.md) corrects it — see [When the CLI answers with nothing](#when-the-cli-answers-with-nothing). |
 | **No** text path resolved at all | The profile no longer matches the installed CLI. A retryable `SERVER` failure that names `text_paths`, points at `crewlet llm doctor`, and prints the **tail** of what the CLI output so you can write the override. |
 | The CLI printed **nothing at all** on a zero exit | Its own message, because neither of the two above can say anything true about output that does not exist. A retryable `SERVER` failure carrying whatever it wrote on stderr, which is the only clue there is. |
 
@@ -408,20 +408,44 @@ and stderr, so a drifted profile still yields a real `RATE_LIMIT` with
 the vendor's own reset instant rather than a server fault.
 
 **Why the last two are failures rather than answers.** They used to be
-one case, and the answer handed back was the CLI's raw stdout — on the
-reasoning that an operator would then see the shape and write an
-override. They would, but only after it had been *spoken as an agent*
-first: an empty `result` on a Claude Code envelope meant the seat's reply
-became `{"duration_api_ms":11377,…,"result":"","type":"result"}`, the
-tool loop appended that to the conversation and re-sent it every round,
-the reviewer judged the turn on it, and the dashboard printed it as the
+one case with the empty one, and the answer handed back was the CLI's raw
+stdout — on the reasoning that an operator would then see the shape and
+write an override. They would, but only after it had been *spoken as an
+agent* first: an empty `result` on a Claude Code envelope meant the
+seat's reply became
+`{"duration_api_ms":11377,…,"result":"","type":"result"}`, the tool loop
+appended that to the conversation and re-sent it every round, the
+reviewer judged the turn on it, and the dashboard printed it as the
 sentence the agent had said. The shape belongs in the error message,
-where the only person who can act on it is the only one reading.
+where the only person who can act on it is the only one reading. Both
+remaining failures are about *this build not being able to read the CLI*,
+which is a fact about your machine — so the chain walking to another
+entry is the right move.
 
-An empty answer is a real outcome, not only a parsing problem — a model
-that spends its whole turn on hidden reasoning produces exactly this — so
-if you see it repeatedly, the entry's `model` is the field to change.
-`crewlet llm doctor` runs a real completion and reports it.
+### When the CLI answers with nothing
+
+A model that spends its whole output budget on hidden reasoning exits 0,
+reports success, bills hundreds of output tokens and leaves the answer
+field **empty**. That is a *model* outcome, so the backend hands it back
+as an answer of nothing rather than dressing it as an outage:
+
+- **The round is charged.** An empty answer costs tokens, and it used to
+  be the one outcome that spent them without ever reaching a budget.
+- **The tool loop asks again, once.** A round that produced neither prose
+  nor a tool call gets one corrective re-prompt naming what went wrong.
+  One and not two: unlike a declined tool call, a second identical nudge
+  is just the same prompt against the same model. A phase that required a
+  tool call gets that corrective instead — `call one of these tools` is
+  the better instruction and already covers it.
+- **It is counted.** `empty_answer_rounds` on the phase record is the
+  number of rounds that reached nobody. A seat whose model habitually
+  answers nothing shows up there, and in `crewlet llm doctor`, which
+  names an empty answer as such rather than reporting `it said: ""`.
+
+If you see it repeatedly, the entry's **`model`** is the field to change.
+`reasoning_effort` and `reasoning_budget_tokens` are refused on a
+cli-agent entry precisely so nobody spends an afternoon on them: they are
+per-call API parameters and a headless coding CLI takes neither.
 
 ### Token accounting
 
