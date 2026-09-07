@@ -1375,12 +1375,49 @@
       ],
       "type": "object"
     },
+    "RoleGitHub": {
+      "additionalProperties": false,
+      "properties": {
+        "app_id": {
+          "description": "Numeric id of this seat's GitHub App. Written by the engine.",
+          "type": "integer"
+        },
+        "app_slug": {
+          "description": "Slug of this seat's GitHub App; the bot login derives from it.",
+          "type": "string"
+        },
+        "installation_id": {
+          "description": "Installation of this seat's app on the organization. Written by the engine.",
+          "type": "integer"
+        },
+        "private_key": {
+          "description": "Reference to this seat's sealed GitHub App key. Returned by GitHub once.",
+          "type": "string"
+        },
+        "repos": {
+          "description": "Repositories this seat works in, as owner/name. Empty means all the installation covers.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tier": {
+          "description": "read_only, review or full_access. Empty means read_only.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "RoleIntegrations": {
       "additionalProperties": false,
       "properties": {
         "confluence": {
           "$ref": "#/$defs/SpaceRef",
           "description": "The Confluence space this seat owns."
+        },
+        "github": {
+          "$ref": "#/$defs/RoleGitHub",
+          "description": "This seat's own GitHub App: how much it may do, and where."
         },
         "jira": {
           "$ref": "#/$defs/ProjectRef",
