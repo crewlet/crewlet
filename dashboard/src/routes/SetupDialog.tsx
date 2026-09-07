@@ -326,19 +326,11 @@ export function SetupDialog({
         </div>
       )}
 
-      {/* WHAT THE SAVE ACTUALLY DOES, said before it is pressed: an operator
-          about to hand a credential to a self-hosted process is owed the
-          sentence that says where it goes. ONE LINE, because it is a footnote
-          to the form rather than part of it — a two-sentence paragraph under
-          the last field competes with the field. What it drops is "nothing is
-          ever sent back to a browser", which is a promise about the READ
-          path; this note is about the write, and the read path keeps its own
-          guarantee in the API docs and in the tests that assert no route
-          returns a value. */}
-      <span className="t-caption faint">
-        Credentials are sealed in the secret store; the configuration holds only a{" "}
-        <code className="inline">${"{VAR}"}</code> pointing at them.
-      </span>
+      {/* WHERE THE CREDENTIAL GOES, said before it is handed over. An
+          operator typing a key into a self-hosted process is owed that much,
+          and no more: how the configuration REFERS to a sealed value is the
+          engine's business, not something to explain on the way past. */}
+      <span className="t-caption faint">Credentials are sealed in the secret store.</span>
     </Dialog>
   );
 
