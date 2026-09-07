@@ -1,6 +1,8 @@
 package confluence
 
 import (
+	"cmp"
+
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -113,12 +115,48 @@ func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []
 	reqs[4].Present, reqs[4].Resolved, reqs[4].Stored = setup.Held(webhookToken, resolve)
 	reqs[5].Present, reqs[5].Resolved, reqs[5].Stored = setup.Held(secret, resolve)
 	reqs[6].Present, reqs[6].Resolved, reqs[6].Stored = setup.Plain(siteURL)
-	return reqs
+	return forDeployment(reqs, DeploymentOf(cmp.Or(url, siteURL)), cloudID)
+}
+
+// forDeployment drops the fields the other Atlassian deployment uses.
+//
+// The same rule Jira's form follows, for the same reason: a Cloud operator
+// was offered a Data Center signing secret their site will never send, and a
+// Data Center operator a Cloud webhook token, a cloud id and a link address
+// that mean nothing off Atlassian's gateway. A field that cannot apply is
+// not an optional field.
+//
+// A field with a value SURVIVES, because the derivation is a guess from an
+// address and the document is a fact.
+func forDeployment(reqs []setup.Requirement, deploy Deployment, cloudID string) []setup.Requirement {
+	gateway := map[string]bool{"cloud_id": true, "site_url": true}
+	cloudOnly := map[string]bool{"webhook_token": true}
+	dataCenter := map[string]bool{"webhook_secret": true}
+
+	out := make([]setup.Requirement, 0, len(reqs))
+	for _, r := range reqs {
+		switch {
+		case r.Present:
+		case gateway[r.Field] && deploy != Cloud:
+			continue
+		case r.Field == "site_url" && cloudID == "":
+			continue
+		case cloudOnly[r.Field] && deploy != Cloud:
+			continue
+		case dataCenter[r.Field] && deploy == Cloud:
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // Summary is the sentence the connect form opens with.
 func Summary() string {
-	return "Agents read the company's pages and answer comments on them. This " +
-		"engine registers a webhook per event so Confluence's changes reach " +
-		"it."
+	// Same correction Jira's summary carries: a Cloud site has no webhook
+	// REST API for an API token to call, so its changes arrive through the
+	// Forge relay.
+	return "Agents read the company's pages and answer comments on them. " +
+		"Cloud delivers through the Crewlet Forge app; Data Center " +
+		"registers a webhook."
 }

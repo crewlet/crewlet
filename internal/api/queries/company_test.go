@@ -189,6 +189,53 @@ func TestAnUnreadableHistoryDoesNotBlankTheSchedules(t *testing.T) {
 
 // --- integrations ----------------------------------------------------------
 
+// A CLOUD SITE HAS NO INBOUND SECRET, and "none" is not "missing".
+//
+// Atlassian restricts the webhook API to Connect and OAuth apps, so a Cloud
+// site's events reach this engine through the Forge relay and are verified by
+// the app id. Reported as a missing secret, a correctly configured Cloud site
+// read "the webhook secret did not resolve, so every delivery is refused" —
+// a fault on the screen, permanently, for a field that surface will never
+// have.
+func TestACloudJiraReportsNoSecretRatherThanAMissingOne(t *testing.T) {
+	t.Parallel()
+	row := jiraRow(t, &config.Jira{URL: "https://acme.atlassian.net"})
+	if row["secret_present"] != nil {
+		t.Errorf("secret_present = %v, want null for a Cloud site", row["secret_present"])
+	}
+	if row["secret_usable"] != nil {
+		t.Errorf("secret_usable = %v, want null for a Cloud site", row["secret_usable"])
+	}
+}
+
+// AND A DATA CENTER INSTANCE STILL ANSWERS IT, because there the secret is a
+// real requirement and an unset one really does refuse every delivery.
+func TestADataCenterJiraStillReportsItsSecret(t *testing.T) {
+	t.Parallel()
+	row := jiraRow(t, &config.Jira{URL: "https://jira.acme.example"})
+	if present, ok := row["secret_present"].(bool); !ok || present {
+		t.Errorf("secret_present = %v, want false for a Data Center instance with none",
+			row["secret_present"])
+	}
+}
+
+func jiraRow(t *testing.T, in *config.Jira) map[string]any {
+	t.Helper()
+	cfg := &config.Company{Name: "Acme", Integrations: config.Integrations{Jira: in}}
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+	}, "integrations", nil))
+	rows, _ := body["integrations"].([]any)
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		if entry["key"] == "jira" {
+			return entry
+		}
+	}
+	t.Fatal("no jira row in the answer")
+	return nil
+}
+
 func TestIntegrationsSaysHowEachSurfaceIsWired(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)

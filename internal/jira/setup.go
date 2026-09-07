@@ -1,6 +1,8 @@
 package jira
 
 import (
+	"cmp"
+
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -104,12 +106,57 @@ func Requirements(in *config.Jira, resolve func(string) (string, bool)) []setup.
 	reqs[3].Present, reqs[3].Resolved, reqs[3].Stored = setup.Held(token, resolve)
 	reqs[4].Present, reqs[4].Resolved, reqs[4].Stored = setup.Held(secret, resolve)
 	reqs[5].Present, reqs[5].Resolved, reqs[5].Stored = setup.Plain(siteURL)
-	return reqs
+	return forDeployment(reqs, DeploymentOf(cmp.Or(url, siteURL)), cloudID)
+}
+
+// forDeployment drops the fields the other Atlassian deployment uses.
+//
+// A Cloud site and a Data Center instance need genuinely different things,
+// and the form asked for BOTH sets at once: a Cloud operator was offered a
+// webhook signing secret their site will never send, and a Data Center
+// operator a cloud id and a link address that mean nothing off Atlassian's
+// gateway. A field that cannot apply is not an optional field; it is a
+// question with no answer, and it invites one anyway.
+//
+// A field with a value SURVIVES whatever this derives, because the
+// derivation is a guess from an address and the document is a fact: hiding a
+// setting a company has written down would make the form disagree with the
+// configuration, and Save would then clear it.
+func forDeployment(reqs []setup.Requirement, deploy Deployment, cloudID string) []setup.Requirement {
+	// The gateway fields only mean anything with a cloud id, which is itself
+	// a Cloud-only way of naming the site.
+	gateway := map[string]bool{"cloud_id": true, "site_url": true}
+	// Cloud sites do not sign a webhook: their events reach this engine
+	// through the Forge relay, because Atlassian restricts the webhook API
+	// to Connect and OAuth apps.
+	dataCenter := map[string]bool{"webhook_secret": true}
+
+	out := make([]setup.Requirement, 0, len(reqs))
+	for _, r := range reqs {
+		switch {
+		case r.Present:
+		case gateway[r.Field] && deploy != Cloud:
+			continue
+		case r.Field == "site_url" && cloudID == "":
+			continue
+		case dataCenter[r.Field] && deploy == Cloud:
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // Summary is the sentence the connect form opens with.
 func Summary() string {
-	return "Agents are assigned issues and mentioned by name. This engine " +
-		"registers a webhook so Jira's events reach it; the accounts are " +
-		"ones you already have."
+	// IT DOES NOT REGISTER A CLOUD WEBHOOK, and said it did. Atlassian
+	// restricts the webhook API to Connect and OAuth apps — an API token is
+	// answered "Only Connect and OAuth 2.0 apps can use this operation" —
+	// so a Cloud site's events reach this engine through the Forge relay and
+	// only Data Center registers a hook. Nor does it create accounts:
+	// Atlassian has no user-creation API outside SCIM, which needs a
+	// verified domain and an identity provider.
+	return "Agents are assigned issues and mentioned by name, as accounts you " +
+		"create yourself. Cloud delivers through the Crewlet Forge app; " +
+		"Data Center registers a webhook."
 }
