@@ -82,3 +82,36 @@ func TestAnUnaddressedBlockKeepsSomewhereToRecordTheSite(t *testing.T) {
 		}
 	}
 }
+
+// THE ACCOUNT EMAIL IS REQUIRED UNTIL DATA CENTER IS ESTABLISHED.
+//
+// Cloud authenticates an API token as Basic base64(email:token) and refuses
+// it as a bearer — measured against a live site: 403 without the address,
+// 200 with it — so without the email the webhook this integration exists to
+// register is never created. Data Center takes the token as a bearer and
+// wants no address at all.
+//
+// The unknown case is the one that was wrong: with no site typed yet,
+// DeploymentOf answers DataCenter for the empty string, so the one field a
+// fresh Cloud connect cannot do without was marked optional.
+func TestTheAccountEmailIsRequiredUntilDataCenterIsKnown(t *testing.T) {
+	t.Parallel()
+	required := func(in *config.Jira) bool {
+		for _, r := range jira.Requirements(in, func(string) (string, bool) { return "", false }) {
+			if r.Field == "email" {
+				return r.Required
+			}
+		}
+		t.Fatal("no email requirement")
+		return false
+	}
+	if !required(&config.Jira{Token: "${T}"}) {
+		t.Error("a company that has named no site yet is not asked for the email")
+	}
+	if !required(&config.Jira{URL: "https://acme.atlassian.net", Token: "${T}"}) {
+		t.Error("a Cloud site is not asked for the email its auth needs")
+	}
+	if required(&config.Jira{URL: "https://jira.acme.example", Token: "${T}"}) {
+		t.Error("a Data Center instance is asked for an email it does not use")
+	}
+}

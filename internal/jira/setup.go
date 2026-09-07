@@ -30,6 +30,8 @@ func Requirements(in *config.Jira, resolve func(string) (string, bool)) []setup.
 		token, email, secret, siteURL = in.Token, in.Email, in.WebhookSecret, in.SiteURL
 	}
 
+	addressed := cmp.Or(url, siteURL) != ""
+
 	reqs := []setup.Requirement{
 		{
 			Field:      "url",
@@ -69,7 +71,19 @@ func Requirements(in *config.Jira, resolve func(string) (string, bool)) []setup.
 			// optional for the Data Center case, which made it optional on
 			// every form including the one where it is the difference
 			// between a working credential and a 401.
-			Required: DeploymentOf(cmp.Or(url, siteURL)) == Cloud,
+			// REQUIRED UNLESS THIS IS KNOWN TO BE DATA CENTER.
+			//
+			// Cloud authenticates an API token as Basic base64(email:token)
+			// and refuses it as a bearer: without the address the engine
+			// sends a bearer and Atlassian answers 403, so the webhook this
+			// integration exists to register is never created. Data Center
+			// takes the token as a bearer and wants no address at all.
+			//
+			// An UNKNOWN deployment counts as Cloud here, and that is the
+			// case this got wrong: with no site typed yet DeploymentOf
+			// answers DataCenter for the empty string, so the one field a
+			// fresh Cloud connect cannot do without was marked optional.
+			Required: !addressed || DeploymentOf(cmp.Or(url, siteURL)) == Cloud,
 			Help:     "Cloud authenticates as email and token together. Leave empty for Data Center.",
 		},
 		{
@@ -123,8 +137,7 @@ func Requirements(in *config.Jira, resolve func(string) (string, bool)) []setup.
 	reqs[3].Present, reqs[3].Resolved, reqs[3].Stored = setup.Held(token, resolve)
 	reqs[4].Present, reqs[4].Resolved, reqs[4].Stored = setup.Held(secret, resolve)
 	reqs[5].Present, reqs[5].Resolved, reqs[5].Stored = setup.Plain(siteURL)
-	return forDeployment(reqs, DeploymentOf(cmp.Or(url, siteURL)), cloudID,
-		cmp.Or(url, siteURL) != "")
+	return forDeployment(reqs, DeploymentOf(cmp.Or(url, siteURL)), cloudID, addressed)
 }
 
 // forDeployment drops the fields the other Atlassian deployment uses.
