@@ -575,6 +575,64 @@ Three more header rules follow from the same audit:
   every phase event and links to its own event) and **what it set out to do**
   (`plan_summary` — the agent's own account, which nothing read).
 
+### What a mark MEANS, and where a control belongs
+
+Five corrections came out of reading the rebuilt screen, and each is a rule
+rather than a tweak:
+
+- **✓/✗ is a pass/fail vocabulary, so it may not describe an absence.** The
+  prefetch panel first drew a check or a cross per context block: four crosses
+  down the left of a turn where nothing had gone wrong. A seat with no prior
+  episodes on this topic, no synthesized skills yet and a turn that is not its
+  first has four empty blocks and a perfectly healthy prompt. It leads with
+  what the prompt actually GOT, sized, and names the rest in one quiet line.
+  The one genuinely diagnostic state — a block that was never *searched*,
+  because the trigger was a bare pointer — stays called out on its own.
+- **A section's name must not be readable as a failure.** "What it left behind"
+  read as work abandoned. It is the reflection pass, and everything in it is
+  something the seat now knows: **What the seat learned**.
+- **"Nothing went wrong" is a badge, not a banner.** It is a property of the
+  turn, so it belongs beside the phase count where the reader already looks
+  for the turn's state, and in the slot the problem badge would occupy. A
+  full-width banner said the same thing at ten times the weight, after
+  everything else, reading as an announcement about nothing. It is claimed
+  only on a *finished* turn with a record to claim it from: "nothing went
+  wrong" and "nothing was read" must not render alike.
+- **A link to the page you are on is a lie.** A phase card carries `event →`
+  to its own event — a way out on the turn and on the seat, and on that
+  event's own page a loop. `useIsCurrent` answers it generally, so no
+  component has to know where it is rendered. Outside a Router it answers
+  "no" rather than throwing: a phase card renders fine on its own, and a
+  router should not be the price of drawing one.
+- **The way into a turn is a control, not a caption.** The turn card's
+  `turn 28e93bc3 →` was a mono link in a footer corner with the sentence
+  explaining it pushed to the opposite end of the row — the most useful action
+  on the card, styled like debug output. It is a button now, with its promise
+  beside it.
+
+And **a chip's shape is a claim about what kind of thing it is.** The turn
+card put the trigger's integration in the same row, size and shape as the
+phase tags, so `EXECUTE  REVIEW  mattermost` read as three phases, one of them
+a chat product. The trigger and its source are one fact and now sit together
+on the line above; the phases are a different one.
+
+### A row is not a row
+
+`EventRow` is the activity feed's row, on a four-track grid: time, actor,
+summary, tail. The turn screen borrowed the class and passed three children,
+so the summary landed in the 132px *actor* column and truncated at about
+twenty characters while the raw event type had the whole tail to itself, and a
+full date wrapped to three lines inside the 62px time column. Every row was
+three lines tall to show half a sentence.
+
+A page about ONE turn needs a different row, and the differences are all the
+same point — the columns that carry information in a feed carry none here. The
+actor is the same seat on every row; the category is an internal taxonomy; the
+date is a turn the header already dates. The actor has to come off the
+**summary** too, not just out of a column: the engine builds these lines as
+`lead(actor, …)`, so each one opens with the seat's name, and four rows under
+that seat's own heading do not each need to repeat it.
+
 Finally, **a nested call hangs off the phase that made it.** `host_phase` and
 `host_iteration` have always been on the wire, `groupTurns` has always done
 the split and `PhaseCard` has always had the prop — this screen used none of

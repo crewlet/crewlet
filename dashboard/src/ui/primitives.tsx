@@ -595,6 +595,58 @@ type CodeProps = { children: ReactNode; plain?: boolean } & (
   | { selectable?: false; label?: never }
 );
 
+/**
+ * A labelled section the reader opens.
+ *
+ * Lifted out of PhaseCard when a second screen needed one. The alternative was
+ * a bare `<details>`, and a bare `<details>` is not the same control: it draws
+ * the platform's own marker instead of the chevron every other expander here
+ * uses, it takes none of the hover, inset or type of `.disclosure-head`, and
+ * it cannot carry a count chip or a status mark. Two expanders that behave the
+ * same and look different is the specific thing this component library exists
+ * to stop.
+ */
+export function Disclosure({
+  label,
+  count,
+  children,
+  defaultOpen,
+  mono,
+  tone,
+  mark,
+  actions,
+}: {
+  label: ReactNode;
+  count?: ReactNode;
+  children: ReactNode;
+  defaultOpen?: boolean;
+  mono?: boolean;
+  tone?: "reasoning";
+  /** A status mark, rendered as its OWN item in the head's row. */
+  mark?: ReactNode;
+  /** Controls that belong to the section, kept OUT of the toggle. Rendered
+      beside the head rather than inside it: a button nested in a button is
+      not a thing, and clicking a copy control must not also collapse the
+      thing it copied. */
+  actions?: ReactNode;
+}) {
+  const [open, setOpen] = useState(!!defaultOpen);
+  return (
+    <div className={cx("disclosure", tone && `tone-${tone}`)}>
+      <div className="disclosure-bar">
+        <button className="disclosure-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+          <Icon name={open ? "chevronDown" : "chevronRight"} size="xs" />
+          {mark}
+          <span className={cx("truncate", mono && "mono")}>{label}</span>
+          {count != null && <span className="count-chip">{count}</span>}
+        </button>
+        {actions}
+      </div>
+      {open && <div className="disclosure-body">{children}</div>}
+    </div>
+  );
+}
+
 export function Code({ children, plain, selectable, label }: CodeProps) {
   const box = useRef<HTMLPreElement>(null);
 

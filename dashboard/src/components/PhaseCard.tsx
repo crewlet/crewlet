@@ -41,8 +41,8 @@
  *     the same shape and the row does not change height when it completes.
  */
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Badge, Button, Code, PhaseTag, cx } from "~/ui/primitives.tsx";
+import { useEffect, useRef, useState } from "react";
+import { Badge, Button, Code, Disclosure, PhaseTag, cx } from "~/ui/primitives.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
 import {
@@ -54,39 +54,7 @@ import {
 } from "~/lib/phases.ts";
 import { staleness } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
-import { href } from "~/app/router.tsx";
-
-function Disclosure({
-  label,
-  count,
-  children,
-  defaultOpen,
-  mono,
-  tone,
-  mark,
-}: {
-  label: ReactNode;
-  count?: ReactNode;
-  children: ReactNode;
-  defaultOpen?: boolean;
-  mono?: boolean;
-  tone?: "reasoning";
-  /** A status mark, rendered as its OWN item in the head's row. */
-  mark?: ReactNode;
-}) {
-  const [open, setOpen] = useState(!!defaultOpen);
-  return (
-    <div className={cx("disclosure", tone && `tone-${tone}`)}>
-      <button className="disclosure-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
-        <Icon name={open ? "chevronDown" : "chevronRight"} size="xs" />
-        {mark}
-        <span className={cx("truncate", mono && "mono")}>{label}</span>
-        {count != null && <span className="count-chip">{count}</span>}
-      </button>
-      {open && <div className="disclosure-body">{children}</div>}
-    </div>
-  );
-}
+import { href, useIsCurrent } from "~/app/router.tsx";
 
 function ToolRow({
   name,
@@ -269,6 +237,7 @@ export function PhaseCard({
   const streaming = ledger.some((r) => r.streaming);
   const stale = record.live ? staleness(record.at, now) : "";
   const took = phaseDuration(record);
+  const onOwnEventPage = useIsCurrent(["events", record.eventId]);
   // The last round is the live one while the phase runs: rounds only append,
   // so "newest" and "last" are the same row and stay the same row.
   const tailRef = useTail(open && record.live);
@@ -546,7 +515,12 @@ export function PhaseCard({
                 {record.conversationKey}
               </span>
             )}
-            {record.eventId && (
+            {/* NOT ON THE EVENT'S OWN PAGE. This card is rendered on the
+                turn, on the seat and on the event itself, and only the first
+                two are somewhere else — on the third the link points at the
+                page already open, so a reader clicks it, nothing moves, and
+                the only thing they learn is that the control was a lie. */}
+            {record.eventId && !onOwnEventPage && (
               <a
                 className="t-link"
                 href={href(["events", record.eventId])}

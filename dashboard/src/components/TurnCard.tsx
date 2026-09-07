@@ -13,12 +13,12 @@
  */
 
 import { useState } from "react";
-import { Badge, PhaseTag, cx } from "~/ui/primitives.tsx";
+import { Badge, Button, PhaseTag, cx } from "~/ui/primitives.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { PhaseCard } from "./PhaseCard.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { href } from "~/app/router.tsx";
+import { useNavigator } from "~/app/router.tsx";
 import type { TurnGroup } from "~/lib/phases.ts";
 
 export function TurnCard({
@@ -32,6 +32,7 @@ export function TurnCard({
 }) {
   const [open, setOpen] = useState(!!defaultOpen);
   const now = useNow();
+  const nav = useNavigator();
 
   // The turn's own wall time, from its first phase to its last. The engine's
   // `turn_completed` carries an exact `duration_ms`, but it is a separate
@@ -51,6 +52,16 @@ export function TurnCard({
         <div className="col" style={{ gap: 2, flex: 1, minWidth: 0 }}>
           <div className="row gap-1">
             {showRole && group.role && <strong className="t-cell">{group.role}</strong>}
+            {/* WHERE THIS CAME FROM, beside the line it qualifies. It used to
+                sit in the row below, in a chip the same size and shape as the
+                phase tags — so `EXECUTE  REVIEW  mattermost` read as three
+                phases, one of which was a chat product. The trigger and its
+                source are one fact; the phases are a different one. */}
+            {trigger?.integration && (
+              <Badge outline mono icon="inbox" title="where this turn's trigger came from">
+                {trigger.integration}
+              </Badge>
+            )}
             <span className="truncate t-cell secondary">
               {trigger?.summary || trigger?.type || "turn"}
             </span>
@@ -59,11 +70,6 @@ export function TurnCard({
             {group.phases.map((p) => (
               <PhaseTag key={p.key} phase={p.phase} />
             ))}
-            {trigger?.integration && (
-              <Badge outline mono>
-                {trigger.integration}
-              </Badge>
-            )}
           </div>
         </div>
         <span className="spacer" />
@@ -103,14 +109,25 @@ export function TurnCard({
               defaultOpen={i === 0 && group.phases.length === 1}
             />
           ))}
+          {/* THE WAY OUT OF THIS CARD, drawn as a control rather than as a
+              mono caption in a footer corner. It was a link styled like debug
+              output, with the sentence explaining it pushed to the OPPOSITE
+              end of the row — so the most useful action on the card looked
+              like a row of hex, and the promise it makes was too far away to
+              read as its label. */}
           <footer className="phase-foot">
-            <a className="t-link mono" href={href(["turns", group.turnId])}>
-              turn {group.turnId.slice(0, 8)} →
-            </a>
-            <span className="spacer" />
+            <Button
+              size="sm"
+              icon="layers"
+              onClick={() => nav.to(["turns", group.turnId])}
+              title={`turn ${group.turnId}`}
+            >
+              Open the whole turn
+            </Button>
             <span className="t-caption">
-              every event of this turn, including the ones no phase carries
+              what woke it, what it was given, and what it learned — the events no phase carries
             </span>
+            <span className="spacer" />
           </footer>
         </div>
       )}

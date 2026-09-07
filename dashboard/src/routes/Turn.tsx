@@ -46,17 +46,18 @@
  * own record. Both records are read now, and named for what each one is.
  */
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { EventRow, QueryState, SeatChip } from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import {
   Badge,
-  Banner,
   Button,
   Code,
   CopyButton,
+  Disclosure,
+  KeyValue,
   Panel,
   Skeleton,
   Stat,
@@ -65,7 +66,15 @@ import {
 } from "~/ui/primitives.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtBytes, fmtCount, fmtDateTime, fmtDuration, oldestFirst, tsKey } from "~/lib/format.ts";
+import {
+  fmtBytes,
+  fmtCount,
+  fmtDateTime,
+  fmtDuration,
+  fmtTime,
+  oldestFirst,
+  tsKey,
+} from "~/lib/format.ts";
 import {
   fromLiveCall,
   fromPhaseEvent,
@@ -153,43 +162,39 @@ function TurnBrief({ rec, trigger }: { rec: TurnRecord; trigger: PhaseRecord["tr
   const said = str(rec.learning, "plan_summary");
   const triggerId = typeof trigger?.id === "string" ? trigger.id : "";
   if (!woke && !said) return null;
+
+  // KeyValue, not two hand-rolled rows with inline `minWidth`. The label
+  // column is a grid track, so both labels agree on where the prose starts
+  // whatever either of them says — which two independently-nudged widths
+  // never quite do — and a long summary wraps under itself instead of pushing
+  // its own label around.
+  const items: [ReactNode, ReactNode][] = [];
+  if (woke) {
+    items.push([
+      "Woken by",
+      <span className="row gap-2" style={{ alignItems: "baseline", flexWrap: "wrap" }}>
+        <span style={{ minWidth: 0 }}>{woke}</span>
+        {trigger?.sender && <Badge outline>{trigger.sender}</Badge>}
+        {trigger?.integration && (
+          <Badge outline mono>
+            {trigger.integration}
+          </Badge>
+        )}
+        {/* The trigger's own event id has always been on the descriptor and
+            nothing linked it. "What asked for this" is the first question a
+            reader brings to a turn they did not expect. */}
+        {triggerId && (
+          <a className="t-link" href={href(["events", triggerId])}>
+            the trigger →
+          </a>
+        )}
+      </span>,
+    ]);
+  }
+  if (said) items.push(["It set out to", said]);
   return (
     <Panel padding="tight">
-      <div className="col gap-2">
-        {woke && (
-          <div className="row gap-2" style={{ alignItems: "baseline" }}>
-            <span className="t-label" style={{ minWidth: 92 }}>
-              Woken by
-            </span>
-            <span className="prose" style={{ flex: 1, minWidth: 0 }}>
-              {woke}
-            </span>
-            {trigger?.integration && (
-              <Badge outline mono>
-                {trigger.integration}
-              </Badge>
-            )}
-            {/* The trigger's own event id has always been on the descriptor
-                and nothing linked it. "What asked for this" is the first
-                question a reader brings to a turn they did not expect. */}
-            {triggerId && (
-              <a className="t-caption" href={href(["events", triggerId])}>
-                the trigger →
-              </a>
-            )}
-          </div>
-        )}
-        {said && (
-          <div className="row gap-2" style={{ alignItems: "baseline" }}>
-            <span className="t-label" style={{ minWidth: 92 }}>
-              It set out to
-            </span>
-            <span className="prose" style={{ flex: 1, minWidth: 0 }}>
-              {said}
-            </span>
-          </div>
-        )}
-      </div>
+      <KeyValue items={items} />
     </Panel>
   );
 }
@@ -197,66 +202,105 @@ function TurnBrief({ rec, trigger }: { rec: TurnRecord; trigger: PhaseRecord["tr
 /**
  * The six context blocks the executor's prompt was built from.
  *
- * The event's own summary collapses this to "2/6 hits", which is right for a
- * feed and useless here: every block degrades to empty on failure by design,
- * so an unreachable store, an unconfigured auxiliary model and a filter that
- * genuinely found nothing all render as the same nothing. A gated block is
- * marked as gated rather than as a miss — that distinction is a configuration
- * problem versus a quiet turn, and it is the whole reason the engine puts
+ * A BLOCK THAT FOUND NOTHING DID NOT FAIL, and the first version of this panel
+ * said it did: a ✓/✗ column, four crosses down the left, reading as four
+ * things that went wrong on a turn where nothing had. ✗ is a pass/fail
+ * vocabulary and this is not a pass/fail question — a seat with no prior
+ * episodes on this topic, no synthesized skills yet and a turn that is not its
+ * first has four empty blocks and a perfectly healthy prompt.
+ *
+ * So it leads with what the prompt actually GOT, sized, and the rest is one
+ * quiet line naming them. Absence is rendered as absence.
+ *
+ * The one genuinely diagnostic state stays called out: a GATED block is not
+ * empty, it was never searched — the trigger was a bare pointer, so the
+ * aux-LLM call was skipped and the executor searches later with
+ * `search_knowledge` instead. That distinction is a configuration problem
+ * versus a quiet turn, and it is the whole reason the engine puts
  * `trigger_requires_recon` on the wire.
  */
 function Prefetch({ blocks }: { blocks: PrefetchBlock[] }) {
-  const hits = blocks.filter((b) => b.hit).length;
+  const got = blocks.filter((b) => b.hit);
+  const gated = blocks.filter((b) => !b.hit && b.gated);
+  const empty = blocks.filter((b) => !b.hit && !b.gated);
   return (
     <Panel
       title="What the turn was given"
       icon="book"
-      subtitle={`${hits} of ${blocks.length} context blocks reached the prompt`}
+      subtitle="the context blocks its prompt was assembled from"
       padding="tight"
     >
-      <div className="col gap-1">
-        {blocks.map((b) => (
-          <div key={b.label} className={cx("row gap-2", !b.hit && "faint")}>
-            <Icon
-              name={b.hit ? "check" : b.gated ? "minus" : "x"}
-              size="xs"
-              style={{
-                color: b.hit ? "var(--positive-ink)" : "var(--text-muted)",
-                flex: "none",
-              }}
-            />
-            <span className="t-cell truncate" style={{ minWidth: 160 }}>
-              {b.label}
-            </span>
-            <span className="t-caption truncate" style={{ flex: 1, minWidth: 0 }}>
-              {b.gated || b.note}
-            </span>
-            <span className="t-caption mono" style={{ flex: "none" }}>
-              {b.hit ? fmtBytes(b.bytes) : ""}
+      <div className="col gap-2">
+        {got.length > 0 ? (
+          <KeyValue
+            items={got.map((b) => [
+              b.label,
+              <span className="row gap-2" style={{ alignItems: "baseline" }}>
+                <span className="mono t-num">{fmtBytes(b.bytes)}</span>
+                {b.note && <span className="t-caption">{b.note}</span>}
+              </span>,
+            ])}
+          />
+        ) : (
+          <span className="t-caption">
+            The prompt was built from the seat&rsquo;s own identity and this turn&rsquo;s trigger
+            alone — no stored context reached it.
+          </span>
+        )}
+        {gated.length > 0 && (
+          <div className="banner neutral">
+            <Icon name="info" size="sm" />
+            <span>
+              Not searched: {list(gated.map((b) => b.label))}. The trigger was a bare pointer, so
+              these filters were skipped — the executor searches later with{" "}
+              <code className="inline">search_knowledge</code>, once it knows what the task needs.
             </span>
           </div>
-        ))}
+        )}
+        {empty.length > 0 && (
+          <span className="t-caption">Nothing to add from {list(empty.map((b) => b.label))}.</span>
+        )}
       </div>
     </Panel>
   );
 }
 
+/** "a", "a and b", "a, b and c" — a list a sentence can contain. */
+function list(items: string[]): string {
+  const lower = items.map((s) => s.toLowerCase());
+  if (lower.length <= 1) return lower[0] ?? "";
+  return `${lower.slice(0, -1).join(", ")} and ${lower[lower.length - 1]}`;
+}
+
 /**
- * A row about the turn, without the two columns that say nothing on a screen
- * about ONE turn.
+ * A row about the turn, without the columns that say nothing on a page about
+ * ONE turn.
  *
- * `EventRow` is the activity feed's row and has four columns — time, actor,
- * summary, source+category. Here the actor is the same seat on every row (it
- * was rendered twelve times on the turn this was rebuilt against) and the
- * category is an internal taxonomy. Two of four columns were noise.
+ * `EventRow` is the activity feed's row: time, actor, summary, source and
+ * category, on a four-track grid. Here the actor is the same seat on every
+ * row — it was rendered twelve times on the turn this screen was rebuilt
+ * against — and the category is an internal taxonomy nobody is filtering by.
+ *
+ * The actor also has to come off the SUMMARY, not just out of a column: the
+ * engine builds these lines as `lead(actor, …)`, so every one of them opens
+ * "Agent CEO …". Four rows under one seat's own heading do not each need to
+ * name it, and the repetition costs exactly the room the sentence needed.
+ *
+ * The date goes too. These instants are seconds apart inside a turn the
+ * header already dates, so a clock is the whole useful part of the timestamp
+ * and the rest was pushing rows to three lines tall.
  */
-function TurnEventRow({ event }: { event: EventRecord }) {
+function TurnEventRow({ event, actor }: { event: EventRecord; actor: string }) {
   return (
-    <a className={cx("feed-row", event.failed && "failed")} href={href(["events", event.id])}>
+    <a
+      className={cx("turn-row", event.failed && "failed")}
+      href={href(["events", event.id])}
+      title={fmtDateTime(event.timestamp)}
+    >
       <time className="feed-time" dateTime={event.timestamp}>
-        {fmtDateTime(event.timestamp)}
+        {fmtTime(event.timestamp)}
       </time>
-      <span className="feed-what truncate">
+      <span className="what truncate">
         {event.failed && (
           <Icon
             name="alert"
@@ -264,7 +308,7 @@ function TurnEventRow({ event }: { event: EventRecord }) {
             style={{ display: "inline", color: "var(--critical-ink)", marginRight: 4 }}
           />
         )}
-        {event.summary || event.type}
+        {withoutActor(event.summary, actor) || event.type}
       </span>
       <span className="feed-tail">
         <span className="faint mono truncate">{event.type}</span>
@@ -273,11 +317,25 @@ function TurnEventRow({ event }: { event: EventRecord }) {
   );
 }
 
-function EventList({ events }: { events: EventRecord[] }) {
+/**
+ * Drop the seat's own name from the front of a line it wrote about itself.
+ *
+ * Only from the FRONT, and only when it is followed by more: a summary that is
+ * nothing but the actor is left alone rather than emptied, and an actor
+ * appearing mid-sentence (the counterparty profiler names a subject) is not
+ * this seat talking about itself and stays.
+ */
+export function withoutActor(summary: string, actor: string): string {
+  if (!actor || !summary.startsWith(actor)) return summary;
+  const rest = summary.slice(actor.length).trimStart();
+  return rest || summary;
+}
+
+function EventList({ events, actor }: { events: EventRecord[]; actor: string }) {
   return (
     <div className="list">
       {events.map((e) => (
-        <TurnEventRow key={e.id} event={e} />
+        <TurnEventRow key={e.id} event={e} actor={actor} />
       ))}
     </div>
   );
@@ -353,6 +411,11 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   const trigger = phases.find((p) => p.trigger)?.trigger ?? null;
   const outcome = outcomeOf(rec);
   const trouble = story.wentWrong.length + (field(rec.summary, "failed") === true ? 1 : 0);
+  // Only claimable on a FINISHED turn with a record to claim it from. A
+  // running turn has not been asked about since it started, and a turn whose
+  // events fell out of the store's window has nothing to say either way —
+  // "nothing went wrong" and "nothing was read" must not render alike.
+  const clean = trouble === 0 && !running && Boolean(rec.summary || rec.learning);
 
   // THE SPAN OVER EVERYTHING THE PAGE HOLDS, not over the query's answer alone.
   // Read off `events` only, a turn whose phases all arrived on the stream
@@ -442,6 +505,22 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             {trouble > 0 && (
               <Badge tone="critical" icon="alert">
                 {trouble === 1 ? "1 problem" : `${trouble} problems`}
+              </Badge>
+            )}
+            {/* A HEADER BADGE, not a banner at the foot of the page. "This
+                turn was clean" is a property of the turn, so it belongs where
+                the reader already looks for the turn's state — beside the
+                phase count and in the slot the problem badge would occupy.
+                A full-width banner said the same thing at ten times the
+                weight, after everything, reading as an announcement about
+                nothing. */}
+            {clean && (
+              <Badge
+                tone="positive"
+                icon="check"
+                title="no guard fired, no provider fell through, no call was refused"
+              >
+                nothing went wrong
               </Badge>
             )}
           </>
@@ -560,7 +639,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             subtitle="guard breaches, exhausted chains, refused calls — the reason to open this page"
             padding="none"
           >
-            <EventList events={story.wentWrong} />
+            <EventList events={story.wentWrong} actor={role} />
           </Panel>
         )}
 
@@ -587,19 +666,23 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             subtitle="work outside the tool loop: coding runs, delegations, colleagues"
             padding="none"
           >
-            <EventList events={story.did} />
+            <EventList events={story.did} actor={role} />
           </Panel>
         )}
 
         {story.leftBehind.length > 0 && (
           <Panel
-            title="What it left behind"
+            title="What the seat learned"
             icon="database"
             count={story.leftBehind.length}
-            subtitle="what the company learned from this turn, after its last phase"
+            // "What it left behind" read as work abandoned rather than as
+            // memory written. This is the reflection pass — it runs AFTER the
+            // last phase, on auxiliary workers of its own, and everything in
+            // it is something the seat now knows that it did not before.
+            subtitle="the reflection pass, once the phases were done"
             padding="none"
           >
-            <EventList events={story.leftBehind} />
+            <EventList events={story.leftBehind} actor={role} />
           </Panel>
         )}
 
@@ -619,19 +702,6 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           </Panel>
         )}
 
-        {!story.wentWrong.length && !running && (rec.summary || rec.learning) && (
-          <Banner tone="neutral" icon="check">
-            Nothing went wrong in this turn: no guard fired, no provider fell through, no call was
-            refused.
-          </Banner>
-        )}
-        {running && !story.wentWrong.length && (
-          <Banner tone="info">
-            This turn is still running. The rows it publishes beside its phases carry no turn id on
-            the wire until they are stored, so reload once it has finished to see them.
-          </Banner>
-        )}
-
         {(rec.summary || rec.learning) && (
           <Panel
             title="The turn's own record"
@@ -641,56 +711,49 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           >
             <div className="col gap-2">
               {conversation && (
-                <div className="row gap-2" style={{ alignItems: "baseline" }}>
-                  <span className="t-label" style={{ minWidth: 118 }}>
-                    Conversation
-                  </span>
-                  {/* Labelled, at last. It is "{source}:{channel}:{thread}" —
-                      which external thread this turn was answering — and it
-                      was previously rendered as an unexplained truncated
-                      string under the seat's name. */}
-                  <code className="inline truncate" title="the external thread this turn served">
-                    {conversation}
-                  </code>
-                </div>
+                <KeyValue
+                  items={[
+                    [
+                      "Conversation",
+                      // LABELLED, and explained. It is "{source}:{channel}:
+                      // {thread}" — which external thread this turn was
+                      // answering — and it used to be an unexplained
+                      // truncated string under the seat's name.
+                      <span className="row gap-2" style={{ alignItems: "baseline" }}>
+                        <code className="inline">{conversation}</code>
+                        <span className="t-caption">the external thread this turn served</span>
+                      </span>,
+                    ],
+                  ]}
+                />
               )}
-              {/* Each record owns select-all and carries its own copy, because
-                  the two are separate records rather than two views of one:
-                  a bug report wants the half it is about, not the page. The
-                  whole turn — both halves, its phases and everything else it
-                  published — is the header's own Copy turn. */}
-              <details>
-                <summary className="t-caption">
-                  agent_turn_completed — the dashboard's summary
-                </summary>
-                <div className="col gap-1">
-                  <Code plain selectable label="The dashboard's turn summary, as JSON">
+              {/* One expander per record, EACH with its own copy button. A
+                  single control in the panel head copied one of the two
+                  without saying which. */}
+              {rec.summary && (
+                <Disclosure
+                  label="agent_turn_completed — the dashboard's summary"
+                  actions={
+                    <CopyButton text={summaryJSON} variant="ghost" title="copy this record" />
+                  }
+                >
+                  <Code selectable label="agent_turn_completed, as JSON">
                     {summaryJSON}
                   </Code>
-                  <div className="row gap-2" style={{ alignItems: "center" }}>
-                    <CopyButton text={summaryJSON} title="agent_turn_completed, as published" />
-                    <span className="t-caption">
-                      Click into the record, and ⌘A / Ctrl+A selects it alone rather than the page.
-                    </span>
-                  </div>
-                </div>
-              </details>
-              <details>
-                <summary className="t-caption">
-                  turn_completed — the learning subsystem's record
-                </summary>
-                <div className="col gap-1">
-                  <Code plain selectable label="The learning subsystem's turn record, as JSON">
+                </Disclosure>
+              )}
+              {rec.learning && (
+                <Disclosure
+                  label="turn_completed — the learning subsystem's record"
+                  actions={
+                    <CopyButton text={learningJSON} variant="ghost" title="copy this record" />
+                  }
+                >
+                  <Code selectable label="turn_completed, as JSON">
                     {learningJSON}
                   </Code>
-                  <div className="row gap-2" style={{ alignItems: "center" }}>
-                    <CopyButton text={learningJSON} title="turn_completed, as published" />
-                    <span className="t-caption">
-                      Click into the record, and ⌘A / Ctrl+A selects it alone rather than the page.
-                    </span>
-                  </div>
-                </div>
-              </details>
+                </Disclosure>
+              )}
             </div>
           </Panel>
         )}
