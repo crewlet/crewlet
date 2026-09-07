@@ -80,7 +80,7 @@ func Requirements(in *config.Jira, resolve func(string) (string, bool)) []setup.
 			Shared:     true,
 			Connect:    true,
 			Label:      "Atlassian user account email",
-			Kind:       setup.KindText,
+			Kind:       setup.KindEmail,
 			ConfigPath: "integrations.jira.email",
 			// REQUIRED ON CLOUD, which authenticates an API token as
 			// email and token together and refuses it as a bearer. It was

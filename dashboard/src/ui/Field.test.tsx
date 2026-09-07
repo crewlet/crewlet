@@ -92,3 +92,31 @@ test("a secret holding anything else stays masked", () => {
     expect((screen.getByLabelText("API token") as HTMLInputElement).type).toBe("password");
   }
 });
+
+// A SINGLE TOKEN TAKES NO WHITESPACE, including from a paste. A space around
+// an address is invisible in the box and fatal at the vendor.
+test("a single-token field drops whitespace as it is typed or pasted", () => {
+  for (const kind of ["url", "id", "email"] as const) {
+    cleanup();
+    const onChange = vi.fn();
+    render(<Field label="Value" kind={kind} value="" onChange={onChange} />);
+    fireEvent.change(screen.getByLabelText("Value"), {
+      target: { value: "  acme.example.com  " },
+    });
+    const written = onChange.mock.calls[0]?.[0] as string;
+    expect(written.endsWith("acme.example.com")).toBe(true);
+    expect(/\s/.test(written)).toBe(false);
+  }
+});
+
+// FREE TEXT KEEPS ITS SPACES, which is why the rule is per kind: a Datadog
+// role is "Datadog Read Only Role", and stripping there would store a name
+// the vendor has no record of.
+test("free text keeps the spaces it is given", () => {
+  const onChange = vi.fn();
+  render(<Field label="Role" kind="text" value="" onChange={onChange} />);
+  fireEvent.change(screen.getByLabelText("Role"), {
+    target: { value: "Datadog Read Only Role" },
+  });
+  expect(onChange).toHaveBeenCalledWith("Datadog Read Only Role");
+});

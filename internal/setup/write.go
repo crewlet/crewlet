@@ -148,8 +148,24 @@ func (w Writer) Write(ctx context.Context, reqs []Requirement, in Submission) (R
 	// to the same seat or to none, because the screen collects one seat's
 	// form at a time.
 	if in.Seat != "" {
+		seatValues, err := normalise(reqs, in.Values)
+		if err != nil {
+			return Result{}, err
+		}
+		in.Values = seatValues
 		return w.writeSeat(ctx, reqs, in)
 	}
+
+	// TRIMMED FIRST, once, before anything is written. A value arrives from
+	// a paste as often as from typing, and a leading or trailing space is
+	// invisible in a form and fatal at the vendor: an address with one
+	// authenticates as nobody, and a URL with one is a host that does not
+	// resolve. See [normalise].
+	normalised, badValue := normalise(reqs, in.Values)
+	if badValue != nil {
+		return Result{}, badValue
+	}
+	in.Values = normalised
 
 	// The patch is built BEFORE anything is written, so a submission naming
 	// a field this third-party app does not have is refused having changed nothing.
@@ -398,6 +414,36 @@ func fields(reqs []Requirement) []string {
 // Every kind but one is a string in the document. A toggle is a boolean, and
 // the strict reader refuses "true" for a bool field, so a patch carrying the
 // string would be rejected on every submission.
+// normalise trims every submitted value, and refuses an interior space in
+// the kinds that cannot hold one.
+//
+// TRIMMED RATHER THAN REFUSED at the edges, because a trailing space is a
+// paste artifact with one obvious intent, and refusing it would send an
+// operator back to a form to delete a character they cannot see. An INTERIOR
+// space is different: nothing sensible produces one, so it is a wrong value
+// rather than an untidy one, and accepting it would store an address no
+// vendor answers to.
+func normalise(reqs []Requirement, values map[string]string) (map[string]string, error) {
+	byField := map[string]Requirement{}
+	for _, r := range reqs {
+		byField[r.Field] = r
+	}
+	out := make(map[string]string, len(values))
+	for field, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if r, ok := byField[field]; ok && r.Kind.Tight() && strings.ContainsAny(trimmed, " \t\r\n") {
+			return nil, fmt.Errorf(
+				"setup: %s cannot contain a space, and %q has one inside it: "+
+					"an address, an identifier and an email are each a single "+
+					"token, so a space in the middle is a value no vendor "+
+					"answers to rather than an untidy one",
+				r.ConfigPath, field)
+		}
+		out[field] = trimmed
+	}
+	return out, nil
+}
+
 func typed(kind Kind, value string) any {
 	if kind != KindToggle {
 		return value

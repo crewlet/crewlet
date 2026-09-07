@@ -93,6 +93,13 @@ func (i *Integrations) validate(path string) error {
 				"an address the third-party app accepts and never reaches", i.PublicBaseURL)
 	}
 
+	// THE ORGANIZATION HAS NO BLOCK VALIDATOR of its own: it is two fields,
+	// and the only rule either carries is that neither is a phrase. A space
+	// in the organization id is sent to Atlassian as the subject of every
+	// admin call and refused with nothing naming the character.
+	if i.Atlassian != nil {
+		noSpaces(&p, at(path, "atlassian.org_id"), i.Atlassian.OrgID)
+	}
 	if i.Jira != nil {
 		p.wrap(i.Jira.validate(at(path, "jira")))
 	}
@@ -187,6 +194,10 @@ func (j *Jira) ShareableBaseURL() string {
 // the old one.
 func (j *Jira) validate(path string) error {
 	var probs problems
+	noSpaces(&probs, at(path, "url"), j.URL)
+	noSpaces(&probs, at(path, "cloud_id"), j.CloudID)
+	noSpaces(&probs, at(path, "site_url"), j.SiteURL)
+	noSpaces(&probs, at(path, "email"), j.Email)
 	url, cloud := strings.TrimSpace(j.URL), strings.TrimSpace(j.CloudID)
 	switch {
 	case url == "" && cloud == "":
@@ -343,6 +354,10 @@ func DefaultSkillsSpaceFor(c *Confluence) string {
 // link to the other.
 func (c *Confluence) validate(path string) error {
 	var probs problems
+	noSpaces(&probs, at(path, "url"), c.URL)
+	noSpaces(&probs, at(path, "cloud_id"), c.CloudID)
+	noSpaces(&probs, at(path, "site_url"), c.SiteURL)
+	noSpaces(&probs, at(path, "email"), c.Email)
 	url, cloud := strings.TrimSpace(c.URL), strings.TrimSpace(c.CloudID)
 	switch {
 	case url == "" && cloud == "":
@@ -599,6 +614,22 @@ func IsAtlassianCloud(raw string) bool {
 
 // hasHTTPScheme reports a URL the clients can actually use, treating a
 // value that still carries a ${VAR} as unknown rather than wrong.
+// noSpaces refuses a value that cannot hold whitespace.
+//
+// An address, an identifier and an email are each a SINGLE TOKEN, and a space
+// in one is never a shorter way of writing something valid: it is a value the
+// vendor has no record of. Caught here rather than at the vendor because the
+// failure there is a 401 or a DNS miss that names neither the field nor the
+// character, and the config is the one place that can say both.
+func noSpaces(p *problems, path, value string) {
+	if trimmed := strings.TrimSpace(value); strings.ContainsAny(trimmed, " \t\r\n") {
+		p.add(path, ErrUnknownValue,
+			"%q contains a space, and this field is a single token: an "+
+				"address, an identifier and an email each name one thing, "+
+				"so a space inside is a value nothing answers to", value)
+	}
+}
+
 func hasHTTPScheme(url string) bool {
 	return strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") ||
 		envref.Has(url)

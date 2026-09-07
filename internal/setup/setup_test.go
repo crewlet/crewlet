@@ -682,3 +682,54 @@ func TestOnlyANonCredentialSaysWhatItsReferenceReads(t *testing.T) {
 		t.Fatalf("the credential is on the wire: %s", body)
 	}
 }
+
+// A SUBMITTED VALUE IS TRIMMED, and a space INSIDE a single token is refused.
+//
+// The two are different mistakes. A trailing space is a paste artifact with
+// one obvious intent, and sending an operator back to a form to delete a
+// character they cannot see is not a fix. A space in the middle is a value
+// nothing answers to, so it is refused naming the field.
+func TestASubmissionIsTrimmedAndRefusesASpaceInsideAToken(t *testing.T) {
+	t.Parallel()
+	reqs := []setup.Requirement{
+		{Field: "url", Kind: setup.KindURL, ConfigPath: "integrations.jira.url"},
+		{Field: "email", Kind: setup.KindEmail, ConfigPath: "integrations.jira.email"},
+		{Field: "role", Kind: setup.KindText, ConfigPath: "integrations.datadog.provisioning.role"},
+	}
+
+	rec := &recorder{}
+	if _, err := writer(rec).Write(context.Background(), reqs, setup.Submission{
+		Kind: integration.KindJira,
+		Values: map[string]string{
+			"url":   "  https://acme.atlassian.net  ",
+			"email": "\tops@acme.example.com\n",
+			// FREE TEXT KEEPS ITS SPACES. A role is several words.
+			"role": "  Datadog Read Only Role  ",
+		},
+		Summary: "connect jira", Operator: "founder",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	patch := rec.events[0]
+	for _, want := range []string{
+		`"url":"https://acme.atlassian.net"`,
+		`"email":"ops@acme.example.com"`,
+		`"role":"Datadog Read Only Role"`,
+	} {
+		if !strings.Contains(patch, want) {
+			t.Errorf("the patch does not carry %s: %s", want, patch)
+		}
+	}
+
+	_, err := writer(&recorder{}).Write(context.Background(), reqs, setup.Submission{
+		Kind:    integration.KindJira,
+		Values:  map[string]string{"email": "ops@acme example.com"},
+		Summary: "connect jira", Operator: "founder",
+	})
+	if err == nil {
+		t.Fatal("a space inside an email was accepted")
+	}
+	if !strings.Contains(err.Error(), "integrations.jira.email") {
+		t.Errorf("the refusal does not name the field: %v", err)
+	}
+}

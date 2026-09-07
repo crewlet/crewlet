@@ -30,7 +30,7 @@
 
 import { useId, type ReactNode } from "react";
 
-export type FieldKind = "text" | "secret" | "url" | "id" | "choice" | "handle";
+export type FieldKind = "text" | "secret" | "url" | "id" | "choice" | "handle" | "email";
 
 /** One option of a choice field. */
 export interface FieldChoice {
@@ -79,6 +79,13 @@ export function Field({
   // MASKED UNLESS IT IS A REFERENCE. See the note above.
   const reference = isReference(value);
   const masked = kind === "secret" && !reference;
+  // A SINGLE TOKEN TAKES NO WHITESPACE, ever, including from a paste. An
+  // address, an identifier and an email each name one thing, and a space
+  // around one is invisible in the box and fatal at the vendor: it
+  // authenticates as nobody, or resolves to no host. The engine refuses one
+  // too; stripping it here is what stops a form being refused for a
+  // character nobody can see.
+  const tight = kind === "url" || kind === "id" || kind === "email";
   const own = kind === "url" ? schemeOf(value) : "";
   const affix = kind === "url" && own !== "http://" ? "https://" : "";
   const shown = affix ? value.slice(own.length) : value;
@@ -88,7 +95,8 @@ export function Field({
 
   // What the box holds becomes the whole value again, with a scheme somebody
   // typed or pasted taken as said rather than doubled onto the affix.
-  function changed(typed: string) {
+  function changed(raw: string) {
+    const typed = tight ? raw.replace(/\s+/g, "") : raw;
     if (!affix) return onChange(typed);
     const carried = schemeOf(typed);
     onChange(carried === "http://" ? typed : affix + typed.slice(carried.length));
@@ -148,7 +156,7 @@ export function Field({
           // A secret is a password field unless it holds a reference. See
           // the note above: the type is what keeps a CREDENTIAL out of
           // autofill and out of a screenshot, and a name is neither.
-          type={masked ? "password" : "text"}
+          type={masked ? "password" : kind === "email" ? "email" : "text"}
           inputMode={kind === "url" ? "url" : undefined}
           value={value}
           placeholder={placeholder}

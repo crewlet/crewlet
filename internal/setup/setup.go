@@ -76,6 +76,13 @@ const (
 	// far too late to be useful.
 	KindHandle Kind = "handle"
 
+	// KindEmail is an address an account is identified by. Distinct from
+	// KindText because free text may legitimately hold a space (a Datadog
+	// role is "Datadog Read Only Role") and an address never can: a
+	// trailing one off a copy is invisible in the box and authenticates as
+	// nobody.
+	KindEmail Kind = "email"
+
 	// KindToggle is on or off, and it is a JSON BOOLEAN in the document
 	// rather than a string. Distinct from a two-option choice for that
 	// reason alone: `"enabled": "true"` is refused by the strict reader,
@@ -85,7 +92,9 @@ const (
 )
 
 // Kinds is every kind, in no significant order.
-var Kinds = []Kind{KindSecret, KindURL, KindID, KindChoice, KindText, KindHandle, KindToggle}
+var Kinds = []Kind{
+	KindSecret, KindURL, KindID, KindChoice, KindText, KindHandle, KindEmail, KindToggle,
+}
 
 // Valid reports whether k is a kind this build knows.
 func (k Kind) Valid() bool {
@@ -510,6 +519,16 @@ func PointerFor(kind integration.Kind, r Requirement, current string) (name stri
 // a field an operator reads straight off GET /config. A toggle is neither: it
 // is present when it is ON, because reporting `false` as written down would
 // make a paused integration look complete.
+
+// Tight reports a kind whose value cannot contain whitespace anywhere.
+//
+// An address, an opaque identifier and an email are single tokens: a space
+// inside one is always a mistake, and a space around one is a paste artifact
+// that is invisible in a form and fatal at the vendor. Free text is
+// deliberately not on the list, because a role name is several words.
+func (k Kind) Tight() bool {
+	return k == KindURL || k == KindID || k == KindEmail
+}
 
 // Deref is the value a field actually carries: a whole `${VAR}` read through
 // the store, anything else as written.

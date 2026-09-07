@@ -80,7 +80,7 @@ func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []
 			Shared:     true,
 			Connect:    true,
 			Label:      "Atlassian user account email",
-			Kind:       setup.KindText,
+			Kind:       setup.KindEmail,
 			ConfigPath: "integrations.confluence.email",
 			// REQUIRED ON CLOUD, which authenticates an API token as
 			// email and token together and refuses it as a bearer. It was
