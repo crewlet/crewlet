@@ -284,9 +284,7 @@ test("a field name shared by two surfaces holds two values", () => {
   // holding in the box. What this asserts is that the two boxes hold
   // DIFFERENT values, which is what one field name across two surfaces got
   // wrong.
-  expect((screen.getByLabelText("Jira site") as HTMLInputElement).value).toBe(
-    "acme.atlassian.net",
-  );
+  expect((screen.getByLabelText("Jira site") as HTMLInputElement).value).toBe("acme.atlassian.net");
   expect((screen.getByLabelText("Confluence site") as HTMLInputElement).value).toBe(
     "acme.atlassian.net/wiki",
   );
