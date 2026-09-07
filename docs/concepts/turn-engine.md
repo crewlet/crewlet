@@ -395,6 +395,29 @@ turn spent on the one failure a model reliably fixes when it is asked
 again. `review_max_tool_rounds` = 4 is that arithmetic: one submission,
 two correctives, one spare.
 
+**A round that said nothing at all is not a finish either.** The other
+half of "think then stop" is a round with **no tool call and no prose** —
+a model that spent its whole output budget on hidden reasoning. It costs
+real tokens (Claude Code on `haiku` bills hundreds for one) and reaches
+nobody, and the loop used to take the same branch it takes for a model
+that answered. It now re-prompts once, naming what went wrong, on any
+caller that did *not* force a tool call — the **executor** and
+**sub-agent workers**. A `required` caller gets the tool corrective
+above instead: "call one of these tools" is the better instruction for a
+phase whose only output *is* a call, and it already covers the same
+model, so the reviewer's and onboarding's round budgets are untouched.
+
+The bound is **one**, not two, and the asymmetry is deliberate. Naming
+the tools is a genuinely new instruction to a model that misread the
+surface, so a second attempt earns its round; a second identical nudge
+after an empty answer is the same prompt against the same model, which is
+the retry [the provider contract](subscription-llm-backends.md) refuses
+to do. One also fits inside the smallest budget any caller declares —
+`workers.max_turns` is validated at ≥ 1 — so the corrective can never eat
+a delegated task's whole allowance. Rounds that reached nobody are
+counted on the phase record as `empty_answer_rounds`, and the dashboard
+badges them.
+
 The **executor** stays on `auto`, and the **judge** takes no tools at
 all — it answers in two lines of text, and a tool on its surface would
 invite a model to call it and answer nothing. A text answer on an `auto`

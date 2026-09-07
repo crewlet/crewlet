@@ -671,11 +671,15 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		TotalTokens:     rec.Result.InputTokens + rec.Result.OutputTokens,
 		RoundsUsed:      rec.Result.RoundsUsed,
 		ExhaustedRounds: rec.Exhausted,
-		Decision:        rec.Decision,
-		RescueFired:     rec.Rescued,
-		Notes:           rec.Notes,
-		ToolsAvailable:  rec.Available,
-		ToolCatalogue:   rec.Catalogue,
+		// Off the loop's own count rather than a re-derivation from the
+		// narration: a round that answered nothing records no narration
+		// at all, so there is nothing downstream to count it from.
+		EmptyAnswerRounds: rec.Result.EmptyAnswers,
+		Decision:          rec.Decision,
+		RescueFired:       rec.Rescued,
+		Notes:             rec.Notes,
+		ToolsAvailable:    rec.Available,
+		ToolCatalogue:     rec.Catalogue,
 		// Set explicitly. BackendNative is the value every consumer reads
 		// as "ran here", and it is NOT the zero value — an empty string
 		// renders as an unknown backend rather than as the normal one.

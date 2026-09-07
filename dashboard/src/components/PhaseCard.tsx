@@ -293,6 +293,14 @@ export function PhaseCard({
             round cap
           </Badge>
         )}
+        {record.emptyAnswerRounds > 0 && (
+          <Badge
+            tone="caution"
+            title="the model answered with nothing — no response and no tool call — and was re-asked"
+          >
+            {record.emptyAnswerRounds} empty
+          </Badge>
+        )}
         {record.rescueFired && (
           <Badge tone="caution" title="the phase did not submit on its first run and was re-asked">
             rescued

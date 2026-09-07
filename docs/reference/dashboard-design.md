@@ -485,9 +485,15 @@ Three more controls that looked like something they were not:
 
 The header carries the same facts in the same order whether a phase is live or
 finished — phase, decision, model, rounds, tokens, age — so the row does not
-change shape when it completes. `decision`, `exhausted_rounds`, `rescue_fired`,
-`notes`, `tools_available` and `conversation_key` are all rendered; every one of
-them was on the wire and shown nowhere.
+change shape when it completes. `decision`, `exhausted_rounds`,
+`empty_answer_rounds`, `rescue_fired`, `notes`, `tools_available` and
+`conversation_key` are all rendered; every one of them was on the wire and shown
+nowhere. `empty_answer_rounds` is the newest and the one with the least warning
+attached elsewhere: a model that answers with nothing used to fail its provider
+call, which walked the fallback chain and could end the turn as a red
+`llm_unavailable`; it is corrected in the tool loop now, so this badge is what
+keeps a seat whose model never speaks from reading as a seat that merely gets
+rescued a lot.
 
 **Nothing animates on a data push.** A list that re-flows every time a
 tool-loop round lands is a list nobody can read while it is running, and

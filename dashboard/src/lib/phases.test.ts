@@ -204,6 +204,25 @@ describe("the round ledger", () => {
   });
 });
 
+describe("a round that reached nobody", () => {
+  test("empty_answer_rounds survives onto the record", () => {
+    // The count is the ONLY surviving signal for a model that answers with
+    // nothing: the engine used to fail the provider call on that round, which
+    // walked the fallback chain and could end the turn as llm_unavailable —
+    // a red event. It now returns an empty answer and re-asks once, so
+    // without this number a seat whose model never speaks looks like a seat
+    // that merely gets rescued a lot.
+    const record = fromPhaseEvent(phaseEvent({ empty_answer_rounds: 2 }))!;
+    expect(record.emptyAnswerRounds).toBe(2);
+  });
+
+  test("a phase recorded before the field existed reads as zero, not NaN", () => {
+    // The envelope evolves additive-only and a rolling upgrade replays rows
+    // written by a build that had no such field.
+    expect(fromPhaseEvent(phaseEvent())!.emptyAnswerRounds).toBe(0);
+  });
+});
+
 describe("presentation rules", () => {
   test("reasoning is split off the front of the answer", () => {
     // The engine keeps a phase's reasoning as a <think> prefix of Response,

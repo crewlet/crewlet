@@ -91,6 +91,14 @@ export interface PhaseRecord {
   roundNum: number;
   roundsUsed: number;
   exhaustedRounds: boolean;
+  /**
+   * Rounds in which the model produced neither prose nor a tool call — it
+   * spent its output budget on hidden reasoning and stopped.
+   *
+   * Zero on a live phase, like the two flags below it: the count is settled
+   * only when the phase publishes its record.
+   */
+  emptyAnswerRounds: number;
   rescueFired: boolean;
   decision: string;
   notes: string;
@@ -301,6 +309,7 @@ export function fromLiveCall(call: LiveCall, role: string): PhaseRecord {
     roundNum: call.round_num,
     roundsUsed: call.rounds,
     exhaustedRounds: false,
+    emptyAnswerRounds: 0,
     rescueFired: false,
     decision: "",
     notes: "",
@@ -354,6 +363,7 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     roundNum: num(p.rounds_used),
     roundsUsed: num(p.rounds_used),
     exhaustedRounds: p.exhausted_rounds === true,
+    emptyAnswerRounds: num(p.empty_answer_rounds),
     rescueFired: p.rescue_fired === true,
     decision: String(p.decision ?? ""),
     notes: String(p.notes ?? ""),

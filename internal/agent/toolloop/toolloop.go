@@ -51,6 +51,21 @@ import (
 // a full priced round.
 const maxForcedToolRetries = 2
 
+// maxEmptyAnswerRetries bounds the corrective re-prompts issued when a round
+// produced NEITHER prose NOR a tool call — a model that spent its whole output
+// budget on hidden reasoning and stopped.
+//
+// One, not two, and the asymmetry with maxForcedToolRetries is the point. A
+// declined tool call is a model that misread the surface, so naming the tools
+// is a genuinely NEW instruction and a second attempt is worth its round. An
+// empty answer is the same prompt against the same model with one sentence
+// added; if that sentence does not land, a second identical nudge is the retry
+// the provider contract refuses to do for exactly this reason. One also fits
+// inside the smallest budget any caller declares — a worker's `max_turns` is
+// validated at >= 1 and routinely set to 2 — so the corrective can never eat
+// a whole delegated task's allowance.
+const maxEmptyAnswerRetries = 1
+
 // Surface is the set of tools a phase runs against.
 //
 // An interface rather than a concrete registry because the phases differ in
@@ -256,6 +271,17 @@ type Result struct {
 	// may extend the cap rather than accept a truncated phase.
 	ExhaustedRounds bool
 
+	// EmptyAnswers counts the rounds that produced neither prose nor a tool
+	// call — a model that spent its output on hidden reasoning and stopped.
+	//
+	// It exists because the loop now CORRECTS that round instead of the
+	// cli-agent backend failing the call, and a condition that used to fire
+	// llm_unavailable would otherwise become invisible: a seat whose model
+	// answers nothing every round now produces quiet rescues rather than a
+	// failure event. The count rides the phase record, at the layer that
+	// knows which seat and which phase, so the diagnosis survives.
+	EmptyAnswers int
+
 	// Suspended and its companions are set when a tool suspended the loop.
 	// The pending call is left UNANSWERED in Messages — exactly one
 	// dangling tool call, which is an invariant checked on both serialize
@@ -408,6 +434,8 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		terminators[name] = struct{}{}
 	}
 	forcedRetries := 0
+	emptyRetries := 0
+	emptyAnswers := 0
 
 	var partial *Partial
 	publish := func(rounds int) {
@@ -605,15 +633,57 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		publish(roundsUsed)
 
 		if len(completion.ToolCalls) == 0 {
+			// Counted whichever corrective follows, and counted for
+			// rounds that get none: the number a phase record carries
+			// is "rounds that reached nobody", which is the question
+			// agent/turn already asks about a turn.
+			answeredNothing := strings.TrimSpace(completion.Content) == ""
+			if answeredNothing {
+				emptyAnswers++
+			}
+
 			// A required tool call that did not arrive. Some endpoints
 			// ignore tool_choice and some models think-then-stop, and
 			// accepting this as a clean finish is how a forced round
 			// silently produces nothing.
-			if cfg.ToolChoice == llm.ToolChoiceRequired && forcedRetries < maxForcedToolRetries {
-				forcedRetries++
+			//
+			// THIS CORRECTIVE WINS OUTRIGHT for a caller that required a
+			// call, empty round or not: "call one of these tools" is
+			// strictly the better instruction for a phase whose only
+			// output IS a call, and it already covers the model that
+			// thought and stopped. Letting both fire would tax every
+			// forced caller's round budget — the reviewer's four, the
+			// onboarding pass's — for an instruction they already got.
+			if cfg.ToolChoice == llm.ToolChoiceRequired {
+				if forcedRetries < maxForcedToolRetries {
+					forcedRetries++
+					msgs = append(msgs, llm.Message{
+						Role:    llm.RoleUser,
+						Content: forcedToolCorrective(tools),
+					})
+					continue
+				}
+				break
+			}
+
+			// A ROUND THAT REACHED NOBODY IS NOT A FINISH. No tool call
+			// and no prose is a model that spent its output on hidden
+			// reasoning — the shape every backend now hands back for it
+			// (an empty Content), rather than the transport error the
+			// cli-agent backend used to raise. Correcting it is the
+			// loop's job and not the provider's: this is the frame that
+			// holds the conversation, so it is the only one that can
+			// ask again without inventing a second prompt contract the
+			// operator cannot see.
+			//
+			// Keyed on Content alone. Reasoning is not an answer that
+			// reached anybody, so a thinking-only round from any
+			// backend is the same failure and gets the same corrective.
+			if answeredNothing && emptyRetries < maxEmptyAnswerRetries {
+				emptyRetries++
 				msgs = append(msgs, llm.Message{
 					Role:    llm.RoleUser,
-					Content: forcedToolCorrective(tools),
+					Content: emptyAnswerCorrective,
 				})
 				continue
 			}
@@ -640,6 +710,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 				RoundsUsed:        roundsUsed,
 				Model:             model,
 				Messages:          msgs,
+				EmptyAnswers:      emptyAnswers,
 				Suspended:         true,
 				PendingToolCallID: pendingID,
 				PendingToolName:   pendingName,
@@ -663,6 +734,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		Model:           model,
 		Messages:        msgs,
 		ExhaustedRounds: exhausted,
+		EmptyAnswers:    emptyAnswers,
 	}, nil
 }
 
@@ -786,6 +858,16 @@ func forcedToolCorrective(tools []llm.ToolDef) string {
 	return "You must respond by calling one of these tools, not with prose: " +
 		strings.Join(names, ", ") + "."
 }
+
+// emptyAnswerCorrective is the re-prompt for a round that produced neither a
+// tool call nor a word of prose.
+//
+// It names the CAUSE rather than scolding, because the model did work — the
+// round bills hundreds of output tokens — and the only thing that went wrong
+// is that none of it was written down where anyone could read it.
+const emptyAnswerCorrective = "Your last reply was empty: you produced no visible " +
+	"response and called no tool. Whatever you worked out, write it in the response " +
+	"itself, or call a tool to act on it."
 
 // assistantText renders a conversation's assistant turns as ONE displayable
 // string, reasoning included, wrapped so a reader can tell it apart.

@@ -939,6 +939,11 @@ func foldOnto(done phaseResult, live toolloop.Result) toolloop.Result {
 	res.RoundsUsed = done.Rounds + live.RoundsUsed
 	res.InputTokens += done.Result.InputTokens
 	res.OutputTokens += done.Result.OutputTokens
+	// Accumulated for the same reason the token counts are: an EXTENDED
+	// phase runs the loop again and the second invocation counts only its
+	// own rounds, so a phase that answered nothing twice under two
+	// invocations would report one.
+	res.EmptyAnswers += done.Result.EmptyAnswers
 	// The model that served the phase, not the model that served the round
 	// that died. An invocation which failed before its first completion
 	// names nobody, and a record with no model on it reads as a phase that
