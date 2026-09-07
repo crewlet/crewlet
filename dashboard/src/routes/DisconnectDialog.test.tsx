@@ -38,7 +38,9 @@ afterEach(() => {
 test("the accounts are kept unless the box is ticked", async () => {
   const sent: Sent[] = [];
   stubFetch(sent);
-  render(<DisconnectDialog name="GitHub" kind="github" onClose={() => {}} onDone={() => {}} />);
+  render(
+    <DisconnectDialog name="GitHub" kinds={["github"]} onClose={() => {}} onDone={() => {}} />,
+  );
 
   fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
   await waitFor(() => expect(sent.length).toBe(1));
@@ -51,7 +53,9 @@ test("the accounts are kept unless the box is ticked", async () => {
 test("ticking the box asks for the accounts too", async () => {
   const sent: Sent[] = [];
   stubFetch(sent);
-  render(<DisconnectDialog name="GitHub" kind="github" onClose={() => {}} onDone={() => {}} />);
+  render(
+    <DisconnectDialog name="GitHub" kinds={["github"]} onClose={() => {}} onDone={() => {}} />,
+  );
 
   fireEvent.click(screen.getByRole("checkbox"));
   fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
@@ -65,7 +69,9 @@ test("ticking the box asks for the accounts too", async () => {
 test("forcing is offered only after a failure", async () => {
   const sent: Sent[] = [];
   stubFetch(sent, 503);
-  render(<DisconnectDialog name="GitHub" kind="github" onClose={() => {}} onDone={() => {}} />);
+  render(
+    <DisconnectDialog name="GitHub" kinds={["github"]} onClose={() => {}} onDone={() => {}} />,
+  );
 
   expect(screen.queryByRole("button", { name: /anyway/i })).toBeNull();
 
@@ -90,7 +96,7 @@ test("a disconnect stuck at the app offers the way out immediately", async () =>
   render(
     <DisconnectDialog
       name="Jira"
-      kind="jira"
+      kinds={["jira"]}
       stuck="jira: GET /rest/webhooks/1.0/webhook: 401: Client must be authenticated"
       onClose={() => {}}
       onDone={() => {}}
@@ -113,6 +119,6 @@ test("a disconnect stuck at the app offers the way out immediately", async () =>
 test("a disconnect in flight does not offer forcing", () => {
   const sent: Sent[] = [];
   stubFetch(sent);
-  render(<DisconnectDialog name="Jira" kind="jira" onClose={() => {}} onDone={() => {}} />);
+  render(<DisconnectDialog name="Jira" kinds={["jira"]} onClose={() => {}} onDone={() => {}} />);
   expect(screen.queryByRole("button", { name: /anyway/i })).toBeNull();
 });

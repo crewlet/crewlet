@@ -454,6 +454,33 @@ export function Reconcile({
 }
 
 /**
+ * The surfaces a card's Disconnect takes away, in the order it takes them.
+ *
+ * THE PROVISIONING SURFACE LAST. On Atlassian the two products are reached
+ * with their own credentials and the ORGANIZATION's is what removes the
+ * accounts, so taking the organization first would strand every account the
+ * products' teardown still has to account for — and leave nothing able to
+ * remove them.
+ *
+ * Only surfaces this company actually has: a card lists what a tool can be
+ * made of, and a delete against a surface nobody configured is a request
+ * with nothing behind it.
+ */
+export function disconnectOrder(
+  entry: Entry,
+  rows: Map<string, IntegrationRow>,
+  sections: { name: string; tool: SetupToolState }[],
+): string[] {
+  const provisions = new Set(sections.filter((s) => s.tool.can_provision).map((s) => s.tool.key));
+  const present = entry.surfaces.map((s) => s.key).filter((key) => rows.has(key));
+  return [
+    ...present.filter((key) => !provisions.has(key)),
+    ...present.filter((key) => provisions.has(key)),
+  ];
+}
+
+/**
+ * What one surface has to report, or nothing./**
  * What one surface has to report, or nothing.
  *
  * A CARD'S BODY IS ITS AGENTS. It used to open with a row per surface —
@@ -923,7 +950,7 @@ export function Integrations() {
   } | null>(null);
   const [dropping, setDropping] = useState<{
     name: string;
-    kind: string;
+    kinds: string[];
     stuck: string;
   } | null>(null);
   const rows = new Map((data?.integrations ?? []).map((r) => [r.key, r]));
@@ -986,7 +1013,7 @@ export function Integrations() {
       {dropping && (
         <DisconnectDialog
           name={dropping.name}
-          kind={dropping.kind}
+          kinds={dropping.kinds}
           stuck={dropping.stuck || undefined}
           onClose={() => setDropping(null)}
           // The row does not vanish here: the engine keeps the block until
@@ -1038,7 +1065,15 @@ export function Integrations() {
                 onDisconnect={() =>
                   setDropping({
                     name: entry.name,
-                    kind: entry.surfaces[0]!.key,
+                    // EVERY SURFACE THE CARD COVERS, not the first one.
+                    //
+                    // Atlassian is an organization and two products, and
+                    // disconnecting took only the surface that happened to
+                    // be listed first: the account was deleted, its block
+                    // removed, and the card still read Connected because
+                    // Jira and Confluence were untouched. A person pressing
+                    // Disconnect on a card means the card.
+                    kinds: disconnectOrder(entry, rows, sectionsFor(entry, setup.byKey)),
                     stuck: stuckDisconnecting(entry, rows),
                   })
                 }

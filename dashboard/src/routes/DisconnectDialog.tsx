@@ -24,7 +24,7 @@ import { rest, RestError } from "~/protocol/index.ts";
 
 export function DisconnectDialog({
   name,
-  kind,
+  kinds,
   stuck,
   onClose,
   onDone,
@@ -32,7 +32,14 @@ export function DisconnectDialog({
   /** The tool's name, as the catalogue writes it. */
   name: string;
   /** The wire key of the surface being disconnected. */
-  kind: string;
+  /**
+   * Every surface this card covers, in the order they are taken away.
+   *
+   * A CARD IS THE UNIT, not a surface: Atlassian is an organization and two
+   * products, and taking only the first left the other two connected under a
+   * card still reading Connected.
+   */
+  kinds: string[];
   /**
    * Why a disconnect already asked for has not finished, when one has not.
    *
@@ -54,7 +61,15 @@ export function DisconnectDialog({
     setBusy(true);
     setError(null);
     try {
-      await rest.del(`/setup/integrations/${kind}`, { remove_seats: removeSeats, force });
+      // ONE AT A TIME, in order, and the first refusal stops the rest.
+      //
+      // The organization goes LAST on Atlassian because the two products are
+      // reached with their own credentials and the organization's is what
+      // removes the accounts: taking it first would strand whatever the
+      // products still hold.
+      for (const kind of kinds) {
+        await rest.del(`/setup/integrations/${kind}`, { remove_seats: removeSeats, force });
+      }
       onDone();
       onClose();
     } catch (err) {

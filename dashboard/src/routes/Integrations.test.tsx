@@ -11,7 +11,14 @@
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
-import { CATALOG, EntryRow, Reconcile, phaseTone, rollUp } from "./Integrations.tsx";
+import {
+  CATALOG,
+  EntryRow,
+  Reconcile,
+  disconnectOrder,
+  phaseTone,
+  rollUp,
+} from "./Integrations.tsx";
 import type { IntegrationRow } from "~/protocol/types.ts";
 
 afterEach(cleanup);
@@ -680,6 +687,36 @@ test("an agent is listed once however many surfaces report it", () => {
   // account rather than about one product's credential slot.
   expect(screen.getByText("mcp_env.atlassian.JIRA_API_TOKEN")).toBeTruthy();
   expect(screen.queryByText(/no Confluence credential/)).toBeNull();
+});
+
+// DISCONNECT MEANS THE CARD, and the provisioner goes last.
+//
+// It took the surface that happened to be listed first: on Atlassian the
+// organization's account was deleted and its block removed while Jira and
+// Confluence were left untouched, under a card still reading Connected. And
+// the order is not arbitrary — the organization's credential is what removes
+// the accounts, so taking it first would strand what the products still hold.
+test("disconnect takes every configured surface, provisioner last", () => {
+  const rows = rowsOf(
+    { key: "atlassian", configured: true },
+    { key: "jira", configured: true },
+    { key: "confluence", configured: true },
+  );
+  const sections = [
+    { name: "Organization", tool: toolState({ key: "atlassian", can_provision: true }) },
+    { name: "Jira", tool: toolState({ key: "jira", can_provision: false }) },
+    { name: "Confluence", tool: toolState({ key: "confluence", can_provision: false }) },
+  ];
+  expect(disconnectOrder(atlassian, rows, sections)).toEqual(["jira", "confluence", "atlassian"]);
+});
+
+// AND A SURFACE NOBODY CONFIGURED IS NOT DELETED. A card lists what a tool
+// CAN be made of; a delete against a surface with no block behind it is a
+// request with nothing behind it.
+test("disconnect skips the surfaces this company does not have", () => {
+  const rows = rowsOf({ key: "jira", configured: true });
+  const sections = [{ name: "Jira", tool: toolState({ key: "jira" }) }];
+  expect(disconnectOrder(atlassian, rows, sections)).toEqual(["jira"]);
 });
 
 // A DROP IS A PROBLEM, so it survives the counters being removed.
