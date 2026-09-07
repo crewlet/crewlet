@@ -79,6 +79,28 @@ test("a blocked surface says what to do and where", () => {
   expect(screen.getByRole("link").getAttribute("href")).toBe("https://jira.example.com/admin");
 });
 
+// AN OPERATOR'S OWN FINDING NAMES NO PLACE.
+//
+// It read "you, in the company configuration", which named a place this
+// screen IS: the note sits inside the card whose Settings control opens the
+// very form the fix is made in, so it sent a reader looking elsewhere for
+// what was already in front of them. The finding's own sentence says what to
+// change, and the admin's clause stays because the third-party app is
+// genuinely somewhere else.
+test("a finding the operator owns carries no place to go", () => {
+  render(
+    <Reconcile
+      status={{
+        phase: "unconfigured",
+        actor: "operator",
+        detail: "the webhook secret resolved to nothing",
+      }}
+    />,
+  );
+  expect(screen.getByText(/the webhook secret resolved to nothing/)).toBeTruthy();
+  expect(screen.queryByText(/company configuration/)).toBeNull();
+});
+
 // THE FINDINGS BEHIND THE HEADLINE. The report says what to do next and the
 // findings say what is actually wrong, so an operator who fixes the first
 // should not wait a full pass to learn there were four more.

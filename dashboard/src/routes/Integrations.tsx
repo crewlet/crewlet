@@ -241,8 +241,12 @@ function actorLabel(actor: string | undefined): string {
       return "the third-party app is applying it";
     case "admin":
       return "you, at the third-party app";
-    case "operator":
-      return "you, in the company configuration";
+    // THE OPERATOR IS UNLABELLED, and deliberately. "you, in the company
+    // configuration" named a place this screen IS: the note sits inside the
+    // card whose Settings control opens the very form the fix is made in, so
+    // it sent a reader looking elsewhere for what was already in front of
+    // them. The finding's own sentence says what to change; where is not a
+    // second fact worth a clause.
     default:
       return "";
   }
@@ -1378,7 +1382,7 @@ export function Integrations() {
           <Empty
             icon="plug"
             title="No integration is connected yet"
-            hint="Until one is, the only thing that can wake a seat is a schedule. Connect a chat surface, a tracker or a code host in the company configuration."
+            hint="Until one is, the only thing that can wake a seat is a schedule. Connect a chat surface, a tracker or a code host from the cards below."
           />
         )}
       </QueryState>
