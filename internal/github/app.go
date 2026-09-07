@@ -457,6 +457,37 @@ func (c *AppClient) Installations(ctx context.Context) ([]Installation, error) {
 	return out, nil
 }
 
+// Exists reports whether GitHub still knows this app.
+//
+// THE ONE PROBE THAT SEPARATES "NOT INSTALLED" FROM "NOT THERE". Both answer
+// 404 from the installation endpoints, and they call for opposite things: an
+// app installed nowhere needs a person to install it, an app that no longer
+// exists needs a person to create another, and sending an operator to install
+// a deleted app hands them a link GitHub itself 404s.
+//
+// The JWT is signed with the app's own key and GitHub validates it by looking
+// the app up, so `Integration not found` here is that lookup failing rather
+// than a permission this credential lacks — the conflation [APIError.NotFound]
+// warns about does not arise, because an app is never invisible to itself.
+//
+// Three answers, and the middle one is why this is not a bool: true, false
+// for "GitHub says it is gone", and an error for "GitHub could not say".
+func (c *AppClient) Exists(ctx context.Context) (bool, error) {
+	var out struct {
+		ID int64 `json:"id"`
+	}
+	err := c.call(ctx, http.MethodGet, "/app", nil, &out)
+	var apiErr *APIError
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.As(err, &apiErr) && apiErr.NotFound():
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
 // Installation reads one installation back.
 func (c *AppClient) Installation(ctx context.Context, id int64) (*Installation, error) {
 	out := new(Installation)

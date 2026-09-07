@@ -780,6 +780,7 @@ func (p *githubPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 			// sink is the loop's permission to write, and without it the
 			// pass reads and reports.
 			Record: p.recordInstallation(in),
+			Forget: p.forgetApp(in),
 		})
 		if appsErr != nil {
 			return nil, fmt.Errorf("engine: github pass: %w", appsErr)
@@ -826,6 +827,18 @@ func (p *githubPass) recordInstallation(in setup.PassInput) func(context.Context
 	}
 	return func(ctx context.Context, handle string, installationID int64) error {
 		return p.engine.RecordGitHubInstallation(ctx, handle, installationID)
+	}
+}
+
+// forgetApp clears a seat's stale app record, on the same terms as
+// [githubPass.recordInstallation]: nil on a dry run, because the sink is the
+// loop's permission to write and a check reads and reports.
+func (p *githubPass) forgetApp(in setup.PassInput) func(context.Context, string) error {
+	if in.Sink == nil {
+		return nil
+	}
+	return func(ctx context.Context, handle string) error {
+		return p.engine.ForgetGitHubApp(ctx, handle)
 	}
 }
 

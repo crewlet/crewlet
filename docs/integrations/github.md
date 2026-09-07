@@ -368,6 +368,33 @@ startup with `github_app_state_key_is_per_process`.
 Request and response shapes are in
 [API Endpoints](../reference/api-endpoints.md#one-agents-own-github-app).
 
+### What the reconcile loop heals
+
+Both of the acts that build a seat's app happen at GitHub, in a browser, and
+GitHub tells the engine about neither. So the loop reads the app back on every
+pass and corrects the document from what it finds.
+
+| What it reads | What it writes | What the screen then says |
+|---|---|---|
+| An installation the app has and the seat does not name | `installation_id` on the seat | The seat is finished |
+| A stored `installation_id` GitHub answers 404 to | `installation_id: 0` | Install it, with the link |
+| An app id GitHub answers 404 to | Clears `app_id`, `app_slug`, `installation_id`, `private_key` and `webhook_secret` | Create an app for this seat |
+
+The last row is the one that needs the extra call. An app installed nowhere
+and an app somebody deleted both answer `404` from the installation
+endpoints, and they call for opposite things, so the app's own identity
+(`GET /app`, signed with its own key) is asked for before an operator is sent
+anywhere. Read as "installed nowhere", a deleted app pointed an operator at an
+install page GitHub itself 404s, on a card reporting the app as present.
+
+The sealed key is left in the store when a record is cleared: it is named per
+seat, so the next app's conversion overwrites it, and deleting a credential on
+the strength of one remote `404` is a destructive answer to a question only
+GitHub can settle.
+
+A **check** (`POST /setup/integrations/github/check`) writes none of this. It
+reads and reports, and the loop makes the correction on its next pass.
+
 ### The constraints that shape all of this
 
 - **The private key and the webhook secret come back exactly once.** GitHub has

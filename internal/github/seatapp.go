@@ -80,6 +80,22 @@ type SeatAppOptions struct {
 	// writes nothing, which is what a check is.
 	Record func(ctx context.Context, handle string, installationID int64) error
 
+	// Forget clears the app a seat names when GitHub says that app no
+	// longer exists. Nil is a DRY RUN, exactly as Record's is.
+	//
+	// THE DOCUMENT IS WRONG AND NOTHING ELSE CAN CORRECT IT. An app is
+	// deleted from its settings page by a person, and GitHub tells the
+	// engine nothing: the record left behind names an app id that answers
+	// 404 to everything, so the seat mints no token, the install link
+	// GitHub itself 404s, and every surface reports a step that cannot be
+	// taken. Clearing it puts the seat back to the one thing that can be
+	// done, which is creating another.
+	//
+	// The sealed key is left alone. It is named per seat, so creating the
+	// next app overwrites it, and deleting it here would be a destructive
+	// answer to a question GitHub is the only authority on.
+	Forget func(ctx context.Context, handle string) error
+
 	// Client builds the app client for one seat. Nil takes the real one.
 	// Injectable because every seat has a different key, so there is no
 	// single client to hand in.
@@ -94,6 +110,10 @@ type SeatAppResult struct {
 
 	// Adopted is the seats whose installation this pass discovered.
 	Adopted []string
+
+	// Forgotten is the seats whose stale app record this pass cleared,
+	// because GitHub no longer has the app it named.
+	Forgotten []string
 
 	// Findings is what is outstanding, per seat.
 	Findings []integration.Finding
@@ -156,6 +176,23 @@ func (r *SeatAppResult) reconcileSeat(
 	}
 
 	installation, adopted, err := r.installationFor(ctx, opts, seat, client)
+
+	// GONE, NOT MERELY UNINSTALLED, and the two call for opposite things.
+	// Both answer 404 from the installation endpoints, so the app's own
+	// identity is asked for before an operator is sent anywhere: an app
+	// installed nowhere needs installing, an app somebody deleted needs
+	// creating again, and the install link for a deleted app is one GitHub
+	// itself 404s.
+	//
+	// Asked only where there is a 404 to explain, so the ordinary pass
+	// makes no extra call.
+	if notFound(err) || (err == nil && installation == nil) {
+		if exists, existsErr := client.Exists(ctx); existsErr == nil && !exists {
+			r.forget(ctx, opts, seat)
+			return
+		}
+	}
+
 	switch {
 	case err != nil && seat.InstallationID != 0:
 		// LEFT ALONE, and only where the document already claims an
@@ -218,6 +255,46 @@ func (r *SeatAppResult) reconcileSeat(
 		return
 	}
 	r.Ready = append(r.Ready, seat.Handle)
+}
+
+// forget reports an app GitHub no longer has, and clears the record naming it.
+//
+// THE FINDING IS THE SAME ONE A SEAT WITH NO APP GETS, because that is the
+// state this seat is now in: it names an app that does not exist, so nothing
+// it does on GitHub is its own. The action URL is empty for the same reason
+// it is empty there — an app is created by a form POST from a page carrying
+// the operator's own session, not by following a link.
+func (r *SeatAppResult) forget(ctx context.Context, opts SeatAppOptions, seat SeatApp) {
+	detail := seat.Handle + "'s GitHub App no longer exists at GitHub, so nothing " +
+		"it does there is its own: create one from the Integrations screen"
+	if opts.Forget != nil {
+		if err := opts.Forget(ctx, seat.Handle); err != nil {
+			// REPORTED, NOT SWALLOWED, and the finding still says the
+			// app is gone: the write is what makes the other surfaces
+			// agree, and failing it leaves them naming a step that
+			// cannot be taken until the next pass.
+			r.Findings = append(r.Findings, integration.Finding{
+				Kind:    integration.FindingIdentityMissing,
+				Subject: seat.Handle,
+				Detail: detail + " (the stale record could not be cleared: " +
+					err.Error() + ")",
+			})
+			return
+		}
+		r.Forgotten = append(r.Forgotten, seat.Handle)
+	}
+	r.Findings = append(r.Findings, integration.Finding{
+		Kind:    integration.FindingIdentityMissing,
+		Subject: seat.Handle,
+		Detail:  detail,
+	})
+}
+
+// notFound reports GitHub answering 404, which is the only status that can
+// mean an app or an installation is absent.
+func notFound(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.NotFound()
 }
 
 // installationFor finds the installation this seat's app is on.

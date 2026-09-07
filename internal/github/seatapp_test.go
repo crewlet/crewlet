@@ -2,6 +2,8 @@ package github_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -122,5 +124,131 @@ func TestSeatsAreOrderedSoAStatusLineIsStable(t *testing.T) {
 	got := github.SeatsFrom([]github.SeatApp{{Handle: "zeta"}, {Handle: "alpha"}, {Handle: "mid"}})
 	if got[0].Handle != "alpha" || got[2].Handle != "zeta" {
 		t.Errorf("order = %v", []string{got[0].Handle, got[1].Handle, got[2].Handle})
+	}
+}
+
+// appAt stands in for GitHub, answering the four calls a seat reconcile
+// makes. `present` is whether GitHub still knows the app: false makes every
+// endpoint answer the 404 a deleted app answers with.
+func appAt(t *testing.T, present bool, installations string) string {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if !present {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"message":"Integration not found"}`))
+			return
+		}
+		switch r.URL.Path {
+		case "/app":
+			_, _ = w.Write([]byte(`{"id":7,"slug":"acme-sre-lead"}`))
+		default:
+			_, _ = w.Write([]byte(installations))
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server.URL
+}
+
+// A DELETED APP IS NOT AN UNINSTALLED ONE, and the two call for opposite acts.
+//
+// Both answer 404 from the installation endpoints. Read as "installed
+// nowhere", a deleted app sent an operator to an install page GitHub itself
+// 404s, on a card that said the app existed, for ever: the step could not be
+// taken and the state could not change.
+func TestAnAppGitHubNoLongerHasIsReportedAsGone(t *testing.T) {
+	t.Parallel()
+	_, pem := testKey(t)
+	base := appAt(t, false, "[]")
+
+	forgotten := ""
+	res, err := github.ReconcileSeatApps(context.Background(), github.SeatAppOptions{
+		APIBase: base, WebBase: "https://github.com", Org: "acme",
+		Seats: []github.SeatApp{{
+			Handle: "sre-lead", AppID: 7, Slug: "acme-sre-lead",
+			Key: pem, Tier: github.TierReview,
+		}},
+		Forget: func(_ context.Context, handle string) error {
+			forgotten = handle
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := kinds(res.Findings); len(got) != 1 || got[0] != string(integration.FindingIdentityMissing) {
+		t.Fatalf("findings = %v, want the app to be reported missing", got)
+	}
+	// NO LINK, because there is nothing to follow: an app is created by a
+	// form POST from a page carrying the operator's own session, and the
+	// install link for an app that does not exist is a 404.
+	if url := res.Findings[0].ActionURL; url != "" {
+		t.Errorf("a deleted app was given an address to follow: %q", url)
+	}
+	if detail := res.Findings[0].Detail; !strings.Contains(detail, "no longer exists") {
+		t.Errorf("the finding does not say the app is gone: %q", detail)
+	}
+	// AND THE DOCUMENT IS CORRECTED, which is what makes every other
+	// surface agree: the roster's step, the card's tag and the finding all
+	// read the same seat.
+	if forgotten != "sre-lead" {
+		t.Errorf("the stale app record was left in place (forgot %q)", forgotten)
+	}
+	if len(res.Forgotten) != 1 || res.Forgotten[0] != "sre-lead" {
+		t.Errorf("Forgotten = %v", res.Forgotten)
+	}
+}
+
+// A CHECK READS AND REPORTS. Without a sink the pass writes nothing, so the
+// finding stands on its own and the record is corrected by the loop instead.
+func TestADryRunReportsAGoneAppWithoutClearingIt(t *testing.T) {
+	t.Parallel()
+	_, pem := testKey(t)
+	res, err := github.ReconcileSeatApps(context.Background(), github.SeatAppOptions{
+		APIBase: appAt(t, false, "[]"), WebBase: "https://github.com", Org: "acme",
+		Seats: []github.SeatApp{{
+			Handle: "sre-lead", AppID: 7, Slug: "acme-sre-lead",
+			Key: pem, Tier: github.TierReview,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := kinds(res.Findings); len(got) != 1 || got[0] != string(integration.FindingIdentityMissing) {
+		t.Fatalf("findings = %v", got)
+	}
+	if len(res.Forgotten) != 0 {
+		t.Errorf("a check cleared a record: %v", res.Forgotten)
+	}
+}
+
+// AN APP THAT EXISTS AND IS INSTALLED NOWHERE STILL SAYS "INSTALL IT".
+//
+// The probe above must not turn every empty installation list into a deleted
+// app: creating an app and installing it are two acts a day apart, and the
+// state between them is the ordinary one.
+func TestAnAppInstalledNowhereStillAsksForTheInstall(t *testing.T) {
+	t.Parallel()
+	_, pem := testKey(t)
+	res, err := github.ReconcileSeatApps(context.Background(), github.SeatAppOptions{
+		APIBase: appAt(t, true, "[]"), WebBase: "https://github.com", Org: "acme",
+		Seats: []github.SeatApp{{
+			Handle: "sre-lead", AppID: 7, Slug: "acme-sre-lead",
+			Key: pem, Tier: github.TierReview,
+		}},
+		Forget: func(context.Context, string) error {
+			t.Error("an app that exists had its record cleared")
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := kinds(res.Findings); len(got) != 1 || got[0] != string(integration.FindingApprovalRequired) {
+		t.Fatalf("findings = %v, want the install to be asked for", got)
+	}
+	want := "https://github.com/organizations/acme/settings/apps/acme-sre-lead/installations"
+	if url := res.Findings[0].ActionURL; url != want {
+		t.Errorf("install link = %q, want %q", url, want)
 	}
 }

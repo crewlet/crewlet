@@ -142,6 +142,54 @@ func (e *Engine) disconnectors() map[integration.Kind]integration.Disconnector {
 // an adoption would rediscover the same installation on every tick and never
 // say why the seat stays unready.
 func (e *Engine) RecordGitHubInstallation(ctx context.Context, handle string, id int64) error {
+	summary := "record " + handle + "'s GitHub installation"
+	if id == 0 {
+		// A CLEARED ID IS AN UNINSTALL SOMEBODY PERFORMED AT GITHUB, and
+		// the summary says so: an operator reading the revision list
+		// should not have to work out why the engine removed something.
+		summary = "clear " + handle + "'s GitHub installation, which is gone at GitHub"
+	}
+	return e.editGitHubSeat(ctx, handle, summary, func(block map[string]any) {
+		block["installation_id"] = id
+	})
+}
+
+// ForgetGitHubApp clears the app a seat names, because GitHub no longer has
+// it.
+//
+// AN APP IS DELETED BY A PERSON AT GITHUB, and GitHub tells the engine
+// nothing. What is left behind is a record naming an app id that answers 404
+// to every call: the seat mints no token, the install link is one GitHub
+// itself 404s, and every surface reports a step nobody can take. Clearing it
+// puts the seat back to the one act that is available, which is creating
+// another app.
+//
+// THE SEALED KEY IS LEFT WHERE IT IS. It is named per seat, so the next app's
+// conversion overwrites it, and deleting a credential on the strength of one
+// remote 404 is a destructive answer to a question only GitHub can settle.
+func (e *Engine) ForgetGitHubApp(ctx context.Context, handle string) error {
+	return e.editGitHubSeat(ctx, handle,
+		"clear "+handle+"'s GitHub App, which no longer exists at GitHub",
+		func(block map[string]any) {
+			for _, field := range []string{
+				"app_id", "app_slug", "installation_id", "private_key", "webhook_secret",
+			} {
+				delete(block, field)
+			}
+		})
+}
+
+// editGitHubSeat reads one seat's GitHub block, applies an edit and writes it
+// back through the entity route.
+//
+// THROUGH THE ENTITY ROUTE, for the reason [ConfigWriter] gives: a merge
+// patch on `roles` would replace the whole list. Refused rather than skipped
+// when no writer is installed, because a pass that silently failed to record
+// what it found would rediscover the same thing on every tick and never say
+// why the seat stays unready.
+func (e *Engine) editGitHubSeat(
+	ctx context.Context, handle, summary string, edit func(block map[string]any),
+) error {
 	writer := e.configWriter.Load()
 	if writer == nil {
 		return integration.ErrDisconnectUnavailable
@@ -162,20 +210,13 @@ func (e *Engine) RecordGitHubInstallation(ctx context.Context, handle string, id
 	if block == nil {
 		return fmt.Errorf("engine: the seat %s has no github app to record against", handle)
 	}
-	block["installation_id"] = id
+	edit(block)
 	integrations["github"] = block
 	role["integrations"] = integrations
 
 	updated, err := json.Marshal(role)
 	if err != nil {
 		return fmt.Errorf("engine: encode the seat %s: %w", handle, err)
-	}
-	summary := "record " + handle + "'s GitHub installation"
-	if id == 0 {
-		// A CLEARED ID IS AN UNINSTALL SOMEBODY PERFORMED AT GITHUB, and
-		// the summary says so: an operator reading the revision list
-		// should not have to work out why the engine removed something.
-		summary = "clear " + handle + "'s GitHub installation, which is gone at GitHub"
 	}
 	return (*writer).SetSeat(ctx, handle, updated, summary, "reconcile loop")
 }
