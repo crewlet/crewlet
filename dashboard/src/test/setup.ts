@@ -50,7 +50,20 @@ if (!("scrollTo" in globalThis)) {
 // in try/catch precisely because a real browser can refuse them, so a test
 // double that cannot store would exercise the fallback on every run and never
 // the path an operator actually takes.
-if (!("localStorage" in globalThis)) {
+// The test is the VALUE, not the key. In CI the property is present and
+// holds undefined, so an `in` check — which is what the two guards above can
+// safely use — skipped this polyfill entirely and the suites failed exactly
+// as they had before it existed. Reading it can also throw, which is the same
+// reason apiToken() wraps its own read.
+function storageMissing(): boolean {
+  try {
+    return !globalThis.localStorage;
+  } catch {
+    return true;
+  }
+}
+
+if (storageMissing()) {
   const store = new Map<string, string>();
   const memory: Storage = {
     get length() {
