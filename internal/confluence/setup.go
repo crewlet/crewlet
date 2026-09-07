@@ -106,10 +106,14 @@ func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []
 			ConfigPath: "integrations.confluence.token",
 			SecretName: "CONFLUENCE_TOKEN",
 			Required:   true,
-			Help:       "The engine reads Confluence as this account: knowledge search, and the webhook.",
-			Where:      "Create an API token on your Atlassian account, or a personal access token on Data Center.",
-			VendorURL:  "https://id.atlassian.com/manage-profile/security/api-tokens",
-			Blocks:     integration.FindingCredentialMissing,
+			// NO SENTENCE OF ITS OWN. This is ONE input shared by Jira
+			// and Confluence, and each named the product it was declared
+			// in, so which description rendered depended on which section
+			// happened to claim the field. What is left is where to make
+			// the token, which is the same answer for both.
+			Where:     "Create an API token on your Atlassian account, or a personal access token on Data Center.",
+			VendorURL: "https://id.atlassian.com/manage-profile/security/api-tokens",
+			Blocks:    integration.FindingCredentialMissing,
 		},
 		{
 			Field:      "webhook_token",
