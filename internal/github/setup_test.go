@@ -38,29 +38,25 @@ func TestOnlyTheOrganizationLeadsTheConnectForm(t *testing.T) {
 	}
 }
 
-// THE ORGANIZATION IS REQUIRED AND THE TOKEN IS NOT, which is the whole
-// difference between the two: without the organization the engine does not
-// know where to install an app or register a hook, and without the token a
-// review request still reaches its reviewer.
+// THIS FORM ASKS FOR NO PERSONAL ACCESS TOKEN, at any point.
 //
-// It is also why the token must not be deleted: it is the only way to learn
-// who is merely watching a thread, which no payload carries.
-func TestTheOrgTokenSurvivesAsAnOptionalField(t *testing.T) {
+// It led the form once, then it was optional; now nothing here wants it. Its
+// one job in routing was the list of who is participating in a thread, and
+// the agents' own apps answer that, scoped to what each may see rather than
+// to whatever the person who minted the token could reach. Asking every
+// company for one bought a permanent note on a card with nothing wrong with
+// it.
+//
+// The organization stays REQUIRED, and the contrast is the point: without it
+// the engine does not know where to install an app or register a hook.
+func TestTheConnectFormAsksForNoPersonalAccessToken(t *testing.T) {
 	t.Parallel()
 	reqs := byField(github.Requirements(nil, nil))
 
-	token, ok := reqs["token"]
-	if !ok {
-		t.Fatal("the organization read token is gone, so participant fan-out " +
-			"can never be configured")
-	}
-	if token.Required {
-		t.Error("the token is required, which puts every company that " +
-			"deliberately runs without one on a permanent list of things to fix")
-	}
-	if token.ConfigPath != "integrations.github.token" || token.SecretName != "GITHUB_TOKEN" {
-		t.Errorf("the token reads %s / %s, which is not where the engine looks",
-			token.ConfigPath, token.SecretName)
+	if token, listed := reqs["token"]; listed {
+		t.Errorf("the form asks for %q, and no agent acts through it: each has "+
+			"its own app, and those answer the one question this was read for",
+			token.Label)
 	}
 	if !reqs["provisioning.org"].Required {
 		t.Error("the organization is optional, so a company could connect GitHub " +
@@ -68,11 +64,11 @@ func TestTheOrgTokenSurvivesAsAnOptionalField(t *testing.T) {
 	}
 }
 
-// THE FIELDS THAT WERE ALREADY WORKING STILL WORK. Demoting the token is an
-// ordering change and nothing else: the secret the edge verifies with is still
-// required and still mintable, the Enterprise address is still optional, and
-// the hook mode still offers the config package's own closed set.
-func TestDemotingTheTokenLeavesTheOtherFieldsAlone(t *testing.T) {
+// THE FIELDS THAT WERE ALREADY WORKING STILL WORK. Dropping the token changes
+// nothing else: the secret the edge verifies with is still required and still
+// mintable, the Enterprise address is still optional, and the hook mode still
+// offers the config package's own closed set.
+func TestDroppingTheTokenLeavesTheOtherFieldsAlone(t *testing.T) {
 	t.Parallel()
 	reqs := byField(github.Requirements(nil, nil))
 

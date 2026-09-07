@@ -31,8 +31,7 @@ the agent's own identity.
 Connect GitHub on the Integrations screen. The engine generates the webhook
 secret and the reconcile loop registers the hook on its next tick, running the
 same pass `crewlet github provision` runs with the same secret store behind
-it. What it cannot do for you is issue the organization read token, because
-GitHub issues no credential on a provisioner's behalf.
+it. Nothing on that form asks for a personal access token.
 
 The loop keeps checking after that, so a grant you change at GitHub is
 reflected on the screen within a tick without anything to press.
@@ -98,15 +97,18 @@ integrations:
   is the only one that could have signed it. The seat is never a way past the
   signature check: what the handle selects is which credential the delivery is
   checked against, not whether it is checked.
-- **`token` (optional, but effectively required)** is a read credential for
-  **participant fan-out**. A webhook payload carries the author, the
-  assignees and the requested reviewers; it does not carry who has
-  *commented* or *reviewed*, which is most of the set GitHub itself would
-  notify. See [Participants](#participants-are-computed-not-read). Without
-  it, thread activity degrades to the payload's author and assignees;
-  directed events are unaffected. It is also the credential
+- **`token` (optional)** is the credential the **organization-level**
+  reconcile reads and registers hooks with, and
   [`crewlet github provision`](#provisioning--crewlet-github-provision)
-  registers webhooks with, and there it is **required**.
+  requires it. A company whose agents each hold their own app needs none: each
+  app carries its own hook, and participant fan-out is read through those
+  apps. See [Participants](#participants-are-computed-not-read). With no token
+  the organization pass reads nothing and says so as a note, which is not a
+  fault: there is nothing it was going to do for such a company.
+
+  It is not on the connect form. Asking every company for a hand-minted
+  personal access token, for a credential no agent ever acts as, put a
+  permanent note on cards with nothing wrong with them.
 - **`provisioning:`** says where hooks are registered and which organization
   these agents work in, and it is read by the engine's own pass as well as by
   the CLI. `org` is the GitHub organization holding the repositories, and it is
@@ -604,6 +606,18 @@ in the API:
 Both are one page of 100, read concurrently, never a cursor walk: a thread
 with more than a hundred commenters is one where notifying all of them is the
 wrong behaviour anyway, and the call sits on the inbound consumer's hot path.
+
+**They are read through the agents' own apps.** An agent that acts as itself
+already holds a credential that can answer: its app is installed on the
+repositories it works in, and every tier grants `issues:read` and
+`pull_requests:read`. The first installed seat whose token mints is asked, and
+the next is tried when one refuses, which is what keeps the answer available
+while an operator is mid-rollout. Tokens are cached per installation for the
+hour GitHub issues them for, because this is the inbound hot path.
+
+This took a shared organization token once. The token was scoped to whatever
+the person who minted it could reach, had to be rotated by hand, and was the
+subject of a note on every card that had not set one.
 
 A pull request's *conversation* comments arrive as `issue_comment`, because
 GitHub models a pull request as an issue with a diff. The engine reads that

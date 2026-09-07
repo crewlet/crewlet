@@ -22,7 +22,6 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/github"
-	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
@@ -1632,18 +1631,21 @@ func TestOnlyAnAskAddressesTheSeat(t *testing.T) {
 	}
 }
 
-// A MISSING ORG TOKEN IS AN OPTIONAL INPUT, NOT A BROKEN INTEGRATION.
+// A COMPANY WITH NO ORG TOKEN HAS NOTHING TO REPORT.
 //
-// Two things this got wrong in turn. Refusing the run made the loop record
+// Three things this got wrong in turn. Refusing the run made the loop record
 // "the last pass could not read this integration", which sends an operator
 // looking for an outage rather than an unset variable. Reporting it as
 // credential_missing then put the card in Failed, which is the phase for an
-// integration that cannot be talked to at all.
+// integration that cannot be talked to at all. Reporting it as
+// optional_missing kept the card ready and left a permanent note on it.
 //
-// Neither is true. Each agent acts through its OWN app, so this token gives
-// nobody an identity: it reads who else is taking part in a thread. Its
-// absence is a working integration with one thing left on the table.
-func TestAPassWithNoOrgTokenIsWorkingRatherThanFailed(t *testing.T) {
+// None of them is right, because there is no degradation left to describe:
+// the token's one job in routing was the list of who is participating in a
+// thread, and the agents' own apps answer that. What is left for it is the
+// organization-level reconcile, which a company that wants one org-wide hook
+// opts into and every other company never had a reason for.
+func TestAPassWithNoOrgTokenReportsNothing(t *testing.T) {
 	t.Parallel()
 	res, err := github.Reconcile(t.Context(), github.Options{
 		Config: &config.GitHub{Enabled: true},
@@ -1654,19 +1656,18 @@ func TestAPassWithNoOrgTokenIsWorkingRatherThanFailed(t *testing.T) {
 	if res == nil {
 		t.Fatal("no result")
 	}
-	findings := res.Findings()
-	if len(findings) != 1 || findings[0].Kind != integration.FindingOptionalMissing {
-		t.Fatalf("findings = %+v, want one optional_missing", findings)
+	if findings := res.Findings(); len(findings) != 0 {
+		t.Fatalf("findings = %+v, want none: nothing is degraded", findings)
 	}
-	// AND THE CARD STAYS READY. This is the assertion that matters: the
-	// verdict is what decides whether an operator sees Failed over an
-	// integration that works.
-	if phase, _ := findings[0].Kind.Verdict(); phase != integration.PhaseReady {
-		t.Errorf("an unset optional token puts the integration in %q", phase)
+	// AND IT SAYS SO AS A NOTE, which is what a run that read nothing has
+	// to leave behind: silence with no note would be indistinguishable
+	// from a pass that looked and found everything in order.
+	if len(res.Notes) == 0 {
+		t.Error("a run that read nothing at GitHub left no note saying so")
 	}
-	// And it says nothing about ingress or identity, because it read
-	// neither: a run with no credential that claimed a webhook was missing
-	// would be reporting on something it never looked at.
+	// It says nothing about ingress or identity, because it read neither: a
+	// run with no credential that claimed a webhook was missing would be
+	// reporting on something it never looked at.
 	if res.Login != "" || len(res.Seats) != 0 || len(res.Hooks) != 0 {
 		t.Errorf("a credential-less run reported %+v", res)
 	}

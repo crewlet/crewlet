@@ -20,26 +20,18 @@ func (r *Result) Findings() []integration.Finding {
 	}
 	var out []integration.Finding
 
-	if r.Login == "" {
-		// The run had no org credential to probe. Everything else it
-		// reports was read without one, so this is said first and the
-		// classifier ranks it above the rest.
-		// OPTIONAL, NOT MISSING, and the difference is the whole card.
-		//
-		// Each agent acts through its OWN app now, so this token is not
-		// what gives an agent an identity: it reads who else is taking
-		// part in a thread. Reported as credential_missing it put the
-		// integration in Failed, which is the phase for one that cannot
-		// be talked to at all, and sent an operator looking for an outage
-		// rather than at a line saying what they would gain by adding it.
-		out = append(out, integration.Finding{
-			Kind: integration.FindingOptionalMissing,
-			Detail: "no organization read token is set, so a thread's other " +
-				"participants are not looked up: an agent hears about work it " +
-				"is assigned or mentioned in, and not about work it is merely " +
-				"watching",
-		})
-	}
+	// NOTHING IS REPORTED FOR AN ABSENT ORG CREDENTIAL, and that is the
+	// end of a road this finding was the last stretch of.
+	//
+	// It said participant fan-out was off, which was true while the lookup
+	// needed a token an operator pasted in. The agents' own apps answer
+	// that question now ([SeatLookup]), scoped to what each may see, so
+	// there is nothing an org token adds to routing and no degradation to
+	// report. What is left for it is the ORGANIZATION-level reconcile: a
+	// company that wants one org-wide hook sets it and this run reads;
+	// every other company never had a reason for one, and telling them
+	// all, on every pass, that something optional was missing put a
+	// permanent note on a card with nothing wrong with it.
 
 	// A TARGET THIS RUN TRIED AND COULD NOT HOOK, and only that.
 	//

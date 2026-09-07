@@ -20,20 +20,26 @@ import (
 // against, and a route with nothing to check against answers 503 rather than
 // accepting one. It is mintable because both ends of it belong to the engine.
 //
-// The ORG TOKEN is neither of those, and it no longer leads. It is read-only,
-// optional, and buys exactly one thing: the list of who is participating in a
-// thread, which no payload carries. Without it a review request still reaches
-// its reviewer and the people merely watching hear nothing. Leading with it
-// made a hand-minted personal access token the price of connecting at all, for
-// a credential no agent ever acts as.
+// THE ORG TOKEN IS NOT ASKED FOR AT ALL, which is the end of a road it spent
+// two versions being demoted along: it led the form, then it was optional,
+// and now nothing here wants it. Its one job in routing was the list of who
+// is participating in a thread, and the agents' own apps answer that
+// ([SeatLookup]), scoped to what each may see rather than to whatever the
+// person who minted the token could reach.
+//
+// The FIELD remains on the config block, because a company that wants one
+// organization-wide hook still reconciles through it. It is not a question
+// worth putting to everyone connecting GitHub, though: the flow this form
+// serves gives each agent its own app, with its own hook baked into its own
+// manifest, and asks nobody for a personal access token at any point.
 
 // Requirements says what this company still needs for GitHub.
 func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setup.Requirement {
-	var token, secret, url, org, orgHook string
+	var secret, url, org, orgHook string
 	var enabled bool
 	if in != nil {
 		enabled = in.Enabled
-		token, secret, url = in.Token, in.WebhookSecret, in.URL
+		secret, url = in.WebhookSecret, in.URL
 		// The provisioning block is a POINTER and is absent on every
 		// company that has not run a pass, which is precisely the
 		// company this list is being built for.
@@ -66,29 +72,6 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			Mintable: true,
 			Help:     "Signs every delivery. Without it the route refuses all of them.",
 			Blocks:   integration.FindingCredentialMissing,
-		},
-		{
-			Field: "token",
-			// NOT A CONNECT FIELD, because it establishes nothing. No
-			// agent acts through it (each seat has its own app) and no
-			// delivery is verified with it, so a form that opened with it
-			// asked for a hand-minted personal access token before the
-			// organization it would be read against had even been named.
-			Label:      "Organization read token",
-			Kind:       setup.KindSecret,
-			ConfigPath: "integrations.github.token",
-			SecretName: "GITHUB_TOKEN",
-			// OPTIONAL, and the consequence is specific rather than
-			// total: routing still works, and participant fan-out does
-			// not. Marking it required would put every company that
-			// deliberately runs without one on a permanent list of
-			// things to fix.
-			Required: false,
-			Help: "Optional and read-only: it reads who is participating in a thread. " +
-				"Without it only the people a payload names are told.",
-			Where:     "A token with read access to the repositories these agents work in.",
-			VendorURL: "https://github.com/settings/tokens",
-			Blocks:    integration.FindingCredentialMissing,
 		},
 		{
 			Field: "url",
@@ -127,10 +110,9 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 
 	reqs[0].Present, reqs[0].Resolved, reqs[0].Stored = setup.Toggle(enabled)
 	reqs[1].Present, reqs[1].Resolved, reqs[1].Stored = setup.Held(secret, resolve)
-	reqs[2].Present, reqs[2].Resolved, reqs[2].Stored = setup.Held(token, resolve)
-	reqs[3].Present, reqs[3].Resolved, reqs[3].Stored = setup.Plain(url)
-	reqs[4].Present, reqs[4].Resolved, reqs[4].Stored = setup.Plain(org)
-	reqs[5].Present, reqs[5].Resolved, reqs[5].Stored = setup.Plain(orgHook)
+	reqs[2].Present, reqs[2].Resolved, reqs[2].Stored = setup.Plain(url)
+	reqs[3].Present, reqs[3].Resolved, reqs[3].Stored = setup.Plain(org)
+	reqs[4].Present, reqs[4].Resolved, reqs[4].Stored = setup.Plain(orgHook)
 	return reqs
 }
 

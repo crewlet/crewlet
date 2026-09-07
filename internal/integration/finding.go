@@ -73,20 +73,6 @@ const (
 	// inherited from a parent group or a second role. Agents keep working,
 	// so the integration is READY with a note, not blocked.
 	FindingGrantExcess FindingKind = "grant_excess"
-
-	// FindingOptionalMissing is an input nobody has given that would make
-	// a WORKING integration better.
-	//
-	// The gap this fills is between "fine" and "broken", and without it
-	// every optional input had to be reported as one or the other. GitHub's
-	// organization read token is the case: the integration works without
-	// it, because each agent acts through its own app, and all that is lost
-	// is knowing who else is participating in a thread. Reported as
-	// credential_missing it put the card in Failed, which is the phase for
-	// an integration that cannot be talked to at all, and sent an operator
-	// looking for an outage instead of at a line saying what they would
-	// gain.
-	FindingOptionalMissing FindingKind = "optional_missing"
 )
 
 // severity ranks the kinds from "nothing works" to "everything works, with a
@@ -159,11 +145,6 @@ func (f FindingKind) severity() int {
 		// whole comment above: its verdict is ready, so anything it
 		// outranks is a problem it hides.
 		return 11
-	case FindingOptionalMissing:
-		// BELOW the excess grant, because a permission nobody asked for
-		// is worth reading before an input nobody has given: one is a
-		// thing to take away and the other a thing to add.
-		return 12
 	default:
 		// A kind this build does not know, ranked ABOVE the advisory and
 		// below every real problem. A peer on a newer build can write one
@@ -206,10 +187,6 @@ func (f FindingKind) Verdict() (Phase, Actor) {
 	case FindingGrantExcess:
 		// READY, not degraded. It is a note on a working integration.
 		return PhaseReady, ActorAdmin
-	case FindingOptionalMissing:
-		// READY too, and the OPERATOR's: what is missing is something
-		// they could write down, and nothing is broken until they do.
-		return PhaseReady, ActorOperator
 	default:
 		// A kind this build does not know is reported as degraded rather
 		// than ready, and pointed at the person who can read the peer's

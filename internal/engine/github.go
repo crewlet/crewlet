@@ -233,34 +233,24 @@ func (e *Engine) startGitHub(ctx context.Context, c *Company, cfg *config.GitHub
 				"or this node's secret store", cfg.WebhookSecret)
 	}
 
-	// THE ENGINE CREDENTIAL IS OPTIONAL and its absence is a documented
-	// degradation rather than a failure: without it a comment reaches the
-	// item's author and assignees instead of everyone taking part.
-	// Directed events are untouched, which is why this warns rather than
-	// refusing.
-	var lookup github.Participants
-	if token := strings.TrimSpace(env.Value(cfg.Token)); token != "" {
-		client, err := github.NewClient(github.ClientOptions{
-			APIBase: api, WebBase: web, Token: token,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("engine: github: %w", err)
-		}
-		lookup = github.Lookup{Client: client}
-		// NOT VERIFIED at boot. A GET /user here would turn a
-		// rate-limited API into a company that will not start, to learn
-		// something the first real lookup learns anyway — and that one
-		// degrades instead of refusing, reporting it as
-		// github_participants_unavailable on the event it affected.
-		//
-		// The SEAT credentials below are the opposite case, and the
-		// difference is what the request buys: verifying this one buys
-		// nothing, while resolving those is the entire integration.
-	} else {
-		log.WarnContext(ctx, "github_has_no_engine_token",
-			"detail", "thread activity reaches the item's author and assignees "+
-				"rather than everyone taking part")
-	}
+	// WHO ELSE IS TAKING PART, read through the agents' OWN apps.
+	//
+	// This took a shared organization token an operator pasted in, and the
+	// token had nothing else left to do: an agent that acts as itself
+	// already holds a credential that answers the question, installed on
+	// the repositories it works in, and every tier grants the two reads a
+	// participant lookup needs. So the reader is there for free, scoped to
+	// what that agent may see rather than to whatever the person who made
+	// the token could reach, and there is one fewer credential to paste,
+	// rotate and be warned about.
+	//
+	// NOT VERIFIED at boot. A probe here would turn a rate-limited API
+	// into a company that will not start, to learn what the first real
+	// lookup learns anyway, and that one degrades instead of refusing.
+	lookup := &github.SeatLookup{Opts: github.SeatAppOptions{
+		APIBase: api, WebBase: web, Org: githubOrg(cfg),
+		Seats: e.githubSeatApps(env),
+	}}
 
 	e.notify.github.resolve(ctx, api, web, github.SeatCredentials(c.Org, env.Value))
 	registered := e.notify.github.register(e.Registry(), c, env)
@@ -274,7 +264,7 @@ func (e *Engine) startGitHub(ctx context.Context, c *Company, cfg *config.GitHub
 			"detail", "every code-host webhook will name a stranger")
 	}
 	log.InfoContext(ctx, "github_wired", "api", api,
-		"seat_identities", registered, "participants_lookup", lookup != nil)
+		"seat_identities", registered, "participants_lookup", len(lookup.Opts.Seats) > 0)
 	return github.NewParser(github.ParserOptions{Participants: lookup}), nil
 }
 
@@ -325,6 +315,40 @@ func (e *Engine) reconcileGitHub(ctx context.Context, c *Company) {
 		return
 	}
 	log.InfoContext(ctx, "github_reconciled", "company", c.Config.Name)
+}
+
+// githubSeatApps reads every agent's own app out of the company document,
+// with its key resolved. A seat with no block at all is skipped: it is a
+// company that has not started, not a seat with a fault.
+//
+// ONE READING, used by both halves that need it: the reconcile, which asks
+// what is still outstanding, and the participant lookup, which asks whose
+// credential can read a thread. Two readers of one roster would be free to
+// disagree about which apps exist.
+func (e *Engine) githubSeatApps(env *config.Resolver) []github.SeatApp {
+	company := e.Company()
+	out := []github.SeatApp{}
+	if company == nil {
+		return out
+	}
+	for role := range company.Config.EachRole() {
+		seat := role.Seat()
+		if !seat.IsAgent() {
+			continue
+		}
+		app := role.Integrations.GitHub
+		if app == nil {
+			continue
+		}
+		tier, _ := github.ParseTier(app.TierOrDefault())
+		out = append(out, github.SeatApp{
+			Handle: seat.Handle(), Name: role.Name, Tier: tier, Repos: app.Repos,
+			AppID: app.AppID, Slug: app.AppSlug,
+			InstallationID: app.InstallationID,
+			Key:            strings.TrimSpace(env.Value(app.PrivateKey)),
+		})
+	}
+	return github.SeatsFrom(out)
 }
 
 // githubPrompt is the hosted code host's trigger builder. A value, held by

@@ -790,30 +790,14 @@ func (p *githubPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 	return findings, nil
 }
 
-// seatApps reads every agent's own app out of the company document, with its
-// key resolved. A seat with no block at all is skipped: it is a company that
-// has not started, not a seat with a fault.
+// seatApps reads every agent's own app out of the CURRENT company document.
+//
+// Through the engine's own reader, which the parser wiring uses as well: the
+// reconcile asks what needs doing and the participant lookup asks whose
+// credential can read a thread, and two readings of one roster would be free
+// to disagree about which apps exist.
 func (p *githubPass) seatApps(env *config.Resolver) []github.SeatApp {
-	company := p.engine.Company()
-	out := []github.SeatApp{}
-	for role := range company.Config.EachRole() {
-		seat := role.Seat()
-		if !seat.IsAgent() {
-			continue
-		}
-		app := role.Integrations.GitHub
-		if app == nil {
-			continue
-		}
-		tier, _ := github.ParseTier(app.TierOrDefault())
-		out = append(out, github.SeatApp{
-			Handle: seat.Handle(), Name: role.Name, Tier: tier, Repos: app.Repos,
-			AppID: app.AppID, Slug: app.AppSlug,
-			InstallationID: app.InstallationID,
-			Key:            strings.TrimSpace(env.Value(app.PrivateKey)),
-		})
-	}
-	return github.SeatsFrom(out)
+	return p.engine.githubSeatApps(env)
 }
 
 // recordInstallation writes what the pass discovered back onto the seat.
