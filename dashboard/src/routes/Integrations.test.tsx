@@ -213,8 +213,12 @@ test("a configured tool discloses its surfaces", () => {
   fireEvent.click(screen.getByRole("button", { name: /Show Atlassian details/ }));
   expect(screen.getByText("Jira")).toBeTruthy();
   expect(screen.getByText("Confluence")).toBeTruthy();
+  // The inbound PATH, which is the address to paste at the vendor. The raw
+  // in / dropped / merged counters that used to sit here are gone: all three
+  // read zero on a healthy surface, so the line cost a row of jargon to say
+  // nothing.
   expect(screen.getByText("/webhooks/jira")).toBeTruthy();
-  expect(screen.getByText(/in: 4/)).toBeTruthy();
+  expect(screen.queryByText(/in: 4/)).toBeNull();
 });
 
 // A TOOL NOBODY SET UP HAS NOTHING TO DISCLOSE, so it gets no disclosure: a
@@ -473,4 +477,35 @@ test("a surface with no pass behind it gets no button", () => {
   fireEvent.click(screen.getByRole("button", { name: /Show Datadog details/ }));
   expect(screen.queryByRole("button", { name: "Run setup" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Recheck" })).toBeNull();
+});
+
+// A DROP IS A PROBLEM, so it survives the counters being removed.
+//
+// The three counters were dropped from the surface line because all three
+// read zero on a healthy surface. One of them carried a real fault: a
+// delivery this engine verified and then routed nowhere means whatever sent
+// it is reaching the engine and reaching no agent. That becomes a sentence,
+// beside the reconcile findings, rather than a number to interpret.
+test("a dropped delivery is stated, not counted", () => {
+  render(
+    <EntryRow
+      entry={CATALOG.find((e) => e.key === "github")!}
+      rows={rowsOf({ key: "github", configured: true, inbound: 12, skipped: 3 })}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Show GitHub details/ }));
+  expect(screen.getByText(/3 deliveries were verified and dropped/)).toBeTruthy();
+});
+
+// And a surface dropping nothing says nothing, which is the whole reason the
+// counters went: a zero is not news.
+test("a surface dropping nothing carries no note about it", () => {
+  render(
+    <EntryRow
+      entry={CATALOG.find((e) => e.key === "github")!}
+      rows={rowsOf({ key: "github", configured: true, inbound: 12, skipped: 0 })}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Show GitHub details/ }));
+  expect(screen.queryByText(/verified and dropped/)).toBeNull();
 });

@@ -336,24 +336,6 @@ export function rollUp(entry: Entry, rows: Map<string, IntegrationRow>): EntrySt
   };
 }
 
-function Count({ value, label }: { value: number | null | undefined; label: string }) {
-  if (value == null) {
-    return (
-      <span
-        className="t-caption faint"
-        title="this process cannot answer; it is not serving ingress"
-      >
-        {label}: unknown
-      </span>
-    );
-  }
-  return (
-    <span className="t-caption t-num">
-      {label}: {value.toLocaleString()}
-    </span>
-  );
-}
-
 /**
  * What the reconcile loop last found for one surface.
  *
@@ -450,14 +432,21 @@ function SurfaceRow({
       <div className="int-row-identity">
         <span className="int-row-name">{surface.name}</span>
         <span className="int-row-detail int-row-facts">
-          {/* The three counts GET /integrations answers with. Read together:
-              "128 arrived" alone cannot tell a working surface from one whose
-              every delivery reaches nobody. */}
-          <Count value={row.inbound} label="in" />
-          <Count value={row.skipped} label="dropped" />
-          <Count value={row.coalesced} label="merged" />
-          {typeof row.inbound_path === "string" && row.inbound_path && (
+          {/* WHERE DELIVERIES ARRIVE, which is what a reader can act on: it
+              is the address to paste at the vendor when a hook has to be
+              registered by hand.
+
+              The three raw counters that were here — in / dropped / merged —
+              are engine plumbing in the engine's own words, and on a healthy
+              surface all three read zero, so the line cost a row of jargon to
+              say nothing. What they were protecting is real and is kept
+              below: a surface that DROPS deliveries is a problem, and a
+              problem belongs in the note band with the other findings rather
+              than in a counter a reader has to interpret. */}
+          {typeof row.inbound_path === "string" && row.inbound_path ? (
             <code className="inline">{String(row.inbound_path)}</code>
+          ) : (
+            "no inbound path"
           )}
         </span>
       </div>
@@ -498,6 +487,25 @@ function SurfaceRow({
           <Button size="sm" variant="ghost" onClick={() => onPass(true)} disabled={running}>
             Recheck
           </Button>
+        </div>
+      )}
+
+      {typeof row.skipped === "number" && row.skipped > 0 && (
+        <div className="int-row-note">
+          <span className="int-row-note-text">
+            {/* ONE STRING, not a number beside its own noun. Split across
+                nodes it reads as three fragments to a screen reader, and no
+                test can match the sentence a person sees. */}
+            <span>
+              {row.skipped === 1
+                ? "1 delivery was verified and dropped"
+                : `${row.skipped.toLocaleString()} deliveries were verified and dropped`}
+            </span>
+            <span className="int-row-note-when">
+              A drop is a delivery this surface accepted and no parser turned into work, so whatever
+              sent it is reaching the engine and reaching nobody.
+            </span>
+          </span>
         </div>
       )}
 
