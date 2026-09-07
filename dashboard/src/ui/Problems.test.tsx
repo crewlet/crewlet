@@ -83,7 +83,7 @@ test("a sentence carries its own link and its own literals", () => {
   render(
     <span>
       {marked(
-        "[Create a legacy personal token](https://gitlab.com/-/user_settings/personal_access_tokens) " +
+        "[Create a legacy personal token](https://gitlab.com/-/user_settings/personal_access_tokens/legacy/new) " +
           "with the full `api` scope, belonging to somebody who owns the group.",
       )}
     </span>,
@@ -91,7 +91,7 @@ test("a sentence carries its own link and its own literals", () => {
 
   const link = screen.getByRole("link", { name: "Create a legacy personal token" });
   expect(link.getAttribute("href")).toBe(
-    "https://gitlab.com/-/user_settings/personal_access_tokens",
+    "https://gitlab.com/-/user_settings/personal_access_tokens/legacy/new",
   );
   expect(link.getAttribute("target")).toBe("_blank");
   // THE SCOPE IS A LITERAL, so it wears the face a value wears rather than

@@ -127,7 +127,12 @@ func AdminCredential(stored string) setup.Requirement {
 		// literal it is. It was three clauses and a trailing "Open
 		// GitLab": what to do, why, and where, in that order, when what
 		// a reader needs first is the page that issues the thing.
-		Help: "[Create a legacy personal token](https://gitlab.com/-/user_settings/personal_access_tokens) " +
+		// THE FORM THAT MAKES ONE, not the list of the ones that exist.
+		// The token has to be a LEGACY personal access token, which is a
+		// separate form on that page, so the settings index left a reader
+		// to find it.
+		Help: "[Create a legacy personal token]" +
+			"(https://gitlab.com/-/user_settings/personal_access_tokens/legacy/new) " +
 			"with the full `api` scope, belonging to somebody who owns the group.",
 	}
 }
