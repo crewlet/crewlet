@@ -5,10 +5,14 @@ Datadog reaches Crewlet through its **Webhooks integration**, which posts a moni
 ## Setting it up from the dashboard
 
 The Integrations screen connects Datadog without a shell: it asks for the
-fallback seat, generates the shared token, seals it, points the config at it
-and activates, then shows you the URL to paste into Datadog's own webhook
-form. Everything below describes what that writes, and is what you edit by
-hand if you would rather.
+monitor tag key and the fallback seat, generates the shared token, seals it,
+points the config at it and activates, then shows you the URL to paste into
+Datadog's own webhook form. Everything below describes what that writes, and
+is what you edit by hand if you would rather.
+
+The tag key comes filled in as `crewlet` and most companies leave it, since
+the two routing questions it and the fallback seat answer are asked in order:
+which tag on a monitor names an owner, and who is woken when none does.
 
 See [Setting an integration up](../reference/api-endpoints.md#setting-an-integration-up)
 for the routes behind it.

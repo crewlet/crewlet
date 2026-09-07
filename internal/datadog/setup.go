@@ -27,10 +27,11 @@ import (
 // screen renders a form from, so answering nothing would leave an operator a
 // Connect button that opens an empty dialog.
 func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []setup.Requirement {
-	var token, routeTo string
+	var token, routeTo, handleTag string
 	var enabled bool
 	if in != nil {
 		token, routeTo = in.WebhookToken, in.RouteTo
+		handleTag = in.HandleTag
 		enabled = in.Enabled
 	}
 
@@ -116,6 +117,22 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			Blocks:    integration.FindingCredentialMissing,
 		},
 		{
+			Field:      "handle_tag",
+			Label:      "Monitor tag key",
+			Kind:       setup.KindText,
+			ConfigPath: "integrations.datadog.handle_tag",
+			// OPTIONAL, AND THE DEFAULT IS THE ANSWER FOR ALMOST EVERYONE.
+			// Unlike the fallback seat, a blank here is not an unanswered
+			// question: the engine reads [DefaultHandleTag], which is a
+			// working setting rather than a hole. The field exists because
+			// the key becomes a tag on the operator's own monitors, beside
+			// conventions they already have.
+			Required: false,
+			Default:  DefaultHandleTag,
+			Help: "The monitor tag key that names an owner. Tag a monitor " +
+				"\"crewlet:sre-lead\" and its alerts wake SRE Lead.",
+		},
+		{
 			Field:      "route_to",
 			Label:      "Fallback seat",
 			Kind:       setup.KindHandle,
@@ -158,6 +175,7 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 		"app_key":       {raw: appKey, sealed: true},
 		"enabled":       {toggle: true},
 		"webhook_token": {raw: token, sealed: true},
+		"handle_tag":    {raw: handleTag},
 		"route_to":      {raw: routeTo},
 	}
 	for i := range reqs {

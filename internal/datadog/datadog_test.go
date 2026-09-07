@@ -400,3 +400,57 @@ func TestNoneStillWakesATaggedSeat(t *testing.T) {
 		t.Fatalf("woke %v, want the tagged seat", got)
 	}
 }
+
+// The tag key is offered on the form, above the fallback seat, and offered
+// with its default filled in.
+//
+// ORDER IS ASSERTED because the two fields answer one question in sequence —
+// which tag names an owner, and who is woken when none does — and a form that
+// asks the second first reads as though the fallback were the whole of the
+// routing.
+func TestTheFormOffersTheTagKeyAboveTheFallbackSeat(t *testing.T) {
+	reqs := Requirements(&config.Datadog{Enabled: true}, func(string) (string, bool) {
+		return "", false
+	})
+
+	tag, route := -1, -1
+	for i, r := range reqs {
+		switch r.Field {
+		case "handle_tag":
+			tag = i
+		case "route_to":
+			route = i
+		}
+	}
+	if tag < 0 || route < 0 {
+		t.Fatalf("want both handle_tag and route_to on the form, got %d and %d", tag, route)
+	}
+	if tag > route {
+		t.Errorf("handle_tag is at %d, below route_to at %d", tag, route)
+	}
+	if reqs[tag].Required {
+		t.Error("handle_tag is required; a company that says nothing gets the default")
+	}
+	if got := reqs[tag].Default; got != DefaultHandleTag {
+		t.Errorf("handle_tag default = %q, want %q", got, DefaultHandleTag)
+	}
+}
+
+// A tag key the operator chose is what the form reports back, so reopening
+// settings shows what is in force rather than the default underneath it.
+func TestTheFormReportsAChosenTagKey(t *testing.T) {
+	reqs := Requirements(
+		&config.Datadog{Enabled: true, HandleTag: "owner"},
+		func(string) (string, bool) { return "", false },
+	)
+	for _, r := range reqs {
+		if r.Field != "handle_tag" {
+			continue
+		}
+		if !r.Present || r.Stored != "owner" {
+			t.Fatalf("handle_tag present=%v stored=%q, want true and %q", r.Present, r.Stored, "owner")
+		}
+		return
+	}
+	t.Fatal("no handle_tag requirement")
+}
