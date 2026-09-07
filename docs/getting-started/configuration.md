@@ -246,8 +246,11 @@ providers:
       timeout_seconds: 120              # optional — per-call HTTP timeout (default: 120); raise for slow / large-output reasoning models
                                         #   (the cli-agent backend drives a subprocess and uses cli.timeout_seconds instead)
       reasoning: false                  # optional — enable reasoning/extended thinking (default: false)
-      reasoning_effort: medium          # optional — OpenAI reasoning effort: low | medium | high (default: medium)
+      reasoning_effort: medium          # optional — OpenAI reasoning effort: low | medium | high | max (default: medium)
       reasoning_budget_tokens: 10000    # optional — Anthropic thinking budget in tokens (default: 10000)
+                                        #   All three are REFUSED on a cli-agent entry: a coding CLI driven
+                                        #   headlessly takes no per-call reasoning flag and carries its own
+                                        #   configuration. Pick the reasoning model with `model` instead
     budget:                             # multiple providers supported
       type: openai
       model: gpt-4o-mini

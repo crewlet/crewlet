@@ -332,10 +332,12 @@ type LLMProvider struct {
 
 	// Reasoning turns on extended thinking.
 	Reasoning bool `yaml:"reasoning,omitempty" json:"reasoning,omitempty" desc:"Enable extended thinking (openai and anthropic only)."`
-	// ReasoningEffort is the OpenAI-side budget selector.
-	ReasoningEffort ReasoningEffort `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty" js:"enum=low|medium|high|max" desc:"OpenAI reasoning effort when reasoning is on."`
-	// ReasoningBudgetTokens is the Anthropic-side thinking budget.
-	ReasoningBudgetTokens int `yaml:"reasoning_budget_tokens,omitempty" json:"reasoning_budget_tokens,omitempty" js:"min=0" desc:"Anthropic thinking budget in tokens when reasoning is on."`
+	// ReasoningEffort is the OpenAI-side budget selector. Refused on a
+	// cli-agent entry, which takes no per-call effort flag.
+	ReasoningEffort ReasoningEffort `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty" js:"enum=low|medium|high|max" desc:"OpenAI reasoning effort when reasoning is on. Not accepted on a cli-agent provider."`
+	// ReasoningBudgetTokens is the Anthropic-side thinking budget. Refused
+	// on a cli-agent entry, which carries its own.
+	ReasoningBudgetTokens int `yaml:"reasoning_budget_tokens,omitempty" json:"reasoning_budget_tokens,omitempty" js:"min=0" desc:"Anthropic thinking budget in tokens when reasoning is on. Not accepted on a cli-agent provider."`
 
 	// TimeoutSeconds is the HTTP client timeout for one call. Raise it for
 	// slow or large-output models that otherwise time out mid-generation;
@@ -411,6 +413,31 @@ func (l *LLMProvider) validate(path string) error {
 					"the CLI's plan carries its own reasoning configuration and "+
 					"exposes no per-call switch. Drop reasoning, or pick the "+
 					"CLI's reasoning model with `model`")
+		}
+	}
+	// The two DIALS beside that switch are refused on the same entry for the
+	// same reason, and refused rather than wired up: both are per-call API
+	// parameters (an OpenAI request field and an Anthropic thinking budget),
+	// and a coding CLI driven headlessly takes neither — it exposes no flag
+	// for either and reads its reasoning setup from its own plan. Nothing in
+	// engine/providers.go passes them to cliagent.Config, so today they
+	// validate clean and are read by nobody, which is the worst of the three
+	// possible behaviours: an operator sent here by an error message telling
+	// them to raise the model's effort would set one, see no change, and have
+	// nothing to look at. The honest fix for an under-reasoning CLI entry is
+	// its `model`.
+	if kind == LLMCLIAgent {
+		if l.ReasoningEffort != "" {
+			p.add(at(path, "reasoning_effort"), ErrConflict,
+				"reasoning_effort is an OpenAI request field and does nothing on a "+
+					"cli-agent provider: the CLI takes no per-call effort flag. "+
+					"Drop it, and point `model` at a stronger model instead")
+		}
+		if l.ReasoningBudgetTokens != 0 {
+			p.add(at(path, "reasoning_budget_tokens"), ErrConflict,
+				"reasoning_budget_tokens is an Anthropic API thinking budget and does "+
+					"nothing on a cli-agent provider: the CLI carries its own. "+
+					"Drop it, and point `model` at a stronger model instead")
 		}
 	}
 	if l.ReasoningEffort != "" && !slices.Contains(ReasoningEfforts, l.ReasoningEffort) {

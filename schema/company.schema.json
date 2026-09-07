@@ -720,12 +720,12 @@
           "type": "boolean"
         },
         "reasoning_budget_tokens": {
-          "description": "Anthropic thinking budget in tokens when reasoning is on.",
+          "description": "Anthropic thinking budget in tokens when reasoning is on. Not accepted on a cli-agent provider.",
           "minimum": 0,
           "type": "integer"
         },
         "reasoning_effort": {
-          "description": "OpenAI reasoning effort when reasoning is on.",
+          "description": "OpenAI reasoning effort when reasoning is on. Not accepted on a cli-agent provider.",
           "enum": [
             "low",
             "medium",

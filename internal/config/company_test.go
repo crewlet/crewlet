@@ -66,6 +66,24 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"name: Acme\nproviders:\n  llm:\n    sub:\n      type: cli-agent\n      model: sonnet\n",
 			"providers.llm.sub.cli", ErrMissing,
 		},
+		// The two reasoning DIALS on a cli-agent entry, refused for the
+		// same reason `reasoning` itself already is: both are per-call API
+		// parameters a headless coding CLI takes no flag for, so nothing
+		// passes them to the backend and they validated clean while doing
+		// nothing at all. An operator told to "raise the model's effort"
+		// would set one, see no change, and have nothing to look at.
+		{
+			"reasoning_effort on a cli-agent provider",
+			"name: Acme\nproviders:\n  llm:\n    sub:\n      type: cli-agent\n      model: haiku\n" +
+				"      reasoning_effort: high\n      cli:\n        agent: claude-code\n",
+			"providers.llm.sub.reasoning_effort", ErrConflict,
+		},
+		{
+			"reasoning_budget_tokens on a cli-agent provider",
+			"name: Acme\nproviders:\n  llm:\n    sub:\n      type: cli-agent\n      model: haiku\n" +
+				"      reasoning_budget_tokens: 10000\n      cli:\n        agent: claude-code\n",
+			"providers.llm.sub.reasoning_budget_tokens", ErrConflict,
+		},
 		{
 			"cli block on an http provider",
 			"name: Acme\nproviders:\n  llm:\n    default:\n      type: anthropic\n      model: m\n      cli:\n        agent: claude-code\n",
