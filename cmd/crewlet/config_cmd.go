@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"text/tabwriter"
 	"time"
@@ -60,11 +61,39 @@ dropping a retired key from secrets.keys, or whatever is still sealed under it
 becomes unreadable.
 `
 
+// configSubcommands is every `crewlet config` subcommand. It is what the
+// guard in [runConfig] checks a name against before any flag is registered,
+// and the dispatch switch at the bottom of that function must name exactly
+// these — TestEveryConfigSubcommandIsDispatchedAndDocumented asserts both
+// directions, because the two lists are three screens apart and nothing else
+// connects them.
+var configSubcommands = []string{
+	"import", "show", "export", "revisions", "diff", "activate", "seal", "rekey",
+}
+
+// defaultRevisionLimit is how many revisions `crewlet config revisions` lists.
+//
+// DELIBERATELY NOT the API's 50 (`GET /config/revisions`, whose default is
+// sized for a client that pages and renders its own list). This output is a
+// tabwriter table a person reads in a terminal, and 20 rows leaves the header
+// and the active-revision marker on screen together on a standard 24-line
+// window. An operator who wants the whole history says `-limit`.
+const defaultRevisionLimit = 20
+
 func runConfig(args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	if sub == "" || sub == "help" {
 		fmt.Fprintf(stdout, configUsage, defaultBootstrapPath)
 		return flag.ErrHelp
+	}
+	// REFUSED BEFORE ANY FLAG IS REGISTERED, so an unknown subcommand is
+	// reported as one. The sets below are per-subcommand, so parsing
+	// `config nonesuch -limit 5` against the bare set would answer "flag
+	// provided but not defined: -limit" and send the operator looking at
+	// the flag rather than at the name they misspelled.
+	if !slices.Contains(configSubcommands, sub) {
+		fmt.Fprintf(stderr, configUsage, defaultBootstrapPath)
+		return fmt.Errorf("unknown config command %q", sub)
 	}
 	// The subject, for the same reason `secrets` peels one: Go's flag
 	// package stops at the first non-flag argument, so `config diff ID
@@ -75,12 +104,41 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	bootstrapPath := fs.String("config", defaultBootstrapPath,
 		"Tier A config: this node's store and its secret keyring")
-	revision := fs.String("revision", "", "which revision (export); default active")
-	against := fs.String("against", "active", "what to compare with (diff)")
-	limit := fs.Int("limit", 20, "how many revisions to list")
-	redact := fs.Bool("redact", false, "mask secret-shaped values (export)")
-	dryRun := fs.Bool("dry-run", false,
-		"report what would be re-sealed without writing (rekey only)")
+	// EACH SUBCOMMAND REGISTERS ONLY THE FLAGS IT READS.
+	//
+	// One shared set is how `crewlet config import company.yaml -dry-run`
+	// parsed cleanly and wrote the revision anyway: -dry-run is `rekey`'s,
+	// and every other subcommand silently ignored it — an operator asking
+	// for no write, being told nothing, and getting one. The same held for
+	// -revision, -against, -limit and -redact on every command but their
+	// own.
+	//
+	// Go's flag package refuses a flag it was not given, so registering per
+	// subcommand turns each of those silent no-ops into a usage error. It is
+	// the rule `run` already follows for a leftover positional: an argument
+	// that cannot mean anything here is REFUSED rather than ignored.
+	var (
+		revision string
+		against  = "active"
+		limit    = defaultRevisionLimit
+		redact   bool
+		dryRun   bool
+	)
+	switch sub {
+	case "export":
+		fs.StringVar(&revision, "revision", "",
+			"which revision to print; default active")
+		fs.BoolVar(&redact, "redact", false, "mask secret-shaped values")
+	case "revisions":
+		fs.IntVar(&limit, "limit", defaultRevisionLimit,
+			"how many revisions to list")
+	case "diff":
+		fs.StringVar(&against, "against", "active",
+			"what to compare with: a revision id, or active")
+	case "rekey":
+		fs.BoolVar(&dryRun, "dry-run", false,
+			"report what would be re-sealed without writing")
+	}
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
@@ -102,18 +160,22 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	case "show":
 		return exportConfig(ctx, cs, "", true, stdout)
 	case "export":
-		return exportConfig(ctx, cs, firstNonEmpty(subject, *revision), *redact, stdout)
+		return exportConfig(ctx, cs, firstNonEmpty(subject, revision), redact, stdout)
 	case "revisions":
-		return listRevisions(ctx, cs, *limit, stdout)
+		return listRevisions(ctx, cs, limit, stdout)
 	case "diff":
-		return diffRevisions(ctx, cs, subject, *against, stdout)
+		return diffRevisions(ctx, cs, subject, against, stdout)
 	case "activate":
 		return activateRevision(ctx, cs, subject, stdout)
 	case "seal":
 		return sealConfig(ctx, cs, *bootstrapPath, stdout)
 	case "rekey":
-		return rekeyConfig(ctx, cs, *bootstrapPath, *dryRun, stdout)
+		return rekeyConfig(ctx, cs, *bootstrapPath, dryRun, stdout)
 	default:
+		// Unreachable: the guard above admits only configSubcommands, and
+		// a test asserts every one of them dispatches. It stays because
+		// the compiler needs a terminating return and because a name added
+		// to the list and not to this switch has to fail loudly.
 		fmt.Fprintf(stderr, configUsage, defaultBootstrapPath)
 		return fmt.Errorf("unknown config command %q", sub)
 	}
