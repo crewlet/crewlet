@@ -416,6 +416,20 @@ func formatMessages(messages []llm.Message) ([]sdk.ChatCompletionMessageParamUni
 			out = append(out, sdk.ChatCompletionMessageParamUnion{OfTool: &msg})
 
 		case llm.RoleAssistant:
+			if strings.TrimSpace(m.Content) == "" && len(m.ToolCalls) == 0 {
+				// A turn with neither content nor a tool call carries
+				// nothing, and this endpoint requires one of the two —
+				// an assistant message with both absent is a 400, not
+				// an empty turn. Dropped rather than padded with "",
+				// matching anthropic's own guard: losing an empty
+				// message loses nothing, and no tool result can be
+				// orphaned by it because there were no calls to pair.
+				//
+				// It is REACHABLE: the tool loop appends the round it
+				// is about to correct before re-calling, and a model
+				// that thought and stopped produces exactly this.
+				continue
+			}
 			msg := sdk.ChatCompletionAssistantMessageParam{}
 			if m.Content != "" {
 				msg.Content.OfString = param.NewOpt(m.Content)

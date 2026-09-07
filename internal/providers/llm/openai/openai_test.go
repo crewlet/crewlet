@@ -479,6 +479,59 @@ func TestConversationTranslation(t *testing.T) {
 	}
 }
 
+// An assistant turn with neither content nor a tool call is DROPPED, not sent.
+//
+// This endpoint requires one of the two: a message with both absent is a 400,
+// so a whole call dies over a turn that carried nothing. The shape is real and
+// reachable — the tool loop appends the round it is about to correct before
+// re-calling, and a model that spends its output on hidden reasoning produces
+// exactly it. anthropic.go drops the same shape for the same reason; this side
+// did not, so one empty round would have taken the next call with it.
+func TestAnAssistantTurnWithNeitherContentNorAToolCallIsDropped(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okCompletion("ok")) })
+	p := newProvider(t, url, nil)
+	_, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "do it"},
+		// The empty round: reasoning only, nothing visible, nothing called.
+		{Role: llm.RoleAssistant, Content: "  ", ReasoningContent: "thought hard"},
+		{Role: llm.RoleUser, Content: "Your last reply was empty."},
+	}})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	messages := api.seen()[0].body["messages"].([]any)
+	if len(messages) != 2 {
+		t.Fatalf("sent %d messages, want 2 — the empty assistant turn was not dropped: %v",
+			len(messages), messages)
+	}
+	for i, m := range messages {
+		if m.(map[string]any)["role"] != "user" {
+			t.Fatalf("message %d = %v, want both to be the user turns", i, m)
+		}
+	}
+}
+
+// The counterfactual: an assistant turn that carries ONLY tool calls has no
+// content and must still be sent, or every tool result is orphaned.
+func TestAnAssistantTurnWithOnlyToolCallsIsStillSent(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okCompletion("ok")) })
+	p := newProvider(t, url, nil)
+	_, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "do it"},
+		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "c1", Name: "run"}}},
+		{Role: llm.RoleTool, ToolCallID: "c1", Name: "run", Content: "done"},
+	}})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if messages := api.seen()[0].body["messages"].([]any); len(messages) != 3 {
+		t.Fatalf("sent %d messages, want 3 — the tool call turn was dropped: %v",
+			len(messages), messages)
+	}
+}
+
 // json.Marshal spells a nil map "null", and an assistant turn replaying
 // `"arguments": "null"` is a message the model wrote turning into one it did
 // not.
