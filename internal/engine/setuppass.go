@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -253,10 +254,41 @@ func (p *githubPass) Teardown(ctx context.Context, in setup.TeardownInput) error
 	if err != nil {
 		return fmt.Errorf("engine: github teardown: %w", err)
 	}
-	return github.Teardown(ctx, github.Options{
+	if err := github.Teardown(ctx, github.Options{
 		Client: client, Config: cfg, Org: company.Org, Value: env.Value,
 		WebhookBase: company.Config.Integrations.WebhookBase(),
-	})
+	}); err != nil {
+		return err
+	}
+	if !in.RemoveSeats {
+		return nil
+	}
+
+	// UNINSTALLING IS WHAT ACTUALLY REVOKES ACCESS, and it is the half the
+	// engine can do. Deleting the app REGISTRATION is the operator's: GitHub
+	// has no API for it, so an app deletes only from its own settings page
+	// in a browser. Uninstalling first means the moment a person presses
+	// Disconnect the agent can no longer read or write anything, whether or
+	// not they get round to deleting the registration.
+	//
+	// Every seat is attempted and the failures are joined, rather than
+	// stopping at the first: one seat whose key is lost must not leave the
+	// other nine installed.
+	var failures []error
+	for _, seat := range p.seatApps(env) {
+		if err := github.UninstallSeat(ctx, github.SeatAppOptions{
+			APIBase: strings.TrimSpace(cfg.URL),
+		}, seat); err != nil {
+			failures = append(failures, fmt.Errorf("%s: %w", seat.Handle, err))
+		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf(
+			"engine: github teardown: some agents' apps are still installed and "+
+				"can still act, so the block stays until they are not: %w",
+			errors.Join(failures...))
+	}
+	return nil
 }
 
 // Teardown disables the bots this pass created, when asked. Mattermost has no

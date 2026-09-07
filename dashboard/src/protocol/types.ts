@@ -962,6 +962,16 @@ export interface SetupSeatState {
    * screen asks the engine for a manifest and submits a form with it.
    */
   action_url?: string;
+  /**
+   * Where a person goes to DELETE what this seat holds at the third-party
+   * app, when deleting it is not something the engine can do.
+   *
+   * GitHub is why: a teardown can uninstall an agent's app, which revokes its
+   * access, but there is no endpoint at any permission for deleting the app
+   * registration. That is done from its settings page by its owner, so a
+   * disconnect hands over a link rather than claiming to have finished.
+   */
+  manage_url?: string;
 }
 
 /** One provisioning pass, live or finished. */

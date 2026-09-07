@@ -322,6 +322,31 @@ func InstallURL(webBase, slug string) string {
 	return base + "/apps/" + url.PathEscape(strings.TrimSpace(slug)) + "/installations/new"
 }
 
+// ManageURL is the app's own settings page, where a person deletes it.
+//
+// DELETING AN APP IS NOT AN API CALL. GitHub offers no endpoint for it at
+// any permission: an app is deleted from its settings page by somebody signed
+// in as its owner. So a teardown can UNINSTALL an app, which is what revokes
+// its access, and then has to hand the operator a link for the rest.
+//
+// The account matters here for the same reason it does at creation: an
+// organization's app is managed under the organization's settings, and a
+// link to a personal page opens somebody else's list.
+func ManageURL(webBase, org, slug string) string {
+	base := strings.TrimRight(strings.TrimSpace(webBase), "/")
+	if base == "" {
+		base = defaultWebBase
+	}
+	name := strings.TrimSpace(slug)
+	if name == "" {
+		return ""
+	}
+	if owner := strings.TrimSpace(org); owner != "" {
+		return base + "/organizations/" + url.PathEscape(owner) + "/settings/apps/" + url.PathEscape(name)
+	}
+	return base + "/settings/apps/" + url.PathEscape(name)
+}
+
 // AppJWT signs the assertion that authenticates as the app itself.
 //
 // AS THE APP, NOT AS AN INSTALLATION. This is what lists installations and

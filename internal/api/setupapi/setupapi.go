@@ -349,6 +349,17 @@ type SeatState struct {
 	// session, so there is no address to link to. The dashboard asks the
 	// begin route for a manifest and submits a form.
 	ActionURL string `json:"action_url,omitempty"`
+
+	// ManageURL is where a person goes to DELETE what this seat holds at
+	// the third-party app, when deleting it is not something the engine can
+	// do itself.
+	//
+	// GitHub is why. A teardown can uninstall an agent's app, which revokes
+	// its access, but GitHub offers no endpoint at any permission for
+	// deleting the app registration: that is done from its settings page by
+	// its owner. So the disconnect dialog hands over a link rather than
+	// claiming to have finished something it cannot.
+	ManageURL string `json:"manage_url,omitempty"`
 }
 
 // The steps a seat can be waiting on, as [SeatState.Step] spells them.
@@ -828,6 +839,12 @@ func githubSeats(company *config.Company, resolve func(string) (string, bool)) [
 			// box no operator can fill.
 			Requirements: []setup.Requirement{},
 		}
+		// THE MANAGE LINK IS ON EVERY SEAT THAT HAS AN APP, whatever step
+		// it is on. It is what a disconnect hands over: the engine can
+		// uninstall an app, and only its owner can delete it.
+		if app != nil && strings.TrimSpace(app.AppSlug) != "" {
+			state.ManageURL = github.ManageURL(webBase, githubOrgOf(company), app.AppSlug)
+		}
 		switch {
 		case app == nil || app.AppID == 0:
 			// NO ACTION URL, and that is the contract rather than an
@@ -1298,4 +1315,13 @@ func (s *Service) markDisconnecting(
 	state.NextAttemptAt = time.Time{}
 	state.Attempts = 0
 	return s.status.SaveIntegration(ctx, state)
+}
+
+// githubOrgOf is the organization an agent's app is managed under.
+func githubOrgOf(company *config.Company) string {
+	gh := company.Integrations.GitHub
+	if gh == nil || gh.Provisioning == nil {
+		return ""
+	}
+	return strings.TrimSpace(gh.Provisioning.Org)
 }

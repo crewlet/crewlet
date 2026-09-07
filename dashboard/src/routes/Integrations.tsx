@@ -1233,6 +1233,7 @@ export function Integrations() {
     name: string;
     kinds: string[];
     stuck: string;
+    apps: { handle: string; url: string }[];
   } | null>(null);
   const rows = new Map((data?.integrations ?? []).map((r) => [r.key, r]));
   // A TERMINAL PHASE IS ONE NOBODY IS WAITING ON. Everything else is the
@@ -1302,6 +1303,7 @@ export function Integrations() {
           name={dropping.name}
           kinds={dropping.kinds}
           stuck={dropping.stuck || undefined}
+          apps={dropping.apps}
           onClose={() => setDropping(null)}
           // The row does not vanish here: the engine keeps the block until
           // the third-party app teardown succeeds, so what a re-read shows
@@ -1378,6 +1380,14 @@ export function Integrations() {
                     // Disconnect on a card means the card.
                     kinds: disconnectOrder(entry, rows, sectionsFor(entry, setup.byKey)),
                     stuck: stuckDisconnecting(entry, rows),
+                    // WHAT THE ENGINE CANNOT DELETE ITSELF. A seat carries a
+                    // manage link only where what it holds has to be removed
+                    // by hand, so an integration with nothing to hand over
+                    // renders no list at all.
+                    apps: sectionsFor(entry, setup.byKey)
+                      .flatMap((section) => section.tool.seats ?? [])
+                      .filter((seat) => seat.manage_url)
+                      .map((seat) => ({ handle: seat.handle, url: seat.manage_url as string })),
                   })
                 }
               />

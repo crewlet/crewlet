@@ -26,6 +26,7 @@ export function DisconnectDialog({
   name,
   kinds,
   stuck,
+  apps,
   onClose,
   onDone,
 }: {
@@ -50,6 +51,16 @@ export function DisconnectDialog({
    * telling so it can offer the way out.
    */
   stuck?: string;
+  /**
+   * The per-agent apps this disconnect cannot delete on its own, with the
+   * page a person deletes each one from.
+   *
+   * GitHub is the case: uninstalling an app revokes its access, and that the
+   * engine does, but there is no endpoint at any permission for deleting the
+   * app registration. Offering the links beside the checkbox is the honest
+   * shape: the engine says what it will do, and hands over what it cannot.
+   */
+  apps?: { handle: string; url: string }[];
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -122,6 +133,24 @@ export function DisconnectDialog({
             </span>
           </span>
         </label>
+
+        {removeSeats && apps && apps.length > 0 && (
+          <div className="col gap-2">
+            <span className="t-caption faint">
+              The engine uninstalls each agent&apos;s app, which stops it acting immediately. The
+              app itself is deleted from its own settings page, which only its owner can do.
+            </span>
+            <ul className="col gap-1" style={{ margin: 0, paddingLeft: "1.1rem" }}>
+              {apps.map((app) => (
+                <li key={app.handle} className="t-caption">
+                  <a href={app.url} target="_blank" rel="noreferrer">
+                    Delete {app.handle}&apos;s app
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {error && (
           <div className="banner critical">
