@@ -87,6 +87,15 @@ func (s *fakeStore) ForgetIntegration(_ context.Context, kind Kind) error {
 	return nil
 }
 
+// has reports presence without failing, for the cases whose subject is
+// whether a row survived at all.
+func (s *fakeStore) has(kind Kind) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.rows[kind]
+	return ok
+}
+
 func (s *fakeStore) get(t *testing.T, kind Kind) State {
 	t.Helper()
 	s.mu.Lock()
@@ -449,4 +458,115 @@ func TestStartAndStopAreIdempotent(t *testing.T) {
 	w.Start(ctx)
 	w.Stop()
 	w.Stop()
+}
+
+// fakeDisconnector records what a teardown was asked to do.
+type fakeDisconnector struct {
+	err error
+
+	mu          sync.Mutex
+	calls       int
+	removeSeats bool
+}
+
+func (f *fakeDisconnector) Disconnect(_ context.Context, removeSeats bool) error {
+	f.mu.Lock()
+	f.calls++
+	f.removeSeats = removeSeats
+	f.mu.Unlock()
+	return f.err
+}
+
+func (f *fakeDisconnector) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+// A SURFACE BEING TAKEN AWAY IS NOT RECONCILED.
+//
+// Its block stays in the company document for the whole teardown, because
+// that block carries the credential the teardown authenticates with. A
+// reconcile over it would therefore find it configured, converge it, and
+// report it healthy while somebody was waiting for it to go — and on a vendor
+// whose pass registers hooks, it would put back exactly what the teardown was
+// removing.
+func TestATearingDownSurfaceIsTornDownRatherThanReconciled(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	r := &fakeReconciler{kind: KindJira}
+	d := &fakeDisconnector{}
+	store := newStore(State{Kind: KindJira, Disconnecting: true, RemoveSeats: true})
+
+	w := at(t, now, store, nil, Registration{Reconciler: r, Disconnector: d})
+	w.Tick(context.Background())
+
+	if r.count() != 0 {
+		t.Errorf("the reconciler ran %d times over a surface being removed", r.count())
+	}
+	if d.count() != 1 {
+		t.Fatalf("the teardown ran %d times, want 1", d.count())
+	}
+	if !d.removeSeats {
+		t.Error("the operator's answer about removing accounts did not reach the vendor")
+	}
+	// It finished, so the row is gone: nothing is left to reconcile.
+	if store.has(KindJira) {
+		t.Error("a finished teardown left its status row behind")
+	}
+}
+
+// A TEARDOWN THAT FAILS HOLDS THE SURFACE and is retried, rather than letting
+// it fall back to looking connected.
+func TestAFailedTeardownKeepsTheRowAndRetries(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	r := &fakeReconciler{kind: KindJira}
+	d := &fakeDisconnector{err: errors.New("jira: 403 removing the webhook")}
+	store := newStore(State{Kind: KindJira, Disconnecting: true})
+
+	w := at(t, now, store, nil, Registration{Reconciler: r, Disconnector: d})
+	w.Tick(context.Background())
+
+	if !store.has(KindJira) {
+		t.Fatal("a failed teardown forgot the row; the vendor still holds what it registered")
+	}
+	row := store.get(t, KindJira)
+	if row.Report.Phase != PhaseDisconnecting {
+		t.Errorf("phase = %q, want %q", row.Report.Phase, PhaseDisconnecting)
+	}
+	if !row.Disconnecting {
+		t.Error("the intent was dropped, so the next tick would reconcile it as connected")
+	}
+	if row.NextAttemptAt.IsZero() || !row.NextAttemptAt.After(now) {
+		t.Error("no retry was scheduled, so the teardown would never be attempted again")
+	}
+	if r.count() != 0 {
+		t.Error("the reconciler ran over a surface being removed")
+	}
+}
+
+// A NODE THAT CANNOT DISCONNECT WRITES NOTHING. Its roles may leave the
+// passes unwired while the loop still runs for every other surface, and the
+// disconnect waits for a node that can rather than being recorded as stuck.
+func TestANodeWithNoDisconnectorLeavesTheRowAlone(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	r := &fakeReconciler{kind: KindJira}
+	store := newStore(State{Kind: KindJira, Disconnecting: true})
+
+	w := at(t, now, store, nil, Registration{Reconciler: r})
+	w.Tick(context.Background())
+
+	if !store.has(KindJira) {
+		t.Fatal("the disconnect intent was lost on a node that cannot act on it")
+	}
+	row := store.get(t, KindJira)
+	if !row.Disconnecting {
+		t.Fatal("the disconnect intent was lost on a node that cannot act on it")
+	}
+	if row.Attempts != 0 {
+		t.Errorf("attempts = %d: a node that did nothing counted an attempt, which "+
+			"backs the retry off for a node that could have acted", row.Attempts)
+	}
+	if r.count() != 0 {
+		t.Error("the reconciler ran over a surface being removed")
+	}
 }

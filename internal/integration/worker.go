@@ -125,9 +125,36 @@ func Reject(err error, status int) error {
 	return fmt.Errorf("%w: %w", ErrCredentialRejected, err)
 }
 
+// Disconnector removes a surface: what it holds at the vendor, and then its
+// block in the company document.
+//
+// ONE CALL FOR BOTH, and the ORDER inside it is the whole reason this is a
+// single seam rather than two. The block holds the credential the vendor
+// teardown authenticates with, so removing it first strands whatever the
+// vendor still has. A caller holding two seams could do them the wrong way
+// round; one cannot.
+//
+// The implementation lives where config writes do. This package knows only
+// that the surface is gone when it returns nil.
+type Disconnector interface {
+	// Disconnect removes what this surface holds and then its block.
+	//
+	// An error leaves everything in place and the surface disconnecting,
+	// so it is retried. Every step must be safe to repeat.
+	Disconnect(ctx context.Context, removeSeats bool) error
+}
+
 // Registration is one reconciler and what is specific to its cadence.
 type Registration struct {
 	Reconciler Reconciler
+
+	// Disconnector removes this surface, or nil for a build that cannot.
+	//
+	// OPTIONAL because the loop must keep running for every other surface
+	// on a node that cannot tear one down: a fleet whose passes are not
+	// wired still reconciles, and a disconnect asked for there waits for
+	// a node that can rather than failing the tick.
+	Disconnector Disconnector
 
 	// Settled overrides [Schedule.Settled] for this surface. Zero takes the
 	// schedule's own value, which is the right answer for a vendor with no
@@ -341,6 +368,15 @@ func (w *Worker) Tick(ctx context.Context) {
 		if !state.Due(now) {
 			continue
 		}
+		// A SURFACE BEING TAKEN AWAY IS NOT RECONCILED. Its block is
+		// still in the document for the whole teardown — it carries the
+		// credential the teardown authenticates with — so a reconcile
+		// here would find it configured, converge it, and report it
+		// healthy while somebody was waiting for it to go.
+		if state.TearingDown() {
+			w.tearDown(ctx, kind, state, now)
+			continue
+		}
 		w.reconcile(ctx, kind, state, now)
 	}
 
@@ -358,6 +394,52 @@ func (w *Worker) load(ctx context.Context) (map[Kind]State, error) {
 		out[row.Kind] = row
 	}
 	return out, nil
+}
+
+// tearDown removes one surface and records how far it got.
+//
+// The counterpart of [Worker.reconcile] for a surface somebody asked to
+// disconnect, and it folds through [ObserveTeardown] for the same reason
+// reconcile folds through [Observe]: what a status row says must not depend
+// on which path produced it.
+func (w *Worker) tearDown(ctx context.Context, kind Kind, state State, now time.Time) {
+	reg := w.byKind[kind]
+	if reg.Disconnector == nil {
+		// THIS NODE CANNOT, which is not a failure of the disconnect. A
+		// node whose roles leave the passes unwired still runs the loop,
+		// and the surface waits for one that can rather than being
+		// reported stuck. Nothing is written, so nothing has to be
+		// undone when a capable node picks it up.
+		log.WarnContext(ctx, "integration_teardown_unavailable",
+			"integration", kind.String(),
+			"detail", "this node cannot disconnect; another will")
+		return
+	}
+
+	err := reg.Disconnector.Disconnect(ctx, state.RemoveSeats)
+	state, forget := ObserveTeardown(state, kind, err, now)
+	if forget {
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
+		if err := w.store.ForgetIntegration(ctx, kind); err != nil {
+			log.WarnContext(ctx, "integration_status_not_forgotten",
+				"integration", kind.String(), "error", err)
+		}
+		log.InfoContext(ctx, "integration_disconnected",
+			"integration", kind.String(), "removed_seats", state.RemoveSeats)
+		return
+	}
+
+	log.WarnContext(ctx, "integration_teardown_failed",
+		"integration", kind.String(), "attempts", state.Attempts, "error", err)
+	state.NextAttemptAt = now.Add(w.schedule.Next(state.Report, state.Attempts, reg.Settled))
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
+	if err := w.store.SaveIntegration(ctx, state); err != nil {
+		// The vendor work that DID land is durable; what is lost is the
+		// record of the attempt, so the next tick tries again over a
+		// teardown that is safe to repeat.
+		log.WarnContext(ctx, "integration_status_unrecorded",
+			"integration", kind.String(), "error", err)
+	}
 }
 
 // reconcile runs one surface and records what it found.
