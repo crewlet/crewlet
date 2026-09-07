@@ -339,11 +339,61 @@ test("a ready tool with a refused secret is not drawn ready", () => {
       reconcile: { phase: "ready" },
     }),
   );
-  // THE ENGINE'S WORD FOR THE PHASE, drawn in the colour the ingress fault
-  // earns. The tag is what a collapsed card owes a reader; which surface and
-  // why are the badge and the note in its body.
-  expect(state.tag).toBe("ready");
+  // CONNECTED IS ONLY EVER GREEN, so a card nothing can reach does not wear
+  // the word at all. Drawn as the engine's word in a colour that disagreed
+  // with it, it said "Connected" in amber: a word and a colour saying
+  // opposite things, leaving a reader to work out which to believe.
+  expect(state.tag).toBe("Action needed");
   expect(state.tone).toBe("caution");
+});
+
+// CONNECTED IS ONLY EVER GREEN. The rule, asserted over every way a card can
+// arrive at that word: a tag saying the integration works, drawn in the
+// colour this screen uses for something to come back to, is two claims in one
+// chip and a reader has to guess which one is meant.
+test("nothing draws Connected in a colour that disagrees with it", () => {
+  const github = CATALOG.find((e) => e.key === "github")!;
+  for (const secret_usable of [undefined, true, false]) {
+    for (const routes of [undefined, true, false]) {
+      const state = rollUp(
+        github,
+        rowsOf({
+          key: "github",
+          configured: true,
+          secret_usable,
+          routes,
+          reconcile: { phase: "ready", phase_label: "Connected" },
+        }),
+      );
+      if (state.tag === "Connected") expect(state.tone).toBe("positive");
+      // And the card that cannot say Connected says what is true instead.
+      if (secret_usable === false || routes === false) {
+        expect(state.tag).toBe("Action needed");
+      }
+    }
+  }
+});
+
+// AND THE ENGINE'S OWN WORD WINS WHEREVER IT IS MORE SPECIFIC.
+//
+// A degraded phase already says something is wrong and says which surface in
+// the body; replacing it with the screen's blunter word would lose that. A
+// phase the engine is working through is worse still: telling a person to act
+// is asking them to interrupt it.
+test("an ingress fault does not overwrite a phase that says more", () => {
+  const github = CATALOG.find((e) => e.key === "github")!;
+  for (const phase of ["degraded", "activating", "provisioning"]) {
+    const state = rollUp(
+      github,
+      rowsOf({
+        key: "github",
+        configured: true,
+        secret_usable: false,
+        reconcile: { phase, phase_label: `label:${phase}` },
+      }),
+    );
+    expect([phase, state.tag]).toEqual([phase, `label:${phase}`]);
+  }
 });
 
 // And an unrouted surface, the other way a configured tool is silently not
@@ -353,6 +403,7 @@ test("a ready tool that routes nothing is not drawn ready", () => {
     CATALOG.find((e) => e.key === "datadog")!,
     rowsOf({ key: "datadog", configured: true, routes: false, reconcile: { phase: "ready" } }),
   );
+  expect(state.tag).toBe("Action needed");
   expect(state.tone).toBe("caution");
 });
 

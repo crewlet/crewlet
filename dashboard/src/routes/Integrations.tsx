@@ -340,6 +340,24 @@ export function rollUp(entry: Entry, rows: Map<string, IntegrationRow>): EntrySt
     .sort((a, b) => distance(a.row.reconcile!.phase) - distance(b.row.reconcile!.phase))[0];
   if (worst?.row.reconcile) {
     const { phase } = worst.row.reconcile;
+    // CONNECTED IS ONLY EVER GREEN, and a surface nothing can reach is not
+    // connected. The loop does not look at ingress at all, so it goes on
+    // reporting `ready` over a route that refuses every delivery: the two are
+    // answers to different questions rather than a contradiction.
+    //
+    // Drawn as the engine's word in a colour that disagreed with it, the card
+    // said "Connected" in amber, a word and a colour saying opposite things,
+    // and left a reader to work out which to believe. What is true of that
+    // card is that somebody has to act, so the tag says so, in the word this
+    // screen uses everywhere else for exactly that.
+    //
+    // ONLY OVER `ready`. Every other phase is either more specific about what
+    // is wrong, where the engine's word is the better one, or a state the
+    // engine is still working through, where telling a person to act would be
+    // asking them to interrupt it.
+    if (ingress && phase === "ready") {
+      return { tag: "Action needed", tone: "caution", outline: false };
+    }
     return {
       // The ENGINE's word for the phase, not this screen's. `phase_label`
       // is derived once, in Go, from a vocabulary the client does not have
@@ -347,10 +365,7 @@ export function rollUp(entry: Entry, rows: Map<string, IntegrationRow>): EntrySt
       // one, and opening its underscores is all this build can honestly do
       // with a value it may not recognise.
       tag: worst.row.reconcile.phase_label || phase.replace(/_/g, " "),
-      // THE PHASE'S OWN TONE, unless nothing can reach the surface: a ready
-      // phase drawn green over a route refusing every delivery is the one
-      // combination this screen must never show.
-      tone: ingress ? "caution" : phaseTone(phase),
+      tone: phaseTone(phase),
       outline: false,
     };
   }
