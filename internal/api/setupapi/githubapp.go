@@ -207,7 +207,11 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 	// values do not exist anywhere else and cannot be asked for again.
 	keyVar := secretNameFor(handle, "GITHUB_APP_KEY")
 	hookVar := secretNameFor(handle, "GITHUB_APP_WEBHOOK_SECRET")
-	now := s.clock()
+	// THROUGH s.now(), which is the guarded reading. Calling s.clock()
+	// straight panicked here on the one path where a panic costs an app:
+	// GitHub had created it, and the crash landed before its key was
+	// sealed, so the key was gone for good.
+	now := s.now()
 	if err := s.secrets.Set(ctx, keyVar, app.PEM, "setup", "setup", now); err != nil {
 		return handle, fmt.Errorf("setupapi: seal the app key for %s: %w", handle, err)
 	}

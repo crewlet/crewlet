@@ -144,6 +144,15 @@ func New(opts Options) *Service {
 	if opts.Company == nil {
 		return nil
 	}
+	// THE CLOCK IS DEFAULTED HERE, not at each use. Every caller but the
+	// tests leaves it nil, and one path called it without a guard: the
+	// GitHub App callback panicked mid-flight, after GitHub had created
+	// the app and before its key was sealed. That key is issued once, so
+	// the app was unrecoverable and had to be deleted by hand.
+	now := opts.Now
+	if now == nil {
+		now = func() time.Time { return time.Now().UTC() }
+	}
 	return &Service{
 		company: opts.Company,
 		config:  opts.Config,
@@ -152,11 +161,11 @@ func New(opts Options) *Service {
 		passes:  opts.Passes,
 		sink:    opts.Sink,
 		status:  opts.Status,
-		clock:   opts.Now,
+		clock:   now,
 		writer: setup.Writer{
 			Secrets: opts.Secrets,
 			Config:  configWriter{opts.Config},
-			Now:     opts.Now,
+			Now:     now,
 		},
 	}
 }

@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/api/setupapi"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
@@ -63,5 +65,35 @@ func TestTwoNodesWithTheSameKeyringAgreeOnAState(t *testing.T) {
 	})
 	if got := two.Validate(one.Mint("sre-lead", 15*60*1000000000)); got != "sre-lead" {
 		t.Errorf("a second node validated the first's state as %q", got)
+	}
+}
+
+// A NIL CLOCK MUST NOT REACH A REQUEST, and this one reached the worst
+// possible request.
+//
+// Every caller but the tests leaves Options.Now nil, and the service stored
+// it unguarded. The GitHub App callback then panicked on its first real use:
+// GitHub had already created the app, and the panic landed BEFORE the private
+// key was sealed. That key is issued once and never reissued, so the app was
+// unrecoverable and had to be deleted at GitHub by hand.
+//
+// The constructor defaults it now, which fixes every path at once rather than
+// the one that happened to be found.
+func TestTheServiceAlwaysHasAClock(t *testing.T) {
+	t.Parallel()
+	s := setupapi.New(setupapi.Options{
+		Company: func() *config.Company { return &config.Company{} },
+	})
+	if s == nil {
+		t.Fatal("a service with a company is nil")
+	}
+	// The flow mints a state, which reads the clock. A nil one panics
+	// here rather than in a request nobody can retry.
+	flow := setupapi.NewAppFlow(s, []string{"k1:material"})
+	if flow == nil {
+		t.Fatal("no app flow")
+	}
+	if got := flow.InstallURL("nobody"); got != "" {
+		t.Errorf("a seat that does not exist has an install URL: %q", got)
 	}
 }
