@@ -14,6 +14,7 @@ import { afterEach, expect, test } from "vitest";
 import {
   CATALOG,
   EntryRow,
+  IN_FLIGHT,
   Reconcile,
   byConfiguredThenName,
   disconnectOrder,
@@ -861,4 +862,27 @@ test("the catalogue is ordered by name, whatever is connected", () => {
   // And the order does not depend on state: the same list, connected or not.
   expect(names[0]).toBe("Atlassian");
   expect(names.at(-1)).toBe("Slack");
+});
+
+// WHICH PHASES THE SCREEN KEEPS WATCHING, and the rule tying that to what it
+// paints. A connect starts work that takes seconds, and the row is the only
+// place saying how it went: polled at a minute's cadence, a card said
+// "Waiting for the provider" long after it had settled, which reads as the
+// connect having done nothing.
+//
+// AMBER AND IN-FLIGHT ARE NEARLY THE SAME SET, and the exception is the
+// point: `degraded` is amber because something is wrong, and it is NOT
+// in-flight because nothing resolves it but a person. A phase added to one
+// list and not the other is either watched forever or never watched at all.
+test("every in-flight phase is amber, and the only amber phase that settles is degraded", () => {
+  for (const phase of IN_FLIGHT) {
+    expect(phaseTone(phase)).toBe("caution");
+  }
+  const amber = ["awaiting_admin", "provisioning", "activating", "disconnecting", "degraded"];
+  for (const phase of amber) {
+    expect(phaseTone(phase)).toBe("caution");
+    expect(IN_FLIGHT.has(phase)).toBe(phase !== "degraded");
+  }
+  expect(phaseTone("ready")).toBe("positive");
+  expect(IN_FLIGHT.has("ready")).toBe(false);
 });

@@ -14,7 +14,7 @@
  * reconnect is an answer about a company that has since moved.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useClient, useConnection } from "./store-hooks.ts";
 import type { QueryMap, QueryName } from "~/protocol/index.ts";
 
@@ -27,6 +27,17 @@ export interface QueryResult<T> {
   /** The engine's machine-readable code (`unauthorized`, `no_event_store`,
    *  `timeout`, …), or null. */
   error: string | null;
+  /**
+   * Ask again now.
+   *
+   * For the moment a screen KNOWS the answer has changed, which no poll
+   * interval can be short enough to cover: a write this screen just made
+   * lands at the engine before the next tick, so the row it changed sat
+   * showing the state it had before the button was pressed.
+   *
+   * It does not blank what is on screen. See `loading`.
+   */
+  refetch: () => void;
 }
 
 export interface QueryOptions {
@@ -64,6 +75,12 @@ export function useQuery<K extends QueryName>(
   // than a captured boolean so a poll tick started by an earlier generation
   // cannot resurrect itself.
   const generation = useRef(0);
+
+  // A COUNTER RATHER THAN A CALLBACK holding the query, so an explicit ask
+  // goes through exactly the same path as a poll tick: one implementation of
+  // "what does the engine say", and a refetch that cannot drift from it.
+  const [asked, setAsked] = useState(0);
+  const refetch = useCallback(() => setAsked((n) => n + 1), []);
 
   useEffect(() => {
     if (!enabled) {
@@ -106,7 +123,7 @@ export function useQuery<K extends QueryName>(
     // re-ask; including it unconditionally would re-run every query on every
     // socket blip.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [socket, what, key, enabled, pollMs, refetchOnReconnect && connected]);
+  }, [socket, what, key, enabled, pollMs, asked, refetchOnReconnect && connected]);
 
-  return state;
+  return { ...state, refetch };
 }

@@ -161,6 +161,15 @@ export const CATALOG: Entry[] = [
  * critical on purpose: agents are still working, which is exactly what
  * separates it from a surface that cannot authenticate at all.
  */
+/**
+ * The phases that mean the engine is still working.
+ *
+ * The screen polls faster while any surface is in one, because each is a
+ * state that RESOLVES ON ITS OWN within seconds and the row is the only place
+ * that says how it resolved.
+ */
+export const IN_FLIGHT = new Set(["awaiting_admin", "provisioning", "activating", "disconnecting"]);
+
 export function phaseTone(phase: string): Tone {
   switch (phase) {
     case "ready":
@@ -977,7 +986,20 @@ function stuckDisconnecting(entry: Entry, rows: Map<string, IntegrationRow>): st
 export function Integrations() {
   // Traffic counters are not pushed, and they move slowly; a minute is the
   // right cadence for "is anything arriving at all".
-  const { data, loading, error } = useQuery("integrations", undefined, { pollMs: 60_000 });
+  //
+  // FASTER WHILE SOMETHING IS MOVING. A connect or a disconnect starts work
+  // at the engine that takes seconds, and the row is what reports how it
+  // went: at a minute's cadence an operator watched a card say "Waiting for
+  // the provider" long after it had settled, and read the delay as the
+  // failure. The quick cadence is bounded by its own condition, since a
+  // surface that has settled leaves the set.
+  const [settling, setSettling] = useState(false);
+  const {
+    data,
+    loading,
+    error,
+    refetch: reread,
+  } = useQuery("integrations", undefined, { pollMs: settling ? 4_000 : 60_000 });
   const setup = useSetup();
   const [dialog, setDialog] = useState<{
     title: string;
@@ -990,6 +1012,12 @@ export function Integrations() {
     stuck: string;
   } | null>(null);
   const rows = new Map((data?.integrations ?? []).map((r) => [r.key, r]));
+  // A TERMINAL PHASE IS ONE NOBODY IS WAITING ON. Everything else is the
+  // engine mid-flight, and the screen's job while that is true is to keep
+  // looking. Derived from what arrived rather than from what was clicked, so
+  // a pass somebody else started is watched too.
+  const moving = [...rows.values()].some((r) => IN_FLIGHT.has(r.reconcile?.phase ?? ""));
+  useEffect(() => setSettling(moving), [moving]);
   const configured = CATALOG.filter((e) => e.surfaces.some((s) => rows.has(s.key)));
 
   return (
@@ -1055,7 +1083,10 @@ export function Integrations() {
           // The row does not vanish here: the engine keeps the block until
           // the third-party app teardown succeeds, so what a re-read shows is the
           // surface moving to Disconnecting.
-          onDone={setup.reload}
+          onDone={() => {
+            setup.reload();
+            reread();
+          }}
         />
       )}
 
@@ -1065,7 +1096,14 @@ export function Integrations() {
           title={dialog.title}
           blocks={dialog.blocks}
           onClose={() => setDialog(null)}
-          onDone={setup.reload}
+          // BOTH HALVES. The requirements half says what the form should now
+          // show; the status half is what reports whether the connect took,
+          // and it is the one an operator is looking at when the dialog
+          // closes.
+          onDone={() => {
+            setup.reload();
+            reread();
+          }}
         />
       )}
 
