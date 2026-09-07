@@ -52,19 +52,24 @@ export function TurnCard({
         <div className="col" style={{ gap: 2, flex: 1, minWidth: 0 }}>
           <div className="row gap-1">
             {showRole && group.role && <strong className="t-cell">{group.role}</strong>}
-            {/* WHERE THIS CAME FROM, beside the line it qualifies. It used to
-                sit in the row below, in a chip the same size and shape as the
-                phase tags — so `EXECUTE  REVIEW  mattermost` read as three
-                phases, one of which was a chat product. The trigger and its
-                source are one fact; the phases are a different one. */}
-            {trigger?.integration && (
-              <Badge outline mono icon="inbox" title="where this turn's trigger came from">
-                {trigger.integration}
-              </Badge>
-            )}
-            <span className="truncate t-cell secondary">
+            {/* THE LINE'S SUBJECT COMES FIRST. What woke the turn is the
+                content of this row; where it came from qualifies it, so it
+                follows rather than opening the line — a chip in front made
+                the eye land on a label before the sentence it labels, and
+                pushed the one thing worth reading to second place.
+                `flex: 1` on the text and none on the badge is what decides
+                who gives way when the card is narrow: the message truncates,
+                the source stays whole. */}
+            <span className="truncate t-cell secondary" style={{ flex: 1 }}>
               {trigger?.summary || trigger?.type || "turn"}
             </span>
+            {trigger?.integration && (
+              <span style={{ flex: "none" }}>
+                <Badge outline mono title="where this turn's trigger came from">
+                  {trigger.integration}
+                </Badge>
+              </span>
+            )}
           </div>
           <div className="row gap-1">
             {group.phases.map((p) => (

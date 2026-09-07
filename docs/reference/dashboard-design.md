@@ -613,8 +613,15 @@ rather than a tweak:
 And **a chip's shape is a claim about what kind of thing it is.** The turn
 card put the trigger's integration in the same row, size and shape as the
 phase tags, so `EXECUTE  REVIEW  mattermost` read as three phases, one of them
-a chat product. The trigger and its source are one fact and now sit together
-on the line above; the phases are a different one.
+a chat product. The trigger and its source are one fact and belong on one
+line; the phases are a different one.
+
+**A qualifier follows what it qualifies.** Moving that chip onto the trigger
+line put it in FRONT of the text, which is its own mistake: the eye landed on
+a label before the sentence it labels, and the one thing worth reading on the
+row — what actually woke the turn — was pushed to second place. The subject
+comes first and the source follows it, with the flex sizing deciding who gives
+way on a narrow card: the message truncates, the source stays whole.
 
 ### A row is not a row
 
