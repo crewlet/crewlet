@@ -95,7 +95,15 @@ func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []
 			// answers DataCenter for the empty string, so the one field a
 			// fresh Cloud connect cannot do without was marked optional.
 			Required: !addressed || DeploymentOf(cmp.Or(url, siteURL)) == Cloud,
-			Help:     "Cloud authenticates as email and token together. Leave empty for Data Center.",
+			// WHERE TO READ IT. The address belongs to the account whose
+			// API token is in the field below, so it is the one on that
+			// account's own profile rather than anything in the
+			// organization's directory. That a Data Center instance needs
+			// none is what the optional marker already says, from the same
+			// rule that decides it.
+			Help:      "Find the value at the end of the",
+			LinkText:  "Profile and visibility page",
+			VendorURL: "https://id.atlassian.com/manage-profile/profile-and-visibility",
 		},
 		{
 			Field:      "token",
