@@ -318,7 +318,39 @@ type SeatState struct {
 	// thing the row exists to report: whether this agent can act as itself
 	// on this app.
 	Detail string `json:"detail,omitempty"`
+
+	// Tier is how much this seat may do, where the app has tiers. Empty
+	// where it has none, which is every app but the two code hosts.
+	Tier string `json:"tier,omitempty"`
+
+	// Step is what is outstanding for this seat, and it is a CLOSED SET so
+	// a screen can render it without reading the sentence in Detail:
+	// "create_app" and "install_app". Empty means nothing is outstanding.
+	//
+	// Two steps rather than one because they are two acts by a person,
+	// minutes or days apart, and an operator who has done the first needs
+	// to be told the second is left rather than shown the same button.
+	Step string `json:"step,omitempty"`
+
+	// ActionURL is where a person goes to do that step, when the engine can
+	// address it directly.
+	//
+	// EMPTY FOR create_app, and that is not an omission: an app is created
+	// by POSTing a manifest from a page carrying the operator's own GitHub
+	// session, so there is no address to link to. The dashboard asks the
+	// begin route for a manifest and submits a form.
+	ActionURL string `json:"action_url,omitempty"`
 }
+
+// The steps a seat can be waiting on, as [SeatState.Step] spells them.
+const (
+	// StepCreateApp means this agent has no app of its own yet.
+	StepCreateApp = "create_app"
+
+	// StepInstallApp means the app exists and nothing has installed it, so
+	// it can see no repository and mints no usable token.
+	StepInstallApp = "install_app"
+)
 
 // list serves GET /setup/integrations.
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
@@ -397,8 +429,10 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		block := company.Integrations.GitHub
 		summary = github.Summary()
 		reqs = github.Requirements(block, s.resolve)
-		seats = credentialSeats(company, s.resolve,
-			[]string{github.SeatEnv}, github.CredentialKeys, "GitHub", false)
+		// NOT credentialSeats. What a GitHub seat holds is an APP rather
+		// than a credential somebody pasted, so the question that roster
+		// answers is the wrong one here: see [githubSeats].
+		seats = githubSeats(company, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindJira:
@@ -520,13 +554,6 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 	return state, true
 }
 
-// slackSeats is every agent seat's own Slack setup.
-//
-// EVERY AGENT, not only the ones already configured: the list is what a
-// screen renders a form from, so leaving out the seats that have no app yet
-// would leave an operator no way to give one to them. Human seats are
-// excluded, because a person's Slack account is not something this engine
-// provisions or holds a token for.
 // credentialSeats is the roster of agents for an app whose seats each hold
 // their own credential.
 //
@@ -673,7 +700,7 @@ func named(values map[string]string, reqs []setup.Requirement) bool {
 	return false
 }
 
-// seatChoices fills every handle requirement with the company's agent seats.// seatChoices fills every handle requirement with the company's agent seats.
+// seatChoices fills every handle requirement with the company's agent seats.
 //
 // In place, on the app's own list, because a requirement is what the form
 // renders and the choices belong to the field rather than beside it. Human
@@ -712,6 +739,13 @@ func seatChoices(company *config.Company, reqs []setup.Requirement) {
 	}
 }
 
+// slackSeats is every agent seat's own Slack setup.
+//
+// EVERY AGENT, not only the ones already configured: the list is what a
+// screen renders a form from, so leaving out the seats that have no app yet
+// would leave an operator no way to give one to them. Human seats are
+// excluded, because a person's Slack account is not something this engine
+// provisions or holds a token for.
 func slackSeats(company *config.Company, resolve func(string) (string, bool)) []SeatState {
 	base := company.Integrations.WebhookBase()
 	out := []SeatState{}
@@ -736,6 +770,96 @@ func slackSeats(company *config.Company, resolve func(string) (string, bool)) []
 		}
 		if base != "" {
 			state.PublicURL = base + state.InboundPath
+		}
+		out = append(out, state)
+	}
+	return out
+}
+
+// githubSeats is every agent seat's own GitHub App, and which of the two acts
+// that produce one is still outstanding.
+//
+// NOT [credentialSeats], which is the roster for an app whose seats each hold
+// a credential a person pasted into mcp_env. What a GitHub seat holds is an
+// APP: one bot identity, created from a manifest by somebody carrying a GitHub
+// session, installed on the organization in a second act, with the key written
+// by the engine because GitHub returns it once and only to the engine. Asked
+// the credential question, every seat answered "no GitHub credential yet, and
+// GitHub issues none on request: add one to this seat's mcp_env" no matter
+// what its app was doing, which is advice for a model this engine no longer
+// runs.
+//
+// EVERY AGENT SEAT, configured or not, for the reason the Slack roster lists
+// them all: this is where an operator starts the flow, so the seat with no app
+// yet is precisely the row that has to be there. Human seats are excluded,
+// because a person's GitHub account is not something this engine creates.
+func githubSeats(company *config.Company, resolve func(string) (string, bool)) []SeatState {
+	webBase := webBaseOf(company)
+	out := []SeatState{}
+	for role := range company.EachRole() {
+		// THROUGH THE SEAT, the same derivation every other roster uses: a
+		// handle defaults from the name, and "is this a person" is the org
+		// model's question rather than the config's.
+		seat := role.Seat()
+		if !seat.IsAgent() {
+			continue
+		}
+		// THE TIER THE MANIFEST WOULD CARRY, read through the same two
+		// functions the begin route reads it through. A second reading here
+		// would be free to disagree with the app that actually gets created.
+		tier, _ := github.ParseTier(seatTier(role))
+		app := role.Integrations.GitHub
+		state := SeatState{
+			Handle: seat.Handle(), Name: role.Name,
+			Tier: string(tier),
+			// NO REQUIREMENTS, and the empty list is deliberate rather
+			// than unfinished: nothing here is typed in. The app id, the
+			// slug and the key are all written by the engine from what
+			// GitHub returned, so a form field for any of them would be a
+			// box no operator can fill.
+			Requirements: []setup.Requirement{},
+		}
+		switch {
+		case app == nil || app.AppID == 0:
+			// NO ACTION URL, and that is the contract rather than an
+			// omission: an app is created by POSTing a manifest from a
+			// page carrying the operator's own GitHub session, so there
+			// is no address to send them to. The dashboard asks the begin
+			// route for the manifest and submits a form.
+			state.Step = StepCreateApp
+			state.Detail = "no app of its own yet, so this agent acts as nobody on GitHub"
+		case app.InstallationID == 0:
+			state.Present = true
+			state.Step = StepInstallApp
+			// THE SLUG GITHUB RETURNED, never the name that was asked
+			// for: GitHub slugifies a name and disambiguates a collision,
+			// so a link built from the name opens a page for an app that
+			// may not exist. A record with no slug gets no link at all,
+			// because a broken one costs an operator the trip to find out.
+			if slug := strings.TrimSpace(app.AppSlug); slug != "" {
+				state.ActionURL = github.InstallURL(webBase, slug)
+			}
+			state.Detail = "the app exists and nothing has installed it, so it " +
+				"sees no repository and mints no usable token"
+		default:
+			state.Present = true
+			present, resolved := setup.Resolution(app.PrivateKey, resolve)
+			switch {
+			case !present:
+				state.Detail = "the app is installed with no private key recorded, so " +
+					"nothing can be minted for it: GitHub returns that key once, so " +
+					"the app has to be created again"
+			case resolved != nil && !*resolved:
+				// THE REFERENCE, NEVER THE KEY. Only a whole ${VAR} can
+				// fail to resolve (a literal in the document is present
+				// and resolved by definition), so what this sentence
+				// carries is a variable name and never a PEM.
+				state.Detail = app.PrivateKey + " did not resolve, so no token can " +
+					"be minted for this seat and it reaches GitHub as nobody"
+			default:
+				state.Satisfied = true
+				state.Detail = "installed, and its key resolves: this seat acts as its own app"
+			}
 		}
 		out = append(out, state)
 	}

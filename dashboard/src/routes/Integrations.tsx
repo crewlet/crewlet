@@ -33,7 +33,7 @@ import { SetupDialog } from "./SetupDialog.tsx";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
 import { onTokenChanged, requestToken, rest, RestError } from "~/protocol/index.ts";
 import type { IntegrationRow, ReconcileStatus } from "~/protocol/types.ts";
-import type { SetupListing, SetupToolState } from "~/protocol/types.ts";
+import type { SetupListing, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
 
 type Tone = "positive" | "caution" | "critical" | "info" | "neutral";
 
@@ -725,6 +725,143 @@ export function sectionsFor(
 }
 
 /**
+ * What the begin route answers: everything a browser needs to create one
+ * agent's app, and nothing it could work out for itself.
+ *
+ * Declared here rather than in the protocol types, for the reason the setup
+ * dialog declares its own answer shape there: it is the answer to one write
+ * made on one screen, read once and merged into nothing.
+ */
+interface AppManifest {
+  /** The account the app is created under: a person's, or an organization's. */
+  action_url: string;
+  /** The app's own declaration, sent as one JSON string. */
+  manifest: Record<string, unknown>;
+  /** The signed token that ties the code host's callback back to this seat. */
+  state: string;
+}
+
+/**
+ * Send the operator to the code host with the manifest, as a real form POST.
+ *
+ * A FORM RATHER THAN A FETCH, and nothing else can do this job. The request
+ * carries the operator's OWN session at the code host, which is what decides
+ * whether they may create an app on that organization at all, and the answer
+ * is a page the host renders for them to confirm what is being created. A
+ * fetch has neither half: it would arrive as this dashboard rather than as
+ * the person, and the confirmation page would come back as a string with
+ * nowhere to display it.
+ */
+export function postManifest(answer: AppManifest): void {
+  const form = document.createElement("form");
+  form.method = "post";
+  form.action = answer.action_url;
+  // A NEW TAB, like the install link that replaces this button on the next
+  // pass. The flow ends on the engine's own landing page, so submitting in
+  // place would take the dashboard away and leave the operator with the
+  // browser's history as the only route back to the card they started from.
+  form.target = "_blank";
+  form.rel = "noreferrer";
+  const fields: [string, string][] = [
+    // STRINGIFIED HERE. The engine answers the manifest as the JSON document
+    // it is, and the form field the host reads is that document as text.
+    ["manifest", JSON.stringify(answer.manifest)],
+    ["state", answer.state],
+  ];
+  for (const [name, value] of fields) {
+    const input = document.createElement("input");
+    input.type = "hidden";
+    input.name = name;
+    input.value = value;
+    form.append(input);
+  }
+  // IN THE DOCUMENT, because a form outside one does not submit at all. It
+  // comes out again immediately: the submission is under way by then, and a
+  // hidden form left in the page is one the next thing to go looking for a
+  // form would find.
+  document.body.append(form);
+  form.submit();
+  form.remove();
+}
+
+/**
+ * The one act an agent's own app is waiting on, as the control that does it.
+ *
+ * TWO STEPS, TWO CONTROLS, because they are two acts by a person. One app is
+ * one bot identity, so each agent has its own, and creating it and installing
+ * it can be a day apart: an operator who has just created an app must be
+ * shown what is left rather than the button they have already pressed.
+ *
+ * The tool is named rather than assumed, so the control says where it sends
+ * somebody. This screen carries no vendor branch anywhere else and needs none
+ * here: the step is the engine's own vocabulary and the route that begins one
+ * is the surface's own.
+ *
+ * A STEP THIS BUILD DOES NOT KNOW DRAWS NOTHING. A newer node may name one,
+ * and a control that guesses what it means is worse than no control at all.
+ */
+export function SeatStep({
+  app,
+  toolKey,
+  seat,
+}: {
+  /** The tool in the reader's own words, from the catalogue. */
+  app: string;
+  /** The engine surface this roster belongs to: what the route is keyed on. */
+  toolKey: string;
+  seat: SetupSeatState;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [refused, setRefused] = useState("");
+
+  async function create(): Promise<void> {
+    setBusy(true);
+    setRefused("");
+    try {
+      const answer = (await rest.post(`/setup/integrations/${toolKey}/app`, {
+        seat: seat.handle,
+      })) as AppManifest;
+      postManifest(answer);
+    } catch (err) {
+      setRefused(
+        err instanceof RestError
+          ? err.detail || err.hint || err.code || "The engine refused that."
+          : String(err),
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (seat.step === "install_app") {
+    // NO ADDRESS, NO LINK. The install page is built from the slug the host
+    // returned rather than from the name that was asked for, so a seat whose
+    // app the engine cannot name has nowhere to send anybody, and an anchor
+    // to nothing is a control that lies.
+    if (!seat.action_url) return null;
+    return (
+      <a className="btn sm" href={seat.action_url} target="_blank" rel="noreferrer">
+        Install on {app}
+      </a>
+    );
+  }
+  if (seat.step !== "create_app") return null;
+
+  return (
+    <>
+      <Button size="sm" variant="primary" disabled={busy} onClick={() => void create()}>
+        {busy ? `Opening ${app}` : `Create app on ${app}`}
+      </Button>
+      {refused && (
+        <div className="int-row-note">
+          <span className="int-row-note-text">{refused}</span>
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
  * One integration, as a card.
  *
  * THE SHAPE THE CONSOLE USES, and it is two states of one object rather than
@@ -778,7 +915,7 @@ export function EntryRow({
   const rosters = tools.filter((t) => (t.seats ?? []).length > 0);
   const roster =
     rosters.find((t) => t.seats_required) ?? rosters.find((t) => t.can_provision) ?? rosters[0];
-  const seats = (roster?.seats ?? []).map((seat) => ({ seat, surface: "" }));
+  const seats = roster?.seats ?? [];
   const bodyID = `int-body-${entry.key}`;
 
   // A FRAGMENT, not a wrapper: the header already has one actions row, and
@@ -906,8 +1043,8 @@ export function EntryRow({
                 named={present.length > 1}
               />
             ))}
-            {seats.map(({ seat, surface }) => (
-              <li key={`${surface}:${seat.handle}`} className="int-row int-seat-row">
+            {seats.map((seat) => (
+              <li key={seat.handle} className="int-row int-seat-row">
                 {/* THE AGENT'S OWN MARK, the same one the org chart, the
                     people list and every seat chip render. An agent should
                     look like itself wherever it appears, which is also what
@@ -934,10 +1071,25 @@ export function EntryRow({
                   </span>
                 </div>
                 <div className="int-row-badges">
+                  {/* HOW MUCH THIS AGENT MAY DO, where the app has tiers. It
+                      is the one thing about a per-agent app that a roster
+                      cannot be read without: two agents on the same card can
+                      hold apps with different permissions, and "ready" says
+                      the same word over both. Rendered in the engine's own
+                      value with its underscores opened, since the tiers are a
+                      closed set this build must not be caught renaming. */}
+                  {seat.tier && (
+                    <Badge outline title="The access tier this agent's app is created with">
+                      {seat.tier.replace(/_/g, " ")}
+                    </Badge>
+                  )}
                   <Badge tone={seat.satisfied ? "positive" : "neutral"} outline={!seat.satisfied}>
                     {seat.satisfied ? "ready" : "not set up"}
                   </Badge>
                 </div>
+                {/* THE STEP'S OWN CONTROL, outside the badges so a refusal can
+                    take the full width of the row the way a finding does. */}
+                {roster && <SeatStep app={entry.name} toolKey={roster.key} seat={seat} />}
               </li>
             ))}
           </ul>
@@ -955,7 +1107,7 @@ export function EntryRow({
  * full because it names the credentials a company holds. A deployment where
  * the operator has no token still gets the whole screen, minus the buttons.
  */
-function useSetup(): {
+export function useSetup(): {
   byKey: Map<string, SetupToolState>;
   base: SetupListing["public_base_url"] | null;
   guarded: boolean;
@@ -985,8 +1137,14 @@ function useSetup(): {
   const [guarded, setGuarded] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  const reload = useCallback(() => {
-    setLoading(true);
+  // `quiet` re-reads without the skeleton, for a refresh nobody asked for.
+  // Every re-read a person triggers keeps it, because the two halves of this
+  // screen disagree for a moment either side of a connect and a card drawn
+  // from one of them is wrong; a background refresh has no such moment, and
+  // blanking six cards because somebody came back to the tab would be the
+  // screen reporting an absence that is not there.
+  const reload = useCallback((quiet = false) => {
+    if (!quiet) setLoading(true);
     void (async () => {
       try {
         setListing((await rest.get("/setup/integrations")) as SetupListing);
@@ -1008,6 +1166,18 @@ function useSetup(): {
   // A refusal here is the one the banner asks the reader to fix, so the fix
   // has to land on this screen without a reload.
   useEffect(() => onTokenChanged(reload), [reload]);
+  // AN AGENT'S APP IS SET UP AT THE CODE HOST, IN ANOTHER TAB, and this
+  // listing is the only thing that carries the roster: nothing pushes it, and
+  // no answer this screen holds says when a person finished creating an app.
+  // So it is re-read when the tab comes back, which is exactly the moment a
+  // seat that offered Create needs to be offering Install instead.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") reload(true);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [reload]);
 
   return {
     byKey: new Map((listing?.tools ?? []).map((t) => [t.key, t])),

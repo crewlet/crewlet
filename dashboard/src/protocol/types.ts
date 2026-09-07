@@ -916,6 +916,21 @@ export interface SetupToolState {
   seats?: SetupSeatState[];
 }
 
+/**
+ * What one agent still needs a person to do before it can act as itself.
+ *
+ * A CLOSED SET, so a screen renders the control from the value rather than
+ * from the sentence in `detail`: an app this agent has none of, and an app it
+ * has that nothing has installed, are two acts by a person minutes or days
+ * apart, and an operator who has done the first must be shown the second
+ * rather than the same button again.
+ *
+ * Widened with `string & {}` for the same reason [KnowledgeReason] is: a newer
+ * node may name a step this build has no control for, and drawing nothing is
+ * the only honest answer to a step it cannot perform.
+ */
+export type SetupSeatStep = "create_app" | "install_app" | (string & {});
+
 export interface SetupSeatState {
   handle: string;
   name?: string;
@@ -931,6 +946,22 @@ export interface SetupSeatState {
    * every other app's roster has this and no path.
    */
   detail?: string;
+  /**
+   * How much this agent may do at the app, where the app has tiers. Empty
+   * where it has none, which is every app but the two code hosts.
+   */
+  tier?: string;
+  /** What is outstanding for this seat. Empty means nothing is. */
+  step?: SetupSeatStep;
+  /**
+   * Where a person goes for that step, when the engine can address it.
+   *
+   * EMPTY FOR "create_app", and that is the contract rather than an omission:
+   * an app is created by POSTing a manifest from a page carrying the
+   * operator's own session at the app, so there is no address to link to. The
+   * screen asks the engine for a manifest and submits a form with it.
+   */
+  action_url?: string;
 }
 
 /** One provisioning pass, live or finished. */

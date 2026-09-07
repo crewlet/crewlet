@@ -6,7 +6,7 @@ registers the webhooks that carry it. A company can run it beside
 [GitLab](gitlab.md) — they are two hosts with different repositories on them,
 which is what a migration and an open-source presence both look like.
 
-Two surfaces, and they are deliberately separate:
+Three surfaces, and they are deliberately separate:
 
 - **Inbound** — `integrations.github` plus `POST /webhooks/github`. This is
   how a review request, an assignment, a comment or a red workflow run
@@ -14,6 +14,10 @@ Two surfaces, and they are deliberately separate:
 - **Tools** — the [GitHub MCP server](https://github.com/github/github-mcp-server),
   a `shared: false` entry in `mcp_servers` with each agent's token in
   `role.mcp_env.github`. This is how an agent reads, reviews and tracks.
+- **Identity.** One GitHub App per agent, in `role.integrations.github`. An app
+  carries exactly one bot identity, so each agent has its own, created and
+  installed from the dashboard and bounded by an access tier. See
+  [One GitHub App per agent](#one-github-app-per-agent).
 
 GitHub tools are for **reading, reviewing and tracking** code — diffs,
 comments, reviews, run status. **Authoring** code changes goes through the
@@ -33,6 +37,10 @@ GitHub issues no credential on a provisioner's behalf.
 The loop keeps checking after that, so a grant you change at GitHub is
 reflected on the screen within a tick without anything to press.
 
+Giving each agent its own bot identity is a separate, per-seat flow that the
+loop cannot run for you, because it needs your GitHub session: see
+[One GitHub App per agent](#one-github-app-per-agent).
+
 See [Running the provisioning pass](../reference/api-endpoints.md#running-the-provisioning-pass).
 
 ## Configuration
@@ -45,7 +53,7 @@ integrations:
     url: "https://github.example.com"
     webhook_secret: "${GITHUB_WEBHOOK_SECRET}"   # required when enabled
     token: "${GITHUB_ENGINE_TOKEN}"              # read credential; see below
-    provisioning:                                # CLI-only, ignored by the engine
+    provisioning:                                # read by the engine's pass and the CLI
       org: acme
       repos: [acme/api, acme/web]
       org_webhook: auto
@@ -64,7 +72,8 @@ integrations:
   has no required shape — GitHub takes any string and signs with it verbatim
   — so there is no wrong *shape* to catch, only a wrong value.
 - **`POST /webhooks/github/{handle}`** is the same route, addressed to one
-  seat, and is what a per-agent GitHub App should point at.
+  seat, and is what a [per-agent GitHub App](#one-github-app-per-agent)
+  delivers to.
 
   GitHub delivers to **every** app installed on a repository, each delivery
   carrying its own `X-GitHub-Delivery`. A repository five agents work
@@ -86,10 +95,13 @@ integrations:
   directed events are unaffected. It is also the credential
   [`crewlet github provision`](#provisioning--crewlet-github-provision)
   registers webhooks with, and there it is **required**.
-- **`provisioning:`** is read only by the CLI. `org` is the GitHub
-  organization holding the repositories, `repos` are `owner/repo` entries to
-  hook individually, and `org_webhook` is `auto` (default) / `true` /
-  `false` — see [Webhooks](#webhooks).
+- **`provisioning:`** says where hooks are registered and which organization
+  these agents work in, and it is read by the engine's own pass as well as by
+  the CLI. `org` is the GitHub organization holding the repositories, and it is
+  also the account a [per-agent app](#one-github-app-per-agent) is registered
+  under; `repos` are `owner/repo` entries to hook individually; `org_webhook`
+  is `auto` (default) / `true` / `false`, described under
+  [Webhooks](#webhooks).
 
 ### Seat identity is derived, never declared
 
@@ -122,6 +134,250 @@ A human seat holds no tool credential. It is addressed by
 `contact.github_login` in the org chart, which the party registry registers
 directly — so a person can be mentioned in a comment and reached by the
 engine's notification spine without ever holding a token here.
+
+## One GitHub App per agent
+
+A GitHub App has exactly one bot identity, derived from its slug, and nothing
+varies it: not a token, not a header, not a manifest field. An agent that is to
+act as itself on GitHub therefore needs an app of its own, so the engine
+creates one **per seat** rather than one per company.
+
+That is a constraint rather than a preference. **Agents cannot share one app
+and keep distinct identities.** A single company-wide app would have every
+agent comment, review and commit as the same account, and an `@mention` of one
+of them would no longer say which agent was meant.
+
+### What an operator does
+
+Two acts, both performed by a person signed in to GitHub, and the second can be
+a day after the first.
+
+1. **Create the app.** The Integrations screen asks the engine for a manifest
+   and submits it to GitHub as a form POST carrying the operator's own GitHub
+   session. GitHub shows what is about to be created and, on approval, sends
+   the browser back to the engine with a one-time code. The engine converts the
+   code, seals the private key that comes back, and records the app on the
+   seat.
+2. **Install the app.** Creating an app grants it nothing: an app with no
+   installation can see no repository. The page the operator lands on after
+   creation links straight to the install page for the app that was just
+   created, and the install is where the repositories are chosen.
+
+**Neither act can be automated, and that is GitHub's shape.** A manifest is
+submitted with the browser session of somebody who may create apps on that
+organization, and GitHub offers no server-to-server equivalent. This is the one
+part of any integration here that a
+[reconcile pass](../concepts/integration-reconcile.md) cannot do on its own.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Op as Operator's browser
+    participant CL as Crewlet
+    participant GH as GitHub
+
+    Op->>CL: POST /setup/integrations/github/app {"seat": "senior-engineer"}
+    CL-->>Op: manifest, action URL, signed state
+    Op->>GH: form POST of the manifest (operator's own session)
+    GH-->>Op: confirm the app, then redirect
+    GH->>CL: GET /webhooks/github-app?code=...&state=...
+    CL->>GH: POST /app-manifests/{code}/conversions
+    GH-->>CL: app id, slug, private key, webhook secret (once only)
+    CL->>CL: seal the key, record app_id and app_slug on the seat
+    CL-->>Op: "App created", with the install link
+    Op->>GH: install the app on the organization
+    GH->>CL: GET /webhooks/github-app?installed=senior-engineer
+```
+
+### What has to be in place first
+
+- **`integrations.public_base_url`.** Three addresses are baked into an app at
+  creation: where its deliveries go, where the browser returns after the
+  creation, and where it returns after the install. Only a person at GitHub can
+  change them afterwards, so the engine refuses to begin without a public base
+  (`409 no_public_url`) rather than create an app that would have to be created
+  again.
+- **`integrations.github.provisioning.org`.** It names the account the app is
+  registered under, and the account matters: an app registered under a person's
+  own account cannot be installed on the organization that owns the
+  repositories. With no organization set, the operator is sent to their
+  personal app registration page instead.
+- **`integrations.github.url`**, when the company runs Enterprise Server. Unset
+  means github.com.
+
+### The manifest the engine builds
+
+| Manifest field | What the engine puts in it |
+|---|---|
+| `name` | The company name and the seat's role name, joined and cut to 34 runes |
+| `url` | `https://crewlet.ai` |
+| `public` | `false`. The app is the company's own |
+| `hook_attributes.url` | `<public_base_url>/webhooks/github/<handle>` |
+| `redirect_url` | `<public_base_url>/webhooks/github-app` |
+| `setup_url` | `<public_base_url>/webhooks/github-app?installed=<handle>` |
+| `default_events` | `issues`, `issue_comment`, `pull_request`, `pull_request_review`, `pull_request_review_comment` |
+| `default_permissions` | The seat's tier, below |
+
+**The events are named, never `*`.** An app with a delivery address and no
+events subscribes to nothing, receives nothing, and reports itself healthy
+while doing so. `push` is deliberately absent: it is the highest-volume event a
+busy repository produces and the router drops every one. `workflow_run` is not
+in an app's set either, so a failed-run notice reaches a seat through the
+organization or repository hook the
+[provisioning pass](#provisioning--crewlet-github-provision) registers rather
+than through the seat's own app.
+
+### The three access tiers
+
+A seat's tier is the one field in this block a person writes, and it decides
+two things: the permissions the app is created with, and the permissions every
+token minted for that app carries.
+
+| Tier | What it grants | GitHub permissions |
+|---|---|---|
+| `read_only` (the default) | Reads code and issues, changes nothing. | `metadata:read`, `contents:read`, `issues:read`, `pull_requests:read`, `checks:read`, `actions:read`, `deployments:read` |
+| `review` | Reads the code and writes **about** it: issues, comments, reviews. | `metadata:read`, `contents:read`, `issues:write`, `pull_requests:write`, `checks:read`, `actions:read`, `deployments:read` |
+| `full_access` | Branches, commits, pull requests, issues and checks. No administration. | `metadata:read`, `contents:write`, `issues:write`, `pull_requests:write`, `checks:write`, `actions:read`, `deployments:read` |
+
+- **Empty means `read_only`.** A seat nobody has thought about yet should have
+  to ask for more rather than already hold it.
+- **`review` keeps `contents` at read on purpose**, so a reviewer cannot change
+  what it is reviewing.
+- **`metadata: read` is on every tier**, because GitHub requires it for almost
+  every read: without it a token cannot resolve a repository at all.
+- **Each tier is an allow list.** GitHub's token endpoint takes the permissions
+  to grant, so anything absent from a tier is simply not on the token. There is
+  no catalogue to subtract from and therefore nothing to forget.
+- **A typo is refused, not guessed at.** `tier: reviw` fails config validation
+  naming the field, and a reader that takes the value anyway falls back to
+  `read_only` rather than to something wider. A hyphen is not a typo:
+  `full-access` and `full_access` are the same tier.
+
+### What no tier grants
+
+None of the three asks for any of these, so no token this engine mints carries
+one. Each is a way out of the tier rather than a step up within it:
+administration (deleting a repository, dropping branch protection), secrets and
+variables (every credential the repository holds), and membership and
+organization settings (how an agent would widen its own access).
+
+`administration` · `organization_administration` · `organization_secrets` ·
+`organization_self_hosted_runners` · `organization_user_blocking` · `members` ·
+`organization_plan` · `secrets` · `actions_variables` ·
+`organization_actions_variables` · `environments`
+
+**What an app holds is a different question from what a token carries.** A
+manifest can be edited in the browser before it is submitted, and an
+installation can be widened by a person afterwards; neither is the engine's to
+decide. What is the engine's is the mint: a token is issued with the tier's own
+permission list and nothing else, so a `read_only` seat still cannot write on
+an installation that could. Where the seat names `repos`, the token is narrowed
+to those as well, and an empty list means every repository the installation
+covers, which is what the operator chose when they installed it.
+
+### What lands where
+
+The app is recorded on the seat, addressed by handle, so a company with ten
+agents keeps ten separate records:
+
+```yaml
+roles:
+  - name: Senior Engineer
+    integrations:
+      github:
+        tier: review              # read_only (default) | review | full_access
+        repos: [acme/api]         # empty means every repository the installation covers
+        # Written by the engine, never typed in:
+        app_id: 1234567
+        app_slug: acme-senior-engineer
+        installation_id: 87654321
+        private_key: "${SENIOR_ENGINEER_GITHUB_APP_KEY}"
+```
+
+`tier` and `repos` are the two fields a person writes. `app_id`, `app_slug` and
+`private_key` are written when the app is created, and the slug is what the
+bot login derives from, so it is what an `@mention` of this agent resolves
+through. `installation_id` is written as `0` at that moment, because creating
+an app and installing it are two acts and an app installed nowhere is a real
+state to report rather than a half-written record. A seat's app can mint tokens
+only once app id, installation id and key are all present.
+
+The credentials themselves never enter the document. Two entries are sealed in
+the [secret store](../concepts/secret-store.md):
+
+| Sealed name | What it is |
+|---|---|
+| `<HANDLE>_GITHUB_APP_KEY` | The app's PEM private key |
+| `<HANDLE>_GITHUB_APP_WEBHOOK_SECRET` | The webhook secret GitHub generated for the app, when it returned one |
+
+`<HANDLE>` is the seat's handle upper-cased, with every character outside
+`A-Z`, `0-9` and `_` replaced by an underscore, so `senior-engineer` becomes
+`SENIOR_ENGINEER`. The names are per seat because the credentials are: one
+shared name would have the second agent's key overwrite the first's, and both
+seats would then authenticate as whichever app was created last.
+
+### Deliveries from a seat's app
+
+An app created this way delivers to `POST /webhooks/github/<handle>`, which is
+the ordinary GitHub route addressed to one seat (see
+[Configuration](#configuration)). That route verifies every delivery against
+`integrations.github.webhook_secret`, exactly as the bare route does, while
+GitHub signs an app's deliveries with **that app's own** webhook secret. So an
+app's webhook secret has to be set at GitHub to the same value the company
+block holds, or its deliveries are refused at the edge with `401`.
+
+### The two routes
+
+| Route | Called by | What it does |
+|---|---|---|
+| `POST /setup/integrations/github/app` | The dashboard, authenticated | Answers with one seat's manifest, the address to POST it to, and a signed state |
+| `GET /webhooks/github-app` | GitHub's redirect, unauthenticated | Converts the one-time code, seals the key, records the app; also the page an install returns to |
+
+The callback carries no engine credential, because a browser redirect from
+GitHub has none to carry. What stands in its place is the **state**: a signed
+token naming the seat, minted by the begin route, valid for 15 minutes, and
+validated before anything else happens. It is scoped to this flow, so a token
+minted for another signed URL this engine issues cannot be replayed here.
+
+Across a fleet the state signer is keyed from the Tier A keyring
+(`secrets.keys`), so a creation begun on one node can be finished on another. A
+deployment with no keys configured falls back to a per-process key, which is
+correct for a single node and cannot work across two; the engine says so at
+startup with `github_app_state_key_is_per_process`.
+
+Request and response shapes are in
+[API Endpoints](../reference/api-endpoints.md#one-agents-own-github-app).
+
+### The constraints that shape all of this
+
+- **The private key and the webhook secret come back exactly once.** GitHub has
+  no endpoint that reissues either, so the callback seals both before doing
+  anything else that can fail. A failure after the seal costs a retry; a
+  failure before it costs the app, and the only way forward is to delete it at
+  GitHub and create it again. It is also why an error here is worded by the
+  engine and never quotes GitHub's response body: that body carries the key.
+- **The delivery address is baked in at creation.** An app's hook attributes,
+  redirect and setup URLs are set from the manifest and changed afterwards only
+  by a person editing the app at GitHub, which is why the begin route refuses
+  to run before the engine knows its own public base.
+- **An app name is globally unique and capped at 34 characters.** A name built
+  from the seat alone would collide the second time two companies both have an
+  `sre-lead`, so the company name leads, the seat's role name follows, and the
+  whole is cut on a rune boundary (a name sliced through a multi-byte character
+  is refused as malformed rather than as too long). GitHub then slugifies the
+  name and disambiguates a collision itself, so the app that exists may not
+  carry the name that was asked for. That is why the install link is built from
+  the slug the conversion returned rather than from the name that was
+  requested.
+- **Permissions are frozen at creation.** Raising a seat's tier afterwards
+  means editing the app's permissions at GitHub, where every installation has
+  to approve the change before it takes effect. Choosing the tier before the
+  app is created is the cheap moment to get it right.
+- **The creation code is single use and lives one hour.** A code that has been
+  converted or has expired is reported as exactly that, and the flow starts
+  again from the begin route. The engine's own state is shorter still, at 15
+  minutes, so an abandoned attempt fails on the state rather than on a code
+  nobody can do anything about.
 
 ---
 
@@ -448,6 +704,17 @@ units:
 - **The provisioner creates no accounts.** GitHub has no API for it. Machine
   users and their tokens are created by hand, and the command reports which
   account each one turned out to be.
+- **Agents cannot share one GitHub App and keep distinct identities.** An app
+  has exactly one bot identity, so a shared app makes every agent the same
+  account. One app per agent is the only arrangement that works, which is why
+  the flow is per seat.
+- **Creating and installing an app is a person's job, twice per agent.** The
+  manifest is submitted with an operator's own GitHub session and there is no
+  server-to-server equivalent, so nothing in the engine can create or install
+  an app unattended.
+- **An app's private key cannot be recovered.** GitHub returns it once, at
+  conversion time, and reissues it never. A key lost between the conversion and
+  the seal means deleting the app at GitHub and creating it again.
 - **An installation token cannot hold a seat's identity.** It authenticates
   as an app rather than a person, so `GET /user` names nobody and the seat is
   reported unresolved.

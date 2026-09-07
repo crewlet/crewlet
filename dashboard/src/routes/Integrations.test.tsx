@@ -946,3 +946,228 @@ test("a stale setup listing offers nothing rather than contradicting the tag", (
   // that says anything.
   expect(actionFor(connected, behind, false)?.label).toBe("Connect");
 });
+
+// --- an agent's own app, in the two acts a person performs ---------------- //
+
+import { waitFor } from "@testing-library/react";
+import { beforeEach, vi } from "vitest";
+import type { SetupSeatState } from "~/protocol/types.ts";
+
+const github = CATALOG.find((e) => e.key === "github")!;
+
+/** One GitHub card with this roster, opened. */
+function roster(...seats: SetupSeatState[]): void {
+  render(
+    <EntryRow
+      entry={github}
+      rows={rowsOf({ key: "github", configured: true })}
+      sections={[{ name: "GitHub", tool: toolState({ key: "github", seats }) }]}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Show GitHub details/ }));
+}
+
+function seatOf(over: Partial<SetupSeatState>): SetupSeatState {
+  return { handle: "cto", name: "CTO", requirements: [], satisfied: false, ...over };
+}
+
+type Sent = { method: string; path: string; body: unknown };
+
+function stubFetch(sent: Sent[], answer: unknown, status = 200) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      sent.push({
+        method: init?.method ?? "GET",
+        path: new URL(String(input), "http://engine.test").pathname,
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      });
+      return new Response(JSON.stringify(answer), { status });
+    }),
+  );
+}
+
+/**
+ * The form the page submits, kept after it is taken out of the document.
+ *
+ * jsdom implements no submission, so the spy IS the assertion point: what
+ * reaches the code host is exactly this element's action, target and fields.
+ */
+function capturedForm(): { form: HTMLFormElement | null } {
+  const seen: { form: HTMLFormElement | null } = { form: null };
+  vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(function (
+    this: HTMLFormElement,
+  ) {
+    seen.form = this;
+  });
+  return seen;
+}
+
+function fieldsOf(form: HTMLFormElement): Record<string, string> {
+  return Object.fromEntries([...form.querySelectorAll("input")].map((i) => [i.name, i.value]));
+}
+
+beforeEach(() => localStorage.setItem("crewlet_api_token", "t"));
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  localStorage.clear();
+});
+
+// AN AGENT WITH NO APP OF ITS OWN CANNOT ACT AS ITSELF, and the roster is
+// where that is answered: one app is one bot identity, so a card that says
+// Connected over a seat with nothing is reporting the half that cannot be
+// acted on. The button is what the engine's own step asks for.
+test("a seat that needs an app of its own gets the button that creates one", () => {
+  roster(seatOf({ step: "create_app", tier: "read_only", detail: "no app of its own yet" }));
+
+  expect(screen.getByRole("button", { name: "Create app on GitHub" })).toBeTruthy();
+  // AND NOT THE OTHER STEP. They are two acts, and an operator shown both at
+  // once has no way to know which one they are on.
+  expect(screen.queryByRole("link", { name: "Install on GitHub" })).toBeNull();
+  // THE TIER, in the engine's own value with its underscores opened: two
+  // agents on one card can hold apps with different permissions, and "not set
+  // up" says the same word over both.
+  expect(screen.getByText("read only")).toBeTruthy();
+});
+
+// THE MANIFEST GOES AS A FORM POST, NEVER AS A FETCH.
+//
+// The request carries the operator's OWN session at the code host, which is
+// what decides whether they may create an app on that organization, and the
+// answer is a page the host renders for them to confirm. A fetch has neither:
+// it would arrive as the dashboard rather than as the person, and the
+// confirmation page would come back as a string with nowhere to display it.
+test("the manifest reaches the code host as a form the operator's browser sends", async () => {
+  const sent: Sent[] = [];
+  const manifest = { name: "Crewlet CTO", url: "https://crewlet.ai", public: false };
+  stubFetch(sent, {
+    seat: "cto",
+    tier: "review",
+    action_url: "https://github.com/organizations/acme/settings/apps/new",
+    manifest,
+    state: "st-1",
+  });
+  const seen = capturedForm();
+  roster(seatOf({ step: "create_app" }));
+
+  fireEvent.click(screen.getByRole("button", { name: "Create app on GitHub" }));
+  await waitFor(() => expect(seen.form).not.toBeNull());
+
+  // ONE REQUEST, and it is the engine's. Nothing this dashboard sends reaches
+  // the code host: a second entry here would be the fetch this must not be.
+  expect(sent).toEqual([
+    { method: "POST", path: "/setup/integrations/github/app", body: { seat: "cto" } },
+  ]);
+
+  const form = seen.form!;
+  expect(form.method).toBe("post");
+  expect(form.getAttribute("action")).toBe(
+    "https://github.com/organizations/acme/settings/apps/new",
+  );
+  // A NEW TAB, so the flow's landing page does not take the dashboard away.
+  expect(form.target).toBe("_blank");
+
+  const fields = fieldsOf(form);
+  // STRINGIFIED. A manifest handed to a form field as an object is the text
+  // "[object Object]", which the host refuses with no clue why.
+  expect(JSON.parse(fields.manifest!)).toEqual(manifest);
+  expect(fields.state).toBe("st-1");
+});
+
+// THE SECOND ACT IS A LINK, because there is an address for it: the install
+// page is built from the slug the host returned, which is a thing this engine
+// can name and send somebody to.
+test("an app nobody has installed is a link to the page that installs it", () => {
+  roster(
+    seatOf({
+      step: "install_app",
+      action_url: "https://github.com/apps/crewlet-cto/installations/new",
+    }),
+  );
+
+  const link = screen.getByRole("link", { name: "Install on GitHub" });
+  expect(link.getAttribute("href")).toBe("https://github.com/apps/crewlet-cto/installations/new");
+  // A NEW TAB, so the card an operator started from is still behind it.
+  expect(link.getAttribute("target")).toBe("_blank");
+  expect(screen.queryByRole("button", { name: /Create app/ })).toBeNull();
+});
+
+// A CONTROL IS NEVER INVENTED. A step a newer node wrote is one this build
+// has no act for, and a seat with nothing outstanding needs no control at
+// all: guessing at either is worse than drawing nothing.
+test("a step this build cannot perform draws no control", () => {
+  roster(
+    seatOf({ handle: "cto", step: "authorize_app" }),
+    seatOf({ handle: "swe", name: "SWE", satisfied: true }),
+    // INSTALL WITH NO ADDRESS. The install page is built from the slug the
+    // host returned, so a seat whose app the engine cannot name has nowhere
+    // to send anybody, and an anchor to nothing is a control that lies.
+    seatOf({ handle: "sre", name: "SRE", step: "install_app" }),
+  );
+
+  expect(screen.queryByRole("button", { name: /Create app/ })).toBeNull();
+  expect(screen.queryByRole("link", { name: /Install on/ })).toBeNull();
+});
+
+// A REFUSAL LANDS ON THE ROW THAT ASKED. The engine refuses this one for
+// reasons an operator can fix (no public address is set, so an app created
+// now would carry a delivery address that cannot be changed afterwards), and
+// a button that quietly did nothing would leave them pressing it again.
+test("the engine's refusal is reported beside the agent it was refused for", async () => {
+  const sent: Sent[] = [];
+  stubFetch(sent, { error: "no_public_url", hint: "set integrations.public_base_url first" }, 409);
+  roster(seatOf({ step: "create_app" }));
+
+  fireEvent.click(screen.getByRole("button", { name: "Create app on GitHub" }));
+  expect(await screen.findByText("set integrations.public_base_url first")).toBeTruthy();
+});
+
+// --- the listing, and when it is worth reading again ---------------------- //
+
+import { act } from "@testing-library/react";
+import { useSetup } from "./Integrations.tsx";
+
+/** The hook alone: it reaches for `rest` and for no context at all. */
+function Probe() {
+  const setup = useSetup();
+  return (
+    <span data-testid="probe">
+      {setup.loading ? "loading" : "ready"}:{[...setup.byKey.keys()].join(",")}
+    </span>
+  );
+}
+
+// AN AGENT'S APP IS SET UP AT THE CODE HOST, IN ANOTHER TAB.
+//
+// This listing carries the roster and nothing pushes it, so a seat that had a
+// Create button kept offering it after the app existed, and an operator who
+// had done exactly what the card asked was told to do it again. The tab
+// coming back is the one moment this screen can know something may have
+// happened while it was not being read.
+test("the roster is read again when the tab comes back", async () => {
+  const calls: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      calls.push(new URL(String(input), "http://engine.test").pathname);
+      return new Response(JSON.stringify({ tools: [toolState({ key: "github" })] }), {
+        status: 200,
+      });
+    }),
+  );
+  render(<Probe />);
+  await waitFor(() => expect(calls).toEqual(["/setup/integrations"]));
+
+  // A TAB GOING AWAY IS NOT A REASON TO READ ANYTHING. Nobody is looking.
+  Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+  act(() => void document.dispatchEvent(new Event("visibilitychange")));
+  expect(calls.length).toBe(1);
+
+  Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+  act(() => void document.dispatchEvent(new Event("visibilitychange")));
+  // QUIETLY: there is already an answer on screen, and re-reading with the
+  // skeleton would blank every card each time somebody switched tabs.
+  expect(screen.getByTestId("probe").textContent).toBe("ready:github");
+  await waitFor(() => expect(calls.length).toBe(2));
+});

@@ -93,6 +93,8 @@ A body that does not arrive inside its deadline fails the read like any other tr
 | `POST` | `/webhooks/slack/{handle}` | Receive Slack Events API deliveries for one seat's app |
 | `GET` | `/webhooks/slack-oauth` | OAuth install landing page for `crewlet slack provision` |
 | `POST` | `/webhooks/github` | Receive GitHub webhooks — HMAC-SHA256 over the raw body |
+| `POST` | `/webhooks/github/{handle}` | The same route addressed to one seat, which is where that seat's own [GitHub App](../integrations/github.md#one-github-app-per-agent) delivers |
+| `GET` | `/webhooks/github-app` | Landing page for the per-agent GitHub App flow: converts the one-time creation code, or reports an install (see [below](#get-webhooksgithub-app)) |
 | `POST` | `/webhooks/gitlab` | Receive GitLab webhooks |
 | `POST` | `/webhooks/confluence` | Receive Confluence Data Center webhooks (Cloud arrives via `/webhooks/forge`) |
 | `POST` | `/webhooks/forge` | Receive Forge events (FIT-verified) |
@@ -623,11 +625,14 @@ because a company mid-edit looks exactly like one that removed a seat.
 
 ### Per-seat setup
 
-Slack is the one third-party app whose credentials live on the **seat** rather
-than on the company: each agent has its own Slack app, so each has its own bot
-token and signing secret. Its tool state carries a `seats` array, one entry per
-agent seat, each with its own requirement list, its own `inbound_path`, and its
-own `satisfied`.
+Two third-party apps put an agent's identity on the **seat** rather than on the
+company, because on both of them one app is one bot: Slack, whose credentials
+an operator pastes in, and GitHub, whose app the engine creates. Both carry a
+`seats` array in their tool state, one entry per agent seat.
+
+Slack's entries are a form: each agent has its own Slack app, so each has its
+own bot token and signing secret, and every entry carries its own requirement
+list, its own `inbound_path` and its own `satisfied`.
 
 A submission for one of them names it:
 
@@ -654,6 +659,122 @@ tokens are available. What this surface does is make a hand-created app usable
 without one: it takes the two values Slack shows on the app's own page and
 seals them.
 
+#### GitHub: the app the engine writes
+
+A GitHub seat's entry carries **no requirement list**, and the empty one is
+deliberate rather than unfinished: nothing here is typed in. The app is created
+from a manifest, and GitHub returns its id, its slug and its private key once,
+to the engine, which seals the key and records the rest on the seat. What the
+entry answers instead is what is still outstanding for that agent:
+
+```json
+{
+  "handle": "builder",
+  "name": "Builder",
+  "requirements": [],
+  "tier": "full_access",
+  "step": "install_app",
+  "action_url": "https://github.com/apps/acme-builder/installations/new",
+  "present": true,
+  "satisfied": false,
+  "detail": "the app exists and nothing has installed it, so it sees no repository and mints no usable token"
+}
+```
+
+`step` and `action_url` are the two clicks, described under
+[One agent's own GitHub App](#one-agents-own-github-app). `tier` is the seat's
+access tier, answered before the app exists because it is what the manifest
+asks for, and defaulting to `read_only` on a seat whose configuration is
+silent.
+
+**`present`** is whether the seat has an app at all, and **`satisfied`** needs
+that app installed *and* its sealed key readable by this node. A `${VAR}`
+naming a secret the store does not hold is the state that reads as configured
+everywhere else while the agent mints no token, so `detail` names the variable
+to set. It names the reference, never a key.
+
+An unfinished roster does **not** hold the card open: the company block is what
+decides whether deliveries arrive, and a company running apps for three of its
+ten agents chose that.
+
+### One agent's own GitHub App
+
+GitHub is the other per-seat case, and it is not a form. A
+[GitHub App](../integrations/github.md#one-github-app-per-agent) is created by
+POSTing a manifest from a page carrying the operator's own GitHub session, so
+this surface hands the dashboard what to submit rather than collecting values,
+and the two clicks that follow are a person's. There is no server-to-server
+equivalent, which is why a reconcile pass cannot do this one alone.
+
+**`POST /setup/integrations/github/app`** begins it, naming the seat:
+
+```bash
+curl -X POST https://engine.example.com/setup/integrations/github/app \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"seat": "senior-engineer"}'
+```
+
+```json
+{
+  "seat": "senior-engineer",
+  "tier": "review",
+  "action_url": "https://github.com/organizations/acme/settings/apps/new",
+  "manifest": {"name": "Acme Senior Engineer", "public": false, "...": "..."},
+  "state": "<signed token naming the seat>"
+}
+```
+
+Those three values are what GitHub's manifest flow takes: the browser POSTs the
+`manifest` as a form field to `action_url`, carrying `state` on that URL so the
+redirect can be tied back to the seat that started. `action_url` is the
+organization's own app registration page whenever
+`integrations.github.provisioning.org` names one, because an app registered
+under a person's account cannot be installed on the organization that owns the
+repositories.
+
+Refusals: `503 no_app_flow` (this process holds no signing material, so a
+browser coming back could not be tied to the seat that started),
+`400 bad_body`, `400 seat_required`, `409 no_active_revision`,
+`404 no_such_seat`, and `409 no_public_url` when
+`integrations.public_base_url` is unset. The last one matters more than it
+looks: an app is created with its delivery, redirect and setup addresses baked
+in, and only a person at GitHub can change them afterwards, so creating one
+now would mean creating it again later.
+
+**`GET /webhooks/github-app`** is where GitHub returns the browser, twice. It is
+unauthenticated because a redirect carries no engine credential; the `state` is
+what stands in its place, and it is validated before anything else happens.
+
+- With a `code`, the engine converts the manifest, **seals the app's private
+  key and webhook secret first**, then records `app_id`, `app_slug` and a
+  `${VAR}` pointing at the sealed key on the seat, through the same per-entity
+  config route [per-seat setup](#per-seat-setup) uses. `installation_id` is
+  written as `0`: the install is a second act. The page then links to the
+  install. The seal comes first because GitHub returns those two values exactly
+  once and reissues neither, so a failure after it costs a retry and a failure
+  before it costs the app.
+- With `?installed=<handle>`, it confirms the install. There is nothing to
+  convert: installing is GitHub's own act and returns no code.
+- With `?error=`, it renders GitHub's own `error_description`, which is the
+  operator's to read (they cancelled, or they may not create apps on that
+  organization).
+
+It answers `200` for a completion or an install, `400` for a refusal, a missing
+code, or a state or code the engine will not accept, and `503` when this
+process has no setup surface behind it. An error message here is always the
+engine's own wording and never a quote of GitHub's response body, because that
+body carries the app's private key.
+
+**The roster says what is outstanding.** A seat entry in a tool's `seats` array
+carries three more fields where a per-seat app has tiers and clicks: `tier` is
+the seat's access tier, `step` is what is left as a closed set of `create_app`
+and `install_app`, and `action_url` is where a person goes to do it. Two steps
+rather than one, because they are two acts minutes or days apart and an
+operator who has done the first needs to be told the second is left rather than
+shown the same button. `action_url` is **empty for `create_app`**, and that is
+not an omission: an app is created by POSTing a manifest, not by following a
+link, so the dashboard asks the begin route above for one and submits a form.
+
 ### One tool, several surfaces
 
 The engine reaches Atlassian over three of these keys: `jira`, `confluence`
@@ -665,13 +786,6 @@ for one section per key and submits one request per section.
 The Forge app id is the exception, and it rides with `jira`: one app relays
 both surfaces, so it is one value with two consumers. Listing it under both
 would be two forms writing one field.
-
-### Disconnecting
-
-`DELETE /setup/integrations/{kind}` removes the block and **nothing else**.
-The sealed values stay, named in `orphaned_secrets`: a credential an operator
-may be sharing with another deployment is not something a disconnect button
-decides about on its own, and `crewlet secrets unset` is the deliberate path.
 
 
 ## Live Stream
@@ -1701,7 +1815,24 @@ The OAuth install landing page for [`crewlet slack provision`](../integrations/s
 
 ### `/webhooks/github`
 
-Receives GitHub webhook payloads. Verifies HMAC-SHA256 over the raw body against the `x-hub-signature-256` header, keyed on the required `webhook_secret` from the `github` config block; invalid or missing signatures are rejected with 401, and a route with no resolved secret answers 503 with a `Retry-After` so the delivery is held for retry rather than blamed on the sender. Deliveries are deduped on `X-GitHub-Delivery`, which is stable across GitHub's own retries and an operator's manual redelivery. **The event name is in the `X-GitHub-Event` header**, not the body — the payload carries only the action — so the header is carried onto the envelope and read by the parser. Publishes to `crewlet.notifications.inbound`. See [GitHub Integration — Webhooks](../integrations/github.md#webhooks).
+Receives GitHub webhook payloads. Verifies HMAC-SHA256 over the raw body against the `x-hub-signature-256` header, keyed on the required `webhook_secret` from the `github` config block; invalid or missing signatures are rejected with 401, and a route with no resolved secret answers 503 with a `Retry-After` so the delivery is held for retry rather than blamed on the sender. Deliveries are deduped on `X-GitHub-Delivery`, which is stable across GitHub's own retries and an operator's manual redelivery. **The event name is in the `X-GitHub-Event` header**, not the body — the payload carries only the action — so the header is carried onto the envelope and read by the parser. Publishes to `crewlet.notifications.inbound`. The same handler serves `POST /webhooks/github/{handle}`, which is the address a seat's own [GitHub App](../integrations/github.md#one-github-app-per-agent) is created with: the handle travels onto the published event so five agents' apps reporting one comment are five wakes rather than four duplicates, and both forms verify against the same company `webhook_secret`, so a seat in the path is not a way past the signature check. See [GitHub Integration — Webhooks](../integrations/github.md#webhooks).
+
+### `GET /webhooks/github-app`
+
+Where GitHub returns an operator's browser during the per-agent
+[GitHub App](../integrations/github.md#one-github-app-per-agent) flow, and the
+only `/webhooks/*` route that renders a page rather than accepting a delivery.
+Two arrivals, one route: after the app is **created**, with a one-time code to
+convert, and after it is **installed**, with nothing but `?installed=<handle>`.
+Unauthenticated, because a redirect from GitHub carries no engine credential;
+the `state` minted by [`POST /setup/integrations/github/app`](#one-agents-own-github-app)
+stands in its place and is a signed token naming the seat, checked before the
+code is converted. On a conversion the app's private key and webhook secret are
+sealed before anything else can fail, because GitHub returns both exactly once
+and reissues neither. Answers `200` for a completion or an install, `400` for a
+refusal from GitHub, a missing code, or a state or code the engine will not
+accept, and `503` when this process has no setup surface. Error text is always
+the engine's own wording: GitHub's response body here carries the private key.
 
 ### `/webhooks/gitlab`
 

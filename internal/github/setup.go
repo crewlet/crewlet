@@ -9,18 +9,23 @@ import (
 // What an operator has to supply before GitHub events reach a seat, and
 // before this engine can register a hook.
 //
-// Two credentials, and they do different jobs. The ORG TOKEN is read-only and
-// optional: without it a delivery still routes, but the engine cannot look up
-// who is participating in a thread, so a review request reaches its reviewer
-// and nobody else. The WEBHOOK SECRET is what the edge verifies every
-// delivery against, and a route with nothing to check against answers 503
-// rather than accepting one, so it is the difference between an integration
-// that works and one that silently refuses everything.
+// THE ORGANIZATION LEADS THE FORM, because it is the one answer nobody but
+// the operator has: it names where the repositories are, where each agent's
+// own app is installed, and what a hook is registered on. Everything an agent
+// authenticates with comes from that app instead. One app per seat, created
+// and installed from the roster, its key sealed by the engine, so the connect
+// form asks for no agent credential at all.
 //
-// GitHub issues no credential on a provisioner's behalf, which is why only
-// the webhook secret is mintable: the engine invents that one because both
-// ends of it are the engine's, and it cannot invent a personal access token
-// no GitHub account has ever seen.
+// The WEBHOOK SECRET is what the edge verifies a company-wide delivery
+// against, and a route with nothing to check against answers 503 rather than
+// accepting one. It is mintable because both ends of it belong to the engine.
+//
+// The ORG TOKEN is neither of those, and it no longer leads. It is read-only,
+// optional, and buys exactly one thing: the list of who is participating in a
+// thread, which no payload carries. Without it a review request still reaches
+// its reviewer and the people merely watching hear nothing. Leading with it
+// made a hand-minted personal access token the price of connecting at all, for
+// a credential no agent ever acts as.
 
 // Requirements says what this company still needs for GitHub.
 func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setup.Requirement {
@@ -63,8 +68,12 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			Blocks:   integration.FindingCredentialMissing,
 		},
 		{
-			Field:      "token",
-			Connect:    true,
+			Field: "token",
+			// NOT A CONNECT FIELD, because it establishes nothing. No
+			// agent acts through it (each seat has its own app) and no
+			// delivery is verified with it, so a form that opened with it
+			// asked for a hand-minted personal access token before the
+			// organization it would be read against had even been named.
 			Label:      "Organization read token",
 			Kind:       setup.KindSecret,
 			ConfigPath: "integrations.github.token",
@@ -74,8 +83,9 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			// not. Marking it required would put every company that
 			// deliberately runs without one on a permanent list of
 			// things to fix.
-			Required:  false,
-			Help:      "Optional and read-only: without it only the reviewer hears about a pull request.",
+			Required: false,
+			Help: "Optional and read-only: it reads who is participating in a thread. " +
+				"Without it only the people a payload names are told.",
 			Where:     "A token with read access to the repositories these agents work in.",
 			VendorURL: "https://github.com/settings/tokens",
 			Blocks:    integration.FindingCredentialMissing,
@@ -157,8 +167,15 @@ func choices() []setup.Choice {
 }
 
 // Summary is the sentence the connect form opens with.
+//
+// IT NAMES THE ORGANIZATION, because that is what the form now asks for. It
+// used to promise that the engine "reads what each seat already has access
+// to", which described a company pasting a token per agent into mcp_env and
+// told an operator nothing about the two clicks that actually give an agent
+// its identity here.
 func Summary() string {
-	return "Agents read and write pull requests as themselves. This engine " +
-		"registers a webhook so GitHub's events reach it, and reads what " +
-		"each seat already has access to."
+	return "Each agent gets its own GitHub App, so it reads, reviews and " +
+		"comments as itself. Name the organization the repositories live in " +
+		"and this engine registers the webhook that carries GitHub's events " +
+		"to those agents."
 }
