@@ -117,13 +117,63 @@ func (g *githubIdentities) register(reg *notify.Registry, c *Company, env *confi
 	known := maps.Clone(g.byToken)
 	g.mu.Unlock()
 
-	var registered int
+	var (
+		registered int
+		byApp      = map[string]bool{}
+	)
+
+	// AN AGENT'S OWN APP IS ITS IDENTITY, and it costs no request at all:
+	// GitHub derives an app's account from its slug, which the engine wrote
+	// down when it created the app. Registered FIRST, because a seat that
+	// has one acts as it, and the token below would otherwise overwrite the
+	// mapping with whatever account a leftover credential authenticates as.
+	//
+	// TWO SPELLINGS, one identity. A person writing a mention types the
+	// slug; every payload reporting what the app did carries the slug with
+	// `[bot]`. Nothing relates them, and the registry is a bijection per
+	// namespace, so the bot login goes in the companion namespace that
+	// exists for exactly this — the same shape Slack and Mattermost use.
+	for role := range c.Config.EachRole() {
+		seat := role.Seat()
+		app := role.Integrations.GitHub
+		if !seat.IsAgent() || app == nil {
+			continue
+		}
+		slug := github.NormalizeLogin(app.AppSlug)
+		if slug == "" {
+			// The app has not been created yet. The seat is on the
+			// roster with a click outstanding, and it acts as nobody
+			// until somebody makes it one.
+			continue
+		}
+		handle := seat.Handle()
+		if err := reg.Register(github.Backend, slug, handle); err != nil {
+			log.Warn("github_seat_identity_refused", "seat", handle,
+				"login", slug, "error", err.Error())
+			continue
+		}
+		if bot := github.BotLogin(slug); bot != "" {
+			if err := reg.Register(notify.BotNamespace(github.Backend), bot, handle); err != nil {
+				// THE MENTION STILL WORKS. What is lost is recognising
+				// this agent's own activity in a payload, so it is a
+				// warning and not a reason to drop the seat.
+				log.Warn("github_seat_bot_identity_refused", "seat", handle,
+					"login", bot, "error", err.Error())
+			}
+		}
+		byApp[handle] = true
+		registered++
+	}
+
 	for seat := range c.Org.AllRoles() {
+		if byApp[seat.Handle()] {
+			continue
+		}
 		token := github.CredentialOf(seat, env.Value)
 		if token == "" {
 			continue
 		}
-		login := known[token]
+		login := github.NormalizeLogin(known[token])
 		if login == "" {
 			continue
 		}

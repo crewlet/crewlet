@@ -329,6 +329,26 @@ the [secret store](../concepts/secret-store.md):
 shared name would have the second agent's key overwrite the first's, and both
 seats would then authenticate as whichever app was created last.
 
+### How a seat's app is recognised
+
+An app has two names and nothing at GitHub relates them. A person writing a
+mention types the **slug**, so a body carries `@acme-sre-lead`; every payload
+reporting what that app did carries the **account**, which is the slug with
+`[bot]` appended. Both are registered against the seat, the slug where
+mentions resolve and the account in the companion namespace a payload's sender
+resolves through, so an agent is routable under either.
+
+Neither costs a request. A seat holding a personal access token still has its
+account learned with one `GET /user`, because a token says nothing about whose
+it is; an app's account is its slug, which the engine wrote down when it
+created the app. **The app wins** where a seat has both, because the app is
+what the agent acts as; a credential nobody cleaned out of `mcp_env` would
+otherwise take the mapping and the app's own deliveries would reach a
+stranger.
+
+Logins are folded to lower case on the way in, because GitHub treats them as
+case-insensitive and a mention carries whatever a person typed.
+
 ### Deliveries from a seat's app
 
 An app created this way delivers to `POST /webhooks/github/<handle>`, which is

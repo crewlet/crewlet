@@ -468,6 +468,64 @@ func TestOnlyRoutableLoginsProduceNotifications(t *testing.T) {
 	}
 }
 
+// AN AGENT'S OWN APP IS ROUTABLE UNDER BOTH ITS NAMES.
+//
+// A person writing a mention types the app's SLUG, so the body carries
+// `@acme-sre-lead`; every payload reporting what that app did carries the
+// account, which is the slug with `[bot]`. Registered under one name only,
+// half of a working integration is dropped as a stranger's: this was the
+// state a live company reached with an app created, installed, its
+// deliveries verified and stored, and not one of them reaching a seat.
+func TestAnAgentsOwnAppIsRoutableUnderBothItsNames(t *testing.T) {
+	t.Parallel()
+	organization := &org.Organization{
+		Name:  "Acme",
+		Roles: []*org.Role{{Name: "SRE Lead", DeclaredHandle: "sre-lead"}},
+	}
+	reg := notify.NewRegistry(organization)
+	// The two registrations the engine makes for one app.
+	if err := reg.Register(github.Backend, "acme-sre-lead", "sre-lead"); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(notify.BotNamespace(github.Backend),
+		github.BotLogin("acme-sre-lead"), "sre-lead"); err != nil {
+		t.Fatal(err)
+	}
+
+	// THE MENTION, which is what a person writes and what wakes the agent.
+	out, err := github.NewParser(github.ParserOptions{}).Parse(context.Background(),
+		delivery("issue_comment", `{
+			"action": "created",
+			"comment": {"body": "@acme-sre-lead please take a look", "user": {"login": "writer"}},
+			"issue": {"number": 16, "title": "Delivery check", "user": {"login": "writer"}},
+			"repository": {"full_name": "acme/api", "name": "api", "owner": {"login": "acme"}},
+			"sender": {"login": "writer"}
+		}`), reg)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got := reasons(out); got["acme-sre-lead"] != github.CommentMention {
+		t.Fatalf("a mention of the agent's own app reached nobody: %v", got)
+	}
+
+	// AND THE ACCOUNT, which is how a payload names the same agent. It is
+	// the author here, so the delivery is about work this agent opened.
+	out, err = github.NewParser(github.ParserOptions{}).Parse(context.Background(),
+		delivery("issue_comment", `{
+			"action": "created",
+			"comment": {"body": "on it", "user": {"login": "writer"}},
+			"issue": {"number": 17, "title": "Rollout", "user": {"login": "acme-sre-lead[bot]"}},
+			"repository": {"full_name": "acme/api", "name": "api", "owner": {"login": "acme"}},
+			"sender": {"login": "writer"}
+		}`), reg)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got := reasons(out); got["acme-sre-lead[bot]"] != github.CommentAdded {
+		t.Fatalf("the agent was not told about a comment on its own issue: %v", got)
+	}
+}
+
 // # Mentions
 
 func TestMentionsReadGitHubsOwnLoginGrammar(t *testing.T) {
