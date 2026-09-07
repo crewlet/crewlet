@@ -110,10 +110,10 @@ export function vendorLink(
  * SEPARATE FROM [vendorLink] although both read `{field}`, because they want
  * OPPOSITE things from an unanswered one: a link with a hole in its path
  * goes nowhere and is dropped entirely, while a sentence is still worth
- * reading. So `resolve` falls back to the field's DEFAULT — which is what
- * the engine uses for a blank optional field, making the filled-in sentence
- * true rather than merely nonempty — and only a template naming a field with
- * neither is left visibly unresolved, which is an authoring mistake and
+ * reading. So `resolve` falls back to the field's DEFAULT, which is what
+ * the engine uses for a blank optional field and makes the filled-in
+ * sentence true rather than merely nonempty. Only a template naming a field
+ * with neither is left visibly unresolved, which is an authoring mistake and
  * should look like one.
  */
 export function fillTemplate(text: string, resolve: (field: string) => string): string {
@@ -261,9 +261,16 @@ export function SetupDialog({
   }, [sections, blocks]);
 
   // ASKED ONCE. A shared value belongs to the tool rather than to one of its
-  // surfaces, so it is rendered by the first section that declares it and
-  // dropped from the rest — and it is SUBMITTED to all of them, which is what
-  // payloadFor reads ownBy for.
+  // surfaces, so it is rendered by ONE section and dropped from the rest, and
+  // it is SUBMITTED to all of them, which is what payloadFor reads ownBy for.
+  //
+  // THE LAST SECTION THAT DECLARES IT, not the first, which is what decides
+  // where it lands on the form. Claimed by the first, Atlassian's account
+  // email and API token rendered inside Jira and pushed the Confluence site
+  // below them, so the two site addresses (one question, asked twice) were
+  // split by two fields belonging to neither. A value several surfaces share
+  // reads as the tool's own once it follows the surfaces rather than
+  // interrupting the first of them.
   //
   // Atlassian asked for the account email, the API token, the cloud id and
   // the link address twice, under two headings, in one dialog. That is one
@@ -271,7 +278,9 @@ export function SetupDialog({
   const shownBy = useMemo(() => {
     const out = new Map<string, SetupRequirement[]>();
     const claimed = new Set<string>();
-    for (const section of sections) {
+    // BACKWARDS to claim, forwards to render: the map keeps the sections'
+    // own order, so only which section owns a shared field changes.
+    for (const section of [...sections].reverse()) {
       const key = sectionKey(section);
       out.set(
         key,
@@ -283,7 +292,9 @@ export function SetupDialog({
         }),
       );
     }
-    return out;
+    return new Map(
+      sections.map((section) => [sectionKey(section), out.get(sectionKey(section)) ?? []]),
+    );
   }, [sections, ownBy]);
   const shown = useMemo(() => [...shownBy.values()].flat(), [shownBy]);
 
@@ -701,17 +712,29 @@ export function SetupDialog({
                     company has answered it. */}
                 {fill(r.help ?? "")}
                 {r.where && <> {fill(r.where)}</>}
-                {link && (
+                {/* THE LINK IS PART OF THE SENTENCE when the app says what
+                    to call it: "Create one on your API keys page" sends
+                    somebody to the page it names, where a trailing "Open
+                    Datadog" makes them work out which of three pages the
+                    form meant.
+
+                    WHICH IS WHY THE WORDS OUTLIVE THE ADDRESS. A
+                    per-organization page has no address until the
+                    organization id is typed, and dropping the whole clause
+                    then left "Find the Jira site value under" ending in
+                    nothing. The name of the page is the useful half and is
+                    true whether or not this form can open it yet, so it
+                    stays and only the anchor waits. */}
+                {(link || r.link_text) && (
                   <>
                     {" "}
-                    <a href={link} target="_blank" rel="noreferrer">
-                      {/* THE LINK IS PART OF THE SENTENCE when the app says
-                          what to call it: "Create one on your API keys page"
-                          sends somebody to the page it names, where a
-                          trailing "Open Datadog" makes them work out which
-                          of three pages the form meant. */}
-                      {r.link_text || `Open ${appName}`}
-                    </a>
+                    {link ? (
+                      <a href={link} target="_blank" rel="noreferrer">
+                        {r.link_text || `Open ${appName}`}
+                      </a>
+                    ) : (
+                      r.link_text
+                    )}
                     {r.link_text ? "." : null}
                   </>
                 )}

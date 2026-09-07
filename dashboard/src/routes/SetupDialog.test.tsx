@@ -1046,7 +1046,11 @@ test("a link cites a shared field from another section", () => {
 // AND STAYS UNLINKED UNTIL THERE IS ONE, which is the rule the organization
 // id already set: a per-organization address with a hole in it opens the
 // console's front door, somewhere a person then has to navigate out of.
-test("a link citing an unanswered field is not drawn", () => {
+//
+// THE WORDS STAY. The name of the page is the useful half and is true
+// whether or not this form can open it yet; dropping it left the sentence
+// it ends ("Find the Jira site value under") stopping at nothing.
+test("a link citing an unanswered field keeps its words and loses its anchor", () => {
   render(
     <SetupDialog
       sections={[
@@ -1060,6 +1064,7 @@ test("a link citing an unanswered field is not drawn", () => {
                 field: "url",
                 label: "Jira site",
                 kind: "url",
+                help: "Find the Jira site value under",
                 link_text: "App URLs",
                 vendor_url: "https://admin.atlassian.com/o/{org_id}/product-urls",
               }),
@@ -1072,5 +1077,56 @@ test("a link citing an unanswered field is not drawn", () => {
       onDone={() => {}}
     />,
   );
-  expect(screen.queryByText("App URLs")).toBeNull();
+  expect(screen.queryByRole("link", { name: "App URLs" })).toBeNull();
+  expect(screen.getByText(/Find the Jira site value under App URLs\./)).toBeTruthy();
+});
+
+// A value SEVERAL surfaces share renders after them, not inside the first.
+// Claimed by the first section, Atlassian's account email and API token sat
+// inside Jira and pushed the Confluence site below them, so the two site
+// addresses (one question asked twice) were split by two fields belonging to
+// neither.
+test("a value shared across surfaces renders after them", () => {
+  const shared = [
+    req({ field: "email", label: "Account email", shared: true, connect: true }),
+    req({ field: "token", label: "API token", kind: "secret", shared: true, connect: true }),
+  ];
+  render(
+    <SetupDialog
+      sections={[
+        {
+          name: "Jira",
+          tool: {
+            ...tool,
+            key: "jira",
+            requirements: [
+              req({ field: "url", label: "Jira site", kind: "url", connect: true }),
+              ...shared,
+            ],
+          },
+        },
+        {
+          name: "Confluence",
+          tool: {
+            ...tool,
+            key: "confluence",
+            requirements: [
+              req({ field: "url", label: "Confluence site", kind: "url", connect: true }),
+              ...shared,
+            ],
+          },
+        },
+      ]}
+      title="Atlassian"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  const labels = screen.getAllByText(/^(Jira site|Confluence site|Account email|API token)$/);
+  expect(labels.map((l) => l.textContent)).toEqual([
+    "Jira site",
+    "Confluence site",
+    "Account email",
+    "API token",
+  ]);
 });
