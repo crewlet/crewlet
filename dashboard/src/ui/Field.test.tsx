@@ -228,6 +228,46 @@ test("Escape closes the list without clearing the field", () => {
   expect(input.value).toBe("$GH");
 });
 
+// THE LIST IS ASKED FOR WHEN IT IS ABOUT TO BE SHOWN.
+//
+// There is no push for the secret store, so a list read when a form opened
+// goes stale the moment somebody adds an entry in another tab, which is
+// exactly what a person does on finding the name they wanted is not there.
+// Asked on the way in, the list is current at the one moment that matters.
+test("the caller is asked to refresh when the list opens", () => {
+  const asked = vi.fn();
+  function Asking() {
+    const [value, setValue] = useState("");
+    return (
+      <Field
+        label="Webhook secret"
+        kind="id"
+        value={value}
+        onChange={setValue}
+        secrets={held}
+        onSecretsNeeded={asked}
+      />
+    );
+  }
+  render(<Asking />);
+  const input = screen.getByLabelText("Webhook secret") as HTMLInputElement;
+
+  // NOT BEFORE. A field nobody is completing in costs nothing.
+  fireEvent.change(input, { target: { value: "acme" } });
+  fireEvent.keyUp(input, { key: "e" });
+  expect(asked).not.toHaveBeenCalled();
+
+  fireEvent.change(input, { target: { value: "acme $" } });
+  fireEvent.keyUp(input, { key: "$" });
+  expect(asked).toHaveBeenCalledTimes(1);
+
+  // ON THE WAY IN ONLY: typing further into an open list is not a second
+  // opening, and asking per keystroke would spend a request on each.
+  fireEvent.change(input, { target: { value: "acme $GH" } });
+  fireEvent.keyUp(input, { key: "H" });
+  expect(asked).toHaveBeenCalledTimes(1);
+});
+
 // A COMPANY THAT HOLDS NOTHING GETS NO LIST, and neither does a query that
 // matches nothing: an empty popup is a control that says a company has
 // entries when it has none.

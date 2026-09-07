@@ -62,6 +62,7 @@ export function Field({
   required,
   autoFocus,
   secrets,
+  onSecretsNeeded,
 }: {
   label: string;
   kind?: FieldKind;
@@ -83,6 +84,19 @@ export function Field({
    * as it was rather than degrading it.
    */
   secrets?: string[];
+  /**
+   * Called when the list is about to be shown, so the caller can make sure
+   * it is current.
+   *
+   * A SECRET CREATED SINCE THIS FORM OPENED HAS TO BE OFFERABLE. There is no
+   * push for the secret store, so a list read once at mount is a list that
+   * goes stale the moment somebody adds an entry in another tab, which is
+   * exactly what a person does when they find the name they wanted is not
+   * there. Asking at the moment the answer matters is one request per time
+   * somebody starts typing a reference, and the caller decides how often
+   * that is worth spending.
+   */
+  onSecretsNeeded?: () => void;
 }) {
   const id = useId();
   const helpID = `${id}-help`;
@@ -131,15 +145,16 @@ export function Field({
 
   /** Re-reads what is under the caret after anything that can move it. */
   function reconsider(target: HTMLInputElement) {
-    if (masked) {
-      // A MASKED BOX REPORTS NO CARET. Browsers refuse selectionStart on a
-      // password input, so the offer waits for the value to become a
-      // reference, which unmasks it, or for the field to hold nothing but
-      // what is being typed.
-      setTyping(referenceAt(target.value, target.value.length));
-      return;
-    }
-    setTyping(referenceAt(target.value, target.selectionStart ?? target.value.length));
+    // A MASKED BOX REPORTS NO CARET. Browsers refuse selectionStart on a
+    // password input, so the offer waits for the value to become a
+    // reference, which unmasks it, or for the field to hold nothing but what
+    // is being typed.
+    const caret = masked ? target.value.length : (target.selectionStart ?? target.value.length);
+    const next = referenceAt(target.value, caret);
+    // ON THE WAY IN ONLY. The list is about to be shown, which is the moment
+    // its being current matters and the only moment worth a request.
+    if (next && !typing) onSecretsNeeded?.();
+    setTyping(next);
   }
 
   /** Writes the chosen name in and puts the caret after it. */

@@ -23,7 +23,7 @@
  * closed tab to leave the write half done.
  */
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Button } from "~/ui/primitives.tsx";
 import { Dialog } from "~/ui/Dialog.tsx";
 import { Field, type FieldKind } from "~/ui/Field.tsx";
@@ -263,21 +263,33 @@ export function SetupDialog({
   // convenience, and a form that could not be filled in because a second
   // request failed would be worse than one with no completion at all.
   const [secretNames, setSecretNames] = useState<string[]>([]);
-  useEffect(() => {
-    let live = true;
-    void (async () => {
-      try {
-        const body = (await rest.get("/secrets")) as { secrets?: { name?: string }[] } | null;
-        if (!live) return;
-        setSecretNames((body?.secrets ?? []).map((s) => s.name ?? "").filter(Boolean));
-      } catch {
-        // Nothing to say and nothing to do: see the note above.
-      }
-    })();
-    return () => {
-      live = false;
-    };
+  // WHEN THE LIST WAS LAST READ. There is no push for the secret store, so a
+  // read taken when this dialog opened goes stale the moment somebody adds an
+  // entry in another tab, which is exactly what a person does on finding the
+  // name they wanted is not there.
+  const readAt = useRef(0);
+  const loadSecrets = useCallback(async () => {
+    // ONE READ A FEW SECONDS AT MOST. The list is asked for whenever a
+    // completion opens, and a form where somebody types several references
+    // would otherwise spend a request on each. Long enough to collapse one
+    // person's typing, short enough that leaving to create an entry and
+    // coming back gets the new name.
+    const now = Date.now();
+    if (now - readAt.current < 3000) return;
+    readAt.current = now;
+    try {
+      const body = (await rest.get("/secrets")) as { secrets?: { name?: string }[] } | null;
+      setSecretNames((body?.secrets ?? []).map((s) => s.name ?? "").filter(Boolean));
+    } catch {
+      // THE LAST GOOD LIST STAYS. A refusal to refresh is not a reason to
+      // tell somebody their company holds no entries, and the completion is
+      // a convenience: a form that could not be filled in because a second
+      // request failed would be worse than one with no completion at all.
+    }
   }, []);
+  useEffect(() => {
+    void loadSecrets();
+  }, [loadSecrets]);
   // Keyed by SECTION rather than by vendor, because a per-seat vendor has
   // one section per seat and they all carry the same vendor key.
   // CONNECTING is "no section here is configured yet". It no longer decides
@@ -781,6 +793,7 @@ export function SetupDialog({
             value={values[key] ?? ""}
             onChange={(v) => setValues((c) => ({ ...c, [key]: v }))}
             secrets={secretNames}
+            onSecretsNeeded={() => void loadSecrets()}
             // WHAT THE APP SAYS, and nothing about which button opened the
             // form. Marking a connect field required while connecting and
             // optional afterwards made one field wear two labels in two
