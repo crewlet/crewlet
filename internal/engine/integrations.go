@@ -69,13 +69,27 @@ func (e *Engine) startIntegrations(ctx context.Context) {
 		return
 	}
 
+	// EVERY SURFACE THIS BUILD CAN REMOVE, paired with the seam that
+	// removes it. A registration with no disconnector still converges;
+	// one with no reconciler only removes.
+	drop := e.disconnectors()
 	regs := []integration.Registration{
-		{Reconciler: &jiraConverger{engine: e}},
+		{Reconciler: &jiraConverger{engine: e}, Disconnector: drop[integration.KindJira]},
 		// The wiki, whose pass had a Findings() and no reader: it could
 		// say what it saw and nothing asked, so a company's Confluence
 		// status was null forever while the surface could be broken.
-		{Reconciler: &confluenceConverger{engine: e}},
-		{Reconciler: &githubConverger{engine: e}},
+		{Reconciler: &confluenceConverger{engine: e}, Disconnector: drop[integration.KindConfluence]},
+		{Reconciler: &githubConverger{engine: e}, Disconnector: drop[integration.KindGitHub]},
+
+		// TEARDOWN ONLY. Both passes CREATE accounts and mint tokens on
+		// them, which a timer must never do: a loop that converged these
+		// would provision a company's vendor on a schedule nobody asked
+		// for, and gitlab.Reconcile refuses outright without a sink for
+		// exactly that reason. They can still be REMOVED on a schedule,
+		// because removal is only ever the answer to somebody pressing
+		// Disconnect.
+		{Only: integration.KindGitLab, Disconnector: drop[integration.KindGitLab]},
+		{Only: integration.KindMattermost, Disconnector: drop[integration.KindMattermost]},
 	}
 
 	worker, err := integration.New(integration.Options{

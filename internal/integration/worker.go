@@ -125,6 +125,18 @@ func Reject(err error, status int) error {
 	return fmt.Errorf("%w: %w", ErrCredentialRejected, err)
 }
 
+// kind is the surface a registration is for.
+//
+// The reconciler answers when there is one, because a reconciler that
+// disagreed with a hand-written kind would converge one surface under
+// another's status row. [Registration.Only] answers when there is not.
+func (r Registration) kind() Kind {
+	if r.Reconciler != nil {
+		return r.Reconciler.Kind()
+	}
+	return r.Only
+}
+
 // Disconnector removes a surface: what it holds at the vendor, and then its
 // block in the company document.
 //
@@ -147,6 +159,13 @@ type Disconnector interface {
 // Registration is one reconciler and what is specific to its cadence.
 type Registration struct {
 	Reconciler Reconciler
+
+	// Only names the surface for a registration with no reconciler.
+	//
+	// Ignored when Reconciler is set, which is the authority on its own
+	// kind. It exists for the teardown-only case: a surface the loop can
+	// REMOVE but must never converge, because converging it would mint.
+	Only Kind
 
 	// Disconnector removes this surface, or nil for a build that cannot.
 	//
@@ -219,10 +238,24 @@ func New(opts Options) (*Worker, error) {
 	byKind := make(map[Kind]Registration, len(opts.Registrations))
 	order := make([]Kind, 0, len(opts.Registrations))
 	for _, reg := range opts.Registrations {
-		if reg.Reconciler == nil {
-			return nil, errors.New("integration: a registration has no reconciler")
+		// A REGISTRATION MUST DO ONE OF THE TWO THINGS. Most do both:
+		// converge a surface and, when asked, remove it. Some can only
+		// remove it, because their pass mints credentials and a timer
+		// must not — GitLab and Mattermost create accounts, so a loop
+		// that reconciled them would provision on a schedule nobody
+		// asked for. Those register a Disconnector alone, which is what
+		// [Registration.Only] names.
+		if reg.Reconciler == nil && reg.Disconnector == nil {
+			return nil, errors.New(
+				"integration: a registration neither converges a surface nor " +
+					"removes one, so the loop would have nothing to do with it")
 		}
-		kind := reg.Reconciler.Kind()
+		kind := reg.kind()
+		if kind == "" {
+			return nil, errors.New(
+				"integration: a teardown-only registration has no Only kind; " +
+					"with no reconciler to ask, it has to name its own surface")
+		}
 		if !kind.Valid() {
 			return nil, fmt.Errorf(
 				"integration: %q is not a surface this build converges; "+
@@ -375,6 +408,12 @@ func (w *Worker) Tick(ctx context.Context) {
 		// healthy while somebody was waiting for it to go.
 		if state.TearingDown() {
 			w.tearDown(ctx, kind, state, now)
+			continue
+		}
+		if w.byKind[kind].Reconciler == nil {
+			// TEARDOWN-ONLY. There is nothing to converge here and a
+			// row exists only while a disconnect is in flight, so a due
+			// surface with no intent has nothing for this tick to do.
 			continue
 		}
 		w.reconcile(ctx, kind, state, now)

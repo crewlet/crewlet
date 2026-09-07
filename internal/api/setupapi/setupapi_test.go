@@ -476,9 +476,13 @@ func TestRotatingASecretPublishesAnyway(t *testing.T) {
 
 // --- disconnect ------------------------------------------------------------- //
 
-// DISCONNECT REMOVES THE BLOCK AND NAMES WHAT IS ORPHANED, without deleting
-// it. A credential an operator may be sharing with another deployment is not
-// something a disconnect button decides about on its own.
+// A FORCED DISCONNECT REMOVES THE BLOCK AND NAMES WHAT IS ORPHANED, without
+// deleting it. A credential an operator may be sharing with another
+// deployment is not something a disconnect button decides about on its own.
+//
+// Forced, because that is the path that still writes synchronously: the
+// ordinary one records the intent and lets the loop remove what the vendor
+// holds before the block goes.
 func TestDisconnectRemovesTheBlockAndNamesTheOrphans(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
@@ -489,7 +493,7 @@ func TestDisconnectRemovesTheBlockAndNamesTheOrphans(t *testing.T) {
 		t.Fatalf("connect = %d: %s", connect.Code, connect.Body)
 	}
 
-	res := s.do(t, http.MethodDelete, "/setup/integrations/datadog", "", nil)
+	res := s.do(t, http.MethodDelete, "/setup/integrations/datadog", `{"force": true}`, nil)
 	if res.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", res.Code, res.Body)
 	}
@@ -1082,4 +1086,73 @@ func TestAPassDoesNotSeeTheRequestBeingCancelled(t *testing.T) {
 		t.Fatal("the pass never finished")
 	}
 	<-served
+}
+
+// AN ORDINARY DISCONNECT ASKS, IT DOES NOT REMOVE.
+//
+// The block carries the credential the vendor teardown authenticates with, so
+// dropping it here would strand every webhook and account the integration
+// still holds with nothing left to authenticate a second attempt. The intent
+// goes on the fleet row and the loop removes both, in that order.
+func TestDisconnectRecordsTheIntentRatherThanRemovingTheBlock(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	status, _ := s.withPass(t, &recordingPass{})
+	s.seedGitHub(t)
+
+	res := s.do(t, http.MethodDelete, "/setup/integrations/github",
+		`{"remove_seats": true}`, nil)
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202: %s", res.Code, res.Body)
+	}
+	body := decode(t, res)
+	if body["removed"] != false || body["disconnecting"] != true {
+		t.Fatalf("body = %v: an asked-for disconnect must not report the block removed", body)
+	}
+
+	row, ok := status.get(integration.KindGitHub)
+	if !ok {
+		t.Fatal("no fleet row was written, so the loop would never act on the disconnect")
+	}
+	if !row.Disconnecting {
+		t.Error("the row does not carry the intent")
+	}
+	if !row.RemoveSeats {
+		t.Error("the checkbox answer did not reach the row the teardown reads it from")
+	}
+	// DUE NOW, or the disconnect waits out a backoff nobody asked it to
+	// serve before anything at the vendor is touched.
+	if !row.Due(pinned) {
+		t.Errorf("next attempt is %v, which is not due at %v", row.NextAttemptAt, pinned)
+	}
+
+	// And the integration is still configured: the block goes when the
+	// teardown finishes, not before.
+	state := decode(t, s.do(t, http.MethodGet, "/setup/integrations/github", "", nil))
+	if state["configured"] != true {
+		t.Error("the block was removed before the vendor teardown ran")
+	}
+}
+
+// THE CHECKBOX DEFAULTS TO OFF. An account at a vendor is a colleague with
+// history attached, and a disconnect that removed one because the field was
+// absent would be inferring the most destructive answer.
+func TestDisconnectDoesNotRemoveSeatsUnlessAsked(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	status, _ := s.withPass(t, &recordingPass{})
+	s.seedGitHub(t)
+
+	if res := s.do(t, http.MethodDelete, "/setup/integrations/github", "", nil); res.Code != http.StatusAccepted {
+		t.Fatalf("status = %d: %s", res.Code, res.Body)
+	}
+	row, ok := status.get(integration.KindGitHub)
+	if !ok {
+		t.Fatal("no fleet row was written")
+	}
+	if row.RemoveSeats {
+		t.Error("a disconnect with no body asked for the accounts to be deleted")
+	}
 }

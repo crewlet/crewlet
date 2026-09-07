@@ -243,7 +243,7 @@ by a process that can reach the [coordination store](../concepts/coordination.md
 | `GET` | `/setup/integrations` | What every integration this build can set up still needs, plus the address vendors reach this deployment on |
 | `GET` | `/setup/integrations/{kind}` | One integration's requirement list and state |
 | `POST` | `/setup/integrations/{kind}/inputs` | Supply or generate those values: credentials are sealed, the rest is patched into the company |
-| `DELETE` | `/setup/integrations/{kind}` | Remove the integration's block, naming the secrets it leaves behind |
+| `DELETE` | `/setup/integrations/{kind}` | Disconnect: remove what the integration holds at the vendor, then its block |
 | `POST` | `/setup/integrations/{kind}/provision` | Run the vendor's provisioning pass: mint what it needs, register its webhook |
 | `POST` | `/setup/integrations/{kind}/check` | Run the same pass read-only, to see whether something fixed at the vendor took |
 | `GET` | `/setup/integrations/{kind}/runs/{id}` | One pass, as the node that executed it remembers it |
@@ -492,6 +492,43 @@ nothing held there was no way to take one away from here, and every account
 the engine created outlived the integration that created it. The credential
 is held so that it can be undone, and it is named in `orphaned_secrets` when
 an integration is disconnected, so an operator knows exactly what to revoke.
+
+### Disconnecting
+
+`DELETE /setup/integrations/{kind}` **asks**; it does not remove. It answers
+`202` and records the intent on the fleet row, and the reconcile loop removes
+what the integration holds at the vendor — the webhooks it registered, and the
+accounts it created when asked — before the block leaves the company document.
+
+That order is the whole design. The block carries the credential the teardown
+authenticates with, so dropping it first would strand every webhook and
+account with nothing left to authenticate a second attempt. Until the teardown
+succeeds the surface reports phase `disconnecting`, labelled **Disconnecting**,
+and a failure holds it there and retries rather than letting it drift back to
+looking connected.
+
+```json
+{ "remove_seats": false, "force": false }
+```
+
+`remove_seats` is the console's *"also remove the accounts Crewlet created"*.
+It defaults to **false** and is never inferred: the engine's own webhooks come
+out either way, because nothing else uses them, but an account is a colleague
+at that vendor with history attached. Mattermost bots are **disabled** rather
+than deleted, because deleting a Mattermost user takes its posts with it.
+
+`force` drops the block immediately without waiting for the vendor, answers
+`200`, and is the way out of a teardown that can never succeed — a revoked
+credential, an instance that is gone. It is the operator saying they will
+remove what the vendor holds themselves.
+
+Either way the sealed credentials are **named, not deleted**, in
+`orphaned_secrets`: one an operator may be sharing with another deployment is
+not something a disconnect decides about on its own. `crewlet secrets unset`
+is the deliberate path.
+
+Refusals: `503 no_status_store` on a node with no coordination, which has
+nowhere to record the intent — retry against a node that has one, or force it.
 
 Refusals worth knowing: `409 requirements_outstanding` names the fields still
 missing (a pass writes at the vendor and must not run against a

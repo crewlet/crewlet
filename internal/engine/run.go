@@ -50,6 +50,11 @@ type Engine struct {
 	backends *Backends
 	node     *node.Node
 
+	// configWriter is how a disconnect removes a block, installed by the
+	// wiring that builds the config surface. Atomic because the loop
+	// reads it from its own goroutine while the API installs it.
+	configWriter atomic.Pointer[ConfigWriter]
+
 	// startedAt is when THIS engine started, which on a split deployment
 	// is a different process on a different clock from the API's own
 	// start. Carried on the presence heartbeat so a peer can tell a node

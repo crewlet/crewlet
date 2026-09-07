@@ -907,6 +907,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		log.Warn("setup_status_unavailable", "error", err,
 			"hint", "a provisioning pass will run and its findings will not reach the screen")
 	}
+	// The surface a DISCONNECT removes a block through, installed now
+	// because it is built here and the engine's loop started before it.
+	// Until it is set the loop refuses a disconnect rather than running
+	// the vendor teardown and leaving the block behind.
+	e.UseConfigWriter(engineConfigWriter{surface: configSurface})
 	setupSurface := setupapi.New(setupapi.Options{
 		Company: func() *config.Company { return companyConfig(e) },
 		Config:  configSurface,
@@ -1491,4 +1496,16 @@ func operatorLogLevel() slog.Level {
 // to a level.
 func operatorLogFormat() logging.Format {
 	return logging.ParseFormat(os.Getenv("CREWLET_LOG_FORMAT"))
+}
+
+// engineConfigWriter lets the reconcile loop remove a block through the same
+// PATCH /config surface every other write uses: one merge, one validation,
+// one compare-and-set onto the document.
+type engineConfigWriter struct{ surface *configapi.Service }
+
+func (w engineConfigWriter) Apply(ctx context.Context, patch []byte, summary, operator string) error {
+	_, err := w.surface.Apply(ctx, configapi.ApplyRequest{
+		Patch: patch, Summary: summary, Operator: operator,
+	})
+	return err
 }

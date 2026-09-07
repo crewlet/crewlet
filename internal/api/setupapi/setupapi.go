@@ -76,6 +76,10 @@ const (
 	codeValidationError  = httpjson.Code("validation_error")
 	codeInvalidInput     = httpjson.Code("invalid_input")
 	codeNoKeyring        = httpjson.Code("no_keyring")
+	// codeNoStatusStore is a node with no fleet row to record a disconnect
+	// on. Distinct from no_keyring, which is about sealing a credential:
+	// the two are different missing pieces and lead to different advice.
+	codeNoStatusStore = httpjson.Code("no_status_store")
 )
 
 // Options wire the service.
@@ -661,6 +665,57 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 		httpjson.Write(w, http.StatusOK, map[string]any{"key": kind, "removed": false})
 		return
 	}
+	var req disconnectRequest
+	if body, err := httpjson.ReadBody(w, r, MaxBody); err != nil {
+		httpjson.Refuse(w, err)
+		return
+	} else if len(body) > 0 {
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
+		if err := decode(body, &req); err != nil {
+			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+				map[string]string{"detail": err.Error()})
+			return
+		}
+	}
+
+	// ASKED FOR, NOT DONE HERE. The block stays in the document until the
+	// vendor teardown has run, because that block carries the credential
+	// the teardown authenticates with: removing it now would strand every
+	// webhook and account the integration still holds, with nothing left
+	// to authenticate a second attempt.
+	//
+	// FORCE is the exception, and it is the operator saying they will
+	// clean up at the vendor themselves. A vendor that will never accept
+	// the delete — a revoked token, an instance that is gone — would
+	// otherwise hold the integration in Disconnecting for ever.
+	if !req.Force {
+		if s.status == nil {
+			httpjson.FailWith(w, http.StatusServiceUnavailable, codeNoStatusStore,
+				map[string]string{
+					"detail": "this node has no fleet status store, so a disconnect " +
+						"cannot be recorded for the loop to act on",
+					"hint": "retry against a node with coordination, or force the " +
+						"disconnect and remove what the vendor holds by hand",
+				})
+			return
+		}
+		if err := s.markDisconnecting(r.Context(), kind, req.RemoveSeats); err != nil {
+			httpjson.FailWith(w, http.StatusServiceUnavailable, httpjson.CodeInternalError,
+				map[string]string{"detail": err.Error()})
+			return
+		}
+		log.InfoContext(r.Context(), "setup_disconnect_requested",
+			"integration", kind, "remove_seats", req.RemoveSeats,
+			"operator", operatorOf(r))
+		httpjson.Write(w, http.StatusAccepted, map[string]any{
+			"key": kind, "removed": false, "disconnecting": true,
+			"remove_seats": req.RemoveSeats,
+			"detail": "the engine is removing what this integration holds at the " +
+				"vendor; the block is dropped when that finishes",
+		})
+		return
+	}
+
 	patch := []byte(`{"integrations":{"` + string(kind) + `":null}}`)
 	applied, err := s.config.Apply(r.Context(), configapi.ApplyRequest{
 		Patch:    patch,
@@ -671,6 +726,16 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.refuse(w, r, err, setup.Result{})
 		return
+	}
+	// FORCED, so whatever the vendor still holds is now the operator's to
+	// remove. The status row goes with the block: leaving one would report
+	// a surface that is no longer configured.
+	if s.status != nil {
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
+		if err := s.status.ForgetIntegration(r.Context(), kind); err != nil {
+			log.WarnContext(r.Context(), "setup_status_not_forgotten",
+				"integration", kind, "error", err)
+		}
 	}
 	orphaned := []string{}
 	for _, req := range state.Requirements {
@@ -767,4 +832,49 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 func operatorOf(r *http.Request) string {
 	operator, _ := auth.OperatorFrom(r.Context())
 	return operator
+}
+
+// disconnectRequest is what the Disconnect dialog sends.
+type disconnectRequest struct {
+	// RemoveSeats is the checkbox: also remove the accounts this engine
+	// created at the vendor. False leaves them and removes only what the
+	// engine registered for itself.
+	RemoveSeats bool `json:"remove_seats"`
+
+	// Force drops the block without waiting for the vendor teardown.
+	//
+	// The way out of a teardown that can never succeed: a revoked
+	// credential, an instance that no longer exists. It is the operator
+	// saying they will remove what the vendor holds themselves, so the
+	// answer names what was left behind.
+	Force bool `json:"force"`
+}
+
+// markDisconnecting records the intent on the fleet row, so the loop picks it
+// up and the screen stops showing a connected integration.
+//
+// The row is written even when there is none: a surface nobody has reconciled
+// yet still has to carry the intent, or a disconnect asked for before the
+// first pass would be lost.
+func (s *Service) markDisconnecting(
+	ctx context.Context, kind integration.Kind, removeSeats bool,
+) error {
+	var state integration.State
+	if states, err := s.status.LoadIntegrations(ctx); err == nil {
+		for _, row := range states {
+			if row.Kind == kind {
+				state = row
+				break
+			}
+		}
+	}
+	state.Kind = kind
+	state.Disconnecting = true
+	state.RemoveSeats = removeSeats
+	// DUE NOW. The zero value is already in the past, but a row that has
+	// been reconciled carries a future one, and inheriting it would leave
+	// the disconnect waiting out a backoff nobody asked it to serve.
+	state.NextAttemptAt = time.Time{}
+	state.Attempts = 0
+	return s.status.SaveIntegration(ctx, state)
 }
