@@ -133,6 +133,122 @@ func TestAnEditedFileIsImportedOnce(t *testing.T) {
 	}
 }
 
+// A RESTART DOES NOT UNDO WHAT THE API WROTE.
+//
+// The bug this covers was silent and total: seeding compared the file against
+// the ACTIVE revision, so any write that moved the config ahead of the file —
+// a PUT, a PATCH, an integration connected from the dashboard — looked exactly
+// like an operator editing the file, and the next boot seeded the file back
+// over it. Observed on a live engine: Datadog's keys sealed in the secret
+// store, and the ${VAR} pointing at them gone from the document, which reads
+// on screen as a connected integration that is not configured.
+func TestARestartKeepsWhatTheAPIActivated(t *testing.T) {
+	t.Parallel()
+	db := seedStore(t)
+	file := parse(t, companyYAML)
+	if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, file, nil, quiet()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Something else moves the config ahead, the way every write through
+	// the API does: a new revision, activated, with the file untouched.
+	seeded, _, err := db.Configs().Active(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var edited map[string]any
+	if err := json.Unmarshal(seeded.Payload, &edited); err != nil {
+		t.Fatal(err)
+	}
+	edited["name"] = "Configured In The Dashboard"
+	payload, err := json.Marshal(edited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Configs().InsertActive(t.Context(), store.Revision{
+		ParentID: seeded.ID, Source: "api", CreatedBy: "operator",
+		Summary: "connect an integration", Payload: payload,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The node restarts with the SAME file it booted with before.
+	for range 3 {
+		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, file, nil, quiet()); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+
+	active, _, err := db.Configs().Active(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(active.Payload, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["name"] != "Configured In The Dashboard" {
+		t.Fatalf("active company = %v after a restart, want what the API activated", got["name"])
+	}
+	revisions, err := db.Configs().List(t.Context(), 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(revisions) != 2 {
+		t.Errorf("%d revisions, want the seed plus the API write and nothing per boot",
+			len(revisions))
+	}
+}
+
+// AND AN EDIT MADE AFTER ONE STILL LANDS. The fix must not turn into
+// "silently prefer the store", which is the failure the seed exists to avoid:
+// the file is compared against the last SEED, so editing it is still the way
+// an operator overrides what the API did.
+func TestAnEditedFileStillWinsAfterAnAPIWrite(t *testing.T) {
+	t.Parallel()
+	db := seedStore(t)
+	if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil,
+		parse(t, companyYAML), nil, quiet()); err != nil {
+		t.Fatal(err)
+	}
+	seeded, _, err := db.Configs().Active(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var edited map[string]any
+	if err := json.Unmarshal(seeded.Payload, &edited); err != nil {
+		t.Fatal(err)
+	}
+	edited["name"] = "Written By The API"
+	payload, err := json.Marshal(edited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Configs().InsertActive(t.Context(), store.Revision{
+		ParentID: seeded.ID, Source: "api", CreatedBy: "operator",
+		Summary: "an API write", Payload: payload,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	renamed := strings.Replace(companyYAML, "name: Acme", "name: Acme Renamed", 1)
+	if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil,
+		parse(t, renamed), nil, quiet()); err != nil {
+		t.Fatal(err)
+	}
+	active, _, err := db.Configs().Active(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(active.Payload, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["name"] != "Acme Renamed" {
+		t.Errorf("active company = %v, want the edited file to take effect", got["name"])
+	}
+}
+
 func TestASealedStoreDoesNotReseedOnEveryBoot(t *testing.T) {
 	t.Parallel()
 	// THE trap. With a keyring configured the stored payload is ciphertext

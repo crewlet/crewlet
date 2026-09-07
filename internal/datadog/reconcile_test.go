@@ -2,12 +2,14 @@ package datadog_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/datadog"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/provision"
 )
 
@@ -65,8 +67,8 @@ func planWith(handles ...string) *provision.Plan {
 
 // orgOK is the verify call every pass starts with.
 func orgOK(reg *region) {
-	reg.handle["/api/v2/current_user/orgs"] = func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"data":[{"attributes":{"name":"Infrado","public_id":"p1"}}]}`))
+	reg.handle["/api/v1/org"] = func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"orgs":[{"name":"Infrado","public_id":"p1"}]}`))
 	}
 	reg.handle["/api/v2/roles"] = func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"data":[{"id":"role-1","attributes":{"name":"Datadog Read Only Role"}}]}`))
@@ -198,7 +200,7 @@ func TestAnUnknownRoleIsRefusedRatherThanGuessed(t *testing.T) {
 func TestRefusedOrgCredentialsAreReportedAsARejection(t *testing.T) {
 	t.Parallel()
 	reg := newRegion(t)
-	reg.handle["/api/v2/current_user/orgs"] = func(w http.ResponseWriter, _ *http.Request) {
+	reg.handle["/api/v1/org"] = func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte(`{"errors":["Forbidden"]}`))
 	}
@@ -209,7 +211,36 @@ func TestRefusedOrgCredentialsAreReportedAsARejection(t *testing.T) {
 	if err == nil {
 		t.Fatal("a refused credential was not reported")
 	}
-	if !strings.Contains(err.Error(), "were refused") {
+	if !strings.Contains(err.Error(), "was refused") {
 		t.Errorf("err = %v", err)
+	}
+	if !errors.Is(err, integration.ErrCredentialRejected) {
+		t.Errorf("a 403 was not classified as a rejection: %v", err)
+	}
+}
+
+// AND ANYTHING ELSE IS NOT A REFUSAL. A 404, a 500 or a timeout says nothing
+// about the key, and reporting one as refused sends an operator to rotate a
+// credential that works. This is not hypothetical: the verify call named a
+// route Datadog does not serve, and every pass reported the keys rejected.
+func TestANonRefusalDoesNotAccuseTheCredential(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	reg.handle["/api/v1/org"] = func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"errors":["upstream"]}`))
+	}
+	_, err := datadog.Reconcile(context.Background(), datadog.Options{
+		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
+		Creds: pair, Sink: newSink(),
+	})
+	if err == nil {
+		t.Fatal("a 500 was not reported at all")
+	}
+	if !strings.Contains(err.Error(), "could not be verified") {
+		t.Errorf("err = %v, want it to stop short of claiming a refusal", err)
+	}
+	if errors.Is(err, integration.ErrCredentialRejected) {
+		t.Errorf("a 500 was classified as a credential rejection: %v", err)
 	}
 }

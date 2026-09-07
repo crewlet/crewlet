@@ -223,27 +223,29 @@ type Org struct {
 // refusal on a screen nobody is watching. It also names the ORGANIZATION,
 // which is the one thing an operator can check to see they connected the
 // account they meant to.
+//
+// `/api/v1/org` rather than a v2 route, and it is not a preference: this was
+// `/api/v2/current_user/orgs`, which does not exist. Datadog answers a made-up
+// path with 404 rather than 401, so a correct key pair failed verification and
+// the pass reported the credentials refused. There is no v2 equivalent that
+// names the organization; the v1 route is current, not deprecated, and takes
+// the same key pair.
 func (c *Client) VerifyCredentials(ctx context.Context, creds Credentials) (Org, error) {
 	var body struct {
-		Data []struct {
-			Attributes struct {
-				Name       string `json:"name"`
-				PublicID   string `json:"public_id"`
-				Disabled   bool   `json:"disabled"`
-				Sharing    string `json:"sharing"`
-				Descriptio string `json:"description"`
-			} `json:"attributes"`
-		} `json:"data"`
+		Orgs []struct {
+			Name     string `json:"name"`
+			PublicID string `json:"public_id"`
+		} `json:"orgs"`
 	}
-	if err := c.do(ctx, http.MethodGet, "/api/v2/current_user/orgs", creds, nil, &body); err != nil {
+	if err := c.do(ctx, http.MethodGet, "/api/v1/org", creds, nil, &body); err != nil {
 		return Org{}, err
 	}
-	if len(body.Data) == 0 {
+	if len(body.Orgs) == 0 {
 		return Org{}, errors.New(
 			"datadog: the keys authenticated and named no organization, which " +
 				"is an answer this build cannot act on")
 	}
-	first := body.Data[0].Attributes
+	first := body.Orgs[0]
 	return Org{Name: first.Name, Public: first.PublicID}, nil
 }
 

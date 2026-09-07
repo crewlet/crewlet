@@ -42,6 +42,7 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 		},
 		{
 			Field:      "url",
+			Connect:    true,
 			Label:      "GitLab instance",
 			Kind:       setup.KindURL,
 			ConfigPath: "integrations.gitlab.url",
@@ -84,6 +85,7 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 		},
 		{
 			Field:      "provisioning.group",
+			Connect:    true,
 			Label:      "Group",
 			Kind:       setup.KindID,
 			ConfigPath: "integrations.gitlab.provisioning.group",
@@ -152,6 +154,7 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 func AdminCredential(stored string) setup.Requirement {
 	return setup.Requirement{
 		Field:      "admin_token",
+		Connect:    true,
 		Label:      "Group Owner token",
 		Kind:       setup.KindSecret,
 		ConfigPath: "integrations.gitlab.provisioning.admin_token",

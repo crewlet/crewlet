@@ -73,14 +73,22 @@ func startReconciler(ctx context.Context, e *engine.Engine, boot *config.Bootstr
 	return reconciler, nil
 }
 
-// seedCompany imports the file as a revision when the store does not already
-// hold it.
+// seedCompany imports the file as a revision when the operator has edited it.
 //
 // Idempotent by CONTENT, not by a marker: a node that boots ten times with an
 // unchanged file imports nothing, and one whose file an operator edited
 // imports once. Silently ignoring the edited file instead would be the worst
 // of the three — an operator changes a config, restarts, and nothing happens,
 // with nothing anywhere saying why.
+//
+// COMPARED AGAINST THE LAST SEED, not against the active revision. Those are
+// the same document only until something else writes one: a PUT /config, a
+// PATCH, or an integration connected from the dashboard all move the active
+// revision ahead of the file, and comparing against it read that as "the
+// operator edited the file" and seeded the file back over their work. It was
+// silent, it happened on every restart, and it left the fleet holding sealed
+// credentials with no ${VAR} in the document pointing at them — which is
+// exactly a working integration reporting itself unconfigured.
 func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue.Publisher,
 	seed *config.Company, cipher secrets.Cipher, log *slog.Logger,
 ) error {
@@ -93,20 +101,30 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 	if err != nil {
 		return fmt.Errorf("read the active revision: %w", err)
 	}
+	seeded, hasSeed, err := configs.LatestSeed(ctx)
+	if err != nil {
+		return fmt.Errorf("read the last seeded revision: %w", err)
+	}
 	parent := ""
 	if found {
+		parent = active.ID
+	}
+	if hasSeed {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		current, err := secrets.Open(cipher, active.Payload)
+		current, err := secrets.Open(cipher, seeded.Payload)
 		if err != nil {
-			return fmt.Errorf("open the active revision: %w", err)
+			return fmt.Errorf("open the last seeded revision: %w", err)
 		}
 		if bytes.Equal(current, document) {
-			// The file has not changed, so there is nothing to import.
-			// The node may still owe the fleet a POINTER — see
-			// publishLocalActive for the case that puts it there.
+			// The file has not changed since this node imported it, so
+			// there is nothing to import and nothing to assert over
+			// whatever has been activated since. The node may still owe
+			// the fleet a POINTER — see publishLocalActive.
+			if !found {
+				return nil
+			}
 			return publishLocalActive(ctx, plane, pub, active, log)
 		}
-		parent = active.ID
 	}
 
 	payload, err := secrets.Seal(cipher, document)

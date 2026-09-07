@@ -31,6 +31,7 @@ func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []
 	reqs := []setup.Requirement{
 		{
 			Field:      "url",
+			Connect:    true,
 			Label:      "Confluence site",
 			Kind:       setup.KindURL,
 			ConfigPath: "integrations.confluence.url",
@@ -41,6 +42,7 @@ func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []
 		},
 		{
 			Field:      "cloud_id",
+			Connect:    true,
 			Label:      "Cloud id",
 			Kind:       setup.KindID,
 			ConfigPath: "integrations.confluence.cloud_id",
@@ -49,6 +51,7 @@ func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []
 		},
 		{
 			Field:      "email",
+			Connect:    true,
 			Label:      "Account email",
 			Kind:       setup.KindText,
 			ConfigPath: "integrations.confluence.email",
@@ -59,6 +62,7 @@ func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []
 		},
 		{
 			Field:      "token",
+			Connect:    true,
 			Label:      "API token",
 			Kind:       setup.KindSecret,
 			ConfigPath: "integrations.confluence.token",

@@ -136,6 +136,25 @@ func Reject(err error, status int) error {
 	return fmt.Errorf("%w: %w", ErrCredentialRejected, err)
 }
 
+// Refusal says how to describe a failed credential check.
+//
+// A REFUSAL IS A CLAIM, and it is only true when the third-party app actually
+// made it. Three reconcilers had "was refused" written into the sentence, so
+// every other way a check can fail — a 404 from a path this build got wrong, a
+// 500, a timeout, a name that does not resolve — reported a working credential
+// as rejected and sent an operator to rotate a key that was fine. Exactly that
+// happened: Datadog's verify call named a route that does not exist, answered
+// 404, and the pass reported the organization credentials refused.
+//
+// Pass the error AFTER [Reject] has classified it; the wording follows the
+// classification rather than guessing at it a second time.
+func Refusal(err error) string {
+	if errors.Is(err, ErrCredentialRejected) {
+		return "was refused"
+	}
+	return "could not be verified"
+}
+
 // kind is the surface a registration is for.
 //
 // The reconciler answers when there is one, because a reconciler that

@@ -177,10 +177,11 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		// reports has to say WHICH kind of failure it was: a refused
 		// credential is the operator's to fix and never clears on its
 		// own, where an unreachable third-party app clears without anybody.
+		rejected := integration.Reject(err, Status(err))
 		return nil, fmt.Errorf(
-			"jira: the org credential in integrations.jira.token was refused, "+
+			"jira: the org credential in integrations.jira.token %s, "+
 				"so nothing else this run reports would be trustworthy: %w",
-			integration.Reject(err, Status(err)))
+			integration.Refusal(rejected), rejected)
 	}
 
 	res := &Result{Deployment: opts.Client.Deployment(), Account: account}

@@ -221,6 +221,24 @@ func (c *Configs) Active(ctx context.Context) (Revision, bool, error) {
 		`SELECT `+revisionColumns+` FROM company_config WHERE is_active <> 0 LIMIT 1`)
 }
 
+// LatestSeed returns the newest revision this node imported FROM THE FILE,
+// and whether there is one.
+//
+// It exists to answer one question the active revision cannot: has the
+// operator edited the file since this node last read it? Seeding used to
+// compare the file against whatever was ACTIVE, which conflates two
+// different events — an edited file, and a config the API moved ahead — and
+// treats both as "the file is newer". A company set up through the dashboard
+// was therefore reverted to the file on the next restart, silently, keeping
+// the credentials it had sealed and losing every pointer to them.
+//
+// Newest by insertion order, for the reason [Configs.List] gives.
+func (c *Configs) LatestSeed(ctx context.Context) (Revision, bool, error) {
+	return c.one(ctx,
+		`SELECT `+revisionColumns+` FROM company_config
+		 WHERE source = 'file' ORDER BY rowid DESC LIMIT 1`)
+}
+
 // Get returns a revision by id, and whether it exists.
 func (c *Configs) Get(ctx context.Context, revisionID string) (Revision, bool, error) {
 	return c.one(ctx,

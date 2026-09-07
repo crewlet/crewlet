@@ -95,8 +95,8 @@ func TestAnUnknownSiteIsRefused(t *testing.T) {
 func TestEveryCallCarriesBothKeys(t *testing.T) {
 	t.Parallel()
 	reg := newRegion(t)
-	reg.handle["/api/v2/current_user/orgs"] = func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"data":[{"attributes":{"name":"Infrado","public_id":"abc"}}]}`))
+	reg.handle["/api/v1/org"] = func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"orgs":[{"name":"Infrado","public_id":"abc"}]}`))
 	}
 	org, err := reg.client(t).VerifyCredentials(context.Background(), pair)
 	if err != nil {
@@ -110,13 +110,37 @@ func TestEveryCallCarriesBothKeys(t *testing.T) {
 	}
 }
 
+// THE VERIFY CALL NAMES A ROUTE DATADOG SERVES.
+//
+// This is the one thing the fake cannot check for itself: it answers whatever
+// path the client asks for, so the suite passed for as long as the client
+// asked for `/api/v2/current_user/orgs`, which Datadog does not serve and
+// answers 404. A correct key pair failed to verify, and the pass reported the
+// organization credentials refused. Pinning the path here is what makes the
+// fake's agreement mean something.
+func TestVerifyAsksForTheOrganizationRoute(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	asked := ""
+	reg.handle["/api/v1/org"] = func(w http.ResponseWriter, r *http.Request) {
+		asked = r.URL.Path
+		_, _ = w.Write([]byte(`{"orgs":[{"name":"Infrado","public_id":"p1"}]}`))
+	}
+	if _, err := reg.client(t).VerifyCredentials(context.Background(), pair); err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if asked != "/api/v1/org" {
+		t.Errorf("asked = %q, want /api/v1/org", asked)
+	}
+}
+
 // A REFUSAL CARRIES DATADOG'S OWN WORDS, and its status, so the shared
 // credential-rejection rule can read the number and an operator can read the
 // sentence.
 func TestARefusalKeepsTheStatusAndTheMessage(t *testing.T) {
 	t.Parallel()
 	reg := newRegion(t)
-	reg.handle["/api/v2/current_user/orgs"] = func(w http.ResponseWriter, _ *http.Request) {
+	reg.handle["/api/v1/org"] = func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte(`{"errors":["Application key is not authorized"]}`))
 	}

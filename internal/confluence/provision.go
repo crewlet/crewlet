@@ -98,10 +98,11 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	}
 	account, err := opts.Client.Me(ctx)
 	if err != nil {
+		rejected := integration.Reject(err, Status(err))
 		return nil, fmt.Errorf(
-			"confluence: the org credential in integrations.confluence.token was "+
-				"refused, so nothing else this run reports would be trustworthy: %w",
-			integration.Reject(err, Status(err)))
+			"confluence: the org credential in integrations.confluence.token %s, "+
+				"so nothing else this run reports would be trustworthy: %w",
+			integration.Refusal(rejected), rejected)
 	}
 	res := &Result{Deployment: opts.Client.Deployment(), Account: account}
 

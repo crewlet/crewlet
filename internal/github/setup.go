@@ -66,6 +66,7 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 		},
 		{
 			Field:      "token",
+			Connect:    true,
 			Label:      "Organization read token",
 			Kind:       setup.KindSecret,
 			ConfigPath: "integrations.github.token",
@@ -86,6 +87,7 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 		},
 		{
 			Field:      "url",
+			Connect:    true,
 			Label:      "GitHub instance",
 			Kind:       setup.KindURL,
 			ConfigPath: "integrations.github.url",
@@ -96,6 +98,7 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 		},
 		{
 			Field:      "provisioning.org",
+			Connect:    true,
 			Label:      "Organization",
 			Kind:       setup.KindID,
 			ConfigPath: "integrations.github.provisioning.org",

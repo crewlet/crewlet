@@ -40,6 +40,7 @@ func Requirements(in *config.Mattermost, resolve func(string) (string, bool)) []
 		},
 		{
 			Field:      "url",
+			Connect:    true,
 			Label:      "Mattermost instance",
 			Kind:       setup.KindURL,
 			ConfigPath: "integrations.mattermost.url",
@@ -51,6 +52,7 @@ func Requirements(in *config.Mattermost, resolve func(string) (string, bool)) []
 		},
 		{
 			Field:      "team",
+			Connect:    true,
 			Label:      "Team",
 			Kind:       setup.KindID,
 			ConfigPath: "integrations.mattermost.team",
@@ -84,6 +86,7 @@ func Requirements(in *config.Mattermost, resolve func(string) (string, bool)) []
 func AdminCredential(stored string) setup.Requirement {
 	return setup.Requirement{
 		Field:      "admin_token",
+		Connect:    true,
 		Label:      "Administrator token",
 		Kind:       setup.KindSecret,
 		ConfigPath: "integrations.mattermost.provisioning.admin_token",

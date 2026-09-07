@@ -136,11 +136,15 @@ type Requirement struct {
 	// connection, rather than one that configures what happens over it.
 	//
 	// The two are different questions asked at different moments, and
-	// putting them on one form asks somebody connecting an app to answer
-	// the second before they have done the first: which seat a Datadog
-	// alert wakes is not a thing to decide while pasting an API key. The
-	// connect form shows these; everything else appears once the app is
-	// connected and there is something to configure.
+	// putting them in that order matters: which seat a Datadog alert wakes
+	// is not a thing to decide while pasting an API key. So these fields
+	// LEAD the form, with a rule under them and the rest below.
+	//
+	// It used to decide VISIBILITY — the connect form showed these alone,
+	// and the rest appeared only once the app was configured. That made an
+	// app's settings a form its operator had never seen, with fields that
+	// arrived from nowhere, so it is an ordering now and the form is the
+	// same one in both directions.
 	//
 	// It is NOT the same as Required. A connect field can be optional to
 	// the integration as a whole — Datadog routes alerts with no keys at

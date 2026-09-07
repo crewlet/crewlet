@@ -45,9 +45,10 @@ func Requirements(handle string, seat *config.Role, resolve func(string) (string
 
 	reqs := []setup.Requirement{
 		{
-			Field: "bot_token",
-			Label: "Bot token",
-			Kind:  setup.KindSecret,
+			Field:   "bot_token",
+			Connect: true,
+			Label:   "Bot token",
+			Kind:    setup.KindSecret,
 			// RELATIVE TO THE SEAT. A seat is addressed by its handle
 			// through the entity route, because a merge patch cannot
 			// reach one element of a list without replacing the list.
@@ -62,6 +63,7 @@ func Requirements(handle string, seat *config.Role, resolve func(string) (string
 		},
 		{
 			Field:      "signing_secret",
+			Connect:    true,
 			Label:      "Signing secret",
 			Kind:       setup.KindSecret,
 			ConfigPath: "integrations.slack.signing_secret",

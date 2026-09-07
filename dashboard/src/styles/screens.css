@@ -1041,6 +1041,16 @@
   cursor: pointer;
 }
 
+/* The line between what connects an app and what configures it. Both halves
+   are one form, and the rule is what keeps that from reading as one long
+   list of unrelated questions. */
+.int-form-rule {
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+  margin: var(--space-2) 0 0;
+  width: 100%;
+}
+
 /* Settings, at the foot of the open card and aligned with its header button
    so the two controls of a connected tool sit on one edge. */
 .int-card-settings {

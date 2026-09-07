@@ -90,11 +90,15 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 
 	org, err := opts.Client.VerifyCredentials(ctx, opts.Creds)
 	if err != nil {
+		// THE VERB FOLLOWS THE CLASSIFICATION. Saying refused whatever
+		// happened turns this build's own mistake into an accusation
+		// against the operator's key: see [integration.Refusal].
+		rejected := integration.Reject(err, Status(err))
 		return nil, fmt.Errorf(
-			"datadog: the organization credentials in "+
-				"integrations.datadog.provisioning were refused, so nothing "+
+			"datadog: the organization credential pair in "+
+				"integrations.datadog.provisioning %s, so nothing "+
 				"else this run reports would be trustworthy: %w",
-			integration.Reject(err, Status(err)))
+			integration.Refusal(rejected), rejected)
 	}
 	res := &Result{Org: org}
 	if opts.Plan == nil {

@@ -31,6 +31,7 @@ func Requirements(in *config.Jira, resolve func(string) (string, bool)) []setup.
 	reqs := []setup.Requirement{
 		{
 			Field:      "url",
+			Connect:    true,
 			Label:      "Jira site",
 			Kind:       setup.KindURL,
 			ConfigPath: "integrations.jira.url",
@@ -41,6 +42,7 @@ func Requirements(in *config.Jira, resolve func(string) (string, bool)) []setup.
 		},
 		{
 			Field:      "cloud_id",
+			Connect:    true,
 			Label:      "Cloud id",
 			Kind:       setup.KindID,
 			ConfigPath: "integrations.jira.cloud_id",
@@ -50,6 +52,7 @@ func Requirements(in *config.Jira, resolve func(string) (string, bool)) []setup.
 		},
 		{
 			Field:      "email",
+			Connect:    true,
 			Label:      "Account email",
 			Kind:       setup.KindText,
 			ConfigPath: "integrations.jira.email",
@@ -60,6 +63,7 @@ func Requirements(in *config.Jira, resolve func(string) (string, bool)) []setup.
 		},
 		{
 			Field:      "token",
+			Connect:    true,
 			Label:      "API token",
 			Kind:       setup.KindSecret,
 			ConfigPath: "integrations.jira.token",

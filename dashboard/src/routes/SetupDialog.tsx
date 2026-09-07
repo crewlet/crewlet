@@ -24,7 +24,7 @@
  * closed tab to leave the write half done.
  */
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { Badge, Button } from "~/ui/primitives.tsx";
 import { Dialog } from "~/ui/Dialog.tsx";
 import { Field, type FieldKind } from "~/ui/Field.tsx";
@@ -42,27 +42,25 @@ interface Submitted {
 }
 
 /**
- * Which requirements a dialog shows.
+ * Which requirements a dialog shows, and in what order.
  *
- * THREE CASES, and the first is the one this exists for.
+ * ONE LIST, whether somebody is connecting the app or changing it afterwards.
+ * It used to be two — the connect fields alone while connecting, everything
+ * once configured — and the two forms behind one dialog were the bug: the
+ * settings form of an app was a screen its operator had never seen, with
+ * fields that appeared from nowhere and a title still reading Connect.
  *
- * CONNECTING shows only the fields that establish the connection. An app
- * declares which those are; the rest configure what happens OVER the
- * connection, and asking which seat a Datadog alert wakes while somebody is
- * pasting an API key asks the second question before the first is answered.
+ * CONNECT FIELDS COME FIRST. That is what the split was really protecting: a
+ * form that opens by asking which seat a Datadog alert wakes asks the second
+ * question before the first is answered. Ordering answers it without hiding
+ * anything, so the person pasting an API key still finds it at the top and
+ * the person changing the fallback seat can reach it at all.
  *
- * MANAGING shows everything, because by then there is a connection and the
- * rest of it is what there is to manage.
- *
- * A FINDING narrows to the fields that clear it, which is what makes Fix on
- * a failing row open the two inputs that matter rather than the whole form.
- * It wins over both: somebody who pressed Fix asked about one thing.
+ * A FINDING still narrows to the fields that clear it, which is what makes
+ * Fix on a failing row open the two inputs that matter rather than the whole
+ * form. Somebody who pressed Fix asked about one thing.
  */
-export function fieldsFor(
-  reqs: SetupRequirement[],
-  blocks?: string,
-  connecting?: boolean,
-): SetupRequirement[] {
+export function fieldsFor(reqs: SetupRequirement[], blocks?: string): SetupRequirement[] {
   if (blocks) {
     const matching = reqs.filter((r) => r.blocks === blocks);
     // A finding no requirement clears is not a reason to show an empty
@@ -70,14 +68,18 @@ export function fieldsFor(
     // somewhere.
     return matching.length ? matching : reqs;
   }
-  if (!connecting) {
-    return reqs;
-  }
-  const connect = reqs.filter((r) => r.connect);
-  // An app that declares none is one whose every field is part of
-  // connecting — which is true of most of them — so the whole list is the
-  // right answer rather than an empty form.
-  return connect.length ? connect : reqs;
+  // A STABLE PARTITION, so within each group the app's own declared order
+  // survives. An app that declares no connect fields is one whose every
+  // field is part of connecting, and this is then the list unchanged.
+  return [...reqs.filter((r) => r.connect), ...reqs.filter((r) => !r.connect)];
+}
+
+/** Where the connect group ends, so the form can rule a line under it. */
+export function connectCount(reqs: SetupRequirement[]): number {
+  const n = reqs.filter((r) => r.connect).length;
+  // All or nothing is not a group: a rule above the first field, or below
+  // the last, separates the form from nothing.
+  return n === reqs.length ? 0 : n;
 }
 
 /** A section's identity: the vendor, plus the seat when there is one. */
@@ -128,9 +130,11 @@ export function SetupDialog({
   const toast = useToast();
   // Keyed by SECTION rather than by vendor, because a per-seat vendor has
   // one section per seat and they all carry the same third-party app key.
-  // CONNECTING is "no section here is configured yet". It decides which
-  // fields the form shows and what its button says, and both have to agree:
-  // a button reading Connect over a form of settings is the wrong promise.
+  // CONNECTING is "no section here is configured yet". It no longer decides
+  // which fields the form shows — that is one list either way — only what
+  // the dialog is CALLED and what its button says, which have to agree: a
+  // title reading Connect over a Save button is the wrong promise, and was
+  // what this dialog did.
   const connecting = sections.every((section) => !section.tool.configured);
 
   const shownBy = useMemo(() => {
@@ -140,12 +144,10 @@ export function SetupDialog({
         section.seat === undefined
           ? section.tool.requirements
           : ((section.tool.seats ?? []).find((s) => s.handle === section.seat)?.requirements ?? []);
-      // CONNECTING is "this app is not configured yet". Once it is, the
-      // same dialog is the Manage one and shows everything.
-      out.set(sectionKey(section), fieldsFor(reqs, blocks, connecting));
+      out.set(sectionKey(section), fieldsFor(reqs, blocks));
     }
     return out;
-  }, [sections, blocks, connecting]);
+  }, [sections, blocks]);
   const shown = useMemo(() => [...shownBy.values()].flat(), [shownBy]);
 
   // A field the engine already holds is left alone unless the operator asks
@@ -268,7 +270,7 @@ export function SetupDialog({
 
   return (
     <Dialog
-      title={`Connect ${title}`}
+      title={connecting ? `Connect ${title}` : `${title} settings`}
       icon="plug"
       onClose={onClose}
       dismissable={!busy}
@@ -289,6 +291,10 @@ export function SetupDialog({
       {sections.map((section) => {
         const reqs = shownBy.get(sectionKey(section)) ?? [];
         if (reqs.length === 0) return null;
+        // WHERE CONNECTING ENDS. The fields above the rule establish the
+        // connection and the ones below configure what happens over it, and
+        // a reader who came here to paste an API key can stop at the line.
+        const rule = connectCount(reqs);
         return (
           <div key={sectionKey(section)} className="int-form">
             {/* A HEADING ONLY WHERE THERE IS MORE THAN ONE. On Slack the
@@ -314,7 +320,12 @@ export function SetupDialog({
                 </span>
               </div>
             )}
-            {reqs.map((r) => renderField(r, section.name))}
+            {reqs.map((r, i) => (
+              <Fragment key={`${sectionKey(section)}:${r.field}`}>
+                {rule > 0 && i === rule && <hr className="int-form-rule" />}
+                {renderField(r, section.name)}
+              </Fragment>
+            ))}
           </div>
         );
       })}
@@ -374,12 +385,13 @@ export function SetupDialog({
             kind={r.kind === "toggle" ? "choice" : (r.kind as FieldKind)}
             value={values[r.field] ?? ""}
             onChange={(v) => setValues((c) => ({ ...c, [r.field]: v }))}
-            // A CONNECT FIELD IS NOT "(optional)". It may be optional to
-            // the integration as a whole — Datadog routes alerts with no
-            // keys — but it is the thing being asked for on a form whose
-            // button says Connect, and marking it optional there reads as
-            // "you can skip this and still connect".
-            required={r.required || (connecting && r.connect === true)}
+            // WHAT THE APP SAYS, and nothing about which button opened the
+            // form. Marking a connect field required while connecting and
+            // optional afterwards made one field wear two labels in two
+            // renderings of one form, and the app's own answer is the true
+            // one: Datadog routes alerts with no keys at all, so its keys
+            // are optional whoever is looking.
+            required={r.required}
             error={fieldErrors[r.field]}
             choices={
               r.kind === "toggle"

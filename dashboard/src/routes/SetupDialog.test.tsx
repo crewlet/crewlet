@@ -249,13 +249,15 @@ test("an external link names the app it opens", () => {
   expect(screen.getByRole("link", { name: "Open Datadog" })).toBeTruthy();
 });
 
-// CONNECTING ASKS ONLY WHAT CONNECTS.
+// ONE FORM, CONNECT FIELDS FIRST.
 //
-// Datadog's form carried seven fields where the console's carries three: the
-// four extra configure what happens OVER the connection — which seat an alert
-// wakes, whether deliveries are accepted — and asking those while somebody is
-// pasting an API key asks the second question before the first is answered.
-test("the connect form shows only the fields that establish the connection", () => {
+// The connect form and the settings form are the same form, because two
+// forms behind one dialog made an app's settings a screen its operator had
+// never seen. What the split was protecting is the ORDER: asking which seat
+// an alert wakes while somebody is pasting an API key asks the second
+// question before the first is answered, and ordering answers that without
+// putting the routing fields somewhere a person cannot reach them.
+test("the connect form leads with the fields that establish the connection", () => {
   render(
     <SetupDialog
       sections={[
@@ -265,10 +267,12 @@ test("the connect form shows only the fields that establish the connection", () 
             ...tool,
             configured: false,
             requirements: [
-              req({ field: "site", label: "Datadog region", kind: "choice", connect: true }),
-              req({ field: "api_key", label: "API key", kind: "secret", connect: true }),
+              // DECLARED OUT OF ORDER on purpose: the form's grouping is its
+              // own, not a property of how an app happened to list them.
               req({ field: "route_to", label: "Fallback seat", kind: "handle" }),
+              req({ field: "site", label: "Datadog region", kind: "choice", connect: true }),
               req({ field: "handle_tag", label: "Owner tag key", kind: "text" }),
+              req({ field: "api_key", label: "API key", kind: "secret", connect: true }),
             ],
           },
         },
@@ -278,14 +282,45 @@ test("the connect form shows only the fields that establish the connection", () 
       onDone={() => {}}
     />,
   );
-  expect(screen.getByText("Datadog region")).toBeTruthy();
-  expect(screen.getByText("API key")).toBeTruthy();
-  expect(screen.queryByText("Fallback seat")).toBeNull();
-  expect(screen.queryByText("Owner tag key")).toBeNull();
+
+  // Everything is here, which is the whole change: none of it is reachable
+  // anywhere else.
+  for (const label of ["Datadog region", "API key", "Fallback seat", "Owner tag key"]) {
+    expect(screen.getByText(label)).toBeTruthy();
+  }
+
+  // And the connect fields lead, in the order the app declared them.
+  const labels = [...document.querySelectorAll("label")].map((l) => l.textContent);
+  expect(labels).toEqual(["Datadog region", "API key", "Fallback seat", "Owner tag key"]);
 });
 
-// AND MANAGING SHOWS EVERYTHING, because by then there is a connection and
-// the rest of it is what there is to manage.
+// THE SAME FORM EITHER WAY. A connected app's settings must not be a screen
+// its operator has never seen: same fields, same order, same labels, with
+// only the title and the button naming which of the two things is happening.
+test("connecting and managing render one identical form", () => {
+  const requirements = [
+    req({ field: "site", label: "Datadog region", kind: "choice", connect: true }),
+    req({ field: "api_key", label: "API key", kind: "secret", connect: true }),
+    req({ field: "route_to", label: "Fallback seat", kind: "handle" }),
+  ];
+  const labelsFor = (configured: boolean): (string | null)[] => {
+    const view = render(
+      <SetupDialog
+        sections={[{ name: "Datadog", tool: { ...tool, configured, requirements } }]}
+        title="Datadog"
+        onClose={() => {}}
+        onDone={() => {}}
+      />,
+    );
+    const labels = [...view.baseElement.querySelectorAll("label")].map((l) => l.textContent);
+    view.unmount();
+    return labels;
+  };
+  expect(labelsFor(false)).toEqual(labelsFor(true));
+});
+
+// AND A CONFIGURED APP SHOWS EVERY FIELD, which it now shares with an
+// unconfigured one.
 test("a configured app shows every field", () => {
   render(
     <SetupDialog
