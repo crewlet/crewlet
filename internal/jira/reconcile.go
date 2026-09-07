@@ -333,20 +333,47 @@ func ensureWebhook(ctx context.Context, opts Options) (string, []string, error) 
 	if err != nil {
 		return "", notes, fmt.Errorf("jira: list webhooks: %w", err)
 	}
+	// BY NAME, NOT BY ADDRESS.
+	//
+	// It matched on the URL, so a hook this engine had registered at a
+	// DIFFERENT address was invisible to it: changing the public base URL
+	// created a second hook and left the first, and every change after that
+	// added another. A deployment behind a tunnel accumulated one per
+	// restart, all live, all delivering to addresses that no longer answer.
+	//
+	// The name is what says the hook is this engine's, so the name is what
+	// converges: one hook, pointed wherever the company says it is reachable
+	// now.
+	// ONE HOOK, and the extras go.
+	//
+	// Converging on the first match still leaves every hook a previous
+	// address created: this engine's own name on three live registrations,
+	// two of them delivering to somewhere that no longer answers. What
+	// "converged" has to mean is one.
+	mine := make([]Webhook, 0, len(hooks))
 	for _, hook := range hooks {
-		if hook.URL != target {
-			continue
+		if hook.Name == WebhookName {
+			mine = append(mine, hook)
 		}
+	}
+	for _, extra := range mine[min(1, len(mine)):] {
+		if err := opts.Client.DeleteWebhook(ctx, extra.ID); err != nil {
+			return "", notes, fmt.Errorf("jira: remove a duplicate webhook: %w", err)
+		}
+	}
+	if len(mine) > 0 {
+		hook := mine[0]
 		if opts.RecreateWebhook {
 			if err := opts.Client.DeleteWebhook(ctx, hook.ID); err != nil {
 				return "", notes, fmt.Errorf("jira: replace webhook: %w", err)
 			}
-			break
+		} else {
+			if _, err := opts.Client.UpdateWebhook(
+				ctx, hook.ID, WebhookName, target, secret); err != nil {
+				return "", notes, fmt.Errorf("jira: update webhook: %w", err)
+			}
+			return target, notes, nil
 		}
-		if _, err := opts.Client.UpdateWebhook(ctx, hook.ID, WebhookName, target, secret); err != nil {
-			return "", notes, fmt.Errorf("jira: update webhook: %w", err)
-		}
-		return target, notes, nil
 	}
 	if _, err := opts.Client.CreateWebhook(ctx, WebhookName, target, secret); err != nil {
 		return "", notes, fmt.Errorf("jira: create webhook: %w", err)

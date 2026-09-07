@@ -188,6 +188,16 @@ type Seat struct {
 	// Email is the address a third-party app account is created with, when the
 	// third-party app needs one.
 	Email string
+
+	// EmailVar is the variable this seat's account ADDRESS is written into,
+	// for an app that assigns the address rather than taking one.
+	//
+	// Atlassian is why. It names a service account itself, and its product
+	// APIs authenticate that account as Basic base64(address:token) — so a
+	// seat holding only the token is refused, and the address is not
+	// something anybody can write down in advance because Atlassian invents
+	// it at creation time.
+	EmailVar string
 }
 
 // Plan is what a provisioning run intends to do, before it does any of it.

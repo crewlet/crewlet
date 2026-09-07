@@ -142,7 +142,7 @@ func reconcileSeat(
 			out.Err = fmt.Errorf("atlassian: create the account for %s: %w", seat.Handle, err)
 			return out
 		}
-		out.AccountID, out.Created = created.ID, true
+		account, out.AccountID, out.Created = *created, created.ID, true
 	}
 
 	// GRANTED EVERY PASS, not only on the one that created the account.
@@ -169,13 +169,27 @@ func reconcileSeat(
 		}
 	}
 
+	// THE ADDRESS FIRST, and for any account this pass has — not only one it
+	// just made. Atlassian's product APIs authenticate as Basic
+	// base64(address:token), so a seat holding the token alone is refused
+	// with a 403 that reads as a broken credential. Atlassian invents the
+	// address, so this is the only place it can come from, and a seat whose
+	// token was minted by an earlier build has none recorded.
+	// A DRY RUN WRITES NOTHING, which is what a check is.
+	if opts.Sink == nil {
+		return out
+	}
+	if seat.EmailVar != "" && account.Email != "" {
+		if err := opts.Sink.Record(ctx, seat.EmailVar, account.Email); err != nil {
+			out.Err = fmt.Errorf("atlassian: record %s: %w", seat.EmailVar, err)
+			return out
+		}
+	}
+
 	// THE TOKEN IS MINTED ONLY WHERE THERE IS NOWHERE TO READ ONE FROM. A
 	// mint is not idempotent — Atlassian issues a new credential every time
 	// and shows it once — so minting on every pass would rotate the token
 	// every agent is authenticating with, on the reconcile loop's timer.
-	if opts.Sink == nil {
-		return out
-	}
 	// THREE-VALUED, and the middle answer is the one that matters: held,
 	// definitively not held, and "the store could not say". Minting on the
 	// third would issue a new credential over one that already exists and

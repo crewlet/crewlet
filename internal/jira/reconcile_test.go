@@ -116,8 +116,16 @@ func (i *instance) serveHooks(w http.ResponseWriter, req *http.Request, path str
 			if n > 0 {
 				body += ","
 			}
+			// THE HOOK'S OWN NAME, because the name is what says whose a
+			// hook is. It was hardcoded to crewlet, so this fake could not
+			// express somebody else's hook at all and agreed with any
+			// matching rule it was asked about.
+			name, _ := hook["name"].(string)
+			if name == "" {
+				name = "crewlet"
+			}
 			body += `{"self":"` + i.URL + `/rest/webhooks/1.0/webhook/` +
-				hook["id"].(string) + `","name":"crewlet","url":"` +
+				hook["id"].(string) + `","name":"` + name + `","url":"` +
 				hook["url"].(string) + `","enabled":true}`
 		}
 		_, _ = w.Write([]byte(body + "]"))
@@ -421,6 +429,77 @@ func TestRecreatingTheWebhookMintsAFreshSecret(t *testing.T) {
 	}
 }
 
+// A CHANGED ADDRESS MOVES THE HOOK, it does not add one.
+//
+// Matching on the URL made a hook this engine had registered at a DIFFERENT
+// address invisible to it, so changing the public base URL created a second
+// hook and left the first. A deployment behind a tunnel accumulated one per
+// restart, all live, all delivering to addresses that no longer answer.
+func TestAMovedBaseURLUpdatesTheHookRatherThanAddingOne(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	inst.hooks = []map[string]any{
+		{"id": "1", "name": "crewlet", "url": "https://the-old-tunnel.example.com/webhooks/jira"},
+	}
+	if _, err := run(t, inst, func(opts *jira.Options) {
+		opts.WebhookBase = "https://the-new-tunnel.example.com"
+		opts.Value = func(v string) string {
+			if v == "${JIRA_WEBHOOK_SECRET}" {
+				return "s"
+			}
+			return v
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(inst.created) != 0 {
+		t.Errorf("a second hook was registered: %v", inst.created)
+	}
+	if len(inst.updated) != 1 {
+		t.Fatalf("the hook was not moved: %v", inst.updated)
+	}
+	if got := inst.updated[0]["url"]; got != "https://the-new-tunnel.example.com/webhooks/jira" {
+		t.Errorf("url = %v, want the address the company is reachable on now", got)
+	}
+}
+
+// AND DUPLICATES THIS ENGINE ALREADY LEFT ARE CLEANED UP.
+//
+// Converging on the first match still left every hook a previous address had
+// created: this engine's own name on three live registrations, two of them
+// delivering to somewhere that no longer answers. Converged has to mean one.
+func TestDuplicateHooksOfOurOwnAreRemoved(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	inst.hooks = []map[string]any{
+		{"id": "1", "name": "crewlet", "url": "https://one.example.com/webhooks/jira"},
+		{"id": "2", "name": "crewlet", "url": "https://two.example.com/webhooks/jira"},
+		{"id": "3", "name": "someone-else", "url": "https://theirs.example.com/hook"},
+	}
+	if _, err := run(t, inst, func(opts *jira.Options) {
+		opts.WebhookBase = "https://now.example.com"
+		opts.Value = func(v string) string {
+			if v == "${JIRA_WEBHOOK_SECRET}" {
+				return "s"
+			}
+			return v
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(inst.deleted) != 1 || inst.deleted[0] != "2" {
+		t.Errorf("deleted = %v, want the duplicate and nothing else", inst.deleted)
+	}
+	if len(inst.updated) != 1 {
+		t.Fatalf("the surviving hook was not moved: %v", inst.updated)
+	}
+	if got := inst.updated[0]["url"]; got != "https://now.example.com/webhooks/jira" {
+		t.Errorf("url = %v", got)
+	}
+}
+
 // A FOREIGN HOOK IS NOT THIS RUN'S TO RECONFIGURE. An instance may carry
 // hooks somebody else registered, and taking over the first one found would
 // break an unrelated integration.
@@ -429,7 +508,8 @@ func TestAForeignHookIsLeftAlone(t *testing.T) {
 	inst := newInstance(t)
 	inst.accounts["Bearer org-token"] = "acct-org"
 	inst.hooks = []map[string]any{
-		{"id": "1", "url": "https://someone-else.example.com/hook"},
+		{"id": "1", "name": "someone-elses-integration",
+			"url": "https://someone-else.example.com/hook"},
 	}
 	if _, err := run(t, inst, func(opts *jira.Options) {
 		opts.WebhookBase = "https://engine.example.com"

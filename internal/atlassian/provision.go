@@ -101,9 +101,52 @@ func PlanFor(o *org.Organization) (*provision.Plan, error) {
 				"manage this seat's account by hand", handle, key)
 			continue
 		}
-		plan.Add(provision.Seat{Handle: handle, Role: seat.Name, TokenVar: name})
+		entry := provision.Seat{Handle: handle, Role: seat.Name, TokenVar: name}
+		// WHERE THE ADDRESS GOES. Atlassian names the account itself, and its
+		// product APIs take Basic base64(address:token), so a seat holding
+		// only the token authenticates as nobody. The address is not
+		// something an operator can write down in advance.
+		if where, value := seatEmail(seat.MCPEnv); where != "" {
+			if emailVar, ok := provision.SoleVar(value); ok {
+				entry.EmailVar = emailVar
+			} else {
+				plan.Note("%s: mcp_env %s is not a whole ${VAR} reference, so there "+
+					"is nowhere to write the address Atlassian assigns this "+
+					"account — point it at a variable", handle, where)
+			}
+		} else {
+			plan.Note("%s: no mcp_env address slot, so this seat cannot use the "+
+				"account: Atlassian authenticates its products as "+
+				"base64(address:token), and the token alone is refused. Add "+
+				"JIRA_USERNAME with a ${VAR} beside the token", handle)
+		}
+		plan.Add(entry)
 	}
 	return plan, nil
+}
+
+// EmailKeys are the spellings a seat's account address arrives under.
+//
+//nolint:gochecknoglobals // an immutable list, not state
+var EmailKeys = []string{
+	"JIRA_USERNAME", "CONFLUENCE_USERNAME", "ATLASSIAN_EMAIL",
+	"JIRA_EMAIL", "CONFLUENCE_EMAIL",
+}
+
+// seatEmail finds a seat's address slot, and says where.
+func seatEmail(env map[string]map[string]string) (where, value string) {
+	for _, server := range SeatEnvs {
+		block := env[server]
+		if len(block) == 0 {
+			continue
+		}
+		for _, key := range EmailKeys {
+			if v := strings.TrimSpace(block[key]); v != "" {
+				return fmt.Sprintf("%s.%s", server, key), v
+			}
+		}
+	}
+	return "", ""
 }
 
 // seatCredential finds a seat's Atlassian credential slot, and says where.
