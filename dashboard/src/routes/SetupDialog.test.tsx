@@ -8,7 +8,7 @@
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { HELD, SetupDialog, fieldsFor, vendorLink } from "./SetupDialog.tsx";
+import { HELD, SetupDialog, fieldsFor, fillTemplate, vendorLink } from "./SetupDialog.tsx";
 import type { SetupRequirement, SetupToolState } from "~/protocol/index.ts";
 
 function req(over: Partial<SetupRequirement>): SetupRequirement {
@@ -962,4 +962,31 @@ test("a field this company has answered keeps its answer", () => {
   // Empty: the form sends only what was touched, so an untouched field
   // carrying a stored value must not arrive pre-filled with the default.
   expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("");
+});
+
+// The description quotes the value, so it has to follow the value. A tag key
+// changed to `owner` left the example reading `crewlet:…`, describing the
+// setting the operator had just replaced.
+test("fillTemplate fills a placeholder from what the form holds", () => {
+  const said = fillTemplate(
+    'A monitor tagged "{handle_tag}:<seat handle>" wakes that seat.',
+    () => "owner",
+  );
+  expect(said).toBe('A monitor tagged "owner:<seat handle>" wakes that seat.');
+});
+
+// A blank optional field is not an absent setting: the engine reads the
+// default, so that is what the sentence has to quote.
+test("fillTemplate falls back to the default a blank field is read as", () => {
+  expect(fillTemplate("tag {handle_tag}", () => "crewlet")).toBe("tag crewlet");
+});
+
+// Visibly unresolved rather than silently wrong: a template naming a field
+// with neither a value nor a default is an authoring mistake.
+test("fillTemplate leaves a placeholder nothing answers alone", () => {
+  expect(fillTemplate("tag {nothing}", () => "")).toBe("tag {nothing}");
+});
+
+test("fillTemplate passes text with no placeholder through unchanged", () => {
+  expect(fillTemplate("plain words", () => "x")).toBe("plain words");
 });

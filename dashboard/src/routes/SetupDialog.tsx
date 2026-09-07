@@ -100,6 +100,31 @@ export function vendorLink(
 }
 
 /**
+ * A field's own sentence, with `{other_field}` filled in from the form.
+ *
+ * A description that quotes a value is only true while that value is what
+ * the form holds. Datadog's tag key is the case: its help gives the example
+ * `"crewlet:<seat handle>"`, and somebody who changes the key to `owner` was
+ * left reading an example for the key they had just replaced.
+ *
+ * SEPARATE FROM [vendorLink] although both read `{field}`, because they want
+ * OPPOSITE things from an unanswered one: a link with a hole in its path
+ * goes nowhere and is dropped entirely, while a sentence is still worth
+ * reading. So `resolve` falls back to the field's DEFAULT — which is what
+ * the engine uses for a blank optional field, making the filled-in sentence
+ * true rather than merely nonempty — and only a template naming a field with
+ * neither is left visibly unresolved, which is an authoring mistake and
+ * should look like one.
+ */
+export function fillTemplate(text: string, resolve: (field: string) => string): string {
+  if (!text) return text;
+  return text.replace(/\{([a-z_]+)\}/g, (whole, field: string) => {
+    const value = resolve(field).trim();
+    return value === "" ? whole : value;
+  });
+}
+
+/**
  * Whether a requirement is a row on the form at all.
  *
  * A HIDDEN field is written without being asked for, and a MINTABLE
@@ -594,6 +619,16 @@ export function SetupDialog({
     const link = vendorLink(r.vendor_url ?? "", values, (field) =>
       valueKey(section, { ...r, field, shared: false }),
     );
+    // WHAT THIS FORM CURRENTLY HOLDS, falling back to the field's own
+    // default, which is what the engine reads when it is left blank. See
+    // [fillTemplate].
+    const siblings = ownBy.get(sectionKey(section)) ?? [];
+    const fill = (text: string) =>
+      fillTemplate(text, (field) => {
+        const sibling = siblings.find((s) => s.field === field);
+        if (!sibling) return "";
+        return values[valueKey(section, sibling)] || sibling.default || "";
+      });
     return (
       <div key={key} className="col gap-1">
         {editable(r) ? (
@@ -635,8 +670,8 @@ export function SetupDialog({
                 {/* THE APP'S OWN SENTENCE FIRST, always, so a field's
                     description opens the same way whether or not this
                     company has answered it. */}
-                {r.help}
-                {r.where && <> {r.where}</>}
+                {fill(r.help ?? "")}
+                {r.where && <> {fill(r.where)}</>}
                 {link && (
                   <>
                     {" "}

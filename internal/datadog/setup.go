@@ -129,8 +129,15 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			// conventions they already have.
 			Required: false,
 			Default:  DefaultHandleTag,
-			Help: "The monitor tag key that names an owner. Tag a monitor " +
-				"\"crewlet:sre-lead\" and its alerts wake SRE Lead.",
+			// THE EXAMPLE FOLLOWS THE FIELD. `{handle_tag}` is substituted
+			// by the form from what is typed, so somebody who changes the
+			// key reads the example for the key they now have rather than
+			// for the default they just replaced. The seat is left as a
+			// placeholder because this package has no roster to draw a real
+			// handle from, and an invented one would name a seat the
+			// company may not have.
+			Help: "The monitor tag key that names an owner. A monitor tagged " +
+				"\"{handle_tag}:<seat handle>\" wakes that seat.",
 		},
 		{
 			Field:      "route_to",
