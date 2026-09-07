@@ -52,24 +52,9 @@ export function TurnCard({
         <div className="col" style={{ gap: 2, flex: 1, minWidth: 0 }}>
           <div className="row gap-1">
             {showRole && group.role && <strong className="t-cell">{group.role}</strong>}
-            {/* THE LINE'S SUBJECT COMES FIRST. What woke the turn is the
-                content of this row; where it came from qualifies it, so it
-                follows rather than opening the line — a chip in front made
-                the eye land on a label before the sentence it labels, and
-                pushed the one thing worth reading to second place.
-                `flex: 1` on the text and none on the badge is what decides
-                who gives way when the card is narrow: the message truncates,
-                the source stays whole. */}
-            <span className="truncate t-cell secondary" style={{ flex: 1 }}>
+            <span className="truncate t-cell secondary">
               {trigger?.summary || trigger?.type || "turn"}
             </span>
-            {trigger?.integration && (
-              <span style={{ flex: "none" }}>
-                <Badge outline mono title="where this turn's trigger came from">
-                  {trigger.integration}
-                </Badge>
-              </span>
-            )}
           </div>
           <div className="row gap-1">
             {group.phases.map((p) => (
@@ -78,6 +63,22 @@ export function TurnCard({
           </div>
         </div>
         <span className="spacer" />
+        {/* WHERE THIS TURN CAME FROM, in the metadata cluster with the turn's
+            other attributes — how much, how long, when.
+            It has been three other places and each was worse for the same
+            reason: it moved. Beside the phase tags it read as a third phase;
+            in front of the trigger text the eye hit a label before the
+            sentence it labels; after that text it sat wherever the sentence
+            happened to end, which is a different spot on every card. The rule
+            this header already keeps is that the same facts are in the same
+            places always, so a reader scanning a list can compare a column
+            rather than hunt a row — and a source is exactly the kind of thing
+            somebody scans down. */}
+        {trigger?.integration && (
+          <Badge outline mono title="where this turn's trigger came from">
+            {trigger.integration}
+          </Badge>
+        )}
         {group.live && (
           <Badge tone="info" dot>
             running

@@ -61,8 +61,16 @@
 .panel-body {
   padding: var(--space-4);
 }
+/* TIGHT IS VERTICAL ONLY. A panel has ONE left edge, and its head sets it:
+   `--space-4`, the same inset the title sits on. Reducing the horizontal
+   padding too put the body's content on a different vertical line from the
+   heading above it — content noticeably closer to the border than its own
+   title — and pushed a code block hard against the panel's right edge with
+   nowhere for its scrollbar to sit. What `tight` is actually for is a panel
+   whose rows carry their own vertical rhythm (a stack of cards, a footer
+   strip), and that is a claim about height, not about the edge. */
 .panel-body.tight {
-  padding: var(--space-2);
+  padding: var(--space-2) var(--space-4);
 }
 .panel-body.none {
   padding: 0;

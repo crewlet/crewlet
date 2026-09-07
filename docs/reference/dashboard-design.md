@@ -623,6 +623,29 @@ row — what actually woke the turn — was pushed to second place. The subject
 comes first and the source follows it, with the flex sizing deciding who gives
 way on a narrow card: the message truncates, the source stays whole.
 
+### A panel has one left edge
+
+`.panel-body.tight` reduced the horizontal padding as well as the vertical
+one, so a tight panel's content sat on a different vertical line from its own
+heading — visibly closer to the border than the title above it — and a code
+block inside one was pushed hard against the panel's right edge with nowhere
+for its scrollbar. What `tight` is for is a panel whose rows carry their own
+vertical rhythm (a stack of cards, a footer strip), and that is a claim about
+height. It is vertical-only now, on the `--space-4` inset the head sets, and
+all five tight panels in the product align with their own titles.
+
+### A fact that moves is a fact nobody can scan
+
+The turn card's source chip took four positions before landing. Beside the
+phase tags it read as a third phase; in front of the trigger text the eye hit
+a label before the sentence it labels; after that text it sat wherever the
+sentence happened to end, which is a different spot on every card. It belongs
+in the header's metadata cluster with the turn's other attributes — how much,
+how long, when — because the rule this header already keeps is that the same
+facts are in the same places always. That is what lets a reader scan a list
+down a column instead of hunting each row, and a source is exactly the kind of
+thing somebody scans.
+
 ### `KeyValue` is a metadata list, not a panel layout
 
 Its grid is `minmax(120px, max-content) 1fr`, sized for compact pairs — an id,
