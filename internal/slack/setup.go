@@ -133,3 +133,10 @@ func statusChoices() []setup.Choice {
 	}
 	return out
 }
+
+// Summary is the sentence the connect form opens with.
+func Summary() string {
+	return "Each agent talks in Slack as its own app. The apps are created " +
+		"from the command line, because Slack issues the credential that " +
+		"makes them by hand."
+}

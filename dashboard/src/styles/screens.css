@@ -989,6 +989,36 @@
   flex-wrap: wrap;
   gap: var(--space-3);
 }
+/* THE CONNECT FORM, laid out the way the console's is.
+   The field spacing is deliberately wider than the dialog's default stack:
+   these are labelled inputs each carrying a help line, and at the tighter
+   gap a help line sat as close to the NEXT field's label as to the control
+   it belongs to, which is the one ambiguity a form must not have. */
+.int-form-intro {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+  color: var(--text-secondary);
+}
+.int-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+/* SENTENCE CASE, scoped to this form.
+   The product's field label is an uppercase micro-label, which reads as a
+   column head: right above a table, wrong above a question. These fields ARE
+   questions, each with a sentence of help under it, and the console asks them
+   in sentence case. Scoped rather than changed globally, because every other
+   form in the dashboard is a settings table where the micro-label belongs. */
+.int-form .field > label {
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--track-normal);
+  text-transform: none;
+  color: var(--text);
+}
+
 /* A choice inside a dialog: the box, and the sentence that says what ticking
    it actually destroys. The description is part of the label so the whole
    thing is one click target and one thing a screen reader reads. */

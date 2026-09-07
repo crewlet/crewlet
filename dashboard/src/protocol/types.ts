@@ -825,6 +825,14 @@ export interface SetupToolState {
   configured: boolean;
   enabled: boolean;
   requirements: SetupRequirement[];
+  /**
+   * One sentence on what connecting this app DOES, from the engine.
+   *
+   * The connect form opens with it. It lives in Go with the app whose
+   * requirements it introduces, for the reason every other word on that form
+   * does: this screen knows nothing about any app.
+   */
+  summary?: string;
   /** Nothing REQUIRED is outstanding. Not a health claim. */
   satisfied: boolean;
   inbound_path?: string;

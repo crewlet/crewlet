@@ -110,3 +110,10 @@ func Requirements(in *config.Jira, resolve func(string) (string, bool)) []setup.
 	reqs[5].Present, reqs[5].Resolved, reqs[5].Stored = setup.Plain(siteURL)
 	return reqs
 }
+
+// Summary is the sentence the connect form opens with.
+func Summary() string {
+	return "Agents are assigned issues and mentioned by name. This engine " +
+		"registers a webhook so Jira's events reach it; the accounts are " +
+		"ones you already have."
+}

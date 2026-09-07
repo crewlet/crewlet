@@ -115,3 +115,15 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 	reqs[3].Present, reqs[3].Resolved, reqs[3].Stored = setup.Plain(handleTag)
 	return reqs
 }
+
+// Summary is the sentence the connect form opens with.
+//
+// It says what connecting DOES, which for this app is unlike every other:
+// Datadog delivers to the engine and the engine calls nothing back, so
+// there is no account to create and no key to hold. What it needs is a way
+// to verify a delivery and a way to know whose alert it is.
+func Summary() string {
+	return "Datadog sends firing monitors to this engine. Alerts are routed by " +
+		"the owner tag on the monitor, so no account is created and no " +
+		"Datadog API key is held here."
+}

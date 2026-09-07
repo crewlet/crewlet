@@ -160,3 +160,10 @@ func choices() []setup.Choice {
 	}
 	return out
 }
+
+// Summary is the sentence the connect form opens with.
+func Summary() string {
+	return "Agents read and write pull requests as themselves. This engine " +
+		"registers a webhook so GitHub's events reach it, and reads what " +
+		"each seat already has access to."
+}

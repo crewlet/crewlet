@@ -184,3 +184,10 @@ func accessChoices() []setup.Choice {
 	}
 	return out
 }
+
+// Summary is the sentence the connect form opens with.
+func Summary() string {
+	return "Each agent gets its own service account in your group, so it owns " +
+		"what it builds. Connecting needs a token from somebody who owns " +
+		"that group, and it is kept so the accounts can be removed again."
+}

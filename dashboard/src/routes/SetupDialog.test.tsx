@@ -201,3 +201,50 @@ test("a literal_in_config refusal is shown against its field", async () => {
   expect(await screen.findByRole("alert")).toBeDefined();
   expect(screen.getByText(/holds a value here rather than a/)).toBeDefined();
 });
+
+// THE FORM SAYS WHAT CONNECTING DOES BEFORE IT ASKS FOR ANYTHING.
+//
+// A form that opens with a credential field asks for a secret before saying
+// what it is for. The sentence comes from the engine, with the app whose
+// requirements it introduces, because this screen knows nothing about any
+// app — the same rule every label and help line here already follows.
+test("the form opens with the engine's own summary", () => {
+  render(
+    <SetupDialog
+      sections={[{ name: "Datadog", tool: { ...tool, summary: "Datadog sends firing monitors." } }]}
+      title="Datadog"
+      onClose={() => {}}
+      onSaved={() => {}}
+    />,
+  );
+  expect(screen.getByText("Datadog sends firing monitors.")).toBeTruthy();
+});
+
+// AND AN EXTERNAL LINK NAMES THE APP. "Open the third-party app" makes a
+// reader guess which one a form with three sections is sending them to.
+test("an external link names the app it opens", () => {
+  render(
+    <SetupDialog
+      sections={[
+        {
+          name: "Datadog",
+          tool: {
+            ...tool,
+            requirements: [
+              req({
+                field: "webhook_token",
+                label: "Shared token",
+                kind: "secret",
+                vendor_url: "https://app.datadoghq.com/integrations/webhooks",
+              }),
+            ],
+          },
+        },
+      ]}
+      title="Datadog"
+      onClose={() => {}}
+      onSaved={() => {}}
+    />,
+  );
+  expect(screen.getByRole("link", { name: "Open Datadog" })).toBeTruthy();
+});

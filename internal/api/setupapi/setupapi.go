@@ -229,6 +229,13 @@ type ToolState struct {
 	Enabled      bool                `json:"enabled"`
 	Requirements []setup.Requirement `json:"requirements"`
 
+	// Summary is one sentence saying what connecting this app DOES, which
+	// the connect form opens with. It lives with the app rather than on
+	// the screen for the reason every other word here does: the dashboard
+	// knows nothing about any app, so adding one is a Go change and no
+	// screen work.
+	Summary string `json:"summary,omitempty"`
+
 	// Satisfied reports that nothing REQUIRED is outstanding. It is not a
 	// health claim: a satisfied integration can still be refusing every
 	// delivery for a reason no input fixes.
@@ -333,19 +340,23 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 	var reqs []setup.Requirement
 	var seats []SeatState
 	var configured, enabled bool
+	var summary string
 	switch kind {
 	case integration.KindDatadog:
 		block := company.Integrations.Datadog
+		summary = datadog.Summary()
 		reqs = datadog.Requirements(block, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindGitHub:
 		block := company.Integrations.GitHub
+		summary = github.Summary()
 		reqs = github.Requirements(block, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindJira:
 		block := company.Integrations.Jira
+		summary = jira.Summary()
 		reqs = jira.Requirements(block, s.resolve)
 		// THE FORGE APP ID RIDES WITH JIRA, and it belongs to neither
 		// surface on its own: one app relays both Jira and Confluence
@@ -362,15 +373,18 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		configured, enabled = block != nil, block != nil
 	case integration.KindConfluence:
 		block := company.Integrations.Confluence
+		summary = confluence.Summary()
 		reqs = confluence.Requirements(block, s.resolve)
 		configured, enabled = block != nil, block != nil
 	case integration.KindGitLab:
 		block := company.Integrations.GitLab
+		summary = gitlab.Summary()
 		reqs = gitlab.Requirements(block, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindMattermost:
 		block := company.Integrations.Mattermost
+		summary = mattermost.Summary()
 		reqs = mattermost.Requirements(block, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
@@ -379,6 +393,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		// indicator and nothing that authenticates; every credential is on
 		// a seat, because every agent has its own Slack app.
 		block := company.Integrations.Slack
+		summary = slack.Summary()
 		reqs = slack.CompanyRequirements(block)
 		seats = slackSeats(company, s.resolve)
 		// CONFIGURED WHEN ANY SEAT IS, not when the company block exists:
@@ -404,7 +419,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		}
 	}
 	state := ToolState{
-		Kind: kind, Configured: configured, Enabled: enabled,
+		Kind: kind, Configured: configured, Enabled: enabled, Summary: summary,
 		Requirements:  reqs,
 		Seats:         seats,
 		Satisfied:     satisfied,

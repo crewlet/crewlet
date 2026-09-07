@@ -249,11 +249,16 @@ export function SetupDialog({
         const reqs = shownBy.get(sectionKey(section)) ?? [];
         if (reqs.length === 0) return null;
         return (
-          <div key={sectionKey(section)} className="col gap-3">
+          <div key={sectionKey(section)} className="int-form">
             {/* A HEADING ONLY WHERE THERE IS MORE THAN ONE. On Slack the
                 dialog is already titled Slack, and a "Slack" heading under
                 it is a word that says nothing. */}
             {sections.length > 1 && <strong className="int-section">{section.name}</strong>}
+            {/* WHAT CONNECTING DOES, before what it needs. A form that opens
+                with a credential field asks for a secret before saying what
+                it is for, and the engine is the one that knows: the sentence
+                comes from the app's own package, not from here. */}
+            {section.tool.summary && <p className="int-form-intro">{section.tool.summary}</p>}
             {section.tool.public_url && !section.tool.can_provision && (
               <div className="banner neutral">
                 <Icon name="link" size="sm" />
@@ -262,13 +267,13 @@ export function SetupDialog({
                     Deliveries arrive at <code className="inline">{section.tool.public_url}</code>
                   </span>
                   <span className="t-caption">
-                    Paste that into the third-party app's own settings. This engine registers no
-                    webhook for {section.name}.
+                    This engine registers no webhook for {section.name}, so paste that address into{" "}
+                    {section.name}&apos;s own settings yourself.
                   </span>
                 </span>
               </div>
             )}
-            {reqs.map((r) => renderField(r))}
+            {reqs.map((r) => renderField(r, section.name))}
           </div>
         );
       })}
@@ -291,7 +296,10 @@ export function SetupDialog({
     </Dialog>
   );
 
-  function renderField(r: SetupRequirement) {
+  // The app's NAME is passed in rather than read from a closure: this is
+  // one function over every section's fields, and the link it draws has to
+  // say which app it opens.
+  function renderField(r: SetupRequirement, appName: string) {
     const note = pointerNote(r);
     return (
       <div key={r.field} className="col gap-1">
@@ -350,7 +358,7 @@ export function SetupDialog({
                   <>
                     {" "}
                     <a href={r.vendor_url} target="_blank" rel="noreferrer">
-                      Open the third-party app
+                      Open {appName}
                     </a>
                   </>
                 )}

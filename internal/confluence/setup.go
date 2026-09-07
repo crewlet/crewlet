@@ -118,3 +118,10 @@ func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []
 	reqs[6].Present, reqs[6].Resolved, reqs[6].Stored = setup.Plain(siteURL)
 	return reqs
 }
+
+// Summary is the sentence the connect form opens with.
+func Summary() string {
+	return "Agents read the company's pages and answer comments on them. This " +
+		"engine registers a webhook per event so Confluence's changes reach " +
+		"it."
+}

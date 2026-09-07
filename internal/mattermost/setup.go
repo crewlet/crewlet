@@ -97,3 +97,11 @@ func AdminCredential(stored string) setup.Requirement {
 		Where: "A personal access token belonging to a system administrator.",
 	}
 }
+
+// Summary is the sentence the connect form opens with.
+func Summary() string {
+	return "Each agent gets its own bot account and holds an outbound " +
+		"connection, so nothing has to reach this engine from outside. " +
+		"Connecting needs a system administrator token, and it is kept so " +
+		"the bots can be disabled again."
+}
