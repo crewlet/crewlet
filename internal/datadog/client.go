@@ -45,6 +45,14 @@ var sites = []string{
 // offers them.
 func Sites() []string { return slices.Clone(sites) }
 
+// DefaultSite is the region offered when a company names none.
+//
+// US1, which is Datadog's own default and where most organizations are. It is
+// a SUGGESTION in the form rather than a value anything falls back to: a call
+// built against the wrong region fails as a rejected credential, so an engine
+// that guessed silently would report a key as bad when the region was.
+const DefaultSite = "datadoghq.com"
+
 // KnownSite reports whether a site is one Datadog actually serves.
 func KnownSite(site string) bool { return slices.Contains(sites, normalizeSite(site)) }
 

@@ -148,6 +148,16 @@ type Requirement struct {
 	// Connect.
 	Connect bool `json:"connect,omitempty"`
 
+	// Default is the value a form offers when this company has none.
+	//
+	// A SUGGESTION, never a stored value: nothing is written until
+	// somebody submits, so a default that turns out to be wrong is one
+	// they change rather than one they have to discover. It exists for
+	// the field whose answer is the same for most companies — Datadog's
+	// region is US1 for most of them — where "Choose one" makes everybody
+	// answer a question that has an obvious answer.
+	Default string `json:"default,omitempty"`
+
 	// LinkText is the words in Help that become the link to VendorURL.
 	//
 	// A link reads as part of the sentence rather than after it: "Create

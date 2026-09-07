@@ -155,7 +155,18 @@ export function SetupDialog({
   const [values, setValues] = useState<Record<string, string>>(() => {
     const initial: Record<string, string> = {};
     for (const r of shown) {
-      if (r.kind === "toggle") initial[r.field] = r.present ? "true" : "true";
+      if (r.kind === "toggle") {
+        initial[r.field] = r.present ? "true" : "true";
+        continue;
+      }
+      // A DEFAULT ONLY WHERE THERE IS NOTHING. A field this company has
+      // already answered keeps its answer; offering the default over it
+      // would quietly propose changing a working setting to the common
+      // one. And it is seeded into the form rather than assumed on the
+      // far side, so what is submitted is what was on screen.
+      if (r.default && !r.present) {
+        initial[r.field] = r.default;
+      }
     }
     return initial;
   });
@@ -315,13 +326,18 @@ export function SetupDialog({
         </div>
       )}
 
-      {/* WHAT THE SAVE ACTUALLY DOES, said before it is pressed. An operator
+      {/* WHAT THE SAVE ACTUALLY DOES, said before it is pressed: an operator
           about to hand a credential to a self-hosted process is owed the
-          sentence that says where it goes. */}
+          sentence that says where it goes. ONE LINE, because it is a footnote
+          to the form rather than part of it — a two-sentence paragraph under
+          the last field competes with the field. What it drops is "nothing is
+          ever sent back to a browser", which is a promise about the READ
+          path; this note is about the write, and the read path keeps its own
+          guarantee in the API docs and in the tests that assert no route
+          returns a value. */}
       <span className="t-caption faint">
-        Credentials are sealed in the fleet's secret store and the company configuration is given a{" "}
-        <code className="inline">${"{VAR}"}</code> pointing at them. Nothing on this page is ever
-        sent back to a browser.
+        Credentials are sealed in the secret store; the configuration holds only a{" "}
+        <code className="inline">${"{VAR}"}</code> pointing at them.
       </span>
     </Dialog>
   );

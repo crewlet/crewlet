@@ -359,3 +359,80 @@ test("the button reads Connect before there is a connection and Save after", () 
   );
   expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
 });
+
+// A DEFAULT IS OFFERED WHERE THERE IS NOTHING, and only there.
+//
+// Datadog's region is US1 for most organizations, so "Choose one" makes
+// everybody answer a question with an obvious answer. It is seeded into the
+// FORM rather than assumed on the far side, so what is submitted is what was
+// on screen.
+test("a field with a default opens holding it", () => {
+  render(
+    <SetupDialog
+      sections={[
+        {
+          name: "Datadog",
+          tool: {
+            ...tool,
+            configured: false,
+            requirements: [
+              req({
+                field: "site",
+                label: "Datadog region",
+                kind: "choice",
+                connect: true,
+                default: "datadoghq.com",
+                choices: [
+                  { value: "datadoghq.com", label: "datadoghq.com" },
+                  { value: "datadoghq.eu", label: "datadoghq.eu" },
+                ],
+              }),
+            ],
+          },
+        },
+      ]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("datadoghq.com");
+});
+
+// AND NOT OVER AN ANSWER THIS COMPANY ALREADY GAVE. Offering the common value
+// on top of a working setting quietly proposes changing it.
+test("a field this company has answered keeps its answer", () => {
+  render(
+    <SetupDialog
+      sections={[
+        {
+          name: "Datadog",
+          tool: {
+            ...tool,
+            configured: true,
+            requirements: [
+              req({
+                field: "site",
+                label: "Datadog region",
+                kind: "choice",
+                connect: true,
+                default: "datadoghq.com",
+                present: true,
+                choices: [
+                  { value: "datadoghq.com", label: "datadoghq.com" },
+                  { value: "datadoghq.eu", label: "datadoghq.eu" },
+                ],
+              }),
+            ],
+          },
+        },
+      ]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  // Empty: the form sends only what was touched, so an untouched field
+  // carrying a stored value must not arrive pre-filled with the default.
+  expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("");
+});

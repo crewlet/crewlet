@@ -51,6 +51,7 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			Required:   false,
 			Connect:    true,
 			Choices:    siteChoices(),
+			Default:    DefaultSite,
 			Help:       "The region your organization is in.",
 		},
 		{

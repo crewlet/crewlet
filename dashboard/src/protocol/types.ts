@@ -816,6 +816,14 @@ export interface SetupRequirement {
   connect?: boolean;
   /** The words in `help` that become the link to `vendor_url`. */
   link_text?: string;
+  /**
+   * What the form offers when this company has no value.
+   *
+   * A SUGGESTION, not a stored value: nothing is written until submit, so a
+   * default that is wrong is one somebody changes rather than one they have
+   * to discover.
+   */
+  default?: string;
   mintable?: boolean;
   help?: string;
   where?: string;
