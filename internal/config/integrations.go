@@ -99,6 +99,21 @@ func (i *Integrations) validate(path string) error {
 	// admin call and refused with nothing naming the character.
 	if i.Atlassian != nil {
 		noSpaces(&p, at(path, "atlassian.org_id"), i.Atlassian.OrgID)
+		if d := strings.TrimSpace(i.Atlassian.Deployment); d != "" &&
+			!slices.Contains(AtlassianDeployments, strings.ToLower(d)) {
+			p.add(at(path, "atlassian.deployment"), ErrUnknownValue,
+				"%q is not an Atlassian deployment; give %q or %q",
+				d, AtlassianCloud, AtlassianDataCenter)
+		}
+		// THE ORGANIZATION IS A CLOUD CONCEPT. admin.atlassian.com has no
+		// Data Center equivalent: there is no organization, no cloud id and
+		// no service account to create, so a key here would be a credential
+		// nothing can spend.
+		if !i.Atlassian.IsCloud() && strings.TrimSpace(i.Atlassian.OrgID) != "" {
+			p.add(at(path, "atlassian.org_id"), ErrConflict,
+				"a Data Center deployment has no organization: the admin APIs "+
+					"this names are Cloud only, so nothing would read it")
+		}
 	}
 	if i.Jira != nil {
 		p.wrap(i.Jira.validate(at(path, "jira")))
@@ -1004,6 +1019,37 @@ func (g *GitLab) validate(path string) error {
 // through a provisioning run that has already created half the fleet.
 var mattermostUsername = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
+// The two Atlassian deployments, as [Atlassian.Deployment] spells them.
+const (
+	AtlassianCloud      = "cloud"
+	AtlassianDataCenter = "data_center"
+)
+
+// AtlassianDeployments is the closed set, for a form's picker and for
+// validation, so a value the form offers and a value the config accepts
+// cannot diverge.
+var AtlassianDeployments = []string{AtlassianCloud, AtlassianDataCenter}
+
+// DeploymentOrDefault is which Atlassian this company runs.
+//
+// CLOUD IS THE DEFAULT because it is the deployment this engine can
+// provision: an organization key creates the accounts, discovers the sites
+// and mints their tokens, and a company that says nothing is far likelier to
+// be on it. A Data Center operator says so once, and every question after
+// that follows from the answer.
+func (a *Atlassian) DeploymentOrDefault() string {
+	if a == nil {
+		return AtlassianCloud
+	}
+	if d := strings.ToLower(strings.TrimSpace(a.Deployment)); d == AtlassianDataCenter {
+		return AtlassianDataCenter
+	}
+	return AtlassianCloud
+}
+
+// IsCloud reports the deployment this engine can provision.
+func (a *Atlassian) IsCloud() bool { return a.DeploymentOrDefault() == AtlassianCloud }
+
 // DatadogIgnore is the route_to value that means "wake nobody".
 //
 // A VALUE, not an empty string, and the difference is the whole point. Empty
@@ -1031,6 +1077,26 @@ const DatadogIgnore = "none"
 // hand and pastes the token into the seat's mcp_env needs none of this. What
 // it buys is that nobody has to.
 type Atlassian struct {
+	// Deployment says which Atlassian this company runs, and it is ASKED
+	// rather than derived.
+	//
+	// Every other part of this file works out Cloud from a hostname, which
+	// is right once an address exists and useless before one does: a form
+	// has to decide what to ask BEFORE the operator has answered anything,
+	// and an empty address reads as Data Center. That is how a Cloud connect
+	// came to be offered a Data Center's fields, and how the Cloud webhook
+	// token was dropped from the list before the address proving the site
+	// Cloud was submitted.
+	//
+	// It also decides which questions are worth asking at all. A Cloud
+	// company has an ORGANIZATION: its sites, their cloud ids and their
+	// addresses are all readable from one key, so asking a person to type
+	// them is asking them to copy values out of a console this engine is
+	// already reading. Data Center has no organization, no cloud id and no
+	// service accounts, so there the address is the only way in and it is
+	// required.
+	Deployment string `yaml:"deployment,omitempty" json:"deployment,omitempty" desc:"Which Atlassian this company runs: cloud or data_center. Default cloud."`
+
 	// OrgID is the organization the admin APIs take as their subject. It is
 	// in the admin console's own URL.
 	OrgID string `yaml:"org_id,omitempty" json:"org_id,omitempty" desc:"Atlassian organization id, from admin.atlassian.com."`

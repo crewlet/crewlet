@@ -7,10 +7,13 @@ import (
 	"github.com/crewlet/crewlet/internal/jira"
 )
 
-func fields(t *testing.T, in *config.Jira) map[string]bool {
+// fields is what the form asks, for a company that has DECLARED which
+// Atlassian it runs. The deployment is no longer derived from the address:
+// a form has to decide what to ask before an address exists.
+func fields(t *testing.T, cloud bool, in *config.Jira) map[string]bool {
 	t.Helper()
 	out := map[string]bool{}
-	for _, r := range jira.Requirements(in, func(string) (string, bool) { return "", false }) {
+	for _, r := range jira.Requirements(in, cloud, func(string) (string, bool) { return "", false }) {
 		out[r.Field] = true
 	}
 	return out
@@ -26,8 +29,12 @@ func fields(t *testing.T, in *config.Jira) map[string]bool {
 // documented. The signing secret is a real requirement on Cloud.
 func TestACloudSiteIsAskedForItsSigningSecret(t *testing.T) {
 	t.Parallel()
-	got := fields(t, &config.Jira{URL: "https://acme.atlassian.net"})
-	for _, want := range []string{"url", "email", "token", "webhook_secret"} {
+	got := fields(t, true, &config.Jira{URL: "https://acme.atlassian.net"})
+	// NOT the site address: a Cloud company's sites are read from its
+	// organization, and an address typed here is used INSTEAD of the
+	// gateway, which is the only place a service account's token
+	// authenticates.
+	for _, want := range []string{"email", "token", "webhook_secret"} {
 		if !got[want] {
 			t.Errorf("a Cloud site was not asked for %s", want)
 		}
@@ -38,7 +45,7 @@ func TestACloudSiteIsAskedForItsSigningSecret(t *testing.T) {
 // a link address mean nothing off Atlassian's own gateway.
 func TestADataCenterInstanceIsNotAskedForCloudFields(t *testing.T) {
 	t.Parallel()
-	got := fields(t, &config.Jira{URL: "https://jira.acme.example"})
+	got := fields(t, false, &config.Jira{URL: "https://jira.acme.example"})
 	for _, gone := range []string{"cloud_id", "site_url"} {
 		if got[gone] {
 			t.Errorf("a Data Center instance was asked for %s", gone)
@@ -47,16 +54,21 @@ func TestADataCenterInstanceIsNotAskedForCloudFields(t *testing.T) {
 	if !got["webhook_secret"] {
 		t.Error("a Data Center instance was not asked for its signing secret")
 	}
+	// AND IT IS ASKED FOR ITS ADDRESS, which is the only way in: nothing
+	// discovers a self-hosted instance.
+	if !got["url"] {
+		t.Error("a Data Center instance was not asked for its address")
+	}
 }
 
-// A VALUE THE DOCUMENT HOLDS SURVIVES THE DERIVATION.
+// A VALUE THE DOCUMENT HOLDS SURVIVES THE FILTER.
 //
-// The deployment is a guess from an address and the document is a fact:
-// hiding a setting a company has written down would make the form disagree
-// with the configuration, and Save would then clear it.
+// The document is a fact: dropping a setting a company has written down would
+// make the form disagree with the configuration, and Save would then clear
+// it.
 func TestAWrittenFieldIsNeverHidden(t *testing.T) {
 	t.Parallel()
-	got := fields(t, &config.Jira{
+	got := fields(t, false, &config.Jira{
 		URL:     "https://jira.acme.example",
 		CloudID: "abc-123",
 	})
@@ -65,17 +77,17 @@ func TestAWrittenFieldIsNeverHidden(t *testing.T) {
 	}
 }
 
-// AN EMPTY ADDRESS IS NOT A DATA CENTER INSTANCE.
+// A CLOUD BLOCK KEEPS SOMEWHERE TO RECORD WHAT DISCOVERY FINDS.
 //
-// DeploymentOf answers DataCenter for a blank string, which is the right
-// default for a real address it cannot place and the wrong answer for no
-// address at all: that is a company mid-connect. Dropping the gateway fields
-// there left nothing for the discovered cloud id to be written into, so a
-// connect that left the site blank was refused by the config for naming no
-// instance — the exact state the discovery exists to fill.
-func TestAnUnaddressedBlockKeepsSomewhereToRecordTheSite(t *testing.T) {
+// The organization pass reads the site and its cloud id from the
+// organization key and writes them into these fields. Dropping them from a
+// company that has connected nothing yet left nothing for the discovered
+// values to be written into, so a connect that named no site was refused by
+// the config for naming no instance, which is the exact state discovery
+// exists to fill.
+func TestACloudBlockKeepsSomewhereToRecordTheSite(t *testing.T) {
 	t.Parallel()
-	got := fields(t, &config.Jira{Email: "${E}", Token: "${T}"})
+	got := fields(t, true, &config.Jira{Email: "${E}", Token: "${T}"})
 	for _, want := range []string{"cloud_id", "site_url"} {
 		if !got[want] {
 			t.Errorf("a block with no address offers no %s to record one in", want)
@@ -83,21 +95,22 @@ func TestAnUnaddressedBlockKeepsSomewhereToRecordTheSite(t *testing.T) {
 	}
 }
 
-// THE ACCOUNT EMAIL IS REQUIRED UNTIL DATA CENTER IS ESTABLISHED.
+// THE ACCOUNT EMAIL IS REQUIRED ON CLOUD AND UNUSED ON DATA CENTER.
 //
 // Cloud authenticates an API token as Basic base64(email:token) and refuses
-// it as a bearer — measured against a live site: 403 without the address,
-// 200 with it — so without the email the webhook this integration exists to
+// it as a bearer, measured against a live site: 403 without the address, 200
+// with it. So without the email the webhook this integration exists to
 // register is never created. Data Center takes the token as a bearer and
 // wants no address at all.
 //
-// The unknown case is the one that was wrong: with no site typed yet,
-// DeploymentOf answers DataCenter for the empty string, so the one field a
-// fresh Cloud connect cannot do without was marked optional.
-func TestTheAccountEmailIsRequiredUntilDataCenterIsKnown(t *testing.T) {
+// It follows the DECLARED deployment now. Derived from the address it was
+// wrong in exactly the case that mattered: with nothing typed yet, an empty
+// string reads as Data Center, so the one field a fresh Cloud connect cannot
+// do without was marked optional on the form where it is first asked.
+func TestTheAccountEmailFollowsTheDeclaredDeployment(t *testing.T) {
 	t.Parallel()
-	required := func(in *config.Jira) bool {
-		for _, r := range jira.Requirements(in, func(string) (string, bool) { return "", false }) {
+	required := func(cloud bool, in *config.Jira) bool {
+		for _, r := range jira.Requirements(in, cloud, func(string) (string, bool) { return "", false }) {
 			if r.Field == "email" {
 				return r.Required
 			}
@@ -105,13 +118,13 @@ func TestTheAccountEmailIsRequiredUntilDataCenterIsKnown(t *testing.T) {
 		t.Fatal("no email requirement")
 		return false
 	}
-	if !required(&config.Jira{Token: "${T}"}) {
-		t.Error("a company that has named no site yet is not asked for the email")
+	if !required(true, &config.Jira{Token: "${T}"}) {
+		t.Error("a Cloud company that has connected nothing yet is not asked for the email")
 	}
-	if !required(&config.Jira{URL: "https://acme.atlassian.net", Token: "${T}"}) {
+	if !required(true, &config.Jira{URL: "https://acme.atlassian.net", Token: "${T}"}) {
 		t.Error("a Cloud site is not asked for the email its auth needs")
 	}
-	if required(&config.Jira{URL: "https://jira.acme.example", Token: "${T}"}) {
+	if required(false, &config.Jira{URL: "https://jira.acme.example", Token: "${T}"}) {
 		t.Error("a Data Center instance is asked for an email it does not use")
 	}
 }

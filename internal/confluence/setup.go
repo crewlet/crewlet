@@ -1,8 +1,6 @@
 package confluence
 
 import (
-	"cmp"
-
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -22,7 +20,13 @@ import (
 // actually settles it.
 
 // Requirements says what this company still needs for Confluence.
-func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []setup.Requirement {
+//
+// It takes the deployment ASKED FOR rather than deriving it from
+// an address: a form has to decide what to ask before the operator has
+// answered anything, and an empty address reads as Data Center.
+func Requirements(
+	in *config.Confluence, cloud bool, resolve func(string) (string, bool),
+) []setup.Requirement {
 	var url, cloudID, token, email, secret, webhookToken, siteURL string
 	if in != nil {
 		url, cloudID = in.URL, in.CloudID
@@ -30,21 +34,24 @@ func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []
 		secret, webhookToken, siteURL = in.WebhookSecret, in.WebhookToken, in.SiteURL
 	}
 
-	// THE ADDRESS, NOT THE REFERENCE NAMING IT. Every derivation below asks
-	// what the site looks like, and `${JIRA_URL}` looks like neither a Cloud
-	// site nor a Data Center instance: a company keeping its address in the
-	// store was offered the other deployment's fields.
-	address := setup.Deref(cmp.Or(url, siteURL), resolve)
-	addressed := address != ""
-
 	reqs := []setup.Requirement{
 		{
-			Field:      "url",
+			Field: "url",
+			// NOT ASKED ON CLOUD. The organization key reads every site
+			// this company has, along with its cloud id and its address,
+			// so a form that asked would be asking an operator to copy a
+			// value out of a console this engine is already reading. Worse
+			// than redundant: an address typed here is used INSTEAD of the
+			// gateway, and a service account's token authenticates only at
+			// the gateway, so answering it is what breaks the seats.
+			//
+			// On Data Center it is the only way in, and required.
+			Hidden:     cloud,
 			Connect:    true,
 			Label:      "Confluence site",
 			Kind:       setup.KindURL,
 			ConfigPath: "integrations.confluence.url",
-			Required:   cloudID == "",
+			Required:   !cloud && cloudID == "",
 			// WHERE TO READ IT, and nothing else. It described the
 			// address, said that connecting Atlassian discovers it, and
 			// named the deployment that needs it typed anyway. Three
@@ -99,7 +106,8 @@ func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []
 			// case this got wrong: with no site typed yet DeploymentOf
 			// answers DataCenter for the empty string, so the one field a
 			// fresh Cloud connect cannot do without was marked optional.
-			Required: !addressed || DeploymentOf(address) == Cloud,
+			// THE DECLARED DEPLOYMENT, not a guess from an address.
+			Required: cloud,
 			// WHERE TO READ IT. The address belongs to the account whose
 			// API token is in the field below, so it is the one on that
 			// account's own profile rather than anything in the
@@ -180,7 +188,7 @@ func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []
 	reqs[4].Present, reqs[4].Resolved, reqs[4].Stored = setup.Held(webhookToken, resolve)
 	reqs[5].Present, reqs[5].Resolved, reqs[5].Stored = setup.Held(secret, resolve)
 	reqs[6].Present, reqs[6].Resolved, reqs[6].Stored = setup.Held(siteURL, resolve)
-	return forDeployment(reqs, DeploymentOf(address), cloudID, addressed)
+	return forDeployment(reqs, cloud)
 }
 
 // forDeployment drops the fields the other Atlassian deployment uses.
@@ -193,47 +201,27 @@ func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []
 //
 // A field with a value SURVIVES, because the derivation is a guess from an
 // address and the document is a fact.
-func forDeployment(
-	reqs []setup.Requirement, deploy Deployment, cloudID string, addressed bool,
-) []setup.Requirement {
-	// THE ORGANIZATION KNOWS ITS OWN SITE. The Atlassian pass discovers the
-	// cloud id and the host from the organization key and records them, so
-	// these are not questions for a person: a form that asked would be
-	// asking an operator to copy three values out of a console this engine
-	// is already reading. They appear only where nothing has discovered
-	// them, which is a company that has not connected Atlassian.
-	gateway := map[string]bool{"cloud_id": true, "site_url": true}
-	cloudOnly := map[string]bool{"webhook_token": true}
-	dataCenter := map[string]bool{"webhook_secret": true}
+func forDeployment(reqs []setup.Requirement, cloud bool) []setup.Requirement {
+	// THE DEPLOYMENT IS DECLARED, so this is now a filter rather than a
+	// guess. A field that cannot apply is not an optional field: a Cloud
+	// operator was offered a Data Center signing secret their site will
+	// never send, and a Data Center operator a cloud id, a link address and
+	// a Cloud webhook token that mean nothing off Atlassian's gateway.
+	//
+	// A field with a VALUE survives whatever this decides, because the
+	// document is a fact and hiding a setting a company has written down
+	// would make the form disagree with the configuration, and Save would
+	// then clear it.
+	cloudOnly := map[string]bool{"cloud_id": true, "site_url": true, "webhook_token": true}
+	dataCenterOnly := map[string]bool{"webhook_secret": true}
 
-	// AN EMPTY ADDRESS IS NOT A DATA CENTER INSTANCE. DeploymentOf answers
-	// DataCenter for a blank string, which is the right default for a real
-	// address it cannot place and the wrong answer for no address at all:
-	// that is a company mid-connect, and dropping the gateway fields there
-	// left nothing for the discovered cloud id to be written into.
-	known := deploy == Cloud || cloudID != "" || addressed
 	out := make([]setup.Requirement, 0, len(reqs))
 	for _, r := range reqs {
 		switch {
 		case r.Present:
-		case gateway[r.Field] && known && deploy != Cloud:
+		case cloudOnly[r.Field] && !cloud:
 			continue
-		case r.Field == "site_url" && cloudID == "" && known:
-			continue
-		// AN UNKNOWN DEPLOYMENT KEEPS BOTH, for the same reason it keeps
-		// the gateway fields: DeploymentOf answers DataCenter for a blank
-		// address, and a company mid-connect has not said which it is yet.
-		//
-		// This is what left a fresh Cloud connect with no webhook token at
-		// all. The form is built from the config as it WAS, so with nothing
-		// written down the Cloud-only field was dropped before the address
-		// that would have proved it Cloud was even submitted, and a
-		// mintable field that is not on the list is never minted. The pass
-		// then refused every run: the token is "", which is neither a value
-		// nor a reference to mint one into.
-		case cloudOnly[r.Field] && known && deploy != Cloud:
-			continue
-		case dataCenter[r.Field] && known && deploy == Cloud:
+		case dataCenterOnly[r.Field] && cloud:
 			continue
 		}
 		out = append(out, r)

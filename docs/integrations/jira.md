@@ -8,12 +8,38 @@ Crewlet integrates with Jira in two directions: agents control Jira via MCP tool
 
 ## Setting it up from the dashboard
 
-Connect Atlassian on the Integrations screen with the site address, the
-account email and the API token. The engine generates the webhook secret and
-the reconcile loop registers the hook on its next tick, running the same pass
-`crewlet jira provision` runs. Atlassian appears as one tool there, with Jira
-and Confluence as sections, because one Atlassian account and one Forge app
-serve both.
+Atlassian appears as one tool on the Integrations screen, with Jira and
+Confluence as sections, because one Atlassian account serves both. The first
+field asks which Atlassian you run, and it decides every question after it:
+
+**Atlassian Cloud** takes an organization id and an unscoped organization API
+key, and nothing else about your sites. The engine reads them from the
+organization: the site, its cloud id and its address are all discovered and
+written into the config, so it does not ask you to copy values out of a
+console it is already reading. It also creates one service account per agent
+seat and mints that seat's token.
+
+An address typed here would be worse than redundant. The config uses a site
+address *instead of* the API gateway, and a service account's token
+authenticates only at the gateway, so naming a site is what stops the seats
+working. On Cloud the form does not offer the field at all.
+
+**Atlassian Data Center** has no organization, no cloud id and no service
+accounts, so there the address of each product is the only way in and it is
+required, alongside that product's own token.
+
+The engine generates the webhook credential each deployment needs (a signing
+secret on Data Center, a URL token on Confluence Cloud) and the reconcile loop
+registers the hook on its next tick, running the same pass
+`crewlet jira provision` runs.
+
+```yaml
+integrations:
+  atlassian:
+    deployment: cloud            # or data_center; cloud is the default
+    org_id: ${ATLASSIAN_ORG_ID}  # Cloud only, from admin.atlassian.com/o/<id>
+    api_key: ${ATLASSIAN_ORG_API_KEY}
+```
 
 See [Running the provisioning pass](../reference/api-endpoints.md#running-the-provisioning-pass).
 

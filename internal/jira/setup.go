@@ -1,8 +1,6 @@
 package jira
 
 import (
-	"cmp"
-
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -23,28 +21,37 @@ import (
 // seat's account id, and an issue assigned to an agent then reaches nobody.
 
 // Requirements says what this company still needs for Jira.
-func Requirements(in *config.Jira, resolve func(string) (string, bool)) []setup.Requirement {
+//
+// It takes the deployment ASKED FOR rather than deriving it from
+// an address: a form has to decide what to ask before the operator has
+// answered anything, and an empty address reads as Data Center.
+func Requirements(
+	in *config.Jira, cloud bool, resolve func(string) (string, bool),
+) []setup.Requirement {
 	var url, cloudID, token, email, secret, siteURL string
 	if in != nil {
 		url, cloudID = in.URL, in.CloudID
 		token, email, secret, siteURL = in.Token, in.Email, in.WebhookSecret, in.SiteURL
 	}
 
-	// THE ADDRESS, NOT THE REFERENCE NAMING IT. Every derivation below asks
-	// what the site looks like, and `${JIRA_URL}` looks like neither a Cloud
-	// site nor a Data Center instance: a company keeping its address in the
-	// store was offered the other deployment's fields.
-	address := setup.Deref(cmp.Or(url, siteURL), resolve)
-	addressed := address != ""
-
 	reqs := []setup.Requirement{
 		{
-			Field:      "url",
+			Field: "url",
+			// NOT ASKED ON CLOUD. The organization key reads every site
+			// this company has, along with its cloud id and its address,
+			// so a form that asked would be asking an operator to copy a
+			// value out of a console this engine is already reading. Worse
+			// than redundant: an address typed here is used INSTEAD of the
+			// gateway, and a service account's token authenticates only at
+			// the gateway, so answering it is what breaks the seats.
+			//
+			// On Data Center it is the only way in, and required.
+			Hidden:     cloud,
 			Connect:    true,
 			Label:      "Jira site",
 			Kind:       setup.KindURL,
 			ConfigPath: "integrations.jira.url",
-			Required:   cloudID == "",
+			Required:   !cloud && cloudID == "",
 			// WHERE TO READ IT, and nothing else. It described the
 			// address, said that connecting Atlassian discovers it, and
 			// named the deployment that needs it typed anyway. Three
@@ -99,7 +106,8 @@ func Requirements(in *config.Jira, resolve func(string) (string, bool)) []setup.
 			// case this got wrong: with no site typed yet DeploymentOf
 			// answers DataCenter for the empty string, so the one field a
 			// fresh Cloud connect cannot do without was marked optional.
-			Required: !addressed || DeploymentOf(address) == Cloud,
+			// THE DECLARED DEPLOYMENT, not a guess from an address.
+			Required: cloud,
 			// WHERE TO READ IT. The address belongs to the account whose
 			// API token is in the field below, so it is the one on that
 			// account's own profile rather than anything in the
@@ -171,7 +179,7 @@ func Requirements(in *config.Jira, resolve func(string) (string, bool)) []setup.
 	reqs[3].Present, reqs[3].Resolved, reqs[3].Stored = setup.Held(token, resolve)
 	reqs[4].Present, reqs[4].Resolved, reqs[4].Stored = setup.Held(secret, resolve)
 	reqs[5].Present, reqs[5].Resolved, reqs[5].Stored = setup.Held(siteURL, resolve)
-	return forDeployment(reqs, DeploymentOf(address), cloudID, addressed)
+	return forDeployment(reqs, cloud)
 }
 
 // forDeployment drops the fields the other Atlassian deployment uses.
@@ -187,30 +195,30 @@ func Requirements(in *config.Jira, resolve func(string) (string, bool)) []setup.
 // derivation is a guess from an address and the document is a fact: hiding a
 // setting a company has written down would make the form disagree with the
 // configuration, and Save would then clear it.
-func forDeployment(
-	reqs []setup.Requirement, deploy Deployment, cloudID string, addressed bool,
-) []setup.Requirement {
-	// THE ORGANIZATION KNOWS ITS OWN SITE. The Atlassian pass discovers the
-	// cloud id and the host from the organization key and records them, so
-	// these are not questions for a person: a form that asked would be
-	// asking an operator to copy three values out of a console this engine
-	// is already reading. They appear only where nothing has discovered
-	// them, which is a company that has not connected Atlassian.
-	gateway := map[string]bool{"cloud_id": true, "site_url": true}
+func forDeployment(reqs []setup.Requirement, cloud bool) []setup.Requirement {
+	// THE DEPLOYMENT IS DECLARED, so this is now a filter rather than a
+	// guess. A field that cannot apply is not an optional field: a Cloud
+	// operator was offered a Data Center signing secret their site will
+	// never send, and a Data Center operator a cloud id, a link address and
+	// a Cloud webhook token that mean nothing off Atlassian's gateway.
+	//
+	// A field with a VALUE survives whatever this decides, because the
+	// document is a fact and hiding a setting a company has written down
+	// would make the form disagree with the configuration, and Save would
+	// then clear it.
+	// JIRA SIGNS ON BOTH DEPLOYMENTS, so its webhook secret is on neither
+	// list. Confluence is the one that differs: Cloud signs nothing there,
+	// so a token in the URL is the whole check.
+	cloudOnly := map[string]bool{"cloud_id": true, "site_url": true}
+	dataCenterOnly := map[string]bool{}
 
-	// AN EMPTY ADDRESS IS NOT A DATA CENTER INSTANCE. DeploymentOf answers
-	// DataCenter for a blank string, which is the right default for a real
-	// address it cannot place and the wrong answer for no address at all:
-	// that is a company mid-connect, and dropping the gateway fields there
-	// left nothing for the discovered cloud id to be written into.
-	known := deploy == Cloud || cloudID != "" || addressed
 	out := make([]setup.Requirement, 0, len(reqs))
 	for _, r := range reqs {
 		switch {
 		case r.Present:
-		case gateway[r.Field] && known && deploy != Cloud:
+		case cloudOnly[r.Field] && !cloud:
 			continue
-		case r.Field == "site_url" && cloudID == "" && known:
+		case dataCenterOnly[r.Field] && cloud:
 			continue
 		}
 		out = append(out, r)

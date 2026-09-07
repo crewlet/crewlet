@@ -7,6 +7,10 @@
           "description": "Unscoped organization API key. A scoped key is refused by the account-management API.",
           "type": "string"
         },
+        "deployment": {
+          "description": "Which Atlassian this company runs: cloud or data_center. Default cloud.",
+          "type": "string"
+        },
         "org_id": {
           "description": "Atlassian organization id, from admin.atlassian.com.",
           "type": "string"

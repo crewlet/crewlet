@@ -395,7 +395,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 	case integration.KindJira:
 		block := company.Integrations.Jira
 		summary = jira.Summary()
-		reqs = jira.Requirements(block, s.resolve)
+		reqs = jira.Requirements(block, company.Integrations.Atlassian.IsCloud(), s.resolve)
 		// THE FORGE APP ID IS NOT ASKED FOR ANY MORE.
 		//
 		// It was the only way a Cloud site's events could reach this engine,
@@ -420,7 +420,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 	case integration.KindConfluence:
 		block := company.Integrations.Confluence
 		summary = confluence.Summary()
-		reqs = confluence.Requirements(block, s.resolve)
+		reqs = confluence.Requirements(block, company.Integrations.Atlassian.IsCloud(), s.resolve)
 		seats = credentialSeats(company, s.resolve,
 			confluence.SeatEnvs, confluence.CredentialKeys, "Confluence", false)
 		configured, enabled = block != nil, block != nil

@@ -22,7 +22,31 @@ func Requirements(in *config.Atlassian, resolve func(string) (string, bool)) []s
 		orgID, key = in.OrgID, in.APIKey
 	}
 
+	// THE DEPLOYMENT FIRST, because it decides which of the questions below
+	// are worth asking. See [config.Atlassian.Deployment].
 	reqs := []setup.Requirement{
+		{
+			Field:      "deployment",
+			Connect:    true,
+			Label:      "Atlassian deployment",
+			Kind:       setup.KindChoice,
+			ConfigPath: "integrations.atlassian.deployment",
+			Required:   true,
+			Default:    config.AtlassianCloud,
+			Choices: []setup.Choice{
+				{
+					Value: config.AtlassianCloud,
+					Label: "Atlassian Cloud",
+					Hint:  "Crewlet reads your sites and creates each agent's account.",
+				},
+				{
+					Value: config.AtlassianDataCenter,
+					Label: "Atlassian Data Center",
+					Hint:  "Self-hosted. Give each product's address and its own token.",
+				},
+			},
+			Help: "Cloud is read from your organization. Data Center is addressed directly.",
+		},
 		{
 			Field: "org_id",
 			// SHARED, so Jira's and Confluence's own fields can cite it.
@@ -69,8 +93,17 @@ func Requirements(in *config.Atlassian, resolve func(string) (string, bool)) []s
 	// a `${VAR}` naming an entry that is not there: the form went green
 	// over a field every call then failed on, which is the exact silent
 	// outage this pair of facts exists to separate.
-	reqs[0].Present, reqs[0].Resolved, reqs[0].Stored = setup.Held(orgID, resolve)
-	reqs[1].Present, reqs[1].Resolved, reqs[1].Stored = setup.Held(key, resolve)
+	reqs[0].Present, reqs[0].Resolved, reqs[0].Stored = setup.Plain(in.DeploymentOrDefault())
+	reqs[1].Present, reqs[1].Resolved, reqs[1].Stored = setup.Held(orgID, resolve)
+	reqs[2].Present, reqs[2].Resolved, reqs[2].Stored = setup.Held(key, resolve)
+
+	// THE ORGANIZATION IS A CLOUD CONCEPT, and asking a Data Center operator
+	// for one is asking for a credential nothing can spend: admin.atlassian.com
+	// has no Data Center equivalent, so there is no organization, no cloud id
+	// and no service account to create.
+	if !in.IsCloud() {
+		return reqs[:1]
+	}
 	return reqs
 }
 

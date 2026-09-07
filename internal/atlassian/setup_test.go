@@ -25,13 +25,13 @@ import (
 func TestBothAtlassianProductsDescribeAsharedFieldTheSameWay(t *testing.T) {
 	byField := map[string]setup.Requirement{}
 	nothing := func(string) (string, bool) { return "", false }
-	for _, r := range jira.Requirements(nil, nothing) {
+	for _, r := range jira.Requirements(nil, true, nothing) {
 		if r.Shared {
 			byField[r.Field] = r
 		}
 	}
 
-	for _, theirs := range confluence.Requirements(nil, nothing) {
+	for _, theirs := range confluence.Requirements(nil, true, nothing) {
 		if !theirs.Shared {
 			continue
 		}

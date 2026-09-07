@@ -1076,42 +1076,55 @@ func TestOnlyAMentionAddressesTheSeat(t *testing.T) {
 	}
 }
 
-// A FRESH CLOUD CONNECT STILL GETS ITS WEBHOOK TOKEN.
+// EACH DEPLOYMENT IS OFFERED ITS OWN WEBHOOK CREDENTIAL, and only its own.
 //
-// The form is built from the config as it WAS, and DeploymentOf answers
-// DataCenter for a blank address, so with nothing written down the Cloud-only
-// token was dropped from the requirement list before the address that proves
-// the site Cloud had been submitted. A mintable field that is not on the list
-// is never minted, and every pass then refused: the token is "", which is
-// neither a value nor a reference to mint one into.
-func TestAnUnknownDeploymentOffersBothWebhookCredentials(t *testing.T) {
+// Confluence Cloud signs nothing, so a token in the registered URL is the
+// whole check; Data Center signs every delivery and the engine verifies an
+// HMAC. A field that cannot apply is not an optional field.
+//
+// This is now decided by the DECLARED deployment. Derived from the address it
+// was wrong on a fresh connect: nothing is typed yet, an empty string reads
+// as Data Center, and the Cloud-only token was dropped from the list before
+// the address proving the site Cloud had been submitted. A mintable field
+// that is not on the list is never minted, so every pass then refused with
+// the token empty.
+func TestEachDeploymentIsOfferedItsOwnWebhookCredential(t *testing.T) {
 	nothing := func(string) (string, bool) { return "", false }
-	got := map[string]bool{}
-	for _, r := range confluence.Requirements(&config.Confluence{}, nothing) {
-		got[r.Field] = true
-	}
-	for _, field := range []string{"webhook_token", "webhook_secret"} {
-		if !got[field] {
-			t.Errorf("a company that has said nothing is not offered %q", field)
+	// SHOWN, not merely declared. A hidden requirement stays on the list so
+	// a value the document holds round-trips through a save; what it does
+	// not do is ask anybody for one.
+	fields := func(cloud bool, in *config.Confluence) map[string]bool {
+		out := map[string]bool{}
+		for _, r := range confluence.Requirements(in, cloud, nothing) {
+			if !r.Hidden {
+				out[r.Field] = true
+			}
 		}
+		return out
 	}
-}
 
-// AND A KNOWN DEPLOYMENT STILL DROPS THE OTHER ONE'S, which is the whole
-// point of the rule: a Cloud operator has no use for a signing secret their
-// site will never send.
-func TestAKnownCloudSiteDropsTheDataCenterSecret(t *testing.T) {
-	nothing := func(string) (string, bool) { return "", false }
-	got := map[string]bool{}
-	for _, r := range confluence.Requirements(
-		&config.Confluence{URL: "https://acme.atlassian.net/wiki"}, nothing,
-	) {
-		got[r.Field] = true
-	}
+	// A Cloud company that has connected nothing yet: the token is offered,
+	// which is what lets it be minted.
+	got := fields(true, &config.Confluence{})
 	if !got["webhook_token"] {
-		t.Error("a Cloud site is not offered the token its deliveries carry")
+		t.Error("a Cloud company is not offered the token its deliveries carry")
 	}
 	if got["webhook_secret"] {
-		t.Error("a Cloud site is offered a signing secret it will never receive")
+		t.Error("a Cloud company is offered a signing secret its site never sends")
+	}
+	// AND ITS SITE IS NOT ASKED FOR AT ALL: the organization key reads it.
+	if got["url"] {
+		t.Error("a Cloud company is asked for a site its organization already knows")
+	}
+
+	got = fields(false, &config.Confluence{URL: "https://wiki.acme.example"})
+	if !got["webhook_secret"] {
+		t.Error("a Data Center instance is not offered the secret it signs with")
+	}
+	if got["webhook_token"] {
+		t.Error("a Data Center instance is offered a Cloud webhook token")
+	}
+	if !got["url"] {
+		t.Error("a Data Center instance is not asked for its address")
 	}
 }
