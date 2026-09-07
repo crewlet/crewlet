@@ -215,13 +215,24 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 	if err := s.secrets.Set(ctx, keyVar, app.PEM, "setup", "setup", now); err != nil {
 		return handle, fmt.Errorf("setupapi: seal the app key for %s: %w", handle, err)
 	}
-	if secret := strings.TrimSpace(app.WebhookSecret); secret != "" {
-		if err := s.secrets.Set(ctx, hookVar, secret, "setup", "setup", now); err != nil {
+	sealedHook := strings.TrimSpace(app.WebhookSecret) != ""
+	if sealedHook {
+		if err := s.secrets.Set(ctx, hookVar, app.WebhookSecret, "setup", "setup", now); err != nil {
 			return handle, fmt.Errorf("setupapi: seal the webhook secret for %s: %w", handle, err)
 		}
 	}
 
-	if err := s.recordSeatApp(ctx, handle, app, keyVar); err != nil {
+	// THE POINTER ONLY WHERE THERE IS SOMETHING TO POINT AT. A `${VAR}`
+	// naming a secret nothing sealed resolves to nothing, and the webhook
+	// route reads an empty secret as "cannot verify" and answers 503 — so
+	// writing it unconditionally would turn an app GitHub gave no secret
+	// into a seat whose deliveries are refused rather than one that falls
+	// back to the organization's.
+	hookRef := ""
+	if sealedHook {
+		hookRef = "${" + hookVar + "}"
+	}
+	if err := s.recordSeatApp(ctx, handle, app, keyVar, hookRef); err != nil {
 		return handle, err
 	}
 	return handle, nil
@@ -234,7 +245,7 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 // handle is the seat's identity rather than its position, which is exactly
 // what this route addresses by.
 func (s *Service) recordSeatApp(
-	ctx context.Context, handle string, app *github.CreatedApp, keyVar string,
+	ctx context.Context, handle string, app *github.CreatedApp, keyVar, hookRef string,
 ) error {
 	body, err := s.writer.Config.Seat(ctx, handle)
 	if err != nil {
@@ -255,6 +266,12 @@ func (s *Service) recordSeatApp(
 	block["app_id"] = app.ID
 	block["app_slug"] = app.Slug
 	block["private_key"] = "${" + keyVar + "}"
+	// THE APP'S OWN SIGNING SECRET, and the route needs it to accept a
+	// single delivery: GitHub signs this app's deliveries with the secret
+	// it generated for THIS app, which is not the organization's.
+	if hookRef != "" {
+		block["webhook_secret"] = hookRef
+	}
 	// THE INSTALLATION IS NOT KNOWN YET, and saying so is the point:
 	// creating an app and installing it are two acts, and the second can
 	// be a day after the first. Zero is the state the screen reports as

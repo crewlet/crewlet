@@ -340,12 +340,25 @@ type RoleGitHub struct {
 	// every other credential here, and losing it means deleting the app
 	// and creating another.
 	PrivateKey string `secret:"true" yaml:"private_key,omitempty" json:"private_key,omitempty" desc:"Reference to this seat's sealed GitHub App key. Returned by GitHub once."`
+
+	// WebhookSecret is what THIS APP signs its deliveries with, and it is
+	// the app's own: GitHub generates one per app at conversion time and
+	// returns it in the same response as the key, once.
+	//
+	// So an agent's deliveries cannot be verified against the
+	// organization's `integrations.github.webhook_secret` — that secret
+	// belongs to a different app, or to no app at all in a company that
+	// only ever created per-agent ones. Verifying against it refused every
+	// delivery from every agent with a 503, while GitHub's own hook page
+	// showed the app healthy and the config showed a secret set.
+	WebhookSecret string `secret:"true" yaml:"webhook_secret,omitempty" json:"webhook_secret,omitempty" desc:"Reference to this seat's sealed GitHub App webhook secret. Returned by GitHub once."`
 }
 
 // IsZero lets an unset block drop out of a round trip.
 func (g *RoleGitHub) IsZero() bool {
 	return g == nil || (g.Tier == "" && len(g.Repos) == 0 && g.AppID == 0 &&
-		g.AppSlug == "" && g.InstallationID == 0 && g.PrivateKey == "")
+		g.AppSlug == "" && g.InstallationID == 0 && g.PrivateKey == "" &&
+		g.WebhookSecret == "")
 }
 
 // Held reports a seat whose app exists and is installed, which is the only

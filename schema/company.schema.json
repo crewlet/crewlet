@@ -1404,6 +1404,10 @@
         "tier": {
           "description": "read_only, review or full_access. Empty means read_only.",
           "type": "string"
+        },
+        "webhook_secret": {
+          "description": "Reference to this seat's sealed GitHub App webhook secret. Returned by GitHub once.",
+          "type": "string"
         }
       },
       "type": "object"

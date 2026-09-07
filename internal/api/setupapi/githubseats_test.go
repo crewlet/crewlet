@@ -1,9 +1,13 @@
 package setupapi_test
 
 import (
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/api/setupapi"
 )
 
 // A company whose agents are at every stage of getting their own GitHub App:
@@ -214,5 +218,143 @@ func TestAGitHubSeatWithWorkOutstandingHoldsTheCardOpen(t *testing.T) {
 		if got, _ := seat["action_url"].(string); got != want {
 			t.Errorf("install_app points at %q, want %q", got, want)
 		}
+	}
+}
+
+// fakeGitHub answers the one call the app flow makes: the manifest
+// conversion. It records what it was asked to convert so a test can assert
+// the code reached it, and answers with what GitHub answers with — a private
+// key and a webhook secret, both returned exactly once.
+func fakeGitHub(t *testing.T, app map[string]any) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/app-manifests/") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(app)
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+// convertOneApp drives a whole creation for one seat, from the begin route
+// through GitHub's redirect, against a fake GitHub.
+func (s *surface) convertOneApp(t *testing.T, handle string, app map[string]any) {
+	t.Helper()
+	server := fakeGitHub(t, app)
+	// THE CONVERSION GOES WHERE THE COMPANY SAYS GITHUB IS, which is what
+	// makes an Enterprise Server work and what lets this test answer.
+	res := s.do(t, http.MethodPatch, "/config",
+		`{"integrations":{"public_base_url":"https://engine.example.com",
+		  "github":{"enabled":true,"url":"`+server.URL+`","webhook_secret":"org",
+		  "provisioning":{"org":"acme"}}}}`,
+		map[string]string{
+			"Content-Type": "application/merge-patch+json",
+			"X-Summary":    "point at a github",
+		})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("point at github = %d: %s", res.Code, res.Body)
+	}
+
+	flow := setupapi.NewAppFlow(s.setup, []string{"test-material"})
+	s.setup.AttachAppFlow(flow)
+
+	// THROUGH THE BEGIN ROUTE, so the state the callback validates is one
+	// this engine actually minted rather than one the test forged.
+	begin := decode(t, s.do(t, http.MethodPost, "/setup/integrations/github/app",
+		`{"seat":"`+handle+`"}`, nil))
+	state, _ := begin["state"].(string)
+	if state == "" {
+		t.Fatalf("the begin route minted no state: %v", begin)
+	}
+	if seat, err := flow.Complete(t.Context(), "one-time-code", state); err != nil {
+		t.Fatalf("complete %s: %v", seat, err)
+	}
+}
+
+// seatDoc reads one seat back through the entity route the flow writes it on.
+func (s *surface) seatDoc(t *testing.T, handle string) []byte {
+	t.Helper()
+	res := s.do(t, http.MethodGet, "/config/roles/"+handle, "", nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("read the seat %s = %d: %s", handle, res.Code, res.Body)
+	}
+	return res.Body.Bytes()
+}
+
+// AN APP'S OWN WEBHOOK SECRET IS SEALED AND POINTED AT.
+//
+// GitHub returns the signing secret in the conversion response, once, and it
+// is the ONLY thing an agent's deliveries can be verified against: the
+// organization's belongs to a different app, or to no app at all in a company
+// that only ever created per-agent ones. Sealed without a pointer written
+// onto the seat, the value was durable and unreachable, and the route checked
+// every agent's delivery against the organization's secret and answered 401.
+func TestAnAppsWebhookSecretIsSealedAndReachable(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seedGitHubApps(t)
+	s.convertOneApp(t, "sre-lead", map[string]any{
+		"id": 91, "slug": "acme-sre-lead", "name": "Acme sre-lead",
+		"pem":            "-----BEGIN RSA PRIVATE KEY-----\nk\n-----END RSA PRIVATE KEY-----",
+		"webhook_secret": "the-apps-own-secret",
+	})
+
+	// SEALED under the seat's own name, beside its key.
+	if got, ok := s.vault.get("SRE_LEAD_GITHUB_APP_WEBHOOK_SECRET"); !ok || got != "the-apps-own-secret" {
+		t.Fatalf("the sealed webhook secret is %q (found=%v)", got, ok)
+	}
+	// AND POINTED AT from the seat, which is the half that was missing.
+	body := s.seatDoc(t, "sre-lead")
+	var seat struct {
+		Integrations struct {
+			GitHub struct {
+				WebhookSecret string `json:"webhook_secret"`
+				PrivateKey    string `json:"private_key"`
+			} `json:"github"`
+		} `json:"integrations"`
+	}
+	if err := json.Unmarshal(body, &seat); err != nil {
+		t.Fatalf("decode the seat: %v", err)
+	}
+	if got := seat.Integrations.GitHub.WebhookSecret; got != "${SRE_LEAD_GITHUB_APP_WEBHOOK_SECRET}" {
+		t.Errorf("the seat points at %q, so nothing can verify this app's deliveries", got)
+	}
+	// THE POINTER, NEVER THE VALUE. A secret in the document is one the
+	// dashboard renders and a config export carries.
+	if strings.Contains(string(body), "the-apps-own-secret") {
+		t.Fatal("the app's webhook secret was written into the company document")
+	}
+	if strings.Contains(string(body), "BEGIN RSA PRIVATE KEY") {
+		t.Fatal("the app's private key was written into the company document")
+	}
+}
+
+// A GITHUB THAT RETURNS NO SECRET LEAVES NO POINTER.
+//
+// A `${VAR}` naming a secret nothing sealed resolves to nothing, and the
+// route reads an empty secret as "cannot verify" and answers 503. So writing
+// the pointer unconditionally would turn a seat that should fall back to the
+// organization's secret into one whose every delivery is refused.
+func TestASeatWithNoWebhookSecretHoldsNoPointerToOne(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seedGitHubApps(t)
+	s.convertOneApp(t, "sre-lead", map[string]any{
+		"id": 92, "slug": "acme-sre-lead", "name": "Acme sre-lead",
+		"pem": "-----BEGIN RSA PRIVATE KEY-----\nk\n-----END RSA PRIVATE KEY-----",
+	})
+
+	body := s.seatDoc(t, "sre-lead")
+	if strings.Contains(string(body), "webhook_secret") {
+		t.Fatalf("the seat points at a webhook secret nothing sealed: %s", body)
+	}
+	// AND THE KEY IS STILL THERE, because the conversion did happen: the
+	// absent secret is one field missing, not a failed creation.
+	if !strings.Contains(string(body), "${SRE_LEAD_GITHUB_APP_KEY}") {
+		t.Fatalf("the seat lost its app key: %s", body)
 	}
 }

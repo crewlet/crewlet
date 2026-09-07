@@ -251,14 +251,21 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	// the inbound route verifies with. A company with seat apps and no
 	// block answers webhooks and sends nothing; one with the block and no
 	// apps refuses every delivery.
-	if seats := slackSeats(company); in.Slack != nil || seats > 0 {
+	if seats := seatSecrets(company, "slack"); in.Slack != nil || seats > 0 {
 		add("slack", in.Slack != nil, boolPtr(seats > 0), nil)
 	}
 	if in.Mattermost != nil {
 		add("mattermost", true, nil, map[string]any{"url": in.Mattermost.URL})
 	}
-	if in.GitHub != nil {
-		add("github", in.GitHub.Enabled, boolPtr(in.GitHub.WebhookSecret != ""), nil)
+	// GitHub, on the same terms as Slack and for the same reason: a
+	// per-agent app is an app of its own, with its own signing secret, and
+	// a company can hold nothing but those. Reported on the org block
+	// alone, such a company had no GitHub row at all while five agents
+	// were receiving deliveries.
+	if seats := seatSecrets(company, "github"); in.GitHub != nil || seats > 0 {
+		org := in.GitHub != nil
+		add("github", org && in.GitHub.Enabled,
+			boolPtr(seats > 0 || (org && in.GitHub.WebhookSecret != "")), nil)
 	}
 	if in.GitLab != nil {
 		add("gitlab", in.GitLab.Enabled, boolPtr(in.GitLab.SigningSecret != ""),
@@ -476,6 +483,8 @@ func seatsFor(company *config.Company, kind string) []string {
 			carries = r.Integrations.Jira != nil
 		case "confluence":
 			carries = r.Integrations.Confluence != nil
+		case "github":
+			carries = r.Integrations.GitHub != nil
 		}
 		if carries {
 			out = append(out, r.Name)
@@ -485,14 +494,28 @@ func seatsFor(company *config.Company, kind string) []string {
 	return out
 }
 
-// slackSeats counts the per-seat Slack apps this company configures.
+// seatSecrets counts the per-seat apps of one kind that carry a verification
+// credential.
 //
-// Counted as well as listed: the COUNT is what says whether the route can
-// verify anything at all, since a Slack app with no signing secret cannot.
-func slackSeats(company *config.Company) int {
+// Counted as well as listed by [seatsFor]: the COUNT is what says whether the
+// route can verify anything at all, since an app with no signing secret
+// cannot, and an app without one is exactly the half-finished state an
+// operator needs to see.
+func seatSecrets(company *config.Company, kind string) int {
 	n := 0
 	for r := range company.EachRole() {
-		if slack := r.Integrations.Slack; slack != nil && slack.SigningSecret != "" {
+		var secret string
+		switch kind {
+		case "slack":
+			if slack := r.Integrations.Slack; slack != nil {
+				secret = slack.SigningSecret
+			}
+		case "github":
+			if app := r.Integrations.GitHub; app != nil {
+				secret = app.WebhookSecret
+			}
+		}
+		if secret != "" {
 			n++
 		}
 	}

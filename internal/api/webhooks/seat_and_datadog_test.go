@@ -69,6 +69,86 @@ func TestGitHub_SeatFormStillVerifies(t *testing.T) {
 	}
 }
 
+// AN AGENT'S APP IS VERIFIED AGAINST ITS OWN SECRET.
+//
+// GitHub generates a signing secret per app and returns it once, so a
+// delivery from an agent's app is signed with that app's secret rather than
+// the organization's. Checked against the organization's, every delivery from
+// every agent was refused with a 503 while GitHub's own hook page showed the
+// app healthy and the config showed a secret set.
+func TestGitHub_AnAgentsAppVerifiesAgainstItsOwnSecret(t *testing.T) {
+	t.Parallel()
+
+	e := newEdge(t)
+	e.secrets.GitHubSeat = map[string]string{"agent-swe": "seat-secret"}
+	body := []byte(`{"action":"created"}`)
+
+	res := e.post(t, "/webhooks/github/agent-swe", body, githubDelivery(body, "seat-secret"))
+	if res.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200: %s", res.Code, res.Body)
+	}
+	if got := seatOf(t, e.published.last()); got != "agent-swe" {
+		t.Fatalf("handle = %q, want agent-swe", got)
+	}
+
+	// AND NOT AGAINST THE ORGANIZATION'S. A seat holding its own app has
+	// one credential its deliveries can carry; accepting the other would
+	// mean a leak of the organization secret forges any agent.
+	res = e.post(t, "/webhooks/github/agent-swe", body, githubDelivery(body, "gh-secret"))
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("got %d, want 401", res.Code)
+	}
+}
+
+// A SEAT WITH NO APP OF ITS OWN FALLS BACK TO THE ORGANIZATION'S.
+//
+// The same path serves a second deployment: one organization app whose
+// deliveries are pointed at a seat. That app has only the organization's
+// secret, and refusing it would break every company on that shape.
+func TestGitHub_ASeatWithNoAppOfItsOwnUsesTheOrganizationSecret(t *testing.T) {
+	t.Parallel()
+
+	e := newEdge(t)
+	e.secrets.GitHubSeat = map[string]string{"agent-swe": "seat-secret"}
+	body := []byte(`{"action":"created"}`)
+
+	res := e.post(t, "/webhooks/github/agent-pm", body, githubDelivery(body, "gh-secret"))
+	if res.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200: %s", res.Code, res.Body)
+	}
+	if got := seatOf(t, e.published.last()); got != "agent-pm" {
+		t.Fatalf("handle = %q, want agent-pm", got)
+	}
+}
+
+// A COMPANY WITH ONLY PER-AGENT APPS STILL SERVES ITS ROUTE.
+//
+// One app per agent is the only way an agent acts as itself, so a company on
+// that shape never configures an organization-wide app at all. Reading the
+// organization's secret alone left it with nothing to verify with, and the
+// route answered 503 to every delivery from every agent.
+func TestGitHub_ServesACompanyThatHasOnlyPerAgentApps(t *testing.T) {
+	t.Parallel()
+
+	e := newEdge(t)
+	e.secrets.GitHub = ""
+	e.secrets.GitHubSeat = map[string]string{"agent-swe": "seat-secret"}
+	body := []byte(`{"action":"created"}`)
+
+	res := e.post(t, "/webhooks/github/agent-swe", body, githubDelivery(body, "seat-secret"))
+	if res.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200: %s", res.Code, res.Body)
+	}
+
+	// AND REFUSES THE ONE IT CANNOT CHECK. A seat with no app of its own
+	// and no organization secret to fall back to has nothing to verify
+	// with, which is 503 and never an accepted delivery.
+	res = e.post(t, "/webhooks/github/agent-pm", body, githubDelivery(body, "seat-secret"))
+	if res.Code != http.StatusServiceUnavailable {
+		t.Fatalf("got %d, want 503", res.Code)
+	}
+}
+
 func datadogDelivery(token string) map[string]string {
 	return map[string]string{"X-Crewlet-Token": token}
 }

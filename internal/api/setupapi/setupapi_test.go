@@ -76,6 +76,9 @@ type surface struct {
 	vault   *vault
 	company func() *config.Company
 	configs *store.Configs
+	// setup is the service itself, kept so a test can attach the app flow
+	// the engine attaches after construction.
+	setup *setupapi.Service
 }
 
 func newSurface(t *testing.T) *surface {
@@ -102,12 +105,13 @@ func newSurface(t *testing.T) *surface {
 		}
 		return doc
 	}
-	setupapi.New(setupapi.Options{
+	s.setup = setupapi.New(setupapi.Options{
 		Company: s.company, Config: cfg, Secrets: v,
 		// The resolution chain: what the vault holds is what resolved.
 		Resolve: v.get,
 		Now:     func() time.Time { return pinned },
-	}).Routes(s.mux)
+	})
+	s.setup.Routes(s.mux)
 	cfg.Routes(s.mux)
 	return s
 }

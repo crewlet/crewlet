@@ -65,7 +65,10 @@ integrations:
   base is derived as `<url>/api/v3` — there is no second address to keep in
   step, and pasting the API base in instead of the instance URL is accepted
   rather than doubled.
-- **`webhook_secret` is required** when enabled. Every delivery to
+- **`webhook_secret` is required** when enabled, and it is the
+  *organization's*: it verifies the bare route and any seat with no app of its
+  own. A company whose agents all hold their own apps still sets one, because
+  enabling this block turns on the organization route. Every delivery to
   `POST /webhooks/github` is verified as HMAC-SHA256 over the raw body
   against `X-Hub-Signature-256`; a route with nothing to verify with answers
   **503** rather than accepting the delivery. Unlike GitLab's, this secret
@@ -74,6 +77,13 @@ integrations:
 - **`POST /webhooks/github/{handle}`** is the same route, addressed to one
   seat, and is what a [per-agent GitHub App](#one-github-app-per-agent)
   delivers to.
+
+  **It verifies against that seat's own secret.** GitHub generates a signing
+  secret per app, at conversion time, and returns it once, so an agent's
+  deliveries are signed with its app's secret rather than the organization's.
+  The route reads the seat's own `webhook_secret` first and falls back to
+  `integrations.github.webhook_secret`, which is what a single organization
+  app pointed at one seat signs with. With neither, the route answers **503**.
 
   GitHub delivers to **every** app installed on a repository, each delivery
   carrying its own `X-GitHub-Delivery`. A repository five agents work
@@ -84,8 +94,10 @@ integrations:
   handle travels on the published event as `handle`.
 
   The bare `POST /webhooks/github` stays for a single app serving a whole
-  organisation, where a delivery names no seat. Both forms verify
-  identically; the seat is not a way past the signature check.
+  organisation, where a delivery names no seat and the organization's secret
+  is the only one that could have signed it. The seat is never a way past the
+  signature check: what the handle selects is which credential the delivery is
+  checked against, not whether it is checked.
 - **`token` (optional, but effectively required)** is a read credential for
   **participant fan-out**. A webhook payload carries the author, the
   assignees and the requested reviewers; it does not carry who has
@@ -183,7 +195,7 @@ sequenceDiagram
     GH->>CL: GET /webhooks/github-app?code=...&state=...
     CL->>GH: POST /app-manifests/{code}/conversions
     GH-->>CL: app id, slug, private key, webhook secret (once only)
-    CL->>CL: seal the key, record app_id and app_slug on the seat
+    CL->>CL: seal the key and the webhook secret, record the app on the seat
     CL-->>Op: "App created", with the install link
     Op->>GH: install the app on the organization
     GH->>CL: GET /webhooks/github-app?installed=senior-engineer
@@ -292,10 +304,11 @@ roles:
         app_slug: acme-senior-engineer
         installation_id: 87654321
         private_key: "${SENIOR_ENGINEER_GITHUB_APP_KEY}"
+        webhook_secret: "${SENIOR_ENGINEER_GITHUB_APP_WEBHOOK_SECRET}"
 ```
 
-`tier` and `repos` are the two fields a person writes. `app_id`, `app_slug` and
-`private_key` are written when the app is created, and the slug is what the
+`tier` and `repos` are the two fields a person writes. `app_id`, `app_slug`,
+`private_key` and `webhook_secret` are written when the app is created, and the slug is what the
 bot login derives from, so it is what an `@mention` of this agent resolves
 through. `installation_id` is written as `0` at that moment, because creating
 an app and installing it are two acts and an app installed nowhere is a real
@@ -320,11 +333,18 @@ seats would then authenticate as whichever app was created last.
 
 An app created this way delivers to `POST /webhooks/github/<handle>`, which is
 the ordinary GitHub route addressed to one seat (see
-[Configuration](#configuration)). That route verifies every delivery against
-`integrations.github.webhook_secret`, exactly as the bare route does, while
-GitHub signs an app's deliveries with **that app's own** webhook secret. So an
-app's webhook secret has to be set at GitHub to the same value the company
-block holds, or its deliveries are refused at the edge with `401`.
+[Configuration](#configuration)).
+
+GitHub signs an app's deliveries with **that app's own** webhook secret, which
+it generates at conversion time and returns once. The engine seals it as
+`<HANDLE>_GITHUB_APP_WEBHOOK_SECRET` and writes the `${VAR}` onto the seat, and
+the route verifies that seat's deliveries against it. Nothing has to be set at
+GitHub by hand, and no two apps share a secret.
+
+A seat with no secret of its own falls back to
+`integrations.github.webhook_secret`, which is what a single organization app
+pointed at a seat signs with. A seat with neither is a route with nothing to
+verify against, and it answers `503` rather than accepting the delivery.
 
 ### The two routes
 

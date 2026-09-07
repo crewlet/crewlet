@@ -46,7 +46,7 @@ func (r *Receiver) github(w http.ResponseWriter, req *http.Request) {
 	if !r.serving(w, "github", event) {
 		return
 	}
-	v, ok := r.authenticate(w, "github", r.secrets().GitHub,
+	v, ok := r.authenticate(w, "github", githubSecret(r.secrets(), handle),
 		req.Header.Get("X-Hub-Signature-256"), raw, verifyGitHub)
 	if !ok {
 		return
@@ -68,6 +68,32 @@ func (r *Receiver) github(w http.ResponseWriter, req *http.Request) {
 		handle:  handle,
 		headers: safeHeaders(req.Header),
 	}, statusOK)
+}
+
+// githubSecret is what a delivery to this path could have been signed with.
+//
+// THE SEAT'S OWN APP FIRST. A GitHub App has one bot identity, so an agent
+// that acts as itself holds an app of its own, and GitHub generated that app
+// its own signing secret at conversion time and returned it once. Verifying
+// those deliveries against `integrations.github.webhook_secret` checks them
+// against a DIFFERENT app's key, or against nothing at all in a company that
+// only ever created per-agent apps: every delivery refused with a 503, while
+// GitHub's hook page shows the app healthy.
+//
+// THE ORGANIZATION'S OTHERWISE, because the same path serves a second
+// deployment: one organization-wide app whose deliveries are pointed at a
+// seat. That app has only the organization's secret, and it is the only
+// credential its deliveries can carry.
+//
+// Empty when neither is set, which [Receiver.authenticate] reads as "cannot
+// verify" and answers 503 to — never as "nothing to verify".
+func githubSecret(s Secrets, handle string) string {
+	if handle != "" {
+		if secret := s.GitHubSeat[handle]; secret != "" {
+			return secret
+		}
+	}
+	return s.GitHub
 }
 
 // datadog is the one route whose credential is not a signature.

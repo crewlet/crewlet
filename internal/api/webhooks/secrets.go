@@ -48,6 +48,19 @@ type Secrets struct {
 	// own Slack app. The handle comes from the URL path, which is why that
 	// route is the only one whose secret depends on where it was addressed.
 	Slack map[string]string
+
+	// GitHubSeat is PER SEAT on the same terms, and for the same reason: a
+	// GitHub App has one bot identity, so an agent that acts as itself has
+	// an app of its own, and GitHub generated that app its own signing
+	// secret at conversion time.
+	//
+	// IT DOES NOT REPLACE [Secrets.GitHub]. Two different deployments
+	// address the seat route: an agent's own app, which signs with the
+	// secret here, and a single organization app pointed at one seat,
+	// which has only the organization's. So the route prefers this and
+	// falls back, and a seat present in this map is one whose deliveries
+	// can ONLY have been signed with its own.
+	GitHubSeat map[string]string
 }
 
 // Verifiable names the surfaces whose material can actually verify a
@@ -87,6 +100,17 @@ func (s Secrets) Verifiable() []string {
 	// whether a delivery from this surface could be accepted.
 	if s.Confluence != "" || s.ConfluenceToken != "" {
 		out = append(out, "confluence")
+	}
+	// GitHub is verifiable on either credential, because either one is
+	// enough for a real delivery to be accepted: the organization app's
+	// secret, or any one agent app's own.
+	if s.GitHub == "" {
+		for _, secret := range s.GitHubSeat {
+			if secret != "" {
+				out = append(out, "github")
+				break
+			}
+		}
 	}
 	for _, pair := range []struct {
 		kind, secret string
@@ -177,6 +201,29 @@ func SecretsOf(c *config.Company, o *org.Organization, resolve func(string) stri
 		}
 		if in.Datadog != nil && in.Datadog.Enabled {
 			s.Datadog = resolve(in.Datadog.WebhookToken)
+		}
+		// PER SEAT, READ FROM THE CONFIG rather than from the org model
+		// the way Slack's is, because a seat's GitHub App has no runtime
+		// identity to carry: it is written by the engine at conversion
+		// time and read back by the reconcile pass from this same
+		// document. Adding a second home for it would give the two
+		// readers something to disagree about.
+		//
+		// NOT GATED ON in.GitHub.Enabled. That switch turns off the
+		// ORGANIZATION's app and route; an agent's app is its own, and a
+		// company that only ever created per-agent ones has no
+		// `integrations.github` block to enable at all.
+		for role := range c.EachRole() {
+			app := role.Integrations.GitHub
+			if app == nil || !role.Seat().IsAgent() {
+				continue
+			}
+			if secret := resolve(app.WebhookSecret); secret != "" {
+				if s.GitHubSeat == nil {
+					s.GitHubSeat = map[string]string{}
+				}
+				s.GitHubSeat[role.Seat().Handle()] = secret
+			}
 		}
 	}
 	if o == nil {
