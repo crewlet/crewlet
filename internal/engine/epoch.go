@@ -151,6 +151,10 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	e.reconcileJira(ctx, next)
 	e.reconcileGitLab(ctx, next)
 	e.reconcileGitHub(ctx, next)
+	// AND WHAT THE LOOP LAST CONCLUDED IS NOW OLD NEWS. Its cadence is for
+	// asking a third-party app again, not for asking this document again,
+	// and the answer just changed here. See [integration.Worker.MarkStale].
+	e.integrations.MarkStale()
 	applied = append(applied, "integrations")
 
 	previous := e.Company()

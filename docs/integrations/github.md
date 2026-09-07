@@ -406,6 +406,13 @@ GitHub can settle.
 A **check** (`POST /setup/integrations/github/check`) writes none of this. It
 reads and reports, and the loop makes the correction on its next pass.
 
+**An applied revision makes every surface due.** The loop's wait is for asking
+GitHub again, not for asking the company document again, so a change here is
+reconciled on the next tick rather than at the settled cadence. Without it, an
+operator who installed an agent's app was redirected back to a card still
+holding the previous pass's finding, printed above the same card's roster
+reporting that agent installed and ready.
+
 ### The constraints that shape all of this
 
 - **The private key and the webhook secret come back exactly once.** GitHub has

@@ -161,6 +161,42 @@ func TestNotDueIsNotReconciled(t *testing.T) {
 	}
 }
 
+// A DOCUMENT THAT CHANGED OUTRANKS THE CADENCE.
+//
+// The wait is for asking a third-party app again, and it is right: nobody
+// wants a timer hammering GitHub every fifteen seconds. It is wrong the
+// moment the answer changes HERE. An operator who installs an agent's app is
+// redirected straight back to a card still holding the previous pass's
+// finding, "this agent has no app of its own", printed above the same card's
+// roster reporting that agent installed and ready: one screen, two answers,
+// for as long as the settled cadence had left to run.
+func TestAChangedConfigurationMakesEverySurfaceDue(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	r := &fakeReconciler{kind: KindGitLab}
+	store := newStore(State{Kind: KindGitLab, NextAttemptAt: now.Add(10 * time.Minute)})
+	w := at(t, now, store, nil, Registration{Reconciler: r})
+
+	// Settled ten minutes out, so nothing runs.
+	w.Tick(context.Background())
+	if r.count() != 0 {
+		t.Fatalf("a surface due in ten minutes ran %d passes", r.count())
+	}
+
+	w.MarkStale()
+	w.Tick(context.Background())
+	if r.count() != 1 {
+		t.Fatalf("an applied revision left the surface on its old cadence: %d passes", r.count())
+	}
+
+	// AND ONE APPLY IS ONE SWEEP. Left set, the flag would make every
+	// later tick ignore the cadence for ever, which is the fifteen-second
+	// hammering the wait exists to prevent.
+	w.Tick(context.Background())
+	if r.count() != 1 {
+		t.Fatalf("the loop kept ignoring the cadence after one apply: %d passes", r.count())
+	}
+}
+
 // THE SINGLETON'S POINT. A coordination store that could not say whether this
 // node holds the duty must not be read as "it is mine". Two nodes reconciling
 // one surface both see a seat with no account and both create one, and the

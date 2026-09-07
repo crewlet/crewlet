@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
@@ -261,6 +262,37 @@ type Worker struct {
 	mu      sync.Mutex
 	stop    context.CancelFunc
 	stopped chan struct{}
+
+	// stale is set when the document every recorded conclusion was drawn
+	// from has been replaced, so the next tick reconsiders every surface
+	// whatever its cadence says. See [Worker.MarkStale].
+	stale atomic.Bool
+}
+
+// MarkStale says the company configuration has changed, so what the loop last
+// concluded was drawn from a document that is no longer current.
+//
+// THE CADENCE IS FOR A THIRD-PARTY APP, NOT FOR A DOCUMENT. A settled surface
+// is asked again in minutes, which is right when the only thing that could
+// have changed is at the third-party app: nobody wants a timer hammering
+// GitHub. It is wrong the moment the answer changes HERE. An operator who
+// installs an agent's app is redirected straight back to a card still holding
+// the previous pass's finding, "this agent has no app of its own", printed
+// above the same card's roster reporting that agent installed and ready: one
+// screen, two answers, for as long as the settled cadence had left to run.
+//
+// In memory rather than written through the store, because it is not a
+// conclusion to be shared: every node sees the apply, and the one holding the
+// duty is the one that acts on it. A node that is not the singleton sets a
+// flag and does nothing with it.
+//
+// A pass this triggers may itself write to the document (adopting an
+// installation is exactly that) and so mark the loop stale again. It
+// converges: the second pass finds nothing new to record and writes nothing.
+func (w *Worker) MarkStale() {
+	if w != nil {
+		w.stale.Store(true)
+	}
 }
 
 // New builds the worker, refusing a registration set it could not run.
@@ -416,6 +448,9 @@ func (w *Worker) Tick(ctx context.Context) {
 	}
 
 	now := w.now().UTC()
+	// READ ONCE, AND CLEARED, so one apply costs one sweep rather than
+	// leaving every later tick ignoring the cadence for ever.
+	stale := w.stale.Swap(false)
 	for _, kind := range w.order {
 		if ctx.Err() != nil {
 			return
@@ -428,7 +463,7 @@ func (w *Worker) Tick(ctx context.Context) {
 			// the zero value already means.
 			state = State{Kind: kind}
 		}
-		if !state.Due(now) {
+		if !stale && !state.Due(now) {
 			continue
 		}
 		// A SURFACE BEING TAKEN AWAY IS NOT RECONCILED. Its block is
