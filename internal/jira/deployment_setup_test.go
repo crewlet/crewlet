@@ -64,3 +64,21 @@ func TestAWrittenFieldIsNeverHidden(t *testing.T) {
 		t.Error("a cloud id the document holds was hidden from the form")
 	}
 }
+
+// AN EMPTY ADDRESS IS NOT A DATA CENTER INSTANCE.
+//
+// DeploymentOf answers DataCenter for a blank string, which is the right
+// default for a real address it cannot place and the wrong answer for no
+// address at all: that is a company mid-connect. Dropping the gateway fields
+// there left nothing for the discovered cloud id to be written into, so a
+// connect that left the site blank was refused by the config for naming no
+// instance — the exact state the discovery exists to fill.
+func TestAnUnaddressedBlockKeepsSomewhereToRecordTheSite(t *testing.T) {
+	t.Parallel()
+	got := fields(t, &config.Jira{Email: "${E}", Token: "${T}"})
+	for _, want := range []string{"cloud_id", "site_url"} {
+		if !got[want] {
+			t.Errorf("a block with no address offers no %s to record one in", want)
+		}
+	}
+}

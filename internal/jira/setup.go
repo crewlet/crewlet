@@ -123,7 +123,8 @@ func Requirements(in *config.Jira, resolve func(string) (string, bool)) []setup.
 	reqs[3].Present, reqs[3].Resolved, reqs[3].Stored = setup.Held(token, resolve)
 	reqs[4].Present, reqs[4].Resolved, reqs[4].Stored = setup.Held(secret, resolve)
 	reqs[5].Present, reqs[5].Resolved, reqs[5].Stored = setup.Plain(siteURL)
-	return forDeployment(reqs, DeploymentOf(cmp.Or(url, siteURL)), cloudID)
+	return forDeployment(reqs, DeploymentOf(cmp.Or(url, siteURL)), cloudID,
+		cmp.Or(url, siteURL) != "")
 }
 
 // forDeployment drops the fields the other Atlassian deployment uses.
@@ -139,7 +140,9 @@ func Requirements(in *config.Jira, resolve func(string) (string, bool)) []setup.
 // derivation is a guess from an address and the document is a fact: hiding a
 // setting a company has written down would make the form disagree with the
 // configuration, and Save would then clear it.
-func forDeployment(reqs []setup.Requirement, deploy Deployment, cloudID string) []setup.Requirement {
+func forDeployment(
+	reqs []setup.Requirement, deploy Deployment, cloudID string, addressed bool,
+) []setup.Requirement {
 	// THE ORGANIZATION KNOWS ITS OWN SITE. The Atlassian pass discovers the
 	// cloud id and the host from the organization key and records them, so
 	// these are not questions for a person: a form that asked would be
@@ -148,13 +151,19 @@ func forDeployment(reqs []setup.Requirement, deploy Deployment, cloudID string) 
 	// them, which is a company that has not connected Atlassian.
 	gateway := map[string]bool{"cloud_id": true, "site_url": true}
 
+	// AN EMPTY ADDRESS IS NOT A DATA CENTER INSTANCE. DeploymentOf answers
+	// DataCenter for a blank string, which is the right default for a real
+	// address it cannot place and the wrong answer for no address at all:
+	// that is a company mid-connect, and dropping the gateway fields there
+	// left nothing for the discovered cloud id to be written into.
+	known := deploy == Cloud || cloudID != "" || addressed
 	out := make([]setup.Requirement, 0, len(reqs))
 	for _, r := range reqs {
 		switch {
 		case r.Present:
-		case gateway[r.Field] && deploy != Cloud:
+		case gateway[r.Field] && known && deploy != Cloud:
 			continue
-		case r.Field == "site_url" && cloudID == "":
+		case r.Field == "site_url" && cloudID == "" && known:
 			continue
 		}
 		out = append(out, r)

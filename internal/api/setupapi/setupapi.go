@@ -37,6 +37,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/datadog"
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -591,7 +592,78 @@ func seatCredential(env map[string]map[string]string, envs, keys []string) (stor
 	return "", ""
 }
 
-// seatChoices fills every handle requirement with the company's agent seats.
+// discoverSite fills in the Atlassian address a submission left blank.
+//
+// ONLY WHEN THREE THINGS HOLD: the surface is Jira or Confluence, neither the
+// submission nor the document names an address, and the company has an
+// Atlassian organization key to ask with. Anything else is left exactly as it
+// was — a company that typed its own site has made a decision, and this
+// fills a blank rather than overriding one.
+//
+// It returns a sentence when the organization could not be read, because the
+// alternative is writing a block that is refused for the reason this exists
+// to prevent and reporting it as a validation error against a field the
+// operator deliberately left empty.
+func (s *Service) discoverSite(
+	ctx context.Context, company *config.Company, kind integration.Kind,
+	reqs []setup.Requirement, values map[string]string,
+) string {
+	if kind != integration.KindJira && kind != integration.KindConfluence {
+		return ""
+	}
+	if named(values, reqs) {
+		return ""
+	}
+	org := company.Integrations.Atlassian
+	if org == nil {
+		return ""
+	}
+	// THE NAME, NOT THE REFERENCE. resolve takes the variable's name — a
+	// document holds `${ATLASSIAN_ORG_API_KEY}` and the store is keyed on
+	// what is inside the braces — so passing the whole reference resolves
+	// nothing, silently, and this read as a company with no key at all.
+	key := ""
+	if name, isRef := envref.Whole(strings.TrimSpace(org.APIKey)); s.resolve != nil {
+		if !isRef {
+			key = strings.TrimSpace(org.APIKey)
+		} else {
+			key, _ = s.resolve(name)
+		}
+	}
+	if strings.TrimSpace(org.OrgID) == "" || strings.TrimSpace(key) == "" {
+		return ""
+	}
+	site, err := atlassian.NewClient(atlassian.ClientOptions{}).
+		DiscoverSite(ctx, key, strings.TrimSpace(org.OrgID))
+	if err != nil {
+		return "the Atlassian organization could not be read, so the site this " +
+			"integration works in is not known and none was given: " + err.Error()
+	}
+	values["cloud_id"] = site.CloudID
+	values["site_url"] = site.HostURL
+	if kind == integration.KindConfluence {
+		values["site_url"] = site.HostURL + "/wiki"
+	}
+	return ""
+}
+
+// named reports whether an address is already known, from the submission or
+// from what the company already holds.
+func named(values map[string]string, reqs []setup.Requirement) bool {
+	for _, field := range []string{"url", "cloud_id"} {
+		if strings.TrimSpace(values[field]) != "" {
+			return true
+		}
+		for _, r := range reqs {
+			if r.Field == field && strings.TrimSpace(r.Stored) != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// seatChoices fills every handle requirement with the company's agent seats.// seatChoices fills every handle requirement with the company's agent seats.
 //
 // In place, on the app's own list, because a requirement is what the form
 // renders and the choices belong to the field rather than beside it. Human
@@ -772,6 +844,21 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	if err := refuseEmpty(values, against); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, codeInvalidInput, map[string]string{
 			"detail": err.Error(),
+		})
+		return
+	}
+
+	// THE SITE, WHERE THE ORGANIZATION KNOWS IT AND THE SUBMISSION DOES NOT.
+	//
+	// Jira and Confluence are refused by the config with neither url nor
+	// cloud_id, and the pass that discovers the site can only fill a block
+	// that already exists — so a connect leaving the site blank would be
+	// rejected before anything could discover anything. Asking Atlassian
+	// here closes that loop: the address arrives in the SAME write as the
+	// credentials, which is what makes the block valid the moment it exists.
+	if note := s.discoverSite(r.Context(), company, kind, against, values); note != "" {
+		httpjson.FailWith(w, http.StatusBadGateway, codeInvalidInput, map[string]string{
+			"detail": note,
 		})
 		return
 	}

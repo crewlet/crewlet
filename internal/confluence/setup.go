@@ -132,7 +132,8 @@ func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []
 	reqs[4].Present, reqs[4].Resolved, reqs[4].Stored = setup.Held(webhookToken, resolve)
 	reqs[5].Present, reqs[5].Resolved, reqs[5].Stored = setup.Held(secret, resolve)
 	reqs[6].Present, reqs[6].Resolved, reqs[6].Stored = setup.Plain(siteURL)
-	return forDeployment(reqs, DeploymentOf(cmp.Or(url, siteURL)), cloudID)
+	return forDeployment(reqs, DeploymentOf(cmp.Or(url, siteURL)), cloudID,
+		cmp.Or(url, siteURL) != "")
 }
 
 // forDeployment drops the fields the other Atlassian deployment uses.
@@ -145,7 +146,9 @@ func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []
 //
 // A field with a value SURVIVES, because the derivation is a guess from an
 // address and the document is a fact.
-func forDeployment(reqs []setup.Requirement, deploy Deployment, cloudID string) []setup.Requirement {
+func forDeployment(
+	reqs []setup.Requirement, deploy Deployment, cloudID string, addressed bool,
+) []setup.Requirement {
 	// THE ORGANIZATION KNOWS ITS OWN SITE. The Atlassian pass discovers the
 	// cloud id and the host from the organization key and records them, so
 	// these are not questions for a person: a form that asked would be
@@ -156,13 +159,19 @@ func forDeployment(reqs []setup.Requirement, deploy Deployment, cloudID string) 
 	cloudOnly := map[string]bool{"webhook_token": true}
 	dataCenter := map[string]bool{"webhook_secret": true}
 
+	// AN EMPTY ADDRESS IS NOT A DATA CENTER INSTANCE. DeploymentOf answers
+	// DataCenter for a blank string, which is the right default for a real
+	// address it cannot place and the wrong answer for no address at all:
+	// that is a company mid-connect, and dropping the gateway fields there
+	// left nothing for the discovered cloud id to be written into.
+	known := deploy == Cloud || cloudID != "" || addressed
 	out := make([]setup.Requirement, 0, len(reqs))
 	for _, r := range reqs {
 		switch {
 		case r.Present:
-		case gateway[r.Field] && deploy != Cloud:
+		case gateway[r.Field] && known && deploy != Cloud:
 			continue
-		case r.Field == "site_url" && cloudID == "":
+		case r.Field == "site_url" && cloudID == "" && known:
 			continue
 		case cloudOnly[r.Field] && deploy != Cloud:
 			continue
