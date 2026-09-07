@@ -937,6 +937,15 @@ export interface SetupSeatState {
   requirements: SetupRequirement[];
   /** Whether anything is written down for this seat, working or not. */
   present?: boolean;
+  /**
+   * Whether this seat is MEANT to be covered, whether or not it holds
+   * anything yet.
+   *
+   * Separate from `present`, and the gap between them is a real state: a
+   * GitHub seat that names the tier it will run at and has no app yet has
+   * opted in with both of its two acts still to do.
+   */
+  enrolled?: boolean;
   satisfied: boolean;
   inbound_path?: string;
   public_url?: string;

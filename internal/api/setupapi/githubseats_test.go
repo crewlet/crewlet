@@ -358,3 +358,59 @@ func TestASeatWithNoWebhookSecretHoldsNoPointerToOne(t *testing.T) {
 		t.Fatalf("the seat lost its app key: %s", body)
 	}
 }
+
+// A BLOCK IS THE OPT-IN, AND AN OPTED-IN SEAT WITH NO APP IS UNFINISHED.
+//
+// The two acts that build an agent's app are days apart, and before the first
+// there is nothing on the seat but the tier it will run at. Read as a
+// company's choice not to give this agent GitHub, that state left the card
+// reporting the integration finished over an agent that acts as nobody, while
+// the reconcile, which reports on exactly the seats that have a block, said
+// action was needed. Two surfaces, two answers, one seat.
+func TestASeatEnrolledInGitHubWithNoAppHoldsTheCardOpen(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	res := s.do(t, http.MethodPut, "/config", `{
+	  "name": "Acme",
+	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
+	  "integrations": {"public_base_url": "https://engine.example.com",
+	    "github": {"enabled": true, "webhook_secret": "org", "provisioning": {"org": "acme"}}},
+	  "roles": [
+	    {"name": "Coder", "handle": "coder", "llm": "zulu",
+	     "integrations": {"github": {"tier": "review"}}},
+	    {"name": "Writer", "handle": "writer", "llm": "zulu"}
+	  ]
+	}`, map[string]string{"X-Summary": "one agent on GitHub, one not"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("import = %d: %s", res.Code, res.Body)
+	}
+
+	state := decode(t, s.do(t, http.MethodGet, "/setup/integrations/github", "", nil))
+	if state["satisfied"] != false {
+		t.Fatalf("a GitHub whose enrolled agent has no app reports satisfied=%v",
+			state["satisfied"])
+	}
+
+	seats := githubSeats(t, s)
+	// THE ONE WITH A BLOCK IS ENROLLED, and holds nothing yet.
+	coder := seats["coder"]
+	if coder["enrolled"] != true || coder["present"] != false {
+		t.Errorf("coder reports enrolled=%v present=%v", coder["enrolled"], coder["present"])
+	}
+	if coder["step"] != "create_app" {
+		t.Errorf("coder is on step %v", coder["step"])
+	}
+	// AND THE ONE WITHOUT IS LISTED AND NOT ENROLLED. It is on the roster
+	// because that is where an operator starts the flow; it is not work
+	// outstanding, because a company running GitHub for some of its agents
+	// chose that.
+	writer := seats["writer"]
+	if _, listed := seats["writer"]; !listed {
+		t.Fatal("a seat with no GitHub block is missing from the roster, so " +
+			"there is no way to start one for it")
+	}
+	if writer["enrolled"] == true {
+		t.Error("a seat with no GitHub block reports itself enrolled, which " +
+			"makes every company with one unfinished for ever")
+	}
+}

@@ -318,6 +318,18 @@ type SeatState struct {
 	// first requirement; it was this.
 	Present bool `json:"present"`
 
+	// Enrolled is a seat this integration is MEANT to cover, whether or not
+	// it holds anything yet.
+	//
+	// SEPARATE FROM Present, and the gap between them is the whole state a
+	// per-agent app is built through: a GitHub seat with a `github` block
+	// and no app has opted in with the first of its two acts still to do.
+	// Read as a company's choice, it left the card reading finished over an
+	// agent that could do nothing, and reading every listed seat as enrolled
+	// would turn a roster into work outstanding for every company that runs
+	// an integration for some of its agents.
+	Enrolled bool `json:"enrolled,omitempty"`
+
 	// Detail is the one line the roster shows under a seat's name: where its
 	// credential is kept, or what is missing.
 	//
@@ -558,7 +570,13 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 	seatsRequired := kind == integration.KindSlack || kind == integration.KindGitHub
 	if seatsRequired {
 		for _, seat := range seats {
-			if seat.Present && !seat.Satisfied {
+			// ENROLLED OR STARTED, because those are two different ways
+			// of having work outstanding and Present only catches the
+			// second. A GitHub seat whose block says which tier it runs
+			// at and which has no app yet is opted in with both acts left,
+			// and it is exactly the seat the reconcile reports on, so
+			// leaving it out put the tag and the roster on two answers.
+			if (seat.Present || seat.Enrolled) && !seat.Satisfied {
 				satisfied = false
 				break
 			}
@@ -838,6 +856,11 @@ func githubSeats(company *config.Company, resolve func(string) (string, bool)) [
 		state := SeatState{
 			Handle: seat.Handle(), Name: role.Name,
 			Tier: string(tier),
+			// A BLOCK IS THE OPT-IN, and it is what the reconcile reads
+			// too: it reports the seats that have one and stays silent
+			// about the rest, so a company running GitHub for three of
+			// its ten agents is finished when those three are.
+			Enrolled: app != nil,
 			// NO REQUIREMENTS, and the empty list is deliberate rather
 			// than unfinished: nothing here is typed in. The app id, the
 			// slug and the key are all written by the engine from what
