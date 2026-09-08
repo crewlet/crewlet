@@ -44,12 +44,41 @@ type buffer struct {
 	limit   int
 	dropped uint64
 	closed  bool
+
+	// wake is closed and replaced on every arrival, so a caller that
+	// cannot use the condition variable above can still be woken by one.
+	//
+	// A CHANNEL BESIDE THE COND, and the reason is the linger: it has to
+	// wait on an arrival, a deadline and a context at once, and a
+	// condition variable can be waited on with none of the other two. The
+	// alternative it replaces was a 5 ms poll — a timer standing in for a
+	// signal that already existed here.
+	wake chan struct{}
 }
 
 func newBuffer(limit int) *buffer {
-	b := &buffer{limit: limit}
+	b := &buffer{limit: limit, wake: make(chan struct{})}
 	b.notEmpty = sync.NewCond(&b.mu)
 	return b
+}
+
+// Wait returns a channel closed when something next arrives, or when the
+// buffer closes.
+//
+// The channel is read under the lock and closed under it, so a caller that
+// takes it and then selects cannot miss an arrival between the two: an
+// arrival closes the channel THAT caller is holding.
+func (b *buffer) Wait() <-chan struct{} {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.wake
+}
+
+// woke closes the current wake channel and installs a fresh one. Callers hold
+// the lock.
+func (b *buffer) woke() {
+	close(b.wake)
+	b.wake = make(chan struct{})
 }
 
 // changeBytes is what one change costs, counting the value plus a fixed
@@ -90,6 +119,7 @@ func (b *buffer) Push(c *coord.Change) bool {
 	b.items = append(b.items, c)
 	b.bytes += size
 	b.notEmpty.Signal()
+	b.woke()
 	return true
 }
 
@@ -147,6 +177,7 @@ func (b *buffer) Close() {
 	defer b.mu.Unlock()
 	b.closed = true
 	b.notEmpty.Broadcast()
+	b.woke()
 }
 
 // Reset empties the buffer and clears the drop count, for a rebuild.

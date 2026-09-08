@@ -119,7 +119,30 @@ func (p *Projector) write(ctx context.Context) error {
 	}
 }
 
-// lingerFor tops a partial batch up for at most [applyLinger].
+// lingerFor tops a partial batch up for at most [applyLinger], and YIELDS AT
+// ONCE to a caller already waiting for a revision this batch carries.
+//
+// # The bug this closes
+//
+// The linger and [Projector.WaitApplied] are two mechanisms in the same file,
+// each correct alone and with nothing between them. A partial batch waited its
+// whole 250 ms window for company that was not coming, while a caller sat on
+// the condition variable for a revision ALREADY IN THAT BATCH. The write path
+// paid it on every write with no other traffic — which is most writes on a
+// quiet company — and the state log pays it on every barriered read, where it
+// is two orders of magnitude more than the append the read is waiting for.
+//
+// The yield is the whole fix: if the highest revision anybody is waiting for
+// is at or below what this batch already holds, there is nobody left to batch
+// with and the wait below buys nothing.
+//
+// # Why the poll is gone
+//
+// The loop used to wake every 5 ms to look for more, which is the shape a
+// buffer with no wake needs. The buffer HAS one — [buffer.Wait] closes on
+// arrival — so the poll was a timer standing in for a signal that existed. It
+// is deleted rather than kept beside the yield: two ways to notice the same
+// arrival is how one of them comes to be the slower one nobody meant to use.
 func (p *Projector) lingerFor(ctx context.Context, batch []*coord.Change) []*coord.Change {
 	deadline := time.NewTimer(applyLinger)
 	defer deadline.Stop()
@@ -128,23 +151,19 @@ func (p *Projector) lingerFor(ctx context.Context, batch []*coord.Change) []*coo
 			batch = append(batch, more...)
 			continue
 		}
+		if wanted := p.waitingFor(); wanted != 0 && wanted <= highest(batch) {
+			return batch
+		}
 		select {
 		case <-ctx.Done():
 			return batch
 		case <-deadline.C:
 			return batch
-		case <-time.After(lingerPoll):
+		case <-p.buf.Wait():
 		}
 	}
 	return batch
 }
-
-// lingerPoll is how often the linger checks for more.
-//
-// Five milliseconds: fine enough that the linger fills a batch from a burst
-// rather than waiting out its whole window, coarse enough that an idle
-// projector wakes fifty times a second rather than thousands.
-const lingerPoll = 5 * time.Millisecond
 
 // highest is the newest revision in a batch.
 //

@@ -150,6 +150,22 @@ type Projector struct {
 	// broadcast is.
 	applied *sync.Cond
 
+	// waiting is the highest revision anybody is blocked on, or 0.
+	//
+	// IT IS WHAT THE LINGER READS. Without it a partial batch waits its
+	// whole window for company that is not coming while a caller sits on
+	// the condition variable above for a revision already in the buffer —
+	// two mechanisms in one file, each correct alone, with nothing between
+	// them. Under the state log that is the difference between a read
+	// costing a broker round trip and a read costing a broker round trip
+	// plus a quarter of a second, on every read.
+	//
+	// A HIGH-WATER MARK rather than a count: the linger's question is "is
+	// anyone waiting for something I already hold", so the largest target
+	// is the one that decides it, and a waiter that leaves does not have
+	// to be subtracted for the answer to stay conservative.
+	waiting uint64
+
 	stop  context.CancelFunc
 	done  chan struct{}
 	watch coord.Watcher
@@ -269,6 +285,13 @@ func (p *Projector) WaitApplied(ctx context.Context, revision uint64) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// DECLARED BEFORE THE WAIT, so the writer's linger can see it. The
+	// mark only ever rises while a waiter holds it, and the writer treats
+	// it as a hint rather than a count, so a waiter that gives up leaves
+	// the answer conservative rather than wrong.
+	if revision > p.waiting {
+		p.waiting = revision
+	}
 	for p.cursor < revision {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("%w: %s is at revision %d, waiting for %d",
@@ -277,6 +300,13 @@ func (p *Projector) WaitApplied(ctx context.Context, revision uint64) error {
 		p.applied.Wait()
 	}
 	return nil
+}
+
+// waitingFor reports the highest revision a caller is blocked on, or 0.
+func (p *Projector) waitingFor() uint64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.waiting
 }
 
 // Run reconciles this node against the bucket, then follows it until ctx ends.
