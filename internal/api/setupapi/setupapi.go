@@ -475,7 +475,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		summary = datadog.Summary()
 		reqs = datadog.Requirements(block, s.resolve)
 		seats = credentialSeats(company, s.resolve,
-			[]string{datadog.SeatEnv}, datadog.CredentialKeys, "Datadog",
+			mcpEnvAt([]string{datadog.SeatEnv}, datadog.CredentialKeys), "Datadog",
 			s.passes.Serves(kind), datadogAccess(block))
 		configured = block != nil
 		enabled = block != nil && block.Enabled
@@ -508,7 +508,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		// ever retires the admin API. What goes is asking every operator to
 		// install an app they do not need.
 		seats = credentialSeats(company, s.resolve,
-			jira.SeatEnvs, jira.CredentialKeys, "Jira", false)
+			mcpEnvAt(jira.SeatEnvs, jira.CredentialKeys), "Jira", false)
 		// THE ATLASSIAN BLOCKS HAVE NO `enabled` FIELD. Their presence IS
 		// the switch, which is why a disconnect removes the block rather
 		// than flipping a flag, and why enabled tracks configured here
@@ -519,27 +519,36 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		summary = confluence.Summary()
 		reqs = confluence.Requirements(block, company.Integrations.Atlassian.IsCloud(), s.resolve)
 		seats = credentialSeats(company, s.resolve,
-			confluence.SeatEnvs, confluence.CredentialKeys, "Confluence", false)
+			mcpEnvAt(confluence.SeatEnvs, confluence.CredentialKeys), "Confluence", false)
 		configured, enabled = block != nil, block != nil
 	case integration.KindAtlassian:
 		block := company.Integrations.Atlassian
 		summary = atlassian.Summary()
 		reqs = atlassian.Requirements(block, s.resolve)
 		seats = credentialSeats(company, s.resolve,
-			atlassian.SeatEnvs, atlassian.CredentialKeys, "Atlassian", s.passes.Serves(kind))
+			mcpEnvAt(atlassian.SeatEnvs, atlassian.CredentialKeys), "Atlassian",
+			s.passes.Serves(kind))
 		configured, enabled = block != nil, block != nil
 	case integration.KindGitLab:
 		block := company.Integrations.GitLab
 		summary = gitlab.Summary()
 		reqs = gitlab.Requirements(block, s.resolve)
 		seats = credentialSeats(company, s.resolve,
-			[]string{gitlab.SeatEnv}, gitlab.CredentialKeys, "GitLab", s.passes.Serves(kind))
+			mcpEnvAt([]string{gitlab.SeatEnv}, gitlab.CredentialKeys), "GitLab",
+			s.passes.Serves(kind))
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindMattermost:
 		block := company.Integrations.Mattermost
 		summary = mattermost.Summary()
 		reqs = mattermost.Requirements(block, s.resolve)
+		// EVERY AGENT POSTS AS ITSELF HERE, so the company block alone
+		// connects nobody: the admin token provisions, and what an agent
+		// authenticates with is its own bot token. Without the roster the
+		// card reported Connected over a company whose agents had no bots,
+		// which is the half an operator cannot act on.
+		seats = credentialSeats(company, s.resolve, mattermostAt, "Mattermost",
+			s.passes.Serves(kind))
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindSlack:
@@ -653,7 +662,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 // operator the half that cannot be acted on: the question is which of their
 // people can work in this app, and only a per-seat answer has it.
 func credentialSeats(company *config.Company, resolve func(string) (string, bool),
-	envs, keys []string, app string, provisions bool, access ...seatAccess,
+	at seatCredentialAt, app string, provisions bool, access ...seatAccess,
 ) []SeatState {
 	out := []SeatState{}
 	for role := range company.EachRole() {
@@ -672,7 +681,7 @@ func credentialSeats(company *config.Company, resolve func(string) (string, bool
 		for _, a := range access {
 			state.Tier, state.TierLabel, state.TierHint = a(role)
 		}
-		stored, where := seatCredential(role.MCPEnv, envs, keys)
+		stored, where := at.Find(role)
 		state.Present = stored != ""
 		switch {
 		case stored == "":
@@ -692,12 +701,12 @@ func credentialSeats(company *config.Company, resolve func(string) (string, bool
 			// was never going to get one.
 			if provisions {
 				state.Detail = "not on " + app + " yet: name a ${VAR} under " +
-					"this seat's mcp_env." + envs[0] + " and the next sync " +
+					"this seat's " + at.Address + " and the next sync " +
 					"creates the account and seals it there"
 				break
 			}
 			state.Detail = "no " + app + " credential yet, and " + app +
-				" issues none on request: add one to this seat's mcp_env"
+				" issues none on request: add one to this seat's " + at.Address
 		default:
 			// RESOLVED, not merely written down. A ${VAR} naming a secret
 			// the store does not hold is the state that reads as configured
@@ -745,6 +754,53 @@ func datadogAccess(cfg *config.Datadog) seatAccess {
 	return func(*config.Role) (string, string, string) {
 		return datadog.TierOf(role), datadog.RoleLabel(role), datadog.RoleHint(role)
 	}
+}
+
+// seatCredentialAt is where one app keeps a seat's credential.
+//
+// PASSED IN RATHER THAN SWITCHED ON, because the apps genuinely disagree and
+// the disagreement is theirs to state: most hand a seat's token to a child
+// MCP server through mcp_env, and Mattermost keeps it on the seat's own
+// integration block because one token authenticates the websocket, the REST
+// calls and the tool server alike, with no child process to pass it to. A
+// roster that only knew the first shape listed no agents at all for the
+// second, which read as a company whose agents were not being provisioned.
+type seatCredentialAt struct {
+	// Find reports the value this seat holds for the app and the address it
+	// sits at, both empty when the seat holds none.
+	Find func(role *config.Role) (stored, where string)
+	// Address is where a seat holding nothing writes one. It is what the
+	// sentence telling an operator how to opt in names, so it is the
+	// address they edit rather than one a value was found at.
+	Address string
+}
+
+// mcpEnvAt is the seat credential of an app whose token reaches a child MCP
+// server through the environment.
+func mcpEnvAt(envs, keys []string) seatCredentialAt {
+	return seatCredentialAt{
+		Find: func(role *config.Role) (string, string) {
+			return seatCredential(role.MCPEnv, envs, keys)
+		},
+		Address: "mcp_env." + envs[0],
+	}
+}
+
+// mattermostAt is the seat credential of a Mattermost bot, which lives on the
+// seat's own block rather than in mcp_env: see [config.RoleMattermost].
+var mattermostAt = seatCredentialAt{
+	Find: func(role *config.Role) (string, string) {
+		block := role.Integrations.Mattermost
+		if block == nil {
+			return "", ""
+		}
+		value := strings.TrimSpace(block.BotToken)
+		if value == "" {
+			return "", ""
+		}
+		return value, "integrations.mattermost.bot_token"
+	},
+	Address: "integrations.mattermost.bot_token",
 }
 
 // seatCredential finds a seat's credential for one app, and says where it is.

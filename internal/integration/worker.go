@@ -301,11 +301,10 @@ func New(opts Options) (*Worker, error) {
 	order := make([]Kind, 0, len(opts.Registrations))
 	for _, reg := range opts.Registrations {
 		// A REGISTRATION MUST DO ONE OF THE TWO THINGS. Most do both:
-		// converge a surface and, when asked, remove it. Some can only
-		// remove it, because their pass mints credentials and a timer
-		// must not — GitLab and Mattermost create accounts, so a loop
-		// that reconciled them would provision on a schedule nobody
-		// asked for. Those register a Disconnector alone, which is what
+		// converge a surface and, when asked, remove it. A surface this
+		// build has no pass for can only be removed: Slack's apps are
+		// created from the command line, so there is nothing to converge,
+		// and it registers a Disconnector alone, which is what
 		// [Registration.Only] names.
 		if reg.Reconciler == nil && reg.Disconnector == nil {
 			return nil, errors.New(
