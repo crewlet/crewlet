@@ -497,14 +497,23 @@ units:
 // carries the `# yaml-language-server: $schema=` modeline, so a schema that
 // rejected it would put red underlines through the file a new operator
 // copies first.
-func TestShippedExampleValidatesAgainstTheSchema(t *testing.T) {
+func TestShippedExamplesValidateAgainstTheSchema(t *testing.T) {
 	t.Parallel()
-	data, err := os.ReadFile(filepath.Join(repoRoot, "examples", "nimbus.company.yaml"))
-	if err != nil {
-		t.Skipf("the example tree is not in this checkout: %v", err)
-	}
-	if err := compileSchema(t, TierCompany).Validate(asJSON(t, string(data))); err != nil {
-		t.Fatalf("the shipped example does not satisfy its own schema:\n%v", err)
+	schema := compileSchema(t, TierCompany)
+	// BOTH, because they exercise different halves of the model: the
+	// full-stack one every integration block, the subscription one the
+	// cli-agent provider, its sandbox cell and the seat-level `run_in`.
+	for _, name := range shippedCompanies {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			data, err := os.ReadFile(filepath.Join(repoRoot, "examples", name))
+			if err != nil {
+				t.Skipf("the example tree is not in this checkout: %v", err)
+			}
+			if err := schema.Validate(asJSON(t, string(data))); err != nil {
+				t.Fatalf("examples/%s does not satisfy its own schema:\n%v", name, err)
+			}
+		})
 	}
 }
 

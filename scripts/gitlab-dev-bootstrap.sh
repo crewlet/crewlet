@@ -9,10 +9,10 @@
 # the `crewlet gitlab provision` command to run against a company config
 # whose integrations.gitlab.url points at THIS local instance.
 #
-# examples/nimbus.company.yaml is chat-only and declares no GitLab at all.
-# To provision it against this local GitLab, copy it and add the blocks in
-# docs/integrations/gitlab.md with integrations.gitlab.url set to
-# http://gitlab.local:8929, then pass that copy as COMPANY below.
+# examples/nimbus.company.yaml targets gitlab.com as shipped. To provision
+# it against this local GitLab, copy it and set integrations.gitlab.url to
+# http://gitlab.local:8929 (and swap gitlab.com -> gitlab.local:8929 in the
+# git-auth setup step), then pass that copy as COMPANY below.
 #
 # Usage:
 #   docker compose --profile gitlab up -d

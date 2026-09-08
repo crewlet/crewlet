@@ -307,9 +307,48 @@ rather than assumed:
 `{file}` substitutes that path; `{system}` substitutes the text straight
 into argv, for a CLI that offers no file variant. A profile that declares
 neither leaves the system prompt in the transcript, which is what a CLI
-with no such flag can take — that is where the other seven built-in
-profiles stand today, and `cli.overrides.system_prompt_args` is how you
-move one the day you check its vendor's flags.
+with no such flag can take.
+
+### Which CLIs actually have one
+
+Checked by running each CLI's own `--help`, at the version named — not
+from vendor documentation, which lags:
+
+| `cli.agent` | version checked | flag | in the profile |
+|---|---|---|---|
+| `claude-code` | 2.1.263 | `--system-prompt-file` / `--append-system-prompt-file` | `["--system-prompt-file", "{file}"]` |
+| `qwen-code` | 0.23.0 | `--system-prompt` / `--append-system-prompt`, **string only** | `["--system-prompt", "{system}"]` |
+| `grok` | 1.0.13 | `--system-prompt-override` (`--rules` appends), **string only** | `["--system-prompt-override", "{system}"]` |
+| `codex` | 0.153.4 | none, on `codex` or `codex exec` alike | — |
+| `gemini-cli` | 0.58.0 | none | — |
+| `opencode` | 1.18.29 | none (`--agent` names a persona from its own config, not a per-call prompt) | — |
+| `copilot` | 1.0.83 | none (`--no-custom-instructions` only disables its own) | — |
+| `cursor-agent` | 2026.09.02 | none | — |
+
+Three things worth knowing from that table.
+
+**Check the CLI you actually have.** `grok` is the trap: xAI's own CLI
+(`x.ai/cli`, [xai-org/grok-build](https://github.com/xai-org/grok-build))
+and a same-named community package on npm both put a `grok` on PATH, and
+they are different programs — the official one has the flag, the npm one
+has none of this profile's flags at all. If `grok --version` prints a
+`0.0.x`, you have the other one.
+
+**Qwen Code is where the Gemini fork has diverged.** Its parent has no such
+flag and it has two, so "same shape as `gemini-cli`" no longer holds here.
+
+**Two of the three are inline, and that is a real trade.** Only Claude Code
+offers a file variant; `qwen-code` and `grok` take a string, so the profile
+has to use `{system}` and the seat's system prompt lands in argv, readable
+through `/proc/<pid>/cmdline` by every account on the machine. For `grok`
+the prompt already travels that way (`prompt_mode: argv`) so nothing
+changes; for `qwen-code` the prompt otherwise goes on stdin, so it is new
+exposure. Worth it on a single-tenant engine host; an operator who cannot
+accept it sets `cli.overrides.system_prompt_args: []` and the prompt goes
+back to being the transcript's first section.
+
+For the five with no flag, `cli.overrides.system_prompt_args` is how you
+adopt one the day its vendor ships it — no engine release needed.
 
 ---
 
@@ -647,7 +686,7 @@ entirely.
 | `opencode` | `opencode` | Anthropic / Copilot / any | `opencode auth login`; the one built-in profile with a credential login. |
 | `cursor-agent` | `cursor-agent` | Cursor seat | `cursor-agent login`. |
 | `copilot` | `copilot` | GitHub Copilot seat | Prompt goes on argv, so very long transcripts are bounded by `ARG_MAX`. Authenticates with a GitHub token, so `GITHUB_TOKEN` is its `api_key_env` — reached via `auth.mode: api-key` or `inherit-env`, never forwarded silently. |
-| `grok` | `grok` | xAI | Accepts `GROK_API_KEY` (or `XAI_API_KEY`, via an `api_key_env` override) through `auth.mode: api-key`. |
+| `grok` | `grok` | xAI | **xAI's own CLI** from [x.ai/cli](https://x.ai/cli), not the same-named npm package. Accepts `XAI_API_KEY` (the variable its own signed-out message names) through `auth.mode: api-key`. |
 | `custom` | — | — | Ships nothing; declare everything under `overrides`. |
 
 ### CLI flags drift — and that's a config edit, not a release

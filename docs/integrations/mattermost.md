@@ -764,17 +764,23 @@ COMPANY=my_company.yaml scripts/mattermost-dev-bootstrap.sh
 
 ### First run, end to end
 
-The example org in [`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml)
-**is** the shortest way to try this. It is a seven-seat company whose only
-integration is Mattermost and whose only model is a coding CLI you already
-subscribe to — so there is no Atlassian site to stand up, no code host, no
-metered API key, and nothing that has to reach the engine from outside. Its
-three engineering seats also run code: their executor *is* the coding CLI's
-own agentic loop, in a [sandbox](../concepts/code-sandbox.md) box on the engine
-host that reuses the same CLI login — so that costs nothing extra to set up
-either, beyond one environment variable in step 5. Add a tracker, a wiki or a code host afterwards, once you
-have seen the loop work; each has its own page and nothing here has to be
-undone first.
+The example org in [`examples/nimbus-claude-cli.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus-claude-cli.company.yaml)
+**is** the shortest way to try this. It is the same seven-seat company as
+[`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml)
+beside it — the full-stack reference, on Jira, Confluence, GitLab and a
+metered key — with everything but chat taken out.
+
+Its only integration is Mattermost and its only model is a coding CLI you
+already subscribe to, so there is no Atlassian site to stand up, no code
+host, no metered API key, and nothing that has to reach the engine from
+outside. Its three engineering seats still run code: their executor *is* the
+coding CLI's own agentic loop, in a [sandbox](../concepts/code-sandbox.md)
+box on the engine host that reuses the same CLI login — so that costs nothing
+extra to set up either, beyond one environment variable in step 5.
+
+Add a tracker, a wiki or a code host afterwards, once you have seen the loop
+work; each has its own page, `examples/nimbus.company.yaml` shows them all
+already wired, and nothing here has to be undone first.
 
 Two things the config expects of you, both once:
 
@@ -802,30 +808,30 @@ docker compose --profile mattermost up -d --wait
 # 2. Admin account, PAT, team, channels -> .env, then the seven bots and
 #    their tokens into the same file. (Drop COMPANY= to do the bots in a
 #    separate `crewlet mattermost provision` run.)
-COMPANY=examples/nimbus.company.yaml scripts/mattermost-dev-bootstrap.sh
+COMPANY=examples/nimbus-claude-cli.company.yaml scripts/mattermost-dev-bootstrap.sh
 
 # 3. Check the plan before it touches the server again, and prove the
 #    whole path before booting
 set -a; . ./.env; set +a
-crewlet mattermost provision examples/nimbus.company.yaml --dry-run --print
-crewlet mattermost doctor examples/nimbus.company.yaml
+crewlet mattermost provision examples/nimbus-claude-cli.company.yaml --dry-run --print
+crewlet mattermost doctor examples/nimbus-claude-cli.company.yaml
 
 # 4. Authenticate the model — once, on this machine. `-from-host` copies
 #    the login `claude` already has here into Crewlet's own directory; plain
 #    `crewlet llm login default` brokers `claude auth login` instead if this
 #    machine has none.
 crewlet llm login default -from-host \
-    -company examples/nimbus.company.yaml -config examples/nimbus.config.yaml
+    -company examples/nimbus-claude-cli.company.yaml -config examples/nimbus-claude-cli.config.yaml
 crewlet llm doctor default \
-    -company examples/nimbus.company.yaml -config examples/nimbus.config.yaml
+    -company examples/nimbus-claude-cli.company.yaml -config examples/nimbus-claude-cli.config.yaml
 
 # 5. Boot — one websocket per agent seat. CREWLET_MCP_BRIDGE_URL is what
 #    the engineering seats' agent-mode runs dial back on for their tools;
 #    it has to match api.port in the Tier A file.
 export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
 export CREWLET_MCP_BRIDGE_URL="http://127.0.0.1:8000"
-crewlet run -config examples/nimbus.config.yaml \
-            -company examples/nimbus.company.yaml
+crewlet run -config examples/nimbus-claude-cli.config.yaml \
+            -company examples/nimbus-claude-cli.company.yaml
 ```
 
 Step 3's `--dry-run --print` prints one line per seat — handle, bot
@@ -847,7 +853,7 @@ error now and every seat losing a corrective round for ever.
 avoids the shared refresh token `-from-host` leaves you with — writes into
 the [encrypted secret store](../concepts/secret-store.md), so it needs a
 Tier A keyring first: `crewlet secrets keygen -key-id 2026-01`, then
-uncomment the `secrets:` block in `examples/nimbus.config.yaml`. Worth doing
+uncomment the `secrets:` block in `examples/nimbus-claude-cli.config.yaml`. Worth doing
 before you run this anywhere but a laptop; without a keyring the command
 stops and says so. See [Subscription LLM
 Backends](../concepts/subscription-llm-backends.md#authentication) for the
@@ -866,7 +872,7 @@ should follow, in order:
 2. `@agent-pm` replies **in a thread** on your message. Reply in that thread
    without mentioning anyone — it answers again, because it is now following
    the thread.
-3. The engine's dashboard shows the turn. `examples/nimbus.config.yaml`
+3. The engine's dashboard shows the turn. `examples/nimbus-claude-cli.config.yaml`
    serves it on <http://localhost:8000> — the **Event log** carries the
    inbound notification with its source, and **Model activity** carries the
    turn it woke: each phase, the rounds it took, and the tools each round
@@ -878,9 +884,9 @@ before anything happens. That is what it is for.
 
 If a bot stays silent, check in this order:
 
-0. `crewlet mattermost doctor examples/nimbus.company.yaml` — this is what it
+0. `crewlet mattermost doctor examples/nimbus-claude-cli.company.yaml` — this is what it
    is for; checks 1–3 below are what it automates.
-1. `crewlet mattermost provision examples/nimbus.company.yaml --dry-run` —
+1. `crewlet mattermost provision examples/nimbus-claude-cli.company.yaml --dry-run` —
    does the seat exist, and is its token minted?
 2. The engine log, for one `mattermost_ws_connected` line per seat. A
    `mattermost_ws_auth_rejected` line instead means that seat's token is
@@ -889,7 +895,7 @@ If a bot stays silent, check in this order:
    is the one failure mode where the agent reasons about a reply and then has
    no tool to send it with, so the logs show a complete turn and the channel
    stays quiet.
-4. `crewlet llm doctor default -company examples/nimbus.company.yaml` — on a
+4. `crewlet llm doctor default -company examples/nimbus-claude-cli.company.yaml` — on a
    `cli-agent` provider this is the other half of the same symptom: a turn
    that never reached a model, or one whose model answered prose instead of
    the tool-call envelope, ends with nothing posted.

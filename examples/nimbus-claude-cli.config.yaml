@@ -1,27 +1,42 @@
 # yaml-language-server: $schema=../schema/bootstrap.schema.json
-# Tier A bootstrap config for the Nimbus example company.
+# Tier A bootstrap config for the SUBSCRIPTION-CLI Nimbus example.
 #
-# Pairs with examples/nimbus.company.yaml (Tier B).  Run the pair
-# end-to-end with:
+# Pairs with examples/nimbus-claude-cli.company.yaml (Tier B) — a CHAT-ONLY
+# company on a coding-CLI subscription, so this node needs no API key, no
+# broker, no database and no public URL.  `nimbus.config.yaml` beside it is
+# the Tier A file for the full-stack example, which does.
 #
+# Bring the pair up end to end:
+#
+#     # 1. Chat: the server, an admin, the team, the channels, the bots.
+#     docker compose --profile mattermost up -d --wait
+#     COMPANY=examples/nimbus-claude-cli.company.yaml scripts/mattermost-dev-bootstrap.sh
+#
+#     # 2. The model: authenticate the `claude` CLI inside Crewlet's own
+#     #    directory, then prove it end to end BEFORE the first turn.
+#     crewlet llm login default -from-host      # or -capture-token
+#     crewlet llm doctor default
+#
+#     # 3. This node's own API token, the tool bridge the engineers'
+#     #    agent-mode runs dial back on, and go.
 #     export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
-#     export LLM_BASE_URL="https://api.your-llm-provider.example/v1/"  # any OpenAI-compatible endpoint
-#     export LLM_MODEL="your-provider/model-id"
-#     export LLM_API_KEY="<your-llm-provider-key>"
-#     export OPENAI_API_KEY="<for-embeddings>"
+#     export CREWLET_MCP_BRIDGE_URL="http://127.0.0.1:8000"   # = api.port below
+#     set -a; . ./.env; set +a          # MATTERMOST_URL + the bot tokens
+#                                       #   the bootstrap wrote
+#     crewlet run -config examples/nimbus-claude-cli.config.yaml \
+#                 -company examples/nimbus-claude-cli.company.yaml
+#
 #     # optional — only if you enable the `secrets:` keyring below.
 #     # `crewlet secrets keygen -key-id 2026-01` prints the export line + snippet:
 #     export CREWLET_SECRET_KEY_2026_01="<base64 key from `crewlet secrets keygen`>"
 #
-#     crewlet run -config examples/nimbus.config.yaml \
-#                 -company examples/nimbus.company.yaml
-#
-# THERE ARE NO EXTERNAL SERVICES HERE.  The stream is a NATS JetStream
-# server embedded in this process and the store is one local file, so a
-# single binary in an empty directory is a working company — no broker to
-# operate, no database to provision, nothing to point a DSN at.  Both
-# slots take an external address when a deployment outgrows that; see
-# docs/guides/deployment.md and docs/guides/fleet.md.
+# THERE ARE NO EXTERNAL SERVICES HERE apart from the chat server the
+# compose file starts.  The stream is a NATS JetStream server embedded in
+# this process and the store is one local file, so a single binary in an
+# empty directory is a working company — no broker to operate, no database
+# to provision, nothing to point a DSN at.  Both slots take an external
+# address when a deployment outgrows that; see docs/guides/deployment.md
+# and docs/guides/fleet.md.
 #
 # Restart-only Tier A fields only:
 #   - stream      : where the durable event log lives
@@ -104,26 +119,44 @@ node:
                                        #   Per node, so a fleet's ceiling is
                                        #   N x this.  Omit for the default (32),
                                        #   which is above the seat count of a
-                                       #   single-node company.  Not the same
-                                       #   knob as a cli-agent provider's own
-                                       #   max_concurrent, which caps that
-                                       #   provider's subprocesses.
+                                       #   single-node company.  NOT the same
+                                       #   knob as the cli-agent provider's own
+                                       #   max_concurrent in the company YAML,
+                                       #   which caps that provider's
+                                       #   subprocesses — and on this pair that
+                                       #   one (4) is the binding ceiling, not
+                                       #   this one: a turn past it waits in
+                                       #   this process for a CLI slot.
 
 api:
   host: "0.0.0.0"
-  # 80 = the walkthrough topology: dashboard + webhooks on the plain
-  # http port, no :port suffix in URLs.  A port > 0 makes `crewlet run`
-  # start the EMBEDDED API inside the engine process, and that embedded
-  # server IS the webhook target the integrations register against a
-  # local engine (http://host.docker.internal:80/webhooks/jira) — one
-  # process serves engine + dashboard + webhooks.  Two things to know
-  # about 80 specifically: (a) on Linux a non-root process needs
-  # privileged-port access — `sudo sysctl net.ipv4.ip_unprivileged_port_start=80`
-  # (persist in /etc/sysctl.d/) or grant CAP_NET_BIND_SERVICE; (b) the
-  # host's port 80 must be free.  In a SPLIT deployment the ingress node serves this and
-  # the others set port 0 so only one process binds it (see
-  # docs/guides/deployment.md).
-  port: 80
+  # A port > 0 makes `crewlet run` start the EMBEDDED API inside the engine
+  # process — one process serves engine + dashboard + webhooks.  Open the
+  # dashboard at http://localhost:8000/ once it is up.
+  #
+  # IT ALSO SERVES THE MCP TOOL BRIDGE the three engineering seats need:
+  # their executor runs as the coding CLI's own agentic loop in a box, and
+  # the seat's tools reach that box back over /mcp/{token} here.  Set
+  # CREWLET_MCP_BRIDGE_URL to a URL the box can dial — for a `direct` box
+  # on this machine that is http://127.0.0.1:<this port>.  Change the port
+  # and change that variable with it; without it agent mode is refused at
+  # launch rather than started with no tools.  In a fleet the URL must
+  # address the NODE and never a load balancer: a bridge session is a live
+  # tool surface in one process, and a peer that never held it answers 401
+  # for ever.
+  #
+  # 8000 rather than 80, deliberately.  The only reason to bind the plain
+  # http port is so a webhook URL an external service registers needs no
+  # `:port` suffix (http://host.docker.internal/webhooks/jira), and this
+  # company has NO inbound webhook at all: Mattermost has none, so the
+  # engine holds one outbound websocket per seat and nothing has to reach
+  # it.  Port 80 would buy nothing and cost a privileged bind — on Linux a
+  # non-root process needs `sudo sysctl net.ipv4.ip_unprivileged_port_start=80`
+  # (persist in /etc/sysctl.d/) or CAP_NET_BIND_SERVICE.  Add a tracker or
+  # a code host and 80 becomes worth it again; docs/guides/deployment.md
+  # covers that shape.  In a SPLIT deployment the ingress node serves this
+  # and the others set port 0 so only one process binds it.
+  port: 8000
   auth:
     tokens:
       - id: founder

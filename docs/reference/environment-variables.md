@@ -2,7 +2,7 @@
 
 All environment variables used by Crewlet and its integrations.
 
-Two kinds of variable appear below. A few names are **read directly by the engine or CLI** (marked as such). Everything else is a **`${VAR}` reference convention**: any string value in the YAML config can reference any environment variable (see [Usage in YAML](#usage-in-yaml)), and the names listed here are simply the conventions the docs and the bundled [`examples/nimbus.company.yaml`](../../examples/nimbus.company.yaml) use — rename them freely as long as the config references match. That example is chat-only, so it references a small subset of this page (`MATTERMOST_*`, `CREWLET_*`); the rest are the conventions for the integrations you add to it.
+Two kinds of variable appear below. A few names are **read directly by the engine or CLI** (marked as such). Everything else is a **`${VAR}` reference convention**: any string value in the YAML config can reference any environment variable (see [Usage in YAML](#usage-in-yaml)), and the names listed here are simply the conventions the bundled [`examples/nimbus.company.yaml`](../../examples/nimbus.company.yaml) uses — rename them freely as long as the config references match. (Its smaller sibling, [`examples/nimbus-claude-cli.company.yaml`](../../examples/nimbus-claude-cli.company.yaml), is chat-only on a coding-CLI subscription and so references a small subset: `MATTERMOST_*` and `CREWLET_*`.)
 
 ---
 
@@ -14,8 +14,8 @@ Two kinds of variable appear below. A few names are **read directly by the engin
 | `TURSO_GO_CACHE_DIR` | Read directly by the `turso` driver (and by the engine, which prepares it): where its embedded ~20 MB native library is extracted and loaded from. Default `os.UserCacheDir()` — `~/.cache` on Linux. Point it at a writable, persistent path in an ephemeral container, or every restart pays the extraction again. See [Deployment § The store](../guides/deployment.md#the-store) | — |
 | `CREWLET_API_TOKEN_FOUNDER` | Bearer token for the founder API identity (`api.auth.tokens`) | Generate one: `openssl rand -hex 32` |
 | `LLM_API_KEY` | API key for your LLM provider (`providers.llm.default.api_keys`) | Your LLM provider dashboard |
-| `LLM_MODEL` | Model id served by your OpenAI-compatible endpoint (`providers.llm.<key>.model`) | Your LLM provider docs |
-| `LLM_BASE_URL` | Your OpenAI-compatible endpoint's `/v1/` base URL (`providers.llm.<key>.base_url`) | Your LLM provider docs |
+| `LLM_MODEL` | Model id served by your OpenAI-compatible endpoint (`providers.llm.default.model` in the example) | Your LLM provider docs |
+| `LLM_BASE_URL` | Your OpenAI-compatible endpoint's `/v1/` base URL (`providers.llm.default.base_url` in the example) | Your LLM provider docs |
 | `OPENAI_API_KEY` | Read directly as a fallback by the `openai` / `openai-compatible` LLM providers (when `api_keys` is empty) and the OpenAI embeddings provider (when `api_key` is unset) | OpenAI dashboard |
 | `ANTHROPIC_API_KEY` | Read directly as a fallback by the `anthropic` LLM provider when `api_keys` is empty | Anthropic Console |
 | `CREWLET_LLM_CLI_HOME` | Read directly by every [`cli-agent`](../concepts/subscription-llm-backends.md) LLM provider: the root under which each provider keeps its credential directory and per-seat CLI homes (`<root>/<provider key>`). Default `~/.crewlet/llm-cli`. Point it at a persistent volume when the engine runs in an ephemeral container, or the subscription login is lost on every restart. Overridden per provider by `cli.state_dir`. | — |
@@ -96,7 +96,7 @@ MCP server (`CONFLUENCE_USERNAME` / `CONFLUENCE_API_TOKEN`), like Jira.
 
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
-| `TAVILY_API_KEY` | Key for a shared Tavily web-search MCP server, where a company declares one | <https://tavily.com> |
+| `TAVILY_API_KEY` | Key for the shared Tavily web-search MCP server the example org declares | <https://tavily.com> |
 
 ---
 
@@ -272,7 +272,7 @@ same backend as the turn that started it and nest underneath it.
 
 ## Code Runtime (Sandbox, Optional)
 
-Used only when `providers.sandbox` is configured so sandbox-enabled roles can author code in an isolated sandbox — see [Code Sandbox](../concepts/code-sandbox.md). There is nothing to install: the binary carries every backend it has, and talks to E2B's REST API directly. The variable names below are the conventions these docs use; any `${ENV}` name works.
+Used only when `providers.sandbox` is configured so sandbox-enabled roles can author code in an isolated sandbox — see [Code Sandbox](../concepts/code-sandbox.md). There is nothing to install: the binary carries every backend it has, and talks to E2B's REST API directly. The variable names below are the conventions the [Nimbus example](../../examples/nimbus.company.yaml) references; any `${ENV}` name works.
 
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
