@@ -18,6 +18,124 @@ import (
 // hold under a replicated stream, a lagging replica and a compacting bucket,
 // and these are the questions whose answers must not differ between them.
 var documentCases = []fleetCase{
+	{"a node's positions round-trip, and only an operator removes a row", func(h *fleetHarness) {
+		row := coord.NodePositions{
+			NodeID:        "node-a",
+			EngineVersion: "v-test",
+			Domains: map[string]coord.DomainPosition{
+				"tracker": {Seq: 41, Generation: 2, AppliedThrough: 40, Deferred: 1},
+				"vectors": {Seq: 9, Generation: 2, AppliedThrough: 9},
+			},
+		}
+		if err := h.f.PutPositions(h.ctx, row); err != nil {
+			h.t.Fatalf("PutPositions: %v", err)
+		}
+		// A SECOND WRITE REPLACES rather than merges: the row is one
+		// node's whole answer, and a merge would leave a domain it no
+		// longer runs behind for ever, pinning the trim on a log nothing
+		// consumes.
+		row.Domains = map[string]coord.DomainPosition{
+			"tracker": {Seq: 60, Generation: 2, AppliedThrough: 60},
+		}
+		if err := h.f.PutPositions(h.ctx, row); err != nil {
+			h.t.Fatalf("second PutPositions: %v", err)
+		}
+
+		rows, err := h.f.Positions(h.ctx)
+		if err != nil {
+			h.t.Fatalf("Positions: %v", err)
+		}
+		if len(rows) != 1 {
+			h.t.Fatalf("register holds %d rows, want 1", len(rows))
+		}
+		got := rows[0]
+		if got.NodeID != "node-a" || len(got.Domains) != 1 {
+			h.t.Fatalf("row = %+v, want node-a with one domain", got)
+		}
+		if d := got.Domains["tracker"]; d.Seq != 60 || d.AppliedThrough != 60 {
+			h.t.Errorf("tracker = %+v, want seq 60 applied 60", d)
+		}
+		if got.At.IsZero() {
+			h.t.Error("At is zero: the register's own freshness is what an " +
+				"operator reads to tell a stalled node from a departed one")
+		}
+
+		// AN UNATTRIBUTED ROW IS REFUSED. It would be read back as some
+		// other node's progress, and the trim takes a minimum across
+		// these rows.
+		if err := h.f.PutPositions(h.ctx, coord.NodePositions{}); err == nil {
+			h.t.Error("a row with no node id was accepted")
+		}
+		// AND SO IS ONE THAT APPLIED PAST WHAT IT CONSUMED.
+		if err := h.f.PutPositions(h.ctx, coord.NodePositions{
+			NodeID:  "node-b",
+			Domains: map[string]coord.DomainPosition{"tracker": {Seq: 5, AppliedThrough: 9}},
+		}); err == nil {
+			h.t.Error("a row applied past its own checkpoint was accepted")
+		}
+
+		if err := h.f.ForgetPositions(h.ctx, "node-a"); err != nil {
+			h.t.Fatalf("ForgetPositions: %v", err)
+		}
+		rows, err = h.f.Positions(h.ctx)
+		if err != nil {
+			h.t.Fatalf("Positions after forget: %v", err)
+		}
+		if len(rows) != 0 {
+			h.t.Errorf("register holds %d rows after the operator's gesture, want 0", len(rows))
+		}
+		// FORGETTING TWICE IS NOT A FAULT: an eviction that is retried
+		// must not fail on the half it already did.
+		if err := h.f.ForgetPositions(h.ctx, "node-a"); err != nil {
+			h.t.Errorf("a second forget errored: %v", err)
+		}
+	}},
+	{"a key listing is the same set as a listing, without the values", func(h *fleetHarness) {
+		// THE TWO ANSWERS MUST AGREE, because the whole reason
+		// DocumentKeys exists is that a sweep asking "which keys are
+		// there" was transferring every value in the family to find out.
+		// A filter that disagreed with the listing's would make a sweep
+		// miss records or reach into another class's.
+		for _, key := range []string{
+			coord.DocumentKey("i", "one"),
+			coord.DocumentKey("i", "two"),
+			coord.DocumentKey("c", "one"),
+			// The prefix ITSELF is a key this engine writes, and a
+			// filter of `i.>` alone would miss it.
+			"i",
+			// A byte-wise prefix would take this for an "i" key, which
+			// is the reason the match is whole-segment.
+			"index",
+		} {
+			if _, err := h.f.CreateDocument(h.ctx, coord.FamilyWork, key, []byte(`{}`)); err != nil {
+				h.t.Fatalf("seed %s: %v", key, err)
+			}
+		}
+
+		for _, prefix := range []string{"", "i", "c"} {
+			records, err := h.f.Documents(h.ctx, coord.FamilyWork, prefix)
+			if err != nil {
+				h.t.Fatalf("Documents(%q): %v", prefix, err)
+			}
+			keys, err := h.f.DocumentKeys(h.ctx, coord.FamilyWork, prefix)
+			if err != nil {
+				h.t.Fatalf("DocumentKeys(%q): %v", prefix, err)
+			}
+			want := make([]string, 0, len(records))
+			for _, r := range records {
+				want = append(want, r.Key)
+			}
+			slices.Sort(want)
+			got := slices.Clone(keys)
+			slices.Sort(got)
+			if !slices.Equal(got, want) {
+				h.t.Errorf("prefix %q: DocumentKeys = %v, Documents = %v: the "+
+					"server-side filter and the client-side one have to select "+
+					"the same set, or a sweep reaches into another class",
+					prefix, got, want)
+			}
+		}
+	}},
 	{"a create is first-writer-wins and losing is not a fault", func(h *fleetHarness) {
 		key := coord.DocumentKey("i", "one")
 		created, err := h.f.CreateDocument(h.ctx, coord.FamilyWork, key, []byte(`{"n":1}`))

@@ -24,6 +24,7 @@ const (
 	workSuffix      = "_work"
 	pagesSuffix     = "_pages"
 	kbVectorsSuffix = "_kb_vectors"
+	positionsSuffix = "_statelog_positions"
 )
 
 // bucketFor resolves a family to its bucket, refusing one this build does not
@@ -116,6 +117,57 @@ func (f *FleetStore) Documents(ctx context.Context, family coord.Family, prefix 
 		})
 	}
 	return out, ctx.Err()
+}
+
+// DocumentKeys lists a family's keys under a prefix, filtered at the SERVER
+// and carrying no values.
+//
+// The prefix becomes a subject filter — `prefix.>` plus the prefix itself,
+// because a key that IS the prefix is under it and `>` alone would miss it —
+// and the watch asks for metadata only. What crosses the wire is key names.
+//
+// The whole-segment rule is still applied here on top of the server's filter:
+// the two agree for every key this engine writes, and the local test is what
+// keeps the guarantee the same as [FleetStore.Documents]' if a filter ever
+// admits a partial segment.
+func (f *FleetStore) DocumentKeys(
+	ctx context.Context, family coord.Family, prefix string,
+) ([]string, error) {
+	bucket, err := f.bucketFor(family)
+	if err != nil {
+		return nil, err
+	}
+	lister, err := bucket.ListKeysFiltered(ctx, keyFilters(prefix)...)
+	if err != nil {
+		return nil, unavailable("list the family's keys", err)
+	}
+	defer func() { _ = lister.Stop() }()
+
+	var out []string
+	for key := range lister.Keys() {
+		if prefix != "" && !hasKeyPrefix(key, prefix) {
+			continue
+		}
+		out = append(out, key)
+	}
+	return out, ctx.Err()
+}
+
+// keyFilters renders a whole-segment prefix as the subject filters the server
+// takes.
+//
+// TWO OF THEM, and the second is the one a single filter gets wrong: `p.>`
+// selects everything BENEATH the prefix and not the prefix itself, which is a
+// key this engine writes — a family's own root record — so a listing built on
+// `p.>` alone silently omits it. The conformance case that caught this
+// compares the two listings' SETS for exactly that reason.
+//
+// An empty prefix is the whole bucket.
+func keyFilters(prefix string) []string {
+	if prefix == "" {
+		return []string{">"}
+	}
+	return []string{prefix, prefix + coord.KeySeparator + ">"}
 }
 
 // hasKeyPrefix matches on WHOLE SEGMENTS.

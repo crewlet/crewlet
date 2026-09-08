@@ -809,6 +809,7 @@ type Fleet interface {
 	Secrets
 	Integrations
 	Documents
+	PositionRegister
 }
 
 // SortUsage puts the org counter first, then the seats by scope.

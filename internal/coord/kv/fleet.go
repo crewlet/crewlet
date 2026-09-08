@@ -19,7 +19,7 @@ import (
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why TWELVE buckets and not one
+// # Why SIXTEEN buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -60,6 +60,22 @@ import (
 //	           that expired would make a converged surface read as one
 //	           nobody has looked at, sending the loop to re-provision
 //	           against a third-party app it had already agreed with
+//	work       none at all, and here an age would delete the company's own
+//	           record: an item is not a horizon-bounded fact, and a bucket
+//	           that expired one would erase work nobody closed
+//	pages      none at all, for the same reason as work — a page is the
+//	           company's own document, and its revisions are its history
+//	kbVectors  none at all: they are DERIVED, so an age would not lose
+//	           anything permanently, but it would silently degrade search
+//	           to keyword-only on a timer with nothing reporting it. They
+//	           are dropped WHOLESALE when the embedding width changes,
+//	           which is a gesture rather than a horizon
+//	positions  none at all, and this is the one where an age would be
+//	           worst: a node's position is what the trim reads to decide
+//	           what every other node may delete, and a key that expired
+//	           would read as a node that has applied NOTHING — which
+//	           either pins the trim for ever or, read the other way,
+//	           lets it delete records that node still needs
 //
 // Putting two of those in one bucket would give one of them the other's
 // retention, and every such mistake is silent — a cooldown that expired in a
@@ -127,7 +143,7 @@ type FleetConfig struct {
 	// StatusFreshness is how long a node's apply status counts as current.
 	StatusFreshness time.Duration
 
-	// Replicas is the JetStream replica count for all eleven.
+	// Replicas is the JetStream replica count for every bucket.
 	Replicas int
 }
 
@@ -195,6 +211,7 @@ type FleetStore struct {
 	work      jetstream.KeyValue
 	pages     jetstream.KeyValue
 	kbVectors jetstream.KeyValue
+	positions jetstream.KeyValue
 
 	// js is the JetStream context, held so a feed can create the durable
 	// consumer a bucket's own KeyValue handle cannot: a watch is
@@ -286,6 +303,8 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 			"Crewlet knowledge-base pages and revisions; NO TTL — a page is the company's own record", 0},
 		{&store.kbVectors, kbVectorsSuffix,
 			"Crewlet knowledge embeddings; NO TTL — derived, and dropped wholesale when the width changes", 0},
+		{&store.positions, positionsSuffix,
+			"Crewlet per-node state-log positions; NO TTL — an expired position reads as a node that applied nothing", 0},
 	} {
 		got, err := open(bucket.suffix, bucket.describe, bucket.ttl)
 		if err != nil {
