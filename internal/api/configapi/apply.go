@@ -105,6 +105,11 @@ type ApplyRequest struct {
 	// refused with a [RacedError] BEFORE anything is stored, so a caller
 	// working from a list it read a minute ago does not silently overwrite
 	// what happened since.
+	//
+	// EITHER SPELLING. A bare revision id is what a programmatic caller
+	// holds; a quoted entity-tag, a comma-separated list of them, or `*` is
+	// what arrives in an `If-Match` header, and a caller that forwards one
+	// is doing the standard thing rather than the wrong thing.
 	Expect string
 }
 
@@ -131,7 +136,13 @@ func (s *Service) Apply(ctx context.Context, req ApplyRequest) (Applied, error) 
 	if !found {
 		return Applied{}, ErrNoActiveRevision
 	}
-	if req.Expect != "" && req.Expect != active.ID {
+	// THE SAME RULE THE HTTP GUARD USES, because callers hand this the same
+	// strings. `/setup`'s force-disconnect passes the raw `If-Match` header
+	// straight through, and a correctly-formed entity-tag — quoted, which is
+	// the only legal spelling — never equals a bare revision id: a caller
+	// doing the standard thing was answered 409 with their own current
+	// revision named as the conflict.
+	if req.Expect != "" && !matchesTag(req.Expect, etagOf(active), true) {
 		return Applied{}, &RacedError{Base: req.Expect, Current: active.ID}
 	}
 

@@ -2,9 +2,12 @@ package configapi_test
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/api/configapi"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -418,5 +421,59 @@ func seedWithPeerField(t *testing.T, s *surface) {
 		Payload: payload, CreatedAt: pinned,
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
+	}
+}
+
+// A QUOTED ENTITY-TAG IS THE STANDARD SPELLING, and it has to work.
+//
+// `/setup`'s force-disconnect forwards the raw `If-Match` header into
+// ApplyRequest.Expect, and a legal entity-tag is quoted — which never equals a
+// bare revision id. A caller doing exactly what the HTTP spec says was
+// answered 409, naming their own current revision as the thing they had raced
+// with.
+func TestAnExpectAcceptsEitherSpellingOfThePrecondition(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	id := s.seed(t, companyDoc, nil)
+
+	for name, expect := range map[string]string{
+		"a bare revision id":   id,
+		"a quoted entity-tag":  `"` + id + `"`,
+		"a list containing it": `"nope", "` + id + `"`,
+		"the wildcard":         "*",
+	} {
+		t.Run(name, func(t *testing.T) {
+			// Serially, because each write advances the revision: the
+			// point is the SPELLING, so each case starts from its own.
+			current, found, err := s.configs.Active(t.Context())
+			if err != nil || !found {
+				t.Fatalf("active: %v", err)
+			}
+			sent := strings.ReplaceAll(expect, id, current.ID)
+			if _, err := s.svc.Apply(t.Context(), configapi.ApplyRequest{
+				Patch:   []byte(`{"mission": "ship the thing"}`),
+				Summary: "a patch", Operator: "operator", Expect: sent,
+			}); err != nil {
+				t.Errorf("Apply with %s (%q) = %v", name, sent, err)
+			}
+		})
+	}
+}
+
+// AND A STALE ONE IS STILL REFUSED, or the tolerance above would have removed
+// the guard rather than widened it.
+func TestAStalePreconditionIsStillRefused(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	s.seed(t, companyDoc, nil)
+
+	_, err := s.svc.Apply(t.Context(), configapi.ApplyRequest{
+		Patch:   []byte(`{"mission": "ship the thing"}`),
+		Summary: "a patch", Operator: "operator",
+		Expect: `"a-revision-that-never-existed"`,
+	})
+	var raced *configapi.RacedError
+	if !errors.As(err, &raced) {
+		t.Fatalf("Apply on a stale base = %v, want a RacedError", err)
 	}
 }

@@ -484,6 +484,16 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	present, resolved := setup.Resolution(company.Integrations.PublicBaseURL, s.resolve)
 	httpjson.Write(w, http.StatusOK, map[string]any{
 		"tools": tools,
+		// THE REVISION THIS ANSWER DESCRIBES, so a caller can send it back
+		// as `if_match` on the write.
+		//
+		// Every write here takes that precondition and `setup.ErrStaleBase`
+		// exists to refuse a submission built on a revision that has moved
+		// — but no read handed the caller a revision to name, so a client
+		// could not use either. The guard was unreachable from the surface
+		// it guards, which made the whole stale-base path dead code that
+		// looked like protection.
+		"revision_id": s.activeRevision(r.Context()),
 		// THE ADDRESS EVERY INBOUND VENDOR IS BUILT ON, answered once
 		// rather than repeated in each tool: it is one setting, and a
 		// screen that asked for it seven times would be asking the
@@ -493,6 +503,28 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 			"config_path": "integrations.public_base_url",
 		},
 	})
+}
+
+// activeRevision is the revision this node is serving, or empty when it
+// cannot say.
+//
+// EMPTY RATHER THAN AN ERROR, because it is a courtesy on a read: a caller
+// that gets one can hold the surface still with `if_match`, and one that does
+// not is exactly where every caller was before — writing unconditionally.
+// Failing the whole read over it would trade a working screen for a
+// precondition nobody asked for.
+func (s *Service) activeRevision(ctx context.Context) string {
+	if s.writer.Config == nil {
+		return ""
+	}
+	id, err := s.writer.Config.Current(ctx)
+	if err != nil {
+		log.WarnContext(ctx, "setup_revision_unreadable", "error", err,
+			"detail", "this answer carries no revision, so a client cannot "+
+				"send if_match with its write")
+		return ""
+	}
+	return id
 }
 
 // one serves GET /setup/integrations/{kind}.

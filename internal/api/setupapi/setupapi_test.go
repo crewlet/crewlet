@@ -1116,15 +1116,41 @@ func TestAPassDoesNotSeeTheRequestBeingCancelled(t *testing.T) {
 		s.mux.ServeHTTP(httptest.NewRecorder(), req)
 	}()
 
-	// Cancel the request while the pass is mid-flight, then let it finish.
-	cancel()
-	close(pass.release)
+	// IN FLIGHT FIRST. Cancelling before the pass is entered proves nothing:
+	// the run would not have been mid-way through anything, which is the only
+	// state this is about.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, calls := pass.last(); calls == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the pass never started")
+		}
+		time.Sleep(time.Millisecond)
+	}
 
+	cancel()
+
+	// THE ASSERTION IS THAT NOTHING HAPPENS. A pass on the request's own
+	// context sees Done the instant it is cancelled, so it would report the
+	// cancellation here without anything releasing it. Waiting for the
+	// release first is what made this test coin-flip: both channels were
+	// ready at once and a select picks between them at random, so it passed
+	// half the time with the detach removed.
+	select {
+	case err := <-pass.watchCtx:
+		t.Fatalf("the pass saw %v the moment the request was cancelled: a closed "+
+			"tab can abandon a run that is creating accounts at the third-party app", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	// AND IT STILL FINISHES ON ITS OWN TERMS.
+	close(pass.release)
 	select {
 	case err := <-pass.watchCtx:
 		if err != nil {
-			t.Fatalf("the pass saw %v from the request's context: a closed tab "+
-				"can abandon a run that is creating accounts at the third-party app", err)
+			t.Fatalf("the released pass reported %v", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the pass never finished")
@@ -1408,4 +1434,51 @@ func orphansOf(raw []any) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// THE READ CARRIES THE REVISION THE WRITE ASKS FOR.
+//
+// Every write on this surface takes `if_match`, and `setup.ErrStaleBase`
+// exists to refuse a submission built on a revision that has since moved. No
+// read handed the caller a revision to name, so neither could be used: the
+// guard was unreachable from the surface it guards, which is dead code
+// wearing the shape of protection.
+func TestTheSetupListNamesTheRevisionItDescribes(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+
+	res := s.do(t, http.MethodGet, "/setup/integrations", "", nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", res.Code, res.Body)
+	}
+	revision, _ := decode(t, res)["revision_id"].(string)
+	if revision == "" {
+		t.Fatal("the listing names no revision, so a client cannot send if_match")
+	}
+
+	// AND IT IS THE ONE A WRITE ACCEPTS, which is the whole point of
+	// returning it: a value the write would refuse is worse than none.
+	accepted := s.do(t, http.MethodPost, "/setup/integrations/slack/inputs",
+		`{"seat":"cto","if_match":"`+revision+`","values":`+
+			`{"bot_token":"xoxb-x","signing_secret":"s"}}`, nil)
+	if accepted.Code >= http.StatusBadRequest {
+		t.Fatalf("a write naming the listing's own revision was refused: %d %s",
+			accepted.Code, accepted.Body)
+	}
+}
+
+// AND A STALE ONE IS REFUSED, or the field would be decoration.
+func TestASetupWriteOnAStaleRevisionIsRefused(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+
+	res := s.do(t, http.MethodPost, "/setup/integrations/slack/inputs",
+		`{"seat":"cto","if_match":"a-revision-that-never-existed","values":`+
+			`{"bot_token":"xoxb-x","signing_secret":"s"}}`, nil)
+	if res.Code < http.StatusBadRequest {
+		t.Fatalf("a write on a revision that never existed was accepted: %d %s",
+			res.Code, res.Body)
+	}
 }
