@@ -481,6 +481,16 @@ func (r *Receiver) record(ctx context.Context, d delivery, trace events.TraceCon
 var sensitiveHeaders = map[string]bool{
 	"authorization": true, "cookie": true, "proxy-authorization": true,
 	"x-gitlab-token": true,
+	// `x-crewlet-token` is this engine's OWN version of the same mistake.
+	// Datadog and Confluence Cloud have no signature to send, so both
+	// routes authenticate on a shared token carried in this header and
+	// compared for EQUALITY: every accepted delivery therefore arrives
+	// carrying the secret itself, not a value derived from it. Copied
+	// through, it is written into the event the receiver publishes, kept
+	// in the dead-letter stream for the retention window, and rendered on
+	// the dashboard beside the payload. A signature header is safe here
+	// and a KEY never is.
+	"x-crewlet-token": true,
 }
 
 // safeHeaders flattens the request's headers, lowercased, with the

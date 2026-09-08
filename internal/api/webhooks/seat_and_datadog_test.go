@@ -1,7 +1,9 @@
 package webhooks_test
 
 import (
+	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/events"
@@ -253,4 +255,42 @@ func seatOf(t *testing.T, ev *events.Event) string {
 	}
 
 	return hook.Handle
+}
+
+// THE ENGINE'S OWN SHARED TOKEN DOES NOT REACH THE EVENT STORE.
+//
+// Datadog and Confluence Cloud have no signature to send, so both routes
+// authenticate on a token carried in a header and compared for EQUALITY:
+// every accepted delivery therefore arrives carrying the secret itself, not a
+// value derived from it. Copied into the published delivery, it is written to
+// the broker, kept in the dead-letter stream for the retention window, and
+// rendered on the dashboard beside the payload. It is the same shape as the
+// GitLab key the denylist was created for, in this engine's own header.
+func TestTheSharedWebhookTokenIsRedactedBeforeADeliveryIsStored(t *testing.T) {
+	t.Parallel()
+	e := newEdge(t)
+	body := []byte(`{"id":"n-1","title":"CPU high","alert_transition":"Triggered"}`)
+
+	if got := e.post(t, "/webhooks/datadog", body, datadogDelivery("dd-token")).Code; got != http.StatusOK {
+		t.Fatalf("the delivery was refused with %d", got)
+	}
+	ev := e.published.last()
+	if ev == nil {
+		t.Fatal("nothing was published")
+	}
+	blob, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(blob), "dd-token") {
+		t.Error("the published delivery carries the shared token verbatim, so it " +
+			"lands in the event store, in the dead-letter stream, and on every " +
+			"dashboard socket")
+	}
+	// AND THE HEADER IS STILL THERE, marked. A delivery whose headers lost a
+	// name entirely reads as one that never carried it, which is a different
+	// fact from one whose value was withheld.
+	if !strings.Contains(string(blob), "REDACTED") {
+		t.Errorf("the header was dropped rather than redacted:\n%s", blob)
+	}
 }
