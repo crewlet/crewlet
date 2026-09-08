@@ -36,7 +36,7 @@ func TestTheAdminTokenHelpLinksTheOperatorsOwnInstance(t *testing.T) {
 	}
 	// A MARKDOWN LINK, which is what the screen renders as an anchor inside
 	// the sentence rather than as "Open Mattermost" after a full stop.
-	if !strings.Contains(admin.Help, "[turning them on](") {
+	if !strings.Contains(admin.Help, "](") {
 		t.Errorf("the help carries no link: %q", admin.Help)
 	}
 	// THE FIELD THE TEMPLATE READS has to be one this form actually has,
@@ -45,10 +45,11 @@ func TestTheAdminTokenHelpLinksTheOperatorsOwnInstance(t *testing.T) {
 		t.Error("the help templates {url}, and the form has no url field to fill it from")
 	}
 
-	// AND IT NAMES THE PAGE A PERSON GOES TO. Creating the token is a modal
-	// on the admin's own account rather than an address, so the sentence
-	// says where that is and links the setting that has to be on first.
-	if !strings.Contains(admin.Help, "Profile > Security") {
+	// AND IT NAMES THE PAGE A PERSON GOES TO. Mattermost opens user
+	// settings as a modal and serves its whole web app from one route, so
+	// there is no address for this page: the sentence carries the path in
+	// words, and the link only opens the instance.
+	if !strings.Contains(admin.Help, "Profile > Security > Personal Access Tokens") {
 		t.Errorf("the help does not say where a token is made: %q", admin.Help)
 	}
 }

@@ -96,15 +96,13 @@ func AdminCredential(stored string) setup.Requirement {
 		// from what is typed above it, so the link follows the field as
 		// somebody fills it in and is dropped entirely until they do.
 		//
-		// IT POINTS AT THE SWITCH, not at the token page. Creating a
-		// personal access token is Profile > Security on the admin's own
-		// account, which is a modal rather than an address; what IS
-		// addressable is the setting that has to be on before that page
-		// offers anything at all, and it is the step people miss.
-		Help: "Creates each agent's bot and joins it to the team, so it belongs to " +
-			"a system administrator. Make one under Profile > Security > Personal " +
-			"Access Tokens, after [turning them on]" +
-			"({url}/admin_console/integrations/integration_management).",
+		// IT OPENS THE INSTANCE, not a settings path. Mattermost serves
+		// its whole web app from one route and opens user settings as a
+		// modal, so there is no address for this page: every candidate
+		// path answers 200 with the same document. A link claiming to go
+		// there would land somewhere else and say nothing about it.
+		Help: "Navigate to [Profile > Security > Personal Access Tokens]({url}) " +
+			"and create a token.",
 	}
 }
 
