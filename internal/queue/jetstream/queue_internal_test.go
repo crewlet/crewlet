@@ -3,6 +3,7 @@ package jetstream
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -35,5 +36,63 @@ func TestOnlyAPlacementFailureIsWaitedOut(t *testing.T) {
 		if unplaceable(err) {
 			t.Fatalf("%v was treated as a forming cluster", err)
 		}
+	}
+}
+
+// A FAILING MESSAGE BACKS OFF, and the budget outlives the outage.
+//
+// A flat spacing spent every one of a message's 25 attempts inside half a
+// minute, so an LLM credential benched for its cooldown, a vendor's
+// rate-limit window or a database restarting all dead-lettered work that the
+// next attempt would have handled, while sending the struggling dependency 25
+// requests a second apart on the way there.
+func TestAFailingMessageBacksOffToACeiling(t *testing.T) {
+	t.Parallel()
+	q := &Queue{cfg: Config{NakDelay: time.Second, NakCeiling: 8 * time.Second}}
+
+	// THE FIRST FAILURE IS STILL FAST. A blip must not cost a seat ten
+	// minutes of silence, which is the other half of this decision.
+	if got := q.nakBackoff(1); got != time.Second {
+		t.Errorf("first redelivery waits %v, want the base delay", got)
+	}
+	for n, want := range map[uint64]time.Duration{
+		2: 2 * time.Second,
+		3: 4 * time.Second,
+		4: 8 * time.Second,
+		5: 8 * time.Second,
+	} {
+		if got := q.nakBackoff(n); got != want {
+			t.Errorf("delivery %d waits %v, want %v", n, got, want)
+		}
+	}
+
+	// A DELIVERY COUNT IS A NUMBER OFF THE WIRE. Shifting a duration by
+	// it is undefined past 63 and negative well before that, and the
+	// answer to a nonsense count is the longest wait rather than an
+	// immediate redelivery, which is the failure this whole change is
+	// about.
+	for _, n := range []uint64{0, 64, 1 << 40} {
+		if got := q.nakBackoff(n); got <= 0 || got > 8*time.Second {
+			t.Errorf("delivery %d waits %v, want a bounded positive wait", n, got)
+		}
+	}
+
+	// A CEILING UNDER THE BASE IS THE CEILING, not a delay that ignores it.
+	tight := &Queue{cfg: Config{NakDelay: time.Minute, NakCeiling: time.Second}}
+	if got := tight.nakBackoff(1); got != time.Second {
+		t.Errorf("a ceiling below the base gives %v, want the ceiling", got)
+	}
+
+	// AND THE SHIPPED DEFAULTS SPAN THE OUTAGE THEY EXIST FOR: a message's
+	// whole budget must outlast a benched credential's auth cooldown, which
+	// is the failure that used to consume it in 25 seconds.
+	var total time.Duration
+	shipped := &Queue{}
+	for n := uint64(1); n <= uint64(maxDeliver); n++ {
+		total += shipped.nakBackoff(n)
+	}
+	if total < 5*time.Minute {
+		t.Errorf("the default budget spans %v, which is shorter than the "+
+			"auth cooldown a benched provider credential serves", total)
 	}
 }

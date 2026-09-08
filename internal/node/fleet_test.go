@@ -78,9 +78,10 @@ func substrates() []substrate {
 			name: "embedded",
 			build: func(t *testing.T) (func(*testing.T) queue.EventQueue, coord.Backend) {
 				srv, err := jetstream.StartServer(t.Context(), jetstream.Config{
-					FetchWait: 25 * time.Millisecond,
-					NakDelay:  25 * time.Millisecond,
-					AckWait:   2 * time.Second,
+					FetchWait:  25 * time.Millisecond,
+					NakDelay:   25 * time.Millisecond,
+					NakCeiling: 50 * time.Millisecond,
+					AckWait:    2 * time.Second,
 				})
 				if err != nil {
 					t.Fatalf("StartServer: %v", err)
@@ -121,9 +122,10 @@ func substrates() []substrate {
 			name: "cluster",
 			build: func(t *testing.T) (func(*testing.T) queue.EventQueue, coord.Backend) {
 				c := jetstreamtest.StartCluster(t, 3, jetstream.Config{
-					FetchWait: 25 * time.Millisecond,
-					NakDelay:  25 * time.Millisecond,
-					AckWait:   2 * time.Second,
+					FetchWait:  25 * time.Millisecond,
+					NakDelay:   25 * time.Millisecond,
+					NakCeiling: 50 * time.Millisecond,
+					AckWait:    2 * time.Second,
 				})
 				admin := c.Client(t, 0)
 				backend, err := coordkv.Open(t.Context(), admin.Conn(), coordkv.Config{

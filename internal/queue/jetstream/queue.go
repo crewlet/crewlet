@@ -79,11 +79,17 @@ type Config struct {
 	AckWait time.Duration
 
 	// FetchWait and NakDelay override the consume loop's poll window and
-	// the spacing between redeliveries of a FAILING message. Zero uses
-	// the derived defaults; tests shrink both so a suite that exercises
-	// redelivery does not spend its life in timers.
+	// the spacing before the FIRST redelivery of a failing message. Zero
+	// uses the derived defaults; tests shrink both so a suite that
+	// exercises redelivery does not spend its life in timers.
 	FetchWait time.Duration
 	NakDelay  time.Duration
+
+	// NakCeiling caps that spacing, which doubles on every further
+	// failure. Zero uses the derived default. A test that shrinks
+	// NakDelay shrinks this too, or the doubling puts its later
+	// redeliveries minutes apart.
+	NakCeiling time.Duration
 
 	// Credentials authenticates against an external server.
 	Credentials string

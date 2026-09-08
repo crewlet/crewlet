@@ -53,10 +53,33 @@ func (q *Queue) drainFetchWait() time.Duration {
 	return min(drainWait, q.fetchWait())
 }
 
-// defaultNakDelay spaces out the redelivery of a FAILING message. Not zero:
-// an immediately-redelivered failure spins the loop at full speed against
-// whatever is broken. A deferral takes a different path and is immediate.
+// defaultNakDelay spaces out the FIRST redelivery of a failing message. Not
+// zero: an immediately-redelivered failure spins the loop at full speed
+// against whatever is broken. A deferral takes a different path and is
+// immediate.
 const defaultNakDelay = time.Second
+
+// defaultNakCeiling caps the doubling that follows.
+//
+// FLAT SPACING SPENT THE WHOLE BUDGET IN HALF A MINUTE. A message gets
+// maxDeliver attempts, and one second apart puts the last of them 25 seconds
+// after the first failure — so a benched LLM credential, a vendor's rate-limit
+// window or a database coming back up all dead-letter a message that would
+// have been handled on the next attempt. It is also the shape that hammers
+// whatever is already struggling: 25 requests a second apart is what a
+// provider that just answered "slow down" receives.
+//
+// Doubling from a second to this spends the budget over about ten minutes,
+// which covers the five-minute auth cooldown a benched provider credential
+// serves (internal/providers/credential) twice over while still
+// retrying a momentary blip within a second or two. A failure that outlasts
+// that window is not transient, and holding a seat's mailbox behind it is
+// worse than the dead-letter copy.
+//
+// The in-memory twin redelivers immediately and deliberately: it models
+// ordering and the delivery budget, not the clock, and a suite that waited
+// out real backoff would spend its life in timers.
+const defaultNakCeiling = 30 * time.Second
 
 func (q *Queue) fetchWait() time.Duration {
 	if q.cfg.FetchWait > 0 {
@@ -70,6 +93,39 @@ func (q *Queue) nakDelay() time.Duration {
 		return q.cfg.NakDelay
 	}
 	return defaultNakDelay
+}
+
+func (q *Queue) nakCeiling() time.Duration {
+	if q.cfg.NakCeiling > 0 {
+		return q.cfg.NakCeiling
+	}
+	return defaultNakCeiling
+}
+
+// nakBackoff is how long the nth redelivery of a failing message waits.
+//
+// The first failure waits [Queue.nakDelay] and each one after that waits
+// twice as long, up to [Queue.nakCeiling]. deliveries is the count JetStream
+// reports for the message, so the first attempt is 1.
+func (q *Queue) nakBackoff(deliveries uint64) time.Duration {
+	delay, ceiling := q.nakDelay(), q.nakCeiling()
+	if delay >= ceiling {
+		return ceiling
+	}
+	// SHIFTED, NOT MULTIPLIED IN A LOOP, and bounded before the shift: a
+	// delivery count is a number off the wire, and shifting a duration by
+	// 64 is undefined rather than large.
+	steps := deliveries
+	if steps > 0 {
+		steps--
+	}
+	if steps > 32 {
+		return ceiling
+	}
+	if backoff := delay << steps; backoff < ceiling && backoff > 0 {
+		return backoff
+	}
+	return ceiling
 }
 
 // attachment is ONE consumer this process runs for a (topic, group) pair.
@@ -417,15 +473,24 @@ func (a *attachment) apply(ctx context.Context, msg jetstream.Msg, ev *events.Ev
 }
 
 // nakOrDeadLetter redelivers a FAILED message until its budget is spent, then
-// dead-letters it. Spaced by nakDelay, because an immediately-redelivered
-// failure spins the loop at full speed against whatever is broken.
+// dead-letters it. Spaced by [Queue.nakBackoff], because an immediately
+// redelivered failure spins the loop at full speed against whatever is broken
+// and a flat spacing spends every attempt before it can heal.
 //
 // The decision lives here rather than relying on MaxDeliver alone because
 // this is where the dead-letter subject is known and the message body is in
 // hand. MaxDeliver stays configured as a backstop so a bug here cannot
 // produce an infinite loop.
 func (a *attachment) nakOrDeadLetter(ctx context.Context, msg jetstream.Msg) {
-	a.returnMsg(ctx, msg, a.q.nakDelay())
+	// A MESSAGE WHOSE METADATA WILL NOT PARSE STILL GOES BACK, at the
+	// shortest spacing: the alternative is dropping a delivery over a
+	// header, and returnMsg reads the same metadata for the budget and
+	// already treats an unreadable one as "not yet spent".
+	var deliveries uint64 = 1
+	if md, err := msg.Metadata(); err == nil {
+		deliveries = md.NumDelivered
+	}
+	a.returnMsg(ctx, msg, a.q.nakBackoff(deliveries))
 }
 
 // handBack returns a HEALTHY message — a deferral, a hold, a pause, teardown.
