@@ -180,6 +180,24 @@ type Documents interface {
 	// listing that returns tombstones is a board with ghosts on it.
 	PurgeDocument(ctx context.Context, family Family, key string, version uint64) (bool, error)
 
+	// DocumentKeys lists a family's KEYS under a prefix, without their
+	// values.
+	//
+	// # Why it exists beside Documents
+	//
+	// A sweep asks "which keys are there" and then decides what to do with
+	// a few of them. Documents answers that question by transferring EVERY
+	// VALUE in the family and discarding the ones outside the prefix
+	// client-side — so a pages sweep looking for a handful of expired
+	// revisions moves every revision body in the company across the wire
+	// to find them.
+	//
+	// This one filters at the SERVER and asks for metadata only, so the
+	// same sweep transfers key names. The filter is the same whole-segment
+	// prefix rule Documents uses, because a byte-wise match would let one
+	// class's keys into another's sweep.
+	DocumentKeys(ctx context.Context, family Family, prefix string) ([]string, error)
+
 	// WatchDocuments follows a family.
 	//
 	// From zero, the watch opens with every document the store holds — one

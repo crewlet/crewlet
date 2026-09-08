@@ -191,6 +191,31 @@ func (f *Fleet) Documents(_ context.Context, family coord.Family, prefix string)
 	return out, nil
 }
 
+// DocumentKeys lists a family's keys under a prefix.
+//
+// The twin has no wire to save, so this is Documents without the values —
+// which is exactly the contract, and the suite certifies both against the
+// same cases.
+func (f *Fleet) DocumentKeys(
+	_ context.Context, family coord.Family, prefix string,
+) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	store, err := f.docs().family(family)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(store))
+	for key := range store {
+		if prefix != "" && !hasKeyPrefix(key, prefix) {
+			continue
+		}
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 // hasKeyPrefix matches on whole segments — see the KV backend's copy for why
 // a byte-wise prefix would let one class sweep another's records.
 func hasKeyPrefix(key, prefix string) bool {
