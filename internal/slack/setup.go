@@ -55,10 +55,26 @@ func Requirements(handle string, seat *config.Role, resolve func(string) (string
 			ConfigPath: "integrations.slack.bot_token",
 			Seat:       handle,
 			Required:   true,
-			Help:       "What this agent posts as. Slack shows it on the app's OAuth page.",
-			Where:      "Install the app to your workspace, then copy the Bot User OAuth Token.",
-			VendorURL:  "https://api.slack.com/apps",
-			Blocks:     integration.FindingIdentityMissing,
+			// THE ROUTE TO THE VALUE, not a description of it.
+			//
+			// Nothing this engine can provision is behind these two boxes:
+			// somebody has to walk Slack's own pages and come back with
+			// what they find, and the only thing that shortens that walk is
+			// being told exactly where to go. It said what the value WAS
+			// ("what this agent posts as"), which a reader looking at a
+			// field called Bot token already knows, and then where to find
+			// it in prose ending in a bare "Open Slack" that landed on an
+			// app list with no clue which of four pages was meant.
+			//
+			// The path is a literal, in the face this screen gives one, for
+			// the reason [mattermost.AdminCredential] gives: a menu path is
+			// followed exactly, and prose runs it into the sentence around
+			// it. The link is the first hop rather than a trailing
+			// afterthought, so the line reads in the order it is walked.
+			Help: "Navigate to [api.slack.com/apps](https://api.slack.com/apps) > " +
+				"this agent's app > `OAuth & Permissions > Install to Workspace` " +
+				"and paste the `Bot User OAuth Token` here.",
+			Blocks: integration.FindingIdentityMissing,
 		},
 		{
 			Field:      "signing_secret",
@@ -68,10 +84,10 @@ func Requirements(handle string, seat *config.Role, resolve func(string) (string
 			ConfigPath: "integrations.slack.signing_secret",
 			Seat:       handle,
 			Required:   true,
-			Help:       "Verifies every delivery addressed to this agent.",
-			Where:      "On the app's Basic Information page, under App Credentials.",
-			VendorURL:  "https://api.slack.com/apps",
-			Blocks:     integration.FindingCredentialMissing,
+			Help: "Navigate to [api.slack.com/apps](https://api.slack.com/apps) > " +
+				"this agent's app > `Basic Information > App Credentials` " +
+				"and paste the `Signing Secret` here.",
+			Blocks: integration.FindingCredentialMissing,
 		},
 		{
 			Field:      "channel",
@@ -80,7 +96,12 @@ func Requirements(handle string, seat *config.Role, resolve func(string) (string
 			ConfigPath: "integrations.slack.channel",
 			Seat:       handle,
 			Required:   false,
-			Help:       "Where this agent posts when nothing else says.",
+			// NO PATH, because there is nothing to fetch: this is a name the
+			// operator chooses. What it does carry is the step that is
+			// invisible until the agent stays silent, which is that a Slack
+			// bot reads and posts only in channels it has been invited to.
+			Help: "The channel this agent posts in when nothing else says. " +
+				"Invite its bot to that channel in Slack, or it cannot post there.",
 		},
 	}
 
@@ -132,8 +153,15 @@ func statusChoices() []setup.Choice {
 }
 
 // Summary is the sentence the connect form opens with.
+//
+// WHAT THE READER HAS TO DO FIRST. It said the apps are created from the
+// command line, which is true of `crewlet slack provision` and useless to
+// somebody looking at this form: that command needs an app-configuration
+// token Slack issues by hand and an organisation may decline to allow at
+// all, so the person reading this is usually the person about to create the
+// apps themselves.
 func Summary() string {
-	return "Each agent talks in Slack as its own app. The apps are created " +
-		"from the command line, because Slack issues the credential that " +
-		"makes them by hand."
+	return "Each agent talks in Slack as its own app, so every agent needs one " +
+		"created at api.slack.com/apps and installed to your workspace. The two " +
+		"values each agent asks for below are on that app's own pages."
 }
