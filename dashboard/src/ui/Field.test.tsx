@@ -63,6 +63,63 @@ test("a value carrying http keeps it, and the affix steps aside", () => {
   expect(screen.queryByText("https://")).toBeNull();
 });
 
+// AND IT STEPS ASIDE FOR A REFERENCE, for the same reason it does for http.
+// `internal/config.hasHTTPScheme` admits `envref.Has`, so a `${VAR}` is a
+// value the engine accepts in this field whole: the scheme the affix stands
+// in for is one the reference carries itself once it resolves. Prepending to
+// it wrote `https://${VAR}`, which no resolver can read.
+test("a reference typed into a url field is left alone", () => {
+  const onChange = vi.fn();
+  render(<Field label="Public base" kind="url" value="" onChange={onChange} />);
+
+  fireEvent.change(screen.getByLabelText("Public base"), {
+    target: { value: "${CREWLET_PUBLIC_BASE}" },
+  });
+  expect(onChange).toHaveBeenCalledWith("${CREWLET_PUBLIC_BASE}");
+});
+
+// THE HALF-TYPED CASE IS THE ONE THAT BITES. A person types the reference one
+// character at a time, and `${CREWLET_PUBLIC` is not yet a whole reference —
+// so a rule that waited for one would prepend the affix on the first
+// keystroke and never take it off again.
+test("a reference still being typed into a url field is left alone", () => {
+  const onChange = vi.fn();
+  render(<Field label="Public base" kind="url" value="" onChange={onChange} />);
+
+  for (const typed of ["$", "${", "${CREWLET_PUBLIC"]) {
+    fireEvent.change(screen.getByLabelText("Public base"), { target: { value: typed } });
+    expect(onChange).toHaveBeenLastCalledWith(typed);
+  }
+});
+
+// A STORED REFERENCE IS SHOWN AS ITSELF, with no affix beside it. Rendering
+// one behind `https://` told the operator their value was
+// `https://${CREWLET_PUBLIC_BASE}`, and the first keystroke made that true.
+test("a stored reference is shown whole, with no affix", () => {
+  const onChange = vi.fn();
+  render(
+    <Field label="Public base" kind="url" value="${CREWLET_PUBLIC_BASE}" onChange={onChange} />,
+  );
+  const input = screen.getByLabelText("Public base") as HTMLInputElement;
+  expect(input.value).toBe("${CREWLET_PUBLIC_BASE}");
+  expect(screen.queryByText("https://")).toBeNull();
+
+  fireEvent.change(input, { target: { value: "${CREWLET_PUBLIC_BASE_2}" } });
+  expect(onChange).toHaveBeenCalledWith("${CREWLET_PUBLIC_BASE_2}");
+});
+
+// A reference BEHIND a scheme is the case that always worked, and it has to
+// keep working: the affix is carrying the scheme there, so it belongs.
+test("a scheme followed by a reference keeps the affix", () => {
+  const onChange = vi.fn();
+  render(<Field label="Jira site" kind="url" value="https://${JIRA_HOST}" onChange={onChange} />);
+  const input = screen.getByLabelText("Jira site") as HTMLInputElement;
+  expect(input.value).toBe("${JIRA_HOST}");
+
+  fireEvent.change(input, { target: { value: "${JIRA_HOST}/x" } });
+  expect(onChange).toHaveBeenCalledWith("https://${JIRA_HOST}/x");
+});
+
 // Only url fields. A token or a handle with https:// in front of it is
 // nonsense, and the affix rewrites what it is attached to.
 test("no other kind of field wears a scheme", () => {
