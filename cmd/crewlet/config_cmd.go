@@ -8,8 +8,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -124,7 +126,18 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 		redact   bool
 		dryRun   bool
 	)
+	var (
+		apiURL  string
+		summary string
+	)
 	switch sub {
+	case "import":
+		fs.StringVar(&apiURL, "api", "",
+			"import through a running node's API; default is the "+
+				"api.host:port in -config when the engine holds the store")
+		fs.StringVar(&summary, "summary", "",
+			"the audit note recorded with the revision; "+
+				"default \"imported from <file>\"")
 	case "export":
 		fs.StringVar(&revision, "revision", "",
 			"which revision to print; default active")
@@ -148,6 +161,20 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
+
+	// IMPORT CHOOSES ITS OWN TARGET, so it is dispatched before the store
+	// is opened: against a running node it must NOT open the store at all,
+	// and an explicit -api is an instruction to write through a node that
+	// may not even be this machine.
+	if sub == "import" {
+		return importCompany(ctx, importTarget{
+			bootstrapPath: *bootstrapPath,
+			path:          subject,
+			apiURL:        apiURL,
+			summary:       summary,
+		}, stdout)
+	}
+
 	cs, closeStore, err := openConfigStore(ctx, *bootstrapPath)
 	if err != nil {
 		return err
@@ -155,8 +182,6 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	defer closeStore()
 
 	switch sub {
-	case "import":
-		return importConfig(ctx, cs, subject, stdout)
 	case "show":
 		return exportConfig(ctx, cs, "", true, stdout)
 	case "export":
@@ -172,10 +197,11 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	case "rekey":
 		return rekeyConfig(ctx, cs, *bootstrapPath, dryRun, stdout)
 	default:
-		// Unreachable: the guard above admits only configSubcommands, and
-		// a test asserts every one of them dispatches. It stays because
-		// the compiler needs a terminating return and because a name added
-		// to the list and not to this switch has to fail loudly.
+		// Unreachable: the guard above admits only configSubcommands,
+		// `import` returned before the store was opened, and a test
+		// asserts every name dispatches. It stays because the compiler
+		// needs a terminating return and because a name added to the list
+		// and not to this switch has to fail loudly.
 		fmt.Fprintf(stderr, configUsage, defaultBootstrapPath)
 		return fmt.Errorf("unknown config command %q", sub)
 	}
@@ -237,18 +263,9 @@ func openConfigStore(ctx context.Context, bootstrapPath string) (*configStore, f
 // unchanged file writes nothing and says so, while an edited one writes
 // once. Silently ignoring an edited file would be the worst of the three —
 // an operator changes a config, runs the command, and nothing happens.
-func importConfig(ctx context.Context, cs *configStore, path string, stdout io.Writer) error {
-	if path == "" {
-		return errors.New("config import needs a company document to read")
-	}
-	// VALIDATED BEFORE IT IS STORED. A revision that cannot be built is one
-	// every node in the fleet will refuse, one after another, each reporting
-	// its own failure — which is a fleet-wide incident produced by a typo
-	// that could have been caught here.
-	company, err := config.LoadCompany(path)
-	if err != nil {
-		return err
-	}
+func importConfig(ctx context.Context, cs *configStore, path string,
+	company *config.Company, summary string, stdout io.Writer,
+) error {
 	document, err := json.Marshal(company)
 	if err != nil {
 		return fmt.Errorf("encode %s: %w", path, err)
@@ -280,7 +297,7 @@ func importConfig(ctx context.Context, cs *configStore, path string, stdout io.W
 	}
 	id, err := cs.configs.InsertActive(ctx, store.Revision{
 		ParentID: parent, Source: "file", CreatedBy: currentOperator(),
-		Summary: "imported from " + path,
+		Summary: summary,
 		Payload: payload,
 	})
 	if err != nil {
@@ -533,4 +550,103 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// importTarget is everything `crewlet config import` needs to decide where the
+// revision lands.
+type importTarget struct {
+	bootstrapPath string
+	path          string
+	apiURL        string
+	summary       string
+}
+
+// importCompany writes a company document as a new active revision, through
+// whichever route can actually reach the fleet.
+//
+// # Two routes, and the difference is not cosmetic
+//
+// The OFFLINE route opens this node's store directly and marks the revision
+// active in its own table. It cannot move the fleet's activation pointer,
+// because on the default topology that pointer lives inside the engine's own
+// process — so it takes effect when this node next starts, and only if this
+// node is the one that starts.
+//
+// The API route is PUT /config on a running node, which stores the revision
+// AND activates it, so every node converges with no restart. That is what an
+// operator editing a live company wants, and until now the CLI had no way to
+// do it: the store is exclusive to one process, so `config import` against a
+// running engine simply refused and told them to write the curl themselves.
+//
+// # Which one it picks
+//
+// An explicit -api is an instruction and skips the store entirely — it is also
+// how this works from a machine that is not the node, where opening the local
+// path would create an empty database nothing ever reads. Otherwise it tries
+// the store, and falls through to the API only on [store.ErrLocked], which
+// means the engine is up, which is precisely when its API is the way in. Every
+// other failure — a missing keyring, an unreadable path — is a broken node,
+// and answering one of those with HTTP would replace an accurate message with
+// a connection refused.
+func importCompany(ctx context.Context, t importTarget, stdout io.Writer) error {
+	if t.path == "" {
+		return errors.New("config import needs a company document to read")
+	}
+	// VALIDATED HERE, WHICHEVER ROUTE IT TAKES. A revision that cannot be
+	// built is one every node in the fleet will refuse, one after another,
+	// each reporting its own failure — a fleet-wide incident from a typo
+	// that could have been caught before it left this machine.
+	company, err := config.LoadCompany(t.path)
+	if err != nil {
+		return err
+	}
+	summary := strings.TrimSpace(t.summary)
+	if summary == "" {
+		summary = "imported from " + t.path
+	}
+
+	boot, err := loadBootstrapForStore(t.bootstrapPath)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(t.apiURL) != "" {
+		return importThroughNode(ctx, boot, t, summary, stdout)
+	}
+
+	cs, closeStore, err := openConfigStore(ctx, t.bootstrapPath)
+	if err != nil {
+		if !errors.Is(err, store.ErrLocked) {
+			return err
+		}
+		// The engine holds its database, so this is the live case rather
+		// than a failure: go through the node that is holding it.
+		return importThroughNode(ctx, boot, t, summary, stdout)
+	}
+	defer closeStore()
+	return importConfig(ctx, cs, t.path, company, summary, stdout)
+}
+
+// importThroughNode PUTs the document at a running node.
+func importThroughNode(ctx context.Context, boot *config.Bootstrap, t importTarget,
+	summary string, stdout io.Writer,
+) error {
+	client, err := newConfigClient(boot, t.apiURL)
+	if err != nil {
+		return err
+	}
+	// THE FILE'S OWN BYTES travel, not a re-encoding of the parsed
+	// document: Tier B's secrets are `${VAR}` pointers stored verbatim, and
+	// the node forms its own opinion of the document anyway.
+	doc, err := os.ReadFile(t.path)
+	if err != nil {
+		return fmt.Errorf("company config %s: %w", t.path, err)
+	}
+	id, epoch, err := client.Import(ctx, doc, summary)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "imported %s as revision %s, active on epoch %d\n",
+		t.path, id, epoch)
+	fmt.Fprintf(stdout, "wrote to %s\n", client.Describe())
+	return nil
 }
