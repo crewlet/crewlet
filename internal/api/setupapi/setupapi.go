@@ -1466,8 +1466,8 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 		"operator", operatorOf(r))
 
 	after := s.company()
-	// THE ADDRESS THIS SURFACE WAS SET UP AGAINST, for the surfaces no pass
-	// ever converges.
+	// THE ADDRESS THIS SURFACE WAS SET UP AGAINST, for the surfaces whose
+	// address only a person can move.
 	//
 	// Where a pass registers the hook, it stamps this on every tick and a
 	// changed base fixes itself. Where nothing does, the registration an
@@ -1475,7 +1475,13 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	// surface reports ready because nothing it can see is wrong, and the
 	// first symptom is an agent that stopped replying. Recorded here so a
 	// later read can say the address moved.
-	if after != nil && !s.passes.Serves(kind) {
+	//
+	// ON THE INGRESS, not on whether this build runs a pass. Datadog has a
+	// pass — it provisions accounts — and its webhook URL is still a field
+	// somebody typed into a settings page, so the pass stamping the base it
+	// ran against reported a healthy surface over an address the third-party
+	// app had never been told about. See [integration.Ingress].
+	if after != nil && kind.Ingress() == integration.IngressOperator {
 		s.recordEndpoint(r.Context(), kind, webhookBase(after, s.resolve))
 	}
 	fresh := state

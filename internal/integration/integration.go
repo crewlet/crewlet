@@ -100,3 +100,60 @@ func (k Kind) Valid() bool { return slices.Contains(Kinds, k) }
 
 // String makes a Kind printable without a conversion at every log site.
 func (k Kind) String() string { return string(k) }
+
+// Ingress says WHO KEEPS a surface's inbound address pointing at this
+// deployment.
+//
+// A company's public base URL moves — a tunnel is restarted, a load balancer
+// is renamed, a deployment moves domain — and what happens next depends
+// entirely on who wrote the address down at the third-party app. This is the
+// distinction that makes [State.Endpoint] mean anything: recorded on a
+// surface the engine re-registers, it is a fact that repairs itself within a
+// tick; recorded on one a person typed into a settings page, it is the only
+// warning anybody gets that deliveries are now going nowhere.
+//
+// Getting it wrong is silent in the direction that matters. A surface whose
+// address only a person can move, stamped as though a pass had moved it,
+// reports a healthy integration while every delivery lands at an address that
+// no longer answers — which is the exact failure the field was added to
+// catch.
+type Ingress string
+
+const (
+	// IngressNone is a surface with no inbound address at all: it is
+	// reached over a connection this engine opens, or it ingests nothing.
+	// A base URL change cannot break it, so a moved address is not a
+	// finding and no address is recorded.
+	IngressNone Ingress = "none"
+
+	// IngressEngine is a surface whose hook a pass registers and
+	// re-registers. A moved base is converged on the next tick, and the
+	// address recorded on each pass is where that registration points.
+	IngressEngine Ingress = "engine"
+
+	// IngressOperator is a surface whose address a PERSON pasted into the
+	// third-party app's own settings, because the third-party app offers no
+	// way for this engine to write it. Nothing converges it: the recorded
+	// address is whatever it was at the last setup, and when the base moves
+	// away from it only the operator can put it right.
+	IngressOperator Ingress = "operator"
+)
+
+// Ingress reports who maintains this surface's inbound address.
+//
+// GitHub, GitLab, Jira and Confluence all expose an API for registering a
+// hook, and each one's pass does. Slack's Request URL and Datadog's webhook
+// URL are fields on a settings page with no write API behind them, so both
+// hold whatever address a person last typed. Mattermost is reached over a
+// websocket this engine dials out on and Atlassian only ever provisions
+// identities, so neither has an inbound address to go stale.
+func (k Kind) Ingress() Ingress {
+	switch k {
+	case KindGitHub, KindGitLab, KindJira, KindConfluence:
+		return IngressEngine
+	case KindSlack, KindDatadog:
+		return IngressOperator
+	default:
+		return IngressNone
+	}
+}

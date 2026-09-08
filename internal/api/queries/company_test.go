@@ -1249,11 +1249,15 @@ func TestAMovedPublicBaseIsReportedPerSurface(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
 	cfg.Integrations.PublicBaseURL = "https://now.example.com"
+	// SLACK IS THE SURFACE THIS IS FOR: its Request URL is a field a person
+	// typed at the third-party app, so nothing converges it and the
+	// comparison is the only thing that can say the address moved.
+	cfg.Integrations.Slack = &config.Slack{}
 	body := asMap(t, answer(t, queries.Sources{
 		Company: func() *config.Company { return cfg },
 		Reconciles: func(context.Context) []integration.State {
 			return []integration.State{
-				{Kind: integration.KindMattermost, Endpoint: "https://old.example.com"},
+				{Kind: integration.KindSlack, Endpoint: "https://old.example.com"},
 				{Kind: integration.KindGitLab, Endpoint: "https://now.example.com"},
 			}
 		},
@@ -1265,11 +1269,18 @@ func TestAMovedPublicBaseIsReportedPerSurface(t *testing.T) {
 		entry, _ := row.(map[string]any)
 		byKind[entry["key"].(string)] = entry
 	}
-	if got := byKind["mattermost"]["endpoint_current"]; got != false {
-		t.Errorf("mattermost endpoint_current = %v, want false: it is registered elsewhere", got)
+	if got := byKind["slack"]["endpoint_current"]; got != false {
+		t.Errorf("slack endpoint_current = %v, want false: it is registered elsewhere", got)
 	}
-	if got := byKind["mattermost"]["endpoint"]; got != "https://old.example.com" {
-		t.Errorf("mattermost endpoint = %v, want the address it is registered at", got)
+	if got := byKind["slack"]["endpoint"]; got != "https://old.example.com" {
+		t.Errorf("slack endpoint = %v, want the address it is registered at", got)
+	}
+	// AND THE ROW CARRYING ONLY THAT ADDRESS IS NOT A REPORT. It was written
+	// by the setup write, not by a pass, and rendering it as one gave the
+	// card an EMPTY phase as its status: Slack drew no state at all, on the
+	// one surface whose moved address only a person can put right.
+	if got := byKind["slack"]["reconcile"]; got != nil {
+		t.Errorf("slack reconcile = %v, want null: no pass has reported on it", got)
 	}
 	if got := byKind["gitlab"]["endpoint_current"]; got != true {
 		t.Errorf("gitlab endpoint_current = %v, want true", got)

@@ -228,9 +228,15 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		// Before the reconcile loop existed this answer had no honest
 		// form, which is why the doc comment above still says it never
 		// infers health: it does not, and now it does not have to.
+		//
+		// AND A ROW IS NOT A REPORT. The setup write stamps an address on
+		// a surface no pass converges, which leaves a row with no phase in
+		// it; rendered as a report, that empty phase became the card's
+		// status and drew Slack with no state at all while its address had
+		// moved. [integration.State.Observed] is the test.
 		if !reconcileKnown {
 			row["reconcile"] = nil
-		} else if state, checked := reconciled[kind]; checked {
+		} else if state, checked := reconciled[kind]; checked && state.Observed() {
 			row["reconcile"] = reconcileRow(state)
 		} else {
 			row["reconcile"] = nil

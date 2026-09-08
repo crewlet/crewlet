@@ -124,6 +124,21 @@ func (s State) Reported() Report {
 	return s.Report
 }
 
+// Observed reports whether a pass has ever said anything about this surface.
+//
+// A ROW IS NOT A REPORT. Two writers put rows in this store: a pass, which
+// records a phase, and the setup write that stamps [State.Endpoint] for a
+// surface no pass converges (internal/api/setupapi). The second leaves a row
+// carrying one address and nothing else, and a reader that treats the row's
+// existence as "the loop has reported on this" renders an EMPTY phase as the
+// integration's status — which on the dashboard is a card with no state on it
+// at all, on precisely the surfaces whose state a person has to act on.
+//
+// The phase is the test rather than a flag of its own, because a phase is
+// what a report IS: every writer that has observed anything sets one, and a
+// value a newer node wrote is still a phase to a reader that cannot name it.
+func (s State) Observed() bool { return s.Reported().Phase != "" }
+
 // TearingDown reports whether this surface is being taken away.
 //
 // Reads the INTENT rather than the phase, because the two are not the same

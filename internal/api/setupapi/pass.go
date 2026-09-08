@@ -239,7 +239,7 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 }
 
 // recordEndpoint remembers the address a surface was set up against, for a
-// surface this build runs no pass for.
+// surface whose address only a person can change ([integration.IngressOperator]).
 //
 // A ROW WITH NOTHING ELSE IN IT, which is the honest shape: no pass has
 // observed this surface, so there is no phase, no finding and no attempt to
