@@ -710,12 +710,15 @@ func runEngine(args []string, stderr io.Writer) error {
 	file, given := onePositional(fs, file)
 	if given > 1 {
 		// EVERY FLAG run REGISTERS, because this is the only synopsis an
-		// operator sees at the moment they got the arguments wrong. It
-		// listed five of the eight, so the three logging flags — the ones
-		// most often reached for while diagnosing exactly this — were
-		// invisible here and documented only in the reference.
+		// operator sees at the moment they got the arguments wrong, and a
+		// flag missing from it is one they do not reach for. It has been
+		// short twice: first the three logging flags, which are what
+		// somebody diagnosing exactly this reaches for, and then
+		// -import-company, which is the flag an operator confused about
+		// which Tier B document wins most needs to be told exists.
 		fmt.Fprintln(stderr, "usage: crewlet run [<config.yaml>] "+
-			"[-company <company.yaml>] [-log-level …] [-log-format …] [-debug] "+
+			"[-company <company.yaml> | -import-company <company.yaml>] "+
+			"[-log-level …] [-log-format …] [-debug] "+
 			"[-roles …] [-api-host …] [-api-port …]")
 		return errors.New("name at most one config document")
 	}
