@@ -278,6 +278,13 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 		Credentials: b.Stream.Credentials,
 		Token:       b.Stream.Token,
 		TLS:         streamTLS(b.Stream.TLS),
+
+		// Through the accessors for the same reason EventRetention goes
+		// through one: the field is a STRING with two meanings, and a
+		// second place deciding which is which is a second place to get
+		// "always" wrong.
+		SyncAlways:   b.Stream.SyncAlways(),
+		SyncInterval: b.Stream.SyncInterval(),
 	}
 	// Through the accessor, so the seconds-to-duration conversion happens
 	// once at the edge rather than being re-derived here — one slip from

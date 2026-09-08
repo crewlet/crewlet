@@ -209,15 +209,36 @@ func embeddedOptions(cfg Config) (*server.Options, string, error) {
 		// turns and lease renewals by a 15-second heartbeat, not by a
 		// throughput workload.
 		//
-		// A CLUSTERED member does not, because the quorum IS the
-		// durability: a publish returns once a majority holds it, so the
-		// host that loses power loses nothing its peers cannot replay.
-		// nats-server draws the same line itself — it enables the
-		// async-flush path for a replicated stream only when SyncAlways is
-		// off (server/filestore.go) — so forcing it on every member would
-		// spend an fsync per write to protect a copy two others already
-		// have.
-		SyncAlways: cfg.Replicas <= 1,
+		// A CLUSTERED member USED TO BE EXEMPTED HERE, on the argument
+		// that the quorum is the durability: a publish returns once a
+		// majority holds it, so a host that loses power loses nothing its
+		// peers cannot replay. That is true of ONE failure class and the
+		// inference covered five.
+		//
+		// A single host losing power, a kernel panic, an orderly
+		// shutdown: the quorum survives all three and the exemption is
+		// right. A RACK or a ZONE losing power takes a majority
+		// together, and a correlated power loss takes every member —
+		// and a three-node fleet on one rack, which is what a first
+		// production deployment looks like, is exposed to both by
+		// construction. Against those the quorum is three copies of the
+		// same unflushed page cache.
+		//
+		// So the operator decides and the engine stops guessing.
+		// nats-server's own async-flush path is gated on this too — it
+		// enables it for a replicated stream only when SyncAlways is off
+		// (server/filestore.go) — but that is an OPTIMISATION GATE
+		// rather than an argument about durability: the raft WAL under a
+		// replicated stream sets SyncAlways for itself regardless
+		// (server/jetstream_cluster.go:2982-2983), which is the server
+		// saying that consensus state is worth an fsync even when the
+		// stream's own data is not.
+		SyncAlways: cfg.SyncAlways,
+
+		// AND WHEN THE FSYNC IS DECLINED, the window is named rather than
+		// inherited. Unset, the file store flushes on a two-minute
+		// interval, which is a recovery-point objective nobody chose.
+		SyncInterval: cfg.SyncInterval,
 
 		// THE ENGINE OWNS THE PROCESS SIGNALS. Left false, Server.Start
 		// installs its own SIGINT/SIGTERM handler, which shuts the

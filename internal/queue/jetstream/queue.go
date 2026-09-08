@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -65,6 +66,35 @@ type Config struct {
 	// where it is what makes a publish quorum-durable before Publish
 	// returns.
 	Replicas int
+
+	// SyncAlways makes the embedded server fsync every write before
+	// acknowledging it, at every replica count.
+	//
+	// DECIDED BY THE OPERATOR rather than inferred from Replicas, and the
+	// inference it replaces was wrong in the case that matters. "The
+	// quorum IS the durability" holds for a majority that survives, and
+	// the five failure classes are not one: a single host losing power
+	// (quorum survives, nothing lost), a rack or a zone losing power
+	// (a majority can go together), an orderly shutdown, a kernel panic
+	// (page cache lost, disk intact), and a correlated power loss across
+	// every member — which is the one an fsync-per-write is the only
+	// defence against, and the one a same-rack three-node fleet is
+	// exposed to by construction.
+	//
+	// It is also a claim about what Publish RETURNING means. A caller that
+	// treats an ack as durable is right under this setting and optimistic
+	// without it.
+	SyncAlways bool
+
+	// SyncInterval is how often the file store flushes when SyncAlways is
+	// off. Zero takes nats-server's own default.
+	//
+	// SET EXPLICITLY rather than left to the server, because the default
+	// is two minutes (server/filestore.go defaultSyncInterval) and two
+	// minutes of acked-but-unflushed writes is a recovery-point objective
+	// nobody chose. An operator who declines the fsync per write is
+	// choosing a window, and this is the field that names it.
+	SyncInterval time.Duration
 
 	// EventRetention bounds the audit/event stream.
 	EventRetention time.Duration
@@ -341,14 +371,35 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 		Replicas:          max(q.cfg.Replicas, 1),
 		MaxAge:            spec.maxAge,
 		MaxMsgsPerSubject: int64(spec.maxPerSubject),
+		MaxBytes:          spec.maxBytes,
+		Discard:           spec.discard,
+		Duplicates:        spec.duplicates,
+		DenyDelete:        spec.denyDelete,
+		AllowRollup:       spec.allowRollup,
+		AllowDirect:       spec.allowDirect,
+		MirrorDirect:      spec.mirrorDirect,
 	}
 	if spec.maxPerSubject == 0 {
 		// The client spells "unlimited" as -1; a zero would be read as a
 		// stream that retains nothing at all.
 		config.MaxMsgsPerSubject = -1
 	}
-	if err := q.createStream(ctx, config); err != nil {
-		return fmt.Errorf("ensure stream %s: %w", spec.name, err)
+	if spec.maxBytes == 0 {
+		config.MaxBytes = -1
+	}
+	// CREATE IF ABSENT, OBSERVE IF PRESENT.
+	//
+	// A running stream's configuration has ONE writer and a booting node is
+	// not it. This used to apply this node's own spec on every boot, which
+	// is N nodes writing one shared configuration from N possibly-different
+	// Tier A files, resolved by boot order: a node that came up late with a
+	// smaller ceiling silently lowered one an operator had just raised, and
+	// it did so with Tier A UNCHANGED, because max(M, M) is M.
+	//
+	// So the writer is removed rather than guarded, and what remains is a
+	// comparison. See observeStream for what each class of difference does.
+	if err := q.createOrObserveStream(ctx, spec, config); err != nil {
+		return err
 	}
 
 	q.mu.Lock()
@@ -358,6 +409,131 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 	q.streams[spec.name] = struct{}{}
 	q.mu.Unlock()
 	return nil
+}
+
+// createOrObserveStream creates the stream when it is absent and COMPARES when
+// it is present, writing nothing either way to a stream that already exists.
+//
+// The create races: two nodes booting together both find nothing and both
+// create. That is fine and deliberate — the loser gets "stream name already in
+// use", which is not an error here but the other node having won, so it falls
+// through to the same comparison the observe path makes.
+func (q *Queue) createOrObserveStream(
+	ctx context.Context, spec streamSpec, config jetstream.StreamConfig,
+) error {
+	info, err := q.js.Stream(ctx, spec.name)
+	switch {
+	case err == nil:
+		return q.observeStream(spec, config, info)
+	case !errors.Is(err, jetstream.ErrStreamNotFound):
+		return fmt.Errorf("ensure stream %s: %w", spec.name, err)
+	}
+
+	if err := q.createStream(ctx, config); err != nil {
+		if !errors.Is(err, jetstream.ErrStreamNameAlreadyInUse) {
+			return fmt.Errorf("ensure stream %s: %w", spec.name, err)
+		}
+		// A PEER WON THE RACE. Read what it created and hold it to the
+		// same comparison — the alternative is trusting a stream this
+		// node never looked at because it lost by milliseconds.
+		info, err = q.js.Stream(ctx, spec.name)
+		if err != nil {
+			return fmt.Errorf("ensure stream %s: read back after a lost "+
+				"creation race: %w", spec.name, err)
+		}
+		return q.observeStream(spec, config, info)
+	}
+	return nil
+}
+
+// observeStream compares a running stream against this node's spec and decides
+// per FIELD CLASS what the difference means. It writes nothing.
+func (q *Queue) observeStream(
+	spec streamSpec, want jetstream.StreamConfig, live jetstream.Stream,
+) error {
+	got := live.CachedInfo().Config
+	unsafe := safetyDifferences(want, got)
+	if len(unsafe) > 0 {
+		// REFUSES TO RUN. Every field here changes what a message on this
+		// stream means, so a node that carried on would be publishing
+		// durable records into a stream that drops them, replays them at
+		// wall-clock speed, or lets any client delete them.
+		return fmt.Errorf(
+			"jetstream: the running stream %q does not match this node's "+
+				"configuration on %d safety field(s): %s. Nothing here is "+
+				"applied to a stream that already exists — one node writing "+
+				"a shared stream's configuration at boot is how a ceiling an "+
+				"operator raised gets silently lowered — so this is an "+
+				"operator gesture: align the Tier A of every node, or resize "+
+				"the stream deliberately",
+			spec.name, len(unsafe), strings.Join(unsafe, "; "))
+	}
+
+	// DURABILITY: below the configured factor refuses; equal or higher is
+	// fine, so an R1 development node against an R3 stream starts.
+	if got.Replicas < want.Replicas {
+		return fmt.Errorf(
+			"jetstream: the running stream %q is replicated %dx and this node "+
+				"is configured for %dx: an acknowledged publish would be "+
+				"proving fewer copies than stream.replicas promises",
+			spec.name, got.Replicas, want.Replicas)
+	}
+
+	// CAPACITY: reported, never applied.
+	for _, d := range capacityDifferences(want, got) {
+		q.log.Info("jetstream_stream_capacity_differs", "stream", spec.name,
+			"difference", d,
+			"detail", "reported rather than applied: a stream's ceiling is "+
+				"changed by an operator gesture, not by whichever node booted "+
+				"last")
+	}
+	return nil
+}
+
+// safetyDifferences lists the safety-class fields on which a running stream
+// differs from this node's spec, each rendered as "field: got X, want Y".
+func safetyDifferences(want, got jetstream.StreamConfig) []string {
+	var out []string
+	add := func(field string, gotV, wantV any) {
+		if fmt.Sprint(gotV) != fmt.Sprint(wantV) {
+			out = append(out, fmt.Sprintf("%s: running %v, this node %v", field, gotV, wantV))
+		}
+	}
+	add("subjects", got.Subjects, want.Subjects)
+	add("retention", got.Retention, want.Retention)
+	add("max_age", got.MaxAge, want.MaxAge)
+	add("max_msgs_per_subject", got.MaxMsgsPerSubject, want.MaxMsgsPerSubject)
+	add("discard", got.Discard, want.Discard)
+	add("deny_delete", got.DenyDelete, want.DenyDelete)
+	add("allow_rollup", got.AllowRollup, want.AllowRollup)
+	add("allow_direct", got.AllowDirect, want.AllowDirect)
+	add("mirror_direct", got.MirrorDirect, want.MirrorDirect)
+	add("storage", got.Storage, want.Storage)
+	return out
+}
+
+// capacityDifferences lists the capacity-class fields, which are reported.
+func capacityDifferences(want, got jetstream.StreamConfig) []string {
+	var out []string
+	if got.MaxBytes != want.MaxBytes {
+		out = append(out, fmt.Sprintf("max_bytes: running %d, this node %d",
+			got.MaxBytes, want.MaxBytes))
+	}
+	if got.Duplicates != want.Duplicates {
+		out = append(out, fmt.Sprintf("duplicates: running %v, this node %v",
+			got.Duplicates, want.Duplicates))
+	}
+	return out
+}
+
+// EnsureDomainStream provisions the stream a statelog domain declares.
+//
+// The generic path, and it is deliberately not a new entry in engineStreams:
+// a domain's stream arrives WITH the domain, so the engine's own stream table
+// stays the list of streams the engine itself defines. It is also what lets a
+// test stand up a throwaway log stream without touching that table.
+func (q *Queue) EnsureDomainStream(ctx context.Context, spec DomainStream) error {
+	return q.ensureStream(ctx, spec.spec())
 }
 
 // streamFor resolves the stream carrying a subject, provisioning it when the

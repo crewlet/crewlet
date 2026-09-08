@@ -399,6 +399,43 @@ draining, and rolling upgrades. The two things that bite hardest:
 > cluster's to provide rather than the engine's to count; see
 > [An external NATS server](#an-external-nats-server).
 
+### What an acknowledged publish has reached
+
+**`stream.sync` decides, and it defaults to `always` at every replica count.**
+Every write is fsynced before the broker acknowledges it, so a publish that
+returned is on the disk of the member that took it — which is what the
+`EventQueue` contract's "durable" means, and what the company's own records
+depend on. The cost is one fsync per write: **1–3 ms on NVMe**, and 15–40 ms
+at the 99th percentile on a network-attached volume.
+
+**It is deliberately not inferred from `replicas`.** The tempting inference —
+a replicated member has a quorum instead of a disk, so it can skip the fsync —
+is true of *one* failure class and there are five:
+
+| What fails | Does a quorum survive it? |
+|---|---|
+| One host loses power | Yes — the other two hold the write |
+| The process is killed, or panics | Yes — the page cache is the kernel's, and the kernel lives |
+| An orderly shutdown | Yes — the store is flushed on the way out |
+| A rack or an availability zone loses power | **No** — a majority can go together |
+| Correlated power loss across every member | **No** — three copies of one unflushed page cache is one copy |
+
+A three-node fleet in one rack, which is what a first production deployment
+usually looks like, is exposed to the bottom two rows by construction.
+
+**Declining the fsync is a legitimate trade and it is made explicitly.** Set
+`sync` to a duration — `30s` — and that duration is the window: the most an
+acknowledged write may be behind the disk. Tier A refuses the value in the
+three places where it would be recorded and then not honoured:
+
+- **against `stream.type: nats`**, because the field configures the embedded
+  server's file store and an external cluster stores its own data (set
+  `sync_interval` on that cluster instead);
+- **below `replicas: 3`**, because the disk being traded away is the only copy
+  there is, so the window buys nothing;
+- **on a cluster whose peers are all on this host**, because the majority the
+  window trades for shares one power supply and one page cache.
+
 Give each node a distinct id — `node.id` in the Tier A file, or the
 `CREWLET_NODE_ID` environment variable, which is how a container orchestrator
 injects a pod name without templating the config. Two nodes sharing an id
