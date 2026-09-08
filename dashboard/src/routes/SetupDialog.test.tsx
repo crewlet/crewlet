@@ -1465,10 +1465,13 @@ test("an app the engine cannot provision says so before the blocks", () => {
   expect(screen.getByText(/Configure a dedicated seat for every agent below/)).toBeDefined();
 });
 
-// EACH AGENT'S OWN ADDRESS, INSIDE ITS OWN BLOCK. A per-seat app has a
-// delivery route per agent, so one banner at the top of the dialog could only
-// have named whose it was in prose.
-test("every agent's block carries that agent's delivery address", () => {
+// THE DELIVERY ADDRESS IS IN THE MANIFEST, not beside it.
+//
+// A per-seat app's request URL is part of the app definition, so pasting the
+// manifest sets it. A banner telling somebody to paste the same address by
+// hand is a second instruction for a step the first one already did, and two
+// instructions for one step is how one of them goes stale.
+test("an agent's block does not ask for its delivery address twice", () => {
   const { container } = render(
     <SetupDialog
       sections={perSeatSections()}
@@ -1478,9 +1481,8 @@ test("every agent's block carries that agent's delivery address", () => {
     />,
   );
   const blocks = [...container.querySelectorAll("details.int-seat-form")];
-  expect(blocks[0]!.textContent).toContain("/webhooks/slack/sre-lead");
-  expect(blocks[0]!.textContent).not.toContain("/webhooks/slack/builder");
-  expect(blocks[1]!.textContent).toContain("/webhooks/slack/builder");
+  expect(blocks[0]!.textContent).not.toContain("Paste that address");
+  expect(blocks[0]!.textContent).not.toContain("/webhooks/slack/sre-lead");
 });
 
 // A SEAT'S OPTIONAL FIELD STAYS WITH ITS SEAT.

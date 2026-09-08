@@ -766,25 +766,11 @@ export function SetupDialog({
                 </Badge>
               </summary>
               <div className="int-seat-fields">
-                {/* THIS AGENT'S OWN ADDRESS, inside this agent's own block.
-                    A per-seat app has a delivery route per agent, so one
-                    banner at the top of the dialog could only have named
-                    whose it was in prose. */}
-                {seat?.public_url && !section.tool.can_provision && (
-                  <div className="banner neutral">
-                    <Icon name="link" size="sm" />
-                    <span className="col" style={{ gap: 4 }}>
-                      <span>
-                        Deliveries for {heading} arrive at{" "}
-                        <code className="inline">{seat.public_url}</code>
-                      </span>
-                      <span className="t-caption">
-                        Paste that address into this agent&apos;s own {section.tool.key} app
-                        settings. Every agent has its own.
-                      </span>
-                    </span>
-                  </div>
-                )}
+                {/* NO DELIVERY-ADDRESS BANNER. This agent's route is IN the
+                    manifest below, as its request URL, so pasting the app
+                    definition sets it: a banner telling somebody to paste the
+                    same address by hand is a second instruction for a step
+                    the first one already did. */}
                 {/* THE APP THIS AGENT IS BUILT FROM, above the two boxes
                     that are filled in from it, because it is the first step
                     and the fields describe what comes back from it.
