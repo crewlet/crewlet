@@ -1460,3 +1460,48 @@ test("the roster is read again when the tab comes back", async () => {
   expect(screen.getByTestId("probe").textContent).toBe("ready:github");
   await waitFor(() => expect(calls.length).toBe(2));
 });
+
+// A TOOL NOTHING CONVERGES IS NOT PERPETUALLY CONNECTING.
+//
+// "The loop has not reported yet" is a window for a surface with a pass and a
+// permanent claim for one without. Slack's apps are created by hand, so the
+// loop registers it for teardown alone and writes no status row for it ever:
+// the card sat on Connecting in amber for as long as it was configured, beside
+// its own roster reporting every agent ready. One screen, two answers, and the
+// wrong one was the louder.
+test("a tool with no provisioning pass reports from what can be seen", () => {
+  const noPass: SetupToolState = {
+    key: "slack",
+    configured: true,
+    enabled: true,
+    satisfied: true,
+    can_provision: false,
+    requirements: [],
+  };
+  const healthy = rollUp(
+    slack,
+    rowsOf({ key: "slack", configured: true, enabled: true, routes: true }),
+    [noPass],
+  );
+  expect(healthy.tag).toBe("Connected");
+  expect(healthy.tone).toBe("positive");
+
+  // AND AN INGRESS FAULT STILL OUTRANKS IT. A route that turns no delivery
+  // into work for a seat is not connected, whoever converges it.
+  const deaf = rollUp(
+    slack,
+    rowsOf({ key: "slack", configured: true, enabled: true, routes: false }),
+    [noPass],
+  );
+  expect(deaf.tag).toBe("Action needed");
+  expect(deaf.tone).toBe("caution");
+
+  // A TOOL THAT DOES HAVE A PASS KEEPS THE WINDOW, because for it the loop
+  // really is about to report.
+  const withPass = rollUp(
+    slack,
+    rowsOf({ key: "slack", configured: true, enabled: true, routes: true }),
+    [{ ...noPass, can_provision: true }],
+  );
+  expect(withPass.tag).toBe("Connecting");
+});

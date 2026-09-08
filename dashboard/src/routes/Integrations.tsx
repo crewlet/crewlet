@@ -298,7 +298,11 @@ function presentSurfaces(entry: Entry, rows: Map<string, IntegrationRow>): Prese
  * tool whose every delivery is refused is not connected, and the status line
  * is what says so.
  */
-export function rollUp(entry: Entry, rows: Map<string, IntegrationRow>): EntryState {
+export function rollUp(
+  entry: Entry,
+  rows: Map<string, IntegrationRow>,
+  tools: SetupToolState[] = [],
+): EntryState {
   const present = presentSurfaces(entry, rows);
   if (present.length === 0) {
     // NO BADGE. The Connect button is the whole message.
@@ -371,6 +375,24 @@ export function rollUp(entry: Entry, rows: Map<string, IntegrationRow>): EntrySt
   }
   if (present.every((p) => p.row.enabled === false)) {
     return { tag: "Paused", tone: "neutral", outline: true };
+  }
+  // A SURFACE NO PASS CONVERGES NEVER REPORTS, so "the loop has not got to
+  // it yet" is a permanent claim about it rather than a window.
+  //
+  // Slack's apps are created by hand, so the loop registers it for teardown
+  // alone and writes no status row for it, ever. The card sat on Connecting
+  // for as long as it was configured, in amber, beside its own roster
+  // reporting every agent ready: one screen, two answers, and the wrong one
+  // was the louder.
+  //
+  // Reported from what this screen CAN see instead, which is the same ingress
+  // the phase branch above reads: a route that refuses every delivery, or one
+  // that turns none of them into work for a seat, is not connected, and
+  // anything else is.
+  if (tools.length > 0 && !tools.some((t) => t.can_provision)) {
+    return ingress
+      ? { tag: "Action needed", tone: "caution", outline: false }
+      : { tag: "Connected", tone: "positive", outline: false };
   }
   // CONFIGURED, AND THE LOOP HAS NOT REPORTED YET. That is a window of one
   // reconcile interval after connecting, not a resting state, so the word is
@@ -919,13 +941,15 @@ export function EntryRow({
   onDisconnect?: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const state = rollUp(entry, rows);
   const present = presentSurfaces(entry, rows);
   const absent = present.length === 0;
   // BY KEY, because a per-seat app contributes one section per agent and
   // they all carry the same tool. Counting it once per section made a
   // roster of one agent render four rows on the Atlassian card.
   const tools = [...new Map((sections ?? []).map((s) => [s.tool.key, s.tool])).values()];
+  // THE TAG NEEDS THEM TOO: whether anything converges this tool decides
+  // whether a missing reconcile row is a window or a resting state.
+  const state = rollUp(entry, rows, tools);
   const action = actionFor(state, tools, !absent);
   // ONE ROW PER AGENT, whatever the card is made of.
   //
