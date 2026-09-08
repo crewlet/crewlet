@@ -1601,3 +1601,28 @@ test("a surface registered at a moved address needs action", () => {
   );
   expect(unknown.tag).not.toBe("Action needed");
 });
+
+// A ROW CARRYING ONLY AN ADDRESS IS NOT A REPORT.
+//
+// The engine's setup write stamps the address a surface was set up against on
+// a surface no pass converges, which leaves a row with no phase in it. Read
+// as a report, the empty phase became the card's tag: the Slack card showed
+// NO STATE AT ALL, on precisely the surface whose moved address only a person
+// can put right.
+test("a phaseless row does not become an empty tag", () => {
+  const slackEntry = CATALOG.find((e) => e.key === "slack")!;
+  const state = rollUp(
+    slackEntry,
+    rowsOf({
+      key: "slack",
+      configured: true,
+      enabled: true,
+      endpoint: "https://old.example.com",
+      endpoint_current: false,
+      reconcile: { phase: "" },
+    }),
+    [{ key: "slack", configured: true, can_provision: false } as never],
+  );
+  expect(state.tag).toBe("Action needed");
+  expect(state.tone).toBe("caution");
+});

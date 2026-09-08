@@ -1073,6 +1073,10 @@ code.inline {
   border-radius: var(--r-xs);
   padding: 1px 4px;
   color: var(--text-secondary);
+  /* A URL IS ONE UNBREAKABLE WORD to a line breaker, and these chips carry
+     public base URLs. Without this the chip is pushed whole onto its own
+     line and the sentence around it is torn into fragments. */
+  overflow-wrap: anywhere;
 }
 /* A REFUSAL'S PROBLEMS, one per line.
  *

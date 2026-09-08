@@ -349,8 +349,13 @@ export function rollUp(
     };
   }
 
+  // A ROW WITH NO PHASE IS NOT A REPORT, and reading one as the card's status
+  // drew an EMPTY tag: the phase became the label, the label was "", and the
+  // Slack card carried no state at all while its address had moved. The
+  // engine no longer sends such a row (internal/api/queries/company.go), and
+  // this is the same rule on the client, for a node that still does.
   const worst = present
-    .filter((p) => p.row.reconcile)
+    .filter((p) => p.row.reconcile?.phase)
     .sort((a, b) => distance(a.row.reconcile!.phase) - distance(b.row.reconcile!.phase))[0];
   if (worst?.row.reconcile) {
     const { phase } = worst.row.reconcile;
@@ -561,7 +566,6 @@ export function disconnectOrder(
 }
 
 /**
- * What one surface has to report, or nothing./**
  * What one surface has to report, or nothing.
  *
  * A CARD'S BODY IS ITS AGENTS. It used to open with a row per surface —
@@ -637,13 +641,21 @@ function SurfaceRow({
         {row.enabled === false && <Badge outline>paused</Badge>}
       </div>
       {/* BOTH ADDRESSES, because the fix is to replace one with the other
-          at the third-party app and a reader cannot do that from a badge. */}
+          at the third-party app and a reader cannot do that from a badge.
+
+          ONE SENTENCE IN ONE ELEMENT. The note's text is a flex column, so
+          every text node and every code chip beside it became a row of its
+          own: one sentence was drawn as five stacked fragments with the two
+          addresses on lines by themselves. */}
       {row.endpoint_current === false && (
         <div className="int-row-note">
           <span className="int-row-note-text">
-            Registered at <code className="inline">{row.endpoint}</code>. This deployment is
-            reachable at <code className="inline">{base ?? "no public address"}</code> now, so
-            update it where the app is configured.
+            <span>
+              The event subscription was registered with{" "}
+              <code className="inline">{row.endpoint}</code>, but this engine now listens on{" "}
+              <code className="inline">{base ?? "no public address"}</code>. Update the address in{" "}
+              {surface.name} to keep receiving events.
+            </span>
           </span>
         </div>
       )}
@@ -1567,7 +1579,6 @@ export function Integrations() {
                     // for every agent.
                     appPath: sectionsFor(entry, setup.byKey).find((s) => s.tool.manage_path)?.tool
                       .manage_path,
-
                   })
                 }
               />
