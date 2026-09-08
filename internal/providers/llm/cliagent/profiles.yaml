@@ -162,7 +162,7 @@ claude-code:
 codex:
   binary: codex
   vendor: openai
-  written_for: "Codex CLI 0.5x (`codex --version`)"
+  written_for: "Codex CLI 0.153.x (`codex --version`)"
   version_args: ["--version"]
   # read-only sandbox for the same reason as Claude's tool denials, and
   # --skip-git-repo-check because the per-call scratch directory is
@@ -216,7 +216,7 @@ codex:
 gemini-cli:
   binary: gemini
   vendor: google
-  written_for: "Gemini CLI 0.1x (`gemini --version`)"
+  written_for: "Gemini CLI 0.58.x (`gemini --version`)"
   version_args: ["--version"]
   complete_args: ["--output-format", "json", "--approval-mode", "default"]
   # Gemini takes its tool policy from settings.json in its config directory,
@@ -259,7 +259,7 @@ gemini-cli:
 qwen-code:
   binary: qwen
   vendor: openai
-  written_for: "Qwen Code 0.1x (`qwen --version`), a Gemini CLI fork"
+  written_for: "Qwen Code 0.23.x (`qwen --version`), a Gemini CLI fork"
   version_args: ["--version"]
   complete_args: ["--output-format", "json", "--approval-mode", "default"]
   # A Gemini CLI fork: same settings shape, same tool names, its own directory.
@@ -268,6 +268,22 @@ qwen-code:
     - path: .qwen/settings.json
       content: '{"tools":{"exclude":["run_shell_command","read_file","write_file","edit_file","replace","glob","grep","search_file_content","list_directory","read_many_files","save_memory"],"allowed":["web_fetch","web_search","google_web_search"]},"excludeTools":["run_shell_command","read_file","write_file","edit_file","replace","glob","grep","search_file_content","list_directory","read_many_files","save_memory"]}'
   model_args: ["--model", "{model}"]
+  # THE ONE PLACE THIS FORK HAS DIVERGED FROM ITS PARENT. Gemini CLI has no
+  # system-prompt flag at all (checked against 0.58.0); Qwen Code 0.23.0 has
+  # both --system-prompt and --append-system-prompt. Replacing rather than
+  # appending, for the reason the claude-code profile records: an appended
+  # seat identity sits underneath the vendor's own coding-agent persona,
+  # which then keeps introducing itself over the top of the seat.
+  #
+  # INLINE, AND ONLY BECAUSE THERE IS NO FILE VARIANT — this CLI takes a
+  # string and nothing else. That puts the seat's system prompt in argv,
+  # where /proc/<pid>/cmdline makes it readable by every account on the
+  # machine, and this profile sends its PROMPT on stdin, so the exposure is
+  # new rather than inherited. Worth it for a single-tenant engine host and
+  # not obviously worth it on a shared one: an operator who cannot accept it
+  # sets `cli.overrides.system_prompt_args: []` and the prompt goes back to
+  # being the transcript's first section.
+  system_prompt_args: ["--system-prompt", "{system}"]
   prompt_mode: stdin
   output: json
   text_paths: [["response"]]
@@ -287,7 +303,7 @@ qwen-code:
 opencode:
   binary: opencode
   vendor: anthropic
-  written_for: "OpenCode 0.4x (`opencode --version`)"
+  written_for: "OpenCode 1.18.x (`opencode --version`)"
   version_args: ["--version"]
   complete_args: ["run", "--print-logs=false"]
   # OpenCode takes its tool policy from opencode.json under XDG_CONFIG_HOME,
@@ -338,7 +354,7 @@ opencode:
 cursor-agent:
   binary: cursor-agent
   vendor: anthropic
-  written_for: "Cursor Agent 2.x (`cursor-agent --version`)"
+  written_for: "Cursor Agent 2026.09.x (`cursor-agent --version`), which versions by DATE"
   version_args: ["--version"]
   complete_args: ["-p", "--output-format", "json"]
   # Cursor reads a permissions block from the project's .cursor/cli.json —
@@ -375,7 +391,7 @@ cursor-agent:
 copilot:
   binary: copilot
   vendor: openai
-  written_for: "GitHub Copilot CLI 0.3x (`copilot --version`)"
+  written_for: "GitHub Copilot CLI 1.0.x (`copilot --version`)"
   version_args: ["--version"]
   # The tool flags come BEFORE -p, so nothing here can be read as the prompt,
   # which is appended last. Denies win over allows; the web tools are
@@ -418,23 +434,42 @@ copilot:
 grok:
   binary: grok
   vendor: openai
-  written_for: "Grok CLI 0.1x (`grok --version`)"
+  # xAI'S OWN CLI (github.com/xai-org/grok-build, installed from x.ai/cli),
+  # NOT the same-named community package on npm. Both put a `grok` on PATH
+  # and they are different programs: this profile's `.grok/auth.json`,
+  # `--sandbox` and `-p` are the official one's, and the npm build has none
+  # of them. If `grok --version` prints a 0.0.x, that is the other one.
+  written_for: "Grok Build CLI 1.0.x (`grok --version`) — xAI's OWN, from x.ai/cli"
   version_args: ["--version"]
   complete_args: ["-p"]
-  # No per-tool denial exists on this CLI, and its --sandbox flag restricts
-  # the network along with the filesystem — which would cut the web tools
-  # this backend keeps on. So the stance is declared honestly and
+  # PER-TOOL DENIAL NOW EXISTS on this CLI and this profile does not use it
+  # yet: 1.0.13 has --disallowed-tools (remove built-ins, comma-separated),
+  # --tools (an allowlist) and --deny. Wiring one needs the built-in tool
+  # NAMES, which the CLI validates only after a login and does not print in
+  # --help — so they are not established here, and guessing them on a
+  # security boundary would produce a filter that looks live and denies
+  # nothing. Until then the stance stays declared rather than enforced and
   # `crewlet llm doctor` measures it: its shell probe reports whether this
   # build ran a command on the engine host.
+  #
+  # --sandbox is still not the answer: it restricts the network along with
+  # the filesystem, which would cut the web tools this backend keeps on.
   local_tools: vendor-default
-  local_tools_note: "grok exposes no per-tool denial, and --sandbox would also cut the network the web tools need"
+  local_tools_note: "grok's --disallowed-tools/--tools are not wired yet (built-in tool names undocumented); --sandbox would also cut the network the web tools need"
   model_args: ["--model", "{model}"]
+  # Replace, not --rules (which appends): the same reasoning as claude-code
+  # and qwen-code. Inline because this flag takes a string and there is no
+  # file variant, so the seat's prompt is on argv — see the qwen-code note.
+  system_prompt_args: ["--system-prompt-override", "{system}"]
   prompt_mode: argv
   output: text
   credential_paths: [".grok/auth.json"]
   volatile_paths: [".grok/history", ".grok/sessions"]
   host_credential_paths: [".grok/auth.json"]
-  api_key_env: "GROK_API_KEY"
+  # THE CLI'S OWN WORD: signed out, it says "set the XAI_API_KEY environment
+  # variable". GROK_API_KEY is the community npm build's variable and this
+  # is not that program.
+  api_key_env: "XAI_API_KEY"
   limit_markers:
     - sentinel: "rate limit"
   auth_markers:

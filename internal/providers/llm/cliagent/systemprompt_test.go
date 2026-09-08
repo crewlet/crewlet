@@ -99,6 +99,75 @@ func TestTheClaudeProfileKeepsTheSystemPromptOffArgv(t *testing.T) {
 	}
 }
 
+// EVERY SHIPPED PROFILE'S system_prompt_args IS SUBSTITUTABLE, and says which
+// channel it chose.
+//
+// A placeholder the code does not substitute is the failure mode with no
+// symptom: the CLI is handed the literal "{file}" as its system prompt, takes
+// it without complaint, and every seat on that provider runs with a one-word
+// identity. The two spellings are the whole vocabulary [systemArgs] knows.
+//
+// The table is the SHIPPED set, so adopting a flag for a new CLI has to come
+// through here — which is where the argv trade gets stated rather than
+// stumbled into.
+func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing.T) {
+	t.Parallel()
+	// Checked against each CLI's own --help at the version named in
+	// docs/concepts/subscription-llm-backends.md. Six of the eight have no
+	// such flag at all, and an empty entry here is that fact rather than an
+	// omission.
+	want := map[string]string{
+		"claude-code": "{file}",   // 2.1.263: --system-prompt-file
+		"qwen-code":   "{system}", // 0.23.0: --system-prompt, string only
+		// 1.0.13, xAI's OWN CLI from x.ai/cli:
+		// --system-prompt-override, string only. NOT the same-named
+		// community package on npm, which has no such flag — both put a
+		// `grok` on PATH and checking the wrong one answers the wrong
+		// question.
+		"grok":         "{system}",
+		"codex":        "", // 0.153.4, on `codex` and `codex exec` alike
+		"gemini-cli":   "", // 0.58.0
+		"opencode":     "", // 1.18.29 (`--agent` names a config persona)
+		"copilot":      "", // 1.0.83
+		"cursor-agent": "", // 2026.09.02
+	}
+	for name, placeholder := range want {
+		profile, ok := cliagent.Builtin(name)
+		if !ok {
+			t.Errorf("no built-in %q profile", name)
+			continue
+		}
+		joined := strings.Join(profile.SystemPromptArgs, " ")
+		if placeholder == "" {
+			if joined != "" {
+				t.Errorf("%s declares system_prompt_args = %v, but its CLI has no "+
+					"such flag — the text would reach it as a literal argument",
+					name, profile.SystemPromptArgs)
+			}
+			continue
+		}
+		if joined == "" {
+			t.Errorf("%s carries no system_prompt_args, so every seat's identity "+
+				"is delivered as an ordinary user message", name)
+			continue
+		}
+		if !strings.Contains(joined, placeholder) {
+			t.Errorf("%s system_prompt_args = %v, want a %s substitution",
+				name, profile.SystemPromptArgs, placeholder)
+		}
+		// Exactly one channel, never both: a profile that names {file} AND
+		// {system} writes the prompt to disk and then puts it on argv too.
+		other := "{system}"
+		if placeholder == "{system}" {
+			other = "{file}"
+		}
+		if strings.Contains(joined, other) {
+			t.Errorf("%s system_prompt_args = %v names both channels",
+				name, profile.SystemPromptArgs)
+		}
+	}
+}
+
 // THE FILE IS PRIVATE AND LANDS IN THE PER-CALL DIRECTORY, which is created
 // empty for one call and removed on release — so the text cannot outlive the
 // call that needed it or reach the next one.
