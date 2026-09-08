@@ -342,7 +342,14 @@ func printConfluenceHooks(w io.Writer, res *confluence.Result) {
 			state := "converged"
 			switch {
 			case !hook.Hooked():
-				state = "NOT registered: " + hook.Detail
+				// A REACHABLE BRANCH NOW. Every failure used to return
+				// an error, so the reconcile never yielded a hook
+				// without a URL and this printed nothing ever; a refused
+				// event is recorded and the walk continues, so one
+				// bad event no longer hides the other seven. orDash for
+				// the same reason the GitHub printer has it: an empty
+				// detail would render as a dangling colon.
+				state = "NOT registered: " + orDash(hook.Detail)
 			case hook.Created:
 				state = "created"
 			}

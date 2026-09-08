@@ -509,7 +509,8 @@ func webhookSecret(
 			"jira: integrations.jira.webhook_secret is %s rather than a value "+
 				"this run could resolve or a whole ${VAR} reference to mint "+
 				"one into — point it at a variable, set that variable, or "+
-				"drop -public-url and register %s by hand",
+				"clear both -public-url and integrations.public_base_url and "+
+				"register %s by hand",
 			provision.Shape(opts.Config.WebhookSecret), target)
 	}
 	if opts.Sink == nil {

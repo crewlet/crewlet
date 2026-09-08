@@ -594,7 +594,8 @@ func webhookSecret(
 			"github: integrations.github.webhook_secret holds neither a value "+
 				"this run could resolve nor a whole ${VAR} reference to mint "+
 				"one into — point it at a variable, set that variable, or "+
-				"drop -public-url and register %s by hand", target)
+				"clear both -public-url and integrations.public_base_url and "+
+				"register %s by hand", target)
 	}
 	if opts.Sink == nil {
 		return "", false, nil, provision.ErrNoSink

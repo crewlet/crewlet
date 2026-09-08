@@ -831,7 +831,8 @@ func PlanSigningSecret(secret, varName string, rotate, registeringHooks bool) Si
 		return SigningPlan{Action: SigningBlocked, Note: "integrations.gitlab." +
 			"signing_secret resolved to nothing and is not a whole ${VAR} " +
 			"reference, so there is nowhere to record a minted one. Point it at " +
-			"a variable, export a whsec_ value yourself, or drop -public-url and " +
+			"a variable, export a whsec_ value yourself, or clear both -public-url " +
+			"and integrations.public_base_url and " +
 			"register the hook by hand"}
 	}
 	action, what := SigningMint, "minted"

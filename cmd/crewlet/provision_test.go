@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/provision"
 )
@@ -531,4 +532,45 @@ func TestVendorUsageNamesOnlyRealCommands(t *testing.T) {
 			}
 		}
 	}
+}
+
+// A REFUSAL NAMES WHAT TO CHANGE, and there are three different answers.
+//
+// The message said "no -public-url" and named nothing else, which was already
+// only one of the ways to reach it: the value comes from the flag OR from
+// integrations.public_base_url, and that field can be SET and still resolve to
+// nothing — a whole ${VAR} this process cannot see becomes "" rather than the
+// text of the variable. An operator who had set the field went looking for a
+// flag they did not need.
+func TestTheMissingPublicBaseRefusalNamesTheRightThing(t *testing.T) {
+	t.Parallel()
+	t.Run("nothing is set", func(t *testing.T) {
+		got := noPublicBase(&config.Integrations{})
+		if !strings.Contains(got, "-public-url") ||
+			!strings.Contains(got, "integrations.public_base_url") {
+			t.Errorf("the refusal names only one of the two sources: %q", got)
+		}
+	})
+	t.Run("a reference that resolved to nothing", func(t *testing.T) {
+		got := noPublicBase(&config.Integrations{PublicBaseURL: "${CREWLET_PUBLIC_URL}"})
+		if !strings.Contains(got, "CREWLET_PUBLIC_URL") {
+			t.Errorf("the refusal does not name the variable to set: %q", got)
+		}
+		if !strings.Contains(got, "integrations.public_base_url") {
+			t.Errorf("the refusal does not name the field it came from: %q", got)
+		}
+	})
+	t.Run("a literal that resolved to nothing", func(t *testing.T) {
+		got := noPublicBase(&config.Integrations{PublicBaseURL: "  "})
+		// A blank literal is indistinguishable from unset once trimmed,
+		// so it takes the unset message rather than inventing a third.
+		if !strings.Contains(got, "-public-url") {
+			t.Errorf("a blank field produced %q", got)
+		}
+	})
+	t.Run("a nil block", func(t *testing.T) {
+		if got := noPublicBase(nil); got == "" {
+			t.Error("a nil integrations block produced no refusal at all")
+		}
+	})
 }

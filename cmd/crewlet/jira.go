@@ -35,7 +35,8 @@ func runJiraProvision(args []string, stdout, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	sinks := addSinkFlags(fs)
 	publicURL := fs.String("public-url", "",
-		"this deployment's public base URL, for registering the webhook")
+		"this deployment's public base URL, for registering the webhook; "+
+			"defaults to integrations.public_base_url")
 	recreate := fs.Bool("recreate-webhook", false,
 		"delete and remake the webhook to mint a fresh secret; this "+
 			"invalidates the secret every other deployment of this company holds")

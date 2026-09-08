@@ -193,7 +193,8 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 		"a GitLab token permitted to create service accounts; empty reads "+
 			"GITLAB_ADMIN_TOKEN, then GITLAB_PROVISION_TOKEN")
 	publicURL := fs.String("public-url", "",
-		"this deployment's public base URL, for registering the webhook")
+		"this deployment's public base URL, for registering the webhook; "+
+			"defaults to integrations.public_base_url")
 	rotate := fs.Bool("rotate", false,
 		"mint a fresh token for every seat, including seats whose current "+
 			"one still works (the engine has to be restarted after)")
@@ -789,6 +790,39 @@ func skillsContainer(flagValue, envVar, fromConfig string) string {
 // address, while `public_base_url` may be a whole `${VAR}` this run has to
 // read before it can build anything a third-party app will hold. See
 // [config.Integrations.WebhookBase].
+// noPublicBase says what to change when a run needs an address and has none.
+//
+// THREE WAYS TO BE EMPTY, and they are not the same work. The flag was not
+// given AND the company names no public base; or it names one that this
+// process cannot resolve, because [config.Integrations.WebhookBase] turns a
+// ${VAR} it cannot see into "" rather than into the text of the variable. A
+// message naming only the flag sent an operator who had already set the field
+// looking for something they did not need.
+func noPublicBase(in *config.Integrations) string {
+	const why = "every app's Events API request URL and OAuth redirect URL " +
+		"are built from it, so an app created without one delivers nowhere " +
+		"and cannot be installed"
+	raw := ""
+	if in != nil {
+		raw = strings.TrimSpace(in.PublicBaseURL)
+	}
+	if raw == "" {
+		return "no public base URL: pass -public-url, or set " +
+			"integrations.public_base_url in the company document. " + why
+	}
+	if name, ok := provision.SoleVar(raw); ok {
+		return fmt.Sprintf(
+			"integrations.public_base_url points at ${%s} and this process "+
+				"resolved nothing for it — set %s in the environment, in the "+
+				"file named by -env-file, or in the secret store, or pass "+
+				"-public-url to override it for this run. %s", name, name, why)
+	}
+	return fmt.Sprintf(
+		"integrations.public_base_url is %q, which resolved to nothing — "+
+			"correct it in the company document, or pass -public-url to "+
+			"override it for this run. %s", raw, why)
+}
+
 func webhookBase(flagValue string, in *config.Integrations, resolve func(string) (string, bool)) string {
 	if v := strings.TrimSpace(flagValue); v != "" {
 		return strings.TrimRight(v, "/")

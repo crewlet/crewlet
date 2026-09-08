@@ -116,9 +116,18 @@ func (e *Engine) dropBlock(
 	}
 	writer := e.configWriterOrNil()
 	if writer == nil {
-		// NO CONFIG SURFACE YET. Normally the window between the loop
-		// arming and the API wiring, which resolves on its own within a
-		// second.
+		// NO CONFIG SURFACE YET, which is now genuinely only the
+		// construction window: the loop is armed when the engine is
+		// constructed and the writer is installed a few hundred
+		// milliseconds later, measured, so a tick landing in between
+		// leaves the row alone and the next one finishes.
+		//
+		// It was not only that. The writer was installed inside the
+		// function that serves HTTP, after its early return for
+		// `api.port: 0` — so a worker-only node never got one and this
+		// branch was permanent there rather than momentary, on a loop
+		// that is a fleet singleton and lands on such a node as readily
+		// as on any other.
 		return fmt.Errorf("%w: no config surface is wired on this node",
 			integration.ErrDisconnectUnavailable)
 	}

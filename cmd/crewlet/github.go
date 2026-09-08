@@ -35,7 +35,8 @@ func runGitHubProvision(args []string, stdout, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	sinks := addSinkFlags(fs)
 	publicURL := fs.String("public-url", "",
-		"this deployment's public base URL, for registering the webhooks")
+		"this deployment's public base URL, for registering the webhooks; "+
+			"defaults to integrations.public_base_url")
 	recreate := fs.Bool("recreate-webhooks", false,
 		"delete and remake every webhook to mint a fresh secret; this "+
 			"invalidates the secret every other deployment of this company holds")
