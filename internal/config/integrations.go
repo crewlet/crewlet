@@ -69,14 +69,46 @@ type Integrations struct {
 }
 
 // WebhookBase is the base every inbound path is built on, without a trailing
-// slash, or empty when this deployment has no inbound address.
+// slash, or empty when this deployment has no inbound address THIS PROCESS
+// CAN READ.
 //
 // Trimmed here rather than at each caller, because five of them would each
 // have to remember: a base ending in "/" yields "…//webhooks/jira", which
 // some third-party apps normalise, some reject, and some accept while signing the
 // unnormalised form.
-func (i *Integrations) WebhookBase() string {
-	return strings.TrimRight(strings.TrimSpace(i.PublicBaseURL), "/")
+//
+// # It takes a resolver, and that is the whole point of the signature
+//
+// `public_base_url` is a Tier B field, so a whole `${VAR}` is a legal way to
+// write it and the document stores it VERBATIM like every other pointer. Read
+// raw, that value is not an address: it is the seven characters `${VAR}`, and
+// every caller here is building something a third-party app will HOLD — a
+// registered webhook, a manifest an operator pastes, an app's baked-in
+// redirect. Slack refuses such a manifest and names nothing; a webhook
+// registered at `${VAR}/webhooks/gitlab` is accepted, reported healthy, and
+// delivers nowhere. The same mistake was measured on the Atlassian pass,
+// which sent the literal `${ATLASSIAN_ORG_ID}` to Atlassian.
+//
+// So there is no raw accessor to reach for by accident. A caller that cannot
+// resolve has to pass nil and be handed "", which every reader here already
+// treats as "no inbound address" — the honest answer for a node that cannot
+// read the value, and the one that stops a literal reaching a third-party app.
+//
+// EMPTY RATHER THAN THE REFERENCE when it will not resolve, for the same
+// reason: no manifest beats a manifest built from a value nothing can read.
+func (i *Integrations) WebhookBase(resolve func(string) (string, bool)) string {
+	base := strings.TrimSpace(i.PublicBaseURL)
+	if name, isRef := envref.Whole(base); isRef {
+		if resolve == nil {
+			return ""
+		}
+		got, ok := resolve(name)
+		if !ok {
+			return ""
+		}
+		base = strings.TrimSpace(got)
+	}
+	return strings.TrimRight(base, "/")
 }
 
 func (i *Integrations) validate(path string) error {

@@ -141,7 +141,7 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 		Operator: req.OperatorCredential,
 	}
 	if !readOnly {
-		base := company.Integrations.WebhookBase()
+		base := company.Integrations.WebhookBase(s.resolve)
 		if base == "" {
 			// SUPPLYING THE BASE IS THE PERMISSION TO REGISTER, so a pass
 			// with none would run and register nothing while reporting

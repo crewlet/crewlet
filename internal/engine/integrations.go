@@ -115,7 +115,7 @@ func (e *Engine) startIntegrations(ctx context.Context) {
 			if company == nil {
 				return ""
 			}
-			return company.Config.Integrations.WebhookBase()
+			return company.Config.Integrations.WebhookBase(e.resolver().LookupOK)
 		},
 		ClaimDuty: integration.DutyFunc(
 			e.workerDuty(integrationDutyName, integrationDutyTTL)),
@@ -262,7 +262,7 @@ func (c *passConverger) Reconcile(ctx context.Context) ([]integration.Finding, e
 	}
 	return c.pass.Run(ctx, setup.PassInput{
 		Sink:        sink,
-		WebhookBase: company.Config.Integrations.WebhookBase(),
+		WebhookBase: company.Config.Integrations.WebhookBase(c.engine.resolver().LookupOK),
 	})
 }
 

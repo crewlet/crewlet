@@ -190,9 +190,57 @@ func TestTheWebhookBaseIsTrimmed(t *testing.T) {
 	}
 	for in, want := range cases {
 		in := config.Integrations{PublicBaseURL: in}
-		if got := in.WebhookBase(); got != want {
+		if got := in.WebhookBase(nil); got != want {
 			t.Errorf("WebhookBase() = %q, want %q", got, want)
 		}
+	}
+}
+
+// A REFERENCE IS READ, NOT PASSED ON. `public_base_url` is a Tier B field, so
+// a whole ${VAR} is a legal way to write it and the document stores it
+// verbatim — but every caller of this method is building an address a
+// third-party app will HOLD: a registered webhook, an app manifest an
+// operator pastes, a redirect baked into an app at creation. Handed the
+// reference itself, a hook is registered at "${PUBLIC_URL}/webhooks/gitlab",
+// which the third-party app accepts, reports healthy, and delivers nowhere.
+func TestTheWebhookBaseReadsAReference(t *testing.T) {
+	t.Parallel()
+	held := func(name string) (string, bool) {
+		if name == "PUBLIC_URL" {
+			return "https://crewlet.example.com/", true
+		}
+		return "", false
+	}
+	in := config.Integrations{PublicBaseURL: "${PUBLIC_URL}"}
+	// Resolved, and trimmed afterwards: the trailing slash may come from the
+	// stored value rather than from the document.
+	if got := in.WebhookBase(held); got != "https://crewlet.example.com" {
+		t.Errorf("WebhookBase() = %q, want the resolved address", got)
+	}
+}
+
+// AND AN UNREADABLE ONE IS EMPTY, NEVER THE LITERAL.
+//
+// Empty is what every caller already reads as "this deployment has no inbound
+// address", and it makes them refuse: no hook, no manifest, and a message
+// naming the setting. The literal makes them all succeed — at building
+// something nothing can reach. That failure was measured on the Atlassian
+// pass, which sent `${ATLASSIAN_ORG_ID}` to Atlassian as an organization id.
+func TestAnUnreadableWebhookBaseIsEmptyRatherThanTheReference(t *testing.T) {
+	t.Parallel()
+	none := func(string) (string, bool) { return "", false }
+	for name, resolve := range map[string]func(string) (string, bool){
+		"nothing holds it": none,
+		"nothing to ask":   nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			in := config.Integrations{PublicBaseURL: "${PUBLIC_URL}"}
+			if got := in.WebhookBase(resolve); got != "" {
+				t.Errorf("WebhookBase() = %q, want \"\": a reference nothing "+
+					"resolves must not reach a third-party app", got)
+			}
+		})
 	}
 }
 

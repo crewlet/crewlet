@@ -149,6 +149,21 @@ type Sources struct {
 	// unchecked.
 	Reconciles func(ctx context.Context) []integration.State
 
+	// PublicBase is where third-party apps reach this deployment, RESOLVED,
+	// or nil when this process cannot say.
+	//
+	// Resolved, and that is why it is a seam rather than a read of
+	// [Sources.Company]: `public_base_url` may be a whole `${VAR}`, and what
+	// a surface REGISTERED is the address that reference resolved to. A
+	// comparison against the raw document would answer "the address moved"
+	// for every company that writes one, for ever.
+	//
+	// Nil is "cannot say", exactly as with Routed, Verifiable and Reconciles
+	// above: a standalone API has no resolution chain, and a node that
+	// cannot read the value must not be the reason a screen calls a healthy
+	// registration stale.
+	PublicBase func() string
+
 	// NodeID names this node in the fleet answer, so a reader can tell
 	// which row is the one they are talking to.
 	NodeID string

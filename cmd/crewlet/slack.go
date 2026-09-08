@@ -71,10 +71,22 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// THROUGH THE SAME CHAIN EVERY OTHER COMMAND USES, because
+	// `public_base_url` may be a whole ${VAR} and what goes into an app
+	// MANIFEST is an address: read raw, the manifest carries
+	// "${PUBLIC_URL}/webhooks/slack/<handle>" where a URL belongs, Slack
+	// refuses the app, and nothing anywhere names the cause.
+	resolveCtx := context.Background()
+	env, closeEnv, err := companyResolver(resolveCtx, *sinks.bootstrap, stdout)
+	if err != nil {
+		return err
+	}
+	defer closeEnv()
+
 	// RESOLVED ONCE. Four places below build a URL from it, and four
 	// separate reads of the flag is how one of them ends up using the flag
 	// while the others use the document.
-	base := webhookBase(*publicURL, &company.Integrations)
+	base := webhookBase(*publicURL, &company.Integrations, env.LookupOK)
 
 	plans := slack.PlanFor(organization)
 	if *ledgerPath == "" {

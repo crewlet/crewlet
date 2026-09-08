@@ -256,7 +256,7 @@ func (p *githubPass) Teardown(ctx context.Context, in setup.TeardownInput) error
 	}
 	if err := github.Teardown(ctx, github.Options{
 		Client: client, Config: cfg, Org: company.Org, Value: env.Value,
-		WebhookBase: company.Config.Integrations.WebhookBase(),
+		WebhookBase: company.Config.Integrations.WebhookBase(env.LookupOK),
 	}); err != nil {
 		return err
 	}
@@ -562,7 +562,7 @@ func (p *jiraPass) Teardown(ctx context.Context, in setup.TeardownInput) error {
 	}
 	return jira.Teardown(ctx, jira.Options{
 		Client: client, Config: cfg,
-		WebhookBase: company.Config.Integrations.WebhookBase(),
+		WebhookBase: company.Config.Integrations.WebhookBase(env.LookupOK),
 	})
 }
 
@@ -742,7 +742,7 @@ func (p *gitlabPass) Teardown(ctx context.Context, in setup.TeardownInput) error
 	}
 	return gitlab.Teardown(ctx, gitlab.TeardownOptions{
 		Client: client, Config: cfg, Plan: plan,
-		WebhookBase: company.Config.Integrations.WebhookBase(),
+		WebhookBase: company.Config.Integrations.WebhookBase(env.LookupOK),
 		RemoveSeats: in.RemoveSeats,
 	})
 }

@@ -479,7 +479,7 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 		}
 		tools = append(tools, state)
 	}
-	base := company.Integrations.WebhookBase()
+	base := company.Integrations.WebhookBase(s.resolve)
 	present, resolved := setup.Resolution(company.Integrations.PublicBaseURL, s.resolve)
 	httpjson.Write(w, http.StatusOK, map[string]any{
 		"tools": tools,
@@ -724,7 +724,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		ManagePath:    managePath,
 		NeedsOperator: s.passes.Needs(kind),
 	}
-	if base := company.Integrations.WebhookBase(); base != "" && state.InboundPath != "" {
+	if base := company.Integrations.WebhookBase(s.resolve); base != "" && state.InboundPath != "" {
 		state.PublicURL = base + state.InboundPath
 	}
 	return state, true

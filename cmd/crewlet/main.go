@@ -1154,6 +1154,19 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Knowledge: e.Knowledge(),
 			Config:    configSurface,
 			Budget:    e.Backends().Fleet,
+			// WHERE THIRD-PARTY APPS REACH THIS DEPLOYMENT, resolved
+			// through this node's own chain. `public_base_url` may be a
+			// whole ${VAR}, and what a surface registered is the address
+			// that reference RESOLVED to -- so the screen has to compare
+			// like with like or report every such company as moved.
+			PublicBase: func() string {
+				//nolint:govet // shadow: scoped to this block; see .golangci.yml
+				company := companyConfig(e)
+				if company == nil {
+					return ""
+				}
+				return company.Integrations.WebhookBase(e.LookupSecret)
+			},
 			// What the reconcile loop last found for each surface. The
 			// FLEET's record, not this node's: the loop is a worker duty,
 			// so on a split-role deployment the node answering the

@@ -273,7 +273,7 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 	// RESOLVED ONCE, for the reason the Slack command states: the value is
 	// read in three places here and three separate reads of the flag is
 	// how one of them disagrees with the others.
-	base := webhookBase(*publicURL, &company.Integrations)
+	base := webhookBase(*publicURL, &company.Integrations, env.LookupOK)
 
 	signingVar := soleVarOf(cfg.SigningSecret)
 	signing := gitlab.PlanSigningSecret(
@@ -783,12 +783,18 @@ func skillsContainer(flagValue, envVar, fromConfig string) string {
 // every other reader of this value sees, the reconcile loop included. A flag
 // that won even when unset would make an operator who simply forgot it
 // silently re-point a working hook at "".
-func webhookBase(flagValue string, in *config.Integrations) string {
+//
+// The flag is taken AS TYPED and the document's value is RESOLVED, which is
+// the difference between the two: somebody typing `-public-url` typed an
+// address, while `public_base_url` may be a whole `${VAR}` this run has to
+// read before it can build anything a third-party app will hold. See
+// [config.Integrations.WebhookBase].
+func webhookBase(flagValue string, in *config.Integrations, resolve func(string) (string, bool)) string {
 	if v := strings.TrimSpace(flagValue); v != "" {
 		return strings.TrimRight(v, "/")
 	}
 	if in == nil {
 		return ""
 	}
-	return in.WebhookBase()
+	return in.WebhookBase(resolve)
 }

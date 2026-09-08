@@ -1254,7 +1254,8 @@ func TestAMovedPublicBaseIsReportedPerSurface(t *testing.T) {
 	// comparison is the only thing that can say the address moved.
 	cfg.Integrations.Slack = &config.Slack{}
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company:    func() *config.Company { return cfg },
+		PublicBase: func() string { return "https://now.example.com" },
 		Reconciles: func(context.Context) []integration.State {
 			return []integration.State{
 				{Kind: integration.KindSlack, Endpoint: "https://old.example.com"},
@@ -1285,6 +1286,84 @@ func TestAMovedPublicBaseIsReportedPerSurface(t *testing.T) {
 	if got := byKind["gitlab"]["endpoint_current"]; got != true {
 		t.Errorf("gitlab endpoint_current = %v, want true", got)
 	}
+}
+
+// A ${VAR} PUBLIC BASE IS COMPARED RESOLVED, ON BOTH SIDES.
+//
+// `public_base_url` may be a whole reference, and what a surface registered is
+// the address that reference RESOLVED to. Comparing a registration against the
+// reference itself never matches, so every company writing one would read
+// "the address moved" on every surface, for ever — an action-needed badge
+// nobody can clear, on deployments that are working perfectly.
+func TestAReferencePublicBaseIsComparedResolved(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	cfg.Integrations.PublicBaseURL = "${PUBLIC_URL}"
+	cfg.Integrations.Slack = &config.Slack{}
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+		// What the node's own chain reads the reference as, which is what
+		// the passes registered with.
+		PublicBase: func() string { return "https://now.example.com" },
+		Reconciles: func(context.Context) []integration.State {
+			return []integration.State{
+				{Kind: integration.KindSlack, Endpoint: "https://now.example.com"},
+			}
+		},
+	}, "integrations", nil))
+
+	rows, _ := body["integrations"].([]any)
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		if entry["key"] != "slack" {
+			continue
+		}
+		if got := entry["endpoint_current"]; got != true {
+			t.Errorf("endpoint_current = %v, want true: the registration holds "+
+				"exactly what this node reads the reference as", got)
+		}
+		return
+	}
+	t.Fatal("no slack row")
+}
+
+// AND A PROCESS THAT CANNOT READ THE ADDRESS SAYS NOTHING, rather than false.
+//
+// A standalone API has no resolution chain, so it cannot know what the current
+// address is. Answering false there would report every registration as stale
+// on the strength of a value this process never had — the same three-valued
+// rule Routed, Verifiable and Reconciles already follow.
+func TestAnUnknowablePublicBaseLeavesTheAnswerNull(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	cfg.Integrations.PublicBaseURL = "https://now.example.com"
+	cfg.Integrations.Slack = &config.Slack{}
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+		// PublicBase deliberately unset: this process cannot say.
+		Reconciles: func(context.Context) []integration.State {
+			return []integration.State{
+				{Kind: integration.KindSlack, Endpoint: "https://now.example.com"},
+			}
+		},
+	}, "integrations", nil))
+
+	rows, _ := body["integrations"].([]any)
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		if entry["key"] != "slack" {
+			continue
+		}
+		if got := entry["endpoint_current"]; got != nil {
+			t.Errorf("endpoint_current = %v, want null: this process has no "+
+				"resolution chain and cannot say what the address is", got)
+		}
+		if got := entry["endpoint"]; got != "https://now.example.com" {
+			t.Errorf("endpoint = %v, want the recorded address regardless", got)
+		}
+		return
+	}
+	t.Fatal("no slack row")
 }
 
 // AND A SURFACE NOTHING HAS RECORDED AN ADDRESS FOR SAYS NOTHING.

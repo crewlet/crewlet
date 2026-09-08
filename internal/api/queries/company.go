@@ -254,10 +254,19 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		// address for this surface", which is not the same claim as "the
 		// address moved". A row that has never been set up says null, and
 		// a screen must not report that as a fault.
+		//
+		// COMPARED AGAINST THE RESOLVED BASE, which is why it reads
+		// [Sources.PublicBase] rather than the document: the address a
+		// surface registered is what a `${VAR}` public base resolved to,
+		// and comparing that against the reference itself would report
+		// every such company as moved for ever. A process that cannot
+		// resolve says null rather than false, for the reason above.
 		row["endpoint"], row["endpoint_current"] = nil, nil
 		if state, checked := reconciled[kind]; checked && state.Endpoint != "" {
 			row["endpoint"] = state.Endpoint
-			row["endpoint_current"] = state.Endpoint == in.WebhookBase()
+			if s.PublicBase != nil {
+				row["endpoint_current"] = state.Endpoint == s.PublicBase()
+			}
 		}
 		// Every row carries seats, so the view never reads undefined.
 		// An empty list is a real answer — nobody holds credentials of
