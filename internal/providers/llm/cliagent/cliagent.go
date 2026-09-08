@@ -298,6 +298,10 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// argv reads the first non-flag argument, so anything appended after it
 	// is read as part of the prompt.
 	if p.profile.mode() == PromptArgv {
+		// PromptArgs and then the prompt, ADJACENT and last: a CLI that
+		// takes its prompt as a flag's value needs the two together, and
+		// anything appended between them becomes the prompt instead.
+		in.args = append(in.args, p.profile.PromptArgs...)
 		in.args = append(in.args, prompt)
 	} else {
 		in.stdin = prompt

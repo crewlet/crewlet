@@ -456,27 +456,46 @@ grok:
   # of them. If `grok --version` prints a 0.0.x, that is the other one.
   written_for: "Grok Build CLI 1.0.x (`grok --version`) — xAI's OWN, from x.ai/cli"
   version_args: ["--version"]
-  complete_args: ["-p"]
-  # PER-TOOL DENIAL NOW EXISTS on this CLI and this profile does not use it
-  # yet: 1.0.13 has --disallowed-tools (remove built-ins, comma-separated),
-  # --tools (an allowlist) and --deny. Wiring one needs the built-in tool
-  # NAMES, which the CLI validates only after a login and does not print in
-  # --help — so they are not established here, and guessing them on a
-  # security boundary would produce a filter that looks live and denies
-  # nothing. Until then the stance stays declared rather than enforced and
-  # `crewlet llm doctor` measures it: its shell probe reports whether this
-  # build ran a command on the engine host.
+  # THE DENIAL, THEN THE PROMPT FLAG LAST — see prompt_args below for why `-p`
+  # cannot sit here.
   #
-  # --sandbox is still not the answer: it restricts the network along with
-  # the filesystem, which would cut the web tools this backend keeps on.
-  local_tools: vendor-default
-  local_tools_note: "grok's --disallowed-tools/--tools are not wired yet (built-in tool names undocumented); --sandbox would also cut the network the web tools need"
+  # --disallowed-tools AND NOT --tools, although an allowlist would be the
+  # safer shape in general. Read against the source (xai-org/grok-build,
+  # crates/codegen/xai-grok-agent/src/builder.rs): the allowlist is applied
+  # only `if unresolved.is_empty()` — one entry it does not recognise and the
+  # whole retain is SKIPPED with a warning, leaving every tool enabled. The
+  # deny list always applies its retain and only warns per entry that matched
+  # nothing. So a name this profile gets wrong costs one tool on a denylist
+  # and costs EVERYTHING on an allowlist, and the vendor renaming a tool is
+  # exactly the drift this format expects.
+  #
+  # The names are the built-in ids from that same source (they match on the
+  # short name, `tool_id_eq` = full id or the part after the last colon).
+  # Denied: the shell and its lifecycle, the filesystem and search, the
+  # sub-agent and background-task family — which would otherwise run terminal
+  # commands the direct denial just removed — the scheduler, and the todo
+  # writer. KEPT: web_search and web_fetch, which this backend keeps on for
+  # every seat, plus the plan-mode and ask-user tools, which reach nothing.
+  # Same stance as claude-code's --disallowedTools and gemini's settings
+  # exclude list, expressed in this CLI's vocabulary.
+  complete_args:
+    - "--disallowed-tools"
+    - "run_terminal_cmd,bash,get_terminal_command_output,kill_terminal_command,read_file,search_replace,list_dir,grep,lsp,task,send_subagent_message,workflow,monitor,get_task_output,wait_tasks,kill_task,todo_write,scheduler_create,scheduler_delete,scheduler_list"
+  local_tools: denied
+  # --sandbox is still not the answer and is deliberately not used: it
+  # restricts the network along with the filesystem, which would cut the web
+  # tools this backend keeps on.
   model_args: ["--model", "{model}"]
   # Replace, not --rules (which appends): the same reasoning as claude-code
   # and qwen-code. Inline because this flag takes a string and there is no
   # file variant, so the seat's prompt is on argv — see the qwen-code note.
   system_prompt_args: ["--system-prompt-override", "{system}"]
   prompt_mode: argv
+  # `-p` TAKES THE PROMPT AS ITS VALUE, so it has to be the last thing before
+  # the prompt rather than sitting in complete_args. It used to sit there, and
+  # the model flag that follows became the prompt: every call exited on
+  # "a value is required for '--single <PROMPT>' but none was supplied".
+  prompt_args: ["-p"]
   output: text
   credential_paths: [".grok/auth.json"]
   volatile_paths: [".grok/history", ".grok/sessions"]

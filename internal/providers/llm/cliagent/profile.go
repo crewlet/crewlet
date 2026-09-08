@@ -309,6 +309,22 @@ type Profile struct {
 	// the CLI its system prompt twice — and [Profile.validate] refuses it.
 	SystemPromptEnv string `yaml:"system_prompt_env,omitempty"`
 
+	// PromptArgs introduces the prompt in argv mode, for a CLI that takes it
+	// as a FLAG'S VALUE rather than as a positional argument. Empty appends
+	// the prompt bare, which is what every other argv profile wants.
+	//
+	// It exists because xAI's grok breaks the assumption the rest of this
+	// format is built on. Its only headless trigger is `-p <PROMPT>`, and a
+	// value is REQUIRED — so with `-p` sitting in complete_args, the model
+	// flag that follows becomes the prompt and the real prompt becomes a
+	// stray positional: `grok -p --model grok-4 "hi"` exits on
+	// "a value is required for '--single <PROMPT>' but none was supplied".
+	// Every call died at argument parsing.
+	//
+	// Appended LAST, after the model and system-prompt arguments, because
+	// that is the only position where the flag and its value stay adjacent.
+	PromptArgs []string `yaml:"prompt_args,omitempty"`
+
 	// Output is how stdout is encoded.
 	Output OutputMode `yaml:"output,omitempty"`
 
@@ -460,6 +476,10 @@ func (p *Profile) validate(name string) error {
 		if dir == "HOME" {
 			add("config_env may not name HOME — it is set from the seat home already")
 		}
+	}
+	if len(p.PromptArgs) > 0 && p.PromptMode != PromptArgv {
+		add("prompt_args is set but prompt_mode is %q — the flag introduces a prompt "+
+			"on argv and there is none to introduce", p.PromptMode)
 	}
 	if len(p.SystemPromptArgs) > 0 && p.SystemPromptEnv != "" {
 		// One channel or the other. Both would hand the CLI the same

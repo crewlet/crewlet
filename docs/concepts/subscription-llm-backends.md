@@ -372,16 +372,27 @@ work through them would fork the engine's tool surface in two.
 
 So every profile **denies the CLI's shell and file tools** wherever the
 vendor offers a way to, and each says how: a flag on the command line
-(Claude Code's `--disallowedTools`, Copilot's `--deny-tool`, Codex's
-read-only sandbox) or a settings file the engine writes into the seat's
-own home or the per-call working directory before every call (Gemini's
-`settings.json`, OpenCode's `opencode.json`, Cursor's `.cursor/cli.json`).
-The shell is the one that matters: the seat's home and environment are
-isolated, but the filesystem is not, and a CLI with a shell on the engine
-host reads whatever the engine user can read. A vendor with no such
-switch is declared as `local_tools: vendor-default` with a note saying
-which switch is missing — and `crewlet llm doctor` **measures** the
-stance rather than trusting it (see [Operating it](#operating-it)).
+(Claude Code's `--disallowedTools`, Copilot's `--deny-tool`, grok's
+`--disallowed-tools`, Codex's read-only sandbox) or a settings file the
+engine writes into the seat's own home or the per-call working directory
+before every call (Gemini's `settings.json`, OpenCode's `opencode.json`,
+Cursor's `.cursor/cli.json`). The shell is the one that matters: the
+seat's home and environment are isolated, but the filesystem is not, and
+a CLI with a shell on the engine host reads whatever the engine user can
+read. A vendor with no such switch is declared as
+`local_tools: vendor-default` with a note saying which switch is missing
+— and `crewlet llm doctor` **measures** the stance rather than trusting
+it (see [Operating it](#operating-it)).
+
+**A deny list, not an allow list, where a vendor offers both.** grok has
+both and the profile takes `--disallowed-tools`, which reads backwards
+until you look at how each is applied. Its allowlist is honoured only if
+*every* entry resolves: one name the build does not recognise and the whole
+filter is skipped with a warning, leaving every tool enabled. The deny list
+always applies and only warns about the entry that matched nothing. So a
+name this profile gets wrong costs one tool on a deny list and costs
+everything on an allow list — and a vendor renaming a tool is exactly the
+drift these profiles are built to expect.
 
 **Web is the one local tool that stays on.** A subscription seat must
 not have less reach than the same CLI at a terminal, and a fetch is a
