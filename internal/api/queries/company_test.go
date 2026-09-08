@@ -1238,3 +1238,65 @@ units:
 			"carries a signing secret", present)
 	}
 }
+
+// A SURFACE'S REGISTRATION IS COMPARED WITH THE ADDRESS IN FORCE.
+//
+// A company's public base moves, and a registration made against the old one
+// keeps pointing somewhere that no longer answers. Where a pass registers the
+// hook the next tick moves it; where nothing does, only a person can, and
+// this is the only thing that can tell them.
+func TestAMovedPublicBaseIsReportedPerSurface(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	cfg.Integrations.PublicBaseURL = "https://now.example.com"
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+		Reconciles: func(context.Context) []integration.State {
+			return []integration.State{
+				{Kind: integration.KindMattermost, Endpoint: "https://old.example.com"},
+				{Kind: integration.KindGitLab, Endpoint: "https://now.example.com"},
+			}
+		},
+	}, "integrations", nil))
+
+	rows, _ := body["integrations"].([]any)
+	byKind := map[string]map[string]any{}
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		byKind[entry["key"].(string)] = entry
+	}
+	if got := byKind["mattermost"]["endpoint_current"]; got != false {
+		t.Errorf("mattermost endpoint_current = %v, want false: it is registered elsewhere", got)
+	}
+	if got := byKind["mattermost"]["endpoint"]; got != "https://old.example.com" {
+		t.Errorf("mattermost endpoint = %v, want the address it is registered at", got)
+	}
+	if got := byKind["gitlab"]["endpoint_current"]; got != true {
+		t.Errorf("gitlab endpoint_current = %v, want true", got)
+	}
+}
+
+// AND A SURFACE NOTHING HAS RECORDED AN ADDRESS FOR SAYS NOTHING.
+//
+// Null is "cannot say", which is what every row said before this existed and
+// what a surface says before it is ever set up. Reported as false it would
+// put an action-needed badge on every integration in a fresh company.
+func TestAnUnrecordedEndpointIsNullRatherThanMoved(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	cfg.Integrations.PublicBaseURL = "https://now.example.com"
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+		Reconciles: func(context.Context) []integration.State {
+			return []integration.State{{Kind: integration.KindGitLab}}
+		},
+	}, "integrations", nil))
+
+	rows, _ := body["integrations"].([]any)
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		if got := entry["endpoint_current"]; got != nil {
+			t.Errorf("%v endpoint_current = %v, want null", entry["key"], got)
+		}
+	}
+}

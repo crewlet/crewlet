@@ -238,6 +238,39 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 	httpjson.Write(w, http.StatusOK, run)
 }
 
+// recordEndpoint remembers the address a surface was set up against, for a
+// surface this build runs no pass for.
+//
+// A ROW WITH NOTHING ELSE IN IT, which is the honest shape: no pass has
+// observed this surface, so there is no phase, no finding and no attempt to
+// report. What the row carries is the one fact only this write knows, and a
+// reader that finds a report on it is reading one some other writer put
+// there.
+func (s *Service) recordEndpoint(ctx context.Context, kind integration.Kind, base string) {
+	if s.status == nil || base == "" {
+		return
+	}
+	var current integration.State
+	if states, err := s.status.LoadIntegrations(ctx); err == nil {
+		for _, state := range states {
+			if state.Kind == kind {
+				current = state
+				break
+			}
+		}
+	}
+	if current.Endpoint == base {
+		return
+	}
+	current.Kind, current.Endpoint = kind, base
+	if err := s.status.SaveIntegration(ctx, current); err != nil {
+		log.WarnContext(ctx, "setup_endpoint_unrecorded",
+			"integration", kind, "error", err,
+			"detail", "a later change of the public base URL will not be "+
+				"reported for this surface")
+	}
+}
+
 // runByID serves GET /setup/integrations/{kind}/runs/{id}.
 func (s *Service) runByID(w http.ResponseWriter, r *http.Request) {
 	run, ok := s.passes.Get(r.PathValue("id"))
@@ -270,6 +303,11 @@ func (s *Service) record(ctx context.Context, kind integration.Kind, run *setup.
 		}
 	}
 	next, forget := integration.Observe(current, kind, run.Findings, passErr, now)
+	// THE ADDRESS THIS PASS RAN AGAINST, the same stamp the loop writes:
+	// see [integration.State.Endpoint].
+	if company := s.company(); company != nil {
+		next.Endpoint = webhookBase(company, s.resolve)
+	}
 	if forget {
 		if err := s.status.ForgetIntegration(ctx, kind); err != nil {
 			log.WarnContext(ctx, "setup_status_not_forgotten",

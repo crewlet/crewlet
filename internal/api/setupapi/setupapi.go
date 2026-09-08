@@ -1466,6 +1466,18 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 		"operator", operatorOf(r))
 
 	after := s.company()
+	// THE ADDRESS THIS SURFACE WAS SET UP AGAINST, for the surfaces no pass
+	// ever converges.
+	//
+	// Where a pass registers the hook, it stamps this on every tick and a
+	// changed base fixes itself. Where nothing does, the registration an
+	// operator made by hand goes on pointing at the old address, the
+	// surface reports ready because nothing it can see is wrong, and the
+	// first symptom is an agent that stopped replying. Recorded here so a
+	// later read can say the address moved.
+	if after != nil && !s.passes.Serves(kind) {
+		s.recordEndpoint(r.Context(), kind, webhookBase(after, s.resolve))
+	}
 	fresh := state
 	if after != nil {
 		if refreshed, ok := s.state(after, kind); ok {

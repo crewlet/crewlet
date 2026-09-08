@@ -235,6 +235,24 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		} else {
 			row["reconcile"] = nil
 		}
+		// WHETHER THIS SURFACE'S REGISTRATION STILL POINTS HERE.
+		//
+		// A company's public base moves, and a registration made against
+		// the old one keeps pointing at an address that no longer answers.
+		// Where a pass registers the hook, the next tick moves it and this
+		// is true again within a tick; where nothing does, it stays false
+		// until a person goes and changes it at the third-party app, which
+		// is the whole reason the field exists.
+		//
+		// THREE-VALUED like the rest: null is "nothing has recorded an
+		// address for this surface", which is not the same claim as "the
+		// address moved". A row that has never been set up says null, and
+		// a screen must not report that as a fault.
+		row["endpoint"], row["endpoint_current"] = nil, nil
+		if state, checked := reconciled[kind]; checked && state.Endpoint != "" {
+			row["endpoint"] = state.Endpoint
+			row["endpoint_current"] = state.Endpoint == in.WebhookBase()
+		}
 		// Every row carries seats, so the view never reads undefined.
 		// An empty list is a real answer — nobody holds credentials of
 		// their own for this surface — and it is not the same as absent.

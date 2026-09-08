@@ -104,6 +104,12 @@ func (e *Engine) startIntegrations(ctx context.Context) {
 	worker, err := integration.New(integration.Options{
 		Registrations: regs,
 		Store:         store,
+		// WHERE THIRD-PARTY APPS REACH THIS DEPLOYMENT, read fresh on
+		// every pass rather than captured here: it is a field of the
+		// applied revision and an apply can change it.
+		Endpoint: func() string {
+			return e.Company().Config.Integrations.WebhookBase()
+		},
 		ClaimDuty: integration.DutyFunc(
 			e.workerDuty(integrationDutyName, integrationDutyTTL)),
 	})

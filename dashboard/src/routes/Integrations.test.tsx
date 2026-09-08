@@ -1561,3 +1561,43 @@ test("the disconnect roster lists each agent once", () => {
   );
   expect(seats.map((s) => s.handle)).toEqual(["sre-lead"]);
 });
+
+// A REGISTRATION POINTING AT AN ADDRESS THIS DEPLOYMENT NO LONGER HAS.
+//
+// A company's public base moves: a tunnel restarts, a deployment is renamed,
+// a proxy goes in front. Where a pass registers the hook the next tick moves
+// it; where nothing does, the app goes on delivering to somewhere that no
+// longer answers while the surface reports ready, because nothing it can see
+// is wrong. The first symptom is an agent that stopped replying.
+test("a surface registered at a moved address needs action", () => {
+  const moved = rollUp(
+    slack,
+    rowsOf({
+      key: "slack",
+      configured: true,
+      enabled: true,
+      routes: true,
+      endpoint: "https://old.example.com",
+      endpoint_current: false,
+      reconcile: { phase: "ready" },
+    }),
+  );
+  expect(moved.tag).toBe("Action needed");
+  expect(moved.tone).toBe("caution");
+
+  // AND A SURFACE NOBODY HAS RECORDED AN ADDRESS FOR IS NOT A FAULT. Null
+  // is "nothing here can say", which is what every row said before this
+  // existed and what a surface says before it is ever set up.
+  const unknown = rollUp(
+    slack,
+    rowsOf({
+      key: "slack",
+      configured: true,
+      enabled: true,
+      routes: true,
+      endpoint_current: null,
+      reconcile: { phase: "ready" },
+    }),
+  );
+  expect(unknown.tag).not.toBe("Action needed");
+});

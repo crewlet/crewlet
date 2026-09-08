@@ -323,7 +323,17 @@ export function rollUp(
   // identity belongs; what is wrong is a note in the body, where the surface
   // that has the fault says which one it is and names it. What the collapsed
   // card owes a reader is that something is off, and the tone is that.
-  const ingress = present.some((p) => p.row.secret_usable === false || p.row.routes === false);
+  const ingress = present.some(
+    (p) =>
+      p.row.secret_usable === false ||
+      p.row.routes === false ||
+      // THE ADDRESS MOVED. A registration made against the old public base
+      // keeps pointing at somewhere that no longer answers, and the surface
+      // goes on reporting ready because nothing it can see is wrong. Where a
+      // pass registers the hook this is true again within a tick; where
+      // nothing does, it stays until a person changes it at the app.
+      p.row.endpoint_current === false,
+  );
 
   // A TEARDOWN OUTRANKS EVERY OTHER ANSWER. The engine reports the phase as
   // disconnecting the moment one is asked for, but a build that does not know
@@ -569,17 +579,21 @@ function SurfaceRow({
   surface,
   row,
   named,
+  base,
 }: {
   surface: Surface;
   row: IntegrationRow;
   /** Whether to say which surface this is: only where the tool has more than one. */
   named: boolean;
+  /** The address this deployment is reachable at now, for the note below. */
+  base?: string;
 }) {
   const dropped = typeof row.skipped === "number" && row.skipped > 0;
   const faulted =
     row.secret_usable === false ||
     row.routes === false ||
     row.enabled === false ||
+    row.endpoint_current === false ||
     dropped ||
     Boolean(row.reconcile?.detail) ||
     Boolean(row.reconcile?.last_error) ||
@@ -611,8 +625,28 @@ function SurfaceRow({
             routes nowhere
           </Badge>
         )}
+        {row.endpoint_current === false && (
+          <Badge
+            tone="caution"
+            outline
+            title="this surface is registered at an address that is no longer this deployment's, so its deliveries go nowhere"
+          >
+            address moved
+          </Badge>
+        )}
         {row.enabled === false && <Badge outline>paused</Badge>}
       </div>
+      {/* BOTH ADDRESSES, because the fix is to replace one with the other
+          at the third-party app and a reader cannot do that from a badge. */}
+      {row.endpoint_current === false && (
+        <div className="int-row-note">
+          <span className="int-row-note-text">
+            Registered at <code className="inline">{row.endpoint}</code>. This deployment is
+            reachable at <code className="inline">{base ?? "no public address"}</code> now, so
+            update it where the app is configured.
+          </span>
+        </div>
+      )}
 
       {dropped && (
         <div className="int-row-note">
@@ -928,11 +962,17 @@ export function EntryRow({
   entry,
   rows,
   sections,
+  publicBase,
   onConnect,
   onDisconnect,
 }: {
   entry: Entry;
   rows: Map<string, IntegrationRow>;
+  /**
+   * The address third-party apps reach this deployment on right now, for the
+   * row that has to say what a moved registration should be changed to.
+   */
+  publicBase?: string;
   /** The engine's setup state per surface this tool is made of. */
   sections?: { name: string; tool: SetupToolState }[];
   /** Open the settings form: the connect form, and the same one afterwards. */
@@ -1096,6 +1136,7 @@ export function EntryRow({
                 surface={p.surface}
                 row={p.row}
                 named={present.length > 1}
+                base={publicBase}
               />
             ))}
             {seats.map((seat) => (
@@ -1476,6 +1517,7 @@ export function Integrations() {
                 entry={entry}
                 rows={rows}
                 sections={sectionsFor(entry, setup.byKey)}
+                publicBase={setup.base?.value}
                 onConnect={(blocks) =>
                   setDialog({
                     title: entry.name,

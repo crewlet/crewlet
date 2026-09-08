@@ -261,6 +261,15 @@ type Options struct {
 	// exercises the wake does not spend its life in timers.
 	WakeSettle time.Duration
 
+	// Endpoint reports the public base URL third-party apps reach this
+	// deployment on, as the applied revision holds it right now.
+	//
+	// STAMPED ON EVERY ROW A PASS WRITES, so a later read can tell the
+	// address a surface was registered against from the one in force. Nil
+	// leaves the field empty, which reads as "not recorded" and never as
+	// "moved".
+	Endpoint func() string
+
 	// Now is the clock, for tests. Nil is time.Now.
 	Now func() time.Time
 }
@@ -281,6 +290,7 @@ type Worker struct {
 	store    Store
 	schedule Schedule
 	claim    DutyFunc
+	endpoint func() string
 	interval time.Duration
 	settle   time.Duration
 	now      func() time.Time
@@ -404,6 +414,7 @@ func New(opts Options) (*Worker, error) {
 	return &Worker{
 		byKind: byKind, order: order, store: opts.Store,
 		schedule: opts.Schedule.WithDefaults(), claim: opts.ClaimDuty,
+		endpoint: opts.Endpoint,
 		interval: interval, settle: settle, now: now,
 		wake: make(chan struct{}, 1),
 	}, nil
@@ -636,6 +647,15 @@ func (w *Worker) tearDown(ctx context.Context, kind Kind, state State, now time.
 	}
 }
 
+// currentEndpoint is the public base in force, or empty where this node
+// cannot say.
+func (w *Worker) currentEndpoint() string {
+	if w.endpoint == nil {
+		return ""
+	}
+	return w.endpoint()
+}
+
 // reconcile runs one surface and records what it found.
 func (w *Worker) reconcile(ctx context.Context, kind Kind, state State, now time.Time) {
 	reg := w.byKind[kind]
@@ -645,6 +665,11 @@ func (w *Worker) reconcile(ctx context.Context, kind Kind, state State, now time
 	// runs from the dashboard: a status row must not depend on which
 	// surface produced it.
 	state, forget := Observe(state, kind, findings, err, now)
+	// THE ADDRESS THIS PASS RAN AGAINST. Recorded on every pass rather
+	// than only a successful one: what it answers is "where is this
+	// surface's registration pointing", and a pass that failed still
+	// registered against the base it was given.
+	state.Endpoint = w.currentEndpoint()
 	switch {
 	case forget:
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml

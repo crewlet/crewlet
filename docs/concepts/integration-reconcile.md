@@ -57,6 +57,20 @@ A third-party app can override the settled interval for itself. Slack's app-mani
 
 ---
 
+## When the deployment's address moves
+
+Every registration a third-party app holds points at `integrations.public_base_url` as it was when the registration was made, and that value moves: a tunnel restarts, a deployment is renamed, a proxy goes in front.
+
+Where a pass registers the hook, the next tick registers it again at the new address and the surface heals itself. Jira and Confluence match their own hook **by name**, so the address is a field they rewrite; GitLab and GitHub match **by delivery URL**, so they create one at the new address and leave the old one behind, which is debris rather than an outage.
+
+Where nothing registers the hook, nothing heals. Slack's request URL lives in each agent's app at Slack and can only be read back with an app-configuration token an operator may not have, so the engine cannot see that it is stale, cannot fix it, and the app goes on delivering to an address that no longer answers. The surface reports `ready`, because nothing it can see is wrong, and the first symptom is an agent that stopped replying.
+
+So the address is **recorded and compared**. Every pass stamps the base it ran against onto the surface's status row, and a surface no pass converges is stamped when its setup form is saved. A row whose recorded address is not the one in force is an **ingress fault**: the card reads *Action needed*, the surface carries an `address moved` badge, and the note names both addresses, because the fix is to replace one with the other at the third-party app and a badge cannot say that.
+
+It clears itself where it should. A surface with a pass is re-stamped on the next tick, so the warning appears only where a person really does have to act. A surface nothing has recorded an address for reports `null` rather than `false`: "nothing here can say" is not the claim "the address moved", and a fresh company must not open with a warning on every card.
+
+---
+
 ## A fleet singleton
 
 The loop is a **worker duty**, claimed per tick like the retention sweep and the sandbox waiter, so exactly one node runs it at a time. Here that is correctness rather than economy: two nodes reconciling one surface at the same moment both read a third-party app that has no account for a seat, and both create one. The third-party app ends up with two identities for one agent, and no later pass can detect or repair that.

@@ -580,6 +580,17 @@ export interface IntegrationRow {
   coalesced?: number | null;
   /** Null means "nothing here can say", never "this surface is fine". */
   reconcile?: ReconcileStatus | null;
+  /**
+   * The public base URL this surface's registration at the third-party app
+   * points at, and whether it is still the one in force.
+   *
+   * `endpoint_current` is three-valued: null is "nothing has recorded an
+   * address for this surface", which is not the same claim as "the address
+   * moved". False is a delivery route pointing somewhere that no longer
+   * answers, which for a surface no pass converges only a person can fix.
+   */
+  endpoint?: string | null;
+  endpoint_current?: boolean | null;
   [key: string]: unknown;
 }
 

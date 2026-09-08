@@ -62,6 +62,25 @@ type State struct {
 	// NextAttemptAt is when this integration becomes due again.
 	NextAttemptAt time.Time `json:"next_attempt_at,omitzero"`
 
+	// Endpoint is the public base URL this surface was last set up
+	// against, which is what its registration at the third-party app
+	// points at.
+	//
+	// WRITTEN SO THE ADDRESS CAN BE COMPARED WITH THE ONE IN FORCE. A
+	// company's public base moves: a tunnel is restarted, a deployment is
+	// renamed, a proxy is put in front. Where a pass registers the hook,
+	// the next tick re-registers it at the new address on its own and this
+	// field simply follows. Where NOTHING does, the registration goes on
+	// pointing at an address that no longer answers, the surface reports
+	// ready because nothing it can see is wrong, and the first symptom is
+	// an agent that has stopped replying.
+	//
+	// So the two are kept apart and compared. A stale one is an ingress
+	// fault a person has to fix at the third-party app, and it is the only
+	// evidence there is: Slack's request URL, for one, cannot be read back
+	// without an app-configuration token the operator may not have.
+	Endpoint string `json:"endpoint,omitempty"`
+
 	// Disconnecting is set the moment somebody asks for the integration
 	// to be taken away, which is BEFORE any teardown pass has run and
 	// set a phase. Without it the screen shows a connected integration
