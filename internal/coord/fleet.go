@@ -766,10 +766,20 @@ type Integrations interface {
 	// PutIntegrationStatus records one surface's status, replacing any
 	// prior one.
 	//
-	// LAST WRITE WINS, with no compare-and-set, and here that is not a
-	// tradeoff: the duty makes one node the only writer, so there is no
-	// second writer to race. Adding a version would be a guard against a
-	// concurrency the singleton already rules out.
+	// LAST WRITE WINS, with no compare-and-set, and what makes that safe is
+	// a LEASE rather than the duty alone.
+	//
+	// The reconcile loop is a singleton, so its own writes cannot race each
+	// other. It is not the only writer: the dashboard records a pass's
+	// outcome, stamps an endpoint and marks a disconnect, on whichever node
+	// served the request. Two writers and one key with no version is a lost
+	// update — a disconnect an operator asked for, overwritten by a tick
+	// that read the row just before it.
+	//
+	// So every writer takes the surface's own provisioning lease first, and
+	// one that cannot take it does not write. That is the same lease the
+	// pass itself runs under, which is why it is a lease and not a version:
+	// the writes here are the tail of work already serialized by it.
 	PutIntegrationStatus(ctx context.Context, kind string, value []byte) error
 
 	// DeleteIntegrationStatus drops a surface's status once its block has

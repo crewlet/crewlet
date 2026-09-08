@@ -1757,6 +1757,24 @@ type disconnectRequest struct {
 func (s *Service) markDisconnecting(
 	ctx context.Context, kind integration.Kind, removeSeats bool,
 ) error {
+	// UNDER THE SURFACE'S OWN LEASE. This is the write that most needs it:
+	// the intent it records is what the loop acts on, and a tick that read
+	// the row a moment earlier would put its own back over the top — losing
+	// a disconnect an operator asked for, with the screen still reporting
+	// the integration connected. See [setup.Runner.Hold].
+	release, held, err := s.passes.Hold(ctx, kind)
+	if err != nil {
+		return fmt.Errorf(
+			"setupapi: this node could not take %s to record the disconnect: %w",
+			kind, err)
+	}
+	if !held {
+		return fmt.Errorf(
+			"setupapi: %s is being provisioned right now, so the disconnect was "+
+				"not started; try again in a moment", kind)
+	}
+	defer release()
+
 	state, err := s.currentState(ctx, kind)
 	if err != nil {
 		// REFUSED RATHER THAN WRITTEN BLIND. This one returns its error,

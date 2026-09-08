@@ -250,6 +250,17 @@ func (s *Service) recordEndpoint(ctx context.Context, kind integration.Kind, bas
 	if s.status == nil || base == "" {
 		return
 	}
+	release, held, err := s.passes.Hold(ctx, kind)
+	if err != nil || !held {
+		log.WarnContext(ctx, "setup_endpoint_unrecorded",
+			"integration", kind, "error", errorOrBusy(err),
+			"detail", "another writer holds this surface, so the address is "+
+				"not recorded and a later change of the public base URL will "+
+				"not be reported for it")
+		return
+	}
+	defer release()
+
 	current, err := s.currentState(ctx, kind)
 	if err != nil {
 		log.WarnContext(ctx, "setup_endpoint_unrecorded",
@@ -372,3 +383,12 @@ func (s *Service) now() time.Time {
 
 // sinkFactory is how the service obtains a recorder for a pass.
 type sinkFactory func(operator string) (provision.TokenSink, error)
+
+// errorOrBusy names why a status write did not happen: the store's own failure
+// when there was one, or the peer that holds the surface when there was not.
+func errorOrBusy(err error) string {
+	if err != nil {
+		return err.Error()
+	}
+	return "another writer holds this surface"
+}

@@ -296,6 +296,33 @@ func (r *Runner) Start(ctx context.Context, kind integration.Kind, in PassInput,
 	return run, nil
 }
 
+// Hold takes one surface's lease for a caller that is about to write about it
+// outside a pass.
+//
+// The status rows are last-write-wins by design, and [coord.Integrations] says
+// why: "the duty makes one node the only writer, so there is no second writer
+// to race." That is true of the LOOP and was never true of this surface — the
+// dashboard records a pass's outcome, stamps an endpoint and marks a
+// disconnect, on whichever node served the request. Two writers, one key, no
+// version: a disconnect an operator asked for could be overwritten by a tick
+// that read the row before it.
+//
+// So the premise is restored rather than replaced. The lease that already
+// makes one writer per surface for the pass itself covers the writes about it
+// too, and a caller that cannot take it does not write.
+//
+// held is false when a peer has it; release is non-nil exactly when held.
+func (r *Runner) Hold(ctx context.Context, kind integration.Kind) (func(), bool, error) {
+	if r == nil || r.duty == nil {
+		return func() {}, true, nil
+	}
+	duty := r.duty(kind)
+	if duty == nil {
+		return func() {}, true, nil
+	}
+	return duty(ctx)
+}
+
 // StartTeardown removes what a third-party app holds, under the same guard a
 // pass runs beneath.
 //
