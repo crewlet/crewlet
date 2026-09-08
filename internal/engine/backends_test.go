@@ -345,20 +345,29 @@ func TestNoEmbeddingProviderIsAWidthOfNoneNotADefault(t *testing.T) {
 	}
 }
 
-func TestNoCompanyIsRefusedRatherThanDefaulted(t *testing.T) {
+// NO COMPANY OPENS AT WIDTH 0, because a node has to open its store before it
+// can read the company out of it — and a node with no active revision has no
+// company to be asked for at all.
+//
+// This was REFUSED while the width was fixed at open, and rightly: a store
+// stuck at the wrong width refuses every write from the right one, and recall
+// stops returning anything with no reason in the log. What makes it safe now
+// is that the width is re-stated by every apply (see
+// TestTheEmbeddingWidthFollowsAConfigApply), so the first revision this node
+// applies corrects it. If that ever stops being true, this has to go back to
+// being a refusal.
+func TestNoCompanyOpensAtWidthZero(t *testing.T) {
 	t.Parallel()
-	// Refused rather than defaulted because the default would be silent:
-	// nothing fails at open, and the failure surfaces later as recall that
-	// returns nothing with no reason in the log.
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	})
-	_, err := engine.OpenBackends(t.Context(), b, nil)
-	if err == nil {
-		t.Fatal("a nil company opened backends")
+	back, err := engine.OpenBackends(t.Context(), b, nil)
+	if err != nil {
+		t.Fatalf("a nil company was refused: %v", err)
 	}
-	if !strings.Contains(err.Error(), "embedding") {
-		t.Errorf("the error does not say what was missing: %v", err)
+	t.Cleanup(func() { back.Close(t.Context()) })
+	if got := back.Store.EmbeddingDim(); got != 0 {
+		t.Errorf("embedding width = %d, want 0 until an apply says otherwise", got)
 	}
 }
 

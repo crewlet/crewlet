@@ -155,21 +155,22 @@ func (b *Backends) Close(ctx context.Context) {
 //
 // It takes the COMPANY as well as the bootstrap, for one field: the width of
 // the vectors the configured embedding model produces. That width is Tier B
-// because the model is, and the store needs it at open time — it is the only
-// thing that knows how wide the packed BLOBs in its vector columns are. Passing
-// it is not optional and a nil company is refused rather than defaulted,
-// because the default would be silent: a store opened at the wrong width
-// refuses every write from the right one, and recall would simply stop
+// because the model is, and the store wants it at open time — it is the only
+// thing that knows how wide the packed BLOBs in its vector columns are.
+//
+// A NIL COMPANY IS A REAL CASE, not a caller's mistake: a node whose company
+// lives in the store has to open that store before it can read it, and a node
+// with no active revision at all has no company to be asked for. Both open at
+// width 0. That is safe only because the width is no longer fixed at open —
+// the engine re-states it with [store.DB.SetEmbeddingDim] on every epoch it
+// installs, so the first revision this node applies tells it the truth. It was
+// refused here while the width was immutable, and rightly: a store stuck at
+// the wrong width refuses every write from the right one, and recall stops
 // returning anything with nothing in the log to say why.
 func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (*Backends, error) {
 	if b == nil {
 		return nil, fmt.Errorf("engine: no bootstrap config")
 	}
-	if c == nil {
-		return nil, fmt.Errorf("engine: no company config: the store needs the " +
-			"configured embedding width to open")
-	}
-
 	var out *Backends
 	var err error
 	switch b.Stream.Type {
@@ -221,7 +222,13 @@ func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*st
 	// else works. That is the honest shape of "this company does not
 	// remember by similarity", and distinct from a configured width the
 	// store was never told about.
-	if c.Providers.Embeddings != nil {
+	//
+	// A NIL COMPANY reads as the same 0, and is a real case rather than a
+	// caller's mistake: a node whose company lives in the store has to open
+	// that store before it can read it. The width is not fixed here — the
+	// engine re-states it with [store.DB.SetEmbeddingDim] on every epoch it
+	// installs, so the first one this node applies tells it the truth.
+	if c != nil && c.Providers.Embeddings != nil {
 		opts.EmbeddingDim = c.Providers.Embeddings.Width()
 	}
 	db, err := store.Open(ctx, b.Store.Path, opts)

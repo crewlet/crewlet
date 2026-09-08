@@ -114,6 +114,12 @@ func newCompany(c *config.Company, env *config.Resolver) (*Company, error) {
 // including one would make the fleet try to claim a lease for something no
 // node can run — and then report the company permanently under capacity.
 func (c *Company) Seats() []placement.Seat {
+	// NIL IS NO SEATS, and the sweep asks on every tick: an unconfigured
+	// node has an empty seat set rather than an unanswerable question, and
+	// converges the moment its first epoch arrives.
+	if c == nil {
+		return nil
+	}
 	var out []placement.Seat
 	for role := range c.Org.AllRoles() {
 		// Through the predicate, not a comparison against KindAgent: an

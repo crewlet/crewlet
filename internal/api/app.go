@@ -56,6 +56,10 @@ type App struct {
 	// health probe reads it.
 	configured atomic.Bool
 
+	// isConfigured is the live answer when this process holds an engine.
+	// Nil for one that does not, which falls back to the flag above.
+	isConfigured func() bool
+
 	handler http.Handler
 }
 
@@ -162,6 +166,14 @@ func New(opts Options) *App {
 		nodeID:       nodeIDOf(opts.Bootstrap),
 		startedAt:    nowISO(now()),
 		queueBackend: opts.QueueBackend,
+	}
+	// DERIVED FROM THE SOURCE THAT ALREADY EXISTS, rather than a second
+	// field an embedder could set inconsistently with it: Sources.Company
+	// reads the CURRENT epoch, and "is there one" is the whole question
+	// [App.Configured] asks. A process that supplies no company source has
+	// no engine to ask and keeps the stored flag.
+	if opts.Sources.Company != nil {
+		a.isConfigured = func() bool { return opts.Sources.Company() != nil }
 	}
 	a.stream = stream.NewService(state, stream.Options{
 		Health: a.streamHealth,
@@ -334,13 +346,28 @@ func (a *App) State() *livestate.LiveState { return a.state }
 func (a *App) Guard() *auth.Guard { return a.guard }
 
 // Configured reports whether a company revision is active.
-func (a *App) Configured() bool { return a.configured.Load() }
+//
+// THROUGH THE SEAM WHEN THERE IS ONE, so this cannot go stale. An embedded
+// node hands over a function reading the engine's live epoch, which is the
+// only thing that actually knows: an apply can make a node configured, and a
+// flag pushed at startup would have said "yes" from the first boot and never
+// been corrected — which is exactly what it did, unconditionally, leaving the
+// unconfigured posture below unreachable in the shipped binary.
+//
+// The stored flag remains for a process with no engine to ask.
+func (a *App) Configured() bool {
+	if a.isConfigured != nil {
+		return a.isConfigured()
+	}
+	return a.configured.Load()
+}
 
 // SetConfigured records that a revision applied, or stopped being active.
 //
-// Load-bearing on readiness: an unconfigured node cannot verify a webhook
-// signature, so it must leave rotation rather than answer deliveries it would
-// only reject.
+// For a process that has no engine to ask; an app built with the seam above
+// ignores it. Load-bearing on readiness: an unconfigured node cannot verify a
+// webhook signature, so it must leave rotation rather than answer deliveries
+// it would only reject.
 func (a *App) SetConfigured(v bool) { a.configured.Store(v) }
 
 // Start brings up the shared health tick.

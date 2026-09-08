@@ -86,11 +86,20 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 // an operator setting `retention_days: 7` got thirty days of conversations,
 // silently, because there was no sweep to honour it.
 func (e *Engine) ConversationRetention() time.Duration {
-	// No zero check: validation refuses retention_days below 1 and fills
-	// the shipped default when it is unset, so a config that reached an
-	// engine always carries a positive number. [maintenance.LedgerJobs]
-	// holds the floor for callers that did not come through a parse.
-	days := e.Company().Config.TurnEngine.ConversationSession.RetentionDays
+	// AN UNCONFIGURED NODE HAS NO HORIZON TO STATE, and says so with a
+	// zero rather than inventing one: [maintenance.LedgerJobs] already
+	// reads zero as "take the floor", which is the same answer and only
+	// one place to change it. What it must never do is return a literal
+	// zero DURATION to a caller that would read it as "retain nothing" —
+	// which is exactly why that floor is there.
+	c := e.Company()
+	if c == nil {
+		return 0
+	}
+	// No zero check beyond that: validation refuses retention_days below 1
+	// and fills the shipped default when it is unset, so a config that
+	// reached an engine always carries a positive number.
+	days := c.Config.TurnEngine.ConversationSession.RetentionDays
 	return time.Duration(days) * 24 * time.Hour
 }
 
