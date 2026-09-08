@@ -28,8 +28,27 @@ type Alert struct {
 	ID string
 
 	// Title is the monitor's rendered title, which carries the state and
-	// the monitor's name.
+	// the monitor's name: "[Triggered] API latency" when it fires and
+	// "[Recovered] API latency" when it clears. NOT an identity — see
+	// MonitorID.
 	Title string
+
+	// MonitorID is the monitor itself, which is what makes a trigger and
+	// its recovery ONE conversation.
+	//
+	// Datadog's $ALERT_ID, not $ID: the latter identifies the
+	// NOTIFICATION, so keying on it would make every firing its own
+	// thread and a seat would never see that this is the fourth time
+	// tonight. It was the TITLE, on the stated reasoning that "there is no
+	// $MONITOR_ID variable" — true of that spelling, and the template is
+	// this engine's own to write — so a trigger and its recovery derived
+	// different keys and landed in two threads, which is the exact
+	// opposite of what this package promises.
+	//
+	// Empty for an alert delivered by a definition written before the
+	// template carried it, which is why [Prompt.ConversationKey] still
+	// falls back to the title.
+	MonitorID string
 
 	// Body is the monitor message with Datadog's own notification targets
 	// left in it.
@@ -93,6 +112,7 @@ func decode(w types.RawWebhook) Alert {
 	return Alert{
 		ID:         str(w.Body, "id"),
 		Title:      str(w.Body, "title"),
+		MonitorID:  str(w.Body, "monitor_id"),
 		Body:       str(w.Body, "body"),
 		Transition: str(w.Body, "alert_transition"),
 		Priority:   strings.TrimPrefix(str(w.Body, "priority"), "P"),
@@ -189,8 +209,15 @@ func TagValues(tags []string, key string) []string {
 // $TAGS is the routing input. $LINK, $EVENT_TITLE and $ALERT_SCOPE are what
 // let a prompt tell a seat where to look rather than only that something
 // happened.
+//
+// $ALERT_ID is the MONITOR and $ID is the notification, and both are here
+// because they answer different questions: the second is the dedupe key at
+// the webhook edge, and the first is what makes a trigger and its recovery
+// one conversation. Keying the thread on the title instead put them in two,
+// because a Datadog title carries the state.
 const WebhookPayload = `{
   "id": "$ID",
+  "monitor_id": "$ALERT_ID",
   "title": "$EVENT_TITLE",
   "body": "$EVENT_MSG",
   "alert_transition": "$ALERT_TRANSITION",

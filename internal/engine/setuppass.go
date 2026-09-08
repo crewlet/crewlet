@@ -483,6 +483,11 @@ func (p *datadogPass) Teardown(ctx context.Context, in setup.TeardownInput) erro
 			AppKey: strings.TrimSpace(env.Value(cfg.Provisioning.AppKey)),
 		},
 		RemoveSeats: in.RemoveSeats,
+		// WHAT PROVES THE DEFINITION IS THIS DEPLOYMENT'S. A Datadog
+		// webhook is addressed by name, and the teardown refuses to
+		// delete one pointing anywhere but here — the same expression
+		// gitlabPass.Teardown passes for the same reason.
+		WebhookBase: company.Config.Integrations.WebhookBase(env.LookupOK),
 	})
 }
 

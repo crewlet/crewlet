@@ -3,6 +3,7 @@ package datadog_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -221,5 +222,133 @@ func TestAnAppKeyReturnsItsValueOnCreation(t *testing.T) {
 	}
 	if key.Key != "secret-value" || key.ID != "k1" {
 		t.Errorf("key = %+v", key)
+	}
+}
+
+// A SERVICE ACCOUNT ON PAGE TWO EXISTS.
+//
+// The listing read one page and stopped, so an account past it read as
+// ABSENT — and both callers act on absence: the reconcile creates a second
+// identity on top of a live account, and the teardown walks away from one it
+// was asked to remove. The threshold is lower than a hundred service
+// accounts, because Datadog's filter is a substring match on email and every
+// PERSON under the same domain consumes a slot on page one before the
+// service-account check drops them.
+func TestListingServiceAccountsWalksEveryPage(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	var asked []string
+	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, r *http.Request) {
+		page := r.URL.Query().Get("page[number]")
+		asked = append(asked, page)
+		if page == "0" {
+			// A FULL page, which is what says there may be more.
+			rows := make([]string, 0, 100)
+			for i := range 100 {
+				rows = append(rows, fmt.Sprintf(
+					`{"id":"p0-%d","attributes":{"email":"filler-%d@crewlet.local","service_account":false}}`,
+					i, i))
+			}
+			_, _ = w.Write([]byte(`{"data":[` + strings.Join(rows, ",") + `]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[
+			{"id":"late","attributes":{"email":"agent-sre@crewlet.local","service_account":true}}
+		]}`))
+	}
+
+	got, err := reg.client(t).ListServiceAccounts(context.Background(), pair, "crewlet.local")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(asked) < 2 {
+		t.Fatalf("asked for pages %v; a full page was taken as the whole set", asked)
+	}
+	if len(got) != 1 || got[0].ID != "late" {
+		t.Fatalf("accounts = %+v; the account on page two was reported absent", got)
+	}
+}
+
+// AND A LISTING THAT NEVER CONVERGES RAISES rather than returning what it
+// has. A short list reaching a caller is what creates a duplicate identity on
+// top of a live account, so the ceiling must be an error.
+func TestAListingThatNeverEndsIsAnError(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	rows := make([]string, 0, 100)
+	for i := range 100 {
+		rows = append(rows, fmt.Sprintf(
+			`{"id":"%d","attributes":{"email":"a%d@crewlet.local","service_account":true}}`,
+			i, i))
+	}
+	full := `{"data":[` + strings.Join(rows, ",") + `]}`
+	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(full))
+	}
+
+	if _, err := reg.client(t).ListServiceAccounts(
+		context.Background(), pair, "crewlet.local"); err == nil {
+		t.Fatal("a listing that never ends returned a short list as if complete")
+	}
+}
+
+// A ROLE PAST THE FIRST PAGE EXISTS TOO, and this one is sharper: roleIDOf
+// needs an EXACT match among what comes back and refuses the whole pass when
+// it finds none, accusing the operator's config of naming a role their
+// organization in fact has.
+func TestListingRolesWalksEveryPage(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	reg.handle["/api/v2/roles"] = func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page[number]") == "0" {
+			rows := make([]string, 0, 100)
+			for i := range 100 {
+				rows = append(rows, fmt.Sprintf(
+					`{"id":"p0-%d","attributes":{"name":"Crewlet Read Only %d"}}`, i, i))
+			}
+			_, _ = w.Write([]byte(`{"data":[` + strings.Join(rows, ",") + `]}`))
+			return
+		}
+		_, _ = w.Write([]byte(
+			`{"data":[{"id":"exact","attributes":{"name":"Crewlet"}}]}`))
+	}
+
+	got, err := reg.client(t).ListRoles(context.Background(), pair, "Crewlet")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var found bool
+	for _, role := range got {
+		if role.Name == "Crewlet" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the exact role on page two was not read: %d roles", len(got))
+	}
+}
+
+// A NON-JSON REFUSAL DOES NOT PUT A WHOLE RESPONSE BODY INTO AN ERROR.
+//
+// That error becomes Finding.Detail, which integration.Observe stores WITHOUT
+// truncation into a State the fleet writes to one coordination key shared
+// with every other integration. A proxy's HTML page or a gateway 502 —
+// exactly what this client's read cap exists for — is the answer least likely
+// to be the JSON the decoder expects.
+func TestARefusalDetailIsBounded(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("<html>" + strings.Repeat("padding ", 100_000) + "</html>"))
+	}
+
+	_, err := reg.client(t).ListServiceAccounts(context.Background(), pair, "crewlet.local")
+	if err == nil {
+		t.Fatal("a 502 was not reported")
+	}
+	if len(err.Error()) > 4096 {
+		t.Errorf("the error is %d bytes; a response body is being pasted into "+
+			"a value the fleet stores", len(err.Error()))
 	}
 }

@@ -1264,6 +1264,17 @@ type Datadog struct {
 	// staging one and a production one. Sharing a name there would have
 	// each deployment rewrite the other's address on every pass, so the
 	// alerts would land at whichever reconciled last.
+	//
+	// CHANGING IT LEAVES THE PREVIOUS DEFINITION IN PLACE, deliberately,
+	// and it is the one edit here with work at Datadog attached. The name
+	// is also the handle monitors write — `@webhook-crewlet` — so every
+	// monitor still naming the old one goes on delivering through the old
+	// definition, correctly: same address, same token. Deleting it on a
+	// rename would silence exactly those monitors, which is why the engine
+	// does not, and Datadog serves no listing (a GET on the collection
+	// answers 405) so nothing can find it later either. Repoint the
+	// monitors and then remove the old definition at Datadog, or leave
+	// both: a disconnect withdraws only the name this field holds.
 	WebhookName string `yaml:"webhook_name,omitempty" json:"webhook_name,omitempty" desc:"Name of the webhook the engine keeps at Datadog; monitors name it as @webhook-<name> (default crewlet)."`
 
 	// HandleTag is the monitor tag key that names the seat an alert wakes,

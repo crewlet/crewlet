@@ -232,17 +232,51 @@ func provisionSeat(
 		return out
 	}
 	if err := opts.Sink.Record(ctx, seat.TokenVar, minted.Key); err != nil {
-		// THE KEY EXISTS AND ITS VALUE IS NOW LOST. Datadog will not show
-		// it again, so this says exactly that rather than a generic write
-		// failure: the recovery is to delete the key at Datadog.
-		out.Err = fmt.Errorf(
-			"minted a key for %s and could not record it, so its value is "+
-				"gone — delete the key at Datadog and run this again: %w",
-			seat.Handle, err)
+		// THE KEY EXISTS AND ITS VALUE IS NOW LOST, so this engine revokes
+		// it rather than leaving it live.
+		//
+		// [provision.TokenSink]'s contract says why in its own words: "a
+		// credential that exists and is not recorded is one nobody can
+		// use and nobody will remember to remove". Left behind, it also
+		// wedges this seat for good — the next pass finds a key it cannot
+		// read a value for and reports the seat stuck, a state this
+		// engine created and could not leave without somebody logging
+		// into Datadog.
+		out.Err = revoke(ctx, opts, seat, account.ID, minted, err)
 		return out
 	}
 	out.KeyMinted = true
 	return out
+}
+
+// revoke takes back a key this run minted and could not record.
+//
+// It returns the ORIGINAL failure with the revocation's outcome appended,
+// never in place of it — the same rule [gitlab.rollback] states: the reason
+// the run stopped is what an operator has to fix, and a cleanup error
+// replacing it would hide the cause behind its consequence. Only when the
+// revocation ALSO fails is anybody asked to delete a key by hand.
+//
+// DETACHED, because the failure is frequently the cancellation itself, and a
+// revocation inheriting a dead context does nothing at all — which is exactly
+// when the credential most needs taking back.
+func revoke(
+	ctx context.Context, opts Options, seat provision.Seat, accountID string,
+	key AppKey, cause error,
+) error {
+	if err := opts.Client.DeleteAppKey(
+		context.WithoutCancel(ctx), opts.Creds, accountID, key.ID,
+	); err != nil {
+		return fmt.Errorf(
+			"minted a key for %s and could not record it (%w) AND could not "+
+				"revoke it — it is live at Datadog, held by nobody: delete "+
+				"the key named %q on %s's service account and run this again",
+			seat.Handle, cause, key.Name, seat.Handle)
+	}
+	return fmt.Errorf(
+		"minted a key for %s and could not record it, so it was revoked "+
+			"again — nothing is left at Datadog and the next pass will mint "+
+			"another: %w", seat.Handle, cause)
 }
 
 // roleIDOf resolves the configured role, refusing rather than guessing.
