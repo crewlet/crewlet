@@ -12,26 +12,23 @@ import (
 )
 
 // stubFlow is an app creation that has already been begun somewhere else.
+//
+// It COUNTS the calls the landing makes, because what this route may do is as
+// much the contract as what it renders: it is unauthenticated, so a method
+// reached from it is a method anyone can reach.
 type stubFlow struct {
 	seat      string
 	err       error
 	install   string
-	installed struct {
-		seat string
-		id   int64
-	}
+	completes int
 }
 
 func (f *stubFlow) Complete(context.Context, string, string) (string, error) {
+	f.completes++
 	return f.seat, f.err
 }
 
 func (f *stubFlow) InstallURL(string) string { return f.install }
-
-func (f *stubFlow) RecordInstall(_ context.Context, seat string, id int64) error {
-	f.installed.seat, f.installed.id = seat, id
-	return nil
-}
 
 // landing drives GET /webhooks/github-app and returns the page.
 func landing(t *testing.T, flow webhooks.AppCompleter, query string) *httptest.ResponseRecorder {
@@ -112,18 +109,60 @@ func TestAPageWithNoInstallLinkHasNoCountdown(t *testing.T) {
 	}
 }
 
-// THE INSTALLATION IS ADOPTED FROM THE REDIRECT, which is what makes the
-// Integrations screen right when the operator gets back to it rather than a
-// minute later. The loop would find the same id by listing the app's
-// installations, so this is a head start rather than the only path.
-func TestTheInstallArrivalAdoptsTheInstallationGitHubNames(t *testing.T) {
+// THE INSTALL ARRIVAL WRITES NOTHING, however complete the query looks.
+//
+// This route is unauthenticated — a redirect from GitHub carries no engine
+// credential — so everything in its query is attacker-supplied. The `code`
+// arm survives that because a signed state stands in for the credential; the
+// install arm has no state to check, because an agent's app is private and
+// GitHub sends none back through the page such an app is installed from.
+//
+// So a well-formed install arrival is still only a page. It reads as the
+// hostile case it is: `installed=` names any seat the caller likes and
+// `installation_id=` any number, and if either reached the company document
+// then anyone who can reach this port could point a seat's GitHub identity
+// wherever they wanted and mint a config revision per request while doing it.
+//
+// The reconcile loop adopts the real installation by LISTING the app's own
+// installations, which is the path that can tell a true id from a typed one.
+func TestTheInstallArrivalWritesNothing(t *testing.T) {
 	t.Parallel()
-	flow := &stubFlow{}
-	res := landing(t, flow, "installed=sre-lead&installation_id=159853568")
-	if res.Code != http.StatusOK {
-		t.Fatalf("got %d: %s", res.Code, res.Body)
+	for _, query := range []string{
+		"installed=sre-lead&installation_id=159853568",
+		"installed=sre-lead&installation_id=1&state=forged",
+		"installed=../../etc&installation_id=-1",
+	} {
+		t.Run(query, func(t *testing.T) {
+			t.Parallel()
+			flow := &stubFlow{}
+			res := landing(t, flow, query)
+			if res.Code != http.StatusOK {
+				t.Fatalf("got %d: %s", res.Code, res.Body)
+			}
+			// Complete is the ONLY method the landing may reach, and only
+			// down the arm that verified a state first. An install
+			// arrival that reached any of the flow at all would be this
+			// route acting on a query nobody signed.
+			if flow.completes != 0 {
+				t.Errorf("the install arrival called the app flow %d times; "+
+					"an unauthenticated query must reach nothing that writes",
+					flow.completes)
+			}
+		})
 	}
-	if flow.installed.seat != "sre-lead" || flow.installed.id != 159853568 {
-		t.Fatalf("recorded %q/%d", flow.installed.seat, flow.installed.id)
+}
+
+// AND IT STILL TELLS THE OPERATOR WHERE THEY STAND. Writing nothing is not
+// the same as saying nothing: the page names the seat GitHub sent and says
+// the loop will pick the installation up, which is the message this arm
+// already showed whenever the adoption failed.
+func TestTheInstallArrivalStillNamesTheSeatAndTheWait(t *testing.T) {
+	t.Parallel()
+	res := landing(t, &stubFlow{}, "installed=sre-lead&installation_id=159853568")
+	body := res.Body.String()
+	for _, want := range []string{"sre-lead", "App installed for", "next pass"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the page does not mention %q:\n%s", want, body)
+		}
 	}
 }

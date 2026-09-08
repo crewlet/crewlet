@@ -753,8 +753,15 @@ what stands in its place, and it is validated before anything else happens.
   install. The seal comes first because GitHub returns those two values exactly
   once and reissues neither, so a failure after it costs a retry and a failure
   before it costs the app.
-- With `?installed=<handle>`, it confirms the install. There is nothing to
-  convert: installing is GitHub's own act and returns no code.
+- With `?installed=<handle>`, it confirms the install and **writes nothing**.
+  There is nothing to convert — installing is GitHub's own act and returns no
+  code — and nothing to check the query against either: an agent's app is
+  private, so it is installed from the organization's own installations page,
+  which sends back no `state`. An unsigned query is therefore never allowed to
+  reach the company document. The
+  [reconcile loop](../concepts/integration-reconcile.md) adopts the
+  installation on its next pass, having *listed the app's own installations* —
+  the reading that can tell a real id from a typed one.
 - With `?error=`, it renders GitHub's own `error_description`, which is the
   operator's to read (they cancelled, or they may not create apps on that
   organization).
@@ -1827,7 +1834,10 @@ convert, and after it is **installed**, with nothing but `?installed=<handle>`.
 Unauthenticated, because a redirect from GitHub carries no engine credential;
 the `state` minted by [`POST /setup/integrations/github/app`](#one-agents-own-github-app)
 stands in its place and is a signed token naming the seat, checked before the
-code is converted. On a conversion the app's private key and webhook secret are
+code is converted. **The install arrival carries no such proof and so changes
+nothing** — it renders a page and no more; the
+[reconcile loop](../concepts/integration-reconcile.md) is what records the
+installation, from GitHub's own list rather than from the query. On a conversion the app's private key and webhook secret are
 sealed before anything else can fail, because GitHub returns both exactly once
 and reissues neither. Answers `200` for a completion or an install, `400` for a
 refusal from GitHub, a missing code, or a state or code the engine will not
