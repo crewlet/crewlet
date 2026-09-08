@@ -13,7 +13,7 @@ require (
 	github.com/openai/openai-go/v3 v3.56.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/tursodatabase/turso-go-platform-libs v0.8.0-pre.8
-	github.com/yuin/goldmark v1.8.5
+	github.com/yuin/goldmark v1.8.6
 	go.opentelemetry.io/otel v1.46.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.46.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.46.0
