@@ -87,5 +87,6 @@ already live there.
 - **[CLI](reference/cli.md)** — Command reference
 - **[API Endpoints](reference/api-endpoints.md)** — REST API routes and schemas, the WebSocket protocol, the work board and page surface over the native backends, and `/operator/mcp` — the company's own tracker and knowledge base served to *your* AI assistant over MCP
 - **[Dashboard Design System](reference/dashboard-design.md)** — The dashboard's screens and its visual system: the one rule (colour carries state, never identity), a palette whose every contrast and separation claim is recomputed from the shipped stylesheet in both themes, what each screen answers that no other one does, the four rules that keep a running turn's transcript from moving under the reader, why the built bundle is committed, and the rules a change has to keep
+- **[Metrics](reference/metrics.md)** — Every instrument the engine exports, generated from the catalogue: what each one measures, its unit, its attributes, and the failure it makes visible. Plus the `OTEL_*` variables that switch the export on, and what is deliberately not exported
 - **[Environment Variables](reference/environment-variables.md)** — All configuration env vars
 - **[Design Decisions](reference/design-decisions.md)** — Why certain architectural choices were made
