@@ -140,7 +140,12 @@ func CompanyRequirements(in *config.Slack) []setup.Requirement {
 		ConfigPath: "integrations.slack.typing_status",
 		Required:   false,
 		Choices:    statusChoices(),
-		Help:       "Whether an agent shows that it is working before it answers.",
+		// PRESELECTED, because a required-looking picker reading "Choose
+		// one" over a field that already has an answer asks a question the
+		// engine has already settled. It is the first choice for the same
+		// reason it is the default.
+		Default: string(config.StatusAlways),
+		Help:    "Whether an agent shows that it is working before it answers.",
 	}
 	req.Present, req.Resolved, req.Stored = setup.Plain(status)
 	return []setup.Requirement{req}
@@ -150,9 +155,8 @@ func CompanyRequirements(in *config.Slack) []setup.Requirement {
 // a value it accepts and a value this offers can never diverge.
 func statusChoices() []setup.Choice {
 	labels := map[config.WorkingStatus]string{
-		"addressed": "Only where somebody is waiting on this agent",
 		"always":    "On every message it takes up",
-		"off":       "Never",
+		"addressed": "Only where somebody is waiting on this agent",
 	}
 	out := make([]setup.Choice, 0, len(config.WorkingStatuses))
 	for _, mode := range config.WorkingStatuses {

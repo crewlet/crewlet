@@ -963,11 +963,10 @@
           "type": "string"
         },
         "typing_status": {
-          "description": "When to show the typing indicator (default off).",
+          "description": "When to show the typing indicator (default always); it costs a request every few seconds per thinking seat.",
           "enum": [
-            "addressed",
             "always",
-            "off"
+            "addressed"
           ],
           "type": "string"
         },
@@ -1905,11 +1904,10 @@
           "$ref": "#/$defs/StatusPhrases"
         },
         "typing_status": {
-          "description": "When to show the working indicator (default addressed).",
+          "description": "When to show the working indicator (default always).",
           "enum": [
-            "addressed",
             "always",
-            "off"
+            "addressed"
           ],
           "type": "string"
         }

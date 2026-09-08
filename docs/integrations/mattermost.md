@@ -201,7 +201,7 @@ integrations:
     enabled: true
     url: "https://chat.nimbus.example"    # instance base URL (required)
     team: nimbus                          # team slug (required)
-    typing_status: off                    # off (default) | addressed | always
+    typing_status: always                 # always (default) | addressed
     provisioning:              # consumed ONLY by the CLI, ignored by the engine
       username_prefix: ""      # e.g. "agent-" if humans share the server
       channels: [town-square, engineering]   # channels every bot joins
@@ -244,7 +244,7 @@ which is reported and left untouched.
 |---|---|
 | `url` | Instance base URL. Required when enabled. |
 | `team` | Team slug agents belong to. Required — channels are team-scoped. |
-| `typing_status` | `off` (default) / `addressed` / `always`. See [Working status](#working-status). |
+| `typing_status` | `always` (default) / `addressed`. See [Working status](#working-status). |
 | `provisioning.username_prefix` | Prepended to each handle to form the bot username. |
 | `provisioning.channels` | Channels every agent bot is added to. |
 | `provisioning.display_name_suffix` | Appended to each bot's display name. |
@@ -661,19 +661,21 @@ both jobs.
 
 Mattermost's only working indicator is the composer typing line, whose
 wording is fixed by the client. The engine can raise it, but cannot say
-anything with it — so unlike Slack there are no per-phase phrases, and
-`typing_status` **defaults to `off`**.
+anything with it, so unlike Slack there are no per-phase phrases.
 
-Two reasons for that default:
+`typing_status` **defaults to `always`**, the same as Slack, and on this
+backend that default is the expensive one. Know what it costs before you
+leave it:
 
 - It conveys only *busy*, where Slack's line carries the phase the agent is
   in. A fixed "is typing…" held for a five-minute turn tells a reader less
-  than the absence of one would.
+  than Slack's would.
 - It has to be re-asserted every few seconds rather than every 45, so a
   multi-minute turn costs one to two orders of magnitude more requests for
   strictly less information.
 
-If you want it anyway, set `typing_status: addressed` (or `always`). The
+Set `typing_status: addressed` to raise it only where somebody is waiting on
+that agent, which is the setting most Mattermost deployments want. The
 heartbeat interval is **derived from the server's own
 `TimeBetweenUserTypingUpdatesMilliseconds`** setting rather than hardcoded:
 re-asserting faster than the server's throttle is silently dropped, and much
@@ -681,9 +683,13 @@ slower leaves a visible gap. Tune the server setting and the engine follows.
 
 | Mode | Shows the status when… |
 |---|---|
-| `off` *(default)* | never |
+| `always` *(default)* | every Mattermost-triggered turn |
 | `addressed` | a DM, a direct mention, or a thread the agent already follows |
-| `always` | every Mattermost-triggered turn |
+
+> **There is no `off`.** What it bought was a company whose agents think in
+> silence for minutes at a time, which is the state this feature exists to
+> remove. `addressed` is the same judgement made per message rather than once
+> for the deployment, and on this backend it is also the cheaper one.
 
 ---
 
@@ -785,7 +791,7 @@ integrations:
     enabled: true
     url: "${MATTERMOST_URL}"     # written by the bootstrap
     team: nimbus                 # the team the bootstrap creates
-    typing_status: addressed     # off by default; on here so you can see it
+    typing_status: addressed     # always by default; narrowed here
     provisioning:
       channels: [town-square, engineering, product]
       display_name_suffix: " (AI)"

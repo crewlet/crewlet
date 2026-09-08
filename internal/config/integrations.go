@@ -423,14 +423,20 @@ const (
 	// this seat: a DM, a direct mention, or a thread it already follows.
 	StatusAddressed WorkingStatus = "addressed"
 	// StatusAlways shows it on every chat-triggered turn, including
-	// passive channel messages and broadcasts.
+	// passive channel messages and broadcasts. It is the DEFAULT: a turn
+	// takes minutes, and a reader who sees nothing cannot tell an agent
+	// working from an agent that is dead.
 	StatusAlways WorkingStatus = "always"
-	// StatusOff disables it.
-	StatusOff WorkingStatus = "off"
 )
 
 // WorkingStatuses is the closed set.
-var WorkingStatuses = []WorkingStatus{StatusAddressed, StatusAlways, StatusOff}
+//
+// THERE IS NO "off". It was here, and what it bought was a company whose
+// agents think in silence for minutes at a time, which is the state this
+// whole feature exists to remove. An operator who finds the indicator noisy
+// wants `addressed`, which is the same judgement made per message rather
+// than once for the deployment.
+var WorkingStatuses = []WorkingStatus{StatusAlways, StatusAddressed}
 
 // validate refuses a status outside the set, at the path it was written.
 //
@@ -458,7 +464,7 @@ func (w WorkingStatus) validate(path string) error {
 type Slack struct {
 	// TypingStatus defaults to addressed: only when someone is plausibly
 	// waiting.
-	TypingStatus WorkingStatus `yaml:"typing_status,omitempty" json:"typing_status,omitempty" js:"enum=addressed|always|off" desc:"When to show the working indicator (default addressed)."`
+	TypingStatus WorkingStatus `yaml:"typing_status,omitempty" json:"typing_status,omitempty" js:"enum=always|addressed" desc:"When to show the working indicator (default always)."`
 
 	// StatusPhrases replaces the words the indicator shows.
 	StatusPhrases StatusPhrases `yaml:"status_phrases,omitempty" json:"status_phrases,omitzero"`
@@ -479,7 +485,7 @@ func (s *Slack) validate(path string) error {
 // Status is the indicator mode, applying the default.
 func (s *Slack) Status() WorkingStatus {
 	if s.TypingStatus == "" {
-		return StatusAddressed
+		return StatusAlways
 	}
 	return s.TypingStatus
 }
@@ -539,7 +545,7 @@ type Mattermost struct {
 	// turn costs one to two orders of magnitude more requests for strictly
 	// less information. There is deliberately no status_phrases analogue:
 	// no text this backend accepts would ever be rendered.
-	TypingStatus WorkingStatus `yaml:"typing_status,omitempty" json:"typing_status,omitempty" js:"enum=addressed|always|off" desc:"When to show the typing indicator (default off)."`
+	TypingStatus WorkingStatus `yaml:"typing_status,omitempty" json:"typing_status,omitempty" js:"enum=always|addressed" desc:"When to show the typing indicator (default always); it costs a request every few seconds per thinking seat."`
 
 	// Provisioning is read ONLY by the provisioning CLI. The engine never
 	// looks at it; it is here so a provisioning-ready config validates.
@@ -549,7 +555,7 @@ type Mattermost struct {
 // Status is the indicator mode, applying the off default.
 func (m *Mattermost) Status() WorkingStatus {
 	if m.TypingStatus == "" {
-		return StatusOff
+		return StatusAlways
 	}
 	return m.TypingStatus
 }

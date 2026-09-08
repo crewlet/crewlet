@@ -39,7 +39,7 @@ same steps done entirely by hand.
 ```yaml
 integrations:
   slack:                                 # enable the Slack transport
-    typing_status: addressed             # addressed (default) | always | off
+    typing_status: always                # always (default) | addressed
 
 mcp_servers:
   - name: slack
@@ -409,14 +409,19 @@ the coffee machine…") is safe; plausible-and-specific is not.
 ```yaml
 integrations:
   slack:
-    typing_status: addressed    # default
+    typing_status: always    # default
 ```
 
 | Mode | Shows the status when… |
 |---|---|
-| `addressed` *(default)* | a human is plausibly waiting on **this** agent: a DM or group DM, a direct `@mention` (including `app_mention`), or a thread the agent already follows |
-| `always` | every Slack-triggered turn, including passive top-level channel messages and `@here` / `@channel` broadcasts |
-| `off` | never |
+| `always` *(default)* | every Slack-triggered turn, including passive top-level channel messages and `@here` / `@channel` broadcasts |
+| `addressed` | a human is plausibly waiting on **this** agent: a DM or group DM, a direct `@mention` (including `app_mention`), or a thread the agent already follows |
+
+> **There is no `off`.** What it bought was a company whose agents think in
+> silence for minutes at a time, which is the state this feature exists to
+> remove. A workspace where several agents light up for one message wants
+> `addressed`, which is the same judgement made per message rather than once
+> for the deployment.
 
 `addressed` deliberately excludes passive channel traffic and collective
 addresses. Every bot in a channel is woken by a top-level message, and the
