@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
@@ -122,9 +123,9 @@ func (s Sources) recentRuns(ctx context.Context) []map[string]any {
 //
 // `routes` is the one thing here that is a property of the BUILD rather than
 // of the config, and it is the difference between an integration that works
-// and one that only looks like it does. A vendor's webhook route verifies and
+// and one that only looks like it does. A third-party app's webhook route verifies and
 // stores its deliveries as soon as its block is present; whether one then
-// wakes a seat needs a parser, and four vendors have the first half and not
+// wakes a seat needs a parser, and four third-party apps have the first half and not
 // the second. Without this field they render identically — configured, secret
 // present, deliveries arriving — so a company whose tracker is ingesting
 // hundreds of events that reach nobody looks exactly like one that is working.
@@ -139,6 +140,15 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	}
 	seen := s.deliveryTraffic(ctx)
 	in := company.Integrations
+	// ONE READ for the whole answer. Every row asks the same question of
+	// the same coordination bucket, and a per-row read would put seven
+	// round trips on a screen refresh.
+	//
+	// Nil when this process cannot say, which a standalone API honestly
+	// is, and which is NOT the same claim as "nothing has been
+	// reconciled". A row then carries a null reconcile rather than one
+	// asserting that nobody has ever checked.
+	reconciled, reconcileKnown := s.reconcileStates(ctx)
 
 	// Nil when no engine is co-located; an empty-but-non-nil list is a real
 	// answer meaning nothing routes, so the two must not collapse.
@@ -201,7 +211,7 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		// Which is the question secret_usable answers, from what this
 		// process actually RESOLVED. The gap between the two is invisible
 		// from every other surface: an unset variable renders as a secret
-		// present, the vendor's settings page shows a healthy hook, and
+		// present, the third-party app's settings page shows a healthy hook, and
 		// every delivery is refused with nothing anywhere naming the
 		// variable. Null when this process cannot say — a standalone API —
 		// or when the surface has no secret to resolve, exactly as above.
@@ -210,6 +220,44 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 			row["secret_usable"] = nil
 		default:
 			row["secret_usable"] = boolPtr(slices.Contains(verifiable, kind))
+		}
+		// THREE-VALUED again, and the third value is the one that took a
+		// subsystem to be able to say at all: null means nothing is
+		// checking this surface from here, an absent entry means the loop
+		// has not reached it yet, and a present one is a real finding.
+		// Before the reconcile loop existed this answer had no honest
+		// form, which is why the doc comment above still says it never
+		// infers health: it does not, and now it does not have to.
+		//
+		// AND A ROW IS NOT A REPORT. The setup write stamps an address on
+		// a surface no pass converges, which leaves a row with no phase in
+		// it; rendered as a report, that empty phase became the card's
+		// status and drew Slack with no state at all while its address had
+		// moved. [integration.State.Observed] is the test.
+		if !reconcileKnown {
+			row["reconcile"] = nil
+		} else if state, checked := reconciled[kind]; checked && state.Observed() {
+			row["reconcile"] = reconcileRow(state)
+		} else {
+			row["reconcile"] = nil
+		}
+		// WHETHER THIS SURFACE'S REGISTRATION STILL POINTS HERE.
+		//
+		// A company's public base moves, and a registration made against
+		// the old one keeps pointing at an address that no longer answers.
+		// Where a pass registers the hook, the next tick moves it and this
+		// is true again within a tick; where nothing does, it stays false
+		// until a person goes and changes it at the third-party app, which
+		// is the whole reason the field exists.
+		//
+		// THREE-VALUED like the rest: null is "nothing has recorded an
+		// address for this surface", which is not the same claim as "the
+		// address moved". A row that has never been set up says null, and
+		// a screen must not report that as a fault.
+		row["endpoint"], row["endpoint_current"] = nil, nil
+		if state, checked := reconciled[kind]; checked && state.Endpoint != "" {
+			row["endpoint"] = state.Endpoint
+			row["endpoint_current"] = state.Endpoint == in.WebhookBase()
 		}
 		// Every row carries seats, so the view never reads undefined.
 		// An empty list is a real answer — nobody holds credentials of
@@ -227,14 +275,21 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	// the inbound route verifies with. A company with seat apps and no
 	// block answers webhooks and sends nothing; one with the block and no
 	// apps refuses every delivery.
-	if seats := slackSeats(company); in.Slack != nil || seats > 0 {
+	if seats := seatSecrets(company, "slack"); in.Slack != nil || seats > 0 {
 		add("slack", in.Slack != nil, boolPtr(seats > 0), nil)
 	}
 	if in.Mattermost != nil {
 		add("mattermost", true, nil, map[string]any{"url": in.Mattermost.URL})
 	}
-	if in.GitHub != nil {
-		add("github", in.GitHub.Enabled, boolPtr(in.GitHub.WebhookSecret != ""), nil)
+	// GitHub, on the same terms as Slack and for the same reason: a
+	// per-agent app is an app of its own, with its own signing secret, and
+	// a company can hold nothing but those. Reported on the org block
+	// alone, such a company had no GitHub row at all while five agents
+	// were receiving deliveries.
+	if seats := seatSecrets(company, "github"); in.GitHub != nil || seats > 0 {
+		org := in.GitHub != nil
+		add("github", org && in.GitHub.Enabled,
+			boolPtr(seats > 0 || (org && in.GitHub.WebhookSecret != "")), nil)
 	}
 	if in.GitLab != nil {
 		add("gitlab", in.GitLab.Enabled, boolPtr(in.GitLab.SigningSecret != ""),
@@ -245,8 +300,30 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 			map[string]any{"url": in.Jira.BaseURL()})
 	}
 	if in.Confluence != nil {
-		add("confluence", true, boolPtr(in.Confluence.WebhookSecret != ""),
-			map[string]any{"url": in.Confluence.BaseURL()})
+		// TWO ROUTES, so the row names both. Data Center signs on
+		// /webhooks/confluence; Cloud carries a token on
+		// /webhooks/confluence/{event}, one hook per event. secret_present
+		// answers for EITHER credential, because the question is whether a
+		// delivery from this surface could be verified at all.
+		add("confluence", true,
+			boolPtr(in.Confluence.WebhookSecret != "" || in.Confluence.WebhookToken != ""),
+			map[string]any{
+				"url":        in.Confluence.BaseURL(),
+				"cloud_path": "/webhooks/confluence/{event}",
+			})
+	}
+	if in.Datadog != nil {
+		// The one row whose secret is not a signing key, and the detail
+		// says so rather than leaving a reader to assume the header is
+		// verified like every other surface's. route_to is reported
+		// because it is where an alert naming no owner goes, which is
+		// the single most consequential thing about this integration
+		// that is invisible from the traffic counts beside it.
+		add("datadog", in.Datadog.Enabled, boolPtr(in.Datadog.WebhookToken != ""),
+			map[string]any{
+				"handle_tag": in.Datadog.HandleTagOrDefault(),
+				"route_to":   in.Datadog.RouteTo,
+			})
 	}
 	if in.ForgeAppID != "" {
 		// The app id is the JWT AUDIENCE rather than a secret — it is in
@@ -275,9 +352,9 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	return body, nil
 }
 
-// inboundPath is where a vendor's deliveries arrive, so an operator can check
-// what they pasted into the vendor's settings page against what this engine
-// actually serves. Static per vendor — these are the routes webhooks.go
+// inboundPath is where a third-party app's deliveries arrive, so an operator can check
+// what they pasted into the third-party app's settings page against what this engine
+// actually serves. Static per integration: these are the routes webhooks.go
 // registers, and a disagreement between the two is a route nothing reaches.
 func inboundPath(kind string) string {
 	switch kind {
@@ -285,6 +362,11 @@ func inboundPath(kind string) string {
 		return "" // one outbound websocket per seat; nothing arrives here
 	case "slack":
 		return "/webhooks/slack/{handle}"
+	case "github":
+		// Both forms are served. The seat one is what a per-agent app
+		// points at, and naming it here is what tells an operator the
+		// path is meant to carry a handle.
+		return "/webhooks/github/{handle}"
 	case "forge":
 		return "/webhooks/forge"
 	default:
@@ -372,7 +454,7 @@ func (s Sources) countOutcomes(ctx context.Context, out *traffic) {
 	for _, row := range rows {
 		// THE INTEGRATION, not the event's Source: the source of an
 		// engine-published event names the engine, and what the row has
-		// to line up with is the inbound count for one vendor.
+		// to line up with is the inbound count for one third-party app.
 		source := integrationOf(row)
 		if source == "" {
 			continue
@@ -386,7 +468,7 @@ func (s Sources) countOutcomes(ctx context.Context, out *traffic) {
 	}
 }
 
-// integrationOf reads the vendor an outcome event concerns.
+// integrationOf reads the third-party app an outcome event concerns.
 //
 // FROM THE TAG, not the payload: a listing deliberately never selects the
 // payload column, so the tag is all a historical row carries — see
@@ -406,10 +488,15 @@ func integrationOf(row store.EventRecord) string {
 // What counts as carrying a surface is that seat's OWN field for it: a Slack
 // app, a Mattermost identity, a per-seat project or space. A seat with none
 // of them is served by the company-wide account, not by one of its own.
+//
+// THE WALK IS company.EachRole, not a loop over company.Roles: that field is
+// the seats belonging to NO unit, and a company whose agents all sit in units
+// answered an empty list from every caller here. EachRole is exported for
+// this exact reason, and its own doc records the first time a top-level-only
+// lookup shipped.
 func seatsFor(company *config.Company, kind string) []string {
 	out := []string{}
-	for i := range company.Roles {
-		r := &company.Roles[i]
+	for r := range company.EachRole() {
 		var carries bool
 		switch kind {
 		case "slack":
@@ -420,6 +507,8 @@ func seatsFor(company *config.Company, kind string) []string {
 			carries = r.Integrations.Jira != nil
 		case "confluence":
 			carries = r.Integrations.Confluence != nil
+		case "github":
+			carries = r.Integrations.GitHub != nil
 		}
 		if carries {
 			out = append(out, r.Name)
@@ -429,14 +518,28 @@ func seatsFor(company *config.Company, kind string) []string {
 	return out
 }
 
-// slackSeats counts the per-seat Slack apps this company configures.
+// seatSecrets counts the per-seat apps of one kind that carry a verification
+// credential.
 //
-// Counted as well as listed: the COUNT is what says whether the route can
-// verify anything at all, since a Slack app with no signing secret cannot.
-func slackSeats(company *config.Company) int {
+// Counted as well as listed by [seatsFor]: the COUNT is what says whether the
+// route can verify anything at all, since an app with no signing secret
+// cannot, and an app without one is exactly the half-finished state an
+// operator needs to see.
+func seatSecrets(company *config.Company, kind string) int {
 	n := 0
-	for i := range company.Roles {
-		if slack := company.Roles[i].Integrations.Slack; slack != nil && slack.SigningSecret != "" {
+	for r := range company.EachRole() {
+		var secret string
+		switch kind {
+		case "slack":
+			if slack := r.Integrations.Slack; slack != nil {
+				secret = slack.SigningSecret
+			}
+		case "github":
+			if app := r.Integrations.GitHub; app != nil {
+				secret = app.WebhookSecret
+			}
+		}
+		if secret != "" {
 			n++
 		}
 	}
@@ -559,4 +662,90 @@ func countOrNil(counts map[string]int, kind string) any {
 		return nil
 	}
 	return counts[kind]
+}
+
+// reconcileStates reads what the loop last found, keyed by surface.
+//
+// The second result is whether this process could say at all, kept apart from
+// an empty map for the same reason [Sources.Routed] keeps them apart: a
+// standalone API has nothing to ask, and reporting that as "no surface has
+// been reconciled" would put an alarming claim on a screen that had simply
+// asked the wrong node.
+func (s Sources) reconcileStates(ctx context.Context) (map[string]integration.State, bool) {
+	if s.Reconciles == nil {
+		return nil, false
+	}
+	states := s.Reconciles(ctx)
+	if states == nil {
+		return nil, false
+	}
+	out := make(map[string]integration.State, len(states))
+	for _, state := range states {
+		out[state.Kind.String()] = state
+	}
+	return out, true
+}
+
+// reconcileRow renders one surface's status for the wire.
+//
+// The FINDINGS travel as well as the report, because the two answer different
+// questions: the report says what to do next, and the findings say what is
+// actually wrong. A company with a broken webhook and four under-granted
+// seats reports the webhook, and an operator who fixes it should not have to
+// wait a full pass to discover there were four more things behind it.
+func reconcileRow(state integration.State) map[string]any {
+	// THE REPORT A READER SHOULD SEE, which is the stored one except in the
+	// window between somebody pressing Disconnect and the first teardown
+	// pass: the stored phase is then still whatever the last reconcile
+	// concluded, and showing it reports a connected integration somebody
+	// has already asked to remove.
+	report := state.Reported()
+	row := map[string]any{
+		"phase": string(report.Phase),
+		// The phase in a reader's words, decided HERE rather than on the
+		// client. A screen that mapped six phase values to five labels
+		// would be a second place that has to know what they mean, and it
+		// could not label a phase a newer node wrote at all.
+		"phase_label": report.Phase.Label(),
+		"actor":       string(report.Actor),
+		"detail":      report.Detail,
+		"action_url":  report.ActionURL,
+		// The INTENT, separately from the phase it produces. A reader
+		// needs to know a disconnect was asked for even on a build whose
+		// phase vocabulary it does not share.
+		"disconnecting": state.TearingDown(),
+		"outcome":       string(state.Outcome),
+		"attempts":      state.Attempts,
+		"last_error":    state.LastError,
+		"findings":      reconcileFindings(state.Findings),
+	}
+	// Rendered as instants, so an absent one is absent rather than the
+	// zero time, which prints as 1970 and reads as a real answer.
+	row["last_attempt_at"] = instantOrNil(state.LastAttemptAt)
+	row["settled_at"] = instantOrNil(state.SettledAt)
+	row["next_attempt_at"] = instantOrNil(state.NextAttemptAt)
+	return row
+}
+
+// reconcileFindings renders the findings list, never nil so a view does not
+// have to read undefined.
+func reconcileFindings(findings []integration.Finding) []map[string]any {
+	out := make([]map[string]any, 0, len(findings))
+	for _, f := range findings {
+		out = append(out, map[string]any{
+			"kind":       string(f.Kind),
+			"subject":    f.Subject,
+			"detail":     f.Detail,
+			"action_url": f.ActionURL,
+		})
+	}
+	return out
+}
+
+// instantOrNil renders a timestamp, or null for one that was never set.
+func instantOrNil(at time.Time) any {
+	if at.IsZero() {
+		return nil
+	}
+	return at.UTC().Format(time.RFC3339)
 }

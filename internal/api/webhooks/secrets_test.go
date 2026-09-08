@@ -19,7 +19,7 @@ import (
 // that absence is asserted rather than assumed.
 //
 // A field wired to the wrong secret is invisible until a real delivery from a
-// real vendor refuses to verify, with the vendor's settings page showing a
+// real third-party app refuses to verify, with its settings page showing a
 // healthy hook. That is what the mapping is held to here.
 
 // gitLabFixtureSecret is whsec_ over standard base64 of a 32-byte key — the
@@ -31,7 +31,7 @@ const gitLabFixtureSecret = "whsec_YS1maXh0dXJlLXNpZ25pbmcta2V5LW9mLTMyYnl0ZXM="
 // a new key, never a new shape.
 const rotatedGitLabSecret = "whsec_YS1yb3RhdGVkLXNpZ25pbmcta2V5LW9mLTMyYnl0ZXM="
 
-// servedYAML is a whole company on the vendors this build serves.
+// servedYAML is a whole company on the third-party apps this build serves.
 var servedYAML = `
 name: Acme
 providers:
@@ -242,7 +242,7 @@ func TestARotatedSecretTakesEffectWithoutARestart(t *testing.T) {
 	// restart.
 	//
 	// Measured on GitLab because GitLab is a route a running company can
-	// have a secret on at all: a vendor this build does not serve has no
+	// have a secret on at all: a third-party app this build does not serve has no
 	// config able to give it one, so nothing there is ever rotated.
 	e := newEdge(t)
 	body := []byte(`{"object_kind":"issue"}`)
@@ -262,7 +262,7 @@ func TestARotatedSecretTakesEffectWithoutARestart(t *testing.T) {
 //
 // A secret lives in the config as a ${VAR}, and the gap between "written
 // down" and "resolved to something a route can check a signature with" is
-// invisible from every other surface: the config shows a secret, the vendor's
+// invisible from every other surface: the config shows a secret, the third-party app's
 // settings page shows a healthy hook, and every delivery is refused with
 // nothing naming the variable.
 func TestVerifiableNamesWhatCouldActuallyAcceptADelivery(t *testing.T) {
@@ -289,7 +289,7 @@ func TestVerifiableNamesWhatCouldActuallyAcceptADelivery(t *testing.T) {
 		{
 			// GitLab signs with the DECODED 32 bytes. A value that is not
 			// one cannot be the key for any delivery, however non-empty.
-			"gitlab holding a key the vendor could not have produced",
+			"gitlab holding a key the third-party app could not have produced",
 			webhooks.Secrets{GitLab: "whsec_c2hvcnQ="},
 			nil,
 		},
@@ -299,11 +299,51 @@ func TestVerifiableNamesWhatCouldActuallyAcceptADelivery(t *testing.T) {
 			[]string{"confluence", "forge", "github", "jira"},
 		},
 		{
-			// Mattermost holds a websocket rather than a route, and Slack's
-			// material is per seat. Neither is a delivery this can verify.
+			// Mattermost holds a websocket rather than a route: there is no
+			// delivery to verify, and its absence here is "nothing to say".
 			"a chat surface with no route to verify",
-			webhooks.Secrets{Slack: map[string]string{"ceo": "s"}},
+			webhooks.Secrets{},
 			nil,
+		},
+		{
+			// SLACK IS PER SEAT AND STILL A ROUTE. One seat whose signing
+			// secret resolved means a delivery addressed to that seat would
+			// be accepted, which is the question this answers. Leaving it
+			// out told every working Slack company its deliveries were
+			// being refused.
+			"one slack seat whose signing secret resolved",
+			webhooks.Secrets{Slack: map[string]string{"ceo": "s", "cto": ""}},
+			[]string{"slack"},
+		},
+		{
+			// And a map of seats that all hold an unresolved reference
+			// verifies nothing, exactly as an unresolved GitLab key does.
+			"slack seats whose secrets did not resolve",
+			webhooks.Secrets{Slack: map[string]string{"ceo": "", "cto": ""}},
+			nil,
+		},
+		{
+			// GITHUB IS PER SEAT TOO, and a company can hold nothing but
+			// per-agent apps: one app per agent is the only way an agent
+			// acts as itself, and such a company never configures an
+			// organization-wide one. Answering on the org secret alone
+			// told it every delivery was refused.
+			"one github seat whose app secret resolved",
+			webhooks.Secrets{GitHubSeat: map[string]string{"sre-lead": "s"}},
+			[]string{"github"},
+		},
+		{
+			"github seats whose secrets did not resolve",
+			webhooks.Secrets{GitHubSeat: map[string]string{"sre-lead": ""}},
+			nil,
+		},
+		{
+			// COUNTED ONCE when both are set, because the question is
+			// whether this surface could accept a delivery, not how many
+			// credentials it has.
+			"both a github org secret and a seat's own",
+			webhooks.Secrets{GitHub: "gh", GitHubSeat: map[string]string{"sre-lead": "s"}},
+			[]string{"github"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -326,8 +366,8 @@ func literal(value string) string { return value }
 // resolved at construction, which is what makes rotating one a change to the
 // environment rather than to the company. This consumer did not resolve, and
 // the result was seven routes verifying against the literal string
-// "${GITLAB_SIGNING_SECRET}": every delivery from every vendor refused, with
-// the vendor's settings page showing a healthy hook. Measured against a real
+// "${GITLAB_SIGNING_SECRET}": every delivery from every third-party app refused, with
+// the third-party app's settings page showing a healthy hook. Measured against a real
 // GitLab.
 //
 // Worse than the outage is what the literal IS. A config field the dashboard
@@ -383,5 +423,105 @@ func TestWithoutAResolverNothingVerifies(t *testing.T) {
 	if got.GitLab != "" || got.Jira != "" || got.ForgeAppID != "" ||
 		got.Confluence != "" || got.GitHub != "" {
 		t.Errorf("secrets appeared with nothing to resolve them: %+v", got)
+	}
+}
+
+// seatAppsYAML is a company whose agents act as themselves on GitHub: one app
+// per agent, each with the signing secret GitHub generated for it, and no
+// organization-wide app at all. It is what the per-agent flow builds.
+const seatAppsYAML = `
+name: Acme
+providers:
+  llm:
+    primary:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["key"]
+roles:
+  - name: SRE Lead
+    handle: sre-lead
+    llm: primary
+    integrations:
+      github:
+        tier: full_access
+        app_id: 41
+        app_slug: acme-sre-lead
+        installation_id: 7
+        private_key: pem
+        webhook_secret: sre-hook
+  - name: Reviewer
+    handle: reviewer
+    llm: primary
+    integrations:
+      github:
+        tier: review
+        app_id: 42
+        app_slug: acme-reviewer
+  - name: Jane Founder
+    handle: founder
+    kind: human
+    contact:
+      github_login: jane
+`
+
+// AN AGENT'S APP SIGNS WITH ITS OWN SECRET, and nothing else could have.
+//
+// GitHub generates a signing secret per app, at conversion time, and returns
+// it once. So a delivery from an agent's app carries a signature over that
+// app's secret, not the organization's, which belongs to a different app or
+// to no app at all in a company like this one. Verified against the
+// organization's, every delivery from every agent was refused with a 503
+// while GitHub's own hook page reported the app healthy.
+func TestAnAgentsAppContributesItsOwnWebhookSecret(t *testing.T) {
+	t.Parallel()
+	s := secretsFor(t, seatAppsYAML)
+
+	if got := s.GitHubSeat["sre-lead"]; got != "sre-hook" {
+		t.Errorf("the seat's own webhook secret is %q, want the app's own", got)
+	}
+	// A HALF-BUILT APP CONTRIBUTES NOTHING, and that is the honest answer:
+	// this seat's app exists but was never converted here, so there is no
+	// secret to check a delivery against and the route must refuse rather
+	// than reach for somebody else's.
+	if secret, listed := s.GitHubSeat["reviewer"]; listed {
+		t.Errorf("a seat with no webhook secret is on the map as %q", secret)
+	}
+	// A HUMAN SEAT HOLDS NO APP. Nothing wakes a person's seat, so a route
+	// keyed on one could only ever be a dead end.
+	if _, listed := s.GitHubSeat["founder"]; listed {
+		t.Error("a human seat contributed a GitHub webhook secret")
+	}
+	// AND THE ORGANIZATION HAS NONE, which is the whole point of the
+	// fixture: this company never configured an org-wide app.
+	if s.GitHub != "" {
+		t.Errorf("the organization secret is %q, and this company has no org app", s.GitHub)
+	}
+	if got := strings.Join(s.Verifiable(), ","); !strings.Contains(got, "github") {
+		t.Errorf("Verifiable() = %v, and a delivery to sre-lead would be accepted", got)
+	}
+}
+
+// THE SEAT'S SECRET IS PREFERRED, AND THE ORGANIZATION'S IS THE FALLBACK.
+//
+// Two deployments address the same path. An agent's own app signs with the
+// secret above. A single organization app pointed at one seat has only the
+// organization's, and it is the only credential its deliveries can carry, so
+// a seat holding none must fall through rather than refuse.
+func TestTheGitHubRouteVerifiesAgainstTheAppThatSigned(t *testing.T) {
+	t.Parallel()
+	s := webhooks.Secrets{GitHub: "org", GitHubSeat: map[string]string{"sre-lead": "seat"}}
+	for _, tc := range []struct{ handle, want string }{
+		{"sre-lead", "seat"},
+		{"reviewer", "org"},
+		{"", "org"},
+	} {
+		if got := webhooks.GitHubSecretForTest(s, tc.handle); got != tc.want {
+			t.Errorf("a delivery to %q verifies against %q, want %q", tc.handle, got, tc.want)
+		}
+	}
+	// NOTHING TO VERIFY WITH IS NOT A REASON TO ACCEPT. With neither
+	// credential the answer is empty, which the route reads as 503.
+	if got := webhooks.GitHubSecretForTest(webhooks.Secrets{}, "sre-lead"); got != "" {
+		t.Errorf("a route with no credential returned %q", got)
 	}
 }

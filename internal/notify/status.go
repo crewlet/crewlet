@@ -449,7 +449,7 @@ func (d *StatusDriver) heartbeat(ctx context.Context, s *session) {
 	if interval <= 0 {
 		// A poster that declares no interval gets no heartbeat rather
 		// than a spin: its indicator lapses, which is a cosmetic loss,
-		// where a zero-interval ticker is a hot loop against a vendor's
+		// where a zero-interval ticker is a hot loop against a third-party app's
 		// rate limiter.
 		log.WarnContext(ctx, "status_poster_declares_no_refresh", "backend", d.poster.StatusBackend())
 		<-ctx.Done()

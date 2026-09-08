@@ -6,24 +6,25 @@ import (
 	"strings"
 )
 
-// Who owns a vendor scope.
+// Who owns an integration scope.
 //
 // The lead map is what makes a work item that names nobody land somewhere. A
 // tracker's worst failure is not a misroute — it is a ticket filed into a
 // project nobody watches, which produces no error anywhere and is discovered
 // weeks later when somebody asks why it was never picked up.
 //
-// # Why this is here rather than in each vendor
+// # Why this is here rather than in each integration
 //
 // A project identifier, a project key and a space key are different words
 // for one org-model question: which seat owns the place this work was filed.
 // The walk that answers it — units before root seats, an inherited lead
 // resolving through the hierarchy, first declaration winning — is a rule
-// about the ORG, not about any vendor, and three copies of it is three
+// about the ORG, not about any integration, and three copies of it is three
 // chances for one of them to answer differently from the others while each
 // stays self-consistent.
 
-// Scope is one vendor's per-unit and per-seat identity, and how to read it.
+// Scope is one integration's per-unit and per-seat identity, and how to
+// read it.
 type Scope struct {
 	// OfUnit reads the scope a unit declares.
 	OfUnit func(*Unit) string
@@ -34,7 +35,7 @@ type Scope struct {
 // LeadReport is what a walk found besides the mapping.
 //
 // RETURNED rather than logged, so the org model owes nothing to a logger and
-// each vendor reports the finding in its own vocabulary — an operator
+// each integration reports the finding in its own vocabulary, so an operator
 // grepping for "jira" finds the Jira warning.
 type LeadReport struct {
 	// Unled names the units that declare a scope and have nobody leading
@@ -83,7 +84,7 @@ type leadSource struct{ where, handle string }
 // a member override it would hand the fallback to whichever teammate
 // happened to be walked first.
 //
-// Scopes are keyed UPPER, because every vendor this serves renders them
+// Scopes are keyed UPPER, because every integration this serves renders them
 // upper and an operator writes one however it was shown to them.
 func (o *Organization) LeadsBy(s Scope) (map[string]string, LeadReport) {
 	var report LeadReport

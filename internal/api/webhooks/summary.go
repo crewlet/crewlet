@@ -217,3 +217,20 @@ func orElse(s, fallback string) string {
 	}
 	return s
 }
+
+// datadogSummary glosses a monitor alert for the event feed.
+func datadogSummary(body map[string]any) string {
+	parts := []string{"Datadog"}
+
+	if transition := str(body, "alert_transition"); transition != "" {
+		parts = append(parts, transition)
+	}
+	if title := str(body, "title"); title != "" {
+		parts = append(parts, title)
+	}
+	if priority := str(body, "priority"); priority != "" {
+		parts = append(parts, "P"+priority)
+	}
+
+	return strings.Join(parts, " · ")
+}

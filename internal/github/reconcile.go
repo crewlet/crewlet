@@ -10,6 +10,8 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
+
+	"github.com/crewlet/crewlet/internal/integration"
 )
 
 // Reconcile brings a GitHub deployment in line with the company config.
@@ -133,17 +135,31 @@ func (r *Result) Routing() int {
 // would leave GitHub delivering to an engine that cannot enrich anything it
 // receives.
 func Reconcile(ctx context.Context, opts Options) (*Result, error) {
-	if opts.Client == nil {
-		return nil, errors.New("github: no client")
-	}
 	if opts.Config == nil {
 		return nil, errors.New("github: no github config")
+	}
+	if opts.Client == nil {
+		// NO ORG CREDENTIAL IS A FINDING, NOT A FAULT. The token is
+		// optional on this host and its absence is a documented
+		// degradation: participant fan-out is off and a thread's
+		// watchers hear nothing, which is exactly what an empty Login
+		// makes Findings report. Refusing here instead turned that into
+		// "the last pass could not read this integration", which sends
+		// an operator looking for an outage rather than for a variable.
+		//
+		// Nothing else can be read without one. Seat identities are API
+		// lookups and a hook is an API write, so the honest result is a
+		// run that says only what it knows.
+		return &Result{Notes: []string{
+			"no org credential resolved, so this run read nothing at GitHub",
+		}}, nil
 	}
 	login, err := opts.Client.Me(ctx)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"github: the credential this run authenticates with was refused, "+
-				"so nothing else it reported would be trustworthy: %w", err)
+				"so nothing else it reported would be trustworthy: %w",
+			integration.Reject(err, Status(err)))
 	}
 
 	res := &Result{Login: login}
@@ -441,12 +457,16 @@ func webhookSecret(ctx context.Context, opts Options, target string) (string, []
 	}
 	secretVar, ok := provision.SoleVar(opts.Config.WebhookSecret)
 	if !ok {
+		// THE VALUE IS NOT QUOTED. It is normally a ${VAR} and quoting it
+		// would be helpful, but the case this refusal exists for is a
+		// slot holding a LITERAL — so the one time the message is
+		// reached, the thing it would print is the credential. The path
+		// is what an operator needs, and the path is what it says.
 		return "", nil, fmt.Errorf(
-			"github: integrations.github.webhook_secret is %q, which is neither "+
-				"a value this run could resolve nor a whole ${VAR} reference to "+
-				"mint one into — point it at a variable, set that variable, or "+
-				"drop -public-url and register %s by hand",
-			opts.Config.WebhookSecret, target)
+			"github: integrations.github.webhook_secret holds neither a value "+
+				"this run could resolve nor a whole ${VAR} reference to mint "+
+				"one into — point it at a variable, set that variable, or "+
+				"drop -public-url and register %s by hand", target)
 	}
 	if opts.Sink == nil {
 		return "", nil, provision.ErrNoSink

@@ -12,6 +12,8 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
+
+	"github.com/crewlet/crewlet/internal/integration"
 )
 
 // Result is what one reconcile did, for the report.
@@ -23,6 +25,11 @@ type Result struct {
 	// Renamed names the bots whose display name was brought back in line
 	// with the company document.
 	Renamed []string
+	// Enabled names the bots a previous disconnect had disabled and this
+	// run turned back on. Said out loud because it is the difference
+	// between a reconnect that works and one that reports ready over an
+	// agent that cannot sign in.
+	Enabled []string
 	Rotated []string
 	// Kept names the seats whose existing token was left alone — the
 	// SUCCESSFUL outcome of a re-run, said out loud because a silent
@@ -100,7 +107,10 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 
 	team, found, err := opts.Client.TeamByName(ctx, opts.Config.Team)
 	if err != nil {
-		return nil, fmt.Errorf("mattermost: resolve team %q: %w", opts.Config.Team, err)
+		// No separate auth probe here either, so this first call carries
+		// the refusal.
+		return nil, fmt.Errorf("mattermost: resolve team %q: %w", opts.Config.Team,
+			integration.Reject(err, Status(err)))
 	}
 	if !found {
 		return nil, fmt.Errorf(
@@ -152,6 +162,21 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		if err != nil {
 			return nil, rollback(ctx, opts, minted,
 				fmt.Errorf("mattermost: %s: %w", seat.Handle, err))
+		}
+		// A DISABLED BOT IS ONE THIS ENGINE TURNED OFF, and reconnecting
+		// has to turn it back on. The teardown disables rather than
+		// deletes so an agent keeps its history, which means the account
+		// is still here to be found: without this the pass joins it,
+		// mints it a token, reports ready, and every socket that token
+		// opens is refused because the account is deactivated.
+		if exists && user.DeleteAt != 0 {
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
+			if err := opts.Client.EnableBot(ctx, user.ID); err != nil {
+				return nil, rollback(ctx, opts, minted, fmt.Errorf(
+					"mattermost: %s: re-enable the bot a disconnect disabled: %w",
+					seat.Handle, err))
+			}
+			res.Enabled = append(res.Enabled, seat.Handle)
 		}
 		if !exists {
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
@@ -250,7 +275,8 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		}
 		// RETIRED AFTER THE RECORD, and only this tool's own: an
 		// administrator may have minted a token on this bot by hand.
-		retired, err := retirePrevious(ctx, opts, user.ID, seat, token.ID)
+		retired, err := opts.Client.RevokeMinted(ctx, user.ID,
+			TokenDescription(seat.Handle), token.ID)
 		if err != nil {
 			return nil, rollback(ctx, opts, minted,
 				fmt.Errorf("mattermost: %s: %w", seat.Handle, err))
@@ -354,6 +380,22 @@ func decommission(ctx context.Context, opts Options, managed map[string]Bot) ([]
 		if !strings.HasPrefix(username, prefix) || keep[username] {
 			continue
 		}
+		// ITS CREDENTIAL FIRST, for the reason [Teardown] gives: a
+		// disabled account keeps its username and its tokens, so a
+		// departed seat whose token was left live is an agent that
+		// starts working again the moment anybody re-enables the bot.
+		// Keyed on the handle inside the username, because that is what
+		// the token was minted under and the plan no longer names this
+		// seat at all.
+		handle := strings.TrimPrefix(username, prefix)
+		if _, err := opts.Client.RevokeMinted(ctx, bot.UserID,
+			TokenDescription(handle), ""); err != nil {
+			notes = append(notes, fmt.Sprintf(
+				"%s matches the managed prefix and its tokens could not be "+
+					"revoked, so it was left enabled rather than disabled "+
+					"holding a live credential: %v", bot.Username, err))
+			continue
+		}
 		if err := opts.Client.DisableBot(ctx, bot.UserID); err != nil {
 			notes = append(notes, fmt.Sprintf(
 				"%s matches the managed prefix and could not be disabled: %v",
@@ -436,25 +478,6 @@ func (c *Client) verify(ctx context.Context, value, wantID string) provision.Ver
 		// "cannot tell" destroys a token that works.
 		return provision.VerdictUnknown
 	}
-}
-
-// retirePrevious revokes this tool's earlier tokens on an existing bot.
-func retirePrevious(ctx context.Context, opts Options, userID string, seat provision.Seat, keep string) (int, error) {
-	tokens, err := opts.Client.Tokens(ctx, userID)
-	if err != nil {
-		return 0, fmt.Errorf("list tokens: %w", err)
-	}
-	retired := 0
-	for _, token := range tokens {
-		if token.ID == keep || token.Description != TokenDescription(seat.Handle) {
-			continue
-		}
-		if err := opts.Client.RevokeToken(ctx, token.ID); err != nil {
-			return retired, fmt.Errorf("revoke the previous token: %w", err)
-		}
-		retired++
-	}
-	return retired, nil
 }
 
 // joinChannels adds a bot to the company-wide channels plus its own.

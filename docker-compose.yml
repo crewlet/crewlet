@@ -23,7 +23,12 @@ services:
   # UNLICENSED gitlab-ee image runs as Free tier and serves the API.
   # ---------------------------------------------------------------------------
   gitlab:
-    image: gitlab/gitlab-ee:latest          # multi-arch incl. arm64 since 18.1
+    # PINNED, like every other service here. `latest` gave Dependabot no
+    # version to move, so this line was watched by nothing while looking
+    # exactly like a line with nothing to update, and a green run named a
+    # GitLab nobody could identify afterwards. Multi-arch incl. arm64 since
+    # 18.1.
+    image: gitlab/gitlab-ee:19.3.1-ee.0
     profiles: [gitlab]
     hostname: gitlab.local
     shm_size: "256m"                         # image default 64 MB is too small
@@ -118,10 +123,18 @@ services:
     # gitlab service above, which needs gitlab-EE precisely because a
     # free-tier feature (service accounts) lives in EE-edition code.
     #
-    # Floating tag, like every other service in this file;
-    # upstream pins an exact ESR (11.7.0 at time of writing) because it is
-    # a production deployment guide and this is a dev loop.
-    image: mattermost/mattermost-team-edition:latest
+    # PINNED EXACTLY, because a floating tag is watched by nothing: it
+    # gives Dependabot no version to move, so the service looks like one
+    # with nothing to update, and it makes a green run a claim about a
+    # build nobody can name afterwards.
+    image: mattermost/mattermost-team-edition:11.11.0
+    # AMD64 ONLY, upstream: there is no arm64 manifest for any tag, so an
+    # Apple Silicon machine fails to start this with "no matching manifest
+    # for linux/arm64/v8", which names nothing an operator can act on.
+    # Declaring the platform runs it under emulation instead, which is
+    # slower and works. Contrast the gitlab service above, which is
+    # genuinely multi-arch and needs no such line.
+    platform: linux/amd64
     profiles: [mattermost]
     environment:
       MM_SQLSETTINGS_DRIVERNAME: postgres

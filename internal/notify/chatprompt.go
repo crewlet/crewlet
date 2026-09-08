@@ -70,7 +70,7 @@ func (ChatPrompt) WakesActor(string) bool { return false }
 // DigestBody implements [Prompt]: every constituent is kept.
 //
 // A chat backend has no supersede rule, because every event it emits IS a
-// message. The rule exists for a vendor that re-emits its whole current
+// message. The rule exists for a third-party app that re-emits its whole current
 // state on every field change; a person typing four times has said four
 // things.
 func (ChatPrompt) DigestBody(_, body string) string { return body }

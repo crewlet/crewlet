@@ -58,6 +58,11 @@ type adminInstance struct {
 	// noGroupHooks makes the GROUP hooks API answer 404, the way GitLab
 	// hides an endpoint the instance's tier does not serve.
 	noGroupHooks bool
+	// plan is what GET /groups/:path reports as the subscription tier.
+	// Empty is a self-managed instance, which sends no such field at all;
+	// "free" is what gitlab.com answers for a group whose group webhooks
+	// are accepted and never delivered.
+	plan string
 	// hookStatus answers the group-hooks route with this status instead,
 	// for the refusals that are NOT a tier gate.
 	hookStatus int
@@ -85,6 +90,18 @@ type adminInstance struct {
 	// route, so a delete down the wrong route can be caught.
 	instanceOwned map[string]bool
 
+	// instanceAdmin says this credential is an INSTANCE ADMIN token, which
+	// is the only thing that may mint through /users/:id. A group Owner is
+	// not one, and on gitlab.com nobody is. Set by the instance-mode tests,
+	// where an admin token is what the mode requires; a group-mode run
+	// leaves it false and the admin route is refused. See the mint handler.
+	instanceAdmin bool
+	// createRefusal makes account creation fail with this exact response,
+	// which is how the vendor's own wording reaches the classifier: a name
+	// still being released is told from a refusal that will never clear by
+	// what GitLab says, and a fake that invented the words would be testing
+	// this package against itself.
+	createRefusal *refusal
 	// failToken makes minting fail for this username, to reach the
 	// rollback path.
 	failToken string
@@ -169,7 +186,11 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 		// caller that never asks for page 2 look correct.
 		json.NewEncoder(w).Encode(pageOf(out, r.URL.Query()))
 
-	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/groups/7/service_accounts/"):
+	// THE ACCOUNT ITSELF, and not a token on it: the group's token routes
+	// live under this same prefix, so a prefix match alone deleted the
+	// whole account when a run asked to revoke one of its tokens.
+	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/groups/7/service_accounts/") &&
+		!strings.Contains(path, "/personal_access_tokens"):
 		id := atoi(strings.TrimPrefix(path, "/groups/7/service_accounts/"))
 		for name, uid := range f.users {
 			if uid != id {
@@ -197,7 +218,11 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 
 	case r.Method == http.MethodGet && path == "/groups/nimbus":
-		json.NewEncoder(w).Encode(map[string]any{"id": 7, "full_path": "nimbus"})
+		group := map[string]any{"id": 7, "full_path": "nimbus"}
+		if f.plan != "" {
+			group["plan"] = f.plan
+		}
+		json.NewEncoder(w).Encode(group)
 
 	case r.Method == http.MethodGet && path == "/users":
 		// A FILTER, NOT A LOOKUP — which is what /users?username= is on
@@ -213,6 +238,15 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		sortByUsername(out)
 		json.NewEncoder(w).Encode(out)
+
+	// A REFUSAL THE TEST ASKED FOR, on either creation route: it is the
+	// vendor's own wording that tells a name still being released from a
+	// refusal that will never clear, and a fake inventing the words would
+	// be testing this package against itself.
+	case r.Method == http.MethodPost && f.createRefusal != nil &&
+		(path == "/groups/7/service_accounts" || path == "/service_accounts"):
+		w.WriteHeader(f.createRefusal.status)
+		w.Write([]byte(f.createRefusal.body))
 
 	case r.Method == http.MethodPost && path == "/groups/7/service_accounts":
 		if f.instanceOnly {
@@ -285,7 +319,21 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 		f.members[path+fmt.Sprint(body["user_id"])] = body["access_level"]
 
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/personal_access_tokens"):
-		id := strings.TrimSuffix(strings.TrimPrefix(path, "/users/"), "/personal_access_tokens")
+		// TWO ROUTES, AND GITLAB.COM ALLOWS ONE OF THEM.
+		//
+		// `/users/:id/personal_access_tokens` is INSTANCE ADMIN ONLY, and
+		// on gitlab.com nobody is an instance admin: a group Owner who
+		// created an account through the group route and minted through
+		// this one got a 403 on every seat, for ever. So the admin route
+		// is refused here unless the run says it holds an admin token,
+		// which is what makes that mistake a red test rather than a live
+		// company with no agent able to authenticate.
+		id, viaGroup := mintTarget(path)
+		if !viaGroup && !f.instanceAdmin {
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`{"message":"403 Forbidden"}`))
+			return
+		}
 		if f.failToken != "" && f.usernameOf(id) == f.failToken {
 			w.WriteHeader(http.StatusForbidden)
 			w.Write([]byte(`{"message":"not permitted"}`))
@@ -314,7 +362,29 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 			"token": token.Value, "id": token.ID, "name": token.Name,
 		})
 
+	// THE GROUP'S OWN LISTING, which is what a group Owner may read. The
+	// admin listing below answers 401 for anyone else, and that 401 is
+	// what a run hit on its SECOND pass, after minting had already
+	// succeeded.
+	case r.Method == http.MethodGet && strings.HasSuffix(path, "/personal_access_tokens") &&
+		strings.Contains(path, "/service_accounts/"):
+		id, _ := mintTarget(path)
+		out := make([]map[string]any, 0, len(f.tokens[atoi(id)]))
+		for _, t := range f.tokens[atoi(id)] {
+			row := map[string]any{"id": t.ID, "name": t.Name, "revoked": t.Revoked}
+			if !t.ExpiresAt.IsZero() {
+				row["expires_at"] = t.ExpiresAt.Format(time.DateOnly)
+			}
+			out = append(out, row)
+		}
+		json.NewEncoder(w).Encode(out)
+
 	case r.Method == http.MethodGet && path == "/personal_access_tokens":
+		if !f.instanceAdmin {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"message":"401 Unauthorized"}`))
+			return
+		}
 		id := atoi(r.URL.Query().Get("user_id"))
 		out := make([]map[string]any, 0, len(f.tokens[id]))
 		for _, t := range f.tokens[id] {
@@ -325,6 +395,15 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 			out = append(out, row)
 		}
 		json.NewEncoder(w).Encode(out)
+
+	// AND THE GROUP'S OWN REVOKE, the third of the three routes a group
+	// Owner may call. Rewritten onto the admin shape so one handler serves
+	// both: what differs is the permission, which is checked above.
+	case r.Method == http.MethodDelete && strings.Contains(path, "/service_accounts/") &&
+		strings.Contains(path, "/personal_access_tokens/"):
+		at := strings.LastIndex(path, "/personal_access_tokens/")
+		path = "/personal_access_tokens/" + path[at+len("/personal_access_tokens/"):]
+		fallthrough
 
 	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/personal_access_tokens/"):
 		if f.failTokenRevoke {
@@ -560,6 +639,23 @@ func (f *adminInstance) revoked() int {
 	return f.revokes
 }
 
+// refusal is one response the fake is told to give instead of succeeding.
+type refusal struct {
+	status int
+	body   string
+}
+
+// mintTarget reads the account a token is being minted for, and says which
+// route asked: the group's, which a group Owner may call, or the instance's,
+// which needs an admin.
+func mintTarget(path string) (id string, viaGroup bool) {
+	trimmed := strings.TrimSuffix(path, "/personal_access_tokens")
+	if at := strings.LastIndex(trimmed, "/service_accounts/"); at >= 0 {
+		return trimmed[at+len("/service_accounts/"):], true
+	}
+	return strings.TrimPrefix(trimmed, "/users/"), false
+}
+
 func atoi(s string) int {
 	n := 0
 	for _, r := range s {
@@ -681,7 +777,13 @@ func reconcileWith(t *testing.T, f *adminInstance, sink provision.TokenSink,
 		WebhookBase: "https://crewlet.example.com", SigningSecret: testSigningSecret,
 		Now: func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) },
 	}
-	tune(&opts)
+	// NIL IS "NOTHING TO ADJUST", which most of these runs are: the
+	// default options ARE the ordinary group-mode company, and a test that
+	// had to pass an empty function to say so would make the exceptions
+	// harder to spot rather than easier.
+	if tune != nil {
+		tune(&opts)
+	}
 	return gitlab.Reconcile(context.Background(), opts)
 }
 
@@ -736,7 +838,7 @@ func TestASecondRunCreatesNothingAndRotatesEverything(t *testing.T) {
 	}
 }
 
-// A RUN THAT CANNOT RECORD WHAT IT MINTED REVOKES IT. Between the vendor
+// A RUN THAT CANNOT RECORD WHAT IT MINTED REVOKES IT. Between the third-party app
 // minting a token and the sink recording it, the only copy of a live
 // credential is in this process's memory — a failure there leaves it live,
 // unusable and unknown.
@@ -2019,8 +2121,10 @@ func TestInstanceModeCreatesOnTheInstanceRoute(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
 	// The group route is refused, so a run that fell back to it fails
-	// rather than passing by accident.
-	f.instanceOnly = true
+	// rather than passing by accident. And the credential IS an admin
+	// token, which is what instance mode requires and what makes the
+	// /users/:id mint permitted at all.
+	f.instanceOnly, f.instanceAdmin = true, true
 	res, err := reconcileWith(t, f, newRecordingSink(),
 		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"},
 		func(o *gitlab.Options) { o.Mode = gitlab.ModeInstance })
@@ -2108,6 +2212,9 @@ func TestEachModesRefusalNamesTheCredentialItNeeds(t *testing.T) {
 func TestSwitchingModesFindsTheAccountsTheCompanyAlreadyHas(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
+	// Instance mode holds an admin token, which is what permits the
+	// /users/:id mint at all; a group Owner is refused there.
+	f.instanceAdmin = true
 	if _, err := reconcileWith(t, f, newRecordingSink(),
 		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"},
 		func(*gitlab.Options) {}); err != nil {
@@ -2132,6 +2239,9 @@ func TestSwitchingModesFindsTheAccountsTheCompanyAlreadyHas(t *testing.T) {
 func TestInstanceModeDecommissionsDownTheInstanceRoute(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
+	// Instance mode holds an admin token, which is what permits the
+	// /users/:id mint at all; a group Owner is refused there.
+	f.instanceAdmin = true
 	instance := func(o *gitlab.Options) { o.Mode = gitlab.ModeInstance }
 	if _, err := reconcileWith(t, f, newRecordingSink(),
 		map[string]string{"swe": "${GITLAB_TOKEN_SWE}", "qa": "${GITLAB_TOKEN_QA}"},
@@ -2198,5 +2308,160 @@ func TestADecommissionSeesPastTheFirstPageOfMembers(t *testing.T) {
 	}
 	if len(res.Decommissioned) != 1 || res.Decommissioned[0] != "crewlet-qa" {
 		t.Fatalf("decommissioned = %v", res.Decommissioned)
+	}
+}
+
+// A GROUP OWNER MINTS THROUGH THE GROUP, because that is the only route it
+// may use.
+//
+// `POST /users/:id/personal_access_tokens` is INSTANCE ADMIN ONLY, and on
+// gitlab.com nobody is an instance admin. So a run that created a service
+// account through the group route, which a group Owner may do, and then
+// minted through the admin one got a 403 on every seat, for ever: an account
+// existed with no token, the seat authenticated as nobody, and the card said
+// the sync would take care of it.
+func TestAGroupOwnerUsesTheGroupRouteForEveryTokenOperation(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	// NOT AN ADMIN, which is every gitlab.com credential: the fake refuses
+	// the /users/:id route, exactly as the real instance does.
+	res, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"}, nil)
+	if err != nil {
+		t.Fatalf("a group Owner could not provision a seat: %v", err)
+	}
+	if len(res.Created) != 1 {
+		t.Fatalf("result = %+v", res)
+	}
+
+	// THE GROUP'S OWN ROUTES, and never the instance's. All three of them:
+	// the mint 403s outright, the list 401s on the NEXT pass after minting
+	// had already succeeded, and the revoke fails inside a rollback where
+	// the message says a live credential was left behind.
+	for _, call := range f.calls {
+		if !strings.Contains(call, "/personal_access_tokens") {
+			continue
+		}
+		if !strings.Contains(call, "/service_accounts/") {
+			t.Errorf("a token operation went through %q, which a group Owner "+
+				"may not call: on gitlab.com nobody is an instance admin", call)
+		}
+	}
+
+	// AND A SECOND PASS IS THE ONE THAT LISTS. The first mints; the next
+	// reads the tokens back to decide whether to keep what it finds, and
+	// that read is the admin listing unless it goes through the group.
+	if _, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"}, nil); err != nil {
+		t.Fatalf("a second pass could not read the tokens it had minted: %v", err)
+	}
+}
+
+// A NAME GITLAB HAS NOT RELEASED YET IS A DELETION STILL RUNNING.
+//
+// GitLab removes a user asynchronously: the account is gone from every
+// listing the moment the delete is accepted, and its username and email stay
+// reserved until a background job finishes. So a disconnect followed by a
+// reconnect inside that window looks the account up, honestly does not find
+// it, creates one, and is refused with "has already been taken".
+//
+// Reported as an ordinary failure it read as "the last pass could not read
+// this integration", which sends an operator looking for an outage over a
+// state that clears itself on the next tick. Named, the caller can say what
+// is actually happening.
+func TestANameStillBeingReleasedIsNotAFailureToRead(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.createRefusal = &refusal{
+		status: http.StatusBadRequest,
+		body:   `{"message":"400 Bad request - Email has already been taken and Username has already been taken"}`,
+	}
+
+	_, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"}, nil)
+	if err == nil {
+		t.Fatal("a refused creation was reported as a clean run")
+	}
+	if !errors.Is(err, gitlab.ErrNameReserved) {
+		t.Fatalf("error = %v, and nothing marks it as a deletion still running", err)
+	}
+}
+
+// AND EVERY OTHER 400 IS STILL A REFUSAL. A creation GitLab rejected for a
+// reason of its own is not something a later tick fixes, and dressing one as
+// work in progress would leave a card reporting progress for ever.
+func TestAnOrdinaryRefusalIsNotDressedAsProgress(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.createRefusal = &refusal{
+		status: http.StatusBadRequest,
+		body:   `{"message":"400 Bad request - Name is too long"}`,
+	}
+
+	_, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"}, nil)
+	if err == nil {
+		t.Fatal("a refused creation was reported as a clean run")
+	}
+	if errors.Is(err, gitlab.ErrNameReserved) {
+		t.Fatalf("an unrelated refusal reads as a deletion still running: %v", err)
+	}
+}
+
+// A FREE GROUP TAKES THE REGISTRATION AND NEVER DELIVERS, which no error can
+// tell you.
+//
+// The fallback beside this one turns on the create call FAILING, and on
+// gitlab.com's free tier it does not fail: POST /groups/:id/hooks answers
+// 201, the hook is listed in the group's settings, and its own event log
+// stays empty for ever. Measured on a live free group, where the pass
+// reported ready and not one delivery had ever arrived. So the tier is read
+// rather than inferred from a refusal.
+func TestAFreeTierGroupHooksTheProjectsWithoutTrying(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.plan = "free"
+	sink := newRecordingSink()
+
+	res, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(f.projectHooks["nimbus/api"]) != 1 {
+		t.Fatalf("project hooks = %+v, want one on the declared project", f.projectHooks)
+	}
+	// AND NO GROUP HOOK AT ALL. One registered here is one an operator
+	// finds in the settings, believes covers the group, and never receives
+	// a delivery from.
+	if len(f.hooks) != 0 {
+		t.Errorf("a group hook was registered on a tier that never delivers: %+v", f.hooks)
+	}
+	if got := res.HookedOn; len(got) != 1 || got[0] != "nimbus/api" {
+		t.Errorf("HookedOn = %v, want the project", got)
+	}
+	if !strings.Contains(strings.Join(res.Notes, "\n"), "free tier") {
+		t.Errorf("notes did not say why the group was skipped: %v", res.Notes)
+	}
+}
+
+// SILENCE IS NOT "FREE". A self-managed instance answers with no plan at all,
+// and reading that as free would send every self-managed deployment down a
+// fallback it does not need, replacing one hook that covers the group with
+// one per declared project.
+func TestAnInstanceThatNamesNoPlanKeepsTheGroupHook(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.plan = ""
+	sink := newRecordingSink()
+
+	res, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(f.hooks) != 1 {
+		t.Fatalf("group hooks = %+v, want the one this instance serves", f.hooks)
+	}
+	if got := res.HookedOn; len(got) != 1 || got[0] != "group" {
+		t.Errorf("HookedOn = %v, want the group", got)
 	}
 }

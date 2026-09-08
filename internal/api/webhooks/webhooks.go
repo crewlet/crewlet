@@ -105,10 +105,18 @@ type Options struct {
 	// nothing, which is a standalone posture rather than a failure.
 	Events *store.EventLog
 
+	// AppFlow finishes a GitHub App creation begun on the setup surface.
+	//
+	// Nil serves the landing page with an honest refusal rather than 404:
+	// the redirect URL is baked into every app this engine creates, so a
+	// process that cannot finish one still has to say so to the browser
+	// that arrives.
+	AppFlow AppCompleter
+
 	// Claims is the FLEET-WIDE dedupe. Nil handles every delivery, which
 	// is what a single node without coordination already does.
 	//
-	// It is coordination state rather than store state because a vendor
+	// It is coordination state rather than store state because a third-party app
 	// retrying a delivery reaches whichever ingress node the load balancer
 	// picks: a claim only one node could see suppressed nothing, and the
 	// same push woke the same seat twice.
@@ -141,6 +149,7 @@ type Receiver struct {
 	configured func() bool
 	now        func() time.Time
 	forge      *forgeVerifier
+	appFlow    AppCompleter
 }
 
 // New assembles the receiver.
@@ -148,6 +157,7 @@ func New(opts Options) *Receiver {
 	r := &Receiver{
 		secrets:    opts.Secrets,
 		publisher:  opts.Publisher,
+		appFlow:    opts.AppFlow,
 		events:     opts.Events,
 		claims:     opts.Claims,
 		stream:     opts.Stream,
@@ -175,12 +185,21 @@ func New(opts Options) *Receiver {
 // two places that have to agree.
 func (r *Receiver) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /webhooks/github", r.github)
+	// The seat form, for an app belonging to one agent. Same handler:
+	// what differs is only whether the path names a seat.
+	mux.HandleFunc("POST /webhooks/github/{handle}", r.github)
 	mux.HandleFunc("POST /webhooks/gitlab", r.gitlab)
 	mux.HandleFunc("POST /webhooks/jira", r.jira)
+	mux.HandleFunc("POST /webhooks/datadog", r.datadog)
 	mux.HandleFunc("POST /webhooks/confluence", r.confluence)
+	// The Cloud form, one path per event. Registered after the bare one
+	// so a reader sees the pair together; the mux matches on the pattern,
+	// not the order.
+	mux.HandleFunc("POST /webhooks/confluence/{event}", r.confluenceCloud)
 	mux.HandleFunc("POST /webhooks/slack/{handle}", r.slack)
 	mux.HandleFunc("POST /webhooks/forge", r.forgeWebhook)
 	mux.HandleFunc("GET /webhooks/slack-oauth", slackOAuthLanding)
+	mux.HandleFunc("GET /webhooks/github-app", r.githubAppLanding)
 }
 
 // --- the shared pipeline ---------------------------------------------------
@@ -296,7 +315,7 @@ func (r *Receiver) accept(w http.ResponseWriter, req *http.Request, v verified, 
 	//
 	// A span rather than a bare minted id, so the arrival itself has a
 	// duration and a name at the collector rather than being an id that
-	// appears from nowhere. No vendor Crewlet serves sends W3C traceparent
+	// appears from nowhere. No third-party app Crewlet serves sends W3C traceparent
 	// today, but the propagator is installed and an inbound one is honoured
 	// if it ever is — which costs nothing and is what makes a delivery
 	// forwarded through an operator's own gateway join their trace.
@@ -391,9 +410,9 @@ func (r *Receiver) release(ctx context.Context, d delivery) {
 
 // claimKey is the fleet-wide identity of one delivery.
 //
-// The SOURCE is in it, so two vendors that happen to mint the same delivery
+// The SOURCE is in it, so two third-party apps that happen to mint the same delivery
 // id do not suppress each other — a UUID from one and a sequence number from
-// another collide far more easily than either vendor's own ids do.
+// another collide far more easily than either third-party app's own ids do.
 func claimKey(d delivery) string { return d.source + "|" + d.key }
 
 // record writes the audit row and pushes the live one. Both are best effort:
@@ -462,6 +481,16 @@ func (r *Receiver) record(ctx context.Context, d delivery, trace events.TraceCon
 var sensitiveHeaders = map[string]bool{
 	"authorization": true, "cookie": true, "proxy-authorization": true,
 	"x-gitlab-token": true,
+	// `x-crewlet-token` is this engine's OWN version of the same mistake.
+	// Datadog and Confluence Cloud have no signature to send, so both
+	// routes authenticate on a shared token carried in this header and
+	// compared for EQUALITY: every accepted delivery therefore arrives
+	// carrying the secret itself, not a value derived from it. Copied
+	// through, it is written into the event the receiver publishes, kept
+	// in the dead-letter stream for the retention window, and rendered on
+	// the dashboard beside the payload. A signature header is safe here
+	// and a KEY never is.
+	"x-crewlet-token": true,
 }
 
 // safeHeaders flattens the request's headers, lowercased, with the
@@ -546,7 +575,7 @@ func noSecret(w http.ResponseWriter, source string) {
 	unavailable(w, "no_webhook_secret", NoSecretRetryAfter)
 }
 
-// bodyKey is the delivery identity of a vendor that sends none.
+// bodyKey is the delivery identity of a third-party app that sends none.
 //
 // # Byte identity IS delivery identity here
 //
@@ -555,7 +584,7 @@ func noSecret(w http.ResponseWriter, source string) {
 // that send X-Atlassian-Webhook-Identifier — so all three Atlassian routes
 // reach here. What they do send is a payload that is byte-identical across
 // the provider's own retries and different for any two distinct events: every
-// one of these vendors stamps its payloads with entity ids and timestamps, so
+// one of these third-party apps stamps its payloads with entity ids and timestamps, so
 // two events cannot serialize the same.
 //
 // # Why a hash of the whole body rather than derived coordinates
@@ -566,17 +595,17 @@ func noSecret(w http.ResponseWriter, source string) {
 // into one, and a collapsed event is a message nobody ever answers. A hash
 // over the whole body cannot do that: any difference at all yields a
 // different key. Its failure mode is the opposite and the safe one — a
-// vendor that re-serialized between attempts would fail to collapse a
+// third-party app that re-serialized between attempts would fail to collapse a
 // redelivery, which is exactly today's behaviour and no worse.
 //
 // It is also the only derivation that needs to know nothing about the
-// vendor, which is what keeps three routes from each growing their own
+// third-party app, which is what keeps three routes from each growing their own
 // half-right field list.
 func bodyKey(raw []byte) string {
 	if len(raw) == 0 {
 		// NOT a key. An empty body is the same for every delivery, and
 		// keying on it would claim the first one and refuse every other
-		// delivery from that vendor for the whole TTL.
+		// delivery from that third-party app for the whole TTL.
 		return ""
 	}
 	sum := sha256.Sum256(raw)

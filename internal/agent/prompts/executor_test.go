@@ -307,7 +307,7 @@ func TestTheReviewPromptIsSmallerThanTheExecutors(t *testing.T) {
 	}
 }
 
-// The contracts steer by capability, never by a vendor tool name — the engine
+// The contracts steer by capability, never by a vendor tool name. The engine
 // must not re-couple itself to one tool stack.
 var forbiddenToolNames = []string{
 	"slack_conversations_add_message",

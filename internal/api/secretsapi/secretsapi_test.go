@@ -314,3 +314,62 @@ func TestTheAuthenticatedOperatorIsRecordedAsTheAuthor(t *testing.T) {
 		}
 	}
 }
+
+// A NAME NO ${VAR} CAN REACH IS REFUSED, and that is not pedantry about
+// spelling. The store is keyed by environment-variable name because that is
+// what a reference in the company document resolves through, so a row stored
+// under "gitlab-token" would be sealed, listed, reported as written, and read
+// by nothing at all. The operator's only evidence would be a provider failing
+// to authenticate hours later.
+func TestAWriteRefusesANameNoReferenceCanEverName(t *testing.T) {
+	h, fleet := surface(t, cipherFor(t, "k1"), "k1")
+	for _, name := range []string{"gitlab-token", "my%20token", "9LIVES", "TOKEN.SUB"} {
+		code, body := call(t, h, http.MethodPut, "/secrets/"+name, "value")
+		if code != http.StatusBadRequest {
+			t.Errorf("PUT /secrets/%s = %d, want 400: %s", name, code, body)
+		}
+		if !strings.Contains(body, "invalid_name") {
+			t.Errorf("PUT /secrets/%s said %q, want an invalid_name refusal", name, body)
+		}
+	}
+	// AND NOTHING WAS SEALED. A refusal that had already written the row
+	// would be worse than accepting it.
+	rows, err := fleet.SecretValues(t.Context())
+	if err != nil {
+		t.Fatalf("SecretValues: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("a refused write left %d row(s) behind", len(rows))
+	}
+}
+
+// The refusal comes BEFORE the body is read, so an oversized value under a
+// bad name is refused for the name rather than for its size: the name is the
+// thing the caller has to change, and a 413 would point at the wrong half.
+func TestABadNameIsRefusedBeforeTheValueIsRead(t *testing.T) {
+	h, _ := surface(t, cipherFor(t, "k1"), "k1")
+	code, body := call(t, h, http.MethodPut, "/secrets/bad-name",
+		strings.Repeat("x", secretsapi.MaxValueBytes+1))
+	if code != http.StatusBadRequest || !strings.Contains(body, "invalid_name") {
+		t.Fatalf("PUT with a bad name and an oversized body = %d %s, want 400 invalid_name",
+			code, body)
+	}
+}
+
+// READING AND REMOVING TAKE THE NAME AS GIVEN. Only the write checks the
+// grammar: a row that predates the check must stay removable, and a delete
+// that refused the name would strand it forever.
+func TestRemovingANameTheWritePathWouldRefuseStillWorks(t *testing.T) {
+	h, fleet := surface(t, cipherFor(t, "k1"), "k1")
+	// Written past the API, the way a build without the guard wrote it.
+	if err := fleet.PutSecret(t.Context(), coord.SecretRecord{
+		Name: "gitlab-token", Value: "enc:v1:k1:not-openable", KeyID: "k1",
+		UpdatedAt: clock, UpdatedBy: "ops", Source: "cli",
+	}); err != nil {
+		t.Fatalf("PutSecret: %v", err)
+	}
+	code, body := call(t, h, http.MethodDelete, "/secrets/gitlab-token", "")
+	if code != http.StatusOK || !strings.Contains(body, `"removed":true`) {
+		t.Fatalf("DELETE = %d %s, want 200 with removed:true", code, body)
+	}
+}

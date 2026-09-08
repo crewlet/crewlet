@@ -422,7 +422,7 @@ func splitLoginCompany(t *testing.T, executor, coder string) (*Company, *org.Rol
 // the executor. Asked about llm_sandbox instead, the guard inspected a model
 // the run never touches: a seat whose executor was a codex subscription and
 // whose code work was an API key launched a remote box that failed at its
-// first model call, minutes in, with the vendor's "not authenticated" — and
+// first model call, minutes in, with the vendor's "not authenticated", and
 // the mirror image, an API-key executor with a codex llm_sandbox, was refused
 // a run that would have worked.
 //

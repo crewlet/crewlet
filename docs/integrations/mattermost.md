@@ -23,6 +23,34 @@ own infrastructure.
 
 ---
 
+## Setting it up from the dashboard
+
+Connect Mattermost on the Integrations screen with the instance address, the
+team and a system administrator token. The reconcile loop creates each agent's
+bot account on its next tick, running the same pass
+`crewlet mattermost provision` runs. The administrator token is sealed in the
+fleet's secret store and kept, because disabling those bots again on
+disconnect needs the same authority that created them.
+
+Disconnecting with **"also remove the accounts this engine created"** revokes
+each seat's bot token and then disables its bot, in that order. The revoke is
+what makes the disable stand up: a disabled account keeps its username and its
+tokens, so a token left behind starts working again the moment anything
+re-enables the bot, this engine's own reconnect included. Only tokens this
+tool minted are taken (matched on the `crewlet-<handle>` description), so an
+administrator's own token on the same account is left alone. A token that
+cannot be revoked fails the disconnect with the bot left **enabled**, rather
+than leaving a disabled account quietly holding a live credential; repeating
+the disconnect resumes there. The sealed `${VAR}` is left in the secret store
+holding the now-dead value, which the next connect overwrites.
+
+This is the one integration that needs **no public address at all**. The
+engine dials out to your server and holds one websocket per seat, so nothing
+has to reach the engine and there is no webhook secret, no shared token and no
+inbound route to expose.
+
+See [Running the provisioning pass](../reference/api-endpoints.md#running-the-provisioning-pass).
+
 ## How this differs from Slack
 
 One structural difference shapes the whole integration: **Mattermost has no
@@ -173,7 +201,7 @@ integrations:
     enabled: true
     url: "https://chat.nimbus.example"    # instance base URL (required)
     team: nimbus                          # team slug (required)
-    typing_status: off                    # off (default) | addressed | always
+    typing_status: always                 # always (default) | addressed
     provisioning:              # consumed ONLY by the CLI, ignored by the engine
       username_prefix: ""      # e.g. "agent-" if humans share the server
       channels: [town-square, engineering]   # channels every bot joins
@@ -216,7 +244,7 @@ which is reported and left untouched.
 |---|---|
 | `url` | Instance base URL. Required when enabled. |
 | `team` | Team slug agents belong to. Required — channels are team-scoped. |
-| `typing_status` | `off` (default) / `addressed` / `always`. See [Working status](#working-status). |
+| `typing_status` | `always` (default) / `addressed`. See [Working status](#working-status). |
 | `provisioning.username_prefix` | Prepended to each handle to form the bot username. |
 | `provisioning.channels` | Channels every agent bot is added to. |
 | `provisioning.display_name_suffix` | Appended to each bot's display name. |
@@ -380,7 +408,7 @@ tokens are what this run *mints*, so it cannot bootstrap itself from them.
 | `-secret-store` / `-env-file PATH` / `-print` | Where minted credentials go — exactly one, and there is no default: a run with nowhere to put what it mints creates live credentials on the server and prints none of them. `-print` writes `export VAR=…` lines and, when a run rolls back, `unset VAR` for each — the stream is meant to be sourced, and a comment is a no-op to a shell, so an operator who piped it into `source` would otherwise keep a revoked token exported. |
 | `-rotate` | Mint a fresh token for every bot, including bots whose current one still works. |
 | `-handles a,b` | Provision only these seat handles. It narrows the provisioning loop **only** — a `-handles` run with `-decommission` does not read the seats it skipped as departed. |
-| `-decommission` | Disable managed bot accounts whose seats have left the config. Disable, never delete: a deleted bot takes its posts with it, silently rewriting the history of every channel it spoke in. |
+| `-decommission` | Revoke the tokens of, and then disable, managed bot accounts whose seats have left the config. Disable, never delete: a deleted bot takes its posts with it, silently rewriting the history of every channel it spoke in. The token goes because the account does not: a departed colleague whose credential outlived them starts working again the moment the bot is re-enabled. |
 | `-dry-run` | Print the plan; create and modify nothing. |
 
 Afterwards, (re)start `crewlet run` so the engine reads the new credentials
@@ -633,19 +661,21 @@ both jobs.
 
 Mattermost's only working indicator is the composer typing line, whose
 wording is fixed by the client. The engine can raise it, but cannot say
-anything with it — so unlike Slack there are no per-phase phrases, and
-`typing_status` **defaults to `off`**.
+anything with it, so unlike Slack there are no per-phase phrases.
 
-Two reasons for that default:
+`typing_status` **defaults to `always`**, the same as Slack, and on this
+backend that default is the expensive one. Know what it costs before you
+leave it:
 
 - It conveys only *busy*, where Slack's line carries the phase the agent is
   in. A fixed "is typing…" held for a five-minute turn tells a reader less
-  than the absence of one would.
+  than Slack's would.
 - It has to be re-asserted every few seconds rather than every 45, so a
   multi-minute turn costs one to two orders of magnitude more requests for
   strictly less information.
 
-If you want it anyway, set `typing_status: addressed` (or `always`). The
+Set `typing_status: addressed` to raise it only where somebody is waiting on
+that agent, which is the setting most Mattermost deployments want. The
 heartbeat interval is **derived from the server's own
 `TimeBetweenUserTypingUpdatesMilliseconds`** setting rather than hardcoded:
 re-asserting faster than the server's throttle is silently dropped, and much
@@ -653,9 +683,13 @@ slower leaves a visible gap. Tune the server setting and the engine follows.
 
 | Mode | Shows the status when… |
 |---|---|
-| `off` *(default)* | never |
+| `always` *(default)* | every Mattermost-triggered turn |
 | `addressed` | a DM, a direct mention, or a thread the agent already follows |
-| `always` | every Mattermost-triggered turn |
+
+> **There is no `off`.** What it bought was a company whose agents think in
+> silence for minutes at a time, which is the state this feature exists to
+> remove. `addressed` is the same judgement made per message rather than once
+> for the deployment, and on this backend it is also the cheaper one.
 
 ---
 
@@ -757,7 +791,7 @@ integrations:
     enabled: true
     url: "${MATTERMOST_URL}"     # written by the bootstrap
     team: nimbus                 # the team the bootstrap creates
-    typing_status: addressed     # off by default; on here so you can see it
+    typing_status: addressed     # always by default; narrowed here
     provisioning:
       channels: [town-square, engineering, product]
       display_name_suffix: " (AI)"

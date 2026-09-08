@@ -11,9 +11,10 @@ import (
 // Five call sites — internal/engine's GitHub, GitLab and Jira credential
 // resolvers, plus internal/github's and internal/jira's reconcile — each open
 // one HTTPS call per seat credential. A company of thirty seats therefore
-// opened thirty simultaneous connections to one vendor at every boot, every
-// apply and every `crewlet <vendor> provision`. engine/github.go's comment
-// asserted a bound that was not a bound on anything the host controls.
+// opened thirty simultaneous connections to one third-party app at every
+// boot, every apply and every `crewlet <vendor> provision`.
+// engine/github.go's comment asserted a bound that was not a bound on
+// anything the host controls.
 func TestIdentityLookupsRunAtMostTheCapAtOnce(t *testing.T) {
 	t.Parallel()
 	const work = 64
@@ -30,7 +31,7 @@ func TestIdentityLookupsRunAtMostTheCapAtOnce(t *testing.T) {
 		peak = max(peak, inFlight)
 		mu.Unlock()
 
-		// HELD, so callers actually overlap. A vendor lookup is an HTTPS
+		// HELD, so callers actually overlap. An identity lookup is an HTTPS
 		// round trip; a body that returns immediately lets each goroutine
 		// finish before the next starts, and the peak then stays at one
 		// whether or not anything bounds it — which is a test that cannot

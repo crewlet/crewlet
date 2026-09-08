@@ -20,7 +20,7 @@ const Backend = "github"
 //
 // # The event name is in a HEADER, and that is the whole shape of this file
 //
-// Every other vendor here says what a delivery is inside the body —
+// Every other third-party app here says what a delivery is inside the body:
 // `object_kind` on GitLab, `webhookEvent` on Jira, `type` on Slack. GitHub
 // says it in `X-GitHub-Event` and puts only the ACTION in the body, so
 // `{"action": "created"}` is the entire discriminator a body-only reader

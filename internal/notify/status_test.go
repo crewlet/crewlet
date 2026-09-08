@@ -370,7 +370,7 @@ func TestTheHeartbeatKeepsTheIndicatorAlive(t *testing.T) {
 
 // A poster declaring no interval gets NO heartbeat rather than a spin: its
 // indicator lapses, which is cosmetic, where a zero-interval ticker is a hot
-// loop against a vendor's rate limiter.
+// loop against a third-party app's rate limiter.
 // gatedPoster blocks inside SetStatus so a heartbeat post is provably in
 // flight when a test calls End, and records the ORDER of what the backend
 // was asked to do.

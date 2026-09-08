@@ -1,18 +1,18 @@
 // Package provision is the integration-agnostic half of minting credentials,
-// and of asking a vendor who they belong to.
+// and of asking a third-party app who they belong to.
 //
-// Every provisioning CLI does the same thing in a different vendor's API:
-// walk the company config for `${VAR}` references that name a credential,
-// create or rotate that credential with the vendor, and record the value
-// where the engine will resolve it from. Only the middle step is
-// vendor-specific. This package is the other two.
+// Every provisioning CLI does the same thing in a different third-party
+// app's API: walk the company config for `${VAR}` references that name a
+// credential, create or rotate that credential with the third-party app,
+// and record the value where the engine will resolve it from. Only the
+// middle step is integration-specific. This package is the other two.
 //
-// [ResolveConcurrently] is the same argument one step later: every vendor's
-// reconcile, and the engine's own credential resolvers, fan out one identity
-// lookup per seat, and the bound on that fan-out is a property of talking to a
-// vendor rather than of any one of them. It lives here because this is the
-// leaf all of them already share — see identity.go for what the number is
-// anchored to.
+// [ResolveConcurrently] is the same argument one step later: every
+// third-party app's reconcile, and the engine's own credential resolvers,
+// fan out one identity lookup per seat, and the bound on that fan-out is a
+// property of talking to a third-party app rather than of any one of them.
+// It lives here because this is the leaf all of them already share. See
+// identity.go for what the number is anchored to.
 package provision
 
 import (
@@ -32,10 +32,9 @@ import (
 //
 // A sink may persist REMOTELY — the encrypted secret store is a database
 // write. Buffering in memory and flushing at the end opens a window where a
-// credential exists at the vendor and nowhere else: if the process dies
-// there, the token is live, unrecorded, and nobody knows to revoke it.
-// Write-through closes that window, and a write-through sink needs a
-// context.
+// credential exists at the third-party app and nowhere else: if the process
+// dies there, the token is live, unrecorded, and nobody knows to revoke it.
+// Write-through closes that window, and a write-through sink needs a context.
 //
 // # Discard is the other half, and the one that is easy to leave out
 //
@@ -65,7 +64,7 @@ type TokenSink interface {
 	//
 	// # It is what makes a re-run safe to run
 	//
-	// A vendor that serves a credential once — which is all of them —
+	// A third-party app that serves a credential once (which is all of them)
 	// gives a provisioner no way to check that the value it recorded last
 	// time still matches. Without this the only option is to mint fresh
 	// every run, and that is an outage: the engine is running with the
@@ -106,9 +105,9 @@ type TokenSink interface {
 // ErrNoSink reports a run with nowhere to put what it mints.
 //
 // Refused UP FRONT rather than discovered after the first token: a
-// provisioning run with no sink would mint live credentials at the vendor
-// and print none of them, which is the worst outcome available — every one
-// of them has to be found and revoked by hand.
+// provisioning run with no sink would mint live credentials at the
+// third-party app and print none of them, which is the worst outcome
+// available — every one of them has to be found and revoked by hand.
 var ErrNoSink = errors.New("provision: name where minted credentials should go")
 
 // ReferencedVars is the set of ${VAR} names one config value points at.
@@ -143,8 +142,8 @@ func SoleVar(value string) (string, bool) {
 // Verdict is what probing a recorded credential concluded.
 //
 // FOUR OUTCOMES, not two, because the two that are easy to merge are the
-// two that must not be: "the vendor refused this credential" and "I could
-// not reach the vendor" lead to opposite actions.
+// two that must not be: "the third-party app refused this credential" and "I
+// could not reach the third-party app" lead to opposite actions.
 type Verdict int
 
 const (
@@ -158,8 +157,8 @@ const (
 	// Nothing to do.
 	VerdictSelf
 
-	// VerdictRejected means the vendor refused it. Whatever is in the variable
-	// is not a credential, so minting is unambiguously right.
+	// VerdictRejected means the third-party app refused it. Whatever is in the
+	// variable is not a credential, so minting is unambiguously right.
 	VerdictRejected
 
 	// VerdictOther means it authenticates as a DIFFERENT account. This is a
@@ -171,41 +170,51 @@ const (
 
 // Seat is one agent seat a provisioner has work to do for.
 //
-// The vendor-specific scan produces these; everything below is shared. Held
-// as a struct rather than passed as four arguments because a report groups
-// by it and a rollback iterates it.
+// The integration-specific scan produces these; everything below is shared.
+// Held as a struct rather than passed as four arguments because a report
+// groups by it and a rollback iterates it.
 type Seat struct {
 	// Handle is the seat, for the report.
 	Handle string
 
-	// Role is the seat's role name, which is what a vendor account is
+	// Role is the seat's role name, which is what a third-party app account is
 	// usually named after.
 	Role string
 
 	// TokenVar is the variable this seat's credential is written into.
 	TokenVar string
 
-	// Email is the address a vendor account is created with, when the
-	// vendor needs one.
+	// Email is the address a third-party app account is created with, when the
+	// third-party app needs one.
 	Email string
+
+	// EmailVar is the variable this seat's account ADDRESS is written into,
+	// for an app that assigns the address rather than taking one.
+	//
+	// Atlassian is why. It names a service account itself, and its product
+	// APIs authenticate that account as Basic base64(address:token) — so a
+	// seat holding only the token is refused, and the address is not
+	// something anybody can write down in advance because Atlassian invents
+	// it at creation time.
+	EmailVar string
 }
 
 // Plan is what a provisioning run intends to do, before it does any of it.
 //
 // # Why a plan exists at all
 //
-// Every one of these runs is partly destructive at the vendor: it creates
-// accounts, rotates tokens that something is currently authenticating with,
-// and removes seats a config no longer has. An operator needs to see that
-// list before it happens, and a --dry-run that re-walks the config
-// separately would be a second implementation that can disagree with the
-// real one about what it was going to do.
+// Every one of these runs is partly destructive at the third-party app: it
+// creates accounts, rotates tokens that something is currently authenticating
+// with, and removes seats a config no longer has. An operator needs to see
+// that list before it happens, and a --dry-run that re-walks the config
+// separately would be a second implementation that can disagree with the real
+// one about what it was going to do.
 type Plan struct {
 	// Seats are the seats to provision, in a stable order.
 	Seats []Seat
 
 	// Notes are the drift and the caveats: a seat whose token is a
-	// literal, a capability the vendor does not offer. They do not stop
+	// literal, a capability the third-party app does not offer. They do not stop
 	// the run — they are what the report ends with.
 	Notes []string
 }

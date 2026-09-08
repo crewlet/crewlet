@@ -34,8 +34,9 @@ A body that does not arrive inside its deadline fails the read like any other tr
 > `Authorization: Bearer <token>`. Reads (`GET` / `HEAD` outside those two)
 > serve without one unless `api.auth.allow_anonymous_read: false` is set, at
 > which point they need the same token — `/ws/stream` included, and it accepts
-> `?token=…` too since browsers cannot set headers on a WebSocket. Never
-> guarded either way: `/health`, `/ready`, `/webhooks/*`, `/otlp/*`, `/mcp/*`, and the
+> `?token=…` too since browsers cannot set headers on a WebSocket. Only there:
+> a token in the query string of any other route authenticates nobody, because
+> a URL lands in proxy logs and browser history. Never guarded either way: `/health`, `/ready`, `/webhooks/*`, `/otlp/*`, `/mcp/*`, and the
 > dashboard shell (`/`, `/dashboard`, `/static/*`). See
 > [Configuration § Auth](../concepts/configuration.md#auth).
 >
@@ -92,6 +93,8 @@ A body that does not arrive inside its deadline fails the read like any other tr
 | `POST` | `/webhooks/slack/{handle}` | Receive Slack Events API deliveries for one seat's app |
 | `GET` | `/webhooks/slack-oauth` | OAuth install landing page for `crewlet slack provision` |
 | `POST` | `/webhooks/github` | Receive GitHub webhooks — HMAC-SHA256 over the raw body |
+| `POST` | `/webhooks/github/{handle}` | The same route addressed to one seat, which is where that seat's own [GitHub App](../integrations/github.md#one-github-app-per-agent) delivers |
+| `GET` | `/webhooks/github-app` | Landing page for the per-agent GitHub App flow: converts the one-time creation code, or reports an install (see [below](#get-webhooksgithub-app)) |
 | `POST` | `/webhooks/gitlab` | Receive GitLab webhooks |
 | `POST` | `/webhooks/confluence` | Receive Confluence Data Center webhooks (Cloud arrives via `/webhooks/forge`) |
 | `POST` | `/webhooks/forge` | Receive Forge events (FIT-verified) |
@@ -120,10 +123,27 @@ All `/config/*` routes require `Authorization: Bearer <token>` matching one of t
 | `GET` | `/config/revisions` | Paginated history (newest first), metadata only |
 | `GET` | `/config/revisions/{id}` | Single revision including its payload |
 | `GET` | `/config/revisions/{id}/diff?against=<uuid\|active>` | Structural diff |
+| `GET` | `/config/references` | Every `${VAR}` the active document names, each with the config path of the field that names it, plus the `revision` they were read from |
 
-The dashboard reads the same four facts over the query channel rather than
+The dashboard reads four of those facts over the query channel rather than
 these routes — `config`, `config_audit`, `config_diff` and `config_entities`,
-each operator-gated for the same reason the prefix is.
+each operator-gated for the same reason the prefix is. The reference index has
+no query of its own; the Secrets screen reads it over REST beside `/secrets`.
+
+**Why the reference index is a route and not a client-side scan.** It answers
+"what breaks if I remove this credential", which is the question in front of an
+operator about to delete or rename a secret: the config keeps `${VAR}`
+**pointers**, so a removed row leaves every pointer at it resolving to the
+empty string and the surfaces holding one start refusing deliveries with
+nothing naming the row that went away. Deriving it from `GET /config` in the
+client would mean a second copy of the `${VAR}` grammar, and the engine has
+already paid for that twice: a looser pattern once displayed a literal secret
+unmasked, and another once minted a live credential into a variable nothing
+reads. The path is the operator's own spelling
+(`roles[0].integrations.slack.bot_token`), the same one a validation failure
+reports, and a name with several readers appears once per reader. It carries
+the document's own `ETag`, because the index changes exactly when the revision
+does.
 
 **Full-document write:**
 
@@ -132,6 +152,7 @@ each operator-gated for the same reason the prefix is.
 | `PUT` | `/config` | Replace the active revision. Body JSON or `Content-Type: application/yaml`. Requires a revision summary — an `X-Summary` header, **or** a top-level `_summary` key in the body. Conditional via `If-Match` / `If-None-Match` — see [below](#conditional-requests) |
 | `OPTIONS` | `/config` | `204` with `Allow` and `Accept-Patch: application/merge-patch+json` |
 | `PATCH` | `/config` | Merge one or more sections into the active revision — see [below](#patch-config--the-narrower-write) |
+| `POST` | `/config/reload` | Re-publish the active document unchanged, so every node re-applies and re-reads the secret store. See [below](#post-configreload-after-a-secret-changes) |
 | `POST` | `/config/revisions/{id}/revert` | Create a new active revision whose payload equals revision `{id}` |
 
 #### `PATCH /config` — the narrower write
@@ -238,12 +259,28 @@ by a process that can reach the [coordination store](../concepts/coordination.md
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `GET` | `/setup/integrations` | What every integration this build can set up still needs, plus the address third-party apps reach this deployment on |
+| `GET` | `/setup/integrations/{kind}` | One integration's requirement list and state |
+| `POST` | `/setup/integrations/{kind}/inputs` | Supply or generate those values: credentials are sealed, the rest is patched into the company |
+| `DELETE` | `/setup/integrations/{kind}` | Disconnect: remove what the integration holds at the third-party app, then its block |
+| `POST` | `/setup/integrations/{kind}/provision` | Run the third-party app's provisioning pass: mint what it needs, register its webhook |
+| `POST` | `/setup/integrations/{kind}/check` | Run the same pass read-only, to see whether something fixed at the third-party app took |
+| `GET` | `/setup/integrations/{kind}/runs/{id}` | One pass, as the node that executed it remembers it |
 | `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` and `source`. **Never a value** |
 | `GET` | `/secrets/{name}` | The same fields for one name. `404 not_found` when it is unset |
 | `GET` | `/secrets/{name}?reveal=true` | **Break-glass.** The decrypted value, `Cache-Control: no-store`, logged by name against the authenticated operator |
-| `PUT` | `/secrets/{name}` | Store or rotate one value. **The request body is the value**, raw bytes, up to 64 KiB. `?source=` records provenance (default `api`) |
+| `PUT` | `/secrets/{name}` | Store or rotate one value. **The request body is the value**, raw bytes, up to 64 KiB. `?source=` records provenance (default `api`). `400 invalid_name` when the name is not an environment-variable name |
 | `DELETE` | `/secrets/{name}` | Remove one value. `200` either way, with `{"removed": true\|false}` |
 | `POST` | `/secrets/rekey` | Re-seal every record not already under this node's `secrets.active_key_id`, answering the names it moved. `?key_id=` is refused with `409` when it names a different key |
+
+**The name is an environment-variable name, and a write that is not one is
+refused.** The store is keyed by the name a `${VAR}` resolves through, so
+`gitlab-token` or `my token` would be sealed, listed and read by nothing at
+all, a success the operator only discovers when a provider fails to
+authenticate hours later. Letters, digits and underscores, starting with a
+letter or an underscore. The refusal comes before the body is read, so the
+name is what the answer points at. Reading and removing take the name as
+given, so a row written before the check can still be inspected and deleted.
 
 **The body is the value, not a JSON wrapper.** A credential is arbitrary bytes
 — a PEM key has newlines, a token can hold anything — and an encoding step
@@ -319,6 +356,437 @@ Response (`200 OK`):
 Payloads are NOT included — fetch a specific revision via `GET /config/revisions/{id}` for the full JSON.
 
 ---
+
+
+#### `POST /config/reload`: after a secret changes
+
+Takes no body and changes nothing. It stores a **new revision carrying the
+same document** and activates it, which advances the epoch and makes every
+node apply again.
+
+That is the gesture a rotated credential needs, and no other route performs
+it. A secret lives in the company config as a `${VAR}` pointer, resolved when
+a provider or a transport is constructed, from a snapshot taken at apply time.
+Writing a new value with `PUT /secrets/{name}` therefore changes nothing in a
+running process: the pointer is already correct, so there is no patch to make,
+and with no activation there is no apply and no refreshed snapshot.
+Re-activating an unchanged revision is exactly why the activation pointer is
+append-only rather than keyed on a revision id.
+
+A new revision rather than a re-pointed old one, for the same reason a revert
+writes one: the history stays append-only, so "the credentials were reloaded
+at 04:12" is a fact somebody can find later. `X-Summary` names it; unset, it
+records `reload configuration`.
+
+Answers `201 {"revision_id", "epoch"}`, `409 no_active_revision` when nothing
+is configured, and `503 no_control_plane` on a process that cannot activate.
+
+The command-line equivalent is [`crewlet config activate <UUID>`](cli.md#crewlet-config-activate)
+naming the revision that is already current.
+
+
+
+## Setting an integration up
+
+Connecting an integration means putting values in two places: a credential
+into the fleet's sealed secret store, and everything else into the company
+document. `/setup` is the surface that does both, in the one order that is
+safe, so the dashboard never has to sequence it and never holds a credential
+across two requests.
+
+**Guarded in full, reads included**, on the same terms as `/config` and
+`/secrets`: this surface answers with the *names* of the credentials a company
+holds, which of them are unset, and the pages at each third-party app an
+administrator would visit. That is a map of what to attack, and it is not
+something the anonymous-read posture opens.
+
+### The requirement list
+
+`GET /setup/integrations/{kind}` answers what that third-party app needs,
+whether or not the company has configured it:
+
+```json
+{
+  "key": "datadog",
+  "configured": false,
+  "enabled": false,
+  "satisfied": false,
+  "inbound_path": "/webhooks/datadog",
+  "public_url": "https://engine.example.com/webhooks/datadog",
+  "requirements": [
+    {
+      "field": "webhook_token",
+      "label": "Shared token",
+      "kind": "secret",
+      "config_path": "integrations.datadog.webhook_token",
+      "secret_name": "DATADOG_WEBHOOK_TOKEN",
+      "required": true,
+      "mintable": true,
+      "help": "...",
+      "where": "...",
+      "vendor_url": "https://app.datadoghq.com/integrations/webhooks",
+      "blocks": "credential_missing",
+      "present": false,
+      "resolved": null
+    }
+  ]
+}
+```
+
+`kind` is one of `secret`, `url`, `id`, `choice`, `text`, `handle`, `toggle`.
+Each third-party app's own package declares its list, so the surface serves a
+third-party app it has no screen for and the dashboard renders a third-party
+app it has no code for. A `toggle` is a JSON boolean in the document; a
+`handle` must name a seat this company has.
+
+A `secret`'s **credential** is never echoed. Its `value` carries the field's
+`${VAR}` reference when the document holds one, because that is a *name*
+rather than a credential: it says which entry of the sealed store the field
+reads, it is already visible through `GET /config` to anybody this surface
+answers, and a client that could not see it would have no way to tell
+"this reads `SHARED_TOKEN`" from "type here to replace what is behind this
+field". A document holding a **literal** in that position sends no `value` at
+all, and a composite such as `https://${HOST}/hook` is a literal for this
+purpose: it names a variable and carries an address beside it, so it is not a
+reference to anything.
+
+`present` and `resolved` are the same two facts `secret_present` and
+`secret_usable` are, asked per field: written down, and actually usable in
+this process. `resolved` is `null` where nothing resolved the document.
+`blocks` names the [reconcile finding](../concepts/integration-reconcile.md)
+that this input being absent produces, which is what lets a row reporting
+`credential_missing` offer exactly the fields that clear it.
+
+`mintable` means the engine can generate the value, so nobody should be asked
+to invent it. **No route here ever returns a credential.**
+
+### Supplying them
+
+```bash
+curl -X POST https://engine.example.com/setup/integrations/datadog/inputs \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{
+        "if_match": "<revision_id>",
+        "values": {"enabled": "true", "route_to": "sre-lead"},
+        "generate": ["webhook_token"]
+      }'
+```
+
+`generate` is separate from `values` on purpose: a client that could send both
+under one key would eventually send a weak token by accident, and a field can
+be one or the other, never both.
+
+**Any field the engine reads through the resolver may hold a `${VAR}`**, not
+only the credentials: the Atlassian organization id, a site address, a cloud
+id and an account email are all read that way, so a company can keep them in
+the sealed store and name them here. `present` and `resolved` then say the two
+things separately, and a reference naming an entry that is not there reports
+`resolved: false` rather than passing for a working setting.
+
+A field holding a reference also carries `resolved_value`: what that `${VAR}`
+currently reads as. It exists because the links this surface describes are
+built out of values, and a reference is a name: the Atlassian API keys page is
+per-organization, so an organization id kept in the store would otherwise put
+the literal text `${ATLASSIAN_ORG_ID}` in the path. **Never present on a
+`secret`**, on a literal (which is already the value), or on a reference
+naming nothing.
+
+**A `secret` field's value may be a `${VAR}` instead of a credential.** Sent
+one, the route writes that reference into the config path and seals nothing,
+so a credential already in the store can serve several fields and rotating it
+is one write in one place. It needs no secret store in the answering process,
+because naming an entry is not writing one. Anything else in that position is
+a credential and is sealed under the field's own name, a composite included.
+
+What the route does, in this order:
+
+1. **Refuses a stale base.** `if_match` names the revision the requirement
+   list was read against. A submission built on an older one is refused
+   *before anything is sealed*, so a caller working from a stale page does not
+   end up with a credential in the store that nothing points at.
+2. **Seals every credential**, under the name the third-party app declared or
+   one derived as `VENDOR_FIELD[_HANDLE]`. The row records `source: "setup"`.
+3. **Patches the document** with the non-secret values and, for a credential
+   whose slot was empty, a whole `${VAR}` pointing at the name from step 2.
+   A slot that already holds a `${VAR}` is written *through*, which is what
+   makes rotating a credential a change to the store and not to the company.
+   A slot holding a literal is `409 literal_in_config`, naming the path:
+   overwriting it would edit the company from a setup form and destroy a
+   credential somebody put there on purpose.
+4. **Activates**, through the same merge, validation and compare-and-set
+   `PATCH /config` performs. When the pointer needed no change (a rotation)
+   it [reloads](#post-configreload-after-a-secret-changes) instead, because a
+   value written into the store after the last apply is invisible to every
+   running seat until something activates. The answer says `"reloaded": true`
+   when that is what happened.
+
+Answers `201 {"revision_id", "epoch", "wrote_secrets", "reloaded", "state"}`.
+Refusals: `400 invalid_input`, `400 validation_error`, `404 unknown_kind`,
+`409 revision_advanced`, `409 literal_in_config`, `409 no_active_revision`,
+`503 no_control_plane`, `503 no_keyring`.
+
+### Running the provisioning pass
+
+Some third-party apps need something done *at* them, not just written down: a
+webhook registered, a signing secret minted and pushed. That is the third-party
+app's provisioning pass, and `POST /setup/integrations/{kind}/provision` is
+what runs it.
+
+**The reconcile loop does this on its own.** It runs the same provisioning
+function every few minutes with the sink and the public base supplied, because
+connecting an integration is the permission: a person named that one app and
+handed over an administrator credential for exactly this. This route is the
+same work on demand, for an operator who wants a pass to run now rather than at
+the next tick, and it holds a fleet lease under its own name so the two never
+overlap. Nothing in the dashboard calls it.
+
+`can_provision` on a tool's state says whether this build has a pass for it.
+`needs_operator` is present only for a third-party app whose pass still asks
+for a credential per run; no third-party app in this build does. GitLab's group
+Owner token and Mattermost's system-admin token are ordinary **stored**
+requirements now, sealed in the fleet secret store with a `${VAR}` in the
+document like every other credential.
+
+They used to be transient, asked for on every pass and dropped the moment it
+returned, on the reasoning that a one-time grant held permanently is a
+standing power. What that reasoning did not price is the **disconnect**:
+removing a service account needs the authority that created it, so with
+nothing held there was no way to take one away from here, and every account
+the engine created outlived the integration that created it. The credential
+is held so that it can be undone, and it is named in `orphaned_secrets` when
+an integration is disconnected, so an operator knows exactly what to revoke.
+
+### Disconnecting
+
+`DELETE /setup/integrations/{kind}` **asks**; it does not remove. It answers
+`202` and records the intent on the fleet row, and the reconcile loop removes
+what the integration holds at the third-party app (the webhooks it registered,
+and the accounts it created when asked) before the block leaves the company
+document.
+
+That order is the whole design. The block carries the credential the teardown
+authenticates with, so dropping it first would strand every webhook and
+account with nothing left to authenticate a second attempt. Until the teardown
+succeeds the surface reports phase `disconnecting`, labelled **Disconnecting**,
+and a failure holds it there and retries rather than letting it drift back to
+looking connected.
+
+```json
+{ "remove_seats": false, "force": false }
+```
+
+`remove_seats` is the console's *"also remove the accounts Crewlet created"*.
+It defaults to **false** and is never inferred: the engine's own webhooks come
+out either way, because nothing else uses them, but an account is a colleague
+at that third-party app with history attached. Mattermost bots are **disabled**
+rather than deleted, because deleting a Mattermost user takes its posts with
+it.
+
+`force` drops the block immediately without waiting for the third-party app,
+answers `200`, and is the way out of a teardown that can never succeed: a
+revoked credential, an instance that is gone. It is the operator saying they
+will remove what the third-party app holds themselves.
+
+Either way the sealed credentials are **named, not deleted**, in
+`orphaned_secrets`: one an operator may be sharing with another deployment is
+not something a disconnect decides about on its own. `crewlet secrets unset`
+is the deliberate path.
+
+Refusals: `503 no_status_store` on a node with no coordination, which has
+nowhere to record the intent. Retry against a node that has one, or force it.
+
+Refusals worth knowing: `409 requirements_outstanding` names the fields still
+missing (a pass writes at the third-party app and must not run against a
+half-configured integration), `409 no_public_base_url` when nothing has told
+the engine what address third-party apps reach it on, and `409 pass_in_flight`
+when another pass for the same third-party app is already running. That last
+one is a refusal rather than a queue on purpose: minting twice is not something
+a retry should paper over.
+
+`POST /setup/integrations/{kind}/check` runs the **same pass with neither**,
+which makes it read-only. It is what answers "did what I just fixed at the
+third-party app take" without the engine writing anything.
+
+Both record their outcome on the same fleet integration status the reconcile
+loop writes, through the same fold, so a pass run by hand and a tick that runs
+a minute later cannot disagree, and the Integrations screen updates with no
+extra plumbing. A pass that **failed** is recorded too, as the loop records
+one: phase `activating`, actor `engine`, findings dropped, because a pass that
+failed did not observe anything.
+
+`recreate_webhooks` re-registers with a fresh secret and is **destructive
+across deployments**: the previous secret stops working everywhere else this
+company runs. On GitLab it also rotates every seat's token, which revokes the
+credential each agent is currently authenticating with.
+
+**No pass on this surface deletes anything.** Decommissioning a service
+account whose seat left the configuration stays a command-line gesture,
+because a company mid-edit looks exactly like one that removed a seat.
+
+### Per-seat setup
+
+Two third-party apps put an agent's identity on the **seat** rather than on the
+company, because on both of them one app is one bot: Slack, whose credentials
+an operator pastes in, and GitHub, whose app the engine creates. Both carry a
+`seats` array in their tool state, one entry per agent seat.
+
+Slack's entries are a form: each agent has its own Slack app, so each has its
+own bot token and signing secret, and every entry carries its own requirement
+list, its own `inbound_path` and its own `satisfied`.
+
+A submission for one of them names it:
+
+```json
+{"seat": "sre-lead", "values": {"bot_token": "...", "signing_secret": "..."}}
+```
+
+Those write through the **entity route** rather than a merge patch, because a
+merge patch replaces an array wholesale and patching the roster to change one
+seat would delete every other one. The engine addresses the seat by its handle,
+which is its identity rather than its position, and everything the submission
+did not send stays exactly as stored.
+
+Every agent seat is listed, configured or not: the list is what a screen
+renders a form from, so leaving out a seat with no app yet would leave an
+operator no way to give it one. Human seats are excluded, because a person's
+Slack account is not something this engine holds a token for.
+
+**It does not create the apps.** That goes through Slack's app-manifest API,
+which authenticates with a configuration token Slack issues only by hand and
+which an organisation may decline to allow at all, so
+[`crewlet slack provision`](cli.md) remains the automated path where those
+tokens are available. What this surface does is make a hand-created app usable
+without one: it takes the two values Slack shows on the app's own page and
+seals them.
+
+#### GitHub: the app the engine writes
+
+A GitHub seat's entry carries **no requirement list**, and the empty one is
+deliberate rather than unfinished: nothing here is typed in. The app is created
+from a manifest, and GitHub returns its id, its slug and its private key once,
+to the engine, which seals the key and records the rest on the seat. What the
+entry answers instead is what is still outstanding for that agent:
+
+```json
+{
+  "handle": "builder",
+  "name": "Builder",
+  "requirements": [],
+  "tier": "full_access",
+  "step": "install_app",
+  "action_url": "https://github.com/apps/acme-builder/installations/new",
+  "present": true,
+  "satisfied": false,
+  "detail": "the app exists and nothing has installed it, so it sees no repository and mints no usable token"
+}
+```
+
+`step` and `action_url` are the two clicks, described under
+[One agent's own GitHub App](#one-agents-own-github-app). `tier` is the seat's
+access tier, answered before the app exists because it is what the manifest
+asks for, and defaulting to `read_only` on a seat whose configuration is
+silent.
+
+**`present`** is whether the seat has an app at all, and **`satisfied`** needs
+that app installed *and* its sealed key readable by this node. A `${VAR}`
+naming a secret the store does not hold is the state that reads as configured
+everywhere else while the agent mints no token, so `detail` names the variable
+to set. It names the reference, never a key.
+
+An unfinished roster does **not** hold the card open: the company block is what
+decides whether deliveries arrive, and a company running apps for three of its
+ten agents chose that.
+
+### One agent's own GitHub App
+
+GitHub is the other per-seat case, and it is not a form. A
+[GitHub App](../integrations/github.md#one-github-app-per-agent) is created by
+POSTing a manifest from a page carrying the operator's own GitHub session, so
+this surface hands the dashboard what to submit rather than collecting values,
+and the two clicks that follow are a person's. There is no server-to-server
+equivalent, which is why a reconcile pass cannot do this one alone.
+
+**`POST /setup/integrations/github/app`** begins it, naming the seat:
+
+```bash
+curl -X POST https://engine.example.com/setup/integrations/github/app \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"seat": "senior-engineer"}'
+```
+
+```json
+{
+  "seat": "senior-engineer",
+  "tier": "review",
+  "action_url": "https://github.com/organizations/acme/settings/apps/new",
+  "manifest": {"name": "Acme Senior Engineer", "public": false, "...": "..."},
+  "state": "<signed token naming the seat>"
+}
+```
+
+Those three values are what GitHub's manifest flow takes: the browser POSTs the
+`manifest` as a form field to `action_url`, carrying `state` on that URL so the
+redirect can be tied back to the seat that started. `action_url` is the
+organization's own app registration page whenever
+`integrations.github.provisioning.org` names one, because an app registered
+under a person's account cannot be installed on the organization that owns the
+repositories.
+
+Refusals: `503 no_app_flow` (this process holds no signing material, so a
+browser coming back could not be tied to the seat that started),
+`400 bad_body`, `400 seat_required`, `409 no_active_revision`,
+`404 no_such_seat`, and `409 no_public_url` when
+`integrations.public_base_url` is unset. The last one matters more than it
+looks: an app is created with its delivery, redirect and setup addresses baked
+in, and only a person at GitHub can change them afterwards, so creating one
+now would mean creating it again later.
+
+**`GET /webhooks/github-app`** is where GitHub returns the browser, twice. It is
+unauthenticated because a redirect carries no engine credential; the `state` is
+what stands in its place, and it is validated before anything else happens.
+
+- With a `code`, the engine converts the manifest, **seals the app's private
+  key and webhook secret first**, then records `app_id`, `app_slug` and a
+  `${VAR}` pointing at the sealed key on the seat, through the same per-entity
+  config route [per-seat setup](#per-seat-setup) uses. `installation_id` is
+  written as `0`: the install is a second act. The page then links to the
+  install. The seal comes first because GitHub returns those two values exactly
+  once and reissues neither, so a failure after it costs a retry and a failure
+  before it costs the app.
+- With `?installed=<handle>`, it confirms the install. There is nothing to
+  convert: installing is GitHub's own act and returns no code.
+- With `?error=`, it renders GitHub's own `error_description`, which is the
+  operator's to read (they cancelled, or they may not create apps on that
+  organization).
+
+It answers `200` for a completion or an install, `400` for a refusal, a missing
+code, or a state or code the engine will not accept, and `503` when this
+process has no setup surface behind it. An error message here is always the
+engine's own wording and never a quote of GitHub's response body, because that
+body carries the app's private key.
+
+**The roster says what is outstanding.** A seat entry in a tool's `seats` array
+carries three more fields where a per-seat app has tiers and clicks: `tier` is
+the seat's access tier, `step` is what is left as a closed set of `create_app`
+and `install_app`, and `action_url` is where a person goes to do it. Two steps
+rather than one, because they are two acts minutes or days apart and an
+operator who has done the first needs to be told the second is left rather than
+shown the same button. `action_url` is **empty for `create_app`**, and that is
+not an omission: an app is created by POSTing a manifest, not by following a
+link, so the dashboard asks the begin route above for one and submits a form.
+
+### One tool, several surfaces
+
+The engine reaches Atlassian over three of these keys: `jira`, `confluence`
+and the Forge relay. Each is its own block in the company document and its own
+entry here, and each is written on its own, which is what keeps a submission
+atomic on the thing it changes. A screen that presents them as one tool asks
+for one section per key and submits one request per section.
+
+The Forge app id is the exception, and it rides with `jira`: one app relays
+both surfaces, so it is one value with two consumers. Listing it under both
+would be two forms writing one field.
+
 
 ## Live Stream
 
@@ -1163,13 +1631,24 @@ webhook route answers `503` to every delivery.
 `secret_usable` is a claim about what this process **resolved**. A secret lives
 in the config as a `${VAR}`, so `secret_present: true, secret_usable: false` is
 a route refusing every delivery while the config shows a secret and the
-vendor's settings page shows a healthy hook — with nothing anywhere naming the
-variable. For GitLab the bar is higher than non-empty: the value must be
-`whsec_` over standard base64 of a 32-byte key, the only shape the vendor
-signs with. `null` means this process cannot say — a standalone API has no
-engine whose resolution to read — or the surface has no secret to resolve.
+third-party app's settings page shows a healthy hook, with nothing anywhere
+naming the variable. For GitLab the bar is higher than non-empty: the value
+must be `whsec_` over standard base64 of a 32-byte key, the only shape the
+third-party app signs with. For Slack, whose material is one signing secret per
+seat, it is lower: **one** seat whose secret resolved makes the surface usable,
+because a delivery addressed to that seat's path would be accepted, and a seat
+whose own secret is unresolved is reported by that seat's identity finding
+rather than by the whole surface. `null` means this process cannot say (a
+standalone API has no engine whose resolution to read), or the surface has no
+secret to resolve.
 
 Only the booleans are ever returned; no secret value leaves the process.
+
+`seats` lists the agents carrying their **own** identity on that surface: a
+Slack app, a Mattermost bot, a per-seat project or space, wherever they sit in
+the hierarchy. A seat in a unit is a seat: the list walks the whole tree, not
+just the top-level `roles:` block, which is by definition the seats belonging to
+no unit.
 
 `routes` is the third of the same family: whether a **verified** delivery
 would wake a seat. The three fail independently, and an operator staring at a
@@ -1336,7 +1815,24 @@ The OAuth install landing page for [`crewlet slack provision`](../integrations/s
 
 ### `/webhooks/github`
 
-Receives GitHub webhook payloads. Verifies HMAC-SHA256 over the raw body against the `x-hub-signature-256` header, keyed on the required `webhook_secret` from the `github` config block; invalid or missing signatures are rejected with 401, and a route with no resolved secret answers 503 with a `Retry-After` so the delivery is held for retry rather than blamed on the sender. Deliveries are deduped on `X-GitHub-Delivery`, which is stable across GitHub's own retries and an operator's manual redelivery. **The event name is in the `X-GitHub-Event` header**, not the body — the payload carries only the action — so the header is carried onto the envelope and read by the parser. Publishes to `crewlet.notifications.inbound`. See [GitHub Integration — Webhooks](../integrations/github.md#webhooks).
+Receives GitHub webhook payloads. Verifies HMAC-SHA256 over the raw body against the `x-hub-signature-256` header, keyed on the required `webhook_secret` from the `github` config block; invalid or missing signatures are rejected with 401, and a route with no resolved secret answers 503 with a `Retry-After` so the delivery is held for retry rather than blamed on the sender. Deliveries are deduped on `X-GitHub-Delivery`, which is stable across GitHub's own retries and an operator's manual redelivery. **The event name is in the `X-GitHub-Event` header**, not the body — the payload carries only the action — so the header is carried onto the envelope and read by the parser. Publishes to `crewlet.notifications.inbound`. The same handler serves `POST /webhooks/github/{handle}`, which is the address a seat's own [GitHub App](../integrations/github.md#one-github-app-per-agent) is created with: the handle travels onto the published event so five agents' apps reporting one comment are five wakes rather than four duplicates, and both forms verify against the same company `webhook_secret`, so a seat in the path is not a way past the signature check. See [GitHub Integration — Webhooks](../integrations/github.md#webhooks).
+
+### `GET /webhooks/github-app`
+
+Where GitHub returns an operator's browser during the per-agent
+[GitHub App](../integrations/github.md#one-github-app-per-agent) flow, and the
+only `/webhooks/*` route that renders a page rather than accepting a delivery.
+Two arrivals, one route: after the app is **created**, with a one-time code to
+convert, and after it is **installed**, with nothing but `?installed=<handle>`.
+Unauthenticated, because a redirect from GitHub carries no engine credential;
+the `state` minted by [`POST /setup/integrations/github/app`](#one-agents-own-github-app)
+stands in its place and is a signed token naming the seat, checked before the
+code is converted. On a conversion the app's private key and webhook secret are
+sealed before anything else can fail, because GitHub returns both exactly once
+and reissues neither. Answers `200` for a completion or an install, `400` for a
+refusal from GitHub, a missing code, or a state or code the engine will not
+accept, and `503` when this process has no setup surface. Error text is always
+the engine's own wording: GitHub's response body here carries the private key.
 
 ### `/webhooks/gitlab`
 

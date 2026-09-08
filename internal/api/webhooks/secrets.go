@@ -24,6 +24,20 @@ type Secrets struct {
 	Jira       string
 	Confluence string
 
+	// ConfluenceToken is the Cloud route's credential, and like Datadog's
+	// it is a shared TOKEN rather than a signing key: Confluence Cloud
+	// attaches no signature to a delivery, so the token written into the
+	// registered URL is the strongest check available. Compared
+	// constant-time against the query the delivery carries.
+	ConfluenceToken string
+
+	// Datadog is a shared TOKEN, not a signing key, and the difference
+	// is the provider's: a Datadog webhook attaches headers with fixed
+	// values only, so there is nothing varying with the body to sign.
+	// It is compared constant-time against the header a delivery
+	// carries, which is the strongest check available here.
+	Datadog string
+
 	// ForgeAppID is the audience claim a Forge invocation token must
 	// carry. It is not a shared secret — the signature is checked against
 	// Atlassian's published keys — but it plays the same role here: with no
@@ -34,6 +48,19 @@ type Secrets struct {
 	// own Slack app. The handle comes from the URL path, which is why that
 	// route is the only one whose secret depends on where it was addressed.
 	Slack map[string]string
+
+	// GitHubSeat is PER SEAT on the same terms, and for the same reason: a
+	// GitHub App has one bot identity, so an agent that acts as itself has
+	// an app of its own, and GitHub generated that app its own signing
+	// secret at conversion time.
+	//
+	// IT DOES NOT REPLACE [Secrets.GitHub]. Two different deployments
+	// address the seat route: an agent's own app, which signs with the
+	// secret here, and a single organization app pointed at one seat,
+	// which has only the organization's. So the route prefers this and
+	// falls back, and a seat present in this map is one whose deliveries
+	// can ONLY have been signed with its own.
+	GitHubSeat map[string]string
 }
 
 // Verifiable names the surfaces whose material can actually verify a
@@ -43,30 +70,68 @@ type Secrets struct {
 // NOT "is a secret configured", which is what every operator surface showed
 // before this: a secret lives in the config as a ${VAR}, and one that did not
 // resolve renders as present while the route answers 503 to every delivery
-// and the vendor's settings page reports a healthy hook. The config says set,
-// the vendor says fine, and the deliveries stop — with nothing anywhere
-// naming the variable.
+// and the third-party app's settings page reports a healthy hook. The config
+// says set, the third-party app says fine, and the deliveries stop, with
+// nothing anywhere naming the variable.
 //
 // The rule is per surface and it is the ROUTE's own: GitLab needs a key the
-// vendor could have signed with, not merely a non-empty string, because a
+// third-party app could have signed with, not merely a non-empty string, because a
 // value that is not one cannot be the HMAC key for any delivery. Mattermost
-// is absent by design — it holds a websocket rather than a route, so there is
-// no delivery to verify — and so is Slack, whose material is per seat.
+// is absent by design: it holds a websocket rather than a route, so there is
+// no delivery to verify at all, and the operator surface reads its absence
+// here as "nothing to say" rather than as a refusal.
+//
+// SLACK IS PER SEAT, and it belongs here on the same question every other
+// surface answers: would a real delivery be accepted right now. It is
+// verifiable when AT LEAST ONE seat's signing secret resolved, because a
+// delivery addressed to that seat's path would be. Leaving it out did not
+// read as "nothing to say" the way Mattermost's absence does, because the
+// company row does carry a secret_present for Slack: so secret_usable was
+// false for every Slack company that had ever worked, and the dashboard told
+// each of them that every delivery was being refused.
 func (s Secrets) Verifiable() []string {
 	var out []string
 	if whsec.Valid(s.GitLab) {
 		out = append(out, "gitlab")
+	}
+	// Confluence has TWO routes with two credentials, and either one makes
+	// the surface verifiable: the signed Data Center route, or the
+	// token-bearing Cloud route. Counted once, because the question is
+	// whether a delivery from this surface could be accepted.
+	if s.Confluence != "" || s.ConfluenceToken != "" {
+		out = append(out, "confluence")
+	}
+	// GitHub is verifiable on either credential, because either one is
+	// enough for a real delivery to be accepted: the organization app's
+	// secret, or any one agent app's own.
+	if s.GitHub == "" {
+		for _, secret := range s.GitHubSeat {
+			if secret != "" {
+				out = append(out, "github")
+				break
+			}
+		}
 	}
 	for _, pair := range []struct {
 		kind, secret string
 	}{
 		{"github", s.GitHub},
 		{"jira", s.Jira},
-		{"confluence", s.Confluence},
+		{"datadog", s.Datadog},
 		{"forge", s.ForgeAppID},
 	} {
 		if pair.secret != "" {
 			out = append(out, pair.kind)
+		}
+	}
+	// One seat is enough. A company with ten Slack apps and one unresolved
+	// ${VAR} is not a company whose Slack is unverifiable; it is one seat
+	// whose deliveries are refused, and that is what the per-seat
+	// identity findings are for.
+	for _, secret := range s.Slack {
+		if secret != "" {
+			out = append(out, "slack")
+			break
 		}
 	}
 	slices.Sort(out)
@@ -88,8 +153,8 @@ func (s Secrets) Verifiable() []string {
 //
 // The consequence was not a degraded route. It was SEVEN routes verifying
 // against the literal string "${GITLAB_SIGNING_SECRET}": every delivery from
-// every vendor refused, with the engine logging one warning per delivery and
-// the vendor's settings page showing a healthy hook. Measured against a real
+// every third-party app refused, with the engine logging one warning per delivery and
+// the third-party app's settings page showing a healthy hook. Measured against a real
 // GitLab. Worse than the outage is what the literal IS — a config field the
 // dashboard renders, not a secret — so a forged delivery would have verified
 // against a string an attacker could read.
@@ -132,6 +197,33 @@ func SecretsOf(c *config.Company, o *org.Organization, resolve func(string) stri
 		}
 		if in.Confluence != nil {
 			s.Confluence = resolve(in.Confluence.WebhookSecret)
+			s.ConfluenceToken = resolve(in.Confluence.WebhookToken)
+		}
+		if in.Datadog != nil && in.Datadog.Enabled {
+			s.Datadog = resolve(in.Datadog.WebhookToken)
+		}
+		// PER SEAT, READ FROM THE CONFIG rather than from the org model
+		// the way Slack's is, because a seat's GitHub App has no runtime
+		// identity to carry: it is written by the engine at conversion
+		// time and read back by the reconcile pass from this same
+		// document. Adding a second home for it would give the two
+		// readers something to disagree about.
+		//
+		// NOT GATED ON in.GitHub.Enabled. That switch turns off the
+		// ORGANIZATION's app and route; an agent's app is its own, and a
+		// company that only ever created per-agent ones has no
+		// `integrations.github` block to enable at all.
+		for role := range c.EachRole() {
+			app := role.Integrations.GitHub
+			if app == nil || !role.Seat().IsAgent() {
+				continue
+			}
+			if secret := resolve(app.WebhookSecret); secret != "" {
+				if s.GitHubSeat == nil {
+					s.GitHubSeat = map[string]string{}
+				}
+				s.GitHubSeat[role.Seat().Handle()] = secret
+			}
 		}
 	}
 	if o == nil {

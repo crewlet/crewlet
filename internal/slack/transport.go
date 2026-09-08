@@ -155,6 +155,29 @@ func (t *Transport) Handles() []string {
 	return out
 }
 
+// Apps is the app each running seat authenticates as, by handle.
+//
+// LEARNED, not configured. Nothing in the org model names an agent's Slack
+// app: the token does, and `auth.test` is what turns one into the other at
+// wire time. An operator looking at a roster of agents wants to know WHICH of
+// their apps each one is, which is the id every Slack settings page is keyed
+// on, and this is the only place in the process that knows it.
+//
+// Only the seats that came up. A seat whose token was refused has no app to
+// name, and inventing one from the config would name an app that may not
+// exist.
+func (t *Transport) Apps() map[string]string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make(map[string]string, len(t.seats))
+	for handle, s := range t.seats {
+		if s.seat.AppID != "" {
+			out[handle] = s.seat.AppID
+		}
+	}
+	return out
+}
+
 // lookup implements [Seats].
 func (t *Transport) lookup(handle string) (Seat, bool) {
 	t.mu.Lock()

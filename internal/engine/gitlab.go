@@ -160,7 +160,7 @@ func (e *Engine) startGitLab(ctx context.Context, c *Company, cfg *config.GitLab
 	// than left to the first delivery.
 	//
 	// Config already refuses an enabled GitLab whose signing_secret is
-	// missing or is a literal the vendor could never have produced, so
+	// missing or is a literal the third-party app could never have produced, so
 	// reaching this line with an unusable value means a ${VAR} that did not
 	// resolve, or resolved to something else. Neither is visible from
 	// anywhere: the route answers 503 to every delivery, GitLab's own

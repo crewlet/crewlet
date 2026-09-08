@@ -145,7 +145,7 @@ func TestAKnownColleagueIsAnnotated(t *testing.T) {
 	if !strings.Contains(got, "`u-ana`") {
 		t.Fatalf("the annotation dropped the platform id:\n%s", got)
 	}
-	// A stranger stays a stranger, with the display name the vendor gave.
+	// A stranger stays a stranger, with the display name the third-party app gave.
 	plain := chatPrompt.Build(chatNote(nil), notify.NewRegistry(nil))
 	if !strings.Contains(plain, "posted by **ana**") {
 		t.Fatalf("an unknown sender rendered as %q", plain)

@@ -85,6 +85,7 @@ Replace `<ROLE>` with the role name in uppercase (e.g., `SLACK_BOT_TOKEN_ENGINEE
 | `CONFLUENCE_API_TOKEN` | Admin/service API token (`integrations.confluence.token`) | Atlassian account > API tokens |
 | `CONFLUENCE_EMAIL` | Admin email for Cloud Basic Auth (`integrations.confluence.email`) | Your Atlassian account email |
 | `CONFLUENCE_WEBHOOK_SECRET` | HMAC secret for Data Center webhooks (`integrations.confluence.webhook_secret`) | Set when creating the webhook |
+| `CONFLUENCE_WEBHOOK_TOKEN` | Shared token every **Cloud** hook carries in its URL (`integrations.confluence.webhook_token`), compared constant-time by `/webhooks/confluence/{event}`. Confluence Cloud signs nothing, so this is the whole authentication: treat it as a signing key. | Minted by `crewlet confluence provision`; `-recreate-webhooks` rotates it |
 
 Per-agent Confluence credentials go through `role.mcp_env` on the `atlassian`
 MCP server (`CONFLUENCE_USERNAME` / `CONFLUENCE_API_TOKEN`), like Jira.
@@ -122,6 +123,34 @@ Conventions used by the [GitLab integration](../integrations/gitlab.md). Apart f
 | `GITLAB_ENGINE_TOKEN` | Engine read token (`integrations.gitlab.token`) | GitLab service account, or minted by provisioning |
 | `GITLAB_SIGNING_SECRET` | The hook's **signing token** (`integrations.gitlab.signing_secret`) — the HMAC key every delivery is verified against, and the route's only credential. Must be `whsec_` over standard base64 of a 32-byte key. | `crewlet gitlab provision` mints one into this variable; GitLab's own **Generate signing token** button produces the same shape |
 | `GITLAB_TOKEN_<SEAT>` | Per-agent service-account PAT (each role's `mcp_env.gitlab.GITLAB_TOKEN`, also referenced from `role.sandbox.env`, e.g. `GITLAB_TOKEN_SWE`) | Minted by `crewlet gitlab provision` |
+
+---
+
+## GitHub
+
+Conventions used by the [GitHub integration](../integrations/github.md). All of them are `${VAR}` references in the company YAML, resolved through the [secret store first and the environment behind it](../concepts/secret-store.md).
+
+Unlike GitLab, **nothing here is minted for you**: GitHub issues no credential on a provisioner's behalf, so `crewlet github provision` registers webhooks and *reports* which account each seat's own token authenticates as. The tokens themselves are ones you create.
+
+| Variable | Description | Where to get it |
+|----------|-------------|-----------------|
+| `GITHUB_WEBHOOK_SECRET` | HMAC secret every inbound delivery is verified against (`integrations.github.webhook_secret`), and the route's only credential. A route with nothing to check against answers **503** rather than accepting a delivery. | `crewlet github provision` mints one into this variable when it is empty, or GitHub > repository/org > Webhooks |
+| `GITHUB_ENGINE_TOKEN` | Org read token for participant fan-out (`integrations.github.token`). **Optional**, and its absence is a documented degradation rather than a failure: without it an event reaches whoever the payload names, and only people merely watching a thread go unheard. | A PAT or GitHub App installation token |
+| `GITHUB_TOKEN_<SEAT>` | Per-agent token (each role's `mcp_env.github`, e.g. `GITHUB_TOKEN_SENIOR`). This is what makes a seat a real GitHub identity: a seat with none receives no review request, assignment or mention at all, which is the one finding `crewlet github provision` exists to surface. | A PAT on that agent's own GitHub account |
+
+---
+
+## Datadog
+
+Conventions used by the [Datadog integration](../integrations/datadog.md).
+
+| Variable | Description | Where to get it |
+|----------|-------------|-----------------|
+| `DATADOG_WEBHOOK_TOKEN` | The shared token compared against the `X-Crewlet-Token` header on every delivery (`integrations.datadog.webhook_token`). **Treat it as a signing key**: Datadog's webhook can attach headers only with fixed values, so there is nothing varying with the payload to sign, and this constant-time comparison is the entire authentication. A replayed delivery is indistinguishable from a fresh one and anyone holding the token can forge an alert. Rotate it the way you would a signing secret; the next reconcile pass writes the new value into the webhook it keeps at Datadog. | Generate one: `openssl rand -base64 32`, or let the setup form mint it |
+| `DATADOG_API_KEY` | Says which organization the engine acts in (`integrations.datadog.provisioning.api_key`). **Required when the block is enabled**: it is half of what registers the webhook that makes alerts arrive. | Datadog > Organization Settings > API Keys |
+| `DATADOG_APP_KEY` | Says which user acts (`integrations.datadog.provisioning.app_key`). Datadog refuses a write carrying only an API key, and its message names neither. | Datadog > Organization Settings > Application Keys |
+
+`integrations.public_base_url`, `integrations.datadog.route_to`, `webhook_name` and `handle_tag` are **not** secrets and belong in the company document as plain values, not as `${VAR}` references. `route_to` is required when the block is enabled: it names the seat an alert wakes when no monitor tag names an owner, and without it those alerts are verified, counted and delivered to nobody. See [Routing](../integrations/datadog.md#routing-is-by-ownership-not-by-mention).
 
 ---
 

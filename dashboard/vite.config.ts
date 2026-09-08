@@ -49,7 +49,10 @@ export default defineConfig({
   server: {
     port: 5173,
     // `npm run dev` proxies the data plane to a locally running engine, so
-    // the dev loop is the real API rather than a fixture.
+    // the dev loop is the real API rather than a fixture. Every prefix the
+    // dashboard calls has to be listed: an unlisted one is served by Vite
+    // itself, which answers 404 for a path it has no file for, so the screen
+    // sees a refusal that looks like the engine's and is not.
     proxy: {
       "/ws/stream": { target: "ws://localhost:8000", ws: true },
       "/api": { target: "http://localhost:8000" },
@@ -60,6 +63,9 @@ export default defineConfig({
       "/tools": { target: "http://localhost:8000" },
       "/schedules": { target: "http://localhost:8000" },
       "/config": { target: "http://localhost:8000" },
+      "/secrets": { target: "http://localhost:8000" },
+      "/setup": { target: "http://localhost:8000" },
+      "/stream": { target: "http://localhost:8000" },
     },
   },
 });

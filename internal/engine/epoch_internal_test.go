@@ -12,7 +12,7 @@ import (
 
 // EVERY VENDOR WIRING THE COMPANY DERIVES IS REBUILT ON AN APPLY.
 //
-// A vendor's parser is built once from the applied company and then held. Two
+// A third-party app's parser is built once from the applied company and then held. Two
 // halves of what it holds move when a revision lands: the ORG CHART it routes
 // by — a lead map, a project or space identity, a seat's own credential — and
 // the CREDENTIAL it reads with. A node that kept its boot-time wiring routes
@@ -25,7 +25,7 @@ import (
 //
 // This is not hypothetical and it is not a typo: `reconcileConfluence` did not
 // exist at all. The knowledge base shipped with a lead map built at boot and
-// never rebuilt, past four vendors that each had the edge, because nothing
+// never rebuilt, past four third-party apps that each had the edge, because nothing
 // connected the list of reconcilers to the list of calls. So the two lists are
 // derived from the source rather than written down — a reconciler added to the
 // package and not to the apply path works perfectly at boot and is discoverable
@@ -42,7 +42,7 @@ func TestEveryVendorReconcilerRunsOnApply(t *testing.T) {
 	for _, name := range defined {
 		if !slices.Contains(called, name) {
 			t.Errorf("(*Engine).%s exists and the apply path never calls it, so "+
-				"that vendor keeps its boot-time wiring for the life of the "+
+				"that third-party app keeps its boot-time wiring for the life of the "+
 				"process — routing by an org chart that is no longer running, "+
 				"and reading with a credential the revision may have rotated",
 				name)

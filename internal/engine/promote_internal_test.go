@@ -215,7 +215,7 @@ func TestPromotionIsBuiltWhenThereIsSomewhereToDraft(t *testing.T) {
 // THE WRITER IS READ AT PASS TIME, NOT WHEN THE PASS IS ARMED.
 //
 // The background passes are armed BEFORE startNotifications builds the
-// vendor clients, so a promoter that resolved its writer at arm time held a
+// third-party app clients, so a promoter that resolved its writer at arm time held a
 // nil for every company that ever ran — and the only symptom was one boot
 // line saying no knowledge base was configured while one was. A pass that
 // runs after the wiring catches up must find it.

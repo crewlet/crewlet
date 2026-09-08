@@ -12,7 +12,7 @@ import (
 // and which unit's seats are pooled.
 //
 // The ENTANGLEMENT the rest of the subsystem is written to avoid. The pass in
-// internal/learning knows nothing about Confluence or org units; the vendor
+// internal/learning knows nothing about Confluence or org units; the third-party app
 // writer knows nothing about units. Both facts meet here, which is what this
 // package is for.
 
@@ -31,7 +31,7 @@ func (e *Engine) promotionWired() bool {
 //
 // READ AT PASS TIME, never captured — it is handed to the pass as the
 // resolver [learning.PromotionWriterFor], because the background passes are
-// armed BEFORE the inbound service builds its vendor clients. A writer read
+// armed BEFORE the inbound service builds its third-party app clients. A writer read
 // at arm time is nil for every company, and the symptom is one boot line
 // saying no knowledge base is configured while one is.
 //
@@ -157,8 +157,8 @@ func (e *Engine) buildPromoter(c *Company) *learning.Promoter {
 	return promoter
 }
 
-// Compile-time proof that the vendor writer satisfies the pass's seam. The
+// Compile-time proof that the integration writer satisfies the pass's seam. The
 // interface is declared by the consumer, so nothing else would notice a
 // signature drift until the wiring above failed to build — which is later
-// than a reader of the vendor package would want to find out.
+// than a reader of the integration package would want to find out.
 var _ learning.PromotionWriter = (*confluence.PromotionWriter)(nil)

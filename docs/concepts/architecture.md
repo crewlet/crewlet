@@ -45,10 +45,10 @@ flowchart TB
     MCPS -->|"the agent's own credentials"| SURF
 ```
 
-**The engine never calls a vendor's API on its own account.** It calls MCP
+**The engine never calls a third-party app's API on its own account.** It calls MCP
 servers, and each seat's server carries *that seat's* credentials
 (`role.mcp_env`), so a comment on an issue is written by the agent, not by a
-service account fronting for it. The engine's own vendor packages exist for the
+service account fronting for it. The engine's own integration packages exist for the
 *inbound* half — verifying a delivery, parsing it, deciding whose it is — plus
 provisioning and the chat working-indicator. See [Tool
 capabilities](tool-capabilities.md) for why no engine prompt names a vendor tool.
@@ -275,7 +275,7 @@ stream appear in more than one leg; there is one of each, company-wide, not one
 per picture. The step numbers run 1–17 straight through.
 
 **Leg 1 — the node that took the delivery.** Verify it, claim it, publish it,
-and answer the vendor only once it is on the stream.
+and answer the third-party app only once it is on the stream.
 
 ```mermaid
 sequenceDiagram
@@ -288,7 +288,7 @@ sequenceDiagram
     V->>I: POST /webhooks/slack/HANDLE
     I->>I: verify the signature<br/>(per-seat signing secret)
     I->>KV: claim the delivery id
-    Note over I,KV: A retry that lands on another node<br/>finds the claim taken and is answered<br/>"duplicate" — one wake, however many<br/>copies the vendor sends
+    Note over I,KV: A retry that lands on another node<br/>finds the claim taken and is answered<br/>"duplicate" — one wake, however many<br/>copies the third-party app sends
     I->>S: publish RawWebhook →<br/>crewlet.notifications.inbound
     I-->>V: 200
 ```
@@ -305,7 +305,7 @@ sequenceDiagram
     participant KV as Coordination KV
 
     S->>R: one fleet-wide group: notify-inbound
-    R->>R: the vendor's parser: who is this for?<br/>mention · assignee · watcher ·<br/>thread follow · project lead
+    R->>R: the third-party app's parser: who is this for?<br/>mention · assignee · watcher ·<br/>thread follow · project lead
     R->>R: resolve to a seat through the<br/>org-derived party registry
     R->>KV: notification valve — is this seat<br/>over its rate for the window?
     R->>S: publish ExternalNotification →<br/>crewlet.agent.HANDLE.inbox
@@ -335,13 +335,13 @@ Five properties of that path are worth stating on their own, because each one
 is why a step exists at all.
 
 **The delivery is claimed before it is published.** Two concurrent retries must
-not both wake a seat, and a vendor retrying reaches whichever node a load
+not both wake a seat, and a third-party app retrying reaches whichever node a load
 balancer picks — so the claim lives in the fleet's coordination store, not in
 the receiving node's memory. Publishing then comes *before* the store row and
 the live push, because the publish is the only step that has to happen: a
 delivery that reached the stream will be worked even if the receiving process
 dies in the next instruction. A publish that fails releases the claim and
-answers 503, so the vendor's retry finds the delivery unclaimed.
+answers 503, so the third-party app's retry finds the delivery unclaimed.
 
 **Routing is a publish, never a call.** The inbound consumer group is
 fleet-wide, so the node that wins a delivery is usually *not* the node running
@@ -366,7 +366,7 @@ publishes hangs beneath it — so a delivery and the turn it woke are one story 
 the collector, and the same ids are columns on the event rows whether or not a
 collector exists.
 
-**There are two inbound edges, not one.** Five vendors plus Atlassian's Forge
+**There are two inbound edges, not one.** Five third-party apps plus Atlassian's Forge
 relay arrive as verified HTTP on `/webhooks/*` and take every step above.
 Mattermost does not: it holds **one websocket per seat**, outbound from this
 node, so it needs no public URL and no signing secret — and it joins the picture

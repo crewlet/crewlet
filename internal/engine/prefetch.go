@@ -78,7 +78,7 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 		// A POINTER TRIGGER gates the three searches that judge relevance
 		// against the trigger text. Read off the events rather than
 		// recomputed, because the parser that produced them is the only
-		// thing that knows whether its vendor's body is the context or a
+		// thing that knows whether its third-party app's body is the context or a
 		// reference to it.
 		RequiresRecon: requiresRecon(req.Ask()),
 	}

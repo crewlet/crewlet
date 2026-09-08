@@ -373,7 +373,7 @@ func TestASurfaceOffersOnlyWhatWasActivated(t *testing.T) {
 func TestActivatingTwiceOffersTheToolOnce(t *testing.T) {
 	t.Parallel()
 	// A duplicate in the offered list is a duplicate in the request, which
-	// the vendor rejects — so one model repeating itself would fail the
+	// the vendor rejects, so one model repeating itself would fail the
 	// whole round.
 	r := tools.NewRegistry()
 	mustRegister(t, r, tool("a"), tools.OriginBuiltin)

@@ -10,7 +10,7 @@ import (
 //
 // # A wiki change is rarely urgent, and the prompt has to say so
 //
-// Every other vendor's event is somebody asking for something. A page edit
+// Every other third-party app's event is somebody asking for something. A page edit
 // usually is not: it is documentation moving, and the right answer is
 // almost always to read it, decide it changes nothing, and stay silent. A
 // prompt that framed it as a request would produce a stream of "noted,

@@ -11,7 +11,7 @@ import (
 // so every seat's Slack call goes through the client built here. It was built
 // with a nil Transport — http.DefaultTransport, two idle connections per host
 // across the whole process — while NewClient beside it already took the
-// shared one, so the two halves of one vendor disagreed.
+// shared one, so the two halves of one integration disagreed.
 func TestTransportRidesTheSharedTransport(t *testing.T) {
 	t.Parallel()
 	tr, err := NewTransport(TransportOptions{

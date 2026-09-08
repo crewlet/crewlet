@@ -5,11 +5,14 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
+
+	"github.com/crewlet/crewlet/internal/integration"
 )
 
 // Reconcile brings a Jira instance in line with the company config.
@@ -170,9 +173,15 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	}
 	account, err := opts.Client.Me(ctx)
 	if err != nil {
+		// The probe exists to fail here rather than midway, so what it
+		// reports has to say WHICH kind of failure it was: a refused
+		// credential is the operator's to fix and never clears on its
+		// own, where an unreachable third-party app clears without anybody.
+		rejected := integration.Reject(err, Status(err))
 		return nil, fmt.Errorf(
-			"jira: the org credential in integrations.jira.token was refused, "+
-				"so nothing else this run reports would be trustworthy: %w", err)
+			"jira: the org credential in integrations.jira.token %s, "+
+				"so nothing else this run reports would be trustworthy: %w",
+			integration.Refusal(rejected), rejected)
 	}
 
 	res := &Result{Deployment: opts.Client.Deployment(), Account: account}
@@ -276,7 +285,22 @@ func checkProjects(ctx context.Context, opts Options, seats []SeatIdentity) []Pr
 	for i, key := range keys {
 		out[i] = ProjectCheck{Key: key, OrgLead: leads[key]}
 		project, err := opts.Client.ProjectOf(ctx, key)
-		if err != nil {
+		switch {
+		case err == nil:
+		case notFound(err):
+			// THE INSTANCE ANSWERED, and the answer was that there is no
+			// such project. Exists stays false and Detail stays EMPTY,
+			// which is what separates this from a read that failed.
+			//
+			// Collapsing the two was the bug: [ProjectCheck.Exists]
+			// promises "a project the instance does not have, which is
+			// almost always a typo in the org chart", and every failure
+			// produced that same shape, so a typo and a timed-out
+			// instance were indistinguishable. Downstream they want
+			// opposite treatment: one is a document an operator must fix
+			// and the other is worth another look in thirty seconds.
+			continue
+		default:
 			out[i].Detail = err.Error()
 			continue
 		}
@@ -300,19 +324,6 @@ func ensureWebhook(ctx context.Context, opts Options) (string, []string, error) 
 				"delivers nothing and the integration looks idle rather than " +
 				"unconfigured"}, nil
 	}
-	if opts.Client.Deployment() == Cloud {
-		// NOT A FAILURE, and not something a better credential fixes. On
-		// Cloud a dynamic webhook belongs to an app, so this endpoint
-		// refuses an API token however privileged it is. The Forge route
-		// is how Cloud events reach this engine.
-		return "", []string{
-			"webhook registration was skipped: this is a Cloud instance, where " +
-				"a webhook belongs to an app rather than to an API token. Cloud " +
-				"events reach the engine through the Forge app on " +
-				"/webhooks/forge, which is verified by its invocation token and " +
-				"needs integrations.forge_app_id rather than a webhook secret"}, nil
-	}
-
 	secret, notes, err := webhookSecret(ctx, opts, target)
 	if err != nil {
 		return "", notes, err
@@ -322,20 +333,47 @@ func ensureWebhook(ctx context.Context, opts Options) (string, []string, error) 
 	if err != nil {
 		return "", notes, fmt.Errorf("jira: list webhooks: %w", err)
 	}
+	// BY NAME, NOT BY ADDRESS.
+	//
+	// It matched on the URL, so a hook this engine had registered at a
+	// DIFFERENT address was invisible to it: changing the public base URL
+	// created a second hook and left the first, and every change after that
+	// added another. A deployment behind a tunnel accumulated one per
+	// restart, all live, all delivering to addresses that no longer answer.
+	//
+	// The name is what says the hook is this engine's, so the name is what
+	// converges: one hook, pointed wherever the company says it is reachable
+	// now.
+	// ONE HOOK, and the extras go.
+	//
+	// Converging on the first match still leaves every hook a previous
+	// address created: this engine's own name on three live registrations,
+	// two of them delivering to somewhere that no longer answers. What
+	// "converged" has to mean is one.
+	mine := make([]Webhook, 0, len(hooks))
 	for _, hook := range hooks {
-		if hook.URL != target {
-			continue
+		if hook.Name == WebhookName {
+			mine = append(mine, hook)
 		}
+	}
+	for _, extra := range mine[min(1, len(mine)):] {
+		if err := opts.Client.DeleteWebhook(ctx, extra.ID); err != nil {
+			return "", notes, fmt.Errorf("jira: remove a duplicate webhook: %w", err)
+		}
+	}
+	if len(mine) > 0 {
+		hook := mine[0]
 		if opts.RecreateWebhook {
 			if err := opts.Client.DeleteWebhook(ctx, hook.ID); err != nil {
 				return "", notes, fmt.Errorf("jira: replace webhook: %w", err)
 			}
-			break
+		} else {
+			if _, err := opts.Client.UpdateWebhook(
+				ctx, hook.ID, WebhookName, target, secret); err != nil {
+				return "", notes, fmt.Errorf("jira: update webhook: %w", err)
+			}
+			return target, notes, nil
 		}
-		if _, err := opts.Client.UpdateWebhook(ctx, hook.ID, WebhookName, target, secret); err != nil {
-			return "", notes, fmt.Errorf("jira: update webhook: %w", err)
-		}
-		return target, notes, nil
 	}
 	if _, err := opts.Client.CreateWebhook(ctx, WebhookName, target, secret); err != nil {
 		return "", notes, fmt.Errorf("jira: create webhook: %w", err)
@@ -394,4 +432,15 @@ func webhookTarget(base string) string {
 		return ""
 	}
 	return base + "/webhooks/jira"
+}
+
+// notFound reports a refusal that means the instance has no such thing.
+//
+// Through [APIError.Status] rather than by matching the message, which is
+// exactly what that type exists for: the wording of a Jira refusal differs by
+// version and by locale, and a substring match on it is a check that stops
+// working when somebody's instance is in German.
+func notFound(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound
 }

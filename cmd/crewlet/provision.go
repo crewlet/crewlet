@@ -22,10 +22,10 @@ import (
 // # Why the sink is a required choice
 //
 // A run with nowhere to put what it mints creates live credentials at the
-// vendor and prints none of them — the worst outcome available, because
-// every one has to be found and revoked by hand. So there is no default: the
-// operator says where, up front, and a run with no answer is refused before
-// it touches anything.
+// third-party app and prints none of them, the worst outcome available,
+// because every one has to be found and revoked by hand. So there is no
+// default: the operator says where, up front, and a run with no answer is
+// refused before it touches anything.
 
 // sinkFlags is the shared --secret-store / --env-file / --print choice.
 type sinkFlags struct {
@@ -118,7 +118,7 @@ func (s sinkFlags) open(ctx context.Context, stdout io.Writer) (provision.TokenS
 // that saw only the environment read an EMPTY STRING for every one an
 // operator had already put in the store. That is not merely a missing value
 // for the GitLab signing secret: empty is the signal to MINT, so the run
-// replaced a working webhook secret at the vendor with a fresh one and broke
+// replaced a working webhook secret at the third-party app with a fresh one and broke
 // every delivery in flight until the config caught up. The store is where a
 // rotated secret lives; a tool that provisions against it has to read it.
 //
@@ -270,9 +270,14 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 	// same mint-into-${VAR} contract the seat tokens follow. Empty when
 	// signing_secret is a literal, which the reconcile refuses rather than
 	// half-configuring.
+	// RESOLVED ONCE, for the reason the Slack command states: the value is
+	// read in three places here and three separate reads of the flag is
+	// how one of them disagrees with the others.
+	base := webhookBase(*publicURL, &company.Integrations)
+
 	signingVar := soleVarOf(cfg.SigningSecret)
 	signing := gitlab.PlanSigningSecret(
-		env.Value(cfg.SigningSecret), signingVar, *rotate, *publicURL != "")
+		env.Value(cfg.SigningSecret), signingVar, *rotate, base != "")
 
 	// THE PLAN IS PRINTED EITHER WAY, and it is the SAME plan the run
 	// uses. A --dry-run that re-derived it separately would be a second
@@ -315,7 +320,7 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 
 	res, err := gitlab.Reconcile(ctx, gitlab.Options{
 		Client: client, Config: cfg, Plan: plan, Sink: sink,
-		WebhookBase:      *publicURL,
+		WebhookBase:      base,
 		SigningSecret:    env.Value(cfg.SigningSecret),
 		SigningSecretVar: signingVar,
 		Rotate:           *rotate, Decommission: *decommission, ExpiryDays: expiry,
@@ -331,7 +336,7 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 // printPlan renders what a run intends to do.
 // The `what` names the credential a seat would have to reference, because
 // an empty plan is almost always a config that names none — and "nothing to
-// do" without saying what was looked for sends an operator to the vendor.
+// do" without saying what was looked for sends an operator to the third-party app.
 func printPlan(w io.Writer, plan *provision.Plan, what string) {
 	if plan.Empty() {
 		fmt.Fprintf(w, "No seat references %s, so there is nothing to provision.\n", what)
@@ -457,6 +462,7 @@ var vendorCommands = map[string][]vendorCommand{
 		{"provision", "<company.yaml>", runSlackProvision},
 	},
 	"confluence": {
+		{"provision", "<company.yaml>", runConfluenceProvision},
 		{"import", "<company.yaml> <directory>", runConfluenceImport},
 		{"resync", "<company.yaml>", runConfluenceResync},
 	},
@@ -767,4 +773,22 @@ func skillsContainer(flagValue, envVar, fromConfig string) string {
 		return strings.ToUpper(v)
 	}
 	return fromConfig
+}
+
+// webhookBase is the address a third-party app reaches this deployment on: the flag
+// when one was passed, and the company document's own value otherwise.
+//
+// THE FLAG WINS, and only when it is non-empty. It is the one-off override —
+// a staging tunnel, a run against a second site — while the document is what
+// every other reader of this value sees, the reconcile loop included. A flag
+// that won even when unset would make an operator who simply forgot it
+// silently re-point a working hook at "".
+func webhookBase(flagValue string, in *config.Integrations) string {
+	if v := strings.TrimSpace(flagValue); v != "" {
+		return strings.TrimRight(v, "/")
+	}
+	if in == nil {
+		return ""
+	}
+	return in.WebhookBase()
 }

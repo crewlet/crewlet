@@ -31,10 +31,13 @@ import (
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
+	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/observe"
@@ -170,7 +173,7 @@ Usage:
   crewlet github <cmd>        Report a GitHub deployment's seat accounts and hook it
   crewlet jira <cmd>          Report a Jira instance's seat accounts and projects
   crewlet slack <cmd>         Create, update and install one Slack app per seat
-  crewlet confluence <cmd>    Publish authored markdown and tool skills into spaces
+  crewlet confluence <cmd>    Register the inbound hooks; publish markdown and tool skills into spaces
   crewlet mattermost <cmd>    Reconcile a Mattermost team, and diagnose one
   crewlet version             Print the version
   crewlet help                Show this message
@@ -876,10 +879,10 @@ func runEngine(args []string, stderr io.Writer) error {
 	// a seat is not claimed until its per-role MCP children are up — one
 	// subprocess per server per seat, each a spawn and a handshake and a
 	// tools/list. On the Nimbus example that is 21 children, and the whole
-	// inbound edge — dashboard, REST, every vendor's webhook — was dark for
-	// as long as they took. Measured at 37 seconds with four seats and every
-	// vendor failing FAST; a company whose vendors actually answer takes
-	// minutes, and it scales with seats times servers.
+	// inbound edge (dashboard, REST, every third-party app's webhook) was
+	// dark for as long as they took. Measured at 37 seconds with four seats
+	// and every vendor failing FAST; a company whose vendors actually answer
+	// takes minutes, and it scales with seats times servers.
 	//
 	// Nothing here needs a started engine: the node exists, /health and
 	// /ready report honestly that it holds no seats yet, and a webhook that
@@ -1040,6 +1043,61 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		Fleet: e.Backends().Fleet, Cipher: cipher,
 		ActiveKeyID: boot.Secrets.ActiveKeyID,
 	})
+	// Connecting an integration from the dashboard. It writes through the
+	// TWO surfaces above rather than reaching for the store and the plane
+	// itself: a credential is sealed by the same store /secrets serves,
+	// and the pointer to it lands through the same merge, validation and
+	// activation PATCH /config performs.
+	// The fleet's integration status, which both the reconcile loop and a
+	// pass run from the dashboard write.
+	integrationStatus, err := e.IntegrationStore()
+	if err != nil {
+		log.Warn("setup_status_unavailable", "error", err,
+			"hint", "a provisioning pass will run and its findings will not reach the screen")
+	}
+	// The surface a DISCONNECT removes a block through, installed now
+	// because it is built here and the engine's loop started before it.
+	// Until it is set the loop refuses a disconnect rather than running
+	// the teardown at the third-party app and leaving the block behind.
+	e.UseConfigWriter(engineConfigWriter{surface: configSurface})
+	setupSurface := setupapi.New(setupapi.Options{
+		Company: func() *config.Company { return companyConfig(e) },
+		Config:  configSurface,
+		// The fleet's own store. A nil fleet leaves this nil, and every
+		// secret write then answers 503 rather than storing plaintext.
+		Secrets: fleetsecrets.New(e.Backends().Fleet, cipher),
+		// THIS NODE'S resolution chain, so a requirement can say whether
+		// a ${VAR} actually resolved rather than only whether somebody
+		// wrote one down. That gap is the silent outage the whole
+		// secret_usable family exists to surface.
+		Resolve: e.LookupSecret,
+		// The third-party apps this build can provision over the API, the recorder
+		// their minted credentials go through, and the fleet row a pass
+		// writes its findings to. That last one is the SAME row the
+		// reconcile loop writes: a pass an operator ran and a tick that
+		// ran a minute later must not disagree about an integration.
+		Passes: e.SetupRunner(nil),
+		Sink:   e.SetupSink,
+		Status: integrationStatus,
+		// WHICH SLACK APP EACH AGENT IS. Named nowhere in the company
+		// document, because the app is what issues the token; the
+		// running transport learned it from Slack when it wired the
+		// seat, and this is the only process that holds it.
+		SlackApps: e.SlackApps,
+	})
+	// ONE AGENT'S OWN GITHUB APP, which is the one thing here a reconcile
+	// loop cannot do alone: an app is created by POSTing a manifest from a
+	// page carrying the operator's own GitHub session. The signer ties the
+	// browser that comes back to the seat that started, and it is keyed
+	// from the SAME Tier A material every node reads, so a fleet where the
+	// two halves land on different nodes still agrees.
+	appFlow := setupapi.NewAppFlow(setupSurface, appStateKeyMaterial(boot))
+	setupSurface.AttachAppFlow(appFlow)
+	if appFlow != nil && len(appStateKeyMaterial(boot)) == 0 {
+		log.Warn("github_app_state_key_is_per_process",
+			"detail", "no secrets.keys are configured, so a GitHub App creation "+
+				"begun on one node cannot be finished on another")
+	}
 
 	// The contextcheck exemption is for the two PUSH TICKS this constructor
 	// registers — the roster re-send and the health frame. Both manufacture
@@ -1096,6 +1154,24 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Knowledge: e.Knowledge(),
 			Config:    configSurface,
 			Budget:    e.Backends().Fleet,
+			// What the reconcile loop last found for each surface. The
+			// FLEET's record, not this node's: the loop is a worker duty,
+			// so on a split-role deployment the node answering the
+			// request is never the one that wrote the answer.
+			Reconciles: func(ctx context.Context) []integration.State {
+				//nolint:govet // shadow: scoped to this block; see .golangci.yml
+				states, err := e.IntegrationStates(ctx)
+				if err != nil {
+					// NIL, which the answer renders as "cannot say"
+					// rather than as "nothing has been reconciled". The
+					// two send an operator in opposite directions, and
+					// an unreachable coordination store is not evidence
+					// about anybody's integrations.
+					log.Warn("integration_status_unreadable", "error", err)
+					return nil
+				}
+				return states
+			},
 			// The DURABLE record of detached coding runs. Read rather
 			// than projected: a run parked on a person's question can
 			// wait days, and the live projection sweeps long before
@@ -1113,9 +1189,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// The inbound edge. It republishes onto THIS node's queue and
 		// dedupes through the FLEET'S coordination store, which is what
 		// makes a delivery that lands on any node wake the seat's owner
-		// exactly once — a vendor retrying reaches whichever node the
-		// load balancer picks, so a claim only this node could see would
-		// suppress nothing.
+		// exactly once. A third-party app retrying reaches whichever node
+		// the load balancer picks, so a claim only this node could see
+		// would suppress nothing.
 		// The WRITE half of the counter, for POST /budgets/reset. On the
 		// default topology the coordination store is this engine's own
 		// embedded broker, so a node that is running is the only thing
@@ -1132,10 +1208,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		}),
 		Config:  configSurface,
 		Secrets: secretSurface,
+		Setup:   setupSurface,
 		Inbound: api.Inbound{
 			Secrets:   func() webhooks.Secrets { return companySecrets(e) },
 			Publisher: e.Backends().Queue,
 			Claims:    e.Backends().Fleet,
+			AppFlow:   appFlow,
 		},
 	})
 	// NOT SET HERE ANY MORE. This used to be an unconditional
@@ -1592,4 +1670,54 @@ func operatorLogLevel() slog.Level {
 // to a level.
 func operatorLogFormat() logging.Format {
 	return logging.ParseFormat(os.Getenv("CREWLET_LOG_FORMAT"))
+}
+
+// engineConfigWriter lets the reconcile loop remove a block through the same
+// PATCH /config surface every other write uses: one merge, one validation,
+// one compare-and-set onto the document.
+type engineConfigWriter struct{ surface *configapi.Service }
+
+func (w engineConfigWriter) Apply(ctx context.Context, patch []byte, summary, operator string) error {
+	_, err := w.surface.Apply(ctx, configapi.ApplyRequest{
+		Patch: patch, Summary: summary, Operator: operator,
+	})
+	return err
+}
+
+// Seat and SetSeat are the per-seat write, through the entity route: a seat
+// is addressed by its handle, because a merge patch cannot reach one element
+// of a list without replacing the list.
+func (w engineConfigWriter) Seat(ctx context.Context, handle string) ([]byte, error) {
+	entity, err := w.surface.Entity(ctx, "roles", handle)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(entity)
+}
+
+func (w engineConfigWriter) SetSeat(
+	ctx context.Context, handle string, body []byte, summary, operator string,
+) error {
+	_, err := w.surface.ApplyEntity(ctx, configapi.ApplyEntityRequest{
+		Kind: "roles", ID: handle, Body: body, Summary: summary, Operator: operator,
+	})
+	return err
+}
+
+// appStateKeyMaterial is the Tier A keyring, as the GitHub App state signer
+// is keyed from.
+//
+// THE SAME MATERIAL EVERY NODE READS, and deliberately not resolved: this
+// derives a key, not a credential, and two processes reading one document
+// have to agree rather than hold plaintext. A deployment with no keys gets a
+// per-process key, which is correct for one node and cannot work across two.
+func appStateKeyMaterial(boot *config.Bootstrap) []string {
+	if boot == nil {
+		return nil
+	}
+	out := make([]string, 0, len(boot.Secrets.Keys))
+	for _, key := range boot.Secrets.Keys {
+		out = append(out, key.ID+":"+key.Material)
+	}
+	return out
 }

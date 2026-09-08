@@ -2,6 +2,7 @@ package webhooks
 
 import (
 	"net/http"
+	"strings"
 )
 
 // The six endpoints. Each one is the same five steps in the same order —
@@ -25,6 +26,18 @@ import (
 // Both say so at the line.
 
 func (r *Receiver) github(w http.ResponseWriter, req *http.Request) {
+	// PER SEAT WHEN ADDRESSED TO ONE. GitHub delivers to every app
+	// installed on a repository, each delivery carrying its own id, so a
+	// repository five agents work produces five deliveries of one
+	// comment. Those are not duplicates to collapse — they are five
+	// agents being told, which is the point of each holding its own app —
+	// and without the handle nothing downstream can tell them apart from
+	// a redelivery of one.
+	//
+	// Empty for a single app serving a whole organisation, which names no
+	// seat and must still be accepted.
+	handle := req.PathValue("handle")
+
 	raw, ok := r.body(w, req)
 	if !ok {
 		return
@@ -33,7 +46,7 @@ func (r *Receiver) github(w http.ResponseWriter, req *http.Request) {
 	if !r.serving(w, "github", event) {
 		return
 	}
-	v, ok := r.authenticate(w, "github", r.secrets().GitHub,
+	v, ok := r.authenticate(w, "github", githubSecret(r.secrets(), handle),
 		req.Header.Get("X-Hub-Signature-256"), raw, verifyGitHub)
 	if !ok {
 		return
@@ -52,6 +65,72 @@ func (r *Receiver) github(w http.ResponseWriter, req *http.Request) {
 		// every retry and on a redelivery an operator triggers from the
 		// provider UI. Without it every one of those woke the seat again.
 		key:     req.Header.Get("X-GitHub-Delivery"),
+		handle:  handle,
+		headers: safeHeaders(req.Header),
+	}, statusOK)
+}
+
+// githubSecret is what a delivery to this path could have been signed with.
+//
+// THE SEAT'S OWN APP FIRST. A GitHub App has one bot identity, so an agent
+// that acts as itself holds an app of its own, and GitHub generated that app
+// its own signing secret at conversion time and returned it once. Verifying
+// those deliveries against `integrations.github.webhook_secret` checks them
+// against a DIFFERENT app's key, or against nothing at all in a company that
+// only ever created per-agent apps: every delivery refused with a 503, while
+// GitHub's hook page shows the app healthy.
+//
+// THE ORGANIZATION'S OTHERWISE, because the same path serves a second
+// deployment: one organization-wide app whose deliveries are pointed at a
+// seat. That app has only the organization's secret, and it is the only
+// credential its deliveries can carry.
+//
+// Empty when neither is set, which [Receiver.authenticate] reads as "cannot
+// verify" and answers 503 to, never as "nothing to verify".
+func githubSecret(s Secrets, handle string) string {
+	if handle != "" {
+		if secret := s.GitHubSeat[handle]; secret != "" {
+			return secret
+		}
+	}
+	return s.GitHub
+}
+
+// datadog is the one route whose credential is not a signature.
+//
+// Datadog's Webhooks integration can attach headers, but only with fixed
+// values, so there is no HMAC to check and the shared token IS the
+// authentication. Everything else about the route is identical to its
+// neighbours, deliberately: the same five steps, the same 503 when there is
+// nothing to check against, the same claim before the wake.
+func (r *Receiver) datadog(w http.ResponseWriter, req *http.Request) {
+	raw, ok := r.body(w, req)
+	if !ok {
+		return
+	}
+	event := headerOr(req, "X-Datadog-Event", "monitor")
+	if !r.serving(w, "datadog", event) {
+		return
+	}
+	v, ok := r.authenticate(w, "datadog", r.secrets().Datadog,
+		req.Header.Get("X-Crewlet-Token"), raw, verifyToken)
+	if !ok {
+		return
+	}
+	body, ok := parseBody(w, raw)
+	if !ok {
+		return
+	}
+	r.accept(w, req, v, delivery{
+		source:  "datadog",
+		label:   "webhook:" + event,
+		summary: datadogSummary(body),
+		body:    body,
+		raw:     raw,
+		// Datadog stamps a notification id that survives its own
+		// retries. Without one there is nothing stable to claim on, and
+		// delivering twice beats dropping a firing monitor.
+		key:     str(body, "id"),
 		headers: safeHeaders(req.Header),
 	}, statusOK)
 }
@@ -178,8 +257,10 @@ func (r *Receiver) confluence(w http.ResponseWriter, req *http.Request) {
 	if !r.serving(w, "confluence", "") {
 		return
 	}
-	// Cloud is unaffected by this route's secret: those events arrive
-	// through the Forge app on /webhooks/forge with its own JWT.
+	// THE DATA CENTER ROUTE, which signs. Cloud arrives on
+	// [Receiver.confluenceCloud] below, or through the Forge relay; a
+	// Cloud delivery posted here carries no signature and is refused,
+	// which is correct rather than a gap.
 	v, ok := r.authenticate(w, "confluence", r.secrets().Confluence,
 		req.Header.Get("X-Hub-Signature"), raw, verifyAtlassian)
 	if !ok {
@@ -284,4 +365,78 @@ func (r *Receiver) slack(w http.ResponseWriter, req *http.Request) {
 		key:     str(body, "event_id"),
 		headers: safeHeaders(req.Header),
 	}, slackOK)
+}
+
+// confluenceCloud is the route Confluence CLOUD delivers to, one hook per
+// event, and the second route here whose credential is not a signature.
+//
+// # Why a second route rather than a second credential on the first
+//
+// Confluence Cloud attaches no signature to a delivery and delivers only what
+// was written into the URL it was registered with. So the credential is a
+// token in the query, compared constant-time exactly as Datadog's header is.
+// A single route accepting EITHER a valid HMAC OR a valid token would be a
+// route with two secrets and no way to say which one a 503 was about, and
+// it would let a Data Center operator believe their signed hook was what a
+// Cloud delivery had been checked against.
+//
+// # Why the event is in the path
+//
+// A Cloud payload names no event. Which one fired is known only from which
+// hook was registered for it, so the provisioner registers one hook per event
+// with the event in the path, and this route stamps it back onto the body
+// under the key the parser already reads. The parser then needs no Cloud
+// branch at all.
+//
+// # What is never logged
+//
+// The query string. The token is the whole authentication and it rides in
+// the URL, so every log line and every stored event row here is built from
+// the path and the body and never from the request's URL as a whole.
+func (r *Receiver) confluenceCloud(w http.ResponseWriter, req *http.Request) {
+	raw, ok := r.body(w, req)
+	if !ok {
+		return
+	}
+	event := strings.TrimSpace(req.PathValue("event"))
+	if !r.serving(w, "confluence", event) {
+		return
+	}
+	// THE TOKEN ARRIVES HOWEVER THE SENDER CAN CARRY IT. The undocumented
+	// admin hook can only put it in the URL, so the query is read. A
+	// Confluence Automation "Send web request" rule, which IS documented
+	// and supported, can set a header, so the same header Datadog uses is
+	// read too. One route, one credential, two senders; the header wins
+	// when both are present so a rule that set it is never judged by a
+	// stale query.
+	token := req.Header.Get("X-Crewlet-Token")
+	if token == "" {
+		token = req.URL.Query().Get("token")
+	}
+	v, ok := r.authenticate(w, "confluence", r.secrets().ConfluenceToken,
+		token, raw, verifyToken)
+	if !ok {
+		return
+	}
+	body, ok := parseBody(w, raw)
+	if !ok {
+		return
+	}
+	// STAMPED, never trusted from the body: a Cloud payload has no event
+	// field, and a Data Center one posted here by mistake would otherwise
+	// name its own. The registered path is the only thing that knows.
+	body["event"] = event
+	r.accept(w, req, v, delivery{
+		source:  "confluence",
+		label:   "webhook:" + event,
+		summary: confluenceSummary(body),
+		body:    body,
+		raw:     raw,
+		// Cloud sends no per-delivery identifier. The payload carries the
+		// content id, its version and a timestamp, and the raw body is
+		// what stays identical across a retry, so it is claimed on that
+		// as the Data Center fallback already is.
+		key:     bodyKey(raw),
+		headers: safeHeaders(req.Header),
+	}, statusOK)
 }

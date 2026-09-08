@@ -2,9 +2,19 @@
 
 Crewlet integrates with Confluence bidirectionally: agents read and write Confluence pages via MCP tools, and Confluence pushes content change events to agents via webhooks.
 
-> **Prerequisites — the Atlassian side is set up by hand.** Atlassian offers no API for provisioning users, so the operator creates the Atlassian site (Cloud or Data Center) and each agent's Atlassian account and API token manually, then wires the tokens into `mcp_env` as shown below. Webhooks differ by deployment: **Cloud** events arrive via the [Crewlet Forge app](https://github.com/crewlet/forge); **Data Center** uses direct webhook registration (see [Webhooks](#webhooks-confluence-pushes-to-agents)).
+> **Prerequisites — the Atlassian side is set up by hand.** Atlassian offers no API for provisioning users, so the operator creates the Atlassian site (Cloud or Data Center) and each agent's Atlassian account and API token manually, then wires the tokens into `mcp_env` as shown below. `crewlet confluence provision` registers the inbound hooks on either deployment; on Cloud the [Crewlet Forge app](https://github.com/crewlet/forge) is the supported alternative (see [Webhooks](#webhooks-confluence-pushes-to-agents)).
 
 ---
+
+## Setting it up from the dashboard
+
+The Integrations screen collects the site address, the account email and the
+API token, generates whichever webhook credential your deployment needs (a
+signing secret for Data Center, a shared token for Cloud), and then **Run
+setup** registers the hooks: the same pass `crewlet confluence provision`
+runs. It appears under Atlassian, beside Jira.
+
+See [Running the provisioning pass](../reference/api-endpoints.md#running-the-provisioning-pass).
 
 ## Configuration
 
@@ -34,7 +44,7 @@ mcp_servers:
 
 > **Human-clickable links agents share:** with `cloud_id`, the `mcp-atlassian` tools return `api.atlassian.com/ex/confluence/{cloud_id}/...` gateway URLs, which colleagues can't open. To have agents share a clickable `…atlassian.net/wiki/spaces/…/pages/…` link, set a [skill variable](../concepts/tool-skills.md#skill-variables) — `skill_variables.confluence_base_url: "https://mycompany.atlassian.net/wiki"` — for your mention/link Tool Skill to reference. (The bundled `examples/tool-skills/platform-mentions.md` already references this variable.) Note this is *enforced-reading guidance* (the required-skill guard puts the rule + base in context before the agent can post), not a rewrite of tool results — `mcp-atlassian` builds result links from `CONFLUENCE_URL` and does not read a site-URL env. (This is independent of `site_url`, which the notification transport and knowledge search use for their own links.)
 
-For **Cloud** webhooks, install the [Crewlet Forge app](https://github.com/crewlet/forge) which forwards events via Forge Remote to `POST /webhooks/forge`. The `webhook_secret` field is only used for Data Center deployments.
+On **Cloud**, `crewlet confluence provision` registers token-bearing hooks on `/webhooks/confluence/{event}` through an endpoint Atlassian has never documented; the [Forge app](https://github.com/crewlet/forge) is the supported alternative and delivers to `POST /webhooks/forge`. `webhook_secret` signs Data Center deliveries; `webhook_token` authenticates Cloud ones. See [Webhooks](#webhooks-confluence-pushes-to-agents).
 
 Since Jira and Confluence share the Atlassian platform, they use the **same** `mcp-atlassian` server — declare it **once** in `mcp_servers` as `atlassian` and set both `JIRA_URL` and `CONFLUENCE_URL` in its `env`; the engine does not derive them from the `jira:` / `confluence:` sections.
 
@@ -94,9 +104,69 @@ Each role keeps its own `CONFLUENCE_API_TOKEN` (and `CONFLUENCE_USERNAME`) in `m
 
 ## Webhooks (Confluence Pushes to Agents)
 
-Confluence Cloud and Data Center use different webhook models. Cloud uses the **Crewlet Forge app**; Data Center uses direct webhook registration.
+Confluence Cloud and Data Center use different webhook models. Data Center signs one hook with `webhook_secret`; Cloud carries a token in one hook per event, or uses the **Crewlet Forge app**.
 
-### Confluence Cloud — Forge App
+### Confluence Cloud — a token-bearing hook per event (the default)
+
+`crewlet confluence provision -public-url https://your-engine.example.com` registers one hook per event on your Cloud site and mints a shared token into `integrations.confluence.webhook_token`. Every hook's URL is `https://your-engine.example.com/webhooks/confluence/<event>?token=…`, and the route compares the token constant-time.
+
+**Read this before relying on it.** Confluence Cloud has no webhook page in its administration UI and no documented API for registering one; the request for it, CONFCLOUD-36613, has been open since 2015. The endpoint the engine uses, `/wiki/rest/webhooks/1.0/webhook`, answers on Cloud with an ordinary API token and does deliver, but **Atlassian has never stated its support status and can change or remove it without notice.** Every fact below was measured against a live site rather than read from a document, because no document exists.
+
+What was measured, and what it decides:
+
+- **A Cloud delivery carries no signature.** The endpoint accepts a `secret` on registration and silently ignores it. Nothing varying with the body arrives, so there is nothing to verify an HMAC against.
+- **Userinfo in the URL is dropped**, and no registration field becomes a header.
+- **The query string is delivered verbatim.** It is the only channel through which anything secret reaches the engine, which is why the token rides there.
+- **The payload names no event.** Which one fired is known only from which hook was registered for it, so the engine registers one hook per event with the event in the path.
+- **The endpoint validates no event names.** A registration for an event Confluence will never emit answers 201 and never fires.
+
+That makes the Cloud token exactly what [Datadog's](datadog.md) is: **a shared token doing a signing key's job with none of the guarantees.** A replayed delivery is indistinguishable from a fresh one, and anyone holding the token can forge a page event. Treat `webhook_token` as a signing key, rotate it the same way (`-recreate-webhooks` re-registers every hook with a fresh one), and keep it a `${VAR}`. The engine never logs the query string on this route.
+
+If you would rather not carry the risk of an undocumented endpoint, the Forge app below remains the supported route, and an Automation rule is the documented way to reach this same route without it.
+
+The account whose token is in `integrations.confluence.token` needs **Confluence administrator** rights to register hooks.
+
+### Confluence Cloud, an Automation rule as the sender (documented alternative)
+
+Confluence Automation's **Send web request** action is Atlassian's documented way for a Cloud site to call an outside URL, and it reaches the same per-event route as the hooks above. It can do the one thing the registered hook cannot: carry the token in a **header** rather than the query string. `POST /webhooks/confluence/<event>` reads `X-Crewlet-Token` first and falls back to `?token=` only when the header is absent, so a rule and a registered hook share one route and one credential.
+
+One rule per event, built in **Space settings** (or **Global automation**) with the trigger that matches the path:
+
+| Trigger | Path | Body |
+|---|---|---|
+| a page is published | `/webhooks/confluence/page_created` | the page body below |
+| a page is edited | `/webhooks/confluence/page_updated` | the page body below |
+| a comment is added | `/webhooks/confluence/comment_created` | the comment body below |
+
+The action is **Send web request** with:
+
+- **URL**: `https://your-engine.example.com/webhooks/confluence/<event>` (the path above)
+- **Method**: `POST`
+- **Headers**: `X-Crewlet-Token` set to the value of `integrations.confluence.webhook_token`, with **Hidden** ticked, and `Content-Type: application/json`
+- **Body**: custom data, on one line. The page body:
+
+```
+{"page":{"id":"{{page.id}}","title":{{page.title.asJsonString}},"version":{"number":"{{page.version.number}}"}},"space":{"key":"{{space.key}}"},"userAccountId":"{{initiator.accountId}}"}
+```
+
+and the comment body:
+
+```
+{"comment":{"id":"{{comment.id}}","parent":{"id":"{{page.id}}","title":{{page.title.asJsonString}},"contentType":"page"}},"space":{"key":"{{space.key}}"},"userAccountId":"{{initiator.accountId}}"}
+```
+
+**The version number and the comment id are not decoration: they are what stops two events collapsing into one.** This route has no per-delivery identifier to claim, so it claims a hash of the body (see [Delivery deduplication](#delivery-deduplication) below), and a body carrying only a page id and a title is byte-identical for two saves of the same page five minutes apart. The second would be answered `200 {"status":"duplicate"}` and wake nobody. `{{page.version.number}}` changes on every save and `{{comment.id}}` is unique per comment, so each event keys as itself.
+
+The engine answers `200` and logs `webhook_received source=confluence`; a wrong or missing token answers `401`. Use the rule's own validate step and one real edit to confirm the smart values render on your site before relying on the rule.
+
+What it costs, and what to watch:
+
+- **It is metered.** Every run is an Automation step, pooled per organisation. A site that reaches its allowance stops running rules, silently from the engine's side, so a quiet feed can mean a spent allowance rather than a quiet wiki.
+- **A failed request is not retried.** Automation is fire-and-forget on a non-2xx answer. If the engine is down for a minute, the events of that minute are gone, where a registered hook and the Forge app both retry.
+- **A hidden header does not survive a copy.** Duplicating, exporting or importing a rule drops the hidden value, so re-enter the token on the copy.
+- **It is the same shared token.** Everything said above about `webhook_token` applies: a header is not a signature, so treat it as a signing key and rotate it the same way.
+
+### Confluence Cloud — the Forge app (supported alternative)
 
 Install the [Crewlet Forge app](https://github.com/crewlet/forge) from the Atlassian Marketplace (or via a private installation link). The Forge app forwards these Confluence events to the Crewlet backend:
 
@@ -137,11 +207,13 @@ Content-Type: application/json
 
 Inbound requests are verified using **HMAC-SHA256** against the `X-Hub-Signature` header, at the route, before the delivery is recorded or published — the same point at which the GitHub and GitLab webhooks verify theirs. `POST /webhooks/confluence` is exempt from the API's bearer token precisely *because* it authenticates by provider HMAC, so the check belongs there.
 
-`webhook_secret` is therefore **required** for Data Center webhooks: without one the endpoint answers **503** with a `Retry-After`, exactly as its peers do, rather than accepting deliveries it cannot verify. That is deliberately not a 4xx — the sender's request is fine, what is missing is on this side, and a 4xx would tell it to discard a delivery nobody else has a copy of. The delivery waits at Confluence and flows once the secret is set. Cloud is unaffected — those events arrive through the Forge app on `/webhooks/forge` and carry a JWT instead.
+`webhook_secret` is therefore **required** for Data Center webhooks: without one the endpoint answers **503** with a `Retry-After`, exactly as its peers do, rather than accepting deliveries it cannot verify. That is deliberately not a 4xx — the sender's request is fine, what is missing is on this side, and a 4xx would tell it to discard a delivery nobody else has a copy of. The delivery waits at Confluence and flows once the secret is set. Cloud is unaffected: its deliveries arrive on the per-event token route above or through the Forge app on `/webhooks/forge`, and neither carries this signature.
 
 ### Delivery deduplication
 
-Data Center deliveries are claimed fleet-wide on the `X-Atlassian-Webhook-Identifier` the instance sends, which is stable across its own retries — so a redelivery is answered `200 {"status":"duplicate"}` and wakes nobody. The claim lasts five minutes. A route whose provider sends no such header — the Forge relay always, and a Data Center build that does not set one — is claimed on a **hash of the raw body** instead. The payload is what stays identical across a provider's own retry, and byte identity is deliberately preferred to derived coordinates: every field left out of a coordinate set is a way for two *different* events to collapse into one, and a collapsed event is a message nobody ever answers. A hash cannot do that — any difference at all yields a different key. See [Webhook deliveries are deduplicated at the edge](../reference/design-decisions.md#webhook-deliveries-are-deduplicated-at-the-edge).
+Data Center deliveries are claimed fleet-wide on the `X-Atlassian-Webhook-Identifier` the instance sends, which is stable across its own retries — so a redelivery is answered `200 {"status":"duplicate"}` and wakes nobody. The claim lasts five minutes. A route whose provider sends no such header — the Cloud token route and the Forge relay always, and a Data Center build that does not set one — is claimed on a **hash of the raw body** instead.
+
+**On the Cloud token route the body is the whole key**, so what the sender puts in it decides what counts as one event. Confluence's own registered hooks carry the content id, its version and a timestamp, and are therefore distinct per event without help. An Automation rule carries only what its body template names, which is why the recipe above includes the page version and the comment id: a template without them makes two saves of one page within the claim window indistinguishable, and the second wakes nobody. The payload is what stays identical across a provider's own retry, and byte identity is deliberately preferred to derived coordinates: every field left out of a coordinate set is a way for two *different* events to collapse into one, and a collapsed event is a message nobody ever answers. A hash cannot do that — any difference at all yields a different key. See [Webhook deliveries are deduplicated at the edge](../reference/design-decisions.md#webhook-deliveries-are-deduplicated-at-the-edge).
 
 ---
 
@@ -300,7 +372,7 @@ could only ever produce notifications the parser drops.
 
 Every routing step excludes the user who triggered the webhook — the agent already knows about the action it just performed. This matters most for **space-lead routing**: a lead acting in the space it leads (e.g. a CEO commenting on a page in the leadership space) is the *default* space-lead recipient for the resulting `comment_created` / `page_updated` webhook. Without the exclusion, that webhook routes straight back to the lead, which wakes it to "acknowledge" the change — posting another comment that triggers another webhook, an endless self-notification loop.
 
-When the **only** candidate recipient is the trigger user (the sole subscriber, or the sole space lead), the event is **dropped** rather than falling through to a later routing step. The notification service adds a transport-agnostic backstop: any inbound notification whose `actor_external_id` resolves to the recipient itself is skipped (recorded as a `NotificationSkipped` event). `actor_external_id` is the **one** actor key every integration stamps — a per-vendor key protects the vendors somebody remembered and silently protects none of the others — and the actor is *resolved* through the handle registry rather than string-matched, so a seat's bot identity and its member identity compare equal. Both layers depend on each agent authenticating as a **distinct Atlassian user** (per-role `CONFLUENCE_API_TOKEN`) so the engine can tell whose action it was — see the per-role-token note below.
+When the **only** candidate recipient is the trigger user (the sole subscriber, or the sole space lead), the event is **dropped** rather than falling through to a later routing step. The notification service adds a transport-agnostic backstop: any inbound notification whose `actor_external_id` resolves to the recipient itself is skipped (recorded as a `NotificationSkipped` event). `actor_external_id` is the **one** actor key every integration stamps (a per-integration key protects the integrations somebody remembered and silently protects none of the others), and the actor is *resolved* through the handle registry rather than string-matched, so a seat's bot identity and its member identity compare equal. Both layers depend on each agent authenticating as a **distinct Atlassian user** (per-role `CONFLUENCE_API_TOKEN`) so the engine can tell whose action it was. See the per-role-token note below.
 
 ### Lead-fallback prompt hint
 

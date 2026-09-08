@@ -20,7 +20,7 @@ import (
 //
 // # The one command with a human step in the middle
 //
-// Every other vendor's provisioning runs to completion unattended. Slack
+// Every other third-party app's provisioning runs to completion unattended. Slack
 // cannot: installing an app into a workspace is an OAuth grant, and OAuth
 // exists precisely so that a person decides. So this run creates and updates
 // the apps by itself, then hands the operator one authorize URL per seat and
@@ -71,6 +71,11 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// RESOLVED ONCE. Four places below build a URL from it, and four
+	// separate reads of the flag is how one of them ends up using the flag
+	// while the others use the document.
+	base := webhookBase(*publicURL, &company.Integrations)
+
 	plans := slack.PlanFor(organization)
 	if *ledgerPath == "" {
 		*ledgerPath = slack.LedgerPathFor(companyPath)
@@ -80,7 +85,7 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
-	printSlackPlan(stdout, plans, ledger, *ledgerPath, *publicURL)
+	printSlackPlan(stdout, plans, ledger, *ledgerPath, base)
 
 	refresh := strings.TrimSpace(*refreshToken)
 	if refresh == "" {
@@ -96,7 +101,7 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 		res, checked := slack.Validate(context.Background(), slack.Options{
 			Admin: slack.NewAdmin(nil), Seats: plans,
 			Ledger: ledger, LedgerPath: *ledgerPath,
-			BaseURL: *publicURL, ConfigRefreshToken: refresh,
+			BaseURL: base, ConfigRefreshToken: refresh,
 			Only: splitHandles(*only),
 		})
 		if res != nil {
@@ -108,7 +113,7 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 	if len(plans) == 0 {
 		return nil
 	}
-	if strings.TrimSpace(*publicURL) == "" {
+	if base == "" {
 		return errors.New(
 			"no -public-url: every app's Events API request URL and OAuth " +
 				"redirect URL are built from it, so an app created without one " +
@@ -125,7 +130,7 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 	opts := slack.Options{
 		Admin: slack.NewAdmin(nil), Seats: plans,
 		Ledger: ledger, LedgerPath: *ledgerPath, Sink: sink,
-		BaseURL: *publicURL, ConfigRefreshToken: refresh, Reinstall: *reinstall,
+		BaseURL: base, ConfigRefreshToken: refresh, Reinstall: *reinstall,
 		Only: splitHandles(*only),
 	}
 	if !*noInstall {

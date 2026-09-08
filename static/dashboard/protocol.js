@@ -232,10 +232,11 @@ function apiToken() {
 function storeToken(token) {
 	try {
 		localStorage.setItem(TOKEN_KEY, String(token ?? "").trim());
-		return true;
 	} catch {
 		return false;
 	}
+	announce();
+	return true;
 }
 var listeners = /* @__PURE__ */ new Set();
 /** Ask for the token dialog. A no-op when no shell is mounted. */
@@ -247,14 +248,36 @@ function onTokenRequested(listener) {
 	listeners.add(listener);
 	return () => listeners.delete(listener);
 }
+/**
+* The symmetric signal: the token CHANGED.
+*
+* The socket learns through `setToken` + `reconnect`, which the shell calls
+* from the dialog. Every REST-backed surface learned nothing at all: it had
+* fetched once on mount, so setting a token left `/setup` and `/secrets`
+* still showing the refusal that prompted the reader to set one. The screen
+* said "needs an operator token", the reader supplied it, and nothing moved.
+*
+* Fired from `storeToken` and `clearToken` themselves rather than from the
+* dialog, so a future writer cannot forget to announce it.
+*/
+var changed = /* @__PURE__ */ new Set();
+/** Subscribe to token changes. Returns the unsubscribe. */
+function onTokenChanged(listener) {
+	changed.add(listener);
+	return () => changed.delete(listener);
+}
+function announce() {
+	for (const listener of changed) listener();
+}
 /** Forget the stored token. Returns false if the browser refused the write. */
 function clearToken() {
 	try {
 		localStorage.removeItem(TOKEN_KEY);
-		return true;
 	} catch {
 		return false;
 	}
+	announce();
+	return true;
 }
 //#endregion
 //#region src/protocol/api.ts
@@ -653,4 +676,130 @@ var LiveSocket = class {
 	}
 };
 //#endregion
-export { LiveSocket, MAX_EVENTS, Store, api, apiToken, clearToken, onTokenRequested, requestToken, storeToken };
+//#region src/protocol/rest.ts
+/**
+* The dashboard's one REST transport: every write, and the guarded reads the
+* socket has no question for.
+*
+* The socket remains the data channel for state. This is not a second one: it
+* carries the requests that are not questions about state at all. Writes never
+* go over the socket, deliberately — its token rides the query string on the
+* handshake, and a channel whose credential appears in a proxy log is not
+* where a credential-bearing write belongs (see internal/api/auth's own note
+* on that). And a handful of reads exist only as REST, `GET /secrets` above
+* all, because no query in the registry answers them.
+*
+* ONE MODULE, for the reason `api.ts` states about itself: a screen reaching
+* for its own transport takes its client from somewhere, and the somewhere the
+* Fleet screen chose was a context field the shell never populated, so it
+* shipped dead. Everything here is a plain function over `fetch` against
+* `location.origin`, which is where the dashboard is served from and the only
+* origin the engine answers on (it writes no CORS header at all).
+*
+* Every call carries the operator bearer token. The engine guards `/config`,
+* `/secrets` and `/setup` in full, reads included, whatever the anonymous-read
+* posture is, so a call with no token is refused rather than silently served.
+*/
+/**
+* What the engine said when it refused.
+*
+* `status` alone is not enough to act on: the setup surface distinguishes a
+* revision that moved under the caller from a config slot holding a literal
+* from a fleet with no keyring, and all three are a 409 or a 503. The engine
+* answers those with a `code`, and the screen branches on it.
+*/
+var RestError = class extends Error {
+	status;
+	code;
+	detail;
+	hint;
+	/** Everything else the body carried, for a caller that needs a field. */
+	body;
+	constructor(status, body) {
+		const code = typeof body.error === "string" ? body.error : "";
+		const detail = typeof body.detail === "string" ? body.detail : "";
+		super(detail || code || `HTTP ${status}`);
+		this.name = "RestError";
+		this.status = status;
+		this.code = code;
+		this.detail = detail;
+		this.hint = typeof body.hint === "string" ? body.hint : "";
+		this.body = body;
+	}
+	/** Whether the engine refused the credential rather than the request. */
+	get unauthorized() {
+		return this.status === 401 || this.status === 403;
+	}
+};
+/**
+* A refusal that never reached the engine: DNS, a dropped connection, a proxy
+* answering HTML. Status 0, so a caller testing `status === 409` cannot
+* mistake it for an answer.
+*/
+function offline(err) {
+	return new RestError(0, {
+		error: "unreachable",
+		detail: err instanceof Error ? err.message : "the engine could not be reached"
+	});
+}
+/**
+* The one request path. `body` is already encoded, and `type` is what it is
+* encoded as — the split exists because not every write on this API takes
+* JSON. See `putText` below.
+*/
+async function send(method, path, body, type, headers = {}) {
+	const token = apiToken();
+	const init = {
+		method,
+		headers: {
+			...token ? { Authorization: "Bearer " + token } : {},
+			...type ? { "Content-Type": type } : {},
+			...headers
+		},
+		...body === void 0 ? {} : { body }
+	};
+	let response;
+	try {
+		response = await fetch(location.origin + path, init);
+	} catch (err) {
+		throw offline(err);
+	}
+	const text = await response.text().catch(() => "");
+	let parsed = null;
+	if (text !== "") try {
+		parsed = JSON.parse(text);
+	} catch {
+		throw new RestError(response.ok ? 502 : response.status, {
+			error: "unreadable_body",
+			detail: "the engine answered something that is not JSON"
+		});
+	}
+	if (!response.ok) {
+		const body = parsed && typeof parsed === "object" ? parsed : {};
+		throw new RestError(response.status, body);
+	}
+	return parsed;
+}
+/** JSON in, for every route that takes a document. */
+function json(method, path, body, headers) {
+	return send(method, path, JSON.stringify(body ?? {}), "application/json", headers);
+}
+var rest = {
+	get: (path) => send("GET", path),
+	post: (path, body, headers) => json("POST", path, body, headers),
+	put: (path, body, headers) => json("PUT", path, body, headers),
+	patch: (path, body, headers) => json("PATCH", path, body, headers),
+	/**
+	* THE BODY IS THE VALUE, not a document carrying one.
+	*
+	* `PUT /secrets/{name}` takes the credential as raw bytes, deliberately: a
+	* credential is arbitrary text — a PEM key has newlines, a token can hold
+	* anything — and an encoding step between the operator and the byte
+	* sequence the vendor compares is a 401 nobody can explain. Sending it
+	* through `put` would seal the JSON quotes into the credential.
+	*/
+	putText: (path, value) => send("PUT", path, value, "text/plain; charset=utf-8"),
+	del: (path, body, headers) => body === void 0 ? send("DELETE", path, void 0, void 0, headers) : json("DELETE", path, body, headers)
+};
+//#endregion
+export { LiveSocket, MAX_EVENTS, RestError, Store, api, apiToken, clearToken, onTokenChanged, onTokenRequested, requestToken, rest, storeToken };

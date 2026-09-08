@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
+	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
@@ -98,6 +99,12 @@ type Options struct {
 	// Config serves /config. Nil serves none, which is what a process with
 	// no store genuinely has.
 	Config *configapi.Service
+
+	// Setup serves /setup: collecting what an integration still needs and
+	// writing it, half into the sealed store and half into the company
+	// document. Nil serves none, which is what a process with no company
+	// configuration has to answer.
+	Setup *setupapi.Service
 
 	// Secrets serves /secrets — the fleet's credential store. Nil serves
 	// none, which is what a process that cannot reach the coordination
@@ -246,7 +253,7 @@ func New(opts Options) *App {
 	// every seat's memory to a path the caller names is not a read,
 	// whatever the anonymous-read posture allows.
 	mux.Handle("POST /backup", http.HandlerFunc(a.serveBackup))
-	mux.Handle("/ws/stream", stream.Handler(a.guard, a.stream, a.answer))
+	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.stream, a.answer))
 	// The dashboard shell and its assets. All four paths are exempt from
 	// the guard: the page that prompts for a token cannot itself require
 	// one, and it ships no data — every byte it renders comes from an
@@ -275,6 +282,11 @@ func New(opts Options) *App {
 	// default topology, so no second process can write the store — and its
 	// listing alone says which credentials a company holds.
 	opts.Secrets.Routes(mux)
+	// The third, and the newest: connecting an integration without a
+	// shell. Guarded by the same prefix rule for the same reason, and
+	// reads included — the list of which credentials a company has NOT
+	// configured is worth as much to an attacker as the ones it has.
+	opts.Setup.Routes(mux)
 	a.handler = a.guard.Middleware(mux)
 	return a
 }
@@ -295,6 +307,14 @@ type Inbound struct {
 	Secrets   func() webhooks.Secrets
 	Publisher queue.Publisher
 	Claims    coord.Claims
+
+	// AppFlow finishes a GitHub App creation begun on the setup surface.
+	//
+	// Threaded from the caller rather than built here because it holds the
+	// setup service, and the redirect URL baked into every app this engine
+	// creates points at the webhook mux. Nil serves the landing page with
+	// an honest refusal rather than a 404.
+	AppFlow webhooks.AppCompleter
 
 	// Keys verifies Forge invocation tokens. Nil uses Atlassian's
 	// published JWKS.
@@ -319,6 +339,7 @@ func (a *App) mountWebhooks(mux *http.ServeMux, in Inbound, sources queries.Sour
 		Publisher:  in.Publisher,
 		Claims:     in.Claims,
 		Keys:       in.Keys,
+		AppFlow:    in.AppFlow,
 		Events:     sources.Events,
 		Stream:     a.stream,
 		Configured: a.Configured,

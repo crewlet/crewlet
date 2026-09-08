@@ -97,7 +97,11 @@ func TestTheOAuthLandingIsStillReachableWithNothingWired(t *testing.T) {
 	// mid-install, before anything else is configured.
 	mux := http.NewServeMux()
 	webhooks.New(webhooks.Options{}).Routes(mux)
-	req := httptest.NewRequest(http.MethodGet, "/webhooks/slack-oauth?code=abc", nil)
+
+	// THE CLI'S ARRIVAL carries the handle in `state`, which is what its
+	// authorize URL puts there, and there is a prompt waiting on the code.
+	req := httptest.NewRequest(http.MethodGet,
+		"/webhooks/slack-oauth?code=abc&state=sre-lead", nil)
 	res := httptest.NewRecorder()
 	mux.ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
@@ -105,7 +109,29 @@ func TestTheOAuthLandingIsStillReachableWithNothingWired(t *testing.T) {
 	}
 	body, _ := io.ReadAll(res.Body)
 	if !strings.Contains(string(body), "abc") {
-		t.Error("the page did not show the code")
+		t.Error("the page did not show the code the waiting prompt needs")
+	}
+
+	// A PERSON'S ARRIVAL carries no state, because they pressed Install to
+	// Workspace on the app's own settings page: the manual path the setup
+	// dialog walks them through. There is no prompt to paste into, and the
+	// thing they need is the bot token on the page they just left. Told to
+	// paste a code into a CLI they are not running, an operator reasonably
+	// concludes the install did not work.
+	req = httptest.NewRequest(http.MethodGet, "/webhooks/slack-oauth?code=abc", nil)
+	res = httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("a manual install landed on %d", res.Code)
+	}
+	body, _ = io.ReadAll(res.Body)
+	page := string(body)
+	if strings.Contains(page, "crewlet slack provision</code> prompt") {
+		t.Error("a manual install is told to paste into a CLI prompt nobody is running")
+	}
+	if !strings.Contains(page, "Bot User OAuth Token") ||
+		!strings.Contains(page, "OAuth &amp; Permissions") {
+		t.Errorf("the page does not say where the token is:\n%s", page)
 	}
 }
 

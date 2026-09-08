@@ -3,6 +3,7 @@ package webhooks
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"strconv"
@@ -167,4 +168,29 @@ func equalHex(presented string, want []byte) bool {
 		return false
 	}
 	return hmac.Equal(got, want)
+}
+
+// verifyToken compares a shared token constant-time.
+//
+// The check for every provider that CANNOT sign a body, and there are two:
+// Datadog attaches headers with fixed values only, so nothing varies with the
+// payload to sign, and Confluence Cloud attaches nothing at all and delivers
+// only what was written into its URL. For both, the token IS the
+// authentication, which is why the compare is constant-time and why the
+// config documents it as a signing key.
+//
+// ONE FUNCTION rather than one per provider, because a constant-time compare
+// written twice is how one of the two stops being constant-time. It is named
+// for what it does rather than for a third-party app, so a third provider in the same
+// position reaches for it instead of copying it.
+//
+// The body is taken and ignored so this fits the same shape as its
+// neighbours; a scheme that cannot read the payload is exactly the fact worth
+// keeping visible at the call site. An empty secret never reaches here:
+// [Receiver.authenticate] answers 503 before calling any scheme.
+func verifyToken(_ []byte, secret, token string) bool {
+	if token == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(token), []byte(secret)) == 1
 }

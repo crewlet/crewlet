@@ -19,7 +19,7 @@
 // weaker key than the operator believed they had configured.
 //
 // Config sits at the bottom of the engine's import graph and cannot reach
-// the vendor package, so the rule lives here, where all three can.
+// the integration package, so the rule lives here, where all three can.
 //
 // # Getting the encoding wrong is silent
 //

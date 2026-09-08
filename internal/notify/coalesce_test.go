@@ -12,8 +12,8 @@ import (
 
 var t0 = time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
 
-// tracker is a vendor whose field updates re-emit stale state and carry no
-// signal of their own — the shape the supersede rule exists for.
+// tracker is a third-party app whose field updates re-emit stale state and
+// carry no signal of their own, the shape the supersede rule exists for.
 type tracker struct{}
 
 func (tracker) Source() string { return "tracker" }
@@ -26,18 +26,20 @@ func (tracker) Build(n notify.Inbound, _ notify.Parties) string {
 	return "## How to triage this\n\n" + n.Body
 }
 
-// RequiresRecon: this vendor's webhooks name a thing-that-changed rather
+// RequiresRecon: this third-party app's webhooks name a thing-that-changed rather
 // than carrying it, EXCEPT a plain message, which is self-contained. Both
 // branches exist so a hardcoded answer is visible.
 func (tracker) RequiresRecon(n notify.Inbound) bool { return n.EventType != "message" }
 
-// Addressed: this vendor's assignments name the seat as the one who has to
-// act; everything else it emits is news about something the seat follows.
+// Addressed: this third-party app's assignments name the seat as the one who
+// has to act; everything else it emits is news about something the seat
+// follows.
 // Both branches exist so a hardcoded answer is visible.
 func (tracker) Addressed(n notify.Inbound) bool { return n.EventType == "assigned" }
 
 // A pipeline result reports the outcome of the actor's OWN push, so it
-// reaches them; everything else this vendor emits, they already know about.
+// reaches them; everything else this third-party app emits, they already
+// know about.
 func (tracker) WakesActor(eventType string) bool { return eventType == "pipeline_failed" }
 func (tracker) ConversationKey(m map[string]string, _ string) string {
 	return m["issue_id"]
@@ -95,8 +97,8 @@ func TestNoEventsCoalesceToNothing(t *testing.T) {
 	}
 }
 
-// The latest constituent renders IN FULL and last, so the vendor's own prompt
-// scaffolding appears exactly once, from the most recent state.
+// The latest constituent renders IN FULL and last, so the third-party app's
+// own prompt scaffolding appears exactly once, from the most recent state.
 func TestTheLatestConstituentRendersInFullAfterTheDigest(t *testing.T) {
 	merged, _ := notify.Coalesce(prompts(), []types.ExternalNotification{
 		note("ana", "first", "comment"),
@@ -105,7 +107,7 @@ func TestTheLatestConstituentRendersInFullAfterTheDigest(t *testing.T) {
 	}, at(0, 1, 2))
 
 	if strings.Count(merged.Body, "SCAFFOLDING") != 1 {
-		t.Fatalf("the vendor's boilerplate rendered %d times:\n%s",
+		t.Fatalf("the third-party app's boilerplate rendered %d times:\n%s",
 			strings.Count(merged.Body, "SCAFFOLDING"), merged.Body)
 	}
 	digest, full, found := strings.Cut(merged.Body, "\n---\n")
@@ -166,8 +168,9 @@ func TestConstituentsAreOrderedByTheirTimestamps(t *testing.T) {
 	}
 }
 
-// A vendor emitting a burst routinely stamps one timestamp on several events;
-// re-ordering them on a tie would rewrite the conversation for nothing.
+// A third-party app emitting a burst routinely stamps one timestamp on
+// several events; re-ordering them on a tie would rewrite the conversation
+// for nothing.
 //
 // TWENTY of them, deliberately. Go's sort falls back to insertion sort below a
 // small threshold, which happens to be stable — so a three-element version of
@@ -412,7 +415,7 @@ func TestAnUnknownSourceStillCoalesces(t *testing.T) {
 		t.Fatal("an unknown source did not coalesce")
 	}
 	// Nothing is superseded, because the fallback has no idea which of this
-	// vendor's bodies are state and which are messages.
+	// third-party app's bodies are state and which are messages.
 	if !strings.Contains(merged.Body, "first") {
 		t.Fatalf("the generic fallback dropped a body:\n%s", merged.Body)
 	}

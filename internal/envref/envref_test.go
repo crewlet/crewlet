@@ -191,3 +191,43 @@ func TestResolveIgnoresAPartialReference(t *testing.T) {
 		t.Errorf("Resolve = %q, want the value untouched", got)
 	}
 }
+
+// TestValidNameIsTheGrammarWithoutTheBraces pins the store's key space to
+// the reference grammar. The two must agree by construction: a name only one
+// of them accepts is a row that is sealed, listed and never resolved.
+func TestValidNameIsTheGrammarWithoutTheBraces(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		ok   bool
+		why  string
+	}{
+		{"TOKEN", true, "the ordinary shape"},
+		{"_leading", true, "an underscore may lead"},
+		{"A_B9", true, "letters, digits and underscores after the first char"},
+		{"lowercase_is_allowed", true, "the shell's rule is not upper-case only"},
+		{"", false, "an empty name"},
+		{"9LIVES", false, "a name may not start with a digit"},
+		{"gitlab-token", false, "hyphens are not name characters"},
+		{"my token", false, "a space is not a name character"},
+		{"${TOKEN}", false, "the reference is not the name"},
+		{"TOKEN\n", false, "a trailing newline is not part of a name"},
+		{"TOKEN.SUB", false, "a dot is not a name character"},
+	} {
+		if got := ValidName(tc.name); got != tc.ok {
+			t.Errorf("ValidName(%q) = %v, want %v — %s", tc.name, got, tc.ok, tc.why)
+		}
+		// The two rules are one rule: whatever ValidName accepts, a
+		// whole reference must name, and nothing else. A name that
+		// passed here and not there is precisely the unreachable row
+		// this guards against. [Whole] rather than [Has], because Has
+		// is unanchored and "${${TOKEN}}" carries a reference without
+		// being one.
+		captured, isRef := Whole("${" + tc.name + "}")
+		if isRef != tc.ok || (isRef && captured != tc.name) {
+			t.Errorf("ValidName(%q) = %v but Whole(\"${%s}\") = (%q, %v) — the "+
+				"store's key space and the reference grammar disagree",
+				tc.name, tc.ok, tc.name, captured, isRef)
+		}
+	}
+}

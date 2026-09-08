@@ -47,7 +47,14 @@ var log = logging.Get("api.auth")
 // const somewhere else and a second `HasPrefix` beside it — and the two would
 // have drifted the day a third surface was added, each staying
 // self-consistent while one of them stopped being consulted.
-var GuardedPrefixes = []string{"/config", "/secrets"}
+//   - /setup: connecting an integration. It answers with the NAMES of the
+//     credentials a company holds, which of them are unset, and the
+//     third-party app pages an administrator would visit, and it writes
+//     both the secret store and the company document. Reads included, for
+//     the same reason /secrets guards its listing: the map of what a
+//     company has not configured is worth as much to an attacker as the
+//     configuration.
+var GuardedPrefixes = []string{"/config", "/secrets", "/setup"}
 
 // AlwaysGuarded reports whether a path is on one of those surfaces.
 func AlwaysGuarded(path string) bool {
@@ -201,12 +208,12 @@ func (g *Guard) Tokens() int { return len(g.tokens) }
 
 // Operator returns the operator id a bare token authenticates as.
 //
-// THE TOKEN COMPARISON, IN ONE PLACE. The HTTP middleware reaches it through
-// [Guard.Bearer], which peels the Authorization header first, and the
-// dashboard's WebSocket query channel calls it directly, because an
-// operator-only query arrives as a field on a socket frame rather than as a
-// header. Both therefore accept exactly the same tokens, honour disabled
-// identically, and compare in constant time.
+// THE TOKEN COMPARISON, IN ONE PLACE. The HTTP middleware and the socket
+// handshake reach it through [Guard.Presented], which peels the credential
+// off the request first, and the dashboard's WebSocket query channel calls it
+// directly, because an operator-only query arrives as a field on a socket
+// frame rather than as a header. All three therefore accept exactly the same
+// tokens, honour disabled identically, and compare in constant time.
 func (g *Guard) Operator(candidate string) (string, bool) {
 	if g.disabled {
 		// Every caller is accepted. The explicit label is what keeps a
@@ -235,16 +242,42 @@ func (g *Guard) Operator(candidate string) (string, bool) {
 	return matched, matched != ""
 }
 
-// Bearer returns the operator id for a request's Authorization header.
-func (g *Guard) Bearer(r *http.Request) (string, bool) {
+// SocketPath is the dashboard's live socket, the one route whose credential
+// may arrive on the query string. It is named here, beside the rule that
+// reads it, so the mux that mounts it and the handler that serves it cannot
+// spell it differently from the guard that admits it.
+const SocketPath = "/ws/stream"
+
+// Credential returns the token a request presented, or "".
+//
+// THE ONE PLACE A REQUEST'S CREDENTIAL IS READ. The Authorization bearer
+// header on every route; and on the socket path only, the token query
+// parameter as well, because a browser cannot set a header on a WebSocket
+// constructor and the dashboard has no other way to send one. The query is
+// read nowhere else: a token in a URL appears in proxy logs and browser
+// history, which is a price worth paying for exactly one route that has no
+// alternative and for no route that has.
+//
+// The header wins when both are present, so a non-browser client that sent
+// the right header is never judged by a stale query.
+func (g *Guard) Credential(r *http.Request) string {
 	header := r.Header.Get("Authorization")
 	const scheme = "bearer "
-	if len(header) < len(scheme) || !strings.EqualFold(header[:len(scheme)], scheme) {
-		// Not a bearer header at all. Still asked, because a disabled
-		// guard accepts a request that carries no credential.
-		return g.Operator("")
+	if len(header) >= len(scheme) && strings.EqualFold(header[:len(scheme)], scheme) {
+		return strings.TrimSpace(header[len(scheme):])
 	}
-	return g.Operator(strings.TrimSpace(header[len(scheme):]))
+	if r.URL.Path == SocketPath {
+		return r.URL.Query().Get("token")
+	}
+	return ""
+}
+
+// Presented returns the operator id for the credential a request presented.
+//
+// Asked even when the request carries none, because a disabled guard accepts
+// a request with no credential at all.
+func (g *Guard) Presented(r *http.Request) (string, bool) {
+	return g.Operator(g.Credential(r))
 }
 
 // Requires reports whether this request must carry a valid bearer token.
@@ -288,11 +321,13 @@ func WithOperator(ctx context.Context, operatorID string) context.Context {
 
 // Middleware wraps a handler with the guard.
 //
-// HTTP only. A WebSocket upgrade is an HTTP request and does pass through here,
-// but the dashboard's socket carries its credential as a query parameter rather
-// than a header, so the stream handler authenticates it itself — and closes
-// with 1008 BEFORE accepting, which is the one thing a browser client can
-// actually observe.
+// A WebSocket upgrade is an HTTP request and passes through here like any
+// other, which is why [Guard.Credential] reads the socket's query token: this
+// used to read the header alone and leave the query to the stream handler,
+// and under a closed posture the socket then never reached that handler at
+// all. The middleware answered 401 first, and the dashboard could not
+// connect with a valid token, on the one posture whose point is that the
+// token is required.
 func (g *Guard) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
@@ -305,7 +340,7 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 		// on an unguarded route made that unreachable: the query arrived
 		// with a valid token, no operator attached, and came back
 		// unauthorized to a caller holding the right credential.
-		operatorID, authenticated := g.Bearer(r)
+		operatorID, authenticated := g.Presented(r)
 		if authenticated {
 			r = r.WithContext(WithOperator(r.Context(), operatorID))
 		}

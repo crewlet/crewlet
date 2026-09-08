@@ -67,7 +67,7 @@ flowchart LR
 | `config` | Which company revision is current. The key's own revision is the fencing epoch | [Control Plane](control-plane.md) |
 | `status` | What each node managed to apply, and when it last said so | [Control Plane](control-plane.md) |
 | `ledger` | Has this trigger already been worked — read before a turn, written after one | [The completion ledger](seat-ownership.md#the-completion-ledger) |
-| `claims` | Has this inbound delivery been seen — the dedupe that used to be a per-process map, so a vendor's retry to a *different* ingress node woke the same seat twice | [Event System](event-system.md) |
+| `claims` | Has this inbound delivery been seen — the dedupe that used to be a per-process map, so a third-party app's retry to a *different* ingress node woke the same seat twice | [Event System](event-system.md) |
 | `rate` | The notification valve. Four nodes ran four of them, so a seat capped at five a second emitted twenty | [Event System](event-system.md) |
 | `cooldowns` | Which provider credential is cooling after a 429. Per-process monotonic values are not even *comparable* across nodes | [Deployment](../guides/deployment.md) |
 | `budgets` | Org and per-seat token spend. Caps stay config-derived in memory; only *usage* is shared, because a counter per node makes an org cap of 500 000 into N × 500 000 | [Deployment § Token budgets](../guides/deployment.md#token-budgets) |
@@ -114,7 +114,7 @@ That is a constraint rather than a preference. On the default embedded backend a
 | `leases` | the lease TTL (45 s by default) | The expiry **is** the mechanism: a renew rewrites the key and restarts the clock, so a node that stops renewing stops holding, and its seats become claimable without anything having to notice it died |
 | `epochs` | none | The fencing counter, and a fence that restarts is not a fence — a deleted key would hand the next owner a token a zombie is still writing under. It is a separate bucket from `leases` for exactly this: the two want opposite retentions |
 | `rate` | a few multiples of the window | A closed window must age out, and must never outlive its successor |
-| `claims` | 5 minutes | A vendor's redelivery and an operator's replay, not the vendor's full retry schedule |
+| `claims` | 5 minutes | A third-party app's redelivery and an operator's replay, not the third-party app's full retry schedule |
 | `ledger` | 7 days | Must outlast the queue's redelivery horizon **and** the scheduler's catchup ceiling — expiring a completion a tick could still evaluate lets that fire run twice |
 | `cooldowns` | 24 hours | The longest cooldown anything sets. A cooldown stores its own end instant, so the bucket only has to outlive the longest one |
 | `status` | 4 reconcile intervals (~60 s) | A node that stops reporting must **vanish** from the fleet view rather than linger as a healthy row nobody is writing |

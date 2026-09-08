@@ -31,7 +31,6 @@ package fleetsecrets
 import (
 	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -67,8 +66,11 @@ func (s *Store) Set(ctx context.Context, name, value, by, source string, now tim
 	if s == nil || s.cipher == nil {
 		return secrets.ErrNoKeyring
 	}
-	if name == "" {
-		return errors.New("fleetsecrets: a secret needs a name")
+	// THE NAME IS THE KEY SPACE, checked before anything is sealed. See
+	// [secrets.CheckName]: a row nothing can reference is worse than a
+	// refusal, because it reports success.
+	if err := secrets.CheckName(name); err != nil {
+		return err
 	}
 	sealed, err := s.cipher.Encrypt(value, secrets.AADForVar(name))
 	if err != nil {

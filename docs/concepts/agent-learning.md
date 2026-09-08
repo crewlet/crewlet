@@ -335,7 +335,7 @@ Which surfaces actually read the salient half, today:
 
 **Known gap — the four relevance surfaces read the ENRICHED task, not the
 salient text.** `prefetch.Request.Task` is the trigger as the turn describes
-it, which for a chat surface carries the vendor's triage scaffolding in front
+it, which for a chat surface carries the third-party app's triage scaffolding in front
 of the message, and for a coalesced conversation is the whole digest. It is
 neither stripped nor bounded, so a filter prompt and an embedding query both
 receive the scaffolding, and a busy thread's digest can be arbitrarily long.

@@ -102,7 +102,7 @@ func TestADryRunNeedsNoSink(t *testing.T) {
 }
 
 // A REAL RUN WITH NOWHERE TO PUT WHAT IT MINTS IS REFUSED BEFORE IT TOUCHES
-// ANYTHING. The alternative creates live credentials at the vendor and
+// ANYTHING. The alternative creates live credentials at the third-party app and
 // prints none of them, and every one has to be found and revoked by hand.
 func TestARealRunWithoutASinkIsRefused(t *testing.T) {
 	t.Parallel()

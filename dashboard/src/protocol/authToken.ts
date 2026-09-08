@@ -37,10 +37,11 @@ export function apiToken(): string {
 export function storeToken(token: string): boolean {
   try {
     localStorage.setItem(TOKEN_KEY, String(token ?? "").trim());
-    return true;
   } catch {
     return false;
   }
+  announce();
+  return true;
 }
 
 /**
@@ -71,12 +72,37 @@ export function onTokenRequested(listener: Listener): () => void {
   return () => listeners.delete(listener);
 }
 
+/**
+ * The symmetric signal: the token CHANGED.
+ *
+ * The socket learns through `setToken` + `reconnect`, which the shell calls
+ * from the dialog. Every REST-backed surface learned nothing at all: it had
+ * fetched once on mount, so setting a token left `/setup` and `/secrets`
+ * still showing the refusal that prompted the reader to set one. The screen
+ * said "needs an operator token", the reader supplied it, and nothing moved.
+ *
+ * Fired from `storeToken` and `clearToken` themselves rather than from the
+ * dialog, so a future writer cannot forget to announce it.
+ */
+const changed = new Set<Listener>();
+
+/** Subscribe to token changes. Returns the unsubscribe. */
+export function onTokenChanged(listener: Listener): () => void {
+  changed.add(listener);
+  return () => changed.delete(listener);
+}
+
+function announce(): void {
+  for (const listener of changed) listener();
+}
+
 /** Forget the stored token. Returns false if the browser refused the write. */
 export function clearToken(): boolean {
   try {
     localStorage.removeItem(TOKEN_KEY);
-    return true;
   } catch {
     return false;
   }
+  announce();
+  return true;
 }

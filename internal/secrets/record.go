@@ -2,7 +2,10 @@ package secrets
 
 import (
 	"errors"
+	"fmt"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/envref"
 )
 
 // Record is one stored secret's row, in whichever store holds it.
@@ -53,3 +56,33 @@ var ErrNoKeyring = errors.New(
 // longer opens what it wrote. Collapsing them would have a rotation that
 // dropped a key look exactly like a name nobody set.
 var ErrNotFound = errors.New("secrets: no such secret")
+
+// ErrInvalidName reports a name no ${VAR} reference could ever reach.
+//
+// Its own sentinel because it is the caller's mistake rather than the
+// store's: an HTTP surface answers it as a 400 naming the field, where every
+// other failure here is a 500 or a 404.
+var ErrInvalidName = errors.New(
+	"secrets: a secret's name is an environment-variable name")
+
+// CheckName refuses a name the reference grammar cannot name.
+//
+// EVERY STORE CALLS THIS, and it is a guard rather than a courtesy. The store
+// is keyed by environment-variable name — that is what a ${VAR} in the
+// company document resolves through, and what the conventional-key fallbacks
+// look up — so a row stored under "gitlab-token" or "my token" is sealed,
+// listed, reported as written and then resolved by nothing at all. The
+// operator's evidence is a provider failing to authenticate hours later, with
+// nothing pointing back at the name they chose.
+func CheckName(name string) error {
+	if envref.ValidName(name) {
+		return nil
+	}
+	if name == "" {
+		return fmt.Errorf("%w: the name is empty", ErrInvalidName)
+	}
+	return fmt.Errorf(
+		"%w: %q is not one, so no ${VAR} in the company config can reach it; "+
+			"use letters, digits and underscores, starting with a letter or "+
+			"an underscore", ErrInvalidName, name)
+}

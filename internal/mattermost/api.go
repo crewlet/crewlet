@@ -28,6 +28,12 @@ type User struct {
 	// token without it fails on the first bot creation with a 403 that
 	// names the endpoint rather than the missing role.
 	Roles string `json:"roles,omitempty"`
+
+	// DeleteAt is when the account was deactivated, or zero while it is
+	// live. Mattermost deactivates rather than deletes, which is what a
+	// disconnect does here, so this is the difference between an account
+	// that is gone and one this engine turned off and can turn back on.
+	DeleteAt int64 `json:"delete_at,omitempty"`
 }
 
 // SystemAdmin reports whether this account may provision.

@@ -31,9 +31,19 @@ So colour is spent in exactly four places:
 | **Accent** | *where the reader is* — the active nav row, the primary button, the focus ring, the on filter | 1 |
 | **Data** | a chart series, inside a chart that carries a legend | 5 + a neutral residual |
 
-Everything else — a seat, a unit, an event category, an integration, a node, a
-tool origin — is **neutral**, and its identity is carried by its name, its icon
-and its position. Those are stable, legible, and do not run out at eight.
+Everything else — a seat, a unit, an event category, an integration's state, a
+node, a tool origin — is **neutral**, and its identity is carried by its name,
+its icon and its position. Those are stable, legible, and do not run out at
+eight.
+
+The one exception is a **third-party app's own mark** on the Integrations screen
+(`ui/VendorMark.tsx`): Slack's four colours, Atlassian's blue, GitLab's orange,
+Datadog's violet, drawn as the third-party app draws them. A mark is identity by
+definition, and a recoloured Slack mark is not Slack's. The exception is held
+to exactly that: a mark is drawn only beside the third-party app's name,
+nothing reads state from it, none of its hues is reused as a token, and the
+integration's STATE beside it is carried by the status tone like everything
+else. A tool the company has not set up keeps its mark, dimmed.
 
 A seat's chrome takes one of four **tones**, from what it is DOING:
 
@@ -161,10 +171,10 @@ meets their company first and the engine last.
 | | Knowledge | `#/knowledge?q=` | `knowledge` — the company's own live search |
 | **Cost** | Spend & budgets | `#/spend?window=` | the pushed spend rollup, the `tokens` query for other windows, and `budgets` |
 | **Operations** | Fleet | `#/fleet` | `fleet` — the lease table |
-| | Integrations | `#/integrations` | `integrations` |
+| | Integrations | `#/integrations` | `integrations`, plus `/setup/integrations` over REST *(operator-gated)* |
 | | Tools | `#/tools?q=&origin=` | the pushed tool catalogue |
 | | Configuration | `#/config?lens=&revision=` | `config` / `config_audit` / `config_diff` *(operator-gated)* |
-| | Secrets | `#/secrets` | the names and provenance the fleet holds — **never a value** *(operator-gated)* |
+| | Secrets | `#/secrets` | `/secrets` and `/config/references` over REST: the names the fleet holds, what reads each, and the writes that store, rotate and remove one — **never a value** *(operator-gated)* |
 | — | Trace | `#/traces/{id}` | `trace` — reached from a row or from search |
 | — | Turn | `#/turns/{id}` | `turn` — everything one unit of work published |
 | — | Event | `#/events/{id}` | `event` |
@@ -547,7 +557,8 @@ rendered idle from the first phase to the last.
 
 1. **Colour is state, never identity.** No hash-to-hue, no per-agent tint, no
    per-category chip colour. If you need to tell two things apart, use their
-   names.
+   names. The third-party app marks in `ui/VendorMark.tsx` are the one, bounded
+   exception (see "The one rule" above); nothing else is.
 2. **No new colour, size, radius or spacing literal.** If a component needs
    one, the TOKEN is what gets added.
 3. **A fill step is never text and an `-ink` step is never a background.** The
@@ -558,6 +569,18 @@ rendered idle from the first phase to the last.
    keyed row uses an identity that survives the row's own lifecycle.
 6. **Every empty state says why it is empty** and what would fill it, and
    distinguishes "nothing happened" from "nothing could be read".
+7. **A write says what happened.** Every write goes through
+   `protocol/rest.ts` and reports its outcome: a toast on success, and the
+   engine's own refusal beside the field it names. A button whose result is
+   invisible is a button an operator presses twice.
+8. **No screen renders a credential.** The setup dialog shows the `${VAR}` a
+   field points at and never a value, because no route returns one.
+9. **A card is one object in two states.** The Integrations screen draws one
+   bordered card per tool rather than rows in a shared panel, so a connected
+   one can grow a body and still read as the thing it already was. A row that
+   expands inside a list of rows pushes its neighbours around and reads as the
+   list breaking. The disclosure is the identity block, never the whole
+   header, so the card's own buttons are not nested inside a button.
 7. **Every screen, section and filter is in the URL**, and obeys the
    push/replace table above.
 8. **A screen subscribes to the slices it reads and no others.**

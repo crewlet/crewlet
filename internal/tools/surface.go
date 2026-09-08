@@ -443,8 +443,8 @@ func paramsOrEmpty(p map[string]any) map[string]any {
 	out := maps.Clone(p)
 	// AN OBJECT SCHEMA OR NOTHING. A tool's parameters reach two consumers
 	// that both require the top-level `type: "object"` the MCP spec
-	// mandates — a vendor's tool-definition API, which rejects the whole
-	// request, and the MCP server the bridge builds, whose AddTool PANICS —
+	// mandates (a vendor's tool-definition API, which rejects the whole
+	// request, and the MCP server the bridge builds, whose AddTool PANICS),
 	// and for an MCP tool this map came off a third-party server's wire
 	// verbatim. A value off the wire must be a value rather than a panic,
 	// and the panic's blast radius is the seat: it is raised on the turn

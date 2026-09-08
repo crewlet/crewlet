@@ -58,7 +58,7 @@ func buildProviders(c *config.Company, r *config.Resolver) (*phase.Registry, err
 // buildProvider constructs one backend.
 //
 // A provider whose credentials are missing still BUILDS. Every call then comes
-// back a clean 401, which names the provider and the vendor — far easier to
+// back a clean 401, which names the provider and the vendor, far easier to
 // diagnose than a constructor that refused to exist and took the whole company
 // down at boot with a message about one key.
 func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm.Provider, error) {

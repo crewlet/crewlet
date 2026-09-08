@@ -96,9 +96,9 @@ func Schema(tier Tier) ([]byte, error) {
 // slice, a map, or one of the hand-written [overrides]. It once carried a
 // fault channel for the one directive that could meet a shape it had no rule
 // for: an integration block the build had no parser for was refused outright.
-// That directive is gone with the last vendor it refused — all six route end
-// to end — so the channel has nothing left to report. An error return nothing
-// can populate reads as a guard against something.
+// That directive is gone with the last third-party app it refused (all six
+// route end to end), so the channel has nothing left to report. An error
+// return nothing can populate reads as a guard against something.
 type schemaGen struct {
 	defs map[string]map[string]any
 }

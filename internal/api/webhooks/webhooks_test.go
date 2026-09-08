@@ -118,8 +118,9 @@ func newEdge(t *testing.T, opts ...func(*webhooks.Options)) *edge {
 
 	secrets := &webhooks.Secrets{
 		GitHub: "gh-secret", GitLab: gitlabSecret,
-		Jira: "jira-secret", Confluence: "conf-secret", ForgeAppID: "app-123",
-		Slack: map[string]string{"ceo": "slack-secret"},
+		Jira: "jira-secret", Confluence: "conf-secret", ConfluenceToken: "conf-token", ForgeAppID: "app-123",
+		Datadog: "dd-token",
+		Slack:   map[string]string{"ceo": "slack-secret"},
 	}
 	configured := true
 	e := &edge{
@@ -843,7 +844,7 @@ func TestCredentialHeadersAreRedactedBeforeADeliveryIsStored(t *testing.T) {
 	}
 }
 
-// --- delivery deduplication, for the vendors that send no delivery id ------ //
+// --- delivery deduplication, for integrations that send no delivery id ----- //
 
 // CONFLUENCE DATA CENTER SENDS THE SAME HEADER ITS JIRA TWIN DOES, and the
 // route ignored it: the claim short-circuits on an empty key, so every
@@ -899,7 +900,7 @@ func TestTwoConfluenceEventsAreBothDelivered(t *testing.T) {
 }
 
 // AN EMPTY BODY IS NOT A KEY. It is the same for every delivery, so keying on
-// it would claim the first and refuse every other delivery from that vendor
+// it would claim the first and refuse every other delivery from that third-party app
 // for the whole TTL.
 func TestAnEmptyBodyIsNotADeliveryKey(t *testing.T) {
 	t.Parallel()

@@ -160,7 +160,7 @@ func TestTheValveIsOffWithoutAStore(t *testing.T) {
 // correctly.
 //
 // It is a class, not a typo, so this checks all three at once: the failure
-// is silent per-integration, and a fourth vendor would repeat it.
+// is silent per-integration, and a fourth third-party app would repeat it.
 func TestEveryIntegrationResolvesItsAddress(t *testing.T) {
 	// NOT parallel: the addresses come from the process environment.
 	t.Setenv("TEST_MM_URL", "http://127.0.0.1:1")
@@ -196,7 +196,7 @@ integrations:
 	}
 
 	// The addresses are unreachable on purpose: what is under test is the
-	// string each wiring BUILT, not whether the vendor answered.
+	// string each wiring BUILT, not whether the third-party app answered.
 	mm := e.Mattermost()
 	if mm == nil {
 		t.Fatal("no chat transport was built")
@@ -247,8 +247,8 @@ integrations:
 //
 // Secrets live in the config as ${VAR}s. The edge's material was assembled
 // from the config WITHOUT resolving, so every route verified against the
-// literal "${GITLAB_SIGNING_SECRET}" — every delivery from every vendor
-// refused, with the vendor's settings page showing a healthy hook. Measured
+// literal "${GITLAB_SIGNING_SECRET}", every delivery from every third-party app
+// refused, with the third-party app's settings page showing a healthy hook. Measured
 // against a real GitLab, where the only trace was one warning per delivery.
 //
 // And the literal is not a secret. It is a config field the dashboard
@@ -291,11 +291,11 @@ func TestAnUnconfiguredNodeHasNoWebhookSecrets(t *testing.T) {
 // A CONFIGURED VENDOR MUST ACTUALLY ROUTE, which is the whole distinction
 // RoutedSources exists to draw.
 //
-// Four vendors once had config models, webhook routes and generated schema
+// Four third-party apps once had config models, webhook routes and generated schema
 // and no parser behind any of them, so a company naming one got a block that
 // validated, appeared on the dashboard's Integrations room beside the
-// working ones, and woke nobody. This is what catches a vendor whose config
-// ships without its wiring — and, in the other direction, a vendor whose
+// working ones, and woke nobody. This is what catches a third-party app whose config
+// ships without its wiring and, in the other direction, a third-party app whose
 // wiring is dropped from startNotifications by a refactor.
 func TestAConfiguredTrackerActuallyRoutes(t *testing.T) {
 	t.Parallel()
@@ -318,6 +318,41 @@ integrations:
 	// delivery it would have routed.
 	if got := e.WebhookSecrets().Jira; got != "jira-secret" {
 		t.Errorf("jira webhook secret = %q", got)
+	}
+}
+
+// AND SO DOES THE ALERTING SURFACE, which is the case this test was written
+// for and did not cover.
+//
+// Datadog shipped with a config block, a webhook route, a generated schema
+// entry and a docs page saying an alert wakes a seat "exactly as a comment on
+// a merge request" does. It had no parser, so the spine logged
+// inbound_source_unparsed and skipped every delivery: verified, stored,
+// counted on the dashboard, and read by nobody. That is precisely the shape
+// the comment above describes, and the third-party app list here is what lets it
+// happen again for the next one.
+func TestAConfiguredAlertingSurfaceActuallyRoutes(t *testing.T) {
+	t.Parallel()
+	doc := companyDoc + `
+integrations:
+  datadog:
+    enabled: true
+    webhook_token: whsec_ZGF0YWRvZy10b2tlbi0zMi1ieXRlcy1sb25nISE=
+    route_to: ceo
+    provisioning:
+      site: datadoghq.com
+      api_key: dd-api
+      app_key: dd-app
+`
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc)})
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !slices.Contains(e.RoutedSources(), "datadog") {
+		t.Fatalf("a company on Datadog routes %v", e.RoutedSources())
+	}
+	if e.WebhookSecrets().Datadog == "" {
+		t.Error("the datadog route has no token to check a delivery against")
 	}
 }
 
@@ -428,7 +463,7 @@ func TestNoKnowledgeBackendIsANilInterface(t *testing.T) {
 // or setting `enabled: false`, the gesture after a credential leak — applied
 // cleanly and changed nothing: the boot-time parser went on routing
 // deliveries under the credential being revoked, RoutedSources went on
-// listing the vendor as reachable, and SecretsOf never consulted Enabled so
+// listing the third-party app as reachable, and SecretsOf never consulted Enabled so
 // the webhook route kept verifying and ingesting.
 func TestAVendorARevisionRetiresStopsRouting(t *testing.T) {
 	t.Parallel()
@@ -460,7 +495,7 @@ integrations:
 	// And the ingest half agrees: a route with nothing to verify with
 	// answers 503 rather than accepting a delivery that goes nowhere.
 	if got := e.WebhookSecrets().Jira; got != "" {
-		t.Errorf("a retired vendor still verifies deliveries with %q", got)
+		t.Errorf("a retired third-party app still verifies deliveries with %q", got)
 	}
 }
 
@@ -498,5 +533,189 @@ integrations:
 	}
 	if slices.Contains(e.RoutedSources(), "github") {
 		t.Errorf("a disabled vendor still routes: %v", e.RoutedSources())
+	}
+}
+
+// A RECONCILER THAT ONLY RETIRES IS NOT A RECONCILER.
+//
+// Confluence's converged in one direction: it returned early unless a parser
+// was ALREADY running, on the reasoning that boot owns the first build. Boot
+// owns the first one and nothing owned the second (the parser set is
+// assembled once, in New), so a revision that ADDED Confluence after boot
+// registered nothing.
+//
+// Disconnecting and reconnecting is exactly that sequence, and it is the one
+// an operator makes most: the route went on verifying and storing every
+// delivery while nothing turned one into work for a seat, and the only cure
+// was restarting the process. The dashboard reported it honestly and looked
+// like it was lying, because the card said Connected and the line under it
+// said nothing routes.
+func TestConfluenceRoutesAgainAfterBeingRemovedAndAddedBack(t *testing.T) {
+	t.Parallel()
+	with := companyDoc + `
+integrations:
+  confluence:
+    url: https://wiki.example.com
+    token: t
+    webhook_secret: cf
+`
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, with)})
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !slices.Contains(e.RoutedSources(), "confluence") {
+		t.Fatalf("a company on Confluence routes %v", e.RoutedSources())
+	}
+
+	// Disconnected: the parser goes, which has always worked.
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc)); err != nil {
+		t.Fatalf("Apply without confluence: %v", err)
+	}
+	if slices.Contains(e.RoutedSources(), "confluence") {
+		t.Fatalf("a removed knowledge base still routes %v", e.RoutedSources())
+	}
+
+	// Connected again: the parser has to come back, and this is the half
+	// that did not.
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, with)); err != nil {
+		t.Fatalf("Apply with confluence: %v", err)
+	}
+	if !slices.Contains(e.RoutedSources(), "confluence") {
+		t.Fatalf("a reconnected knowledge base does not route: %v", e.RoutedSources())
+	}
+	// AND ITS SEARCHER COMES BACK WITH IT. A revived parser beside a dead
+	// searcher would route page activity while every Plan phase went on
+	// getting an empty knowledge block.
+	if searcher := e.Knowledge(); searcher == nil || searcher.Backend() != "confluence" {
+		t.Error("the knowledge searcher did not come back with the parser")
+	}
+}
+
+// EVERY INTEGRATION HAS TO SURVIVE BEING ADDED AFTER BOOT.
+//
+// The parser set is assembled once, in New, so anything that is not rebuilt
+// on a config apply is registered only if it happened to be configured when
+// the process started. Connecting it afterwards leaves its route verifying
+// and storing every delivery while nothing turns one into work for a seat,
+// and the dashboard says so in a line that reads like a lie next to a card
+// tagged Connected.
+//
+// Confluence had exactly this and was fixed by making its reconciler revive
+// as well as retire. This is the same question asked of the rest, because a
+// reconciler nobody calls is indistinguishable from one that converges in one
+// direction.
+func TestEveryIntegrationRoutesWhenAddedAfterBoot(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		source string
+		block  string
+	}{
+		{source: "jira", block: `
+integrations:
+  jira:
+    url: https://jira.example.com
+    token: t
+    webhook_secret: s
+`},
+		{source: "confluence", block: `
+integrations:
+  confluence:
+    url: https://wiki.example.com
+    token: t
+    webhook_secret: s
+`},
+		{source: "gitlab", block: `
+integrations:
+  gitlab:
+    enabled: true
+    url: https://gitlab.example.com
+    token: t
+    signing_secret: whsec_Y3Jld2xldC10ZXN0LXNpZ25pbmcta2V5LTMyYnl0ZXM=
+`},
+		{source: "github", block: `
+integrations:
+  github:
+    enabled: true
+    token: t
+    webhook_secret: s
+`},
+		{source: "datadog", block: `
+integrations:
+  datadog:
+    enabled: true
+    webhook_token: t
+    route_to: founder
+    provisioning:
+      site: datadoghq.com
+      api_key: dd-api
+      app_key: dd-app
+`},
+	} {
+		t.Run(tc.source, func(t *testing.T) {
+			t.Parallel()
+			// BOOTED WITHOUT IT, which is the case that matters: a company
+			// that has never configured this integration.
+			e := newEngine(t, engine.Options{Company: parsedCompany(t, companyDoc)})
+			if err := e.Start(t.Context()); err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			if slices.Contains(e.RoutedSources(), tc.source) {
+				t.Fatalf("%s routes before it is configured: %v", tc.source, e.RoutedSources())
+			}
+
+			if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc+tc.block)); err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if !slices.Contains(e.RoutedSources(), tc.source) {
+				t.Errorf("%s was connected and does not route: %v", tc.source, e.RoutedSources())
+			}
+		})
+	}
+}
+
+// AND A ROUTING SETTING CHANGES WITHOUT A RESTART.
+//
+// Datadog's parser carries the two settings that decide where an alert goes:
+// the monitor tag key and the fallback seat. With the parser built once at
+// boot, a company that moved its fallback from one seat to another went on
+// waking the old one until the process was restarted, and nothing on any
+// surface said so.
+func TestDatadogRoutingFollowsTheAppliedRevision(t *testing.T) {
+	t.Parallel()
+	with := func(route string) string {
+		return companyDoc + `
+integrations:
+  datadog:
+    enabled: true
+    webhook_token: t
+    route_to: ` + route + `
+    provisioning:
+      site: datadoghq.com
+      api_key: dd-api
+      app_key: dd-app
+`
+	}
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, with("founder"))})
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !slices.Contains(e.RoutedSources(), "datadog") {
+		t.Fatalf("a company on Datadog routes %v", e.RoutedSources())
+	}
+
+	// Turned off, which is the gesture after a leaked webhook token.
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc)); err != nil {
+		t.Fatalf("Apply without datadog: %v", err)
+	}
+	if slices.Contains(e.RoutedSources(), "datadog") {
+		t.Fatalf("a removed alert source still routes %v", e.RoutedSources())
+	}
+
+	// And back, which is what a reconnect is.
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, with("founder"))); err != nil {
+		t.Fatalf("Apply with datadog: %v", err)
+	}
+	if !slices.Contains(e.RoutedSources(), "datadog") {
+		t.Errorf("a reconnected alert source does not route: %v", e.RoutedSources())
 	}
 }

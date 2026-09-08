@@ -183,9 +183,22 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// parser would route the new revision's work items by the old
 	// company's org chart.
 	e.reconcileConfluence(next)
+	e.reconcileDatadog(ctx, next)
 	e.reconcileJira(ctx, next)
 	e.reconcileGitLab(ctx, next)
 	e.reconcileGitHub(ctx, next)
+	// AND THE TWO CHAT SURFACES, which had no reconciler at all: their
+	// parsers were assembled once at boot, so a company that connected
+	// either one after starting had every delivery verified at the edge and
+	// routed to nobody until the process was restarted. See
+	// [Engine.reconcileSlack] for why one rebuilds unconditionally and the
+	// other does not.
+	e.reconcileSlack(ctx, next)
+	e.reconcileMattermost(ctx, next)
+	// AND WHAT THE LOOP LAST CONCLUDED IS NOW OLD NEWS. Its cadence is for
+	// asking a third-party app again, not for asking this document again,
+	// and the answer just changed here. See [integration.Worker.MarkStale].
+	e.integrations.MarkStale()
 	applied = append(applied, "integrations")
 
 	previous := e.Company()

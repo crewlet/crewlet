@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
@@ -26,8 +27,8 @@ import (
 // and a next-run projection are both measured against it.
 var pinned = time.Date(2026, 8, 23, 16, 0, 0, 0, time.UTC)
 
-// Nothing here is about which vendors the fixture names: the org block plus a
-// per-seat identity is the shape these answers project, and every vendor
+// Nothing here is about which third-party apps the fixture names: the org block plus a
+// per-seat identity is the shape these answers project, and every third-party app
 // carries it identically.
 const companyDoc = `
 name: Acme
@@ -706,7 +707,7 @@ func TestFleetCarriesEachNodesOwnLiveStatus(t *testing.T) {
 
 // CONFIGURED IS NOT ROUTED, and the answer says which.
 //
-// A vendor's webhook route verifies and stores deliveries as soon as its
+// A third-party app's webhook route verifies and stores deliveries as soon as its
 // config block is present; whether one then wakes a seat needs a parser, and
 // this build has parsers for three of the seven. Without this field the two
 // render identically — configured, secret present, deliveries arriving — so
@@ -743,7 +744,7 @@ func TestIntegrationsTellsRoutedFromMerelyConfigured(t *testing.T) {
 // A secret lives in the config as a ${VAR}. secret_present says an operator
 // wrote one down; only this process knows what it resolved to. The gap is
 // the failure that hides everywhere else: an unset variable renders as a
-// secret present, the vendor's settings page shows a healthy hook, and the
+// secret present, the third-party app's settings page shows a healthy hook, and the
 // route answers 503 to every delivery with nothing naming the variable.
 func TestIntegrationsTellsAResolvedSecretFromAConfiguredOne(t *testing.T) {
 	t.Parallel()
@@ -848,7 +849,7 @@ func TestAnApiWithNoEngineCannotSayWhatRoutes(t *testing.T) {
 
 // AN ENGINE THAT ROUTES NOTHING SAYS SO, rather than reading as unknown.
 //
-// The empty-but-not-nil case: notifications started and no vendor registered.
+// The empty-but-not-nil case: notifications started and no third-party app registered.
 // That is a real measurement and must not collapse into "cannot say".
 func TestAnEngineRoutingNothingIsNotUnknown(t *testing.T) {
 	t.Parallel()
@@ -888,9 +889,9 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 		t.Skipf("the dashboard tree is not in this checkout: %v", err)
 	}
 
-	// EVERY vendor, because the per-vendor detail fields (url, seats) only
-	// appear on the rows that have them — a fixture missing one reports its
-	// field as a mismatch that is really a gap in the fixture.
+	// EVERY third-party app, because the per-integration detail fields (url,
+	// seats) only appear on the rows that have them: a fixture missing one
+	// reports its field as a mismatch that is really a gap in the fixture.
 	cfg := company(t)
 	cfg.Integrations.Jira = &config.Jira{
 		URL: "https://jira.example.com", Token: "t", WebhookSecret: "jr",
@@ -905,7 +906,7 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 		t.Fatal("the answer carried no integrations, so this proves nothing")
 	}
 	// Across every row, not just the first: `url` and `seats` are
-	// per-vendor detail, so a field carried by ANY row is a field the
+	// per-integration detail, so a field carried by ANY row is a field the
 	// answer knows how to send.
 	sent := map[string]bool{}
 	for _, r := range rows {
@@ -1065,6 +1066,248 @@ func TestAnUnreadableEventLogReportsNullOutcomes(t *testing.T) {
 				t.Errorf("%s %s = %v, want null when the listing failed",
 					entry["key"], field, entry[field])
 			}
+		}
+	}
+}
+
+// THE THREE-VALUED RECONCILE FIELD, and the third value is the one that took
+// a subsystem to be able to say at all.
+//
+// A standalone API has no loop to ask, and reporting that as "no surface has
+// been reconciled" would put an alarming claim on a screen that had asked the
+// wrong node. So null is "cannot say", an absent entry is "the loop has not
+// reached this surface yet", and a present one is a real finding.
+func TestIntegrationsCarriesWhatTheReconcileLoopFound(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+
+	t.Run("cannot say", func(t *testing.T) {
+		t.Parallel()
+		rows := integrationRows(t, queries.Sources{
+			Company: func() *config.Company { return cfg },
+		})
+		for kind, row := range rows {
+			if got, present := row["reconcile"]; !present || got != nil {
+				t.Errorf("%s reconcile = %v, want null on a process with no "+
+					"loop to ask", kind, got)
+			}
+		}
+	})
+
+	t.Run("a finding", func(t *testing.T) {
+		t.Parallel()
+		rows := integrationRows(t, queries.Sources{
+			Company: func() *config.Company { return cfg },
+			Reconciles: func(context.Context) []integration.State {
+				return []integration.State{{
+					Kind: integration.KindGitLab,
+					Report: integration.Report{
+						Phase: integration.PhaseDegraded, Actor: integration.ActorAdmin,
+						Detail:    "ceo needs maintainer on api-gateway",
+						ActionURL: "https://gitlab.example.com/api-gateway/-/settings",
+					},
+					Findings: []integration.Finding{
+						{Kind: integration.FindingGrantShort, Subject: "ceo"},
+						{Kind: integration.FindingGrantExcess, Subject: "cto"},
+					},
+					Outcome:  integration.OutcomeBlocked,
+					Attempts: 2,
+				}}
+			},
+		})
+
+		got, _ := rows["gitlab"]["reconcile"].(map[string]any)
+		if got == nil {
+			t.Fatalf("gitlab carries no reconcile status: %v", rows["gitlab"]["reconcile"])
+		}
+		if got["phase"] != "degraded" || got["actor"] != "admin" {
+			t.Errorf("phase/actor = %v/%v, want degraded/admin", got["phase"], got["actor"])
+		}
+		if got["detail"] != "ceo needs maintainer on api-gateway" {
+			t.Errorf("detail = %v", got["detail"])
+		}
+		// THE FINDINGS TRAVEL TOO, and not only the one the report
+		// promoted: the report says what to do next and the findings say
+		// what is actually wrong, and an operator who fixes the first
+		// should not wait a full pass to learn there was a second.
+		findings, _ := got["findings"].([]any)
+		if len(findings) != 2 {
+			t.Fatalf("carried %d findings, want both", len(findings))
+		}
+		// A surface the loop has not reached is absent rather than
+		// asserted, which is not the same as the process being unable to
+		// say: the field is null either way, and only the presence of
+		// OTHER rows' answers tells them apart.
+		if got := rows["mattermost"]["reconcile"]; got != nil {
+			t.Errorf("mattermost reconcile = %v, want null until the loop reaches it", got)
+		}
+	})
+}
+
+// integrationRows answers the question and indexes the rows by surface.
+func integrationRows(t *testing.T, sources queries.Sources) map[string]map[string]any {
+	t.Helper()
+	body := asMap(t, answer(t, sources, "integrations", nil))
+	rows, _ := body["integrations"].([]any)
+	out := map[string]map[string]any{}
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		out[entry["key"].(string)] = entry
+	}
+	return out
+}
+
+// A SEAT IN A UNIT IS A SEAT.
+//
+// `roles:` at the top level is the seats belonging to NO unit, and a company
+// of any size puts its agents in units instead. Listing only the top level
+// answered an empty seat list, and a zero count, for every one of them: the
+// Slack row then reported no per-seat app on a company running seven, and its
+// secret_present was computed from a count that was always zero while the
+// routes verified fine. The walk is company.EachRole, which is exported for
+// exactly this and whose own doc records the first time a top-level-only
+// lookup shipped.
+func TestSeatsInUnitsAreReported(t *testing.T) {
+	t.Parallel()
+	const doc = `
+name: Acme
+providers:
+  llm:
+    zulu:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["${K}"]
+integrations:
+  mattermost:
+    enabled: true
+    url: https://mm.example.com
+    team: acme
+  slack:
+    typing_status: addressed
+units:
+  - name: Engineering
+    roles:
+      - name: SWE
+        handle: swe
+        llm: zulu
+        integrations:
+          mattermost:
+            bot_token: "${MM}"
+          slack:
+            bot_token: "${BOT}"
+            signing_secret: "${SIG}"
+    children:
+      - name: Platform
+        roles:
+          - name: SRE
+            handle: sre
+            llm: zulu
+            integrations:
+              mattermost:
+                bot_token: "${MM2}"
+`
+	cfg, err := config.ParseCompany([]byte(doc))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+	}, "integrations", nil))
+
+	rows, _ := body["integrations"].([]any)
+	byKind := map[string]map[string]any{}
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		byKind[entry["key"].(string)] = entry
+	}
+
+	// A seat one unit deep and a seat two deep, both carrying their own
+	// identity, and neither at the top level.
+	seats, _ := byKind["mattermost"]["seats"].([]any)
+	if len(seats) != 2 {
+		t.Fatalf("mattermost seats = %v, want the two seats in units", seats)
+	}
+	if seats[0] != "SRE" || seats[1] != "SWE" {
+		t.Errorf("mattermost seats = %v, want them sorted", seats)
+	}
+
+	// And the Slack count, which decides whether the row claims a secret at
+	// all, sees the one seat that has an app.
+	if present := byKind["slack"]["secret_present"]; present != true {
+		t.Errorf("slack secret_present = %v, want true: one seat in a unit "+
+			"carries a signing secret", present)
+	}
+}
+
+// A SURFACE'S REGISTRATION IS COMPARED WITH THE ADDRESS IN FORCE.
+//
+// A company's public base moves, and a registration made against the old one
+// keeps pointing somewhere that no longer answers. Where a pass registers the
+// hook the next tick moves it; where nothing does, only a person can, and
+// this is the only thing that can tell them.
+func TestAMovedPublicBaseIsReportedPerSurface(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	cfg.Integrations.PublicBaseURL = "https://now.example.com"
+	// SLACK IS THE SURFACE THIS IS FOR: its Request URL is a field a person
+	// typed at the third-party app, so nothing converges it and the
+	// comparison is the only thing that can say the address moved.
+	cfg.Integrations.Slack = &config.Slack{}
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+		Reconciles: func(context.Context) []integration.State {
+			return []integration.State{
+				{Kind: integration.KindSlack, Endpoint: "https://old.example.com"},
+				{Kind: integration.KindGitLab, Endpoint: "https://now.example.com"},
+			}
+		},
+	}, "integrations", nil))
+
+	rows, _ := body["integrations"].([]any)
+	byKind := map[string]map[string]any{}
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		byKind[entry["key"].(string)] = entry
+	}
+	if got := byKind["slack"]["endpoint_current"]; got != false {
+		t.Errorf("slack endpoint_current = %v, want false: it is registered elsewhere", got)
+	}
+	if got := byKind["slack"]["endpoint"]; got != "https://old.example.com" {
+		t.Errorf("slack endpoint = %v, want the address it is registered at", got)
+	}
+	// AND THE ROW CARRYING ONLY THAT ADDRESS IS NOT A REPORT. It was written
+	// by the setup write, not by a pass, and rendering it as one gave the
+	// card an EMPTY phase as its status: Slack drew no state at all, on the
+	// one surface whose moved address only a person can put right.
+	if got := byKind["slack"]["reconcile"]; got != nil {
+		t.Errorf("slack reconcile = %v, want null: no pass has reported on it", got)
+	}
+	if got := byKind["gitlab"]["endpoint_current"]; got != true {
+		t.Errorf("gitlab endpoint_current = %v, want true", got)
+	}
+}
+
+// AND A SURFACE NOTHING HAS RECORDED AN ADDRESS FOR SAYS NOTHING.
+//
+// Null is "cannot say", which is what every row said before this existed and
+// what a surface says before it is ever set up. Reported as false it would
+// put an action-needed badge on every integration in a fresh company.
+func TestAnUnrecordedEndpointIsNullRatherThanMoved(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	cfg.Integrations.PublicBaseURL = "https://now.example.com"
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+		Reconciles: func(context.Context) []integration.State {
+			return []integration.State{{Kind: integration.KindGitLab}}
+		},
+	}, "integrations", nil))
+
+	rows, _ := body["integrations"].([]any)
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		if got := entry["endpoint_current"]; got != nil {
+			t.Errorf("%v endpoint_current = %v, want null", entry["key"], got)
 		}
 	}
 }

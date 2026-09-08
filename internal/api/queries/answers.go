@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -132,6 +133,21 @@ type Sources struct {
 	// delivery reach anyone" fail independently, and an operator staring at
 	// a silent integration has to know which half broke.
 	Verifiable func(ctx context.Context) []string
+
+	// Reconciles is what the integration reconcile loop last found for
+	// each surface, or nil when this process cannot say.
+	//
+	// The FLEET's record rather than this node's, and that is the whole
+	// reason it is stored where it is: the loop is a worker duty, so on a
+	// split-role deployment the node answering this request is never the
+	// one that wrote it.
+	//
+	// Nil is "cannot say" and an empty slice is "nothing has been
+	// reconciled", exactly as with Routed and Verifiable above. The
+	// integrations answer keeps the two apart rather than folding a
+	// standalone API's silence into a claim that every surface is
+	// unchecked.
+	Reconciles func(ctx context.Context) []integration.State
 
 	// NodeID names this node in the fleet answer, so a reader can tell
 	// which row is the one they are talking to.

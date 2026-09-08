@@ -467,6 +467,64 @@ func TestOnlyRoutableLoginsProduceNotifications(t *testing.T) {
 	}
 }
 
+// AN AGENT'S OWN APP IS ROUTABLE UNDER BOTH ITS NAMES.
+//
+// A person writing a mention types the app's SLUG, so the body carries
+// `@acme-sre-lead`; every payload reporting what that app did carries the
+// account, which is the slug with `[bot]`. Registered under one name only,
+// half of a working integration is dropped as a stranger's: this was the
+// state a live company reached with an app created, installed, its
+// deliveries verified and stored, and not one of them reaching a seat.
+func TestAnAgentsOwnAppIsRoutableUnderBothItsNames(t *testing.T) {
+	t.Parallel()
+	organization := &org.Organization{
+		Name:  "Acme",
+		Roles: []*org.Role{{Name: "SRE Lead", DeclaredHandle: "sre-lead"}},
+	}
+	reg := notify.NewRegistry(organization)
+	// The two registrations the engine makes for one app.
+	if err := reg.Register(github.Backend, "acme-sre-lead", "sre-lead"); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(notify.BotNamespace(github.Backend),
+		github.BotLogin("acme-sre-lead"), "sre-lead"); err != nil {
+		t.Fatal(err)
+	}
+
+	// THE MENTION, which is what a person writes and what wakes the agent.
+	out, err := github.NewParser(github.ParserOptions{}).Parse(context.Background(),
+		delivery("issue_comment", `{
+			"action": "created",
+			"comment": {"body": "@acme-sre-lead please take a look", "user": {"login": "writer"}},
+			"issue": {"number": 16, "title": "Delivery check", "user": {"login": "writer"}},
+			"repository": {"full_name": "acme/api", "name": "api", "owner": {"login": "acme"}},
+			"sender": {"login": "writer"}
+		}`), reg)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got := reasons(out); got["acme-sre-lead"] != github.CommentMention {
+		t.Fatalf("a mention of the agent's own app reached nobody: %v", got)
+	}
+
+	// AND THE ACCOUNT, which is how a payload names the same agent. It is
+	// the author here, so the delivery is about work this agent opened.
+	out, err = github.NewParser(github.ParserOptions{}).Parse(context.Background(),
+		delivery("issue_comment", `{
+			"action": "created",
+			"comment": {"body": "on it", "user": {"login": "writer"}},
+			"issue": {"number": 17, "title": "Rollout", "user": {"login": "acme-sre-lead[bot]"}},
+			"repository": {"full_name": "acme/api", "name": "api", "owner": {"login": "acme"}},
+			"sender": {"login": "writer"}
+		}`), reg)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got := reasons(out); got["acme-sre-lead[bot]"] != github.CommentAdded {
+		t.Fatalf("the agent was not told about a comment on its own issue: %v", got)
+	}
+}
+
 // # Mentions
 
 func TestMentionsReadGitHubsOwnLoginGrammar(t *testing.T) {
@@ -1570,5 +1628,47 @@ func TestOnlyAnAskAddressesTheSeat(t *testing.T) {
 		if addressed(reason) {
 			t.Errorf("%q addresses the seat and is news about a thread it follows", reason)
 		}
+	}
+}
+
+// A COMPANY WITH NO ORG TOKEN HAS NOTHING TO REPORT.
+//
+// Three things this got wrong in turn. Refusing the run made the loop record
+// "the last pass could not read this integration", which sends an operator
+// looking for an outage rather than an unset variable. Reporting it as
+// credential_missing then put the card in Failed, which is the phase for an
+// integration that cannot be talked to at all. Reporting it as
+// optional_missing kept the card ready and left a permanent note on it.
+//
+// None of them is right, because there is no degradation left to describe:
+// the token's one job in routing was the list of who is participating in a
+// thread, and the agents' own apps answer that. What is left for it is the
+// organization-level reconcile, which a company that wants one org-wide hook
+// opts into and every other company never had a reason for.
+func TestAPassWithNoOrgTokenReportsNothing(t *testing.T) {
+	t.Parallel()
+	res, err := github.Reconcile(t.Context(), github.Options{
+		Config: &config.GitHub{Enabled: true},
+	})
+	if err != nil {
+		t.Fatalf("a pass with no credential failed: %v", err)
+	}
+	if res == nil {
+		t.Fatal("no result")
+	}
+	if findings := res.Findings(); len(findings) != 0 {
+		t.Fatalf("findings = %+v, want none: nothing is degraded", findings)
+	}
+	// AND IT SAYS SO AS A NOTE, which is what a run that read nothing has
+	// to leave behind: silence with no note would be indistinguishable
+	// from a pass that looked and found everything in order.
+	if len(res.Notes) == 0 {
+		t.Error("a run that read nothing at GitHub left no note saying so")
+	}
+	// It says nothing about ingress or identity, because it read neither: a
+	// run with no credential that claimed a webhook was missing would be
+	// reporting on something it never looked at.
+	if res.Login != "" || len(res.Seats) != 0 || len(res.Hooks) != 0 {
+		t.Errorf("a credential-less run reported %+v", res)
 	}
 }

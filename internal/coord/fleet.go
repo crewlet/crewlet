@@ -22,8 +22,8 @@ import (
 //     so a company on four nodes ran four valves and a seat could emit four
 //     times its configured rate.
 //   - The webhook dedupe registry claimed first-claim-wins across a company.
-//     A vendor retrying a delivery to a different ingress node found no
-//     claim, and the same push woke the same seat twice.
+//     A third-party app retrying a delivery to a different ingress node
+//     found no claim, and the same push woke the same seat twice.
 //   - The turn-completion ledger is what stops a redelivered trigger being
 //     worked again. A redelivery that landed on a peer had no ledger to
 //     consult.
@@ -77,7 +77,7 @@ const (
 	// ClaimTTL is how long an inbound delivery stays claimed.
 	//
 	// Sized to cover queue redelivery and an operator's replay, NOT a
-	// vendor's own retry schedule — those back off for far longer, in
+	// third-party app's own retry schedule. Those back off for far longer, in
 	// minutes to hours, and only fire when the API layer failed to answer
 	// 2xx, which is exactly when the delivery was never claimed at all.
 	// Too long is visible in one direction only: a deliberate replay ten
@@ -168,9 +168,9 @@ type Claims interface {
 	// Claim records key and reports whether THIS caller was first.
 	//
 	// FAILS OPEN — an error yields (false, err) and the caller must
-	// PROCESS the delivery. A vendor's push suppressed because the store
-	// blinked is a wake that never happens, and nothing else will notice;
-	// a duplicated wake is a turn the completion ledger collapses.
+	// PROCESS the delivery. A third-party app's push suppressed because the
+	// store blinked is a wake that never happens, and nothing else will
+	// notice; a duplicated wake is a turn the completion ledger collapses.
 	Claim(ctx context.Context, key string, ttl time.Duration, now time.Time) (bool, error)
 
 	// Release drops a claim, so a deliberate replay of the same delivery
@@ -722,10 +722,67 @@ type Secrets interface {
 	DeleteSecret(ctx context.Context, name string) (bool, error)
 }
 
+// Integrations is the fleet's record of where each external surface got to.
+//
+// # Why the fleet holds it rather than the node that produced it
+//
+// The reconcile loop is a worker duty, so exactly one node writes this. The
+// node that READS it is usually a different one: the dashboard and the REST
+// API answer from whichever node serves ingress, and an operator running
+// `-roles ingress` has put those on separate hosts deliberately. On the
+// producing node's own database the status would be invisible from the
+// surface that exists to show it, which is the same fan-out failure the
+// activation pointer beside it was built to remove.
+//
+// # The value is OPAQUE, like a sandbox run's and unlike everything else here
+//
+// A status is a phase, an actor, a sentence, a list of findings and four
+// timestamps, and every one of those is a term in internal/integration's
+// vocabulary. Modelling it here would put a second copy of that vocabulary in
+// the one package the whole engine depends on, and the two would have to be
+// kept equal forever for no reader's benefit. So this carries bytes: the
+// producer marshals, the reader unmarshals, and coordination stores what it
+// cannot interpret.
+//
+// # No retention
+//
+// The bucket has no age, for the reason the budget counter has none: a status
+// is standing state rather than a short-horizon question. One that expired
+// would make a converged integration read as one nobody has ever looked at,
+// on a timer nobody chose, and the loop would then re-provision against a
+// third-party app it had already agreed with. There are at most as many keys
+// here as there are surfaces, so nothing grows.
+type Integrations interface {
+	// IntegrationStatuses returns every recorded status, keyed by the
+	// surface it describes.
+	//
+	// RAISES rather than answering empty on an unreachable store. "No
+	// surface has ever been reconciled" and "the store cannot be read"
+	// send the loop down opposite paths: the first is a fleet that should
+	// start converging, and the second is one that must conclude nothing
+	// about a company it cannot see.
+	IntegrationStatuses(ctx context.Context) (map[string][]byte, error)
+
+	// PutIntegrationStatus records one surface's status, replacing any
+	// prior one.
+	//
+	// LAST WRITE WINS, with no compare-and-set, and here that is not a
+	// tradeoff: the duty makes one node the only writer, so there is no
+	// second writer to race. Adding a version would be a guard against a
+	// concurrency the singleton already rules out.
+	PutIntegrationStatus(ctx context.Context, kind string, value []byte) error
+
+	// DeleteIntegrationStatus drops a surface's status once its block has
+	// left the company document. It removes the RECORD and nothing at the
+	// third-party app: see internal/integration's package doc for why a
+	// deleted block is not a request to destroy what a pass created.
+	DeleteIntegrationStatus(ctx context.Context, kind string) error
+}
+
 // Fleet is a backend that serves all of the shared state, which is what the
 // contract suite certifies and what the engine wires from.
 //
-// One interface at the CONSTRUCTION seam and eight at the call sites: the
+// One interface at the CONSTRUCTION seam and nine at the call sites: the
 // webhook edge takes a Claims and nothing else, the valve takes a Counter,
 // a turn's meter takes a Budgets. A consumer that could reach the whole store
 // would eventually use it.
@@ -740,6 +797,7 @@ type Fleet interface {
 	Fires
 	SandboxRuns
 	Secrets
+	Integrations
 }
 
 // SortUsage puts the org counter first, then the seats by scope.

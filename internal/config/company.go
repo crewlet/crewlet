@@ -26,7 +26,7 @@ type Company struct {
 	// seat's derived id (uuid5 over org name and handle), so renaming a
 	// company orphans every seat's diary, onboarding markers and
 	// counterparty profiles.
-	Name string `yaml:"name" json:"name" js:"required" desc:"Company name. Half of every seat's derived id — effectively permanent."`
+	Name string `yaml:"name" json:"name" js:"required" desc:"Company name. Half of every seat's derived id: effectively permanent."`
 
 	Mission  string   `yaml:"mission,omitempty" json:"mission,omitempty" desc:"One line on what the company is for; reaches every seat's prompt."`
 	Vision   string   `yaml:"vision,omitempty" json:"vision,omitempty" desc:"Longer statement of where the company is going."`
@@ -185,7 +185,7 @@ func (c *Company) Validate() error {
 	// about where it came from.
 	for _, path := range c.UnresolvedMasks() {
 		p.add(path, ErrUnknownValue,
-			"still holds the redaction marker %q — a masked credential could "+
+			"still holds the redaction marker %q: a masked credential could "+
 				"not be matched to the value it hid. Either this member is new "+
 				"or was renamed, so there is no prior value to restore, or a "+
 				"list of bare credentials changed length. Write the real value "+
@@ -194,14 +194,31 @@ func (c *Company) Validate() error {
 	}
 
 	if strings.TrimSpace(c.Name) == "" {
-		p.add("name", ErrMissing, "the company needs a name — it is half of every seat's derived id")
+		p.add("name", ErrMissing, "the company needs a name: it is half of every seat's derived id")
+	}
+
+	// A SEAT MAY NOT BE CALLED WHAT "NOBODY" IS CALLED.
+	//
+	// Datadog's fallback takes a seat handle or DatadogIgnore, and a company
+	// with a seat of that name would have it silenced by its own name: every
+	// alert meant for it dismissed, on a screen reporting the configuration
+	// exactly as written. Refusing the name is the only place this can be
+	// caught, because by the time the parser reads a fallback the two are
+	// the same string.
+	for role := range c.EachRole() {
+		if role.Seat().Handle() == DatadogIgnore {
+			p.add("roles", ErrUnknownValue,
+				"a seat cannot be called %q: it is what integrations.datadog.route_to "+
+					"means by nobody, so a seat of that name would be silenced by "+
+					"its own handle", DatadogIgnore)
+		}
 	}
 
 	for key := range c.SkillVariables {
 		if !skillVariableKey.MatchString(key) {
 			p.add(at("skill_variables", key), ErrUnknownValue,
 				"keys must be substitution identifiers matching "+
-					"[A-Za-z_][A-Za-z0-9_]* — a key like %q would never be "+
+					"[A-Za-z_][A-Za-z0-9_]*: a key like %q would never be "+
 					"substituted into a skill's ${name} reference", key)
 		}
 	}
@@ -215,7 +232,7 @@ func (c *Company) Validate() error {
 	}
 	if w := c.NotificationCoalesceWindowSeconds; w < 0 || w > coalesceWindowMax {
 		p.add("notification_coalesce_window_seconds", ErrOutOfRange,
-			"must be 0..%v seconds, got %v — the window is spent out of the "+
+			"must be 0..%v seconds, got %v: the window is spent out of the "+
 				"broker's ack-timeout budget, which also has to fit a whole turn",
 			coalesceWindowMax, w)
 	}
@@ -370,7 +387,7 @@ func (c *Company) validateProviderKeys() error {
 			for _, key := range field.keys {
 				if _, ok := c.Providers.LLM[key]; !ok {
 					p.add(field.path, ErrUnknownValue,
-						"%q is not a configured provider — providers.llm has %s. "+
+						"%q is not a configured provider: providers.llm has %s. "+
 							"A key that misses is not an error at run time: the seat "+
 							"falls back to another model and bills against it, so this "+
 							"is the only place the typo can be seen",
@@ -602,7 +619,7 @@ func (c *Company) validateSandboxPlacement() error {
 		if !catalogue.Enabled() {
 			p.add(at(at(path, "sandbox"), "enabled"), ErrMissing,
 				"this seat runs code, but the company configures no sandbox. "+
-					"Add providers.sandbox, or turn the seat's gate off — an "+
+					"Add providers.sandbox, or turn the seat's gate off: an "+
 					"enabled gate with no catalogue offers the seat nothing and "+
 					"says so nowhere")
 			continue
@@ -634,7 +651,7 @@ func (c *Company) validateSandboxPlacement() error {
 		case run == "":
 			p.add(where, ErrMissing,
 				"this seat runs code and the catalogue offers more than one "+
-					"place to do it (%s), so it has to name one — or "+
+					"place to do it (%s), so it has to name one: or "+
 					"providers.sandbox.default_run_in has to",
 				names(catalogue.available()))
 		case !slices.Contains(Placements, run):
@@ -672,7 +689,7 @@ func (c *Company) validateSandboxPlacement() error {
 			p.add(where, ErrMissing,
 				"agent mode runs the executor in a box and the catalogue "+
 					"offers more than one place to do it (%s), so this entry "+
-					"has to name one — or providers.sandbox.default_run_in has to",
+					"has to name one: or providers.sandbox.default_run_in has to",
 				names(catalogue.available()))
 		case !slices.Contains(BackendPlacements(), run):
 			// Spelling is the entry's own rule; it already reported.

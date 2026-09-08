@@ -9,6 +9,7 @@
  */
 
 import { Shell } from "./Shell.tsx";
+import { ToastProvider } from "~/ui/Toast.tsx";
 import { useRoute } from "./router.tsx";
 import { Overview } from "~/routes/Overview.tsx";
 import { People } from "~/routes/People.tsx";
@@ -80,8 +81,13 @@ function Screen() {
 
 export function App() {
   return (
-    <Shell>
-      <Screen />
-    </Shell>
+    // The toast host wraps the shell rather than sitting inside a screen: an
+    // outcome has to survive the navigation the write causes, and a provider
+    // mounted per screen is unmounted by exactly that.
+    <ToastProvider>
+      <Shell>
+        <Screen />
+      </Shell>
+    </ToastProvider>
   );
 }

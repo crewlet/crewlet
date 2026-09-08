@@ -7,7 +7,7 @@
 // A Slack app has ONE bot user and ONE request URL. An engine running seven
 // agents therefore runs seven apps, each with its own credentials, its own
 // signing secret and its own `/webhooks/slack/{handle}` path — which is why
-// the inbound edge is per-seat where every other vendor's is per-company,
+// the inbound edge is per-seat where every other third-party app's is per-company,
 // and why provisioning here is an app-manifest problem rather than an
 // account-creation one.
 package slack
@@ -388,7 +388,7 @@ func metadata(body, event map[string]any, seat Seat, msg notify.ChatMessage,
 		"transport":    Backend,
 		"channel":      msg.Channel,
 		"channel_type": kind,
-		// The canonical shape beside the vendor's own word. Both,
+		// The canonical shape beside the third-party app's own word. Both,
 		// because the raw one is what a prompt and an operator
 		// recognise and the canonical one is what the learning workers
 		// read — and the mapping belongs here, in the only code that

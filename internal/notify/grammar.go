@@ -11,8 +11,8 @@ import (
 // turns every one into `<@U123>` / `<!channel>`), or leaves it LITERAL in
 // the message text (Mattermost stores `@agent-swe` exactly as typed). Those
 // are the only two, they need entirely different matching, and both are
-// data-driven here so a vendor package declares its constants rather than
-// writing a third matcher.
+// data-driven here so a third-party app's package declares its constants
+// rather than writing a third matcher.
 
 // MarkupGrammar matches a backend that rewrites mentions into structured
 // tokens before delivery.

@@ -1,5 +1,23 @@
 {
   "$defs": {
+    "Atlassian": {
+      "additionalProperties": false,
+      "properties": {
+        "api_key": {
+          "description": "Unscoped organization API key. A scoped key is refused by the account-management API.",
+          "type": "string"
+        },
+        "deployment": {
+          "description": "Which Atlassian this company runs: cloud or data_center. Default cloud.",
+          "type": "string"
+        },
+        "org_id": {
+          "description": "Atlassian organization id, from admin.atlassian.com.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "CLIAgent": {
       "additionalProperties": false,
       "properties": {
@@ -120,6 +138,10 @@
         "webhook_secret": {
           "description": "HMAC secret for Data Center webhooks.",
           "type": "string"
+        },
+        "webhook_token": {
+          "description": "Shared token for Confluence Cloud webhooks, carried in the registered URL; minted by crewlet confluence provision.",
+          "type": "string"
         }
       },
       "required": [
@@ -186,6 +208,62 @@
       },
       "type": "object"
     },
+    "Datadog": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Turn the integration on.",
+          "type": "boolean"
+        },
+        "handle_tag": {
+          "description": "Monitor tag key naming the seat an alert wakes (default crewlet).",
+          "type": "string"
+        },
+        "provisioning": {
+          "$ref": "#/$defs/DatadogProvisioning",
+          "description": "Inputs for provisioning agent identities at Datadog."
+        },
+        "route_to": {
+          "description": "Handle of the seat an alert naming no owner wakes; required when enabled.",
+          "type": "string"
+        },
+        "webhook_name": {
+          "description": "Name of the webhook the engine keeps at Datadog; monitors name it as @webhook-\u003cname\u003e (default crewlet).",
+          "type": "string"
+        },
+        "webhook_token": {
+          "description": "Shared token compared against X-Crewlet-Token; required when enabled.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "DatadogProvisioning": {
+      "additionalProperties": false,
+      "properties": {
+        "api_key": {
+          "description": "Datadog API key; says which organization.",
+          "type": "string"
+        },
+        "app_key": {
+          "description": "Datadog application key; says which user acts.",
+          "type": "string"
+        },
+        "email_domain": {
+          "description": "Domain agent service-account addresses are built under.",
+          "type": "string"
+        },
+        "role": {
+          "description": "Role each agent's service account holds (default Datadog Read Only Role).",
+          "type": "string"
+        },
+        "site": {
+          "description": "Datadog region hostname, e.g. datadoghq.com.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "Delegation": {
       "additionalProperties": false,
       "properties": {
@@ -245,7 +323,7 @@
           "type": "string"
         },
         "template": {
-          "description": "Box template. This is where vCPU/RAM/disk are set — at template build time.",
+          "description": "Box template. This is where vCPU/RAM/disk are set: at template build time.",
           "type": "string"
         }
       },
@@ -457,6 +535,10 @@
           "description": "Per-handle membership overrides.",
           "type": "object"
         },
+        "admin_token": {
+          "description": "Personal access token with the full api scope, belonging to a group owner. Creates and removes the service accounts.",
+          "type": "string"
+        },
         "group": {
           "description": "Top-level group the service accounts join.",
           "type": "string"
@@ -515,9 +597,17 @@
     "Integrations": {
       "additionalProperties": false,
       "properties": {
+        "atlassian": {
+          "$ref": "#/$defs/Atlassian",
+          "description": "Atlassian organization and its unscoped API key, used to create one service account per agent. Absent = accounts are made by hand."
+        },
         "confluence": {
           "$ref": "#/$defs/Confluence",
           "description": "Confluence instance or Cloud site, org read account and webhook secret. Absent = disabled."
+        },
+        "datadog": {
+          "$ref": "#/$defs/Datadog",
+          "description": "Datadog monitor alerts delivered as inbound events. Absent = disabled."
         },
         "forge_app_id": {
           "description": "Forge app id, verified against a relayed Cloud event's invocation token. Required for Jira or Confluence Cloud.",
@@ -538,6 +628,10 @@
         "mattermost": {
           "$ref": "#/$defs/Mattermost",
           "description": "Mattermost instance and team. Absent = disabled."
+        },
+        "public_base_url": {
+          "description": "HTTPS base a vendor reaches this deployment on, e.g. https://crewlet.example.com. Empty means no inbound address.",
+          "type": "string"
         },
         "slack": {
           "$ref": "#/$defs/Slack",
@@ -873,11 +967,10 @@
           "type": "string"
         },
         "typing_status": {
-          "description": "When to show the typing indicator (default off).",
+          "description": "When to show the typing indicator (default always); it costs a request every few seconds per thinking seat.",
           "enum": [
-            "addressed",
             "always",
-            "off"
+            "addressed"
           ],
           "type": "string"
         },
@@ -891,6 +984,10 @@
     "MattermostProvisioning": {
       "additionalProperties": false,
       "properties": {
+        "admin_token": {
+          "description": "System-admin token used to create and to disable the bots.",
+          "type": "string"
+        },
         "channels": {
           "description": "Channels every bot joins.",
           "items": {
@@ -1026,7 +1123,7 @@
           "type": "string"
         },
         "handle": {
-          "description": "Canonical slug. Effectively permanent — it derives the seat's durable id.",
+          "description": "Canonical slug. Effectively permanent: it derives the seat's durable id.",
           "pattern": "^[a-z0-9][a-z0-9-]*$",
           "type": "string"
         },
@@ -1281,12 +1378,53 @@
       ],
       "type": "object"
     },
+    "RoleGitHub": {
+      "additionalProperties": false,
+      "properties": {
+        "app_id": {
+          "description": "Numeric id of this seat's GitHub App. Written by the engine.",
+          "type": "integer"
+        },
+        "app_slug": {
+          "description": "Slug of this seat's GitHub App; the bot login derives from it.",
+          "type": "string"
+        },
+        "installation_id": {
+          "description": "Installation of this seat's app on the organization. Written by the engine.",
+          "type": "integer"
+        },
+        "private_key": {
+          "description": "Reference to this seat's sealed GitHub App key. Returned by GitHub once.",
+          "type": "string"
+        },
+        "repos": {
+          "description": "Repositories this seat works in, as owner/name. Empty means all the installation covers.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tier": {
+          "description": "read_only, review or full_access. Empty means read_only.",
+          "type": "string"
+        },
+        "webhook_secret": {
+          "description": "Reference to this seat's sealed GitHub App webhook secret. Returned by GitHub once.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "RoleIntegrations": {
       "additionalProperties": false,
       "properties": {
         "confluence": {
           "$ref": "#/$defs/SpaceRef",
           "description": "The Confluence space this seat owns."
+        },
+        "github": {
+          "$ref": "#/$defs/RoleGitHub",
+          "description": "This seat's own GitHub App: how much it may do, and where."
         },
         "jira": {
           "$ref": "#/$defs/ProjectRef",
@@ -1455,7 +1593,7 @@
           "type": "string"
         },
         "default_timeout_seconds": {
-          "description": "Box TTL/keepalive. Not a run cap — the orphan-reclaim grace.",
+          "description": "Box TTL/keepalive. Not a run cap: the orphan-reclaim grace.",
           "minimum": 0,
           "type": "number"
         },
@@ -1770,11 +1908,10 @@
           "$ref": "#/$defs/StatusPhrases"
         },
         "typing_status": {
-          "description": "When to show the working indicator (default addressed).",
+          "description": "When to show the working indicator (default always).",
           "enum": [
-            "addressed",
             "always",
-            "off"
+            "addressed"
           ],
           "type": "string"
         }
@@ -2040,7 +2177,7 @@
       "type": "string"
     },
     "name": {
-      "description": "Company name. Half of every seat's derived id — effectively permanent.",
+      "description": "Company name. Half of every seat's derived id: effectively permanent.",
       "type": "string"
     },
     "notification_coalesce_max_batch": {

@@ -103,6 +103,9 @@ type chatServer struct {
 	// settings overrides the client-config booleans the preflight reads.
 	settings map[string]string
 	revokes  int
+	// revokeFails makes every revoke answer 500, which is the instance
+	// that will not give a credential up.
+	revokeFails bool
 	// identityFails makes the identity route answer 500 for a BOT's
 	// token, which is "cannot tell" rather than "this token is bad".
 	identityFails bool
@@ -406,7 +409,14 @@ func (s *chatServer) serve(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(`{"message":"Unable to find the user."}`))
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{"id": id, "username": username})
+		row := map[string]any{"id": id, "username": username}
+		// DEACTIVATED IS A STATE THE ACCOUNT REPORTS, and it is what a
+		// disconnect leaves behind: Mattermost disables rather than
+		// deletes, so the account is still found and still off.
+		if s.off[id] {
+			row["delete_at"] = 1
+		}
+		json.NewEncoder(w).Encode(row)
 
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/bots"):
 		out := []map[string]any{}
@@ -426,6 +436,11 @@ func (s *chatServer) serve(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/disable") &&
 		strings.HasPrefix(path, "/bots/"):
 		s.off[strings.TrimSuffix(strings.TrimPrefix(path, "/bots/"), "/disable")] = true
+		w.Write([]byte(`{}`))
+
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/enable") &&
+		strings.HasPrefix(path, "/bots/"):
+		delete(s.off, strings.TrimSuffix(strings.TrimPrefix(path, "/bots/"), "/enable"))
 		w.Write([]byte(`{}`))
 
 	case r.Method == http.MethodPost && path == "/bots":
@@ -505,6 +520,11 @@ func (s *chatServer) serve(w http.ResponseWriter, r *http.Request) {
 		var body map[string]string
 		json.NewDecoder(r.Body).Decode(&body)
 		s.revokes++
+		if s.revokeFails {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"message":"Unable to revoke the token."}`))
+			return
+		}
 		// A REVOKED TOKEN IS GONE from the listing, which is how
 		// Mattermost serves it — there is no revoked flag.
 		for user, tokens := range s.tokens {
@@ -1204,5 +1224,67 @@ func TestAHealthyInstanceRaisesNoPreflightNote(t *testing.T) {
 			strings.Contains(note, "EnableBot") || strings.Contains(note, "EnableUser") {
 			t.Errorf("healthy instance produced a preflight note: %q", note)
 		}
+	}
+}
+
+// RECONNECTING TURNS THE BOT BACK ON, because disconnecting turned it off.
+//
+// A decommission DISABLES rather than deletes, deliberately: a deleted
+// Mattermost account takes its posts with it, so a disconnect would rewrite
+// the history of every channel the agent ever spoke in. That leaves the
+// account here to be found, and a reconnect that merely found it, joined it
+// to the team and minted a fresh token reported ready over an agent that
+// could not sign in: every socket that token opened was refused, and nothing
+// anywhere said why.
+func TestReconnectingReEnablesABotADisconnectDisabled(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	both := []*org.Role{
+		chatSeat("CEO", "${MM_TOKEN_CEO}", "leadership"),
+		chatSeat("CTO", "${MM_TOKEN_CTO}", "eng"),
+	}
+	if _, err := reconcileChat(t, srv, newChatSink(), both); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	srv.mu.Lock()
+	id := srv.bots["agent-cto"]
+	srv.mu.Unlock()
+	if id == "" {
+		t.Fatal("the first run created no bot for the seat")
+	}
+
+	// THE DISCONNECT, which is what leaves the account off.
+	if _, err := reconcileChatWith(t, srv, newChatSink(), both[:1],
+		func(o *mattermost.Options) { o.Decommission = true }); err != nil {
+		t.Fatalf("decommission: %v", err)
+	}
+	srv.mu.Lock()
+	disabled := srv.off[id]
+	srv.mu.Unlock()
+	if !disabled {
+		t.Fatal("the decommission left the bot enabled, so this test proves nothing")
+	}
+
+	res, err := reconcileChat(t, srv, newChatSink(), both)
+	if err != nil {
+		t.Fatalf("reconnect: %v", err)
+	}
+	srv.mu.Lock()
+	stillOff, now := srv.off[id], srv.bots["agent-cto"]
+	srv.mu.Unlock()
+	if stillOff {
+		t.Error("the bot is still disabled after a reconnect, so its token " +
+			"authenticates as a deactivated account and it can never open a socket")
+	}
+	// AND THE RUN SAYS SO. A pass that fixed this silently would be
+	// indistinguishable from one that had nothing to do.
+	if len(res.Enabled) != 1 || res.Enabled[0] != "cto" {
+		t.Errorf("Enabled = %v, and the report does not name the bot it turned back on",
+			res.Enabled)
+	}
+	// THE SAME ACCOUNT, not a second one: keeping the username and its
+	// history is the whole reason a disconnect disables rather than deletes.
+	if now != id {
+		t.Errorf("the reconnect made a new bot %q, orphaning %q", now, id)
 	}
 }

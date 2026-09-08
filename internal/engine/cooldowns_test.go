@@ -97,7 +97,7 @@ func TestABenchTakenHereIsPublishedToTheFleet(t *testing.T) {
 
 // THE SCOPE IS THE CONFIG ENTRY'S KEY, which is what keeps one entry's quota
 // out of another's. Two entries can list the same credential against different
-// models, and those are two rate-limit buckets at the vendor — a shared record
+// models, and those are two rate-limit buckets at the vendor. A shared record
 // with no scope would turn one model's burst into a company-wide outage.
 func TestOneEntrysBenchDoesNotReachAnotherOnTheSameKey(t *testing.T) {
 	t.Parallel()

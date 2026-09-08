@@ -345,7 +345,7 @@ func TestBothLayersMeetTheSameGate(t *testing.T) {
 }
 
 // THE ACTOR IS NOT FILTERED BY THE PARSER. It is stamped under the one key
-// every vendor writes and suppressed by the spine, which knows the
+// every third-party app writes and suppressed by the spine, which knows the
 // pipeline.failed exception and can resolve an actor across identity
 // namespaces — neither of which a username comparison here could do.
 func TestTheActorIsStampedRatherThanFiltered(t *testing.T) {

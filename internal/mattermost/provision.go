@@ -211,6 +211,48 @@ func (c *Client) RevokeTokens(ctx context.Context, userID string) error {
 	return nil
 }
 
+// RevokeMinted removes every token this tool minted on an account under one
+// description, keeping the id in keep (empty keeps nothing), and reports how
+// many it took.
+//
+// THE ONE WALK THREE CALLERS SHARE: a rotation retiring the token it just
+// superseded, a decommission removing a departed seat's, and a disconnect
+// removing a seat's before its bot is disabled. Written three times, the
+// three would have disagreed about the one thing that matters here, which is
+// what "this tool's own" means, and the caller that got it wrong would revoke
+// an administrator's own token or leave a live one behind, silently either
+// way.
+//
+// FOLDED, because the description is built from a seat handle a person wrote
+// (see [TokenDescription]) and a decommission recovers that handle from the
+// LOWERCASED username Mattermost stores. Comparing exactly there would leave
+// a mixed-case seat's credential live on an account this engine had just
+// disabled.
+func (c *Client) RevokeMinted(ctx context.Context, userID, description, keep string) (int, error) {
+	tokens, err := c.Tokens(ctx, userID)
+	if err != nil {
+		return 0, fmt.Errorf("mattermost: list the tokens on %s: %w", userID, err)
+	}
+	revoked := 0
+	var failures []error
+	for _, token := range tokens {
+		if token.ID == keep || !strings.EqualFold(token.Description, description) {
+			continue
+		}
+		// EVERY ONE ATTEMPTED before any is reported: the caller either
+		// rolls the run back or fails the disconnect, and both are
+		// better off having taken what they could than stopping at the
+		// first token an instance would not give up.
+		if err := c.RevokeToken(ctx, token.ID); err != nil {
+			failures = append(failures, fmt.Errorf(
+				"mattermost: revoke token %s on %s: %w", token.ID, userID, err))
+			continue
+		}
+		revoked++
+	}
+	return revoked, errors.Join(failures...)
+}
+
 // TeamByName resolves a team by its slug.
 func (c *Client) TeamByName(ctx context.Context, name string) (Team, bool, error) {
 	var out Team
@@ -291,6 +333,22 @@ func (c *Client) PatchBot(ctx context.Context, userID, displayName string) error
 // actually means.
 func (c *Client) DisableBot(ctx context.Context, userID string) error {
 	_, err := c.request(ctx, http.MethodPost, "/bots/"+userID+"/disable", nil, nil, false)
+	return err
+}
+
+// EnableBot reactivates a bot account this engine disabled.
+//
+// THE UNDO OF A DISCONNECT, and without it a reconnect is a card that reports
+// itself ready over an agent that cannot sign in. A teardown disables rather
+// than deletes, deliberately, so the account survives with its history and
+// its username; reconnecting then FINDS that account, joins it to the team,
+// mints it a fresh token and reports success, while every socket it opens is
+// refused because the account behind the token is deactivated.
+//
+// Mattermost's own route, which is the mirror of the disable above rather
+// than the generic user-activation call: a bot is enabled through /bots.
+func (c *Client) EnableBot(ctx context.Context, userID string) error {
+	_, err := c.request(ctx, http.MethodPost, "/bots/"+userID+"/enable", nil, nil, false)
 	return err
 }
 

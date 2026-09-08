@@ -11,6 +11,8 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/whsec"
+
+	"github.com/crewlet/crewlet/internal/integration"
 )
 
 // Reconcile brings a GitLab instance in line with the company config.
@@ -26,7 +28,7 @@ import (
 //
 // # A run that cannot record what it minted revokes it
 //
-// Between the vendor creating a token and the sink recording it there is a
+// Between the third-party app creating a token and the sink recording it there is a
 // window where the only copy of a live credential is in this process's
 // memory. If recording fails, the token exists, nothing can use it, and
 // nobody knows to remove it — so the run revokes what it minted and discards
@@ -209,7 +211,12 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	// created.
 	group, found, err := opts.Client.GroupByPath(ctx, p.Group)
 	if err != nil {
-		return nil, fmt.Errorf("gitlab: resolve group %q: %w", p.Group, err)
+		// GitLab has no separate auth probe, so this first call is where
+		// a bad token shows up. Distinguishing a refusal from an
+		// unreachable instance here is what stops a revoked token
+		// reporting as "the engine is working on it" forever.
+		return nil, fmt.Errorf("gitlab: resolve group %q: %w", p.Group,
+			integration.Reject(err, Status(err)))
 	}
 	if !found {
 		return nil, fmt.Errorf(
@@ -287,14 +294,23 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			continue
 		}
 
-		token, err := opts.Client.CreateToken(ctx, user.ID,
+		// THROUGH THE GROUP THAT OWNS THE ACCOUNT, which is what a group
+		// Owner may do: the instance route is admin only and 403s on
+		// gitlab.com for every seat. Zero on the instance path, where the
+		// credential is an admin token and no group owns the account.
+		token, err := opts.Client.CreateToken(ctx, mintGroup(opts, group.ID), user.ID,
 			TokenName(seat.Handle), tokenScopes(p), expiry(opts))
 		if err != nil {
 			return nil, rollback(ctx, opts, minted,
 				fmt.Errorf("gitlab: %s: mint token: %w", seat.Handle, err))
 		}
 		minted[seat.Handle] = mintedToken{
-			userID: user.ID, tokenID: token.ID, createdAccount: created,
+			// THE GROUP IT WAS MINTED THROUGH, carried rather than
+			// recomputed: a rollback that reached for the other route
+			// would fail to revoke exactly the credential it just
+			// created, which is the one moment a live token is loose.
+			groupID: mintGroup(opts, group.ID),
+			userID:  user.ID, tokenID: token.ID, createdAccount: created,
 		}
 		// RECORDED IMMEDIATELY. The value above is the only copy there
 		// will ever be.
@@ -311,7 +327,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		// administrator may have minted a token on this account by hand,
 		// and revoking it would break whatever is using it — silently,
 		// since nothing here knows what that is.
-		retired, err := retirePrevious(ctx, opts, user.ID, seat, token.ID)
+		retired, err := retirePrevious(ctx, opts, mintGroup(opts, group.ID), user.ID, seat, token.ID)
 		if err != nil {
 			return nil, rollback(ctx, opts, minted,
 				fmt.Errorf("gitlab: %s: %w", seat.Handle, err))
@@ -351,7 +367,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			res.Recorded++
 		}
 		opts.SigningSecret = secret
-		hooked, notes, err := ensureHooks(ctx, opts, group.ID, projects, target)
+		hooked, notes, err := ensureHooks(ctx, opts, group, projects, target)
 		if err != nil {
 			return nil, rollback(ctx, opts, minted, err)
 		}
@@ -373,6 +389,11 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 
 // mintedToken is one credential this run created, as its rollback needs it.
 type mintedToken struct {
+	// groupID is the group the token was minted THROUGH, or zero for the
+	// instance route. Carried rather than recomputed: a rollback reaching
+	// for the other route would fail to revoke exactly the credential it
+	// just created, which is the one moment a live token is loose.
+	groupID int
 	userID  int
 	tokenID int
 	// createdAccount says the account is this run's, which decides HOW
@@ -449,8 +470,10 @@ func status(err error) int {
 }
 
 // retirePrevious revokes this tool's earlier tokens on an existing account.
-func retirePrevious(ctx context.Context, opts Options, userID int, seat provision.Seat, keep int) (int, error) {
-	tokens, err := opts.Client.Tokens(ctx, userID)
+func retirePrevious(
+	ctx context.Context, opts Options, groupID, userID int, seat provision.Seat, keep int,
+) (int, error) {
+	tokens, err := opts.Client.Tokens(ctx, groupID, userID)
 	if err != nil {
 		return 0, fmt.Errorf("list tokens: %w", err)
 	}
@@ -463,7 +486,7 @@ func retirePrevious(ctx context.Context, opts Options, userID int, seat provisio
 		if token.ID == keep || token.Revoked || token.Name != TokenName(seat.Handle) {
 			continue
 		}
-		if err := opts.Client.RevokeToken(ctx, token.ID); err != nil {
+		if err := opts.Client.RevokeToken(ctx, groupID, userID, token.ID); err != nil {
 			return retired, fmt.Errorf("revoke the previous token: %w", err)
 		}
 		retired++
@@ -525,6 +548,31 @@ func ensureAccount(ctx context.Context, opts Options, groupID int,
 	return user, true, nil
 }
 
+// mintGroup is the group a token is minted through, or zero for the instance
+// path.
+//
+// THE SAME SPLIT [ensureAccount] MAKES, and it has to be: an account created
+// through the group route is owned by that group and its tokens are minted
+// there, while an instance service account belongs to nobody and takes the
+// admin route. Reading the mode once in each place is what keeps a run from
+// creating an account one way and reaching for its tokens the other.
+func mintGroup(opts Options, groupID int) int {
+	if opts.Mode.Or() == ModeInstance {
+		return 0
+	}
+	return groupID
+}
+
+// ErrNameReserved reports a username or email GitLab is still releasing from
+// an account it is deleting.
+//
+// A STATE THAT CLEARS ITSELF, and the whole reason it is named: the pass has
+// nothing to fix and nobody to tell, it simply has to be run again once
+// GitLab's own deletion finishes. The caller reports it as work in progress
+// rather than as a failure to read the integration.
+var ErrNameReserved = errors.New(
+	"gitlab is still releasing the name of an account it is deleting")
+
 // modeError turns a refusal into the sentence that names the credential the
 // chosen mode actually needs.
 //
@@ -537,6 +585,22 @@ func modeError(mode Mode, err error) error {
 	var api *APIError
 	if !errors.As(err, &api) {
 		return err
+	}
+	// A NAME GITLAB HAS NOT RELEASED YET, which is a deletion still running
+	// rather than anything wrong with this run.
+	//
+	// GitLab removes a user asynchronously: the account is gone from every
+	// listing the moment the delete is accepted, and its username and email
+	// stay reserved until a background job finishes. So a disconnect
+	// followed by a reconnect inside that window looks up the account,
+	// honestly does not find it, creates one, and is refused with "has
+	// already been taken".
+	//
+	// Reported as an error, that reads as "the last pass could not read this
+	// integration", which sends an operator looking for an outage over a
+	// state that clears itself on the next tick. See [ErrNameReserved].
+	if api.Status == http.StatusBadRequest && strings.Contains(api.Detail, "already been taken") {
+		return fmt.Errorf("%w: %w", ErrNameReserved, err)
 	}
 	if mode.Or() != ModeInstance {
 		if api.Forbidden() {
@@ -811,15 +875,41 @@ func MintSigningSecret() (string, error) { return whsec.Mint() }
 // Modes come from provisioning.group_webhook — auto (default) tries the
 // group and falls back, true demands the group, false goes straight to the
 // projects.
-func ensureHooks(ctx context.Context, opts Options, groupID int, projects []string, target string) ([]string, []string, error) {
+func ensureHooks(ctx context.Context, opts Options, group Group, projects []string, target string) ([]string, []string, error) {
 	mode := config.ContainerWebhookAuto
 	if pv := opts.Config.Provisioning; pv != nil && pv.GroupWebhook != "" {
 		mode = pv.GroupWebhook
 	}
 	secret := opts.SigningSecret
 
+	// A FREE GROUP TAKES THE REGISTRATION AND NEVER DELIVERS, which no
+	// error can tell you.
+	//
+	// The fallback below turns on the create call FAILING, and on
+	// gitlab.com's free tier it does not fail: POST /groups/:id/hooks
+	// answers 201, the hook is listed in the group's settings, and its own
+	// event log stays empty for ever. Measured on a live free group, where
+	// the pass reported ready and not one delivery had ever arrived.
+	//
+	// So the tier is READ rather than inferred from a refusal. Only
+	// gitlab.com answers with a plan at all, and [Group.PaidPlan] reads
+	// silence as "cannot tell": a self-managed instance keeps the behaviour
+	// it has, and the one case caught is a group that says it is free.
+	if mode == config.ContainerWebhookAuto && !group.PaidPlan() {
+		hooked, err := ensureProjectHooks(ctx, opts.Client, projects, target, secret)
+		if err != nil {
+			return nil, nil, err
+		}
+		return hooked, []string{
+			"this group is on GitLab's free tier, where a group webhook is " +
+				"accepted and never delivered, so one hook was registered per " +
+				"provisioning.projects entry instead; a project added to the " +
+				"group later will NOT be covered until this runs again",
+		}, nil
+	}
+
 	if mode != config.ContainerWebhookNever {
-		err := ensureGroupHook(ctx, opts.Client, groupID, target, secret)
+		err := ensureGroupHook(ctx, opts.Client, group.ID, target, secret)
 		switch {
 		case err == nil:
 			return []string{"group"}, nil, nil
@@ -1046,9 +1136,9 @@ func rollback(ctx context.Context, opts Options, minted map[string]mintedToken, 
 		if m.createdAccount {
 			// Nothing else has ever minted on an account this run made,
 			// so taking everything takes exactly what this run caused.
-			err = opts.Client.RevokeTokens(ctx, m.userID)
+			err = opts.Client.RevokeTokens(ctx, m.groupID, m.userID)
 		} else {
-			err = opts.Client.RevokeToken(ctx, m.tokenID)
+			err = opts.Client.RevokeToken(ctx, m.groupID, m.userID, m.tokenID)
 		}
 		if err != nil {
 			problems = append(problems, fmt.Sprintf("%s: %v", handle, err))

@@ -2,6 +2,7 @@ package config
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
@@ -45,7 +46,7 @@ type Role struct {
 	// EFFECTIVELY PERMANENT: the seat's durable id is derived from the
 	// company name and this handle, so changing either orphans that seat's
 	// diary, onboarding markers and counterparty profiles.
-	Handle string `yaml:"handle,omitempty" json:"handle,omitempty" js:"pattern=^[a-z0-9][a-z0-9-]*$" desc:"Canonical slug. Effectively permanent — it derives the seat's durable id."`
+	Handle string `yaml:"handle,omitempty" json:"handle,omitempty" js:"pattern=^[a-z0-9][a-z0-9-]*$" desc:"Canonical slug. Effectively permanent: it derives the seat's durable id."`
 
 	Email string `yaml:"email,omitempty" json:"email,omitempty" desc:"Seat email; plus-addressing derives from the handle."`
 
@@ -269,6 +270,7 @@ func (s *RoleSandbox) validate(path string) error {
 // the server that consumes them. Nothing in this block scopes knowledge
 // reads either; read scope is the org-wide knowledge block only.
 type RoleIntegrations struct {
+	GitHub     *RoleGitHub     `yaml:"github,omitempty" json:"github,omitempty" desc:"This seat's own GitHub App: how much it may do, and where."`
 	Slack      *RoleSlack      `yaml:"slack,omitempty" json:"slack,omitempty" desc:"This seat's own Slack app: bot token and signing secret."`
 	Mattermost *RoleMattermost `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"This seat's Mattermost bot: one token covers everything."`
 	Jira       *ProjectRef     `yaml:"jira,omitempty" json:"jira,omitempty" desc:"The Jira project this seat owns."`
@@ -277,8 +279,8 @@ type RoleIntegrations struct {
 
 // IsZero lets an unset block drop out of a round trip.
 func (r RoleIntegrations) IsZero() bool {
-	return r.Slack == nil && r.Mattermost == nil && r.Jira == nil &&
-		r.Confluence == nil
+	return r.GitHub == nil && r.Slack == nil && r.Mattermost == nil &&
+		r.Jira == nil && r.Confluence == nil
 }
 
 // ProjectRef is the tracker project a seat or unit owns. Integration
@@ -292,6 +294,138 @@ type ProjectRef struct {
 // [ProjectRef].
 type SpaceRef struct {
 	Space string `yaml:"space,omitempty" json:"space,omitempty" desc:"Space key."`
+}
+
+// RoleGitHub is a seat's own GitHub App.
+//
+// ONE APP PER AGENT, and there is no other way to have one. A GitHub App has
+// exactly one bot identity, derived from its slug: no token, header or
+// manifest field varies the author. So agents sharing an app all act as the
+// same account, and this engine would refuse them anyway, because two seats
+// resolving to one login means an @mention can no longer say which agent is
+// meant.
+//
+// THE CREDENTIALS ARE NOT TYPED IN. An app is created from a manifest the
+// engine builds, and GitHub returns its private key exactly once, to the
+// engine, at conversion time. What an operator does is click through the
+// creation and the install. Everything here except the tier and the
+// repositories is therefore written by the engine, not by a person.
+type RoleGitHub struct {
+	// Tier is how much of a repository this seat may do: read_only,
+	// review or full_access. Empty is read_only, which is the least this
+	// engine will hand out and the right answer for a seat nobody has
+	// thought about yet.
+	Tier string `yaml:"tier,omitempty" json:"tier,omitempty" desc:"read_only, review or full_access. Empty means read_only."`
+
+	// Repos are the repositories this seat works in, as owner/name. Empty
+	// means every repository the installation covers, which is what the
+	// operator chose when they installed the app.
+	Repos []string `yaml:"repos,omitempty" json:"repos,omitempty" desc:"Repositories this seat works in, as owner/name. Empty means all the installation covers."`
+
+	// AppID and AppSlug are the app GitHub created from the manifest. The
+	// SLUG is what the bot's login is derived from, so it is what an
+	// @mention of this agent resolves through.
+	AppID   int64  `yaml:"app_id,omitempty" json:"app_id,omitempty" desc:"Numeric id of this seat's GitHub App. Written by the engine."`
+	AppSlug string `yaml:"app_slug,omitempty" json:"app_slug,omitempty" desc:"Slug of this seat's GitHub App; the bot login derives from it."`
+
+	// InstallationID is the installation of that app on the organization.
+	// SEPARATE FROM THE APP, because creating an app and installing it are
+	// two acts by a person and the second can be a day after the first: an
+	// app with no installation is a real, reportable state rather than a
+	// half-written record.
+	InstallationID int64 `yaml:"installation_id,omitempty" json:"installation_id,omitempty" desc:"Installation of this seat's app on the organization. Written by the engine."`
+
+	// PrivateKey is the app's PEM, which GitHub returns ONCE and will
+	// never reissue. It is a `${VAR}` pointing at the sealed store like
+	// every other credential here, and losing it means deleting the app
+	// and creating another.
+	PrivateKey string `secret:"true" yaml:"private_key,omitempty" json:"private_key,omitempty" desc:"Reference to this seat's sealed GitHub App key. Returned by GitHub once."`
+
+	// WebhookSecret is what THIS APP signs its deliveries with, and it is
+	// the app's own: GitHub generates one per app at conversion time and
+	// returns it in the same response as the key, once.
+	//
+	// So an agent's deliveries cannot be verified against the
+	// organization's `integrations.github.webhook_secret`, which belongs to
+	// a different app, or to no app at all in a company that only ever
+	// created per-agent ones. Verifying against it refused every
+	// delivery from every agent with a 503, while GitHub's own hook page
+	// showed the app healthy and the config showed a secret set.
+	WebhookSecret string `secret:"true" yaml:"webhook_secret,omitempty" json:"webhook_secret,omitempty" desc:"Reference to this seat's sealed GitHub App webhook secret. Returned by GitHub once."`
+}
+
+// IsZero lets an unset block drop out of a round trip.
+func (g *RoleGitHub) IsZero() bool {
+	return g == nil || (g.Tier == "" && len(g.Repos) == 0 && g.AppID == 0 &&
+		g.AppSlug == "" && g.InstallationID == 0 && g.PrivateKey == "" &&
+		g.WebhookSecret == "")
+}
+
+// Held reports a seat whose app exists and is installed, which is the only
+// state its credentials can be minted from.
+func (g *RoleGitHub) Held() bool {
+	return g != nil && g.AppID != 0 && g.InstallationID != 0 &&
+		strings.TrimSpace(g.PrivateKey) != ""
+}
+
+// validate checks a seat's GitHub App.
+//
+// THE TIER IS THE ONLY THING A PERSON WRITES, so it is the only thing that
+// can be wrong in a way worth refusing. Everything else is written by the
+// engine after GitHub has answered, and refusing a half-built record would
+// refuse the document between the two clicks that build it.
+func (g *RoleGitHub) validate(path string) error {
+	var p problems
+	if tier := normalTier(g.Tier); tier != "" && !slices.Contains(CodeAccessTiers, tier) {
+		p.add(at(path, "tier"), ErrUnknownValue,
+			"%q is not an access tier; give one of %s. An unknown tier would "+
+				"run the seat read-only, which is safe and is not what the "+
+				"document says",
+			g.Tier, strings.Join(CodeAccessTiers, ", "))
+	}
+	for i, repo := range g.Repos {
+		if name := strings.TrimSpace(repo); name == "" || !strings.Contains(name, "/") {
+			p.add(at(path, "repos["+strconv.Itoa(i)+"]"), ErrUnknownValue,
+				"%q is not a repository; give it as owner/name, which is how "+
+					"GitHub addresses one and how an installation lists them",
+				repo)
+		}
+	}
+	return p.err()
+}
+
+// The access tiers a code host's seat can be set to.
+//
+// RESTATED HERE rather than imported from internal/github, because config is
+// the leaf every integration package depends on and reaching the other way
+// for three words would invert that. The same reasoning [Datadog] follows for
+// its tag key. Each code host's package owns the real vocabulary and the
+// permissions behind it, and a test asserts the two lists agree.
+const (
+	TierReadOnly   = "read_only"
+	TierReview     = "review"
+	TierFullAccess = "full_access"
+)
+
+// CodeAccessTiers is the closed set, in order of how much it grants.
+var CodeAccessTiers = []string{TierReadOnly, TierReview, TierFullAccess}
+
+// normalTier reads a tier the way the code hosts do, so a document written
+// `full-access` is not refused for a hyphen the engine itself accepts.
+func normalTier(raw string) string {
+	return strings.ToLower(strings.TrimSpace(strings.ReplaceAll(raw, "-", "_")))
+}
+
+// TierOrDefault is the tier this seat runs at.
+//
+// READ ONLY when the document is silent, which is the least this engine hands
+// out. A seat nobody has thought about should ask for more rather than
+// already hold it.
+func (g *RoleGitHub) TierOrDefault() string {
+	if tier := normalTier(g.Tier); slices.Contains(CodeAccessTiers, tier) {
+		return tier
+	}
+	return TierReadOnly
 }
 
 // RoleSlack is a seat's own Slack app.
@@ -318,13 +452,13 @@ func (s *RoleSlack) validate(path string) error {
 	var p problems
 	if strings.TrimSpace(s.BotToken) == "" {
 		p.add(at(path, "bot_token"), ErrMissing,
-			"required — without it this seat receives messages it cannot "+
+			"required: without it this seat receives messages it cannot "+
 				"answer. `crewlet slack provision` mints one into the ${VAR} "+
 				"this field points at")
 	}
 	if strings.TrimSpace(s.SigningSecret) == "" {
 		p.add(at(path, "signing_secret"), ErrMissing,
-			"required — this seat's /webhooks/slack/<handle> route has nothing "+
+			"required: this seat's /webhooks/slack/<handle> route has nothing "+
 				"to verify a delivery with otherwise and answers 503 to every "+
 				"one, while the app's own settings page reports a healthy "+
 				"request URL")
@@ -360,7 +494,7 @@ func (m *RoleMattermost) validate(path string) error {
 	}
 	if !mattermostUsername.MatchString(m.Username) {
 		return fault(at(path, "username"), ErrUnknownValue,
-			"%q — Mattermost usernames are lowercase and contain only letters, "+
+			"%q: Mattermost usernames are lowercase and contain only letters, "+
 				"digits, '.', '-' and '_', starting with a letter or digit", m.Username)
 	}
 	return nil
@@ -370,6 +504,9 @@ func (r *Role) validate(path string) error {
 	var p problems
 	if strings.TrimSpace(r.Name) == "" {
 		p.add(at(path, "name"), ErrMissing, "every seat needs a name")
+	}
+	if g := r.Integrations.GitHub; g != nil {
+		p.wrap(g.validate(at(path, "integrations.github")))
 	}
 	if s := r.Integrations.Slack; s != nil {
 		p.wrap(s.validate(at(path, "integrations.slack")))
@@ -508,11 +645,11 @@ type Unit struct {
 	// Channel is where this unit talks; inherited by children that
 	// set none.
 	//
-	// Vendor-neutral, and it was not always: it was `slack_channel`, which
-	// made the ONE way to give a unit a channel name a vendor this build
-	// refuses — and put "Team Slack channel" into the prompt of every agent
-	// in a company that talks on Mattermost. A unit's channel is a fact
-	// about the unit, not about who hosts it.
+	// Integration-neutral, and it was not always: it was `slack_channel`,
+	// which made the ONE way to give a unit a channel name a third-party
+	// app this build refuses, and put "Team Slack channel" into the prompt
+	// of every agent in a company that talks on Mattermost. A unit's
+	// channel is a fact about the unit, not about who hosts it.
 	Channel string `yaml:"channel,omitempty" json:"channel,omitempty" desc:"Unit channel on the company's chat surface; inherited by child units."`
 
 	// Knowledge is free-text knowledge references for this unit. NOT a
@@ -540,7 +677,7 @@ type Unit struct {
 func (u Unit) IdentityKey() string { return u.Name }
 
 // UnitIntegrations is a unit's integration identity. Chat at the unit level
-// is the vendor-neutral channel field, so it is deliberately not here.
+// is the integration-neutral channel field, so it is deliberately not here.
 type UnitIntegrations struct {
 	Jira       *ProjectRef `yaml:"jira,omitempty" json:"jira,omitempty" desc:"The Jira project this unit owns."`
 	Confluence *SpaceRef   `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"The Confluence space this unit owns."`

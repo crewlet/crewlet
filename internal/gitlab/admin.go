@@ -86,10 +86,9 @@ func (e *APIError) Error() string {
 // Status reports the HTTP status a call was refused with, or 0 when the
 // failure was not an API error.
 //
-// The same accessor the other vendor clients export, for the same reason: a
-// caller deciding what to do about a refusal needs the number, and each
-// vendor package spelling that its own way is another place to get it
-// wrong.
+// The same accessor every integration client exports, for the same reason: a
+// caller deciding what a refusal MEANS needs the number, and the meaning is
+// decided once, in [integration.Reject], rather than per integration.
 func Status(err error) int {
 	var e *APIError
 	if errors.As(err, &e) {
@@ -231,6 +230,25 @@ func (c *Client) DeleteInstanceServiceAccount(ctx context.Context, userID int) e
 type Group struct {
 	ID       int    `json:"id"`
 	FullPath string `json:"full_path"`
+
+	// Plan is the subscription tier this group is on, and gitlab.com is the
+	// only deployment that answers it: a self-managed instance sends no
+	// such field, so an empty value there means "not said" rather than
+	// "free". See [PaidPlan].
+	Plan string `json:"plan"`
+}
+
+// PaidPlan reports whether this group is on a tier that serves the Premium
+// features, as far as the instance is willing to say.
+//
+// TRUE WHEN IT CANNOT TELL, which is the direction that matters: a
+// self-managed instance answers with no plan at all, and reading that as
+// "free" would send every self-managed deployment down a fallback it does not
+// need. The one case this exists to catch is a gitlab.com group that
+// answers, in so many words, that it is on the free tier.
+func (g Group) PaidPlan() bool {
+	plan := strings.ToLower(strings.TrimSpace(g.Plan))
+	return plan != "free" && plan != "default"
 }
 
 // GroupByPath resolves a group by its path.
@@ -343,9 +361,39 @@ func (d *Date) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
+// tokenPath is where an account's tokens live, and it follows who owns the
+// account because the PERMISSION does.
+//
+// THE INSTANCE ROUTES ARE ADMIN ONLY, all three of them: listing another
+// account's tokens, minting one, and revoking one. Nobody is an instance
+// admin on gitlab.com, so a group Owner reaching for any of them is refused,
+// and the three refusals arrive at three different points in a run: the mint
+// 403s outright, the list 401s on the next pass, and the revoke fails inside
+// a rollback where the message says a live credential was left behind.
+//
+// The group routes are the counterpart of the group creation and are what a
+// group Owner may call. So groupID decides: non-zero addresses the group that
+// owns the account, zero the instance, which is the self-managed path where
+// the credential IS an admin token and no group owns the account.
+func tokenPath(groupID, userID int) string {
+	if groupID != 0 {
+		return "/groups/" + strconv.Itoa(groupID) + "/service_accounts/" +
+			strconv.Itoa(userID) + "/personal_access_tokens"
+	}
+	return "/users/" + strconv.Itoa(userID) + "/personal_access_tokens"
+}
+
 // Tokens lists an account's personal access tokens.
-func (c *Client) Tokens(ctx context.Context, userID int) ([]Token, error) {
+//
+// THROUGH THE GROUP where one owns the account: `/personal_access_tokens` is
+// an admin listing, and asking it as a group Owner answers 401. See
+// [tokenPath].
+func (c *Client) Tokens(ctx context.Context, groupID, userID int) ([]Token, error) {
 	var tokens []Token
+	if groupID != 0 {
+		err := c.get(ctx, tokenPath(groupID, userID), nil, &tokens)
+		return tokens, err
+	}
 	err := c.get(ctx, "/personal_access_tokens",
 		url.Values{"user_id": {strconv.Itoa(userID)}}, &tokens)
 	return tokens, err
@@ -353,18 +401,32 @@ func (c *Client) Tokens(ctx context.Context, userID int) ([]Token, error) {
 
 // CreateToken mints a personal access token for a service account.
 //
-// The value is returned ONCE, by GitLab, and never again — which is why the
+// # The route follows who owns the account, because the permission does
+//
+// `POST /users/:id/personal_access_tokens` is INSTANCE ADMIN ONLY, and on
+// gitlab.com nobody is an instance admin: a group Owner creating an account
+// through the group route and then minting through this one gets a 403 on
+// every seat, for ever. The group route
+// (`/groups/:gid/service_accounts/:uid/personal_access_tokens`) is the one a
+// group Owner may call, and it is the counterpart of the group creation.
+//
+// So groupID decides: non-zero mints through the group that owns the account,
+// zero through the instance, which is the self-managed path where the
+// credential IS an admin token and no group owns the account.
+//
+// The value is returned ONCE, by GitLab, and never again, which is why the
 // sink is written through rather than batched: between minting and recording
 // there is a window where the only copy of a live credential is in this
 // process's memory.
-func (c *Client) CreateToken(ctx context.Context, userID int, name string, scopes []string, expiry time.Time) (Token, error) {
+func (c *Client) CreateToken(
+	ctx context.Context, groupID, userID int, name string, scopes []string, expiry time.Time,
+) (Token, error) {
 	body := map[string]any{"name": name, "scopes": scopes}
 	if !expiry.IsZero() {
 		body["expires_at"] = expiry.UTC().Format(time.DateOnly)
 	}
 	var out Token
-	err := c.send(ctx, http.MethodPost,
-		"/users/"+strconv.Itoa(userID)+"/personal_access_tokens", body, &out)
+	err := c.send(ctx, http.MethodPost, tokenPath(groupID, userID), body, &out)
 	if err != nil {
 		return Token{}, err
 	}
@@ -377,9 +439,12 @@ func (c *Client) CreateToken(ctx context.Context, userID int, name string, scope
 }
 
 // RevokeToken removes one token.
-func (c *Client) RevokeToken(ctx context.Context, tokenID int) error {
-	err := c.send(ctx, http.MethodDelete,
-		"/personal_access_tokens/"+strconv.Itoa(tokenID), nil, nil)
+func (c *Client) RevokeToken(ctx context.Context, groupID, userID, tokenID int) error {
+	path := "/personal_access_tokens/" + strconv.Itoa(tokenID)
+	if groupID != 0 {
+		path = tokenPath(groupID, userID) + "/" + strconv.Itoa(tokenID)
+	}
+	err := c.send(ctx, http.MethodDelete, path, nil, nil)
 	if isNotFound(err) {
 		return nil
 	}
@@ -393,14 +458,14 @@ func (c *Client) RevokeToken(ctx context.Context, tokenID int) error {
 // this run caused. On an account that already existed the rollback revokes
 // by id instead — sweeping it would take an administrator's own token with
 // no way to tell that it had.
-func (c *Client) RevokeTokens(ctx context.Context, userID int) error {
-	tokens, err := c.Tokens(ctx, userID)
+func (c *Client) RevokeTokens(ctx context.Context, groupID, userID int) error {
+	tokens, err := c.Tokens(ctx, groupID, userID)
 	if err != nil {
 		return err
 	}
 	var failures []string
 	for _, t := range tokens {
-		if err := c.RevokeToken(ctx, t.ID); err != nil {
+		if err := c.RevokeToken(ctx, groupID, userID, t.ID); err != nil {
 			failures = append(failures, strconv.Itoa(t.ID))
 		}
 	}
@@ -507,6 +572,13 @@ func (c *Client) UpdateGroupHook(ctx context.Context, groupID, hookID int, targe
 		hookBody(target, secret), nil)
 }
 
+// DeleteGroupHook removes a group hook, which is what a disconnect does with
+// the one this engine registered.
+func (c *Client) DeleteGroupHook(ctx context.Context, groupID, hookID int) error {
+	return c.send(ctx, http.MethodDelete,
+		"/groups/"+strconv.Itoa(groupID)+"/hooks/"+strconv.Itoa(hookID), nil, nil)
+}
+
 // ProjectHooks lists a project's webhooks.
 func (c *Client) ProjectHooks(ctx context.Context, project string) ([]Hook, error) {
 	var out []Hook
@@ -524,6 +596,12 @@ func (c *Client) CreateProjectHook(ctx context.Context, project, target, secret 
 	err := c.send(ctx, http.MethodPost, "/projects/"+url.PathEscape(project)+"/hooks",
 		hookBody(target, secret), &out)
 	return out, err
+}
+
+// DeleteProjectHook removes a project hook.
+func (c *Client) DeleteProjectHook(ctx context.Context, project string, hookID int) error {
+	return c.send(ctx, http.MethodDelete,
+		"/projects/"+url.PathEscape(project)+"/hooks/"+strconv.Itoa(hookID), nil, nil)
 }
 
 // UpdateProjectHook re-points an existing project hook.

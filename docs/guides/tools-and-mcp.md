@@ -62,16 +62,16 @@ engine. Everything above about `mcp_servers` is that surface.
 
 Two things MCP does not cover, and what to do instead:
 
-- **A new chat or tracker vendor.** Routing an inbound delivery to a seat needs
+- **A new chat or tracker third-party app.** Routing an inbound delivery to a seat needs
   a parser, and that is an in-tree Go interface — the
   [notification spine](../concepts/event-system.md) is backend-neutral by
-  design, but a vendor contributes a client, a parser and a transport as code.
+  design, but a third-party app contributes a client, a parser and a transport as code.
   That is a pull request, not a config entry. The six this build serves are
   [Mattermost](../integrations/mattermost.md), [Slack](../integrations/slack.md),
   [Jira](../integrations/jira.md), [Confluence](../integrations/confluence.md),
   [GitLab](../integrations/gitlab.md) and [GitHub](../integrations/github.md) —
   every one of them routes end to end (see
-  [Design Decisions](../reference/design-decisions.md#every-vendor-is-served)).
+  [Design Decisions](../reference/design-decisions.md#every-third-party-app-is-served)).
 - **Company-wide periodic work.** An MCP server is called by an agent; it does
   not get a tick of its own. Schedule it as [cron work](../concepts/scheduling.md)
   against a seat, which gives it an agent, a turn, and the engine's own

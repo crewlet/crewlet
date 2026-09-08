@@ -245,18 +245,18 @@ Byte identity is preferred to derived coordinates deliberately. Coordinates —
 event, action, entity id, activity id — are the tempting shape and are strictly
 worse in the direction that matters: **every field left out of a coordinate set
 is a way for two different events to collapse into one**, and a collapsed event
-is a message nobody ever answers. A vendor that fires one webhook per changed
-field with an identical entity snapshot makes this concrete: a bulk edit is N
-deliveries differing only in the activity record. A hash over the whole body
-cannot collapse them — any difference at all yields a different key — and its failure
-mode is the safe one: a provider that re-serialized between attempts fails to
-collapse a redelivery, which is a duplicate rather than a silence. It also
-needs to know nothing about the vendor, which keeps three routes from each
-growing their own half-right field list.
+is a message nobody ever answers. A third-party app that fires one webhook per
+changed field with an identical entity snapshot makes this concrete: a bulk
+edit is N deliveries differing only in the activity record. A hash over the
+whole body cannot collapse them — any difference at all yields a different key
+— and its failure mode is the safe one: a provider that re-serialized between
+attempts fails to collapse a redelivery, which is a duplicate rather than a
+silence. It also needs to know nothing about the third-party app, which keeps
+three routes from each growing their own half-right field list.
 
 The one input that must not produce a key is an **empty body**: it is identical
 for every delivery, so claiming on it would refuse every later delivery from
-that vendor for the whole window.
+that third-party app for the whole window.
 
 **The whole mechanism fails open.** No claim store, no key, or a store that
 cannot be reached all mean "handle it": a duplicate is recoverable noise, while
@@ -300,21 +300,21 @@ easy to assume the other way round:
 
 ---
 
-## Every Vendor Is Served
+## Every Third-Party App Is Served
 
 The engine once refused an `integrations.*` block it had no parser for, on the
-theory that a config naming a vendor the build could not serve should fail
-loudly rather than be silently ignored. That mechanism is **gone**, because the
-premise stopped being true: all six vendors — Mattermost, Slack, GitLab,
-GitHub, Jira and Confluence — route end to end, so there is nothing left to
-refuse. The table it kept held four rows, and each was struck as that vendor
-shipped its parser.
+theory that a config naming a third-party app the build could not serve should
+fail loudly rather than be silently ignored. That mechanism is **gone**,
+because the premise stopped being true: all six third-party apps — Mattermost,
+Slack, GitLab, GitHub, Jira and Confluence — route end to end, so there is
+nothing left to refuse. The table it kept held four rows, and each was struck
+as that third-party app shipped its parser.
 
 What outlives it is the rule it was built to enforce: **a config block the
 engine cannot honour must fail, not be ignored.** A silently dropped
 integration block looks exactly like one that is working until someone notices
-the messages never arrived. If a vendor is ever added to the schema ahead of
-its parser again, that is the shape to rebuild.
+the messages never arrived. If a third-party app is ever added to the schema
+ahead of its parser again, that is the shape to rebuild.
 
 ---
 
@@ -349,7 +349,7 @@ prompts to a tracing backend.
 
 ## Provider Abstraction via Protocols
 
-All external dependencies (LLM, embeddings, storage) are behind interfaces **defined by the package that calls them**, kept to what that caller needs — there is no `interfaces.go`, and a provider package exports a concrete type. No vendor SDK lock-in. This enables:
+All external dependencies (LLM, embeddings, storage) are behind interfaces **defined by the package that calls them**, kept to what that caller needs. There is no `interfaces.go`, and a provider package exports a concrete type. No vendor SDK lock-in. This enables:
 
 - Different roles using different LLM providers/models
 - Configurable embedding providers for the agent-learning subsystem (e.g., OpenAI, or any compatible endpoint)

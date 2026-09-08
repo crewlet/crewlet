@@ -174,6 +174,13 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 	// Read by name from somewhere that is not a room's query() call.
 	nonRoom := map[string]string{
 		"stream": "the header's health poll reads it through api.js, not a room",
+		// A documented PUBLIC read: docs/guides/configure-via-api.md drives
+		// it as GET /query/config_entities?kind=roles, and configapi's own
+		// comment points at it as the fetch a config loop makes. The
+		// dashboard's Config screen is a viewer of the whole document rather
+		// than an entity browser, so no room asks — which is not the same as
+		// nobody reading it.
+		"config_entities": "docs/guides/configure-via-api.md reads it over REST, not a room",
 	}
 
 	asked := roomQueries(t)

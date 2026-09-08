@@ -517,6 +517,102 @@ a.brand:hover {
   line-height: var(--lh-normal);
   resize: vertical;
 }
+/* A url field wears the scheme it would otherwise be refused without. The
+   affix sits INSIDE the control's border rather than beside it, so the box
+   reads as one value: a separate chip in front of the input reads as two
+   fields, and the second of them looks optional. */
+.input-affixed {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding-left: var(--space-3);
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+.input-affixed:focus-within {
+  border-color: var(--accent);
+  background: var(--surface-1);
+}
+.input-affix {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  user-select: none;
+}
+/* The input keeps its own height and type styling and gives up the chrome
+   the wrapper now draws. */
+.input-affixed > .input {
+  border: none;
+  background: none;
+  padding-left: 0;
+}
+.input-affixed > .input:focus {
+  background: none;
+}
+
+/* A `${VAR}` is a NAME, and it wears the face a name wears everywhere else
+   in this product: the Secrets screen renders a stored entry's name as inline
+   code, and a field pointing at one is naming exactly that. */
+/* THE SECRET COMPLETION LIST, over the field that opened it.
+ *
+ * ABSOLUTE, so a list of eight names does not push the rest of a form down
+ * the moment somebody types `$` and pull it back up when they finish the
+ * word: a field that moves under a caret is a field people stop typing in.
+ */
+.input-suggests {
+  position: relative;
+}
+.input-suggest-list {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: var(--space-1);
+  list-style: none;
+  /* BOUNDED AND SCROLLED. A company with forty sealed entries would
+     otherwise draw a list past the bottom of the dialog. */
+  max-height: 12rem;
+  overflow-y: auto;
+  /* OPAQUE, and --surface-1 is the token that is: this floats over a dialog
+     that is already a surface, and a translucent one let the help line and
+     the fields beneath show through the names. */
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-2);
+}
+.input-suggest {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  /* THE SAME FACE A REFERENCE WEARS in the box above and on the Secrets
+     screen: these are the names that go in one, and a list drawn in the
+     page's prose font reads as prose rather than as values. */
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+  font-size: var(--fs-2xs);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.input-suggest.is-active {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.input.is-reference {
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+  font-size: 0.92em;
+  color: var(--text-secondary);
+}
+
 .input:focus,
 .select:focus,
 .textarea:focus {
@@ -977,7 +1073,42 @@ code.inline {
   border-radius: var(--r-xs);
   padding: 1px 4px;
   color: var(--text-secondary);
+  /* A URL IS ONE UNBREAKABLE WORD to a line breaker, and these chips carry
+     public base URLs. Without this the chip is pushed whole onto its own
+     line and the sentence around it is torn into fragments. */
+  overflow-wrap: anywhere;
 }
+/* A REFUSAL'S PROBLEMS, one per line.
+ *
+ * A validation refusal is several of them joined with newlines, and HTML
+ * collapses those: the banner showed one run-on paragraph in which the second
+ * problem's config path landed inside the first one's sentence. A reader
+ * could not tell how many things were wrong, let alone which.
+ */
+.problems {
+  margin: 0;
+  padding-left: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+/* INHERITED, not restated. These sit inside a banner or a field error that
+   has already set the colour for what it is saying, and a code face that
+   brought its own would read as a quotation from somewhere else. */
+.banner code.inline,
+.field-error code.inline {
+  color: inherit;
+  background: var(--surface-inset);
+}
+/* A `${VAR}` wears the face it wears in a field and on the Secrets screen:
+   these are names of sealed entries, and one drawn as ordinary code reads as
+   a path in the document rather than an entry in the store. */
+.banner code.inline.is-reference,
+.field-error code.inline.is-reference {
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+}
+
 kbd {
   font-family: var(--font-mono);
   font-size: var(--fs-3xs);

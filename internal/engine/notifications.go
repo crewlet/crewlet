@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -10,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/datadog"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -24,7 +27,7 @@ import (
 // A party registry is DERIVED from one org and answers for it permanently —
 // so an apply builds a new one, and everything reading parties reads it
 // through a function rather than holding it. A transport is the opposite: it
-// holds live sockets and resolved vendor identities, and rebuilding it on
+// holds live sockets and resolved third-party app identities, and rebuilding it on
 // every apply would drop every connection whenever an unrelated field
 // changed. So the registry is swapped and the transports are reconciled.
 
@@ -36,6 +39,11 @@ type notifications struct {
 
 	service    *notify.Service
 	mattermost *mattermost.Transport
+
+	// chatPrint is what the running self-hosted transport was built from,
+	// hashed. An apply that changes nothing this surface reads must not
+	// drop every seat's websocket: see [Engine.reconcileMattermost].
+	chatPrint string
 
 	// slack is the hosted chat surface. A company may run BOTH — they are
 	// different workspaces with different people in them, and an org
@@ -87,9 +95,9 @@ func (e *Engine) Registry() *notify.Registry {
 // seat on this node, sorted.
 //
 // NOT the integrations that are CONFIGURED, which is the distinction the
-// whole method exists for. A vendor's webhook route verifies and stores its
+// whole method exists for. A third-party app's webhook route verifies and stores its
 // deliveries as soon as its block is present; whether one then reaches an
-// agent depends on a parser existing, and four vendors have the first half
+// agent depends on a parser existing, and four third-party apps have the first half
 // and not the second. On every operator surface those look identical —
 // configured, secret present, deliveries arriving — so an integration that
 // ingests and routes nothing renders exactly like one that works.
@@ -142,7 +150,7 @@ func (e *Engine) Status() *notify.Statuses {
 // against an org that is no longer running, and a seat added by an apply
 // would be permanently unreachable with nothing failing.
 //
-// The vendor identities a transport resolved against a live server are
+// The third-party app identities a transport resolved against a live server are
 // re-registered into the new registry, because they are facts about the
 // SERVER rather than about the config — losing them on an apply would make
 // every agent's own message annotate as a stranger until something
@@ -264,6 +272,19 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 			prompts = append(prompts, githubPrompt())
 		}
 	}
+	if dd := c.Config.Integrations.Datadog; dd != nil && dd.Enabled {
+		// NO error path, and it is the only surface here without one.
+		// Every other parser needs something built first: a tracker reads
+		// an issue's watchers, a code host fans out to a thread's
+		// participants, a chat backend opens a socket. A monitor alert
+		// carries everything its routing needs on the payload itself, so
+		// there is nothing to construct and nothing that can fail to.
+		parsers = append(parsers, datadog.NewParser(datadog.ParserOptions{
+			HandleTag: dd.HandleTagOrDefault(),
+			Fallback:  dd.RouteTo,
+		}))
+		prompts = append(prompts, datadogPrompt())
+	}
 	if j := c.Config.Integrations.Jira; j != nil {
 		parser, err := e.startJira(ctx, c, j)
 		if err != nil {
@@ -326,7 +347,7 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 	return nil
 }
 
-// RouteInbound adds a vendor to this node's inbound edge after boot.
+// RouteInbound adds a third-party app to this node's inbound edge after boot.
 //
 // The seam a CUSTOM TRANSPORT joins through — an integration that is not one
 // of the shipped ones, or one that came up late. Refused rather than queued
@@ -453,6 +474,11 @@ func (e *Engine) startMattermost(ctx context.Context, c *Company, cfg *config.Ma
 	}
 	e.notify.mu.Lock()
 	e.notify.mattermost = transport
+	// RECORDED WHERE IT IS BUILT, so the boot path and the apply path agree
+	// about what the running transport was made from. Set only by the
+	// reconciler, the first apply after a boot would find no fingerprint,
+	// read that as a change, and drop every seat's websocket for nothing.
+	e.notify.chatPrint = chatFingerprint(url, team, string(cfg.Status()), seats)
 	e.notify.mu.Unlock()
 
 	if err := transport.Start(ctx); err != nil {
@@ -544,6 +570,102 @@ func (e *Engine) resumeInbound(ctx context.Context) {
 	}
 }
 
+// reconcileMattermost brings the self-hosted chat surface in line with the
+// applied revision.
+//
+// GUARDED, and this is the one reconciler here that has to be. Every other
+// surface rebuilds a parser, which costs nothing; this one holds a WEBSOCKET
+// PER SEAT, so rebuilding on each apply would drop and reconnect every
+// agent's connection whenever an unrelated field changed. A reconnect is not
+// free either: a seat is deaf across it, and the backfill that closes the gap
+// re-reads each of its channels.
+//
+// So it rebuilds only when something this surface reads has changed, and the
+// fingerprint is over exactly what the transport is BUILT from. A field it
+// does not read cannot make it reconnect, and one it does read cannot be
+// changed without it noticing.
+func (e *Engine) reconcileMattermost(ctx context.Context, c *Company) {
+	cfg := c.Config.Integrations.Mattermost
+	e.notify.mu.Lock()
+	svc, previous, was := e.notify.service, e.notify.mattermost, e.notify.chatPrint
+	e.notify.mu.Unlock()
+	if svc == nil {
+		return
+	}
+	if cfg == nil || !cfg.Enabled {
+		e.notify.mu.Lock()
+		e.notify.mattermost, e.notify.chatPrint = nil, ""
+		e.notify.mu.Unlock()
+		if previous != nil {
+			previous.Stop(ctx)
+		}
+		if svc.Unregister(mattermost.Backend) {
+			log.InfoContext(ctx, "mattermost_retired",
+				"detail", "the revision no longer enables mattermost; no seat "+
+					"holds a connection and nothing routes to one")
+		}
+		return
+	}
+	// THE SAME INPUTS startMattermost READS, resolved the same way, which
+	// is what makes an unchanged answer mean "nothing to do" rather than
+	// "nothing obvious to do".
+	env := e.resolver()
+	print := chatFingerprint(env.Value(cfg.URL), env.Value(cfg.Team),
+		string(cfg.Status()), mattermost.SeatsFrom(c.Org, env.LookupOK))
+	if previous != nil && print == was {
+		return
+	}
+	transport, err := e.startMattermost(ctx, c, cfg)
+	if err != nil || transport == nil {
+		// The previous connections keep running, for the reason the
+		// hosted surface's do: a stale credential still routes, and a
+		// dropped one routes nothing.
+		e.notify.mu.Lock()
+		e.notify.mattermost = previous
+		e.notify.mu.Unlock()
+		if err != nil {
+			log.ErrorContext(ctx, "mattermost_reconcile_failed", "error", errorText(err),
+				"detail", "the previous chat wiring is still current")
+		}
+		return
+	}
+	if err := svc.Replace(transport.Parser(), transport.Prompt()); err != nil {
+		log.ErrorContext(ctx, "mattermost_reconcile_failed", "error", err.Error(),
+			"detail", "the previous chat wiring is still current")
+		return
+	}
+	if previous != nil && previous != transport {
+		previous.Stop(ctx)
+	}
+	log.InfoContext(ctx, "mattermost_reconciled", "company", c.Config.Name)
+}
+
+// chatFingerprint is what a chat transport was built from, as one comparable
+// value.
+//
+// HASHED, because a seat's configuration carries its bot token: the inputs
+// have to be compared, and a comparison does not need to keep them. What is
+// stored on the engine is 32 bytes that reveal nothing and that no log line
+// ever carries.
+//
+// LENGTH-PREFIXED, so two different input sets cannot render as one string.
+// Joined with a separator, a seat named "a" holding token "b:c" and one named
+// "a:b" holding "c" are the same bytes, and the second would be read as no
+// change at all.
+func chatFingerprint(url, team, status string, seats []mattermost.SeatConfig) string {
+	h := sha256.New()
+	write := func(parts ...string) {
+		for _, part := range parts {
+			fmt.Fprintf(h, "%d:%s", len(part), part)
+		}
+	}
+	write(url, team, status)
+	for _, seat := range seats {
+		write(seat.Handle, seat.Token, seat.Username, seat.Channel)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // stopNotifications takes the inbound edge down.
 func (e *Engine) stopNotifications(ctx context.Context) {
 	e.notify.mu.Lock()
@@ -563,15 +685,65 @@ func (e *Engine) stopNotifications(ctx context.Context) {
 	}
 }
 
-// errorText renders a vendor reconcile failure for a log line, including the
+// errorText renders a third-party app reconcile failure for a log line, including the
 // "it built but produced nothing" case that carries no error of its own.
 //
-// SHARED by every vendor reconciler, because each of them has the same two
-// ways to fail and a per-vendor copy would drift the first time one of them
+// SHARED by every integration reconciler, because each of them has the same two
+// ways to fail and a per-integration copy would drift the first time one of them
 // learned a third.
 func errorText(err error) string {
 	if err == nil {
 		return "the wiring produced no parser"
 	}
 	return err.Error()
+}
+
+// reconcileDatadog brings the alert parser in line with the applied revision.
+//
+// IT HAD NONE, and it is the surface that needed one most cheaply. The parser
+// set is assembled once in [Engine.startNotifications], so a company that
+// connected Datadog after boot had its route verify and store every alert
+// while nothing turned one into work for a seat, until the process was
+// restarted. Disconnecting and reconnecting is the same sequence.
+//
+// It also carries the two ROUTING settings, which no other parser here does:
+// the monitor tag key and the fallback seat. Both are ordinary config a
+// person changes, and without this a company that moved its fallback from one
+// seat to another went on waking the old one until a restart.
+//
+// Nothing here can fail, which is why this is the shortest reconciler in the
+// package: a monitor alert carries everything its routing needs on the
+// payload, so there is nothing to construct and nothing to keep running when
+// a build fails.
+func (e *Engine) reconcileDatadog(ctx context.Context, c *Company) {
+	cfg := c.Config.Integrations.Datadog
+	e.notify.mu.Lock()
+	svc := e.notify.service
+	e.notify.mu.Unlock()
+	if svc == nil {
+		return
+	}
+	// RETIRED when the revision no longer enables it, which is the gesture
+	// an operator makes after a leaked webhook token: the route then
+	// refuses every delivery, and a parser left behind would go on waking
+	// seats from whatever had already been accepted.
+	if cfg == nil || !cfg.Enabled {
+		if svc.Unregister(datadog.Backend) {
+			log.InfoContext(ctx, "datadog_retired",
+				"detail", "the revision no longer enables datadog; its alerts "+
+					"are refused at the webhook route and wake no seat")
+		}
+		return
+	}
+	parser := datadog.NewParser(datadog.ParserOptions{
+		HandleTag: cfg.HandleTagOrDefault(),
+		Fallback:  cfg.RouteTo,
+	})
+	if err := svc.Replace(parser, datadogPrompt()); err != nil {
+		log.ErrorContext(ctx, "datadog_reconcile_failed", "error", err.Error(),
+			"detail", "the previous alert routing is still current")
+		return
+	}
+	log.InfoContext(ctx, "datadog_reconciled", "company", c.Config.Name,
+		"handle_tag", cfg.HandleTagOrDefault(), "route_to", cfg.RouteTo)
 }

@@ -13,6 +13,25 @@ Both end in the same place: per-agent credentials referenced from the company YA
 
 ---
 
+## Setting it up from the dashboard
+
+The Integrations screen shows one section per agent, because on Slack the
+credentials belong to the seat: each agent has its own app, so each has its own
+bot token and signing secret. Paste the two values Slack shows on the app's own
+page and the engine seals them, gives the seat a `${VAR}` pointing at each, and
+activates. Each seat's own delivery address is shown beside its fields.
+
+**It does not create the apps.** Creating one goes through Slack's app-manifest
+API, which authenticates with an app configuration token Slack issues only by
+hand from its own pages, and which your organisation may not permit at all.
+Where those tokens are available, [`crewlet slack provision`](#automated-setup-crewlet-slack-provision)
+below remains the automated path and does the whole thing. Where they are not,
+connect Slack from the dashboard's Integrations screen: every agent gets its
+own block there carrying the manifest its app is created from, so building each
+app is a copy, a paste into Slack's **From an app manifest** flow, an install,
+and the two values pasted back. See the [manual setup](#manual-setup) for the
+same steps done entirely by hand.
+
 ## Configure in YAML
 
 `integrations.slack: {}` (org-level) is a marker that enables the outbound Slack **transport**; its one setting is [`typing_status`](#working-status-is-thinking). The Slack **MCP tool** server is a separate `mcp_servers` entry (`shared: false`). Per agent, the Slack identity has two consumers: the **transport** reads `role.integrations.slack` (`bot_token`, `signing_secret`, optional `channel`), and the **Slack MCP subprocess** reads `role.mcp_env.slack.SLACK_MCP_XOXB_TOKEN`. Name the same `${VAR}` in both — one credential, two readers, no secret duplicated:
@@ -20,7 +39,7 @@ Both end in the same place: per-agent credentials referenced from the company YA
 ```yaml
 integrations:
   slack:                                 # enable the Slack transport
-    typing_status: addressed             # addressed (default) | always | off
+    typing_status: always                # always (default) | addressed
 
 mcp_servers:
   - name: slack
@@ -151,7 +170,7 @@ The OAuth exchange's answer names the app it was for, and the run **refuses a co
 
 It is a **secrets file** — written `0600` through a temp file and a rename, because a truncate-then-write interrupted half way would destroy values that cannot be read back. It is gitignored by name in the repo's own `.gitignore`; if you keep your company document elsewhere, gitignore it there too. Committing it publishes credentials nothing can rotate for you.
 
-Why a file at all, when no other vendor needs one: two of those four values have no field in the company config (nothing in the running engine reads a client id), and Slack has no method that reads them back. Deleting the ledger makes the next run create duplicate apps, since Slack has no API to list the ones you already have.
+Why a file at all, when no other third-party app needs one: two of those four values have no field in the company config (nothing in the running engine reads a client id), and Slack has no method that reads them back. Deleting the ledger makes the next run create duplicate apps, since Slack has no API to list the ones you already have.
 
 ### Bot scopes and events
 
@@ -196,14 +215,18 @@ Bot events: `app_mention`, `message.channels`, `message.groups`, `message.im`, `
 
 ## Manual Setup
 
-The click-through equivalent of the provisioner — useful when you can't (or don't want to) use configuration tokens.
+The click-through equivalent of the provisioner, for when you cannot (or do not want to) use configuration tokens.
+
+**Do this from the Integrations screen if you can.** Connect Slack there and every agent gets its own block carrying **the manifest its app is created from**: the same definition `crewlet slack provision` pushes, with that agent's scopes, events and request URL already in it. Copy it, paste it into Slack, install, and paste the two values back. That is Steps 1 to 3 below in one paste, and it removes the failure this section's hand-built path invites, which is a single missing scope (see the [cache note](#bot-scopes-and-events)) turning into a bot that installs, reports success and sees an empty workspace.
+
+The steps below are the same thing done by hand.
 
 ### Step 1: Create a Slack App Per Agent
 
 For each agent that will use Slack, create a dedicated Slack app:
 
 1. Go to [api.slack.com/apps](https://api.slack.com/apps) and click **Create New App**
-2. Choose **From scratch**
+2. Choose **From an app manifest**, and paste that agent's manifest from the Integrations screen. Steps 2 and 3 are then already done, and you can skip to installing it. Choosing **From scratch** instead leaves the scopes, the events and the request URL for you to set by hand, which is the rest of this section.
 3. Name it after the agent (e.g., "Crewlet Engineer", "Crewlet Designer")
 4. Select your workspace and click **Create App**
 
@@ -213,7 +236,7 @@ For each app:
 
 1. Go to **OAuth & Permissions** in the sidebar
 2. Under **Bot Token Scopes**, add **every** scope from the [table above](#bot-scopes-and-events)
-3. Click **Install to Workspace** — or **Reinstall to Workspace** if you added scopes to an existing app (new scopes only take effect on a freshly minted token, so adding a scope without reinstalling changes nothing)
+3. Click **Install to Workspace**, or **Reinstall to Workspace** if you added scopes to an existing app (new scopes only take effect on a freshly minted token, so adding a scope without reinstalling changes nothing)
 4. Copy the **Bot User OAuth Token** (`xoxb-...`)
 5. Go to **Basic Information** > **App Credentials** and copy the **Signing Secret**
 
@@ -230,7 +253,7 @@ For each app:
 3. Subscribe to bot events: `app_mention`, `message.channels`, `message.groups`, `message.im`, `message.mpim`
 4. Click **Save Changes**
 
-Then export each `SLACK_BOT_TOKEN_*` / `SLACK_SIGNING_SECRET_*` pair (or put them in `.env`) under the names your YAML references.
+Then paste each pair into that agent's block on the Integrations screen, or export them as `SLACK_BOT_TOKEN_*` / `SLACK_SIGNING_SECRET_*` (or put them in `.env`) under the names your YAML references.
 
 > **The `signing_secret` is what makes the endpoint usable.** `/webhooks/slack/{handle}` is
 > exempt from the API's bearer token because it verifies Slack's own signature instead — so
@@ -386,14 +409,19 @@ the coffee machine…") is safe; plausible-and-specific is not.
 ```yaml
 integrations:
   slack:
-    typing_status: addressed    # default
+    typing_status: always    # default
 ```
 
 | Mode | Shows the status when… |
 |---|---|
-| `addressed` *(default)* | a human is plausibly waiting on **this** agent: a DM or group DM, a direct `@mention` (including `app_mention`), or a thread the agent already follows |
-| `always` | every Slack-triggered turn, including passive top-level channel messages and `@here` / `@channel` broadcasts |
-| `off` | never |
+| `always` *(default)* | every Slack-triggered turn, including passive top-level channel messages and `@here` / `@channel` broadcasts |
+| `addressed` | a human is plausibly waiting on **this** agent: a DM or group DM, a direct `@mention` (including `app_mention`), or a thread the agent already follows |
+
+> **There is no `off`.** What it bought was a company whose agents think in
+> silence for minutes at a time, which is the state this feature exists to
+> remove. A workspace where several agents light up for one message wants
+> `addressed`, which is the same judgement made per message rather than once
+> for the deployment.
 
 `addressed` deliberately excludes passive channel traffic and collective
 addresses. Every bot in a channel is woken by a top-level message, and the

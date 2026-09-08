@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
@@ -115,8 +116,16 @@ func (i *instance) serveHooks(w http.ResponseWriter, req *http.Request, path str
 			if n > 0 {
 				body += ","
 			}
+			// THE HOOK'S OWN NAME, because the name is what says whose a
+			// hook is. It was hardcoded to crewlet, so this fake could not
+			// express somebody else's hook at all and agreed with any
+			// matching rule it was asked about.
+			name, _ := hook["name"].(string)
+			if name == "" {
+				name = "crewlet"
+			}
 			body += `{"self":"` + i.URL + `/rest/webhooks/1.0/webhook/` +
-				hook["id"].(string) + `","name":"crewlet","url":"` +
+				hook["id"].(string) + `","name":"` + name + `","url":"` +
 				hook["url"].(string) + `","enabled":true}`
 		}
 		_, _ = w.Write([]byte(body + "]"))
@@ -269,8 +278,17 @@ func TestTheReconcileChecksEveryDeclaredProject(t *testing.T) {
 	if len(byKey) != 2 {
 		t.Fatalf("checked %v", res.Projects)
 	}
-	if got := byKey["OPZ"]; got.Exists || got.Detail == "" {
-		t.Errorf("a project the instance does not have was reported fine: %+v", got)
+	// A PROJECT THE INSTANCE DOES NOT HAVE, and Detail is EMPTY for it.
+	//
+	// The two together are the claim: the instance answered, and the
+	// answer was 404. Detail is reserved for a read that FAILED, so a
+	// company document naming a project that does not exist and an
+	// instance that timed out are told apart. They were not, and they want
+	// opposite treatment downstream: one is a typo an operator must fix
+	// and the other is worth another look in thirty seconds.
+	if got := byKey["OPZ"]; got.Exists || got.Detail != "" {
+		t.Errorf("a project the instance does not have was not reported as "+
+			"absent: %+v", got)
 	}
 	// The lead's own project agrees: the org chart's lead IS the account
 	// Jira calls the project lead.
@@ -411,6 +429,77 @@ func TestRecreatingTheWebhookMintsAFreshSecret(t *testing.T) {
 	}
 }
 
+// A CHANGED ADDRESS MOVES THE HOOK, it does not add one.
+//
+// Matching on the URL made a hook this engine had registered at a DIFFERENT
+// address invisible to it, so changing the public base URL created a second
+// hook and left the first. A deployment behind a tunnel accumulated one per
+// restart, all live, all delivering to addresses that no longer answer.
+func TestAMovedBaseURLUpdatesTheHookRatherThanAddingOne(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	inst.hooks = []map[string]any{
+		{"id": "1", "name": "crewlet", "url": "https://the-old-tunnel.example.com/webhooks/jira"},
+	}
+	if _, err := run(t, inst, func(opts *jira.Options) {
+		opts.WebhookBase = "https://the-new-tunnel.example.com"
+		opts.Value = func(v string) string {
+			if v == "${JIRA_WEBHOOK_SECRET}" {
+				return "s"
+			}
+			return v
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(inst.created) != 0 {
+		t.Errorf("a second hook was registered: %v", inst.created)
+	}
+	if len(inst.updated) != 1 {
+		t.Fatalf("the hook was not moved: %v", inst.updated)
+	}
+	if got := inst.updated[0]["url"]; got != "https://the-new-tunnel.example.com/webhooks/jira" {
+		t.Errorf("url = %v, want the address the company is reachable on now", got)
+	}
+}
+
+// AND DUPLICATES THIS ENGINE ALREADY LEFT ARE CLEANED UP.
+//
+// Converging on the first match still left every hook a previous address had
+// created: this engine's own name on three live registrations, two of them
+// delivering to somewhere that no longer answers. Converged has to mean one.
+func TestDuplicateHooksOfOurOwnAreRemoved(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	inst.hooks = []map[string]any{
+		{"id": "1", "name": "crewlet", "url": "https://one.example.com/webhooks/jira"},
+		{"id": "2", "name": "crewlet", "url": "https://two.example.com/webhooks/jira"},
+		{"id": "3", "name": "someone-else", "url": "https://theirs.example.com/hook"},
+	}
+	if _, err := run(t, inst, func(opts *jira.Options) {
+		opts.WebhookBase = "https://now.example.com"
+		opts.Value = func(v string) string {
+			if v == "${JIRA_WEBHOOK_SECRET}" {
+				return "s"
+			}
+			return v
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(inst.deleted) != 1 || inst.deleted[0] != "2" {
+		t.Errorf("deleted = %v, want the duplicate and nothing else", inst.deleted)
+	}
+	if len(inst.updated) != 1 {
+		t.Fatalf("the surviving hook was not moved: %v", inst.updated)
+	}
+	if got := inst.updated[0]["url"]; got != "https://now.example.com/webhooks/jira" {
+		t.Errorf("url = %v", got)
+	}
+}
+
 // A FOREIGN HOOK IS NOT THIS RUN'S TO RECONFIGURE. An instance may carry
 // hooks somebody else registered, and taking over the first one found would
 // break an unrelated integration.
@@ -419,7 +508,8 @@ func TestAForeignHookIsLeftAlone(t *testing.T) {
 	inst := newInstance(t)
 	inst.accounts["Bearer org-token"] = "acct-org"
 	inst.hooks = []map[string]any{
-		{"id": "1", "url": "https://someone-else.example.com/hook"},
+		{"id": "1", "name": "someone-elses-integration",
+			"url": "https://someone-else.example.com/hook"},
 	}
 	if _, err := run(t, inst, func(opts *jira.Options) {
 		opts.WebhookBase = "https://engine.example.com"
@@ -445,7 +535,21 @@ func TestAForeignHookIsLeftAlone(t *testing.T) {
 // a better credential fixes: on Cloud a dynamic webhook belongs to an app.
 // A run that reported a 403 there would send an operator to rotate a token
 // that is fine.
-func TestCloudSkipsWebhookRegistrationAndSaysWhy(t *testing.T) {
+// CLOUD REGISTERS ITS OWN WEBHOOK, and this test is the inversion of the one
+// it replaces.
+//
+// The reconcile used to skip registration on Cloud and tell the operator to
+// install a Forge app, on the premise that "on Cloud a dynamic webhook
+// belongs to an app, so this endpoint refuses an API token". That is true of
+// /rest/api/3/webhook and false of /rest/webhooks/1.0/webhook, which is the
+// endpoint this client actually calls. Verified against a live Cloud site:
+// GET answers 200, POST answers 201 with isSigned true, and the app-only
+// endpoint answers 403 "Only Connect and OAuth 2.0 apps can use this
+// operation".
+//
+// The cost of the wrong premise was total: a Cloud company got no webhook at
+// all from the command whose job is to register one.
+func TestCloudRegistersItsOwnWebhook(t *testing.T) {
 	t.Parallel()
 	inst := newInstance(t)
 	inst.accounts["Bearer org-token"] = "acct-org"
@@ -457,25 +561,27 @@ func TestCloudSkipsWebhookRegistrationAndSaysWhy(t *testing.T) {
 		t.Fatal(err)
 	}
 	res, err := jira.Reconcile(context.Background(), jira.Options{
-		Client: client,
-		Config: &config.Jira{CloudID: "acme", Token: "t"},
-		Org:    company(),
-		Value:  func(v string) string { return v },
-		Sink:   newSink(),
-		// A base IS given: the point is that Cloud skips anyway.
+		Client:      client,
+		Config:      &config.Jira{CloudID: "acme", Token: "t", WebhookSecret: "${JIRA_WEBHOOK_SECRET}"},
+		Org:         company(),
+		Value:       func(v string) string { return v },
+		Sink:        newSink(),
 		WebhookBase: "https://engine.example.com",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Hooked != "" {
-		t.Errorf("a Cloud run claimed to register a hook: %q", res.Hooked)
+	if res.Hooked != "https://engine.example.com/webhooks/jira" {
+		t.Errorf("a Cloud run registered %q", res.Hooked)
 	}
-	if len(inst.created) != 0 {
-		t.Errorf("a Cloud run posted to the hook endpoint: %v", inst.created)
+	if len(inst.created) != 1 {
+		t.Fatalf("a Cloud run posted %d hooks, want 1: %v", len(inst.created), inst.created)
 	}
-	if !strings.Contains(strings.Join(res.Notes, " "), "/webhooks/forge") {
-		t.Errorf("the operator is not told where Cloud events arrive: %v", res.Notes)
+	// AND IT IS SIGNED. The secret is the route's only credential, so a
+	// hook registered without one is an endpoint that answers 503 to every
+	// delivery it would otherwise have routed.
+	if got, _ := inst.created[0]["secret"].(string); got == "" {
+		t.Errorf("the Cloud hook was registered with no secret: %v", inst.created[0])
 	}
 }
 
@@ -633,5 +739,117 @@ func TestTheSeatWalkIsBounded(t *testing.T) {
 	}
 	if byHandle["qa"].Account != "" {
 		t.Errorf("the seat with no credential resolved to %q", byHandle["qa"].Account)
+	}
+}
+
+// THE FINDINGS ARE WHAT THE RECONCILE LOOP READS, so what the operator sees
+// on the dashboard comes from here rather than from the CLI's own printout.
+//
+// A seat whose credential the instance refuses is the one finding this
+// command exists to surface, and it must survive the trip into the shared
+// vocabulary rather than being visible only to somebody running the
+// subcommand and reading its output.
+func TestFindingsReportASeatWithNoAccount(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	inst.accounts["Bearer lead-token"] = acctLead
+
+	res, err := run(t, inst, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings := res.Findings()
+
+	var swe *integration.Finding
+	for i, f := range findings {
+		if f.Subject == "swe" {
+			swe = &findings[i]
+		}
+	}
+	if swe == nil {
+		t.Fatalf("no finding names the seat whose credential was refused: %+v", findings)
+	}
+	if swe.Kind != integration.FindingIdentityFailed {
+		t.Errorf("kind is %q, want %q", swe.Kind, integration.FindingIdentityFailed)
+	}
+	if !strings.Contains(swe.Detail, "swe") {
+		t.Errorf("detail %q does not name the seat", swe.Detail)
+	}
+
+	// And the report an operator reads names it too, rather than only the
+	// findings list behind it.
+	report := integration.Classify(findings)
+	if report.Phase == integration.PhaseReady {
+		t.Fatalf("a company with an unreachable seat classified ready: %+v", report)
+	}
+}
+
+// A PROJECT THE INSTANCE DOES NOT HAVE is almost always a typo in the company
+// document, and a silent one: the webhook arrives, the key matches no lead,
+// and the issue reaches nobody.
+func TestFindingsReportAProjectTheInstanceDoesNotHave(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	inst.accounts["Bearer lead-token"] = acctLead
+	inst.accounts["Bearer swe-token"] = "acct-swe"
+	inst.accounts["Bearer qa-token"] = "acct-qa"
+	// Deliberately no projects registered, so every declared key is absent.
+
+	res, err := run(t, inst, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, f := range res.Findings() {
+		if f.Kind == integration.FindingUnknownTier {
+			found = true
+			if f.Subject == "" {
+				t.Errorf("a missing project finding names no project: %+v", f)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no finding reports a declared project the instance lacks: %+v",
+			res.Findings())
+	}
+}
+
+// NOTHING IS SAID ABOUT INGRESS, and the silence is the fix rather than a
+// gap. Result.Hooked is the webhook this RUN registered, and it is empty both
+// for a read-only pass and for a perfectly healthy Cloud company whose events
+// arrive through the Forge relay. Reading either as "no webhook is
+// registered" would park a working integration on a block nobody can clear.
+func TestFindingsSayNothingAboutIngress(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	inst.accounts["Bearer lead-token"] = acctLead
+	inst.accounts["Bearer swe-token"] = "acct-swe"
+	inst.accounts["Bearer qa-token"] = "acct-qa"
+	inst.projects["ENG"] = "Engineering"
+	inst.projects["QA"] = "Quality"
+
+	// No public base URL, which is the posture the reconcile loop runs in.
+	res, err := run(t, inst, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Hooked != "" {
+		t.Fatalf("the premise is wrong: this run registered %q", res.Hooked)
+	}
+	for _, f := range res.Findings() {
+		if f.Kind == integration.FindingIngressBlocked {
+			t.Fatalf("a read-only pass reported ingress blocked: %+v", f)
+		}
+	}
+	// What the company IS reported as here is driven by its seats (the
+	// fixture has one with no credential at all), which is the point: the
+	// phase reflects something an operator can act on rather than a
+	// webhook this pass was never asked to register.
+	if report := integration.Classify(res.Findings()); report.Actor == integration.ActorNobody &&
+		report.Phase != integration.PhaseReady {
+		t.Fatalf("a report with no actor is not ready: %+v", report)
 	}
 }

@@ -49,6 +49,54 @@ func TestEveryDeclaredTypingStatusIsAccepted(t *testing.T) {
 	}
 }
 
+// A CHAT SURFACE SHOWS THAT IT IS WORKING UNLESS TOLD OTHERWISE, on both
+// backends and by the same word.
+//
+// A turn takes minutes, and a reader who sees nothing cannot tell an agent
+// working from an agent that is dead. The two defaults used to disagree
+// (Slack addressed, Mattermost off), which made "what does an unset block
+// do" a question with two answers.
+func TestBothChatSurfacesShowTheIndicatorByDefault(t *testing.T) {
+	t.Parallel()
+	if got := (&config.Slack{}).Status(); got != config.StatusAlways {
+		t.Errorf("slack default = %q, want always", got)
+	}
+	if got := (&config.Mattermost{}).Status(); got != config.StatusAlways {
+		t.Errorf("mattermost default = %q, want always", got)
+	}
+}
+
+// AND THERE IS NO WAY TO TURN IT OFF FOR A WHOLE DEPLOYMENT.
+//
+// `off` was a company whose agents think in silence for minutes at a time,
+// which is the state the indicator exists to remove. `addressed` is the same
+// judgement made per message rather than once, and it is what an operator who
+// finds the indicator noisy actually wants.
+func TestTheIndicatorCannotBeSwitchedOff(t *testing.T) {
+	t.Parallel()
+	for _, block := range []string{"slack", "mattermost"} {
+		t.Run(block, func(t *testing.T) {
+			t.Parallel()
+			body := "    typing_status: off"
+			if block == "mattermost" {
+				body = "    url: https://chat.example.com\n    team: acme\n" + body
+			}
+			err := validateIntegrationDoc(t, block, body)
+			if err == nil {
+				t.Fatal("`off` was accepted")
+			}
+			// AND THE REFUSAL NAMES WHAT IS LEFT, because an operator
+			// carrying a config that used to work needs the replacement
+			// rather than the news that their value is gone.
+			for _, want := range []string{"always", "addressed"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("refusal does not offer %q: %v", want, err)
+				}
+			}
+		})
+	}
+}
+
 func validateIntegrationDoc(t *testing.T, block, body string) error {
 	t.Helper()
 	doc := `

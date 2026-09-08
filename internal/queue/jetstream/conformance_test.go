@@ -51,6 +51,11 @@ func openForTest(t *testing.T, cfg Config) *Queue {
 	if cfg.NakDelay == 0 {
 		cfg.NakDelay = 25 * time.Millisecond
 	}
+	// AND ITS CEILING, or the doubling puts a suite's later redeliveries
+	// seconds apart and the redelivery cases wait for real minutes.
+	if cfg.NakCeiling == 0 {
+		cfg.NakCeiling = 50 * time.Millisecond
+	}
 	srv, err := StartServer(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("StartServer: %v", err)

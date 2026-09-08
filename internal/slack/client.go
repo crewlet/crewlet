@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -93,6 +94,46 @@ func call(ctx context.Context, httpClient *http.Client, method, token string, bo
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("slack: %s: %w", method, err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return fmt.Errorf("slack: %s: %w", method, err)
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return &RateLimited{Method: method, RetryAfter: retryAfter(resp)}
+	}
+	return decode(method, raw, out)
+}
+
+// callQuery is [call] for a method that will not read a JSON body.
+//
+// SLACK ACCEPTS JSON FOR SOME METHODS AND SILENTLY IGNORES IT FOR THE REST,
+// which is the worst of the three possible behaviours: `bots.info` posted as
+// JSON answers `{"ok":true}` with no bot object at all, so the parameter is
+// dropped, the envelope says success, and the caller decodes an empty answer
+// from a call that reported working. Measured against the live API.
+//
+// The parameters ride in the query string, which every read method accepts,
+// and the body stays empty.
+func callQuery(ctx context.Context, httpClient *http.Client,
+	method, token string, params url.Values, out any,
+) error {
+	address := APIBase + "/" + method
+	if encoded := params.Encode(); encoded != "" {
+		address += "?" + encoded
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		return fmt.Errorf("slack: %s: %w", method, err)
+	}
+	req.Header.Set("Accept", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("slack: %s: %w", method, err)
@@ -204,7 +245,57 @@ func (c *Client) AuthTest(ctx context.Context) (Identity, error) {
 	if err := call(ctx, c.http, "auth.test", c.token, map[string]any{}, &out); err != nil {
 		return Identity{}, err
 	}
-	return Identity{UserID: out.UserID, TeamID: out.TeamID, BotID: out.BotID}, nil
+	id := Identity{UserID: out.UserID, TeamID: out.TeamID, BotID: out.BotID}
+	// THE APP, WHICH auth.test DOES NOT SAY.
+	//
+	// It answers with the bot's user id, its team and its bot id, and no
+	// app id at all: [Identity.AppID] was decoded from a response field
+	// Slack does not send, so it was empty for every seat this engine has
+	// ever wired, and nothing noticed because the one thing reading it
+	// falls back to the delivery's own envelope. bots.info is where the id
+	// lives, keyed on the bot id this call does return.
+	//
+	// BEST EFFORT, and never fatal: knowing the app is what lets a screen
+	// say WHICH of an operator's apps this agent is and link to it. A seat
+	// whose token works is a seat that works, and failing it over the
+	// second request would trade a running agent for a label.
+	if id.BotID != "" {
+		app, err := c.AppOf(ctx, id.BotID)
+		if err != nil {
+			log.WarnContext(ctx, "slack_app_unknown", "bot", id.BotID,
+				"error", err.Error(),
+				"detail", "this seat works; nothing can say which app it is")
+		}
+		id.AppID = app
+	}
+	return id, nil
+}
+
+// AppOf is the app a bot user belongs to.
+//
+// It needs only `users:read`, which every agent's manifest grants, and the
+// bot id [Client.AuthTest] returns.
+func (c *Client) AppOf(ctx context.Context, botID string) (string, error) {
+	if strings.TrimSpace(botID) == "" {
+		return "", fmt.Errorf("slack: bots.info: no bot id")
+	}
+	var out struct {
+		Bot struct {
+			AppID string `json:"app_id"`
+		} `json:"bot"`
+	}
+	if err := callQuery(ctx, c.http, "bots.info", c.token,
+		url.Values{"bot": {botID}}, &out); err != nil {
+		return "", err
+	}
+	if out.Bot.AppID == "" {
+		// AN EMPTY ANSWER IS AN ERROR HERE, because Slack's is not: a
+		// method that will not read the parameter answers ok with
+		// nothing, and reported as success that is a seat silently
+		// carrying no app for ever.
+		return "", fmt.Errorf("slack: bots.info: %s named no app", botID)
+	}
+	return out.Bot.AppID, nil
 }
 
 // PostMessage sends a message, optionally into a thread.

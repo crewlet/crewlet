@@ -164,7 +164,7 @@ Everything else is YAML config, in-memory state, or an external tool.
 ```
 cmd/crewlet/              # The one binary: run, validate, schema, migrate,
                           #   budgets, secrets, config, llm, and the six
-                          #   vendor CLIs — gitlab/github/jira/slack
+                          #   integration CLIs — gitlab/github/jira/slack
                           #   `provision`, confluence `import|resync`,
                           #   mattermost `provision|doctor`
 internal/
@@ -199,7 +199,7 @@ internal/
 ├── mcp/                  # MCP client and child-process supervision
 ├── tools/                # The registry, and the per-phase tool surfaces
 ├── notify/               # The backend-neutral notification spine
-├── mattermost/ slack/    # The six vendors: client, parser, transport,
+├── mattermost/ slack/    # The six third-party apps: client, parser, transport,
 │   jira/ confluence/     #   prompt, provisioning reconcile — each
 │   gitlab/ github/       #   contributing only what is genuinely its own,
 │                         #   which is why Jira has no transport

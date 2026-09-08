@@ -372,3 +372,29 @@ func TestMigrationWithoutAKeyringIsASilentNoOp(t *testing.T) {
 		t.Fatalf("a node with no keyring failed its migration: %v", err)
 	}
 }
+
+// BOTH STORES KEY ON AN ENVIRONMENT-VARIABLE NAME, and this is the fleet's
+// half of that one rule. A row stored under a name the ${VAR} grammar cannot
+// name is sealed, listed and resolved by nothing, so the write reports a
+// success that no config can ever act on. Its twin is
+// TestASecretNameOutsideTheReferenceGrammarIsRefused in internal/store.
+func TestASecretNameOutsideTheReferenceGrammarIsRefused(t *testing.T) {
+	t.Parallel()
+	s, fleet := fleetStore(t, ring(t, "k1"))
+	for _, name := range []string{"", "gitlab token", "gitlab-token", "9LIVES"} {
+		err := s.Set(t.Context(), name, "value", "sam", "cli", clock)
+		if !errors.Is(err, secrets.ErrInvalidName) {
+			t.Errorf("Set(%q) = %v, want secrets.ErrInvalidName", name, err)
+		}
+	}
+	rows, err := fleet.SecretValues(t.Context())
+	if err != nil {
+		t.Fatalf("SecretValues: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("a refused write left %d row(s) on the fleet", len(rows))
+	}
+	// AND THE ORDINARY NAMES STILL PASS, or the guard is just an outage.
+	mustSet(t, s, "GITLAB_TOKEN", "glpat-not-a-real-token")
+	mustSet(t, s, "_leading_underscore", "value")
+}

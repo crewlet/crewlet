@@ -53,7 +53,7 @@ type githubIdentities struct {
 // CONCURRENTLY and bounded — see [identityLookups]. Sequentially this is one
 // round trip per seat on the boot path, which on a company of thirty seats is
 // thirty timeouts end to end against a degraded API; unbounded it is thirty
-// simultaneous connections to one vendor, which is the shape an abuse
+// simultaneous connections to one third-party app, which is the shape an abuse
 // detector is built to notice.
 //
 // A seat whose lookup FAILS is left unresolved rather than failing the boot:
@@ -117,13 +117,63 @@ func (g *githubIdentities) register(reg *notify.Registry, c *Company, env *confi
 	known := maps.Clone(g.byToken)
 	g.mu.Unlock()
 
-	var registered int
+	var (
+		registered int
+		byApp      = map[string]bool{}
+	)
+
+	// AN AGENT'S OWN APP IS ITS IDENTITY, and it costs no request at all:
+	// GitHub derives an app's account from its slug, which the engine wrote
+	// down when it created the app. Registered FIRST, because a seat that
+	// has one acts as it, and the token below would otherwise overwrite the
+	// mapping with whatever account a leftover credential authenticates as.
+	//
+	// TWO SPELLINGS, one identity. A person writing a mention types the
+	// slug; every payload reporting what the app did carries the slug with
+	// `[bot]`. Nothing relates them, and the registry is a bijection per
+	// namespace, so the bot login goes in the companion namespace that
+	// exists for exactly this — the same shape Slack and Mattermost use.
+	for role := range c.Config.EachRole() {
+		seat := role.Seat()
+		app := role.Integrations.GitHub
+		if !seat.IsAgent() || app == nil {
+			continue
+		}
+		slug := github.NormalizeLogin(app.AppSlug)
+		if slug == "" {
+			// The app has not been created yet. The seat is on the
+			// roster with a click outstanding, and it acts as nobody
+			// until somebody makes it one.
+			continue
+		}
+		handle := seat.Handle()
+		if err := reg.Register(github.Backend, slug, handle); err != nil {
+			log.Warn("github_seat_identity_refused", "seat", handle,
+				"login", slug, "error", err.Error())
+			continue
+		}
+		if bot := github.BotLogin(slug); bot != "" {
+			if err := reg.Register(notify.BotNamespace(github.Backend), bot, handle); err != nil {
+				// THE MENTION STILL WORKS. What is lost is recognising
+				// this agent's own activity in a payload, so it is a
+				// warning and not a reason to drop the seat.
+				log.Warn("github_seat_bot_identity_refused", "seat", handle,
+					"login", bot, "error", err.Error())
+			}
+		}
+		byApp[handle] = true
+		registered++
+	}
+
 	for seat := range c.Org.AllRoles() {
+		if byApp[seat.Handle()] {
+			continue
+		}
 		token := github.CredentialOf(seat, env.Value)
 		if token == "" {
 			continue
 		}
-		login := known[token]
+		login := github.NormalizeLogin(known[token])
 		if login == "" {
 			continue
 		}
@@ -183,34 +233,24 @@ func (e *Engine) startGitHub(ctx context.Context, c *Company, cfg *config.GitHub
 				"or this node's secret store", cfg.WebhookSecret)
 	}
 
-	// THE ENGINE CREDENTIAL IS OPTIONAL and its absence is a documented
-	// degradation rather than a failure: without it a comment reaches the
-	// item's author and assignees instead of everyone taking part.
-	// Directed events are untouched, which is why this warns rather than
-	// refusing.
-	var lookup github.Participants
-	if token := strings.TrimSpace(env.Value(cfg.Token)); token != "" {
-		client, err := github.NewClient(github.ClientOptions{
-			APIBase: api, WebBase: web, Token: token,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("engine: github: %w", err)
-		}
-		lookup = github.Lookup{Client: client}
-		// NOT VERIFIED at boot. A GET /user here would turn a
-		// rate-limited API into a company that will not start, to learn
-		// something the first real lookup learns anyway — and that one
-		// degrades instead of refusing, reporting it as
-		// github_participants_unavailable on the event it affected.
-		//
-		// The SEAT credentials below are the opposite case, and the
-		// difference is what the request buys: verifying this one buys
-		// nothing, while resolving those is the entire integration.
-	} else {
-		log.WarnContext(ctx, "github_has_no_engine_token",
-			"detail", "thread activity reaches the item's author and assignees "+
-				"rather than everyone taking part")
-	}
+	// WHO ELSE IS TAKING PART, read through the agents' OWN apps.
+	//
+	// This took a shared organization token an operator pasted in, and the
+	// token had nothing else left to do: an agent that acts as itself
+	// already holds a credential that answers the question, installed on
+	// the repositories it works in, and every tier grants the two reads a
+	// participant lookup needs. So the reader is there for free, scoped to
+	// what that agent may see rather than to whatever the person who made
+	// the token could reach, and there is one fewer credential to paste,
+	// rotate and be warned about.
+	//
+	// NOT VERIFIED at boot. A probe here would turn a rate-limited API
+	// into a company that will not start, to learn what the first real
+	// lookup learns anyway, and that one degrades instead of refusing.
+	lookup := &github.SeatLookup{Opts: github.SeatAppOptions{
+		APIBase: api, WebBase: web, Org: githubOrg(cfg),
+		Seats: e.githubSeatApps(env),
+	}}
 
 	e.notify.github.resolve(ctx, api, web, github.SeatCredentials(c.Org, env.Value))
 	registered := e.notify.github.register(e.Registry(), c, env)
@@ -224,7 +264,7 @@ func (e *Engine) startGitHub(ctx context.Context, c *Company, cfg *config.GitHub
 			"detail", "every code-host webhook will name a stranger")
 	}
 	log.InfoContext(ctx, "github_wired", "api", api,
-		"seat_identities", registered, "participants_lookup", lookup != nil)
+		"seat_identities", registered, "participants_lookup", len(lookup.Opts.Seats) > 0)
 	return github.NewParser(github.ParserOptions{Participants: lookup}), nil
 }
 
@@ -275,6 +315,40 @@ func (e *Engine) reconcileGitHub(ctx context.Context, c *Company) {
 		return
 	}
 	log.InfoContext(ctx, "github_reconciled", "company", c.Config.Name)
+}
+
+// githubSeatApps reads every agent's own app out of the company document,
+// with its key resolved. A seat with no block at all is skipped: it is a
+// company that has not started, not a seat with a fault.
+//
+// ONE READING, used by both halves that need it: the reconcile, which asks
+// what is still outstanding, and the participant lookup, which asks whose
+// credential can read a thread. Two readers of one roster would be free to
+// disagree about which apps exist.
+func (e *Engine) githubSeatApps(env *config.Resolver) []github.SeatApp {
+	company := e.Company()
+	out := []github.SeatApp{}
+	if company == nil {
+		return out
+	}
+	for role := range company.Config.EachRole() {
+		seat := role.Seat()
+		if !seat.IsAgent() {
+			continue
+		}
+		app := role.Integrations.GitHub
+		if app == nil {
+			continue
+		}
+		tier, _ := github.ParseTier(app.TierOrDefault())
+		out = append(out, github.SeatApp{
+			Handle: seat.Handle(), Name: role.Name, Tier: tier, Repos: app.Repos,
+			AppID: app.AppID, Slug: app.AppSlug,
+			InstallationID: app.InstallationID,
+			Key:            strings.TrimSpace(env.Value(app.PrivateKey)),
+		})
+	}
+	return github.SeatsFrom(out)
 }
 
 // githubPrompt is the hosted code host's trigger builder. A value, held by

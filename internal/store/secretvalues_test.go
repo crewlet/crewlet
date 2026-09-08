@@ -350,3 +350,31 @@ func TestARekeyAbortsOnARowItCannotOpen(t *testing.T) {
 		t.Fatalf("the pass reported success having moved %v", moved)
 	}
 }
+
+// The node-local half of the one rule both stores keep: a secret is keyed by
+// environment-variable name, because that is what a ${VAR} in the company
+// document resolves through. This path is what `crewlet secrets set` writes
+// against a STOPPED node, and whatever lands here is migrated onto the fleet
+// unchanged at the next start, so a name refused there has to be refused
+// here too, or the migration is where the operator finds out. Its twin is
+// TestASecretNameOutsideTheReferenceGrammarIsRefused in internal/fleetsecrets.
+func TestASecretNameOutsideTheReferenceGrammarIsRefused(t *testing.T) {
+	t.Parallel()
+	s, _, _ := secretStore(t, ring(t, "k1"))
+	for _, name := range []string{"", "gitlab token", "gitlab-token", "9LIVES"} {
+		err := s.Set(context.Background(), name, "value", "operator", "cli", secretClock)
+		if !errors.Is(err, secrets.ErrInvalidName) {
+			t.Errorf("Set(%q) = %v, want secrets.ErrInvalidName", name, err)
+		}
+	}
+	rows, err := s.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("a refused write left %d row(s) in the table", len(rows))
+	}
+	// AND THE ORDINARY NAMES STILL PASS, or the guard is just an outage.
+	mustSet(t, s, "GITLAB_TOKEN", "glpat-not-a-real-token")
+	mustSet(t, s, "_leading_underscore", "value")
+}

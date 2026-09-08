@@ -366,7 +366,7 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 		// reason: a list of revisions with no summaries is a list of
 		// uuids. A per-entity write can say more, so the hint does.
 		summary, body, ok := requireSummary(w, r, body,
-			"this write needs an audit summary — the X-Summary header, "+
+			"this write needs an audit summary: the X-Summary header, "+
 				"or a top-level _summary key in the body. Name what changed "+
 				"about "+kind+"/"+id)
 		if !ok {
@@ -384,7 +384,7 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 			// route would build a company out of one seat.
 			writeJSON(w, http.StatusConflict, map[string]string{
 				"error": "no_active_revision",
-				"hint": "this node has no active company revision to edit — " +
+				"hint": "this node has no active company revision to edit: " +
 					"import one with `crewlet config import`",
 			})
 			return
@@ -425,7 +425,7 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 			// which is the same surprise one revision later.
 			writeJSON(w, http.StatusBadRequest, map[string]string{
 				"error": "identity_mismatch", "detail": err.Error(),
-				"hint": "the path is the address — send " + kind + "/" + id +
+				"hint": "the path is the address: send " + kind + "/" + id +
 					" back under the id it already has. Renaming is a " +
 					"full-document edit: a seat's durable id derives from its " +
 					"handle, so a rename also has to move what references it, " +

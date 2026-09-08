@@ -19,18 +19,18 @@ package notify
 //     Caught at parse time, by comparing usernames.
 //
 // Three implementations meant three chances to disagree, and they did: the
-// service read only `actor_account_id`, which one vendor stamps, so the
-// guard existed for that vendor and silently did not exist for the rest.
-// Here there is ONE actor field every parser stamps, and one comparison —
-// applied by whichever layer holds the identifiers.
+// service read only `actor_account_id`, which one third-party app stamps,
+// so the guard existed for that third-party app and silently did not exist
+// for the rest. Here there is ONE actor field every parser stamps, and one
+// comparison, applied by whichever layer holds the identifiers.
 
 // ActorField is the metadata key carrying the external id of whoever caused
 // an event.
 //
-// ONE key across every vendor, because the guard reads it and every parser
-// writes it. A per-vendor key is not a naming preference — it is a guard
-// that protects the vendors somebody remembered and quietly protects none of
-// the others, which is exactly what it was.
+// ONE key across every third-party app, because the guard reads it and every
+// parser writes it. A per-integration key is not a naming preference. It is a
+// guard that protects the third-party apps somebody remembered and quietly
+// protects none of the others, which is exactly what it was.
 const ActorField = "actor_external_id"
 
 // SelfAction reports whether an event describes an action by the party it
@@ -68,7 +68,7 @@ func ActorOf(metadata map[string]string) string { return metadata[ActorField] }
 // learns. A comment the actor wrote is the opposite — they already know.
 //
 // The distinction is "did something happen BECAUSE of me that I do not yet
-// know about", and only the vendor can name which of its event types are
+// know about", and only the third-party app can name which of its event types are
 // which, so it is asked through the prompt registry. A source with no
 // registered prompt gets the safe answer, which is no: an unrecognised event
 // type that loops is worse than one that goes unheard, because the loop
@@ -103,7 +103,7 @@ func Deliverable(prompts Prompts, r *Registry, n Inbound, recipient Party) (bool
 // SuppressSelf filters an actor out of a fan-out target list.
 //
 // The parse-time face of the same rule, applied where the identifiers are
-// still the vendor's own usernames and nothing has been resolved yet. It
+// still the third-party app's own usernames and nothing has been resolved yet. It
 // takes the same [WakesActor] exception, so a failed pipeline still reaches
 // the person who pushed it while their own comment does not come back to
 // them.

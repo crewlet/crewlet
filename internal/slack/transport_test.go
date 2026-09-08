@@ -31,6 +31,11 @@ type workspace struct {
 	replies    map[string]string
 }
 
+// queryMethods are the Slack methods that read their parameters from the
+// query string and ignore a JSON body, answering ok with nothing when one is
+// posted instead. See [callQuery].
+var queryMethods = map[string]bool{"bots.info": true}
+
 func newWorkspace(t *testing.T) *workspace {
 	t.Helper()
 	w := &workspace{
@@ -41,6 +46,27 @@ func newWorkspace(t *testing.T) *workspace {
 		method := strings.TrimPrefix(req.URL.Path, "/api/")
 		var body map[string]any
 		_ = json.NewDecoder(req.Body).Decode(&body)
+		// SLACK READS A JSON BODY FOR SOME METHODS AND SILENTLY IGNORES
+		// IT FOR THE REST, answering ok with nothing at all: measured on
+		// bots.info, which is why a query parameter posted as JSON
+		// produced a seat that carried no app and no error. The fake
+		// reproduces that rather than being generous, so a caller using
+		// the wrong encoding fails here instead of in production.
+		for name, values := range req.URL.Query() {
+			if body == nil {
+				body = map[string]any{}
+			}
+			body[name] = values[0]
+		}
+		if queryMethods[method] && len(req.URL.Query()) == 0 {
+			// The parameter was sent the way this method will not read.
+			rw.Header().Set("Content-Type", "application/json")
+			_, _ = rw.Write([]byte(`{"ok":true}`))
+			w.mu.Lock()
+			w.calls = append(w.calls, method)
+			w.mu.Unlock()
+			return
+		}
 
 		w.mu.Lock()
 		w.calls = append(w.calls, method)
@@ -300,5 +326,54 @@ func TestSeatsFromSkipsUnresolvedTokens(t *testing.T) {
 	})
 	if len(got) != 1 || got[0].Handle != "swe" || got[0].Token != "xoxb-swe" {
 		t.Fatalf("seats = %+v", got)
+	}
+}
+
+// WHICH APP A SEAT IS, learned where Slack actually states it.
+//
+// auth.test answers with the bot's user id, its team and its bot id, and no
+// app id at all: the field was decoded from a response Slack does not send,
+// so it was empty for every seat this engine ever wired. bots.info is where
+// it lives, keyed on the bot id auth.test does return. Knowing it is what
+// lets a screen say which of an operator's apps an agent is, and link to the
+// page that deletes it.
+func TestASeatLearnsWhichAppItIs(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	ws.replies["auth.test"] = `{"ok":true,"user_id":"` + botUser +
+		`","team_id":"T0ACME","bot_id":"B0ACME"}`
+	ws.replies["bots.info"] = `{"ok":true,"bot":{"app_id":"A0ACME"}}`
+
+	tr := transport(t, ws, nil)
+	if err := tr.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := tr.Apps(); len(got) != 1 || got["swe"] != "A0ACME" {
+		t.Errorf("Apps() = %v, want the app this seat authenticates as", got)
+	}
+}
+
+// AND A SEAT WHOSE APP CANNOT BE NAMED STILL WORKS.
+//
+// Knowing the app is a label on a screen; the token working is an agent that
+// can speak. Failing the seat over the second request would trade one for the
+// other, and the delivery envelope names the app anyway wherever the parser
+// needs it.
+func TestASeatWhoseAppIsUnknownStillRuns(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	ws.replies["auth.test"] = `{"ok":true,"user_id":"` + botUser +
+		`","team_id":"T0ACME","bot_id":"B0ACME"}`
+	ws.refuse["bots.info"] = "missing_scope"
+
+	tr := transport(t, ws, nil)
+	if err := tr.Start(context.Background()); err != nil {
+		t.Fatalf("a seat with a working token was dropped over a label: %v", err)
+	}
+	if got := tr.Handles(); len(got) != 1 || got[0] != "swe" {
+		t.Fatalf("handles = %v, want the seat running", got)
+	}
+	if got := tr.Apps(); len(got) != 0 {
+		t.Errorf("Apps() = %v, want no claim about an app nothing could name", got)
 	}
 }

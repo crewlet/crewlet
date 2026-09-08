@@ -306,7 +306,7 @@ func TestThePromptNamesNoTool(t *testing.T) {
 	}
 }
 
-// The prompt is the vendor's entry in the registry, which keys on the source
+// The prompt is the third-party app's entry in the registry, which keys on the source
 // name — a mismatch means every GitLab event silently gets the generic
 // fallback, and with it the self-action rule with no exception.
 func TestThePromptAnswersForGitLab(t *testing.T) {

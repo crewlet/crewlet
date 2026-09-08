@@ -3,6 +3,7 @@ package confluence
 import (
 	"context"
 	"maps"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -184,11 +185,35 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	}
 	page, _ := w.Body["page"].(map[string]any)
 	comment, _ := w.Body["comment"].(map[string]any)
-	if len(page) == 0 && len(comment) == 0 {
-		return nil, nil
+	if len(page) == 0 && len(comment) > 0 {
+		// THE COMMENT'S OWN CONTAINER IS THE SECOND PLACE THE PAGE IS NAMED,
+		// and both inbound shapes deliver a comment with no top-level page:
+		// the Forge relay lifts a container only when it was given one, and
+		// Confluence Cloud's own hook puts the page under "parent" with
+		// nothing beside the comment at all (measured against a live site).
+		// The page id is the whole conversation key for this third-party app, so a
+		// comment read only from the sibling key had no key at all: it fell
+		// back to its own event id and coalesced with nothing, and three
+		// comments on one page while the seat was busy ran three turns, which
+		// is precisely the case the key exists to collapse. On Cloud it was
+		// worse, since the space lives on the parent too, so every Cloud
+		// comment routed to nobody. Lifting the container here, once, is what
+		// lets the space, the title and the id below all read from one place.
+		page = container(comment)
 	}
-
+	// THE PAGE ID IS RESOLVED ONCE, and the self URL is its last resort.
+	//
+	// A Confluence Cloud REPLY names its page in neither place the lift
+	// above looks: its parent is the comment being replied to, and that
+	// object may carry no parent of its own. Its self URL does name the
+	// page, in the /pages/<id>/ segment every Cloud content URL has, and a
+	// reply with no page id at all is dropped before mentions, watchers or
+	// the space lead are ever considered — so on Cloud a seat asked in a
+	// reply would never be woken, and replies are most of a wiki thread.
 	pageID := str(page, "id")
+	if pageID == "" {
+		pageID = pageIDFromSelf(str(comment, "self"))
+	}
 	// THE INDEXER RUNS FIRST, before every filter below. The tool-skill
 	// registry is rebuilt from page content and cares about EVERY change —
 	// including one in the space routing excludes and one a seat made
@@ -207,7 +232,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 		return nil, nil
 	}
 
-	base, ok := p.base(w.Body, page, comment, event, space)
+	base, ok := p.base(w.Body, page, comment, event, space, pageID)
 	if !ok {
 		return nil, nil
 	}
@@ -419,21 +444,8 @@ func (p *Parser) leadCopy(base notify.Inbound, space, actor string, reg *notify.
 }
 
 // base assembles the notification every recipient's copy is made from.
-func (p *Parser) base(body, page, comment map[string]any, event, space string) (notify.Inbound, bool) {
+func (p *Parser) base(body, page, comment map[string]any, event, space, pageID string) (notify.Inbound, bool) {
 	title := firstOf(str(page, "title"), str(comment, "title"))
-	// THE COMMENT'S OWN CONTAINER IS THE SECOND PLACE THE PAGE IS NAMED.
-	//
-	// Both inbound shapes tolerate a comment payload that carries no
-	// top-level `page` — the Forge relay only lifts a container it was given,
-	// and Parse itself accepts comment-without-page — and the page id is the
-	// whole conversation key here. Reading only the top-level object left
-	// such a comment with no key at all, so it fell back to its own event id
-	// and coalesced with nothing: three comments on one page while the seat
-	// was busy ran three turns, which is precisely the case this key exists
-	// to collapse. The container is the same object the relay would have
-	// lifted, so this reads the page from where it actually is rather than
-	// depending on whether an upstream copied it.
-	pageID := firstOf(str(page, "id"), str(container(comment), "id"))
 	if title == "" && pageID == "" {
 		return notify.Inbound{}, false
 	}
@@ -555,7 +567,7 @@ func storageOf(content map[string]any) string {
 // LeadsFrom maps each Confluence space key to the handle that owns it.
 //
 // The walk itself is [org.Organization.LeadsBy] — which seat owns a scope is
-// a question about the org chart, and this vendor's only contribution is
+// a question about the org chart, and this third-party app's only contribution is
 // naming the field and reporting what the walk found in its own vocabulary.
 func LeadsFrom(o *org.Organization) map[string]string {
 	leads, report := o.LeadsBy(org.Scope{
@@ -573,18 +585,68 @@ func LeadsFrom(o *org.Organization) map[string]string {
 	return leads
 }
 
-// container is a comment's parent object, where a payload states one.
+// container is the PAGE a comment hangs off, wherever the payload names it.
+//
+// Three senders name it three ways. The Forge relay calls it "container", and
+// it is the page. Confluence's own hook calls it "parent", which is the page
+// for a top-level comment and ANOTHER COMMENT for a reply — whose own parent
+// is the page — so the chain is WALKED rather than read once. Reading it once
+// and refusing a comment parent dropped every Cloud reply on the floor, which
+// is worse than the mis-keying that guard was written against: a reply keyed
+// on a comment id at least woke somebody.
+//
+// Only an explicit "comment" is walked past. An object in the parent slot
+// that names no content type is the page in every shape observed, and
+// treating an unlabelled one as a comment would put the drop back.
 func container(comment map[string]any) map[string]any {
 	if c, ok := comment["container"].(map[string]any); ok {
 		return c
 	}
-	// Some shapes name it `parent` instead; both are the page the comment
-	// hangs off, and which one arrives is the relay's choice, not a fact
-	// about the comment.
-	if c, ok := comment["parent"].(map[string]any); ok {
-		return c
+	node := comment
+	// BOUNDED, because the walk follows a field a stranger controls: a
+	// payload whose parent points back at itself would otherwise spin here
+	// forever, inside the webhook edge's own request.
+	for range maxCommentDepth {
+		parent, ok := node["parent"].(map[string]any)
+		if !ok {
+			return nil
+		}
+		if str(parent, "contentType") != "comment" {
+			return parent
+		}
+		node = parent
 	}
 	return nil
+}
+
+// maxCommentDepth bounds the walk up a comment's parents. Confluence itself
+// allows one level of reply, so two is already a payload shape the product
+// does not produce; the value is a guard against a cycle, not a limit anybody
+// should reach.
+const maxCommentDepth = 8
+
+// pageIDFromSelf reads the page id out of a content object's self URL.
+//
+// Every Cloud content URL carries it in a /pages/<id>/ segment
+// (…/wiki/spaces/ENG/pages/10000001/Title?focusedCommentId=…), and for a
+// reply whose parent chain names no page it is the only place the page
+// appears at all. Parsed rather than split on the raw string, so a query
+// parameter that happens to contain "pages" cannot answer.
+func pageIDFromSelf(self string) string {
+	if self == "" {
+		return ""
+	}
+	u, err := url.Parse(self)
+	if err != nil {
+		return ""
+	}
+	segments := strings.Split(u.Path, "/")
+	for i, segment := range segments {
+		if segment == "pages" && i+1 < len(segments) {
+			return segments[i+1]
+		}
+	}
+	return ""
 }
 
 func str(m map[string]any, key string) string {

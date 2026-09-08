@@ -195,7 +195,7 @@ roles:
 		t.Errorf("ProviderType = %q, want the CLI's own vendor family", got.ProviderType)
 	}
 	if got.BaseURL != "" {
-		t.Errorf("BaseURL = %q — a cli-agent entry talks to its vendor, so declaring "+
+		t.Errorf("BaseURL = %q. A cli-agent entry talks to its vendor, so declaring "+
 			"a custom endpoint points the coding agent at nothing", got.BaseURL)
 	}
 }

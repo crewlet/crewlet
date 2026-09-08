@@ -8,6 +8,36 @@ What GitLab adds over GitHub is **automated, per-agent identity provisioning**. 
 
 ---
 
+## Setting it up from the dashboard
+
+Connect GitLab on the Integrations screen with the instance address, the group
+and a group Owner token. The engine generates the signing secret and the
+reconcile loop creates the service accounts on its next tick, running the same
+pass `crewlet gitlab provision` runs.
+
+The **group Owner token is sealed in the fleet's secret store and kept**. That
+token creates accounts and mints tokens on them, which is a standing power, and
+it is held anyway for one reason: removing an account needs the authority that
+created it, so with nothing kept there was no way to disconnect the integration
+and take the accounts away with it.
+
+Two things the dashboard deliberately does not do, both of which stay on the
+command line: **rotating** every seat's token, which revokes the credential
+every agent is currently authenticating with, and **decommissioning** accounts
+whose seats have left the configuration, which cannot be told apart from a
+company mid-edit.
+
+See [Running the provisioning pass](../reference/api-endpoints.md#running-the-provisioning-pass).
+
+**The signing secret is generated, and its shape is not a formality.** GitLab
+computes the HMAC over the *decoded* bytes of a `whsec_` value and accepts no
+other form, so a secret of any other shape cannot match a delivery it will
+then refuse. Nothing downstream catches one: the value goes to the secret
+store and the document gets a `${VAR}`, which is the one thing config
+validation cannot check the shape of, because the reference is all that layer
+ever sees. Both the dashboard and `crewlet gitlab provision` mint the same
+shape, and GitLab's own Generate button produces it too.
+
 ## Configuration
 
 The top-level `integrations.gitlab` block is **non-tool config** — it enables inbound webhook handling and boot-time identity registration:
@@ -17,7 +47,7 @@ integrations:
   gitlab:
     enabled: true
     url: "https://gitlab.com"                   # instance base URL — REQUIRED
-    signing_secret: "${GITLAB_SIGNING_SECRET}"  # whsec_<base64 of 32 bytes> — the hook's signing token — REQUIRED
+    signing_secret: "${GITLAB_SIGNING_SECRET}"  # whsec_<base64 of 32 bytes>, the hook's signing token, REQUIRED
     token: "${GITLAB_ENGINE_TOKEN}"             # optional read credential → participants-based routing
     provisioning:                # consumed ONLY by `crewlet gitlab provision`, ignored by the engine
       group: nimbus-hq           # top-level group the agent service accounts join
@@ -160,7 +190,9 @@ Human seats are never created — they carry `contact.gitlab_username` and are r
 | **`true`** | Group hook only. **Fail** if the group hooks API is unavailable — no silent fallback, because the mode exists for an operator who needs the group-level guarantee and would otherwise find out the day a new repository went unwatched |
 | **`false`** | Per-project hooks only, one per listed `projects` entry, without touching the group |
 
-> **The group hooks API is not everywhere.** It is a **Premium** feature on gitlab.com and it does not exist in **Community Edition** at all, and GitLab **hides an unavailable endpoint as a `404`** rather than answering `402` — so "not found" is what an instance says about a feature its tier does not serve. `auto` treats a `403`/`404` from that endpoint as the tier gate. Any other refusal — a `401`, a `5xx`, a transport failure — is a real problem and aborts, because falling back on it would paper over a broken credential with a set of project hooks nobody asked for.
+> **The group hooks API is not everywhere, and on gitlab.com Free it is worse than absent.** A free group **accepts** the registration: `POST /groups/:id/hooks` answers `201`, the hook appears in the group's settings, and its own event log stays empty for ever. Measured on a live free group, where the pass reported ready and not one delivery had ever arrived. So `auto` **reads the group's tier** rather than waiting for a refusal: gitlab.com reports a `plan` on the group, and a group that says it is free goes straight to per-project hooks. Only gitlab.com answers that field, and silence is read as "cannot tell", so a self-managed instance keeps the group hook it serves.
+>
+> The refusal path still exists beside it, because the API is also absent from **Community Edition**, and GitLab **hides an unavailable endpoint as a `404`** rather than answering `402` — so "not found" is what an instance says about a feature its tier does not serve. `auto` treats a `403`/`404` from that endpoint as the tier gate. Any other refusal — a `401`, a `5xx`, a transport failure — is a real problem and aborts, because falling back on it would paper over a broken credential with a set of project hooks nobody asked for.
 >
 > Measured, because the obvious guess is wrong: the **unlicensed `gitlab-ee`** image this repository's `docker compose --profile gitlab` stack runs (19.3.0, no license) *does* serve `GET /groups/:id/hooks`, so the local loop takes the group path. Set `group_webhook: false` to exercise the per-project path there.
 
@@ -187,13 +219,31 @@ A run that changed nothing still says so: the report names the seats it **kept**
 
 ### Permission matrix — the operator credential
 
-The provisioner's own credential is an **operator credential**, passed by `-admin-token` or `$GITLAB_ADMIN_TOKEN`, and is **never stored in company config**.
+The provisioner's own credential is an **admin credential**. On the command line it is passed by `-admin-token` or `$GITLAB_ADMIN_TOKEN` and read from the environment only. From the dashboard it is `integrations.gitlab.provisioning.admin_token`: a `${VAR}` in the document whose value is sealed in the fleet secret store, like every other credential.
+
+It is **held** rather than asked for each time, and the reason is the disconnect. Removing a service account needs the authority that created it, so a credential dropped after every pass left no way to take an account away: every one this engine created outlived the integration. Disconnecting names the secret in `orphaned_secrets`, so revoking it afterwards is one command.
 
 | Target | Required credential |
 |--------|---------------------|
 | **GitLab.com** (primary) | A **top-level group Owner PAT with the `api` scope** — no instance admin. Everything the provisioner touches (service accounts, their PATs, memberships, hooks) is group-Owner-callable on GitLab.com |
 | **Self-managed**, `-mode group` (default) | An **instance admin PAT**, **or** a group Owner PAT with the instance setting `allow_top_level_group_owners_to_create_service_accounts` enabled |
 | **Self-managed**, `-mode instance` | An **instance admin PAT**, always — a group Owner cannot create an account the instance owns. A `403` on this route says so by name, because the same status means a different remedy in each mode and "403 Forbidden" alone tells an operator nothing about which |
+
+**Every token operation goes through the group that owns the account**, which
+is what makes the GitLab.com row above true:
+
+| Operation | Group route (a group Owner may call) | Instance route (admin only) |
+|---|---|---|
+| Mint | `POST /groups/:id/service_accounts/:uid/personal_access_tokens` | `POST /users/:uid/personal_access_tokens` |
+| List | `GET /groups/:id/service_accounts/:uid/personal_access_tokens` | `GET /personal_access_tokens?user_id=` |
+| Revoke | `DELETE …/personal_access_tokens/:token_id` under the group | `DELETE /personal_access_tokens/:token_id` |
+
+On GitLab.com nobody is an instance admin, so a run reaching for the right
+column is refused, and the three refusals arrive at three different moments: a
+mint `403`s outright, a list `401`s on the *next* pass after minting has
+already succeeded, and a revoke fails inside a rollback whose message says a
+live credential was left behind. Instance mode uses the right column, because
+there the credential is an admin token and no group owns the account.
 
 On the GitLab.com Free tier, **annual token rotation is the norm** — every new PAT expires within 365 days (non-expiring service-account tokens require the Premium group setting). Wire `crewlet gitlab provision -rotate` into a yearly cron.
 
@@ -340,7 +390,7 @@ scripts/gitlab-dev-bootstrap.sh          # mint a root token, open the SSRF allo
 
 The profile ships one service:
 
-- **`gitlab`** — `gitlab/gitlab-ee:latest` served at `http://gitlab.local:8929`. The EE image is deliberate: service accounts are a **Free-*tier*** feature that lives in **EE-*edition*** code, so the FOSS `gitlab-ce` image 404s on the `/service_accounts` API — an *unlicensed* `gitlab-ee` image runs as Free tier and serves it.
+- **`gitlab`** — `gitlab/gitlab-ee:19.3.1-ee.0` served at `http://gitlab.local:8929`. The EE image is deliberate: service accounts are a **Free-*tier*** feature that lives in **EE-*edition*** code, so the FOSS `gitlab-ce` image 404s on the `/service_accounts` API — an *unlicensed* `gitlab-ee` image runs as Free tier and serves it.
 
 There is no MCP-server sidecar: the GitLab tool surface is `glab mcp serve`, which the engine spawns per-role (see [MCP tool server](#mcp-tool-server)).
 
@@ -391,5 +441,5 @@ The full loop this validates: **provision** (service accounts appear with the ag
 ## Limitations
 
 - **The default MCP tool server is experimental.** `glab mcp serve` is GitLab-official but flagged experimental; pin a known-good `glab` version if that matters. The community `@zereight/mcp-gitlab` is the supported alternative for a single shared server. GitLab's built-in `/api/v4/mcp` endpoint stays unused until it gains PAT authentication (it is OAuth-only today). See [MCP tool server](#mcp-tool-server).
-- **A single group webhook is not available on every tier** — Premium on gitlab.com, absent from Community Edition. `group_webhook: auto` uses a group hook where the instance serves the API and registers **per-project** hooks where it does not; see [Where the webhook lands](#where-the-webhook-lands). Per-project hooks cover exactly the declared `provisioning.projects`, so a repository added later needs another run.
+- **A single group webhook is not available on every tier** — Premium on gitlab.com, absent from Community Edition, and on gitlab.com Free it is accepted and silently never delivered. `group_webhook: auto` reads the group's plan, uses a group hook where the tier serves one, and registers **per-project** hooks otherwise; see [Where the webhook lands](#where-the-webhook-lands). Per-project hooks cover exactly the declared `provisioning.projects`, so a repository added later needs another run.
 - **No composite identity.** GitLab's dual-attribution token mechanism (agent + triggering human) has no public API, so Crewlet's seats are plain service accounts. Every action is attributed to the agent that took it.
