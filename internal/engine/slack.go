@@ -59,6 +59,79 @@ func (e *Engine) startSlack(ctx context.Context, c *Company, cfg *config.Slack) 
 	return transport, nil
 }
 
+// reconcileSlack brings the hosted chat surface in line with the applied
+// revision.
+//
+// IT HAD NONE, and the gap is the one an operator meets first. The parser set
+// is assembled once in [Engine.startNotifications], so a company that
+// connected Slack after boot had every delivery verified at the webhook route
+// and turned into work for nobody: `inbound_source_unparsed` in the log,
+// `routes nowhere` on the card, and an agent that answers nothing, until the
+// process was restarted. Connecting from the dashboard is exactly that
+// sequence, and so is rotating a seat's token.
+//
+// REBUILT ON EVERY APPLY, unlike the self-hosted surface next door. What is
+// torn down here is an HTTP client and a working-indicator driver, because
+// Slack's inbound half is this engine's own API edge and there is no socket
+// to drop; [Engine.reconcileMattermost] holds one per seat and is guarded
+// accordingly.
+func (e *Engine) reconcileSlack(ctx context.Context, c *Company) {
+	cfg := c.Config.Integrations.Slack
+	e.notify.mu.Lock()
+	svc, previous := e.notify.service, e.notify.slack
+	e.notify.mu.Unlock()
+	if svc == nil {
+		return
+	}
+	// RETIRED when the revision no longer declares it, the same posture
+	// every other reconciler here takes: an operator who removes the block
+	// after a leak must not be left with the boot-time parser routing
+	// deliveries under the credential being revoked.
+	if cfg == nil {
+		e.notify.mu.Lock()
+		e.notify.slack = nil
+		e.notify.mu.Unlock()
+		if previous != nil {
+			previous.Stop(ctx)
+		}
+		if svc.Unregister(slack.Backend) {
+			log.InfoContext(ctx, "slack_retired",
+				"detail", "the revision no longer configures slack; its deliveries "+
+					"are refused at the webhook route and route to no seat")
+		}
+		return
+	}
+	transport, err := e.startSlack(ctx, c, cfg)
+	if err != nil || transport == nil {
+		// THE PREVIOUS TRANSPORT KEEPS RUNNING, the same posture as the
+		// code host's: routing by a stale credential is worse than the
+		// new one and much better than not routing at all. startSlack
+		// stores what it built before starting it, so the field is put
+		// back rather than left pointing at something that did not come
+		// up.
+		e.notify.mu.Lock()
+		e.notify.slack = previous
+		e.notify.mu.Unlock()
+		if err != nil {
+			log.ErrorContext(ctx, "slack_reconcile_failed", "error", errorText(err),
+				"detail", "the previous hosted chat wiring is still current")
+		}
+		return
+	}
+	if err := svc.Replace(transport.Parser(), transport.Prompt()); err != nil {
+		log.ErrorContext(ctx, "slack_reconcile_failed", "error", err.Error(),
+			"detail", "the previous hosted chat wiring is still current")
+		return
+	}
+	if previous != nil && previous != transport {
+		// AFTER the swap, so no delivery falls between the two: what
+		// Stop does here is clear working indicators the old transport
+		// raised, and one left up outlives the process visibly.
+		previous.Stop(ctx)
+	}
+	log.InfoContext(ctx, "slack_reconciled", "company", c.Config.Name)
+}
+
 // statusPhrases maps the config block onto the phrase registry's own shape.
 //
 // The MAPPING IS THE POINT and it belongs here rather than in either

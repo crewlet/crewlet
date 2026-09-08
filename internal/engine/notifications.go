@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -37,6 +39,11 @@ type notifications struct {
 
 	service    *notify.Service
 	mattermost *mattermost.Transport
+
+	// chatPrint is what the running self-hosted transport was built from,
+	// hashed. An apply that changes nothing this surface reads must not
+	// drop every seat's websocket: see [Engine.reconcileMattermost].
+	chatPrint string
 
 	// slack is the hosted chat surface. A company may run BOTH — they are
 	// different workspaces with different people in them, and an org
@@ -467,6 +474,11 @@ func (e *Engine) startMattermost(ctx context.Context, c *Company, cfg *config.Ma
 	}
 	e.notify.mu.Lock()
 	e.notify.mattermost = transport
+	// RECORDED WHERE IT IS BUILT, so the boot path and the apply path agree
+	// about what the running transport was made from. Set only by the
+	// reconciler, the first apply after a boot would find no fingerprint,
+	// read that as a change, and drop every seat's websocket for nothing.
+	e.notify.chatPrint = chatFingerprint(url, team, string(cfg.Status()), seats)
 	e.notify.mu.Unlock()
 
 	if err := transport.Start(ctx); err != nil {
@@ -556,6 +568,102 @@ func (e *Engine) resumeInbound(ctx context.Context) {
 		log.InfoContext(ctx, "inbound_resumed",
 			"detail", "the config posture admits work again")
 	}
+}
+
+// reconcileMattermost brings the self-hosted chat surface in line with the
+// applied revision.
+//
+// GUARDED, and this is the one reconciler here that has to be. Every other
+// surface rebuilds a parser, which costs nothing; this one holds a WEBSOCKET
+// PER SEAT, so rebuilding on each apply would drop and reconnect every
+// agent's connection whenever an unrelated field changed. A reconnect is not
+// free either: a seat is deaf across it, and the backfill that closes the gap
+// re-reads each of its channels.
+//
+// So it rebuilds only when something this surface reads has changed, and the
+// fingerprint is over exactly what the transport is BUILT from. A field it
+// does not read cannot make it reconnect, and one it does read cannot be
+// changed without it noticing.
+func (e *Engine) reconcileMattermost(ctx context.Context, c *Company) {
+	cfg := c.Config.Integrations.Mattermost
+	e.notify.mu.Lock()
+	svc, previous, was := e.notify.service, e.notify.mattermost, e.notify.chatPrint
+	e.notify.mu.Unlock()
+	if svc == nil {
+		return
+	}
+	if cfg == nil || !cfg.Enabled {
+		e.notify.mu.Lock()
+		e.notify.mattermost, e.notify.chatPrint = nil, ""
+		e.notify.mu.Unlock()
+		if previous != nil {
+			previous.Stop(ctx)
+		}
+		if svc.Unregister(mattermost.Backend) {
+			log.InfoContext(ctx, "mattermost_retired",
+				"detail", "the revision no longer enables mattermost; no seat "+
+					"holds a connection and nothing routes to one")
+		}
+		return
+	}
+	// THE SAME INPUTS startMattermost READS, resolved the same way, which
+	// is what makes an unchanged answer mean "nothing to do" rather than
+	// "nothing obvious to do".
+	env := e.resolver()
+	print := chatFingerprint(env.Value(cfg.URL), env.Value(cfg.Team),
+		string(cfg.Status()), mattermost.SeatsFrom(c.Org, env.LookupOK))
+	if previous != nil && print == was {
+		return
+	}
+	transport, err := e.startMattermost(ctx, c, cfg)
+	if err != nil || transport == nil {
+		// The previous connections keep running, for the reason the
+		// hosted surface's do: a stale credential still routes, and a
+		// dropped one routes nothing.
+		e.notify.mu.Lock()
+		e.notify.mattermost = previous
+		e.notify.mu.Unlock()
+		if err != nil {
+			log.ErrorContext(ctx, "mattermost_reconcile_failed", "error", errorText(err),
+				"detail", "the previous chat wiring is still current")
+		}
+		return
+	}
+	if err := svc.Replace(transport.Parser(), transport.Prompt()); err != nil {
+		log.ErrorContext(ctx, "mattermost_reconcile_failed", "error", err.Error(),
+			"detail", "the previous chat wiring is still current")
+		return
+	}
+	if previous != nil && previous != transport {
+		previous.Stop(ctx)
+	}
+	log.InfoContext(ctx, "mattermost_reconciled", "company", c.Config.Name)
+}
+
+// chatFingerprint is what a chat transport was built from, as one comparable
+// value.
+//
+// HASHED, because a seat's configuration carries its bot token: the inputs
+// have to be compared, and a comparison does not need to keep them. What is
+// stored on the engine is 32 bytes that reveal nothing and that no log line
+// ever carries.
+//
+// LENGTH-PREFIXED, so two different input sets cannot render as one string.
+// Joined with a separator, a seat named "a" holding token "b:c" and one named
+// "a:b" holding "c" are the same bytes, and the second would be read as no
+// change at all.
+func chatFingerprint(url, team, status string, seats []mattermost.SeatConfig) string {
+	h := sha256.New()
+	write := func(parts ...string) {
+		for _, part := range parts {
+			fmt.Fprintf(h, "%d:%s", len(part), part)
+		}
+	}
+	write(url, team, status)
+	for _, seat := range seats {
+		write(seat.Handle, seat.Token, seat.Username, seat.Channel)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // stopNotifications takes the inbound edge down.
