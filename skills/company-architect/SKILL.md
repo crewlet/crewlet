@@ -3,7 +3,7 @@ name: company-architect
 description: >
   Interview a founder and author their Crewlet company configuration —
   the Tier B company.yaml org chart (mission, policies, units, seats,
-  schedules, integrations) and the Tier A config.yaml bootstrap. Use
+  schedules, integrations) and the Tier A crewlet.yaml bootstrap. Use
   when someone wants to set up, design, extend, or restructure a Crewlet
   AI agent company, add or remove a seat or team, wire in an integration
   (Jira, Confluence, Mattermost, Slack, GitLab, GitHub, the code
@@ -30,7 +30,7 @@ authoritative field list is a JSON Schema generated from the code
 itself:
 
 - Tier B (`company.yaml`) — <https://docs.crewlet.ai/schema/company.schema.json>
-- Tier A (`config.yaml`) — <https://docs.crewlet.ai/schema/bootstrap.schema.json>
+- Tier A (`crewlet.yaml`) — <https://docs.crewlet.ai/schema/bootstrap.schema.json>
 
 **Fetch the Tier B schema before you write any YAML.** It carries every
 field name, type, and enum, plus `additionalProperties: false`
@@ -283,13 +283,13 @@ are five copies of one agent with five times the bill.
 When you finish, the founder should have:
 
 1. `company.yaml` — Tier B, validated, `${VAR}` for every secret.
-2. `config.yaml` — Tier A: the store's file path (one local file this
+2. `crewlet.yaml` — Tier A: the store's file path (one local file this
    process owns — there is no DSN), the stream slot, `coordination.type`,
    and the API host/port with at least one auth token. Leave the stream
    `type: embedded` with a `store_dir` and `coordination.type: local`:
    that is one node with no broker to operate and no service to point
    anything at, and it is what every company starts as. Validate it too
-   (`crewlet validate config.yaml`).
+   (`crewlet validate crewlet.yaml`).
 3. `.env` — every `${VAR}` the two files reference, with real values.
    List them explicitly; a missing one resolves to an empty string and
    fails later, deep in a turn.
@@ -297,7 +297,7 @@ When you finish, the founder should have:
 
 ```bash
 crewlet validate company.yaml
-crewlet run config.yaml -company company.yaml
+crewlet run crewlet.yaml -company company.yaml
 # dashboard on the configured api.port
 ```
 

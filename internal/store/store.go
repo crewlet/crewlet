@@ -55,6 +55,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
@@ -123,6 +124,12 @@ type Options struct {
 	// config, learn the width, then migrate the rest. Vector columns here
 	// are plain BLOBs and this is the only thing that knows how wide they
 	// are. 0 means no embedding model is configured.
+	//
+	// It is fixed for the life of the handle once it is non-zero: the
+	// vectors already in the file are this wide, and the engine refuses a
+	// revision that would change it. The one exception is a store opened
+	// at 0 — a node with no active revision, holding no rows — which
+	// learns its width from its first apply via [DB.LearnEmbeddingDim].
 	EmbeddingDim int
 }
 
@@ -151,7 +158,12 @@ type DB struct {
 	sql  *sql.DB
 	path string
 	caps Capabilities
-	dim  int
+
+	// dim is [Options.EmbeddingDim], re-stated by every config apply. ATOMIC
+	// because the applying goroutine writes it while turns are reading it to
+	// validate their vectors — a plain int here is a data race the detector
+	// finds on any company that writes memory during a reconcile.
+	dim atomic.Int64
 
 	// lock is this process's exclusive claim on path, held for the life of
 	// the handle and released by Close — or by the kernel, if this process
@@ -192,7 +204,12 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 		return nil, err
 	}
 
-	db := &DB{sql: pool, path: path, dim: opts.EmbeddingDim, lock: lock}
+	db := &DB{sql: pool, path: path, lock: lock}
+	// Straight to the field, not through [DB.LearnEmbeddingDim]: that one
+	// only ever raises from 0 because it guards a LIVE handle, and this is
+	// the open where whatever the caller passed — including 0 — is the
+	// answer.
+	db.dim.Store(int64(opts.EmbeddingDim))
 	applied, err := db.migrate(ctx)
 	if err != nil {
 		_ = pool.Close()
@@ -305,7 +322,38 @@ func (d *DB) Path() string { return d.path }
 // EmbeddingDim reports the configured vector width, or 0 when no embedding
 // model is configured. See Options.EmbeddingDim for why this is not in the
 // schema.
-func (d *DB) EmbeddingDim() int { return d.dim }
+func (d *DB) EmbeddingDim() int { return int(d.dim.Load()) }
+
+// LearnEmbeddingDim records the width the first time this handle meets one.
+//
+// # It only ever raises the width from 0, and that is the whole contract
+//
+// The width describes the vectors this FILE already holds, not what the
+// current config asks for, so it is emphatically not a setting an apply may
+// change. The engine refuses a revision whose width differs from the one the
+// store was opened at, and tells the operator to restart — see
+// buildEmbedder. This must never become a way around that guard, and a plain
+// setter would be exactly that way in two steps: drop the embeddings provider
+// and apply (width falls to 0, guard off), then add it back at a different
+// width (guard sees no declared width, lets it through). The recall pool then
+// holds rows of two widths and the reader can match neither reliably.
+//
+// So: zero to non-zero, once. That is the only safe transition, and it is the
+// one a node that booted with no active revision needs — it opened at 0
+// holding no rows at all, and its first apply is what tells it how wide its
+// vectors will be. Every other case is already correct at open, because
+// [OpenBackends] passes the active revision's width.
+//
+// A width of 0 is "no declared width", not a width of zero:
+// [DB.EncodeVector] checks nothing against it, which is what leaves the
+// dimension guard off on a store that has never been told. See
+// TestVectorDimensionUnconfigured.
+func (d *DB) LearnEmbeddingDim(width int) {
+	if width <= 0 {
+		return
+	}
+	d.dim.CompareAndSwap(0, int64(width))
+}
 
 // SQL exposes the pooled handle for store implementations built on this
 // database. Application code goes through a typed store instead — a caller

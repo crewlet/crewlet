@@ -287,10 +287,18 @@ engine in a single invocation:
 crewlet run crewlet.yaml -company company.yaml
 ```
 
-`-company` is a **seed**: it is imported when the store does not already
-hold a company, and ignored when it does — so re-running the same command
-boots straight from the store rather than overwriting what is live. A
-running node then serves the store, not the file.
+`-company` is a **bootstrap seed**: it is imported when the store holds no
+company yet, and once one exists it is ignored — with a warning that says so,
+naming the file and the two ways to apply it. So a restart never reverts a
+change you made live, however stale the file on disk is.
+
+When you do want the file to win, that is a different flag:
+`crewlet run -import-company company.yaml` makes it the active revision over
+whatever the fleet is running. And to change a **running** fleet with no
+restart at all, use `crewlet config import company.yaml` — it goes through the
+node's API and every node converges on it.
+
+A running node always serves the store, not the file.
 
 **Or two steps** — import once, then run:
 
@@ -302,9 +310,12 @@ crewlet run                             # boots from the store
 Both flags default to files in the working directory — `crewlet.yaml` and
 `company.yaml` — so a node whose files are named that way needs neither.
 
-**Stopping:** press `Ctrl+C` once for a graceful drain (running agent turns
-finish; the dashboard stays up so you can watch the in-flight count converge),
-twice to force-stop, three times to hard-exit. See
+**Stopping:** press `Ctrl+C` once for a graceful drain — running agent turns
+finish, and the HTTP surface (dashboard included) closes immediately so
+nothing new arrives while it converges, which means you watch the drain in the
+logs rather than on a screen. Press it a **second** time to exit at once; the
+first press hands signal handling back to the OS precisely so that works.
+There is no third tier. See
 [Graceful shutdown](../concepts/agent-runtime.md#graceful-shutdown). Piping
 the output? Use `tee -i` (`crewlet run 2>&1 | tee -i run.log`) — a plain `tee`
 dies on the first Ctrl+C and the drain logs have nowhere to go.

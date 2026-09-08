@@ -6,7 +6,7 @@ Every request below assumes:
 
 ```bash
 export CREWLET_URL="http://localhost"   # the example Tier A file binds the embedded API on port 80
-export TOKEN="$CREWLET_API_TOKEN_FOUNDER"   # matches api.auth.tokens[].token in config.yaml
+export TOKEN="$CREWLET_API_TOKEN_FOUNDER"   # matches api.auth.tokens[].token in crewlet.yaml
 export AUTH="Authorization: Bearer $TOKEN"
 ```
 

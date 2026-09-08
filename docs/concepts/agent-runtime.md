@@ -229,27 +229,32 @@ exactly that reason.
 
 ### Graceful shutdown
 
-SIGINT / SIGTERM trigger a **quiesce-then-drain** shutdown, designed so a restart picks up cleanly without a half-finished turn. The engine owns the process signals exclusively — nothing else in the process may install a handler — and the embedded API server is *not* one of the things holding one. If it were, it would shut the dashboard down on the first Ctrl+C, exactly when an operator wants it alive to watch the drain converge.
+SIGINT / SIGTERM trigger a **close-the-door-then-drain** shutdown, designed so a restart picks up cleanly without a half-finished turn. The engine owns the process signals exclusively — nothing else in the process may install a handler, the embedded API server included.
+
+**The HTTP surface comes down first, before the drain — not after it.** The drain waits for in-flight turns to finish, and a listener still accepting webhooks throughout would keep minting new ones; closing the door first is what makes the drain converge at all. The cost is real and worth knowing: the dashboard, the REST API and every webhook endpoint stop answering the moment you press Ctrl+C, so the drain is watched in the **logs** (`drain_in_progress`, every 10 s) rather than on a screen.
 
 ```mermaid
 flowchart TD
-    SIG["Signal arrives (1st)<br/><i>signals handed back to the OS</i>"] --> S1
-    S1["1. Quiesce every held seat"] --> S2
-    S2["2. Stop work producers<br/>timers · scheduler"] --> S3
-    S3["3. Wait for in-flight handlers"] --> S4
-    S4["4. Release seats; stop sandbox,<br/>transports, maintenance"] --> S5
-    S5["5. Close stream + store"] --> S6
-    S6["6. Embedded API server exits"]
+    SIG["Signal arrives (1st)<br/><i>signals handed back to the OS</i>"] --> S0
+    S0["1. Embedded API server stops<br/>dashboard · REST · webhooks"] --> S1
+    S1["2. Quiesce every held seat"] --> S2
+    S2["3. Stop work producers<br/>timers · scheduler"] --> S3
+    S3["4. Wait for in-flight handlers"] --> S4
+    S4["5. Release seats; stop sandbox,<br/>transports, maintenance"] --> S5
+    S5["6. Close stream + store"]
     SIG -.->|"2nd signal:<br/>immediate exit"| X["Process dies"]
 ```
 
-1. **Quiesce every held seat** — the node stops taking new work while staying
+1. **The API server stops** — the listener is closed before anything is
+   drained, so no new webhook, REST call or dashboard socket can arrive to
+   create work the drain would then have to wait for.
+2. **Quiesce every held seat** — the node stops taking new work while staying
    attached. This is what makes the wait below terminate: without it the
    mailbox keeps feeding this node work for as long as its peers keep
    publishing, and "wait until nothing is running" never comes true.
    Quiesce is also the *reversible* verb, so a drain that turns out to be a
    shed can be undone.
-2. **Stop work producers** — deadline timers and the cron scheduler, and
+3. **Stop work producers** — deadline timers and the cron scheduler, and
    close the concurrency gate. Turns still parked at it are released at
    once and their deliveries deferred — left unacked, so a peer picks them
    up rather than waiting out a redelivery timer — instead of starting
@@ -258,16 +263,14 @@ flowchart TD
    and parked behind a slot is past that point. Closing is reversible, so
    a node that drained and then converged serves again rather than
    holding its seats and refusing every turn.
-3. **Wait for in-flight handlers** — indefinitely; running turns finish
+4. **Wait for in-flight handlers** — indefinitely; running turns finish
    their rounds until the count hits 0, with `drain_in_progress` logging the
    in-flight count every 10 s.
-4. **Release the seats**, then stop the sandbox waiter, the notification
+5. **Release the seats**, then stop the sandbox waiter, the notification
    transports and the maintenance duties — the waiter last of the three to
    start stopping, because its keepalive is what stops a running box being
    reaped while turns are still finishing.
-5. **Close the backends** — the stream connection and the store file.
-6. **API server exits** — the dashboard is served through the whole drain,
-   and is brought down only after the engine has fully stopped.
+6. **Close the backends** — the stream connection and the store file.
 
 **Let LLMs finish their rounds — but only the running ones.** The drain distinguishes two kinds of in-flight turn. Turns already past the concurrency gate (model rounds under way) run to completion: they may have fired side effects, and abandoning that work buys a faster deploy by throwing away what was nearly done. Turns delivered before the quiesce but still *waiting* for a slot abort immediately — they have called no model and fired nothing, so their trigger is simply deferred. Without this split, a backlog parked behind `max_concurrent` would run full multi-minute executor → reviewer turns one after another during a shutdown that waits for them indefinitely.
 
@@ -299,7 +302,11 @@ duplicate — the [completion ledger](seat-ownership.md#the-completion-ledger)
 covers a turn that *finished*, and this one did not. That is the trade-off
 you opted into by sending the second signal.
 
-**Watching the drain.** The dashboard stays live through the entire drain (the embedded API server is stopped only after `stop()` completes). Its engine pill shows the in-flight handler count whenever it is non-zero, and the overview's attention queue reports the drain with that count — so an operator can watch it converge to 0. The count is also available programmatically:
+**Watching the drain.** Not on the dashboard: the embedded API server is stopped *first*, before the drain begins, so the dashboard, the REST API and `GET /health` all stop answering on the first Ctrl+C. **The logs are the drain's only live view** — the engine writes `drain_in_progress` with the in-flight count every 10 seconds until `drain_complete`.
+
+On a **split deployment** the standalone API process is a separate process and keeps serving while an engine node drains, but it has no engine reference, so it reports the fleet rather than that node's in-flight count.
+
+The count is available programmatically up to the moment the surface closes:
 
 - the engine's in-flight turn count
 - `engine.shutting_down` — `True` from the first moment of `stop()` (unlike `is_running`, which only flips once teardown completes)

@@ -138,20 +138,39 @@ crewlet config import company.yaml   # one-shot bootstrap of Tier B
 crewlet run                          # boots from ./crewlet.yaml + the store
 ```
 
-**Option 2 — run first, configure over the API:**
+**Option 2 — run first, configure the running node:**
 
 ```bash
 crewlet run                          # boots in UNCONFIGURED state
+crewlet config import company.yaml -summary "initial bootstrap"
+# Detects the running engine, goes through its API, and every node
+# reconciles onto the new activation epoch — no restart needed.
+```
+
+The same thing by hand, which is what the CLI is doing:
+
+```bash
 curl -X PUT https://crewlet.example.com/config \
   -H "Authorization: Bearer $CREWLET_API_TOKEN_FOUNDER" \
   -H "Content-Type: application/yaml" \
   -H "X-Summary: initial bootstrap" \
   --data-binary @company.yaml
-# Every node reconciles onto the new activation epoch and spawns the
-# company in place — no restart needed.
 ```
 
-`crewlet run` defaults `-config` to `./crewlet.yaml` and `-company` to `./company.yaml` in the working directory; naming a path is only needed when a file lives elsewhere.
+This is also how you change a company that is **already running**: the same
+command, against a node that already has one.
+
+`crewlet run` defaults `-config` to `./crewlet.yaml` and `-company` to `./company.yaml` in the working directory; naming a path is only needed when a file lives elsewhere. **A missing `./company.yaml` is not an error** — the store is authoritative, so a node with no Tier B file boots on whatever the store holds, or unconfigured when it holds nothing.
+
+`-company` only ever **bootstraps an empty store**. Once a company exists the file is ignored, with a `company_seed_ignored` warning naming it and the active revision, so a restart cannot revert a change made live. Two flags cover the other intents:
+
+| I want to… | Use |
+|---|---|
+| fill an empty store at first boot | `crewlet run -company company.yaml` (the default) |
+| change a **running** fleet, no restart | `crewlet config import company.yaml` |
+| make a file the company again on restart | `crewlet run -import-company company.yaml` |
+
+`-company` and `-import-company` together are refused: they ask for opposite things, and picking a winner silently would be picking it about the flag that overwrites a running company.
 
 ---
 
@@ -476,7 +495,7 @@ secrets:
 
 The whole document is stored as `{"__encrypted__": "enc:v1:<key_id>:<base64>"}` — nothing about the config's structure (org chart, policies, model choices, or secrets) is visible in the database. A stolen DB reveals nothing.
 
-- **Encrypt on write.** Every write path (`PUT /config`, per-entity `PUT`, `crewlet config import`, `crewlet run -company`) encrypts the whole document before the payload reaches the DB.
+- **Encrypt on write.** Every write path (`PUT /config`, per-entity `PUT`, `crewlet config import`, `crewlet run -company` / `-import-company`) encrypts the whole document before the payload reaches the DB.
 - **Decrypt at the read boundary.** The engine, API process, migrations, and CLI each decrypt the blob (`load_config`) into the plaintext structure before use — the Tier A key is required for **every** config read. `${VAR}` references *inside* the config are kept verbatim in the blob and still resolve from the environment at construction time.
 - **Fail closed.** If an activated revision is stored encrypted but no keyring is configured (or the key is missing), the engine refuses to boot rather than run with an opaque blob it can't read.
 - **One key, not N env vars.** After encrypting, the engine needs only the Tier A key in its environment — not a per-secret env var for every LLM key, MCP token, and webhook secret.

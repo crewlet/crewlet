@@ -414,3 +414,144 @@ func TestTooManyArgumentsAreCountedAsGiven(t *testing.T) {
 		})
 	}
 }
+
+// A FLAG A SUBCOMMAND DOES NOT READ IS REFUSED, NOT IGNORED.
+//
+// Every `crewlet config` subcommand used to share one FlagSet, so each of
+// them accepted all five of the others' flags and silently did nothing with
+// them. The dangerous one was `-dry-run`: it belongs to `rekey`, and
+// `crewlet config import company.yaml -dry-run` parsed cleanly and wrote the
+// revision anyway — an operator asked for no write, was told nothing, and got
+// one. The rest were merely mute.
+//
+// This is the same rule `run` follows for a leftover positional, and it can
+// only be checked from outside: a flag that parses and is dropped leaves no
+// trace in the output to assert on, which is exactly why it survived.
+func TestAFlagAnotherSubcommandOwnsIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	cfg := bootstrapForStore(t, dir)
+	doc := companyFile(t, dir, "company.yaml", func(doc string) string { return doc })
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		// The one that wrote. `-dry-run` is rekey's.
+		{"import -dry-run", []string{"import", doc, "-dry-run"}},
+		{"activate -dry-run", []string{"activate", "some-id", "-dry-run"}},
+		// The mute ones.
+		{"import -limit", []string{"import", doc, "-limit", "5"}},
+		{"import -redact", []string{"import", doc, "-redact"}},
+		{"import -revision", []string{"import", doc, "-revision", "x"}},
+		{"import -against", []string{"import", doc, "-against", "active"}},
+		{"show -redact", []string{"show", "-redact"}},
+		{"revisions -redact", []string{"revisions", "-redact"}},
+		{"export -limit", []string{"export", "-limit", "5"}},
+		{"diff -limit", []string{"diff", "some-id", "-limit", "5"}},
+		{"rekey -limit", []string{"rekey", "-limit", "5"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, _, err := configCmd(t, cfg, tc.args...); err == nil {
+				t.Fatalf("config %v was accepted", tc.args)
+			}
+		})
+	}
+	// AND THE WRITE DID NOT HAPPEN. Refusing the flag is only half the
+	// claim; the other half is that the refused `import -dry-run` above
+	// left the store as it found it. Without this the test would pass on a
+	// build that errored *after* inserting the revision.
+	out, _, err := configCmd(t, cfg, "revisions")
+	if err != nil {
+		t.Fatalf("config revisions: %v", err)
+	}
+	if !strings.Contains(out, "no revisions are stored") {
+		t.Errorf("a refused import still wrote a revision:\n%s", out)
+	}
+}
+
+// EVERY SUBCOMMAND STILL READS ITS OWN FLAG. The guard above is only correct
+// if splitting the sets did not also drop a flag from the command that owns
+// it — a refusal everywhere is indistinguishable from a working allowlist
+// until this runs.
+func TestEachSubcommandStillAcceptsItsOwnFlags(t *testing.T) {
+	dir := t.TempDir()
+	cfg := bootstrapForStore(t, dir)
+	doc := companyFile(t, dir, "company.yaml", func(doc string) string { return doc })
+	if _, _, err := configCmd(t, cfg, "import", doc); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"revisions -limit", []string{"revisions", "-limit", "5"}},
+		{"export -redact", []string{"export", "-redact"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, _, err := configCmd(t, cfg, tc.args...); err != nil {
+				t.Errorf("config %v: %v", tc.args, err)
+			}
+		})
+	}
+	// `rekey` cannot SUCCEED here — this fixture declares no keyring, and
+	// rekey refuses without one — so the claim is narrower and has to be
+	// stated as such: -dry-run reached the command rather than being
+	// refused by the flag parser. Asserting success instead would only
+	// prove the fixture had a key.
+	t.Run("rekey -dry-run", func(t *testing.T) {
+		_, _, err := configCmd(t, cfg, "rekey", "-dry-run")
+		if err == nil {
+			t.Fatal("rekey succeeded with no keyring configured")
+		}
+		if strings.Contains(err.Error(), "not defined") {
+			t.Errorf("rekey refused its own flag: %v", err)
+		}
+		if !strings.Contains(err.Error(), "secrets.keys") {
+			t.Errorf("rekey failed for an unexpected reason: %v", err)
+		}
+	})
+	// -revision and -against need a real id, so they are exercised against
+	// the revision the import above wrote rather than a literal.
+	id := activeRevisionID(t, cfg)
+	if _, _, err := configCmd(t, cfg, "export", "-revision", id); err != nil {
+		t.Errorf("export -revision: %v", err)
+	}
+	if _, _, err := configCmd(t, cfg, "diff", id, "-against", "active"); err != nil {
+		t.Errorf("diff -against: %v", err)
+	}
+}
+
+// Nothing connects configSubcommands to the switch that dispatches them or to
+// the usage text, and all three are screens apart. A name in the list that no
+// case handles reaches an "unreachable" default; a name the switch handles
+// that the list omits is refused before it is ever dispatched; and either one
+// missing from the usage text is a command an operator is never told about.
+// This is the `config` twin of TestUsageAdvertisesEveryDispatchedCommand.
+func TestEveryConfigSubcommandIsDispatchedAndDocumented(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	cfg := bootstrapForStore(t, dir)
+	for _, sub := range configSubcommands {
+		if !strings.Contains(configUsage, "crewlet config "+sub+" ") {
+			t.Errorf("configUsage never names %q", sub)
+		}
+		// Dispatched, not necessarily successful: most of these fail on an
+		// empty store. What must never come back is the unknown-command
+		// refusal, which is what an undispatched name produces.
+		_, _, err := configCmd(t, cfg, sub)
+		if err != nil && strings.Contains(err.Error(), "unknown config command") {
+			t.Errorf("%q is listed but not dispatched", sub)
+		}
+	}
+	if _, _, err := configCmd(t, cfg, "nonesuch"); err == nil ||
+		!strings.Contains(err.Error(), "unknown config command") {
+		t.Errorf("an unknown subcommand gave %v, want the unknown-command refusal", err)
+	}
+	// An unknown subcommand carrying another command's flag must still be
+	// reported as an unknown COMMAND. The guard runs before the flag sets
+	// are built precisely so the operator is sent to the name they
+	// misspelled rather than to a flag that was never the problem.
+	if _, _, err := configCmd(t, cfg, "nonesuch", "-limit", "5"); err == nil ||
+		!strings.Contains(err.Error(), "unknown config command") {
+		t.Errorf("`config nonesuch -limit 5` gave %v, want the unknown-command refusal", err)
+	}
+}

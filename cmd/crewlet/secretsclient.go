@@ -4,14 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
-	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -33,13 +29,6 @@ import (
 // A fleet's engine is running. The local table is what a STOPPED node can
 // write, and the engine migrates those rows onto the fleet at its next start
 // — see [github.com/crewlet/crewlet/internal/fleetsecrets.Migrate].
-
-// apiTokenEnv is where the CLI reads a bearer token that is not in Tier A.
-//
-// AN ENVIRONMENT VARIABLE, never a flag: a token on argv is in the shell
-// history and in `ps` output for every user on the host, which is the same
-// reason `secrets set` reads its value from stdin.
-const apiTokenEnv = "CREWLET_API_TOKEN"
 
 // apiTimeout bounds one call to the node's API.
 //
@@ -65,46 +54,15 @@ type secretsClient struct {
 // this command runs on the node whose config it just read — and `-api` is
 // there for the case where it does not.
 func newSecretsClient(boot *config.Bootstrap, override string) (*secretsClient, error) {
-	base := strings.TrimSpace(override)
-	if base == "" {
-		if boot.API.Port == 0 {
-			return nil, errors.New(
-				"this node's api.port is 0, so it serves no HTTP surface and " +
-					"there is no way to reach the fleet's secret store; set " +
-					"api.port, or pass -api URL for a node that has one")
-		}
-		host := strings.TrimSpace(boot.API.Host)
-		switch host {
-		case "", "0.0.0.0", "::", "[::]":
-			host = "127.0.0.1"
-		}
-		base = "http://" + net.JoinHostPort(host, strconv.Itoa(boot.API.Port))
+	base, err := nodeBaseURL(boot, override, "the fleet's secret store")
+	if err != nil {
+		return nil, err
 	}
-	parsed, err := url.Parse(base)
-	if err != nil || parsed.Host == "" {
-		return nil, fmt.Errorf("%q is not a URL the API can be reached at "+
-			"(want something like http://127.0.0.1:8080)", base)
+	token, err := nodeAPIToken(boot, "/secrets")
+	if err != nil {
+		return nil, err
 	}
-	token := strings.TrimSpace(os.Getenv(apiTokenEnv))
-	if token == "" && !boot.API.Auth.Disabled {
-		// THE FIRST configured token, and it is not an arbitrary pick:
-		// Tier A's token list is what THIS node accepts, so any entry
-		// authenticates. The id is stamped as the author of the write,
-		// which is why the environment variable exists — an operator who
-		// wants their own attribution supplies their own token.
-		if len(boot.API.Auth.Tokens) == 0 {
-			return nil, fmt.Errorf(
-				"this node lists no api.auth.tokens, so nothing can authenticate "+
-					"to its /secrets surface; add one, or export %s",
-				apiTokenEnv)
-		}
-		token = boot.API.Auth.Tokens[0].Token
-	}
-	return &secretsClient{
-		base:  strings.TrimRight(parsed.String(), "/"),
-		token: token,
-		http:  httpx.Client(apiTimeout),
-	}, nil
+	return &secretsClient{base: base, token: token, http: httpx.Client(apiTimeout)}, nil
 }
 
 // Describe names where a write lands, for the line the command prints.

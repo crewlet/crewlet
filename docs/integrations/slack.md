@@ -101,7 +101,7 @@ The run exchanges it for a 12-hour access token and **records both in the ledger
 Run the API server **before** provisioning, publicly reachable at `-public-url`:
 
 ```bash
-crewlet run -config config.yaml -roles ingress -api-host 0.0.0.0 -api-port 8080   # unconfigured is fine
+crewlet run -config crewlet.yaml -roles ingress -api-host 0.0.0.0 -api-port 8080   # unconfigured is fine
 ```
 
 Slack verifies each app's events **Request URL** with a `url_verification` challenge, and the API answers it unconditionally — no engine, company config or credentials needed. That exemption is deliberate and safe: the response is a pure echo of the caller's own challenge, and it has to work because during provisioning the signing secret does not exist yet, so a verified handshake would be impossible and the app could never be installed. If an app's Request URL still shows *unverified* in its settings page, click **Verify** there.

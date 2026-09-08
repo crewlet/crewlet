@@ -455,3 +455,66 @@ func TestThePostureGateReachesTriggerAdmission(t *testing.T) {
 		t.Error("a node that converged back never reopened trigger admission")
 	}
 }
+
+// AN ENGINE RUNS WITH NO COMPANY AT ALL.
+//
+// The store is authoritative at runtime and a fleet's first revision may
+// arrive over the API, so a node has to be able to start with nothing: serving
+// its HTTP surface, holding no seats, and waiting for the control plane to
+// hand it an epoch. This was refused — engine.New required a company — which
+// made the whole documented "unconfigured" state unreachable from the binary:
+// /health never said it, /ready never went 503 for it, and the flag that
+// reported it was set to true unconditionally with no caller ever setting it
+// back.
+//
+// Start as well as New, because the two failed at different places: New built
+// the epoch, and Start read the company's name to log that it had started.
+func TestAnEngineRunsUnconfigured(t *testing.T) {
+	t.Parallel()
+	e, err := engine.New(t.Context(), engine.Options{
+		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
+			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		}),
+	})
+	if err != nil {
+		t.Fatalf("an engine with no company was refused: %v", err)
+	}
+	t.Cleanup(func() { e.Stop(context.Background()) })
+	if e.Company() != nil {
+		t.Error("an unconfigured engine reports an epoch")
+	}
+	// The placement sweep asks on every tick, and an unconfigured node has
+	// an empty seat set rather than an unanswerable question.
+	if got := len(e.Company().Seats()); got != 0 {
+		t.Errorf("seats = %d, want none", got)
+	}
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatalf("an unconfigured engine failed to start: %v", err)
+	}
+}
+
+// AND ITS FIRST APPLY BRINGS IT UP. The unconfigured state is only useful if
+// the node leaves it without a restart, which is the whole point of being able
+// to bootstrap a fleet through PUT /config.
+func TestAnUnconfiguredEngineTakesItsFirstEpoch(t *testing.T) {
+	t.Parallel()
+	e, err := engine.New(t.Context(), engine.Options{
+		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
+			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		}),
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+	t.Cleanup(func() { e.Stop(context.Background()) })
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc)); err != nil {
+		t.Fatalf("the first apply onto an unconfigured node failed: %v", err)
+	}
+	company := e.Company()
+	if company == nil {
+		t.Fatal("the node is still unconfigured after applying a revision")
+	}
+	if len(company.Seats()) == 0 {
+		t.Error("the applied company contributed no seats")
+	}
+}
