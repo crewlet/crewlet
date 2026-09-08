@@ -91,8 +91,20 @@ func AdminCredential(stored string) setup.Requirement {
 		Required:   true,
 		Present:    stored != "",
 		Stored:     stored,
-		Help:       "Creates each agent's bot and joins it to the team, so it needs admin rights.",
-		Where:      "A personal access token belonging to a system administrator.",
+		// THE LINK IS BUILT FROM THE INSTANCE BOX, because a self-hosted
+		// app has no address this engine could know: `{url}` is filled
+		// from what is typed above it, so the link follows the field as
+		// somebody fills it in and is dropped entirely until they do.
+		//
+		// IT POINTS AT THE SWITCH, not at the token page. Creating a
+		// personal access token is Profile > Security on the admin's own
+		// account, which is a modal rather than an address; what IS
+		// addressable is the setting that has to be on before that page
+		// offers anything at all, and it is the step people miss.
+		Help: "Creates each agent's bot and joins it to the team, so it belongs to " +
+			"a system administrator. Make one under Profile > Security > Personal " +
+			"Access Tokens, after [turning them on]" +
+			"({url}/admin_console/integrations/integration_management).",
 	}
 }
 
