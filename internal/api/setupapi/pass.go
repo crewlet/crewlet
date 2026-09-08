@@ -354,7 +354,7 @@ func (s *Service) record(ctx context.Context, kind integration.Kind, run *setup.
 	// loop would have made it due. A pass by hand changes what is true, not
 	// how often the engine looks.
 	next.NextAttemptAt = now.Add(integration.Schedule{}.WithDefaults().
-		Next(next.Report, next.Attempts, 0))
+		Next(next.Report, next.Attempts))
 	if err := s.status.SaveIntegration(ctx, next); err != nil {
 		// The pass happened and its work at the third-party app is durable. What is
 		// lost is the record, so the loop re-runs a pass with nothing left

@@ -221,6 +221,11 @@ type Store interface {
 // The caller sets NextAttemptAt, through [Schedule.Next], because the cadence
 // is the loop's business and a pass run by hand does not change it.
 func Observe(state State, kind Kind, findings []Finding, err error, now time.Time) (next State, forget bool) {
+	// THE WAIT THIS ROW WAS ON before this pass changed it. Attempts pace a
+	// backoff, and a backoff only means anything within one wait — see
+	// [CadenceOf].
+	was := CadenceOf(state.Report)
+
 	state.Kind = kind
 	state.LastAttemptAt = now
 
@@ -274,6 +279,20 @@ func Observe(state State, kind Kind, findings []Finding, err error, now time.Tim
 		} else {
 			state.Attempts++
 		}
+	}
+	// A CHANGE OF WAIT RESTARTS THE COUNT. Attempts are consecutive passes
+	// that did not settle, and [Schedule.Next] reads them against whichever
+	// wait the row is NOW on — so a surface that spent ten ticks waiting on
+	// the engine carried a count of ten into the wait for a PERSON and
+	// started it at the ceiling.
+	//
+	// That is the one cadence where the ceiling is wrong. The brisk admin
+	// interval exists so an operator who installs an app "sees provisioning
+	// continue without pressing anything", and inherited attempts skipped it
+	// entirely: the fast retries never happened, and the operator watched a
+	// screen that would not move for ten minutes.
+	if CadenceOf(state.Report) != was {
+		state.Attempts = min(state.Attempts, 1)
 	}
 	state.Outcome = state.Report.Outcome()
 	return state, false

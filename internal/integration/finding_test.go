@@ -257,3 +257,66 @@ func TestTheAdvisoryIsTheOnlyReadyVerdict(t *testing.T) {
 		}
 	}
 }
+
+// THE ORDER ITSELF, AS DATA. Not "they are all different" and not "the
+// advisory is last" — the actual sequence, so a change to it is a change to
+// this list.
+//
+// Distinctness and advisory-last are necessary and nowhere near sufficient.
+// Every drift this ranking was written to end sits in the MIDDLE of it, and
+// each one keeps both of those properties:
+//
+//   - GitLab checked excess access immediately before the short-grant check,
+//     so a seat holding too much in one dimension and too little in another
+//     reported ready with a note.
+//   - Datadog checked it before the failed-agent count, so a company with one
+//     over-granted agent and one that could not be provisioned at all
+//     reported ready.
+//   - GitHub checked its installation-level excess before the WEBHOOK check,
+//     so an app holding one spare permission reported healthy while its
+//     deliveries reached nobody.
+//
+// And two more disagreed about whether an unknown access tier outranks a
+// broken delivery path. Swapping any of those pairs leaves the ranks distinct
+// and the advisory last, and passes every other test in this file.
+func TestTheSeverityOrderIsPinned(t *testing.T) {
+	// Worst first: how much of the integration is not working, from "the
+	// pass could not authenticate" down to "it works, but somebody should
+	// look". Within one level, engine-owned work before person-owned work,
+	// because telling a person to fix something the engine is mid-way
+	// through sends them to repair what is not broken.
+	want := []FindingKind{
+		FindingCredentialMissing,
+		FindingCredentialRejected,
+		FindingApprovalRequired,
+		FindingIngressBlocked,
+		FindingIngressPending,
+		FindingIdentityMissing,
+		FindingIdentityFailed,
+		FindingGrantPending,
+		FindingUnknownTier,
+		FindingGrantShort,
+		FindingGrantExcess,
+	}
+	if len(want) != len(knownKinds) {
+		t.Fatalf("this list has %d kinds and the package defines %d: a kind was "+
+			"added without deciding where it ranks", len(want), len(knownKinds))
+	}
+	for i := 1; i < len(want); i++ {
+		worse, better := want[i-1], want[i]
+		if worse.severity() >= better.severity() {
+			t.Errorf("%s no longer outranks %s (%d >= %d)",
+				worse, better, worse.severity(), better.severity())
+		}
+	}
+	// AND THE UNKNOWN KIND SITS BETWEEN THE LAST REAL PROBLEM AND THE
+	// ADVISORY, which is its own decision: ranked worst, an older node would
+	// report a healthy company as broken; ranked below the advisory, one
+	// spare permission would hide a finding this binary cannot read.
+	unknown := FindingKind("a-kind-from-a-newer-build").severity()
+	if !(FindingGrantShort.severity() < unknown && unknown < FindingGrantExcess.severity()) {
+		t.Errorf("an unknown kind ranks %d, want between %s (%d) and %s (%d)",
+			unknown, FindingGrantShort, FindingGrantShort.severity(),
+			FindingGrantExcess, FindingGrantExcess.severity())
+	}
+}

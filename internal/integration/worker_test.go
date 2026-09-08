@@ -853,3 +853,35 @@ func TestStampEndpointFollowsTheSurfacesIngress(t *testing.T) {
 		})
 	}
 }
+
+// A PEER'S SURFACE IS SKIPPED, NOT DELETED.
+//
+// The status rows are the FLEET's, written by whichever build ran the last
+// pass, and a rolling upgrade puts a newer node's kind in front of an older
+// reader. [Kind.Valid]'s own doc promises what happens then: "an unknown kind
+// is SKIPPED by the worker and rendered as-is by the API."
+//
+// It was deleted instead, and this build cannot tell a peer's kind from a
+// departed one by looking at its own registrations — both are simply absent.
+// So an older node erased the newer node's status on every tick and the newer
+// node wrote it back on every pass, for the length of the upgrade.
+func TestAKindThisBuildDoesNotKnowIsLeftAlone(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	peer := Kind("a-surface-from-a-newer-build")
+	store := newStore(
+		State{Kind: peer, Endpoint: "https://engine.example.com"},
+		State{Kind: KindJira},
+	)
+
+	// Neither is registered here: the peer's kind because this build has
+	// never heard of it, jira because this company stopped declaring it.
+	at(t, now, store, nil, Registration{Reconciler: &fakeReconciler{kind: KindGitLab}}).
+		Tick(context.Background())
+
+	if !store.has(peer) {
+		t.Error("a surface only a newer build knows was deleted from the fleet's status")
+	}
+	if store.has(KindJira) {
+		t.Error("a departed surface this build DOES know was not forgotten")
+	}
+}

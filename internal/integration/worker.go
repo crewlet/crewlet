@@ -241,11 +241,6 @@ type Registration struct {
 	// wired still reconciles, and a disconnect asked for there waits for
 	// a node that can rather than failing the tick.
 	Disconnector Disconnector
-
-	// Settled overrides [Schedule.Settled] for this surface. Zero takes the
-	// schedule's own value, which is the right answer for a third-party app with no
-	// reason to differ. See [Schedule.next] for the one that does.
-	Settled time.Duration
 }
 
 // DutyFunc claims the single-owner reconcile duty for one tick.
@@ -652,7 +647,7 @@ func (w *Worker) tearDown(ctx context.Context, kind Kind, state State, now time.
 
 	log.WarnContext(ctx, "integration_teardown_failed",
 		"integration", kind.String(), "attempts", state.Attempts, "error", err)
-	state.NextAttemptAt = now.Add(w.schedule.Next(state.Report, state.Attempts, reg.Settled))
+	state.NextAttemptAt = now.Add(w.schedule.Next(state.Report, state.Attempts))
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := w.store.SaveIntegration(ctx, state); err != nil {
 		// The third-party app work that DID land is durable; what is lost is the
@@ -714,7 +709,7 @@ func (w *Worker) reconcile(ctx context.Context, kind Kind, state State, now time
 			"integration", kind.String(), "attempts", state.Attempts, "error", err)
 	}
 
-	state.NextAttemptAt = now.Add(w.schedule.Next(state.Report, state.Attempts, reg.Settled))
+	state.NextAttemptAt = now.Add(w.schedule.Next(state.Report, state.Attempts))
 
 	if err := w.store.SaveIntegration(ctx, state); err != nil {
 		// The pass still happened, and its work at the third-party app is durable.
@@ -768,6 +763,18 @@ func StampEndpoint(state *State, kind Kind, current string) {
 func (w *Worker) forgetDeparted(ctx context.Context, states map[Kind]State) {
 	for kind := range states {
 		if _, live := w.byKind[kind]; live {
+			continue
+		}
+		if !kind.Valid() {
+			// A PEER'S SURFACE, NOT A DEPARTED ONE, and this build cannot
+			// tell the difference by looking at its own registrations —
+			// every kind it does not know is missing from byKind either
+			// way. [Kind.Valid] already promises what happens here: "an
+			// unknown kind is SKIPPED by the worker and rendered as-is by
+			// the API", because the store holds state written by whichever
+			// build ran the last pass. Deleting it made an older node in a
+			// rolling upgrade erase the newer node's status on every tick,
+			// and the newer node write it back on every pass of its own.
 			continue
 		}
 		if err := w.store.ForgetIntegration(ctx, kind); err != nil {

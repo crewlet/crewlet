@@ -13,8 +13,8 @@ func TestNextTurnsOnTheActor(t *testing.T) {
 	degradedAdmin := Report{Phase: PhaseDegraded, Actor: ActorAdmin}
 	degradedOperator := Report{Phase: PhaseDegraded, Actor: ActorOperator}
 
-	admin := s.Next(degradedAdmin, 1, 0)
-	operator := s.Next(degradedOperator, 1, 0)
+	admin := s.Next(degradedAdmin, 1)
+	operator := s.Next(degradedOperator, 1)
 	if admin != s.AdminBase {
 		t.Fatalf("a first admin wait is %s, want %s", admin, s.AdminBase)
 	}
@@ -34,7 +34,7 @@ func TestOperatorWaitDoesNotBackOff(t *testing.T) {
 	s := DefaultSchedule
 	report := Report{Phase: PhaseUnconfigured, Actor: ActorOperator}
 	for _, attempts := range []int{1, 2, 10, 1000} {
-		if got := s.Next(report, attempts, 0); got != s.Operator {
+		if got := s.Next(report, attempts); got != s.Operator {
 			t.Fatalf("after %d attempts the operator wait is %s, want %s",
 				attempts, got, s.Operator)
 		}
@@ -50,7 +50,7 @@ func TestAdminWaitDoublesAndCaps(t *testing.T) {
 
 	var previous time.Duration
 	for attempts := 1; attempts <= 20; attempts++ {
-		got := s.Next(report, attempts, 0)
+		got := s.Next(report, attempts)
 		if got <= 0 {
 			t.Fatalf("attempt %d produced a wait of %s, which every caller "+
 				"reads as already due", attempts, got)
@@ -97,25 +97,22 @@ func TestBackoffTreatsNoAttemptsAsTheFirst(t *testing.T) {
 	}
 }
 
-// A settled surface takes its own interval when it has one. Slack's
-// app-manifest methods are rate limited to roughly one request a minute, so
-// re-reading twenty seats on the shared ten-minute cadence would spend the
-// whole interval waiting on a rate limit.
-func TestSettledOverrideAppliesOnlyWhenReady(t *testing.T) {
+// A SETTLED SURFACE TAKES THE SHARED INTERVAL, and there is only one.
+//
+// A per-surface override lived here, justified by Slack's app-manifest rate
+// limit — but Slack registers no reconciler, so the surface it was written for
+// could never have used it and nothing ever set it. It is collapsed rather
+// than left half-wired; this pins that there is one cadence, so re-adding a
+// knob means re-adding a caller with it.
+func TestASettledSurfaceTakesTheSharedInterval(t *testing.T) {
 	s := DefaultSchedule
-	const slack = 2 * time.Hour
-
-	if got := s.Next(Ready(), 0, slack); got != slack {
-		t.Fatalf("a settled surface waited %s, want its own %s", got, slack)
+	if got := s.Next(Ready(), 0); got != s.Settled {
+		t.Fatalf("a settled surface waited %s, want the shared %s", got, s.Settled)
 	}
-	if got := s.Next(Ready(), 0, 0); got != s.Settled {
-		t.Fatalf("a surface with no override waited %s, want the shared %s", got, s.Settled)
-	}
-	// The override is a SETTLED interval. A surface that is waiting on the
-	// third-party app must not inherit it, or a rate-limited surface would
-	// also be the slowest one to finish provisioning.
+	// And a surface still working takes the waiting cadence, not the
+	// settled one, however many passes it has had.
 	working := Report{Phase: PhaseProvisioning, Actor: ActorEngine}
-	if got := s.Next(working, 1, slack); got != s.WaitingBase {
+	if got := s.Next(working, 1); got != s.WaitingBase {
 		t.Fatalf("a provisioning surface waited %s, want the %s waiting base",
 			got, s.WaitingBase)
 	}
@@ -159,5 +156,47 @@ func TestDefaultScheduleIsOrdered(t *testing.T) {
 	if Interval > s.AdminBase {
 		t.Errorf("the loop ticks every %s but the schedule asks for %s",
 			Interval, s.AdminBase)
+	}
+}
+
+// A CHANGE OF WAIT RESTARTS THE BACKOFF.
+//
+// Attempts pace the backoff and [Schedule.Next] reads them against whichever
+// wait the row is NOW on, so a count accumulated under one wait was carried
+// straight into another. A surface that spent ten ticks waiting on the engine
+// entered the wait for a PERSON already at its ceiling.
+//
+// That is the one cadence where the ceiling is wrong. The brisk admin
+// interval exists so an operator who installs an app sees provisioning
+// continue without pressing anything, and inherited attempts skipped every
+// fast retry: the screen would not move for ten minutes.
+func TestTheBackoffRestartsWhenTheWaitChanges(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	schedule := Schedule{}.WithDefaults()
+
+	// Ten passes waiting on the engine.
+	state := State{Kind: KindGitHub}
+	for range 10 {
+		state, _ = Observe(state, KindGitHub,
+			[]Finding{{Kind: FindingIngressPending}}, nil, now)
+	}
+	if state.Attempts < 10 {
+		t.Fatalf("attempts = %d, want the engine wait to have accumulated", state.Attempts)
+	}
+	waiting := schedule.Next(state.Report, state.Attempts)
+	if waiting != schedule.WaitingMax {
+		t.Fatalf("the engine wait is %s, want it at its ceiling %s", waiting, schedule.WaitingMax)
+	}
+
+	// The same surface now waits on a PERSON.
+	state, _ = Observe(state, KindGitHub,
+		[]Finding{{Kind: FindingApprovalRequired}}, nil, now)
+
+	admin := schedule.Next(state.Report, state.Attempts)
+	if admin > 2*schedule.AdminBase {
+		t.Errorf("the first wait for a person is %s, want it near %s: an operator "+
+			"installing the app sees nothing happen for %s",
+			admin, schedule.AdminBase, admin)
 	}
 }
