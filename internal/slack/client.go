@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -93,6 +94,46 @@ func call(ctx context.Context, httpClient *http.Client, method, token string, bo
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("slack: %s: %w", method, err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return fmt.Errorf("slack: %s: %w", method, err)
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return &RateLimited{Method: method, RetryAfter: retryAfter(resp)}
+	}
+	return decode(method, raw, out)
+}
+
+// callQuery is [call] for a method that will not read a JSON body.
+//
+// SLACK ACCEPTS JSON FOR SOME METHODS AND SILENTLY IGNORES IT FOR THE REST,
+// which is the worst of the three possible behaviours: `bots.info` posted as
+// JSON answers `{"ok":true}` with no bot object at all, so the parameter is
+// dropped, the envelope says success, and the caller decodes an empty answer
+// from a call that reported working. Measured against the live API.
+//
+// The parameters ride in the query string, which every read method accepts,
+// and the body stays empty.
+func callQuery(ctx context.Context, httpClient *http.Client,
+	method, token string, params url.Values, out any,
+) error {
+	address := APIBase + "/" + method
+	if encoded := params.Encode(); encoded != "" {
+		address += "?" + encoded
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		return fmt.Errorf("slack: %s: %w", method, err)
+	}
+	req.Header.Set("Accept", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("slack: %s: %w", method, err)
@@ -243,9 +284,16 @@ func (c *Client) AppOf(ctx context.Context, botID string) (string, error) {
 			AppID string `json:"app_id"`
 		} `json:"bot"`
 	}
-	if err := call(ctx, c.http, "bots.info", c.token,
-		map[string]any{"bot": botID}, &out); err != nil {
+	if err := callQuery(ctx, c.http, "bots.info", c.token,
+		url.Values{"bot": {botID}}, &out); err != nil {
 		return "", err
+	}
+	if out.Bot.AppID == "" {
+		// AN EMPTY ANSWER IS AN ERROR HERE, because Slack's is not: a
+		// method that will not read the parameter answers ok with
+		// nothing, and reported as success that is a seat silently
+		// carrying no app for ever.
+		return "", fmt.Errorf("slack: bots.info: %s named no app", botID)
 	}
 	return out.Bot.AppID, nil
 }

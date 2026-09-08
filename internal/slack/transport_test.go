@@ -31,6 +31,11 @@ type workspace struct {
 	replies    map[string]string
 }
 
+// queryMethods are the Slack methods that read their parameters from the
+// query string and ignore a JSON body, answering ok with nothing when one is
+// posted instead. See [callQuery].
+var queryMethods = map[string]bool{"bots.info": true}
+
 func newWorkspace(t *testing.T) *workspace {
 	t.Helper()
 	w := &workspace{
@@ -41,6 +46,27 @@ func newWorkspace(t *testing.T) *workspace {
 		method := strings.TrimPrefix(req.URL.Path, "/api/")
 		var body map[string]any
 		_ = json.NewDecoder(req.Body).Decode(&body)
+		// SLACK READS A JSON BODY FOR SOME METHODS AND SILENTLY IGNORES
+		// IT FOR THE REST, answering ok with nothing at all: measured on
+		// bots.info, which is why a query parameter posted as JSON
+		// produced a seat that carried no app and no error. The fake
+		// reproduces that rather than being generous, so a caller using
+		// the wrong encoding fails here instead of in production.
+		for name, values := range req.URL.Query() {
+			if body == nil {
+				body = map[string]any{}
+			}
+			body[name] = values[0]
+		}
+		if queryMethods[method] && len(req.URL.Query()) == 0 {
+			// The parameter was sent the way this method will not read.
+			rw.Header().Set("Content-Type", "application/json")
+			_, _ = rw.Write([]byte(`{"ok":true}`))
+			w.mu.Lock()
+			w.calls = append(w.calls, method)
+			w.mu.Unlock()
+			return
+		}
 
 		w.mu.Lock()
 		w.calls = append(w.calls, method)
