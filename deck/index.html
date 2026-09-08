@@ -1,0 +1,1295 @@
+<title>Crewlet</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:ital,wdth,wght@0,62..125,400..800;1,62..125,400..700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap">
+
+<style>
+/* ==========================================================================
+   Crewlet — the deck.
+
+   A committed single visual world: the operator's console. Ground, type and
+   accent are lifted from the product's own design system
+   (dashboard/src/styles/tokens.css) rather than invented here, so the deck and
+   the dashboard read as one thing. Every colour is painted explicitly — the
+   page must hold on any host ground.
+
+   The structural device: every mechanism claim carries its source — a file
+   path in the repo, or a publication — set in the mono face and aligned right.
+   Provenance is the content, not decoration. A claim without one is a claim
+   we are not making.
+   ========================================================================== */
+
+:root {
+  color-scheme: dark;
+
+  /* Ground. From the product's dark ramp: deliberately not #000, which
+     halates behind near-white type. */
+  --ink:        #0a0c11;
+  --ink-deep:   #06080b;
+  --panel:      #101319;
+  --panel-2:    #161a22;
+  --edge:       #1e232d;
+
+  --hair:       rgba(255,255,255,0.07);
+  --hair-2:     rgba(255,255,255,0.12);
+  --hair-3:     rgba(255,255,255,0.20);
+
+  /* Type ramp, measured against --edge, the worst surface a label lands on. */
+  --paper:      #f6f7fa;
+  --text:       #e9ebf0;
+  --text-2:     #b0b6c2;
+  --text-3:     #9aa2b0;
+  --text-4:     #6a7280;   /* decoration only, never a fact */
+
+  /* One accent, spent on emphasis and nothing else. --mark is the logo's own
+     violet; --violet is the fill step; --violet-ink is the text step. They are
+     never interchangeable. */
+  --mark:        #7c56ff;
+  --violet:      #8347ff;
+  --violet-ink:  #ab92ff;
+  --violet-soft: rgba(131,71,255,0.16);
+  --violet-line: rgba(160,130,255,0.34);
+
+  /* Signal. Four, fixed, meanings never move. */
+  --green: #74cf92;
+  --amber: #e2ae50;
+  --red:   #ff8f8b;
+  --blue:  #7fb8f2;
+
+  /* The product's three phase hues — the only other categorical colour here,
+     and used only where a phase is actually what is being drawn. */
+  --exec:   #b3a0ff;
+  --review: #5cc39c;
+  --onb:    #7fb8f2;
+
+  --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --pad: clamp(28px, 5vw, 92px);
+  --rail: 76px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--ink);
+  color: var(--text);
+  font-family: var(--body);
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  scroll-snap-type: y mandatory;
+  overflow-x: hidden;
+}
+
+/* ---- The rail --------------------------------------------------------- */
+
+.rail {
+  position: fixed;
+  left: 0; top: 0; bottom: 0;
+  width: var(--rail);
+  border-right: 1px solid var(--hair);
+  background: var(--ink-deep);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 22px 0;
+  z-index: 20;
+}
+.rail .mark { width: 26px; height: auto; display: block; opacity: 0.95; }
+.rail .spine {
+  flex: 1;
+  width: 1px;
+  background: var(--hair-2);
+  margin: 22px 0;
+  position: relative;
+}
+.rail .spine i {
+  position: absolute;
+  left: -1px; top: 0;
+  width: 3px;
+  background: var(--violet);
+  height: 0;
+  transition: height 180ms cubic-bezier(0.16,1,0.3,1);
+}
+.rail .count {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  writing-mode: vertical-rl;
+  font-variant-numeric: tabular-nums;
+}
+.rail .count b { color: var(--paper); font-weight: 500; }
+
+/* ---- Slides ----------------------------------------------------------- */
+
+.slide {
+  scroll-snap-align: start;
+  min-height: 100svh;
+  padding: clamp(40px, 6vh, 76px) var(--pad) clamp(40px, 6vh, 68px) calc(var(--rail) + var(--pad));
+  border-bottom: 1px solid var(--hair);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: clamp(20px, 3vh, 34px);
+  position: relative;
+  background: var(--ink);
+}
+.slide.deep { background: var(--ink-deep); }
+
+/* A faint engineering grid, only on the statement slides, and only ever
+   behind them. */
+.slide.grid::before {
+  content: "";
+  position: absolute; inset: 0;
+  background-image:
+    linear-gradient(to right, rgba(255,255,255,0.022) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255,255,255,0.022) 1px, transparent 1px);
+  background-size: 76px 76px;
+  pointer-events: none;
+}
+.slide > * { position: relative; }
+
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--violet-ink);
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.eyebrow s { text-decoration: none; color: var(--text-4); }
+
+h1, h2 {
+  font-family: var(--display);
+  font-weight: 700;
+  font-stretch: 108%;
+  letter-spacing: -0.022em;
+  line-height: 1.03;
+  color: var(--paper);
+  margin: 0;
+  text-wrap: balance;
+}
+h1 { font-size: clamp(2.2rem, 5.4vw, 4.6rem); }
+h2 { font-size: clamp(1.6rem, 3.3vw, 2.9rem); }
+h3 {
+  font-family: var(--display);
+  font-weight: 600;
+  font-stretch: 104%;
+  font-size: 1.0625rem;
+  letter-spacing: -0.008em;
+  color: var(--paper);
+  margin: 0;
+  line-height: 1.25;
+}
+.lede {
+  font-size: clamp(1.0625rem, 1.5vw, 1.3125rem);
+  line-height: 1.5;
+  color: var(--text-2);
+  max-width: 64ch;
+  margin: 0;
+}
+p { margin: 0; }
+.body { font-size: 0.9375rem; line-height: 1.6; color: var(--text-2); max-width: 66ch; }
+.body + .body { margin-top: 0.7em; }
+strong, b { color: var(--paper); font-weight: 600; }
+em { color: var(--violet-ink); font-style: normal; }
+code, .m { font-family: var(--mono); font-size: 0.86em; color: var(--violet-ink); }
+
+/* ---- The citation, the deck's signature ------------------------------- */
+
+.cite {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-4);
+  letter-spacing: 0.01em;
+  border-top: 1px solid var(--hair);
+  padding-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 22px;
+}
+.cite span::before { content: "↳ "; color: var(--violet-ink); opacity: 0.55; }
+
+/* ---- Compositional pieces --------------------------------------------- */
+
+.cols { display: grid; gap: clamp(18px, 2.2vw, 34px); }
+.c2 { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.c3 { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+.c4 { grid-template-columns: repeat(auto-fit, minmax(178px, 1fr)); }
+
+.block {
+  border-top: 2px solid var(--hair-3);
+  padding-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.block.hot { border-top-color: var(--violet); }
+.block p { font-size: 0.875rem; line-height: 1.6; color: var(--text-3); }
+.block .k {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-4);
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--hair);
+  border-radius: 10px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.card.raise { background: var(--panel-2); border-color: var(--violet-line); }
+.card p { font-size: 0.875rem; line-height: 1.6; color: var(--text-3); }
+
+/* Big numbers. Only where the figure is the point of the slide. */
+.stat { display: flex; flex-direction: column; gap: 5px; }
+.stat .n {
+  font-family: var(--display);
+  font-weight: 700;
+  font-stretch: 112%;
+  font-size: clamp(2rem, 3.9vw, 3.4rem);
+  line-height: 0.95;
+  letter-spacing: -0.035em;
+  color: var(--paper);
+  font-variant-numeric: tabular-nums;
+}
+.stat .n.v { color: var(--violet-ink); }
+.stat .l { font-size: 0.8125rem; line-height: 1.45; color: var(--text-3); }
+.stat .s { font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; color: var(--text-4); text-transform: uppercase; }
+
+/* Tables. Wide content scrolls in its own container, never the body. */
+.tw { overflow-x: auto; border-top: 1px solid var(--hair-2); }
+table { width: 100%; border-collapse: collapse; font-size: 0.875rem; min-width: 640px; }
+th {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--text-4);
+  text-align: left;
+  padding: 11px 18px 11px 0;
+  border-bottom: 1px solid var(--hair-2);
+  white-space: nowrap;
+}
+td {
+  padding: 13px 18px 13px 0;
+  border-bottom: 1px solid var(--hair);
+  color: var(--text-2);
+  vertical-align: top;
+  line-height: 1.5;
+}
+td:first-child { color: var(--paper); font-weight: 500; }
+td .m { display: block; margin-top: 3px; font-size: 10.5px; color: var(--text-4); letter-spacing: 0.02em; }
+tr.us td { background: var(--violet-soft); }
+tr.us td:first-child { color: var(--violet-ink); }
+
+/* The terminal frame on the cover. */
+.term {
+  background: var(--ink-deep);
+  border: 1px solid var(--hair-2);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 24px 56px rgba(0,0,0,0.55);
+}
+.term .bar {
+  height: 30px;
+  border-bottom: 1px solid var(--hair);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  background: var(--panel);
+}
+.term .bar i { width: 8px; height: 8px; border-radius: 50%; background: var(--hair-3); }
+.term .bar span { font-family: var(--mono); font-size: 10px; color: var(--text-4); margin-left: 8px; letter-spacing: 0.08em; }
+.term .body-t { padding: 16px 18px 18px; font-family: var(--mono); font-size: 12px; line-height: 1.85; color: var(--text-2); }
+.term .body-t .p { color: var(--green); }
+.term .body-t .d { color: var(--text-4); }
+.term .body-t .v { color: var(--violet-ink); }
+
+/* Signal chips */
+.chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.chip {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--hair-2);
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.chip.on { border-color: rgba(116,207,146,0.4); color: var(--green); }
+.chip.no { border-color: rgba(226,174,80,0.36); color: var(--amber); }
+.chip.v  { border-color: var(--violet-line); color: var(--violet-ink); }
+
+/* A quote given a whole slide. */
+.quote {
+  font-family: var(--display);
+  font-weight: 500;
+  font-stretch: 100%;
+  font-size: clamp(1.5rem, 3.4vw, 2.85rem);
+  line-height: 1.14;
+  letter-spacing: -0.02em;
+  color: var(--paper);
+  max-width: 30ch;
+  margin: 0;
+  text-wrap: balance;
+}
+.quote .q { color: var(--violet-ink); }
+.attrib { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.06em; color: var(--text-3); }
+
+/* The three delivery gates. A row of peers, so one object repeated three times
+   with the same edges, baselines and inner padding. */
+.gates { display: flex; flex-direction: column; gap: 14px; }
+.gates .gk {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--text-4);
+}
+.gate {
+  border-top: 2px solid var(--exec);
+  padding-top: 13px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.gate.rev { border-top-color: var(--review); }
+.gate p { font-size: 0.8125rem; line-height: 1.55; color: var(--text-3); }
+.gate .cost { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.05em; margin-top: auto; }
+.gate .cost.on { color: var(--green); }
+.gate .cost.no { color: var(--amber); }
+
+/* Horizon roadmap */
+.hz { border-top: 2px solid var(--hair-3); padding-top: 16px; display: flex; flex-direction: column; gap: 14px; }
+.hz.a { border-top-color: var(--onb); }
+.hz.b { border-top-color: var(--exec); }
+.hz.c { border-top-color: var(--review); }
+.hz .hd { display: flex; flex-direction: column; gap: 4px; }
+.hz .when { font-family: var(--mono); font-size: 10px; letter-spacing: 0.13em; text-transform: uppercase; color: var(--text-4); }
+.hz .th { font-size: 0.8125rem; color: var(--text-3); line-height: 1.5; }
+.hz ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 11px; }
+.hz li { font-size: 0.8125rem; line-height: 1.5; color: var(--text-3); padding-left: 15px; position: relative; }
+.hz li::before { content: ""; position: absolute; left: 0; top: 8px; width: 5px; height: 1px; background: var(--hair-3); }
+.hz li b { display: block; color: var(--paper); font-weight: 600; font-size: 0.875rem; margin-bottom: 1px; }
+
+/* Two honest columns */
+.ledger { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: clamp(20px, 3vw, 44px); }
+.ledger ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
+.ledger li { font-size: 0.875rem; line-height: 1.5; color: var(--text-2); padding-left: 21px; position: relative; }
+.ledger li::before { position: absolute; left: 0; top: 0; font-family: var(--mono); font-size: 12px; }
+.ledger .built li::before { content: "✓"; color: var(--green); }
+.ledger .next li::before { content: "○"; color: var(--amber); }
+.ledger h3 { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+.ledger h3 s { text-decoration: none; font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; color: var(--text-4); }
+
+/* Diagram type */
+svg text { font-family: "JetBrains Mono", ui-monospace, monospace; }
+
+/* ---- Focus, motion, print --------------------------------------------- */
+
+a { color: var(--violet-ink); text-decoration: none; border-bottom: 1px solid var(--violet-line); }
+a:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--violet-ink); outline-offset: 3px; }
+
+.slide > * { animation: rise 520ms cubic-bezier(0.16,1,0.3,1) both; }
+@keyframes rise { from { opacity: 0.45; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .slide > * { animation: none; }
+  .rail .spine i { transition: none; }
+  html { scroll-behavior: auto; }
+}
+
+.hint {
+  position: fixed; right: 18px; bottom: 16px; z-index: 20;
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em;
+  color: var(--text-4); text-transform: uppercase;
+  background: rgba(6,8,11,0.82); border: 1px solid var(--hair);
+  border-radius: 999px; padding: 6px 12px;
+}
+
+@media (max-width: 720px) {
+  :root { --rail: 0px; }
+  .rail { display: none; }
+  .slide { min-height: auto; padding-top: 56px; padding-bottom: 56px; }
+  body { scroll-snap-type: none; }
+  .hint { display: none; }
+}
+
+@media print {
+  :root { --rail: 0px; }
+  html, body { background: var(--ink); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .rail, .hint { display: none; }
+  .slide { min-height: auto; page-break-after: always; break-after: page; padding: 34px 40px; }
+  .slide > * { animation: none; }
+  @page { size: landscape; margin: 0; }
+}
+</style>
+
+<nav class="rail" aria-label="Deck progress">
+  <svg class="mark" viewBox="0 0 1467 978" aria-label="Crewlet"><g fill="#7c56ff"><path d="M535.78 783.81 l-0.35 -59.13 -36.67 0 -36.67 0 -6.82 -6.47 c-48.78 -46.43 -176.91 -173.03 -210.41 -207.82 -24.69 -25.74 -75.70 -81.70 -93.69 -102.85 -3.29 -3.88 -5.29 -7.17 -4.70 -7.76 1.29 -1.06 58.30 -40.32 82.05 -56.42 l16.34 -11.05 3.64 4.47 c11.05 13.87 76.99 92.51 98.98 118.14 l25.74 29.97 15.63 0.35 15.52 0.35 0 -82.87 0 -82.75 50.55 -46.67 c27.86 -25.74 50.55 -47.14 50.55 -47.72 0 -0.59 46.78 -1.06 111.55 -1.06 l111.55 0 15.52 14.81 c15.28 14.58 15.52 14.69 17.98 12.58 1.29 -1.18 8.46 -7.76 15.75 -14.58 l13.40 -12.46 17.75 -0.71 c9.76 -0.47 58.77 -0.82 108.85 -0.82 l90.98 0 14.34 13.75 c7.76 7.64 24.57 23.86 37.15 36.20 12.58 12.34 29.15 28.45 36.67 35.85 l13.87 13.40 0.24 82.87 0.35 82.99 14.22 0.35 14.34 0.35 4.47 -5.64 c2.47 -3.06 11.52 -14.11 19.98 -24.45 8.46 -10.34 30.56 -38.32 49.14 -62.30 43.85 -56.42 46.20 -59.36 48.43 -59.36 2.12 0 4.82 1.88 47.96 33.27 43.02 31.27 45.37 33.03 45.37 34.09 0 0.82 -39.03 46.20 -62.42 72.53 -62.42 70.29 -106.50 117.67 -184.08 197.60 l-50.78 52.43 -13.28 0.71 c-7.29 0.47 -23.98 0.82 -37.03 0.82 l-23.86 0 0 57.01 0 57.01 -49.37 0 -49.37 0 0 -56.42 0 -56.42 -114.37 0 c-63.01 0 -120.13 0.35 -126.95 0.82 l-12.58 0.71 0 55.72 0 55.60 -47.61 0 -47.61 0 -0.24 -59.01z m443.16 -373.22 l-0.35 -119.66 -223.93 0.12 -223.93 0.12 -0.35 119.43 -0.24 119.55 224.52 0 224.52 0 -0.24 -119.55z"/><path d="M546.36 516.39 c-0.24 -0.59 -0.47 -4.94 -0.35 -9.76 0 -4.82 0.12 -52.54 0.35 -106.15 l0.24 -97.21 209.59 0.24 209.47 0.35 0.35 106.73 0.24 106.62 -209.71 0 c-115.43 0 -209.94 -0.35 -210.18 -0.82z m121.07 -100.50 l-0.35 -66.18 -34.32 -0.35 -34.44 -0.24 0 66.41 0 66.41 34.68 0 34.68 0 -0.24 -66.06z m260.96 0 l-0.35 -66.18 -34.09 0 -34.09 0 0 10.93 c0 5.88 0.12 35.62 0.35 66.06 l0.24 55.25 34.09 0 34.09 0 -0.24 -66.06z"/></g></svg>
+  <div class="spine"><i id="spine"></i></div>
+  <div class="count"><b id="cur">01</b> / 22</div>
+</nav>
+
+<main>
+
+<!-- ══ 01 ══ COVER ══════════════════════════════════════════════════════ -->
+<section class="slide grid" id="s1">
+  <div class="eyebrow">Crewlet <s>/</s> github.com/crewlet/crewlet <s>/</s> MIT <s>/</s> pre-1.0</div>
+  <h1>An operating&nbsp;system for autonomous companies.</h1>
+  <p class="lede">You write the company down. The engine runs it — one persistent
+  agent per seat, working in the chat, the tracker and the code host you already
+  have, under its own identity. One binary. Your hardware. Your memory.</p>
+
+  <div class="cols c2" style="align-items:end">
+    <div class="term">
+      <div class="bar"><i></i><i></i><i></i><span>~/acme</span></div>
+      <div class="body-t">
+<span class="d">$</span> crewlet run<br>
+<span class="d">  stream</span>  embedded jetstream <span class="d">· no listener</span><br>
+<span class="d">  store</span>   ./acme.db <span class="d">· one file</span><br>
+<span class="d">  seats</span>   <span class="p">7 acquired</span> <span class="d">· epoch 1</span><br>
+<span class="d">  api</span>     :8000 <span class="d">· dashboard embedded</span><br>
+<span class="v">  company is running</span>
+      </div>
+    </div>
+
+    <svg viewBox="0 0 420 214" role="img" aria-label="Org chart: a human founder seat above a CEO, who manages a CTO and a PM, each over two teams">
+      <g fill="none" stroke="#1e232d" stroke-width="1">
+        <path d="M210 30 V50"/>
+        <path d="M210 78 V90 M92 90 H328 M92 90 V102 M328 90 V102"/>
+        <path d="M92 130 V142 M50 142 H134 M50 142 V154 M134 142 V154"/>
+        <path d="M328 130 V142 M286 142 H370 M286 142 V154 M370 142 V154"/>
+      </g>
+      <g font-size="8" letter-spacing="0.05em">
+        <rect x="162" y="6" width="96" height="24" rx="4" fill="#161a22" stroke="#e2ae50"/>
+        <text x="210" y="21" fill="#e2ae50" text-anchor="middle">you · human</text>
+
+        <rect x="162" y="54" width="96" height="24" rx="4" fill="#161a22" stroke="#8347ff"/>
+        <text x="210" y="69" fill="#ab92ff" text-anchor="middle">ceo</text>
+
+        <rect x="44" y="102" width="96" height="24" rx="4" fill="#101319" stroke="#1e232d"/>
+        <text x="92" y="117" fill="#b0b6c2" text-anchor="middle">cto</text>
+        <rect x="280" y="102" width="96" height="24" rx="4" fill="#101319" stroke="#1e232d"/>
+        <text x="328" y="117" fill="#b0b6c2" text-anchor="middle">pm</text>
+
+        <rect x="14" y="154" width="72" height="22" rx="4" fill="#101319" stroke="#1e232d"/>
+        <text x="50" y="168" fill="#9aa2b0" text-anchor="middle">backend</text>
+        <rect x="98" y="154" width="72" height="22" rx="4" fill="#101319" stroke="#1e232d"/>
+        <text x="134" y="168" fill="#9aa2b0" text-anchor="middle">platform</text>
+        <rect x="250" y="154" width="72" height="22" rx="4" fill="#101319" stroke="#1e232d"/>
+        <text x="286" y="168" fill="#9aa2b0" text-anchor="middle">design</text>
+        <rect x="334" y="154" width="72" height="22" rx="4" fill="#101319" stroke="#1e232d"/>
+        <text x="370" y="168" fill="#9aa2b0" text-anchor="middle">devrel</text>
+
+        <text x="14" y="200" fill="#6a7280" font-size="7">the chart is the graph the engine executes</text>
+        <text x="14" y="210" fill="#6a7280" font-size="7">a human seat holds the root, so the chain ends at a person</text>
+      </g>
+    </svg>
+  </div>
+</section>
+
+<!-- ══ 02 ══ MISSION ════════════════════════════════════════════════════ -->
+<section class="slide deep" id="s2">
+  <div class="eyebrow">Mission</div>
+  <h1>Make a company something you can&nbsp;write down, run, and change in an&nbsp;afternoon.</h1>
+  <div class="cols c2">
+    <p class="body">Software has been sold by the seat for thirty years. We are
+    making the seat the unit of <em>production</em> instead of the unit of billing.
+    A founder describes a company — its mission, its policies, its chart, who
+    reports to whom — and it is running before lunch, on their own machine,
+    owned outright.</p>
+    <p class="body">Not a chat window you supervise. Not a workflow you draw.
+    A company: named colleagues who hold seats, remember what they learned,
+    work in the tools your team already opens every morning, and escalate to a
+    person when the decision is above their authority.</p>
+  </div>
+</section>
+
+<!-- ══ 03 ══ VISION ═════════════════════════════════════════════════════ -->
+<section class="slide grid" id="s3">
+  <div class="eyebrow">Vision <s>/</s> the next ten years</div>
+  <h1>Founding a company will look like authoring&nbsp;one.</h1>
+  <div class="cols c4">
+    <div class="block hot">
+      <div class="k">you write the chart</div>
+      <h3>A company is a document.</h3>
+      <p>Mission, policies, departments, seats — each with a backstory, a goal, a
+      manager, tools and a budget. Versioned. Diffable. Reviewable.</p>
+    </div>
+    <div class="block hot">
+      <div class="k">it staffs itself</div>
+      <h3>Seats onboard like new hires.</h3>
+      <p>A fresh seat reads your team's own onboarding pages, captures the
+      conventions that matter, and marks itself ready. A reorg re-triggers it.</p>
+    </div>
+    <div class="block hot">
+      <div class="k">it works where you work</div>
+      <h3>Real tickets. Real reviews.</h3>
+      <p>Comments, assignments, merge requests — filed under each agent's own
+      account at the vendor, not under a shared service token.</p>
+    </div>
+    <div class="block hot">
+      <div class="k">you own all of it</div>
+      <h3>One binary on your metal.</h3>
+      <p>The engine, the event stream, the database and the secrets are yours.
+      There is no Crewlet cloud in the path of a single turn.</p>
+    </div>
+  </div>
+  <p class="lede">The org chart stops being a diagram <em>of</em> a company and
+  becomes the running company.</p>
+</section>
+
+<!-- ══ 04 ══ WHY NOW: capability ════════════════════════════════════════ -->
+<section class="slide" id="s4">
+  <div class="eyebrow">Why now <s>/</s> 01 — the capability arrived</div>
+  <h2>Models got good enough and cheap enough while the substrate stood&nbsp;still.</h2>
+  <div class="cols c3">
+    <div class="stat">
+      <div class="n">~7 months</div>
+      <div class="l">Doubling time of the task length an agent completes at 50% reliability — measured continuously since 2019.</div>
+      <div class="s">METR, Time Horizons</div>
+    </div>
+    <div class="stat">
+      <div class="n v">5–10× / yr</div>
+      <div class="l">Rate at which the price of a given benchmark score falls for frontier models on knowledge, reasoning, math and software engineering.</div>
+      <div class="s">MIT · arXiv:2511.23455</div>
+    </div>
+    <div class="stat">
+      <div class="n">$7.8B → $52.6B</div>
+      <div class="l">AI agents market, 2025 to 2030 — a 46.3% CAGR, against $328B of business-process outsourcing spend today.</div>
+      <div class="s">MarketsandMarkets · Grand View</div>
+    </div>
+  </div>
+  <p class="body">A capability curve this steep normally produces an application
+  boom. It has not, and the reason is not the models.</p>
+  <div class="cite">
+    <span>metr.org/time-horizons</span>
+    <span>arxiv.org/abs/2511.23455</span>
+    <span>MarketsandMarkets, 2026-08-20</span>
+    <span>Grand View Research, 2026-06-15</span>
+  </div>
+</section>
+
+<!-- ══ 05 ══ WHY NOW: the wall ══════════════════════════════════════════ -->
+<section class="slide deep" id="s5">
+  <div class="eyebrow">Why now <s>/</s> 02 — the wall everyone hit</div>
+  <h2>Everyone is piloting. Almost nobody is in&nbsp;production.</h2>
+  <div class="tw">
+    <table>
+      <thead><tr><th>Finding</th><th>Figure</th><th>Source</th></tr></thead>
+      <tbody>
+        <tr><td>Enterprises getting zero return on GenAI investment</td><td>95%<span class="m">of $30–40B deployed</span></td><td>MIT Project NANDA, Jul 2025<span class="m">300+ initiatives, 52 interviews</span></td></tr>
+        <tr><td>Custom enterprise AI tools that reach production</td><td>5%<span class="m">60% investigated → 20% piloted → 5% shipped</span></td><td>MIT Project NANDA<span class="m">report exhibit</span></td></tr>
+        <tr><td>Deploy agents / orchestrate more than one</td><td>53% / 18%<span class="m">orchestration doubled from 9% in one quarter</span></td><td>KPMG AI Pulse Q2 2026<span class="m">n=204, $1B+ revenue orgs</span></td></tr>
+        <tr><td>Have real-time visibility into what their AI costs to run</td><td>26%<span class="m">despite 66% having monitoring dashboards</span></td><td>KPMG AI Pulse Q2 2026</td></tr>
+        <tr><td>Tested or deployed agents / scaled multi-agent adoption</td><td>42% / 15%<span class="m">yet 74% expect half their processes redesigned inside four years</span></td><td>Deloitte, Aug 2026<span class="m">n=501 senior leaders</span></td></tr>
+        <tr><td>Companies whose agents need a human on 30%+ of tasks</td><td>~50%<span class="m">top failure mode: multi-step workflows that break partway through</span></td><td>ICONIQ State of AI 2026<span class="m">~300 software executives, Q2 2026</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="body">Read the last row again. The category's number-one failure is
+  not a reasoning failure. It is a <em>durability</em> failure — work that starts
+  and does not finish, in a runtime that cannot survive its own restart.</p>
+</section>
+
+<!-- ══ 06 ══ THE DIAGNOSIS ══════════════════════════════════════════════ -->
+<section class="slide grid" id="s6">
+  <div class="eyebrow">The diagnosis</div>
+  <div class="cols c2" style="align-items:center">
+    <div style="display:flex;flex-direction:column;gap:22px">
+      <p class="quote"><span class="q">“</span>The core barrier to scaling is not
+      infrastructure, regulation, or talent. It is learning. Most GenAI systems do
+      not retain feedback, adapt to context, or improve over time.<span class="q">”</span></p>
+      <div class="attrib">MIT Project NANDA — The GenAI Divide, July 2025</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:18px">
+      <h3 style="font-size:1.375rem">We think that is an infrastructure problem
+      wearing a research problem's clothes.</h3>
+      <p class="body">Memory is not a prompt technique. Neither is identity,
+      ownership, a budget that actually stops, or proof that a piece of work
+      reached a person. Those are <em>runtime services</em> — the things an
+      operating system provides so that no application has to.</p>
+      <p class="body">Nobody ships them. So every serious team rebuilds all five,
+      badly, in private, and calls the result a product.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══ 07 ══ THE FAILURE MODE ═══════════════════════════════════════════ -->
+<section class="slide" id="s7">
+  <div class="eyebrow">The failure mode nobody puts on a slide</div>
+  <h1>The agent answered. Nobody got&nbsp;the answer.</h1>
+  <div class="cols c2">
+    <div class="card">
+      <div class="k" style="font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-4)">turn 4,181 — reported</div>
+      <div style="font-family:var(--mono);font-size:12px;line-height:2;color:var(--text-2)">
+        outcome <span style="color:var(--green)">delivered</span><br>
+        summary <span style="color:var(--text-3)">“replied to the reporter with the fix”</span><br>
+        tool&nbsp;calls <span style="color:var(--red)">— none that left the engine —</span>
+      </div>
+      <p>A model that writes a good answer into its own transcript and never posts
+      it looks, from every metric a dashboard has, exactly like a model that did
+      the job.</p>
+    </div>
+    <div class="card">
+      <div class="k" style="font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-4)">the obvious fix, and why it broke</div>
+      <p><strong>Ask the planner to name the tools it will call, then reconcile
+      the prediction against reality.</strong> It failed in both directions, and
+      both are recorded:</p>
+      <p><span class="m" style="color:var(--red)">too strict</span> &nbsp;a real
+      delivery read as undelivered, the override fired, and the seat posted the
+      same message twice.</p>
+      <p><span class="m" style="color:var(--amber)">too loose</span> &nbsp;a turn
+      whose named tool was a wrong guess called nothing but a builtin — “reply
+      hi” produced prose, called no chat tool, and completed silently.</p>
+    </div>
+  </div>
+  <p class="body">You cannot tune your way out of the wrong question. We deleted
+  the planner: the frame that <em>decides</em> is now the frame that <em>acts</em>,
+  and the engine stopped asking the model what it did.</p>
+  <div class="cite"><span>internal/agent/turn/verify.go — both incidents are written into the source that replaced them</span></div>
+</section>
+
+<!-- ══ 08 ══ THE FIX ════════════════════════════════════════════════════ -->
+<section class="slide deep" id="s8">
+  <div class="eyebrow">The fix</div>
+  <h2>A kernel that takes the caller's word for it is not a&nbsp;kernel.</h2>
+  <div class="cols c2">
+    <div class="block hot">
+      <div class="k">fact one — before any model runs</div>
+      <h3>Who is waiting.</h3>
+      <p>Derived by the engine at dispatch from the trigger's own type. An
+      assignment or a direct mention owes an answer; a schedule fire owes
+      nothing. The model is never asked to declare its own intent, because a turn
+      that declared “skip” on a direct mention reads, to the person who sent it,
+      exactly like the message never arriving.</p>
+    </div>
+    <div class="block hot">
+      <div class="k">fact two — recorded as it happens</div>
+      <h3>What actually ran.</h3>
+      <p>The tool loop's own ledger, kept outside the model's conversation — which
+      is also what stops a second round re-firing the first round's side effects.
+      A tool counts as a delivery when it is server-backed and not positively
+      annotated read-only, so the engine ships <em>zero</em> hardcoded knowledge
+      of Slack or Jira and the rule holds for any tool stack.</p>
+    </div>
+  </div>
+  <div class="gates">
+    <div class="gk">Three gates, in increasing cost</div>
+    <div class="cols c3">
+      <div class="gate">
+        <h3>Gate 1 · at decode time</h3>
+        <p>A claim the record refutes is bounced straight back to the model,
+        listing what <em>is</em> citable — because the failure this catches is
+        usually a model naming the tool it meant to call.</p>
+        <div class="cost on">cost: one tool call</div>
+      </div>
+      <div class="gate">
+        <h3>Gate 2 · before the reviewer</h3>
+        <p>A no-action nobody asked for ends the turn as skipped; a claim the
+        record refutes loops back carrying an engine-written correction.</p>
+        <div class="cost on">cost: no model call at all</div>
+      </div>
+      <div class="gate rev">
+        <h3>Gate 3 · after the reviewer</h3>
+        <p>A “done” on an awaited turn where nothing acted outside the engine is
+        <em>overturned</em> to self_iterate. This is the recorded failure: a
+        reviewer reading a good answer that went nowhere.</p>
+        <div class="cost no">cost: one more round</div>
+      </div>
+    </div>
+  </div>
+  <div class="cite"><span>internal/agent/turn/verify.go</span><span>internal/agent/turn/loop.go — 787 lines of pure decision logic, zero I/O, 1,084 lines of tests against a fake</span></div>
+</section>
+
+<!-- ══ 09 ══ THE THESIS ═════════════════════════════════════════════════ -->
+<section class="slide grid" id="s9">
+  <div class="eyebrow">The thesis</div>
+  <h1>The org chart is the execution&nbsp;graph.</h1>
+  <div class="cols c2">
+    <p class="body">Not as a metaphor. A seat's runtime id is a
+    <code>uuid5(namespace, "org name:handle")</code> — <strong>derived, not
+    assigned</strong> — so every node in a fleet computes the same id with no
+    database and nothing running. That is what lets the node that wins an inbound
+    webhook route the work to a seat it does not itself run, and it is why a
+    seat's diary, its episodes and its profile of a colleague survive every
+    restart and every rebalance.</p>
+    <p class="body">The chart carries identity, the delegation direction, the
+    lead's roster, and where a blocked turn goes next. Drawing it is the whole of
+    configuring the system. And a <em>human</em> holds a seat the same way — the
+    founder sits at the root, above the top agent, so the chain of
+    responsibility ends at a person by construction rather than by policy.</p>
+  </div>
+  <div class="tw">
+    <table>
+      <thead><tr><th>What the chart decides</th><th>Mechanism</th></tr></thead>
+      <tbody>
+        <tr><td>Identity</td><td>UUIDv5 over (org name, handle); every per-seat table keys on it<span class="m">internal/org</span></td></tr>
+        <tr><td>Who a lead can hand work to</td><td>The lead's prompt renders its reports' real profiles from the live org model — assignment is the lead's reasoning, not a routing algorithm<span class="m">internal/agent/prompts</span></td></tr>
+        <tr><td>Where a blocked turn goes</td><td>No escalation mechanism at all: the reviewer loops the turn back and the next round reaches the manager with the same tools a teammate would use — a chat mention, a ticket comment<span class="m">internal/agent/turn</span></td></tr>
+        <tr><td>Which machine runs the seat</td><td>A TTL lease with a monotonic fencing epoch, claimed to a fair share of <code>ceil(seats ÷ live nodes)</code><span class="m">internal/seat · internal/coord</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ══ 10 ══ THE PRIMITIVES ═════════════════════════════════════════════ -->
+<section class="slide deep" id="s10">
+  <div class="eyebrow">The primitives</div>
+  <h2>Every mapping is a mechanism, and every mechanism has an&nbsp;address.</h2>
+  <div class="tw">
+    <table>
+      <thead><tr><th style="width:15%">OS concept</th><th style="width:20%">Crewlet primitive</th><th>What actually implements it</th></tr></thead>
+      <tbody>
+        <tr><td>Process</td><td class="m" style="color:var(--violet-ink)">a seat</td><td>A derived identity, a durable mailbox, its own vendor credentials, its own MCP child processes, its own vector-indexed memory. Long-lived and individually defined — not an interchangeable worker.<span class="m">internal/org</span></td></tr>
+        <tr><td>Scheduler</td><td class="m" style="color:var(--violet-ink)">the org chart + leases</td><td>Two schedulers, and only one is code: a lease sweep places seats on nodes; a lead places work on seats by reading their profiles.<span class="m">internal/seat</span></td></tr>
+        <tr><td>Syscall</td><td class="m" style="color:var(--violet-ink)">a turn</td><td>Executor then reviewer, with a return value the engine checks three times against its own record rather than the model's claim.<span class="m">internal/agent/turn</span></td></tr>
+        <tr><td>IPC</td><td class="m" style="color:var(--violet-ink)">a durable mailbox</td><td>A JetStream consumer created with nothing attached, in ~1.7 ms — so every node creates one for every seat at boot and an unowned seat's mail survives a lease gap, a rebalance or a full restart.<span class="m">internal/queue</span></td></tr>
+        <tr><td>uid</td><td class="m" style="color:var(--violet-ink)">a vendor account</td><td>Its own Slack app, Mattermost bot, GitLab service account, GitHub App. An agent comments and opens merge requests as itself.<span class="m">internal/provision</span></td></tr>
+        <tr><td>Driver</td><td class="m" style="color:var(--violet-ink)">an MCP server</td><td>Capability annotations, never a tool name. The engine has no built-in idea of what Jira is called.<span class="m">internal/mcp · internal/tools</span></td></tr>
+        <tr><td>Kernel bus</td><td class="m" style="color:var(--violet-ink)">the event stream</td><td>A NATS JetStream server inside the process. In solo mode it binds no socket at all — the broker is unreachable from outside the binary.<span class="m">internal/queue</span></td></tr>
+        <tr><td>Swap / suspend</td><td class="m" style="color:var(--violet-ink)">a detached run</td><td>A coding run suspends the agent's live conversation mid-tool-call and re-enters it later — after a restart, on another machine. No parked goroutine anywhere.<span class="m">internal/agent/execstate</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="body">Clone the repository and check any row. That is the point of the
+  third column.</p>
+</section>
+
+<!-- ══ 11 ══ WHERE THE WORK HAPPENS ═════════════════════════════════════ -->
+<section class="slide" id="s11">
+  <div class="eyebrow">The surface</div>
+  <h1>Your agents show up in the tools your company already&nbsp;runs.</h1>
+  <div class="cols c2">
+    <div style="display:flex;flex-direction:column;gap:16px">
+      <p class="body">Six third-party surfaces route <strong>end to end</strong> —
+      a delivery from any of them wakes the seats it concerns, and the reply goes
+      back where the work lives. Datadog monitor alerts come in the same way.</p>
+      <div class="chips">
+        <span class="chip v">Slack</span><span class="chip v">Mattermost</span>
+        <span class="chip v">Jira</span><span class="chip v">Confluence</span>
+        <span class="chip v">GitHub</span><span class="chip v">GitLab</span>
+        <span class="chip">Datadog</span>
+      </div>
+      <p class="body">Ten comments landing on one ticket while a seat is busy
+      become <strong>one</strong> turn, not ten — drained from the broker,
+      partitioned by conversation, merged into a single digest whose delivery
+      obligation is the strongest of its parts, because a merge must not be able
+      to launder an ask.</p>
+      <p class="body">You do not adopt a second workplace, and there is no
+      Crewlet inbox for a human to check.</p>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:14px">
+      <div class="card raise">
+        <h3>One command per vendor, and we say exactly what it does</h3>
+        <p><span class="m" style="color:var(--green)">mints credentials</span>
+        &nbsp;Mattermost and GitLab create an account per seat and issue its
+        token.</p>
+        <p><span class="m" style="color:var(--amber)">reports and registers</span>
+        &nbsp;Jira and GitHub issue no credential on a provisioner's behalf, so
+        those passes report which account each seat authenticates as and register
+        the webhooks. A GitHub App per seat needs a person signed in — twice.</p>
+        <p><span class="m" style="color:var(--blue)">no public URL needed</span>
+        &nbsp;Mattermost holds one outbound websocket per seat, so that loop runs
+        behind NAT with no tunnel.</p>
+      </div>
+      <p class="body">A reconcile loop then checks each integration still works,
+      in a finding vocabulary every vendor reports in — and deliberately never
+      tears anything down or rotates a working credential on its own.</p>
+    </div>
+  </div>
+  <div class="cite"><span>docs/integrations/ — one page per vendor, including what each cannot automate</span></div>
+</section>
+
+<!-- ══ 12 ══ IT COMPOUNDS ═══════════════════════════════════════════════ -->
+<section class="slide deep" id="s12">
+  <div class="eyebrow">What accrues</div>
+  <h2>A seat that has worked here six months is not the seat you&nbsp;hired.</h2>
+  <p class="lede">This is our direct answer to the MIT finding. Learning is not a
+  feature bolted onto a turn — it is a deterministic harness that runs after
+  every one, on its own consumer group, so it cannot be starved by traffic and
+  cannot starve it.</p>
+  <div class="cols c3">
+    <div class="card">
+      <h3>It onboards like a new hire</h3>
+      <p>A fresh seat runs a dedicated first-turn pass on its own round budget:
+      it finds its knowledge tools, reads its team's <code>Onboarding</code>
+      pages, captures the conventions with a durable write, and marks itself.
+      A reorg recomputes the chain hash and re-triggers it.</p>
+    </div>
+    <div class="card">
+      <h3>It remembers by use, not by age</h3>
+      <p>A private diary, capped at 500 entries because recall cosines every one
+      at turn start. Past the cap the sweep drops the <em>least-retrieved</em>
+      first — and a “use” only counts when the relevance filter actually selected
+      the entry, never when it merely considered it.</p>
+    </div>
+    <div class="card">
+      <h3>It recalls comparable work</h3>
+      <p>One row per completed turn, vector-indexed, keyed on a work key derived
+      from the trigger's own event ids — so a node that finishes a turn and then
+      lapses does not lose the memory of it.</p>
+    </div>
+    <div class="card">
+      <h3>It learns who it works with</h3>
+      <p>A profile per <em>(observer, subject)</em> pair, built from observed
+      interactions. The seat that briefs your CFO knows how your CFO likes to be
+      briefed.</p>
+    </div>
+    <div class="card">
+      <h3>It writes its own skills</h3>
+      <p>Repeated procedures become drafted, refinable skills the seat loads on
+      demand. Clustering is <strong>off by default</strong> — a young company has
+      nothing to cluster — and a draft only becomes readable team-wide when a
+      human lead publishes it.</p>
+    </div>
+    <div class="card">
+      <h3>It carries all of it between machines</h3>
+      <p>Memory rides a compacted changelog, so when placement moves a seat to
+      another node its rows are hydrated <em>before</em> its mailbox attaches.
+      Nothing is lost and nothing arrives late.</p>
+    </div>
+  </div>
+  <div class="cite"><span>docs/concepts/agent-learning.md</span><span>internal/learning · internal/learning/memsync</span></div>
+</section>
+
+<!-- ══ 13 ══ THE ARTIFACT ═══════════════════════════════════════════════ -->
+<section class="slide grid" id="s13">
+  <div class="eyebrow">The artifact</div>
+  <h1>One binary. Then the same binary, more than&nbsp;once.</h1>
+  <div class="cols c2">
+    <div class="block hot">
+      <div class="k">solo — the design's ordinary case</div>
+      <h3>Nothing to bring up.</h3>
+      <p>The event stream is a NATS JetStream server the process embeds, with no
+      listener and no port. The database is one local file it creates and owns
+      exclusively. <code>CGO_ENABLED=0</code>. The dashboard is compiled into the
+      executable. <code>go install</code>, or a signed binary, and a company
+      runs — no broker, no Postgres, no Node toolchain, no control plane you
+      don't run.</p>
+    </div>
+    <div class="block hot">
+      <div class="k">fleet — a config value, not a second product</div>
+      <h3>The same code path.</h3>
+      <p><code>node.roles</code> picks from <code>ingress</code>,
+      <code>seats</code> and <code>workers</code>; the default is all three.
+      Seat ownership is a TTL lease with a monotonic fencing epoch; placement
+      converges in <em>both</em> directions, so adding a node actually moves
+      seats instead of waiting for something to die. A wedged-but-alive node ends
+      its own process, because a stalled event loop cannot be signalled and its
+      MCP children still hold live per-seat credentials.</p>
+    </div>
+  </div>
+  <div class="cols c3">
+    <div class="stat"><div class="n v">3-valued</div><div class="l">Every ownership question answers held, definitively-not, or <em>unknown</em> — and each contract declares which direction is safe for it. Collapsing unknown into “no” tears a healthy company down over a two-second database blip.</div><div class="s">internal/coord</div></div>
+    <div class="stat"><div class="n v">no leader</div><div class="l">The config activation pointer is an append-only compare-and-set. There is no coordinator to elect, and the CAS is what stops two operators overwriting each other.</div><div class="s">internal/configplane</div></div>
+    <div class="stat"><div class="n v">restart-safe</div><div class="l">A detached coding run is re-entered by whichever node is holding the seat when it finishes — the parked conversation is a serialized row, not a goroutine.</div><div class="s">internal/agent/execstate</div></div>
+  </div>
+  <p class="body"><span class="m" style="color:var(--amber)">honest note</span>
+  &nbsp;A fleet is opt-in: it needs the shared coordination backend and one
+  shared stream, and the single-node default says so in its boot log. The agents'
+  own tools are MCP child processes, so a company still needs whatever those
+  servers need on the host.</p>
+</section>
+
+<!-- ══ 14 ══ THE HINGE ══════════════════════════════════════════════════ -->
+<section class="slide" id="s14" style="justify-content:center">
+  <div class="eyebrow">The question every buyer eventually asks</div>
+  <h1 style="font-size:clamp(2.6rem,7vw,6rem);max-width:22ch">Where does your company's memory&nbsp;live?</h1>
+  <div class="cols c2">
+    <p class="body">A hosted agent platform makes your company a <em>tenant</em>
+    of somebody else's runtime. Its institutional memory, its agents'
+    identities, its credentials and its work all live on a vendor's servers — and
+    the vendor's whole delivery model depends on keeping them there.</p>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <p class="body"><strong>56%</strong> of 1,800 senior IT decision-makers run
+      or plan to run production inference on private cloud, against public cloud
+      falling 15 points to 41%. <strong>Data sovereignty has overtaken
+      compliance</strong> as the top geopolitical factor in IT strategy, at 54%.
+      EU AI Act enforcement went live 2 August 2026.</p>
+      <div class="cite" style="border:0;padding:0"><span>Broadcom, Private Cloud Outlook 2026</span><span>European Commission</span></div>
+    </div>
+  </div>
+  <p class="lede">We are not asking anyone to trust us with any of it. There is no
+  Crewlet account, no telemetry home, and nothing of ours in the path of a
+  turn.</p>
+</section>
+
+<!-- ══ 15 ══ THE LANDSCAPE ══════════════════════════════════════════════ -->
+<section class="slide deep" id="s15">
+  <div class="eyebrow">The landscape</div>
+  <h2>Five shapes are funded. None of them is standing where we&nbsp;are.</h2>
+  <div class="tw">
+    <table>
+      <thead><tr><th style="width:19%">Who</th><th style="width:22%">What they actually are</th><th>Where the ground is different</th></tr></thead>
+      <tbody>
+        <tr><td>Paperclip<span class="m">MIT · 80,261★ in six months</span></td><td>An org-chart shell over <em>other people's</em> agent loops — “a workforce layer, not a model”, in its own words.</td><td>Work lives in Paperclip's own tickets; its “slack chat” issue has been open since day two of the project. Node&nbsp;24 + pnpm + Postgres, single process, no clustering documented. <strong>Enormous validation that the category is real — and the clearest contrast on both integration and runtime.</strong></td></tr>
+        <tr><td>Polsia<span class="m">closed · hosted-only · $30M at $250M reported</span></td><td>A company-in-a-box: type an idea, it provisions the repo, database, hosting, payments and ad account, then runs nine agents on daily cycles.</td><td>It <em>creates</em> new companies; we <em>staff</em> existing ones. Its integration surface is GitHub plus an optional Slack notification hook. Anthropic-locked. A 20% take-rate on generated revenue no existing CFO will sign.</td></tr>
+        <tr><td>Frameworks<span class="m">LangChain $125M at $1.25B · CrewAI · Mastra</span></td><td>A library you import. The agent's life is the process's life.</td><td>No persistent organisational role, no seat identity at a vendor, no cross-node memory. LangChain monetises observability, not the framework.</td></tr>
+        <tr><td>Durable execution<span class="m">Temporal $300M at $5B · MIT + Cloud</span></td><td>The reliability primitives, expressed in workflow vocabulary.</td><td>Genuinely the right instinct — and you still build the company yourself on top of it. We are the company, with the primitives inside.</td></tr>
+        <tr><td>Control planes<span class="m">Guild.ai · Microsoft Agent 365 (GA)</span></td><td>Governance <em>above</em> a runtime someone else operates: an inventory, permissions at the moment of action, reversibility.</td><td>They presuppose the runtime. We answer the same questions from inside it — per-seat leases, budgets that stop, a local audit log, one tool surface the guards refuse on.</td></tr>
+        <tr><td>App-layer AI employees<span class="m">Sierra $15B+ · Decagon $4.5B · Cognition $48B</span></td><td>One role, sold closed and vendor-hosted, priced on outcomes.</td><td>Extraordinary businesses, and orthogonal: they sell a worker. We sell the company that worker would sit in.</td></tr>
+        <tr class="us"><td>Crewlet</td><td>The runtime <em>and</em> the org, on your infrastructure.</td><td>Own the turn engine, the tool registry, memory, the credential pool and the fleet — and still drive your coding CLI when you want to. Agents hold seats in the Slack, Jira and GitHub you already have.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="cite"><span>All figures from company announcements or named press, verified 2026-09-08; star count via the GitHub API</span></div>
+</section>
+
+<!-- ══ 16 ══ ECONOMICS ══════════════════════════════════════════════════ -->
+<section class="slide" id="s16">
+  <div class="eyebrow">The economics of a turn</div>
+  <h2>Frontier model to work. Cheap model to&nbsp;check.</h2>
+  <div class="cols c2">
+    <div style="display:flex;flex-direction:column;gap:13px">
+      <p class="body">Cost control is architectural here, not a setting. Each
+      phase of a turn chooses its own model, so the expensive one is spent on the
+      work and a cheap one judges it. The reviewer's prompt has no tool
+      catalogue, no policies and no prefetch — and every prompt in the engine
+      sits under a token budget <strong>asserted in CI</strong>: executor under
+      2,200, review under 750, the whole turn under 3,000.</p>
+      <p class="body">The static <code>system + tools</code> prefix is
+      byte-stable within a phase and across a seat's turns, so provider prefix
+      caching absorbs the repetition instead of the guidance being trimmed to
+      fit. Trimming would re-open the incidents the rules exist to close.</p>
+      <p class="body">And spend is one durable number for the whole company,
+      held in the coordination store rather than per node — so a 10M-token
+      ceiling is 10M however many nodes run it, and it survives a restart.</p>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div class="card">
+        <h3>What bounds the bill</h3>
+        <p><strong>Conversation coalescing</strong> — an idle-agent burst
+        worst-cases at two turns, never N.</p>
+        <p><strong>A round-cap extension judge</strong> — a cheap model reads the
+        tool log and grants more rounds only when the seat is progressing, so a
+        static cap stops throwing away nearly-finished work.</p>
+        <p><strong>A credential pool</strong> — least-in-flight rotation, cooldowns
+        on a monotonic clock so an NTP correction neither revives a benched key
+        nor strands a live one, and a fallback chain onto the next model when a
+        pool is spent.</p>
+        <p><strong>Budgets that actually stop</strong> — charged before the call,
+        org-wide then per-seat, with the exhaustion on the event stream.</p>
+      </div>
+      <p class="body"><span class="m" style="color:var(--amber)">and one option, stated carefully</span>
+      &nbsp;Eight coding CLIs ship as first-class model backends, so seats can run
+      on a subscription rather than a metered key, falling back to a key when the
+      window is spent. Subscription plans are generally written for interactive
+      use — we document that plainly and leave the decision to the operator
+      rather than building a margin story on it.</p>
+    </div>
+  </div>
+  <p class="body">KPMG found <strong>26%</strong> of large enterprises have
+  real-time visibility into what their AI costs to operate. We ship the meter:
+  spend rolls up by phase, model, worker, agent and turn, in one implementation
+  the dashboard and the API both read.</p>
+</section>
+
+<!-- ══ 17 ══ PROOF ══════════════════════════════════════════════════════ -->
+<section class="slide deep" id="s17">
+  <div class="eyebrow">Proof of work</div>
+  <h1>317,032 lines of Go. 146,027 of them are&nbsp;tests.</h1>
+  <div class="cols c4">
+    <div class="stat"><div class="n">317,032</div><div class="l">lines of Go</div><div class="s">171,005 source / 146,027 test</div></div>
+    <div class="stat"><div class="n v">4,371</div><div class="l">test functions</div><div class="s">whole suite under -race</div></div>
+    <div class="stat"><div class="n">52</div><div class="l">internal packages, each stating its own rationale</div><div class="s">go doc is the authority</div></div>
+    <div class="stat"><div class="n">21</div><div class="l">direct dependencies</div><div class="s">the standard library first</div></div>
+    <div class="stat"><div class="n">50</div><div class="l">documentation pages, ~226,000 words</div><div class="s">docs.crewlet.ai</div></div>
+    <div class="stat"><div class="n">19</div><div class="l">forward-only migrations</div><div class="s">an applied migration is history</div></div>
+  </div>
+  <div class="cols c2">
+    <p class="body">The gate is one command. <code>make check</code> runs
+    <code>gofmt</code>, <code>go mod tidy -diff</code>, <code>vet</code>,
+    <code>golangci-lint</code>, the build, <strong>the entire suite under the
+    race detector with caching off</strong>, and a cross-compile of every
+    release target — the same steps CI runs on every pull request, in the same
+    order.</p>
+    <p class="body">Two habits matter more than the totals. Every contract with
+    more than one implementation is certified by <strong>one shared conformance
+    suite</strong>, so the in-memory twin is held to the same cases as the real
+    broker. And the config JSON Schema is <strong>generated from the Go types the
+    engine runs on</strong>, regenerated and diffed by a test, so it cannot drift
+    from the implementation it documents.</p>
+  </div>
+  <div class="cite"><span>Counts computed on the working tree, 2026-09-08</span><span>CLAUDE.md · CONTRIBUTING.md · .github/workflows/ci.yml</span></div>
+</section>
+
+<!-- ══ 18 ══ ROADMAP ════════════════════════════════════════════════════ -->
+<section class="slide grid" id="s18">
+  <div class="eyebrow">Roadmap</div>
+  <h2>Three horizons. Every item is an extension of a seam that already&nbsp;exists.</h2>
+  <div class="cols c3">
+    <div class="hz a">
+      <div class="hd">
+        <div class="when">Now · 0–6 months</div>
+        <h3>Make it startable.</h3>
+        <div class="th">An hour to start a company, an afternoon to change it, a minute to prove it did something.</div>
+      </div>
+      <ul>
+        <li><b>The company registry</b><code>crewlet init acme/support-desk</code> fetches a signed, forkable, diffable company — the config is already a versioned document with revisions, diff and rollback.</li>
+        <li><b><code>crewlet simulate</code></b>Replay a trigger corpus against a config with every outbound call stubbed, and get a scorecard per seat. Three of the four pieces ship already: the in-memory broker twin, the provider fakes, a scratch store.</li>
+        <li><b>Signed work receipts</b>Every turn already writes which trigger, which config revision, which models, which tools, what it cost and whether it delivered. Sign it and it is verifiable by anyone holding the company's key.</li>
+        <li><b>The second knowledge backend, and a local reviewer</b>Notion, Drive, SharePoint or a Markdown repo behind the searcher seam that was built to take them; Bedrock and Vertex behind a provider contract so small a new backend inherits the credential pool and the fallback chain for free.</li>
+      </ul>
+    </div>
+    <div class="hz b">
+      <div class="hd">
+        <div class="when">Next · 6–18 months</div>
+        <h3>Make it compound.</h3>
+        <div class="th">The chart stops being something a founder writes once and becomes an object the company measures and improves — with a human holding the only lever.</div>
+      </div>
+      <ul>
+        <li><b>The reorg loop</b>A weekly pass reads outcome data and emits a config <em>diff</em> with a rationale: this seat is two jobs; this manager is a bottleneck; this reviewer overturns 40% of its executor's work on a model two tiers too cheap. A human activates it. The engine never activates its own reorg.</li>
+        <li><b>Agents that write their own tools</b>A seat that keeps hitting the same gap writes the MCP server for it in its sandbox and publishes a draft on its own lease. The draft-and-promote mechanism this needs already ships — for prompts.</li>
+        <li><b>A seat and skill marketplace</b>A seat is already an addressable entity with a round-trip API contract, so publishing one — persona, tool grants, phase models, learned skills — is a listing, not a new format.</li>
+        <li><b>Objectives, not cron</b>A seat declares a measure and a threshold; the scheduler wakes it when the measure moves, stalls, or a horizon approaches, and its one-on-ones hold it to the same record the delivery gate uses.</li>
+        <li><b>Kubernetes cells, and reaching the humans</b>Two more sandbox placements in a catalogue built to take them; email, SMS, paging and voice on a notification spine deliberately built before any vendor sat on it.</li>
+      </ul>
+    </div>
+    <div class="hz c">
+      <div class="hd">
+        <div class="when">The frontier · 18–36 months</div>
+        <h3>Make it a network.</h3>
+        <div class="th">One company was the unit. The unit becomes the node.</div>
+      </div>
+      <ul>
+        <li><b>Cross-company A2A</b>A seat in your company asks a seat in someone else's: one ask, one answer, signed at the boundary, scoped by an explicit grant, logged on both sides. Our channel is already an authorization record rather than a transport, which is exactly why a colleague on another node is the ordinary case.</li>
+        <li><b>An economic layer</b>A seat has a balance, not just a cap, and pays another company's seat for an answered ask. The counter is already durable, fleet-wide and derived from the active config.</li>
+        <li><b>Attestable companies</b>An evidence pack for any window: every decision, on which revision, with which model and credential, what it cost, what the reviewer overturned, which human held the escalation. The log is already append-only with trace ids on the envelope.</li>
+        <li><b>Sovereign mode, and backtesting a reorg</b>A company with zero egress — local models, local knowledge, local sandbox, a signed reproducible artifact; and last quarter's real triggers replayed against a <em>proposed</em> chart, so the reorg loop stops proposing and starts arguing with evidence.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ══ 19 ══ MOONSHOTS ══════════════════════════════════════════════════ -->
+<section class="slide" id="s19">
+  <div class="eyebrow">If this works</div>
+  <h1>The four things we would rather be&nbsp;wrong about than not&nbsp;try.</h1>
+  <div class="cols c2">
+    <div class="card raise">
+      <div class="k" style="font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--violet-ink)">01 · org design becomes empirical</div>
+      <h3>A company you can fork, diff, benchmark and merge.</h3>
+      <p>The best-performing five-seat product org for a B2B SaaS becomes a
+      versioned artifact with a score, replayed against a shared trigger corpus.
+      Management has never had a benchmark. We already store a company as a
+      diffable revision and already derive a verdict per turn from our own
+      record — a public leaderboard is those two facts plus a corpus.</p>
+    </div>
+    <div class="card raise">
+      <div class="k" style="font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--violet-ink)">02 · a market for machine labour</div>
+      <h3>An open protocol for firms that are not made of people.</h3>
+      <p>Companies discover each other, ask for bounded work, verify signed
+      receipts and settle. Not a marketplace we operate — a protocol we give
+      away, with the reference implementation. If it lands, the interesting
+      number stops being ARR and becomes the count of companies that can talk to
+      each other.</p>
+    </div>
+    <div class="card raise">
+      <div class="k" style="font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--violet-ink)">03 · the self-optimizing corporation</div>
+      <h3>Structure that improves on a loop, with one human lever.</h3>
+      <p>Each week the engine reads its own outcomes, proposes a reorg, backtests
+      it against replayed history, argues for it with evidence — and waits. A
+      person approves with one compare-and-set, and never fewer than one.</p>
+    </div>
+    <div class="card raise">
+      <div class="k" style="font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--violet-ink)">04 · sovereign agent companies</div>
+      <h3>A whole firm, auditable to the token, inside a network no vendor enters.</h3>
+      <p>A signed binary, a local model, no egress, a generated evidence pack.
+      Every hosted competitor is structurally excluded from this market. Our
+      default deployment is most of the way there already, because the broker
+      binds no socket and the store is a file.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══ 20 ══ BUSINESS MODEL ═════════════════════════════════════════════ -->
+<section class="slide deep" id="s20">
+  <div class="eyebrow">Business model</div>
+  <h2>The engine is MIT forever. That is a commercial decision, not a&nbsp;concession.</h2>
+  <p class="lede">Every enterprise buyer's first question is whether their source,
+  their credentials and their prompts leave the network, and the only
+  unimpeachable answer is a binary they can read. We do not sell the runtime. We
+  sell the things a single self-hosted binary structurally cannot be — all of
+  them properties of coordination <em>between</em> binaries.</p>
+  <div class="cols c4">
+    <div class="block hot">
+      <div class="k">01 · the volume tier</div>
+      <h3>Crewlet Cloud</h3>
+      <p>A hosted control plane holding the activation pointer, revision history,
+      long-horizon audit retention, cross-fleet dashboards, posture alerting and
+      SSO. Your nodes run on your infrastructure and dial out; no prompt, no code
+      and no credential reaches us — a checkable property of the split, not a
+      promise. Free for one node and a handful of seats, forever.</p>
+    </div>
+    <div class="block hot">
+      <div class="k">02 · the network effect</div>
+      <h3>The registry</h3>
+      <p>Companies, seats, skills and tools. Free listings free forever; paid and
+      private listings take a cut; private catalogues of approved seats for
+      enterprises. A company and a seat are already portable artifacts, which is
+      what makes this a listing rather than a product.</p>
+    </div>
+    <div class="block hot">
+      <div class="k">03 · the margin tier</div>
+      <h3>Enterprise</h3>
+      <p>Signed reproducible builds, air-gapped and offline-mirror kits, the
+      generated compliance evidence pack, the Kubernetes and microVM sandbox
+      cells, an SLA, and design partnership on the org model. Sold to exactly the
+      buyers a hosted-only competitor cannot serve at all.</p>
+    </div>
+    <div class="block">
+      <div class="k">04 · explicitly the option, not the plan</div>
+      <h3>The clearing layer</h3>
+      <p>If the inter-company protocol wins, a basis-point fee on settlement is
+      the largest business on this page by an order of magnitude — and it is
+      worth nothing without the protocol. We underwrite it on the first three
+      tiers. Anyone modelling the round on this line is modelling the wrong
+      company.</p>
+    </div>
+  </div>
+  <p class="body">The comparables are unambiguous about which half gets paid for:
+  <strong>GitLab</strong> — open core, $955M FY26 revenue, 87% gross margin, 118%
+  net retention. <strong>Temporal</strong> — MIT server, $5B on the cloud.
+  <strong>Grafana</strong> — $400M+ ARR on an AGPL core. <strong>HashiCorp</strong>
+  — Go single binaries, $6.4B to IBM. Every one monetised the fleet, never the
+  engine. We price the fleet, and we know a seat is an org abstraction rather
+  than a pricing one.</p>
+</section>
+
+<!-- ══ 21 ══ BUILT / NOT YET ════════════════════════════════════════════ -->
+<section class="slide" id="s21">
+  <div class="eyebrow">Where we actually are</div>
+  <h2>Two columns, at the same weight, so you don't have to find the second one in&nbsp;diligence.</h2>
+  <div class="ledger">
+    <div class="built">
+      <h3>Built and running <s>in the tree today</s></h3>
+      <ul>
+        <li>Two-stage turn engine with the three delivery gates and the round-cap extension judge</li>
+        <li>Executor delegation to workers as a dependency graph, under one budget slice and a tool grant enforced in code</li>
+        <li>Six vendors routed end to end, with per-seat identity, provisioning passes and a reconcile loop</li>
+        <li>Detached coding runs that suspend a turn and resume it after a restart, on another node</li>
+        <li>Diary, episodes, counterparty profiles, skill synthesis, first-turn onboarding, memory that follows a seat between nodes</li>
+        <li>Seat leases with a fencing epoch, fair-share placement, drain, watchdog, mixed-version fleet protocol</li>
+        <li>Two-tier config with revisions, diff, activate and rollback; whole-config encryption at rest; a sealed secret store on the coordination KV</li>
+        <li>REST API, websocket, embedded dashboard, OpenTelemetry, per-node event store, verified backups</li>
+        <li>Anthropic, OpenAI, any OpenAI-compatible endpoint, and eight coding CLIs as model backends</li>
+      </ul>
+    </div>
+    <div class="next">
+      <h3>Not yet, and we will say so first <s>the honest column</s></h3>
+      <ul>
+        <li><strong>No release has shipped this code.</strong> The only tag sits on an initial commit with no Go in it. A real <code>v0.1</code> is the next thing we cut — ask us for a build today and you get one from the branch.</li>
+        <li><strong>No paying customer, no design partner yet.</strong> We are pre-revenue and this deck claims no traction we cannot show you in a terminal.</li>
+        <li><strong>The engine composes your ticketing, chat and code host — it does not replace them.</strong> There is deliberately no task engine: the tracker is the source of truth and we mirror none of it. What ships is a compose file that stands Mattermost and GitLab up beside the engine, so the whole stack can be yours.</li>
+        <li><strong>Nothing about the pilot-to-production gap is proven at scale by us.</strong> The numbers on this deck's earlier slides are the industry's, not ours.</li>
+        <li><strong>No SOC 2, no SSO, no RBAC beyond scoped bearer tokens.</strong> The event store is each node's own database, not a fleet-wide immutable ledger.</li>
+        <li><strong>A local sandbox run in direct mode is not a security boundary</strong>, and we document it in those words. Isolation means the container or the remote cell.</li>
+        <li><strong>The linux binary needs glibc.</strong> <code>CGO_ENABLED=0</code> does not make it static — the store driver loads its engine with <code>dlopen</code>. No Windows target.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ══ 22 ══ THE ASK ════════════════════════════════════════════════════ -->
+<section class="slide grid" id="s22">
+  <div class="eyebrow">The ask</div>
+  <h1>Fund the substrate, not the&nbsp;demo.</h1>
+  <div class="cols c2">
+    <div style="display:flex;flex-direction:column;gap:14px">
+      <p class="lede">We are raising to do three things: cut the first real
+      release and put ten companies into production, ship the registry and the
+      simulator so starting a company takes an hour, and hire the four engineers
+      who turn a fleet into a product.</p>
+      <p class="body">The category has capital, distribution and enormous
+      enthusiasm. What it does not have is a runtime that survives its own
+      restart, an identity per agent at the vendors work actually happens on, and
+      an owner's answer to where the memory lives. We have been building exactly
+      that, in the open, and every claim in this deck has a file path.</p>
+      <div class="chips">
+        <span class="chip v">github.com/crewlet/crewlet</span>
+        <span class="chip v">docs.crewlet.ai</span>
+        <span class="chip">MIT</span>
+        <span class="chip">Go 1.27+</span>
+      </div>
+    </div>
+    <div class="term">
+      <div class="bar"><i></i><i></i><i></i><span>~/your-company</span></div>
+      <div class="body-t">
+<span class="d">$</span> crewlet run<br>
+<span class="d">  seats</span>   <span class="p">61 acquired</span> <span class="d">· 58 agent · 3 human</span><br>
+<span class="d">  nodes</span>   <span class="p">4 live</span> <span class="d">· epoch 27</span><br>
+<span class="d">  turns</span>   <span class="p">2,914 today</span> <span class="d">· 31 overturned</span><br>
+<span class="d">  spend</span>   <span class="d">tracked by phase · model · seat</span><br>
+<span class="v">  company is running</span><br>
+<span class="d">  # same command as slide one.</span><br>
+<span class="d">  # not one character different.</span>
+      </div>
+    </div>
+  </div>
+  <p class="lede" style="color:var(--violet-ink)">Make a company something you can
+  write down, run, and change in an afternoon.</p>
+</section>
+
+</main>
+
+<div class="hint" id="hint">← → to move · P to print</div>
+
+<script>
+(function () {
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var cur = document.getElementById('cur');
+  var spine = document.getElementById('spine');
+  var hint = document.getElementById('hint');
+  var i = 0;
+
+  function paint(n) {
+    i = Math.max(0, Math.min(slides.length - 1, n));
+    cur.textContent = String(i + 1).padStart(2, '0');
+    spine.style.height = ((i / (slides.length - 1)) * 100) + '%';
+  }
+
+  function go(n) {
+    var t = Math.max(0, Math.min(slides.length - 1, n));
+    slides[t].scrollIntoView({ behavior: 'smooth', block: 'start' });
+    paint(t);
+  }
+
+  // Track the slide nearest the top of the viewport, so keyboard and scroll
+  // never disagree about which one is current.
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (e.isIntersecting && e.intersectionRatio > 0.5) paint(slides.indexOf(e.target));
+    });
+  }, { threshold: [0.5] });
+  slides.forEach(function (s) { io.observe(s); });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    var k = e.key;
+    if (k === 'ArrowRight' || k === 'ArrowDown' || k === 'PageDown' || k === ' ') { e.preventDefault(); go(i + 1); }
+    else if (k === 'ArrowLeft' || k === 'ArrowUp' || k === 'PageUp') { e.preventDefault(); go(i - 1); }
+    else if (k === 'Home') { e.preventDefault(); go(0); }
+    else if (k === 'End') { e.preventDefault(); go(slides.length - 1); }
+    else if (k === 'p' || k === 'P') { e.preventDefault(); window.print(); }
+  });
+
+  paint(0);
+  setTimeout(function () { hint.style.opacity = '0'; hint.style.transition = 'opacity 600ms'; }, 6000);
+})();
+</script>
