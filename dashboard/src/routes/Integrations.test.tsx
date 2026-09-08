@@ -463,12 +463,16 @@ test("the action follows the state", () => {
     atlassian,
     rowsOf({ key: "jira", configured: true, reconcile: { phase: "ready" } }),
   );
-  expect(actionFor(ready, [toolState({ configured: false })])?.label).toBe("Connect");
-  expect(actionFor(ready, [toolState({ satisfied: false })])?.label).toBe("Continue");
+  // A TOOL NOBODY HAS CONNECTED: neither half has it, which is what makes
+  // Connect the answer. Passing present=true here would be a card whose rows
+  // hold a surface its listing has not caught up with, and that one offers
+  // nothing until it does.
+  expect(actionFor(ready, [toolState({ configured: false })], false)?.label).toBe("Connect");
+  expect(actionFor(ready, [toolState({ satisfied: false })], true)?.label).toBe("Continue");
   // A WORKING TOOL OFFERS NOTHING. Nothing a person does moves it, and the
   // Manage button that used to sit here read as a card's primary action
   // while saying only "nobody is needed".
-  expect(actionFor(ready, [toolState({})])).toBeNull();
+  expect(actionFor(ready, [toolState({})], true)).toBeNull();
 
   // A FAULT IS NOT AN ACTION. A row a person owes something on says so in
   // its tag and its status line; what to do about it is the settings the
@@ -483,7 +487,31 @@ test("the action follows the state", () => {
       reconcile: { phase: "degraded", actor: "admin", detail: "x" },
     }),
   );
-  expect(actionFor(owed, [toolState({})])).toBeNull();
+  expect(actionFor(owed, [toolState({})], true)).toBeNull();
+});
+
+// THE ROWS ARE THE FRESHER HALF, IN BOTH DIRECTIONS.
+//
+// The two halves of this screen arrive separately, and the rows are the
+// quicker answer to "does this company have this". Read as fresher in only
+// one direction, a disconnect left the card with no control at all: nothing
+// to connect it, because the listing still called it configured, and nothing
+// to disconnect, because the rows already said it was gone. It stayed that
+// way until somebody refreshed the page by hand.
+test("a card the rows say is gone offers to connect it again", () => {
+  const github = CATALOG.find((e) => e.key === "github")!;
+  const gone = rollUp(github, rowsOf());
+  expect(gone.tag).toBe("");
+  // The listing has not caught up and still calls it configured.
+  expect(actionFor(gone, [toolState({ key: "github", configured: true })], false)?.label).toBe(
+    "Connect",
+  );
+
+  // AND THE OTHER DIRECTION IS UNCHANGED: straight after a connect the rows
+  // hold the surface while the listing is still the pre-connect one, and a
+  // card then drew Connect beside a tag reading Connected.
+  const fresh = rollUp(github, rowsOf({ key: "github", configured: true }));
+  expect(actionFor(fresh, [toolState({ key: "github", configured: false })], true)).toBeNull();
 });
 
 // A CARD IN MOTION OFFERS NOTHING.
@@ -501,7 +529,11 @@ test("a card the engine is mid-flight on offers no action", () => {
   // Atlassian is three surfaces, so the other two are unconfigured and this
   // is exactly the card that drew Continue beside Connecting.
   expect(
-    actionFor(connecting, [toolState({ key: "atlassian" }), toolState({ configured: false })]),
+    actionFor(
+      connecting,
+      [toolState({ key: "atlassian" }), toolState({ configured: false })],
+      true,
+    ),
   ).toBeNull();
 
   // AND BEING TAKEN AWAY, which is the other direction of the same rule.
@@ -513,7 +545,7 @@ test("a card the engine is mid-flight on offers no action", () => {
       reconcile: { phase: "ready", disconnecting: true },
     }),
   );
-  expect(actionFor(going, [toolState({ configured: false })])).toBeNull();
+  expect(actionFor(going, [toolState({ configured: false })], true)).toBeNull();
 });
 
 // A TOOL IS COMPLETE ONLY WHEN EVERY CONFIGURED SURFACE IS. Atlassian with
@@ -525,10 +557,14 @@ test("one unfinished surface makes the whole tool unfinished", () => {
     atlassian,
     rowsOf({ key: "jira", configured: true, reconcile: { phase: "ready" } }),
   );
-  const mixed = actionFor(ready, [
-    toolState({ key: "jira", configured: true, satisfied: true }),
-    toolState({ key: "confluence", configured: true, satisfied: false }),
-  ]);
+  const mixed = actionFor(
+    ready,
+    [
+      toolState({ key: "jira", configured: true, satisfied: true }),
+      toolState({ key: "confluence", configured: true, satisfied: false }),
+    ],
+    true,
+  );
   expect(mixed?.label).toBe("Continue");
 
   // AND A SURFACE NOBODY HAS CONFIGURED IS SOMETHING TO CONTINUE, not to
@@ -543,17 +579,25 @@ test("one unfinished surface makes the whole tool unfinished", () => {
   // The WORD matters: this said Connect, beside a tag reading Connected, so
   // the card claimed both at once. Continue is what this screen already says
   // about a tool with something left to do.
-  const partial = actionFor(ready, [
-    toolState({ key: "jira", configured: true, satisfied: true }),
-    toolState({ key: "confluence", configured: false, satisfied: false }),
-  ]);
+  const partial = actionFor(
+    ready,
+    [
+      toolState({ key: "jira", configured: true, satisfied: true }),
+      toolState({ key: "confluence", configured: false, satisfied: false }),
+    ],
+    true,
+  );
   expect(partial?.label).toBe("Continue");
 
   // A tool whose every surface is connected and working offers nothing.
-  const done = actionFor(ready, [
-    toolState({ key: "jira", configured: true, satisfied: true }),
-    toolState({ key: "confluence", configured: true, satisfied: true }),
-  ]);
+  const done = actionFor(
+    ready,
+    [
+      toolState({ key: "jira", configured: true, satisfied: true }),
+      toolState({ key: "confluence", configured: true, satisfied: true }),
+    ],
+    true,
+  );
   expect(done).toBeNull();
 });
 
@@ -561,7 +605,7 @@ test("one unfinished surface makes the whole tool unfinished", () => {
 // discovers on a press that there is no surface behind it is worse than none.
 test("a tool with no setup surface offers no action", () => {
   const state = rollUp(slack, rowsOf({ key: "slack", configured: true }));
-  expect(actionFor(state, [])).toBeNull();
+  expect(actionFor(state, [], true)).toBeNull();
 });
 
 // --- a per-seat vendor ------------------------------------------------------ //
@@ -656,45 +700,57 @@ test("a per-seat app leaves the work to the agent's own row", () => {
   // produce an agent's app happen at GitHub, from that agent's own row, so a
   // GitHub seat carries no requirements and the dialog has no box a Continue
   // button could take anybody to.
-  const action = actionFor(state, [
-    toolState({
-      key: "github",
-      configured: true,
-      satisfied: false,
-      form_complete: true,
-      seats_required: true,
-      seats: [{ handle: "cto", requirements: [], satisfied: false, enrolled: true }],
-    }),
-  ]);
+  const action = actionFor(
+    state,
+    [
+      toolState({
+        key: "github",
+        configured: true,
+        satisfied: false,
+        form_complete: true,
+        seats_required: true,
+        seats: [{ handle: "cto", requirements: [], satisfied: false, enrolled: true }],
+      }),
+    ],
+    true,
+  );
   expect(action).toBeNull();
 
   // AND SLACK'S: unfinished because a seat's own credential is unanswered,
   // which is a box in this very dialog. Suppressing the button there would
   // leave the agent's app with no way to be filled in at all.
-  const typeable = actionFor(state, [
-    toolState({
-      key: "slack",
-      configured: true,
-      satisfied: false,
-      form_complete: false,
-      seats_required: true,
-      seats: [{ handle: "cto", requirements: [], satisfied: false }],
-    }),
-  ]);
+  const typeable = actionFor(
+    state,
+    [
+      toolState({
+        key: "slack",
+        configured: true,
+        satisfied: false,
+        form_complete: false,
+        seats_required: true,
+        seats: [{ handle: "cto", requirements: [], satisfied: false }],
+      }),
+    ],
+    true,
+  );
   expect(typeable?.label).toBe("Continue");
 
   // AND AN INFORMATIONAL ROSTER IS NOT WORK OUTSTANDING. Every app lists its
   // agents now, and most of those credentials are an upgrade on an app that
   // already works: reading any roster as unfinished put a Continue button on
   // every connected card.
-  const informational = actionFor(state, [
-    toolState({
-      key: "datadog",
-      configured: true,
-      satisfied: true,
-      seats: [{ handle: "cto", requirements: [], satisfied: false }],
-    }),
-  ]);
+  const informational = actionFor(
+    state,
+    [
+      toolState({
+        key: "datadog",
+        configured: true,
+        satisfied: true,
+        seats: [{ handle: "cto", requirements: [], satisfied: false }],
+      }),
+    ],
+    true,
+  );
   expect(informational).toBeNull();
 });
 

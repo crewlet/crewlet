@@ -566,6 +566,7 @@ func TestDisconnectingWhatIsAbsentIsNotAnError(t *testing.T) {
 // given, which is the whole question these tests ask: does the route hand a
 // pass the two things that let it write, and only when it should.
 type recordingPass struct {
+	kind     integration.Kind
 	mu       sync.Mutex
 	calls    []setup.PassInput
 	findings []integration.Finding
@@ -577,7 +578,15 @@ type recordingPass struct {
 	watchCtx chan error
 }
 
-func (*recordingPass) Kind() integration.Kind      { return integration.KindGitHub }
+// Kind is GitHub unless a test names another: most of these are about the
+// pass contract rather than about a particular app, and one of them is about
+// a roster only a provisioning app has.
+func (p *recordingPass) Kind() integration.Kind {
+	if p.kind != "" {
+		return p.kind
+	}
+	return integration.KindGitHub
+}
 func (p *recordingPass) Needs() *setup.Requirement { return p.needs }
 
 func (p *recordingPass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
@@ -1310,4 +1319,71 @@ func firstRunes(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+// A SEAT OPTS IN BY NAMING A VARIABLE, and the roster says which side of that
+// each seat is on.
+//
+// The plan a provisioning pass runs is built from the seats whose mcp_env
+// block holds a whole `${VAR}`: that is where the minted credential goes, and
+// a seat with nowhere to put one is left alone. So the two states are not
+// "has an account" and "does not": they are "no sync will look at this seat"
+// and "the next one will".
+//
+// Both were described wrongly, and each in the direction that misleads. A
+// seat nobody had opted in was promised an account on the next sync, which no
+// sync would ever create, so the card read Connected over an agent that had
+// none and never would. A seat that HAD opted in, which is a named variable
+// with nothing behind it yet, was reported as authenticating with nothing:
+// the one state an operator reaches by doing exactly the right thing, read as
+// a mistake.
+func TestAProvisionedSeatSaysWhichSideOfOptingInItIsOn(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	res := s.do(t, http.MethodPut, "/config", `{
+	  "name": "Acme",
+	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
+	  "integrations": {"gitlab": {"enabled": true, "url": "https://gitlab.com",
+	    "signing_secret": "whsec_YS1maXh0dXJlLXNpZ25pbmcta2V5LW9mLTMyYnl0ZXM=",
+	    "provisioning": {"group": "acme", "admin_token": "glpat-x"}}},
+	  "roles": [
+	    {"name": "Coder", "handle": "coder", "llm": "zulu",
+	     "mcp_env": {"gitlab": {"GITLAB_TOKEN": "${CODER_GITLAB_TOKEN}"}}},
+	    {"name": "Writer", "handle": "writer", "llm": "zulu"}
+	  ]
+	}`, map[string]string{"X-Summary": "one agent opted in, one not"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("import = %d: %s", res.Code, res.Body)
+	}
+
+	// A SURFACE THAT PROVISIONS, which is what makes the two states above
+	// different from each other at all.
+	s.withPass(t, &recordingPass{kind: integration.KindGitLab})
+
+	seats := map[string]map[string]any{}
+	state := decode(t, s.do(t, http.MethodGet, "/setup/integrations/gitlab", "", nil))
+	for _, row := range state["seats"].([]any) {
+		seat, _ := row.(map[string]any)
+		seats[seat["handle"].(string)] = seat
+	}
+
+	// OPTED IN AND WAITING. The variable is named and nothing is behind it
+	// yet, which is exactly what puts this seat in the plan.
+	opted, _ := seats["coder"]["detail"].(string)
+	if !strings.Contains(opted, "waiting for the next sync") {
+		t.Errorf("a seat that opted in reads %q", opted)
+	}
+	if strings.Contains(opted, "authenticates with nothing") {
+		t.Error("a seat that opted in is described as a mistake")
+	}
+
+	// NOT OPTED IN, and no sync will look at it. Promised an account, the
+	// card read Connected over an agent that was never going to get one.
+	out, _ := seats["writer"]["detail"].(string)
+	if !strings.Contains(out, "mcp_env.gitlab") {
+		t.Errorf("a seat nobody opted in reads %q, and it does not say how to", out)
+	}
+	if strings.Contains(out, "created on the next sync") {
+		t.Error("a seat no sync will look at was promised an account by one")
+	}
 }

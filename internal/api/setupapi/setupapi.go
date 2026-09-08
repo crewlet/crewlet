@@ -681,8 +681,19 @@ func credentialSeats(company *config.Company, resolve func(string) (string, bool
 			// this build has a pass for it, and where the app issues no
 			// credential on a provisioner's behalf the next step is a
 			// person's.
+			//
+			// A SEAT OPTS IN BY NAMING A VARIABLE, which is the one thing
+			// the pass cannot do for it: the plan is built from the seats
+			// whose mcp_env block holds a whole `${VAR}`, because that is
+			// where the minted credential goes and a seat with nowhere to
+			// put one is left alone. So "created on the next sync" was a
+			// promise about a seat no sync would ever look at, and the
+			// card read Connected over an agent that had no account and
+			// was never going to get one.
 			if provisions {
-				state.Detail = "not in " + app + " yet, created on the next sync"
+				state.Detail = "not on " + app + " yet: name a ${VAR} under " +
+					"this seat's mcp_env." + envs[0] + " and the next sync " +
+					"creates the account and seals it there"
 				break
 			}
 			state.Detail = "no " + app + " credential yet, and " + app +
@@ -692,6 +703,18 @@ func credentialSeats(company *config.Company, resolve func(string) (string, bool
 			// the store does not hold is the state that reads as configured
 			// everywhere else while the agent authenticates with nothing.
 			if _, ok := setup.Resolution(stored, resolve); ok != nil && !*ok {
+				// UNLESS THE ENGINE IS ABOUT TO FILL IT. On an app this
+				// build provisions, a named variable with nothing behind
+				// it is a seat that has opted IN and is waiting: it is
+				// what puts the seat in the plan, and the pass mints the
+				// credential and seals it under that name. Reported as a
+				// fault, the one state an operator reaches by doing
+				// exactly the right thing read as a mistake.
+				if provisions {
+					state.Detail = "waiting for the next sync to create the account " +
+						"and seal " + where
+					break
+				}
 				state.Detail = where + " did not resolve, so this agent authenticates with nothing"
 				break
 			}

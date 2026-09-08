@@ -627,7 +627,13 @@ function SurfaceRow({
 export function actionFor(
   state: EntryState,
   tools: SetupToolState[],
-  present = false,
+  /**
+   * Whether the ROWS have this tool, which is the fresher of the two halves
+   * and now load-bearing in both directions. No default: a caller that left
+   * it out was saying "the rows say this is gone", which is a real state with
+   * a real answer and not a thing to fall into.
+   */
+  present: boolean,
 ): { label: string; blocks?: string } | null {
   if (tools.length === 0) return null;
   // A CARD IN MOTION OFFERS NOTHING. Between a connect and the loop's first
@@ -646,8 +652,15 @@ export function actionFor(
   // where they say a surface is there, this half is behind rather than
   // reporting an unconnected tool. Nothing is offered until it catches up,
   // which is a moment, and the tag carries the truth throughout.
-  const stale = present && tools.every((t) => !t.configured);
-  if (stale) return null;
+  //
+  // AND THE SAME RULE THE OTHER WAY. After a disconnect the rows say the
+  // surface is gone while this listing still calls it configured, and the
+  // card then had no control at all: nothing to connect it, because the
+  // listing said it was, and nothing to disconnect, because the rows said it
+  // was not. Reading the rows as fresher in only one direction is what left
+  // it there until somebody refreshed the page by hand.
+  if (present && tools.every((t) => !t.configured)) return null;
+  if (!present && tools.some((t) => t.configured)) return { label: "Connect" };
   // A TOOL IS CONFIGURED WHEN ANY OF ITS SURFACES IS, and complete only when
   // every configured one is. Atlassian with Jira set up and Confluence not is
   // neither "connect" nor "done": it is a tool with something left to do.
@@ -1278,7 +1291,17 @@ export function Integrations() {
   const setup = useSetup();
   // READ AGAIN AFTER A WRITE, because the first read can land before the
   // engine has applied the revision it just stored. See [useRecheck].
-  const { watching, watch } = useRecheck(reread);
+  const { watching, watch } = useRecheck(
+    useCallback(() => {
+      // BOTH HALVES, every time. The rows say whether the company has a
+      // surface and the listing says what its form should show, and a
+      // re-read of one leaves the card drawn from two documents that
+      // disagree: that is what put a Continue button beside Connected, and
+      // later left a disconnected card with no control at all.
+      reread();
+      setup.reload();
+    }, [reread, setup]),
+  );
   const [dialog, setDialog] = useState<{
     title: string;
     sections: { name: string; tool: SetupToolState }[];
@@ -1364,7 +1387,10 @@ export function Integrations() {
           // the third-party app teardown succeeds, so what a re-read shows
           // is the surface moving to Disconnecting.
           onDone={() => {
-            setup.reload();
+            // BOTH HALVES, AND KEEP LOOKING AT BOTH. A disconnect leaves
+            // the listing calling the surface configured while the rows
+            // already say it is gone, which is the same race as a connect
+            // in the other direction. See [useRecheck].
             watch();
           }}
         />
@@ -1381,9 +1407,8 @@ export function Integrations() {
           // and it is the one an operator is looking at when the dialog
           // closes.
           onDone={() => {
-            setup.reload();
             // READ, AND KEEP LOOKING: the first read can land before the
-            // engine has applied the revision it just stored. See [watch].
+            // engine has applied the revision it just stored. See [useRecheck].
             watch();
           }}
         />
