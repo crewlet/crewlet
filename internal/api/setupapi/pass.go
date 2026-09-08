@@ -250,14 +250,14 @@ func (s *Service) recordEndpoint(ctx context.Context, kind integration.Kind, bas
 	if s.status == nil || base == "" {
 		return
 	}
-	var current integration.State
-	if states, err := s.status.LoadIntegrations(ctx); err == nil {
-		for _, state := range states {
-			if state.Kind == kind {
-				current = state
-				break
-			}
-		}
+	current, err := s.currentState(ctx, kind)
+	if err != nil {
+		log.WarnContext(ctx, "setup_endpoint_unrecorded",
+			"integration", kind, "error", err,
+			"detail", "the prior row could not be read, so nothing is written "+
+				"over it; a later change of the public base URL will not be "+
+				"reported for this surface until a pass records one")
+		return
 	}
 	if current.Endpoint == base {
 		return
@@ -284,6 +284,35 @@ func (s *Service) runByID(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, run)
 }
 
+// currentState is the row a surface already has, or the error that stopped
+// this node reading it.
+//
+// THREE-VALUED, and every caller here reads the third value as a reason to
+// write NOTHING. The rows carry attempts, the settled cadence, the address a
+// surface was registered against and the last fault, and they are keyed per
+// kind on the FLEET's store — so a read that failed is not evidence the
+// surface has no row. Three copies of this each folded the failure into the
+// zero State and then saved it, which is not a lost update but a blind
+// overwrite: a two-second coordination blip erased everything a surface had
+// ever recorded and reported it as freshly reconciled.
+//
+// An absent row IS the zero State, and that is a real answer: a surface
+// nobody has reconciled has no row, which is why the miss is not an error.
+func (s *Service) currentState(
+	ctx context.Context, kind integration.Kind,
+) (integration.State, error) {
+	states, err := s.status.LoadIntegrations(ctx)
+	if err != nil {
+		return integration.State{}, err
+	}
+	for _, state := range states {
+		if state.Kind == kind {
+			return state, nil
+		}
+	}
+	return integration.State{}, nil
+}
+
 // record folds a pass's outcome into the fleet's integration status.
 func (s *Service) record(ctx context.Context, kind integration.Kind, run *setup.Run, passErr error) {
 	if s.status == nil || run == nil {
@@ -293,20 +322,26 @@ func (s *Service) record(ctx context.Context, kind integration.Kind, run *setup.
 	// The row this integration already has, so attempts and settled-at
 	// carry across rather than resetting because a person pressed a
 	// button.
-	var current integration.State
-	if states, err := s.status.LoadIntegrations(ctx); err == nil {
-		for _, state := range states {
-			if state.Kind == kind {
-				current = state
-				break
-			}
-		}
+	current, err := s.currentState(ctx, kind)
+	if err != nil {
+		// NOTHING IS WRITTEN. See [Service.currentState]: without the
+		// prior row this would save a state built from an empty one,
+		// erasing the attempts, the cadence and the address the surface
+		// had. The pass itself happened and its work is durable; what is
+		// lost is the record of it, which the loop's next tick rebuilds.
+		log.WarnContext(ctx, "setup_status_unreadable",
+			"integration", kind, "error", err,
+			"detail", "the pass ran; its outcome is not recorded, and the "+
+				"loop's next tick reports it")
+		return
 	}
 	next, forget := integration.Observe(current, kind, run.Findings, passErr, now)
-	// THE ADDRESS THIS PASS RAN AGAINST, the same stamp the loop writes:
-	// see [integration.State.Endpoint].
+	// THE ADDRESS THIS PASS RAN AGAINST, and only where this pass is what
+	// keeps that address current — the same three-way rule the loop applies,
+	// through the same helper, so a row cannot mean one thing when a tick
+	// wrote it and another when a button did.
 	if company := s.company(); company != nil {
-		next.Endpoint = webhookBase(company, s.resolve)
+		integration.StampEndpoint(&next, kind, company.Integrations.WebhookBase(s.resolve))
 	}
 	if forget {
 		if err := s.status.ForgetIntegration(ctx, kind); err != nil {

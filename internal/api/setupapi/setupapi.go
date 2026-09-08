@@ -26,6 +26,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -1089,7 +1090,7 @@ func slackSeats(company *config.Company, resolve func(string) (string, bool),
 	// where an address belongs, and Slack refuses the app with nothing
 	// naming the cause. The same mistake was measured on the Atlassian
 	// pass, which sent the literal `${ATLASSIAN_ORG_ID}` to Atlassian.
-	base := webhookBase(company, resolve)
+	base := company.Integrations.WebhookBase(resolve)
 	out := []SeatState{}
 	for role := range company.EachRole() {
 		// THROUGH THE SEAT, which is where the derivation lives: a handle
@@ -1156,19 +1157,6 @@ func slackSeats(company *config.Company, resolve func(string) (string, bool),
 		out = append(out, state)
 	}
 	return out
-}
-
-// webhookBase is the address third-party apps reach this deployment on, as a
-// VALUE rather than as whatever the document happens to hold.
-//
-// A REFERENCE IS NOT AN ADDRESS. The field is Tier B, so `${PUBLIC_URL}` is a
-// legal way to write it and the document keeps it verbatim; everything built
-// from it here is shown to an operator or copied into a third-party app, and
-// both read the literal as the address. An unresolved reference answers
-// empty, which every caller already treats as "no address yet" and says so.
-func webhookBase(company *config.Company, resolve func(string) (string, bool)) string {
-	base := setup.Deref(company.Integrations.PublicBaseURL, resolve)
-	return strings.TrimRight(strings.TrimSpace(base), "/")
 }
 
 // repoScope is the repositories a finished seat works in.
@@ -1476,13 +1464,16 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	// first symptom is an agent that stopped replying. Recorded here so a
 	// later read can say the address moved.
 	//
-	// ON THE INGRESS, not on whether this build runs a pass. Datadog has a
-	// pass — it provisions accounts — and its webhook URL is still a field
-	// somebody typed into a settings page, so the pass stamping the base it
-	// ran against reported a healthy surface over an address the third-party
-	// app had never been told about. See [integration.Ingress].
+	// ON THE INGRESS, not on whether this build runs a pass. Today that
+	// admits Slack alone: its Request URL is a field on a settings page with
+	// no write API behind it, so it holds whatever address a person last
+	// typed, however much of Slack's provisioning a pass does converge.
+	// Datadog used to be here too and is not any more — its webhook
+	// definition is writable through the organization credentials its block
+	// already carries, so no person holds that address. See
+	// [integration.Kind.Ingress].
 	if after != nil && kind.Ingress() == integration.IngressOperator {
-		s.recordEndpoint(r.Context(), kind, webhookBase(after, s.resolve))
+		s.recordEndpoint(r.Context(), kind, after.Integrations.WebhookBase(s.resolve))
 	}
 	fresh := state
 	if after != nil {
@@ -1734,14 +1725,15 @@ type disconnectRequest struct {
 func (s *Service) markDisconnecting(
 	ctx context.Context, kind integration.Kind, removeSeats bool,
 ) error {
-	var state integration.State
-	if states, err := s.status.LoadIntegrations(ctx); err == nil {
-		for _, row := range states {
-			if row.Kind == kind {
-				state = row
-				break
-			}
-		}
+	state, err := s.currentState(ctx, kind)
+	if err != nil {
+		// REFUSED RATHER THAN WRITTEN BLIND. This one returns its error,
+		// so the operator is told the disconnect was not started instead
+		// of watching a row that says Disconnecting over a state this
+		// node overwrote without reading. See [Service.currentState].
+		return fmt.Errorf(
+			"setupapi: the fleet's record of %s could not be read, so the "+
+				"disconnect was not started: %w", kind, err)
 	}
 	state.Kind = kind
 	state.Disconnecting = true

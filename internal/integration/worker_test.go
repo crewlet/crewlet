@@ -812,3 +812,44 @@ func TestAnOrdinaryFaultIsStillRecorded(t *testing.T) {
 		t.Error("the recorded row carries no fault")
 	}
 }
+
+// THE ENDPOINT RULE IS ONE RULE, and it is three-way rather than a stamp.
+//
+// Two writers share these rows: this loop's tick and the pass an operator runs
+// from the dashboard. The rule lived inside the loop and the dashboard's pass
+// stamped every surface unconditionally, so one row meant different things
+// depending on which writer touched it last.
+func TestStampEndpointFollowsTheSurfacesIngress(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		kind  Kind
+		start string
+		want  string
+	}{
+		// A pass registers the delivery, so where it ran IS where the
+		// registration points.
+		"engine-registered takes the current address": {
+			kind: KindGitLab, start: "https://old.example.com", want: "https://now.example.com",
+		},
+		// A person typed the address at the third-party app. Stamping it
+		// would turn the one warning about a moved address into a green row.
+		"operator-typed is left exactly as it was": {
+			kind: KindSlack, start: "https://typed.example.com", want: "https://typed.example.com",
+		},
+		// Nothing delivers to an address, so carrying one is a false alarm
+		// waiting for the public base to move. Cleared, not merely skipped,
+		// so a row an earlier build stamped converges.
+		"a surface with no inbound is cleared": {
+			kind: KindAtlassian, start: "https://stale.example.com", want: "",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			state := State{Kind: tc.kind, Endpoint: tc.start}
+			StampEndpoint(&state, tc.kind, "https://now.example.com")
+			if state.Endpoint != tc.want {
+				t.Errorf("Endpoint = %q, want %q", state.Endpoint, tc.want)
+			}
+		})
+	}
+}

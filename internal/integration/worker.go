@@ -694,36 +694,13 @@ func (w *Worker) reconcile(ctx context.Context, kind Kind, state State, now time
 	// runs from the dashboard: a status row must not depend on which
 	// surface produced it.
 	state, forget := Observe(state, kind, findings, err, now)
-	// THE ADDRESS THIS PASS RAN AGAINST, and ONLY where this pass is what
-	// keeps that address current. Recorded on every pass rather than only
-	// a successful one: what it answers is "where is this surface's
+	// THE ADDRESS THIS PASS RAN AGAINST, on every pass rather than only a
+	// successful one: what it answers is "where is this surface's
 	// registration pointing", and a pass that failed still registered
-	// against the base it was given.
-	//
-	// A surface whose address a person typed at the third-party app
-	// ([IngressOperator]) is deliberately left alone here, however much of
-	// its provisioning this pass does converge: stamping it would report
-	// the base this deployment listens on as though the third-party app
-	// had been told about it, which turns the one warning an operator gets
-	// about a moved address into a green row. Datadog is exactly that
-	// surface — its pass provisions accounts and its webhook URL is a
-	// field on a settings page — and the address it was set up against is
-	// written once, by the setup write that asked a person to paste it.
-	switch kind.Ingress() {
-	case IngressEngine:
-		state.Endpoint = w.currentEndpoint()
-	case IngressNone:
-		// NOTHING DELIVERS TO AN ADDRESS HERE, so carrying one is a claim
-		// waiting to become a false alarm: the moment the public base
-		// moves, a stale value compares unequal and reports an action
-		// nobody can take on a surface that has no address to change.
-		// Cleared rather than merely not written, so a row an earlier
-		// build stamped converges on the next pass.
-		state.Endpoint = ""
-	case IngressOperator:
-		// LEFT ALONE. See the note above: only the setup write knows what
-		// a person was shown, and this pass knows nothing about it.
-	}
+	// against the base it was given. Which surfaces that applies to is
+	// [StampEndpoint]'s to decide, because the dashboard's pass writes these
+	// same rows and the two must not disagree.
+	StampEndpoint(&state, kind, w.currentEndpoint())
 	switch {
 	case forget:
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
@@ -745,6 +722,40 @@ func (w *Worker) reconcile(ctx context.Context, kind Kind, state State, now time
 		// pass that has nothing left to do, which is the cheap failure.
 		log.WarnContext(ctx, "integration_status_unrecorded",
 			"integration", kind.String(), "error", err)
+	}
+}
+
+// StampEndpoint records the address a pass ran against, where that pass is
+// what keeps the address current.
+//
+// THREE-WAY on [Kind.Ingress], and the three answers are genuinely different:
+//
+//   - IngressEngine — a pass registers the delivery here, so the address it
+//     ran against is the address the registration points at.
+//   - IngressNone — nothing delivers to an address at all, so carrying one is
+//     a claim waiting to become a false alarm: the moment the public base
+//     moves, a stale value compares unequal and reports an action nobody can
+//     take on a surface with no address to change. CLEARED rather than merely
+//     not written, so a row an earlier build stamped converges on the next
+//     pass.
+//   - IngressOperator — a person typed the address at the third-party app.
+//     Stamping it would report the base this deployment listens on as though
+//     the third-party app had been told, which turns the one warning an
+//     operator gets about a moved address into a green row.
+//
+// EXPORTED, because two writers share these rows: the loop's tick and the
+// pass an operator runs from the dashboard. The rule lived inside the loop
+// and the dashboard's pass stamped every surface unconditionally — so the
+// same row meant one thing when a tick wrote it and another when a button
+// did, and Datadog, whose webhook URL is a field on a settings page, was
+// reported current by the button and left alone by the tick.
+func StampEndpoint(state *State, kind Kind, current string) {
+	switch kind.Ingress() {
+	case IngressEngine:
+		state.Endpoint = current
+	case IngressNone:
+		state.Endpoint = ""
+	case IngressOperator:
 	}
 }
 
