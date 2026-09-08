@@ -25,6 +25,11 @@ type Result struct {
 	// Renamed names the bots whose display name was brought back in line
 	// with the company document.
 	Renamed []string
+	// Enabled names the bots a previous disconnect had disabled and this
+	// run turned back on. Said out loud because it is the difference
+	// between a reconnect that works and one that reports ready over an
+	// agent that cannot sign in.
+	Enabled []string
 	Rotated []string
 	// Kept names the seats whose existing token was left alone — the
 	// SUCCESSFUL outcome of a re-run, said out loud because a silent
@@ -157,6 +162,21 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		if err != nil {
 			return nil, rollback(ctx, opts, minted,
 				fmt.Errorf("mattermost: %s: %w", seat.Handle, err))
+		}
+		// A DISABLED BOT IS ONE THIS ENGINE TURNED OFF, and reconnecting
+		// has to turn it back on. The teardown disables rather than
+		// deletes so an agent keeps its history, which means the account
+		// is still here to be found: without this the pass joins it,
+		// mints it a token, reports ready, and every socket that token
+		// opens is refused because the account is deactivated.
+		if exists && user.DeleteAt != 0 {
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
+			if err := opts.Client.EnableBot(ctx, user.ID); err != nil {
+				return nil, rollback(ctx, opts, minted, fmt.Errorf(
+					"mattermost: %s: re-enable the bot a disconnect disabled: %w",
+					seat.Handle, err))
+			}
+			res.Enabled = append(res.Enabled, seat.Handle)
 		}
 		if !exists {
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml

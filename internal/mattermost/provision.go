@@ -294,6 +294,22 @@ func (c *Client) DisableBot(ctx context.Context, userID string) error {
 	return err
 }
 
+// EnableBot reactivates a bot account this engine disabled.
+//
+// THE UNDO OF A DISCONNECT, and without it a reconnect is a card that reports
+// itself ready over an agent that cannot sign in. A teardown disables rather
+// than deletes, deliberately, so the account survives with its history and
+// its username; reconnecting then FINDS that account, joins it to the team,
+// mints it a fresh token and reports success, while every socket it opens is
+// refused because the account behind the token is deactivated.
+//
+// Mattermost's own route, which is the mirror of the disable above rather
+// than the generic user-activation call: a bot is enabled through /bots.
+func (c *Client) EnableBot(ctx context.Context, userID string) error {
+	_, err := c.request(ctx, http.MethodPost, "/bots/"+userID+"/enable", nil, nil, false)
+	return err
+}
+
 // botPageSize is Mattermost's documented per_page maximum. A larger value is
 // clamped server-side, which would make a partial walk look like a complete
 // one — the page size and the stop condition have to agree.
