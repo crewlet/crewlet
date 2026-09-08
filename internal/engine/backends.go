@@ -158,15 +158,20 @@ func (b *Backends) Close(ctx context.Context) {
 // because the model is, and the store wants it at open time — it is the only
 // thing that knows how wide the packed BLOBs in its vector columns are.
 //
-// A NIL COMPANY IS A REAL CASE, not a caller's mistake: a node whose company
-// lives in the store has to open that store before it can read it, and a node
-// with no active revision at all has no company to be asked for. Both open at
-// width 0. That is safe only because the width is no longer fixed at open —
-// the engine re-states it with [store.DB.SetEmbeddingDim] on every epoch it
-// installs, so the first revision this node applies tells it the truth. It was
-// refused here while the width was immutable, and rightly: a store stuck at
-// the wrong width refuses every write from the right one, and recall stops
-// returning anything with nothing in the log to say why.
+// A NIL COMPANY IS A REAL CASE, not a caller's mistake: a node with no active
+// revision has no company to be asked for. It opens at width 0 holding no
+// rows, and learns its width from the first epoch that arrives — see
+// [store.DB.LearnEmbeddingDim].
+//
+// This does NOT make the width mutable, and it was refused here while it was
+// immutable for a reason that still holds: a store left at a wrong non-zero
+// width refuses every write from the right provider, and recall stops
+// returning anything with nothing in the log to say why. So it is fixed once
+// non-zero, [Engine.buildEmbedder] refuses a revision that would change it,
+// and only the never-told case is learnable.
+//
+// A node that HAS a revision does not arrive here nil: the caller reads the
+// active revision first and passes it, so the store opens at the right width.
 func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (*Backends, error) {
 	if b == nil {
 		return nil, fmt.Errorf("engine: no bootstrap config")
@@ -218,16 +223,15 @@ func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*st
 		BusyTimeout:  b.Store.BusyTimeout(),
 	}
 	// Nil embeddings means no vector recall is configured, which the store
-	// reads as width 0 — writes carrying a vector are refused, everything
-	// else works. That is the honest shape of "this company does not
-	// remember by similarity", and distinct from a configured width the
-	// store was never told about.
+	// reads as width 0: no DECLARED width, so it checks nothing against it
+	// and a caller that has vectors anyway is not refused. That is the
+	// honest shape of "this company does not remember by similarity", and
+	// distinct from a configured width the store was never told about.
 	//
 	// A NIL COMPANY reads as the same 0, and is a real case rather than a
-	// caller's mistake: a node whose company lives in the store has to open
-	// that store before it can read it. The width is not fixed here — the
-	// engine re-states it with [store.DB.SetEmbeddingDim] on every epoch it
-	// installs, so the first one this node applies tells it the truth.
+	// caller's mistake: a node with no active revision has no company to be
+	// asked for. Such a store holds no rows and learns its width from the
+	// first epoch that arrives — see [store.DB.LearnEmbeddingDim].
 	if c != nil && c.Providers.Embeddings != nil {
 		opts.EmbeddingDim = c.Providers.Embeddings.Width()
 	}
