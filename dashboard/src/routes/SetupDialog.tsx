@@ -31,7 +31,7 @@ import { Icon } from "~/ui/Icon.tsx";
 import { marked, Problems } from "~/ui/Problems.tsx";
 import { useToast } from "~/ui/Toast.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
-import type { SetupRequirement, SetupToolState } from "~/protocol/index.ts";
+import type { SetupRequirement, SetupSeatState, SetupToolState } from "~/protocol/index.ts";
 import { href } from "~/app/router.tsx";
 
 /** What the engine answers a submission with. */
@@ -220,6 +220,17 @@ function sectionKey(section: SetupSection): string {
   return section.seat ? `${section.tool.key}/${section.seat}` : section.tool.key;
 }
 
+/**
+ * The roster row a seat section is for.
+ *
+ * The section names a handle; everything else about that agent, whether it is
+ * finished and where its own deliveries arrive, is on the tool's roster.
+ */
+function seatOf(section: SetupSection): SetupSeatState | undefined {
+  if (section.seat === undefined) return undefined;
+  return (section.tool.seats ?? []).find((s) => s.handle === section.seat);
+}
+
 /** One engine surface inside a tool's dialog. */
 export interface SetupSection {
   /** The surface's own name: Jira, Confluence, the Forge relay. */
@@ -375,9 +386,42 @@ export function SetupDialog({
         .filter((g) => g.connect.length > 0 || g.more.length > 0),
     [sections, shownBy, perSeat],
   );
-  const folded = useMemo(
-    () => grouped.flatMap(({ section, more }) => more.map((r) => ({ section, r }))),
+  // AN AGENT'S OWN BLOCK IS ITS OWN DISCLOSURE, and the rest of the form is
+  // not. A per-seat app asks for the same two credentials once per agent, so
+  // a company with ten agents opened a dialog with twenty inputs in one
+  // scroll and no way to see how many were left. Folded, the dialog opens as
+  // the roster it actually is: every agent named, each saying whether it is
+  // done, and one of them expanded to work in.
+  const seatGroups = useMemo(
+    () => grouped.filter((g) => g.section.seat !== undefined),
     [grouped],
+  );
+  const plainGroups = useMemo(
+    () => grouped.filter((g) => g.section.seat === undefined),
+    [grouped],
+  );
+  // THE SHARED FOLD IS FOR THE COMPANY'S FIELDS ALONE. A seat's optional
+  // fields go inside that seat's own block: gathered at the foot of the
+  // dialog they lost the one thing that said whose they were, and a
+  // three-agent company showed three identical "Default channel" boxes in
+  // one list.
+  const folded = useMemo(
+    () => plainGroups.flatMap(({ section, more }) => more.map((r) => ({ section, r }))),
+    [plainGroups],
+  );
+  // NOBODY IS COMING TO DO THIS FOR YOU, said once, at the top.
+  //
+  // Where an app's seats are mandatory (each agent acts as itself there, so
+  // an agent without its own credentials is an agent that cannot speak) and
+  // this build has no pass that can create them, every seat below is manual
+  // work. The card cannot say it, because a card with no roster looks
+  // exactly like an app with nothing to do.
+  const manualSeats = useMemo(
+    () =>
+      sections.some(
+        (section) => section.tool.seats_required && !section.tool.can_provision,
+      ),
+    [sections],
   );
   // ONE INTRO PER DISTINCT SENTENCE. Two surfaces of one tool each carry
   // their own summary, and a per-seat app repeats one summary per agent.
@@ -388,8 +432,16 @@ export function SetupDialog({
       .filter((text) => text !== "" && !seen.has(text) && seen.add(text));
   }, [sections]);
   // The surfaces whose hooks a person has to register by hand.
+  //
+  // COMPANY-LEVEL ONLY. A per-seat app has a delivery route per agent, and
+  // that address is rendered inside the agent's own block, where the name
+  // above it says whose it is.
   const manual = useMemo(
-    () => sections.filter((section) => section.tool.public_url && !section.tool.can_provision),
+    () =>
+      sections.filter(
+        (section) =>
+          section.seat === undefined && section.tool.public_url && !section.tool.can_provision,
+      ),
     [sections],
   );
 
@@ -453,7 +505,25 @@ export function SetupDialog({
   const [busy, setBusy] = useState(false);
   // The disclosure is closed until somebody opens it, or until a submission
   // is refused for a field inside it.
+  // The section whose write is in flight, so a refusal opens the block it
+  // came from. A ref rather than state: nothing renders from it, and a
+  // re-render between two writes would be a form moving under somebody.
+  const refused = useRef<SetupSection | undefined>(undefined);
   const [moreOpen, setMoreOpen] = useState(false);
+  // WHICH AGENT IS OPEN. Seeded once, from what each seat still needs: one
+  // agent's company opens straight into its fields, and a larger one opens
+  // on the first that is unfinished rather than on all of them at once.
+  //
+  // Seeded rather than derived, because a person opening and closing these
+  // is making a decision the form must not overrule on the next render.
+  const [openSeats, setOpenSeats] = useState<Record<string, boolean>>(() => {
+    const seats = sections.filter((section) => section.seat !== undefined);
+    const first = seats.find((section) => !seatOf(section)?.satisfied) ?? seats[0];
+    return first ? { [sectionKey(first)]: true } : {};
+  });
+  const setSeatOpen = useCallback((key: string, open: boolean) => {
+    setOpenSeats((was) => (was[key] === open ? was : { ...was, [key]: open }));
+  }, []);
   const onMoreToggle = (e: React.SyntheticEvent<HTMLDetailsElement>) => {
     setMoreOpen(e.currentTarget.open);
   };
@@ -531,16 +601,23 @@ export function SetupDialog({
     try {
       let rotated = false;
       for (const { section, body } of work) {
+        // WHICH AGENT THE ENGINE WAS ANSWERING ABOUT. A per-seat app writes
+        // one request per agent, so a banner reporting the third one's
+        // refusal over ten closed blocks names nothing a reader can act on.
+        refused.current = section;
         const answer = (await rest.post(`/setup/integrations/${section.tool.key}/inputs`, {
           ...body,
           ...(section.seat ? { seat: section.seat } : {}),
         })) as Submitted;
         rotated = rotated || answer.reloaded === true;
       }
+      refused.current = undefined;
       toast.ok(rotated ? `${title} credentials rotated and republished` : `${title} connected`);
       onDone();
       onClose();
     } catch (err) {
+      const at = refused.current;
+      if (at?.seat !== undefined) setSeatOpen(sectionKey(at), true);
       if (!(err instanceof RestError)) {
         setError(String(err));
         return;
@@ -569,8 +646,11 @@ export function SetupDialog({
             return;
           }
           setFieldErrors({ [valueKey(found.section, target)]: said });
-          // An error inside the disclosure is an error nobody can see.
-          if (!target.connect) setMoreOpen(true);
+          // An error inside the disclosure is an error nobody can see. The
+          // same holds for an agent's own block, which is closed whenever
+          // somebody is working on a different agent.
+          if (found.section.seat !== undefined) setSeatOpen(sectionKey(found.section), true);
+          else if (!target.connect) setMoreOpen(true);
           return;
         }
       }
@@ -625,6 +705,18 @@ export function SetupDialog({
             {intro}
           </p>
         ))}
+        {manualSeats && (
+          <div className="banner neutral">
+            <Icon name="info" size="sm" />
+            <span className="col" style={{ gap: 4 }}>
+              <span>{title} does not support automatic agent provisioning at the moment.</span>
+              <span className="t-caption">
+                Each agent acts as itself in {title}, so it needs its own credentials. Configure a
+                dedicated seat for every agent below.
+              </span>
+            </span>
+          </div>
+        )}
         {manual.map((section) => (
           <div key={sectionKey(section)} className="banner neutral">
             <Icon name="link" size="sm" />
@@ -640,14 +732,66 @@ export function SetupDialog({
           </div>
         ))}
 
-        {grouped.map(({ section, heading, connect, more }) => (
+        {plainGroups.map(({ section, heading, connect }) => (
           <Fragment key={sectionKey(section) + ":group"}>
-            {heading && <strong className="int-section">{heading}</strong>}
+            {/* A HEADING ONLY OVER SOMETHING. A surface whose every field is
+                optional contributes nothing here (they are all in the fold
+                below), and its heading stood over the next surface's
+                questions. */}
+            {heading && connect.length > 0 && <strong className="int-section">{heading}</strong>}
             {connect.map((r) => (
               <Fragment key={valueKey(section, r)}>{renderField(section, r)}</Fragment>
             ))}
           </Fragment>
         ))}
+
+        {/* ONE BLOCK PER AGENT, folded. Each is that agent's own app: its own
+            credentials, its own delivery address, and its own answer to
+            whether it is finished. */}
+        {seatGroups.map(({ section, heading, connect, more }) => {
+          const key = sectionKey(section);
+          const seat = seatOf(section);
+          const done = seat?.satisfied === true;
+          return (
+            <details
+              key={key + ":seat"}
+              className="int-seat-form"
+              open={openSeats[key] ?? false}
+              onToggle={(e) => setSeatOpen(key, e.currentTarget.open)}
+            >
+              <summary className="int-seat-summary">
+                <span className="int-seat-name">{heading}</span>
+                <Badge tone={done ? "positive" : "caution"} outline={done}>
+                  {done ? "Configured" : "Needs setup"}
+                </Badge>
+              </summary>
+              <div className="int-seat-fields">
+                {/* THIS AGENT'S OWN ADDRESS, inside this agent's own block.
+                    A per-seat app has a delivery route per agent, so one
+                    banner at the top of the dialog could only have named
+                    whose it was in prose. */}
+                {seat?.public_url && !section.tool.can_provision && (
+                  <div className="banner neutral">
+                    <Icon name="link" size="sm" />
+                    <span className="col" style={{ gap: 4 }}>
+                      <span>
+                        Deliveries for {heading} arrive at{" "}
+                        <code className="inline">{seat.public_url}</code>
+                      </span>
+                      <span className="t-caption">
+                        Paste that address into this agent&apos;s own {section.tool.key} app
+                        settings. Every agent has its own.
+                      </span>
+                    </span>
+                  </div>
+                )}
+                {[...connect, ...more].map((r) => (
+                  <Fragment key={valueKey(section, r)}>{renderField(section, r)}</Fragment>
+                ))}
+              </div>
+            </details>
+          );
+        })}
 
         {/* ONE FOLD FOR THE WHOLE TOOL, for the same reason: two "More
             settings" rows in one dialog is the config's shape showing
@@ -765,7 +909,11 @@ export function SetupDialog({
   // one function over every section's fields, and the link it draws has to
   // say which app it opens.
   function renderField(section: SetupSection, r: SetupRequirement) {
-    const appName = section.name;
+    // THE APP THE LINK OPENS, never the section it is rendered in. A
+    // per-seat app names its sections after the AGENT, so the link under an
+    // agent's bot token offered to "Open SRE Lead", which is not a page and
+    // not a product. The dialog's title is the app for every section it has.
+    const appName = section.seat === undefined ? section.name : title;
     const key = valueKey(section, r);
     // A LINK ONLY WHERE IT GOES SOMEWHERE. See [vendorLink].
     // A LINK IS BUILT OUT OF VALUES, so a box holding a reference hands over

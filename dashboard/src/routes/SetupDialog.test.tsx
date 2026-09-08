@@ -1345,3 +1345,223 @@ test("a link built from an unresolved reference is not drawn", () => {
   );
   expect(screen.queryByRole("link", { name: "API keys" })).toBeNull();
 });
+
+/**
+ * A per-seat app: each agent has its own app at the vendor, so each has its
+ * own credentials and its own delivery route. Slack's shape, and the reason
+ * this dialog has more than one section.
+ */
+const perSeatTool: SetupToolState = {
+  key: "slack",
+  configured: false,
+  enabled: false,
+  satisfied: false,
+  seats_required: true,
+  can_provision: false,
+  requirements: [
+    req({
+      field: "typing_status",
+      label: "Working indicator",
+      kind: "choice",
+      required: false,
+      config_path: "integrations.slack.typing_status",
+      choices: [{ value: "off", label: "Never" }],
+    }),
+  ],
+  seats: [
+    {
+      handle: "sre-lead",
+      name: "SRE Lead",
+      satisfied: false,
+      public_url: "https://engine.example.com/webhooks/slack/sre-lead",
+      requirements: [
+        req({ field: "bot_token", label: "Bot token", kind: "secret", connect: true, seat: "sre-lead" }),
+        req({
+          field: "channel",
+          label: "Default channel",
+          required: false,
+          seat: "sre-lead",
+        }),
+      ],
+    },
+    {
+      handle: "builder",
+      name: "Builder",
+      satisfied: true,
+      public_url: "https://engine.example.com/webhooks/slack/builder",
+      requirements: [
+        req({
+          field: "bot_token",
+          label: "Bot token",
+          kind: "secret",
+          connect: true,
+          seat: "builder",
+          present: true,
+          resolved: true,
+          value: "${BUILDER_SLACK_BOT_TOKEN}",
+        }),
+      ],
+    },
+  ],
+};
+
+function perSeatSections() {
+  return [
+    { name: "Slack", tool: perSeatTool },
+    { name: "SRE Lead", tool: perSeatTool, seat: "sre-lead" },
+    { name: "Builder", tool: perSeatTool, seat: "builder" },
+  ];
+}
+
+// ONE FOLDED BLOCK PER AGENT.
+//
+// A per-seat app asks for the same credentials once per agent, so a company
+// with ten agents opened a dialog with twenty inputs in one scroll and no way
+// to see how many were left. Folded, the dialog opens as the roster it is:
+// every agent named, each saying whether it is done.
+test("a per-seat app gives every agent its own collapsible block", () => {
+  const { container } = render(
+    <SetupDialog
+      sections={perSeatSections()}
+      title="Slack"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  const blocks = [...container.querySelectorAll("details.int-seat-form")];
+  expect(blocks.length).toBe(2);
+  expect(screen.getByText("SRE Lead")).toBeDefined();
+  expect(screen.getByText("Builder")).toBeDefined();
+
+  // AND EACH SAYS WHETHER IT IS DONE, which is the answer a reader wants
+  // before opening anything.
+  expect(screen.getByText("Needs setup")).toBeDefined();
+  expect(screen.getByText("Configured")).toBeDefined();
+
+  // THE UNFINISHED ONE IS OPEN. A single-agent company opens straight into
+  // its fields; a larger one opens on the agent with work left rather than
+  // on all of them at once.
+  expect((blocks[0] as HTMLDetailsElement).open).toBe(true);
+  expect((blocks[1] as HTMLDetailsElement).open).toBe(false);
+});
+
+// NOBODY IS COMING TO DO THIS FOR YOU, said once, at the top.
+//
+// Where the seats are mandatory and this build has no pass that can create
+// them, every block below is manual work, and a card with no roster looks
+// exactly like an app with nothing to do.
+test("an app the engine cannot provision says so before the blocks", () => {
+  render(
+    <SetupDialog
+      sections={perSeatSections()}
+      title="Slack"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect(
+    screen.getByText(/Slack does not support automatic agent provisioning at the moment/),
+  ).toBeDefined();
+  expect(screen.getByText(/Configure a dedicated seat for every agent below/)).toBeDefined();
+});
+
+// EACH AGENT'S OWN ADDRESS, INSIDE ITS OWN BLOCK. A per-seat app has a
+// delivery route per agent, so one banner at the top of the dialog could only
+// have named whose it was in prose.
+test("every agent's block carries that agent's delivery address", () => {
+  const { container } = render(
+    <SetupDialog
+      sections={perSeatSections()}
+      title="Slack"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  const blocks = [...container.querySelectorAll("details.int-seat-form")];
+  expect(blocks[0]!.textContent).toContain("/webhooks/slack/sre-lead");
+  expect(blocks[0]!.textContent).not.toContain("/webhooks/slack/builder");
+  expect(blocks[1]!.textContent).toContain("/webhooks/slack/builder");
+});
+
+// A SEAT'S OPTIONAL FIELD STAYS WITH ITS SEAT.
+//
+// Gathered into the dialog's shared "More settings" fold, an agent's optional
+// fields lost the one thing that said whose they were: a three-agent company
+// showed three identical "Default channel" boxes in one list.
+test("an agent's optional field is inside that agent's block", () => {
+  const { container } = render(
+    <SetupDialog
+      sections={perSeatSections()}
+      title="Slack"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  const blocks = [...container.querySelectorAll("details.int-seat-form")];
+  expect(blocks[0]!.textContent).toContain("Default channel");
+  // ONCE, AND ONLY THERE. Gathered at the foot of the dialog it appeared per
+  // agent with nothing saying whose each one was.
+  expect(screen.getAllByText("Default channel").length).toBe(1);
+  expect(blocks[1]!.textContent).not.toContain("Default channel");
+
+  // AND THE COMPANY'S OWN FIELD IS NOT INSIDE ANYBODY'S BLOCK: it is one
+  // setting for the whole app, not a question about an agent.
+  expect(screen.getByText("Working indicator")).toBeDefined();
+  for (const block of blocks) {
+    expect(block.textContent).not.toContain("Working indicator");
+  }
+});
+
+// THE LINK NAMES THE APP, not the agent whose block it is in. A per-seat
+// app names its sections after the AGENT, so the link under a bot token
+// offered to "Open SRE Lead", which is not a page and not a product.
+test("a vendor link inside an agent's block names the app", () => {
+  const linked = {
+    ...perSeatTool,
+    seats: [
+      {
+        ...perSeatTool.seats![0]!,
+        requirements: [
+          req({
+            field: "bot_token",
+            label: "Bot token",
+            kind: "secret",
+            connect: true,
+            seat: "sre-lead",
+            vendor_url: "https://api.slack.com/apps",
+          }),
+        ],
+      },
+    ],
+  };
+  render(
+    <SetupDialog
+      sections={[{ name: "SRE Lead", tool: linked, seat: "sre-lead" }]}
+      title="Slack"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect(screen.getByText("Open Slack")).toBeDefined();
+  expect(screen.queryByText("Open SRE Lead")).toBeNull();
+});
+
+// A CLOSED BLOCK IS STILL A BLOCK SOMEBODY CAN OPEN.
+test("an agent's block opens when its summary is clicked", () => {
+  const { container } = render(
+    <SetupDialog
+      sections={perSeatSections()}
+      title="Slack"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  const blocks = [...container.querySelectorAll("details.int-seat-form")];
+  const closed = blocks[1] as HTMLDetailsElement;
+  expect(closed.open).toBe(false);
+  closed.open = true;
+  fireEvent(closed, new Event("toggle"));
+  expect((container.querySelectorAll("details.int-seat-form")[1] as HTMLDetailsElement).open).toBe(
+    true,
+  );
+});

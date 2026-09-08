@@ -1174,6 +1174,68 @@
   padding-top: var(--space-5);
 }
 
+/* ONE AGENT'S OWN BLOCK in the setup dialog, for an app whose credentials
+   live on the seat. Folded, because the same two questions are asked once per
+   agent: a ten-agent company opened twenty inputs in one scroll with no way
+   to see how many were left, and the dialog now opens as the roster it is. */
+.int-seat-form {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  background: var(--surface-1);
+}
+.int-seat-form + .int-seat-form {
+  margin-top: calc(var(--space-3) - var(--space-5));
+}
+.int-seat-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  cursor: pointer;
+  list-style: none;
+  border-radius: var(--r-md);
+}
+.int-seat-summary::-webkit-details-marker {
+  display: none;
+}
+/* The marker says which way it opens, and is the same one the More settings
+   fold draws, so two disclosures in one dialog are one idea. */
+.int-seat-summary::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 0;
+  height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  color: var(--text-muted);
+  transition: transform 120ms ease;
+}
+.int-seat-form[open] > .int-seat-summary::before {
+  transform: rotate(90deg);
+}
+.int-seat-summary:hover {
+  background: var(--surface-2);
+}
+/* The badge sits at the far end, so a column of blocks reads down its right
+   edge as a list of what is left to do. */
+.int-seat-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.int-seat-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: 0 var(--space-4) var(--space-4);
+}
+
 .int-row-badges {
   display: flex;
   align-items: center;
