@@ -103,6 +103,9 @@ type chatServer struct {
 	// settings overrides the client-config booleans the preflight reads.
 	settings map[string]string
 	revokes  int
+	// revokeFails makes every revoke answer 500, which is the instance
+	// that will not give a credential up.
+	revokeFails bool
 	// identityFails makes the identity route answer 500 for a BOT's
 	// token, which is "cannot tell" rather than "this token is bad".
 	identityFails bool
@@ -517,6 +520,11 @@ func (s *chatServer) serve(w http.ResponseWriter, r *http.Request) {
 		var body map[string]string
 		json.NewDecoder(r.Body).Decode(&body)
 		s.revokes++
+		if s.revokeFails {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"message":"Unable to revoke the token."}`))
+			return
+		}
 		// A REVOKED TOKEN IS GONE from the listing, which is how
 		// Mattermost serves it — there is no revoked flag.
 		for user, tokens := range s.tokens {

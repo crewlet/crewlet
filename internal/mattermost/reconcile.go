@@ -275,7 +275,8 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		}
 		// RETIRED AFTER THE RECORD, and only this tool's own: an
 		// administrator may have minted a token on this bot by hand.
-		retired, err := retirePrevious(ctx, opts, user.ID, seat, token.ID)
+		retired, err := opts.Client.RevokeMinted(ctx, user.ID,
+			TokenDescription(seat.Handle), token.ID)
 		if err != nil {
 			return nil, rollback(ctx, opts, minted,
 				fmt.Errorf("mattermost: %s: %w", seat.Handle, err))
@@ -379,6 +380,22 @@ func decommission(ctx context.Context, opts Options, managed map[string]Bot) ([]
 		if !strings.HasPrefix(username, prefix) || keep[username] {
 			continue
 		}
+		// ITS CREDENTIAL FIRST, for the reason [Teardown] gives: a
+		// disabled account keeps its username and its tokens, so a
+		// departed seat whose token was left live is an agent that
+		// starts working again the moment anybody re-enables the bot.
+		// Keyed on the handle inside the username, because that is what
+		// the token was minted under and the plan no longer names this
+		// seat at all.
+		handle := strings.TrimPrefix(username, prefix)
+		if _, err := opts.Client.RevokeMinted(ctx, bot.UserID,
+			TokenDescription(handle), ""); err != nil {
+			notes = append(notes, fmt.Sprintf(
+				"%s matches the managed prefix and its tokens could not be "+
+					"revoked, so it was left enabled rather than disabled "+
+					"holding a live credential: %v", bot.Username, err))
+			continue
+		}
 		if err := opts.Client.DisableBot(ctx, bot.UserID); err != nil {
 			notes = append(notes, fmt.Sprintf(
 				"%s matches the managed prefix and could not be disabled: %v",
@@ -461,25 +478,6 @@ func (c *Client) verify(ctx context.Context, value, wantID string) provision.Ver
 		// "cannot tell" destroys a token that works.
 		return provision.VerdictUnknown
 	}
-}
-
-// retirePrevious revokes this tool's earlier tokens on an existing bot.
-func retirePrevious(ctx context.Context, opts Options, userID string, seat provision.Seat, keep string) (int, error) {
-	tokens, err := opts.Client.Tokens(ctx, userID)
-	if err != nil {
-		return 0, fmt.Errorf("list tokens: %w", err)
-	}
-	retired := 0
-	for _, token := range tokens {
-		if token.ID == keep || token.Description != TokenDescription(seat.Handle) {
-			continue
-		}
-		if err := opts.Client.RevokeToken(ctx, token.ID); err != nil {
-			return retired, fmt.Errorf("revoke the previous token: %w", err)
-		}
-		retired++
-	}
-	return retired, nil
 }
 
 // joinChannels adds a bot to the company-wide channels plus its own.
