@@ -200,3 +200,46 @@ func TestTheBackoffRestartsWhenTheWaitChanges(t *testing.T) {
 			admin, schedule.AdminBase, admin)
 	}
 }
+
+// A WAIT IS SCATTERED, so surfaces that settled together do not stay
+// together.
+//
+// Every surface is stamped from ONE reading of the clock with ONE settled
+// interval, so a company whose integrations all converge on the same tick
+// becomes due on the same tick — and nothing ever pulls them apart, because
+// each pass re-stamps them the same way. That is one burst of every vendor's
+// API at once, six times an hour, rather than a trickle.
+func TestAWaitIsScatteredButNeverStretched(t *testing.T) {
+	t.Parallel()
+	const wait = 10 * time.Minute
+	seen := map[time.Duration]bool{}
+	for range 200 {
+		got := spreadWait(wait)
+		// NEVER LONGER. The interval is also a promise — the settled
+		// cadence is "the horizon on which an administrator who revokes an
+		// agent's access by hand is noticed" — so scattering may only
+		// bring a pass forward.
+		if got > wait {
+			t.Fatalf("a wait was stretched to %s, past its own %s", got, wait)
+		}
+		// AND NEVER BY MUCH: a tenth is enough to decorrelate a handful of
+		// surfaces and small enough that no cadence changes meaning.
+		if got < wait-wait/10 {
+			t.Fatalf("a wait was cut to %s, more than a tenth off %s", got, wait)
+		}
+		seen[got] = true
+	}
+	if len(seen) < 2 {
+		t.Error("every wait came back identical, so surfaces stay in one batch")
+	}
+}
+
+// AND A ZERO WAIT STAYS ZERO. "Due now" is what a fresh surface and a
+// disconnect both carry, and delaying either would be a scatter changing
+// behaviour rather than timing.
+func TestAZeroWaitIsNotScattered(t *testing.T) {
+	t.Parallel()
+	if got := spreadWait(0); got != 0 {
+		t.Errorf("spreadWait(0) = %s, want 0", got)
+	}
+}

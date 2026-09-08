@@ -114,6 +114,9 @@ func at(t *testing.T, now time.Time, store Store, claim DutyFunc, regs ...Regist
 	w, err := New(Options{
 		Registrations: regs, Store: store, ClaimDuty: claim,
 		Now: func() time.Time { return now },
+		// PINNED, so a case can assert an exact instant. What the real
+		// spread does is asserted on its own, below.
+		Spread: func(d time.Duration) time.Duration { return d },
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -883,5 +886,58 @@ func TestAKindThisBuildDoesNotKnowIsLeftAlone(t *testing.T) {
 	}
 	if store.has(KindJira) {
 		t.Error("a departed surface this build DOES know was not forgotten")
+	}
+}
+
+// THE DUTY IS RE-CLAIMED BEFORE EACH SURFACE, not sampled once per tick.
+//
+// The claim's TTL is a small multiple of the tick interval, and the sweep
+// makes network calls to every configured surface in turn — so a tick across
+// eight vendors outlives it easily, and a duty that lapsed mid-tick means a
+// second node is already reconciling the surfaces this one has not reached.
+//
+// The re-claim sits past the not-due check, so a tick with nothing to do
+// makes none of them.
+func TestTheDutyIsReclaimedBeforeEachSurface(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	var claims int
+	// Held for the first two asks — the tick's own, and the first
+	// surface's — then lost, as a lapsed TTL looks from here.
+	claim := func(context.Context) (bool, error) {
+		claims++
+		return claims <= 2, nil
+	}
+	first := &fakeReconciler{kind: KindJira}
+	second := &fakeReconciler{kind: KindGitLab}
+
+	at(t, now, newStore(), claim,
+		Registration{Reconciler: first}, Registration{Reconciler: second}).
+		Tick(context.Background())
+
+	if first.count() != 1 {
+		t.Errorf("the first surface ran %d times, want 1", first.count())
+	}
+	if second.count() != 0 {
+		t.Errorf("the second surface ran after the duty was lost: %d passes",
+			second.count())
+	}
+}
+
+// AND A TICK WITH NOTHING DUE ASKS ONCE. The re-claim is a round trip, so it
+// belongs on the work rather than on the sweep.
+func TestATickWithNothingDueClaimsOnce(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	var claims int
+	claim := func(context.Context) (bool, error) { claims++; return true, nil }
+
+	// Recorded as settled and not due again until well after now.
+	store := newStore(State{
+		Kind: KindJira, Report: Ready(), NextAttemptAt: now.Add(time.Hour),
+	})
+	at(t, now, store, claim, Registration{Reconciler: &fakeReconciler{kind: KindJira}}).
+		Tick(context.Background())
+
+	if claims != 1 {
+		t.Errorf("a tick with nothing due claimed the duty %d times, want 1", claims)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"slices"
 	"sync"
@@ -283,6 +284,11 @@ type Options struct {
 
 	// Now is the clock, for tests. Nil is time.Now.
 	Now func() time.Time
+
+	// Spread scatters a computed wait, so surfaces that settled together do
+	// not stay together. Nil is [spreadWait]; a test pins it to identity so
+	// it can assert an exact instant.
+	Spread func(time.Duration) time.Duration
 }
 
 // Worker runs the registered reconcilers against whatever is due.
@@ -303,6 +309,7 @@ type Worker struct {
 	claim    DutyFunc
 	endpoint func() string
 	interval time.Duration
+	spread   func(time.Duration) time.Duration
 	settle   time.Duration
 	now      func() time.Time
 
@@ -422,11 +429,15 @@ func New(opts Options) (*Worker, error) {
 	if settle <= 0 {
 		settle = WakeSettle
 	}
+	spread := opts.Spread
+	if spread == nil {
+		spread = spreadWait
+	}
 	return &Worker{
 		byKind: byKind, order: order, store: opts.Store,
 		schedule: opts.Schedule.WithDefaults(), claim: opts.ClaimDuty,
 		endpoint: opts.Endpoint,
-		interval: interval, settle: settle, now: now,
+		interval: interval, settle: settle, now: now, spread: spread,
 		wake: make(chan struct{}, 1),
 	}, nil
 }
@@ -570,6 +581,21 @@ func (w *Worker) Tick(ctx context.Context) {
 		if !stale && !state.Due(now) {
 			continue
 		}
+		// STILL OURS? The duty was claimed once, before this loop, and its
+		// TTL is a small multiple of the tick interval — while the loop
+		// below makes network calls to every configured surface in turn. A
+		// sweep across eight vendors outlives that TTL easily, and a duty
+		// that lapsed mid-tick is a second node already sweeping the
+		// surfaces this one has not reached.
+		//
+		// RE-CLAIMED HERE, past the not-due check, so the cost lands only
+		// on a tick with work to do: a claim is one round trip on a
+		// connection the process already holds, and a tick that reconciles
+		// nothing makes none. For the same owner it doubles as the renew,
+		// so the holder keeps the duty by using it.
+		if !w.stillHoldsDuty(ctx) {
+			return
+		}
 		// A SURFACE BEING TAKEN AWAY IS NOT RECONCILED. Its block is
 		// still in the document for the whole teardown — it carries the
 		// credential the teardown authenticates with — so a reconcile
@@ -589,6 +615,53 @@ func (w *Worker) Tick(ctx context.Context) {
 	}
 
 	w.forgetDeparted(ctx, states)
+}
+
+// stillHoldsDuty re-claims the singleton before a unit of work.
+//
+// UNKNOWN STOPS THE SWEEP, exactly as it stops the tick that began it: a
+// coordination store that could not answer has not said the duty is still
+// ours, and carrying on would be entering the two-nodes-one-surface case on a
+// guess rather than on a decision.
+func (w *Worker) stillHoldsDuty(ctx context.Context) bool {
+	if w.claim == nil {
+		return true
+	}
+	held, err := w.claim(ctx)
+	if err != nil {
+		log.WarnContext(ctx, "integration_duty_unknown", "error", err,
+			"detail", "stopping this sweep rather than risking a second node "+
+				"reconciling the surfaces it has not reached")
+		return false
+	}
+	if !held {
+		log.InfoContext(ctx, "integration_duty_lost",
+			"detail", "another node holds the reconcile duty; this sweep stops here")
+	}
+	return held
+}
+
+// spreadWait scatters a wait by up to a tenth of itself, so surfaces that
+// settled together do not stay together.
+//
+// EVERY SURFACE IS STAMPED FROM ONE READING OF THE CLOCK, and the settled
+// interval is one number, so a company whose integrations all converge on the
+// same tick becomes due on the same tick — for ever. Nothing ever pulls them
+// apart again: each pass re-stamps them from the same instant with the same
+// interval. What that produces is one burst of every vendor's API at once,
+// six times an hour, instead of a steady trickle.
+//
+// A TENTH, and only downward from a full interval, because the interval is
+// also a promise: [Schedule.Settled] is "the horizon on which an
+// administrator who revokes an agent's access by hand is noticed", and
+// stretching it would make that horizon longer than it says. Ten per cent is
+// enough to decorrelate eight surfaces within one tick of each other and
+// small enough that no cadence's meaning changes.
+func spreadWait(d time.Duration) time.Duration {
+	if d <= 0 {
+		return d
+	}
+	return d - time.Duration(rand.Int64N(int64(d)/10+1))
 }
 
 // load reads the recorded state, keyed by kind.
@@ -647,7 +720,7 @@ func (w *Worker) tearDown(ctx context.Context, kind Kind, state State, now time.
 
 	log.WarnContext(ctx, "integration_teardown_failed",
 		"integration", kind.String(), "attempts", state.Attempts, "error", err)
-	state.NextAttemptAt = now.Add(w.schedule.Next(state.Report, state.Attempts))
+	state.NextAttemptAt = now.Add(w.spread(w.schedule.Next(state.Report, state.Attempts)))
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := w.store.SaveIntegration(ctx, state); err != nil {
 		// The third-party app work that DID land is durable; what is lost is the
@@ -709,7 +782,7 @@ func (w *Worker) reconcile(ctx context.Context, kind Kind, state State, now time
 			"integration", kind.String(), "attempts", state.Attempts, "error", err)
 	}
 
-	state.NextAttemptAt = now.Add(w.schedule.Next(state.Report, state.Attempts))
+	state.NextAttemptAt = now.Add(w.spread(w.schedule.Next(state.Report, state.Attempts)))
 
 	if err := w.store.SaveIntegration(ctx, state); err != nil {
 		// The pass still happened, and its work at the third-party app is durable.

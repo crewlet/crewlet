@@ -162,6 +162,32 @@ func (s State) Due(now time.Time) bool { return !now.Before(s.NextAttemptAt) }
 // phase alongside it.
 const MaxLastErrorLength = 2000
 
+// MaxDetailLength bounds one finding's own sentence, and the report's.
+//
+// SMALLER THAN [MaxLastErrorLength] because there can be many: a row carries
+// one fault text and a finding PER SEAT, so a company with fifty agents on a
+// vendor that pastes response bodies into its messages writes fifty of these
+// into a single KV value. Capping only the fault left the larger half
+// unbounded, and an oversized row is not truncated by the store — it is
+// REFUSED, so the surface's whole status silently stops being recorded.
+//
+// A sentence naming what is outstanding fits easily; this is a ceiling on a
+// third-party app's prose, not a budget for the engine's own.
+const MaxDetailLength = 500
+
+// bound caps every piece of third-party text a status row carries.
+//
+// AT THE BOUNDARY rather than in each vendor, because the limit belongs to
+// what this row is written into and there are seven vendors who would each
+// have to remember it — and the two most recent did not.
+func bound(report Report, findings []Finding) (Report, []Finding) {
+	report.Detail = textcut.Ellipsis(report.Detail, MaxDetailLength)
+	for i := range findings {
+		findings[i].Detail = textcut.Ellipsis(findings[i].Detail, MaxDetailLength)
+	}
+	return report, findings
+}
+
 // truncateError applies [MaxLastErrorLength].
 //
 // Through [textcut.Ellipsis] rather than a slice, and through textcut rather
@@ -270,8 +296,7 @@ func Observe(state State, kind Kind, findings []Finding, err error, now time.Tim
 		state.Attempts++
 		state.LastError = truncateError(err.Error())
 	default:
-		state.Report = Classify(findings)
-		state.Findings = findings
+		state.Report, state.Findings = bound(Classify(findings), findings)
 		state.LastError = ""
 		if state.Report.Phase == PhaseReady {
 			state.Attempts = 0
