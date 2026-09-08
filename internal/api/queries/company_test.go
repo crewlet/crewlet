@@ -1390,3 +1390,48 @@ func TestAnUnrecordedEndpointIsNullRatherThanMoved(t *testing.T) {
 		}
 	}
 }
+
+// EVERY SURFACE THE LOOP CAN REPORT ON HAS A ROW HERE.
+//
+// The answer is a hand-written ladder, one branch per vendor, and the loop
+// writes a status row for every `integration.Kind`. When the two drift the
+// symptom is silence: the reconcile records what it found and the one screen
+// an operator watches has nowhere to draw it. Atlassian was exactly that — a
+// registered pass, a status row, and no row on the card.
+//
+// DERIVED FROM integration.Kinds rather than from a list beside it, because a
+// hardcoded list in the test is how this happened the first time: the guard
+// that was supposed to catch a vendor shipping without its wiring carried its
+// own copy of the vendors.
+func TestEveryIntegrationKindCanBeReported(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	// Every block present, so each ladder branch is reachable. The values
+	// only have to be non-nil: what is asserted is that a row appears.
+	cfg.Integrations.Slack = &config.Slack{}
+	cfg.Integrations.Mattermost = &config.Mattermost{Enabled: true, URL: "https://chat.example.com"}
+	cfg.Integrations.GitHub = &config.GitHub{Enabled: true}
+	cfg.Integrations.GitLab = &config.GitLab{Enabled: true}
+	cfg.Integrations.Jira = &config.Jira{}
+	cfg.Integrations.Confluence = &config.Confluence{}
+	cfg.Integrations.Datadog = &config.Datadog{Enabled: true, RouteTo: "sre-lead"}
+	cfg.Integrations.Atlassian = &config.Atlassian{OrgID: "acme"}
+
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+	}, "integrations", nil))
+
+	rows, _ := body["integrations"].([]any)
+	seen := map[string]bool{}
+	for _, row := range rows {
+		if entry, ok := row.(map[string]any); ok {
+			seen[entry["key"].(string)] = true
+		}
+	}
+	for _, kind := range integration.Kinds {
+		if !seen[string(kind)] {
+			t.Errorf("%s is a surface the reconcile loop reports on, and the "+
+				"integrations answer has no row for it", kind)
+		}
+	}
+}

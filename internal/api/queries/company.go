@@ -334,6 +334,26 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 				"route_to":   in.Datadog.RouteTo,
 			})
 	}
+	if in.Atlassian != nil {
+		// THE ORGANIZATION, not a third product. Jira and Confluence are
+		// sites this engine reads as an account; this is where the account
+		// itself is created, which no site API can do — so it reconciles
+		// identities, ingests nothing, and has no inbound address of its
+		// own. The loop writes a status row for it like any other surface,
+		// and without a row here that status was invisible: the one screen
+		// an operator watches said nothing at all about whether their
+		// agents' Atlassian accounts could still be created.
+		// PRESENCE IS THE CONFIGURATION, the same as jira and confluence
+		// beside it: the block carries no `enabled` switch, because an
+		// organization key is either there to create accounts with or it
+		// is not.
+		add("atlassian", true,
+			boolPtr(strings.TrimSpace(in.Atlassian.APIKey) != ""),
+			map[string]any{
+				"deployment": in.Atlassian.DeploymentOrDefault(),
+				"org_id":     in.Atlassian.OrgID,
+			})
+	}
 	if in.ForgeAppID != "" {
 		// The app id is the JWT AUDIENCE rather than a secret — it is in
 		// every manifest the operator installs — so its presence is the
