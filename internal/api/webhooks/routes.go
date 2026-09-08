@@ -130,7 +130,13 @@ func (r *Receiver) datadog(w http.ResponseWriter, req *http.Request) {
 		// Datadog stamps a notification id that survives its own
 		// retries. Without one there is nothing stable to claim on, and
 		// delivering twice beats dropping a firing monitor.
-		key:     str(body, "id"),
+		//
+		// THROUGH num, which accepts the NUMBER an unquoted `$ID` arrives
+		// as. `str` answered "" for it, so a template an operator wrote
+		// without quotes — the same slip [datadog.str] tolerates for
+		// every other field — silently turned retry suppression off and
+		// woke a seat once per delivery attempt.
+		key:     num(body, "id"),
 		headers: safeHeaders(req.Header),
 	}, statusOK)
 }
