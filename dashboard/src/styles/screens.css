@@ -1253,6 +1253,22 @@
   gap: var(--space-2);
   width: auto;
 }
+/* THE SAME MARKER THE OTHER DISCLOSURES DRAW, because a fold that gives no
+   sign of being one is a line of text somebody has to discover by clicking. */
+.int-manifest-summary::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 0;
+  height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  color: var(--text-muted);
+  transition: transform 120ms ease;
+}
+.int-manifest[open] > .int-manifest-summary::before {
+  transform: rotate(90deg);
+}
 .int-manifest-summary > span:first-of-type {
   min-width: 0;
   overflow: hidden;

@@ -214,3 +214,51 @@ func TestASeatWhoseNameSlackRefusesSaysSo(t *testing.T) {
 		t.Errorf("manifest_note = %q, and it does not say what to change", note)
 	}
 }
+
+// WHICH APP THIS AGENT IS, which is the question a roster of agents raises.
+//
+// The row showed the delivery ROUTE instead, on the one app that has one per
+// seat: true, the same shape for every agent bar the handle, and silent about
+// the thing an operator staring at four identical rows wants to know. A Slack
+// app is named nowhere in the company document, because the app is what
+// issues the token rather than something the token points at, so the running
+// transport's answer is the only one there is.
+func TestASlackSeatNamesTheAppItAuthenticatesAs(t *testing.T) {
+	t.Parallel()
+	s := newSurfaceWithApps(t, map[string]string{"sre-lead": "A0C0AETLX5J"})
+	res := s.do(t, http.MethodPut, "/config", slackDoc,
+		map[string]string{"X-Summary": "a company with an agent"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("import = %d: %s", res.Code, res.Body)
+	}
+
+	seat := slackSeatRows(t, s)["sre-lead"]
+	if detail, _ := seat["detail"].(string); detail != "App A0C0AETLX5J" {
+		t.Errorf("detail = %q, want the app this agent authenticates as", detail)
+	}
+}
+
+// AND WHERE NOTHING KNOWS, what this CAN prove.
+//
+// A seat whose token was refused has no app to name, and a standalone API has
+// no transport to ask. Inventing one from the config would name an app that
+// may not exist, so the row says where the credential lives, which is what
+// every other app's roster says.
+func TestASlackSeatWithNoKnownAppNamesItsCredential(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	res := s.do(t, http.MethodPut, "/config", slackDoc,
+		map[string]string{"X-Summary": "a company with an agent"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("import = %d: %s", res.Code, res.Body)
+	}
+
+	seat := slackSeatRows(t, s)["sre-lead"]
+	detail, _ := seat["detail"].(string)
+	if detail != "integrations.slack.bot_token" {
+		t.Errorf("detail = %q, want the address of the credential", detail)
+	}
+	if strings.HasPrefix(detail, "App ") {
+		t.Error("the roster named an app nothing in this process knows")
+	}
+}

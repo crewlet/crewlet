@@ -1148,11 +1148,19 @@ export function EntryRow({
                       one with a route per seat: true, and silent about the
                       thing the row exists to answer, which is whether this
                       agent can act as itself here. */}
+                  {/* WHAT THIS AGENT IS AT THE APP, which is the question a
+                      roster of agents raises. It showed the delivery ROUTE
+                      instead, on the one app that has one per seat: true, and
+                      the same shape for every agent bar the handle, so it
+                      said nothing a reader could act on and nothing about
+                      which of their apps this one is. The engine's sentence
+                      wins; the path is the fallback for a node too old to
+                      send one. */}
                   <span className="int-row-detail">
-                    {seat.inbound_path ? (
-                      <code className="inline">{seat.inbound_path}</code>
-                    ) : seat.detail ? (
+                    {seat.detail ? (
                       seat.detail
+                    ) : seat.inbound_path ? (
+                      <code className="inline">{seat.inbound_path}</code>
                     ) : (
                       "nothing set up for this agent"
                     )}

@@ -59,6 +59,27 @@ func (e *Engine) startSlack(ctx context.Context, c *Company, cfg *config.Slack) 
 	return transport, nil
 }
 
+// SlackApps is the Slack app each running seat authenticates as, by handle.
+//
+// A LIVE FACT, and the only kind available: an agent's Slack app is named
+// nowhere in the company document, because the app is what issues the token
+// rather than something the token points at. The transport learns it from
+// `auth.test` when it wires the seat, so this answers for the seats that came
+// up and is empty before they do.
+//
+// Read by the setup screen, which shows an operator which of their apps each
+// agent is: the id every Slack settings page is keyed on, and the answer to
+// the question a roster of identical-looking agents raises.
+func (e *Engine) SlackApps() map[string]string {
+	e.notify.mu.Lock()
+	transport := e.notify.slack
+	e.notify.mu.Unlock()
+	if transport == nil {
+		return nil
+	}
+	return transport.Apps()
+}
+
 // reconcileSlack brings the hosted chat surface in line with the applied
 // revision.
 //

@@ -121,6 +121,20 @@ type Options struct {
 	// reconcile loop writes, so the two cannot disagree.
 	Status Status
 
+	// SlackApps is which Slack app each agent seat authenticates as, by
+	// handle.
+	//
+	// A LIVE FACT FROM A CO-LOCATED ENGINE, and there is no other source:
+	// an agent's Slack app is named nowhere in the company document,
+	// because the app is what issues the token rather than something the
+	// token points at. The transport learns it from the vendor when it
+	// wires a seat.
+	//
+	// Nil on a standalone API, which is the honest answer rather than a
+	// confident empty map: the roster then says where the seat's
+	// credential lives, which is what it can prove.
+	SlackApps func() map[string]string
+
 	// Now is injectable so a test can pin a secret row's timestamp.
 	Now func() time.Time
 }
@@ -131,12 +145,15 @@ type Service struct {
 	config  *configapi.Service
 	writer  setup.Writer
 	resolve func(string) (string, bool)
-	secrets setup.Secrets
-	passes  *setup.Runner
-	sink    sinkFactory
-	status  Status
-	clock   func() time.Time
-	appFlow *AppFlow
+	// slackApps is which Slack app each seat authenticates as, from a
+	// co-located engine. Nil elsewhere: see [Options.SlackApps].
+	slackApps func() map[string]string
+	secrets   setup.Secrets
+	passes    *setup.Runner
+	sink      sinkFactory
+	status    Status
+	clock     func() time.Time
+	appFlow   *AppFlow
 }
 
 // New builds the service, or nil when this process has no company to set up.
@@ -154,14 +171,15 @@ func New(opts Options) *Service {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &Service{
-		company: opts.Company,
-		config:  opts.Config,
-		resolve: opts.Resolve,
-		secrets: opts.Secrets,
-		passes:  opts.Passes,
-		sink:    opts.Sink,
-		status:  opts.Status,
-		clock:   now,
+		company:   opts.Company,
+		config:    opts.Config,
+		resolve:   opts.Resolve,
+		secrets:   opts.Secrets,
+		passes:    opts.Passes,
+		sink:      opts.Sink,
+		status:    opts.Status,
+		slackApps: opts.SlackApps,
+		clock:     now,
 		writer: setup.Writer{
 			Secrets: opts.Secrets,
 			Config:  configWriter{opts.Config},
@@ -588,7 +606,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		block := company.Integrations.Slack
 		summary = slack.Summary()
 		reqs = slack.CompanyRequirements(block)
-		seats = slackSeats(company, s.resolve)
+		seats = slackSeats(company, s.resolve, s.apps())
 		// CONFIGURED WHEN ANY SEAT IS, not when the company block exists:
 		// the block is optional settings, and a company with seven working
 		// Slack apps and no block is fully configured.
@@ -968,7 +986,18 @@ func seatChoices(company *config.Company, reqs []setup.Requirement) {
 // would leave an operator no way to give one to them. Human seats are
 // excluded, because a person's Slack account is not something this engine
 // provisions or holds a token for.
-func slackSeats(company *config.Company, resolve func(string) (string, bool)) []SeatState {
+// apps is which Slack app each seat authenticates as, or an empty map where
+// nothing in this process knows.
+func (s *Service) apps() map[string]string {
+	if s.slackApps == nil {
+		return nil
+	}
+	return s.slackApps()
+}
+
+func slackSeats(company *config.Company, resolve func(string) (string, bool),
+	apps map[string]string,
+) []SeatState {
 	// THROUGH THE RESOLVER, because what is built from this is COPIED INTO
 	// SLACK. `public_base_url` is a Tier B field, so it may be a whole
 	// `${VAR}` and the document stores it verbatim; read raw, the manifest
@@ -996,6 +1025,21 @@ func slackSeats(company *config.Company, resolve func(string) (string, bool)) []
 			Present:      len(reqs) > 0 && reqs[0].Present,
 			Satisfied:    len(setup.Outstanding(reqs)) == 0,
 			InboundPath:  "/webhooks/slack/" + handle,
+		}
+		// WHICH APP THIS AGENT IS, which is the question a roster of
+		// agents raises and the one nothing else here answers. A Slack
+		// app is named nowhere in the company document (the app issues
+		// the token rather than the other way round), so this is the
+		// running transport's answer, learned from the vendor.
+		//
+		// Where it is not known, the address of the credential, which is
+		// what every other app's roster says and what this can prove:
+		// the seat may not have come up, or this may be an API with no
+		// engine beside it.
+		if app := apps[handle]; app != "" {
+			state.Detail = "App " + app
+		} else {
+			state.Detail = "integrations.slack.bot_token"
 		}
 		// THE APP THIS SEAT IS BUILT FROM, and where there is none, why.
 		//

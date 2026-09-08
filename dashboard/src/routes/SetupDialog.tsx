@@ -708,13 +708,9 @@ export function SetupDialog({
         {manualSeats && (
           <div className="banner neutral">
             <Icon name="info" size="sm" />
-            <span className="col" style={{ gap: 4 }}>
-              <span>{title} does not support automatic agent provisioning at the moment.</span>
-              <span className="t-caption">
-                Each agent acts as itself in {title}, so it needs its own credentials. Configure a
-                dedicated seat for every agent below.
-              </span>
-            </span>
+            {/* ONE LINE. What follows it is the roster of agents to
+                configure, which says the rest by being there. */}
+            <span>{title} does not support automatic agent provisioning at the moment.</span>
           </div>
         )}
         {manual.map((section) => (
@@ -761,7 +757,10 @@ export function SetupDialog({
             >
               <summary className="int-seat-summary">
                 <span className="int-seat-name">{heading}</span>
-                <Badge tone={done ? "positive" : "caution"} outline={done}>
+                {/* SOLID WHEN IT IS DONE. Outlined, the one row a reader
+                    scans for (the finished one) was the quietest thing on the
+                    card. */}
+                <Badge tone={done ? "positive" : "caution"} outline={!done}>
                   {done ? "Configured" : "Needs setup"}
                 </Badge>
               </summary>
@@ -804,10 +803,7 @@ export function SetupDialog({
                           agent's and carries their name two lines above, so
                           repeating it here says nothing and pushes the words
                           that do off the end of a narrow dialog. */}
-                      <span>
-                        App manifest
-                        <span className="faint"> (paste this into Slack)</span>
-                      </span>
+                      <span>App manifest</span>
                       <span className="spacer" />
                       {/* COPYING IT DOES NOT OPEN IT. A button inside a
                           summary toggles the disclosure on its way through,

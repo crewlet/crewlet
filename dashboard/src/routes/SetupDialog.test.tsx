@@ -1462,7 +1462,9 @@ test("an app the engine cannot provision says so before the blocks", () => {
   expect(
     screen.getByText(/Slack does not support automatic agent provisioning at the moment/),
   ).toBeDefined();
-  expect(screen.getByText(/Configure a dedicated seat for every agent below/)).toBeDefined();
+  // ONE LINE. What follows it is the roster of agents to configure, which
+  // says the rest by being there.
+  expect(screen.queryByText(/Configure a dedicated seat/)).toBeNull();
 });
 
 // THE DELIVERY ADDRESS IS IN THE MANIFEST, not beside it.

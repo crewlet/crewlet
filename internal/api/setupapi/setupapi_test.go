@@ -82,7 +82,12 @@ type surface struct {
 	setup *setupapi.Service
 }
 
-func newSurface(t *testing.T) *surface {
+func newSurface(t *testing.T) *surface { return newSurfaceWithApps(t, nil) }
+
+// newSurfaceWithApps is the same surface with a co-located engine's answer to
+// which Slack app each seat authenticates as. Nil is a standalone API, or
+// seats that have not come up.
+func newSurfaceWithApps(t *testing.T, apps map[string]string) *surface {
 	t.Helper()
 	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "c.db"), store.Options{})
 	if err != nil {
@@ -109,8 +114,9 @@ func newSurface(t *testing.T) *surface {
 	s.setup = setupapi.New(setupapi.Options{
 		Company: s.company, Config: cfg, Secrets: v,
 		// The resolution chain: what the vault holds is what resolved.
-		Resolve: v.get,
-		Now:     func() time.Time { return pinned },
+		Resolve:   v.get,
+		SlackApps: func() map[string]string { return apps },
+		Now:       func() time.Time { return pinned },
 	})
 	s.setup.Routes(s.mux)
 	cfg.Routes(s.mux)

@@ -931,6 +931,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		Passes: e.SetupRunner(nil),
 		Sink:   e.SetupSink,
 		Status: integrationStatus,
+		// WHICH SLACK APP EACH AGENT IS. Named nowhere in the company
+		// document, because the app is what issues the token; the
+		// running transport learned it from Slack when it wired the
+		// seat, and this is the only process that holds it.
+		SlackApps: e.SlackApps,
 	})
 	// ONE AGENT'S OWN GITHUB APP, which is the one thing here a reconcile
 	// loop cannot do alone: an app is created by POSTing a manifest from a
