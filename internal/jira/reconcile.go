@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -145,6 +146,21 @@ type Result struct {
 	// Hooked is the webhook target this run registered, or empty.
 	Hooked string
 	Notes  []string
+
+	// NoIngress says why this run left the instance with no delivery path
+	// at all, and is empty when it had an address to register one against
+	// or when a hook is not how events arrive here.
+	//
+	// A SEPARATE FIELD because an empty Hooked means three unrelated
+	// things: a read-only pass, a working Cloud company whose events come
+	// through the Forge relay, and a deployment nothing can reach. Only
+	// the third is a problem, and Classify over no findings is Ready — so
+	// a Data Center company that never set its public base reported Jira
+	// working while the instance had nowhere to deliver to.
+	//
+	// The zero value is "nothing to report", deliberately: a Result built
+	// anywhere but Reconcile must not invent an ingress problem.
+	NoIngress string
 }
 
 // Routing reports the seats whose inbound events can reach them.
@@ -194,6 +210,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		return res, err
 	}
 	res.Hooked = hooked
+	res.NoIngress = noIngressReason(opts, res.Deployment)
 	if opts.Sink != nil {
 		if err := opts.Sink.Flush(ctx); err != nil {
 			return res, fmt.Errorf("jira: %w", err)
@@ -313,6 +330,24 @@ func checkProjects(ctx context.Context, opts Options, seats []SeatIdentity) []Pr
 	return out
 }
 
+// noIngressReason says why this run left the instance unable to deliver, or
+// "".
+//
+// DATA CENTER ONLY. A Cloud webhook belongs to an app rather than to an API
+// token, and those events arrive through the Forge relay at an address this
+// engine did not register — so an empty Hooked there is a working company,
+// and reporting it would park one on a block nobody can clear. On Data
+// Center the hook this run registers IS how events arrive, and without a
+// public base there is no address to put in it.
+func noIngressReason(opts Options, deployment Deployment) string {
+	if deployment == Cloud || webhookTarget(opts.WebhookBase) != "" {
+		return ""
+	}
+	return "integrations.public_base_url is unset, so this Jira instance has " +
+		"no address to deliver to and no issue or comment reaches this " +
+		"deployment"
+}
+
 // ensureWebhook registers the inbound hook, or converges the one that is
 // already there.
 func ensureWebhook(ctx context.Context, opts Options) (string, []string, error) {
@@ -324,7 +359,7 @@ func ensureWebhook(ctx context.Context, opts Options) (string, []string, error) 
 				"delivers nothing and the integration looks idle rather than " +
 				"unconfigured"}, nil
 	}
-	secret, notes, err := webhookSecret(ctx, opts, target)
+	secret, minted, notes, err := webhookSecret(ctx, opts, target)
 	if err != nil {
 		return "", notes, err
 	}
@@ -368,6 +403,15 @@ func ensureWebhook(ctx context.Context, opts Options) (string, []string, error) 
 				return "", notes, fmt.Errorf("jira: replace webhook: %w", err)
 			}
 		} else {
+			if converged(hook, target, minted) {
+				// ALREADY CORRECT, and left exactly as it is. This is
+				// the steady state and where the loop spends its life:
+				// [integration.DefaultSchedule] is anchored on a pass
+				// issuing no writes when nothing has changed, and an
+				// unconditional update was one write per pass, for ever,
+				// on a hook that needed nothing.
+				return target, notes, nil
+			}
 			if _, err := opts.Client.UpdateWebhook(
 				ctx, hook.ID, WebhookName, target, secret); err != nil {
 				return "", notes, fmt.Errorf("jira: update webhook: %w", err)
@@ -392,13 +436,19 @@ func ensureWebhook(ctx context.Context, opts Options) (string, []string, error) 
 // promise is that it is safe to re-run. So a secret that already resolves is
 // used as it is, and minting happens when there is none, or when the
 // operator asked to recreate the hook having planned the restart.
-func webhookSecret(ctx context.Context, opts Options, target string) (string, []string, error) {
+// The bool is whether a FRESH secret was minted on this run, and it is what
+// lets a converged pass leave a working hook alone: Jira never gives a secret
+// back, so "the hook already points at the right address" is only enough when
+// this run did not change the key it must be signed with.
+func webhookSecret(
+	ctx context.Context, opts Options, target string,
+) (secret string, minted bool, notes []string, err error) {
 	var resolved string
 	if opts.Value != nil {
 		resolved = strings.TrimSpace(opts.Value(opts.Config.WebhookSecret))
 	}
 	if resolved != "" && !opts.RecreateWebhook {
-		return resolved, nil, nil
+		return resolved, false, nil, nil
 	}
 	secretVar, ok := provision.SoleVar(opts.Config.WebhookSecret)
 	if !ok {
@@ -407,7 +457,7 @@ func webhookSecret(ctx context.Context, opts Options, target string) (string, []
 		// than theirs: it becomes State.LastError, which is written to
 		// the fleet's coordination store and served on the integrations
 		// query, so a %q of a literal signing secret publishes it.
-		return "", nil, fmt.Errorf(
+		return "", false, nil, fmt.Errorf(
 			"jira: integrations.jira.webhook_secret is %s rather than a value "+
 				"this run could resolve or a whole ${VAR} reference to mint "+
 				"one into — point it at a variable, set that variable, or "+
@@ -415,11 +465,11 @@ func webhookSecret(ctx context.Context, opts Options, target string) (string, []
 			provision.Shape(opts.Config.WebhookSecret), target)
 	}
 	if opts.Sink == nil {
-		return "", nil, provision.ErrNoSink
+		return "", false, nil, provision.ErrNoSink
 	}
-	secret := rand.Text()
-	if err := opts.Sink.Record(ctx, secretVar, secret); err != nil {
-		return "", nil, fmt.Errorf("jira: record %s: %w", secretVar, err)
+	fresh := rand.Text()
+	if recordErr := opts.Sink.Record(ctx, secretVar, fresh); recordErr != nil {
+		return "", false, nil, fmt.Errorf("jira: record %s: %w", secretVar, recordErr)
 	}
 	note := fmt.Sprintf(
 		"a fresh webhook secret was minted into %s — %s", secretVar,
@@ -428,7 +478,31 @@ func webhookSecret(ctx context.Context, opts Options, target string) (string, []
 		note += ". The previous secret is now invalid on every other " +
 			"deployment of this company"
 	}
-	return secret, []string{note}, nil
+	return fresh, true, []string{note}, nil
+}
+
+// converged reports a hook that already carries everything this run would
+// write, so writing it again is a request spent to change nothing.
+//
+// The name and the address are the caller's business — they are what selected
+// this hook and what it is being pointed at. What is left is whether it
+// delivers at all, whether it carries every event the parser reads, and the
+// one thing that cannot be read back: a secret this run just replaced has to
+// be sent, because Jira answers with no secret and there is nothing to
+// compare.
+//
+// EXTRA events are not a reason to write, for the reason the GitHub side
+// gives: converge what this engine needs and do not undo what it does not.
+func converged(hook Webhook, target string, minted bool) bool {
+	if minted || !hook.Enabled || hook.URL != target {
+		return false
+	}
+	for _, want := range WebhookEvents {
+		if !slices.Contains(hook.Events, want) {
+			return false
+		}
+	}
+	return true
 }
 
 // webhookTarget is the route a Jira delivery arrives on.

@@ -200,7 +200,22 @@ func (r *SeatAppResult) reconcileSeat(
 		}
 	}
 
+	var notRecorded *errNotRecorded
 	switch {
+	case errors.As(err, &notRecorded):
+		// FOUND AND NOT WRITTEN DOWN. The click has been made; what
+		// failed is this engine's own write, so nothing an operator does
+		// at GitHub changes it and the install link would be wrong
+		// advice. Degraded and owed by an admin, because a store that
+		// keeps refusing this write is a fault somebody has to look at —
+		// and until it lands, every pass re-reads the same installation
+		// and the seat mints no token.
+		r.Findings = append(r.Findings, integration.Finding{
+			Kind:    integration.FindingIdentityFailed,
+			Subject: seat.Handle,
+			Detail:  notRecorded.detail(seat.Handle),
+		})
+		return
 	case err != nil && seat.InstallationID != 0:
 		// LEFT ALONE, and only where the document already claims an
 		// installation. See the package note: a failed read is not
@@ -310,6 +325,14 @@ func notFound(err error) bool {
 // Three answers, and the middle one is why this is not a bool: the
 // installation, nil for "there is none and that is the truth", and an error
 // for "GitHub could not say".
+//
+// A FOURTH THING CAN GO WRONG and it is not any of those: the installation is
+// found and cannot be WRITTEN DOWN. That used to arrive here as a plain error,
+// indistinguishable from a failed read, and for a seat with nothing recorded
+// yet the caller then reported "'s app exists and nothing has installed it" —
+// a sentence that is false about the one fact this pass established, sending
+// an operator to redo a click nobody reversed while the real failure was
+// logged nowhere at all. [errNotRecorded] keeps it apart.
 func (r *SeatAppResult) installationFor(
 	ctx context.Context, opts SeatAppOptions, seat SeatApp, client *AppClient,
 ) (*Installation, bool, error) {
@@ -326,7 +349,13 @@ func (r *SeatAppResult) installationFor(
 			// rather than retrying an id that will never answer again.
 			if opts.Record != nil {
 				if clearErr := opts.Record(ctx, seat.Handle, 0); clearErr != nil {
-					return nil, false, clearErr
+					// THE STALE ID SURVIVES, so the seat is not
+					// merely uninstalled: the document still names
+					// an installation GitHub has forgotten, and the
+					// next pass will read it and 404 again. Named
+					// rather than folded into the read failure, for
+					// the same reason as the discovery write.
+					return nil, false, &errNotRecorded{err: clearErr}
 				}
 			}
 			return nil, false, nil
@@ -354,12 +383,46 @@ func (r *SeatAppResult) installationFor(
 		}
 		if opts.Record != nil {
 			if recordErr := opts.Record(ctx, seat.Handle, installation.ID); recordErr != nil {
-				return nil, false, recordErr
+				return nil, false, &errNotRecorded{
+					id: installation.ID, err: recordErr,
+				}
 			}
 		}
 		return &installation, true, nil
 	}
 	return nil, false, nil
+}
+
+// errNotRecorded is a discovery this pass could not write down.
+//
+// The installation IS at GitHub — this pass read it — and what failed was
+// persisting WHICH one. That is neither "GitHub could not say" nor "there is
+// none", and collapsing it into either produces a sentence that contradicts
+// what the pass just established.
+//
+// id is the installation that was found, and is zero when what failed was
+// CLEARING a stale one instead.
+type errNotRecorded struct {
+	id  int64
+	err error
+}
+
+func (e *errNotRecorded) Error() string { return e.err.Error() }
+func (e *errNotRecorded) Unwrap() error { return e.err }
+
+// detail is the sentence an operator reads, and it says which write failed
+// rather than what the pass found — the finding is about this engine, not
+// about GitHub.
+func (e *errNotRecorded) detail(handle string) string {
+	if e.id == 0 {
+		return handle + "'s app was uninstalled at GitHub and this engine could " +
+			"not clear the installation it still has recorded, so the seat " +
+			"keeps trying to mint against an installation that no longer " +
+			"exists: " + e.err.Error()
+	}
+	return handle + "'s app IS installed at GitHub and this engine could not " +
+		"record which installation, so the seat mints no token until the " +
+		"write succeeds — nothing at GitHub needs changing: " + e.err.Error()
 }
 
 // TokenFor mints the credential one seat acts with.

@@ -153,6 +153,12 @@ func printGitHubResult(w io.Writer, res *github.Result) {
 				fmt.Fprintf(w, "  %-28s registered at %s\n", hook.Target, hook.URL)
 			case hook.Hooked():
 				fmt.Fprintf(w, "  %-28s already pointing at %s\n", hook.Target, hook.URL)
+			case !hook.Blocks():
+				// NOTHING TO HOOK, not a refusal. Printed as NOT HOOKED
+				// it reads as a problem and sends somebody to fix a
+				// repository that is finished.
+				fmt.Fprintf(w, "  %-28s skipped — %s\n",
+					hook.Target, orDash(hook.Detail))
 			default:
 				fmt.Fprintf(w, "  %-28s NOT HOOKED — %s\n",
 					hook.Target, orDash(hook.Detail))

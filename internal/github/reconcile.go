@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -90,22 +91,79 @@ type SeatIdentity struct {
 // Routes reports a seat whose inbound events can reach it.
 func (s SeatIdentity) Routes() bool { return s.Login != "" }
 
+// HookOutcome is what happened at one webhook target, and it has THREE
+// values because two of them were indistinguishable and led to opposite
+// actions.
+//
+// A hook that was attempted and refused is an ingress block: events reach
+// nobody and somebody has to widen a credential. A target with NOTHING TO
+// HOOK is not — an archived repository emits no events, so a hook on it
+// would be correct and pointless — and reporting it as a block put a company
+// permanently in [integration.PhaseDegraded], retried on the admin backoff
+// for ever, over a repository that is finished.
+//
+// Both used to be "URL is empty, Detail says why", which is why the
+// distinction has to be a value rather than a convention: an empty URL is
+// what a caller sees, and no amount of prose in Detail changes what
+// [Result.Findings] does with it.
+type HookOutcome string
+
+// The three outcomes.
+const (
+	// HookRegistered is a target this run left with a working hook.
+	HookRegistered HookOutcome = "registered"
+
+	// HookSkipped is a target with nothing to hook. Not a fault, and not
+	// a finding: the reason travels in Detail for a person reading the
+	// run.
+	HookSkipped HookOutcome = "skipped"
+
+	// HookBlocked is a target this run tried and could not hook. This is
+	// the one that becomes [integration.FindingIngressBlocked].
+	HookBlocked HookOutcome = "blocked"
+)
+
+// Valid reports an outcome this build knows, so one off the wire is a value
+// rather than a panic.
+func (o HookOutcome) Valid() bool {
+	switch o {
+	case HookRegistered, HookSkipped, HookBlocked:
+		return true
+	default:
+		return false
+	}
+}
+
 // HookState is what one webhook target looks like after the run.
 type HookState struct {
 	Target Target
-	// URL is the delivery address the hook now points at, or empty for a
-	// target no hook was registered on.
+
+	// Outcome is what happened. The ZERO VALUE IS BLOCKED, deliberately:
+	// every path that gives up on a target returns early having set only
+	// Detail, so the honest default for "this function returned without
+	// saying otherwise" is the refusing one. A new early return is
+	// therefore reported rather than silently swallowed.
+	Outcome HookOutcome
+
+	// URL is the delivery address the hook now points at, empty for any
+	// outcome but [HookRegistered].
 	URL string
+
 	// Created is true for a hook this run made, false for one it
 	// converged.
 	Created bool
-	// Detail carries the refusal for a target that could not be hooked,
-	// in terms an operator can act on.
+
+	// Detail says why, for a target that was refused OR skipped, in terms
+	// an operator can act on.
 	Detail string
 }
 
 // Hooked reports a target this run left with a working hook.
-func (h HookState) Hooked() bool { return h.URL != "" }
+func (h HookState) Hooked() bool { return h.Outcome == HookRegistered }
+
+// Blocks reports a target whose events reach nobody AND that somebody can do
+// something about — the only case [Result.Findings] reports.
+func (h HookState) Blocks() bool { return h.Outcome == HookBlocked }
 
 // Result is what one reconcile found and did.
 type Result struct {
@@ -115,6 +173,21 @@ type Result struct {
 	Seats []SeatIdentity
 	Hooks []HookState
 	Notes []string
+
+	// NoIngress says why this run registered no delivery path AT ALL, and
+	// is empty when it had an address to register one against.
+	//
+	// A SEPARATE FIELD because an empty Hooks list means two opposite
+	// things. A pass given no public base registers nothing by
+	// construction — every hook state it would have produced is simply
+	// absent — and Classify over no findings is Ready. So a company whose
+	// public_base_url was never set reported GitHub as working while
+	// nothing at GitHub pointed at it, which is the same not-there
+	// coverage every other rule here exists to refuse.
+	//
+	// The zero value is "nothing to report", deliberately: a Result built
+	// anywhere but Reconcile must not invent an ingress problem.
+	NoIngress string
 }
 
 // Routing reports the seats whose inbound events can reach them.
@@ -168,6 +241,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	hooks, notes, err := ensureWebhooks(ctx, opts)
 	res.Hooks = hooks
 	res.Notes = append(res.Notes, notes...)
+	res.NoIngress = noIngressReason(opts)
 	if err != nil {
 		return res, err
 	}
@@ -248,6 +322,22 @@ func resolveSeats(ctx context.Context, opts Options) []SeatIdentity {
 // routing on day one and routing whenever somebody remembers. It needs
 // `admin:org_hook`, which a fine-grained token cannot carry, so `auto` falls
 // back to per-repository hooks rather than failing.
+// noIngressReason says why this run could register no delivery path, or "".
+//
+// ONLY THE ADDRESS. A company with no `provisioning` block has no
+// organization and no repositories for an org- or repo-level hook, and that
+// is a working configuration rather than a gap: each agent's own GitHub App
+// carries its own webhook, registered in the app's manifest. The public base
+// is different — with none, nothing this engine runs has an address for
+// GitHub to deliver to at all.
+func noIngressReason(opts Options) string {
+	if webhookTarget(opts.WebhookBase) != "" {
+		return ""
+	}
+	return "integrations.public_base_url is unset, so nothing at GitHub has " +
+		"an address to deliver to and no event reaches this deployment"
+}
+
 func ensureWebhooks(ctx context.Context, opts Options) ([]HookState, []string, error) {
 	target := webhookTarget(opts.WebhookBase)
 	if target == "" {
@@ -265,7 +355,7 @@ func ensureWebhooks(ctx context.Context, opts Options) ([]HookState, []string, e
 				"register one on"}, nil
 	}
 
-	secret, notes, err := webhookSecret(ctx, opts, target)
+	secret, minted, notes, err := webhookSecret(ctx, opts, target)
 	if err != nil {
 		return nil, notes, err
 	}
@@ -277,7 +367,7 @@ func ensureWebhooks(ctx context.Context, opts Options) ([]HookState, []string, e
 	var hooks []HookState
 
 	if org := strings.TrimSpace(pv.Org); org != "" && mode != config.ContainerWebhookNever {
-		state, err := ensureOrgWebhook(ctx, opts, org, target, secret)
+		state, err := ensureOrgWebhook(ctx, opts, org, target, secret, minted)
 		switch {
 		case err == nil:
 			hooks = append(hooks, state)
@@ -316,7 +406,7 @@ func ensureWebhooks(ctx context.Context, opts Options) ([]HookState, []string, e
 		return hooks, notes, nil
 	}
 	for _, t := range targets {
-		hooks = append(hooks, ensureRepoWebhook(ctx, opts, t, target, secret))
+		hooks = append(hooks, ensureRepoWebhook(ctx, opts, t, target, secret, minted))
 	}
 	return hooks, notes, nil
 }
@@ -326,8 +416,10 @@ func ensureWebhooks(ctx context.Context, opts Options) ([]HookState, []string, e
 // The error is returned rather than folded into the state because the caller
 // decides what an org-hook refusal MEANS — a hard failure under `true`, a
 // fallback under `auto` — and it cannot decide that from a string.
-func ensureOrgWebhook(ctx context.Context, opts Options, org, target, secret string) (HookState, error) {
-	state := HookState{Target: Target{Org: org}}
+func ensureOrgWebhook(
+	ctx context.Context, opts Options, org, target, secret string, minted bool,
+) (HookState, error) {
+	state := HookState{Target: Target{Org: org}, Outcome: HookBlocked}
 	hooks, err := opts.Client.OrgWebhooks(ctx, org)
 	if err != nil {
 		return state, err
@@ -346,16 +438,33 @@ func ensureOrgWebhook(ctx context.Context, opts Options, org, target, secret str
 			}
 			break
 		}
+		if converged(hook, minted) {
+			// ALREADY CORRECT, and left exactly as it is.
+			//
+			// THE STEADY STATE IS WHERE THIS LOOP LIVES: the reconcile
+			// runs every few minutes for the life of the deployment, and
+			// [integration.DefaultSchedule] is anchored on each pass
+			// issuing no writes when nothing has changed. An
+			// unconditional update was one write per target per pass, for
+			// ever, on a hook that needed nothing.
+			//
+			// `minted` is the half a URL comparison cannot see: GitHub
+			// never gives a secret back, so a hook pointing at the right
+			// address is still signed with the old key when this run made
+			// a new one.
+			state.Outcome, state.URL = HookRegistered, target
+			return state, nil
+		}
 		if _, err := opts.Client.UpdateOrgWebhook(ctx, org, hook.ID, target, secret); err != nil {
 			return state, err
 		}
-		state.URL = target
+		state.Outcome, state.URL = HookRegistered, target
 		return state, nil
 	}
 	if _, err := opts.Client.CreateOrgWebhook(ctx, org, target, secret); err != nil {
 		return state, err
 	}
-	state.URL, state.Created = target, true
+	state.Outcome, state.URL, state.Created = HookRegistered, target, true
 	return state, nil
 }
 
@@ -365,8 +474,10 @@ func ensureOrgWebhook(ctx context.Context, opts Options, org, target, secret str
 // contain one that was renamed, archived or made private to a team this
 // credential is not in, and failing the whole run over it would leave every
 // other repository unhooked to punish one typo.
-func ensureRepoWebhook(ctx context.Context, opts Options, t Target, target, secret string) HookState {
-	state := HookState{Target: t}
+func ensureRepoWebhook(
+	ctx context.Context, opts Options, t Target, target, secret string, minted bool,
+) HookState {
+	state := HookState{Target: t, Outcome: HookBlocked}
 	repo, err := opts.Client.RepoOf(ctx, t.Owner, t.Repo)
 	if err != nil {
 		var apiErr *APIError
@@ -393,9 +504,13 @@ func ensureRepoWebhook(ctx context.Context, opts Options, t Target, target, secr
 		return state
 	}
 	if repo.Archived {
-		// Not a failure: an archived repository emits no events, so a
-		// hook on it would be correct and pointless. Saying so is what
-		// stops an operator debugging a repository that is finished.
+		// NOTHING TO HOOK, which is not the same as failing to hook: an
+		// archived repository emits no events, so a hook on it would be
+		// correct and pointless. Saying so is what stops an operator
+		// debugging a repository that is finished — and the outcome is
+		// what stops the loop reporting the company degraded over it,
+		// for ever, on the admin backoff.
+		state.Outcome = HookSkipped
 		state.Detail = "archived, so it emits no events — no hook registered"
 		return state
 	}
@@ -416,18 +531,25 @@ func ensureRepoWebhook(ctx context.Context, opts Options, t Target, target, secr
 			}
 			break
 		}
+		if converged(hook, minted) {
+			// ALREADY CORRECT — see [ensureOrgWebhook] for why this
+			// branch exists and what `minted` covers that a URL
+			// comparison cannot.
+			state.Outcome, state.URL = HookRegistered, target
+			return state
+		}
 		if _, err := opts.Client.UpdateRepoWebhook(ctx, t.Owner, t.Repo, hook.ID, target, secret); err != nil {
 			state.Detail = err.Error()
 			return state
 		}
-		state.URL = target
+		state.Outcome, state.URL = HookRegistered, target
 		return state
 	}
 	if _, err := opts.Client.CreateRepoWebhook(ctx, t.Owner, t.Repo, target, secret); err != nil {
 		state.Detail = err.Error()
 		return state
 	}
-	state.URL, state.Created = target, true
+	state.Outcome, state.URL, state.Created = HookRegistered, target, true
 	return state
 }
 
@@ -447,13 +569,19 @@ func ensureRepoWebhook(ctx context.Context, opts Options, t Target, target, secr
 // value behind it: `integrations.github.webhook_secret` is what the edge
 // verifies against, so a per-repository secret would be a key the engine
 // never checks.
-func webhookSecret(ctx context.Context, opts Options, target string) (string, []string, error) {
+// The bool is whether a FRESH secret was minted on this run, and it is what
+// lets a converged pass leave a working hook alone: GitHub never gives a
+// secret back, so "the hook already points at the right address" is only
+// enough when this run did not change the key it must be signed with.
+func webhookSecret(
+	ctx context.Context, opts Options, target string,
+) (secret string, minted bool, notes []string, err error) {
 	var resolved string
 	if opts.Value != nil {
 		resolved = strings.TrimSpace(opts.Value(opts.Config.WebhookSecret))
 	}
 	if resolved != "" && !opts.RecreateWebhooks {
-		return resolved, nil, nil
+		return resolved, false, nil, nil
 	}
 	secretVar, ok := provision.SoleVar(opts.Config.WebhookSecret)
 	if !ok {
@@ -462,22 +590,22 @@ func webhookSecret(ctx context.Context, opts Options, target string) (string, []
 		// slot holding a LITERAL — so the one time the message is
 		// reached, the thing it would print is the credential. The path
 		// is what an operator needs, and the path is what it says.
-		return "", nil, fmt.Errorf(
+		return "", false, nil, fmt.Errorf(
 			"github: integrations.github.webhook_secret holds neither a value "+
 				"this run could resolve nor a whole ${VAR} reference to mint "+
 				"one into — point it at a variable, set that variable, or "+
 				"drop -public-url and register %s by hand", target)
 	}
 	if opts.Sink == nil {
-		return "", nil, provision.ErrNoSink
+		return "", false, nil, provision.ErrNoSink
 	}
 	// rand.Text is 26 base32 characters over a 128-bit draw. GitHub
 	// accepts any string as a webhook secret and signs with it verbatim,
 	// so the only property that matters is that it is unguessable — there
 	// is no shape to satisfy, unlike the self-hosted host's whsec_ form.
-	secret := rand.Text()
-	if err := opts.Sink.Record(ctx, secretVar, secret); err != nil {
-		return "", nil, fmt.Errorf("github: record %s: %w", secretVar, err)
+	fresh := rand.Text()
+	if recordErr := opts.Sink.Record(ctx, secretVar, fresh); recordErr != nil {
+		return "", false, nil, fmt.Errorf("github: record %s: %w", secretVar, recordErr)
 	}
 	note := fmt.Sprintf(
 		"a fresh webhook secret was minted into %s — %s", secretVar,
@@ -486,7 +614,33 @@ func webhookSecret(ctx context.Context, opts Options, target string) (string, []
 		note += ". The previous secret is now invalid on every other " +
 			"deployment of this company"
 	}
-	return secret, []string{note}, nil
+	return fresh, true, []string{note}, nil
+}
+
+// converged reports a hook that already carries everything this run would
+// write, so writing it again is a request spent to change nothing.
+//
+// The URL is the caller's business — it is what selected this hook — so what
+// is left is the two fields a delivery depends on and the one thing that
+// cannot be read back. A disabled hook delivers nothing; a hook missing an
+// event type delivers everything but that one, which is a silence nobody
+// notices; and a secret this run just replaced has to be sent, because GitHub
+// answers with no secret at all and there is nothing to compare.
+//
+// EXTRA events are not a reason to write. An operator who added one to
+// Crewlet's hook wanted it, and rewriting the list every pass to take it away
+// again is the same argument as [integration.Reconciler]'s: converge what
+// this engine needs, and do not undo what it does not.
+func converged(hook Webhook, minted bool) bool {
+	if minted || !hook.Active {
+		return false
+	}
+	for _, want := range WebhookEvents {
+		if !slices.Contains(hook.Events, want) {
+			return false
+		}
+	}
+	return true
 }
 
 // webhookTarget is the route a GitHub delivery arrives on.

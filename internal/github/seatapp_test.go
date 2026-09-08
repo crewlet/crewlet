@@ -2,6 +2,7 @@ package github_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -260,5 +261,91 @@ func TestAnAppInstalledNowhereStillAsksForTheInstall(t *testing.T) {
 	want := "https://github.com/organizations/acme/settings/apps/acme-sre-lead/installations"
 	if url := res.Findings[0].ActionURL; url != want {
 		t.Errorf("install link = %q, want %q", url, want)
+	}
+}
+
+// A WRITE THIS ENGINE COULD NOT MAKE IS NOT A CLICK NOBODY MADE.
+//
+// The installation is found at GitHub and recording WHICH one fails. That
+// arrived at the caller as a plain error, indistinguishable from a failed
+// read, and for a seat with nothing recorded yet it was reported as "'s app
+// exists and nothing has installed it, so it sees no repository: install it
+// on acme" — a sentence that contradicts the one fact the pass established,
+// pointing an operator at a page where they would find the app already
+// installed. The real failure was logged nowhere.
+func TestAnInstallationThatCannotBeRecordedSaysSo(t *testing.T) {
+	t.Parallel()
+	_, pem := testKey(t)
+	base := appAt(t, true, `[{"id":42,"account":{"login":"acme"}}]`)
+
+	boom := errors.New("the config surface refused the write")
+	res, err := github.ReconcileSeatApps(context.Background(), github.SeatAppOptions{
+		APIBase: base, WebBase: "https://github.com", Org: "acme",
+		Seats: []github.SeatApp{{
+			Handle: "sre-lead", AppID: 7, Slug: "acme-sre-lead",
+			Key: pem, Tier: github.TierReview,
+		}},
+		Record: func(context.Context, string, int64) error { return boom },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Findings) != 1 {
+		t.Fatalf("findings = %+v, want exactly one", res.Findings)
+	}
+	got := res.Findings[0]
+	if got.Kind != integration.FindingIdentityFailed {
+		t.Errorf("kind = %q, want %q — the click was made, so this is not "+
+			"something an operator does at GitHub",
+			got.Kind, integration.FindingIdentityFailed)
+	}
+	if strings.Contains(got.Detail, "nothing has installed it") {
+		t.Errorf("the finding claims nobody installed the app: %q", got.Detail)
+	}
+	if !strings.Contains(got.Detail, boom.Error()) {
+		t.Errorf("the finding does not name the write that failed: %q", got.Detail)
+	}
+	// AND NO INSTALL LINK, because following it changes nothing.
+	if got.ActionURL != "" {
+		t.Errorf("an operator was sent to %q for a failure at this engine",
+			got.ActionURL)
+	}
+}
+
+// And the same for the other write: a stale id that could not be cleared
+// leaves the seat minting against an installation GitHub has forgotten, which
+// is a different sentence from either "installed" or "not installed".
+func TestAStaleInstallationThatCannotBeClearedSaysSo(t *testing.T) {
+	t.Parallel()
+	_, pem := testKey(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/app" {
+			_, _ = w.Write([]byte(`{"id":7,"slug":"acme-sre-lead"}`))
+			return
+		}
+		// The recorded installation is gone; the app itself is not.
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"Not Found"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	boom := errors.New("the config surface refused the write")
+	res, err := github.ReconcileSeatApps(context.Background(), github.SeatAppOptions{
+		APIBase: server.URL, WebBase: "https://github.com", Org: "acme",
+		Seats: []github.SeatApp{{
+			Handle: "sre-lead", AppID: 7, Slug: "acme-sre-lead",
+			InstallationID: 99, Key: pem, Tier: github.TierReview,
+		}},
+		Record: func(context.Context, string, int64) error { return boom },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Findings) != 1 {
+		t.Fatalf("findings = %+v, want exactly one", res.Findings)
+	}
+	if detail := res.Findings[0].Detail; !strings.Contains(detail, boom.Error()) {
+		t.Errorf("the finding does not name the write that failed: %q", detail)
 	}
 }

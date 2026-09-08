@@ -17,11 +17,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/github"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
@@ -1670,5 +1672,169 @@ func TestAPassWithNoOrgTokenReportsNothing(t *testing.T) {
 	// reporting on something it never looked at.
 	if res.Login != "" || len(res.Seats) != 0 || len(res.Hooks) != 0 {
 		t.Errorf("a credential-less run reported %+v", res)
+	}
+}
+
+// AN ARCHIVED REPOSITORY IS NOT AN INGRESS BLOCK.
+//
+// It emits no events, so a hook on it would be correct and pointless — the
+// reconcile says so deliberately. Reported as a refusal it parked the whole
+// integration in PhaseDegraded, retried on the admin backoff for ever, over a
+// repository somebody archived on purpose. The old shape could not tell the
+// two apart: both were an empty URL with prose in Detail.
+func TestAnArchivedRepositoryIsNotAFinding(t *testing.T) {
+	t.Parallel()
+	res := &github.Result{Hooks: []github.HookState{
+		{
+			Target:  github.Target{Owner: "acme", Repo: "attic"},
+			Outcome: github.HookSkipped,
+			Detail:  "archived, so it emits no events — no hook registered",
+		},
+	}}
+	if got := res.Findings(); len(got) != 0 {
+		t.Fatalf("an archived repository produced %d finding(s): %+v", len(got), got)
+	}
+}
+
+// AND A REFUSAL STILL IS ONE, or the guard above would be a way of hiding
+// every hook this credential cannot register.
+func TestARefusedWebhookIsStillAFinding(t *testing.T) {
+	t.Parallel()
+	res := &github.Result{Hooks: []github.HookState{
+		{
+			Target:  github.Target{Owner: "acme", Repo: "api"},
+			Outcome: github.HookBlocked,
+			Detail:  "this credential has no admin access",
+		},
+	}}
+	got := res.Findings()
+	if len(got) != 1 {
+		t.Fatalf("a refused hook produced %d finding(s), want 1: %+v", len(got), got)
+	}
+	if got[0].Kind != integration.FindingIngressBlocked {
+		t.Errorf("kind = %q, want %q", got[0].Kind, integration.FindingIngressBlocked)
+	}
+}
+
+// A RUN WITH NO ADDRESS TO DELIVER TO IS AN INGRESS BLOCK, said once.
+//
+// Nothing at GitHub can reach a deployment whose public base is unset, and
+// the pass registers no hooks at all — which was silence, so Classify saw no
+// findings and reported the integration Ready. The comment justifying that
+// silence said the URL "is not on the integrations block today"; it is
+// integrations.public_base_url, and the reconcile loop feeds it into every
+// pass.
+func TestARunWithNoPublicBaseReportsIngressBlocked(t *testing.T) {
+	t.Parallel()
+	res := &github.Result{NoIngress: "integrations.public_base_url is unset"}
+	got := res.Findings()
+	if len(got) != 1 {
+		t.Fatalf("got %d finding(s), want exactly one: %+v", len(got), got)
+	}
+	if got[0].Kind != integration.FindingIngressBlocked {
+		t.Errorf("kind = %q, want %q", got[0].Kind, integration.FindingIngressBlocked)
+	}
+	if got[0].Subject != "integrations.public_base_url" {
+		t.Errorf("subject = %q; the finding must name the field to set", got[0].Subject)
+	}
+	if integration.Classify(got).Phase == integration.PhaseReady {
+		t.Error("a deployment nothing can deliver to classified as ready")
+	}
+}
+
+// AND A RUN THAT HAD ONE SAYS NOTHING, or the rule above would report every
+// working company.
+func TestARunWithAPublicBaseSaysNothingAboutIt(t *testing.T) {
+	t.Parallel()
+	res := &github.Result{Hooks: []github.HookState{{
+		Target: github.Target{Org: "acme"}, Outcome: github.HookRegistered,
+		URL: "https://engine.example.com/webhooks/github",
+	}}}
+	if got := res.Findings(); len(got) != 0 {
+		t.Fatalf("a hooked run produced %d finding(s): %+v", len(got), got)
+	}
+}
+
+// A CONVERGED PASS WRITES NOTHING.
+//
+// This runs every few minutes for the life of the deployment, and
+// integration.DefaultSchedule is anchored on each pass issuing no writes when
+// nothing has changed. An existing hook at the right address was updated
+// unconditionally, so a company with fifty repositories spent fifty PATCH
+// requests every pass rewriting hooks that were already correct.
+func TestAConvergedPassRewritesNoWebhook(t *testing.T) {
+	t.Parallel()
+	events, _ := json.Marshal(github.WebhookEvents)
+	existing := fmt.Sprintf(
+		`[{"id":1,"active":true,"events":%s,"config":{"url":"https://x/webhooks/github"}}]`,
+		events)
+
+	var writes atomic.Int64
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method != http.MethodGet:
+			writes.Add(1)
+			_, _ = w.Write([]byte(`{"id": 1}`))
+		case strings.HasSuffix(r.URL.Path, "/hooks"):
+			_, _ = w.Write([]byte(existing))
+		default:
+			_, _ = w.Write([]byte(`{"full_name": "acme/api", "permissions": {"admin": true}}`))
+		}
+	})
+
+	res, err := github.Reconcile(context.Background(), github.Options{
+		Client: client,
+		Config: &config.GitHub{
+			Enabled: true, WebhookSecret: "s3cret",
+			Provisioning: &config.GitHubProvisioning{Repos: []string{"acme/api"}},
+		},
+		Value: func(v string) string { return v }, WebhookBase: "https://x",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Hooks) != 1 || !res.Hooks[0].Hooked() {
+		t.Fatalf("the converged hook was not reported as working: %+v", res.Hooks)
+	}
+	if got := writes.Load(); got != 0 {
+		t.Errorf("a pass over an already-correct hook made %d write(s) at GitHub", got)
+	}
+}
+
+// AND A HOOK THAT IS NOT ALREADY CORRECT IS STILL WRITTEN, or the rule above
+// would be a way of never converging anything. A disabled hook delivers
+// nothing at all, which is the case a URL comparison cannot see.
+func TestADisabledWebhookIsRewritten(t *testing.T) {
+	t.Parallel()
+	events, _ := json.Marshal(github.WebhookEvents)
+	existing := fmt.Sprintf(
+		`[{"id":1,"active":false,"events":%s,"config":{"url":"https://x/webhooks/github"}}]`,
+		events)
+
+	var writes atomic.Int64
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method != http.MethodGet:
+			writes.Add(1)
+			_, _ = w.Write([]byte(`{"id": 1}`))
+		case strings.HasSuffix(r.URL.Path, "/hooks"):
+			_, _ = w.Write([]byte(existing))
+		default:
+			_, _ = w.Write([]byte(`{"full_name": "acme/api", "permissions": {"admin": true}}`))
+		}
+	})
+
+	if _, err := github.Reconcile(context.Background(), github.Options{
+		Client: client,
+		Config: &config.GitHub{
+			Enabled: true, WebhookSecret: "s3cret",
+			Provisioning: &config.GitHubProvisioning{Repos: []string{"acme/api"}},
+		},
+		Value: func(v string) string { return v }, WebhookBase: "https://x",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if writes.Load() == 0 {
+		t.Error("a disabled hook was left disabled, so it still delivers nothing")
 	}
 }

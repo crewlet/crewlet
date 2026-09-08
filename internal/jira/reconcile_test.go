@@ -124,9 +124,22 @@ func (i *instance) serveHooks(w http.ResponseWriter, req *http.Request, path str
 			if name == "" {
 				name = "crewlet"
 			}
+			// AND ITS EVENTS, for the same reason: a hook that listed
+			// none could not express a CONVERGED registration at all, so
+			// a fake with no events agreed that every hook needed
+			// rewriting.
+			events, _ := hook["events"].([]string)
+			if events == nil {
+				events = jira.WebhookEvents
+			}
+			encoded, err := json.Marshal(events)
+			if err != nil {
+				panic(err)
+			}
 			body += `{"self":"` + i.URL + `/rest/webhooks/1.0/webhook/` +
 				hook["id"].(string) + `","name":"` + name + `","url":"` +
-				hook["url"].(string) + `","enabled":true}`
+				hook["url"].(string) + `","enabled":true,"events":` +
+				string(encoded) + `}`
 		}
 		_, _ = w.Write([]byte(body + "]"))
 	case http.MethodPost:
@@ -384,14 +397,52 @@ func TestARerunDoesNotReplaceAWorkingSecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Hooked == "" || len(inst.created) != 0 || len(inst.updated) != 1 {
+	if res.Hooked == "" || len(inst.created) != 0 {
 		t.Fatalf("created %v, updated %v", inst.created, inst.updated)
-	}
-	if inst.updated[0]["secret"] != "the-live-secret" {
-		t.Errorf("the live secret was replaced: %v", inst.updated[0])
 	}
 	if sink.value("JIRA_WEBHOOK_SECRET") != "" {
 		t.Error("a working secret was re-minted into the sink")
+	}
+	// AND THE CONVERGED HOOK IS NOT REWRITTEN EITHER. This pass runs every
+	// few minutes for the life of the deployment, and an unconditional
+	// update was one write per pass, for ever, on a hook that already
+	// carried the right address, the right events and a secret this run
+	// did not change.
+	if len(inst.updated) != 0 {
+		t.Errorf("a converged hook was rewritten: %v", inst.updated)
+	}
+}
+
+// AND A HOOK THAT IS NOT ALREADY CORRECT IS STILL WRITTEN, or the rule above
+// would be a way of never converging anything. A disabled hook, or one
+// missing an event the parser reads, delivers nothing an operator will miss.
+func TestAHookMissingAnEventIsRewritten(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	inst.hooks = []map[string]any{{
+		"id":  "7",
+		"url": "https://engine.example.com/webhooks/jira",
+		// Every event but the comments, which is how a hook somebody
+		// edited by hand arrives.
+		"events": []string{"jira:issue_created", "jira:issue_updated"},
+	}}
+
+	if _, err := run(t, inst, func(opts *jira.Options) {
+		opts.Sink = newSink()
+		opts.WebhookBase = "https://engine.example.com"
+		opts.Value = func(v string) string {
+			if v == "${JIRA_WEBHOOK_SECRET}" {
+				return "the-live-secret"
+			}
+			return v
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(inst.updated) != 1 {
+		t.Fatalf("a hook missing comment events was left alone: updated %v",
+			inst.updated)
 	}
 }
 
@@ -816,12 +867,15 @@ func TestFindingsReportAProjectTheInstanceDoesNotHave(t *testing.T) {
 	}
 }
 
-// NOTHING IS SAID ABOUT INGRESS, and the silence is the fix rather than a
-// gap. Result.Hooked is the webhook this RUN registered, and it is empty both
-// for a read-only pass and for a perfectly healthy Cloud company whose events
-// arrive through the Forge relay. Reading either as "no webhook is
-// registered" would park a working integration on a block nobody can clear.
-func TestFindingsSayNothingAboutIngress(t *testing.T) {
+// A DATA CENTER INSTANCE WITH NOWHERE TO DELIVER TO IS AN INGRESS BLOCK.
+//
+// The pass registers no hook, which used to be silence — on the reasoning
+// that the public base "is not on the integrations block" and ingress belonged
+// to the subcommand that had it. It IS on the block, as
+// integrations.public_base_url, and the reconcile loop feeds it into every
+// pass, so the silence meant a company that never set it saw Jira reported
+// Ready while the instance had no address to send anything to.
+func TestADataCenterInstanceWithNoPublicBaseReportsIngressBlocked(t *testing.T) {
 	t.Parallel()
 	inst := newInstance(t)
 	inst.accounts["Bearer org-token"] = "acct-org"
@@ -831,7 +885,6 @@ func TestFindingsSayNothingAboutIngress(t *testing.T) {
 	inst.projects["ENG"] = "Engineering"
 	inst.projects["QA"] = "Quality"
 
-	// No public base URL, which is the posture the reconcile loop runs in.
 	res, err := run(t, inst, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -839,17 +892,52 @@ func TestFindingsSayNothingAboutIngress(t *testing.T) {
 	if res.Hooked != "" {
 		t.Fatalf("the premise is wrong: this run registered %q", res.Hooked)
 	}
+	var found bool
 	for _, f := range res.Findings() {
 		if f.Kind == integration.FindingIngressBlocked {
-			t.Fatalf("a read-only pass reported ingress blocked: %+v", f)
+			found = true
+			if f.Subject != "integrations.public_base_url" {
+				t.Errorf("the finding names %q rather than the field to set",
+					f.Subject)
+			}
 		}
 	}
-	// What the company IS reported as here is driven by its seats (the
-	// fixture has one with no credential at all), which is the point: the
-	// phase reflects something an operator can act on rather than a
-	// webhook this pass was never asked to register.
-	if report := integration.Classify(res.Findings()); report.Actor == integration.ActorNobody &&
-		report.Phase != integration.PhaseReady {
-		t.Fatalf("a report with no actor is not ready: %+v", report)
+	if !found {
+		t.Fatalf("an instance with no address to deliver to reported no ingress "+
+			"problem: %+v", res.Findings())
+	}
+}
+
+// AND A CLOUD COMPANY IS STILL SILENT, which is the half that has to survive
+// the rule above. A Cloud webhook belongs to an app rather than to an API
+// token, and those events arrive through the Forge relay at an address this
+// engine never registered — so an empty Hooked there is a working company,
+// and reporting it would park one on a block nobody can clear.
+func TestACloudCompanySaysNothingAboutIngress(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	inst.accounts["Bearer lead-token"] = acctLead
+	inst.accounts["Bearer swe-token"] = "acct-swe"
+	inst.accounts["Bearer qa-token"] = "acct-qa"
+	inst.projects["ENG"] = "Engineering"
+	inst.projects["QA"] = "Quality"
+
+	res, err := run(t, inst, func(o *jira.Options) {
+		client, err := jira.NewClient(jira.ClientOptions{
+			URL: inst.URL, Token: "org-token", Deployment: jira.Cloud,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		o.Client = client
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range res.Findings() {
+		if f.Kind == integration.FindingIngressBlocked {
+			t.Fatalf("a Cloud company reported ingress blocked: %+v", f)
+		}
 	}
 }

@@ -210,7 +210,10 @@ sequenceDiagram
   creation, and where it returns after the install. Only a person at GitHub can
   change them afterwards, so the engine refuses to begin without a public base
   (`409 no_public_url`) rather than create an app that would have to be created
-  again.
+  again. The reconcile loop reports the same gap for the org- and
+  repository-level hooks: with no public base there is no address for GitHub to
+  deliver to, so the integration is reported **degraded** naming that field
+  rather than **ready** with nothing registered anywhere.
 - **`integrations.github.provisioning.org`.** It names the account the app is
   registered under, and the account matters: an app registered under a person's
   own account cannot be installed on the organization that owns the

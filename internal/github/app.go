@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -297,7 +298,7 @@ func ExchangeManifest(ctx context.Context, apiBase, code string) (*CreatedApp, e
 	}
 
 	app := new(CreatedApp)
-	if err := json.NewDecoder(res.Body).Decode(app); err != nil {
+	if err := json.NewDecoder(io.LimitReader(res.Body, httpx.MaxResponseBody)).Decode(app); err != nil {
 		return nil, fmt.Errorf("github: decode the created app: %w", err)
 	}
 	if app.ID == 0 || strings.TrimSpace(app.PEM) == "" {
@@ -457,13 +458,47 @@ func NewAppClient(appID int64, pem, apiBase string, now func() time.Time) (*AppC
 // this does not return has been uninstalled by the account, which is a thing
 // an operator does at GitHub and tells nobody about. Reading it back is the
 // only way the engine learns.
+// TO EXHAUSTION, for the reason [Client.listWebhooks] gives one file over: an
+// installation past the first page read as ABSENT, and absent is the answer
+// that sends an operator to install an app that is already installed. A
+// hundred is GitHub's per_page maximum, not a company's ceiling — an app
+// installed once per seat reaches it at a hundred seats.
 func (c *AppClient) Installations(ctx context.Context) ([]Installation, error) {
-	var out []Installation
-	if err := c.call(ctx, http.MethodGet, "/app/installations?per_page=100", nil, &out); err != nil {
-		return nil, err
+	out := []Installation{}
+	for page := 1; ; page++ {
+		var rows []Installation
+		path := fmt.Sprintf("/app/installations?per_page=%d&page=%d",
+			installPageSize, page)
+		if err := c.call(ctx, http.MethodGet, path, nil, &rows); err != nil {
+			return nil, err
+		}
+		out = append(out, rows...)
+		if len(rows) < installPageSize {
+			return out, nil
+		}
+		if len(out) > installWalkCeiling {
+			return nil, fmt.Errorf(
+				"github: this app has more than %d installations, which is not "+
+					"an app Crewlet provisions seats against", installWalkCeiling)
+		}
 	}
-	return out, nil
 }
+
+// installPageSize is GitHub's per_page maximum for this listing.
+const installPageSize = 100
+
+// installWalkCeiling stops a walk that is not converging.
+//
+// A NON-CONVERGENCE GUARD rather than a hard cap, and compared with > for the
+// reason [hookWalkCeiling] is: at >= an app holding exactly this many
+// installations is refused by an error saying it has "more than" this many,
+// when its next page is empty and the walk would have finished. The cost of
+// the looser test is one extra page.
+//
+// A thousand, matching the hook walk: one installation per seat is the shape
+// this engine creates, and a company with a thousand seats is not one whose
+// listing failing to converge should be read as normal.
+const installWalkCeiling = 1000
 
 // Exists reports whether GitHub still knows this app.
 //
@@ -605,12 +640,21 @@ func (c *AppClient) call(ctx context.Context, method, path string, body, out any
 	defer func() { _ = res.Body.Close() }()
 
 	if res.StatusCode < 200 || res.StatusCode > 299 {
-		return &APIError{Method: method, Path: path, Status: res.StatusCode}
+		detail, _ := io.ReadAll(io.LimitReader(res.Body, errorBodyBytes))
+		return &APIError{
+			Method: method, Path: path, Status: res.StatusCode,
+			Detail: strings.TrimSpace(string(detail)),
+		}
 	}
 	if out == nil {
 		return nil
 	}
-	if err := json.NewDecoder(res.Body).Decode(out); err != nil {
+	// BOUNDED, like every other outbound client here. The success arm is
+	// the one that runs on every call, and c.base is the operator's own
+	// `integrations.github.url` on Enterprise — see [httpx.MaxResponseBody]
+	// for why an endpoint does not get to choose this process's memory
+	// ceiling.
+	if err := json.NewDecoder(io.LimitReader(res.Body, httpx.MaxResponseBody)).Decode(out); err != nil {
 		return fmt.Errorf("github: decode %s %s: %w", method, path, err)
 	}
 	return nil

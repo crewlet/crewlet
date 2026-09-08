@@ -24,23 +24,35 @@ func (r *Result) Findings() []integration.Finding {
 	}
 	var out []integration.Finding
 
-	// # NOTHING IS SAID ABOUT INGRESS, and the silence is deliberate
+	// # WHAT IS SAID ABOUT INGRESS, and what is deliberately not
 	//
 	// [Result.Hooked] is the webhook this RUN registered, not the one the
-	// instance holds, and it is empty in two states that are nothing like
-	// each other. A read-only pass registers nothing by construction, so
-	// it is always empty there. And on Cloud it is always empty even for a
-	// fully working company, because a Cloud webhook belongs to an app
-	// rather than to an API token and those events arrive through the
-	// Forge relay instead.
+	// instance holds, and it is empty in three states that are nothing
+	// like each other: a read-only pass registers nothing by construction;
+	// a fully working CLOUD company registers nothing either, because a
+	// Cloud webhook belongs to an app rather than to an API token and
+	// those events arrive through the Forge relay; and a Data Center
+	// instance with nowhere to deliver to registers nothing because there
+	// is no address to put in a hook.
 	//
-	// Reading either as "no webhook is registered" would park a healthy
-	// integration on a block nobody can clear. Answering honestly needs
-	// the instance's own hook list compared against this deployment's
-	// public base URL, and that URL is not on the integrations block at
-	// all today: every integration subcommand takes it as -public-url. So this
-	// reports what a read of the instance can actually establish, and
-	// ingress stays with the subcommand that has the URL.
+	// So an empty Hooked is not the question. [Result.NoIngress] is: the
+	// pass records whether it HAD an address, on the one deployment where
+	// a hook is how events arrive, and that is reported here. Everything
+	// else stays silent, because reading a healthy Cloud company as
+	// unhooked would park it on a block nobody can clear.
+	//
+	// The public base used to be described here as absent from the
+	// integrations block, with ingress left "to the subcommand that has
+	// the URL". It is `integrations.public_base_url`, and the reconcile
+	// loop feeds it into every pass — so the silence meant a Data Center
+	// company that never set it saw Jira reported Ready.
+	if r.NoIngress != "" {
+		out = append(out, integration.Finding{
+			Kind:    integration.FindingIngressBlocked,
+			Subject: "integrations.public_base_url",
+			Detail:  r.NoIngress,
+		})
+	}
 
 	for _, seat := range r.Seats {
 		if seat.Routes() {
