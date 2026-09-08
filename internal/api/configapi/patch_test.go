@@ -1,11 +1,15 @@
 package configapi_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // summaryHeader is what every write on this surface needs.
@@ -328,5 +332,91 @@ func TestAWriteWithNoRaceStillActivates(t *testing.T) {
 	}
 	if target.RevisionID == "" {
 		t.Error("the fleet was not pointed at the new revision")
+	}
+}
+
+// A FIELD THIS BUILD DOES NOT KNOW SURVIVES A WRITE MADE BY THIS BUILD.
+//
+// A rolling upgrade puts two builds on one coordination store, and the
+// activation pointer carries the payload — so an older node holds, byte for
+// byte, a document a NEWER peer wrote. Decoding that into this build's struct
+// and marshalling it back drops every field this build cannot represent, and
+// the older node then publishes the result as the fleet's configuration: the
+// newer peers reconcile onto it and lose settings nobody edited.
+//
+// The same rule the event envelope already keeps, and for the same reason —
+// it is a contract between PEERS, which no tag count makes optional.
+func TestAPatchKeepsFieldsThisBuildCannotRepresent(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+
+	seedWithPeerField(t, s)
+
+	patchOnly(t, s, `{"mission": "ship the thing"}`, summaryHeader)
+
+	after := s.activeDocument(t)
+	if !strings.Contains(after, "ship the thing") {
+		t.Fatalf("the patch did not apply: %s", after)
+	}
+	if !strings.Contains(after, "a_setting_from_a_newer_build") {
+		t.Errorf("a newer peer's setting was dropped by a write from this build:\n%s", after)
+	}
+}
+
+// AND A TYPO IS STILL REFUSED, even on a document a newer peer extended.
+//
+// The two rules meet here: tolerate a key the stored bytes already carried,
+// refuse one the patch invented. Read leniently across the board, the typo
+// guard would be gone; read strictly, a peer's field disables the surface.
+// What decides is where the unknown key came from.
+func TestATypoIsRefusedEvenOnAPeerExtendedDocument(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	seedWithPeerField(t, s)
+
+	res := s.do(t, http.MethodPatch, "/config",
+		`{"missionn": "ship the thing"}`, summaryHeader)
+
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("a misspelled key was accepted: %d %s", res.Code, res.Body)
+	}
+	if !strings.Contains(res.Body.String(), "missionn") {
+		t.Errorf("the refusal does not name the key that is wrong: %s", res.Body)
+	}
+}
+
+// seedWithPeerField makes the active revision a document carrying a setting
+// this build has no type for — what an older node holds after a newer peer
+// wrote one, byte for byte, through the activation pointer.
+//
+// Seeded as RAW BYTES, because the struct is precisely what cannot carry it.
+func seedWithPeerField(t *testing.T, s *surface) {
+	t.Helper()
+	cfg, err := config.ParseCompany([]byte(companyDoc))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	known, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(known, &document); err != nil {
+		t.Fatal(err)
+	}
+	document["a_setting_from_a_newer_build"] = map[string]any{"depth": 3}
+	raw, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := secrets.Seal(nil, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.configs.InsertActive(t.Context(), store.Revision{
+		Source: "peer", CreatedBy: "a newer node", Summary: "seed",
+		Payload: payload, CreatedAt: pinned,
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
 	}
 }

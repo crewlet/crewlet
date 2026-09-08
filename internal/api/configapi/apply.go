@@ -135,19 +135,28 @@ func (s *Service) Apply(ctx context.Context, req ApplyRequest) (Applied, error) 
 		return Applied{}, &RacedError{Base: req.Expect, Current: active.ID}
 	}
 
-	prior, err := s.open(active)
+	// THE STORED BYTES ARE THE MERGE BASE, never a re-marshal of them.
+	//
+	// A rolling upgrade puts two builds on one coordination store, and the
+	// activation pointer carries the payload — so an older node holds, byte
+	// for byte, a document a NEWER peer wrote. Decoding that into this
+	// build's struct and marshalling it back silently drops every field this
+	// build does not know, and the older node then publishes the result as
+	// the fleet's configuration. The newer peers reconcile onto it and lose
+	// settings nobody edited.
+	document, err := secrets.Open(s.cipher, active.Payload)
 	if err != nil {
 		return Applied{}, fmt.Errorf("configapi: open the active revision: %w", err)
 	}
-	document, err := json.Marshal(prior)
+	prior, err := config.DecodeCompany(document)
 	if err != nil {
-		return Applied{}, fmt.Errorf("configapi: encode the active revision: %w", err)
+		return Applied{}, fmt.Errorf("configapi: decode the active revision: %w", err)
 	}
 	merged, err := applyMergePatch(document, req.Patch)
 	if err != nil {
 		return Applied{}, &PatchError{Err: err}
 	}
-	incoming, err := parseDocument(merged)
+	incoming, err := readPatched(req.Patch, merged)
 	if err != nil {
 		return Applied{}, &PatchError{Err: err}
 	}
@@ -155,7 +164,71 @@ func (s *Service) Apply(ctx context.Context, req ApplyRequest) (Applied, error) 
 	if err := incoming.Validate(); err != nil {
 		return Applied{}, &ValidationError{Err: err}
 	}
-	return s.activate(ctx, incoming, active.ID, req.Summary, req.Operator)
+	// AND THE BYTES ARE WHAT IS STORED, for the same reason. Everything
+	// above worked on the full document; encoding `incoming` alone would
+	// undo it at the last step. Restoring the redacted values is the only
+	// thing that changed the struct after the merge, so its own encoding is
+	// merged BACK OVER the document — which writes the fields this build
+	// knows and leaves untouched the ones it does not.
+	restored, err := json.Marshal(incoming)
+	if err != nil {
+		return Applied{}, fmt.Errorf("configapi: encode the merged config: %w", err)
+	}
+	final, err := applyMergePatch(merged, restored)
+	if err != nil {
+		return Applied{}, fmt.Errorf("configapi: restore the merged config: %w", err)
+	}
+	return s.activateDocument(ctx, final, active.ID, req.Summary, req.Operator)
+}
+
+// readPatched reads a patched document, catching a typo the PATCH invented
+// while tolerating a field a PEER wrote.
+//
+// Both readers already state this rule and this call had it backwards.
+// [parseDocument]'s doc says its strictness "belongs here and not on the
+// stored form: this is the door a person's document comes through, and a typo
+// is a mistake to catch rather than a peer running a newer build."
+// [config.DecodeCompany]'s says rejecting an unrecognised key in a stored
+// revision "makes a mixed-version fleet an outage in the older direction."
+//
+// A merged document is BOTH at once: a person's words over bytes a peer may
+// have written. Reading it strictly refused every config write on an older
+// node the moment a newer one added a field; reading it leniently would
+// swallow the typo the strict reader exists to catch. So the two questions are
+// asked of the two inputs separately.
+//
+// THE PATCH IS ASKED ONLY ABOUT ITS KEYS. It is a fragment, so nothing else
+// the authored reader decides about it is meaningful yet: a redaction marker
+// is restored after the merge, and a shape is judged by Validate once it has
+// been. Only [config.ErrUnknownField] is a fact about the patch alone.
+func readPatched(patch, merged []byte) (*config.Company, error) {
+	cfg, err := parseDocument(merged)
+	switch {
+	case err == nil:
+		return cfg, nil
+	case !errors.Is(err, config.ErrUnknownField):
+		// Every other refusal the authored reader makes is about the
+		// merged document itself and is unchanged by any of this.
+		return nil, err
+	}
+	// The strict reader found a key it does not know. Whose is it? Ask the
+	// patch alone, and ONLY about its keys: it is a fragment, so nothing
+	// else the authored reader decides about it is meaningful yet — a
+	// redaction marker is restored after the merge, and a shape is judged
+	// by Validate once it has been.
+	if patchErr := onlyUnknownField(parseDocument(patch)); patchErr != nil {
+		return nil, patchErr
+	}
+	return config.DecodeCompany(merged)
+}
+
+// onlyUnknownField keeps an unknown-key refusal and discards every other
+// complaint about a fragment.
+func onlyUnknownField(_ *config.Company, err error) error {
+	if err != nil && errors.Is(err, config.ErrUnknownField) {
+		return err
+	}
+	return nil
 }
 
 // activate seals, stores and points the fleet at a document.
@@ -167,6 +240,24 @@ func (s *Service) Apply(ctx context.Context, req ApplyRequest) (Applied, error) 
 func (s *Service) activate(
 	ctx context.Context, company *config.Company, parent, summary, operator string,
 ) (Applied, error) {
+	document, err := json.Marshal(company)
+	if err != nil {
+		return Applied{}, fmt.Errorf("configapi: encode the config: %w", err)
+	}
+	return s.activateDocument(ctx, document, parent, summary, operator)
+}
+
+// activateDocument is [Service.activate] for a caller that already holds the
+// bytes to store.
+//
+// The two are not the same thing, and the difference is a rolling upgrade. A
+// caller that built the document itself — a revert, a reload, a bootstrap —
+// has bytes and a struct that agree by construction. A caller that MERGED one
+// has bytes carrying fields this build cannot represent, and re-encoding its
+// struct would drop exactly those.
+func (s *Service) activateDocument(
+	ctx context.Context, document []byte, parent, summary, operator string,
+) (Applied, error) {
 	if s.plane == nil {
 		// REFUSED BEFORE ANYTHING IS STORED, and here rather than in each
 		// caller: this is the one tail every write on this surface passes
@@ -174,10 +265,6 @@ func (s *Service) activate(
 		// this process cannot point the fleet at would report success for
 		// a change that takes effect nowhere.
 		return Applied{}, ErrNoControlPlane
-	}
-	document, err := json.Marshal(company)
-	if err != nil {
-		return Applied{}, fmt.Errorf("configapi: encode the config: %w", err)
 	}
 	payload, err := secrets.Seal(s.cipher, document)
 	if err != nil {
