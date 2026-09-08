@@ -1244,12 +1244,23 @@
   border-radius: var(--r-md);
   padding: var(--space-3);
 }
-.int-manifest-body {
+/* The label, the aside, and the Copy button on one line: copying is what an
+   operator does with this, and a button below the fold is one they have to
+   open it to reach. */
+.int-manifest-summary {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
   gap: var(--space-2);
-  padding-top: var(--space-3);
+  width: auto;
+}
+.int-manifest-summary > span:first-of-type {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.int-manifest > .int-manifest-text {
+  margin-top: var(--space-3);
 }
 /* IT SCROLLS RATHER THAN WRAPS. A wrapped manifest is not one a person can
    read against the app they already have, and a dialog that grew to forty

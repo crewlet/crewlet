@@ -798,23 +798,36 @@ export function SetupDialog({
                 )}
                 {seat?.manifest && (
                   <details className="int-manifest">
-                    <summary className="int-summary">
-                      App manifest for {heading}
-                      <span className="faint"> (paste this into Slack)</span>
-                    </summary>
-                    <div className="int-manifest-body">
+                    <summary className="int-summary int-manifest-summary">
+                      <Icon name="file" size="sm" />
+                      {/* NOT "for SRE Lead". The block this sits in is that
+                          agent's and carries their name two lines above, so
+                          repeating it here says nothing and pushes the words
+                          that do off the end of a narrow dialog. */}
+                      <span>
+                        App manifest
+                        <span className="faint"> (paste this into Slack)</span>
+                      </span>
+                      <span className="spacer" />
+                      {/* COPYING IT DOES NOT OPEN IT. A button inside a
+                          summary toggles the disclosure on its way through,
+                          so an operator who only wanted the text got the
+                          forty lines they were copying instead of it. */}
                       <Button
                         size="sm"
                         icon="copy"
-                        onClick={() => void navigator.clipboard?.writeText(seat.manifest ?? "")}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          void navigator.clipboard?.writeText(seat.manifest ?? "");
+                        }}
                       >
                         Copy
                       </Button>
-                      {/* READ AS WELL AS PASTED: an operator comparing this
-                          against an app they already have is reading a diff,
-                          so it scrolls rather than wrapping. */}
-                      <pre className="int-manifest-text">{seat.manifest}</pre>
-                    </div>
+                    </summary>
+                    {/* READ AS WELL AS PASTED: an operator comparing this
+                        against an app they already have is reading a diff, so
+                        it scrolls rather than wrapping. */}
+                    <pre className="int-manifest-text">{seat.manifest}</pre>
                   </details>
                 )}
                 {[...connect, ...more].map((r) => (

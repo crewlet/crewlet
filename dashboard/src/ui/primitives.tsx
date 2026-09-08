@@ -9,7 +9,7 @@
  * clicks. A typed prop cannot be forgotten.
  */
 
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, MouseEvent, ReactNode } from "react";
 import { Icon, type IconName } from "./Icon.tsx";
 
 export type Tone = "neutral" | "positive" | "caution" | "critical" | "info" | "accent";
@@ -86,7 +86,13 @@ export function Button({
   icon?: IconName;
   variant?: "default" | "primary" | "ghost" | "danger";
   size?: "md" | "sm";
-  onClick?: () => void;
+  /**
+   * The event is passed through, so a button inside an element with a
+   * default action of its own can stop it. A Copy button in a `<summary>`
+   * toggled the disclosure on its way through, giving an operator who only
+   * wanted the text the whole block they were copying instead.
+   */
+  onClick?: (event: MouseEvent<HTMLButtonElement>) => void;
   disabled?: boolean;
   title?: string;
   type?: "button" | "submit";

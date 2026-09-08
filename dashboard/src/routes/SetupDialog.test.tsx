@@ -1589,7 +1589,11 @@ test("an agent's block offers the manifest its app is built from", () => {
     />,
   );
   const block = container.querySelector("details.int-seat-form");
-  expect(block?.textContent).toContain("App manifest for SRE Lead");
+  // NOT "for SRE Lead": the block this sits in is that agent's and carries
+  // their name two lines above, so repeating it says nothing and pushes the
+  // words that do off the end of a narrow dialog.
+  expect(block?.textContent).toContain("App manifest");
+  expect(block?.textContent).not.toContain("App manifest for");
   expect(container.querySelector(".int-manifest-text")?.textContent).toContain(
     "display_information",
   );
@@ -1691,5 +1695,41 @@ test("a seat carrying a manifest shows no missing-manifest note", () => {
     />,
   );
   expect(screen.queryByText(/No app manifest/)).toBeNull();
-  expect(screen.getByText(/App manifest for SRE Lead/)).toBeDefined();
+  expect(screen.getByText(/App manifest/)).toBeDefined();
+});
+
+// COPYING THE MANIFEST DOES NOT OPEN IT.
+//
+// The button sits in the disclosure's summary, where copying is one click
+// from a folded block rather than two. A click there toggles the disclosure on
+// its way through, so an operator who only wanted the text got the forty
+// lines they were copying instead of it.
+test("copying the manifest does not toggle its disclosure", () => {
+  const written: string[] = [];
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: (t: string) => (written.push(t), Promise.resolve()) },
+  });
+  const manifest = '{\n  "display_information": {"name": "SRE Lead"}\n}';
+  const withManifest = {
+    ...perSeatTool,
+    seats: [{ ...perSeatTool.seats![0]!, manifest }],
+  };
+  const { container } = render(
+    <SetupDialog
+      sections={[{ name: "SRE Lead", tool: withManifest, seat: "sre-lead" }]}
+      title="Slack"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  const fold = container.querySelector("details.int-manifest") as HTMLDetailsElement;
+  expect(fold.open).toBe(false);
+  // THE DEFAULT IS CANCELLED, which is the actual mechanism: fireEvent
+  // reports what dispatchEvent did, and jsdom does not implement a
+  // summary's toggle, so asserting `fold.open` afterwards would pass
+  // whether or not anything prevented it.
+  const dispatched = fireEvent.click(screen.getByText("Copy"));
+  expect(written).toEqual([manifest]);
+  expect(dispatched).toBe(false);
 });
