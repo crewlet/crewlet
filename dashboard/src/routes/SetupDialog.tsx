@@ -785,6 +785,52 @@ export function SetupDialog({
                     </span>
                   </div>
                 )}
+                {/* THE APP THIS AGENT IS BUILT FROM, above the two boxes
+                    that are filled in from it, because it is the first step
+                    and the fields describe what comes back from it.
+
+                    OFFERED RATHER THAN EXPLAINED. Slack issues the
+                    credential that creates an app by hand, so an operator
+                    usually builds each agent's app themselves, and told only
+                    where to click they were reproducing seventeen scopes and
+                    five event subscriptions from a documentation table. One
+                    of them wrong is a bot that installs, reports success and
+                    sees an empty workspace. */}
+                {/* AND WHY THERE IS NONE, where there could have been one.
+                    The field below tells an operator to paste a manifest, so
+                    an empty block is an instruction pointing at what is not
+                    there, and both causes (no public address, a role name
+                    past Slack's cap) are one edit away from fixed. */}
+                {!seat?.manifest && seat?.manifest_note && (
+                  <div className="banner caution">
+                    <Icon name="alert" size="sm" />
+                    <span className="col" style={{ gap: 4 }}>
+                      <span>No app manifest for {heading} yet.</span>
+                      <span className="t-caption">{marked(seat.manifest_note)}</span>
+                    </span>
+                  </div>
+                )}
+                {seat?.manifest && (
+                  <details className="int-manifest">
+                    <summary className="int-summary">
+                      App manifest for {heading}
+                      <span className="faint"> (paste this into Slack)</span>
+                    </summary>
+                    <div className="int-manifest-body">
+                      <Button
+                        size="sm"
+                        icon="copy"
+                        onClick={() => void navigator.clipboard?.writeText(seat.manifest ?? "")}
+                      >
+                        Copy
+                      </Button>
+                      {/* READ AS WELL AS PASTED: an operator comparing this
+                          against an app they already have is reading a diff,
+                          so it scrolls rather than wrapping. */}
+                      <pre className="int-manifest-text">{seat.manifest}</pre>
+                    </div>
+                  </details>
+                )}
                 {[...connect, ...more].map((r) => (
                   <Fragment key={valueKey(section, r)}>{renderField(section, r)}</Fragment>
                 ))}

@@ -1236,6 +1236,41 @@
   padding: 0 var(--space-4) var(--space-4);
 }
 
+/* THE APP DEFINITION AN OPERATOR PASTES, inside the agent's own block.
+   FOLDED, because it is forty lines of JSON and the two boxes under it are
+   what the form is for: it is opened once per agent, at the start. */
+.int-manifest {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  padding: var(--space-3);
+}
+.int-manifest-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+}
+/* IT SCROLLS RATHER THAN WRAPS. A wrapped manifest is not one a person can
+   read against the app they already have, and a dialog that grew to forty
+   lines of JSON would push its own buttons off the screen. */
+.int-manifest-text {
+  width: 100%;
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+  padding: var(--space-3);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  white-space: pre;
+  -webkit-user-select: all;
+  user-select: all;
+}
+
 .int-row-badges {
   display: flex;
   align-items: center;

@@ -149,6 +149,30 @@ func Manifest(roleName, handle, base string) (map[string]any, error) {
 	}, nil
 }
 
+// ManifestJSON is [Manifest] as the text a person pastes into Slack.
+//
+// INDENTED, because it is read as well as pasted: an operator comparing what
+// they are about to create against what the app already has is reading a
+// diff, and one line of JSON is not one a person can diff. Slack accepts
+// either.
+//
+// It exists so the setup screen and the provisioning command share one
+// definition of what an agent's app IS. Written twice, the screen's copy
+// would drift from the one the command pushes, and the difference between
+// them is a scope or an event: a bot that reports success and hears nothing,
+// or one that sees an empty workspace.
+func ManifestJSON(roleName, handle, base string) (string, error) {
+	manifest, err := Manifest(roleName, handle, base)
+	if err != nil {
+		return "", err
+	}
+	out, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("slack: render %s's manifest: %w", handle, err)
+	}
+	return string(out), nil
+}
+
 // AuthorizeURL is where the operator clicks to install one app.
 //
 // The HANDLE rides as `state`, because the landing page has to say which

@@ -71,8 +71,15 @@ func Requirements(handle string, seat *config.Role, resolve func(string) (string
 			// followed exactly, and prose runs it into the sentence around
 			// it. The link is the first hop rather than a trailing
 			// afterthought, so the line reads in the order it is walked.
+			// THE PAGE THE TOKEN IS ON, named, which the manifest step
+			// must not cost. Creating the app from a manifest leaves an
+			// operator on Basic Information, and installing it redirects
+			// the browser to this engine's own OAuth landing page, so a
+			// line ending at "Install to Workspace" leaves them two clicks
+			// from a value with nothing saying where.
 			Help: "Navigate to [api.slack.com/apps](https://api.slack.com/apps) > " +
-				"this agent's app > `OAuth & Permissions > Install to Workspace` " +
+				"`Create New App > From an app manifest` and paste this agent's " +
+				"manifest, then `OAuth & Permissions > Install to Workspace` " +
 				"and paste the `Bot User OAuth Token` here.",
 			Blocks: integration.FindingIdentityMissing,
 		},
@@ -87,6 +94,9 @@ func Requirements(handle string, seat *config.Role, resolve func(string) (string
 			Help: "Navigate to [api.slack.com/apps](https://api.slack.com/apps) > " +
 				"this agent's app > `Basic Information > App Credentials` " +
 				"and paste the `Signing Secret` here.",
+			// SECOND, ALWAYS. The bot token's line is the one that creates
+			// the app, so this one describes a page that exists only once
+			// that has been followed.
 			Blocks: integration.FindingCredentialMissing,
 		},
 		{
@@ -161,7 +171,8 @@ func statusChoices() []setup.Choice {
 // all, so the person reading this is usually the person about to create the
 // apps themselves.
 func Summary() string {
-	return "Each agent talks in Slack as its own app, so every agent needs one " +
-		"created at api.slack.com/apps and installed to your workspace. The two " +
-		"values each agent asks for below are on that app's own pages."
+	return "Each agent talks in Slack as its own app. Every agent below carries " +
+		"the manifest its app is created from, which sets the scopes, the events " +
+		"and that agent's own delivery address; install it, and its two values " +
+		"are on the app's own pages."
 }

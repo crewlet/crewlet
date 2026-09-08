@@ -319,6 +319,36 @@ type SeatState struct {
 	InboundPath string `json:"inbound_path,omitempty"`
 	PublicURL   string `json:"public_url,omitempty"`
 
+	// Manifest is the third-party app definition this seat's own app is
+	// created from, ready to paste, for an app whose seats a person has to
+	// build by hand.
+	//
+	// THE ENGINE'S OWN, byte for byte the one `crewlet slack provision`
+	// pushes: the scopes, the events and this seat's request URL are what
+	// make an app the engine can actually use, and every one of them is a
+	// decision that lives in Go. Told to build the app themselves, an
+	// operator was being asked to reproduce seventeen scopes and five event
+	// subscriptions from a documentation table, and the failure mode of
+	// getting one wrong is a bot that reports success and sees an empty
+	// workspace.
+	//
+	// Empty where the company has no public address yet (the request URL is
+	// built from it, so a manifest without one registers deliveries
+	// nowhere), and where this build has no manifest for the app.
+	Manifest string `json:"manifest,omitempty"`
+
+	// ManifestNote is why there is no manifest, when there could have been
+	// one.
+	//
+	// A SILENT ABSENCE IS THE WORST ANSWER HERE, because the field help
+	// tells an operator to paste a manifest: a seat whose role name is
+	// longer than Slack's app-name cap, or a company with no public
+	// address, got a block with nothing in it and an instruction pointing
+	// at what was not there. Both causes are one edit away from fixed and
+	// neither is guessable, so the reason travels rather than the error
+	// being swallowed.
+	ManifestNote string `json:"manifest_note,omitempty"`
+
 	// Present is whether this seat has STARTED: something is written down
 	// for it, whether or not it works.
 	//
@@ -939,7 +969,14 @@ func seatChoices(company *config.Company, reqs []setup.Requirement) {
 // excluded, because a person's Slack account is not something this engine
 // provisions or holds a token for.
 func slackSeats(company *config.Company, resolve func(string) (string, bool)) []SeatState {
-	base := company.Integrations.WebhookBase()
+	// THROUGH THE RESOLVER, because what is built from this is COPIED INTO
+	// SLACK. `public_base_url` is a Tier B field, so it may be a whole
+	// `${VAR}` and the document stores it verbatim; read raw, the manifest
+	// an operator pastes carries `${PUBLIC_URL}/webhooks/slack/sre-lead`
+	// where an address belongs, and Slack refuses the app with nothing
+	// naming the cause. The same mistake was measured on the Atlassian
+	// pass, which sent the literal `${ATLASSIAN_ORG_ID}` to Atlassian.
+	base := webhookBase(company, resolve)
 	out := []SeatState{}
 	for role := range company.EachRole() {
 		// THROUGH THE SEAT, which is where the derivation lives: a handle
@@ -960,12 +997,45 @@ func slackSeats(company *config.Company, resolve func(string) (string, bool)) []
 			Satisfied:    len(setup.Outstanding(reqs)) == 0,
 			InboundPath:  "/webhooks/slack/" + handle,
 		}
+		// THE APP THIS SEAT IS BUILT FROM, and where there is none, why.
+		//
+		// A manifest naming no request URL is an app that receives
+		// nothing, so it is offered only once the company knows where
+		// third-party apps reach it. A refusal is ONE SEAT'S problem
+		// rather than a reason the roster fails to render (Slack caps an
+		// app name, and a long role name trips it), but it is not
+		// silence: the field help tells an operator to paste a manifest,
+		// so a block with nothing in it and no reason given is an
+		// instruction pointing at what is not there.
+		switch manifest, err := slack.ManifestJSON(role.Name, handle, base); {
+		case base == "":
+			state.ManifestNote = "no manifest yet: set integrations.public_base_url " +
+				"to the address this agent's app delivers to, as a value this " +
+				"node can read"
+		case err != nil:
+			state.ManifestNote = err.Error()
+		default:
+			state.Manifest = manifest
+		}
 		if base != "" {
 			state.PublicURL = base + state.InboundPath
 		}
 		out = append(out, state)
 	}
 	return out
+}
+
+// webhookBase is the address third-party apps reach this deployment on, as a
+// VALUE rather than as whatever the document happens to hold.
+//
+// A REFERENCE IS NOT AN ADDRESS. The field is Tier B, so `${PUBLIC_URL}` is a
+// legal way to write it and the document keeps it verbatim; everything built
+// from it here is shown to an operator or copied into a third-party app, and
+// both read the literal as the address. An unresolved reference answers
+// empty, which every caller already treats as "no address yet" and says so.
+func webhookBase(company *config.Company, resolve func(string) (string, bool)) string {
+	base := setup.Deref(company.Integrations.PublicBaseURL, resolve)
+	return strings.TrimRight(strings.TrimSpace(base), "/")
 }
 
 // repoScope is the repositories a finished seat works in.

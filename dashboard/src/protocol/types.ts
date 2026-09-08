@@ -961,6 +961,23 @@ export interface SetupSeatState {
   inbound_path?: string;
   public_url?: string;
   /**
+   * The third-party app definition this agent's own app is created from,
+   * ready to paste, for an app whose seats a person has to build by hand.
+   *
+   * The engine's own, byte for byte the one its provisioning command pushes:
+   * the scopes, the events and this seat's request URL are what make an app
+   * the engine can use. Absent where the company has no public address yet,
+   * or where the build has no manifest for the app.
+   */
+  manifest?: string;
+  /**
+   * Why there is no manifest, when there could have been one: a company with
+   * no public address, or a role name past the app's own name cap. A silent
+   * absence is the worst answer, because the field help tells an operator to
+   * paste one.
+   */
+  manifest_note?: string;
+  /**
    * The one line under this agent's name: where its own credential for this
    * app is kept, or what is missing. Only Slack has a route per seat, so
    * every other app's roster has this and no path.

@@ -1565,3 +1565,129 @@ test("an agent's block opens when its summary is clicked", () => {
     true,
   );
 });
+
+// THE APP AN AGENT IS BUILT FROM, offered rather than described.
+//
+// Slack issues the credential that creates an app by hand, so an operator
+// usually builds each agent's app themselves. Told only where to click, they
+// were reproducing seventeen scopes and five event subscriptions from a
+// documentation table, and one of them wrong is a bot that installs, reports
+// success and sees an empty workspace.
+test("an agent's block offers the manifest its app is built from", () => {
+  const withManifest = {
+    ...perSeatTool,
+    seats: [{ ...perSeatTool.seats![0]!, manifest: '{\n  "display_information": {}\n}' }],
+  };
+  const { container } = render(
+    <SetupDialog
+      sections={[{ name: "SRE Lead", tool: withManifest, seat: "sre-lead" }]}
+      title="Slack"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  const block = container.querySelector("details.int-seat-form");
+  expect(block?.textContent).toContain("App manifest for SRE Lead");
+  expect(container.querySelector(".int-manifest-text")?.textContent).toContain(
+    "display_information",
+  );
+  // INSIDE THE AGENT'S OWN BLOCK, because a per-seat app has one manifest
+  // per agent and they differ by exactly the request URL that decides whose
+  // mentions arrive where.
+  expect(block?.querySelector(".int-manifest")).not.toBeNull();
+});
+
+// A SEAT WITH NO MANIFEST OFFERS NOTHING, rather than an empty box to paste.
+// The request URL is built from the company's public address, so without one
+// there is no app definition worth pasting.
+test("an agent with no manifest is offered no manifest", () => {
+  const { container } = render(
+    <SetupDialog
+      sections={[{ name: "SRE Lead", tool: perSeatTool, seat: "sre-lead" }]}
+      title="Slack"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect(container.querySelector(".int-manifest")).toBeNull();
+  expect(screen.queryByText(/App manifest/)).toBeNull();
+});
+
+// COPYING IT IS ONE CLICK, because it is forty lines nobody selects by hand.
+test("the manifest can be copied", async () => {
+  const written: string[] = [];
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: (t: string) => (written.push(t), Promise.resolve()) },
+  });
+  const manifest = '{\n  "display_information": {"name": "SRE Lead"}\n}';
+  const withManifest = {
+    ...perSeatTool,
+    seats: [{ ...perSeatTool.seats![0]!, manifest }],
+  };
+  render(
+    <SetupDialog
+      sections={[{ name: "SRE Lead", tool: withManifest, seat: "sre-lead" }]}
+      title="Slack"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  fireEvent.click(screen.getByText("Copy"));
+  expect(written).toEqual([manifest]);
+});
+
+// A MISSING MANIFEST SAYS WHY.
+//
+// The field below it tells the operator to paste one, so a block with nothing
+// in it is an instruction pointing at what is not there. Both causes, a
+// company with no public address and a role name past Slack's app-name cap,
+// are one edit away from fixed and neither is guessable.
+test("an agent with no manifest is told why not", () => {
+  const noted = {
+    ...perSeatTool,
+    seats: [
+      {
+        ...perSeatTool.seats![0]!,
+        manifest_note: "no manifest yet: set integrations.public_base_url",
+      },
+    ],
+  };
+  const { container } = render(
+    <SetupDialog
+      sections={[{ name: "SRE Lead", tool: noted, seat: "sre-lead" }]}
+      title="Slack"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect(screen.getByText(/No app manifest for SRE Lead yet/)).toBeDefined();
+  expect(screen.getByText(/integrations.public_base_url/)).toBeDefined();
+  // AND NO EMPTY BOX to copy nothing out of.
+  expect(container.querySelector(".int-manifest")).toBeNull();
+});
+
+// A MANIFEST OUTRANKS ITS OWN ABSENCE. Both rendered would be a block saying
+// it has nothing while showing it.
+test("a seat carrying a manifest shows no missing-manifest note", () => {
+  const both = {
+    ...perSeatTool,
+    seats: [
+      {
+        ...perSeatTool.seats![0]!,
+        manifest: '{\n  "display_information": {}\n}',
+        manifest_note: "should not be shown",
+      },
+    ],
+  };
+  render(
+    <SetupDialog
+      sections={[{ name: "SRE Lead", tool: both, seat: "sre-lead" }]}
+      title="Slack"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect(screen.queryByText(/No app manifest/)).toBeNull();
+  expect(screen.getByText(/App manifest for SRE Lead/)).toBeDefined();
+});

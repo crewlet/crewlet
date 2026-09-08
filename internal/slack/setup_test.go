@@ -1,6 +1,8 @@
 package slack_test
 
 import (
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -72,8 +74,20 @@ func TestTheTwoSlackCredentialsNameDifferentPages(t *testing.T) {
 	reqs := byField(slack.Requirements("sre-lead", nil, nil))
 
 	bot, secret := reqs["bot_token"].Help, reqs["signing_secret"].Help
+	// THE APP IS CREATED ON THIS LINE, and from the manifest rather than
+	// from scratch: an app built by hand has no scopes, no events and no
+	// request URL, so installing it hands back a token that reports success
+	// and sees an empty workspace.
+	if !strings.Contains(bot, "`Create New App > From an app manifest`") {
+		t.Errorf("the bot token does not say to create the app from its manifest: %q", bot)
+	}
+	// AND THE PAGE IT IS DISPLAYED ON. Install to Workspace lives there
+	// too, but the value is what the operator came for: creating the app
+	// from a manifest leaves them on Basic Information, and installing it
+	// redirects the browser away from Slack entirely, so a line that names
+	// no page leaves them hunting through four of them.
 	if !strings.Contains(bot, "`OAuth & Permissions > Install to Workspace`") {
-		t.Errorf("the bot token does not name the page it is minted on: %q", bot)
+		t.Errorf("the bot token does not name the page it is displayed on: %q", bot)
 	}
 	if !strings.Contains(secret, "`Basic Information > App Credentials`") {
 		t.Errorf("the signing secret does not name the page it is on: %q", secret)
@@ -95,5 +109,64 @@ func TestTheDefaultChannelNamesTheInviteRatherThanAPath(t *testing.T) {
 	}
 	if !strings.Contains(channel.Help, "Invite") {
 		t.Errorf("the channel never mentions the invite the bot needs: %q", channel.Help)
+	}
+}
+
+// THE MANIFEST IS THE ENGINE'S OWN, so the app a person builds by hand and
+// the app the provisioning command pushes are the same app.
+//
+// Seventeen scopes and five event subscriptions decide whether an agent can
+// hear anything, and every one of them is a decision that lives in Go. A
+// screen that asked an operator to reproduce them from a table would be
+// asking them to get one wrong, and the failure mode is a bot that reports
+// success and sees an empty workspace.
+func TestASeatsManifestIsTheOneTheProvisionerPushes(t *testing.T) {
+	t.Parallel()
+	const base = "https://engine.example.com"
+
+	text, err := slack.ManifestJSON("SRE Lead", "sre-lead", base)
+	if err != nil {
+		t.Fatalf("ManifestJSON: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(text), &got); err != nil {
+		t.Fatalf("the manifest is not JSON a person could paste: %v", err)
+	}
+	want, err := slack.Manifest("SRE Lead", "sre-lead", base)
+	if err != nil {
+		t.Fatalf("Manifest: %v", err)
+	}
+	// THROUGH JSON BOTH WAYS, because that is what the comparison is about:
+	// the text an operator pastes has to decode to the structure the
+	// command sends, not merely be built beside it.
+	round, _ := json.Marshal(want)
+	var expect map[string]any
+	_ = json.Unmarshal(round, &expect)
+	if !reflect.DeepEqual(got, expect) {
+		t.Error("the pasted manifest and the pushed one are different apps")
+	}
+
+	// AND IT IS READ, not only pasted: an operator comparing it against an
+	// app they already have is reading a diff, and one line of JSON is not
+	// one a person can diff.
+	if !strings.Contains(text, "\n") {
+		t.Error("the manifest is one line, which nobody can read or diff")
+	}
+
+	// THIS SEAT'S OWN ADDRESS. A per-seat app has a route per agent, so a
+	// manifest carrying somebody else's would deliver this agent's mentions
+	// to another seat's inbox.
+	if !strings.Contains(text, base+"/webhooks/slack/sre-lead") {
+		t.Errorf("the manifest does not carry this seat's request URL:\n%s", text)
+	}
+}
+
+// A NAME SLACK WOULD REFUSE IS REFUSED HERE, rather than pasted and rejected
+// in a browser with a message about a field the operator never typed.
+func TestAManifestForAnUnusableNameIsRefused(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("a really long role name ", 10)
+	if _, err := slack.ManifestJSON(long, "sre-lead", "https://engine.example.com"); err == nil {
+		t.Error("a role name Slack caps produced a manifest anyway")
 	}
 }

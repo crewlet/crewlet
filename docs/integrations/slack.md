@@ -26,8 +26,11 @@ API, which authenticates with an app configuration token Slack issues only by
 hand from its own pages, and which your organisation may not permit at all.
 Where those tokens are available, [`crewlet slack provision`](#automated-setup-crewlet-slack-provision)
 below remains the automated path and does the whole thing. Where they are not,
-create each app by hand as the [manual setup](#manual-setup) describes, install
-it to the workspace, and wire it up from the dashboard.
+connect Slack from the dashboard's Integrations screen: every agent gets its
+own block there carrying the manifest its app is created from, so building each
+app is a copy, a paste into Slack's **From an app manifest** flow, an install,
+and the two values pasted back. See the [manual setup](#manual-setup) for the
+same steps done entirely by hand.
 
 ## Configure in YAML
 
@@ -212,14 +215,18 @@ Bot events: `app_mention`, `message.channels`, `message.groups`, `message.im`, `
 
 ## Manual Setup
 
-The click-through equivalent of the provisioner — useful when you can't (or don't want to) use configuration tokens.
+The click-through equivalent of the provisioner, for when you cannot (or do not want to) use configuration tokens.
+
+**Do this from the Integrations screen if you can.** Connect Slack there and every agent gets its own block carrying **the manifest its app is created from**: the same definition `crewlet slack provision` pushes, with that agent's scopes, events and request URL already in it. Copy it, paste it into Slack, install, and paste the two values back. That is Steps 1 to 3 below in one paste, and it removes the failure this section's hand-built path invites, which is a single missing scope (see the [cache note](#bot-scopes-and-events)) turning into a bot that installs, reports success and sees an empty workspace.
+
+The steps below are the same thing done by hand.
 
 ### Step 1: Create a Slack App Per Agent
 
 For each agent that will use Slack, create a dedicated Slack app:
 
 1. Go to [api.slack.com/apps](https://api.slack.com/apps) and click **Create New App**
-2. Choose **From scratch**
+2. Choose **From an app manifest**, and paste that agent's manifest from the Integrations screen. Steps 2 and 3 are then already done, and you can skip to installing it. Choosing **From scratch** instead leaves the scopes, the events and the request URL for you to set by hand, which is the rest of this section.
 3. Name it after the agent (e.g., "Crewlet Engineer", "Crewlet Designer")
 4. Select your workspace and click **Create App**
 
@@ -229,7 +236,7 @@ For each app:
 
 1. Go to **OAuth & Permissions** in the sidebar
 2. Under **Bot Token Scopes**, add **every** scope from the [table above](#bot-scopes-and-events)
-3. Click **Install to Workspace** — or **Reinstall to Workspace** if you added scopes to an existing app (new scopes only take effect on a freshly minted token, so adding a scope without reinstalling changes nothing)
+3. Click **Install to Workspace**, or **Reinstall to Workspace** if you added scopes to an existing app (new scopes only take effect on a freshly minted token, so adding a scope without reinstalling changes nothing)
 4. Copy the **Bot User OAuth Token** (`xoxb-...`)
 5. Go to **Basic Information** > **App Credentials** and copy the **Signing Secret**
 
@@ -246,7 +253,7 @@ For each app:
 3. Subscribe to bot events: `app_mention`, `message.channels`, `message.groups`, `message.im`, `message.mpim`
 4. Click **Save Changes**
 
-Then export each `SLACK_BOT_TOKEN_*` / `SLACK_SIGNING_SECRET_*` pair (or put them in `.env`) under the names your YAML references.
+Then paste each pair into that agent's block on the Integrations screen, or export them as `SLACK_BOT_TOKEN_*` / `SLACK_SIGNING_SECRET_*` (or put them in `.env`) under the names your YAML references.
 
 > **The `signing_secret` is what makes the endpoint usable.** `/webhooks/slack/{handle}` is
 > exempt from the API's bearer token because it verifies Slack's own signature instead — so
