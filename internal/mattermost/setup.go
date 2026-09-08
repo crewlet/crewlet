@@ -91,17 +91,16 @@ func AdminCredential(stored string) setup.Requirement {
 		Required:   true,
 		Present:    stored != "",
 		Stored:     stored,
-		// THE LINK IS BUILT FROM THE INSTANCE BOX, because a self-hosted
-		// app has no address this engine could know: `{url}` is filled
-		// from what is typed above it, so the link follows the field as
-		// somebody fills it in and is dropped entirely until they do.
+		// A PATH, NOT A LINK. Mattermost serves its whole web app from one
+		// route and opens user settings as a modal, so there is no address
+		// for this page: every candidate answers 200 with the same
+		// document, and an anchor claiming to go there would land
+		// somewhere else and say nothing about it.
 		//
-		// IT OPENS THE INSTANCE, not a settings path. Mattermost serves
-		// its whole web app from one route and opens user settings as a
-		// modal, so there is no address for this page: every candidate
-		// path answers 200 with the same document. A link claiming to go
-		// there would land somewhere else and say nothing about it.
-		Help: "Navigate to [Profile > Security > Personal Access Tokens]({url}) " +
+		// So it is carried in words, in the face this screen gives a
+		// literal: a menu path is a thing to follow exactly, and prose
+		// runs it into the sentence around it.
+		Help: "Navigate to `Profile > Security > Personal Access Tokens` " +
 			"and create a token.",
 	}
 }
