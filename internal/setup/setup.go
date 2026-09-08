@@ -224,6 +224,21 @@ type Requirement struct {
 	// not.
 	Mintable bool `json:"mintable,omitempty"`
 
+	// Shape is what a minted value has to LOOK like, for the fields where
+	// the third-party app accepts one form and no other.
+	//
+	// A MINT THAT IGNORES THIS IS A CREDENTIAL THE ENGINE'S OWN VERIFIER
+	// REJECTS, and every path that would catch it is closed by
+	// construction: the mint writes into the secret store, the document
+	// gets a `${VAR}`, and a reference is the one thing config validation
+	// cannot check the shape of, because the reference is all that layer
+	// ever sees. So GitLab was connected from the dashboard with a signing
+	// secret that could not be an HMAC key for any delivery, its route
+	// answered 503 to every one, and nothing anywhere said why.
+	//
+	// Empty is [ShapeToken], which is every field but one.
+	Shape Shape `json:"shape,omitempty"`
+
 	// Help is one sentence on what the value is for.
 	Help string `json:"help,omitempty"`
 

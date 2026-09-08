@@ -29,6 +29,15 @@ company mid-edit.
 
 See [Running the provisioning pass](../reference/api-endpoints.md#running-the-provisioning-pass).
 
+**The signing secret is generated, and its shape is not a formality.** GitLab
+computes the HMAC over the *decoded* bytes of a `whsec_` value and accepts no
+other form, so a secret of any other shape cannot match a delivery it will
+then refuse. Nothing downstream catches one: the value goes to the secret
+store and the document gets a `${VAR}`, which is the one thing config
+validation cannot check the shape of, because the reference is all that layer
+ever sees. Both the dashboard and `crewlet gitlab provision` mint the same
+shape, and GitLab's own Generate button produces it too.
+
 ## Configuration
 
 The top-level `integrations.gitlab` block is **non-tool config** — it enables inbound webhook handling and boot-time identity registration:
@@ -38,7 +47,7 @@ integrations:
   gitlab:
     enabled: true
     url: "https://gitlab.com"                   # instance base URL — REQUIRED
-    signing_secret: "${GITLAB_SIGNING_SECRET}"  # whsec_<base64 of 32 bytes> — the hook's signing token — REQUIRED
+    signing_secret: "${GITLAB_SIGNING_SECRET}"  # whsec_<base64 of 32 bytes>, the hook's signing token, REQUIRED
     token: "${GITLAB_ENGINE_TOKEN}"             # optional read credential → participants-based routing
     provisioning:                # consumed ONLY by `crewlet gitlab provision`, ignored by the engine
       group: nimbus-hq           # top-level group the agent service accounts join

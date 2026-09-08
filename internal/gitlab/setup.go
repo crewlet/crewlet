@@ -63,9 +63,14 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 			// delivery, however non-empty. A person typing one would get
 			// it wrong.
 			Mintable: true,
-			Help:     "Signs every delivery, and has a shape, so the engine generates it.",
-			Format:   "whsec_ then standard base64 of a 32-byte key",
-			Blocks:   integration.FindingCredentialMissing,
+			// AND IT IS THE ONE FIELD WITH A SHAPE. GitLab accepts this
+			// in exactly one form and computes its HMAC over the decoded
+			// bytes, so a plain token here is a secret that cannot match
+			// any delivery: see [setup.ShapeSigningKey].
+			Shape:  setup.ShapeSigningKey,
+			Help:   "Signs every delivery, and has a shape, so the engine generates it.",
+			Format: "whsec_ then standard base64 of a 32-byte key",
+			Blocks: integration.FindingCredentialMissing,
 		},
 		{
 			Field:      "provisioning.group",

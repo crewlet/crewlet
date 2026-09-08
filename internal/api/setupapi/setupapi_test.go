@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/whsec"
 )
 
 var pinned = time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
@@ -1239,4 +1240,74 @@ func TestASealWithNoKeyringSaysWhatToSet(t *testing.T) {
 	if hint, _ := body["hint"].(string); !strings.Contains(hint, "secrets.keys") {
 		t.Errorf("hint = %q, want it to name what to set", hint)
 	}
+}
+
+// A MINTED SECRET IS ONE THE ENGINE'S OWN VERIFIER ACCEPTS.
+//
+// GitLab computes its HMAC over the DECODED bytes of a `whsec_` value and
+// accepts no other shape, so a plain token there is a secret that cannot
+// match any delivery. Every check that would have caught it is closed by
+// construction: the mint writes into the secret store and the document gets a
+// `${VAR}`, which is the one thing config validation cannot check the shape
+// of, because the reference is all that layer ever sees.
+//
+// So GitLab was connected from the dashboard, its route answered 503 to every
+// delivery for ever, and the only thing on screen was "secret unresolved"
+// against a secret that was present and had been minted seconds earlier.
+func TestAMintedSigningSecretIsOneGitLabCouldHaveSigned(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+
+	res := s.do(t, http.MethodPost, "/setup/integrations/gitlab/inputs", `{
+		"values": {"url": "https://gitlab.com", "provisioning.group": "acme",
+		           "admin_token": "glpat-x"},
+		"generate": ["signing_secret"]
+	}`, nil)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("connect = %d: %s", res.Code, res.Body)
+	}
+
+	minted, held := s.vault.get("GITLAB_SIGNING_SECRET")
+	if !held {
+		t.Fatal("nothing was sealed for the signing secret")
+	}
+	if !whsec.Valid(minted) {
+		t.Fatalf("the engine minted a signing secret its own verifier rejects, "+
+			"so every delivery would be refused: %d characters, prefix %q",
+			len(minted), firstRunes(minted, 6))
+	}
+}
+
+// AND EVERY OTHER MINTABLE FIELD STILL GETS A PLAIN TOKEN, which is what a
+// third-party app comparing a shared secret verbatim wants: a shape nobody
+// asked for would be this engine inventing a contract.
+func TestAMintedTokenIsAPlainSharedSecret(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+
+	res := s.do(t, http.MethodPost, "/setup/integrations/github/inputs", `{
+		"values": {"provisioning.org": "acme"},
+		"generate": ["webhook_secret"]
+	}`, nil)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("connect = %d: %s", res.Code, res.Body)
+	}
+	minted, held := s.vault.get("GITHUB_WEBHOOK_SECRET")
+	if !held || minted == "" {
+		t.Fatal("nothing was sealed for the webhook secret")
+	}
+	if strings.HasPrefix(minted, "whsec_") {
+		t.Errorf("a shared token was minted in GitLab's signing shape: %q", minted)
+	}
+}
+
+// firstRunes is the head of a value, for an error that must not carry the
+// whole of a credential even when that credential is unusable.
+func firstRunes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }

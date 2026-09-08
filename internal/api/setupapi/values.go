@@ -48,7 +48,11 @@ func mintInto(values map[string]string, reqs []setup.Requirement, generate []str
 			return fmt.Errorf(
 				"%s was both supplied and asked to be generated; send one or the other", field)
 		}
-		values[field] = mint()
+		minted, err := r.Shape.Mint(mint)
+		if err != nil {
+			return fmt.Errorf("generate %s: %w", field, err)
+		}
+		values[field] = minted
 	}
 	return nil
 }
@@ -60,6 +64,14 @@ func mintInto(values map[string]string, reqs []setup.Requirement, generate []str
 // where every token this mints ends up. The same generator the provisioning
 // passes already use, so a token minted from the dashboard and one minted
 // from the CLI are the same kind of thing.
+//
+// NOT EVERY MINTABLE FIELD TAKES ONE. A field the third-party app accepts in
+// exactly one form says so with [setup.Requirement.Shape], and this is what
+// the rest get. Minting a token into GitLab's signing secret produced a value
+// that could not be the HMAC key for any delivery, and every check that would
+// have caught it is closed by construction: the value goes to the secret
+// store and the document gets a `${VAR}`, which is the one thing config
+// validation cannot check the shape of.
 func mint() string { return rand.Text() }
 
 // refuseEmpty rejects a submission that clears a required field.
