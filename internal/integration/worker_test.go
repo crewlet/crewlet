@@ -397,8 +397,8 @@ func TestOrderIsCanonicalNotRegistrationOrder(t *testing.T) {
 	w, err := New(Options{
 		Store: newStore(),
 		Registrations: []Registration{
-			{Reconciler: &fakeReconciler{kind: KindDatadog}},
 			{Reconciler: &fakeReconciler{kind: KindSlack}},
+			{Reconciler: &fakeReconciler{kind: KindDatadog}},
 			{Reconciler: &fakeReconciler{kind: KindGitHub}},
 		},
 	})
@@ -704,19 +704,19 @@ func waitForPasses(t *testing.T, r *fakeReconciler, n int) {
 
 // A PASS STAMPS THE ADDRESS ONLY WHERE IT IS THE THING KEEPING IT CURRENT.
 //
-// Datadog's pass provisions accounts and its webhook URL is a field a person
-// typed into a settings page. A pass that stamped the base it ran against
-// would be claiming the third-party app had been told about an address nobody
-// has told it about, which turns the one warning an operator gets about a
-// moved public base into a card reporting Connected.
+// Slack's Request URL is a field a person typed into a settings page. A pass
+// that stamped the base it ran against would be claiming the third-party app
+// had been told about an address nobody has told it about, which turns the
+// one warning an operator gets about a moved public base into a card
+// reporting Connected.
 func TestOnlyAnEngineRegisteredAddressIsStampedByAPass(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	const base = "https://now.example.com"
 	const stale = "https://old.example.com"
 
-	// The address a person set Datadog up against, already on the row.
+	// The address a person set Slack up against, already on the row.
 	store := newStore(
-		State{Kind: KindDatadog, Endpoint: stale},
+		State{Kind: KindSlack, Endpoint: stale},
 		// A row an earlier build stamped on a surface with no inbound
 		// address at all.
 		State{Kind: KindMattermost, Endpoint: stale},
@@ -724,7 +724,7 @@ func TestOnlyAnEngineRegisteredAddressIsStampedByAPass(t *testing.T) {
 	w, err := New(Options{
 		Registrations: []Registration{
 			{Reconciler: &fakeReconciler{kind: KindGitLab}},
-			{Reconciler: &fakeReconciler{kind: KindDatadog}},
+			{Reconciler: &fakeReconciler{kind: KindSlack}},
 			{Reconciler: &fakeReconciler{kind: KindMattermost}},
 		},
 		Store:    store,
@@ -739,8 +739,8 @@ func TestOnlyAnEngineRegisteredAddressIsStampedByAPass(t *testing.T) {
 	if got := store.get(t, KindGitLab).Endpoint; got != base {
 		t.Errorf("gitlab endpoint = %q, want %q: its pass registers the hook", got, base)
 	}
-	if got := store.get(t, KindDatadog).Endpoint; got != stale {
-		t.Errorf("datadog endpoint = %q, want %q left alone: only a person "+
+	if got := store.get(t, KindSlack).Endpoint; got != stale {
+		t.Errorf("slack endpoint = %q, want %q left alone: only a person "+
 			"can move an address they typed at the third-party app", got, stale)
 	}
 	if got := store.get(t, KindMattermost).Endpoint; got != "" {

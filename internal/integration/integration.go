@@ -141,17 +141,23 @@ const (
 
 // Ingress reports who maintains this surface's inbound address.
 //
-// GitHub, GitLab, Jira and Confluence all expose an API for registering a
-// hook, and each one's pass does. Slack's Request URL and Datadog's webhook
-// URL are fields on a settings page with no write API behind them, so both
-// hold whatever address a person last typed. Mattermost is reached over a
+// GitHub, GitLab, Jira, Confluence and Datadog all expose an API for
+// registering their delivery address, and each one's pass uses it. Slack's
+// Request URL is a field on a settings page with no write API behind it, so
+// it holds whatever address a person last typed. Mattermost is reached over a
 // websocket this engine dials out on and Atlassian only ever provisions
 // identities, so neither has an inbound address to go stale.
+//
+// DATADOG WAS OPERATOR-OWNED AND IS NOT ANY MORE. Its webhook definition is
+// writable through the same organization credential pair the block already
+// carries for provisioning identities, and config validation now refuses an
+// enabled block without one — so there is no longer a shape in which a person
+// is the one holding that address.
 func (k Kind) Ingress() Ingress {
 	switch k {
-	case KindGitHub, KindGitLab, KindJira, KindConfluence:
+	case KindGitHub, KindGitLab, KindJira, KindConfluence, KindDatadog:
 		return IngressEngine
-	case KindSlack, KindDatadog:
+	case KindSlack:
 		return IngressOperator
 	default:
 		return IngressNone

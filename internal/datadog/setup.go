@@ -8,17 +8,18 @@ import (
 
 // What an operator has to supply before monitor alerts reach a seat.
 //
-// Datadog is the one surface here where "ready" is reachable purely by
-// collecting inputs. The engine calls no Datadog API, creates nothing, and
-// has no provisioner: it serves a route, checks a shared token, and routes by
-// a tag the operator puts on their own monitors. So every requirement below
-// is either something a person pastes into Datadog's own webhook form, or
-// something the engine can generate.
+// The engine does the rest of the wiring itself: with the organization
+// credential pair below it registers the webhook definition at Datadog,
+// points it at this deployment, writes the payload template the route
+// decodes and attaches the shared token as a header. What is left for a
+// person is the half only they can do, which is naming that webhook in the
+// monitors they want an agent woken by.
 //
-// The webhook URL is deliberately NOT a requirement. It is not an input at
-// all: it is `<public_base_url>/webhooks/datadog`, which the setup surface
-// shows the operator to copy. Modelling it as a field would invite somebody
-// to type a different one, which the engine would store and never serve.
+// The webhook URL is deliberately NOT a requirement, and now for a stronger
+// reason than before: it is not an input at all but `<public_base_url>` plus
+// the inbound path, and the engine WRITES it at Datadog on every pass.
+// Modelling it as a field would invite somebody to type one the next
+// reconcile would overwrite.
 
 // Requirements says what this company still needs for Datadog.
 //
@@ -37,14 +38,14 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 
 	reqs := []setup.Requirement{
 		{
-			// THE PROVISIONING HALF, and every field in it is optional
-			// on purpose. A company that pastes the engine's address
-			// into Datadog's own webhook form needs none of it: alerts
-			// arrive and route with the three fields above alone, which
-			// is the whole of what this integration was before the
-			// engine could call Datadog back. Filling these in is
-			// asking for something more — an identity per agent — and
-			// leaving them empty must not report a company incomplete.
+			// THE ORGANIZATION CREDENTIALS, and they are what makes
+			// every other field here work. They register the webhook
+			// that carries the alerts and they create each agent's
+			// account: an enabled block without them serves a route,
+			// checks a token and receives nothing, because nothing at
+			// Datadog was ever told this deployment exists. Config
+			// validation refuses that shape rather than reporting it
+			// connected.
 			Field:      "site",
 			Label:      "Datadog region",
 			Kind:       setup.KindChoice,
@@ -110,11 +111,33 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			// against whatever the config names. There is nothing to
 			// agree with, so asking a person to invent one is asking
 			// them to invent a password.
-			Mintable:  true,
-			Help:      "Datadog signs nothing, so this token is the whole check on a delivery.",
-			Where:     "Paste it into the Datadog webhook's X-Crewlet-Token header.",
+			Mintable: true,
+			Help: "Datadog signs nothing, so this token is the whole check " +
+				"on a delivery. The engine attaches it to the webhook it " +
+				"registers; nothing has to be pasted anywhere.",
 			VendorURL: "https://app.datadoghq.com/integrations/webhooks",
 			Blocks:    integration.FindingCredentialMissing,
+		},
+		{
+			// THE ONE THING A PERSON STILL HAS TO WRITE DOWN AT DATADOG.
+			// The engine keeps the definition; a monitor reaches it only
+			// by naming it, so the form's job here is to tell the
+			// operator the handle rather than to collect a value.
+			//
+			// Nameable because the name is Datadog's primary key for a
+			// webhook: one organization watched by a staging deployment
+			// and a production one needs two, or each rewrites the
+			// other's address on every pass.
+			Field:      "webhook_name",
+			Label:      "Webhook name",
+			Kind:       setup.KindText,
+			ConfigPath: "integrations.datadog.webhook_name",
+			Required:   false,
+			Default:    DefaultWebhookName,
+			Help: "The engine registers this webhook at Datadog. Add " +
+				"\"@webhook-{webhook_name}\" to any monitor whose alerts " +
+				"an agent should see.",
+			VendorURL: "https://app.datadoghq.com/integrations/webhooks",
 		},
 		{
 			Field:      "handle_tag",
@@ -163,6 +186,10 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 		},
 	}
 
+	var webhookName string
+	if in != nil {
+		webhookName = in.WebhookName
+	}
 	var site, apiKey, appKey string
 	if in != nil && in.Provisioning != nil {
 		site, apiKey, appKey = in.Provisioning.Site, in.Provisioning.APIKey, in.Provisioning.AppKey
@@ -182,6 +209,7 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 		"app_key":       {raw: appKey, sealed: true},
 		"enabled":       {toggle: true},
 		"webhook_token": {raw: token, sealed: true},
+		"webhook_name":  {raw: webhookName},
 		"handle_tag":    {raw: handleTag},
 		"route_to":      {raw: routeTo},
 	}
@@ -215,7 +243,8 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 // A company can have the second without the first, which is what the
 // sentence has to leave room for.
 func Summary() string {
-	return "Each agent gets its own Datadog account, so it owns what it builds. " +
+	return "Crewlet registers a webhook at Datadog and gives each agent its own " +
+		"account, so alerts arrive and every agent owns what it builds. " +
 		"Connecting takes keys from someone who can manage users and roles."
 }
 

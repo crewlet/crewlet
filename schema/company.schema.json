@@ -227,6 +227,10 @@
           "description": "Handle of the seat an alert naming no owner wakes; required when enabled.",
           "type": "string"
         },
+        "webhook_name": {
+          "description": "Name of the webhook the engine keeps at Datadog; monitors name it as @webhook-\u003cname\u003e (default crewlet).",
+          "type": "string"
+        },
         "webhook_token": {
           "description": "Shared token compared against X-Crewlet-Token; required when enabled.",
           "type": "string"

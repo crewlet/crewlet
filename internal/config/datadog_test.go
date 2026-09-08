@@ -38,14 +38,57 @@ func TestDatadogRequiresItsToken(t *testing.T) {
 	}
 }
 
+// AND THE KEYS THAT REGISTER THE WEBHOOK ARE REQUIRED TOO.
+//
+// Datadog posts to whatever URL its Webhooks integration holds, and the
+// engine writes that URL with this credential pair. An enabled block without
+// them serves a route, checks a token, reports itself connected and receives
+// nothing, because nothing at Datadog was ever told this deployment exists.
+func TestDatadogRequiresTheKeysThatRegisterItsWebhook(t *testing.T) {
+	t.Parallel()
+	err := validateIntegrationDoc(t, "datadog",
+		"    enabled: true\n    webhook_token: \"whsec_x\"\n    route_to: sre-lead")
+	if err == nil {
+		t.Fatal("an enabled Datadog block with no provisioning keys was accepted")
+	}
+	if !strings.Contains(err.Error(), "provisioning") {
+		t.Errorf("error %q does not name the field", err)
+	}
+}
+
 // A complete block validates, so the rules above are requirements rather than
 // a refusal of everything.
 func TestACompleteDatadogBlockValidates(t *testing.T) {
 	t.Parallel()
-	err := validateIntegrationDoc(t, "datadog",
-		"    enabled: true\n    webhook_token: \"whsec_x\"\n    route_to: sre-lead")
+	err := validateIntegrationDoc(t, "datadog", completeDatadog)
 	if err != nil {
 		t.Fatalf("a complete Datadog block was refused: %v", err)
+	}
+}
+
+// completeDatadog is a block with every requirement answered.
+const completeDatadog = `    enabled: true
+    webhook_token: "whsec_x"
+    route_to: sre-lead
+    provisioning:
+      site: datadoghq.com
+      api_key: "${DD_API_KEY}"
+      app_key: "${DD_APP_KEY}"`
+
+// A WEBHOOK NAME BECOMES A HANDLE, and any of these characters ends that
+// handle early: a monitor naming "@webhook-my hook" reaches nobody.
+func TestDatadogRefusesAWebhookNameThatCannotBeAHandle(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"my hook", "crew@let", "a,b"} {
+		err := validateIntegrationDoc(t, "datadog",
+			completeDatadog+"\n    webhook_name: \""+name+"\"")
+		if err == nil {
+			t.Errorf("webhook_name %q was accepted", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "webhook_name") {
+			t.Errorf("error %q does not name the field", err)
+		}
 	}
 }
 

@@ -384,6 +384,12 @@ func (p *datadogPass) Run(ctx context.Context, in setup.PassInput) ([]integratio
 	}
 	res, err := datadog.Reconcile(ctx, datadog.Options{
 		Client: client, Config: cfg, Plan: plan, Creds: creds, Sink: in.Sink,
+		// THE INBOUND HALF. Supplying the base IS the permission to
+		// register the webhook, on the same terms as every other surface,
+		// and the token is what the definition carries so the route it
+		// posts to accepts the delivery.
+		WebhookBase:  in.WebhookBase,
+		WebhookToken: strings.TrimSpace(env.Value(cfg.WebhookToken)),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: datadog pass: %w", err)
@@ -398,18 +404,16 @@ func (p *datadogPass) Teardown(ctx context.Context, in setup.TeardownInput) erro
 	if cfg == nil || cfg.Provisioning == nil {
 		return nil
 	}
-	if !in.RemoveSeats {
-		// Datadog holds no webhook this engine registered, so with the
-		// accounts staying there is nothing to do at all.
-		return nil
-	}
 	env := p.engine.resolver()
 	client, err := datadog.NewClient(datadog.ClientOptions{Site: cfg.Provisioning.Site})
 	if err != nil {
 		return fmt.Errorf("engine: datadog teardown: %w", err)
 	}
+	// THE PLAN IS ONLY THE ACCOUNTS' HALF, so a company whose roster
+	// cannot be planned still has its webhook withdrawn: the definition is
+	// named by the config alone.
 	plan, err := datadog.PlanFor(company.Org, cfg)
-	if err != nil {
+	if err != nil && in.RemoveSeats {
 		return fmt.Errorf("engine: datadog teardown: %w", err)
 	}
 	return datadog.Teardown(ctx, datadog.TeardownOptions{

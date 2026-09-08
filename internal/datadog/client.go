@@ -444,3 +444,97 @@ func (c *Client) ListAppKeys(ctx context.Context, creds Credentials, accountID s
 func (c *Client) DisableUser(ctx context.Context, creds Credentials, userID string) error {
 	return c.do(ctx, http.MethodDelete, "/api/v2/users/"+url.PathEscape(userID), creds, nil, nil)
 }
+
+// webhookPath is the Webhooks integration's configuration collection.
+//
+// THERE IS NO LIST ROUTE. Datadog answers a GET on the collection with 405,
+// so a webhook is only ever addressed by name: convergence reads the one name
+// this company owns rather than diffing a set, and a webhook somebody else
+// made under another name is invisible here, which is the correct blindness.
+const webhookPath = "/api/v1/integration/webhooks/configuration/webhooks"
+
+// Webhook is one entry in Datadog's Webhooks integration.
+//
+// It is the whole of the inbound half: a monitor whose message names
+// `@webhook-<Name>` is posted to URL with Payload rendered into its body and
+// CustomHeaders attached, and nothing else at Datadog decides whether an
+// alert reaches this engine.
+type Webhook struct {
+	// Name is the primary key AND the handle an operator writes in a
+	// monitor message. Renaming one is therefore not an edit but a new
+	// webhook plus every monitor that named the old one going nowhere.
+	Name string `json:"name"`
+
+	// URL is where Datadog posts, which is this deployment's public base
+	// plus the inbound path.
+	URL string `json:"url"`
+
+	// Payload is the body template Datadog renders. Empty means Datadog
+	// posts NOTHING, which is why [WebhookPayload] is written here rather
+	// than left to a default that does not exist.
+	Payload string `json:"payload,omitempty"`
+
+	// CustomHeaders is a JSON object ENCODED AS A STRING, which is
+	// Datadog's own shape for the field rather than a choice made here.
+	// It carries the shared token, and Datadog hands it back in full on a
+	// read: anyone holding an application key for this organization can
+	// read the token, so it is a delivery check rather than a secret in
+	// the sense the sealed store means.
+	CustomHeaders string `json:"custom_headers,omitempty"`
+
+	// EncodeAs is "json" or "form". Always json here: the route parses a
+	// JSON body, and a form-encoded delivery arrives as a body the parser
+	// reads as empty.
+	EncodeAs string `json:"encode_as,omitempty"`
+}
+
+// Webhook reads one webhook definition by name.
+//
+// THREE-VALUED, and the third value is the point: a webhook that is absent is
+// something to create, and a read that failed is not. Collapsing the two into
+// an empty struct would have a rate-limited pass create a second definition
+// over a healthy one on every tick.
+func (c *Client) Webhook(
+	ctx context.Context, creds Credentials, name string,
+) (Webhook, bool, error) {
+	var out Webhook
+	err := c.do(ctx, http.MethodGet,
+		webhookPath+"/"+url.PathEscape(name), creds, nil, &out)
+	switch {
+	case err == nil:
+		return out, true, nil
+	case Status(err) == http.StatusNotFound:
+		return Webhook{}, false, nil
+	default:
+		return Webhook{}, false, err
+	}
+}
+
+// CreateWebhook registers a new definition.
+func (c *Client) CreateWebhook(ctx context.Context, creds Credentials, hook Webhook) error {
+	return c.do(ctx, http.MethodPost, webhookPath, creds, hook, nil)
+}
+
+// UpdateWebhook rewrites the definition named by hook.Name.
+//
+// The WHOLE shape is sent rather than the fields that differ: Datadog's
+// update takes the same body as its create, and a partial write is how the
+// payload template survives an address change while the token does not.
+func (c *Client) UpdateWebhook(ctx context.Context, creds Credentials, hook Webhook) error {
+	return c.do(ctx, http.MethodPut,
+		webhookPath+"/"+url.PathEscape(hook.Name), creds, hook, nil)
+}
+
+// DeleteWebhook removes a definition.
+//
+// A webhook that is already gone is a SUCCESS. Teardown is repeated after a
+// partial failure, and refusing the second attempt would leave a disconnect
+// stuck on work that is already done.
+func (c *Client) DeleteWebhook(ctx context.Context, creds Credentials, name string) error {
+	err := c.do(ctx, http.MethodDelete,
+		webhookPath+"/"+url.PathEscape(name), creds, nil, nil)
+	if Status(err) == http.StatusNotFound {
+		return nil
+	}
+	return err
+}

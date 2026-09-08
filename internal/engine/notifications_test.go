@@ -339,6 +339,10 @@ integrations:
     enabled: true
     webhook_token: whsec_ZGF0YWRvZy10b2tlbi0zMi1ieXRlcy1sb25nISE=
     route_to: ceo
+    provisioning:
+      site: datadoghq.com
+      api_key: dd-api
+      app_key: dd-app
 `
 	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc)})
 	if err := e.Start(t.Context()); err != nil {
@@ -641,6 +645,10 @@ integrations:
     enabled: true
     webhook_token: t
     route_to: founder
+    provisioning:
+      site: datadoghq.com
+      api_key: dd-api
+      app_key: dd-app
 `},
 	} {
 		t.Run(tc.source, func(t *testing.T) {
@@ -681,6 +689,10 @@ integrations:
     enabled: true
     webhook_token: t
     route_to: ` + route + `
+    provisioning:
+      site: datadoghq.com
+      api_key: dd-api
+      app_key: dd-app
 `
 	}
 	e := newEngine(t, engine.Options{Company: parsedCompany(t, with("founder"))})

@@ -27,6 +27,15 @@ type Options struct {
 	// Sink records what is minted. Nil is a DRY RUN: the pass reads what
 	// exists and creates nothing, which is what a check is.
 	Sink provision.TokenSink
+
+	// WebhookBase is this deployment's public base URL, or empty to skip
+	// registering the inbound webhook at Datadog.
+	WebhookBase string
+
+	// WebhookToken is the resolved shared token the definition carries and
+	// the route checks. Empty skips registration for the same reason an
+	// empty base does: a definition that cannot deliver is worse than none.
+	WebhookToken string
 }
 
 // Result is what one pass found.
@@ -38,6 +47,10 @@ type Result struct {
 
 	// Seats is one entry per seat the plan named.
 	Seats []SeatResult
+
+	// Webhook is what this pass did to the inbound definition at Datadog,
+	// nil where the pass never reached it.
+	Webhook *WebhookResult
 
 	// Notes are the caveats: a seat whose key is a literal, a role the
 	// organization does not have.
@@ -101,6 +114,16 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			integration.Refusal(rejected), rejected)
 	}
 	res := &Result{Org: org}
+
+	// THE INBOUND HALF FIRST, and before the early return below. A company
+	// with no seats to give identities to still wants its alerts to
+	// arrive, and the webhook is the only thing that makes them.
+	hook := ensureWebhook(ctx, opts)
+	res.Webhook = &hook
+	if hook.Note != "" {
+		res.Notes = append(res.Notes, hook.Note)
+	}
+
 	if opts.Plan == nil {
 		return res, nil
 	}
@@ -260,6 +283,17 @@ func (r *Result) Findings() []integration.Finding {
 		return nil
 	}
 	out := []integration.Finding{}
+	if hook := r.Webhook; hook != nil && hook.Err != nil {
+		// INGRESS, NOT IDENTITY. A definition that could not be written is
+		// every alert this company has going nowhere, which is a different
+		// thing from one agent lacking an account and is owned by whoever
+		// holds the Datadog keys.
+		out = append(out, integration.Finding{
+			Kind:    integration.FindingIngressBlocked,
+			Subject: hook.Name,
+			Detail:  hook.Err.Error(),
+		})
+	}
 	for _, seat := range r.Seats {
 		switch {
 		case seat.Err != nil:

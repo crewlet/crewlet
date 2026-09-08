@@ -136,8 +136,8 @@ var ErrPassInFlight = errors.New("setup: a pass for this integration is already 
 var ErrNoPass = errors.New("setup: no provisioning pass for this integration")
 
 // ErrNoTeardown reports a third-party app that registers nothing to remove.
-// Slack, Mattermost and Datadog register no webhook from this engine, so a
-// disconnect has only the company document to change.
+// Slack and Mattermost register no webhook from this engine, so a disconnect
+// has only the company document to change.
 var ErrNoTeardown = errors.New("setup: nothing to remove at this integration")
 
 // RunState is where one pass got to.

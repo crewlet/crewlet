@@ -483,7 +483,7 @@ func TestADatadogSeatCarriesTheRoleItsAccountHolds(t *testing.T) {
 	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
 	  "integrations": {"datadog": {"enabled": true, "route_to": "sre-lead",
 	    "webhook_token": "t",
-	    "provisioning": {"site": "datadoghq.com", "role": "Datadog Standard Role"}}},
+	    "provisioning": {"api_key": "dd-api", "app_key": "dd-app", "site": "datadoghq.com", "role": "Datadog Standard Role"}}},
 	  "roles": [{"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"}]
 	}`, map[string]string{"X-Summary": "datadog on a standard role"})
 	if res.Code != http.StatusCreated {
@@ -525,7 +525,7 @@ func TestACustomDatadogRoleKeepsItsOwnName(t *testing.T) {
 	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
 	  "integrations": {"datadog": {"enabled": true, "route_to": "sre-lead",
 	    "webhook_token": "t",
-	    "provisioning": {"site": "datadoghq.com", "role": "Acme On-Call"}}},
+	    "provisioning": {"api_key": "dd-api", "app_key": "dd-app", "site": "datadoghq.com", "role": "Acme On-Call"}}},
 	  "roles": [{"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"}]
 	}`, map[string]string{"X-Summary": "datadog on a role of our own"})
 	if res.Code != http.StatusCreated {

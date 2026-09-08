@@ -1,14 +1,16 @@
 # Datadog
 
-Datadog reaches Crewlet through its **Webhooks integration**, which posts a monitor's payload to a URL you configure. A firing monitor becomes an inbound event on the same path as everything else, so a seat is woken by an alert exactly as it is by a comment on a merge request.
+Datadog reaches Crewlet through its **Webhooks integration**, which posts a monitor's payload to a URL. A firing monitor becomes an inbound event on the same path as everything else, so a seat is woken by an alert exactly as it is by a comment on a merge request.
+
+The engine registers that webhook itself and keeps its address current, so the only thing left for you at Datadog is naming it in the monitors you want an agent woken by.
 
 ## Setting it up from the dashboard
 
-The Integrations screen connects Datadog without a shell: it asks for the
-monitor tag key and the fallback seat, generates the shared token, seals it,
-points the config at it and activates, then shows you the URL to paste into
-Datadog's own webhook form. Everything below describes what that writes, and
-is what you edit by hand if you would rather.
+The Integrations screen connects Datadog without a shell: it takes an API key
+and an application key, asks for the monitor tag key and the fallback seat,
+generates the shared token, seals it, points the config at it and activates.
+The next reconcile pass registers the webhook at Datadog. Everything below
+describes what that writes, and is what you edit by hand if you would rather.
 
 The tag key comes filled in as `crewlet` and most companies leave it, since
 the two routing questions it and the fallback seat answer are asked in order:
@@ -19,13 +21,16 @@ for the routes behind it.
 
 ## Giving each agent its own Datadog identity
 
-Optional, and separate from everything above. Alerts arrive and route with no
-Datadog credential at all — that is the whole of this integration for a company
-that pastes the engine's address into Datadog's webhook form.
+`integrations.datadog.provisioning` carries the organization credential pair,
+and it is **required when the integration is enabled**: it is what registers
+the webhook that makes alerts arrive at all. An enabled block without it serves
+a route, checks a token and receives nothing, because nothing at Datadog was
+ever told this deployment exists, so the configuration is refused rather than
+reported connected.
 
-Filling in `integrations.datadog.provisioning` asks for something more: one
-**service account per agent seat**, each holding a role and its own application
-key.
+The same pair buys one more thing: a **service account per agent seat**, each
+holding a role and its own application key, so an agent reading Datadog does it
+as itself.
 
 ```yaml
 integrations:
@@ -91,7 +96,12 @@ integrations:
     enabled: true
     webhook_token: "${DATADOG_WEBHOOK_TOKEN}"
     route_to: sre-lead        # required: where an alert naming no owner goes
+    webhook_name: crewlet     # optional: monitors name it as @webhook-crewlet
     handle_tag: crewlet       # optional: the monitor tag key that names a seat
+    provisioning:             # required when enabled: registers the webhook
+      site: datadoghq.com
+      api_key: "${DATADOG_API_KEY}"
+      app_key: "${DATADOG_APP_KEY}"
 ```
 
 | Field | Required | Meaning |
@@ -99,6 +109,8 @@ integrations:
 | `enabled` | yes | Turn the integration on. |
 | `webhook_token` | yes | Compared against the `X-Crewlet-Token` header on every delivery. A route with nothing to check against answers **503** rather than accepting one. |
 | `route_to` | yes | The handle of the seat an alert wakes when no monitor tag names an owner. See [Routing](#routing-is-by-ownership-not-by-mention). |
+| `provisioning` | yes | The organization credential pair (`site`, `api_key`, `app_key`). The engine registers the webhook with it, so an enabled block without it is refused. |
+| `webhook_name` | no | The name of the webhook the engine keeps at Datadog, and therefore the handle a monitor writes: `@webhook-crewlet` by default. Give two deployments watching one organization two names, or each rewrites the other's address on every pass. Cannot contain a space, an `@` or a comma. |
 | `handle_tag` | no | The monitor tag key that names a seat. Defaults to `crewlet`. Cannot contain a colon, a comma or a space, because Datadog uses those to separate a key from its value and one tag from the next. |
 
 ## Routing is by ownership, not by mention
@@ -149,18 +161,26 @@ The strongest check available is therefore a constant-time comparison of a share
 
 Treat `webhook_token` as a signing key. It is doing that job with none of the guarantees. Rotate it the same way, and keep it a `${VAR}` rather than a literal.
 
-## Setting it up in Datadog
+## What you do in Datadog
 
-1. Open **Integrations → Webhooks** and add a webhook.
-2. Set the URL to `https://<your-engine>/webhooks/datadog`.
-3. Under **Headers**, add `X-Crewlet-Token` with your token's value.
-4. Set the **Payload** to the template below.
-5. Reference the webhook from a monitor's notification message with `@webhook-<name>`.
-6. Tag the monitors you want routed to a particular seat with `crewlet:<handle>`.
+The webhook itself is not on this list. The reconcile pass creates it under
+`webhook_name`, points it at `<public_base_url>/webhooks/datadog`, attaches the
+`X-Crewlet-Token` header and writes the payload template below, and it rewrites
+that definition whenever the address or the token changes. A disconnect
+withdraws it.
+
+What is left is naming it on the monitors you care about:
+
+1. Add `@webhook-crewlet` to a monitor's notification message. Without it Datadog posts nothing, however healthy the webhook is.
+2. Tag the monitors you want routed to a particular seat with `crewlet:<handle>`.
+
+You can see what the engine wrote under **Integrations → Webhooks**. Editing it
+there is temporary: the next pass restores the definition above, which is what
+keeps the address correct when the deployment moves.
 
 ### The payload template
 
-Datadog posts an **empty body** unless the webhook defines a payload template, and the template is written by whoever creates the webhook rather than fixed by the third-party app. There is therefore no canonical Datadog alert shape: there is the shape this engine asks for, and this is it.
+Datadog posts an **empty body** unless the webhook defines a payload template, and the template belongs to whoever creates the webhook rather than being fixed by the third-party app. There is therefore no canonical Datadog alert shape: there is the shape this engine writes, and this is it.
 
 ```json
 {
@@ -178,7 +198,7 @@ Datadog posts an **empty body** unless the webhook defines a payload template, a
 
 `$TAGS` is what routing runs on, so an alert cannot be routed to its owner without it. `$LINK`, `$EVENT_TITLE` and `$ALERT_SCOPE` are what let a seat be told where to look rather than only that something happened.
 
-Every value is quoted, including `$PRIORITY`. An unquoted variable that expands to nothing yields `"priority": ,`, which is not JSON and which Datadog posts anyway. The engine still accepts a bare number, so a template somebody unquoted by hand does not lose its alerts, but the template above is the one to paste.
+Every value is quoted, including `$PRIORITY`. An unquoted variable that expands to nothing yields `"priority": ,`, which is not JSON and which Datadog posts anyway. The engine still accepts a bare number, so a template somebody unquoted by hand does not lose its alerts until the next pass restores this one.
 
 Every field is optional on the way in. A template somebody edited is a configuration mistake, and dropping a firing monitor over one is the worst available response: the alert is real whether or not its priority came through.
 

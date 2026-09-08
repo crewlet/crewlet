@@ -1138,6 +1138,17 @@ type Datadog struct {
 	// delivery from anyone's POST.
 	WebhookToken string `secret:"true" yaml:"webhook_token,omitempty" json:"webhook_token,omitempty" desc:"Shared token compared against X-Crewlet-Token; required when enabled."`
 
+	// WebhookName is the name of the webhook definition the engine keeps at
+	// Datadog, and therefore the handle an operator writes in a monitor
+	// message: `@webhook-crewlet` by default.
+	//
+	// Configurable because the name is Datadog's PRIMARY KEY for a webhook
+	// and one organization may be watched by two Crewlet deployments, a
+	// staging one and a production one. Sharing a name there would have
+	// each deployment rewrite the other's address on every pass, so the
+	// alerts would land at whichever reconciled last.
+	WebhookName string `yaml:"webhook_name,omitempty" json:"webhook_name,omitempty" desc:"Name of the webhook the engine keeps at Datadog; monitors name it as @webhook-<name> (default crewlet)."`
+
 	// HandleTag is the monitor tag key that names the seat an alert wakes,
 	// so a monitor tagged `crewlet:sre-lead` reaches that seat.
 	//
@@ -1162,6 +1173,17 @@ type Datadog struct {
 	// verified, counted and dropped, which is the worst state an alerting
 	// integration can be in: it looks exactly like coverage.
 	RouteTo string `yaml:"route_to,omitempty" json:"route_to,omitempty" desc:"Handle of the seat an alert naming no owner wakes; required when enabled."`
+}
+
+// WebhookNameOrDefault is the name of the webhook definition at Datadog.
+//
+// Restated here rather than imported from internal/datadog for the reason
+// [Datadog.HandleTagOrDefault] states, and asserted equal by the same test.
+func (d *Datadog) WebhookNameOrDefault() string {
+	if name := strings.TrimSpace(d.WebhookName); name != "" {
+		return name
+	}
+	return "crewlet"
 }
 
 // HandleTagOrDefault is the monitor tag key naming a seat.
@@ -1203,6 +1225,43 @@ func (d *Datadog) validate(path string) error {
 				"the colon separates the key from its value and the comma "+
 				"separates one tag from the next, so a key holding either "+
 				"never matches a monitor")
+	}
+	if name := strings.TrimSpace(d.WebhookName); name != "" &&
+		strings.ContainsAny(name, " @,") {
+		p.add(at(path, "webhook_name"), ErrUnknownValue,
+			"a Datadog webhook name cannot contain a space, an @ or a comma: "+
+				"a monitor names it as @webhook-<name>, and any of those ends "+
+				"the handle early so the alert reaches nobody")
+	}
+
+	// THE ENGINE REGISTERS THE WEBHOOK, so the keys that let it are not
+	// optional decoration on an otherwise working block.
+	//
+	// Datadog posts to whatever URL its Webhooks integration holds, and
+	// there is no other way in: an enabled block with no keys serves a
+	// route, checks a token, reports itself connected and never receives
+	// one delivery, because nothing at Datadog was ever told this
+	// deployment exists. That is the same failure `route_to` guards
+	// against one step earlier — coverage that is not there — and it is
+	// worth refusing for the same reason.
+	switch {
+	case d.Provisioning == nil:
+		p.add(at(path, "provisioning"), ErrMissing,
+			"required when datadog is enabled: the engine registers the "+
+				"webhook that makes alerts arrive, and it needs an API key "+
+				"and an application key to do it. Without them the block "+
+				"reports itself connected and receives nothing")
+	default:
+		if strings.TrimSpace(d.Provisioning.APIKey) == "" {
+			p.add(at(path, "provisioning.api_key"), ErrMissing,
+				"required when datadog is enabled: it says which organization "+
+					"the webhook is registered in")
+		}
+		if strings.TrimSpace(d.Provisioning.AppKey) == "" {
+			p.add(at(path, "provisioning.app_key"), ErrMissing,
+				"required when datadog is enabled: Datadog refuses a write "+
+					"carrying only an API key, and its message names neither")
+		}
 	}
 
 	return p.err()

@@ -446,7 +446,9 @@ func TestALiteralInTheConfigIsRefusedByPath(t *testing.T) {
 	// Put a literal there the way an operator would have: through the
 	// config surface itself.
 	patch := s.do(t, http.MethodPatch, "/config",
-		`{"integrations":{"datadog":{"enabled":true,"webhook_token":"plain-token","route_to":"sre-lead"}}}`,
+		`{"integrations":{"datadog":{"enabled":true,"webhook_token":"plain-token",`+
+			`"route_to":"sre-lead","provisioning":{"site":"datadoghq.com",`+
+			`"api_key":"dd-api","app_key":"dd-app"}}}}`,
 		map[string]string{
 			"Content-Type": "application/merge-patch+json",
 			"X-Summary":    "by hand",
@@ -1209,12 +1211,13 @@ func TestDisconnectNamesOnlyTheSecretsThatExist(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
 	s.seed(t)
-	// Connect with the webhook token only, leaving the provisioning keys
-	// unset. The form asks for them, and a submission that omits one is
-	// still a submission: what this pins is that the disconnect names the
-	// secrets that EXIST rather than every name the app declares.
+	// Connect the org half only. Datadog also declares a credential per
+	// SEAT, and nobody has set one: what this pins is that the disconnect
+	// names the secrets that EXIST rather than every name the app declares.
 	connect := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs",
-		`{"values": {"route_to": "sre-lead", "enabled": "true"}, "generate": ["webhook_token"]}`, nil)
+		`{"values": {"route_to": "sre-lead", "enabled": "true", `+
+			`"site": "datadoghq.com", "api_key": "dd-api", "app_key": "dd-app"}, `+
+			`"generate": ["webhook_token"]}`, nil)
 	if connect.Code != http.StatusCreated {
 		t.Fatalf("connect = %d: %s", connect.Code, connect.Body)
 	}
@@ -1224,8 +1227,9 @@ func TestDisconnectNamesOnlyTheSecretsThatExist(t *testing.T) {
 		t.Fatalf("status = %d: %s", res.Code, res.Body)
 	}
 	orphans, _ := decode(t, res)["orphaned_secrets"].([]any)
-	if len(orphans) != 1 || orphans[0] != "DATADOG_WEBHOOK_TOKEN" {
-		t.Fatalf("orphaned = %v, want only the secret that was actually stored", orphans)
+	want := []string{"DATADOG_API_KEY", "DATADOG_APP_KEY", "DATADOG_WEBHOOK_TOKEN"}
+	if got := orphansOf(orphans); !slices.Equal(got, want) {
+		t.Fatalf("orphaned = %v, want only the secrets that were actually stored", got)
 	}
 }
 
@@ -1392,4 +1396,16 @@ func TestAProvisionedSeatSaysWhichSideOfOptingInItIsOn(t *testing.T) {
 	if strings.Contains(out, "created on the next sync") {
 		t.Error("a seat no sync will look at was promised an account by one")
 	}
+}
+
+// orphansOf sorts a disconnect's orphan list so the assertion above does not
+// depend on the order the walk happened to produce.
+func orphansOf(raw []any) []string {
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		name, _ := v.(string)
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	return out
 }

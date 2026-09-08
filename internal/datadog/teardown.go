@@ -22,10 +22,13 @@ type TeardownOptions struct {
 
 // Teardown removes what this engine created at Datadog.
 //
-// NO WEBHOOK TO WITHDRAW. Datadog's webhook is created by a person in
-// Datadog's own UI pointing at this engine, so this engine registered nothing
-// there and a disconnect has only the accounts to consider. Dropping the
-// block closes the route at this end.
+// THE WEBHOOK GOES EITHER WAY. This engine registered it, nothing else at
+// Datadog uses it, and one left behind posts every alert to a company that no
+// longer has a block to route it: the deliveries are refused, counted and
+// dropped, and the monitors that name it go on reporting a healthy target.
+// That is the same rule every other surface's hooks follow — see
+// [setup.TeardownInput] — and it is why the definition is not gated on
+// RemoveSeats.
 //
 // The accounts go only when asked, and they are DISABLED rather than deleted:
 // deleting a Datadog user detaches it from everything it did, so dashboards,
@@ -37,22 +40,33 @@ type TeardownOptions struct {
 // the rest, and an operator reading a stuck teardown should see everything
 // blocking it at once.
 func Teardown(ctx context.Context, opts TeardownOptions) error {
-	if !opts.RemoveSeats {
-		return nil
-	}
 	if opts.Client == nil {
 		return errors.New("datadog: no client")
 	}
-	if opts.Config == nil || opts.Config.Provisioning == nil || opts.Plan == nil {
-		// Nothing was ever provisioned, so there is nothing to remove and
-		// the disconnect finishes.
+	if opts.Config == nil || opts.Config.Provisioning == nil {
+		// Nothing was ever registered or provisioned, so there is nothing
+		// to remove and the disconnect finishes.
 		return nil
 	}
 	if opts.Creds.APIKey == "" || opts.Creds.AppKey == "" {
 		return errors.New(
-			"datadog: both keys are needed to disable the accounts this engine " +
-				"created; force the disconnect to drop the block and disable " +
-				"them at Datadog by hand")
+			"datadog: both keys are needed to withdraw the webhook this engine " +
+				"registered and to disable the accounts it created; force the " +
+				"disconnect to drop the block and remove them at Datadog by hand")
+	}
+
+	// THE WEBHOOK FIRST, because it is what is still delivering. An
+	// account that outlives a failed teardown does nothing on its own; a
+	// definition that does posts every alert to a route that will refuse
+	// it.
+	if err := opts.Client.DeleteWebhook(
+		ctx, opts.Creds, WebhookNameOf(opts.Config)); err != nil {
+		return fmt.Errorf("datadog: withdraw the webhook: %w",
+			integration.Reject(err, Status(err)))
+	}
+
+	if !opts.RemoveSeats || opts.Plan == nil {
+		return nil
 	}
 
 	existing, err := opts.Client.ListServiceAccounts(ctx, opts.Creds, emailDomainOf(opts.Config))

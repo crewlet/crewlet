@@ -33,15 +33,27 @@
 // because it looks like coverage. The tag is the override; the floor is the
 // guarantee that a page at three in the morning wakes somebody.
 //
-// # The payload is a template, and the engine names the one it expects
+// # The payload is a template, and the engine writes the one it expects
 //
 // Datadog posts an EMPTY BODY unless the webhook definition carries a payload
-// template, and the template is written by whoever creates the webhook rather
-// than fixed by the third-party app. So there is no canonical Datadog alert shape to
-// decode: there is the shape this engine asks for, which
-// docs/integrations/datadog.md publishes and [Alert] decodes. Every field is
-// optional on the way in, because a template somebody edited is a
-// configuration mistake rather than a reason to drop a firing monitor.
+// template, and the template belongs to whoever creates the webhook rather
+// than being fixed by the third-party app. So there is no canonical Datadog
+// alert shape to decode: there is the shape this engine asks for, which
+// [WebhookPayload] holds, [ensureWebhook] writes into the definition, and
+// [Alert] decodes. Every field is still optional on the way in, because a
+// template somebody edited by hand is a configuration mistake rather than a
+// reason to drop a firing monitor.
+//
+// # The engine owns the webhook definition
+//
+// Datadog delivers to whatever URL its Webhooks integration holds, so that
+// address is the whole of the inbound path. It used to be written by a person
+// in Datadog's own UI, which meant it went stale the first time a deployment
+// moved: the monitors kept firing and the alerts landed nowhere. The
+// organization credential pair this block already carries for provisioning
+// identities is the same pair Datadog's webhook API takes, so the reconcile
+// registers the definition, keeps its address current, and withdraws it on
+// disconnect.
 package datadog
 
 // Backend is the source name on the wire.

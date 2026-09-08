@@ -19,8 +19,8 @@ func TestEverySurfaceDeclaresWhoOwnsItsAddress(t *testing.T) {
 		integration.KindGitLab:     integration.IngressEngine,
 		integration.KindJira:       integration.IngressEngine,
 		integration.KindConfluence: integration.IngressEngine,
+		integration.KindDatadog:    integration.IngressEngine,
 		integration.KindSlack:      integration.IngressOperator,
-		integration.KindDatadog:    integration.IngressOperator,
 		integration.KindMattermost: integration.IngressNone,
 		integration.KindAtlassian:  integration.IngressNone,
 	}
