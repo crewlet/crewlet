@@ -290,7 +290,7 @@ func (p *githubPass) Teardown(ctx context.Context, in setup.TeardownInput) error
 	// Every seat is attempted and the failures are joined, rather than
 	// stopping at the first: one seat whose key is lost must not leave the
 	// other nine installed.
-	apiBase, _ := githubBases(cfg, env)
+	apiBase, _ := cfg.Bases(env.LookupOK)
 	var failures []error
 	for _, seat := range p.seatApps(env) {
 		if err := github.UninstallSeat(ctx, github.SeatAppOptions{
@@ -864,7 +864,7 @@ func (p *githubPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 	// in a browser that tells the engine nothing.
 	seats := p.seatApps(env)
 	if len(seats) > 0 {
-		apiBase, webBase := githubBases(cfg, env)
+		apiBase, webBase := cfg.Bases(env.LookupOK)
 		apps, appsErr := github.ReconcileSeatApps(ctx, github.SeatAppOptions{
 			APIBase: apiBase,
 			WebBase: webBase,

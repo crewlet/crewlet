@@ -15,7 +15,9 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/github"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // Giving one agent its own GitHub App, in the two acts a person performs.
@@ -48,6 +50,16 @@ import (
 // landing carries a handle for display and checks nothing, which is fine for
 // a page that only prints a code and would not be fine here: this callback
 // writes a credential into a seat.
+
+// completeDeadline bounds the detached half of a conversion.
+//
+// Generous against three HTTP calls and two seals, because it is a BACKSTOP
+// for a GitHub that stopped answering rather than a deadline for the work: the
+// window it protects is the one where the app exists and its key is not sealed
+// yet, and cutting that short is the failure it exists to prevent. Shorter
+// than [manifestTTL], so a conversion cannot still be running when the state
+// that authorized it would have expired.
+const completeDeadline = 2 * time.Minute
 
 // manifestTTL is how long a begun app creation stays valid.
 //
@@ -194,10 +206,20 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	// THROUGH THE PACKAGE'S OWN CAP, like every other route here. A decoder
+	// straight off r.Body reads whatever is sent: this route names one seat,
+	// so the body is tens of bytes, and streaming an unbounded one into a
+	// decoder is a route that can be made to consume memory by anyone who
+	// can reach it.
+	body, err := httpjson.ReadBody(w, r, MaxBody)
+	if err != nil {
+		httpjson.Refuse(w, err)
+		return
+	}
 	var in struct {
 		Seat string `json:"seat"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	if err := json.Unmarshal(body, &in); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, codeBadBody, map[string]string{"hint": err.Error()})
 		return
 	}
@@ -251,7 +273,7 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 		// THE ACCOUNT THAT WILL OWN THE APP. An app registered under a
 		// person's own account cannot be installed on the organization
 		// that owns the repositories.
-		"action_url": github.ActionURL(webBaseOf(company), orgOf(company)),
+		"action_url": github.ActionURL(s.webBaseOf(company), orgOf(company)),
 		"manifest":   manifest,
 		"state":      state,
 	})
@@ -295,15 +317,26 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 		return handle, fmt.Errorf("setupapi: this company has no agent seat %q", handle)
 	}
 
-	app, err := github.ExchangeManifest(ctx, apiBaseOf(company), code)
+	// DETACHED FROM THE BROWSER, which is the same move [Service.runPass]
+	// makes and for a sharper reason. Everything below is irreversible: the
+	// conversion spends GitHub's one-time code, and the two values it returns
+	// are issued once and never reissued. Run on the request's own context, a
+	// person closing the tab — or a proxy timing the request out — cancels
+	// the engine between GitHub creating the app and the key being sealed,
+	// and that app is then unusable and unrecoverable, deletable only by hand
+	// at GitHub.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), completeDeadline)
+	defer cancel()
+
+	app, err := github.ExchangeManifest(ctx, f.service.apiBaseOf(company), code)
 	if err != nil {
 		return handle, err
 	}
 
 	// SEALED BEFORE ANYTHING ELSE CAN FAIL. See the note above: these two
 	// values do not exist anywhere else and cannot be asked for again.
-	keyVar := secretNameFor(handle, "GITHUB_APP_KEY")
-	hookVar := secretNameFor(handle, "GITHUB_APP_WEBHOOK_SECRET")
+	keyVar := secretNameFor(handle, "APP_KEY")
+	hookVar := secretNameFor(handle, "APP_WEBHOOK_SECRET")
 	// THROUGH s.now(), which is the guarded reading. Calling s.clock()
 	// straight panicked here on the one path where a panic costs an app:
 	// GitHub had created it, and the crash landed before its key was
@@ -407,7 +440,7 @@ func (f *AppFlow) InstallURL(handle string) string {
 	if slug == "" {
 		return ""
 	}
-	return github.InstallURL(webBaseOf(company), orgOf(company), slug)
+	return github.InstallURL(f.service.webBaseOf(company), orgOf(company), slug)
 }
 
 // secretNameFor is the sealed-store name one seat's value lives under.
@@ -415,23 +448,22 @@ func (f *AppFlow) InstallURL(handle string) string {
 // PER SEAT, because these are per-seat credentials: one shared name would
 // have the second agent's app key overwrite the first's, and both seats would
 // then authenticate as whichever app was created last.
-func secretNameFor(handle, suffix string) string {
-	return setupSlug(handle) + "_" + suffix
-}
-
-// setupSlug upper-snakes a handle into the reference grammar, so the name it
-// produces is one a `${VAR}` can actually resolve through.
-func setupSlug(handle string) string {
-	var b strings.Builder
-	for _, r := range strings.ToUpper(strings.TrimSpace(handle)) {
-		switch {
-		case r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_':
-			b.WriteRune(r)
-		default:
-			b.WriteRune('_')
-		}
-	}
-	return b.String()
+//
+// THROUGH THE SHARED GRAMMAR, and the ORDER is why. This built the name as
+// `<HANDLE>_<FIELD>`, so a handle beginning with a digit — `7th-engineer`,
+// which the org model accepts — produced `7TH_ENGINEER_GITHUB_APP_KEY`. That
+// is not a name a `${VAR}` can reference: envref's whole-reference grammar
+// requires a leading letter or underscore. The pointer written beside it
+// therefore resolved to nothing, and the value it pointed at was the app's
+// private key, which GitHub issues exactly once and never reissues — so the
+// app was unusable and unrecoverable the moment it was created.
+//
+// [setup.SecretNameFor] puts the constant first, which makes a leading letter
+// structural rather than something each caller has to remember.
+func secretNameFor(handle, field string) string {
+	return setup.SecretNameFor(integration.KindGitHub, setup.Requirement{
+		Field: field, Seat: handle,
+	})
 }
 
 // seatByHandle finds one agent seat.
@@ -463,24 +495,33 @@ func orgOf(company *config.Company) string {
 
 // webBaseOf is the host a person's browser opens, which is github.com unless
 // this company runs Enterprise Server.
-func webBaseOf(company *config.Company) string {
-	gh := company.Integrations.GitHub
-	if gh == nil {
-		return ""
-	}
-	return strings.TrimSpace(gh.URL)
+func (s *Service) webBaseOf(company *config.Company) string {
+	_, web := company.Integrations.GitHub.Bases(s.resolve)
+	return web
 }
 
 // apiBaseOf is the REST base the conversion is POSTed to.
-func apiBaseOf(company *config.Company) string {
-	return webBaseOf(company)
+//
+// NOT THE BROWSER BASE, which is what this returned. They are the same string
+// only on github.com: Enterprise Server serves its REST API under `/api/v3`,
+// so the manifest conversion was POSTed to a path that answers 404 — and
+// GitHub's manifest code is one-time, so the operator was told their code was
+// already spent and had to create the app again, every time.
+func (s *Service) apiBaseOf(company *config.Company) string {
+	api, _ := company.Integrations.GitHub.Bases(s.resolve)
+	return api
 }
 
 // publicBase is the address a third-party app reaches this engine on.
+//
+// RESOLVED, because every address built from it here is baked into an app at
+// GitHub — the delivery URL, the redirect and the setup URL — and only a
+// person can change those afterwards. A `${PUBLIC_URL}` copied in literally
+// creates an app nothing can ever deliver to.
 func (s *Service) publicBase() string {
 	company := s.company()
 	if company == nil {
 		return ""
 	}
-	return strings.TrimSpace(company.Integrations.PublicBaseURL)
+	return company.Integrations.WebhookBase(s.resolve)
 }

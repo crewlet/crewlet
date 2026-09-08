@@ -9,7 +9,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // THE STATE IS THE ONLY THING GUARDING AN UNAUTHENTICATED WRITE.
@@ -163,4 +165,43 @@ type blindClaims struct{}
 
 func (blindClaims) Claim(context.Context, string, time.Duration, time.Time) (bool, error) {
 	return false, errors.New("the coordination store could not be reached")
+}
+
+// A HANDLE THAT BEGINS WITH A DIGIT STILL GETS A REFERENCEABLE NAME.
+//
+// The org model accepts `7th-engineer`, and the name built for that seat used
+// to lead with the handle: `7TH_ENGINEER_GITHUB_APP_KEY`. envref's
+// whole-reference grammar requires a leading letter or underscore, so the
+// `${VAR}` written beside it resolved to nothing — and the value it pointed at
+// was the app's private key, which GitHub issues once and never reissues. The
+// app was unusable and unrecoverable from the moment it was created.
+func TestASecretNameIsReferenceableForEverySeatHandle(t *testing.T) {
+	t.Parallel()
+	for _, handle := range []string{
+		"7th-engineer", "1", "sre-lead", "_leading", "n0va", "Ops Lead",
+	} {
+		for _, field := range []string{"APP_KEY", "APP_WEBHOOK_SECRET"} {
+			name := setup.SecretNameFor(integration.KindGitHub, setup.Requirement{
+				Field: field, Seat: handle,
+			})
+			if !setup.ValidSecretName(name) {
+				t.Errorf("the name for %q/%s is %q, which no ${VAR} can reference",
+					handle, field, name)
+			}
+		}
+	}
+}
+
+// AND TWO SEATS NEVER SHARE ONE. These are per-seat credentials: one shared
+// name would have the second agent's key overwrite the first's, and both
+// seats would then authenticate as whichever app was created last.
+func TestTwoSeatsDoNotShareASecretName(t *testing.T) {
+	t.Parallel()
+	first := setup.SecretNameFor(integration.KindGitHub,
+		setup.Requirement{Field: "APP_KEY", Seat: "sre-lead"})
+	second := setup.SecretNameFor(integration.KindGitHub,
+		setup.Requirement{Field: "APP_KEY", Seat: "platform-lead"})
+	if first == second {
+		t.Errorf("both seats seal their app key under %q", first)
+	}
 }

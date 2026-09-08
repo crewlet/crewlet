@@ -794,6 +794,34 @@ func (g *GitHub) APIBase() string {
 }
 
 // WebURL is the base a shareable link is built on.
+// Bases is where GitHub is reached: the REST base and the browser base, both
+// derived from a RESOLVED url.
+//
+// RESOLVED FIRST, THEN DERIVED, and both halves are load-bearing.
+//
+// [GitHub.APIBase] and [GitHub.WebURL] are computed FROM the url, so asking
+// the raw block points an Enterprise Server deployment at github.com whenever
+// its host is written as a `${VAR}` — a legal way to write it, since the
+// field takes an embedded reference too.
+//
+// And the two are genuinely different addresses. The REST base is
+// `<url>/api/v3` on Enterprise Server; the browser base is the host without
+// it. Passing the raw url as either is only ever right on github.com, where
+// an empty field makes both fall back — which is exactly why a caller that
+// skipped this looked correct everywhere but Enterprise.
+//
+// ONE IMPLEMENTATION because three callers need it, in three packages: the
+// engine's reconcile client, its seat-app half, and the dashboard's app-
+// creation flow. Each had its own idea, and two of them were wrong.
+func (g *GitHub) Bases(resolve func(name string) (string, bool)) (apiBase, webBase string) {
+	if g == nil {
+		return "", ""
+	}
+	url, _ := envref.Expand(g.URL, resolve)
+	derived := GitHub{URL: strings.TrimSpace(url)}
+	return derived.APIBase(), derived.WebURL()
+}
+
 func (g *GitHub) WebURL() string {
 	if base := strings.TrimRight(strings.TrimSpace(g.URL), "/"); base != "" {
 		return strings.TrimSuffix(base, githubEnterpriseAPIPath)

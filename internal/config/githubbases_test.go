@@ -1,4 +1,4 @@
-package engine
+package config_test
 
 import (
 	"testing"
@@ -44,7 +44,7 @@ func TestGitHubBasesAreDerivedFromAResolvedURL(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			api, web := githubBases(&config.GitHub{URL: tc.url}, env)
+			api, web := (&config.GitHub{URL: tc.url}).Bases(env.LookupOK)
 			if api != tc.wantAPI {
 				t.Errorf("api base = %q, want %q", api, tc.wantAPI)
 			}
@@ -63,7 +63,7 @@ func TestGitHubBasesAreDerivedFromAResolvedURL(t *testing.T) {
 func TestGitHubBasesResolveTheHostFirst(t *testing.T) {
 	t.Parallel()
 	held := config.NewResolver(config.MapSource{"GITHUB_HOST": "https://ghe.example.com"})
-	api, web := githubBases(&config.GitHub{URL: "${GITHUB_HOST}"}, held)
+	api, web := (&config.GitHub{URL: "${GITHUB_HOST}"}).Bases(held.LookupOK)
 	if api != "https://ghe.example.com/api/v3" {
 		t.Errorf("api base = %q, and a reference was not read before it was derived from", api)
 	}
@@ -76,7 +76,8 @@ func TestGitHubBasesResolveTheHostFirst(t *testing.T) {
 // path reads them before it has decided the block is there.
 func TestGitHubBasesOfNothingAreEmpty(t *testing.T) {
 	t.Parallel()
-	if api, web := githubBases(nil, config.EnvOnly()); api != "" || web != "" {
-		t.Errorf("githubBases(nil) = %q/%q, want empty", api, web)
+	var absent *config.GitHub
+	if api, web := absent.Bases(config.EnvOnly().LookupOK); api != "" || web != "" {
+		t.Errorf("Bases() of a nil block = %q/%q, want empty", api, web)
 	}
 }

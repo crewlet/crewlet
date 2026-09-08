@@ -1190,7 +1190,7 @@ func repoScope(repos []string) string {
 // yet is precisely the row that has to be there. Human seats are excluded,
 // because a person's GitHub account is not something this engine creates.
 func githubSeats(company *config.Company, resolve func(string) (string, bool)) []SeatState {
-	webBase := webBaseOf(company)
+	_, webBase := company.Integrations.GitHub.Bases(resolve)
 	out := []SeatState{}
 	for role := range company.EachRole() {
 		// THROUGH THE SEAT, the same derivation every other roster uses: a
