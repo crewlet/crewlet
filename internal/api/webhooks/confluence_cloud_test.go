@@ -20,7 +20,7 @@ func TestConfluenceCloud_AcceptsTheConfiguredToken(t *testing.T) {
 	t.Parallel()
 	e := newEdge(t)
 
-	res := e.post(t, "/webhooks/confluence/page_updated?token=conf-token", []byte(cloudPage), nil)
+	res := e.post(t, "/webhooks/confluence/page_updated?token=EXAMPLECONFLUENCETOKEN0000", []byte(cloudPage), nil)
 	if res.Code != http.StatusOK {
 		t.Fatalf("got %d, want 200: %s", res.Code, res.Body)
 	}
@@ -75,7 +75,7 @@ func TestConfluenceCloud_StampsTheEventFromThePath(t *testing.T) {
 	t.Parallel()
 	e := newEdge(t)
 
-	res := e.post(t, "/webhooks/confluence/comment_created?token=conf-token", []byte(cloudPage), nil)
+	res := e.post(t, "/webhooks/confluence/comment_created?token=EXAMPLECONFLUENCETOKEN0000", []byte(cloudPage), nil)
 	if res.Code != http.StatusOK {
 		t.Fatalf("got %d: %s", res.Code, res.Body)
 	}
@@ -100,7 +100,7 @@ func TestConfluenceCloud_DataCenterRouteStillDemandsASignature(t *testing.T) {
 	t.Parallel()
 	e := newEdge(t)
 
-	res := e.post(t, "/webhooks/confluence?token=conf-token", []byte(cloudPage), nil)
+	res := e.post(t, "/webhooks/confluence?token=EXAMPLECONFLUENCETOKEN0000", []byte(cloudPage), nil)
 	if res.Code != http.StatusUnauthorized {
 		t.Fatalf("got %d, want 401 from the signed route", res.Code)
 	}
@@ -112,8 +112,8 @@ func TestConfluenceCloud_ARetryIsADuplicate(t *testing.T) {
 	t.Parallel()
 	e := newEdge(t)
 
-	first := e.post(t, "/webhooks/confluence/page_updated?token=conf-token", []byte(cloudPage), nil)
-	second := e.post(t, "/webhooks/confluence/page_updated?token=conf-token", []byte(cloudPage), nil)
+	first := e.post(t, "/webhooks/confluence/page_updated?token=EXAMPLECONFLUENCETOKEN0000", []byte(cloudPage), nil)
+	second := e.post(t, "/webhooks/confluence/page_updated?token=EXAMPLECONFLUENCETOKEN0000", []byte(cloudPage), nil)
 	if first.Code != http.StatusOK || second.Code != http.StatusOK {
 		t.Fatalf("got %d then %d", first.Code, second.Code)
 	}
@@ -130,7 +130,7 @@ func TestConfluenceCloud_AcceptsTheTokenInAHeaderToo(t *testing.T) {
 	e := newEdge(t)
 
 	res := e.post(t, "/webhooks/confluence/page_updated", []byte(cloudPage),
-		map[string]string{"X-Crewlet-Token": "conf-token"})
+		map[string]string{"X-Crewlet-Token": "EXAMPLECONFLUENCETOKEN0000"})
 	if res.Code != http.StatusOK {
 		t.Fatalf("got %d, want 200: %s", res.Code, res.Body)
 	}
@@ -152,7 +152,7 @@ func TestConfluenceCloud_TwoSavesOfOnePageAreTwoEvents(t *testing.T) {
 			version + `"}},"space":{"key":"ENG"},"userAccountId":"712020:actor"}`)
 	}
 	for _, version := range []string{"3", "4"} {
-		res := e.post(t, "/webhooks/confluence/page_updated?token=conf-token", body(version), nil)
+		res := e.post(t, "/webhooks/confluence/page_updated?token=EXAMPLECONFLUENCETOKEN0000", body(version), nil)
 		if res.Code != http.StatusOK {
 			t.Fatalf("version %s got %d: %s", version, res.Code, res.Body)
 		}

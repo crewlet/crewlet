@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/whsec"
 )
 
@@ -431,6 +432,7 @@ func (c *Confluence) validate(path string) error {
 				"credential of its own searches under, and the one the "+
 				"tool-skill walk reads with")
 	}
+	sharedToken(&probs, at(path, "webhook_token"), c.WebhookToken)
 	if strings.TrimSpace(c.WebhookSecret) == "" && cloud == "" && !IsAtlassianCloud(url) {
 		// CLOUD IS EXEMPT, on either of its routes. The Forge relay is
 		// verified by the app's invocation token and the token-bearing
@@ -444,6 +446,31 @@ func (c *Confluence) validate(path string) error {
 				"answers 503 to every one")
 	}
 	return probs.err()
+}
+
+// sharedToken refuses a token too weak to be the whole authentication for a
+// route.
+//
+// TWO ROUTES HAVE NOTHING ELSE. Datadog's provider attaches headers with fixed
+// values and Confluence Cloud's attaches nothing at all, so neither delivery
+// can be signed and the token is the entire check — see
+// [secrets.CheckSharedToken] for the rule and why the number is what it is.
+// Every other inbound route verifies an HMAC over the body, where the secret's
+// shape is what [whsec] refuses.
+//
+// A ${VAR} IS UNKNOWN, NOT WRONG, exactly as everywhere else in this file:
+// Tier B holds a pointer verbatim and resolves it where the transport is
+// built, so the length of what it resolves to is not knowable here. The
+// webhook edge makes the same check on the resolved value, which is what
+// stops a reference being the way around this.
+func sharedToken(p *problems, path, value string) {
+	token := strings.TrimSpace(value)
+	if token == "" || envref.Has(token) {
+		return
+	}
+	if err := secrets.CheckSharedToken(token); err != nil {
+		p.add(path, ErrUnknownValue, "%s", err.Error())
+	}
 }
 
 // WorkingStatus is when a seat raises the "is thinking…" indicator while it
@@ -665,8 +692,6 @@ func IsAtlassianCloud(raw string) bool {
 	return strings.Contains(strings.ToLower(raw), "api.atlassian.com/ex/")
 }
 
-// hasHTTPScheme reports a URL the clients can actually use, treating a
-// value that still carries a ${VAR} as unknown rather than wrong.
 // noSpaces refuses a value that cannot hold whitespace.
 //
 // An address, an identifier and an email are each a SINGLE TOKEN, and a space
@@ -683,6 +708,8 @@ func noSpaces(p *problems, path, value string) {
 	}
 }
 
+// hasHTTPScheme reports a URL the clients can actually use, treating a
+// value that still carries a ${VAR} as unknown rather than wrong.
 func hasHTTPScheme(url string) bool {
 	return strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") ||
 		envref.Has(url)
@@ -691,11 +718,14 @@ func hasHTTPScheme(url string) bool {
 // DatadogProvisioning is what the engine creates at Datadog: one service
 // account per agent seat, each holding a role and its own application key.
 //
-// SEPARATE FROM THE INBOUND HALF above, and optional, because the two are
-// genuinely different integrations sharing a name. A company can accept
-// alerts with nothing here at all — paste the engine's address into
-// Datadog's webhook form and the routing works — and that was the whole of
-// this integration before the engine could call Datadog back.
+// SEPARATE FROM THE INBOUND HALF above, because the two are genuinely
+// different integrations sharing a name — but not optional, and that is a
+// change from what this was. A company could once accept alerts with nothing
+// here, by pasting the engine's address into Datadog's webhook form by hand;
+// the engine registers that webhook itself now, so an enabled block without
+// this pair has nothing at Datadog pointing at it and receives no delivery
+// ever. The identity half — a service account per agent seat, each holding a
+// role and its own application key — is what the same pair additionally buys.
 type DatadogProvisioning struct {
 	// Site is the Datadog region, e.g. datadoghq.eu. A key issued in one
 	// region is refused by every other and the hostname is the only thing
@@ -1219,9 +1249,16 @@ type Datadog struct {
 	HandleTag string `yaml:"handle_tag,omitempty" json:"handle_tag,omitempty" desc:"Monitor tag key naming the seat an alert wakes (default crewlet)."`
 
 	// Provisioning is what the engine creates AT Datadog, and it is
-	// optional: an inbound-only company that pastes a webhook into
-	// Datadog's own UI needs none of it, which is how this integration
-	// worked before there was a client at all.
+	// REQUIRED when the block is enabled.
+	//
+	// It reads as decoration on an otherwise working inbound block and is
+	// not: the engine registers the webhook that makes an alert arrive at
+	// all, and nothing else does. A block without this pair serves its
+	// route, checks its token, reports itself connected, and receives
+	// nothing — the same not-there coverage `route_to` guards against one
+	// step earlier. Creating a service account per agent seat is a second
+	// thing the same pair happens to pay for, not the reason it is
+	// required. [Datadog.validate] refuses an enabled block without it.
 	Provisioning *DatadogProvisioning `yaml:"provisioning,omitempty" json:"provisioning,omitempty" desc:"Inputs for provisioning agent identities at Datadog."`
 
 	// RouteTo is the seat an alert whose monitor names nobody wakes.
@@ -1233,6 +1270,28 @@ type Datadog struct {
 	// verified, counted and dropped, which is the worst state an alerting
 	// integration can be in: it looks exactly like coverage.
 	RouteTo string `yaml:"route_to,omitempty" json:"route_to,omitempty" desc:"Handle of the seat an alert naming no owner wakes; required when enabled."`
+}
+
+// DatadogSites is every Datadog region a company may name.
+//
+// Restated here rather than imported from internal/datadog for the reason
+// [Datadog.HandleTagOrDefault] states — config is the leaf the vendor
+// packages depend on, and reaching the other way for a list would invert
+// that — and asserted equal to datadog.Sites() by the same test.
+//
+// CHECKED rather than accepted, because the hostname is the only thing that
+// distinguishes one region's keys from another's: a typo is a credential that
+// authenticates nowhere, reported by Datadog as a rejected key.
+//
+//nolint:gochecknoglobals // an immutable list, not state
+var DatadogSites = []string{
+	"datadoghq.com",
+	"us3.datadoghq.com",
+	"us5.datadoghq.com",
+	"datadoghq.eu",
+	"ap1.datadoghq.com",
+	"ap2.datadoghq.com",
+	"ddog-gov.com",
 }
 
 // WebhookNameOrDefault is the name of the webhook definition at Datadog.
@@ -1270,6 +1329,7 @@ func (d *Datadog) validate(path string) error {
 				"against it, and a route with nothing to check against "+
 				"answers 503 rather than accepting one")
 	}
+	sharedToken(&p, at(path, "webhook_token"), d.WebhookToken)
 	if strings.TrimSpace(d.RouteTo) == "" {
 		p.add(at(path, "route_to"), ErrMissing,
 			"required when datadog is enabled: name the handle of the seat "+
@@ -1321,6 +1381,33 @@ func (d *Datadog) validate(path string) error {
 			p.add(at(path, "provisioning.app_key"), ErrMissing,
 				"required when datadog is enabled: Datadog refuses a write "+
 					"carrying only an API key, and its message names neither")
+		}
+		// AND THE REGION, which is the third of the three and was the one
+		// that failed soft. A key issued in one region is refused by every
+		// other and the hostname is the only thing that tells them apart,
+		// so a block with both keys and no site cannot build a single
+		// call — it just fails hours later as a dashboard finding rather
+		// than at load, beside two fields that fail closed.
+		site := strings.ToLower(strings.TrimSpace(d.Provisioning.Site))
+		switch {
+		case site == "":
+			p.add(at(path, "provisioning.site"), ErrMissing,
+				"required when datadog is enabled: it is the region the keys "+
+					"were issued in, and a key from one region is refused by "+
+					"every other. One of %s",
+				strings.Join(DatadogSites, ", "))
+		case envref.Has(d.Provisioning.Site):
+			// A ${VAR} IS UNKNOWN, NOT WRONG. Tier B holds pointers
+			// verbatim and resolves them where a client is built, so the
+			// membership check belongs there — datadog.NewClient makes
+			// it, on the resolved value.
+		case !slices.Contains(DatadogSites, site):
+			p.add(at(path, "provisioning.site"), ErrUnknownValue,
+				"%q is not a Datadog region: the hostname is the only thing "+
+					"that tells one organization's keys from another's, so a "+
+					"value Datadog does not serve resolves to no API at all. "+
+					"One of %s",
+				d.Provisioning.Site, strings.Join(DatadogSites, ", "))
 		}
 	}
 

@@ -446,7 +446,7 @@ func TestALiteralInTheConfigIsRefusedByPath(t *testing.T) {
 	// Put a literal there the way an operator would have: through the
 	// config surface itself.
 	patch := s.do(t, http.MethodPatch, "/config",
-		`{"integrations":{"datadog":{"enabled":true,"webhook_token":"plain-token",`+
+		`{"integrations":{"datadog":{"enabled":true,"webhook_token":"EXAMPLEPLAINTOKEN000000000",`+
 			`"route_to":"sre-lead","provisioning":{"site":"datadoghq.com",`+
 			`"api_key":"dd-api","app_key":"dd-app"}}}}`,
 		map[string]string{
@@ -471,7 +471,7 @@ func TestALiteralInTheConfigIsRefusedByPath(t *testing.T) {
 	}
 	// AND THE REFUSAL DOES NOT ECHO THE VALUE, which is the leak a
 	// third-party app's own error string would have carried straight through.
-	if strings.Contains(res.Body.String(), "plain-token") {
+	if strings.Contains(res.Body.String(), "EXAMPLEPLAINTOKEN000000000") {
 		t.Fatal("the refusal echoes the credential it refused to overwrite")
 	}
 }

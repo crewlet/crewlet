@@ -205,12 +205,60 @@ func (c *Company) Validate() error {
 	// exactly as written. Refusing the name is the only place this can be
 	// caught, because by the time the parser reads a fallback the two are
 	// the same string.
-	for role := range c.EachRole() {
-		if role.Seat().Handle() == DatadogIgnore {
-			p.add("roles", ErrUnknownValue,
+	//
+	// AND THE FALLBACK MUST NAME SOMEBODY WHO CAN BE WOKEN. `route_to` is
+	// the only routing floor in this file, and the two ways it silently
+	// fails are a handle no seat has — resolving to nothing, one
+	// `notification_undeliverable` warning per untagged alert, for ever —
+	// and one naming a HUMAN seat, which resolves fine and is then dropped
+	// as a self-action. Both read as correct configuration on every screen,
+	// which is the state the field exists to prevent. This is the only
+	// place either can be caught: the parser deliberately does not consult
+	// the roster (a bad monitor TAG must stay visible as the operator's
+	// typo it is), and the setup form is one of three write paths.
+	fallback := ""
+	if dd := c.Integrations.Datadog; dd != nil && dd.Enabled {
+		fallback = strings.TrimSpace(dd.RouteTo)
+	}
+	agents, handles := 0, make([]string, 0, 8)
+	routed := false
+	for role, path := range c.EachRole() {
+		seat := role.Seat()
+		if seat.Handle() == DatadogIgnore {
+			p.add(at(path, "handle"), ErrUnknownValue,
 				"a seat cannot be called %q: it is what integrations.datadog.route_to "+
 					"means by nobody, so a seat of that name would be silenced by "+
-					"its own handle", DatadogIgnore)
+					"its own handle. %q derives that handle from its name",
+				DatadogIgnore, role.Name)
+		}
+		if !seat.IsAgent() {
+			continue
+		}
+		agents++
+		handles = append(handles, seat.Handle())
+		if seat.Handle() == fallback {
+			routed = true
+		}
+	}
+	if fallback != "" && fallback != DatadogIgnore && !routed {
+		switch {
+		case !org.ValidHandle(fallback):
+			p.add("integrations.datadog.route_to", ErrUnknownValue,
+				"%q is not a seat handle: a handle is lowercase letters, "+
+					"digits and hyphens starting with a letter or digit, so "+
+					"this names no seat and every untagged alert is verified, "+
+					"counted and delivered to nobody", fallback)
+		case agents == 0:
+			p.add("integrations.datadog.route_to", ErrUnknownValue,
+				"%q names no seat: this company declares no agent seat at all, "+
+					"so there is nobody an untagged alert can wake", fallback)
+		default:
+			p.add("integrations.datadog.route_to", ErrUnknownValue,
+				"%q is not an agent seat in this company. An alert naming no "+
+					"owner wakes this handle, and one that resolves to nothing "+
+					"— or to a human seat, which is dropped as a self-action — "+
+					"is coverage that is not there. The agent seats are: %s",
+				fallback, strings.Join(handles, ", "))
 		}
 	}
 

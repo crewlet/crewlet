@@ -47,7 +47,7 @@ func (r *Receiver) github(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	v, ok := r.authenticate(w, "github", githubSecret(r.secrets(), handle),
-		req.Header.Get("X-Hub-Signature-256"), raw, verifyGitHub)
+		req.Header.Get("X-Hub-Signature-256"), raw, signed(verifyGitHub))
 	if !ok {
 		return
 	}
@@ -113,7 +113,7 @@ func (r *Receiver) datadog(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	v, ok := r.authenticate(w, "datadog", r.secrets().Datadog,
-		req.Header.Get("X-Crewlet-Token"), raw, verifyToken)
+		req.Header.Get("X-Crewlet-Token"), raw, sharedToken)
 	if !ok {
 		return
 	}
@@ -198,7 +198,7 @@ func (r *Receiver) gitlab(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	v, ok := r.authenticate(w, "gitlab", secret,
-		req.Header.Get("webhook-signature"), raw, scheme(standardWebhooks))
+		req.Header.Get("webhook-signature"), raw, signed(standardWebhooks))
 	if !ok {
 		return
 	}
@@ -230,7 +230,7 @@ func (r *Receiver) jira(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	v, ok := r.authenticate(w, "jira", r.secrets().Jira,
-		req.Header.Get("X-Hub-Signature"), raw, verifyAtlassian)
+		req.Header.Get("X-Hub-Signature"), raw, signed(verifyAtlassian))
 	if !ok {
 		return
 	}
@@ -268,7 +268,7 @@ func (r *Receiver) confluence(w http.ResponseWriter, req *http.Request) {
 	// Cloud delivery posted here carries no signature and is refused,
 	// which is correct rather than a gap.
 	v, ok := r.authenticate(w, "confluence", r.secrets().Confluence,
-		req.Header.Get("X-Hub-Signature"), raw, verifyAtlassian)
+		req.Header.Get("X-Hub-Signature"), raw, signed(verifyAtlassian))
 	if !ok {
 		return
 	}
@@ -354,7 +354,7 @@ func (r *Receiver) slack(w http.ResponseWriter, req *http.Request) {
 	v0 := func(body []byte, secret, signature string) bool {
 		return verifySlack(body, secret, signature, timestamp, now)
 	}
-	v, ok := r.authenticate(w, "slack", secret, req.Header.Get("X-Slack-Signature"), raw, v0)
+	v, ok := r.authenticate(w, "slack", secret, req.Header.Get("X-Slack-Signature"), raw, signed(v0))
 	if !ok {
 		return
 	}
@@ -420,7 +420,7 @@ func (r *Receiver) confluenceCloud(w http.ResponseWriter, req *http.Request) {
 		token = req.URL.Query().Get("token")
 	}
 	v, ok := r.authenticate(w, "confluence", r.secrets().ConfluenceToken,
-		token, raw, verifyToken)
+		token, raw, sharedToken)
 	if !ok {
 		return
 	}

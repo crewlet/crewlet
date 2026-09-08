@@ -643,8 +643,8 @@ integrations:
 integrations:
   datadog:
     enabled: true
-    webhook_token: t
-    route_to: founder
+    webhook_token: EXAMPLEDATADOGTOKEN0000000
+    route_to: ceo
     provisioning:
       site: datadoghq.com
       api_key: dd-api
@@ -687,7 +687,7 @@ func TestDatadogRoutingFollowsTheAppliedRevision(t *testing.T) {
 integrations:
   datadog:
     enabled: true
-    webhook_token: t
+    webhook_token: EXAMPLEDATADOGTOKEN0000000
     route_to: ` + route + `
     provisioning:
       site: datadoghq.com
@@ -695,7 +695,7 @@ integrations:
       app_key: dd-app
 `
 	}
-	e := newEngine(t, engine.Options{Company: parsedCompany(t, with("founder"))})
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, with("ceo"))})
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -712,7 +712,7 @@ integrations:
 	}
 
 	// And back, which is what a reconnect is.
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, with("founder"))); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, with("ceo"))); err != nil {
 		t.Fatalf("Apply with datadog: %v", err)
 	}
 	if !slices.Contains(e.RoutedSources(), "datadog") {

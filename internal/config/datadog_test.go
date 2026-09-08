@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -16,7 +17,7 @@ import (
 // working coverage.
 func TestDatadogRequiresARoutingFloor(t *testing.T) {
 	t.Parallel()
-	err := validateIntegrationDoc(t, "datadog", "    enabled: true\n    webhook_token: \"whsec_x\"")
+	err := validateIntegrationDoc(t, "datadog", "    enabled: true\n    webhook_token: \"EXAMPLEDATADOGTOKEN0000000\"")
 	if err == nil {
 		t.Fatal("an enabled Datadog block with no route_to was accepted")
 	}
@@ -29,7 +30,7 @@ func TestDatadogRequiresARoutingFloor(t *testing.T) {
 // company that fixed one must still be told about the other.
 func TestDatadogRequiresItsToken(t *testing.T) {
 	t.Parallel()
-	err := validateIntegrationDoc(t, "datadog", "    enabled: true\n    route_to: sre-lead")
+	err := validateIntegrationDoc(t, "datadog", "    enabled: true\n    route_to: swe")
 	if err == nil {
 		t.Fatal("an enabled Datadog block with no webhook_token was accepted")
 	}
@@ -47,7 +48,7 @@ func TestDatadogRequiresItsToken(t *testing.T) {
 func TestDatadogRequiresTheKeysThatRegisterItsWebhook(t *testing.T) {
 	t.Parallel()
 	err := validateIntegrationDoc(t, "datadog",
-		"    enabled: true\n    webhook_token: \"whsec_x\"\n    route_to: sre-lead")
+		"    enabled: true\n    webhook_token: \"EXAMPLEDATADOGTOKEN0000000\"\n    route_to: swe")
 	if err == nil {
 		t.Fatal("an enabled Datadog block with no provisioning keys was accepted")
 	}
@@ -68,8 +69,8 @@ func TestACompleteDatadogBlockValidates(t *testing.T) {
 
 // completeDatadog is a block with every requirement answered.
 const completeDatadog = `    enabled: true
-    webhook_token: "whsec_x"
-    route_to: sre-lead
+    webhook_token: "EXAMPLEDATADOGTOKEN0000000"
+    route_to: swe
     provisioning:
       site: datadoghq.com
       api_key: "${DD_API_KEY}"
@@ -111,8 +112,8 @@ func TestDatadogRefusesATagKeyThatCannotMatch(t *testing.T) {
 		t.Run(key, func(t *testing.T) {
 			t.Parallel()
 			err := validateIntegrationDoc(t, "datadog",
-				"    enabled: true\n    webhook_token: \"whsec_x\"\n"+
-					"    route_to: sre-lead\n    handle_tag: \""+key+"\"")
+				"    enabled: true\n    webhook_token: \"EXAMPLEDATADOGTOKEN0000000\"\n"+
+					"    route_to: swe\n    handle_tag: \""+key+"\"")
 			if err == nil {
 				t.Fatalf("handle_tag %q was accepted", key)
 			}
@@ -319,5 +320,150 @@ func TestTheCloudHostRuleMatchesTheVendorClients(t *testing.T) {
 		if fromConfig != fromConfluence || fromConfig != fromJira {
 			t.Errorf("%s: config=%v confluence=%v jira=%v", addr, fromConfig, fromConfluence, fromJira)
 		}
+	}
+}
+
+// THE FALLBACK MUST NAME A SEAT THAT EXISTS.
+//
+// route_to is the only routing floor in this file, and a handle no seat has
+// resolves to nothing: one `notification_undeliverable` warning per untagged
+// alert, for ever, on a screen showing the configuration exactly as written.
+// The parser deliberately passes an unknown handle through — a bad monitor
+// TAG is the operator's typo and must stay visible — so the config document
+// is the one place this can be caught.
+func TestDatadogRefusesAFallbackNamingNoSeat(t *testing.T) {
+	t.Parallel()
+	err := validateIntegrationDoc(t, "datadog",
+		strings.Replace(completeDatadog, "route_to: swe", "route_to: nobody-here", 1))
+	if err == nil {
+		t.Fatal("route_to naming no seat was accepted")
+	}
+	if !strings.Contains(err.Error(), "route_to") ||
+		!strings.Contains(err.Error(), "nobody-here") {
+		t.Errorf("error %q names neither the field nor the handle", err)
+	}
+	// AND IT SAYS WHO IS AVAILABLE, because "not a seat" without the
+	// roster sends an operator to another file to find out what is.
+	if !strings.Contains(err.Error(), "swe") {
+		t.Errorf("error %q does not list the agent seats that do exist", err)
+	}
+}
+
+// A HANDLE THAT IS NOT A HANDLE is refused for the shape rather than the
+// roster, because "not an agent seat in this company" reads as a missing seat
+// when the real answer is that no seat could ever be called this.
+func TestDatadogRefusesAFallbackThatIsNotAHandle(t *testing.T) {
+	t.Parallel()
+	err := validateIntegrationDoc(t, "datadog",
+		strings.Replace(completeDatadog, "route_to: swe", `route_to: "SRE Lead"`, 1))
+	if err == nil {
+		t.Fatal("route_to holding a name rather than a handle was accepted")
+	}
+	if !strings.Contains(err.Error(), "not a seat handle") {
+		t.Errorf("error %q does not say the value is the wrong shape", err)
+	}
+}
+
+// AND none STILL MEANS NOBODY. It is the one value that names no seat on
+// purpose, so the roster check must not refuse it.
+func TestDatadogAcceptsTheDismissFallback(t *testing.T) {
+	t.Parallel()
+	err := validateIntegrationDoc(t, "datadog",
+		strings.Replace(completeDatadog, "route_to: swe", "route_to: none", 1))
+	if err != nil {
+		t.Fatalf("route_to: none was refused: %v", err)
+	}
+}
+
+// THE REGION IS AS LOAD-BEARING AS THE TWO KEYS. A key issued in one region
+// is refused by every other and the hostname is the only thing that tells
+// them apart, so a block with both keys and no site cannot build one call —
+// and it used to fail hours later as a dashboard finding rather than at load.
+func TestDatadogRequiresTheRegionItsKeysWereIssuedIn(t *testing.T) {
+	t.Parallel()
+	err := validateIntegrationDoc(t, "datadog",
+		strings.Replace(completeDatadog, "      site: datadoghq.com\n", "", 1))
+	if err == nil {
+		t.Fatal("a provisioning block with no site was accepted")
+	}
+	if !strings.Contains(err.Error(), "provisioning.site") {
+		t.Errorf("error %q does not name the field", err)
+	}
+}
+
+// And a region Datadog does not serve is refused rather than left to become a
+// credential that authenticates nowhere.
+func TestDatadogRefusesARegionItDoesNotServe(t *testing.T) {
+	t.Parallel()
+	err := validateIntegrationDoc(t, "datadog",
+		strings.Replace(completeDatadog, "site: datadoghq.com", "site: datadoghq.co.uk", 1))
+	if err == nil {
+		t.Fatal("an unknown Datadog region was accepted")
+	}
+	if !strings.Contains(err.Error(), "datadoghq.co.uk") {
+		t.Errorf("error %q does not quote the region it refused", err)
+	}
+}
+
+// A ${VAR} IS UNKNOWN, NOT WRONG. Tier B holds pointers verbatim, so the
+// membership check belongs where the client is built, on the resolved value.
+func TestDatadogAcceptsAReferencedRegion(t *testing.T) {
+	t.Parallel()
+	err := validateIntegrationDoc(t, "datadog",
+		strings.Replace(completeDatadog, "site: datadoghq.com", `site: "${DD_SITE}"`, 1))
+	if err != nil {
+		t.Fatalf("a ${VAR} region was refused: %v", err)
+	}
+}
+
+// The region list here and the vendor client's own must agree, or a site this
+// validator accepts is one datadog.NewClient refuses at the first call.
+func TestTheRegionListMatchesTheVendorClient(t *testing.T) {
+	t.Parallel()
+	if got, want := config.DatadogSites, datadog.Sites(); !slices.Equal(got, want) {
+		t.Errorf("config.DatadogSites = %v, datadog.Sites() = %v", got, want)
+	}
+}
+
+// AND A HUMAN SEAT IS NOT AN ANSWER EITHER — the subtler of the two silent
+// failures, because the seat EXISTS. The handle resolves, the configuration
+// reads as correct on every screen, and notify.Deliverable then drops the
+// delivery as a self-action, so every untagged alert lands nowhere. The
+// engine's own fixture routed to a human seat until this rule existed.
+func TestDatadogRefusesAFallbackNamingAHumanSeat(t *testing.T) {
+	t.Parallel()
+	doc := `
+name: Acme
+providers:
+  llm:
+    fast:
+      type: anthropic
+      model: claude-golden
+integrations:
+  datadog:
+` + completeDatadog + `
+roles:
+  - name: SWE
+    llm: fast
+  - name: Founder
+    kind: human
+    contact:
+      slack_user_id: U0FOUNDER
+`
+	// ParseCompany validates, so the refusal can come from either step.
+	err := func() error {
+		c, err := config.ParseCompany(
+			[]byte(strings.Replace(doc, "route_to: swe", "route_to: founder", 1)))
+		if err != nil {
+			return err
+		}
+		return c.Validate()
+	}()
+	if err == nil {
+		t.Fatal("route_to naming a human seat was accepted")
+	}
+	if !strings.Contains(err.Error(), "founder") ||
+		!strings.Contains(err.Error(), "human seat") {
+		t.Errorf("error %q does not say why a human seat cannot be the floor", err)
 	}
 }
