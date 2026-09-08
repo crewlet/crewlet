@@ -274,10 +274,11 @@ func (p *githubPass) Teardown(ctx context.Context, in setup.TeardownInput) error
 	// Every seat is attempted and the failures are joined, rather than
 	// stopping at the first: one seat whose key is lost must not leave the
 	// other nine installed.
+	apiBase, _ := githubBases(cfg, env)
 	var failures []error
 	for _, seat := range p.seatApps(env) {
 		if err := github.UninstallSeat(ctx, github.SeatAppOptions{
-			APIBase: strings.TrimSpace(cfg.URL),
+			APIBase: apiBase,
 		}, seat); err != nil {
 			failures = append(failures, fmt.Errorf("%s: %w", seat.Handle, err))
 		}
@@ -838,9 +839,10 @@ func (p *githubPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 	// in a browser that tells the engine nothing.
 	seats := p.seatApps(env)
 	if len(seats) > 0 {
+		apiBase, webBase := githubBases(cfg, env)
 		apps, appsErr := github.ReconcileSeatApps(ctx, github.SeatAppOptions{
-			APIBase: strings.TrimSpace(cfg.URL),
-			WebBase: strings.TrimSpace(cfg.URL),
+			APIBase: apiBase,
+			WebBase: webBase,
 			Org:     githubOrg(cfg),
 			Seats:   seats,
 			// A DRY RUN RECORDS NOTHING, which is what a check is: the

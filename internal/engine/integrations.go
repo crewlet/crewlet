@@ -197,15 +197,38 @@ func githubReconcileClient(cfg *config.GitHub, env *config.Resolver) (*github.Cl
 	if token == "" {
 		return nil, nil
 	}
-	// RESOLVED FIRST, then asked for its bases. APIBase and WebURL are
-	// derived from URL, so building them off the unresolved block would
-	// point an Enterprise Server deployment at github.com whenever the
-	// host is written as a ${VAR}.
+	apiBase, webBase := githubBases(cfg, env)
+	return github.NewClient(github.ClientOptions{
+		APIBase: apiBase, WebBase: webBase, Token: token,
+	})
+}
+
+// githubBases is where GitHub is reached: the REST base and the browser base,
+// both DERIVED from a RESOLVED url.
+//
+// RESOLVED FIRST, then asked for its bases. [config.GitHub.APIBase] and
+// [config.GitHub.WebURL] are derived from URL, so building them off the
+// unresolved block points an Enterprise Server deployment at github.com
+// whenever the host is written as a ${VAR}.
+//
+// AND DERIVED RATHER THAN PASSED THROUGH. The REST base is `<url>/api/v3` on
+// Enterprise Server and `api.github.com` when the field is empty; the raw url
+// is neither. Handing it over as the API base is not inert on the seat-app
+// half: every call 404s, and [github.ReconcileSeatApps] reads a 404 from the
+// installation endpoints as an app GitHub no longer has, so it FORGETS the
+// seat's app — clearing the id, the slug and the pointer to a key GitHub
+// issues once and never reissues, for an app that exists and works.
+//
+// One helper because there are three callers and the empty-url case makes the
+// wrong one look right: github.com works either way, so a copy that skipped
+// this was only ever wrong on Enterprise Server.
+func githubBases(cfg *config.GitHub, env *config.Resolver) (apiBase, webBase string) {
+	if cfg == nil {
+		return "", ""
+	}
 	resolved := *cfg
 	resolved.URL = strings.TrimSpace(env.Value(cfg.URL))
-	return github.NewClient(github.ClientOptions{
-		APIBase: resolved.APIBase(), WebBase: resolved.WebURL(), Token: token,
-	})
+	return resolved.APIBase(), resolved.WebURL()
 }
 
 // confluenceBaseURL is the REST base this node reads the wiki on.
