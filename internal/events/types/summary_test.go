@@ -8,10 +8,9 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 )
 
-// The summary and actor assertions ported from tests/test_events/test_types.py.
-// They are stated through the envelope rather than against the payload methods,
-// because the envelope is what every consumer calls and where the fallbacks
-// live.
+// The summary and actor assertions are stated through the envelope rather than
+// against the payload methods, because the envelope is what every consumer
+// calls and where the fallbacks live.
 
 func summaryOf(payload events.Payload, source string) string {
 	event := events.NewFrom(payload, events.TraceContext{})
