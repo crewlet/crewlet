@@ -102,7 +102,7 @@ func TestALeaseThatCannotBeReadIsNotReportedAsInFlight(t *testing.T) {
 	close(pass.release)
 	blip := errors.New("coordination store unreachable")
 	r := NewRunner([]Pass{pass}, func(integration.Kind) Duty {
-		return func(context.Context) (bool, error) { return false, blip }
+		return func(context.Context) (func(), bool, error) { return nil, false, blip }
 	}, pinnedNow)
 
 	_, err := r.Start(context.Background(), integration.KindGitHub, PassInput{}, "run-1")
@@ -123,7 +123,7 @@ func TestALeaseHeldElsewhereIsInFlight(t *testing.T) {
 	pass := newGate(integration.KindGitHub)
 	close(pass.release)
 	r := NewRunner([]Pass{pass}, func(integration.Kind) Duty {
-		return func(context.Context) (bool, error) { return false, nil }
+		return func(context.Context) (func(), bool, error) { return nil, false, nil }
 	}, pinnedNow)
 
 	if _, err := r.Start(context.Background(), integration.KindGitHub, PassInput{}, "run-1"); !errors.Is(err, ErrPassInFlight) {
@@ -169,5 +169,92 @@ func TestAFailedPassIsRecordedRatherThanForgotten(t *testing.T) {
 	got, ok := r.Get("run-1")
 	if !ok || got.State != RunFailed {
 		t.Error("the failed run is not retrievable by id")
+	}
+}
+
+// countingDuty is a lease that records how often it was taken and given back.
+type countingDuty struct {
+	mu       sync.Mutex
+	held     int
+	released int
+}
+
+func (d *countingDuty) duty(integration.Kind) Duty {
+	return func(context.Context) (func(), bool, error) {
+		d.mu.Lock()
+		d.held++
+		d.mu.Unlock()
+		return func() {
+			d.mu.Lock()
+			d.released++
+			d.mu.Unlock()
+		}, true, nil
+	}
+}
+
+func (d *countingDuty) counts() (int, int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.held, d.released
+}
+
+// THE LEASE IS GIVEN BACK WHEN THE PASS ENDS.
+//
+// Held to its TTL instead, this lock is indistinguishable from an outage to
+// every other caller. The reconcile loop takes the SAME lease for the same
+// surface every few seconds, so a five-minute lease kept after a
+// three-second pass would refuse every tick on every other node — and refuse
+// an operator's next press of the button too.
+func TestTheProvisioningLeaseIsGivenBack(t *testing.T) {
+	pass := newGate(integration.KindGitHub)
+	close(pass.release)
+	lease := new(countingDuty)
+	r := NewRunner([]Pass{pass}, lease.duty, pinnedNow)
+
+	if _, err := r.Start(context.Background(), integration.KindGitHub, PassInput{}, "run-1"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if held, released := lease.counts(); held != 1 || released != 1 {
+		t.Errorf("lease taken %d times and given back %d, want 1 and 1", held, released)
+	}
+}
+
+// AND GIVEN BACK WHEN THE PASS FAILS, which is when holding it hurts most: a
+// surface that just refused is the one an operator retries immediately.
+func TestAFailedPassStillGivesTheLeaseBack(t *testing.T) {
+	pass := newGate(integration.KindGitHub)
+	close(pass.release)
+	pass.err = errors.New("the vendor refused")
+	lease := new(countingDuty)
+	r := NewRunner([]Pass{pass}, lease.duty, pinnedNow)
+
+	if _, err := r.Start(context.Background(), integration.KindGitHub, PassInput{}, "run-1"); err == nil {
+		t.Fatal("a failing pass reported success")
+	}
+	if _, released := lease.counts(); released != 1 {
+		t.Errorf("the lease was given back %d times after a failure, want 1", released)
+	}
+}
+
+// tearPass is a pass that can also be torn down.
+type tearPass struct{ gatePass }
+
+func (p *tearPass) Teardown(context.Context, TeardownInput) error { return nil }
+
+// AND A TEARDOWN GIVES IT BACK TOO. It takes the same lease for the same
+// reason — a teardown and a pass both write at the third-party app — so it
+// has to return it on the same terms.
+func TestATeardownGivesTheLeaseBack(t *testing.T) {
+	pass := &tearPass{gatePass: gatePass{kind: integration.KindGitHub}}
+	lease := new(countingDuty)
+	r := NewRunner([]Pass{pass}, lease.duty, pinnedNow)
+
+	if _, err := r.StartTeardown(
+		context.Background(), integration.KindGitHub, TeardownInput{}, "run-1",
+	); err != nil {
+		t.Fatalf("StartTeardown: %v", err)
+	}
+	if held, released := lease.counts(); held != 1 || released != 1 {
+		t.Errorf("lease taken %d times and given back %d, want 1 and 1", held, released)
 	}
 }

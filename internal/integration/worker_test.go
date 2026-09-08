@@ -749,3 +749,66 @@ func TestOnlyAnEngineRegisteredAddressIsStampedByAPass(t *testing.T) {
 			"waiting for the next base change", got)
 	}
 }
+
+// A SURFACE SOMEBODY ELSE IS WRITING AT LEAVES NO TRACE.
+//
+// The provisioning lease is shared with the pass an operator runs from the
+// dashboard, so a tick can find it held. That is not a result: nothing was
+// observed, so nothing may be recorded. An attempt counted here would back the
+// cadence off for a pass that never ran, and a fault written here would
+// describe as broken a surface that is at that moment being provisioned
+// successfully by somebody else.
+//
+// The mirror of the ErrDisconnectUnavailable arm in tearDown, which is where
+// this shape already existed for the other half of the tick.
+func TestABusySurfaceRecordsNothing(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	r := &fakeReconciler{kind: KindGitLab, err: ErrReconcileUnavailable}
+	store := newStore()
+
+	at(t, now, store, nil, Registration{Reconciler: r}).Tick(context.Background())
+
+	if r.count() != 1 {
+		t.Fatalf("the reconciler ran %d times, want 1", r.count())
+	}
+	if store.has(KindGitLab) {
+		t.Errorf("a tick that reconciled nothing wrote a status row: %+v",
+			store.get(t, KindGitLab))
+	}
+}
+
+// AND A WRAPPED ONE TOO, because the converger wraps the store's own failure
+// around it: an unreadable lease is "not now" for the same reason a held one
+// is — neither is evidence the surface is idle.
+func TestABusySurfaceRecordsNothingWhenTheReasonIsWrapped(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	r := &fakeReconciler{
+		kind: KindGitLab,
+		err: fmt.Errorf("%w: %w", ErrReconcileUnavailable,
+			errors.New("coordination store unreachable")),
+	}
+	store := newStore()
+
+	at(t, now, store, nil, Registration{Reconciler: r}).Tick(context.Background())
+
+	if store.has(KindGitLab) {
+		t.Errorf("a deferred tick wrote a status row: %+v", store.get(t, KindGitLab))
+	}
+}
+
+// AND AN ORDINARY FAULT STILL IS RECORDED, or the arm above would be a way to
+// lose every real failure.
+func TestAnOrdinaryFaultIsStillRecorded(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	r := &fakeReconciler{kind: KindGitLab, err: errors.New("the vendor refused")}
+	store := newStore()
+
+	at(t, now, store, nil, Registration{Reconciler: r}).Tick(context.Background())
+
+	if !store.has(KindGitLab) {
+		t.Fatal("a failed pass recorded nothing")
+	}
+	if got := store.get(t, KindGitLab); got.LastError == "" {
+		t.Error("the recorded row carries no fault")
+	}
+}

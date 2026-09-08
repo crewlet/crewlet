@@ -48,6 +48,28 @@ func (e *Engine) workerDuty(name string, ttl time.Duration) schedule.DutyFunc {
 		e.node.Owner(), e.node.ID(), ttl)
 }
 
+// workerHold is [Engine.workerDuty] for a lease that is GIVEN BACK.
+//
+// The same three-way gate and the same reasoning; what differs is the shape of
+// the lease underneath. A singleton is re-claimed every tick and the holder
+// stays the holder, so its TTL is meant to outlive one tick. A hold wraps one
+// piece of work and is released when that work ends, because keeping it after
+// is indistinguishable from an outage to every other caller — see
+// [schedule.HoldNamedDuty].
+func (e *Engine) workerHold(name string, ttl time.Duration) schedule.HoldFunc {
+	if !e.profile.RunsWorkers() {
+		return refuseHold
+	}
+	if e.backends == nil || e.node == nil {
+		return nil
+	}
+	return schedule.HoldNamedDuty(e.backends.Coord, name,
+		e.node.Owner(), e.node.ID(), ttl)
+}
+
+// refuseHold is [refuseDuty] for a hold: no release, because nothing was held.
+func refuseHold(context.Context) (func(), bool, error) { return nil, false, nil }
+
 // refuseDuty is the answer for a node whose roles exclude worker duties.
 //
 // A plain false rather than an error: the node is doing exactly what it was

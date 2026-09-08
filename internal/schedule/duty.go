@@ -83,6 +83,73 @@ func ClaimDuty(backend coord.Backend, owner, nodeID string, tick time.Duration) 
 	return ClaimNamedDuty(backend, DutyName, owner, nodeID, DutyTTL(tick))
 }
 
+// HoldFunc claims a duty for ONE piece of work and hands back the release.
+//
+// held is false when a peer has it. release is non-nil exactly when held is
+// true, and calling it is what lets the next caller in.
+type HoldFunc func(ctx context.Context) (release func(), held bool, err error)
+
+// HoldNamedDuty is mutual exclusion around one piece of work, where
+// [ClaimNamedDuty] is a fleet SINGLETON.
+//
+// The difference is what the TTL is for, and it is the whole reason both
+// exist. A singleton re-claims every tick and the holder stays the holder, so
+// a TTL that outlives one tick is the point of it. This is a lock around work
+// with a beginning and an end — a provisioning pass writing at a third-party
+// app — where the TTL is only a backstop for a node that died mid-pass, and
+// holding it afterwards locks every other node out of a surface for minutes
+// after the work finished.
+//
+// RELEASED ON A CONTEXT THAT CANNOT BE CANCELLED, because the thing being
+// undone is frequently the cancellation itself: a pass whose context died
+// mid-run is exactly when the lease most needs giving back, and a release
+// inheriting that context would do nothing at all.
+//
+// The release EXPIRES the record rather than deleting it, which is
+// [coord.Backend.Release]'s own contract: a deleted record restarts the epoch
+// counter that a zombie from the released tenure is still fencing with.
+func HoldNamedDuty(backend coord.Backend, duty, owner, nodeID string, ttl time.Duration) HoldFunc {
+	if backend == nil {
+		// No coordination store is the single-node case, which always
+		// holds every duty. Nil rather than a function that always says
+		// yes, for the reason [ClaimNamedDuty] gives: a caller logs
+		// whether it is a fleet singleton, and a wrapper that always
+		// agreed would make a lone node report itself as one.
+		return nil
+	}
+	resource := coord.WorkerResource(duty)
+	return func(ctx context.Context) (func(), bool, error) {
+		lease, err := backend.TryAcquire(ctx, resource, coord.AcquireOptions{
+			Owner:     owner,
+			TTL:       ttl,
+			Preferred: nodeID,
+			Ungated:   true,
+		})
+		if err != nil {
+			// Unknown, passed straight through, for the reason
+			// [ClaimNamedDuty] gives: "a peer holds it" and "the store
+			// could not be reached" are the same silence and opposite
+			// situations.
+			return nil, false, err
+		}
+		if lease == nil {
+			return nil, false, nil
+		}
+		release := func() {
+			// The epoch is the fencing token this tenure was granted
+			// under; releasing at any other would give away a lease
+			// somebody else now holds.
+			if _, relErr := backend.Release(
+				context.WithoutCancel(ctx), resource, owner, lease.Epoch,
+			); relErr != nil {
+				log.Warn("duty_not_released", "duty", duty, "error", relErr,
+					"detail", "the next caller waits out the lease TTL instead")
+			}
+		}
+		return release, true, nil
+	}
+}
+
 // ClaimNamedDuty is [ClaimDuty] for any fleet singleton.
 //
 // The scheduler is not the only one: the sandbox waiter polls every active run

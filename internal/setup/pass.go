@@ -170,13 +170,20 @@ type Run struct {
 	Report *integration.Report `json:"report,omitempty"`
 }
 
-// Duty is the fleet lease a pass holds while it runs.
+// Duty is the fleet lease a pass holds WHILE IT RUNS, and gives back when it
+// is done.
 //
 // The consumer's own interface: one call, answering whether this node may act
-// now. Three-valued through the error, like every other ownership question in
-// this engine, because "somebody else holds it" and "the store could not be
-// reached" lead to opposite actions.
-type Duty func(ctx context.Context) (bool, error)
+// now and handing back the release. Three-valued through the error, like every
+// other ownership question in this engine, because "somebody else holds it"
+// and "the store could not be reached" lead to opposite actions.
+//
+// THE RELEASE IS THE HALF THAT MAKES THE LEASE SHAREABLE. Held to its TTL
+// after the work finished, this lock is indistinguishable from an outage to
+// every other caller: the loop reconciles a surface every few seconds, so a
+// lease it kept for five minutes would refuse an operator's pass on any node
+// but its own, permanently. release is non-nil exactly when held is true.
+type Duty func(ctx context.Context) (release func(), held bool, err error)
 
 // Runner executes passes and remembers what they did.
 type Runner struct {
@@ -256,7 +263,7 @@ func (r *Runner) Start(ctx context.Context, kind integration.Kind, in PassInput,
 
 	if r.duty != nil {
 		if duty := r.duty(kind); duty != nil {
-			held, err := duty(ctx)
+			release, held, err := duty(ctx)
 			if err != nil {
 				// UNKNOWN IS NOT REFUSED-AND-NOT-HELD. A coordination
 				// store that could not answer is not evidence that
@@ -267,6 +274,7 @@ func (r *Runner) Start(ctx context.Context, kind integration.Kind, in PassInput,
 			if !held {
 				return nil, ErrPassInFlight
 			}
+			defer release()
 		}
 	}
 
@@ -317,7 +325,7 @@ func (r *Runner) StartTeardown(
 
 	if r.duty != nil {
 		if duty := r.duty(kind); duty != nil {
-			held, err := duty(ctx)
+			release, held, err := duty(ctx)
 			if err != nil {
 				// Three-valued, as everywhere: a store that could not
 				// answer is not evidence somebody else is minting.
@@ -326,6 +334,7 @@ func (r *Runner) StartTeardown(
 			if !held {
 				return nil, ErrPassInFlight
 			}
+			defer release()
 		}
 	}
 

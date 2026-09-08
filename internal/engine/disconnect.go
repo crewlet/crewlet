@@ -121,6 +121,26 @@ func (e *Engine) dropBlock(
 		return fmt.Errorf("%w: no config surface is wired on this node",
 			integration.ErrDisconnectUnavailable)
 	}
+	// AND NOT WHILE SOMETHING ELSE IS WRITING AT THIS SURFACE. A teardown
+	// and a provisioning pass are the two operations that write at the
+	// third-party app, and letting them overlap is how a disconnect deletes
+	// the webhook the pass beside it is registering — which is exactly why
+	// [setup.Runner.StartTeardown] takes this same lease. The loop reaches a
+	// teardown through the Disconnector instead, so it has to take it here
+	// or the guard covers one of the two callers.
+	if duty := e.setupDuty(kind); duty != nil {
+		release, held, err := duty(ctx)
+		switch {
+		case err != nil:
+			return fmt.Errorf("%w: this node could not check whether %s is "+
+				"being provisioned right now: %w",
+				integration.ErrDisconnectUnavailable, kind, err)
+		case !held:
+			return fmt.Errorf("%w: a provisioning pass for %s is running",
+				integration.ErrDisconnectUnavailable, kind)
+		}
+		defer release()
+	}
 	if err := vendor(ctx); err != nil {
 		return fmt.Errorf("engine: %s teardown: %w", kind, err)
 	}

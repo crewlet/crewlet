@@ -219,18 +219,34 @@ func (e *Engine) SetupRunner(now func() time.Time) *setup.Runner {
 	return setup.NewRunner(e.setupPasses(), e.setupDuty, now)
 }
 
-// setupDuty is the fleet lease one integration's pass holds while it runs.
+// setupDutyName is the ONE name a surface's provisioning is serialized under.
 //
-// The SAME mechanism the reconcile loop's singleton uses, under its own name,
-// so a pass and a loop tick for one integration never overlap either. The TTL is
-// generous relative to a pass: a lease that expired mid-run would let a
-// second node start minting while the first was still writing.
+// A function rather than a spelling at each call site, because two spellings
+// is precisely the bug this had. The dashboard's pass claimed
+// `setup-provision-<kind>` and the reconcile loop claimed
+// `integration-reconcile`; leases are keyed by NAME, so those are two locks,
+// neither excluding the other and both looking exactly like exclusion. The
+// loop's singleton name is still its own — "which node runs the loop" and
+// "who is writing at this surface right now" are different questions — and
+// this is the second one, asked by both callers under one key.
+func setupDutyName(kind integration.Kind) string {
+	return "setup-provision-" + string(kind)
+}
+
+// setupDuty is the fleet lease held while ANYTHING writes at one integration —
+// a pass an operator ran, a tick of the reconcile loop, or a disconnect.
+//
+// All three write at the third-party app, and letting any two overlap is how
+// one creates the account another is deleting, or a disconnect removes the
+// webhook the pass beside it is registering. The TTL is generous relative to a
+// pass because it is a BACKSTOP for a node that died mid-run rather than a
+// deadline for the work: the lease is given back when the work ends.
 func (e *Engine) setupDuty(kind integration.Kind) setup.Duty {
-	duty := e.workerDuty("setup-provision-"+string(kind), setupLeaseTTL)
-	if duty == nil {
+	hold := e.workerHold(setupDutyName(kind), setupLeaseTTL)
+	if hold == nil {
 		return nil
 	}
-	return setup.Duty(duty)
+	return setup.Duty(hold)
 }
 
 // setupLeaseTTL bounds how long one pass may hold its third-party app.

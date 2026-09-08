@@ -136,6 +136,22 @@ var ErrCredentialRejected = errors.New("integration: the third-party app refused
 // disconnect that is simply early.
 var ErrDisconnectUnavailable = errors.New("integration: this node cannot complete a disconnect yet")
 
+// ErrReconcileUnavailable reports a surface this tick may not touch RIGHT NOW,
+// as distinct from one that failed.
+//
+// [ErrDisconnectUnavailable]'s twin for the other half of the tick, and it
+// exists for the same reason: the answer is about THIS MOMENT, not about the
+// integration. Today it means somebody else is already writing at the surface
+// — an operator's pass from the dashboard holds the provisioning lease this
+// tick would otherwise have taken — and the honest response is to come back,
+// not to record anything.
+//
+// Recording would be wrong twice over. An attempt backs the cadence off for a
+// pass that never ran, and a fault puts an error on the screen describing a
+// surface that is at that moment being provisioned successfully by somebody
+// else.
+var ErrReconcileUnavailable = errors.New("integration: this surface is busy, so this tick did not reconcile it")
+
 // Reject marks err as a credential refusal when the third-party app answered with an
 // authentication or authorization status, and returns it untouched otherwise.
 //
@@ -660,6 +676,19 @@ func (w *Worker) currentEndpoint() string {
 func (w *Worker) reconcile(ctx context.Context, kind Kind, state State, now time.Time) {
 	reg := w.byKind[kind]
 	findings, err := reg.Reconciler.Reconcile(ctx)
+
+	// NOT NOW, WHICH IS NOT A RESULT. Somebody else is writing at this
+	// surface — an operator's pass holding the provisioning lease — so this
+	// tick observed nothing and must record nothing. The mirror of the
+	// [ErrDisconnectUnavailable] arm in [Worker.tearDown], and for the same
+	// reason: an attempt counted here backs off a cadence for a pass that
+	// never ran, and a fault written here describes as broken a surface that
+	// is at this moment being provisioned successfully.
+	if errors.Is(err, ErrReconcileUnavailable) {
+		log.InfoContext(ctx, "integration_reconcile_deferred",
+			"integration", kind.String(), "detail", err.Error())
+		return
+	}
 
 	// THE FOLD IS integration.Observe, shared with the pass an operator
 	// runs from the dashboard: a status row must not depend on which
