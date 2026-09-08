@@ -167,7 +167,7 @@ A failed call's *result* is elided at `ValueLimit` too. It is tool output — au
 
 Arguments use **per-value** elision, never a cap on the serialised blob. `json.Marshal` sorts map keys, so capping the object would drop whichever keys sort last — and the discriminating argument (`channel`, `key`, `page_id`) is usually the *shortest* one. A line that kept a 400-char message body but lost `channel` would look precise while hiding which of two deliveries actually fired. When even fully elided values exceed `BlobLimit`, the backstop drops **whole keys** — shortest-value-first, so identifiers survive — and appends `+N more` rather than cutting mid-serialisation. The same priority governs the read-line cap: only reads are ever omitted, never a write.
 
-**The ledger survives a sandbox suspend.** A detached `run_sandbox` ends the turn and its completion resumes it in another process, so the records are serialised into the pending run's `execute_state` ([`internal/agent/execstate`](../reference/index.md)) and rehydrated onto the resumed turn. Without that round-trip, a turn that self-iterated before suspending would forget those rounds and re-fire their deliveries after the resume. That blob carries an explicit version and a permanent reader for the previous one, because a parked run can outlive the build that suspended it and nothing rewrites a parked row.
+**The ledger survives a sandbox suspend.** A detached `run_sandbox` ends the turn and its completion resumes it in another process, so the records are serialised into the pending run's `execute_state` (`internal/agent/execstate`) and rehydrated onto the resumed turn. Without that round-trip, a turn that self-iterated before suspending would forget those rounds and re-fire their deliveries after the resume. That blob carries an explicit version and a permanent reader for the previous one, because a parked run can outlive the build that suspended it and nothing rewrites a parked row.
 
 The **task description** is not mutated by a `self_iterate` round: the correction is prefixed to the user MESSAGE instead. Appending review notes to the task leaked them into the knowledge-search query builders, the sandbox brief, and the episode / turn-completed publishers — all of which want the requester's actual ask.
 
@@ -473,7 +473,9 @@ never fail a turn — and a liveness probe drops it within one refresh if the
 owning turn dies without clearing.
 
 Whether it appears at all is the org-wide `integrations.slack.typing_status`
-setting (`addressed` by default); the wording comes from per-phase pools
+setting (`always` by default, and the only other value is `addressed` — there
+is no `off`, because a reader who sees nothing cannot tell an agent working
+from an agent that is dead); the wording comes from per-phase pools
 that `integrations.slack.status_phrases` can replace. See
 [Slack § Working Status](../integrations/slack.md#working-status-is-thinking).
 

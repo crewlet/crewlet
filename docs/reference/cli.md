@@ -38,6 +38,7 @@ subcommand below is served by it.
 | `crewlet llm export <KEY> [-secret-store]` | Pack the login into one portable blob — stdout, or the secret store under the name the engine restores from on a fresh host |
 | `crewlet llm import <KEY>` | Restore a bundle from **stdin** onto this host; refuses to overwrite a login that is already there |
 | `crewlet confluence import <company.yaml> <directory>` | Publish a directory of authored markdown into [Confluence](../integrations/confluence.md) spaces — one space per directory, plus the tool skills the files themselves declare. Every target space is checked before a single page is written |
+| `crewlet confluence provision <company.yaml>` | Register the inbound [Confluence](../integrations/confluence.md) webhooks and mint the credential each one carries. Cloud gets one token-bearing hook per event, Data Center one signed hook for all of them, and a re-run converges what is there rather than adding to it |
 | `crewlet confluence resync <company.yaml>` | Re-run the engine's own tool-skill walk of the Confluence skills space against a throwaway registry and print what loads — a read-only diagnostic, not a way to change a running engine |
 | `crewlet slack provision <company.yaml>` | Create, update and install one [Slack](../integrations/slack.md) app per agent seat from the canonical manifest, minting each seat's bot token and signing secret into the `${VAR}`s its config points at. The install itself is an OAuth grant, so the run hands the operator one authorize URL per seat and takes the code back |
 | `crewlet jira provision <company.yaml>` | Report a [Jira](../integrations/jira.md) instance against the config: which account each seat's own credential authenticates as, whether every project the org chart names exists and agrees about its lead, and — on Data Center — register the inbound webhook with a minted secret. Jira issues no credentials on a provisioner's behalf, so this run reports far more than it changes |
@@ -865,6 +866,44 @@ The routing is the FILE'S, not the directory's, because a skill is identified by
 A company that has turned tool skills off (`integrations.confluence.skills_space: ""`) has no space for a skill file to go to: a tree containing one **stops the walk** naming both the setting and `-space`, rather than filing an instruction meant for one phase of one turn into a space every seat searches.
 
 See [Confluence Integration](../integrations/confluence.md#publishing-local-pages-from-your-machine-cli).
+
+---
+
+## `crewlet confluence provision`
+
+```
+crewlet confluence provision <company.yaml> [-secret-store|-env-file PATH|-print]
+                             [-public-url URL] [-recreate-webhooks] [-dry-run]
+```
+
+Registers the inbound webhooks that make Confluence push page and comment
+events to this deployment, and mints the credential each one carries into the
+`${VAR}` the company document already points at.
+
+**The two deployments are registered differently, because they authenticate
+differently.** On **Cloud** the run creates one hook per event at
+`<public-url>/webhooks/confluence/<event>?token=…`: Cloud signs nothing and
+honours no registration field for a header, so a shared token in the URL is
+the whole authentication, and one hook per event is how the engine knows which
+event fired at all (a Cloud payload does not say). On **Data Center** it
+creates one signed hook at `<public-url>/webhooks/confluence` covering every
+event, verified by HMAC over the body against
+`integrations.confluence.webhook_secret`.
+
+A re-run **converges** rather than adding: hooks are found by the
+`crewlet:` name prefix this engine registers under, so one whose address has
+moved is re-pointed rather than duplicated, and one an operator registered by
+hand is never touched. A hook that is already correct is left exactly as it
+is, and one event this instance refuses is reported without stopping the rest.
+
+| Flag | Meaning |
+|---|---|
+| `-secret-store` / `-env-file PATH` / `-print` | Where a minted token or secret goes. The same three sinks every provisioning command takes; a run with none of them refuses rather than minting a credential it cannot record. |
+| `-public-url URL` | This deployment's public base URL, which the hooks are registered against. **Overrides `integrations.public_base_url` for this run**, and registration is skipped only when both are empty. |
+| `-recreate-webhooks` | Delete and remake every hook with a fresh token or secret. **Destructive across deployments**: the previous value stops working everywhere else this company runs, so it is the recovery for a leaked or lost credential rather than part of an ordinary run. |
+| `-dry-run` | Read and report; register nothing. |
+
+See [Confluence Integration — Webhooks](../integrations/confluence.md#webhooks-confluence-pushes-to-agents).
 
 ---
 

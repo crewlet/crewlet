@@ -305,9 +305,9 @@ easy to assume the other way round:
 The engine once refused an `integrations.*` block it had no parser for, on the
 theory that a config naming a third-party app the build could not serve should
 fail loudly rather than be silently ignored. That mechanism is **gone**,
-because the premise stopped being true: all six third-party apps — Mattermost,
-Slack, GitLab, GitHub, Jira and Confluence — route end to end, so there is
-nothing left to refuse. The table it kept held four rows, and each was struck
+because the premise stopped being true: all seven third-party apps — Mattermost,
+Slack, GitLab, GitHub, Jira, Confluence and Datadog — route end to end, so
+there is nothing left to refuse. The table it kept held four rows, and each was struck
 as that third-party app shipped its parser.
 
 What outlives it is the rule it was built to enforce: **a config block the

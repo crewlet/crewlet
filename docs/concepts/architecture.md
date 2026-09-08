@@ -366,8 +366,11 @@ publishes hangs beneath it — so a delivery and the turn it woke are one story 
 the collector, and the same ids are columns on the event rows whether or not a
 collector exists.
 
-**There are two inbound edges, not one.** Five third-party apps plus Atlassian's Forge
-relay arrive as verified HTTP on `/webhooks/*` and take every step above.
+**There are two inbound edges, not one.** Six third-party apps plus Atlassian's Forge
+relay arrive as verified HTTP on `/webhooks/*` and take every step above — five
+of them verified by an HMAC over the body, and Datadog by a constant-time
+comparison of a shared token, because its provider attaches only fixed-value
+headers and so has nothing varying with the payload to sign.
 Mattermost does not: it holds **one websocket per seat**, outbound from this
 node, so it needs no public URL and no signing secret — and it joins the picture
 only at the republish onto `crewlet.notifications.inbound`, with its own
@@ -557,8 +560,8 @@ They were moved, and the rule is now the one above. See
 **Retention here is a bucket's age, never a per-write TTL.** On the embedded
 broker a per-key TTL is create-only — an update clears it, leaving the key
 immortal — so a horizon has to be fixed when its bucket is created, and that is
-why there are thirteen of them rather than one with prefixes — two in the lease
-store, eleven in the fleet store. The first two are the sharpest illustration: `crewlet_leases` has an age, *and that age is the
+why there are fourteen of them rather than one with prefixes — two in the lease
+store, twelve in the fleet store. The first two are the sharpest illustration: `crewlet_leases` has an age, *and that age is the
 lease TTL* — a renew rewrites the key and restarts the clock, so a node that
 stops renewing stops holding and nothing has to notice it died. `crewlet_epochs`
 sits beside it with no age at all, because a fence that restarts is not a fence.
