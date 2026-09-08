@@ -368,3 +368,69 @@ func TestTheBootMigratesBeforeItSnapshots(t *testing.T) {
 			migrate, refresh)
 	}
 }
+
+// A CREDENTIAL A PASS SEALED IS ONE EVERY SURFACE CAN SEE.
+//
+// `${VAR}` resolves from a snapshot taken at apply time, which keeps the
+// secret store off the path of every config read, and nothing about minting a
+// credential advances an epoch. So a pass created a GitLab service account,
+// minted its token and sealed it under the name the seat pointed at, and
+// every surface went on reporting that seat as waiting for an account: the
+// resolver was still holding the snapshot from before the seal. The pass then
+// ran again on the next tick, found the same unresolved variable, and minted
+// a second token, for ever.
+func TestASealedCredentialIsVisibleWithoutAnApply(t *testing.T) {
+	e, _ := engineWithSecrets(t)
+	// THE FLEET'S STORE, which is where a sealed credential goes and where
+	// the resolver's snapshot is read from.
+	e.backends.Fleet = coordmem.NewFleet()
+
+	sink, err := e.SetupSink("test")
+	if err != nil {
+		t.Skipf("this build has no sink to exercise: %v", err)
+	}
+	if got := e.resolver().Value("${SEAT_TOKEN}"); got != "" {
+		t.Fatalf("before the pass, ${SEAT_TOKEN} = %q", got)
+	}
+
+	if err := sink.Record(t.Context(), "SEAT_TOKEN", "glpat-minted"); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	// NOT YET, and deliberately: a run that seals five credentials and is
+	// then rolled back should leave the snapshot where it was.
+	if got := e.resolver().Value("${SEAT_TOKEN}"); got != "" {
+		t.Errorf("mid-run, ${SEAT_TOKEN} = %q: a rollback would leave a value "+
+			"resolving that no longer exists", got)
+	}
+
+	if err := sink.Flush(t.Context()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if got := e.resolver().Value("${SEAT_TOKEN}"); got != "glpat-minted" {
+		t.Fatalf("after the pass, ${SEAT_TOKEN} = %q, so every surface still "+
+			"reports this seat as waiting for a credential it already has", got)
+	}
+}
+
+// A RUN THAT SEALED NOTHING DOES NOT REBUILD THE SNAPSHOT. Most passes read
+// and report, and rebuilding on each of those would put the whole secret
+// store on the reconcile loop's tick.
+func TestAPassThatSealedNothingLeavesTheSnapshotAlone(t *testing.T) {
+	e, sv := engineWithSecrets(t)
+	e.backends.Fleet = coordmem.NewFleet()
+	sink, err := e.SetupSink("test")
+	if err != nil {
+		t.Skipf("this build has no sink to exercise: %v", err)
+	}
+
+	// Written behind the resolver's back, so a rebuild is observable.
+	if err := sv.Set(t.Context(), "UNSEEN", "value", "op", "cli", time.Now().UTC()); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := sink.Flush(t.Context()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if got := e.resolver().Value("${UNSEEN}"); got != "" {
+		t.Errorf("a read-only pass rebuilt the snapshot: ${UNSEEN} = %q", got)
+	}
+}

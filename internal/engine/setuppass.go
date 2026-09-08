@@ -432,8 +432,55 @@ func (e *Engine) SetupSink(operator string) (provision.TokenSink, error) {
 	if e.cipher == nil {
 		return nil, fmt.Errorf("engine: this node has no keyring, so a minted credential cannot be sealed")
 	}
-	return provision.NewSecretStoreSink(
-		fleetsecrets.New(e.backends.Fleet, e.cipher), operator), nil
+	return &refreshingSink{
+		TokenSink: provision.NewSecretStoreSink(
+			fleetsecrets.New(e.backends.Fleet, e.cipher), operator),
+		engine: e,
+	}, nil
+}
+
+// refreshingSink rebuilds the resolver's snapshot after a run seals anything.
+//
+// # A SECRET NOBODY CAN SEE IS A PASS THAT DID NOTHING
+//
+// `${VAR}` resolves from a SNAPSHOT taken at apply time, which is what keeps
+// the secret store off the path of every config read. Nothing about minting a
+// credential advances an epoch, though: a pass created a GitLab service
+// account, minted its token and sealed it under the name the seat pointed at,
+// and every surface went on reporting that seat as waiting for an account,
+// because the resolver was still holding the snapshot from before the seal.
+// The pass then ran again on the next tick, found the same unresolved
+// variable, and minted a second token, for ever.
+//
+// AFTER FLUSH, not per Record: a run that seals five credentials and is then
+// rolled back should leave the snapshot where it was, and Flush is the point
+// at which what was written is what stands. A refresh that fails leaves the
+// previous snapshot standing, which is the same posture an apply takes.
+type refreshingSink struct {
+	provision.TokenSink
+	engine  *Engine
+	sealed  bool
+	flushed bool
+}
+
+func (s *refreshingSink) Record(ctx context.Context, name, value string) error {
+	if err := s.TokenSink.Record(ctx, name, value); err != nil {
+		return err
+	}
+	s.sealed = true
+	return nil
+}
+
+func (s *refreshingSink) Flush(ctx context.Context) error {
+	err := s.TokenSink.Flush(ctx)
+	// EVEN ON A FAILED FLUSH, because a write-through sink has already
+	// made its values durable: what failed is the completion, and the
+	// credentials are out there either way.
+	if s.sealed && !s.flushed {
+		s.flushed = true
+		s.engine.refreshSecrets(ctx)
+	}
+	return err
 }
 
 // jiraPass adapts jira.Reconcile to the pass contract.
