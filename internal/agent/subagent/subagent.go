@@ -148,8 +148,14 @@ var controlDenylist = map[string]struct{}{
 	// completion pauses the parent seat's inbox. A sub-agent's loop cannot
 	// suspend, so the parent turn would finish normally, never persist an
 	// execute state, and the seat would stay deaf for the whole coding run
-	// with nothing to resume into. It carries no annotations either, so the
-	// shared-write filter does not catch it.
+	// with nothing to resume into.
+	//
+	// The annotation filter below happens to catch it too — a coding run is
+	// open-world, and internal/agent/builtin says so. Named here anyway,
+	// and the redundancy is the point: that reason is about pushing
+	// branches other people read, and this one is about a turn that can
+	// never be resumed. Either alone would deny it; only this one survives
+	// somebody deciding a sandbox is private.
 	"run_sandbox": {},
 
 	// The PARENT's discovery pair. Both close over the parent's surface, so
@@ -162,8 +168,10 @@ var controlDenylist = map[string]struct{}{
 
 	// Cross-agent communication. A short-lived worker's half-formed
 	// conclusions must not land on a teammate's desk under the parent's
-	// name. The last three are not engine tools today; they are denied
-	// defensively in case an extension registers them.
+	// name — a narrower objection than "it leaves the process", which is
+	// why it is named here as well as annotated open-world. The last three
+	// are not engine tools today; they are denied defensively in case an
+	// extension registers them.
 	"a2a_ask":             {},
 	"request_a2a_channel": {},
 	"send_a2a_message":    {},

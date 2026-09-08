@@ -10,7 +10,9 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -123,6 +125,93 @@ func TestEveryBuiltinDeclaresWhetherItIsARead(t *testing.T) {
 		if e.Origin != tools.OriginBuiltin {
 			t.Errorf("%s registered as %q, not builtin", e.Name(), e.Origin)
 		}
+	}
+}
+
+// EVERY BUILTIN ALSO SAYS WHETHER IT WRITES WHERE A HUMAN CAN READ, and that
+// is a different question with a different consumer: the sub-agent guard, not
+// the delivery gate.
+//
+// mcp.WritesToSharedSurface asks "would a sub-agent calling this write to a
+// surface a human reads, under the parent agent's identity?" Its rule is
+// `ReadOnly == No` AND `OpenWorld != No`, and the middle term is a TRI-STATE —
+// so a private-state write that leaves OpenWorld unset is classified as a
+// public one. Three builtins did: the diary, the refined skill and the
+// onboarding marker were denied to workers their parent had explicitly granted
+// them, on the strength of a hint nobody had set. internal/mcp/probe.go
+// reaches past the SDK to stop a third-party server producing that shape by
+// accident; these produced it by hand.
+//
+// The table is EVERY builtin, so a new one cannot be added without deciding
+// which side of the guard it is on.
+func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
+	t.Parallel()
+	shared := map[string]bool{
+		// Leaves the process. Both are ALSO denied to a worker by name,
+		// for reasons narrower than open-world — see the denylist in
+		// internal/agent/subagent.
+		builtin.A2AAskTool:     true,
+		builtin.RunSandboxTool: true,
+
+		// Private state: read back by this seat's own next turn and by
+		// nobody else. A worker writing one of these writes to its
+		// parent's own memory, which is whose turn it is running.
+		builtin.ReflectAndPersistTool: false,
+		builtin.RefineSkillTool:       false,
+		builtin.MarkOnboardedTool:     false,
+
+		// Pure reads, short-circuited before OpenWorld is consulted.
+		builtin.LookupColleagueTool: false,
+		builtin.UseSkillTool:        false,
+		builtin.QueryEpisodesTool:   false,
+		builtin.RefreshMemoryTool:   false,
+		builtin.LoadToolSkillTool:   false,
+		builtin.SearchKnowledgeTool: false,
+	}
+
+	reg := tools.NewRegistry()
+	names, err := builtin.Register(reg, fullDeps(t))
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	snapshot := reg.Snapshot()
+	for _, name := range names {
+		want, classified := shared[name]
+		if !classified {
+			t.Errorf("builtin %q is registered and this table does not say whether "+
+				"a sub-agent may call it — decide, then add it", name)
+			continue
+		}
+		entry, ok := snapshot.Lookup(name)
+		if !ok {
+			t.Fatalf("%q registered but is not in the snapshot", name)
+		}
+		if got := mcp.WritesToSharedSurface(entry.Annotations); got != want {
+			t.Errorf("WritesToSharedSurface(%q) = %v, want %v (annotations %+v)",
+				name, got, want, entry.Annotations)
+		}
+	}
+	if len(names) != len(shared) {
+		t.Errorf("registered %d builtins and classified %d — the table names a tool "+
+			"that no longer exists", len(names), len(shared))
+	}
+}
+
+// AN UNSET OPEN-WORLD HINT IS NOT "PRIVATE". The classifier's own documented
+// rule, restated here because three builtins were written against the opposite
+// reading of it — and because the fail-closed default is the half a fix in the
+// other direction would quietly remove.
+func TestAnUnsetOpenWorldHintStillReadsAsAPublicWrite(t *testing.T) {
+	t.Parallel()
+	unset := tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No}
+	if !mcp.WritesToSharedSurface(unset) {
+		t.Error("a write that never said whether it leaves the process was treated " +
+			"as private — the fail-closed default for an unclassified tool is gone")
+	}
+	said := tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.No}
+	if mcp.WritesToSharedSurface(said) {
+		t.Error("a write that explicitly said it does not leave the process was " +
+			"still treated as public, so the tri-state buys nothing")
 	}
 }
 
@@ -625,6 +714,19 @@ func TestEverySeatScopedToolRefusesWithoutASeat(t *testing.T) {
 	}
 }
 
+// toolSkills and searcher exist so every builtin is REGISTERED — the
+// classification table below covers the whole set, and a dependency left nil
+// omits its tool. What either one returns is another test's subject.
+type toolSkills struct{}
+
+func (toolSkills) Body(string) (string, bool) { return "", false }
+
+type searcher struct{}
+
+func (searcher) CanSearch(*org.Role, *org.Organization) bool { return true }
+
+func (searcher) Search(context.Context, knowledge.Query) []knowledge.Hit { return nil }
+
 func fullDeps(t *testing.T) builtin.Deps {
 	t.Helper()
 	store := &skillStore{}
@@ -632,5 +734,9 @@ func fullDeps(t *testing.T) builtin.Deps {
 		A2A: &asker{}, Skills: store, Refinable: store,
 		Episodes: &episodeStore{}, Diary: &diaryStore{},
 		Onboarding: &onboardingStore{},
+		// EVERY builtin, so a test that asks "is each one classified"
+		// is asking about the whole set rather than the subset this
+		// helper happened to wire.
+		Sandbox: &launchSpy{}, ToolSkills: toolSkills{}, Knowledge: searcher{},
 	}
 }

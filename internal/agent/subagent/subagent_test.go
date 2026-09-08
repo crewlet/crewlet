@@ -221,12 +221,27 @@ func newWorld(t *testing.T) *world {
 	add("jira_lookup", tools.Origin("jira"), tools.Annotations{})
 	add("slack_post", tools.Origin("slack"), tools.Annotations{ReadOnly: mcp.No, OpenWorld: mcp.Yes})
 	add("delete_page", tools.Origin("wiki"), tools.Annotations{Destructive: mcp.Yes})
-	// The engine-control surface a parent's Execute phase really does hold.
+	// The first-party surface a parent's Execute phase really does hold,
+	// with the annotations internal/agent/builtin really does register —
+	// which its own TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead
+	// pins. Mirrored rather than imported because registering the real set
+	// needs eight dependency doubles; kept HONEST because the previous
+	// mirror had a2a_ask and run_sandbox carrying no annotations at all,
+	// which is what a comment in this file claimed for years after it
+	// stopped being true.
 	add(subagent.ToolName, tools.OriginBuiltin, tools.Annotations{})
 	add("activate_tool", tools.OriginBuiltin, tools.Annotations{})
 	add("list_mcp_server_tools", tools.OriginBuiltin, tools.Annotations{})
-	add("a2a_ask", tools.OriginBuiltin, tools.Annotations{})
-	add("run_sandbox", tools.OriginBuiltin, tools.Annotations{})
+	add("a2a_ask", tools.OriginBuiltin,
+		tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes})
+	add("run_sandbox", tools.OriginBuiltin,
+		tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes})
+	// The private-state writes. Each says OpenWorld explicitly, which is
+	// what makes it reachable by a worker its parent granted it to.
+	add("reflect_and_persist", tools.OriginBuiltin,
+		tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.No})
+	add("refine_skill", tools.OriginBuiltin,
+		tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.No})
 	w.snapshot = w.registry.Snapshot()
 	return w
 }
@@ -436,6 +451,47 @@ func TestAGrantRefusesToolsThatWriteToASharedSurface(t *testing.T) {
 		if !slices.Contains(g.Active, name) {
 			t.Errorf("%s should have been granted: active=%v rejected=%v",
 				name, g.Active, g.Rejected)
+		}
+	}
+}
+
+// A WORKER MAY WRITE TO ITS PARENT'S OWN MEMORY, and this is the behaviour the
+// annotation fix restores.
+//
+// The classifier asks whether a sub-agent would "write to a surface a human
+// reads, under the parent agent's identity" — a diary note and a refined skill
+// are read back by this seat's own next turn and by nobody else. They were
+// denied anyway, because their OpenWorld hint was UNSET rather than false, and
+// the filter's rule is `ReadOnly == No` AND `OpenWorld != No`. So a founder who
+// named `reflect_and_persist` in a worker template got a worker that could not
+// call it, with the rejection blamed on writing somewhere a human could read.
+func TestAWorkerMayBeGrantedAWriteToItsParentsOwnMemory(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	g := subagent.Permit(w.snapshot, w.parentAll(),
+		[]string{"reflect_and_persist", "refine_skill"})
+
+	for _, name := range []string{"reflect_and_persist", "refine_skill"} {
+		if !slices.Contains(g.Active, name) {
+			t.Errorf("%s writes only the parent's own memory and was refused: "+
+				"active=%v rejected=%v", name, g.Active, g.Rejected)
+		}
+	}
+}
+
+// The counterfactual, and the half that must not move: a first-party tool that
+// LEAVES the process is still refused, by name and by annotation both.
+func TestAWorkerIsStillRefusedTheToolsThatLeaveTheProcess(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	g := subagent.Permit(w.snapshot, w.parentAll(), []string{"a2a_ask", "run_sandbox"})
+
+	for _, name := range []string{"a2a_ask", "run_sandbox"} {
+		if slices.Contains(g.Active, name) {
+			t.Errorf("%s leaves the process and was granted", name)
+		}
+		if _, ok := g.Universe.Lookup(name); ok {
+			t.Errorf("%s is still discoverable by the child", name)
 		}
 	}
 }
