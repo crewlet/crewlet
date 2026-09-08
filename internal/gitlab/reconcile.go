@@ -367,7 +367,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			res.Recorded++
 		}
 		opts.SigningSecret = secret
-		hooked, notes, err := ensureHooks(ctx, opts, group.ID, projects, target)
+		hooked, notes, err := ensureHooks(ctx, opts, group, projects, target)
 		if err != nil {
 			return nil, rollback(ctx, opts, minted, err)
 		}
@@ -875,15 +875,41 @@ func MintSigningSecret() (string, error) { return whsec.Mint() }
 // Modes come from provisioning.group_webhook — auto (default) tries the
 // group and falls back, true demands the group, false goes straight to the
 // projects.
-func ensureHooks(ctx context.Context, opts Options, groupID int, projects []string, target string) ([]string, []string, error) {
+func ensureHooks(ctx context.Context, opts Options, group Group, projects []string, target string) ([]string, []string, error) {
 	mode := config.ContainerWebhookAuto
 	if pv := opts.Config.Provisioning; pv != nil && pv.GroupWebhook != "" {
 		mode = pv.GroupWebhook
 	}
 	secret := opts.SigningSecret
 
+	// A FREE GROUP TAKES THE REGISTRATION AND NEVER DELIVERS, which no
+	// error can tell you.
+	//
+	// The fallback below turns on the create call FAILING, and on
+	// gitlab.com's free tier it does not fail: POST /groups/:id/hooks
+	// answers 201, the hook is listed in the group's settings, and its own
+	// event log stays empty for ever. Measured on a live free group, where
+	// the pass reported ready and not one delivery had ever arrived.
+	//
+	// So the tier is READ rather than inferred from a refusal. Only
+	// gitlab.com answers with a plan at all, and [Group.PaidPlan] reads
+	// silence as "cannot tell": a self-managed instance keeps the behaviour
+	// it has, and the one case caught is a group that says it is free.
+	if mode == config.ContainerWebhookAuto && !group.PaidPlan() {
+		hooked, err := ensureProjectHooks(ctx, opts.Client, projects, target, secret)
+		if err != nil {
+			return nil, nil, err
+		}
+		return hooked, []string{
+			"this group is on GitLab's free tier, where a group webhook is " +
+				"accepted and never delivered, so one hook was registered per " +
+				"provisioning.projects entry instead; a project added to the " +
+				"group later will NOT be covered until this runs again",
+		}, nil
+	}
+
 	if mode != config.ContainerWebhookNever {
-		err := ensureGroupHook(ctx, opts.Client, groupID, target, secret)
+		err := ensureGroupHook(ctx, opts.Client, group.ID, target, secret)
 		switch {
 		case err == nil:
 			return []string{"group"}, nil, nil

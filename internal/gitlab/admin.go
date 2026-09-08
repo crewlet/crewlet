@@ -230,6 +230,25 @@ func (c *Client) DeleteInstanceServiceAccount(ctx context.Context, userID int) e
 type Group struct {
 	ID       int    `json:"id"`
 	FullPath string `json:"full_path"`
+
+	// Plan is the subscription tier this group is on, and gitlab.com is the
+	// only deployment that answers it: a self-managed instance sends no
+	// such field, so an empty value there means "not said" rather than
+	// "free". See [PaidPlan].
+	Plan string `json:"plan"`
+}
+
+// PaidPlan reports whether this group is on a tier that serves the Premium
+// features, as far as the instance is willing to say.
+//
+// TRUE WHEN IT CANNOT TELL, which is the direction that matters: a
+// self-managed instance answers with no plan at all, and reading that as
+// "free" would send every self-managed deployment down a fallback it does not
+// need. The one case this exists to catch is a gitlab.com group that
+// answers, in so many words, that it is on the free tier.
+func (g Group) PaidPlan() bool {
+	plan := strings.ToLower(strings.TrimSpace(g.Plan))
+	return plan != "free" && plan != "default"
 }
 
 // GroupByPath resolves a group by its path.

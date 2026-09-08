@@ -58,6 +58,11 @@ type adminInstance struct {
 	// noGroupHooks makes the GROUP hooks API answer 404, the way GitLab
 	// hides an endpoint the instance's tier does not serve.
 	noGroupHooks bool
+	// plan is what GET /groups/:path reports as the subscription tier.
+	// Empty is a self-managed instance, which sends no such field at all;
+	// "free" is what gitlab.com answers for a group whose group webhooks
+	// are accepted and never delivered.
+	plan string
 	// hookStatus answers the group-hooks route with this status instead,
 	// for the refusals that are NOT a tier gate.
 	hookStatus int
@@ -213,7 +218,11 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 
 	case r.Method == http.MethodGet && path == "/groups/nimbus":
-		json.NewEncoder(w).Encode(map[string]any{"id": 7, "full_path": "nimbus"})
+		group := map[string]any{"id": 7, "full_path": "nimbus"}
+		if f.plan != "" {
+			group["plan"] = f.plan
+		}
+		json.NewEncoder(w).Encode(group)
 
 	case r.Method == http.MethodGet && path == "/users":
 		// A FILTER, NOT A LOOKUP — which is what /users?username= is on
@@ -2396,5 +2405,63 @@ func TestAnOrdinaryRefusalIsNotDressedAsProgress(t *testing.T) {
 	}
 	if errors.Is(err, gitlab.ErrNameReserved) {
 		t.Fatalf("an unrelated refusal reads as a deletion still running: %v", err)
+	}
+}
+
+// A FREE GROUP TAKES THE REGISTRATION AND NEVER DELIVERS, which no error can
+// tell you.
+//
+// The fallback beside this one turns on the create call FAILING, and on
+// gitlab.com's free tier it does not fail: POST /groups/:id/hooks answers
+// 201, the hook is listed in the group's settings, and its own event log
+// stays empty for ever. Measured on a live free group, where the pass
+// reported ready and not one delivery had ever arrived. So the tier is read
+// rather than inferred from a refusal.
+func TestAFreeTierGroupHooksTheProjectsWithoutTrying(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.plan = "free"
+	sink := newRecordingSink()
+
+	res, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(f.projectHooks["nimbus/api"]) != 1 {
+		t.Fatalf("project hooks = %+v, want one on the declared project", f.projectHooks)
+	}
+	// AND NO GROUP HOOK AT ALL. One registered here is one an operator
+	// finds in the settings, believes covers the group, and never receives
+	// a delivery from.
+	if len(f.hooks) != 0 {
+		t.Errorf("a group hook was registered on a tier that never delivers: %+v", f.hooks)
+	}
+	if got := res.HookedOn; len(got) != 1 || got[0] != "nimbus/api" {
+		t.Errorf("HookedOn = %v, want the project", got)
+	}
+	if !strings.Contains(strings.Join(res.Notes, "\n"), "free tier") {
+		t.Errorf("notes did not say why the group was skipped: %v", res.Notes)
+	}
+}
+
+// SILENCE IS NOT "FREE". A self-managed instance answers with no plan at all,
+// and reading that as free would send every self-managed deployment down a
+// fallback it does not need, replacing one hook that covers the group with
+// one per declared project.
+func TestAnInstanceThatNamesNoPlanKeepsTheGroupHook(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.plan = ""
+	sink := newRecordingSink()
+
+	res, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(f.hooks) != 1 {
+		t.Fatalf("group hooks = %+v, want the one this instance serves", f.hooks)
+	}
+	if got := res.HookedOn; len(got) != 1 || got[0] != "group" {
+		t.Errorf("HookedOn = %v, want the group", got)
 	}
 }
