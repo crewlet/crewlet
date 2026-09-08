@@ -43,13 +43,42 @@ import (
 //     engine holds. Without one the instance delivers nothing and the
 //     integration looks idle rather than unconfigured.
 
-// WebhookName is the name the engine's own hook is registered under.
+// DefaultWebhookName is the name the engine's own hook is registered under
+// when the company names none.
 //
-// Matched on the URL rather than this name, because an instance may carry
-// hooks somebody else registered and a run that reconfigured the first one
-// it found by name would take down an unrelated integration. The name is for
-// the human reading Jira's admin page.
-const WebhookName = "crewlet"
+// Restated from `integrations.jira.webhook_name`, whose doc carries the
+// reasoning, and asserted equal to [config.Jira.WebhookNameOrDefault] by a
+// test.
+const DefaultWebhookName = "crewlet"
+
+// ours reports a hook this deployment registered.
+//
+// TWO CONDITIONS, and both are needed.
+//
+// THE NAME IS THE IDENTITY, because it is the only field that survives a
+// change of public base. Matching on the URL instead meant a deployment that
+// moved created a second hook and left the first: one live orphan per change,
+// each delivering to an address that no longer answers, and a run that
+// "converged" left three registrations behind. So the name is what selects,
+// and this file's own comment used to say the opposite — matched on the URL
+// "because an instance may carry hooks somebody else registered".
+//
+// THE DELIVERY PATH IS THE GUARD that concern deserves. Every hook this
+// engine registers ends in /webhooks/jira whatever base it was registered
+// against, so a hook that merely shares the name and points somewhere else
+// is not this engine's and is left alone — which is the whole of what
+// matching on the URL was protecting, kept without the orphans.
+//
+// Two DEPLOYMENTS of one company watching one instance is the case the name
+// cannot settle, because they share this document: they set
+// `integrations.jira.webhook_name` to two values, exactly as they would
+// Datadog's.
+func ours(hook Webhook, name string) bool {
+	return hook.Name == name && strings.HasSuffix(hook.URL, webhookPath)
+}
+
+// webhookPath is where every Jira delivery arrives, whatever base carries it.
+const webhookPath = "/webhooks/jira"
 
 // Options are one reconcile's inputs.
 type Options struct {
@@ -121,8 +150,6 @@ type ProjectCheck struct {
 	JiraLead       string
 	JiraLeadName   string
 	JiraLeadHandle string
-	// Detail carries the refusal for a project that could not be read.
-	Detail string
 }
 
 // Agrees reports the two ideas of ownership pointing at one seat.
@@ -202,7 +229,11 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 
 	res := &Result{Deployment: opts.Client.Deployment(), Account: account}
 	res.Seats = resolveSeats(ctx, opts)
-	res.Projects = checkProjects(ctx, opts, res.Seats)
+	projects, err := checkProjects(ctx, opts, res.Seats)
+	res.Projects = projects
+	if err != nil {
+		return res, err
+	}
 
 	hooked, notes, err := ensureWebhook(ctx, opts)
 	res.Notes = append(res.Notes, notes...)
@@ -285,10 +316,22 @@ func resolveSeats(ctx context.Context, opts Options) []SeatIdentity {
 }
 
 // checkProjects reads every project the org declares.
-func checkProjects(ctx context.Context, opts Options, seats []SeatIdentity) []ProjectCheck {
+//
+// A READ THAT FAILED IS A FAULT, NOT A FINDING, and that is
+// [integration.Reconciler]'s own contract: "an error is the engine or the
+// third-party app failing to look at that world at all, which the loop
+// records as a fault and retries". It used to become a `grant_pending`
+// finding — a kind defined as "nobody has to act; it resolves on its own",
+// whose actor is the PROVIDER — so a permanent 403 from a token without
+// Browse Projects reported forever that somebody else was working on it,
+// while State.LastError stayed empty and the refusal appeared on no surface
+// at all.
+func checkProjects(
+	ctx context.Context, opts Options, seats []SeatIdentity,
+) ([]ProjectCheck, error) {
 	keys := ProjectsOf(opts.Org)
 	if len(keys) == 0 {
-		return nil
+		return nil, nil
 	}
 	leads := LeadsFrom(opts.Org)
 	byAccount := make(map[string]string, len(seats))
@@ -318,8 +361,12 @@ func checkProjects(ctx context.Context, opts Options, seats []SeatIdentity) []Pr
 			// and the other is worth another look in thirty seconds.
 			continue
 		default:
-			out[i].Detail = err.Error()
-			continue
+			// RAISED, so [integration.Observe] records it as this
+			// surface's LastError and [integration.Reject] can route a
+			// 401 or 403 to the operator rather than to the wait every
+			// transport fault gets.
+			return out, fmt.Errorf("jira: read project %s: %w",
+				key, integration.Reject(err, Status(err)))
 		}
 		out[i].Exists = true
 		out[i].Name = project.Name
@@ -327,7 +374,7 @@ func checkProjects(ctx context.Context, opts Options, seats []SeatIdentity) []Pr
 		out[i].JiraLeadName = project.LeadName
 		out[i].JiraLeadHandle = byAccount[project.Lead]
 	}
-	return out
+	return out, nil
 }
 
 // noIngressReason says why this run left the instance unable to deliver, or
@@ -385,9 +432,10 @@ func ensureWebhook(ctx context.Context, opts Options) (string, []string, error) 
 	// address created: this engine's own name on three live registrations,
 	// two of them delivering to somewhere that no longer answers. What
 	// "converged" has to mean is one.
+	name := opts.Config.WebhookNameOrDefault()
 	mine := make([]Webhook, 0, len(hooks))
 	for _, hook := range hooks {
-		if hook.Name == WebhookName {
+		if ours(hook, name) {
 			mine = append(mine, hook)
 		}
 	}
@@ -413,13 +461,13 @@ func ensureWebhook(ctx context.Context, opts Options) (string, []string, error) 
 				return target, notes, nil
 			}
 			if _, err := opts.Client.UpdateWebhook(
-				ctx, hook.ID, WebhookName, target, secret); err != nil {
+				ctx, hook.ID, name, target, secret); err != nil {
 				return "", notes, fmt.Errorf("jira: update webhook: %w", err)
 			}
 			return target, notes, nil
 		}
 	}
-	if _, err := opts.Client.CreateWebhook(ctx, WebhookName, target, secret); err != nil {
+	if _, err := opts.Client.CreateWebhook(ctx, name, target, secret); err != nil {
 		return "", notes, fmt.Errorf("jira: create webhook: %w", err)
 	}
 	return target, notes, nil
@@ -510,7 +558,7 @@ func webhookTarget(base string) string {
 	if base = strings.TrimRight(strings.TrimSpace(base), "/"); base == "" {
 		return ""
 	}
-	return base + "/webhooks/jira"
+	return base + webhookPath
 }
 
 // notFound reports a refusal that means the instance has no such thing.

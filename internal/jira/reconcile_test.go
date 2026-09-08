@@ -3,6 +3,7 @@ package jira_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -33,10 +34,14 @@ type instance struct {
 	onLookup func()
 	// projects the instance has.
 	projects map[string]string
-	hooks    []map[string]any
-	created  []map[string]any
-	updated  []map[string]any
-	deleted  []string
+	// projectStatus makes one key answer a chosen status instead, which is
+	// how a read that FAILED is expressed: a 404 is the instance
+	// answering, and everything else is it failing to.
+	projectStatus map[string]int
+	hooks         []map[string]any
+	created       []map[string]any
+	updated       []map[string]any
+	deleted       []string
 }
 
 func newInstance(t *testing.T) *instance {
@@ -87,6 +92,11 @@ func (i *instance) serve(w http.ResponseWriter, req *http.Request) {
 	switch {
 	case strings.Contains(path, "/project/"):
 		key := path[strings.LastIndex(path, "/")+1:]
+		if status, refuse := i.projectStatus[key]; refuse {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(`{"errorMessages":["nope"]}`))
+			return
+		}
 		name, ok := i.projects[key]
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
@@ -291,15 +301,13 @@ func TestTheReconcileChecksEveryDeclaredProject(t *testing.T) {
 	if len(byKey) != 2 {
 		t.Fatalf("checked %v", res.Projects)
 	}
-	// A PROJECT THE INSTANCE DOES NOT HAVE, and Detail is EMPTY for it.
-	//
-	// The two together are the claim: the instance answered, and the
-	// answer was 404. Detail is reserved for a read that FAILED, so a
-	// company document naming a project that does not exist and an
-	// instance that timed out are told apart. They were not, and they want
-	// opposite treatment downstream: one is a typo an operator must fix
-	// and the other is worth another look in thirty seconds.
-	if got := byKey["OPZ"]; got.Exists || got.Detail != "" {
+	// A PROJECT THE INSTANCE ANSWERED 404 FOR. A read that FAILED does not
+	// reach here at all — it raises, so the loop records it as this
+	// surface's fault and retries — which is what tells a company document
+	// naming a project that does not exist from an instance that timed
+	// out. They want opposite treatment: one is a document an operator
+	// must fix, and the other is worth another look in thirty seconds.
+	if got := byKey["OPZ"]; got.Exists {
 		t.Errorf("a project the instance does not have was not reported as "+
 			"absent: %+v", got)
 	}
@@ -854,16 +862,79 @@ func TestFindingsReportAProjectTheInstanceDoesNotHave(t *testing.T) {
 	}
 	var found bool
 	for _, f := range res.Findings() {
-		if f.Kind == integration.FindingUnknownTier {
+		// NOT AN ACCESS TIER. This was FindingUnknownTier, whose own doc
+		// defines it as an access tier the company names and the vendor
+		// does not have, and whose fallback sentence says exactly that —
+		// on a finding about a project key.
+		if f.Kind == integration.FindingIngressBlocked && f.Subject != "integrations.public_base_url" {
 			found = true
 			if f.Subject == "" {
 				t.Errorf("a missing project finding names no project: %+v", f)
+			}
+			// BOTH HALVES OF THE 404: Jira answers it for a project that
+			// is not there and for one this credential may not browse,
+			// and told only the first half an operator looks for a typo
+			// in a key they can see in the UI.
+			if !strings.Contains(f.Detail, "Browse Projects") {
+				t.Errorf("the finding does not mention the permission half of "+
+					"a Jira 404: %q", f.Detail)
 			}
 		}
 	}
 	if !found {
 		t.Fatalf("no finding reports a declared project the instance lacks: %+v",
 			res.Findings())
+	}
+}
+
+// A PROJECT READ THAT FAILED IS A FAULT, NOT A FINDING.
+//
+// It became FindingGrantPending — a kind whose closed-set doc says "nobody
+// has to act; it resolves on its own" and whose actor is the PROVIDER — so a
+// permanent 403 from a token without Browse Projects reported forever that
+// somebody else was working on it. The pass returned nil, so State.LastError
+// stayed empty and the refusal appeared on no surface at all.
+func TestAProjectReadThatFailedIsRaisedRatherThanReported(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	inst.accounts["Bearer lead-token"] = acctLead
+	inst.accounts["Bearer swe-token"] = "acct-swe"
+	inst.accounts["Bearer qa-token"] = "acct-qa"
+	inst.projectStatus = map[string]int{"ENG": http.StatusForbidden}
+
+	res, err := run(t, inst, nil)
+	if err == nil {
+		t.Fatalf("a refused project read was reported as a finding: %+v",
+			res.Findings())
+	}
+	// AND ROUTED TO THE OPERATOR. A 403 is refused identically on every
+	// later pass, so folding it in with the transport faults would report
+	// "the engine is working on it" about the one thing that will never
+	// happen on its own.
+	if !errors.Is(err, integration.ErrCredentialRejected) {
+		t.Errorf("a 403 was not marked as a credential refusal: %v", err)
+	}
+	if !strings.Contains(err.Error(), "ENG") {
+		t.Errorf("the fault does not name the project it failed on: %v", err)
+	}
+}
+
+// AND A 5XX IS NOT A CREDENTIAL REFUSAL, or every brief outage would send an
+// operator to rotate a key that is fine.
+func TestAProjectReadThatBrokeIsNotACredentialRefusal(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	inst.accounts["Bearer lead-token"] = acctLead
+	inst.accounts["Bearer swe-token"] = "acct-swe"
+	inst.accounts["Bearer qa-token"] = "acct-qa"
+	inst.projectStatus = map[string]int{"ENG": http.StatusInternalServerError}
+
+	if _, err := run(t, inst, nil); err == nil {
+		t.Fatal("a project read that broke was not raised")
+	} else if errors.Is(err, integration.ErrCredentialRejected) {
+		t.Errorf("a 500 was reported as a refused credential: %v", err)
 	}
 }
 
@@ -939,5 +1010,124 @@ func TestACloudCompanySaysNothingAboutIngress(t *testing.T) {
 		if f.Kind == integration.FindingIngressBlocked {
 			t.Fatalf("a Cloud company reported ingress blocked: %+v", f)
 		}
+	}
+}
+
+// THE ENGINE'S HOOK IS FOUND BY NAME, WHEREVER IT POINTS.
+//
+// Matching on the address meant a deployment that changed its public base
+// created a second hook and left the first: one live orphan per change, each
+// enabled, each delivering to somewhere that no longer answers.
+func TestAHookRegisteredAtAnOldAddressIsRepointed(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	inst.hooks = []map[string]any{
+		{"id": "7", "name": "crewlet", "url": "https://old-tunnel.example.com/webhooks/jira"},
+	}
+
+	res, err := run(t, inst, func(opts *jira.Options) {
+		opts.Sink = newSink()
+		opts.WebhookBase = "https://engine.example.com"
+		opts.Value = func(v string) string {
+			if v == "${JIRA_WEBHOOK_SECRET}" {
+				return "the-live-secret"
+			}
+			return v
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Hooked != "https://engine.example.com/webhooks/jira" {
+		t.Fatalf("Hooked = %q", res.Hooked)
+	}
+	if len(inst.created) != 0 {
+		t.Errorf("a second hook was created beside the one that moved: %v",
+			inst.created)
+	}
+	if len(inst.updated) != 1 || inst.updated[0]["id"] != "7" {
+		t.Errorf("the hook at the old address was not repointed: %v", inst.updated)
+	}
+}
+
+// AND A HOOK THIS ENGINE NEVER REGISTERED IS NOT ADOPTED.
+//
+// The name alone would take one: an instance carries hooks other integrations
+// registered, and a run that repointed the first thing sharing a name would
+// take down somebody else's. Every hook this engine registers ends in
+// /webhooks/jira whatever base carries it, so the path is the guard.
+func TestAHookSharingTheNameButNotThePathIsLeftAlone(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	inst.hooks = []map[string]any{
+		{"id": "7", "name": "crewlet", "url": "https://elsewhere.example.com/their/hook"},
+	}
+
+	if _, err := run(t, inst, func(opts *jira.Options) {
+		opts.Sink = newSink()
+		opts.WebhookBase = "https://engine.example.com"
+		opts.Value = func(v string) string {
+			if v == "${JIRA_WEBHOOK_SECRET}" {
+				return "the-live-secret"
+			}
+			return v
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(inst.updated) != 0 || len(inst.deleted) != 0 {
+		t.Errorf("somebody else's hook was updated %v / deleted %v",
+			inst.updated, inst.deleted)
+	}
+	if len(inst.created) != 1 {
+		t.Errorf("this engine did not register its own hook: %v", inst.created)
+	}
+}
+
+// TWO DEPLOYMENTS WATCHING ONE INSTANCE SET TWO NAMES, and each then
+// converges its own hook. With one name each pass repointed the other's and
+// only the last deployment to run received anything.
+func TestADeploymentWithItsOwnHookNameKeepsItsOwnHook(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	inst.hooks = []map[string]any{
+		{"id": "1", "name": "crewlet", "url": "https://prod.example.com/webhooks/jira"},
+		{"id": "2", "name": "crewlet-staging", "url": "https://old-staging/webhooks/jira"},
+	}
+
+	if _, err := run(t, inst, func(opts *jira.Options) {
+		opts.Sink = newSink()
+		opts.WebhookBase = "https://staging.example.com"
+		opts.Config = &config.Jira{
+			URL: inst.URL, Token: "${JIRA_TOKEN}",
+			WebhookSecret: "${JIRA_WEBHOOK_SECRET}", WebhookName: "crewlet-staging",
+		}
+		opts.Value = func(v string) string {
+			if v == "${JIRA_WEBHOOK_SECRET}" {
+				return "the-live-secret"
+			}
+			return v
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(inst.updated) != 1 || inst.updated[0]["id"] != "2" {
+		t.Fatalf("staging did not converge its own hook: %v", inst.updated)
+	}
+	if len(inst.deleted) != 0 {
+		t.Errorf("staging deleted %v, which is production's hook", inst.deleted)
+	}
+}
+
+// The default here and the config model's must agree, or the hook the
+// reconcile registers is not the one a company that named none is documented
+// to get.
+func TestTheDefaultHookNameMatchesTheConfigModel(t *testing.T) {
+	t.Parallel()
+	if got := (&config.Jira{}).WebhookNameOrDefault(); got != jira.DefaultWebhookName {
+		t.Errorf("config says %q, jira says %q", got, jira.DefaultWebhookName)
 	}
 }

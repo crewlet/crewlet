@@ -208,6 +208,33 @@ type Jira struct {
 	// signatures are not verified, and the route answers 503 rather than
 	// accepting an unverifiable payload.
 	WebhookSecret string `secret:"true" yaml:"webhook_secret,omitempty" json:"webhook_secret,omitempty" desc:"HMAC secret for inbound webhooks."`
+
+	// WebhookName is the name the engine's own hook is registered under,
+	// and therefore WHICH HOOK ON THIS INSTANCE IS THIS DEPLOYMENT'S.
+	//
+	// The reconcile converges the hook carrying this name, whatever
+	// address it currently points at, which is what stops a change of
+	// public base leaving a live orphan behind delivering to somewhere
+	// that no longer answers — one per change, all enabled.
+	//
+	// So it has to differ between two deployments watching ONE instance:
+	// staging and production of the same company share this document, and
+	// with one name each pass would repoint the other's hook and only the
+	// last one to run would receive anything. The same knob exists on
+	// Datadog for the same reason.
+	WebhookName string `yaml:"webhook_name,omitempty" json:"webhook_name,omitempty" desc:"Name the engine's own Jira webhook is registered under; give two deployments watching one instance two names (default crewlet)."`
+}
+
+// WebhookNameOrDefault is the name the engine's hook carries at Jira.
+//
+// Restated here rather than imported from internal/jira for the reason
+// [Datadog.HandleTagOrDefault] gives — config is the leaf the vendor packages
+// depend on — and asserted equal by a test.
+func (j *Jira) WebhookNameOrDefault() string {
+	if name := strings.TrimSpace(j.WebhookName); name != "" {
+		return name
+	}
+	return "crewlet"
 }
 
 // BaseURL is the REST base: the gateway for a cloud id, the instance URL

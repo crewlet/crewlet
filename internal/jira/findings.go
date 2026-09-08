@@ -73,24 +73,33 @@ func (r *Result) Findings() []integration.Finding {
 
 	for _, project := range r.Projects {
 		switch {
-		case project.Detail != "":
-			// COULD NOT BE READ is not the same as does not exist, and
-			// the two get different kinds: a read that failed is
-			// something the next pass may well succeed at.
-			out = append(out, integration.Finding{
-				Kind:    integration.FindingGrantPending,
-				Subject: project.Key,
-				Detail: fmt.Sprintf("could not read project %s: %s",
-					project.Key, project.Detail),
-			})
 		case !project.Exists:
+			// BOTH HALVES OF THE 404, because Jira answers the same
+			// status for a project that is not there and for one this
+			// credential may not browse — the conflation this tree's
+			// GitHub side already names at [github.ensureRepoWebhook].
+			// Told only the first half, an operator goes looking for a
+			// typo in a key they are staring at in the Jira UI.
+			//
+			// AND NOT AS AN ACCESS TIER. This borrowed
+			// FindingUnknownTier, whose closed-set doc defines it as "an
+			// access tier the company document names that this
+			// third-party app does not have" and whose fallback sentence
+			// says exactly that — a sentence about tiers, on a finding
+			// about a project key. A routing path that will not fix
+			// itself, owed by the admin who can grant the permission or
+			// correct the key, is FindingIngressBlocked.
 			out = append(out, integration.Finding{
-				Kind:    integration.FindingUnknownTier,
+				Kind:    integration.FindingIngressBlocked,
 				Subject: project.Key,
 				Detail: fmt.Sprintf(
-					"the company names Jira project %s and this instance does "+
-						"not have it, so every issue routed by that project "+
-						"reaches nobody", project.Key),
+					"the company names Jira project %s and this instance "+
+						"answered 404 for it, so every issue routed by that "+
+						"project reaches nobody. Jira answers 404 both for a "+
+						"project that does not exist and for one the "+
+						"credential may not see, so check the key and check "+
+						"that integrations.jira.token's account has Browse "+
+						"Projects on it", project.Key),
 			})
 		}
 	}

@@ -46,11 +46,14 @@ func TestTeardownRemovesOnlyThisEnginesHook(t *testing.T) {
 	}
 }
 
-// WITHOUT A BASE NOTHING WAS EVER REGISTERED, so there is nothing to
-// withdraw and the disconnect finishes rather than failing. A teardown that
-// errored here would hold a surface in Disconnecting over an integration that
-// never had a hook at all.
-func TestTeardownWithNoWebhookBaseIsANoOp(t *testing.T) {
+// A NODE THAT CANNOT NAME ITS OWN ADDRESS STILL REMOVES THE HOOK.
+//
+// It did not: with no public base there was no address to match on, so the
+// teardown walked away and left a live registration behind, delivering to
+// this engine for ever after the operator disconnected the integration. A
+// hook is identified by its NAME now, which is exactly the identity that does
+// not depend on knowing where this deployment is reachable — see jira.ours.
+func TestTeardownWithNoWebhookBaseStillRemovesTheHook(t *testing.T) {
 	t.Parallel()
 	inst := newInstance(t)
 	inst.accounts["Bearer org-token"] = "acct-1"
@@ -67,8 +70,36 @@ func TestTeardownWithNoWebhookBaseIsANoOp(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("teardown with no base: %v", err)
 	}
+	if len(inst.deleted) != 1 || inst.deleted[0] != "1" {
+		t.Errorf("deleted = %v; a live hook survived the disconnect because "+
+			"this node could not name its own address", inst.deleted)
+	}
+}
+
+// AND SOMEBODY ELSE'S HOOK IS LEFT ALONE, which is what the delivery-path
+// guard is for: a hook that shares the name and points anywhere but a
+// /webhooks/jira path was never registered by this engine.
+func TestTeardownLeavesAHookThatIsNotThisEnginesAlone(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-1"
+	inst.hooks = []map[string]any{
+		{"id": "1", "name": "crewlet", "url": "https://someone-else/hooks/theirs"},
+	}
+
+	client, err := jira.NewClient(jira.ClientOptions{
+		URL: inst.URL, Token: "org-token", Deployment: jira.DataCenter,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := jira.Teardown(context.Background(), jira.Options{
+		Client: client, Config: &config.Jira{}, WebhookBase: "https://x",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if len(inst.deleted) != 0 {
-		t.Errorf("deleted = %v with no base configured", inst.deleted)
+		t.Errorf("deleted %v, which this engine never registered", inst.deleted)
 	}
 }
 

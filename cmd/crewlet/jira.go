@@ -155,7 +155,10 @@ func printJiraResult(w io.Writer, res *jira.Result) {
 		for _, p := range res.Projects {
 			switch {
 			case !p.Exists:
-				fmt.Fprintf(w, "  %-10s NOT ON THIS INSTANCE — %s\n", p.Key, p.Detail)
+				// BOTH HALVES: Jira answers 404 for a project that is not
+				// there and for one this credential may not browse.
+				fmt.Fprintf(w, "  %-10s NOT VISIBLE — no such project, or "+
+					"this credential may not browse it\n", p.Key)
 			case p.Agrees():
 				fmt.Fprintf(w, "  %-10s %s (lead %s)\n", p.Key, p.Name, p.OrgLead)
 			default:
