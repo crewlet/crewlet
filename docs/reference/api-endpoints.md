@@ -1834,7 +1834,12 @@ convert, and after it is **installed**, with nothing but `?installed=<handle>`.
 Unauthenticated, because a redirect from GitHub carries no engine credential;
 the `state` minted by [`POST /setup/integrations/github/app`](#one-agents-own-github-app)
 stands in its place and is a signed token naming the seat, checked before the
-code is converted. **The install arrival carries no such proof and so changes
+code is converted — and **spent** there, so a state that reached a browser
+history or an ingress access log cannot be presented a second time within the
+fifteen minutes it stays valid. The spend goes through the fleet's claim
+registry, so it holds when the two halves of the flow land on different nodes,
+and it fails CLOSED: a registry that cannot answer has not said the link is
+unused. **The install arrival carries no such proof and so changes
 nothing** — it renders a page and no more; the
 [reconcile loop](../concepts/integration-reconcile.md) is what records the
 installation, from GitHub's own list rather than from the query. On a conversion the app's private key and webhook secret are

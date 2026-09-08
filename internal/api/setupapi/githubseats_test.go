@@ -259,7 +259,7 @@ func (s *surface) convertOneApp(t *testing.T, handle string, app map[string]any)
 		t.Fatalf("point at github = %d: %s", res.Code, res.Body)
 	}
 
-	flow := setupapi.NewAppFlow(s.setup, []string{"test-material"})
+	flow := setupapi.NewAppFlow(s.setup, []string{"test-material"}, nil)
 	s.setup.AttachAppFlow(flow)
 
 	// THROUGH THE BEGIN ROUTE, so the state the callback validates is one

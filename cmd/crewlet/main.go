@@ -1091,7 +1091,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// browser that comes back to the seat that started, and it is keyed
 	// from the SAME Tier A material every node reads, so a fleet where the
 	// two halves land on different nodes still agrees.
-	appFlow := setupapi.NewAppFlow(setupSurface, appStateKeyMaterial(boot))
+	//
+	// The fleet's claim registry SPENDS each state, so a link that reached a
+	// log or a browser history cannot be presented a second time. Nil on a
+	// node with no coordination store, which takes a per-process set — the
+	// same single-node trade the key material above makes.
+	appFlow := setupapi.NewAppFlow(setupSurface, appStateKeyMaterial(boot),
+		e.Backends().Fleet)
 	setupSurface.AttachAppFlow(appFlow)
 	if appFlow != nil && len(appStateKeyMaterial(boot)) == 0 {
 		log.Warn("github_app_state_key_is_per_process",

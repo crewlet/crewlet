@@ -2,11 +2,14 @@ package setupapi
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -66,6 +69,22 @@ const tokenDomain = "github-app-manifest"
 type AppFlow struct {
 	service *Service
 	signer  *runtoken.Signer
+	spent   StateClaims
+}
+
+// StateClaims is what spends a callback state, so no state is ever accepted
+// twice.
+//
+// The consumer's own interface, one method wide: this package needs
+// first-claim-wins and nothing else. The fleet's [coord.Claims] satisfies it,
+// and reading it here INVERTS that type's documented policy on purpose.
+// Webhook dedupe fails OPEN, because a push suppressed by a store blip is a
+// wake nobody notices. This is an authorization check, so it fails CLOSED: a
+// store that cannot answer is not evidence that a state is unspent, and the
+// cost of refusing is that an operator clicks again.
+type StateClaims interface {
+	// Claim records key and reports whether THIS caller was first.
+	Claim(ctx context.Context, key string, ttl time.Duration, now time.Time) (bool, error)
 }
 
 // NewAppFlow builds the completer the webhook mux serves.
@@ -75,17 +94,78 @@ type AppFlow struct {
 // different nodes would otherwise refuse every completion. Empty material
 // takes a per-process key, which is correct for one node and cannot work
 // across two, and the caller logs what that costs.
-func NewAppFlow(s *Service, material []string) *AppFlow {
+//
+// spent is where a used state is recorded, and it has the SAME fleet
+// requirement for the same reason: a callback landing on a node that cannot
+// see the first one's record would accept a replay. Nil takes a per-process
+// set, correct for one node and no more — exactly the trade the key material
+// above makes.
+func NewAppFlow(s *Service, material []string, spent StateClaims) *AppFlow {
 	if s == nil {
 		return nil
 	}
+	if spent == nil {
+		spent = &localClaims{seen: map[string]time.Time{}}
+	}
 	return &AppFlow{
 		service: s,
+		spent:   spent,
 		signer: runtoken.New(runtoken.Options{
 			Key: runtoken.KeyFrom(tokenDomain, material),
 			Now: s.clock,
 		}),
 	}
+}
+
+// localClaims is the single-node stand-in for the fleet's registry.
+//
+// Bounded by the same TTL the fleet row carries, swept on write rather than
+// on a timer: a state is spent at most once per app creation, so the map
+// holds one entry per creation for fifteen minutes and there is no loop worth
+// running to keep it smaller.
+type localClaims struct {
+	mu   sync.Mutex
+	seen map[string]time.Time
+}
+
+func (l *localClaims) Claim(_ context.Context, key string, ttl time.Duration, now time.Time) (bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for k, expiry := range l.seen {
+		if !now.Before(expiry) {
+			delete(l.seen, k)
+		}
+	}
+	if expiry, held := l.seen[key]; held && now.Before(expiry) {
+		return false, nil
+	}
+	l.seen[key] = now.Add(ttl)
+	return true, nil
+}
+
+// spend records a state as used, and reports whether this caller may use it.
+//
+// KEYED ON THE DIGEST, never the token: the fleet's registry is shared state
+// and the state IS the credential on this route, so writing it there would
+// put a live bearer token in a store read by every node.
+//
+// The claim outlives the token deliberately — the same TTL the state was
+// minted for, measured from the moment it is spent — so a token cannot be
+// replayed at any point while it would still validate.
+func (f *AppFlow) spend(ctx context.Context, state string) error {
+	digest := sha256.Sum256([]byte(state))
+	key := "github-app-state:" + hex.EncodeToString(digest[:])
+	first, err := f.spent.Claim(ctx, key, manifestTTL, f.service.now())
+	if err != nil {
+		// CLOSED. See [StateClaims]: a registry that could not answer has
+		// not told us this state is unspent.
+		return fmt.Errorf("%w: this engine could not check whether the link "+
+			"had already been used: %w", ErrStateRefused, err)
+	}
+	if !first {
+		return ErrStateRefused
+	}
+	return nil
 }
 
 // AttachAppFlow gives the service the signer its begin route needs.
@@ -191,6 +271,23 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 	handle := f.signer.Validate(strings.TrimSpace(state))
 	if handle == "" {
 		return "", ErrStateRefused
+	}
+	// SPENT HERE, BEFORE THE EXCHANGE, which is what makes [ErrStateRefused]
+	// mean what it has always said it means.
+	//
+	// The state is the ONLY authorization on this route — it is served by the
+	// unauthenticated webhooks mux — and validating it is a pure signature
+	// and expiry check, so without this it is a bearer credential that works
+	// as many times as it is presented for a full [manifestTTL]. It travels
+	// in a query string, which is where browser history and every ingress
+	// access log keep it.
+	//
+	// BEFORE the exchange rather than after, and that costs nothing: GitHub's
+	// manifest code is itself one-time, so a conversion that fails needs a
+	// fresh code and therefore a fresh creation either way. Spending first
+	// means a replay cannot race a slow exchange.
+	if err := f.spend(ctx, state); err != nil {
+		return handle, err
 	}
 	s := f.service
 	company := s.company()
