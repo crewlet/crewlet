@@ -442,6 +442,7 @@ test("the phase order is the engine's", () => {
 // --- the action slot -------------------------------------------------------- //
 
 import { actionFor, sectionsFor } from "./Integrations.tsx";
+import type { Entry } from "./Integrations.tsx";
 import type { SetupToolState } from "~/protocol/types.ts";
 
 function toolState(over: Partial<SetupToolState>): SetupToolState {
@@ -1504,4 +1505,59 @@ test("a tool with no provisioning pass reports from what can be seen", () => {
     [{ ...noPass, can_provision: true }],
   );
   expect(withPass.tag).toBe("Connecting");
+});
+
+// ONE AGENT, ONE ROW.
+//
+// A per-seat app contributes one section per agent and they all carry the same
+// tool, so walking the sections listed the whole roster once per section: a
+// company with one agent saw it twice in the disconnect dialog, and a company
+// with ten would have seen a hundred rows.
+test("the disconnect roster lists each agent once", () => {
+  const tool: SetupToolState = {
+    key: "github",
+    configured: true,
+    enabled: true,
+    satisfied: true,
+    seats_required: true,
+    manage_path: "Advanced > Delete GitHub App",
+    // A COMPANY BLOCK AS WELL AS SEATS, which is GitHub's real shape and
+    // what makes the sections outnumber the agents.
+    requirements: [
+      {
+        field: "org",
+        label: "Organization",
+        kind: "id",
+        config_path: "integrations.github.provisioning.org",
+        required: true,
+        present: true,
+      },
+    ],
+    seats: [
+      {
+        handle: "sre-lead",
+        name: "SRE Lead",
+        satisfied: true,
+        requirements: [],
+        manage_url: "https://github.com/settings/apps/acme-sre",
+      },
+    ],
+  };
+  const entry: Entry = {
+    key: "github",
+    capability: "code",
+    name: "GitHub",
+    description: "Code and pull requests",
+    vendor: "github",
+    surfaces: [{ key: "github", name: "GitHub" }],
+  };
+  const sections = sectionsFor(entry, new Map([["github", tool]]));
+  // The sections themselves are one per agent plus the company block, which
+  // is the shape the dialog used to walk.
+  expect(sections.length).toBeGreaterThan(1);
+
+  const seats = [...new Map(sections.map((s) => [s.tool.key, s.tool])).values()].flatMap(
+    (t) => t.seats ?? [],
+  );
+  expect(seats.map((s) => s.handle)).toEqual(["sre-lead"]);
 });

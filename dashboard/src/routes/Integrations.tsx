@@ -1500,8 +1500,17 @@ export function Integrations() {
                     // manage link only where what it holds has to be removed
                     // by hand, so an integration with nothing to hand over
                     // renders no list at all.
-                    apps: sectionsFor(entry, setup.byKey)
-                      .flatMap((section) => section.tool.seats ?? [])
+                    // BY TOOL KEY FIRST. A per-seat app contributes one
+                    // section per agent and they all carry the same tool, so
+                    // walking the sections listed the whole roster once per
+                    // section: one agent, two rows, and a company of ten
+                    // agents a hundred.
+                    apps: [
+                      ...new Map(
+                        sectionsFor(entry, setup.byKey).map((s) => [s.tool.key, s.tool]),
+                      ).values(),
+                    ]
+                      .flatMap((tool) => tool.seats ?? [])
                       .filter((seat) => seat.manage_url)
                       .map((seat) => ({
                         handle: seat.handle,
@@ -1516,6 +1525,7 @@ export function Integrations() {
                     // for every agent.
                     appPath: sectionsFor(entry, setup.byKey).find((s) => s.tool.manage_path)?.tool
                       .manage_path,
+
                   })
                 }
               />
