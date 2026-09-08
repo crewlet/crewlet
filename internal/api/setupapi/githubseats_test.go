@@ -544,3 +544,32 @@ func TestACustomDatadogRoleKeepsItsOwnName(t *testing.T) {
 		t.Errorf("a role this engine does not know was graded as %v", tier)
 	}
 }
+
+// A FINISHED SEAT SAYS WHO IT IS ON GITHUB.
+//
+// The login is what appears on every commit, comment and review the agent
+// writes, and what an operator matches against GitHub's own pages. The row
+// said which repositories the seat reaches, which is a real difference
+// between two finished seats and not the question a roster of agents raises
+// first.
+func TestAFinishedGitHubSeatNamesItsLogin(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seedGitHubApps(t)
+
+	seat := githubSeats(t, s)["reviewer"]
+	if seat == nil {
+		t.Fatal("the roster does not list the finished seat")
+	}
+	detail, _ := seat["detail"].(string)
+	if detail != "acme-reviewer[bot]" {
+		t.Errorf("detail = %q, want the login this agent acts as", detail)
+	}
+	// AND NOT THE SCOPE AN OPERATOR ALREADY CHOSE. "Every repository the
+	// installation covers" is the answer they gave when they installed the
+	// app; repeating it after the login pushes the name off a narrow row to
+	// say nothing.
+	if strings.Contains(detail, "Every repository") {
+		t.Errorf("detail = %q repeats the scope the install already settled", detail)
+	}
+}

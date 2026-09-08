@@ -1280,13 +1280,29 @@ func githubSeats(company *config.Company, resolve func(string) (string, bool)) [
 					"be minted for this seat and it reaches GitHub as nobody"
 			default:
 				state.Satisfied = true
-				// WHAT IT REACHES, once it reaches anything. A finished
-				// seat's line said it was finished, which the tag beside
-				// it already said; the question left is which
-				// repositories this agent works in, and it is the one
-				// thing two finished seats on one card differ by. The
-				// control plane's roster answers it the same way.
-				state.Detail = repoScope(app.Repos)
+				// WHO IT IS, AND WHAT IT REACHES, in that order.
+				//
+				// A finished seat's line said it was finished, which the
+				// tag beside it already said. It then said which
+				// repositories the agent works in, which is a real
+				// difference between two finished seats but not the
+				// question a roster of agents raises first: the login is
+				// what appears on every commit, comment and review this
+				// agent writes, and it is what an operator matches
+				// against GitHub's own pages.
+				//
+				// The scope follows only where the installation NARROWS
+				// it. "Every repository the installation covers" is the
+				// answer an operator already gave when they installed
+				// the app, and repeating it after the login pushes the
+				// name off a narrow row to say nothing.
+				state.Detail = github.BotLogin(app.AppSlug)
+				if len(app.Repos) > 0 {
+					state.Detail += " in " + strings.Join(app.Repos, ", ")
+				}
+				if state.Detail == "" {
+					state.Detail = repoScope(app.Repos)
+				}
 			}
 		}
 		out = append(out, state)
