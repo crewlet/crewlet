@@ -3,6 +3,8 @@ package config
 import (
 	"encoding/base64"
 	"log/slog"
+	"net"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -528,6 +530,48 @@ type Stream struct {
 	// `tls { verify: true }`, which REQUIRES a client certificate — is
 	// simply unreachable.
 	TLS NATSTLS `yaml:"tls,omitempty" json:"tls,omitzero"`
+
+	// Sync decides what an acknowledged publish has actually reached, and
+	// it is the one Tier A field that changes what durability MEANS here.
+	//
+	// `always` fsyncs every write before acknowledging it. `<duration>`
+	// declines the fsync and names the window instead — the most an
+	// acknowledged write can be behind the disk. Unset takes `always`,
+	// which is the strong value at every replica count, because the
+	// alternative is a default that is silently weaker on exactly the
+	// deployments that matter most.
+	//
+	// IT IS NOT INFERRED FROM replicas, and the inference it replaces is
+	// the reason this field exists. "A replicated member has a quorum
+	// instead of a disk" is true when one host loses power and false when
+	// a rack does — and a three-node fleet in one rack, which is what a
+	// first production deployment looks like, is exposed to the second by
+	// construction. Three copies of the same unflushed page cache is one
+	// copy.
+	Sync string `yaml:"sync,omitempty" json:"sync,omitempty" desc:"always (default) fsyncs every write before acknowledging it; a duration (30s) declines the fsync and names the window an acknowledged write may be behind the disk."`
+}
+
+// StreamSyncAlways is [Stream.Sync]'s strong value.
+const StreamSyncAlways = "always"
+
+// SyncAlways reports whether every write is fsynced before it is
+// acknowledged. Unset means yes — see [Stream.Sync].
+func (s Stream) SyncAlways() bool {
+	v := strings.TrimSpace(s.Sync)
+	return v == "" || v == StreamSyncAlways
+}
+
+// SyncInterval is the flush window when the fsync is declined, or 0 when it is
+// not. Validation has already established the value parses.
+func (s Stream) SyncInterval() time.Duration {
+	if s.SyncAlways() {
+		return 0
+	}
+	d, err := time.ParseDuration(strings.TrimSpace(s.Sync))
+	if err != nil {
+		return 0
+	}
+	return d
 }
 
 // StreamCluster is an embedded server's membership in a cluster.
@@ -567,6 +611,9 @@ func (s *Stream) validate(path string) error {
 	}
 	if s.Replicas < 0 {
 		p.add(at(path, "replicas"), ErrOutOfRange, "must not be negative, got %d", s.Replicas)
+	}
+	if err := s.validateSync(path, external); err != nil {
+		p.wrap(err)
 	}
 	if s.EventRetentionHours < 0 {
 		p.add(at(path, "event_retention_hours"), ErrOutOfRange,
@@ -925,4 +972,101 @@ func (s *Secrets) Cipher() (secrets.Cipher, error) {
 		ring.Keys[key.ID] = material
 	}
 	return secrets.NewCipher(ring)
+}
+
+// validateSync checks stream.sync, and its three refusals are the cases where
+// the value is a claim the deployment cannot make.
+//
+// The refusals are about MEANING rather than about syntax. Declining the fsync
+// is a legitimate operator choice with a real cost, and each of these is a
+// place where the choice would be recorded and then not honoured — which is
+// worse than either answer, because the operator believes the number they
+// wrote.
+func (s *Stream) validateSync(path string, external bool) error {
+	var p problems
+	raw := strings.TrimSpace(s.Sync)
+	if raw == "" || raw == StreamSyncAlways {
+		// THE WARNING, not a refusal: an unset value takes `always`, and
+		// on a replicated fleet that is a deliberate cost rather than an
+		// accident. It is stated where the operator will read it — see
+		// docs/guides/deployment.md — rather than made a validation
+		// problem, because there is nothing here to fix.
+		return nil
+	}
+
+	// (1) AN EXTERNAL CLUSTER'S DISK IS NOT THIS PROCESS'S TO CONFIGURE.
+	// The field sets an option on the EMBEDDED server; against
+	// `stream.type: nats` it is read by nobody, so accepting it would
+	// record a durability decision that never reaches the thing storing
+	// the data.
+	if external {
+		p.add(at(path, "sync"), ErrConflict,
+			"stream.sync configures the EMBEDDED server's file store, and an "+
+				"external NATS cluster stores its own data: set sync_interval "+
+				"on that cluster instead, or remove this field")
+		return p.err()
+	}
+
+	d, err := time.ParseDuration(raw)
+	switch {
+	case err != nil:
+		p.add(at(path, "sync"), ErrUnknownValue,
+			"%q is neither %q nor a duration (30s, 2m): it names how far behind "+
+				"the disk an acknowledged write may be", s.Sync, StreamSyncAlways)
+		return p.err()
+	case d <= 0:
+		p.add(at(path, "sync"), ErrOutOfRange,
+			"%q must be positive: a zero or negative window is %q said in a way "+
+				"nothing reads", s.Sync, StreamSyncAlways)
+		return p.err()
+	}
+
+	// (2) BELOW THREE REPLICAS THERE IS NO QUORUM TO SPEND INSTEAD. The
+	// whole argument for declining the fsync is that a majority holds the
+	// write; a solo member's disk is the only copy there is, so the
+	// window is not a trade, it is a straight loss.
+	if s.Replicas < 3 {
+		p.add(at(path, "sync"), ErrConflict,
+			"declining the fsync trades this member's disk for a quorum, and "+
+				"replicas=%d has no quorum to trade for: the local disk is the "+
+				"only copy, so %q would be a window with nothing behind it",
+			max(s.Replicas, 1), s.Sync)
+	}
+
+	// (3) A SAME-HOST CLUSTER IS ONE FAILURE DOMAIN. Peers that resolve to
+	// this host share its power, its kernel and its page cache, so the
+	// majority the window is traded for dies with the member that has it.
+	if sameHostCluster(s.Cluster.Peers) {
+		p.add(at(path, "sync"), ErrConflict,
+			"every peer in stream.cluster.peers is on this host, so the quorum "+
+				"this window trades for shares one power supply and one page "+
+				"cache: %q would be recorded and not honoured", s.Sync)
+	}
+	return p.err()
+}
+
+// sameHostCluster reports whether every peer address is on this machine.
+//
+// A HOST TEST rather than an address test: `localhost`, `127.0.0.1` and `::1`
+// are the three spellings a compose file or a laptop fleet uses, and they are
+// one failure domain however they are written. An empty peer list is not a
+// cluster at all and answers false — the replica rule above is what covers it.
+func sameHostCluster(peers []string) bool {
+	if len(peers) == 0 {
+		return false
+	}
+	for _, peer := range peers {
+		host := strings.TrimSpace(peer)
+		if u, err := url.Parse(host); err == nil && u.Host != "" {
+			host = u.Hostname()
+		} else if h, _, splitErr := net.SplitHostPort(host); splitErr == nil {
+			host = h
+		}
+		switch strings.ToLower(strings.Trim(host, "[]")) {
+		case "localhost", "127.0.0.1", "::1", "0.0.0.0":
+		default:
+			return false
+		}
+	}
+	return true
 }

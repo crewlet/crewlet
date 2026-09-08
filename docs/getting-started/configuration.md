@@ -395,6 +395,27 @@ stream:
   #   peers:                        #   the member name, so it must survive a
   #     - "nats://node-1:6222"      #   restart — a name minted at boot orphans
   #     - "nats://node-2:6222"      #   this member's replicas every time
+  # sync: always                    # what an acknowledged publish has actually
+                                    #   reached. `always` (the default, at every
+                                    #   replica count) fsyncs every write before
+                                    #   acknowledging it; a duration — `30s` —
+                                    #   declines the fsync and names the window
+                                    #   an acked write may be behind the disk.
+                                    #   It is NOT inferred from `replicas`: "a
+                                    #   replicated member has a quorum instead
+                                    #   of a disk" holds when one host loses
+                                    #   power and fails when a RACK does, and a
+                                    #   three-node fleet in one rack is three
+                                    #   copies of one unflushed page cache. A
+                                    #   window is refused where it would be
+                                    #   recorded and not honoured: against an
+                                    #   external cluster (which stores its own
+                                    #   data), below 3 replicas (no quorum to
+                                    #   trade the disk for), and on a cluster
+                                    #   whose peers are all on this host (one
+                                    #   failure domain). Declining it on a real
+                                    #   three-host fleet is a legitimate trade
+                                    #   and costs 1–3 ms per write on NVMe
   # event_retention_hours: 720      # 0 takes the queue's own default (30 days).
                                     #   Unbounded is deliberately not expressible:
                                     #   an event log nothing sweeps grows for the

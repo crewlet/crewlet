@@ -237,6 +237,10 @@
           "description": "Embedded stream persistence directory. Empty = in-memory (nothing survives a restart).",
           "type": "string"
         },
+        "sync": {
+          "description": "always (default) fsyncs every write before acknowledging it; a duration (30s) declines the fsync and names the window an acknowledged write may be behind the disk.",
+          "type": "string"
+        },
         "tls": {
           "$ref": "#/$defs/NATSTLS"
         },
