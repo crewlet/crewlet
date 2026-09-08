@@ -9,6 +9,7 @@ import (
 	"maps"
 	"runtime/debug"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -105,9 +106,10 @@ func (q *Queue) nakCeiling() time.Duration {
 // nakBackoff is how long the nth redelivery of a failing message waits.
 //
 // The first failure waits [Queue.nakDelay] and each one after that waits
-// twice as long, up to [Queue.nakCeiling]. deliveries is the count JetStream
-// reports for the message, so the first attempt is 1.
-func (q *Queue) nakBackoff(deliveries uint64) time.Duration {
+// twice as long, up to [Queue.nakCeiling]. failures is how many times THIS
+// MESSAGE HAS FAILED, so the first is 1 — see [attachment.failures] for why
+// that is not JetStream's delivery count.
+func (q *Queue) nakBackoff(failures uint64) time.Duration {
 	delay, ceiling := q.nakDelay(), q.nakCeiling()
 	if delay >= ceiling {
 		return ceiling
@@ -115,7 +117,7 @@ func (q *Queue) nakBackoff(deliveries uint64) time.Duration {
 	// SHIFTED, NOT MULTIPLIED IN A LOOP, and bounded before the shift: a
 	// delivery count is a number off the wire, and shifting a duration by
 	// 64 is undefined rather than large.
-	steps := deliveries
+	steps := failures
 	if steps > 0 {
 		steps--
 	}
@@ -161,6 +163,56 @@ type attachment struct {
 	// more message through — the delivery a successor is already entitled
 	// to.
 	detached atomic.Bool
+
+	// failures counts how many times each message has FAILED here, keyed
+	// on its stream sequence.
+	//
+	// # Why the delivery count cannot answer this
+	//
+	// The backoff doubles per failure, and it was doubling per DELIVERY —
+	// which this package documents as counting something else entirely.
+	// [budgetFor]'s own comment says the budget "covers poison, node-death
+	// AND HANDOFF — the last because a deferred delivery returns via Nak
+	// and that increments the count (measured)". Every healthy return goes
+	// through the same counter: a deferral when a lease moves, a hand-back
+	// when a hold or a pause lands between the fetch and the dispatch. So
+	// a message handed back five times for reasons that were nobody's
+	// fault met its FIRST genuine failure already five steps up the
+	// doubling curve — at the shipped values, straight at the 30 s
+	// ceiling. THE FIRST FAILURE IS STILL FAST is the other half of the
+	// backoff decision, and it was not true.
+	//
+	// # Why in memory, and what a reset costs
+	//
+	// There is nowhere else to put it: a Nak cannot carry a header, and
+	// the count is worth exactly one attachment's lifetime. A redelivery
+	// that lands on another node — or here after a re-attach — starts at
+	// one again, which is the SAFE direction: the cost is a fast retry,
+	// where the alternative was a slow first one. The budget is unchanged
+	// and still counts deliveries, because dead-lettering is about how
+	// many times a message has been handed to anybody at all.
+	failures   map[uint64]uint64
+	failuresMu sync.Mutex
+}
+
+// failed records one failure of a message and reports the count.
+func (a *attachment) failed(seq uint64) uint64 {
+	a.failuresMu.Lock()
+	defer a.failuresMu.Unlock()
+	if a.failures == nil {
+		a.failures = map[uint64]uint64{}
+	}
+	a.failures[seq]++
+	return a.failures[seq]
+}
+
+// settled forgets a message that will not come back — acked, terminated, or
+// handed on. Without it the map would hold every sequence this attachment
+// ever failed for the life of the seat.
+func (a *attachment) settled(seq uint64) {
+	a.failuresMu.Lock()
+	defer a.failuresMu.Unlock()
+	delete(a.failures, seq)
 }
 
 func (a *attachment) setQuiesced(v bool) { a.quiesced.Store(v) }
@@ -442,6 +494,13 @@ func (a *attachment) apply(ctx context.Context, msg jetstream.Msg, ev *events.Ev
 	queue.LogResult(a.log, a.key.topic, a.key.group, ev, res)
 	switch res.Outcome {
 	case queue.OutcomeAck:
+		// FORGOTTEN FIRST. A message that succeeded after failing twice
+		// must not carry those two failures into a later redelivery of
+		// the same sequence, and the map would otherwise hold every
+		// sequence this seat ever failed for the life of the attachment.
+		if md, err := msg.Metadata(); err == nil {
+			a.settled(md.Sequence.Stream)
+		}
 		if err := msg.Ack(); err != nil {
 			a.log.Warn("ack_failed", "error", err.Error())
 		}
@@ -486,11 +545,11 @@ func (a *attachment) nakOrDeadLetter(ctx context.Context, msg jetstream.Msg) {
 	// shortest spacing: the alternative is dropping a delivery over a
 	// header, and returnMsg reads the same metadata for the budget and
 	// already treats an unreadable one as "not yet spent".
-	var deliveries uint64 = 1
+	var failures uint64 = 1
 	if md, err := msg.Metadata(); err == nil {
-		deliveries = md.NumDelivered
+		failures = a.failed(md.Sequence.Stream)
 	}
-	a.returnMsg(ctx, msg, a.q.nakBackoff(deliveries))
+	a.returnMsg(ctx, msg, a.q.nakBackoff(failures))
 }
 
 // handBack returns a HEALTHY message — a deferral, a hold, a pause, teardown.
@@ -510,6 +569,9 @@ func (a *attachment) handBack(ctx context.Context, msg jetstream.Msg) {
 func (a *attachment) returnMsg(ctx context.Context, msg jetstream.Msg, delay time.Duration) {
 	md, err := msg.Metadata()
 	if err == nil && md.NumDelivered >= uint64(budgetFor(a.q.cfg)) {
+		// Terminated here, so nothing will redeliver this sequence and
+		// its failure count is dead weight.
+		a.settled(md.Sequence.Stream)
 		a.log.Error("dead_lettered", "deliveries", md.NumDelivered)
 		a.q.deadLetter(ctx, a.key.topic, a.key.group, msg.Data())
 		// Term, not Ack: the message is being discarded from this

@@ -110,6 +110,75 @@ type TokenSink interface {
 // available — every one of them has to be found and revoked by hand.
 var ErrNoSink = errors.New("provision: name where minted credentials should go")
 
+// ReadOnly is the sink for a run that MAY NOT MINT.
+//
+// A node with no keyring cannot seal a credential, and there was no way to
+// say that: the loop passed a nil sink, documenting it as a dry run, and the
+// two passes that guarded their entry point on a nil sink answered
+// [ErrNoSink] instead — reported as a FAULT, so an ordinary deployment that
+// keeps its ${VAR}s in the environment had those integrations permanently
+// "the last pass could not read this", retried for ever, over a node doing
+// exactly what it was configured to do.
+//
+// This says the honest thing at each method instead. A pass can still resolve
+// its group, read its hooks and report every seat's identity; what it cannot
+// do is create a credential, and each of the two calls that would has an
+// answer:
+//
+//   - Value answers UNKNOWN, which every pass here already distinguishes from
+//     "no key": guessing absent would rotate a live credential because a
+//     store blinked, so the seat is reported rather than re-minted.
+//   - Record refuses, which is unreachable while Value stops the pass first
+//     and is the correct answer if one ever does not.
+//   - Flush and Discard succeed, because a run that recorded nothing has
+//     nothing to make durable and nothing to take back.
+func ReadOnly() TokenSink { return readOnlySink{} }
+
+type readOnlySink struct{}
+
+// Mints reports that this sink cannot persist anything, which is what
+// [CanMint] asks.
+func (readOnlySink) Mints() bool { return false }
+
+func (readOnlySink) Record(context.Context, string, string) error { return ErrNoSink }
+func (readOnlySink) Discard(context.Context) error                { return nil }
+func (readOnlySink) Flush(context.Context) error                  { return nil }
+
+func (readOnlySink) Value(context.Context, string) (string, bool, error) {
+	return "", false, ErrNoSink
+}
+
+func (readOnlySink) Describe() string {
+	return "nowhere: this node has no keyring, so nothing can be sealed"
+}
+
+func (readOnlySink) NextStep() string {
+	return "set secrets.keys in the bootstrap configuration so this node can " +
+		"seal what a pass mints"
+}
+
+// CanMint reports whether a sink can persist what a run creates.
+//
+// ASKED BEFORE ANYTHING IS CREATED, not discovered at the first Record. The
+// two provisioners that create ACCOUNTS have no rollback that can undo one —
+// they revoke the token and leave the account — so a run that gets as far as
+// minting on a sink that cannot record has already made an identity at the
+// third-party app that nobody asked for. See [ReadOnly] for what such a sink
+// is and why the loop hands one out.
+//
+// A nil sink cannot mint either, but a caller that has one wants
+// [ErrNoSink]: on the command line a run with nowhere to put its credentials
+// is a mistake to refuse rather than a posture to adopt.
+func CanMint(sink TokenSink) bool {
+	if sink == nil {
+		return false
+	}
+	if asked, ok := sink.(interface{ Mints() bool }); ok {
+		return asked.Mints()
+	}
+	return true
+}
+
 // ReferencedVars is the set of ${VAR} names one config value points at.
 //
 // A helper rather than a call to envref because the callers here ask a

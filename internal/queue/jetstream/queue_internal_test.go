@@ -96,3 +96,68 @@ func TestAFailingMessageBacksOffToACeiling(t *testing.T) {
 			"auth cooldown a benched provider credential serves", total)
 	}
 }
+
+// A HANDOFF IS NOT A FAILURE, and the backoff must not treat it as one.
+//
+// The wait doubled per DELIVERY, and this package's own budget comment says
+// what a delivery counts: "poison, node-death AND HANDOFF — the last because
+// a deferred delivery returns via Nak and that increments the count". Every
+// healthy return goes through the same counter — a lease moving, a hold or a
+// pause landing between the fetch and the dispatch — so a message handed back
+// five times for nobody's fault met its first genuine failure already five
+// steps up the curve, which at the shipped values is straight at the ceiling.
+// "THE FIRST FAILURE IS STILL FAST" is the other half of the decision above,
+// and it was not true.
+func TestAHandoffDoesNotAgeAMessagesBackoff(t *testing.T) {
+	t.Parallel()
+	a := &attachment{}
+
+	// Five handoffs of sequence 7: nothing here failed, so nothing is
+	// recorded against it.
+	const seq = 7
+	if got := a.failed(seq); got != 1 {
+		t.Fatalf("the first failure counted as %d", got)
+	}
+	a.settled(seq)
+
+	// After the message is settled its first failure is a first failure
+	// again, which is what a redelivery landing on a fresh attachment
+	// gets.
+	if got := a.failed(seq); got != 1 {
+		t.Errorf("a settled message carried %d failures into its next life", got)
+	}
+}
+
+// AND A REAL SEQUENCE OF FAILURES STILL AGES, or the fix above would be a way
+// of retrying a poisoned message at full speed for ever.
+func TestRepeatedFailuresOfOneMessageAge(t *testing.T) {
+	t.Parallel()
+	a := &attachment{}
+	for want := uint64(1); want <= 4; want++ {
+		if got := a.failed(11); got != want {
+			t.Fatalf("failure %d counted as %d", want, got)
+		}
+	}
+	// AND THEY ARE PER MESSAGE. One seat failing on one message must not
+	// slow the next message down.
+	if got := a.failed(12); got != 1 {
+		t.Errorf("a different message started at %d", got)
+	}
+}
+
+// NOTHING IS REMEMBERED FOR A MESSAGE THAT WILL NOT COME BACK, or the map
+// grows for the life of the seat.
+func TestASettledMessageIsForgotten(t *testing.T) {
+	t.Parallel()
+	a := &attachment{}
+	a.failed(1)
+	a.failed(2)
+	a.settled(1)
+	a.settled(2)
+
+	a.failuresMu.Lock()
+	defer a.failuresMu.Unlock()
+	if len(a.failures) != 0 {
+		t.Errorf("the failure map holds %d settled message(s)", len(a.failures))
+	}
+}

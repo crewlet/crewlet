@@ -19,7 +19,10 @@ import (
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/datadog"
+	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -1480,5 +1483,47 @@ func TestASetupWriteOnAStaleRevisionIsRefused(t *testing.T) {
 	if res.Code < http.StatusBadRequest {
 		t.Fatalf("a write on a revision that never existed was accepted: %d %s",
 			res.Code, res.Body)
+	}
+}
+
+// EVERY CREDENTIAL FINDING IS CLAIMED BY A FIELD THAT CAN CLEAR IT.
+//
+// Requirement.Blocks is documented as "the join": a status row reporting a
+// finding offers exactly the fields whose Blocks names it. Nothing checked
+// the join was pointed anywhere useful, and two integrations had it wrong in
+// the same way — `credential_missing` was claimed by the instance URL and the
+// team slug, and by the signing secret the engine mints for itself, while the
+// administrator token that is the only thing that clears it declared nothing
+// at all. A row asking for a credential then offered every field except the
+// credential.
+func TestACredentialFindingIsClearedByACredentialField(t *testing.T) {
+	t.Parallel()
+	resolve := func(string) (string, bool) { return "", false }
+	for _, tc := range []struct {
+		kind string
+		reqs []setup.Requirement
+	}{
+		{"gitlab", gitlab.Requirements(nil, resolve)},
+		{"mattermost", mattermost.Requirements(nil, resolve)},
+		{"datadog", datadog.Requirements(nil, resolve)},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			var claimed bool
+			for _, req := range tc.reqs {
+				if req.Blocks != integration.FindingCredentialMissing {
+					continue
+				}
+				claimed = true
+				if req.Kind != setup.KindSecret {
+					t.Errorf("%s.%s is a %s and claims to clear a missing "+
+						"credential; a row asking for one would offer it",
+						tc.kind, req.Field, req.Kind)
+				}
+			}
+			if !claimed {
+				t.Errorf("no %s field claims credential_missing, so a row "+
+					"reporting one offers nothing that clears it", tc.kind)
+			}
+		})
 	}
 }

@@ -181,8 +181,14 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 				Label: "None: dismiss alerts nobody owns",
 				Hint:  "Only monitors tagged with a seat wake an agent.",
 			}},
-			Help:   "The seat an alert wakes when no monitor tag names an owner.",
-			Blocks: integration.FindingCredentialMissing,
+			Help: "The seat an alert wakes when no monitor tag names an owner.",
+			// A ROUTING FLOOR IS NOT A CREDENTIAL. It claimed
+			// credential_missing, so a row reporting a Datadog key this
+			// engine could not resolve offered the fallback seat as the
+			// field that clears it — and the token that does declared
+			// nothing. [setup.Requirement.Blocks] is the join a status
+			// row picks its fields from.
+			Blocks: integration.FindingIngressBlocked,
 		},
 	}
 

@@ -171,7 +171,7 @@ func NewClient(opts ClientOptions) *Client {
 	}
 	return &Client{
 		base: base,
-		http: &http.Client{Transport: httpx.Transport(), Timeout: ClientTimeout},
+		http: httpx.Client(ClientTimeout),
 	}
 }
 

@@ -39,7 +39,17 @@ type Result struct {
 	// part an operator most needs to see: a bot hears only what it has
 	// joined, so a seat with an empty list is one that will never wake.
 	Joined map[string][]string
-	Notes  []string
+
+	// NoKeyring is a pass this node could not run at all because it has
+	// nowhere to seal what provisioning creates.
+	//
+	// A STATE, not an error, and the distinction is what an operator is
+	// told: a fault reports the engine working on it and is retried for
+	// ever, where this never resolves until somebody sets secrets.keys.
+	// See [provision.CanMint].
+	NoKeyring bool
+
+	Notes []string
 }
 
 // Options are one reconcile's inputs.
@@ -99,7 +109,24 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		return nil, errors.New("mattermost: no client")
 	}
 	if opts.Sink == nil {
+		// THE COMMAND LINE'S CASE, and it stays a refusal: a run with
+		// nowhere to put what it mints would create live credentials and
+		// print none of them, which is the worst outcome available.
 		return nil, provision.ErrNoSink
+	}
+	if !provision.CanMint(opts.Sink) {
+		// A NODE THAT CANNOT SEAL DOES NOT CREATE. This pass makes an
+		// ACCOUNT before it mints a token, and the rollback can only
+		// revoke the token — so reaching the first Record on a sink that
+		// cannot record leaves an identity at the third-party app that
+		// nobody asked for and nothing recorded.
+		//
+		// REPORTED, NOT RAISED. An error is a fault the loop retries
+		// while telling an operator the engine is working on it, which is
+		// the one thing that is certainly not happening: no pass will
+		// ever succeed until somebody sets secrets.keys. See
+		// [Result.Findings].
+		return &Result{Notes: notesOf(opts.Plan), NoKeyring: true}, nil
 	}
 	if opts.Plan == nil || opts.Plan.Empty() {
 		return &Result{Notes: notesOf(opts.Plan)}, nil

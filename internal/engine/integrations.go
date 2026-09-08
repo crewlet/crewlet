@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/provision"
 
 	"github.com/crewlet/crewlet/internal/setup"
 )
@@ -246,15 +247,20 @@ func (c *passConverger) Reconcile(ctx context.Context) ([]integration.Finding, e
 	}
 	// A SINK IS BEST EFFORT HERE. A node with no keyring cannot seal a
 	// minted credential, but it can still read a surface and report what
-	// it finds, and reporting is most of what this loop is for. The pass
-	// treats a nil sink as a dry run, which is the honest posture for a
-	// node that could not have recorded what it created.
+	// it finds, and reporting is most of what this loop is for.
+	//
+	// [provision.ReadOnly] RATHER THAN NIL. This passed nil and called it a
+	// dry run, which no pass implemented: two of them refused a nil sink at
+	// their entry point with ErrNoSink, so every tick reported those
+	// integrations as a FAULT — "the last pass could not read this",
+	// retried for ever — on an ordinary deployment that keeps its ${VAR}s
+	// in the environment and has no secrets.keys at all.
 	sink, err := c.engine.SetupSink(reconcileOperator)
 	if err != nil {
 		log.WarnContext(ctx, "integration_sink_unavailable",
 			"integration", c.pass.Kind().String(), "error", err,
 			"detail", "this pass reads and reports; it will mint nothing")
-		sink = nil
+		sink = provision.ReadOnly()
 	}
 	// UNDER THE SURFACE'S OWN GUARD, the same one an operator's pass takes.
 	//

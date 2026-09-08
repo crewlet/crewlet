@@ -25,8 +25,6 @@ func Requirements(in *config.Mattermost, resolve func(string) (string, bool)) []
 	if in != nil {
 		enabled, url, team = in.Enabled, in.URL, in.Team
 	}
-	_ = resolve // nothing here is a credential; every field is a plain setting.
-
 	reqs := []setup.Requirement{
 		{
 			Field:      "enabled",
@@ -46,7 +44,11 @@ func Requirements(in *config.Mattermost, resolve func(string) (string, bool)) []
 			Required:   true,
 			Help:       "Your server's address. The engine dials out, so it needs no public address.",
 			Format:     "https://chat.example.com",
-			Blocks:     integration.FindingCredentialMissing,
+			// AN ADDRESS IS NOT A CREDENTIAL. It claimed
+			// credential_missing, so a row reporting a token this
+			// engine could not resolve offered the instance URL as
+			// the field that clears it.
+			Blocks: integration.FindingIdentityMissing,
 		},
 		{
 			Field:      "team",
@@ -56,7 +58,9 @@ func Requirements(in *config.Mattermost, resolve func(string) (string, bool)) []
 			ConfigPath: "integrations.mattermost.team",
 			Required:   true,
 			Help:       "The team slug the agent bots belong to and post in.",
-			Blocks:     integration.FindingCredentialMissing,
+			// Nor is a team slug: without one the bots have nowhere to
+			// be, which is an identity this pass cannot create.
+			Blocks: integration.FindingIdentityMissing,
 		},
 	}
 
@@ -66,11 +70,16 @@ func Requirements(in *config.Mattermost, resolve func(string) (string, bool)) []
 	// The administrator credential, appended rather than declared inline
 	// with the rest because it is the one whose value this function has to
 	// resolve through the same seam every other secret uses.
-	admin := AdminCredential("")
+	admin := AdminCredential()
+	var adminToken string
 	if in != nil && in.Provisioning != nil {
-		admin = AdminCredential(in.Provisioning.AdminToken)
-		admin.Present, admin.Resolved, admin.Stored = setup.Held(in.Provisioning.AdminToken, resolve)
+		adminToken = in.Provisioning.AdminToken
 	}
+	// THROUGH Held ON BOTH BRANCHES. An absent provisioning block and an
+	// empty token are the same answer here — nothing is stored, and
+	// Resolved stays nil rather than claiming a value was looked up — so
+	// there is no second path to keep in step with this one.
+	admin.Present, admin.Resolved, admin.Stored = setup.Held(adminToken, resolve)
 	reqs = append(reqs, admin)
 	return reqs
 }
@@ -81,7 +90,7 @@ func Requirements(in *config.Mattermost, resolve func(string) (string, bool)) []
 // Held rather than transient, for the reason [gitlab.AdminCredential] states
 // at length: disabling a bot needs the authority that created it, so nothing
 // held meant nothing could be taken away from here.
-func AdminCredential(stored string) setup.Requirement {
+func AdminCredential() setup.Requirement {
 	return setup.Requirement{
 		Field:      "admin_token",
 		Connect:    true,
@@ -89,8 +98,14 @@ func AdminCredential(stored string) setup.Requirement {
 		Kind:       setup.KindSecret,
 		ConfigPath: "integrations.mattermost.provisioning.admin_token",
 		Required:   true,
-		Present:    stored != "",
-		Stored:     stored,
+		// BLOCKS THE FINDING THIS FIELD ACTUALLY CLEARS. It declared
+		// none, and `url` and `team` (or `signing_secret`) claimed
+		// credential_missing instead — none of which is the credential.
+		// [setup.Requirement.Blocks] is the join a status row uses to
+		// offer "the fields whose Blocks says they clear it", so a row
+		// reporting a missing group credential offered everything but
+		// the token that supplies one.
+		Blocks: integration.FindingCredentialMissing,
 		// A PATH, NOT A LINK. Mattermost serves its whole web app from one
 		// route and opens user settings as a modal, so there is no address
 		// for this page: every candidate answers 200 with the same
