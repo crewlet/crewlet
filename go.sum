@@ -155,5 +155,5 @@ gopkg.in/yaml.v2 v2.4.0 h1:D8xgwECY7CYvx+Y2n4sBz93Jn9JRvxdiyyo8CTfuKaY=
 gopkg.in/yaml.v2 v2.4.0/go.mod h1:RDklbk79AGWmwhnvt/jBztapEOGDOx6ZbXqjP6csGnQ=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
-turso.tech/database/tursogo v0.8.0-pre.7 h1:F2iDjVZ0r+I47XDIyAdrzGtqU8Z5WYSZoEQZlzYDvCU=
-turso.tech/database/tursogo v0.8.0-pre.7/go.mod h1:LxMxKoecNkjFBYYQpp/v5gxVm+/qtDL9j7/jxGv3Y2E=
+turso.tech/database/tursogo v0.8.0-pre.8 h1:/fBsgt7emx6dSy8JBCJLm9ip4jncpMYtU9PW5BfRD14=
+turso.tech/database/tursogo v0.8.0-pre.8/go.mod h1:odycO7A22lbXZ0mtaOfHFDxE3MgJ/JJpjrkkYYjxmWI=
