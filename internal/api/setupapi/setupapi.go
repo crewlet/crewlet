@@ -531,8 +531,14 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		block := company.Integrations.Datadog
 		summary = datadog.Summary()
 		reqs = datadog.Requirements(block, s.resolve)
-		seats = credentialSeats(company, s.resolve,
-			mcpEnvAt([]string{datadog.SeatEnv}, datadog.CredentialKeys), "Datadog",
+		at := mcpEnvAt([]string{datadog.SeatEnv}, datadog.CredentialKeys)
+		at.Identity = derivedIdentity("Service account", func(handle string) string {
+			if block == nil {
+				return ""
+			}
+			return datadog.AccountEmail(block.Provisioning, handle)
+		})
+		seats = credentialSeats(company, s.resolve, at, "Datadog",
 			s.passes.Serves(kind), datadogAccess(block))
 		configured = block != nil
 		enabled = block != nil && block.Enabled
@@ -565,8 +571,9 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		// through Forge keeps working, and it is the fallback if Atlassian
 		// ever retires the admin API. What goes is asking every operator to
 		// install an app they do not need.
-		seats = credentialSeats(company, s.resolve,
-			mcpEnvAt(jira.SeatEnvs, jira.CredentialKeys), "Jira", false)
+		at := mcpEnvAt(jira.SeatEnvs, jira.CredentialKeys)
+		at.Identity = atlassianIdentity(s.resolve)
+		seats = credentialSeats(company, s.resolve, at, "Jira", false)
 		// THE ATLASSIAN BLOCKS HAVE NO `enabled` FIELD. Their presence IS
 		// the switch, which is why a disconnect removes the block rather
 		// than flipping a flag, and why enabled tracks configured here
@@ -576,23 +583,31 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		block := company.Integrations.Confluence
 		summary = confluence.Summary()
 		reqs = confluence.Requirements(block, company.Integrations.Atlassian.IsCloud(), s.resolve)
-		seats = credentialSeats(company, s.resolve,
-			mcpEnvAt(confluence.SeatEnvs, confluence.CredentialKeys), "Confluence", false)
+		at := mcpEnvAt(confluence.SeatEnvs, confluence.CredentialKeys)
+		at.Identity = atlassianIdentity(s.resolve)
+		seats = credentialSeats(company, s.resolve, at, "Confluence", false)
 		configured, enabled = block != nil, block != nil
 	case integration.KindAtlassian:
 		block := company.Integrations.Atlassian
 		summary = atlassian.Summary()
 		reqs = atlassian.Requirements(block, s.resolve)
-		seats = credentialSeats(company, s.resolve,
-			mcpEnvAt(atlassian.SeatEnvs, atlassian.CredentialKeys), "Atlassian",
+		at := mcpEnvAt(atlassian.SeatEnvs, atlassian.CredentialKeys)
+		at.Identity = atlassianIdentity(s.resolve)
+		seats = credentialSeats(company, s.resolve, at, "Atlassian",
 			s.passes.Serves(kind))
 		configured, enabled = block != nil, block != nil
 	case integration.KindGitLab:
 		block := company.Integrations.GitLab
 		summary = gitlab.Summary()
 		reqs = gitlab.Requirements(block, s.resolve)
-		seats = credentialSeats(company, s.resolve,
-			mcpEnvAt([]string{gitlab.SeatEnv}, gitlab.CredentialKeys), "GitLab",
+		at := mcpEnvAt([]string{gitlab.SeatEnv}, gitlab.CredentialKeys)
+		at.Identity = derivedIdentity("Service account", func(handle string) string {
+			if block == nil {
+				return ""
+			}
+			return gitlab.Username(block.Provisioning, handle)
+		})
+		seats = credentialSeats(company, s.resolve, at, "GitLab",
 			s.passes.Serves(kind))
 		configured = block != nil
 		enabled = block != nil && block.Enabled
@@ -605,7 +620,14 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		// authenticates with is its own bot token. Without the roster the
 		// card reported Connected over a company whose agents had no bots,
 		// which is the half an operator cannot act on.
-		seats = credentialSeats(company, s.resolve, mattermostAt, "Mattermost",
+		at := mattermostAt
+		at.Identity = derivedIdentity("Bot", func(handle string) string {
+			if block == nil {
+				return ""
+			}
+			return "@" + mattermost.BotUsername(block.Provisioning, handle)
+		})
+		seats = credentialSeats(company, s.resolve, at, "Mattermost",
 			s.passes.Serves(kind))
 		configured = block != nil
 		enabled = block != nil && block.Enabled
@@ -789,6 +811,11 @@ func credentialSeats(company *config.Company, resolve func(string) (string, bool
 			}
 			state.Satisfied = true
 			state.Detail = where
+			if at.Identity != nil {
+				if who := at.Identity(role); who != "" {
+					state.Detail = who
+				}
+			}
 		}
 		out = append(out, state)
 	}
@@ -833,6 +860,21 @@ type seatCredentialAt struct {
 	// sentence telling an operator how to opt in names, so it is the
 	// address they edit rather than one a value was found at.
 	Address string
+
+	// Identity is who this agent IS at the app, in the app's own words:
+	// the service account, the bot, the app registration. Empty where
+	// nothing here can say.
+	//
+	// IT ANSWERS THE QUESTION THE ROSTER IS FOR. A row said where the
+	// credential was kept, `mcp_env.datadog.DD_APP_KEY`, which is a fact
+	// about this company's YAML: true, identical for every agent bar the
+	// block name, and no help at all to somebody looking at the app's own
+	// user list trying to work out which account is which colleague.
+	//
+	// ONLY OVER A WORKING SEAT, because a derived name is what the engine
+	// WOULD create rather than proof it did. Shown next to a seat with
+	// nothing sealed, it would name an account that may not exist.
+	Identity func(role *config.Role) string
 }
 
 // mcpEnvAt is the seat credential of an app whose token reaches a child MCP
@@ -843,6 +885,37 @@ func mcpEnvAt(envs, keys []string) seatCredentialAt {
 			return seatCredential(role.MCPEnv, envs, keys)
 		},
 		Address: "mcp_env." + envs[0],
+	}
+}
+
+// atlassianIdentity is the account an Atlassian seat authenticates as.
+//
+// RECORDED RATHER THAN DERIVED, and it has to be: Atlassian assigns the
+// address when it creates a service account, so the pass writes it onto the
+// seat and this reads it back. Read through the resolver, because the
+// document holds a reference and a roster wants the account.
+func atlassianIdentity(resolve func(string) (string, bool)) func(*config.Role) string {
+	return func(role *config.Role) string {
+		if email := setup.Deref(atlassian.SeatEmail(role.MCPEnv), resolve); email != "" {
+			return "Account " + email
+		}
+		return ""
+	}
+}
+
+// derivedIdentity is the account an app's provisioner names a seat by, for
+// the apps that derive it from the handle rather than being told it.
+//
+// THE SAME FUNCTION THE PASS USES, so the roster and the account are one
+// answer: a second rule here would name the wrong account the day either
+// changed, and the failure is an operator hunting a user list for a name
+// nothing created.
+func derivedIdentity(noun string, name func(handle string) string) func(*config.Role) string {
+	return func(role *config.Role) string {
+		if who := name(role.Seat().Handle()); who != "" {
+			return noun + " " + who
+		}
+		return ""
 	}
 }
 

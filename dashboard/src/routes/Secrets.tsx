@@ -10,7 +10,7 @@
  * There is no reveal button. The one route that returns a value needs an
  * explicit flag and logs the access, and putting that behind a click in a
  * dashboard that anyone with the token can open is not a trade worth making;
- * `crewlet secrets get` is the deliberate path. Storing, rotating and removing
+ * `crewlet secrets get` is the deliberate path. Storing, editing and removing
  * a row need no such trade: none of them reads a value back.
  *
  * WHAT READS A NAME IS PART OF THE LIST, and it is the reason this screen
@@ -74,7 +74,7 @@ export function Secrets() {
   const [references, setReferences] = useState<ConfigReference[] | null>(null);
   const [unknown, setUnknown] = useState<string | null>(null);
 
-  const [writing, setWriting] = useState<{ rotating: string } | null>(null);
+  const [writing, setWriting] = useState<{ editing: string } | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -149,7 +149,7 @@ export function Secrets() {
         sub="The company's sealed credentials. Names, key ids and provenance — this screen never asks for a value."
         badges={<Badge outline>{plural(list.length, "credential")} held</Badge>}
         actions={
-          <Button icon="plus" variant="primary" onClick={() => setWriting({ rotating: "" })}>
+          <Button icon="plus" variant="primary" onClick={() => setWriting({ editing: "" })}>
             Store a secret
           </Button>
         }
@@ -264,9 +264,9 @@ export function Secrets() {
                     <Button
                       size="sm"
                       variant="ghost"
-                      icon="refresh"
-                      title={`Rotate ${s.name}`}
-                      onClick={() => setWriting({ rotating: s.name })}
+                      icon="pencil"
+                      title={`Edit ${s.name}`}
+                      onClick={() => setWriting({ editing: s.name })}
                     />
                     <Button
                       size="sm"
@@ -285,11 +285,11 @@ export function Secrets() {
 
       {writing && (
         <SecretDialog
-          rotating={writing.rotating}
-          paths={writing.rotating ? pathsFor(writing.rotating) : null}
+          editing={writing.editing}
+          paths={writing.editing ? pathsFor(writing.editing) : null}
           onClose={() => setWriting(null)}
           onDone={(name) => {
-            toast.ok(writing.rotating ? `Rotated ${name}` : `Stored ${name}`);
+            toast.ok(writing.editing ? `Updated ${name}` : `Stored ${name}`);
             void reload();
           }}
         />

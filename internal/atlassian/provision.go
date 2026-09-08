@@ -133,6 +133,19 @@ var EmailKeys = []string{
 	"JIRA_EMAIL", "CONFLUENCE_EMAIL",
 }
 
+// SeatEmail is the Atlassian account one seat authenticates as, or empty.
+//
+// THE ACCOUNT, NOT THE SLOT. Atlassian assigns the address when it creates a
+// service account and the pass records it on the seat, so this is the agent's
+// identity at the app rather than a note about where a value is kept.
+//
+// The value is returned AS WRITTEN, which may be a whole `${VAR}`: this
+// package holds no resolver, and the caller that displays it does.
+func SeatEmail(env map[string]map[string]string) string {
+	_, value := seatEmail(env)
+	return value
+}
+
 // seatEmail finds a seat's address slot, and says where.
 func seatEmail(env map[string]map[string]string) (where, value string) {
 	for _, server := range SeatEnvs {

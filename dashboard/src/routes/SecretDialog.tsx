@@ -1,5 +1,5 @@
 /**
- * Storing a credential, and rotating one.
+ * Storing a credential, and editing one.
  *
  * ONE DIALOG FOR BOTH, because they are one write: `PUT /secrets/{name}` does
  * not care whether a row was there, and a second dialog would be a second
@@ -30,8 +30,8 @@ import { Icon } from "~/ui/Icon.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 
 export function SecretDialog({
-  /** The name being rotated, or "" to store a new one. */
-  rotating,
+  /** The name being edited, or "" to store a new one. */
+  editing,
   /**
    * The config fields that read this name, or null when the reference index
    * could not be read. Shown on a rotation because the value a running seat
@@ -42,12 +42,12 @@ export function SecretDialog({
   onClose,
   onDone,
 }: {
-  rotating: string;
+  editing: string;
   paths: string[] | null;
   onClose: () => void;
   onDone: (name: string) => void;
 }) {
-  const [name, setName] = useState(rotating);
+  const [name, setName] = useState(editing);
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,7 +76,7 @@ export function SecretDialog({
 
   return (
     <Dialog
-      title={rotating ? `Rotate ${rotating}` : "Store a secret"}
+      title={editing ? `Edit ${editing}` : "Store a secret"}
       icon="key"
       onClose={onClose}
       dismissable={!busy}
@@ -88,14 +88,14 @@ export function SecretDialog({
             Cancel
           </Button>
           <Button type="submit" variant="primary" disabled={busy || !name.trim() || value === ""}>
-            {busy ? "Saving" : rotating ? "Rotate" : "Store"}
+            {busy ? "Saving" : editing ? "Save" : "Store"}
           </Button>
         </>
       }
     >
-      {rotating ? (
+      {editing ? (
         <p className="t-body secondary" style={{ margin: 0 }}>
-          The value replaces what the fleet holds under <code className="inline">{rotating}</code>.
+          The value replaces what the fleet holds under <code className="inline">{editing}</code>.
           Every node reads the same row, so nothing has to be copied anywhere.
         </p>
       ) : (
@@ -110,15 +110,15 @@ export function SecretDialog({
       )}
 
       <Field
-        label={rotating ? "New value" : "Value"}
+        label={editing ? "New value" : "Value"}
         kind="secret"
         value={value}
         onChange={setValue}
-        autoFocus={Boolean(rotating)}
+        autoFocus={Boolean(editing)}
         help="Sealed with this node's keyring before it leaves the browser's request. This page never reads a value back."
       />
 
-      {rotating && readers.length > 0 && (
+      {editing && readers.length > 0 && (
         <div className="banner neutral">
           <Icon name="info" size="sm" />
           <span className="col" style={{ gap: 4 }}>

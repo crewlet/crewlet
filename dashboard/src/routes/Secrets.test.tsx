@@ -278,18 +278,18 @@ test("no active configuration reads as nothing pointing at it, not as a failure"
   );
 });
 
-// A rotation does not read the old value back — the field opens empty — and
-// the write still goes to the name the row already has.
-test("a rotation asks for a new value and never receives the old one", async () => {
+// Editing a secret does not read the old value back (the field opens empty)
+// and the write still goes to the name the row already has.
+test("editing a secret asks for a new value and never receives the old one", async () => {
   const spy = stubLoaded((path, init) =>
     init?.method === "PUT" ? ok({ name: "GITHUB_TOKEN" }) : null,
   );
   render(<Secrets />);
 
-  fireEvent.click(await screen.findByRole("button", { name: "Rotate GITHUB_TOKEN" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit GITHUB_TOKEN" }));
   expect((screen.getByLabelText("New value") as HTMLInputElement).value).toBe("");
   fireEvent.change(screen.getByLabelText("New value"), { target: { value: "ghp-rotated" } });
-  fireEvent.click(screen.getByRole("button", { name: "Rotate" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
   await vi.waitFor(() => {
     const write = spy.mock.calls.find(([, init]) => init?.method === "PUT");

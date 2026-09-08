@@ -80,8 +80,12 @@ func TestTheMattermostRosterNamesEveryAgentsBot(t *testing.T) {
 
 	if sre := seats["sre-lead"]; sre["satisfied"] != true || sre["present"] != true {
 		t.Errorf("sre-lead = %v, want the seat whose token is sealed reported working", sre)
-	} else if detail, _ := sre["detail"].(string); detail != "integrations.mattermost.bot_token" {
-		t.Errorf("sre-lead detail = %q, want the address an operator edits", detail)
+	} else if detail, _ := sre["detail"].(string); detail != "Bot @sre-lead" {
+		// WHO THIS AGENT IS AT MATTERMOST, in Mattermost's own words. It
+		// said where the credential was kept, which is a fact about this
+		// company's YAML: true, identical for every agent, and no help to
+		// somebody reading Mattermost's own user list.
+		t.Errorf("sre-lead detail = %q, want the bot it posts as", detail)
 	}
 
 	// OPTED IN AND WAITING is not a fault: naming the variable is the one
