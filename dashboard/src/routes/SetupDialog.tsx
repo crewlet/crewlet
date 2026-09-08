@@ -392,14 +392,8 @@ export function SetupDialog({
   // scroll and no way to see how many were left. Folded, the dialog opens as
   // the roster it actually is: every agent named, each saying whether it is
   // done, and one of them expanded to work in.
-  const seatGroups = useMemo(
-    () => grouped.filter((g) => g.section.seat !== undefined),
-    [grouped],
-  );
-  const plainGroups = useMemo(
-    () => grouped.filter((g) => g.section.seat === undefined),
-    [grouped],
-  );
+  const seatGroups = useMemo(() => grouped.filter((g) => g.section.seat !== undefined), [grouped]);
+  const plainGroups = useMemo(() => grouped.filter((g) => g.section.seat === undefined), [grouped]);
   // THE SHARED FOLD IS FOR THE COMPANY'S FIELDS ALONE. A seat's optional
   // fields go inside that seat's own block: gathered at the foot of the
   // dialog they lost the one thing that said whose they were, and a
@@ -417,10 +411,7 @@ export function SetupDialog({
   // work. The card cannot say it, because a card with no roster looks
   // exactly like an app with nothing to do.
   const manualSeats = useMemo(
-    () =>
-      sections.some(
-        (section) => section.tool.seats_required && !section.tool.can_provision,
-      ),
+    () => sections.some((section) => section.tool.seats_required && !section.tool.can_provision),
     [sections],
   );
   // ONE INTRO PER DISTINCT SENTENCE. Two surfaces of one tool each carry

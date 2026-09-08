@@ -1375,7 +1375,13 @@ const perSeatTool: SetupToolState = {
       satisfied: false,
       public_url: "https://engine.example.com/webhooks/slack/sre-lead",
       requirements: [
-        req({ field: "bot_token", label: "Bot token", kind: "secret", connect: true, seat: "sre-lead" }),
+        req({
+          field: "bot_token",
+          label: "Bot token",
+          kind: "secret",
+          connect: true,
+          seat: "sre-lead",
+        }),
         req({
           field: "channel",
           label: "Default channel",
@@ -1421,12 +1427,7 @@ function perSeatSections() {
 // every agent named, each saying whether it is done.
 test("a per-seat app gives every agent its own collapsible block", () => {
   const { container } = render(
-    <SetupDialog
-      sections={perSeatSections()}
-      title="Slack"
-      onClose={() => {}}
-      onDone={() => {}}
-    />,
+    <SetupDialog sections={perSeatSections()} title="Slack" onClose={() => {}} onDone={() => {}} />,
   );
   const blocks = [...container.querySelectorAll("details.int-seat-form")];
   expect(blocks.length).toBe(2);
@@ -1452,12 +1453,7 @@ test("a per-seat app gives every agent its own collapsible block", () => {
 // exactly like an app with nothing to do.
 test("an app the engine cannot provision says so before the blocks", () => {
   render(
-    <SetupDialog
-      sections={perSeatSections()}
-      title="Slack"
-      onClose={() => {}}
-      onDone={() => {}}
-    />,
+    <SetupDialog sections={perSeatSections()} title="Slack" onClose={() => {}} onDone={() => {}} />,
   );
   expect(
     screen.getByText(/Slack does not support automatic agent provisioning at the moment/),
@@ -1475,12 +1471,7 @@ test("an app the engine cannot provision says so before the blocks", () => {
 // instructions for one step is how one of them goes stale.
 test("an agent's block does not ask for its delivery address twice", () => {
   const { container } = render(
-    <SetupDialog
-      sections={perSeatSections()}
-      title="Slack"
-      onClose={() => {}}
-      onDone={() => {}}
-    />,
+    <SetupDialog sections={perSeatSections()} title="Slack" onClose={() => {}} onDone={() => {}} />,
   );
   const blocks = [...container.querySelectorAll("details.int-seat-form")];
   expect(blocks[0]!.textContent).not.toContain("Paste that address");
@@ -1494,12 +1485,7 @@ test("an agent's block does not ask for its delivery address twice", () => {
 // showed three identical "Default channel" boxes in one list.
 test("an agent's optional field is inside that agent's block", () => {
   const { container } = render(
-    <SetupDialog
-      sections={perSeatSections()}
-      title="Slack"
-      onClose={() => {}}
-      onDone={() => {}}
-    />,
+    <SetupDialog sections={perSeatSections()} title="Slack" onClose={() => {}} onDone={() => {}} />,
   );
   const blocks = [...container.querySelectorAll("details.int-seat-form")];
   expect(blocks[0]!.textContent).toContain("Default channel");
@@ -1553,12 +1539,7 @@ test("a vendor link inside an agent's block names the app", () => {
 // A CLOSED BLOCK IS STILL A BLOCK SOMEBODY CAN OPEN.
 test("an agent's block opens when its summary is clicked", () => {
   const { container } = render(
-    <SetupDialog
-      sections={perSeatSections()}
-      title="Slack"
-      onClose={() => {}}
-      onDone={() => {}}
-    />,
+    <SetupDialog sections={perSeatSections()} title="Slack" onClose={() => {}} onDone={() => {}} />,
   );
   const blocks = [...container.querySelectorAll("details.int-seat-form")];
   const closed = blocks[1] as HTMLDetailsElement;
