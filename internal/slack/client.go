@@ -204,7 +204,50 @@ func (c *Client) AuthTest(ctx context.Context) (Identity, error) {
 	if err := call(ctx, c.http, "auth.test", c.token, map[string]any{}, &out); err != nil {
 		return Identity{}, err
 	}
-	return Identity{UserID: out.UserID, TeamID: out.TeamID, BotID: out.BotID}, nil
+	id := Identity{UserID: out.UserID, TeamID: out.TeamID, BotID: out.BotID}
+	// THE APP, WHICH auth.test DOES NOT SAY.
+	//
+	// It answers with the bot's user id, its team and its bot id, and no
+	// app id at all: [Identity.AppID] was decoded from a response field
+	// Slack does not send, so it was empty for every seat this engine has
+	// ever wired, and nothing noticed because the one thing reading it
+	// falls back to the delivery's own envelope. bots.info is where the id
+	// lives, keyed on the bot id this call does return.
+	//
+	// BEST EFFORT, and never fatal: knowing the app is what lets a screen
+	// say WHICH of an operator's apps this agent is and link to it. A seat
+	// whose token works is a seat that works, and failing it over the
+	// second request would trade a running agent for a label.
+	if id.BotID != "" {
+		app, err := c.AppOf(ctx, id.BotID)
+		if err != nil {
+			log.WarnContext(ctx, "slack_app_unknown", "bot", id.BotID,
+				"error", err.Error(),
+				"detail", "this seat works; nothing can say which app it is")
+		}
+		id.AppID = app
+	}
+	return id, nil
+}
+
+// AppOf is the app a bot user belongs to.
+//
+// It needs only `users:read`, which every agent's manifest grants, and the
+// bot id [Client.AuthTest] returns.
+func (c *Client) AppOf(ctx context.Context, botID string) (string, error) {
+	if strings.TrimSpace(botID) == "" {
+		return "", fmt.Errorf("slack: bots.info: no bot id")
+	}
+	var out struct {
+		Bot struct {
+			AppID string `json:"app_id"`
+		} `json:"bot"`
+	}
+	if err := call(ctx, c.http, "bots.info", c.token,
+		map[string]any{"bot": botID}, &out); err != nil {
+		return "", err
+	}
+	return out.Bot.AppID, nil
 }
 
 // PostMessage sends a message, optionally into a thread.
