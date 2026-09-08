@@ -96,13 +96,13 @@ func TestEveryCallCarriesBothKeys(t *testing.T) {
 	t.Parallel()
 	reg := newRegion(t)
 	reg.handle["/api/v1/org"] = func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"orgs":[{"name":"Infrado","public_id":"abc"}]}`))
+		_, _ = w.Write([]byte(`{"orgs":[{"name":"Acme","public_id":"abc"}]}`))
 	}
 	org, err := reg.client(t).VerifyCredentials(context.Background(), pair)
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
-	if org.Name != "Infrado" {
+	if org.Name != "Acme" {
 		t.Errorf("org = %+v", org)
 	}
 	if len(reg.auth) != 1 || reg.auth[0] != creds {
@@ -124,7 +124,7 @@ func TestVerifyAsksForTheOrganizationRoute(t *testing.T) {
 	asked := ""
 	reg.handle["/api/v1/org"] = func(w http.ResponseWriter, r *http.Request) {
 		asked = r.URL.Path
-		_, _ = w.Write([]byte(`{"orgs":[{"name":"Infrado","public_id":"p1"}]}`))
+		_, _ = w.Write([]byte(`{"orgs":[{"name":"Acme","public_id":"p1"}]}`))
 	}
 	if _, err := reg.client(t).VerifyCredentials(context.Background(), pair); err != nil {
 		t.Fatalf("verify: %v", err)

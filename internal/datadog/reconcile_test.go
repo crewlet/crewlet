@@ -68,7 +68,7 @@ func planWith(handles ...string) *provision.Plan {
 // orgOK is the verify call every pass starts with.
 func orgOK(reg *region) {
 	reg.handle["/api/v1/org"] = func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"orgs":[{"name":"Infrado","public_id":"p1"}]}`))
+		_, _ = w.Write([]byte(`{"orgs":[{"name":"Acme","public_id":"p1"}]}`))
 	}
 	reg.handle["/api/v2/roles"] = func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"data":[{"id":"role-1","attributes":{"name":"Datadog Read Only Role"}}]}`))

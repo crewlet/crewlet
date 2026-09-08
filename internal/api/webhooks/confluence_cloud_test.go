@@ -11,7 +11,7 @@ import (
 // cloudPage is a Confluence Cloud delivery as it actually arrives: no event
 // name, no signature, an actor as a bare account id at the top level, and the
 // page under "page". Captured from a real site rather than written.
-const cloudPage = `{"page":{"idAsString":"41746440","creatorAccountId":"712020:aaaa","spaceKey":"ENG","spaceId":28672112,"modificationDate":1788716539150,"lastModifierAccountId":"712020:aaaa","self":"https://example.atlassian.net/wiki/spaces/ENG/pages/41746440/x","id":"41746440","title":"a page","creationDate":1788716535483,"contentType":"page","version":2},"userAccountId":"712020:aaaa","timestamp":1788716539192,"accountType":"customer","updateTrigger":"edit_page","suppressNotifications":false}`
+const cloudPage = `{"page":{"idAsString":"10000001","creatorAccountId":"712020:aaaa","spaceKey":"ENG","spaceId":20000001,"modificationDate":1788716539150,"lastModifierAccountId":"712020:aaaa","self":"https://example.atlassian.net/wiki/spaces/ENG/pages/10000001/x","id":"10000001","title":"a page","creationDate":1788716535483,"contentType":"page","version":2},"userAccountId":"712020:aaaa","timestamp":1788716539192,"accountType":"customer","updateTrigger":"edit_page","suppressNotifications":false}`
 
 // The token rides in the query, because it is the only place Confluence
 // Cloud will carry one: it signs nothing, drops userinfo, and honours no
@@ -148,7 +148,7 @@ func TestConfluenceCloud_TwoSavesOfOnePageAreTwoEvents(t *testing.T) {
 	e := newEdge(t)
 
 	body := func(version string) []byte {
-		return []byte(`{"page":{"id":"41746440","title":"Deploy runbook","version":{"number":"` +
+		return []byte(`{"page":{"id":"10000001","title":"Deploy runbook","version":{"number":"` +
 			version + `"}},"space":{"key":"ENG"},"userAccountId":"712020:actor"}`)
 	}
 	for _, version := range []string{"3", "4"} {

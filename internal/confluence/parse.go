@@ -628,7 +628,7 @@ const maxCommentDepth = 8
 // pageIDFromSelf reads the page id out of a content object's self URL.
 //
 // Every Cloud content URL carries it in a /pages/<id>/ segment
-// (…/wiki/spaces/ENG/pages/41746440/Title?focusedCommentId=…), and for a
+// (…/wiki/spaces/ENG/pages/10000001/Title?focusedCommentId=…), and for a
 // reply whose parent chain names no page it is the only place the page
 // appears at all. Parsed rather than split on the raw string, so a query
 // parameter that happens to contain "pages" cannot answer.

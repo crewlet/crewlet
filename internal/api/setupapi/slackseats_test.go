@@ -225,7 +225,7 @@ func TestASeatWhoseNameSlackRefusesSaysSo(t *testing.T) {
 // transport's answer is the only one there is.
 func TestASlackSeatNamesTheAppItAuthenticatesAs(t *testing.T) {
 	t.Parallel()
-	s := newSurfaceWithApps(t, map[string]string{"sre-lead": "A0C0AETLX5J"})
+	s := newSurfaceWithApps(t, map[string]string{"sre-lead": "A0ACME"})
 	res := s.do(t, http.MethodPut, "/config", slackDoc,
 		map[string]string{"X-Summary": "a company with an agent"})
 	if res.Code != http.StatusCreated {
@@ -233,7 +233,7 @@ func TestASlackSeatNamesTheAppItAuthenticatesAs(t *testing.T) {
 	}
 
 	seat := slackSeatRows(t, s)["sre-lead"]
-	if detail, _ := seat["detail"].(string); detail != "App A0C0AETLX5J" {
+	if detail, _ := seat["detail"].(string); detail != "App A0ACME" {
 		t.Errorf("detail = %q, want the app this agent authenticates as", detail)
 	}
 }

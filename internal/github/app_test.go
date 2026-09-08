@@ -40,7 +40,7 @@ func testKey(t *testing.T) (*rsa.PrivateKey, string) {
 func TestAnAppNameFitsGitHubsGlobalNamespace(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct{ company, seat, want string }{
-		"short enough":   {"Infrado", "sre-lead", "Infrado sre-lead"},
+		"short enough":   {"Acme", "sre-lead", "Acme sre-lead"},
 		"no company":     {"", "sre-lead", "sre-lead"},
 		"nothing at all": {"", "", "Crewlet agent"},
 	} {
@@ -69,7 +69,7 @@ func TestAnAppNameFitsGitHubsGlobalNamespace(t *testing.T) {
 func TestAManifestSubscribesToTheEventsTheRouterActsOn(t *testing.T) {
 	t.Parallel()
 	m := github.BuildManifest(github.ManifestOptions{
-		Seat: "sre-lead", Name: "Infrado sre-lead",
+		Seat: "sre-lead", Name: "Acme sre-lead",
 		DeliveryURL: "https://engine.example.com/webhooks/github/sre-lead",
 		RedirectURL: "https://engine.example.com/webhooks/github/app-callback",
 		Tier:        github.TierReview,
@@ -124,14 +124,14 @@ func TestAnAppWithNoAddressIsCreatedWithDeliveryOff(t *testing.T) {
 // an app that exists, belongs to the wrong account, and is useless.
 func TestTheManifestIsPostedToTheAccountThatWillOwnTheApp(t *testing.T) {
 	t.Parallel()
-	if got := github.ActionURL("", "infrado"); got != "https://github.com/organizations/infrado/settings/apps/new" {
+	if got := github.ActionURL("", "acme"); got != "https://github.com/organizations/acme/settings/apps/new" {
 		t.Errorf("an organization posts to %q", got)
 	}
 	if got := github.ActionURL("", ""); got != "https://github.com/settings/apps/new" {
 		t.Errorf("a personal account posts to %q", got)
 	}
 	// Enterprise Server has its own host, and the app is created there.
-	if got := github.ActionURL("https://ghe.example.com", "infrado"); !strings.HasPrefix(got, "https://ghe.example.com/") {
+	if got := github.ActionURL("https://ghe.example.com", "acme"); !strings.HasPrefix(got, "https://ghe.example.com/") {
 		t.Errorf("an Enterprise host posts to %q", got)
 	}
 }
@@ -158,7 +158,7 @@ func TestASpentManifestCodeIsToldApartFromAFailure(t *testing.T) {
 func TestAConversionWithoutAKeyIsRefused(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"id":42,"slug":"infrado-sre-lead"}`))
+		_, _ = w.Write([]byte(`{"id":42,"slug":"acme-sre-lead"}`))
 	}))
 	defer srv.Close()
 	if _, err := github.ExchangeManifest(context.Background(), srv.URL, "code"); err == nil {
@@ -219,7 +219,7 @@ func TestATokenCarriesOnlyWhatTheTierAsksFor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, err := client.MintToken(context.Background(), 11, github.TierReadOnly, []string{"infrado/platform"})
+	token, err := client.MintToken(context.Background(), 11, github.TierReadOnly, []string{"acme/platform"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,9 +268,9 @@ func TestATokenIsRenewedBeforeItExpires(t *testing.T) {
 // whole flow depends on.
 func TestTheInstallLinkGoesToTheAppsOwnSettings(t *testing.T) {
 	t.Parallel()
-	got := github.InstallURL("", "crewbed", "infrado-live-test-sre-lead")
-	want := "https://github.com/organizations/crewbed/settings/apps/" +
-		"infrado-live-test-sre-lead/installations"
+	got := github.InstallURL("", "acme", "acme-sre-lead")
+	want := "https://github.com/organizations/acme/settings/apps/" +
+		"acme-sre-lead/installations"
 	if got != want {
 		t.Errorf("InstallURL = %q, want %q", got, want)
 	}
@@ -283,7 +283,7 @@ func TestTheInstallLinkGoesToTheAppsOwnSettings(t *testing.T) {
 		t.Errorf("a user-owned app installs at %q", got)
 	}
 	// No slug means no link, because a broken one costs the trip to find out.
-	if got := github.InstallURL("", "crewbed", ""); got != "" {
+	if got := github.InstallURL("", "acme", ""); got != "" {
 		t.Errorf("an app with no slug was given a link: %q", got)
 	}
 }
