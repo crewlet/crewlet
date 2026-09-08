@@ -399,23 +399,6 @@ func fields(reqs []Requirement) []string {
 	return out
 }
 
-// setPath writes a value into a nested map from a dotted config path.
-//
-// Merge-patch shaped: `integrations.datadog.route_to` becomes
-// {"integrations":{"datadog":{"route_to":"..."}}}, so two fields of one
-// third-party app merge into one object rather than the second replacing the
-// first.
-//
-// A list position is REFUSED rather than guessed at. The grammar has one
-// (`roles[2].llm`), and a merge patch cannot address a list element at all:
-// merging an array replaces it wholesale, so a patch built this way would
-// silently delete every other seat. A per-seat write addresses its seat
-// through the entity routes instead.
-// typed turns a submitted string into the JSON value its kind is.
-//
-// Every kind but one is a string in the document. A toggle is a boolean, and
-// the strict reader refuses "true" for a bool field, so a patch carrying the
-// string would be rejected on every submission.
 // normalise trims every submitted value, and refuses an interior space in
 // the kinds that cannot hold one.
 //
@@ -434,18 +417,30 @@ func normalise(reqs []Requirement, values map[string]string) (map[string]string,
 	for field, value := range values {
 		trimmed := strings.TrimSpace(value)
 		if r, ok := byField[field]; ok && r.Kind.Tight() && strings.ContainsAny(trimmed, " \t\r\n") {
+			// THE VALUE, not the field name: the name is already the
+			// first argument and by construction has no space in it, so
+			// quoting it twice asserted something false about the one
+			// identifier shown and withheld the only thing an operator
+			// needs to see. Every kind that reaches here is Tight —
+			// a URL, an id or an email — and KindSecret is deliberately
+			// not, so nothing echoed here is a credential.
 			return nil, fmt.Errorf(
 				"setup: %s cannot contain a space, and %q has one inside it: "+
 					"an address, an identifier and an email are each a single "+
 					"token, so a space in the middle is a value nothing "+
 					"answers to rather than an untidy one",
-				r.ConfigPath, field)
+				r.ConfigPath, trimmed)
 		}
 		out[field] = trimmed
 	}
 	return out, nil
 }
 
+// typed turns a submitted string into the JSON value its kind is.
+//
+// Every kind but one is a string in the document. A toggle is a boolean, and
+// the strict reader refuses "true" for a bool field, so a patch carrying the
+// string would be rejected on every submission.
 func typed(kind Kind, value string) any {
 	if kind != KindToggle {
 		return value
@@ -458,6 +453,18 @@ func typed(kind Kind, value string) any {
 	}
 }
 
+// setPath writes a value into a nested map from a dotted config path.
+//
+// Merge-patch shaped: `integrations.datadog.route_to` becomes
+// {"integrations":{"datadog":{"route_to":"..."}}}, so two fields of one
+// third-party app merge into one object rather than the second replacing the
+// first.
+//
+// A list position is REFUSED rather than guessed at. The grammar has one
+// (`roles[2].llm`), and a merge patch cannot address a list element at all:
+// merging an array replaces it wholesale, so a patch built this way would
+// silently delete every other seat. A per-seat write addresses its seat
+// through the entity routes instead.
 func setPath(into map[string]any, path string, value any) error {
 	if path == "" {
 		return fmt.Errorf("setup: a requirement declares no config path")

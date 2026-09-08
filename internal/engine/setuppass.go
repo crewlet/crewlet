@@ -212,11 +212,45 @@ var _ setup.Teardowner = (*atlassianPass)(nil)
 // Nil rather than a runner that refuses: a pass that cannot record what it
 // mints must not run at all, and the surface above answers 503 naming the
 // keyring rather than starting something it will have to unwind.
-func (e *Engine) SetupRunner(now func() time.Time) *setup.Runner {
-	if e == nil || e.backends == nil || e.backends.Fleet == nil {
+//
+// THE SAME RUNNER EVERY TIME, built once — see [Engine.setupRunner]. A caller
+// that wants its own clock builds its own with [setup.NewRunner]; there is no
+// second runner in the engine, because a second in-process claim map would
+// mean the loop and the dashboard guard nothing against each other.
+func (e *Engine) SetupRunner() *setup.Runner {
+	if e == nil || e.setupRunner == nil {
 		return nil
 	}
-	return setup.NewRunner(e.setupPasses(), e.setupDuty, now)
+	return e.setupRunner()
+}
+
+// newSetupRunner builds the one runner. Called through a [sync.OnceValue]
+// installed by the constructor.
+func (e *Engine) newSetupRunner() *setup.Runner {
+	if e.backends == nil || e.backends.Fleet == nil {
+		return nil
+	}
+	return setup.NewRunner(e.setupPasses(), e.setupDuty, nil)
+}
+
+// holdSurface takes the one guard every writer at a surface passes through.
+//
+// The loop's tick and a disconnect's teardown reach a third-party app without
+// going through [setup.Runner.Start], so they take the guard here instead —
+// the same in-process claim and the same fleet lease an operator's pass takes,
+// which is what makes the three mutually exclusive rather than merely
+// serialized in pairs.
+//
+// A node with no runner has no keyring to mint into and therefore nothing to
+// serialize: it reads and reports. held is true there, and release is a no-op.
+func (e *Engine) holdSurface(
+	ctx context.Context, kind integration.Kind,
+) (func(), bool, error) {
+	runner := e.SetupRunner()
+	if runner == nil {
+		return func() {}, true, nil
+	}
+	return runner.Hold(ctx, kind)
 }
 
 // setupDutyName is the ONE name a surface's provisioning is serialized under.

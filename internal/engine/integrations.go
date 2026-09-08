@@ -256,35 +256,36 @@ func (c *passConverger) Reconcile(ctx context.Context) ([]integration.Finding, e
 			"detail", "this pass reads and reports; it will mint nothing")
 		sink = nil
 	}
-	// UNDER THE SURFACE'S OWN LEASE, the same one an operator's pass takes.
+	// UNDER THE SURFACE'S OWN GUARD, the same one an operator's pass takes.
 	//
 	// This tick and that button run THE SAME [setup.Pass] with the same sink
 	// and the same webhook base, so they create the same accounts, mint the
 	// same tokens and register the same hooks. Two of them at once is the
 	// collision the worker's own singleton exists to rule out — both read a
-	// surface with no account for a seat, both create one — reachable here
-	// between the loop and the dashboard rather than between two nodes.
+	// surface with no account for a seat, both create one — and it is
+	// reachable between the loop and the dashboard ON ONE NODE, which is
+	// why the fleet lease alone does not close it. [setup.Runner.Hold] is
+	// both halves.
 	//
-	// The loop's own `integration-reconcile` duty does not cover it: that
-	// one answers "which node runs the loop", which is a different question
+	// The loop's own `integration-reconcile` duty covers neither: that one
+	// answers "which node runs the loop", which is a different question
 	// from "who is writing at this surface", and a lease keyed on a
 	// different name excludes nobody.
-	if duty := c.engine.setupDuty(c.pass.Kind()); duty != nil {
-		release, held, err := duty(ctx)
-		switch {
-		case err != nil:
-			// UNKNOWN IS NOT FREE. A coordination store that could not
-			// answer has not said the surface is idle, and the whole
-			// point of the lease is that acting on that guess is what
-			// creates the duplicate.
-			return nil, fmt.Errorf("%w: %w", integration.ErrReconcileUnavailable, err)
-		case !held:
-			// SOMEBODY IS ALREADY DOING THIS. Nothing is recorded and no
-			// attempt is counted — see [integration.ErrReconcileUnavailable].
-			return nil, integration.ErrReconcileUnavailable
-		}
-		defer release()
+	release, held, err := c.engine.holdSurface(ctx, c.pass.Kind())
+	switch {
+	case err != nil:
+		// UNKNOWN IS NOT FREE. A coordination store that could not
+		// answer has not said the surface is idle, and the whole point
+		// of the guard is that acting on that guess is what creates the
+		// duplicate.
+		return nil, fmt.Errorf("%w: %w", integration.ErrReconcileUnavailable, err)
+	case !held:
+		// SOMEBODY IS ALREADY DOING THIS. Nothing is recorded and no
+		// attempt is counted — see [integration.ErrReconcileUnavailable].
+		return nil, integration.ErrReconcileUnavailable
 	}
+	defer release()
+
 	return c.pass.Run(ctx, setup.PassInput{
 		Sink:        sink,
 		WebhookBase: company.Config.Integrations.WebhookBase(c.engine.resolver().LookupOK),

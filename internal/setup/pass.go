@@ -13,24 +13,39 @@ import (
 
 // Running a third-party app's provisioning pass from inside the engine.
 //
-// # What a pass is, and what makes this different from the loop
+// # What a pass is, and who else runs one
 //
-// The reconcile loop runs a third-party app's own Reconcile every few minutes
-// with NO sink and NO webhook base, and those two absences are what make it
-// safe to run unattended: a base is permission to register a webhook, and a
-// sink is permission to mint a credential. Neither is something a timer may
-// decide.
+// A pass is a third-party app's own Reconcile with a sink and a webhook base
+// supplied: a base is permission to register a webhook and a sink is
+// permission to mint a credential, so those two arguments are the whole of
+// what separates provisioning from reading.
 //
-// A pass is the same function with both supplied, and it runs because a
-// person pressed a button. That is the whole distinction, and it is why this
-// exists rather than the loop simply being given more to do.
+// It used to be what separated this package from the reconcile loop, which
+// ran every tick with neither. It no longer does: CONNECTING IS THE
+// PERMISSION, so the loop supplies both as well (see
+// [github.com/crewlet/crewlet/internal/engine] `startIntegrations`), and what
+// still cannot happen unattended is anything a person has not asked for — a
+// company with no block is not reconciled, a block with no credential reports
+// a finding rather than acting, and nothing is deleted except through a
+// disconnect somebody pressed.
 //
-// # It is a fleet singleton for the duration
+// So this package is no longer "the writing one". It is the surface an
+// operator's button runs a pass through, and — through [Runner.Hold] — the
+// one guard every other writer at a surface takes as well.
 //
-// Two operators pressing Connect at once, or one pressing it twice, would run
-// two passes that both mint. A pass therefore takes the same named duty lease
-// the loop uses, under its own name, and a second caller is refused rather
-// than queued: minting twice is not something a retry should paper over.
+// # One writer per surface, on this node and across the fleet
+//
+// Two operators pressing Connect at once, a loop tick landing on the pass an
+// operator just started, or a disconnect deleting the webhook a pass beside it
+// is registering: three shapes of one collision, at a third-party app where a
+// write creates an account or mints a credential.
+//
+// [Runner.Hold] is the only thing standing between them, and it is two guards
+// rather than one because either alone is a hole. The named duty lease stops
+// two NODES; it cannot stop two goroutines here, because a claim by an owner
+// that already holds the lease doubles as a renew, so both would be told yes.
+// An in-process claim stops those two goroutines and knows nothing of a peer.
+// A writer takes both or writes nothing.
 //
 // # Its result speaks the reconcile vocabulary
 //
@@ -59,14 +74,23 @@ type Pass interface {
 	Needs() *Requirement
 }
 
-// Teardowner is a [Pass] that can also remove what it registered.
+// Teardowner is a [Pass] that can also remove what it created.
 //
-// OPTIONAL, and the third-party apps that do not satisfy it are not
-// oversights: Slack, Mattermost and Datadog register no webhook from this
-// engine, so a teardown for them would have nothing to withdraw. A type
-// assertion is what asks, which keeps a third-party app's answer in one place
-// (its own package) rather than in a list here that has to be kept in step
-// with it.
+// OPTIONAL, and today every [Pass] satisfies it. That is not an argument for
+// folding Teardown into Pass: what decides membership is whether this engine
+// PUT something at the surface, and the one kind that has nothing — Slack,
+// whose apps are created from the command line — has no pass here at all, so
+// it never reaches this assertion. A kind that gains a read-only pass gains
+// one without a teardown.
+//
+// A WEBHOOK IS NOT WHAT DECIDES IT. Mattermost withdraws none — it revokes
+// the tokens it issued and disables the bots it created — and Datadog
+// withdraws the webhook its own pass registers as well as disabling the
+// accounts. Both are destructive, which is the property that matters here.
+//
+// A type assertion is what asks, which keeps a third-party app's answer in one
+// place (its own package) rather than in a list here that has to be kept in
+// step with it.
 type Teardowner interface {
 	Pass
 
@@ -102,8 +126,12 @@ type TeardownInput struct {
 
 // PassInput is what a pass is given.
 type PassInput struct {
-	// Sink records a minted credential. Always present here, which is the
-	// difference from a loop tick.
+	// Sink records a minted credential.
+	//
+	// NIL IS A DRY RUN, and it is the honest posture for a caller that
+	// could not have recorded what it created: a node with no keyring can
+	// still read a surface and report what it finds, which is most of what
+	// a pass is for.
 	Sink provision.TokenSink
 
 	// WebhookBase is the address third-party apps reach this deployment on, and
@@ -134,11 +162,6 @@ var ErrPassInFlight = errors.New("setup: a pass for this integration is already 
 // ErrNoPass reports a third-party app this build cannot provision from the
 // API.
 var ErrNoPass = errors.New("setup: no provisioning pass for this integration")
-
-// ErrNoTeardown reports a third-party app that registers nothing to remove.
-// Slack and Mattermost register no webhook from this engine, so a disconnect
-// has only the company document to change.
-var ErrNoTeardown = errors.New("setup: nothing to remove at this integration")
 
 // RunState is where one pass got to.
 type RunState string
@@ -256,27 +279,18 @@ func (r *Runner) Start(ctx context.Context, kind integration.Kind, in PassInput,
 	if !ok {
 		return nil, ErrNoPass
 	}
-	if err := r.claim(kind, id); err != nil {
-		return nil, err
+	release, held, err := r.hold(ctx, kind, id)
+	if err != nil {
+		// UNKNOWN IS NOT REFUSED-AND-NOT-HELD. A coordination store that
+		// could not answer is not evidence that somebody else is minting,
+		// and treating it as such would make a two-second blip look like
+		// a conflict.
+		return nil, fmt.Errorf("setup: could not claim the provisioning lease: %w", err)
 	}
-	defer r.release(kind)
-
-	if r.duty != nil {
-		if duty := r.duty(kind); duty != nil {
-			release, held, err := duty(ctx)
-			if err != nil {
-				// UNKNOWN IS NOT REFUSED-AND-NOT-HELD. A coordination
-				// store that could not answer is not evidence that
-				// somebody else is minting, and treating it as such
-				// would make a two-second blip look like a conflict.
-				return nil, fmt.Errorf("setup: could not claim the provisioning lease: %w", err)
-			}
-			if !held {
-				return nil, ErrPassInFlight
-			}
-			defer release()
-		}
+	if !held {
+		return nil, ErrPassInFlight
 	}
+	defer release()
 
 	run := &Run{ID: id, Kind: kind, State: RunRunning, StartedAt: r.now()}
 	r.remember(run)
@@ -296,101 +310,81 @@ func (r *Runner) Start(ctx context.Context, kind integration.Kind, in PassInput,
 	return run, nil
 }
 
-// Hold takes one surface's lease for a caller that is about to write about it
-// outside a pass.
+// Hold is THE GUARD every writer at one surface passes through.
 //
-// The status rows are last-write-wins by design, and [coord.Integrations] says
-// why: "the duty makes one node the only writer, so there is no second writer
-// to race." That is true of the LOOP and was never true of this surface — the
-// dashboard records a pass's outcome, stamps an endpoint and marks a
-// disconnect, on whichever node served the request. Two writers, one key, no
-// version: a disconnect an operator asked for could be overwritten by a tick
-// that read the row before it.
+// Three callers write at a third-party app and none of them can see the
+// others: an operator's pass here, a tick of the reconcile loop, and a
+// disconnect's teardown. Two at once is one creating the account the other is
+// deleting, or a disconnect withdrawing the webhook a pass beside it just
+// registered.
 //
-// So the premise is restored rather than replaced. The lease that already
-// makes one writer per surface for the pass itself covers the writes about it
-// too, and a caller that cannot take it does not write.
+// BOTH HALVES, because each alone leaves the collision reachable:
 //
-// held is false when a peer has it; release is non-nil exactly when held.
+//   - The named duty lease stops two NODES. It cannot stop two goroutines in
+//     this one, because [coord.Backend.TryAcquire] doubles as a renew for the
+//     owner that already holds the record — so a loop tick and a button press
+//     on one node are both told yes. It is also absent entirely on a node with
+//     no coordination store, which is the single-node install.
+//   - The in-process claim stops those two goroutines and knows nothing about
+//     a peer.
+//
+// It also covers the writes ABOUT a surface, not only the ones at it. The
+// status rows are last-write-wins and [coord.Integrations] says why: "the duty
+// makes one node the only writer, so there is no second writer to race." That
+// premise is restored rather than replaced — the dashboard records a pass's
+// outcome, stamps an endpoint and marks a disconnect on whichever node served
+// the request, so it takes this same hold, and a caller that cannot take it
+// does not write.
+//
+// held is false when somebody already has it; release is non-nil exactly when
+// held is true, and calling it is what lets the next writer in. The error is
+// the third value: a store that could not answer has not said the surface is
+// idle.
 func (r *Runner) Hold(ctx context.Context, kind integration.Kind) (func(), bool, error) {
-	if r == nil || r.duty == nil {
+	if r == nil {
 		return func() {}, true, nil
+	}
+	return r.hold(ctx, kind, holdID)
+}
+
+// holdID is what the in-process claim records for a hold taken outside a run.
+//
+// The map's VALUE is only ever read back by a person reading a dump; what
+// makes the guard work is the key's presence. A run records its own id there
+// because that one is worth seeing.
+const holdID = "hold"
+
+// hold takes the in-process claim and then the fleet lease, and hands back the
+// release for both.
+//
+// IN THAT ORDER, and it matters on the failing path: the local claim is what
+// the release below gives back, so taking the remote one first would leave a
+// lease held for its full TTL whenever a second goroutine on this node lost
+// the local race.
+func (r *Runner) hold(
+	ctx context.Context, kind integration.Kind, id string,
+) (func(), bool, error) {
+	if err := r.claim(kind, id); err != nil {
+		// A pass is already running HERE. Definitively not held rather
+		// than an error: this is knowledge, not a failure to look.
+		return nil, false, nil
+	}
+	if r.duty == nil {
+		return func() { r.release(kind) }, true, nil
 	}
 	duty := r.duty(kind)
 	if duty == nil {
-		return func() {}, true, nil
+		// No coordination store: a single node with nobody to be a
+		// singleton among, still guarded against itself by the claim
+		// above.
+		return func() { r.release(kind) }, true, nil
 	}
-	return duty(ctx)
-}
-
-// StartTeardown removes what a third-party app holds, under the same guard a
-// pass runs beneath.
-//
-// THE SAME LEASE, deliberately. A teardown and a provisioning pass are the
-// two operations that write at the third-party app, and letting them overlap
-// is how a disconnect deletes a webhook the pass beside it is registering.
-// Sharing the claim means one of them waits, whichever arrives second.
-//
-// Returns [ErrNoTeardown] for a third-party app that registers nothing to
-// remove, which the caller reads as "there was nothing to do" rather than as
-// a failure: the disconnect still finishes.
-func (r *Runner) StartTeardown(
-	ctx context.Context, kind integration.Kind, in TeardownInput, id string,
-) (*Run, error) {
-	pass, ok := r.passes[kind]
-	if !ok {
-		return nil, ErrNoPass
+	release, held, err := duty(ctx)
+	if err != nil || !held {
+		r.release(kind)
+		return nil, false, err
 	}
-	tearer, ok := pass.(Teardowner)
-	if !ok {
-		return nil, ErrNoTeardown
-	}
-	if err := r.claim(kind, id); err != nil {
-		return nil, err
-	}
-	defer r.release(kind)
-
-	if r.duty != nil {
-		if duty := r.duty(kind); duty != nil {
-			release, held, err := duty(ctx)
-			if err != nil {
-				// Three-valued, as everywhere: a store that could not
-				// answer is not evidence somebody else is minting.
-				return nil, fmt.Errorf("setup: could not claim the teardown lease: %w", err)
-			}
-			if !held {
-				return nil, ErrPassInFlight
-			}
-			defer release()
-		}
-	}
-
-	run := &Run{ID: id, Kind: kind, State: RunRunning, StartedAt: r.now()}
-	r.remember(run)
-
-	err := tearer.Teardown(ctx, in)
-	ended := r.now()
-	run.EndedAt = &ended
-	if err != nil {
-		run.State = RunFailed
-		run.Error = err.Error()
-		return run, err
-	}
-	run.State = RunDone
-	return run, nil
-}
-
-// Tears reports whether this build can remove what a third-party app holds.
-func (r *Runner) Tears(kind integration.Kind) bool {
-	if r == nil {
-		return false
-	}
-	pass, ok := r.passes[kind]
-	if !ok {
-		return false
-	}
-	_, ok = pass.(Teardowner)
-	return ok
+	return func() { release(); r.release(kind) }, true, nil
 }
 
 // Get is one run by id.

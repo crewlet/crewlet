@@ -1076,7 +1076,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// writes its findings to. That last one is the SAME row the
 		// reconcile loop writes: a pass an operator ran and a tick that
 		// ran a minute later must not disagree about an integration.
-		Passes: e.SetupRunner(nil),
+		Passes: e.SetupRunner(),
 		Sink:   e.SetupSink,
 		Status: integrationStatus,
 		// WHICH SLACK APP EACH AGENT IS. Named nowhere in the company

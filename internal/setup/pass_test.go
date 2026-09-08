@@ -236,25 +236,97 @@ func TestAFailedPassStillGivesTheLeaseBack(t *testing.T) {
 	}
 }
 
-// tearPass is a pass that can also be torn down.
-type tearPass struct{ gatePass }
+// AND A HOLD GIVES IT BACK TOO. The loop's tick and a disconnect's teardown
+// reach the surface through Hold rather than Start, and a lease kept after
+// they finish locks a peer out for the full TTL exactly as one kept after a
+// pass would.
+func TestAHoldGivesTheLeaseBack(t *testing.T) {
+	lease := new(countingDuty)
+	r := NewRunner([]Pass{newGate(integration.KindGitHub)}, lease.duty, pinnedNow)
 
-func (p *tearPass) Teardown(context.Context, TeardownInput) error { return nil }
+	release, held, err := r.Hold(context.Background(), integration.KindGitHub)
+	if err != nil || !held {
+		t.Fatalf("Hold = (%v, %v), want held", held, err)
+	}
+	release()
+	if got, released := lease.counts(); got != 1 || released != 1 {
+		t.Errorf("lease taken %d times and given back %d, want 1 and 1", got, released)
+	}
+}
 
-// AND A TEARDOWN GIVES IT BACK TOO. It takes the same lease for the same
-// reason — a teardown and a pass both write at the third-party app — so it
-// has to return it on the same terms.
-func TestATeardownGivesTheLeaseBack(t *testing.T) {
-	pass := &tearPass{gatePass: gatePass{kind: integration.KindGitHub}}
+// THE FLEET LEASE ALONE DOES NOT STOP TWO WRITERS IN ONE PROCESS.
+//
+// coord's TryAcquire doubles as a renew for the owner that already holds the
+// record, so a loop tick and an operator's button on ONE node are both told
+// yes by it — which is what countingDuty reproduces. The in-process claim is
+// what refuses the second, and without it the two run the same pass at one
+// third-party app: both see a seat with no account, both create one.
+func TestAHoldIsRefusedWhileAPassRunsOnThisNode(t *testing.T) {
+	pass := newGate(integration.KindGitHub)
+	r := NewRunner([]Pass{pass}, new(countingDuty).duty, pinnedNow)
+
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		close(started)
+		_, err := r.Start(context.Background(), integration.KindGitHub, PassInput{}, "run-1")
+		done <- err
+	}()
+	<-started
+	<-pass.entered
+
+	release, held, err := r.Hold(context.Background(), integration.KindGitHub)
+	switch {
+	case err != nil:
+		t.Fatalf("Hold reported a fault rather than a busy surface: %v", err)
+	case held:
+		release()
+		t.Fatal("a hold was granted while a pass was writing at the same surface")
+	}
+
+	close(pass.release)
+	if err := <-done; err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	// AND THE SURFACE IS FREE AGAIN once the pass ends, or the refusal
+	// above would be a deadlock rather than a guard.
+	release, held, err = r.Hold(context.Background(), integration.KindGitHub)
+	if err != nil || !held {
+		t.Fatalf("Hold after the pass ended = (%v, %v), want held", held, err)
+	}
+	release()
+}
+
+// A LOST LOCAL RACE TAKES NO FLEET LEASE. Claiming the remote one first and
+// discovering the local claim second would leave a peer locked out for the
+// full TTL by a caller that never wrote anything.
+func TestARefusedHoldTakesNoLease(t *testing.T) {
+	pass := newGate(integration.KindGitHub)
 	lease := new(countingDuty)
 	r := NewRunner([]Pass{pass}, lease.duty, pinnedNow)
 
-	if _, err := r.StartTeardown(
-		context.Background(), integration.KindGitHub, TeardownInput{}, "run-1",
-	); err != nil {
-		t.Fatalf("StartTeardown: %v", err)
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.Start(context.Background(), integration.KindGitHub, PassInput{}, "run-1")
+		done <- err
+	}()
+	<-pass.entered
+
+	// The live pass holds one, so the assertion is that the refused hold
+	// took NONE — not that nothing is held at all.
+	beforeHeld, beforeReleased := lease.counts()
+	if _, held, _ := r.Hold(context.Background(), integration.KindGitHub); held {
+		t.Fatal("a hold was granted while a pass was writing at the same surface")
 	}
-	if held, released := lease.counts(); held != 1 || released != 1 {
-		t.Errorf("lease taken %d times and given back %d, want 1 and 1", held, released)
+	afterHeld, afterReleased := lease.counts()
+	if afterHeld != beforeHeld || afterReleased != beforeReleased {
+		t.Errorf("a refused hold moved the lease counts from (%d held, %d given back) "+
+			"to (%d, %d); it reached the store at all",
+			beforeHeld, beforeReleased, afterHeld, afterReleased)
+	}
+
+	close(pass.release)
+	if err := <-done; err != nil {
+		t.Fatalf("Start: %v", err)
 	}
 }
