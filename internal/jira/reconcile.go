@@ -402,12 +402,17 @@ func webhookSecret(ctx context.Context, opts Options, target string) (string, []
 	}
 	secretVar, ok := provision.SoleVar(opts.Config.WebhookSecret)
 	if !ok {
+		// THE SHAPE, NEVER THE VALUE, the rule every other provisioner
+		// here states at its own call site. This error reaches further
+		// than theirs: it becomes State.LastError, which is written to
+		// the fleet's coordination store and served on the integrations
+		// query, so a %q of a literal signing secret publishes it.
 		return "", nil, fmt.Errorf(
-			"jira: integrations.jira.webhook_secret is %q, which is neither a "+
-				"value this run could resolve nor a whole ${VAR} reference to "+
-				"mint one into — point it at a variable, set that variable, or "+
+			"jira: integrations.jira.webhook_secret is %s rather than a value "+
+				"this run could resolve or a whole ${VAR} reference to mint "+
+				"one into — point it at a variable, set that variable, or "+
 				"drop -public-url and register %s by hand",
-			opts.Config.WebhookSecret, target)
+			provision.Shape(opts.Config.WebhookSecret), target)
 	}
 	if opts.Sink == nil {
 		return "", nil, provision.ErrNoSink

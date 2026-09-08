@@ -258,11 +258,16 @@ func mintInto(ctx context.Context, opts Options, ref, field, role string) (strin
 	}
 	variable, ok := provision.SoleVar(ref)
 	if !ok {
+		// THE SHAPE, NEVER THE VALUE. See [provision.Shape]: this error
+		// becomes State.LastError, which the fleet stores and the
+		// integrations query serves, so a %q of a literal webhook token
+		// publishes the one credential that route authenticates with.
 		return "", nil, fmt.Errorf(
-			"confluence: integrations.confluence.%s is %q, which is neither a "+
-				"value this run could resolve nor a whole ${VAR} reference to "+
-				"mint one into; point it at a variable and set that variable, "+
-				"or drop -public-url and register the hooks by hand", field, ref)
+			"confluence: integrations.confluence.%s is %s rather than a value "+
+				"this run could resolve or a whole ${VAR} reference to mint "+
+				"one into; point it at a variable and set that variable, "+
+				"or drop -public-url and register the hooks by hand",
+			field, provision.Shape(ref))
 	}
 	if opts.Sink == nil {
 		return "", nil, provision.ErrNoSink

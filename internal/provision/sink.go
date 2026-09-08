@@ -119,6 +119,32 @@ func ReferencedVars(value string) []string {
 	return envref.Names(value)
 }
 
+// Shape says what is wrong with a value [SoleVar] refused, WITHOUT REPEATING
+// IT.
+//
+// The value here is a credential or a string holding one, and what is done
+// with this sentence is the whole reason the rule exists: it goes into an
+// operator's report pasted into a ticket, and — since the reconcile loop —
+// into `State.LastError`, which is written to the fleet's coordination store
+// and served on the integrations query, a read that is anonymous unless the
+// deployment turned that off. A `%q` of the value there publishes the
+// credential to anyone who can reach the port.
+//
+// The two cases are kept apart because their fixes differ — a literal needs a
+// variable, a composite needs the variable to be the whole value — so
+// collapsing them into "not a reference" would leave an operator to work out
+// which.
+//
+// ONE IMPLEMENTATION: this was two byte-identical copies, in mattermost and
+// gitlab, and the two provisioners added since had neither and quoted the
+// value instead.
+func Shape(value string) string {
+	if len(ReferencedVars(value)) == 0 {
+		return "a literal"
+	}
+	return "a reference embedded in other text"
+}
+
 // SoleVar reports the one variable a value is a whole reference to.
 //
 // # Exactly one, and the WHOLE value
