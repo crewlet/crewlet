@@ -3,6 +3,7 @@ package storetest
 import (
 	"context"
 	"database/sql/driver"
+	"errors"
 	"sync/atomic"
 )
 
@@ -172,4 +173,198 @@ func (r *faultRows) Next(dest []driver.Value) error {
 		dest[0] = nil
 	}
 	return nil
+}
+
+// FailCommitAfter wraps a driver so that the (n+1)th COMMIT fails with err.
+//
+// # Why a commit fault is its own instrument
+//
+// The read faults above reach a caller that got an incomplete answer. This one
+// reaches a caller that does not know what happened to a WRITE, and the two
+// have opposite remedies: an incomplete read is retried freely, while a
+// failed-looking write may or may not have landed. A rolled-back transaction
+// leaves rows, op ids and checkpoints consistent with each other, and the
+// applier contract's whole claim is that they move together — so the way to
+// prove it is to fail the commit and read all three back.
+//
+// It counts commits rather than firing on all of them so a test can let its
+// setup and its control transaction through and arm the fault at the one
+// commit under examination.
+func FailCommitAfter(n int, err error) *CommitFault {
+	return &CommitFault{after: n, err: err}
+}
+
+// LoseCommitAck wraps a driver so that the (n+1)th COMMIT SUCCEEDS and then
+// reports failure to the caller.
+//
+// # The only way to reach committed-but-unknown
+//
+// This is the branch nothing else can produce. The transaction is durable —
+// the pages are on disk, a reader sees them, a restart finds them — and the
+// caller was told it failed. Every other fault produces a state the caller's
+// belief matches; this one produces the state where it does not, which is the
+// state the three-valued write outcome exists for. A caller that treats it as
+// a failure and retries writes twice; one that treats it as a success reports
+// a durability it did not observe. The only correct answer is "unknown", and
+// without this injector no test can ever hand a caller that fact.
+//
+// A CRASH BETWEEN COMMIT AND ACK is the real-world shape of it, and it cannot
+// be produced in-process: the process is gone. This is that shape with the
+// process still running to be asserted against.
+func LoseCommitAck(n int) *CommitFault {
+	return &CommitFault{after: n, lose: true}
+}
+
+// CommitFault is an armable commit failure. See [FailCommitAfter] and
+// [LoseCommitAck].
+type CommitFault struct {
+	after int
+	err   error
+	lose  bool
+
+	armed atomic.Bool
+	seen  atomic.Int64
+	fired atomic.Bool
+}
+
+// Wrap is the [store.Options.WrapDriver] function for this fault.
+func (f *CommitFault) Wrap(d driver.Driver) driver.Driver {
+	return &commitFaultDriver{inner: d, fault: f}
+}
+
+// Arm switches the fault on; Disarm switches it off. Armed separately for the
+// same reason the read faults are: a fault that fired during migration would
+// stop the database opening at all.
+func (f *CommitFault) Arm() { f.armed.Store(true) }
+
+// Disarm stops the fault firing, so a test can assert the recovery path on the
+// same handle that failed.
+func (f *CommitFault) Disarm() { f.armed.Store(false) }
+
+// Fired reports whether the fault actually reached its commit.
+//
+// An assertion that the injector RAN, and it is not ceremony: the store
+// retries a conflicted transaction, so a test that armed a fault and asserted
+// only the outcome can pass because the fault never fired at all.
+func (f *CommitFault) Fired() bool { return f.fired.Load() }
+
+// commitErr decides what this commit does. It is called once per commit while
+// armed, and consumes the allowance.
+func (f *CommitFault) commitErr() (fail bool, lose bool, err error) {
+	if !f.armed.Load() {
+		return false, false, nil
+	}
+	if f.seen.Add(1) <= int64(f.after) {
+		return false, false, nil
+	}
+	f.fired.Store(true)
+	if f.lose {
+		return false, true, errLostAck
+	}
+	return true, false, f.err
+}
+
+// errLostAck is what a lost acknowledgement surfaces as. A distinct sentinel
+// rather than the caller's own error, because the point of the injector is
+// that the caller cannot tell this apart from a real failure by its error.
+var errLostAck = errors.New("storetest: the commit's acknowledgement was lost")
+
+// ErrLostAck is the error a [LoseCommitAck] transaction reports. Exported so a
+// test can assert the failure it saw was the injected one rather than a real
+// fault the fixture produced by accident.
+var ErrLostAck = errLostAck
+
+type commitFaultDriver struct {
+	inner driver.Driver
+	fault *CommitFault
+}
+
+func (d *commitFaultDriver) Open(name string) (driver.Conn, error) {
+	conn, err := d.inner.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	return &commitFaultConn{Conn: conn, fault: d.fault}, nil
+}
+
+type commitFaultConn struct {
+	driver.Conn
+	fault *CommitFault
+}
+
+// The same four forwards faultConn makes, and for the same reason: an embedded
+// driver.Conn carries none of the optional interfaces, and hiding them moves
+// every query onto a different path than production takes.
+func (c *commitFaultConn) ExecContext(
+	ctx context.Context, q string, args []driver.NamedValue,
+) (driver.Result, error) {
+	ex, ok := c.Conn.(driver.ExecerContext)
+	if !ok {
+		return nil, driver.ErrSkip
+	}
+	return ex.ExecContext(ctx, q, args)
+}
+
+func (c *commitFaultConn) QueryContext(
+	ctx context.Context, q string, args []driver.NamedValue,
+) (driver.Rows, error) {
+	qr, ok := c.Conn.(driver.QueryerContext)
+	if !ok {
+		return nil, driver.ErrSkip
+	}
+	return qr.QueryContext(ctx, q, args)
+}
+
+func (c *commitFaultConn) PrepareContext(ctx context.Context, q string) (driver.Stmt, error) {
+	pc, ok := c.Conn.(driver.ConnPrepareContext)
+	if !ok {
+		return c.Conn.Prepare(q)
+	}
+	return pc.PrepareContext(ctx, q)
+}
+
+func (c *commitFaultConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
+	bt, ok := c.Conn.(driver.ConnBeginTx)
+	if !ok {
+		//nolint:staticcheck // SA1019: the fallback database/sql itself uses.
+		tx, err := c.Conn.Begin()
+		if err != nil {
+			return nil, err
+		}
+		return &commitFaultTx{Tx: tx, fault: c.fault}, nil
+	}
+	tx, err := bt.BeginTx(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	return &commitFaultTx{Tx: tx, fault: c.fault}, nil
+}
+
+type commitFaultTx struct {
+	driver.Tx
+	fault *CommitFault
+}
+
+// Commit is where the two injectors differ, and the difference is the whole
+// point: FailCommitAfter never reaches the real Commit, so nothing is durable;
+// LoseCommitAck reaches it FIRST and reports the failure afterwards, so
+// everything is durable and the caller was told otherwise.
+func (t *commitFaultTx) Commit() error {
+	fail, lose, err := t.fault.commitErr()
+	switch {
+	case fail:
+		// Rolled back rather than left open: a driver that returned an
+		// error from Commit without ending the transaction would wedge
+		// the connection, and the fault under test is a failed commit,
+		// not a leaked one.
+		_ = t.Tx.Rollback()
+		return err
+	case lose:
+		if commitErr := t.Tx.Commit(); commitErr != nil {
+			return commitErr
+		}
+		return err
+	default:
+		return t.Tx.Commit()
+	}
 }

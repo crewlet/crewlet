@@ -57,6 +57,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -86,7 +87,14 @@ const (
 	// the write path. More would not help: under WAL, readers never block
 	// the writer, but writers serialise on the file lock regardless, so
 	// connections past the read concurrency only deepen a queue.
-	defaultMaxOpenConns = 4
+	//
+	// READERS ONLY. Every pinned writer ([DB.Writer]) holds a connection of
+	// its own for its lifetime and counts against the same bound, so the
+	// pool is this plus [Options.PinnedWriters] rather than a constant —
+	// see maxOpenConns. A constant here was outgrown the moment a second
+	// long-lived writer existed: its pin came out of the readers' four and
+	// nothing said so.
+	defaultReaderConns = 4
 
 	// Half the dashboard's 10 s query timeout. A busy wait longer than the
 	// timeout above it turns lock contention into a request that fails with
@@ -112,8 +120,23 @@ type Options struct {
 	// there is no config field for it.
 	WrapDriver func(driver.Driver) driver.Driver
 
-	// MaxOpenConns bounds the connection pool; 0 means defaultMaxOpenConns.
+	// MaxOpenConns bounds the connection pool; 0 means the derived bound —
+	// defaultReaderConns plus PinnedWriters. Setting it wins outright, and
+	// a caller that sets it owns the arithmetic PinnedWriters does for
+	// everybody else.
 	MaxOpenConns int
+
+	// PinnedWriters is how many connections will be held for the life of
+	// this handle by [DB.Writer], and it is passed by the one caller that
+	// knows the number rather than fixed here.
+	//
+	// A pinned connection counts against MaxOpenConns like any other, so a
+	// handle with N pins and a fixed pool of four leaves 4−N for every
+	// reader — the dashboard, the probes, the coverage checks — with
+	// nothing naming the loss. The engine registers the writers, so the
+	// engine passes the count; the store owns the arithmetic because the
+	// pool is what is shared.
+	PinnedWriters int
 
 	// BusyTimeout is how long a statement waits for the file lock before
 	// giving up; 0 means defaultBusyTimeout.
@@ -141,7 +164,7 @@ type Options struct {
 // made Pending a different database connection from the engine's.
 func (o Options) maxOpenConns() int {
 	if o.MaxOpenConns <= 0 {
-		return defaultMaxOpenConns
+		return defaultReaderConns + o.PinnedWriters
 	}
 	return o.MaxOpenConns
 }
@@ -172,6 +195,17 @@ type DB struct {
 	// does not get to run Close. Nil for an in-memory database, which has
 	// no file to exclude anyone from. See lock.go.
 	lock *fileLock
+
+	// pins bounds how many connections [DB.Writer] may hand out, and how
+	// many it has. DECLARED rather than discovered: a pin past the count
+	// the pool was sized for is refused NAMING the count, because the
+	// alternative is a writer that silently takes a reader's connection
+	// and a read burst that queues behind it with nothing to read.
+	pins struct {
+		mu       sync.Mutex
+		declared int
+		held     int
+	}
 }
 
 var log = logging.Get("store")
@@ -207,6 +241,7 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 	}
 
 	db := &DB{sql: pool, path: path, lock: lock}
+	db.pins.declared = opts.PinnedWriters
 	// Straight to the field, not through [DB.LearnEmbeddingDim]: that one
 	// only ever raises from 0 because it guards a LIVE handle, and this is
 	// the open where whatever the caller passed — including 0 — is the
@@ -226,6 +261,9 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 		"vector_functions", db.caps.VectorFunctions,
 		"vector_index", db.caps.VectorIndex,
 		"full_text_search", db.caps.FullTextSearch,
+		"max_variables", db.caps.MaxVariables,
+		"page_cache_kib", db.caps.PageCacheKiB,
+		"pinned_writers", opts.PinnedWriters,
 	)
 	return db, nil
 }
@@ -404,12 +442,36 @@ func openPool(path string, busy time.Duration,
 			// writes has no other copy, and its commit rate (a handful per
 			// second on a busy node) never earns the discount.
 			"PRAGMA synchronous = FULL",
+			// AND ON DARWIN, `FULL` alone is not what it says. Turso
+			// moved macOS's FULL from fcntl(F_FULLFSYNC) to a plain
+			// fsync() and put F_FULLFSYNC behind this pragma
+			// (tursodatabase/turso#4760). A plain fsync() on macOS
+			// returns before the drive's own write cache is flushed, so
+			// a committed transaction is lost to a power cut on the one
+			// platform where FULL reads as strongest. Harmless
+			// elsewhere: every other platform ignores it.
+			"PRAGMA fullfsync = 1",
 			// SQLite defaults foreign keys OFF, which makes a declared
 			// constraint look enforced right up until the day it
 			// matters. synthesized_skill_versions declares one so that
 			// deleting a skill cascades its history rather than
 			// orphaning it; this is what makes the declaration true.
 			"PRAGMA foreign_keys = ON",
+			// 32 MiB per connection, and it is for the B-TREE INTERIOR
+			// PAGES rather than for the scans. The hot table here carries
+			// twenty-odd indexes and the postings list is read by term,
+			// so what a cache this size buys is that a lookup's descent
+			// does not go to the file; the big sequential reads are the
+			// OS page cache's job, and sizing a per-connection cache for
+			// them would be N copies of it.
+			//
+			// Negative means KiB rather than pages, which is what makes
+			// the number mean the same thing whatever page size the file
+			// was created with. Read back at Open as
+			// [Capabilities.PageCacheKiB], because a driver that ignores
+			// this leaves every connection on its own default and the
+			// symptom appears nowhere near the cause.
+			"PRAGMA cache_size = -32768",
 			fmt.Sprintf("PRAGMA busy_timeout = %d", busy.Milliseconds()),
 		},
 	}), nil
@@ -474,8 +536,19 @@ func (d *DB) Tx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 	// missing under nothing more than two goroutines. internal/learning
 	// carried a private copy of this loop for one of its twelve callers;
 	// the other eleven had none.
+	return retryStale(ctx, func() error { return d.tx(ctx, fn) })
+}
+
+// retryStale runs one attempt at a time until it succeeds, fails for a reason
+// a retry cannot fix, or exhausts [txAttempts].
+//
+// ONE LOOP, and that is the whole reason it is a function: [DB.Tx] and
+// [Writer.Tx] both need it, and a second copy is how one of them comes to
+// classify an error the other retries — which is exactly what the eleven
+// callers without internal/learning's private copy paid for.
+func retryStale(ctx context.Context, once func() error) error {
 	for attempt := 0; ; attempt++ {
-		err = d.tx(ctx, fn)
+		err := once()
 		if err == nil || attempt+1 >= txAttempts || !staleSnapshot(err) {
 			return err
 		}

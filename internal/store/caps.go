@@ -58,6 +58,32 @@ type Capabilities struct {
 	// behind knowledge.Searcher, and this is here so that the day Turso's
 	// index reaches Go is a day this project notices.
 	FullTextSearch bool
+
+	// MaxVariables is how many bound parameters one statement accepts,
+	// measured rather than assumed.
+	//
+	// It is the chunk size for every multi-row INSERT the appliers write:
+	// rows ÷ columns per statement, which is the difference between one
+	// round trip and a thousand on a batch this engine writes constantly.
+	// SQLite has raised this default once already (999 → 32 766 in 3.32),
+	// so a hardcoded 999 is 33× the round trips on the driver actually
+	// pinned here, and a hardcoded 32 766 is a refused statement on any
+	// engine that did not follow. The probe costs one prepare at open.
+	//
+	// A conservative 999 when the probe cannot tell: too small is slow,
+	// too large is a runtime failure on a statement the caller cannot
+	// retry differently.
+	MaxVariables int
+
+	// PageCacheKiB is `PRAGMA cache_size` as the driver actually applied
+	// it, in kibibytes, or 0 when it could not be read.
+	//
+	// The session list asks for a deliberate size (see openPool). Asking is
+	// not the same as getting: a driver that ignores the pragma leaves
+	// every connection on its own default, and the symptom — a query plan
+	// that spills where it used to fit — appears nowhere near the cause.
+	// Reading it back is what turns the request into a fact.
+	PageCacheKiB int
 }
 
 // probe measures each capability against the live connection.
@@ -75,7 +101,121 @@ func probe(ctx context.Context, db *sql.DB) Capabilities {
 		VectorFunctions: probeVectorFunctions(ctx, db),
 		VectorIndex:     probeVectorIndex(ctx, db),
 		FullTextSearch:  probeFullText(ctx, db),
+		MaxVariables:    probeMaxVariables(ctx, db),
+		PageCacheKiB:    probePageCache(ctx, db),
 	}
+}
+
+// conservativeMaxVariables is the answer when the probe cannot establish one.
+//
+// SQLite's pre-3.32 default, which every engine in this family accepts. Too
+// small costs round trips; too large costs a refused statement at the moment
+// a batch is largest, which is the failure that cannot be retried into
+// success.
+const conservativeMaxVariables = 999
+
+// probeMaxVariables finds the largest parameter count one statement accepts,
+// by BINARY SEARCH over prepares.
+//
+// A prepare rather than an execution: the limit is a parser bound, so a
+// statement that prepares would run, and preparing touches no table and needs
+// no transaction. `SELECT ?,?,…` is the narrowest statement that carries N
+// parameters and nothing else.
+//
+// The search is bounded above by 32 766 — SQLite's own post-3.32 default and
+// the largest value any engine in this family reports — so the loop is at
+// most fifteen prepares and cannot run away on a driver with no limit at all.
+func probeMaxVariables(ctx context.Context, db *sql.DB) int {
+	const ceiling = 32766
+	accepts := func(n int) bool {
+		stmt, err := db.PrepareContext(ctx, selectParams(n))
+		if err != nil {
+			return false
+		}
+		_ = stmt.Close()
+		return true
+	}
+	if !accepts(conservativeMaxVariables) {
+		// Below the floor every engine here clears. Reported rather than
+		// searched further: something is wrong with the probe or the
+		// driver, and a number derived from that is worse than the
+		// documented minimum.
+		return conservativeMaxVariables
+	}
+	if accepts(ceiling) {
+		return ceiling
+	}
+	low, high := conservativeMaxVariables, ceiling
+	for low+1 < high {
+		mid := low + (high-low)/2
+		if accepts(mid) {
+			low = mid
+		} else {
+			high = mid
+		}
+	}
+	return low
+}
+
+// selectParams builds `SELECT ?, ?, …` with n placeholders.
+func selectParams(n int) string {
+	var b strings.Builder
+	b.Grow(len("SELECT ") + 3*n)
+	b.WriteString("SELECT ")
+	for i := range n {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		b.WriteString("?")
+	}
+	return b.String()
+}
+
+// probePageCache reads `PRAGMA cache_size` back and converts it to KiB.
+//
+// The pragma answers in PAGES when positive and in KiB (negated) when
+// negative, which is the whole reason this is a conversion rather than a
+// read: a caller comparing the raw number against a byte budget would be
+// comparing two different units depending on how it was set.
+func probePageCache(ctx context.Context, db *sql.DB) int {
+	// ONE CONNECTION for both pragmas. `cache_size` is per-connection state
+	// and `page_size` is a property of the file, so reading them through the
+	// pool can pair one connection's cache with another's page size — which
+	// is a number that describes neither.
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return 0
+	}
+	defer func() { _ = conn.Close() }()
+
+	var raw int
+	if err := conn.QueryRowContext(ctx, `PRAGMA cache_size`).Scan(&raw); err != nil {
+		return 0
+	}
+	var pageSize int
+	if err := conn.QueryRowContext(ctx, `PRAGMA page_size`).Scan(&pageSize); err != nil {
+		return 0
+	}
+	return pageCacheKiB(raw, pageSize)
+}
+
+// pageCacheKiB converts `PRAGMA cache_size` into kibibytes.
+//
+// The pragma answers in PAGES when positive and in KiB (negated) when
+// negative, which is the whole reason this is a conversion rather than a read:
+// a caller comparing the raw number against a byte budget would be comparing
+// two different units depending on how the value was set.
+//
+// Pure, so the rule is testable without a driver — which is what the first
+// version of this was not, and it measured a pool rather than the arithmetic.
+func pageCacheKiB(raw, pageSize int) int {
+	if raw < 0 {
+		return -raw
+	}
+	if pageSize <= 0 {
+		return 0
+	}
+	return raw * pageSize / 1024
 }
 
 // probeVectorFunctions asks for a distance between two literal vectors. It
