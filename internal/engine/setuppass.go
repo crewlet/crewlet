@@ -359,7 +359,16 @@ func (*datadogPass) Needs() *setup.Requirement { return nil }
 func (p *datadogPass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.Datadog
-	if cfg == nil {
+	// DISABLED IS NOT CONFIGURED, the same answer gitlab, github and
+	// mattermost give. `enabled: false` is the gesture an operator makes
+	// after a leaked webhook token — the inbound route, the parser and the
+	// notification wiring all gate on it — so a loop that went on
+	// provisioning service accounts against a block somebody had just
+	// switched off, and reported the surface Connected while doing it, is
+	// answering a question nobody asked. `Datadog.validate` does not even
+	// check a disabled block, so there is no guarantee the fields this pass
+	// would read are coherent.
+	if cfg == nil || !cfg.Enabled {
 		return nil, integration.ErrNotConfigured
 	}
 	if cfg.Provisioning == nil {
@@ -882,7 +891,10 @@ func (p *githubPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 // credential can read a thread, and two readings of one roster would be free
 // to disagree about which apps exist.
 func (p *githubPass) seatApps(env *config.Resolver) []github.SeatApp {
-	return p.engine.githubSeatApps(env)
+	// THE LIVE EPOCH, which is what a pass wants: it converges the company
+	// as it is now, where the apply path wires the revision it is about to
+	// publish. See [Engine.githubSeatApps].
+	return p.engine.githubSeatApps(p.engine.Company(), env)
 }
 
 // recordInstallation writes what the pass discovered back onto the seat.
@@ -939,7 +951,7 @@ var (
 
 // gitlabAdminToken resolves the group Owner credential.
 //
-// The DOCUMENT first and the per-run override second, which is the order that
+// The per-run OVERRIDE first and the document second, which is the order that
 // makes a rotation possible: an operator holding a new token can run a pass
 // with it before the document carries it, and every other run needs no
 // credential in hand at all.

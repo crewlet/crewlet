@@ -474,16 +474,29 @@ func (e *Engine) startMattermost(ctx context.Context, c *Company, cfg *config.Ma
 	}
 	e.notify.mu.Lock()
 	e.notify.mattermost = transport
-	// RECORDED WHERE IT IS BUILT, so the boot path and the apply path agree
-	// about what the running transport was made from. Set only by the
-	// reconciler, the first apply after a boot would find no fingerprint,
-	// read that as a change, and drop every seat's websocket for nothing.
-	e.notify.chatPrint = chatFingerprint(url, team, string(cfg.Status()), seats)
 	e.notify.mu.Unlock()
 
 	if err := transport.Start(ctx); err != nil {
 		return transport, err
 	}
+
+	// RECORDED WHERE IT IS BUILT, so the boot path and the apply path agree
+	// about what the running transport was made from. Set only by the
+	// reconciler, the first apply after a boot would find no fingerprint,
+	// read that as a change, and drop every seat's websocket for nothing.
+	//
+	// AND ONLY ONCE THE TRANSPORT IS PROVEN TO RUN. The fingerprint is what
+	// the next reconcile compares against to decide there is nothing to do,
+	// so recording it for a wiring that never started is a wedge rather than
+	// a stale value: [Transport.Start] returns an error when every seat
+	// failed, and such a transport holds no websocket and has no reconnect
+	// loop of its own. The reconcile that follows would find its own freshly
+	// computed fingerprint equal to this one, return early, and never try
+	// again — the surface dead until the process restarts, with the last log
+	// line saying the previous wiring is still current.
+	e.notify.mu.Lock()
+	e.notify.chatPrint = chatFingerprint(url, team, string(cfg.Status()), seats)
+	e.notify.mu.Unlock()
 	return transport, nil
 }
 

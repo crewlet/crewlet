@@ -71,13 +71,14 @@ type vendorDisconnect struct {
 func (d vendorDisconnect) Disconnect(ctx context.Context, removeSeats bool) error {
 	return d.engine.dropBlock(ctx, d.kind, func(ctx context.Context) error {
 		if d.pass == nil {
-			// NOTHING REGISTERED AT THE VENDOR. Datadog's webhook is
-			// created by a person in Datadog's own UI pointing at this
-			// engine, and Slack's apps are made from the command line,
-			// so neither has anything this engine put there to take
-			// away. Dropping the block is the whole disconnect, and a
-			// third-party app with no teardown must still HAVE a disconnector or
-			// the intent sits on the row for ever.
+			// NOTHING REGISTERED AT THE VENDOR. Slack is the only
+			// surface here with no pass at all — its apps are made from
+			// the command line — so it is the only one that reaches
+			// this branch, and there is nothing this engine put at
+			// Slack for a teardown to take away. Dropping the block is
+			// the whole disconnect, and a third-party app with no
+			// teardown must still HAVE a disconnector or the intent
+			// sits on the row for ever.
 			return nil
 		}
 		return d.pass.Teardown(ctx, setup.TeardownInput{RemoveSeats: removeSeats})
@@ -156,11 +157,15 @@ func (e *Engine) dropBlock(
 
 // disconnectors pairs every pass this build can tear down with the seam the
 // loop removes it through.
-// EVERY SURFACE, not only the ones with something to remove. A third-party app with no
-// teardown still has a BLOCK, and a disconnect for it that no node could
-// complete would leave the intent on the fleet row for ever with the screen
-// reporting Disconnecting and nothing moving. Datadog and Slack are that
-// case: neither has anything this engine registered at the third-party app.
+//
+// EVERY SURFACE, not only the ones with something to remove. A third-party app
+// with no teardown still has a BLOCK, and a disconnect for it that no node
+// could complete would leave the intent on the fleet row for ever with the
+// screen reporting Disconnecting and nothing moving. Slack is that case, and
+// the only one: it is the single kind with no pass, so it is the single kind
+// with nothing this engine registered to take away. Datadog was in this
+// sentence and is not any more — it registers its own webhook and tears it
+// down again.
 func (e *Engine) disconnectors() map[integration.Kind]integration.Disconnector {
 	tearers := map[integration.Kind]setup.Teardowner{}
 	for _, pass := range e.setupPasses() {
@@ -234,7 +239,17 @@ func (e *Engine) editGitHubSeat(
 ) error {
 	writer := e.configWriter.Load()
 	if writer == nil {
-		return integration.ErrDisconnectUnavailable
+		// THE SENTINEL, WRAPPED WITH WHAT IT IS ACTUALLY REFUSING. Bare, it
+		// reads "this node cannot complete a disconnect yet" — which is the
+		// sentence its doc scopes it to and is not what happened: this is a
+		// pass recording an app it just discovered, and no disconnect is in
+		// flight. It stays comparable because the loop's own
+		// [integration.Worker.tearDown] arm keys on errors.Is, and it is
+		// the right sentinel: the cause is identical, the config surface
+		// this node has not wired yet.
+		return fmt.Errorf(
+			"%w: no config surface is wired on this node, so %s's GitHub app "+
+				"cannot be recorded yet", integration.ErrDisconnectUnavailable, handle)
 	}
 	body, err := (*writer).Seat(ctx, handle)
 	if err != nil {
