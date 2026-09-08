@@ -27,7 +27,9 @@ type State struct {
 	Report Report `json:"report"`
 
 	// Findings is EVERYTHING the last pass observed, not only the one
-	// [Classify] promoted into Report.
+	// [Classify] promoted into Report — and the promoted one is FIRST, so a
+	// reader wanting "what else is wrong" takes the tail rather than
+	// re-deriving which finding the report is about. See [Promote].
 	//
 	// Kept because the report answers "what should I do next" and this
 	// answers "what is actually wrong", and they are different questions
@@ -296,7 +298,7 @@ func Observe(state State, kind Kind, findings []Finding, err error, now time.Tim
 		state.Attempts++
 		state.LastError = truncateError(err.Error())
 	default:
-		state.Report, state.Findings = bound(Classify(findings), findings)
+		state.Report, state.Findings = bound(Classify(findings), Promote(findings))
 		state.LastError = ""
 		if state.Report.Phase == PhaseReady {
 			state.Attempts = 0

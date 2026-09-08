@@ -270,18 +270,55 @@ type Finding struct {
 //
 // No findings is [Ready]. That is the whole of the success path: a third-party app
 // that converged reports nothing, rather than having to remember to say so.
+// worstOf is the finding [Classify] promotes, and where it sits.
+//
+// One implementation because two callers need the same answer: Classify makes
+// the report from it, and [Promote] puts it first in the stored slice so no
+// reader has to re-derive which finding the report is about.
+func worstOf(findings []Finding) (Finding, int) {
+	worst, at := findings[0], 0
+	rank := worst.Kind.severity()
+	for i, f := range findings[1:] {
+		if s := f.Kind.severity(); s < rank {
+			worst, rank, at = f, s, i+1
+		}
+	}
+	return worst, at
+}
+
+// Promote returns findings with the one [Classify] reports FIRST.
+//
+// The order is the contract, and it exists because every reader wants the
+// same thing: the findings the report did NOT summarise. Without an order
+// they had to re-derive the winner, and the dashboard instead assumed it —
+// dropping element zero and rendering the tail — so whenever the worst
+// finding was not already first, a real finding was hidden and the headline
+// was re-printed as "1 more finding".
+//
+// A STABLE ROTATION rather than a sort: the vendor's own order is meaningful
+// below the headline (a pass walks its seats in a stable order, so an
+// operator reading the list twice sees the same seats in the same places),
+// and sorting by severity would shuffle equals on every pass.
+func Promote(findings []Finding) []Finding {
+	if len(findings) < 2 {
+		return findings
+	}
+	_, at := worstOf(findings)
+	if at == 0 {
+		return findings
+	}
+	out := make([]Finding, 0, len(findings))
+	out = append(out, findings[at])
+	out = append(out, findings[:at]...)
+	return append(out, findings[at+1:]...)
+}
+
 func Classify(findings []Finding) Report {
 	if len(findings) == 0 {
 		return Ready()
 	}
 
-	worst := findings[0]
-	rank := worst.Kind.severity()
-	for _, f := range findings[1:] {
-		if s := f.Kind.severity(); s < rank {
-			worst, rank = f, s
-		}
-	}
+	worst, _ := worstOf(findings)
 
 	// Counted over the WINNING KIND rather than over everything, because
 	// "3 more" has to mean three more of the thing just described. A total

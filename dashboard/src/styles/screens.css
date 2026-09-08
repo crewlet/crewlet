@@ -1067,16 +1067,24 @@
  * "ready", where two chips on one row read as two verdicts and a reader
  * scanning a roster for what is wrong stopped on "read-only" every time.
  */
+/* THROUGH THE TOKENS, all of it. This arrived with six literals — a 9px
+   font-size off the nine-step ramp, its own margin, padding, radius,
+   line-height and tracking — and the design rules name that as the one thing
+   a change may not do: "No new colour, size, radius or spacing literal. If a
+   component needs one, the TOKEN is what gets added."
+   
+   --fs-3xs is the smallest step and the pill is made small by its PADDING
+   rather than by a tenth type size, because a step nothing else uses is a
+   scale of ten pretending to be a scale of nine. */
 .int-seat-tier {
-  margin-left: 7px;
-  padding: 0 5px;
-  border-radius: 4px;
-  font-size: 9px;
+  margin-left: var(--space-2);
+  padding: 0 var(--space-1);
+  border-radius: var(--r-xs);
+  font-size: var(--fs-3xs);
   font-weight: 600;
-  line-height: 15px;
-  letter-spacing: 0.03em;
+  line-height: 1.3;
+  letter-spacing: var(--track-wide);
   text-transform: uppercase;
-  vertical-align: 2px;
   white-space: nowrap;
   border: 1px solid var(--border);
   /* MUTED, NEVER FAINT. --text-faint is decoration only, and the tier is a

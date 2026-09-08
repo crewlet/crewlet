@@ -22,7 +22,7 @@
  * claim that the tool is fine.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Avatar, Badge, Button, Empty, Skeleton } from "~/ui/primitives.tsx";
@@ -437,6 +437,36 @@ export function rollUp(
  * A green tick here would be exactly the invented health this screen has
  * always refused to show.
  */
+/**
+ * The findings the report did NOT summarise.
+ *
+ * The engine promotes the reported finding to index 0 (integration.Promote),
+ * so dropping element zero would usually be right — and "usually" is the
+ * problem: a row written by a peer on an older build carries the vendor's own
+ * order, and a rolling upgrade puts exactly those rows here. Matching by
+ * identity is correct for both, and it removes the positional assumption
+ * rather than depending on it.
+ *
+ * The report's detail can carry a count suffix, because Classify appends
+ * "(and 2 more)" when several findings share the winning kind, so that is
+ * stripped before the comparison. Only the FIRST match is removed: several
+ * findings can legitimately render the same sentence for different seats, and
+ * the report stands for exactly one of them.
+ */
+export function withoutHeadline(
+  findings: { kind: string; subject?: string; detail?: string }[],
+  detail: string,
+): { kind: string; subject?: string; detail?: string }[] {
+  const headline = detail.replace(/ \(and \d+ more\)$/, "").trim();
+  if (headline === "") return findings;
+  let dropped = false;
+  return findings.filter((f) => {
+    if (dropped || (f.detail ?? "").trim() !== headline) return true;
+    dropped = true;
+    return false;
+  });
+}
+
 export function Reconcile({
   status,
   detail,
@@ -459,7 +489,20 @@ export function Reconcile({
   // The findings the phase was NOT derived from. The report says what to do
   // next and the findings say what is actually wrong, so an operator who
   // fixes the first should not wait a full pass to learn there was a second.
-  const rest = (status.findings ?? []).slice(1);
+  //
+  // BY IDENTITY, NOT BY POSITION. This dropped element zero, on the
+  // assumption that the reported finding is first — which the engine now
+  // guarantees (integration.Promote) but a row written by a peer on an
+  // older build does not, and a rolling upgrade puts exactly those rows on
+  // this screen. Whenever the worst finding was not already first, a real
+  // finding was hidden and the headline was re-printed as "1 more finding".
+  //
+  // Matched on the DETAIL, which is what the report carries and what this
+  // list renders, so the comparison is between the two strings actually on
+  // screen rather than between a rendered string and a reconstructed one.
+  // A count suffix — Classify appends "(and 2 more)" when several findings
+  // share the winning kind — is stripped from the report's side first.
+  const others = withoutHeadline(status.findings ?? [], status.detail ?? "");
 
   // A WORKING SURFACE SAYS NOTHING.
   //
@@ -469,7 +512,7 @@ export function Reconcile({
   // On a healthy surface that timestamp was the ONLY thing in the band, so
   // the card grew a grey stripe per surface saying nothing had happened.
   // The tag says the state; the band is for what a person has to act on.
-  if (!status.detail && !status.action_url && !status.last_error && rest.length === 0) {
+  if (!status.detail && !status.action_url && !status.last_error && others.length === 0) {
     return null;
   }
 
@@ -491,13 +534,13 @@ export function Reconcile({
           </span>
         )}
 
-        {rest.length > 0 && (
+        {others.length > 0 && (
           <details>
             <summary className="int-summary">
-              {rest.length} more finding{rest.length === 1 ? "" : "s"}
+              {others.length} more finding{others.length === 1 ? "" : "s"}
             </summary>
             <ul className="col gap-1 int-findings">
-              {rest.map((f, i) => (
+              {others.map((f, i) => (
                 <li key={`${f.kind}:${f.subject ?? ""}:${i}`}>
                   {f.detail || `${f.kind.replace(/_/g, " ")}${f.subject ? `: ${f.subject}` : ""}`}
                 </li>
@@ -601,7 +644,7 @@ function SurfaceRow({
     dropped ||
     Boolean(row.reconcile?.detail) ||
     Boolean(row.reconcile?.last_error) ||
-    (row.reconcile?.findings ?? []).length > 1;
+    withoutHeadline(row.reconcile?.findings ?? [], row.reconcile?.detail ?? "").length > 0;
   if (!faulted) return null;
 
   return (
@@ -1280,13 +1323,38 @@ export function useSetup(): {
   // from one of them is wrong; a background refresh has no such moment, and
   // blanking six cards because somebody came back to the tab would be the
   // screen reporting an absence that is not there.
+  // THE READ THAT ANSWERS LAST IS NOT THE READ THAT WAS ASKED LAST.
+  //
+  // Four things start one — mount, a token change, the tab becoming visible
+  // and useRecheck, which deliberately fires the same read twice 700 ms
+  // apart — so several can be in flight at once. Every answer was written
+  // into state unconditionally, and nothing polls this route, so whichever
+  // landed last is what the screen held until the operator changed tabs or
+  // set a token. A generation counter is what useQuery in this same tree
+  // already uses for exactly this, and it is why its doc argues against a
+  // second hand-rolled loader.
+  const generation = useRef(0);
+  useEffect(
+    () => () => {
+      // An unmounted screen has no state to write into, and a stale
+      // generation is what says so to a read still in flight.
+      generation.current++;
+    },
+    [],
+  );
+
   const reload = useCallback((quiet = false) => {
+    generation.current++;
+    const mine = generation.current;
     if (!quiet) setLoading(true);
     void (async () => {
       try {
-        setListing((await rest.get("/setup/integrations")) as SetupListing);
+        const answer = (await rest.get("/setup/integrations")) as SetupListing;
+        if (generation.current !== mine) return;
+        setListing(answer);
         setGuarded(false);
       } catch (err) {
+        if (generation.current !== mine) return;
         // A refusal is not an empty answer. The screen keeps every read it
         // already has and simply offers no writes.
         setListing(null);
@@ -1294,7 +1362,7 @@ export function useSetup(): {
       } finally {
         // ANSWERED, not answered WELL. A refusal is a state the screen can
         // render honestly, with the banner and no buttons; waiting is not.
-        setLoading(false);
+        if (generation.current === mine) setLoading(false);
       }
     })();
   }, []);

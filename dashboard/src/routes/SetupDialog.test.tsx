@@ -7,6 +7,8 @@
  */
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+
+import { ToastProvider } from "~/ui/Toast";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { HELD, SetupDialog, fieldsFor, fillTemplate, vendorLink } from "./SetupDialog.tsx";
 import type { SetupRequirement, SetupToolState } from "~/protocol/index.ts";
@@ -137,7 +139,7 @@ test("a mintable secret is not on the form at all", () => {
 // required label read as an unanswered question on a form that is already
 // complete. The dots say "there is one", which is the only thing this
 // process actually knows.
-test("a stored credential is prefilled with dots, never a value", () => {
+test("a stored credential shows the dots as a PLACEHOLDER, never a value", () => {
   render(
     <SetupDialog
       sections={[
@@ -165,7 +167,15 @@ test("a stored credential is prefilled with dots, never a value", () => {
     />,
   );
   const input = screen.getByLabelText("Group Owner token") as HTMLInputElement;
-  expect(input.value).toBe(HELD);
+  // EMPTY, WITH THE DOTS AS THE PLACEHOLDER. Seeded as the VALUE, the
+  // sentinel had to be recognised on the way out by an exact string compare
+  // — so any edit that left the box holding something other than exactly
+  // those sixteen characters submitted the whole string as the credential,
+  // and two ordinary gestures did that: typing at the caret without
+  // select-all, and the ${NAME} completion, which keeps everything before
+  // the `$`.
+  expect(input.value).toBe("");
+  expect(input.placeholder).toBe(HELD);
   expect(input.type).toBe("password");
   // Still required, because the app says so and that does not change once a
   // company has answered it.
@@ -616,10 +626,14 @@ test("connecting and managing render one identical form", () => {
     const form = view.baseElement.querySelector(".int-form");
     // Two things are allowed to differ, and only two. React mints an id per
     // rendered field, so a second render of the same form has different
-    // ones. And a credential this company already holds is prefilled with
-    // dots — the field, its label, its help and its required mark are all
-    // the same, and what it CONTAINS is the state the form is showing.
-    const html = (form?.innerHTML ?? "").replace(/\b(id|for|aria-describedby|value)="[^"]*"/g, "");
+    // ones. And a credential this company already holds shows the dots as
+    // its PLACEHOLDER — the field, its label, its help and its required
+    // mark are all the same, and what it SHOWS is the state the form is
+    // reporting.
+    const html = (form?.innerHTML ?? "")
+      .replace(/\b(id|for|aria-describedby|value|placeholder)="[^"]*"/g, "")
+      // The removals leave the gaps their attributes sat in.
+      .replace(/\s+/g, " ");
     view.unmount();
     return html;
   };
@@ -1214,7 +1228,51 @@ test("a literal credential still shows only that it is held", () => {
       onDone={() => {}}
     />,
   );
-  expect((screen.getByLabelText("Shared token") as HTMLInputElement).value).toBe(HELD);
+  const held = screen.getByLabelText("Shared token") as HTMLInputElement;
+  expect(held.value).toBe("");
+  expect(held.placeholder).toBe(HELD);
+});
+
+// TYPING INTO A HELD BOX SUBMITS EXACTLY WHAT WAS TYPED.
+//
+// The sentinel was the input's value and payloadFor recognised it by an
+// exact string compare, so anything that left the box holding something
+// else went to the engine whole — dots and all — and was sealed as the
+// credential by name. Inserting at the caret without select-all is the
+// ordinary way to do that.
+test("typing after the dots submits only what was typed", async () => {
+  let sent: Record<string, unknown> = {};
+  const spy = stubFetch((_url, init) => {
+    sent = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    return new Response(JSON.stringify({ revision_id: "r", wrote_secrets: [] }), { status: 201 });
+  });
+  render(
+    <SetupDialog
+      sections={[
+        {
+          name: "Datadog",
+          tool: {
+            ...tool,
+            configured: true,
+            requirements: [
+              req({ field: "webhook_token", label: "Shared token", kind: "secret", present: true }),
+            ],
+          },
+        },
+      ]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  const box = screen.getByLabelText("Shared token") as HTMLInputElement;
+  // What an insert at the caret produces when the box is genuinely empty.
+  fireEvent.change(box, { target: { value: "brand-new-token" } });
+  fireEvent.click(screen.getByRole("button", { name: /save|connect/i }));
+  await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+
+  const values = sent.values as Record<string, string>;
+  expect(values.webhook_token).toBe("brand-new-token");
 });
 
 // The recommendation is an alternative to what the form asked for, so it is
@@ -1715,4 +1773,140 @@ test("copying the manifest does not toggle its disclosure", () => {
   const dispatched = fireEvent.click(screen.getByText("Copy"));
   expect(written).toEqual([manifest]);
   expect(dispatched).toBe(false);
+});
+
+// ONE SAVE IS ONE WRITE, and only for what changed.
+//
+// seed() fills the form from what the engine reports, and payloadFor sent
+// every value it found — so every configured section was submitted whether or
+// not anybody touched it. Each POST is a revision and an epoch: nothing on
+// the write path compares a submitted value against what is stored, and the
+// activation advances unconditionally. Editing one seat of a three-seat app
+// wrote three revisions.
+test("only the section that changed is written", async () => {
+  const writes: string[] = [];
+  const spy = stubFetch((url, init) => {
+    if (init?.method === "POST") writes.push(url);
+    return new Response(JSON.stringify({ revision_id: "r", wrote_secrets: [] }), { status: 201 });
+  });
+  const seat = (handle: string) => ({
+    name: handle,
+    seat: handle,
+    tool: {
+      ...tool,
+      configured: true,
+      requirements: [],
+      // A PER-SEAT APP asks its questions per seat, so the requirements
+      // live on the seat rather than on the tool.
+      seats: [
+        {
+          handle,
+          satisfied: true,
+          requirements: [
+            req({
+              field: "channel",
+              label: "Channel",
+              kind: "text",
+              present: true,
+              value: `#${handle}`,
+            }),
+          ],
+        },
+      ],
+    },
+  });
+  render(
+    <SetupDialog
+      sections={[seat("ceo"), seat("cto"), seat("swe")]}
+      title="Slack"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+
+  const boxes = screen.getAllByLabelText("Channel");
+  expect(boxes).toHaveLength(3);
+  const cto = boxes[1];
+  if (!cto) throw new Error("the second seat has no field");
+  fireEvent.change(cto, { target: { value: "#leadership" } });
+  fireEvent.click(screen.getByRole("button", { name: /Save|Connect/ }));
+  await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+
+  expect(writes).toHaveLength(1);
+});
+
+// AND NOTHING CHANGED IS NOTHING SUBMITTED, rather than three no-op
+// revisions.
+test("a save that changed nothing writes nothing", async () => {
+  const spy = stubFetch(
+    () => new Response(JSON.stringify({ revision_id: "r", wrote_secrets: [] }), { status: 201 }),
+  );
+  render(
+    <SetupDialog
+      sections={[
+        {
+          name: "GitLab",
+          tool: {
+            ...tool,
+            configured: true,
+            requirements: [
+              req({
+                field: "url",
+                label: "Instance",
+                kind: "url",
+                present: true,
+                value: "https://gitlab.example.com",
+              }),
+            ],
+          },
+        },
+      ]}
+      title="GitLab"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Save|Connect/ }));
+  await vi.waitFor(() => expect(screen.getByText(/Nothing to submit/)).toBeTruthy());
+  const posts = spy.mock.calls.filter(
+    ([, init]) => (init as RequestInit | undefined)?.method === "POST",
+  );
+  expect(posts).toHaveLength(0);
+});
+
+// A SAVE SAYS IT SAVED. The title and the button branch on whether this is a
+// connection or an edit, and the toast did not — so a dialog headed "Datadog
+// settings", submitted with a Save button, confirmed with "Datadog
+// connected".
+test("saving a connected app does not say it connected", async () => {
+  const spy = stubFetch(
+    () => new Response(JSON.stringify({ revision_id: "r", wrote_secrets: [] }), { status: 201 }),
+  );
+  render(
+    <ToastProvider>
+      <SetupDialog
+        sections={[
+          {
+            name: "Datadog",
+            tool: {
+              ...tool,
+              configured: true,
+              requirements: [
+                req({ field: "route_to", label: "Fallback seat", kind: "handle", present: true }),
+              ],
+            },
+          },
+        ]}
+        title="Datadog"
+        onClose={() => {}}
+        onDone={() => {}}
+      />
+    </ToastProvider>,
+  );
+  fireEvent.change(screen.getByLabelText("Fallback seat"), { target: { value: "sre-lead" } });
+  fireEvent.click(screen.getByRole("button", { name: /Save|Connect/ }));
+  await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+
+  await vi.waitFor(() => expect(screen.getByText(/Datadog settings saved/)).toBeTruthy());
+  expect(screen.queryByText(/Datadog connected/)).toBeNull();
 });

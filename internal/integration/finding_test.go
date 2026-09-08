@@ -320,3 +320,55 @@ func TestTheSeverityOrderIsPinned(t *testing.T) {
 			FindingGrantExcess, FindingGrantExcess.severity())
 	}
 }
+
+// THE REPORTED FINDING IS FIRST, so a reader wanting "what else is wrong"
+// takes the tail.
+//
+// Without an order every reader had to re-derive which finding the report was
+// about, and the dashboard instead assumed it — dropping element zero and
+// rendering the rest — so whenever the worst finding was not already first, a
+// real finding was hidden and the headline was re-printed as "1 more
+// finding". Classify picks the winner from ANY index.
+func TestTheReportedFindingIsPromotedToTheFront(t *testing.T) {
+	t.Parallel()
+	findings := []Finding{
+		{Kind: FindingGrantExcess, Subject: "ceo"},
+		{Kind: FindingCredentialRejected, Subject: "org"},
+		{Kind: FindingGrantShort, Subject: "cto", Detail: "needs maintainer"},
+	}
+	got := Promote(findings)
+	if len(got) != len(findings) {
+		t.Fatalf("Promote returned %d findings, want %d", len(got), len(findings))
+	}
+	if got[0].Kind != FindingCredentialRejected {
+		t.Fatalf("first = %q, want the kind Classify reports", got[0].Kind)
+	}
+	// AND THE REST KEEP THE PASS'S OWN ORDER. A vendor walks its seats in a
+	// stable order, so an operator reading the list twice sees the same
+	// seats in the same places; sorting by severity would shuffle equals
+	// on every pass.
+	if got[1].Subject != "ceo" || got[2].Subject != "cto" {
+		t.Errorf("the tail was reordered: %+v", got[1:])
+	}
+	// The report is about the promoted one, which is the whole point.
+	if report := Classify(got); report.Phase != Classify(findings).Phase {
+		t.Error("promoting changed what the pass classifies as")
+	}
+}
+
+// AND A LIST ALREADY IN ORDER IS UNTOUCHED, so nothing churns a stored row
+// that was already right.
+func TestPromoteLeavesAnOrderedListAlone(t *testing.T) {
+	t.Parallel()
+	findings := []Finding{
+		{Kind: FindingCredentialMissing, Subject: "org"},
+		{Kind: FindingGrantShort, Subject: "cto", Detail: "x"},
+	}
+	got := Promote(findings)
+	if got[0].Subject != "org" || got[1].Subject != "cto" {
+		t.Errorf("an ordered list was reordered: %+v", got)
+	}
+	if len(Promote(nil)) != 0 {
+		t.Error("Promote invented a finding from nothing")
+	}
+}

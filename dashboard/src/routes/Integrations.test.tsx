@@ -110,7 +110,9 @@ test("the findings the phase was not derived from are still reachable", () => {
       status={{
         phase: "degraded",
         actor: "admin",
-        detail: "ceo needs maintainer on api-gateway",
+        // THE REPORT'S DETAIL IS THE WINNING FINDING'S. Classify copies it,
+        // which is what makes matching by identity possible at all.
+        detail: "ceo needs maintainer",
         findings: [
           { kind: "grant_short", subject: "ceo", detail: "ceo needs maintainer" },
           { kind: "grant_excess", subject: "cto", detail: "cto holds owner on api-gateway" },
@@ -120,6 +122,60 @@ test("the findings the phase was not derived from are still reachable", () => {
   );
   expect(screen.getByText(/1 more finding/)).toBeTruthy();
   expect(screen.getByText(/cto holds owner/)).toBeTruthy();
+  // AND THE HEADLINE IS NOT REPEATED under it.
+  expect(screen.getAllByText(/ceo needs maintainer/)).toHaveLength(1);
+});
+
+// THE REPORTED FINDING IS NOT ALWAYS FIRST.
+//
+// This dropped element zero and rendered the tail, so whenever Classify's
+// winner sat anywhere else a real finding was hidden and the headline was
+// re-printed as "1 more finding". The engine promotes the winner now, but a
+// row written by a peer on an older build carries the vendor's own order and
+// a rolling upgrade puts exactly those rows on this screen.
+test("a finding list in the vendor's own order still renders correctly", () => {
+  render(
+    <Reconcile
+      status={{
+        phase: "unconfigured",
+        actor: "operator",
+        detail: "the organization credential was refused",
+        findings: [
+          { kind: "grant_excess", subject: "ceo", detail: "ceo holds owner on api-gateway" },
+          {
+            kind: "credential_rejected",
+            subject: "org",
+            detail: "the organization credential was refused",
+          },
+        ],
+      }}
+    />,
+  );
+  expect(screen.getByText(/1 more finding/)).toBeTruthy();
+  // The one the report did NOT summarise, which was the one being hidden.
+  expect(screen.getByText(/ceo holds owner/)).toBeTruthy();
+  expect(screen.getAllByText(/the organization credential was refused/)).toHaveLength(1);
+});
+
+// A COUNT SUFFIX IS NOT PART OF THE SENTENCE. Classify appends "(and 2 more)"
+// when several findings share the winning kind, so a literal compare would
+// never match and the headline would render twice.
+test("a report counting its own kind still matches its finding", () => {
+  render(
+    <Reconcile
+      status={{
+        phase: "degraded",
+        actor: "admin",
+        detail: "ceo needs maintainer (and 1 more)",
+        findings: [
+          { kind: "grant_short", subject: "ceo", detail: "ceo needs maintainer" },
+          { kind: "grant_short", subject: "cto", detail: "cto needs maintainer" },
+        ],
+      }}
+    />,
+  );
+  expect(screen.getByText(/1 more finding/)).toBeTruthy();
+  expect(screen.getByText(/cto needs maintainer/)).toBeTruthy();
 });
 
 // A pass that could not read the surface is a FAULT, not a finding, and it is

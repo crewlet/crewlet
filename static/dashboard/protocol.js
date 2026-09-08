@@ -743,6 +743,24 @@ function offline(err) {
 	});
 }
 /**
+* How long a request may take before it is abandoned.
+*
+* A REQUEST THAT NEVER SETTLES NEVER SETTLES, and that is not a slow spinner
+* here: every write in this UI runs behind a `busy` flag whose only reset is
+* the `finally` of its own await, and every dialog disables its own exits
+* while busy — Escape, the veil click and the Cancel button. An unresolved
+* fetch was a modal with every way out switched off and a reload as the only
+* escape.
+*
+* ANCHORED TO THE LONGEST PATH THIS API HAS: a setup submission seals a
+* credential in the fleet's store, patches the company document, validates it
+* whole and advances the epoch, each a round trip of its own. Thirty seconds
+* is comfortably above that and comfortably below the point at which a person
+* concludes the page is broken. It is exported so a caller with a genuinely
+* longer path can say so rather than removing the deadline.
+*/
+var REQUEST_TIMEOUT_MS = 3e4;
+/**
 * The one request path. `body` is already encoded, and `type` is what it is
 * encoded as — the split exists because not every write on this API takes
 * JSON. See `putText` below.
@@ -758,11 +776,21 @@ async function send(method, path, body, type, headers = {}) {
 		},
 		...body === void 0 ? {} : { body }
 	};
+	const deadline = new AbortController();
+	const timer = setTimeout(() => deadline.abort(), REQUEST_TIMEOUT_MS);
 	let response;
 	try {
-		response = await fetch(location.origin + path, init);
+		response = await fetch(location.origin + path, {
+			...init,
+			signal: deadline.signal
+		});
 	} catch (err) {
-		throw offline(err);
+		throw deadline.signal.aborted ? new RestError(0, {
+			error: "unreachable",
+			detail: `the engine did not answer within ${REQUEST_TIMEOUT_MS / 1e3} seconds`
+		}) : offline(err);
+	} finally {
+		clearTimeout(timer);
 	}
 	const text = await response.text().catch(() => "");
 	let parsed = null;
@@ -802,4 +830,4 @@ var rest = {
 	del: (path, body, headers) => body === void 0 ? send("DELETE", path, void 0, void 0, headers) : json("DELETE", path, body, headers)
 };
 //#endregion
-export { LiveSocket, MAX_EVENTS, RestError, Store, api, apiToken, clearToken, onTokenChanged, onTokenRequested, requestToken, rest, storeToken };
+export { LiveSocket, MAX_EVENTS, REQUEST_TIMEOUT_MS, RestError, Store, api, apiToken, clearToken, onTokenChanged, onTokenRequested, requestToken, rest, storeToken };
