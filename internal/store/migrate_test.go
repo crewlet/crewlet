@@ -198,10 +198,27 @@ func TestOpenPreparedAppliesThePoolBounds(t *testing.T) {
 		t.Fatalf("openPrepared: %v", err)
 	}
 	defer func() { _ = unset.Close() }()
-	if got := unset.Stats().MaxOpenConnections; got != defaultMaxOpenConns {
+	if got := unset.Stats().MaxOpenConnections; got != defaultReaderConns {
 		t.Errorf("max open conns = %d, want the store default %d — an unset "+
 			"bound must reach the pool as \"you choose\", not as unbounded",
-			got, defaultMaxOpenConns)
+			got, defaultReaderConns)
+	}
+
+	// AND A DECLARED PIN WIDENS IT, rather than being taken out of the
+	// readers' share. The whole reason PinnedWriters exists is that a pin
+	// counts against MaxOpenConns like any other connection, so a handle
+	// running three statelog domains on a fixed four leaves one connection
+	// for every reader on the node.
+	pinned, err := openPrepared(t.Context(), filepath.Join(t.TempDir(), "p.db"),
+		Options{PinnedWriters: 3})
+	if err != nil {
+		t.Fatalf("openPrepared: %v", err)
+	}
+	defer func() { _ = pinned.Close() }()
+	if got, want := pinned.Stats().MaxOpenConnections, defaultReaderConns+3; got != want {
+		t.Errorf("max open conns with 3 pinned writers = %d, want %d: a pin "+
+			"has to be ADDED to the readers' bound, not carved out of it",
+			got, want)
 	}
 	var busyMS int
 	if err := unset.QueryRowContext(t.Context(), `PRAGMA busy_timeout`).Scan(&busyMS); err != nil {
