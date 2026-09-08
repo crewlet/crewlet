@@ -1,6 +1,9 @@
 package slack
 
 import (
+	"net/url"
+	"strings"
+
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -161,6 +164,31 @@ func statusChoices() []setup.Choice {
 	}
 	return out
 }
+
+// ManageURL is one agent's app at Slack, where a person deletes it.
+//
+// DELETING AN APP IS NOT AN API CALL for this engine: apps.manifest.delete
+// authenticates with an app-configuration token Slack issues by hand, which
+// is the same credential the whole surface exists because an operator may not
+// have. So a disconnect hands over a link.
+//
+// The APP ID, because it is the only thing that identifies one agent's app:
+// two agents may carry the same display name, and nothing else on the seat
+// names the app at all.
+func ManageURL(appID string) string {
+	id := strings.TrimSpace(appID)
+	if id == "" {
+		return ""
+	}
+	return "https://api.slack.com/apps/" + url.PathEscape(id)
+}
+
+// ManagePath is what a person clicks once [ManageURL] has opened.
+//
+// The last two steps rather than the whole journey: the link lands them on
+// the app, and what is left is the control that removes it, at the foot of a
+// page named nothing like "delete".
+func ManagePath() string { return "Settings > Basic Information > Delete App" }
 
 // Summary is the sentence the connect form opens with.
 //

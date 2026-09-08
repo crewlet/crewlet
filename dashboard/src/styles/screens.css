@@ -1298,6 +1298,16 @@
   user-select: all;
 }
 
+/* The link that finishes an agent off, at the far end of its row, so a
+   column of them reads down one edge. */
+.int-row-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .int-row-badges {
   display: flex;
   align-items: center;

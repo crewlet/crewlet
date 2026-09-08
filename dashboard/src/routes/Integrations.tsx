@@ -1343,7 +1343,8 @@ export function Integrations() {
     name: string;
     kinds: string[];
     stuck: string;
-    apps: { handle: string; url: string }[];
+    apps: { handle: string; name: string; url: string }[];
+    appPath?: string;
   } | null>(null);
   const rows = new Map((data?.integrations ?? []).map((r) => [r.key, r]));
   // A TERMINAL PHASE IS ONE NOBODY IS WAITING ON. Everything else is the
@@ -1414,6 +1415,7 @@ export function Integrations() {
           kinds={dropping.kinds}
           stuck={dropping.stuck || undefined}
           apps={dropping.apps}
+          appPath={dropping.appPath}
           onClose={() => setDropping(null)}
           // The row does not vanish here: the engine keeps the block until
           // the third-party app teardown succeeds, so what a re-read shows
@@ -1501,7 +1503,19 @@ export function Integrations() {
                     apps: sectionsFor(entry, setup.byKey)
                       .flatMap((section) => section.tool.seats ?? [])
                       .filter((seat) => seat.manage_url)
-                      .map((seat) => ({ handle: seat.handle, url: seat.manage_url as string })),
+                      .map((seat) => ({
+                        handle: seat.handle,
+                        // THE AGENT, not the handle: the dialog draws this
+                        // roster the way every other roster in the product
+                        // draws one, and a colleague is a name and a mark.
+                        name: seat.name || seat.handle,
+                        url: seat.manage_url as string,
+                      })),
+                    // WHAT IS LEFT TO CLICK once the link has opened, in the
+                    // app's own words. Stated once, because it is the same
+                    // for every agent.
+                    appPath: sectionsFor(entry, setup.byKey).find((s) => s.tool.manage_path)?.tool
+                      .manage_path,
                   })
                 }
               />

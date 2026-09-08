@@ -313,6 +313,15 @@ type ToolState struct {
 	// Continue button on every connected card.
 	SeatsRequired bool `json:"seats_required,omitempty"`
 
+	// ManagePath is what a person clicks at the third-party app to delete
+	// ONE agent's app, once a seat's ManageURL has opened it.
+	//
+	// THE SAME FOR EVERY SEAT, so it is stated once here rather than
+	// repeated down the roster. Empty where the engine removes what it made
+	// on its own, which is every app but the two whose per-agent apps only
+	// their owner can delete.
+	ManagePath string `json:"manage_path,omitempty"`
+
 	// NeedsOperator is the transient third-party app administrator credential the
 	// pass asks for on every run, or null. Never stored.
 	NeedsOperator *setup.Requirement `json:"needs_operator,omitempty"`
@@ -516,7 +525,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 	var reqs []setup.Requirement
 	var seats []SeatState
 	var configured, enabled bool
-	var summary string
+	var summary, managePath string
 	switch kind {
 	case integration.KindDatadog:
 		block := company.Integrations.Datadog
@@ -535,6 +544,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		// than a credential somebody pasted, so the question that roster
 		// answers is the wrong one here: see [githubSeats].
 		seats = githubSeats(company, s.resolve)
+		managePath = github.ManagePath()
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindJira:
@@ -607,6 +617,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		summary = slack.Summary()
 		reqs = slack.CompanyRequirements(block)
 		seats = slackSeats(company, s.resolve, s.apps())
+		managePath = slack.ManagePath()
 		// CONFIGURED WHEN ANY SEAT IS, not when the company block exists:
 		// the block is optional settings, and a company with seven working
 		// Slack apps and no block is fully configured.
@@ -688,6 +699,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		InboundPath:   inboundPath(kind),
 		CanProvision:  s.passes.Serves(kind),
 		SeatsRequired: seatsRequired,
+		ManagePath:    managePath,
 		NeedsOperator: s.passes.Needs(kind),
 	}
 	if base := company.Integrations.WebhookBase(); base != "" && state.InboundPath != "" {
@@ -1038,6 +1050,11 @@ func slackSeats(company *config.Company, resolve func(string) (string, bool),
 		// engine beside it.
 		if app := apps[handle]; app != "" {
 			state.Detail = "App " + app
+			// AND THE PAGE IT IS DELETED FROM, which a disconnect hands
+			// over: Slack's delete is an app-configuration token away,
+			// which is the credential this whole surface exists because
+			// an operator may not have.
+			state.ManageURL = slack.ManageURL(app)
 		} else {
 			state.Detail = "integrations.slack.bot_token"
 		}

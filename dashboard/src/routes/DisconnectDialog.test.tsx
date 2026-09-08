@@ -122,3 +122,52 @@ test("a disconnect in flight does not offer forcing", () => {
   render(<DisconnectDialog name="Jira" kinds={["jira"]} onClose={() => {}} onDone={() => {}} />);
   expect(screen.queryByRole("button", { name: /anyway/i })).toBeNull();
 });
+
+// WHO IS LEFT, AND WHERE.
+//
+// The engine uninstalls each agent's app, which stops it acting at once, and
+// cannot delete the app itself: neither GitHub nor Slack offers that at any
+// permission this engine could hold. So the agents are named, as agents rather
+// than as handles inside a sentence, each with the page that finishes it off
+// and one line saying what to click when it opens.
+test("removing the accounts names each agent and where to delete its app", () => {
+  render(
+    <DisconnectDialog
+      name="GitHub"
+      kinds={["github"]}
+      apps={[
+        { handle: "swe", name: "Agent SWE", url: "https://github.com/settings/apps/acme-swe" },
+        { handle: "sre", name: "SRE Lead", url: "https://github.com/settings/apps/acme-sre" },
+      ]}
+      appPath="Advanced > Delete GitHub App"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  // NOTHING UNTIL IT IS ASKED FOR. The checkbox is the decision; the roster
+  // is what that decision leaves an operator holding.
+  expect(screen.queryByText("Agent SWE")).toBeNull();
+
+  fireEvent.click(screen.getByRole("checkbox"));
+  expect(screen.getByText("Agent SWE")).toBeDefined();
+  expect(screen.getByText("SRE Lead")).toBeDefined();
+  expect(screen.getAllByText("Link to delete").length).toBe(2);
+  // THE AGENT, not the handle: a colleague is a name, and "swe" is a config
+  // key.
+  expect(screen.queryByText(/Delete swe's app/)).toBeNull();
+  // AND THE LAST CLICKS, because the link lands on a settings page whose
+  // delete control is at the bottom under a heading named nothing like it.
+  expect(screen.getByText(/Delete GitHub App/)).toBeDefined();
+
+  const links = screen.getAllByRole("link");
+  expect(links[0]!.getAttribute("href")).toBe("https://github.com/settings/apps/acme-swe");
+});
+
+// AN APP THE ENGINE REMOVES ITSELF HANDS OVER NOTHING.
+test("an integration with nothing to hand over renders no roster", () => {
+  render(
+    <DisconnectDialog name="GitLab" kinds={["gitlab"]} onClose={() => {}} onDone={() => {}} />,
+  );
+  fireEvent.click(screen.getByRole("checkbox"));
+  expect(screen.queryByText("Link to delete")).toBeNull();
+});

@@ -917,6 +917,12 @@ export interface SetupToolState {
    * outstanding puts a Continue button on a working card.
    */
   seats_required?: boolean;
+  /**
+   * What a person clicks at the third-party app to delete ONE agent's app,
+   * once a seat's `manage_url` has opened it. The same for every seat, so it
+   * is stated once. Empty where the engine removes what it made on its own.
+   */
+  manage_path?: string;
   /** The transient third-party app credential its pass asks for, never stored. */
   needs_operator?: SetupRequirement | null;
   /**

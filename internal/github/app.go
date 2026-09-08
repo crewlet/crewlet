@@ -353,6 +353,14 @@ func ManageURL(webBase, org, slug string) string {
 	return base + "/settings/apps/" + url.PathEscape(name)
 }
 
+// ManagePath is what a person clicks once [ManageURL] has opened.
+//
+// THE LAST TWO STEPS, not the whole journey: the link lands them on the app,
+// and what is left is finding the one control that removes it, which is at
+// the bottom of a page named nothing like "delete". A screen that offered
+// only the link left an operator on a settings page hunting for it.
+func ManagePath() string { return "Advanced > Delete GitHub App" }
+
 // AppJWT signs the assertion that authenticates as the app itself.
 //
 // AS THE APP, NOT AS AN INSTALLATION. This is what lists installations and

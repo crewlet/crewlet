@@ -18,8 +18,9 @@
 
 import { useState } from "react";
 import { Dialog } from "~/ui/Dialog.tsx";
-import { Button } from "~/ui/primitives.tsx";
+import { Avatar, Button } from "~/ui/primitives.tsx";
 import { Icon } from "~/ui/Icon.tsx";
+import { marked } from "~/ui/Problems.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 
 export function DisconnectDialog({
@@ -27,6 +28,7 @@ export function DisconnectDialog({
   kinds,
   stuck,
   apps,
+  appPath,
   onClose,
   onDone,
 }: {
@@ -60,7 +62,13 @@ export function DisconnectDialog({
    * app registration. Offering the links beside the checkbox is the honest
    * shape: the engine says what it will do, and hands over what it cannot.
    */
-  apps?: { handle: string; url: string }[];
+  apps?: { handle: string; name: string; url: string }[];
+  /**
+   * What a person clicks at the third-party app to finish one of them off,
+   * once the link has opened it. The app's own words, stated once because it
+   * is the same for every agent.
+   */
+  appPath?: string;
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -134,17 +142,37 @@ export function DisconnectDialog({
           </span>
         </label>
 
+        {/* WHO IS LEFT, and where. The engine uninstalls each agent's app,
+            which stops it acting at once, and cannot delete the app itself:
+            neither vendor offers that at any permission this engine could
+            hold. So the agents are named, as agents rather than as handles in
+            a sentence, each with the page that finishes it off.
+
+            A ROW PER AGENT, not a bulleted list of links: this is the same
+            roster the card shows, and the question it answers is "which of my
+            colleagues do I still have to go and remove", which is a list of
+            people rather than a list of URLs. */}
         {removeSeats && apps && apps.length > 0 && (
           <div className="col gap-2">
             <span className="t-caption faint">
-              The engine uninstalls each agent&apos;s app, which stops it acting immediately. The
-              app itself is deleted from its own settings page, which only its owner can do.
+              Each agent&apos;s app is uninstalled, which stops it acting immediately. Deleting the
+              app itself is yours to do{appPath ? <>: {marked(appPath)}</> : null}.
             </span>
-            <ul className="col gap-1" style={{ margin: 0, paddingLeft: "1.1rem" }}>
+            <ul className="int-rows">
               {apps.map((app) => (
-                <li key={app.handle} className="t-caption">
-                  <a href={app.url} target="_blank" rel="noreferrer">
-                    Delete {app.handle}&apos;s app
+                <li key={app.handle} className="int-row int-seat-row">
+                  <Avatar name={app.name || app.handle} size="sm" />
+                  <div className="int-row-identity">
+                    <span className="int-row-name">{app.name || app.handle}</span>
+                  </div>
+                  <a
+                    className="t-caption int-row-link"
+                    href={app.url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <Icon name="external" size="xs" />
+                    Link to delete
                   </a>
                 </li>
               ))}
