@@ -181,8 +181,14 @@ Usage:
 Config:
   -config   Tier A, this NODE: where its broker, store and API are (default %q)
   -company  Tier B, the COMPANY: its org, providers and integrations (default %q).
-            A seed: it is imported into the store when the store does not
-            already hold it, and a running node serves the store.
+            A BOOTSTRAP seed: imported only when the store holds no company
+            yet. Once one exists the node serves the store and this file is
+            ignored, so a restart never reverts a live change.
+  -import-company
+            Tier B to make active NOW, over whatever the fleet is running.
+            The deliberate "this file is the company again" gesture.
+            To change a RUNNING fleet with no restart at all, use
+            "crewlet config import" — it goes through the node's API.
 `, version.String(), defaultBootstrapPath, defaultCompanyPath)
 }
 
@@ -194,11 +200,33 @@ Config:
 // it is what tells the process where its store and broker are, so it cannot
 // come from them.
 //
-// Tier B is different: -company names a SEED. A running node serves the
-// revision the activation pointer names, and the file is imported into the
-// store when the store does not already hold it (see reconcile.go). That is
-// what makes a PUT /config on one node reach every other, and what makes an
-// operator's edit to the file still take effect.
+// Tier B is different, and it is TWO flags because it was one job too many
+// for one.
+//
+// A running node serves the revision the fleet's activation pointer names,
+// not a file — that is what makes a PUT /config on one node reach every other.
+// So a Tier B file on the command line is only ever a way of getting a
+// document INTO that store, and there are two quite different reasons to want
+// that:
+//
+//	-company        BOOTSTRAP. Imported only when the store holds no active
+//	                revision. Once the company exists, this file is ignored
+//	                and the node boots on what the fleet is running.
+//
+//	-import-company OVERRIDE. Make this file the active revision now, over
+//	                whatever the fleet is running.
+//
+// They were one flag with the override's behaviour, and it was the wrong
+// default in the way that costs most: an operator edits their company live —
+// through the dashboard, PUT /config, or `crewlet config import` — then
+// restarts a node whose company.yaml still says what it said last month, and
+// the file silently wins. A deleted role comes back, a changed model reverts,
+// and nothing anywhere says so, because from the node's point of view it did
+// exactly what it was told.
+//
+// Making the safe one the default does not resurrect the bug it was guarding
+// against — an edited file being silently ignored — because the ignore is now
+// LOUD (see reconcile.go) and the override is one flag away.
 const (
 	defaultBootstrapPath = "crewlet.yaml"
 	defaultCompanyPath   = "company.yaml"
@@ -237,12 +265,97 @@ func (c configFlags) load() (*config.Bootstrap, *config.Company, error) {
 	return boot, company, nil
 }
 
+// companyName is what the boot line calls the company, including when there
+// is not one yet.
+func companyName(c *config.Company) string {
+	if c == nil {
+		return "(unconfigured — no active revision and no Tier B file)"
+	}
+	return c.Name
+}
+
+// tierBSeed is the Tier B document a `crewlet run` invocation carries, and
+// what it is FOR.
+//
+// The store is authoritative at runtime, so a file on the command line is only
+// ever a way of getting a document INTO it. Override says which of the two
+// reasons this one is: bootstrap an empty store, or replace what the fleet is
+// running. Company is nil when there is no file to seed from at all.
+type tierBSeed struct {
+	Path     string
+	Override bool
+	Company  *config.Company
+}
+
+// loadForRun reads Tier A, and Tier B as the seed `run` will reconcile.
+//
+// It reports EVERY problem it can rather than the first, for the same reason
+// [configFlags.load] does: an operator fixing a broker URL only to be told
+// about their org chart on the next boot has been made to pay twice for one
+// edit.
+func (c configFlags) loadForRun(set *flag.FlagSet, importPath string) (
+	*config.Bootstrap, tierBSeed, error,
+) {
+	// See [configFlags.load] for why Tier A resolves environment-only.
+	boot, bootErr := config.LoadBootstrap(*c.bootstrap, config.EnvOnly())
+	bootErr = nameTheNeighbour(*c.bootstrap, bootErr)
+
+	seed, seedErr := c.resolveSeed(set, importPath)
+	if err := errors.Join(bootErr, seedErr); err != nil {
+		return nil, tierBSeed{}, err
+	}
+	return boot, seed, nil
+}
+
+// resolveSeed decides which Tier B file this invocation carries and why.
+func (c configFlags) resolveSeed(set *flag.FlagSet, importPath string) (tierBSeed, error) {
+	named := strings.TrimSpace(importPath)
+	if named != "" && isFlagSet(set, "company") {
+		// REFUSED rather than resolved by precedence. The two flags ask
+		// for opposite things — "only if the store is empty" and "even if
+		// it is not" — so any winner is a guess about which one the
+		// operator meant, made silently, about the flag that overwrites a
+		// running company.
+		return tierBSeed{}, errors.New(
+			"-company and -import-company both name a Tier B document, and " +
+				"they mean opposite things: -company bootstraps an empty " +
+				"store, -import-company replaces what the fleet is running. " +
+				"Pass one")
+	}
+	if named != "" {
+		company, err := config.LoadCompany(named)
+		if err != nil {
+			return tierBSeed{}, err
+		}
+		return tierBSeed{Path: named, Override: true, Company: company}, nil
+	}
+
+	path := *c.company
+	company, err := config.LoadCompany(path)
+	if err == nil {
+		return tierBSeed{Path: path, Company: company}, nil
+	}
+	// AN ABSENT DEFAULT IS NOT AN ERROR, but an absent NAMED file is.
+	//
+	// The store is authoritative, so a node whose company already lives
+	// there needs no file at all — and the documented way to bootstrap one
+	// is `crewlet run` followed by PUT /config, which cannot work if the
+	// binary refuses to start without a document. But a path the operator
+	// typed and that is not there is a typo, and booting past it would give
+	// them a node quietly running something other than what they named.
+	if isFlagSet(set, "company") || !errors.Is(err, fs.ErrNotExist) {
+		return tierBSeed{}, err
+	}
+	return tierBSeed{Path: path}, nil
+}
+
 // nameTheNeighbour adds the one hint that answers the commonest first-run
 // failure.
 //
-// This repository's own quickstart, its example file and half its
-// documentation have called the Tier A document `config.yaml`, while the
-// binary's default is `crewlet.yaml`. An operator who followed the guide gets
+// `config.yaml` is the name this project's own guides used to give the Tier A
+// document, and the bundled example still carries it
+// (`examples/nimbus.config.yaml`), while the binary's default is
+// `crewlet.yaml`. An operator with a file written against that guidance gets
 // "no such file" about a name they never typed, with their file sitting right
 // there. Naming it costs one stat and saves the whole diagnosis.
 //
@@ -582,6 +695,13 @@ func runEngine(args []string, stderr io.Writer) error {
 	apiHost := fs.String("api-host", "", "bind address, overriding api.host")
 	apiPort := fs.Int("api-port", -1,
 		"bind port, overriding api.port; 0 serves no HTTP at all")
+	// ON run's OWN SET, not addConfigFlags: `validate` checks documents and
+	// has nothing to override, so offering it there would be a flag that
+	// parses and means nothing — the thing the config subcommands were just
+	// cured of.
+	importCompany := fs.String("import-company", "",
+		"Tier B config to make the active revision NOW, over whatever the "+
+			"fleet is running; -company only bootstraps an empty store")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -592,8 +712,17 @@ func runEngine(args []string, stderr io.Writer) error {
 	// nothing — without ever mentioning the file the operator named.
 	file, given := onePositional(fs, file)
 	if given > 1 {
+		// EVERY FLAG run REGISTERS, because this is the only synopsis an
+		// operator sees at the moment they got the arguments wrong, and a
+		// flag missing from it is one they do not reach for. It has been
+		// short twice: first the three logging flags, which are what
+		// somebody diagnosing exactly this reaches for, and then
+		// -import-company, which is the flag an operator confused about
+		// which Tier B document wins most needs to be told exists.
 		fmt.Fprintln(stderr, "usage: crewlet run [<config.yaml>] "+
-			"[-company <company.yaml>] [-roles …] [-api-host …] [-api-port …]")
+			"[-company <company.yaml> | -import-company <company.yaml>] "+
+			"[-log-level …] [-log-format …] [-debug] "+
+			"[-roles …] [-api-host …] [-api-port …]")
 		return errors.New("name at most one config document")
 	}
 	if file != "" {
@@ -618,17 +747,21 @@ func runEngine(args []string, stderr io.Writer) error {
 	log := logging.Get("cli")
 	warnUnrecognisedLogNames(log, "flag", "-log-level", *logLevel, "-log-format", *logFormat)
 
-	boot, company, err := cfg.load()
+	boot, seed, err := cfg.loadForRun(fs, *importCompany)
 	if err != nil {
 		return err
 	}
-	// AND NOW THE FILE, which is what makes `debug: true` in Tier A mean
-	// anything. It was a declared field nothing ever read: the quickstart
-	// tells an operator to write it and the deployment guide says it
-	// "raises the log level to DEBUG", and for the life of the field it
-	// did nothing at all. Lines emitted BEFORE this point came out under
-	// the flags alone, which is the best a process can do about a file it
-	// has not opened yet.
+	company := seed.Company
+	// AND NOW THE FILE, which is what makes Tier A's `logging:` block mean
+	// anything. Its ancestor `debug: true` was a declared field nothing
+	// ever read: the quickstart told an operator to write it and the
+	// deployment guide said it "raises the log level to DEBUG", and for the
+	// life of the field it did nothing at all. It is retired now rather
+	// than wired up — a file still carrying it is REFUSED, and pointed at
+	// `logging.level` (see config.retiredBootstrapFields) — so this line is
+	// what keeps its replacement from repeating the bug. Lines emitted
+	// BEFORE this point came out under the flags alone, which is the best a
+	// process can do about a file it has not opened yet.
 	logging.SetVerbosity(logSettings(boot, fs, *logLevel, *logFormat, *debug))
 	// THE FLAGS OVERRIDE THE FILE, and are applied AFTER it loads so a
 	// validation failure names the file's own value rather than one the
@@ -677,7 +810,22 @@ func runEngine(args []string, stderr io.Writer) error {
 		}
 	}()
 
-	log.InfoContext(ctx, "engine_starting", "version", version.String(), "company", company.Name)
+	// THE EPOCH THIS NODE STARTS ON. With a Tier B file it is that file's
+	// company, which the reconcile below converges onto the fleet's before
+	// anything is claimed. Without one it is whatever this node's store has
+	// marked active — because the store is authoritative at runtime and a
+	// node whose company already lives there needs no file at all.
+	//
+	// Read BEFORE the engine, in its own open-and-close, so the engine still
+	// owns the backends it opens; see [companyFromStore].
+	if company == nil {
+		if company, err = companyFromStore(ctx, *cfg.bootstrap); err != nil {
+			return err
+		}
+	}
+
+	log.InfoContext(ctx, "engine_starting", "version", version.String(),
+		"company", companyName(company))
 	e, err := engine.New(ctx, engine.Options{Bootstrap: boot, Company: company})
 	if err != nil {
 		return err
@@ -700,7 +848,7 @@ func runEngine(args []string, stderr io.Writer) error {
 	//
 	// Converged BEFORE Start, so seats are claimed under the epoch this
 	// node will actually serve rather than under the file's and then moved.
-	reconciler, err := startReconciler(ctx, e, boot, company, cipher, log)
+	reconciler, err := startReconciler(ctx, e, boot, seed, cipher, log)
 	if err != nil {
 		e.Stop(context.WithoutCancel(ctx))
 		return err
@@ -1068,18 +1216,23 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			AppFlow:   appFlow,
 		},
 	})
-	// CONFIGURED by construction. The engine only exists because a company
-	// config parsed, validated and built an epoch, so by the time this
-	// runs a company is active — and a node that never said so would be
-	// permanently unready, which takes every working node out of a load
-	// balancer's rotation.
+	// NOT SET HERE ANY MORE. This used to be an unconditional
+	// SetConfigured(true) justified by "the engine only exists because a
+	// company config parsed" — which stopped being true when a node became
+	// able to boot with no revision at all, and was the reason the whole
+	// unconfigured posture below it was unreachable in the shipped binary:
+	// /health never said unconfigured, /ready never went 503 for it, and
+	// SetConfigured(false) had no caller anywhere.
 	//
-	// It stays true for the life of the process: an apply that FAILS
-	// leaves the node serving the previous epoch, which is a configured
-	// node. What a failed apply changes is the POSTURE, and /ready reads
-	// that — the two answer different questions, and collapsing them would
-	// take a correctly-serving node out of rotation for being behind.
-	app.SetConfigured(true)
+	// [api.App.Configured] now reads the engine's live epoch through the
+	// same Sources.Company seam every other question uses, so an apply that
+	// brings this node its first revision flips it with nothing to
+	// remember to call.
+	//
+	// It is still not the POSTURE: an apply that FAILS leaves the node
+	// serving the previous epoch, which is a configured node. /ready reads
+	// the posture as well, and collapsing the two would take a
+	// correctly-serving node out of rotation for being behind.
 	app.Start(ctx)
 
 	// The other half of the observability pipeline. The engine already
@@ -1400,13 +1553,15 @@ func formatNames() []string {
 // A flag carries its default whether or not anyone typed it, so applying
 // `*logLevel` unconditionally would pin every node at info and make
 // `logging.level: warn` in the file dead on arrival — the same class of bug
-// as the `debug:` field this function exists to give a meaning. isFlagSet is
-// what separates "the operator asked for info" from "nobody said anything",
-// and it is the same idiom [overrideNode] uses for the three node overrides.
+// as the retired `debug:` field, which was declared in Tier A and read by
+// nothing for the whole of its life. isFlagSet is what separates "the
+// operator asked for info" from "nobody said anything", and it is the same
+// idiom [overrideNode] uses for the three node overrides.
 //
 // `-debug` only ever RAISES: it is the shorthand for asking for debug, not a
 // switch that turns the file's own setting off. An operator who wants a
-// `debug: true` file quieter for one run says so with `-log-level info`.
+// `logging.level: debug` file quieter for one run says so with
+// `-log-level info`.
 func logSettings(boot *config.Bootstrap, fs *flag.FlagSet,
 	logLevel, logFormat string, debug bool,
 ) (slog.Level, logging.Format) {

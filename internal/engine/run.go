@@ -417,27 +417,46 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	e.migrateSecrets(ctx)
 	e.refreshSecrets(ctx)
 
-	company, err := NewCompanyWith(opts.Company, e.resolver())
-	if err != nil {
-		return fail(err)
+	// A NIL COMPANY IS THE UNCONFIGURED NODE, not a caller's mistake.
+	//
+	// The store is authoritative at runtime and a fleet's first revision
+	// may arrive over the API, so a node has to be able to run with no
+	// company at all: serving its HTTP surface, reporting itself
+	// unconfigured, and holding no seats until the control plane hands it
+	// an epoch. Everything below is written against that — a nil epoch
+	// means "nothing to equip, nothing to place", never a panic.
+	var company *Company
+	if opts.Company != nil {
+		company, err = NewCompanyWith(opts.Company, e.resolver())
+		if err != nil {
+			return fail(err)
+		}
 	}
-	// BEFORE equip, because equip registers run_sandbox and only a node
-	// with a coordinator can offer it: a tool whose dependency is absent is
-	// OMITTED rather than registered-and-broken, so an engine that equipped
-	// first would build a code-enabled company whose seats have no code
-	// tool and plan around one anyway.
-	//nolint:govet // shadow: scoped to this block; see .golangci.yml
-	if err := e.buildSandboxRuntime(company); err != nil {
-		return fail(fmt.Errorf("engine: sandbox: %w", err))
+	// SKIPPED ENTIRELY WHEN THERE IS NO EPOCH. Both of these are derived
+	// from a company — the sandbox backends it configures, the tools its
+	// seats are given — and an unconfigured node has neither to build. The
+	// apply that brings it its first revision runs both then, on the same
+	// path every later apply takes.
+	if company != nil {
+		// BEFORE equip, because equip registers run_sandbox and only a
+		// node with a coordinator can offer it: a tool whose dependency is
+		// absent is OMITTED rather than registered-and-broken, so an
+		// engine that equipped first would build a code-enabled company
+		// whose seats have no code tool and plan around one anyway.
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
+		if err := e.buildSandboxRuntime(company); err != nil {
+			return fail(fmt.Errorf("engine: sandbox: %w", err))
+		}
+		// EQUIPPED BEFORE PUBLISHED. A turn can start the instant the
+		// epoch is current, and one that found an empty registry would run
+		// a seat with no tools at all — a company that boots cleanly and
+		// can do nothing.
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
+		if err := e.equip(ctx, company); err != nil {
+			return fail(err)
+		}
 	}
-	// EQUIPPED BEFORE PUBLISHED. A turn can start the instant the epoch is
-	// current, and one that found an empty registry would run a seat with
-	// no tools at all — a company that boots cleanly and can do nothing.
-	//nolint:govet // shadow: scoped to this block; see .golangci.yml
-	if err := e.equip(ctx, company); err != nil {
-		return fail(err)
-	}
-	e.epoch.current.Store(company)
+	e.installEpoch(company)
 
 	nodeID, err := config.ResolveNodeID(opts.Bootstrap, nil)
 	if err != nil {
@@ -502,8 +521,14 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// prepareSeat then skips the step rather than pretending it happened.
 	if e.memory, err = memsync.New(backends.Store, backends.Conn(),
 		func(handle string) string {
-			role := e.Company().Org.AgentSeatByHandle(handle)
-			id, ok := e.Company().Org.AgentIDFor(role)
+			c := e.Company()
+			if c == nil {
+				// Unconfigured: no seat has an identity yet, and
+				// nothing has memory to carry.
+				return ""
+			}
+			role := c.Org.AgentSeatByHandle(handle)
+			id, ok := c.Org.AgentIDFor(role)
 			if !ok {
 				return ""
 			}
@@ -671,9 +696,17 @@ func (e *Engine) Start(ctx context.Context) error {
 			e.watchdog.Start(context.WithoutCancel(ctx))
 		}
 	}
+	// The started line has to be printable BEFORE a company exists: an
+	// unconfigured node genuinely started, and a log that only says so once
+	// a revision lands would leave the one state an operator most needs to
+	// recognise looking like a boot that hung.
 	company := e.Company()
-	log.InfoContext(ctx, "engine_started", "company", company.Config.Name,
-		"seats", len(company.Seats()))
+	name := "(unconfigured)"
+	if company != nil {
+		name = company.Config.Name
+	}
+	log.InfoContext(ctx, "engine_started", "company", name,
+		"seats", len(company.Seats()), "configured", company != nil)
 	return nil
 }
 

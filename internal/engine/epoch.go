@@ -41,6 +41,42 @@ type epoch struct {
 // exists to remove, and it is removable only at the call site.
 func (e *Engine) Company() *Company { return e.epoch.current.Load() }
 
+// installEpoch publishes an epoch and tells the store anything derived from it
+// that the store cannot work out for itself.
+//
+// ONE FUNCTION for the two places an epoch becomes current — boot and apply —
+// because state set in one and forgotten in the other fails silently and only
+// on the path nobody exercised.
+//
+// Today that is one thing: a store opened with NO width, which is a node that
+// booted with no active revision. It holds no rows, and its first epoch is
+// what tells it how wide its vectors will be. A store that already has a width
+// keeps it — [store.DB.LearnEmbeddingDim] only ever raises from 0 — because
+// the width belongs to the rows in the file rather than to the current
+// config, and [Engine.buildEmbedder] has already refused any revision that
+// would change it.
+func (e *Engine) installEpoch(c *Company) {
+	e.epoch.current.Store(c)
+	// Backends are always present on a running engine; a `crewlet validate`
+	// engine applies to nothing and has no store to tell.
+	if e.backends != nil && e.backends.Store != nil {
+		e.backends.Store.LearnEmbeddingDim(embeddingWidth(c))
+	}
+}
+
+// embeddingWidth is the vector width an epoch's embeddings provider produces,
+// or 0 for a company that configures none.
+//
+// Zero is "no declared width to check against", not a width of zero and not an
+// unknown: the store applies no dimension check at all against it. See
+// [store.DB.LearnEmbeddingDim] for why a store that has one keeps it.
+func embeddingWidth(c *Company) int {
+	if c == nil || c.Config == nil || c.Config.Providers.Embeddings == nil {
+		return 0
+	}
+	return c.Config.Providers.Embeddings.Width()
+}
+
 // Apply publishes a new epoch, reporting what happened to this node.
 //
 // The build comes first and touches nothing: [NewCompany] validates, resolves
@@ -166,7 +202,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	applied = append(applied, "integrations")
 
 	previous := e.Company()
-	e.epoch.current.Store(next)
+	e.installEpoch(next)
 	applied = append(applied, "epoch")
 
 	// AFTER the epoch is published, because a seat registry is a clone of

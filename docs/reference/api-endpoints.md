@@ -1857,7 +1857,7 @@ The body is read **whole even when the request will be refused**, and bounded at
 ## Running
 
 ```bash
-crewlet run -config config.yaml -roles ingress -api-host 0.0.0.0 -api-port 8000
+crewlet run -config crewlet.yaml -roles ingress -api-host 0.0.0.0 -api-port 8000
 ```
 
 The API is read-only against the database, and the one thing it publishes is inbound webhook deliveries, onto `crewlet.notifications.inbound`. It does not run agents — the engine process handles that.

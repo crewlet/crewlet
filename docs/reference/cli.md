@@ -71,12 +71,20 @@ subcommand below is served by it.
 ## `crewlet run`
 
 ```
-crewlet run [<config.yaml>] [-company PATH] [-debug]
+crewlet run [<config.yaml>] [-company PATH | -import-company PATH] [-debug]
             [-log-level LEVEL] [-log-format FORMAT]
             [-roles ROLE[,ROLE...]] [-api-host HOST] [-api-port PORT]
 ```
 
-Reads Tier A bootstrap and starts the agent engine. The path comes from the
+Reads Tier A bootstrap and starts the agent engine.
+
+**Tier B is not read from a file at runtime.** A running node serves the
+revision the fleet's [activation pointer](../concepts/control-plane.md) names,
+so a Tier B file on this command line is only ever a way of getting a document
+*into* the store — and the two flags above are the two reasons to want that.
+To change a **running** fleet with no restart at all, use
+[`crewlet config import`](#crewlet-config-import), which goes through the
+node's API. The path comes from the
 **positional argument**, or from `-config`, defaulting to `./crewlet.yaml`.
 Naming it both ways is refused: the two would have to agree and nothing checks
 that they do. A leftover positional is refused too, rather than ignored —
@@ -85,17 +93,18 @@ path and kept going would silently boot from the default without ever
 mentioning the file the operator named.
 
 If the default is missing and a `config.yaml` sits beside it, the error says
-so. This repository's own quickstart, its example file and much of its
-documentation have called the Tier A document `config.yaml` while the binary's
-default is `crewlet.yaml`, and an operator who followed the guide otherwise
-gets "no such file" about a name they never typed. It is a **hint, not a
-fallback**: silently loading a file nobody asked for is how a node boots from
+so. `config.yaml` is the name this project's own guides used to give the Tier A
+document, and the bundled example still carries it in
+`examples/nimbus.config.yaml`, so an operator with a file written against that
+guidance gets "no such file" about a name they never typed. It is a **hint, not
+a fallback**: silently loading a file nobody asked for is how a node boots from
 the wrong document on a machine that has both. Tier B is read from the `company_config` table in the store — if no active revision exists, the engine boots in the **unconfigured** state with the API still serving so an operator can bootstrap via `crewlet config import` or `PUT /config`. See [Configuration concept doc](../concepts/configuration.md).
 
 | Flag | Description |
 |------|-------------|
 | `-config PATH` | Tier A: this node's broker, store and API (default `./crewlet.yaml`) |
-| `-company PATH` | Tier B **seed**: imported into the store when the store does not already hold it. A running node serves the store, not this file. |
+| `-company PATH` | Tier B **bootstrap seed** (default `./company.yaml`): imported only when the store holds no company yet. Once one exists this file is **ignored**, loudly (`company_seed_ignored` at warn), so a restart with a stale file never reverts a live change. Absent at its default is fine — the node boots on whatever the store holds. |
+| `-import-company PATH` | Tier B to make the active revision **now**, over whatever the fleet is running. The deliberate "this file is the company again" gesture. Mutually exclusive with `-company`; both together is refused, because they ask for opposite things. |
 | `-log-level LEVEL` | `debug`, `info` (default), `warn` or `error`. Overrides `logging.level` in Tier A, and only when actually given. A typo resolves to `info` — a bad log level must never be why a company will not boot. |
 | `-log-format FORMAT` | `console` (default), `text` or `json`. Overrides `logging.format` in Tier A, and only when actually given. `console` is columns and colour for a person; `text` is slog's `key=value`; `json` is one object per line for a shipper. A typo resolves to `console`. |
 | `-debug` | Shorthand for `-log-level debug`; wins if both are given. It only ever *raises* — to quieten a file that sets `logging.level: debug`, pass `-log-level info`. |
@@ -111,7 +120,7 @@ Publishing knowledge and tool skills is its own command rather than a flag on `r
 
 Press `Ctrl+C` for graceful shutdown — signals escalate in two tiers:
 
-1. **First `Ctrl+C`** — graceful: every held seat quiesces, running LLM turns finish their rounds (no internal timeout — `drain_in_progress` logs the in-flight count every 10 s), turns still queued behind the concurrency limit are returned to the broker for prompt redelivery, and the embedded dashboard stays up through the drain so you can watch the in-flight pill converge to 0.
+1. **First `Ctrl+C`** — graceful: every held seat quiesces, running LLM turns finish their rounds (no internal timeout — `drain_in_progress` logs the in-flight count every 10 s), and turns still queued behind the concurrency limit are returned to the broker for prompt redelivery. The HTTP surface — dashboard, REST and every webhook endpoint — is closed **first**, before the drain begins: the drain waits on in-flight turns, and a listener still accepting deliveries would keep making more. Watch it in the logs, not on the dashboard.
 2. **Second `Ctrl+C`** — the process exits immediately. The first signal hands signal handling back to the operating system precisely so this works: in-flight turns are killed with their triggers unacknowledged, and the broker redelivers them once its ack window elapses.
 
 There is no third tier, because the second is already an unconditional exit rather than something the engine has to be well enough to perform.
@@ -131,11 +140,44 @@ Manage the Tier B company configuration in the store. Every subcommand opens the
 ### `crewlet config import`
 
 ```
-crewlet config import <company.yaml> [-config PATH]
-                                     [--force] [--dry-run] [--summary STR]
+crewlet config import <company.yaml> [-config PATH] [-api URL] [-summary STR]
 ```
 
-Validates the Tier B YAML and writes it as a new active revision. Refuses when an active revision already exists unless `--force` (which records the prior revision as `parent_revision_id`). `--dry-run` validates without writing. `--summary` records the audit note (default: `"cli import"`).
+Validates the Tier B YAML and writes it as a new active revision, recording the
+previously-active revision as its `parent_revision_id`.
+
+**It reaches a running node.** The store is exclusive to one process, so
+against a live engine this cannot open the database — and it no longer needs
+to: it detects the held store and goes through that node's `PUT /config`
+instead, which stores the revision **and activates it fleet-wide**, so every
+node converges with no restart. `-api URL` names a node explicitly, which is
+also how this works from a machine that is not the node at all. This is the
+same routing [`crewlet secrets`](#crewlet-secrets) does for the fleet's secret
+store, and for the same reason: both estates live inside the engine's process.
+
+With the engine **stopped** it writes to this node's own store and marks the
+revision active there, which the node publishes to the fleet at its next start.
+The line it prints says which of the two happened.
+
+`-summary` is the audit note recorded with the revision (default
+`imported from <path>`). The revision history is the record of who changed what
+and why, so a fleet-wide write is worth a sentence; `created_by` is the token's
+id when it goes through the API, and the invoking operator when it does not.
+
+It does **not** refuse because a revision is already active, and there is no
+flag to force it past one: the pointer is append-only, so an import *chains* a
+revision rather than overwriting one, and `crewlet config activate` takes you
+back to any earlier id.
+
+**Idempotent by content**, the same rule the [boot seed](#crewlet-run) follows:
+a file that already matches the active revision imports nothing and says so, an
+edited one imports once. The audit note is `imported from <path>`, `created_by`
+is the invoking operator and `source` is `file` — all three are recorded for
+you and none is settable from the command line. (`PUT /config` takes an
+`X-Summary` header; the CLI has no equivalent.)
+
+Like `seal` and `activate`, this writes the revision to **this node's** store;
+the note it prints says what publishes it to a running fleet.
 
 ### `crewlet config export`
 
@@ -143,7 +185,11 @@ Validates the Tier B YAML and writes it as a new active revision. Refuses when a
 crewlet config export [-config PATH] [-revision UUID] [-redact]
 ```
 
-Dumps the active revision (or `--revision <UUID>`) as YAML to stdout. Emits the stored payload verbatim — a plaintext `${VAR}` config when unencrypted, or the inert `{__encrypted__: "enc:v1:…"}` document blob when [encrypted](../concepts/configuration.md#secrets) (round-trippable: re-importing decrypts and re-stores it). `--redact` decrypts the structure but masks every secret as `{encrypted: true, …}` markers for a share-safe dump. Never emits a plaintext secret.
+Dumps the active revision (or `-revision <UUID>`) as YAML to stdout. It does **not** emit the stored bytes verbatim: the payload is decrypted with the Tier A keyring, decoded, and re-encoded as YAML, so an [encrypted](../concepts/configuration.md#secrets) revision exports as the readable document rather than as its `{__encrypted__: "enc:v1:…"}` blob.
+
+> **Without `-redact` this prints secrets in the clear.** `${VAR}` references export as themselves — they name a credential rather than being one — but a config that *inlines* a literal key exports that key. This is the one command that will do that, deliberately: it is what a genuine restore or migration needs.
+>
+> **`-redact` is what you want for anything you are going to share.** It masks every field the config types declare as secret-bearing (structurally, not by pattern-matching the text), which is the share-safe dump. `crewlet config show` and `crewlet config diff` are always redacted and have no flag to turn it off.
 
 ### `crewlet config show`
 
@@ -151,7 +197,9 @@ Dumps the active revision (or `--revision <UUID>`) as YAML to stdout. Emits the 
 crewlet config show [-config PATH]
 ```
 
-Prints a short summary of the active revision (id, activated_at, created_by, source, summary, company name) — or `"No active revision (engine is unconfigured)"` when nothing is active.
+Prints the whole active revision as **redacted** YAML — exactly `crewlet config export -redact`, with no way to ask for the unredacted form. Use it to read what the fleet is actually running; use `crewlet config revisions` for the id, author and audit note.
+
+Errors with ``no revision is active; run `crewlet config import` `` when nothing is active.
 
 ### `crewlet config revisions`
 

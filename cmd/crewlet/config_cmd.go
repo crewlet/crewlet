@@ -8,7 +8,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"slices"
 	"strconv"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -60,11 +63,39 @@ dropping a retired key from secrets.keys, or whatever is still sealed under it
 becomes unreadable.
 `
 
+// configSubcommands is every `crewlet config` subcommand. It is what the
+// guard in [runConfig] checks a name against before any flag is registered,
+// and the dispatch switch at the bottom of that function must name exactly
+// these — TestEveryConfigSubcommandIsDispatchedAndDocumented asserts both
+// directions, because the two lists are three screens apart and nothing else
+// connects them.
+var configSubcommands = []string{
+	"import", "show", "export", "revisions", "diff", "activate", "seal", "rekey",
+}
+
+// defaultRevisionLimit is how many revisions `crewlet config revisions` lists.
+//
+// DELIBERATELY NOT the API's 50 (`GET /config/revisions`, whose default is
+// sized for a client that pages and renders its own list). This output is a
+// tabwriter table a person reads in a terminal, and 20 rows leaves the header
+// and the active-revision marker on screen together on a standard 24-line
+// window. An operator who wants the whole history says `-limit`.
+const defaultRevisionLimit = 20
+
 func runConfig(args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	if sub == "" || sub == "help" {
 		fmt.Fprintf(stdout, configUsage, defaultBootstrapPath)
 		return flag.ErrHelp
+	}
+	// REFUSED BEFORE ANY FLAG IS REGISTERED, so an unknown subcommand is
+	// reported as one. The sets below are per-subcommand, so parsing
+	// `config nonesuch -limit 5` against the bare set would answer "flag
+	// provided but not defined: -limit" and send the operator looking at
+	// the flag rather than at the name they misspelled.
+	if !slices.Contains(configSubcommands, sub) {
+		fmt.Fprintf(stderr, configUsage, defaultBootstrapPath)
+		return fmt.Errorf("unknown config command %q", sub)
 	}
 	// The subject, for the same reason `secrets` peels one: Go's flag
 	// package stops at the first non-flag argument, so `config diff ID
@@ -75,12 +106,52 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	bootstrapPath := fs.String("config", defaultBootstrapPath,
 		"Tier A config: this node's store and its secret keyring")
-	revision := fs.String("revision", "", "which revision (export); default active")
-	against := fs.String("against", "active", "what to compare with (diff)")
-	limit := fs.Int("limit", 20, "how many revisions to list")
-	redact := fs.Bool("redact", false, "mask secret-shaped values (export)")
-	dryRun := fs.Bool("dry-run", false,
-		"report what would be re-sealed without writing (rekey only)")
+	// EACH SUBCOMMAND REGISTERS ONLY THE FLAGS IT READS.
+	//
+	// One shared set is how `crewlet config import company.yaml -dry-run`
+	// parsed cleanly and wrote the revision anyway: -dry-run is `rekey`'s,
+	// and every other subcommand silently ignored it — an operator asking
+	// for no write, being told nothing, and getting one. The same held for
+	// -revision, -against, -limit and -redact on every command but their
+	// own.
+	//
+	// Go's flag package refuses a flag it was not given, so registering per
+	// subcommand turns each of those silent no-ops into a usage error. It is
+	// the rule `run` already follows for a leftover positional: an argument
+	// that cannot mean anything here is REFUSED rather than ignored.
+	var (
+		revision string
+		against  = "active"
+		limit    = defaultRevisionLimit
+		redact   bool
+		dryRun   bool
+	)
+	var (
+		apiURL  string
+		summary string
+	)
+	switch sub {
+	case "import":
+		fs.StringVar(&apiURL, "api", "",
+			"import through a running node's API; default is the "+
+				"api.host:port in -config when the engine holds the store")
+		fs.StringVar(&summary, "summary", "",
+			"the audit note recorded with the revision; "+
+				"default \"imported from <file>\"")
+	case "export":
+		fs.StringVar(&revision, "revision", "",
+			"which revision to print; default active")
+		fs.BoolVar(&redact, "redact", false, "mask secret-shaped values")
+	case "revisions":
+		fs.IntVar(&limit, "limit", defaultRevisionLimit,
+			"how many revisions to list")
+	case "diff":
+		fs.StringVar(&against, "against", "active",
+			"what to compare with: a revision id, or active")
+	case "rekey":
+		fs.BoolVar(&dryRun, "dry-run", false,
+			"report what would be re-sealed without writing")
+	}
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
@@ -90,6 +161,20 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
+
+	// IMPORT CHOOSES ITS OWN TARGET, so it is dispatched before the store
+	// is opened: against a running node it must NOT open the store at all,
+	// and an explicit -api is an instruction to write through a node that
+	// may not even be this machine.
+	if sub == "import" {
+		return importCompany(ctx, importTarget{
+			bootstrapPath: *bootstrapPath,
+			path:          subject,
+			apiURL:        apiURL,
+			summary:       summary,
+		}, stdout)
+	}
+
 	cs, closeStore, err := openConfigStore(ctx, *bootstrapPath)
 	if err != nil {
 		return err
@@ -97,23 +182,26 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	defer closeStore()
 
 	switch sub {
-	case "import":
-		return importConfig(ctx, cs, subject, stdout)
 	case "show":
 		return exportConfig(ctx, cs, "", true, stdout)
 	case "export":
-		return exportConfig(ctx, cs, firstNonEmpty(subject, *revision), *redact, stdout)
+		return exportConfig(ctx, cs, firstNonEmpty(subject, revision), redact, stdout)
 	case "revisions":
-		return listRevisions(ctx, cs, *limit, stdout)
+		return listRevisions(ctx, cs, limit, stdout)
 	case "diff":
-		return diffRevisions(ctx, cs, subject, *against, stdout)
+		return diffRevisions(ctx, cs, subject, against, stdout)
 	case "activate":
 		return activateRevision(ctx, cs, subject, stdout)
 	case "seal":
 		return sealConfig(ctx, cs, *bootstrapPath, stdout)
 	case "rekey":
-		return rekeyConfig(ctx, cs, *bootstrapPath, *dryRun, stdout)
+		return rekeyConfig(ctx, cs, *bootstrapPath, dryRun, stdout)
 	default:
+		// Unreachable: the guard above admits only configSubcommands,
+		// `import` returned before the store was opened, and a test
+		// asserts every name dispatches. It stays because the compiler
+		// needs a terminating return and because a name added to the list
+		// and not to this switch has to fail loudly.
 		fmt.Fprintf(stderr, configUsage, defaultBootstrapPath)
 		return fmt.Errorf("unknown config command %q", sub)
 	}
@@ -175,18 +263,9 @@ func openConfigStore(ctx context.Context, bootstrapPath string) (*configStore, f
 // unchanged file writes nothing and says so, while an edited one writes
 // once. Silently ignoring an edited file would be the worst of the three —
 // an operator changes a config, runs the command, and nothing happens.
-func importConfig(ctx context.Context, cs *configStore, path string, stdout io.Writer) error {
-	if path == "" {
-		return errors.New("config import needs a company document to read")
-	}
-	// VALIDATED BEFORE IT IS STORED. A revision that cannot be built is one
-	// every node in the fleet will refuse, one after another, each reporting
-	// its own failure — which is a fleet-wide incident produced by a typo
-	// that could have been caught here.
-	company, err := config.LoadCompany(path)
-	if err != nil {
-		return err
-	}
+func importConfig(ctx context.Context, cs *configStore, path string,
+	company *config.Company, summary string, stdout io.Writer,
+) error {
 	document, err := json.Marshal(company)
 	if err != nil {
 		return fmt.Errorf("encode %s: %w", path, err)
@@ -218,7 +297,7 @@ func importConfig(ctx context.Context, cs *configStore, path string, stdout io.W
 	}
 	id, err := cs.configs.InsertActive(ctx, store.Revision{
 		ParentID: parent, Source: "file", CreatedBy: currentOperator(),
-		Summary: "imported from " + path,
+		Summary: summary,
 		Payload: payload,
 	})
 	if err != nil {
@@ -471,4 +550,103 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// importTarget is everything `crewlet config import` needs to decide where the
+// revision lands.
+type importTarget struct {
+	bootstrapPath string
+	path          string
+	apiURL        string
+	summary       string
+}
+
+// importCompany writes a company document as a new active revision, through
+// whichever route can actually reach the fleet.
+//
+// # Two routes, and the difference is not cosmetic
+//
+// The OFFLINE route opens this node's store directly and marks the revision
+// active in its own table. It cannot move the fleet's activation pointer,
+// because on the default topology that pointer lives inside the engine's own
+// process — so it takes effect when this node next starts, and only if this
+// node is the one that starts.
+//
+// The API route is PUT /config on a running node, which stores the revision
+// AND activates it, so every node converges with no restart. That is what an
+// operator editing a live company wants, and until now the CLI had no way to
+// do it: the store is exclusive to one process, so `config import` against a
+// running engine simply refused and told them to write the curl themselves.
+//
+// # Which one it picks
+//
+// An explicit -api is an instruction and skips the store entirely — it is also
+// how this works from a machine that is not the node, where opening the local
+// path would create an empty database nothing ever reads. Otherwise it tries
+// the store, and falls through to the API only on [store.ErrLocked], which
+// means the engine is up, which is precisely when its API is the way in. Every
+// other failure — a missing keyring, an unreadable path — is a broken node,
+// and answering one of those with HTTP would replace an accurate message with
+// a connection refused.
+func importCompany(ctx context.Context, t importTarget, stdout io.Writer) error {
+	if t.path == "" {
+		return errors.New("config import needs a company document to read")
+	}
+	// VALIDATED HERE, WHICHEVER ROUTE IT TAKES. A revision that cannot be
+	// built is one every node in the fleet will refuse, one after another,
+	// each reporting its own failure — a fleet-wide incident from a typo
+	// that could have been caught before it left this machine.
+	company, err := config.LoadCompany(t.path)
+	if err != nil {
+		return err
+	}
+	summary := strings.TrimSpace(t.summary)
+	if summary == "" {
+		summary = "imported from " + t.path
+	}
+
+	boot, err := loadBootstrapForStore(t.bootstrapPath)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(t.apiURL) != "" {
+		return importThroughNode(ctx, boot, t, summary, stdout)
+	}
+
+	cs, closeStore, err := openConfigStore(ctx, t.bootstrapPath)
+	if err != nil {
+		if !errors.Is(err, store.ErrLocked) {
+			return err
+		}
+		// The engine holds its database, so this is the live case rather
+		// than a failure: go through the node that is holding it.
+		return importThroughNode(ctx, boot, t, summary, stdout)
+	}
+	defer closeStore()
+	return importConfig(ctx, cs, t.path, company, summary, stdout)
+}
+
+// importThroughNode PUTs the document at a running node.
+func importThroughNode(ctx context.Context, boot *config.Bootstrap, t importTarget,
+	summary string, stdout io.Writer,
+) error {
+	client, err := newConfigClient(boot, t.apiURL)
+	if err != nil {
+		return err
+	}
+	// THE FILE'S OWN BYTES travel, not a re-encoding of the parsed
+	// document: Tier B's secrets are `${VAR}` pointers stored verbatim, and
+	// the node forms its own opinion of the document anyway.
+	doc, err := os.ReadFile(t.path)
+	if err != nil {
+		return fmt.Errorf("company config %s: %w", t.path, err)
+	}
+	id, epoch, err := client.Import(ctx, doc, summary)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "imported %s as revision %s, active on epoch %d\n",
+		t.path, id, epoch)
+	fmt.Fprintf(stdout, "wrote to %s\n", client.Describe())
+	return nil
 }

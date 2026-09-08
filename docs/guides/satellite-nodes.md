@@ -79,7 +79,7 @@ prompts, providers, integrations) comes from the database, so there is
 no company YAML to copy or keep in sync.
 
 ```yaml
-# config.yaml, on the satellite host
+# crewlet.yaml, on the satellite host
 node:
   id: "${CREWLET_NODE_ID}"        # distinct and stable — sat-eu-1
   roles: [seats]                  # agents only: no API, no duties
@@ -102,7 +102,7 @@ coordination:
 
 `${VAR}` references are resolved in `node.labels` and `node.id` like
 anywhere else, so an orchestrator injects both from the environment
-without templating the file. There is a `--roles` flag for the same
+without templating the file. There is a `-roles` flag for the same
 reason; labels have no flag, because `${VAR}` already covers it.
 
 `api.port` can stay set — a node without the `ingress` role does not
@@ -133,15 +133,23 @@ process, and it strands the seat when that particular process is gone.
 
 ### 3. Start it
 
+Both commands run **on the satellite**, against the Tier A file above:
+
 ```bash
-crewlet migrate                 # once, from anywhere that reaches the DB
-crewlet run                     # on the satellite; roles come from the file
+crewlet migrate                 # this host's own store file
+crewlet run                     # roles come from the file
 ```
+
+`crewlet migrate` is **per node, not per fleet**. There is no shared database
+to migrate from elsewhere: it applies the pending schema migrations to the one
+local store file its Tier A config names (`/var/lib/crewlet/sat-eu-1.db`
+above), and every node owns its file exclusively. A new satellite is migrated
+on the satellite.
 
 Or, if you would rather not put roles in the file:
 
 ```bash
-crewlet run --roles seats
+crewlet run -roles seats
 ```
 
 ---

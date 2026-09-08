@@ -121,7 +121,7 @@ config and re-validate. One integration per pass — a failure is then
 unambiguous.
 
 Tier B is live-editable, so applying a change is
-`crewlet config import company.yaml --force`, no restart. Full worked
+`crewlet config import company.yaml`, no restart. Full worked
 reference with everything connected:
 [`examples/nimbus.company.yaml`](../../examples/nimbus.company.yaml).
 

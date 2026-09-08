@@ -274,7 +274,7 @@ func TestABudgetCommandSendsTheConfiguredToken(t *testing.T) {
 func TestAnExportedTokenBeatsTheConfigs(t *testing.T) {
 	node := newFakeNode(t)
 	cfg := bootstrapForNode(t, node)
-	t.Setenv(APITokenEnv, "exported")
+	t.Setenv(apiTokenEnv, "exported")
 
 	if _, _, err := cli(t, "budgets", "reset", "-config", cfg); err != nil {
 		t.Fatalf("budgets reset: %v", err)
@@ -330,7 +330,7 @@ func TestAWildcardBindResolvesToSomethingDialable(t *testing.T) {
 	for _, host := range []string{"", "0.0.0.0", "::", "[::]"} {
 		got, err := nodeBaseURL(&config.Bootstrap{
 			API: config.API{Host: host, Port: 8080},
-		})
+		}, "", "this node")
 		if err != nil {
 			t.Fatalf("host %q: %v", host, err)
 		}

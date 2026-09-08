@@ -7,10 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"os"
-	"strconv"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -30,14 +27,6 @@ import (
 // So they ask the node. Which node is a flag with a sensible default: the
 // address this node's own Tier A config says it binds, so the common case is
 // running the command beside the config file and naming nothing.
-
-// APITokenEnv is where a node client reads its bearer token from.
-//
-// An ENV VAR rather than a flag default, because a token on a command line is
-// in the shell history, in `ps`, and in any CI log that echoes the command.
-// The flag exists for the case where that is genuinely what an operator
-// wants, and it is theirs to choose.
-const APITokenEnv = "CREWLET_API_TOKEN"
 
 // nodeClient is one running node's HTTP surface.
 type nodeClient struct {
@@ -83,7 +72,7 @@ func nodeClientFor(args []string, name string, stderr io.Writer, extra func(*fla
 	addr := fs.String("url", "",
 		"the running node's base URL; empty takes it from the config's api block")
 	token := fs.String("token", "",
-		"bearer token; empty takes "+APITokenEnv+", then the config's first token")
+		"bearer token; empty takes "+apiTokenEnv+", then the config's first token")
 	if extra != nil {
 		extra(fs)
 	}
@@ -110,13 +99,16 @@ func nodeClientFor(args []string, name string, stderr io.Writer, extra func(*fla
 				"whose config this machine does not hold", err)
 		}
 		if base == "" {
-			base, err = nodeBaseURL(boot)
+			base, err = nodeBaseURL(boot, "", "this node")
 			if err != nil {
 				return nil, err
 			}
 		}
 		if bearer == "" {
-			bearer = nodeToken(boot)
+			// The LENIENT form: these routes are servable with
+			// `api.auth.disabled`, so an absent token is a legitimate
+			// call rather than something to refuse in advance.
+			bearer = nodeTokenOrEmpty(boot)
 		}
 	}
 	return &nodeClient{
@@ -124,39 +116,6 @@ func nodeClientFor(args []string, name string, stderr io.Writer, extra func(*fla
 		token: bearer,
 		http:  httpx.Client(nodeRequestTimeout),
 	}, nil
-}
-
-// nodeBaseURL is where the config says this node's API listens.
-func nodeBaseURL(boot *config.Bootstrap) (string, error) {
-	if boot.API.Port == 0 {
-		return "", errors.New("this config serves no HTTP surface (api.port is 0), " +
-			"so there is no node to ask: set api.port, or pass -url for another node")
-	}
-	host := boot.API.Host
-	// A bind address of 0.0.0.0 (or ::) says "every interface", which is
-	// not an address anything can dial — the loopback one is, and it is
-	// the interface a command running beside the config is on.
-	switch host {
-	case "", "0.0.0.0", "::", "[::]":
-		host = "127.0.0.1"
-	}
-	return "http://" + net.JoinHostPort(host, strconv.Itoa(boot.API.Port)), nil
-}
-
-// nodeToken is the bearer token to send, or "".
-//
-// The environment first, then the config's first token. The order matters: a
-// checked-in config carries ${VAR} references that resolve to the same place
-// the environment does, and an operator who exported one deliberately means
-// that one.
-func nodeToken(boot *config.Bootstrap) string {
-	if fromEnv := os.Getenv(APITokenEnv); fromEnv != "" {
-		return fromEnv
-	}
-	if len(boot.API.Auth.Tokens) > 0 {
-		return boot.API.Auth.Tokens[0].Token
-	}
-	return ""
 }
 
 func (c *nodeClient) get(ctx context.Context, path string, into any) error {
@@ -234,7 +193,7 @@ func nodeError(status int, body []byte, sentToken bool) error {
 	case http.StatusUnauthorized, http.StatusForbidden:
 		if !sentToken {
 			return errors.New("the node refused the request and no token was sent: " +
-				"export " + APITokenEnv + ", or pass -token")
+				"export " + apiTokenEnv + ", or pass -token")
 		}
 		return errors.New("the node refused the token: check it against the " +
 			"api.auth.tokens entry you meant to use")

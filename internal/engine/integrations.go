@@ -108,7 +108,14 @@ func (e *Engine) startIntegrations(ctx context.Context) {
 		// every pass rather than captured here: it is a field of the
 		// applied revision and an apply can change it.
 		Endpoint: func() string {
-			return e.Company().Config.Integrations.WebhookBase()
+			// EMPTY WHERE THIS NODE CANNOT SAY, which is what the worker
+			// reads a missing endpoint as. A node with no active revision
+			// has no public base to have registered anything against.
+			company := e.Company()
+			if company == nil {
+				return ""
+			}
+			return company.Config.Integrations.WebhookBase()
 		},
 		ClaimDuty: integration.DutyFunc(
 			e.workerDuty(integrationDutyName, integrationDutyTTL)),
@@ -230,6 +237,17 @@ func (c *passConverger) Kind() integration.Kind { return c.pass.Kind() }
 
 func (c *passConverger) Reconcile(ctx context.Context) ([]integration.Finding, error) {
 	company := c.engine.Company()
+	if company == nil {
+		// NO COMPANY, NOTHING TO CONVERGE. A node runs with no active
+		// revision at all — it is how one boots before a company is ever
+		// imported, and how one keeps serving when the fleet's revision
+		// cannot be read. Every surface is then UNCONFIGURED rather than
+		// broken, which is exactly what the sentinel says and what the
+		// loop already does the right thing with: it forgets the status
+		// rather than recording a fault against a company that does not
+		// exist yet.
+		return nil, integration.ErrNotConfigured
+	}
 	// A SINK IS BEST EFFORT HERE. A node with no keyring cannot seal a
 	// minted credential, but it can still read a surface and report what
 	// it finds, and reporting is most of what this loop is for. The pass

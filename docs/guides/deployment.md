@@ -21,7 +21,7 @@ nodes lives in the KV instead. See [Running a Fleet](fleet.md) and
 ## The single host
 
 ```yaml
-# config.yaml (Tier A)
+# crewlet.yaml (Tier A)
 stream:
   type: embedded              # a JetStream server inside this process
   store_dir: "/var/lib/crewlet/stream"   # empty = in-memory, nothing survives a restart
@@ -34,7 +34,7 @@ coordination:
 ```
 
 ```bash
-crewlet run -config config.yaml -company company.yaml
+crewlet run -config crewlet.yaml -company company.yaml
 ```
 
 That is the deployment. Point a reverse proxy at the API port for inbound
@@ -83,7 +83,7 @@ The fleet still ships as one binary and there is still no broker to deploy.
 Three nodes, each naming itself, its route port and the other two:
 
 ```yaml
-# config.yaml (Tier A) on the first node. The other two differ only in
+# crewlet.yaml (Tier A) on the first node. The other two differ only in
 # node.id and in which peers they name.
 node:
   id: crewlet-1
@@ -169,7 +169,7 @@ The other multi-node shape, and the one to reach for when the broker has to
 be secured, operated, or shared on a schedule of its own:
 
 ```yaml
-# config.yaml (Tier A)
+# crewlet.yaml (Tier A)
 stream:
   type: nats
   url: "nats://nats-1.internal:4222,nats://nats-2.internal:4222,nats://nats-3.internal:4222"
@@ -266,7 +266,7 @@ api:
 ```
 
 ```bash
-crewlet run -config config.yaml    # engine + embedded API on :80
+crewlet run -config crewlet.yaml    # engine + embedded API on :80
 ```
 
 (`-api-port 80` on the command line does the same.) This is the shape every single-host walkthrough in these docs uses — the bundled `examples/nimbus.config.yaml` ships `api.port: 80`, and that embedded server **is** the webhook target the integrations register (e.g. `http://host.docker.internal:80/webhooks/gitlab`). Binding 80 as a non-root process needs privileged-port access on Linux: `sudo sysctl net.ipv4.ip_unprivileged_port_start=80` (persist in `/etc/sysctl.d/`) or grant the binary `CAP_NET_BIND_SERVICE`. Make sure nothing else already owns the port you pick.
@@ -299,10 +299,10 @@ only the ingress node should bind one:
 
 ```bash
 # Terminal 1: the agents and the fleet duties, no HTTP
-crewlet run -config config.yaml -roles seats,workers -api-port 0
+crewlet run -config crewlet.yaml -roles seats,workers -api-port 0
 
 # Terminal 2: the webhook receiver and the dashboard
-crewlet run -config config.yaml -roles ingress -api-host 0.0.0.0 -api-port 8000
+crewlet run -config crewlet.yaml -roles ingress -api-host 0.0.0.0 -api-port 8000
 ```
 
 Give each node a distinct `node.id` (or `CREWLET_NODE_ID`) — two nodes sharing an id miscount the fleet. See [Running a Fleet](fleet.md).

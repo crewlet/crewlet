@@ -345,20 +345,29 @@ func TestNoEmbeddingProviderIsAWidthOfNoneNotADefault(t *testing.T) {
 	}
 }
 
-func TestNoCompanyIsRefusedRatherThanDefaulted(t *testing.T) {
+// NO COMPANY OPENS AT WIDTH 0, because a node has to open its store before it
+// can read the company out of it — and a node with no active revision has no
+// company to be asked for at all.
+//
+// This was REFUSED while the width was fixed at open, and rightly: a store
+// stuck at the wrong width refuses every write from the right one, and recall
+// stops returning anything with no reason in the log. What makes it safe now
+// is that the width is re-stated by every apply (see
+// TestTheEmbeddingWidthFollowsAConfigApply), so the first revision this node
+// applies corrects it. If that ever stops being true, this has to go back to
+// being a refusal.
+func TestNoCompanyOpensAtWidthZero(t *testing.T) {
 	t.Parallel()
-	// Refused rather than defaulted because the default would be silent:
-	// nothing fails at open, and the failure surfaces later as recall that
-	// returns nothing with no reason in the log.
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	})
-	_, err := engine.OpenBackends(t.Context(), b, nil)
-	if err == nil {
-		t.Fatal("a nil company opened backends")
+	back, err := engine.OpenBackends(t.Context(), b, nil)
+	if err != nil {
+		t.Fatalf("a nil company was refused: %v", err)
 	}
-	if !strings.Contains(err.Error(), "embedding") {
-		t.Errorf("the error does not say what was missing: %v", err)
+	t.Cleanup(func() { back.Close(t.Context()) })
+	if got := back.Store.EmbeddingDim(); got != 0 {
+		t.Errorf("embedding width = %d, want 0 until an apply says otherwise", got)
 	}
 }
 
@@ -706,5 +715,102 @@ func TestAnExternalStreamsTLSMaterialReachesTheDial(t *testing.T) {
 	if !strings.Contains(err.Error(), "/nope/ca.pem") {
 		t.Errorf("err = %v, want the configured tls.ca to have reached the "+
 			"dial and been refused by name", err)
+	}
+}
+
+// THE WIDTH IS LEARNED ONCE AND THEN HELD.
+//
+// The width belongs to the vectors already in the file, not to the current
+// config, so it is not something an apply may change: buildEmbedder refuses a
+// revision whose width differs from the one the store was opened at and tells
+// the operator to restart. A store that was never told a width is the one
+// exception — a node that booted with no active revision, holding no rows —
+// and it learns from its first epoch.
+//
+// The direction that must NOT work is the way back. Were the width simply
+// re-stated on every apply, dropping the embeddings provider would set it to 0
+// and turn that guard off, and re-adding the provider at a different width
+// would then be accepted — putting rows of two widths in one recall pool,
+// which the reader can match neither of. Zero is "no declared width", and
+// EncodeVector checks nothing against it, so nothing would report this.
+func TestTheEmbeddingWidthIsLearnedOnceAndHeld(t *testing.T) {
+	// Not parallel: t.Setenv resolves the ${K} these documents reference.
+	const noVectors = `
+name: Acme
+providers:
+  llm:
+    zulu:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["${K}"]
+roles:
+  - name: CEO
+    handle: ceo
+    llm: zulu
+`
+	const wide = `
+name: Acme
+providers:
+  llm:
+    zulu:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["${K}"]
+  embeddings:
+    type: openai
+    model: text-embedding-3-large
+    api_key: ${K}
+    dimensions: 3072
+roles:
+  - name: CEO
+    handle: ceo
+    llm: zulu
+`
+	narrow := strings.Replace(wide, "dimensions: 3072", "dimensions: 1536", 1)
+	narrow = strings.Replace(narrow, "text-embedding-3-large", "text-embedding-3-small", 1)
+
+	t.Setenv("K", "test-key")
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, noVectors)})
+	if got := e.Backends().Store.EmbeddingDim(); got != 0 {
+		t.Fatalf("booted at width %d, want 0 for a company with no embeddings", got)
+	}
+
+	// LEARNED: the unconfigured node taking its first revision. Nothing was
+	// being refused at 0 — the dimension guard was simply off.
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, wide)); err != nil {
+		t.Fatalf("apply the embedding provider: %v", err)
+	}
+	if got := e.Backends().Store.EmbeddingDim(); got != 3072 {
+		t.Fatalf("after the first apply the width is %d, want 3072 — the "+
+			"dimension guard stays off for the life of the process", got)
+	}
+	if _, err := e.Backends().Store.EncodeVector(make([]float32, 3072)); err != nil {
+		t.Errorf("a vector from the applied provider was refused: %v", err)
+	}
+	if _, err := e.Backends().Store.EncodeVector(make([]float32, 1536)); err == nil {
+		t.Error("a mis-sized vector was accepted: the guard did not come on")
+	}
+
+	// HELD: a revision that would change it is refused, by the guard that
+	// already existed. This is what the learn-once rule protects.
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, narrow)); err == nil {
+		t.Error("a revision changing the store's width was applied")
+	}
+	if got := e.Backends().Store.EmbeddingDim(); got != 3072 {
+		t.Errorf("a refused apply moved the width to %d", got)
+	}
+
+	// AND HELD ACROSS A REMOVAL, which is the two-step way around the guard.
+	// Dropping the provider must not reset the width to "never told".
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, noVectors)); err != nil {
+		t.Fatalf("apply the removal: %v", err)
+	}
+	if got := e.Backends().Store.EmbeddingDim(); got != 3072 {
+		t.Fatalf("dropping the embeddings provider reset the width to %d; "+
+			"re-adding it at another width would now be accepted and the "+
+			"recall pool would hold rows of two widths", got)
+	}
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, narrow)); err == nil {
+		t.Error("removing and re-adding the provider changed the width")
 	}
 }
