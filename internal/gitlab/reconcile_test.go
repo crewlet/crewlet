@@ -91,6 +91,12 @@ type adminInstance struct {
 	// where an admin token is what the mode requires; a group-mode run
 	// leaves it false and the admin route is refused. See the mint handler.
 	instanceAdmin bool
+	// createRefusal makes account creation fail with this exact response,
+	// which is how the vendor's own wording reaches the classifier: a name
+	// still being released is told from a refusal that will never clear by
+	// what GitLab says, and a fake that invented the words would be testing
+	// this package against itself.
+	createRefusal *refusal
 	// failToken makes minting fail for this username, to reach the
 	// rollback path.
 	failToken string
@@ -223,6 +229,15 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		sortByUsername(out)
 		json.NewEncoder(w).Encode(out)
+
+	// A REFUSAL THE TEST ASKED FOR, on either creation route: it is the
+	// vendor's own wording that tells a name still being released from a
+	// refusal that will never clear, and a fake inventing the words would
+	// be testing this package against itself.
+	case r.Method == http.MethodPost && f.createRefusal != nil &&
+		(path == "/groups/7/service_accounts" || path == "/service_accounts"):
+		w.WriteHeader(f.createRefusal.status)
+		w.Write([]byte(f.createRefusal.body))
 
 	case r.Method == http.MethodPost && path == "/groups/7/service_accounts":
 		if f.instanceOnly {
@@ -613,6 +628,12 @@ func (f *adminInstance) revoked() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.revokes
+}
+
+// refusal is one response the fake is told to give instead of succeeding.
+type refusal struct {
+	status int
+	body   string
 }
 
 // mintTarget reads the account a token is being minted for, and says which
@@ -2324,5 +2345,56 @@ func TestAGroupOwnerUsesTheGroupRouteForEveryTokenOperation(t *testing.T) {
 	if _, err := reconcileWith(t, f, newRecordingSink(),
 		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"}, nil); err != nil {
 		t.Fatalf("a second pass could not read the tokens it had minted: %v", err)
+	}
+}
+
+// A NAME GITLAB HAS NOT RELEASED YET IS A DELETION STILL RUNNING.
+//
+// GitLab removes a user asynchronously: the account is gone from every
+// listing the moment the delete is accepted, and its username and email stay
+// reserved until a background job finishes. So a disconnect followed by a
+// reconnect inside that window looks the account up, honestly does not find
+// it, creates one, and is refused with "has already been taken".
+//
+// Reported as an ordinary failure it read as "the last pass could not read
+// this integration", which sends an operator looking for an outage over a
+// state that clears itself on the next tick. Named, the caller can say what
+// is actually happening.
+func TestANameStillBeingReleasedIsNotAFailureToRead(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.createRefusal = &refusal{
+		status: http.StatusBadRequest,
+		body:   `{"message":"400 Bad request - Email has already been taken and Username has already been taken"}`,
+	}
+
+	_, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"}, nil)
+	if err == nil {
+		t.Fatal("a refused creation was reported as a clean run")
+	}
+	if !errors.Is(err, gitlab.ErrNameReserved) {
+		t.Fatalf("error = %v, and nothing marks it as a deletion still running", err)
+	}
+}
+
+// AND EVERY OTHER 400 IS STILL A REFUSAL. A creation GitLab rejected for a
+// reason of its own is not something a later tick fixes, and dressing one as
+// work in progress would leave a card reporting progress for ever.
+func TestAnOrdinaryRefusalIsNotDressedAsProgress(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.createRefusal = &refusal{
+		status: http.StatusBadRequest,
+		body:   `{"message":"400 Bad request - Name is too long"}`,
+	}
+
+	_, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"}, nil)
+	if err == nil {
+		t.Fatal("a refused creation was reported as a clean run")
+	}
+	if errors.Is(err, gitlab.ErrNameReserved) {
+		t.Fatalf("an unrelated refusal reads as a deletion still running: %v", err)
 	}
 }

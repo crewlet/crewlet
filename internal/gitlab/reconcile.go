@@ -563,6 +563,16 @@ func mintGroup(opts Options, groupID int) int {
 	return groupID
 }
 
+// ErrNameReserved reports a username or email GitLab is still releasing from
+// an account it is deleting.
+//
+// A STATE THAT CLEARS ITSELF, and the whole reason it is named: the pass has
+// nothing to fix and nobody to tell, it simply has to be run again once
+// GitLab's own deletion finishes. The caller reports it as work in progress
+// rather than as a failure to read the integration.
+var ErrNameReserved = errors.New(
+	"gitlab is still releasing the name of an account it is deleting")
+
 // modeError turns a refusal into the sentence that names the credential the
 // chosen mode actually needs.
 //
@@ -575,6 +585,22 @@ func modeError(mode Mode, err error) error {
 	var api *APIError
 	if !errors.As(err, &api) {
 		return err
+	}
+	// A NAME GITLAB HAS NOT RELEASED YET, which is a deletion still running
+	// rather than anything wrong with this run.
+	//
+	// GitLab removes a user asynchronously: the account is gone from every
+	// listing the moment the delete is accepted, and its username and email
+	// stay reserved until a background job finishes. So a disconnect
+	// followed by a reconnect inside that window looks up the account,
+	// honestly does not find it, creates one, and is refused with "has
+	// already been taken".
+	//
+	// Reported as an error, that reads as "the last pass could not read this
+	// integration", which sends an operator looking for an outage over a
+	// state that clears itself on the next tick. See [ErrNameReserved].
+	if api.Status == http.StatusBadRequest && strings.Contains(api.Detail, "already been taken") {
+		return fmt.Errorf("%w: %w", ErrNameReserved, err)
 	}
 	if mode.Or() != ModeInstance {
 		if api.Forbidden() {

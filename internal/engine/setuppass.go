@@ -684,6 +684,22 @@ func (p *gitlabPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 		// Both stay deliberate gestures on the command line.
 		Rotate: in.Recreate,
 	})
+	// A NAME GITLAB HAS NOT RELEASED YET IS WORK IN PROGRESS, not a failure
+	// to read the integration.
+	//
+	// GitLab removes a user asynchronously, so a disconnect followed by a
+	// reconnect inside that window finds no account, creates one, and is
+	// refused with "has already been taken". Reported as an error, the card
+	// read "the last pass could not read this integration", which sends an
+	// operator looking for an outage over a state the next tick clears.
+	if errors.Is(err, gitlab.ErrNameReserved) {
+		return []integration.Finding{{
+			Kind: integration.FindingIdentityMissing,
+			Detail: "GitLab is still releasing the name of an account it is " +
+				"deleting, so this seat's account cannot be created yet: " +
+				"the next pass makes it, usually within a minute",
+		}}, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("engine: gitlab pass: %w", err)
 	}
