@@ -37,6 +37,7 @@ subcommand below is served by it.
 | `crewlet llm logout <KEY>` | Revoke locally and delete the provider's credential files |
 | `crewlet llm export <KEY> [-secret-store]` | Pack the login into one portable blob — stdout, or the secret store under the name the engine restores from on a fresh host |
 | `crewlet llm import <KEY>` | Restore a bundle from **stdin** onto this host; refuses to overwrite a login that is already there |
+| `crewlet confluence provision <company.yaml>` | Register the inbound [Confluence](../integrations/confluence.md) hooks: one signed hook on Data Center, one token-bearing hook per event on Cloud, which signs nothing and names no event in what it delivers. A hook that already points here is left alone and one an operator made by hand is never touched |
 | `crewlet confluence import <company.yaml> <directory>` | Publish a directory of authored markdown into [Confluence](../integrations/confluence.md) spaces — one space per directory, plus the tool skills the files themselves declare. Every target space is checked before a single page is written |
 | `crewlet confluence resync <company.yaml>` | Re-run the engine's own tool-skill walk of the Confluence skills space against a throwaway registry and print what loads — a read-only diagnostic, not a way to change a running engine |
 | `crewlet slack provision <company.yaml>` | Create, update and install one [Slack](../integrations/slack.md) app per agent seat from the canonical manifest, minting each seat's bot token and signing secret into the `${VAR}`s its config points at. The install itself is an OAuth grant, so the run hands the operator one authorize URL per seat and takes the code back |
@@ -832,6 +833,33 @@ For each seat whose `integrations.slack` credentials are whole `${VAR}` referenc
 Run the API server first, publicly reachable at `-public-url`: Slack verifies each app's request URL with a `url_verification` challenge, which the edge answers unconditionally — it has to, because during provisioning the signing secret does not exist yet and a verified handshake would be impossible.
 
 See [Slack Integration](../integrations/slack.md#automated-setup-crewlet-slack-provision) for the full walkthrough.
+
+## `crewlet confluence provision`
+
+```
+crewlet confluence provision <company.yaml> [-secret-store | -env-file PATH | -print]
+                                            [-public-url URL]
+                                            [-recreate-webhooks] [-dry-run]
+```
+
+Registers the inbound hooks on the knowledge base, and it is the one Confluence command that writes to the instance's **administration** rather than to its content. The run reads the instance as the org account in `integrations.confluence.token`, reports which account that turned out to be, and refuses outright when the credential is rejected — nothing else it reported would be trustworthy.
+
+**The two deployments need different hooks, and the difference is not cosmetic.** Data Center signs a delivery, so one hook covers every event and `integrations.confluence.webhook_secret` is the HMAC key. Cloud signs nothing, drops userinfo, turns no registration field into a header, and names no event in the payload — so the engine registers **one hook per event** with the event in the path and the shared `webhook_token` in the query string, which is the only channel through which anything secret reaches this engine. Treat that token as a signing key: see [Confluence Integration](../integrations/confluence.md#confluence-cloud--a-token-bearing-hook-per-event-the-default) for what a shared token cannot promise, and for the Automation-rule alternative that carries it in a header instead.
+
+**A working credential is never re-minted.** The Cloud token lives in the URL Confluence delivers to, so minting on every run would re-register every hook and invalidate the value the running engine holds — from a command whose whole promise is that it is safe to re-run. One is minted only when the config's `${VAR}` resolves to nothing, or when `-recreate-webhooks` says the operator has planned the restart.
+
+**Only this engine's hooks are converged.** Matching is on the hook's name prefix, so one somebody else registered on the same instance is left exactly as it is; a hook of ours pointing at a stale address is re-pointed rather than duplicated.
+
+| Flag | Description |
+|------|-------------|
+| `-secret-store` / `-env-file PATH` / `-print` | Where a minted token or secret goes — exactly one, and there is no default. See [the secret store](../concepts/secret-store.md). |
+| `-public-url` | This deployment's public base URL; defaults to `integrations.public_base_url`. With neither, **nothing is registered** and the run says so — a hook pointing at the wrong host is worse than none, because the instance then reports a healthy integration that delivers into the void. |
+| `-recreate-webhooks` | Delete and remake every hook to mint a fresh token or secret. Destructive: it invalidates the value every other deployment of this company holds. |
+| `-dry-run` | Read the instance and report; register nothing. The sink is not opened, so it prompts for no passphrase. |
+
+The reconcile loop runs this same pass on its own cadence once the integration is connected — see [Integration Reconcile](../concepts/integration-reconcile.md). This command is for an operator who wants the pass to run now.
+
+---
 
 ## `crewlet confluence import`
 

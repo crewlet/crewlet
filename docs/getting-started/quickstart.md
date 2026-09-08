@@ -326,10 +326,11 @@ Open the dashboard at <http://localhost:8000/>. The **Overview** greets you
 with your company's name and mission, and says what — if anything — needs a
 person. Within five minutes the `hello-crewlet` schedule fires a
 `TaskAssigned` at the CEO: the seat appears under **Live seats**, and
-**Model activity** shows the turn as it runs — Plan, then Execute, then Review,
-each phase listing the rounds it took, the tools each round called, and the
-prompts the model actually saw. A phase that finishes updates in place rather
-than moving, so you can read one while the next is running.
+**Model activity** shows the turn as it runs — Onboarding on a seat's very
+first turn, then Execute, then Review — each phase listing the rounds it took,
+the tools each round called, and the prompts the model actually saw. A phase
+that finishes updates in place rather than moving, so you can read one while
+the next is running.
 
 The same picture is available over the API:
 
