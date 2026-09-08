@@ -23,7 +23,12 @@ services:
   # UNLICENSED gitlab-ee image runs as Free tier and serves the API.
   # ---------------------------------------------------------------------------
   gitlab:
-    image: gitlab/gitlab-ee:latest          # multi-arch incl. arm64 since 18.1
+    # PINNED, like every other service here. `latest` gave Dependabot no
+    # version to move, so this line was watched by nothing while looking
+    # exactly like a line with nothing to update, and a green run named a
+    # GitLab nobody could identify afterwards. Multi-arch incl. arm64 since
+    # 18.1.
+    image: gitlab/gitlab-ee:19.3.1-ee.0
     profiles: [gitlab]
     hostname: gitlab.local
     shm_size: "256m"                         # image default 64 MB is too small

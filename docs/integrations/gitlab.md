@@ -388,7 +388,7 @@ scripts/gitlab-dev-bootstrap.sh          # mint a root token, open the SSRF allo
 
 The profile ships one service:
 
-- **`gitlab`** — `gitlab/gitlab-ee:latest` served at `http://gitlab.local:8929`. The EE image is deliberate: service accounts are a **Free-*tier*** feature that lives in **EE-*edition*** code, so the FOSS `gitlab-ce` image 404s on the `/service_accounts` API — an *unlicensed* `gitlab-ee` image runs as Free tier and serves it.
+- **`gitlab`** — `gitlab/gitlab-ee:19.3.1-ee.0` served at `http://gitlab.local:8929`. The EE image is deliberate: service accounts are a **Free-*tier*** feature that lives in **EE-*edition*** code, so the FOSS `gitlab-ce` image 404s on the `/service_accounts` API — an *unlicensed* `gitlab-ee` image runs as Free tier and serves it.
 
 There is no MCP-server sidecar: the GitLab tool surface is `glab mcp serve`, which the engine spawns per-role (see [MCP tool server](#mcp-tool-server)).
 
