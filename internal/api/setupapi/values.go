@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // Reading the document a submission is measured against, and producing the
@@ -35,6 +36,16 @@ func mintInto(values map[string]string, reqs []setup.Requirement, generate []str
 	for _, r := range reqs {
 		byField[r.Field] = r
 	}
+	// THE SUPPLIED SET IS TAKEN BEFORE ANYTHING IS MINTED, because minting
+	// writes into the same map the collision check reads. A field named
+	// twice in `generate` otherwise met its own first minting and was
+	// refused as "both supplied and asked to be generated" — a sentence
+	// about a request the caller did not make.
+	supplied := make(map[string]struct{}, len(values))
+	for field := range values {
+		supplied[field] = struct{}{}
+	}
+	minted := make(map[string]struct{}, len(generate))
 	for _, field := range generate {
 		r, ok := byField[field]
 		if !ok {
@@ -44,15 +55,19 @@ func mintInto(values map[string]string, reqs []setup.Requirement, generate []str
 			return fmt.Errorf("%s is not something this engine can generate; "+
 				"it comes from the third-party app", field)
 		}
-		if _, supplied := values[field]; supplied {
+		if _, twice := minted[field]; twice {
+			return fmt.Errorf("%s is named twice in generate; name it once", field)
+		}
+		minted[field] = struct{}{}
+		if _, sent := supplied[field]; sent {
 			return fmt.Errorf(
 				"%s was both supplied and asked to be generated; send one or the other", field)
 		}
-		minted, err := r.Shape.Mint(mint)
+		value, err := r.Shape.Mint(mint)
 		if err != nil {
 			return fmt.Errorf("generate %s: %w", field, err)
 		}
-		values[field] = minted
+		values[field] = value
 	}
 	return nil
 }
@@ -88,14 +103,29 @@ func refuseEmpty(values map[string]string, reqs []setup.Requirement) error {
 		if strings.TrimSpace(value) != "" {
 			continue
 		}
-		if byField[field].Required {
+		// A SECRET COUNTS AS WELL AS A REQUIRED FIELD, and for the same
+		// reason rather than a different one. An optional credential that
+		// is already set is a WORKING credential: an empty submission
+		// seals "" over it, and every route that resolves it then reads a
+		// value that is present and useless. There is no way to clear one
+		// here in any case — this route's own answer to "leave it alone"
+		// is to omit the field — so an empty secret is never a request,
+		// only ever a form that rendered a value it never had.
+		if r := byField[field]; r.Required || r.Kind == setup.KindSecret {
 			return fmt.Errorf(
-				"%s is required and the submission clears it; omit the field to leave it alone",
+				"%s is a credential the submission clears; omit the field to leave it alone",
 				field)
 		}
 	}
 	return nil
 }
+
+// maxSummary bounds a caller's own words in the stored sentence.
+//
+// A short phrase is all this field has ever been: it is rendered inline in the
+// revision list beside the id and the actor, where a longer one would push
+// both off the row.
+const maxSummary = 120
 
 // auditSummary is the sentence stored on the revision.
 //
@@ -112,9 +142,10 @@ func auditSummary(kind integration.Kind, supplied string) string {
 	// Newlines out, length capped. What survives is a short phrase, which
 	// is all this field has ever been.
 	supplied = strings.Join(strings.Fields(supplied), " ")
-	const maxSummary = 120
-	if len(supplied) > maxSummary {
-		supplied = supplied[:maxSummary]
-	}
-	return base + ": " + supplied
+	// THROUGH textcut, which exists to remove exactly this. A raw
+	// `supplied[:n]` cuts mid-rune whenever a multi-byte character straddles
+	// the boundary, and what is left is invalid UTF-8: the JSON encoder
+	// substitutes it, so the summary stored on the revision and rendered on
+	// the Config screen ends in a replacement character.
+	return base + ": " + textcut.Ellipsis(supplied, maxSummary)
 }
