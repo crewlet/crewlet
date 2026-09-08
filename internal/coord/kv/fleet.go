@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -889,17 +888,22 @@ func (f *FleetStore) flip(ctx context.Context, expect string, seq uint64, raw []
 
 // isWrongLastSequence reports a compare-and-set refusal.
 //
-// MATCHED ON THE MESSAGE, which is not something to do lightly: the client
-// surfaces this as an API error whose typed form is not exported, so there is
-// nothing else to match on. Getting it wrong is not silent — a refusal read as
-// an outage answers 503 instead of 409, which an operator sees immediately —
-// and the conformance suite exercises the real store rather than trusting it.
+// TWO CODES, and the second is not a fallback: the server answers 10071 on a
+// solo stream and 10164 on a REPLICATED one, for the same refusal. So a fleet
+// — the only topology where a compare-and-set race is common — was matching
+// on neither code and reaching the substring test underneath, which is a
+// message this client is free to reword in any release.
+//
+// The message test is gone with it. A refusal read as an outage answers 503
+// where it should answer 409, and the shape of that bug is a conflict an
+// operator retries for ever because the engine called it an unavailable store.
 func isWrongLastSequence(err error) bool {
 	var api *jetstream.APIError
-	if errors.As(err, &api) && api.ErrorCode == jetstream.JSErrCodeStreamWrongLastSequence {
-		return true
+	if !errors.As(err, &api) {
+		return false
 	}
-	return strings.Contains(strings.ToLower(err.Error()), "wrong last sequence")
+	return api.ErrorCode == jetstream.JSErrCodeStreamWrongLastSequence ||
+		api.ErrorCode == jetstream.JSErrCodeStreamWrongLastSequenceConstant
 }
 
 // payloadRecord is the current revision's sealed body on the wire. The
