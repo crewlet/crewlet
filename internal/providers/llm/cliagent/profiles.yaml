@@ -231,6 +231,18 @@ gemini-cli:
     - path: .gemini/settings.json
       content: '{"tools":{"exclude":["run_shell_command","read_file","write_file","edit_file","replace","glob","grep","search_file_content","list_directory","read_many_files","save_memory"],"allowed":["web_fetch","web_search","google_web_search"]},"excludeTools":["run_shell_command","read_file","write_file","edit_file","replace","glob","grep","search_file_content","list_directory","read_many_files","save_memory"]}'
   model_args: ["--model", "{model}"]
+  # NO FLAG EXISTS — this CLI takes its system prompt from a FILE named by an
+  # environment variable, which is why reading `--help` reports it as having
+  # no such channel at all (it was recorded that way here once). Verified
+  # against the shipped 0.58.0 bundle and its own docs/reference/
+  # configuration.md: "Replaces the built-in system prompt with content from
+  # a Markdown file… Any other string: Treat as a path".
+  #
+  # A full replacement rather than a merge, which is the behaviour this
+  # backend wants for the same reason claude-code's profile records: an
+  # appended seat identity sits underneath the vendor's own coding-agent
+  # persona. There is no append variant here in any case.
+  system_prompt_env: "GEMINI_SYSTEM_MD"
   prompt_mode: stdin
   output: json
   text_paths: [["response"]]
@@ -268,22 +280,25 @@ qwen-code:
     - path: .qwen/settings.json
       content: '{"tools":{"exclude":["run_shell_command","read_file","write_file","edit_file","replace","glob","grep","search_file_content","list_directory","read_many_files","save_memory"],"allowed":["web_fetch","web_search","google_web_search"]},"excludeTools":["run_shell_command","read_file","write_file","edit_file","replace","glob","grep","search_file_content","list_directory","read_many_files","save_memory"]}'
   model_args: ["--model", "{model}"]
-  # THE ONE PLACE THIS FORK HAS DIVERGED FROM ITS PARENT. Gemini CLI has no
-  # system-prompt flag at all (checked against 0.58.0); Qwen Code 0.23.0 has
-  # both --system-prompt and --append-system-prompt. Replacing rather than
-  # appending, for the reason the claude-code profile records: an appended
-  # seat identity sits underneath the vendor's own coding-agent persona,
-  # which then keeps introducing itself over the top of the seat.
+  # THE FORK RENAMED ITS PARENT'S VARIABLE: `QWEN_SYSTEM_MD`, where Gemini
+  # CLI reads `GEMINI_SYSTEM_MD` (this build reads neither of the other's —
+  # checked against the shipped 0.23.0 bundle). Same contract otherwise: a
+  # path, replacing the built-in prompt.
   #
-  # INLINE, AND ONLY BECAUSE THERE IS NO FILE VARIANT — this CLI takes a
-  # string and nothing else. That puts the seat's system prompt in argv,
-  # where /proc/<pid>/cmdline makes it readable by every account on the
-  # machine, and this profile sends its PROMPT on stdin, so the exposure is
-  # new rather than inherited. Worth it for a single-tenant engine host and
-  # not obviously worth it on a shared one: an operator who cannot accept it
-  # sets `cli.overrides.system_prompt_args: []` and the prompt goes back to
-  # being the transcript's first section.
-  system_prompt_args: ["--system-prompt", "{system}"]
+  # THE ENV VAR RATHER THAN THE FLAG, and this fork is the only profile where
+  # the choice arises: 0.23.0 also has --system-prompt and
+  # --append-system-prompt. The variable names a FILE, so the seat's system
+  # prompt — the org chart, the policies, that seat's own memory — never
+  # reaches argv, where /proc/<pid>/cmdline makes it readable by every
+  # account on the machine. The flag takes a string and nothing else.
+  #
+  # Replacing rather than appending, for the reason the claude-code profile
+  # records: an appended seat identity sits underneath the vendor's own
+  # coding-agent persona, which then keeps introducing itself over the top of
+  # the seat. Note this CLI still appends its own QWEN.md context after
+  # either one — that is the vendor's, and not something the profile can
+  # switch off here.
+  system_prompt_env: "QWEN_SYSTEM_MD"
   prompt_mode: stdin
   output: json
   text_paths: [["response"]]

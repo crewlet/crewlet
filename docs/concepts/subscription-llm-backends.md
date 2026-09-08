@@ -316,16 +316,33 @@ from vendor documentation, which lags:
 
 | `cli.agent` | version checked | flag | in the profile |
 |---|---|---|---|
-| `claude-code` | 2.1.263 | `--system-prompt-file` / `--append-system-prompt-file` | `["--system-prompt-file", "{file}"]` |
-| `qwen-code` | 0.23.0 | `--system-prompt` / `--append-system-prompt`, **string only** | `["--system-prompt", "{system}"]` |
-| `grok` | 1.0.13 | `--system-prompt-override` (`--rules` appends), **string only** | `["--system-prompt-override", "{system}"]` |
+| `claude-code` | 2.1.263 | flag, file: `--system-prompt-file` (`--append-…-file` appends) | `system_prompt_args: ["--system-prompt-file", "{file}"]` |
+| `gemini-cli` | 0.58.0 | **env var, file**: `GEMINI_SYSTEM_MD` — no flag exists | `system_prompt_env: GEMINI_SYSTEM_MD` |
+| `qwen-code` | 0.23.0 | **both**: `QWEN_SYSTEM_MD` (file) *and* `--system-prompt` (string) | `system_prompt_env: QWEN_SYSTEM_MD` |
+| `grok` | 1.0.13 | flag, string: `--system-prompt-override` (`--rules` appends) | `system_prompt_args: ["--system-prompt-override", "{system}"]` |
 | `codex` | 0.153.4 | none, on `codex` or `codex exec` alike | — |
-| `gemini-cli` | 0.58.0 | none | — |
 | `opencode` | 1.18.29 | none (`--agent` names a persona from its own config, not a per-call prompt) | — |
 | `copilot` | 1.0.83 | none (`--no-custom-instructions` only disables its own) | — |
 | `cursor-agent` | 2026.09.02 | none | — |
 
-Three things worth knowing from that table.
+**There are two channels, and `--help` only shows one of them.** A CLI may
+take the prompt as an *argument* (`system_prompt_args`, with `{file}`
+substituting a path and `{system}` the text itself) or from a *file named by
+an environment variable* (`system_prompt_env`). Gemini CLI and its Qwen fork
+have no flag at all and are configured entirely through the second — which is
+why both were once recorded here as having no system-prompt channel, on the
+strength of reading `--help`. A profile declares one or the other; naming
+both is refused at load, because which copy a CLI honours when handed the
+same prompt twice is the vendor's business.
+
+**Prefer the file wherever both exist.** `{system}` puts the seat's system
+prompt — the org chart, the policies, that seat's own memory — into argv,
+where `/proc/<pid>/cmdline` makes it readable by every account on the
+machine. `qwen-code` is the one CLI offering both, and this profile takes the
+variable for exactly that reason. `grok` has only the string form, but its
+*prompt* already travels on argv (`prompt_mode: argv`) so nothing changes
+there; on a shared host, `cli.overrides.system_prompt_args: []` puts the
+prompt back in the transcript.
 
 **Check the CLI you actually have.** `grok` is the trap: xAI's own CLI
 (`x.ai/cli`, [xai-org/grok-build](https://github.com/xai-org/grok-build))
@@ -334,21 +351,14 @@ they are different programs — the official one has the flag, the npm one
 has none of this profile's flags at all. If `grok --version` prints a
 `0.0.x`, you have the other one.
 
-**Qwen Code is where the Gemini fork has diverged.** Its parent has no such
-flag and it has two, so "same shape as `gemini-cli`" no longer holds here.
+**Qwen Code is where the Gemini fork has diverged.** It renamed its parent's
+variable (`QWEN_SYSTEM_MD`, and this build reads neither the other's) and
+added two flags its parent does not have, so "same shape as `gemini-cli`" no
+longer holds here.
 
-**Two of the three are inline, and that is a real trade.** Only Claude Code
-offers a file variant; `qwen-code` and `grok` take a string, so the profile
-has to use `{system}` and the seat's system prompt lands in argv, readable
-through `/proc/<pid>/cmdline` by every account on the machine. For `grok`
-the prompt already travels that way (`prompt_mode: argv`) so nothing
-changes; for `qwen-code` the prompt otherwise goes on stdin, so it is new
-exposure. Worth it on a single-tenant engine host; an operator who cannot
-accept it sets `cli.overrides.system_prompt_args: []` and the prompt goes
-back to being the transcript's first section.
-
-For the five with no flag, `cli.overrides.system_prompt_args` is how you
-adopt one the day its vendor ships it — no engine release needed.
+For the four with no channel at all, `cli.overrides.system_prompt_args` and
+`cli.overrides.system_prompt_env` are how you adopt one the day its vendor
+ships it — no engine release needed.
 
 ---
 

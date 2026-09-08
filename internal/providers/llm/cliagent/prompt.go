@@ -203,9 +203,9 @@ func systemArgs(template []string, system, dir string) ([]string, error) {
 	for _, arg := range template {
 		if strings.Contains(arg, "{file}") {
 			if path == "" {
-				path = filepath.Join(dir, systemPromptFile)
-				if err := os.WriteFile(path, []byte(system), 0o600); err != nil {
-					return nil, fmt.Errorf("cli-agent: writing the system prompt: %w", err)
+				var err error
+				if path, err = writeSystemPrompt(system, dir); err != nil {
+					return nil, err
 				}
 			}
 			arg = strings.ReplaceAll(arg, "{file}", path)
@@ -213,4 +213,27 @@ func systemArgs(template []string, system, dir string) ([]string, error) {
 		out = append(out, strings.ReplaceAll(arg, "{system}", system))
 	}
 	return out, nil
+}
+
+// systemEnv renders the NAME=path pair for a profile whose CLI reads its
+// system prompt from a file named by an environment variable.
+//
+// The same private file [systemArgs] writes for `{file}`, because it is the
+// same decision: the text is on disk in the per-call directory and never on
+// argv. Only the channel that carries the PATH differs.
+func systemEnv(name, system, dir string) (string, error) {
+	path, err := writeSystemPrompt(system, dir)
+	if err != nil {
+		return "", err
+	}
+	return name + "=" + path, nil
+}
+
+// writeSystemPrompt puts the text in the per-call working directory, 0600.
+func writeSystemPrompt(system, dir string) (string, error) {
+	path := filepath.Join(dir, systemPromptFile)
+	if err := os.WriteFile(path, []byte(system), 0o600); err != nil {
+		return "", fmt.Errorf("cli-agent: writing the system prompt: %w", err)
+	}
+	return path, nil
 }

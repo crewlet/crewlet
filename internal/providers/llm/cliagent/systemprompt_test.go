@@ -110,6 +110,11 @@ func TestTheClaudeProfileKeepsTheSystemPromptOffArgv(t *testing.T) {
 // The table is the SHIPPED set, so adopting a flag for a new CLI has to come
 // through here — which is where the argv trade gets stated rather than
 // stumbled into.
+// envChannel marks a CLI that reads its system prompt from a FILE named by an
+// environment variable rather than from argv — a third channel, and the one
+// `--help` never shows.
+const envChannel = "{env}"
+
 func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing.T) {
 	t.Parallel()
 	// Checked against each CLI's own --help at the version named in
@@ -117,16 +122,21 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 	// such flag at all, and an empty entry here is that fact rather than an
 	// omission.
 	want := map[string]string{
-		"claude-code": "{file}",   // 2.1.263: --system-prompt-file
-		"qwen-code":   "{system}", // 0.23.0: --system-prompt, string only
+		"claude-code": "{file}", // 2.1.263: --system-prompt-file
 		// 1.0.13, xAI's OWN CLI from x.ai/cli:
 		// --system-prompt-override, string only. NOT the same-named
 		// community package on npm, which has no such flag — both put a
 		// `grok` on PATH and checking the wrong one answers the wrong
 		// question.
-		"grok":         "{system}",
+		"grok": "{system}",
+		// A FILE NAMED BY AN ENV VAR, which is the channel `--help` does
+		// not show: GEMINI_SYSTEM_MD / QWEN_SYSTEM_MD. Both were once
+		// recorded here as having no system-prompt channel at all,
+		// because only their flags had been read.
+		"gemini-cli": envChannel,
+		"qwen-code":  envChannel,
+		// No channel of any kind, on any of the three.
 		"codex":        "", // 0.153.4, on `codex` and `codex exec` alike
-		"gemini-cli":   "", // 0.58.0
 		"opencode":     "", // 1.18.29 (`--agent` names a config persona)
 		"copilot":      "", // 1.0.83
 		"cursor-agent": "", // 2026.09.02
@@ -138,11 +148,33 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 			continue
 		}
 		joined := strings.Join(profile.SystemPromptArgs, " ")
+		// EXACTLY ONE CHANNEL, ever: a profile naming both would write the
+		// prompt to disk and then put it on argv as well, and which copy
+		// the CLI honours is the vendor's business.
+		if joined != "" && profile.SystemPromptEnv != "" {
+			t.Errorf("%s declares BOTH system_prompt_args and system_prompt_env", name)
+			continue
+		}
+		if placeholder == envChannel {
+			if profile.SystemPromptEnv == "" {
+				t.Errorf("%s carries no system_prompt_env, so its seats' identities "+
+					"go in the transcript although its CLI reads a file", name)
+			}
+			if joined != "" {
+				t.Errorf("%s puts the prompt on argv although its CLI reads a file: %v",
+					name, profile.SystemPromptArgs)
+			}
+			continue
+		}
 		if placeholder == "" {
 			if joined != "" {
 				t.Errorf("%s declares system_prompt_args = %v, but its CLI has no "+
 					"such flag — the text would reach it as a literal argument",
 					name, profile.SystemPromptArgs)
+			}
+			if profile.SystemPromptEnv != "" {
+				t.Errorf("%s declares system_prompt_env = %q, but its CLI reads no "+
+					"such variable", name, profile.SystemPromptEnv)
 			}
 			continue
 		}

@@ -209,7 +209,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// THE SYSTEM PROMPT ON ITS OWN CHANNEL where the CLI has one. Lifted
 	// before the transcript is rendered, so it is never both.
 	var system string
-	if len(p.profile.SystemPromptArgs) > 0 {
+	if len(p.profile.SystemPromptArgs) > 0 || p.profile.SystemPromptEnv != "" {
 		system, req = SplitSystem(req)
 	}
 	prompt, err := RenderPrompt(req)
@@ -271,12 +271,27 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		}
 	}
 	if system != "" {
-		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		args, err := systemArgs(p.profile.SystemPromptArgs, system, checkout.Work)
-		if err != nil {
-			return nil, p.fail(llm.KindFatal, 0, err)
+		// One channel or the other — the profile validator refuses a
+		// build that declares both.
+		switch {
+		case len(p.profile.SystemPromptArgs) > 0:
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
+			args, err := systemArgs(p.profile.SystemPromptArgs, system, checkout.Work)
+			if err != nil {
+				return nil, p.fail(llm.KindFatal, 0, err)
+			}
+			in.args = append(in.args, args...)
+		case p.profile.SystemPromptEnv != "":
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
+			pair, err := systemEnv(p.profile.SystemPromptEnv, system, checkout.Work)
+			if err != nil {
+				return nil, p.fail(llm.KindFatal, 0, err)
+			}
+			// APPENDED, so it wins: the child env is assembled from the
+			// allowlist and the profile's own config_env above, and the
+			// last assignment of a name is the one exec applies.
+			in.env = append(in.env, pair)
 		}
-		in.args = append(in.args, args...)
 	}
 	// THE PROMPT LAST, and after the system args for the same reason the
 	// profile puts the model flag before it: a CLI taking its prompt on

@@ -290,6 +290,25 @@ type Profile struct {
 	//             for a CLI that offers no file variant.
 	SystemPromptArgs []string `yaml:"system_prompt_args,omitempty"`
 
+	// SystemPromptEnv is the THIRD channel, and the one `--help` does not
+	// show: an environment variable naming a file the CLI reads its system
+	// prompt from. Empty means the CLI has no such variable.
+	//
+	// Gemini CLI and its Qwen fork both work this way and neither has a
+	// flag for a path — `GEMINI_SYSTEM_MD` / `QWEN_SYSTEM_MD`, each taking
+	// a path and REPLACING the built-in prompt. Reading only `--help`
+	// reports both as having no system-prompt channel at all, which is how
+	// they were first recorded here.
+	//
+	// PREFERRED OVER SystemPromptArgs WHEREVER BOTH EXIST, because it is a
+	// file: the text never reaches argv, where /proc/<pid>/cmdline makes it
+	// readable by every account on the machine. Qwen Code has both and
+	// takes this one for exactly that reason.
+	//
+	// The two are mutually exclusive — a profile declaring both would hand
+	// the CLI its system prompt twice — and [Profile.validate] refuses it.
+	SystemPromptEnv string `yaml:"system_prompt_env,omitempty"`
+
 	// Output is how stdout is encoded.
 	Output OutputMode `yaml:"output,omitempty"`
 
@@ -441,6 +460,13 @@ func (p *Profile) validate(name string) error {
 		if dir == "HOME" {
 			add("config_env may not name HOME — it is set from the seat home already")
 		}
+	}
+	if len(p.SystemPromptArgs) > 0 && p.SystemPromptEnv != "" {
+		// One channel or the other. Both would hand the CLI the same
+		// system prompt twice, and which copy wins is the vendor's
+		// business rather than something this profile can state.
+		add("system_prompt_args and system_prompt_env are both set — a CLI takes " +
+			"its system prompt on ONE channel; drop whichever this build does not use")
 	}
 	for i, m := range p.LimitMarkers {
 		if problem := sentinelProblem(m.Sentinel); problem != "" {

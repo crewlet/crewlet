@@ -53,6 +53,20 @@ func TestCLIAgentFakeCLI(t *testing.T) {
 		env := os.Environ()
 		slices.Sort(env)
 		fmt.Print(strings.Join(env, "\n"))
+	case os.Getenv("FAKE_READ_SYSTEM_PROMPT") != "":
+		// Reads the file the system-prompt env var points at and prints
+		// it, FROM INSIDE THE CHILD. That is the only place the question
+		// can be asked honestly: the per-call working directory is
+		// removed when the call releases, so a test that opened the path
+		// afterwards would be reading a file the CLI never saw — and a
+		// prompt written after the spawn, or unreadable to the child,
+		// looks identical from outside.
+		body, err := os.ReadFile(os.Getenv(os.Getenv("FAKE_READ_SYSTEM_PROMPT")))
+		if err != nil {
+			fmt.Print("UNREADABLE: ", err)
+			return
+		}
+		fmt.Printf("%s|%s", os.Getenv(os.Getenv("FAKE_READ_SYSTEM_PROMPT")), body)
 	case os.Getenv("FAKE_ECHO_STDIN") == "1":
 		// Base64 rather than verbatim: the prompt CONTAINS the response
 		// contract's own fenced example, so echoing it raw would be
