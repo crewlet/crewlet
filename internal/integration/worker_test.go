@@ -641,3 +641,63 @@ func TestATeardownThatIsMerelyEarlyIsNotRecordedAsAFailure(t *testing.T) {
 		t.Errorf("the disconnector was called %d times", d.count())
 	}
 }
+
+// A SAVE DOES NOT WAIT OUT THE CADENCE.
+//
+// The stale flag alone only promised that the NEXT tick would reconsider, and
+// the next tick is up to a full interval away. An operator who pressed Save
+// watched the card go on describing the configuration they had just replaced,
+// and read that as the save not working. The cadence is for asking a
+// third-party app again; this is the answer changing here.
+func TestAnAppliedRevisionBringsTheTickForward(t *testing.T) {
+	r := &fakeReconciler{kind: KindGitLab}
+	// AN INTERVAL NO TEST COULD WAIT OUT, so a pass inside this test can
+	// only have come from the wake.
+	w, err := New(Options{
+		Registrations: []Registration{{Reconciler: r}},
+		Store:         newStore(),
+		Interval:      time.Hour,
+		WakeSettle:    5 * time.Millisecond,
+		Now:           func() time.Time { return time.Now().UTC() },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	w.Start(context.Background())
+	defer w.Stop()
+
+	// The loop's own first pass, which every start runs.
+	waitForPasses(t, r, 1)
+
+	w.MarkStale()
+	waitForPasses(t, r, 2)
+
+	// AND ONE OPERATOR ACTION IS ONE PASS. The setup dialog writes one
+	// request per surface, so saving Atlassian applies three revisions in a
+	// row; a tick each would ask three third-party apps three times for one
+	// press of Save.
+	before := r.count()
+	w.MarkStale()
+	w.MarkStale()
+	w.MarkStale()
+	waitForPasses(t, r, before+1)
+	// PAST THE WINDOW BEFORE COUNTING, or a second tick still on its way
+	// would read as a burst that folded.
+	time.Sleep(20 * 5 * time.Millisecond)
+	if got := r.count(); got != before+1 {
+		t.Errorf("three applies ran %d passes, want the burst folded into one", got-before)
+	}
+}
+
+// waitForPasses waits for the loop to have run at least n passes.
+func waitForPasses(t *testing.T, r *fakeReconciler, n int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if r.count() >= n {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("the loop ran %d passes, want %d: the tick never came forward", r.count(), n)
+}

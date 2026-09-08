@@ -30,6 +30,26 @@ var log = logging.Get("integration")
 // one is due.
 const Interval = 15 * time.Second
 
+// WakeSettle is how long a config apply waits before the tick it brings
+// forward runs.
+//
+// A COALESCING WINDOW, not a delay for its own sake. One operator action is
+// routinely several applies: the setup dialog writes one request per surface,
+// so saving Atlassian writes the organization, Jira and Confluence blocks in
+// three, and each one marks the loop stale. Ticking per apply would ask three
+// third-party apps three times for one press of Save. This window is well
+// under what a person reads as "immediately" and folds the burst into one
+// pass.
+//
+// It is also the floor under a pass that writes the document on every run.
+// Such a pass marks the loop stale from inside the tick that is running it,
+// so with no window the loop would spin against a third-party app at whatever
+// speed the pass returns. That is a bug rather than a design (a pass is
+// expected to converge, and [Worker.MarkStale] says why the second one writes
+// nothing), but the failure has to stay survivable long enough for somebody
+// to notice it.
+const WakeSettle = 750 * time.Millisecond
+
 // Reconciler is one surface's convergence step.
 //
 // # Level triggered, never told what changed
@@ -236,6 +256,11 @@ type Options struct {
 	// Interval overrides [Interval]. Zero takes it.
 	Interval time.Duration
 
+	// WakeSettle overrides [WakeSettle], the window a config apply's tick
+	// waits out first. Zero takes it; a test shrinks it so a suite that
+	// exercises the wake does not spend its life in timers.
+	WakeSettle time.Duration
+
 	// Now is the clock, for tests. Nil is time.Now.
 	Now func() time.Time
 }
@@ -257,7 +282,14 @@ type Worker struct {
 	schedule Schedule
 	claim    DutyFunc
 	interval time.Duration
+	settle   time.Duration
 	now      func() time.Time
+
+	// wake carries a config apply to the loop, so the tick that
+	// reconsiders comes now rather than at the end of the cadence. Buffered
+	// by one and never blocked on: a queued wake and two queued wakes are
+	// the same tick. See [Worker.MarkStale].
+	wake chan struct{}
 
 	mu      sync.Mutex
 	stop    context.CancelFunc
@@ -290,8 +322,22 @@ type Worker struct {
 // installation is exactly that) and so mark the loop stale again. It
 // converges: the second pass finds nothing new to record and writes nothing.
 func (w *Worker) MarkStale() {
-	if w != nil {
-		w.stale.Store(true)
+	if w == nil {
+		return
+	}
+	w.stale.Store(true)
+	// AND THE TICK COMES FORWARD, which is the half the flag alone cannot
+	// do. Marked and left to the cadence, the promise is only that the
+	// NEXT tick reconsiders: an operator who just pressed Save watched a
+	// card describe the configuration they had replaced for as long as the
+	// interval had left to run, and read it as the save not working.
+	//
+	// Never blocking, on a channel that may be nil on a Worker a test
+	// built by hand: a send that is not ready takes the default, and the
+	// flag above is what the ordinary tick reads anyway.
+	select {
+	case w.wake <- struct{}{}:
+	default:
 	}
 }
 
@@ -351,10 +397,15 @@ func New(opts Options) (*Worker, error) {
 	if now == nil {
 		now = time.Now
 	}
+	settle := opts.WakeSettle
+	if settle <= 0 {
+		settle = WakeSettle
+	}
 	return &Worker{
 		byKind: byKind, order: order, store: opts.Store,
 		schedule: opts.Schedule.WithDefaults(), claim: opts.ClaimDuty,
-		interval: interval, now: now,
+		interval: interval, settle: settle, now: now,
+		wake: make(chan struct{}, 1),
 	}, nil
 }
 
@@ -410,6 +461,38 @@ func (w *Worker) run(ctx context.Context, done chan struct{}) {
 			return
 		case <-ticker.C:
 			w.Tick(ctx)
+		case <-w.wake:
+			// A CONFIG APPLY. The cadence is for asking a third-party app
+			// again; this is the answer changing here, so it does not
+			// wait. See [Worker.MarkStale].
+			if !w.settleWake(ctx) {
+				log.InfoContext(ctx, "integration_reconciler_stopping")
+				return
+			}
+			w.Tick(ctx)
+		}
+	}
+}
+
+// settleWake waits out the coalescing window, absorbing the applies that
+// arrive inside it, and reports whether the loop should go on.
+//
+// A wake landing DURING the tick that follows is not absorbed here: it sits
+// in the buffer and fires afterwards, which is what makes a document a pass
+// changed get reconsidered rather than swallowed by the pass that changed it.
+func (w *Worker) settleWake(ctx context.Context) bool {
+	timer := time.NewTimer(w.settle)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-w.wake:
+			// Another apply, already covered by the tick this one is
+			// waiting for. Absorbed rather than queued: one operator
+			// action is one pass.
+		case <-timer.C:
+			return true
 		}
 	}
 }

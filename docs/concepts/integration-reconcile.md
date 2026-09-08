@@ -51,6 +51,8 @@ Not what failed. A third-party app applying a grant it already accepted finishes
 
 The brisk admin cadence is the point of the whole design: install the app, and provisioning continues without you pressing anything. The flat operator cadence is the opposite case, because nothing at the third-party app will ever change a variable this deployment did not set, so backing off buys nothing and asking often only spends requests.
 
+**An applied revision ignores all of it and reconciles now.** Every interval above is a wait for asking a *third-party app* again. A configuration change is the answer changing *here*, so it marks every surface due and brings the tick forward instead of waiting out the cadence: save the setup dialog and the pass runs within about a second, not at the end of whatever wait the last report earned. One operator action is one pass, because the dialog writes one request per surface (saving Atlassian applies three revisions in a row) and the applies inside a short window fold into a single tick.
+
 A third-party app can override the settled interval for itself. Slack's app-manifest methods are rate limited to roughly one request a minute, so re-reading twenty seats on the shared ten-minute cadence would spend the whole interval waiting on a rate limit.
 
 ---
