@@ -294,7 +294,11 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			continue
 		}
 
-		token, err := opts.Client.CreateToken(ctx, user.ID,
+		// THROUGH THE GROUP THAT OWNS THE ACCOUNT, which is what a group
+		// Owner may do: the instance route is admin only and 403s on
+		// gitlab.com for every seat. Zero on the instance path, where the
+		// credential is an admin token and no group owns the account.
+		token, err := opts.Client.CreateToken(ctx, mintGroup(opts, group.ID), user.ID,
 			TokenName(seat.Handle), tokenScopes(p), expiry(opts))
 		if err != nil {
 			return nil, rollback(ctx, opts, minted,
@@ -530,6 +534,21 @@ func ensureAccount(ctx context.Context, opts Options, groupID int,
 		return User{}, false, modeError(opts.Mode, err)
 	}
 	return user, true, nil
+}
+
+// mintGroup is the group a token is minted through, or zero for the instance
+// path.
+//
+// THE SAME SPLIT [ensureAccount] MAKES, and it has to be: an account created
+// through the group route is owned by that group and its tokens are minted
+// there, while an instance service account belongs to nobody and takes the
+// admin route. Reading the mode once in each place is what keeps a run from
+// creating an account one way and reaching for its tokens the other.
+func mintGroup(opts Options, groupID int) int {
+	if opts.Mode.Or() == ModeInstance {
+		return 0
+	}
+	return groupID
 }
 
 // modeError turns a refusal into the sentence that names the credential the

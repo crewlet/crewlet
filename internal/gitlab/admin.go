@@ -352,18 +352,37 @@ func (c *Client) Tokens(ctx context.Context, userID int) ([]Token, error) {
 
 // CreateToken mints a personal access token for a service account.
 //
-// The value is returned ONCE, by GitLab, and never again — which is why the
+// # The route follows who owns the account, because the permission does
+//
+// `POST /users/:id/personal_access_tokens` is INSTANCE ADMIN ONLY, and on
+// gitlab.com nobody is an instance admin: a group Owner creating an account
+// through the group route and then minting through this one gets a 403 on
+// every seat, for ever. The group route
+// (`/groups/:gid/service_accounts/:uid/personal_access_tokens`) is the one a
+// group Owner may call, and it is the counterpart of the group creation.
+//
+// So groupID decides: non-zero mints through the group that owns the account,
+// zero through the instance, which is the self-managed path where the
+// credential IS an admin token and no group owns the account.
+//
+// The value is returned ONCE, by GitLab, and never again, which is why the
 // sink is written through rather than batched: between minting and recording
 // there is a window where the only copy of a live credential is in this
 // process's memory.
-func (c *Client) CreateToken(ctx context.Context, userID int, name string, scopes []string, expiry time.Time) (Token, error) {
+func (c *Client) CreateToken(
+	ctx context.Context, groupID, userID int, name string, scopes []string, expiry time.Time,
+) (Token, error) {
 	body := map[string]any{"name": name, "scopes": scopes}
 	if !expiry.IsZero() {
 		body["expires_at"] = expiry.UTC().Format(time.DateOnly)
 	}
+	path := "/users/" + strconv.Itoa(userID) + "/personal_access_tokens"
+	if groupID != 0 {
+		path = "/groups/" + strconv.Itoa(groupID) + "/service_accounts/" +
+			strconv.Itoa(userID) + "/personal_access_tokens"
+	}
 	var out Token
-	err := c.send(ctx, http.MethodPost,
-		"/users/"+strconv.Itoa(userID)+"/personal_access_tokens", body, &out)
+	err := c.send(ctx, http.MethodPost, path, body, &out)
 	if err != nil {
 		return Token{}, err
 	}

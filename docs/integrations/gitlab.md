@@ -227,6 +227,16 @@ It is **held** rather than asked for each time, and the reason is the disconnect
 | **Self-managed**, `-mode group` (default) | An **instance admin PAT**, **or** a group Owner PAT with the instance setting `allow_top_level_group_owners_to_create_service_accounts` enabled |
 | **Self-managed**, `-mode instance` | An **instance admin PAT**, always — a group Owner cannot create an account the instance owns. A `403` on this route says so by name, because the same status means a different remedy in each mode and "403 Forbidden" alone tells an operator nothing about which |
 
+**A seat's token is minted through the group that owns the account**
+(`POST /groups/:id/service_accounts/:user_id/personal_access_tokens`), which
+is what makes the GitLab.com row above true. The instance route
+(`POST /users/:id/personal_access_tokens`) is admin only, and on GitLab.com
+nobody is an instance admin: a run that created accounts through the group
+route and minted through that one got a `403` on every seat, leaving accounts
+with no token and agents authenticating as nobody. Instance mode still uses
+the admin route, because there the credential is an admin token and no group
+owns the account.
+
 On the GitLab.com Free tier, **annual token rotation is the norm** — every new PAT expires within 365 days (non-expiring service-account tokens require the Premium group setting). Wire `crewlet gitlab provision -rotate` into a yearly cron.
 
 ### Prerequisites (GitLab.com)

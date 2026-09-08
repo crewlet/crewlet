@@ -85,6 +85,12 @@ type adminInstance struct {
 	// route, so a delete down the wrong route can be caught.
 	instanceOwned map[string]bool
 
+	// instanceAdmin says this credential is an INSTANCE ADMIN token, which
+	// is the only thing that may mint through /users/:id. A group Owner is
+	// not one, and on gitlab.com nobody is. Set by the instance-mode tests,
+	// where an admin token is what the mode requires; a group-mode run
+	// leaves it false and the admin route is refused. See the mint handler.
+	instanceAdmin bool
 	// failToken makes minting fail for this username, to reach the
 	// rollback path.
 	failToken string
@@ -285,7 +291,21 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 		f.members[path+fmt.Sprint(body["user_id"])] = body["access_level"]
 
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/personal_access_tokens"):
-		id := strings.TrimSuffix(strings.TrimPrefix(path, "/users/"), "/personal_access_tokens")
+		// TWO ROUTES, AND GITLAB.COM ALLOWS ONE OF THEM.
+		//
+		// `/users/:id/personal_access_tokens` is INSTANCE ADMIN ONLY, and
+		// on gitlab.com nobody is an instance admin: a group Owner who
+		// created an account through the group route and minted through
+		// this one got a 403 on every seat, for ever. So the admin route
+		// is refused here unless the run says it holds an admin token,
+		// which is what makes that mistake a red test rather than a live
+		// company with no agent able to authenticate.
+		id, viaGroup := mintTarget(path)
+		if !viaGroup && !f.instanceAdmin {
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`{"message":"403 Forbidden"}`))
+			return
+		}
 		if f.failToken != "" && f.usernameOf(id) == f.failToken {
 			w.WriteHeader(http.StatusForbidden)
 			w.Write([]byte(`{"message":"not permitted"}`))
@@ -560,6 +580,17 @@ func (f *adminInstance) revoked() int {
 	return f.revokes
 }
 
+// mintTarget reads the account a token is being minted for, and says which
+// route asked: the group's, which a group Owner may call, or the instance's,
+// which needs an admin.
+func mintTarget(path string) (id string, viaGroup bool) {
+	trimmed := strings.TrimSuffix(path, "/personal_access_tokens")
+	if at := strings.LastIndex(trimmed, "/service_accounts/"); at >= 0 {
+		return trimmed[at+len("/service_accounts/"):], true
+	}
+	return strings.TrimPrefix(trimmed, "/users/"), false
+}
+
 func atoi(s string) int {
 	n := 0
 	for _, r := range s {
@@ -681,7 +712,13 @@ func reconcileWith(t *testing.T, f *adminInstance, sink provision.TokenSink,
 		WebhookBase: "https://crewlet.example.com", SigningSecret: testSigningSecret,
 		Now: func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) },
 	}
-	tune(&opts)
+	// NIL IS "NOTHING TO ADJUST", which most of these runs are: the
+	// default options ARE the ordinary group-mode company, and a test that
+	// had to pass an empty function to say so would make the exceptions
+	// harder to spot rather than easier.
+	if tune != nil {
+		tune(&opts)
+	}
 	return gitlab.Reconcile(context.Background(), opts)
 }
 
@@ -2019,8 +2056,10 @@ func TestInstanceModeCreatesOnTheInstanceRoute(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
 	// The group route is refused, so a run that fell back to it fails
-	// rather than passing by accident.
-	f.instanceOnly = true
+	// rather than passing by accident. And the credential IS an admin
+	// token, which is what instance mode requires and what makes the
+	// /users/:id mint permitted at all.
+	f.instanceOnly, f.instanceAdmin = true, true
 	res, err := reconcileWith(t, f, newRecordingSink(),
 		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"},
 		func(o *gitlab.Options) { o.Mode = gitlab.ModeInstance })
@@ -2108,6 +2147,9 @@ func TestEachModesRefusalNamesTheCredentialItNeeds(t *testing.T) {
 func TestSwitchingModesFindsTheAccountsTheCompanyAlreadyHas(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
+	// Instance mode holds an admin token, which is what permits the
+	// /users/:id mint at all; a group Owner is refused there.
+	f.instanceAdmin = true
 	if _, err := reconcileWith(t, f, newRecordingSink(),
 		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"},
 		func(*gitlab.Options) {}); err != nil {
@@ -2132,6 +2174,9 @@ func TestSwitchingModesFindsTheAccountsTheCompanyAlreadyHas(t *testing.T) {
 func TestInstanceModeDecommissionsDownTheInstanceRoute(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
+	// Instance mode holds an admin token, which is what permits the
+	// /users/:id mint at all; a group Owner is refused there.
+	f.instanceAdmin = true
 	instance := func(o *gitlab.Options) { o.Mode = gitlab.ModeInstance }
 	if _, err := reconcileWith(t, f, newRecordingSink(),
 		map[string]string{"swe": "${GITLAB_TOKEN_SWE}", "qa": "${GITLAB_TOKEN_QA}"},
@@ -2198,5 +2243,40 @@ func TestADecommissionSeesPastTheFirstPageOfMembers(t *testing.T) {
 	}
 	if len(res.Decommissioned) != 1 || res.Decommissioned[0] != "crewlet-qa" {
 		t.Fatalf("decommissioned = %v", res.Decommissioned)
+	}
+}
+
+// A GROUP OWNER MINTS THROUGH THE GROUP, because that is the only route it
+// may use.
+//
+// `POST /users/:id/personal_access_tokens` is INSTANCE ADMIN ONLY, and on
+// gitlab.com nobody is an instance admin. So a run that created a service
+// account through the group route, which a group Owner may do, and then
+// minted through the admin one got a 403 on every seat, for ever: an account
+// existed with no token, the seat authenticated as nobody, and the card said
+// the sync would take care of it.
+func TestAGroupOwnerMintsThroughTheGroupRoute(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	// NOT AN ADMIN, which is every gitlab.com credential: the fake refuses
+	// the /users/:id route, exactly as the real instance does.
+	res, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"}, nil)
+	if err != nil {
+		t.Fatalf("a group Owner could not provision a seat: %v", err)
+	}
+	if len(res.Created) != 1 {
+		t.Fatalf("result = %+v", res)
+	}
+
+	// THE GROUP'S OWN ROUTE, and never the instance's.
+	var minted string
+	for _, call := range f.calls {
+		if strings.HasPrefix(call, "POST ") && strings.HasSuffix(call, "/personal_access_tokens") {
+			minted = call
+		}
+	}
+	if !strings.Contains(minted, "/service_accounts/") {
+		t.Errorf("the token was minted through %q, which a group Owner may not call", minted)
 	}
 }
