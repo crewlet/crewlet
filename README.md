@@ -123,11 +123,12 @@ the working directory; `-config` and `-company` point elsewhere. The Tier A
 file is the short one — where this node's store, stream and API live — and the
 [quickstart](docs/getting-started/quickstart.md) writes it out in full.
 
-The company file is a *seed*: it is compared against the active revision on
-every boot, so an unchanged file imports nothing and an edited one is imported
-and activated. The store is the source of truth at runtime — `crewlet config`
-and `PUT /config` edit it live — but a node restarted with a stale seed file
-re-activates that file over them, so keep the two in step.
+The company file is a **bootstrap seed**: it fills an empty store and is
+ignored once a company exists, so a restart never reverts a change made live.
+The store is the source of truth at runtime. To change a running fleet, run
+`crewlet config import company.yaml` — it goes through the node's API and every
+node converges with no restart. To make the file win on a restart instead, pass
+`-import-company`.
 
 A four-agent company is about 40 lines of YAML:
 

@@ -172,7 +172,7 @@ That distinction was not always drawn, and each consequence was silent. The toke
 
 > **On the embedded backend the coordination store lives inside the running engine.** It exists while the engine runs. That is the correct trade for a single node — nothing else to install — but it has two visible consequences.
 >
-> An *offline* `crewlet config import` cannot move the activation pointer, because there is nothing running to move it in. The command says so. A node that starts holding an active revision the fleet has no pointer for publishes it at boot, so a restart converges without any operator action.
+> An *offline* `crewlet config import` — one run while the engine is stopped — cannot move the activation pointer, because there is nothing running to move it in. It marks the revision active in this node's own database and says so; a node that starts holding an active revision the fleet has no pointer for publishes it at boot, so a restart converges without any operator action. Against a **running** node the same command takes the other route entirely: it detects the held store and goes through that node's `PUT /config`, which moves the pointer immediately.
 >
 > And the operator commands that act on this state talk to a **running node** rather than to a file: `crewlet budgets show` and `crewlet budgets reset` are clients of that node's API. Opening the store from outside would either find nothing (the engine is down, and an embedded broker exists only while it runs) or corrupt it (the engine is up, and a second broker on the same store directory is *accepted* rather than refused).
 

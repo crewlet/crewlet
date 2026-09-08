@@ -71,12 +71,20 @@ subcommand below is served by it.
 ## `crewlet run`
 
 ```
-crewlet run [<config.yaml>] [-company PATH] [-debug]
+crewlet run [<config.yaml>] [-company PATH | -import-company PATH] [-debug]
             [-log-level LEVEL] [-log-format FORMAT]
             [-roles ROLE[,ROLE...]] [-api-host HOST] [-api-port PORT]
 ```
 
-Reads Tier A bootstrap and starts the agent engine. The path comes from the
+Reads Tier A bootstrap and starts the agent engine.
+
+**Tier B is not read from a file at runtime.** A running node serves the
+revision the fleet's [activation pointer](../concepts/control-plane.md) names,
+so a Tier B file on this command line is only ever a way of getting a document
+*into* the store — and the two flags above are the two reasons to want that.
+To change a **running** fleet with no restart at all, use
+[`crewlet config import`](#crewlet-config-import), which goes through the
+node's API. The path comes from the
 **positional argument**, or from `-config`, defaulting to `./crewlet.yaml`.
 Naming it both ways is refused: the two would have to agree and nothing checks
 that they do. A leftover positional is refused too, rather than ignored —
@@ -95,7 +103,8 @@ the wrong document on a machine that has both. Tier B is read from the `company_
 | Flag | Description |
 |------|-------------|
 | `-config PATH` | Tier A: this node's broker, store and API (default `./crewlet.yaml`) |
-| `-company PATH` | Tier B **seed** (default `./company.yaml`): compared against the active revision on every boot — an unchanged file imports nothing, an edited one is imported *and activated*. It is not first-run-only, so a node restarted with a stale file re-activates it over newer live changes. A running node serves the store, not this file. |
+| `-company PATH` | Tier B **bootstrap seed** (default `./company.yaml`): imported only when the store holds no company yet. Once one exists this file is **ignored**, loudly (`company_seed_ignored` at warn), so a restart with a stale file never reverts a live change. Absent at its default is fine — the node boots on whatever the store holds. |
+| `-import-company PATH` | Tier B to make the active revision **now**, over whatever the fleet is running. The deliberate "this file is the company again" gesture. Mutually exclusive with `-company`; both together is refused, because they ask for opposite things. |
 | `-log-level LEVEL` | `debug`, `info` (default), `warn` or `error`. Overrides `logging.level` in Tier A, and only when actually given. A typo resolves to `info` — a bad log level must never be why a company will not boot. |
 | `-log-format FORMAT` | `console` (default), `text` or `json`. Overrides `logging.format` in Tier A, and only when actually given. `console` is columns and colour for a person; `text` is slog's `key=value`; `json` is one object per line for a shipper. A typo resolves to `console`. |
 | `-debug` | Shorthand for `-log-level debug`; wins if both are given. It only ever *raises* — to quieten a file that sets `logging.level: debug`, pass `-log-level info`. |
@@ -131,11 +140,29 @@ Manage the Tier B company configuration in the store. Every subcommand opens the
 ### `crewlet config import`
 
 ```
-crewlet config import <company.yaml> [-config PATH]
+crewlet config import <company.yaml> [-config PATH] [-api URL] [-summary STR]
 ```
 
 Validates the Tier B YAML and writes it as a new active revision, recording the
 previously-active revision as its `parent_revision_id`.
+
+**It reaches a running node.** The store is exclusive to one process, so
+against a live engine this cannot open the database — and it no longer needs
+to: it detects the held store and goes through that node's `PUT /config`
+instead, which stores the revision **and activates it fleet-wide**, so every
+node converges with no restart. `-api URL` names a node explicitly, which is
+also how this works from a machine that is not the node at all. This is the
+same routing [`crewlet secrets`](#crewlet-secrets) does for the fleet's secret
+store, and for the same reason: both estates live inside the engine's process.
+
+With the engine **stopped** it writes to this node's own store and marks the
+revision active there, which the node publishes to the fleet at its next start.
+The line it prints says which of the two happened.
+
+`-summary` is the audit note recorded with the revision (default
+`imported from <path>`). The revision history is the record of who changed what
+and why, so a fleet-wide write is worth a sentence; `created_by` is the token's
+id when it goes through the API, and the invoking operator when it does not.
 
 It does **not** refuse because a revision is already active, and there is no
 flag to force it past one: the pointer is append-only, so an import *chains* a

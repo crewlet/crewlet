@@ -287,19 +287,18 @@ engine in a single invocation:
 crewlet run crewlet.yaml -company company.yaml
 ```
 
-`-company` is a **seed**, and it is idempotent *by content* rather than
-first-run-only: on every boot the file is compared against the active
-revision, an unchanged file imports nothing, and an **edited file is imported
-and activated**. That is deliberate — silently ignoring an edited file would
-mean an operator changes a config, restarts, and nothing happens, with nothing
-anywhere saying why.
+`-company` is a **bootstrap seed**: it is imported when the store holds no
+company yet, and once one exists it is ignored — with a warning that says so,
+naming the file and the two ways to apply it. So a restart never reverts a
+change you made live, however stale the file on disk is.
 
-The corollary matters on a fleet: a node restarted with a **stale**
-`company.yaml` re-activates that file over newer changes made through
-`PUT /config` or `crewlet config import`. Keep the file in step with the
-store, or leave `-company` pointing at nothing and let the node take its
-configuration from the store alone. A running node always serves the store,
-not the file.
+When you do want the file to win, that is a different flag:
+`crewlet run -import-company company.yaml` makes it the active revision over
+whatever the fleet is running. And to change a **running** fleet with no
+restart at all, use `crewlet config import company.yaml` — it goes through the
+node's API and every node converges on it.
+
+A running node always serves the store, not the file.
 
 **Or two steps** — import once, then run:
 

@@ -808,3 +808,65 @@ func TestAMissingDefaultNamesTheFileSittingBesideIt(t *testing.T) {
 		t.Errorf("the neighbour was not named: %v", err)
 	}
 }
+
+// THE TWO TIER B FLAGS MEAN OPPOSITE THINGS, so naming both is refused.
+//
+// -company bootstraps an empty store; -import-company replaces what the fleet
+// is running. Any precedence between them is a silent guess about which the
+// operator meant, made about the flag that overwrites a live company.
+func TestNamingBothTierBFlagsIsRefused(t *testing.T) {
+	t.Parallel()
+	var out, errOut bytes.Buffer
+	err := run([]string{"run", "-company", "a.yaml", "-import-company", "b.yaml"},
+		&out, &errOut)
+	if err == nil {
+		t.Fatal("both Tier B flags were accepted")
+	}
+	for _, want := range []string{"-company", "-import-company", "opposite"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %q: %v", want, err)
+		}
+	}
+}
+
+// A TIER B PATH THE OPERATOR TYPED AND THAT IS NOT THERE IS A TYPO, whichever
+// flag carried it. Booting past it would give them a node quietly running
+// something other than what they named.
+func TestANamedTierBFileThatIsMissingIsRefused(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	boot := filepath.Join(dir, "crewlet.yaml")
+	if err := os.WriteFile(boot, []byte("node:\n  id: n1\nstore:\n  path: "+
+		filepath.Join(dir, "n.db")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, flag := range []string{"-company", "-import-company"} {
+		t.Run(flag, func(t *testing.T) {
+			t.Parallel()
+			var out, errOut bytes.Buffer
+			err := run([]string{"run", "-config", boot, flag,
+				filepath.Join(dir, "nope.yaml")}, &out, &errOut)
+			if err == nil {
+				t.Fatalf("%s named a missing file and was accepted", flag)
+			}
+			if !strings.Contains(err.Error(), "nope.yaml") {
+				t.Errorf("the error does not name the file: %v", err)
+			}
+		})
+	}
+}
+
+// USAGE NAMES BOTH, because nothing connects the flag registration to the help
+// text and a flag an operator is never told about is one they never reach for
+// — which for -import-company means reaching for the one that silently does
+// nothing instead.
+func TestUsageNamesBothTierBFlags(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	usage(&buf)
+	for _, want := range []string{"-company", "-import-company"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("usage never names %q:\n%s", want, buf.String())
+		}
+	}
+}

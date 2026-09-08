@@ -17,10 +17,16 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The seed is the one piece of policy in this binary: `-company` names a FILE,
-// and a running node serves the STORE. What these pin is the rule joining
-// them — the file is imported when, and only when, the store does not already
-// hold it.
+// The seed is the one piece of policy in this binary: a Tier B file on the
+// command line names a FILE, and a running node serves the STORE. What these
+// pin is the rule joining them, which is now two rules, because there are two
+// flags:
+//
+//   -company        bootstraps an EMPTY store and is otherwise ignored, loudly
+//   -import-company activates over whatever the store already holds
+//
+// Both are idempotent by CONTENT: an unchanged file writes nothing however
+// many times a node boots.
 
 func seedStore(t *testing.T) *store.DB {
 	t.Helper()
@@ -50,7 +56,7 @@ func TestAFirstRunSeedsTheStore(t *testing.T) {
 	// store finds it unconfigured.
 	db := seedStore(t)
 	fleet := coordmemory.NewFleet()
-	if err := seedCompany(t.Context(), db, fleet, nil, parse(t, companyYAML), nil, quiet()); err != nil {
+	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)), nil, quiet()); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	active, found, err := db.Configs().Active(t.Context())
@@ -79,7 +85,7 @@ func TestAnUnchangedFileSeedsNothing(t *testing.T) {
 	db := seedStore(t)
 	company := parse(t, companyYAML)
 	for range 5 {
-		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, company, nil, quiet()); err != nil {
+		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seedOf(company), nil, quiet()); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	}
@@ -92,19 +98,22 @@ func TestAnUnchangedFileSeedsNothing(t *testing.T) {
 	}
 }
 
-func TestAnEditedFileIsImportedOnce(t *testing.T) {
+// AN OVERRIDE IMPORTS AN EDITED FILE, once however many times it boots.
+//
+// This is `-import-company`: the deliberate "this file is the company again"
+// gesture. Silently doing nothing here would be the worst outcome — an
+// operator names a file explicitly to make it win, restarts, and nothing
+// happens, with nothing anywhere saying why.
+func TestAnOverrideImportsAnEditedFileOnce(t *testing.T) {
 	t.Parallel()
-	// The alternative — silently preferring the store — is the worst of
-	// the three: an operator edits a config, restarts, and nothing happens,
-	// with nothing anywhere saying why.
 	db := seedStore(t)
 	fleet := coordmemory.NewFleet()
-	if err := seedCompany(t.Context(), db, fleet, nil, parse(t, companyYAML), nil, quiet()); err != nil {
+	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)), nil, quiet()); err != nil {
 		t.Fatal(err)
 	}
 	edited := strings.Replace(companyYAML, "name: Acme", "name: Acme Renamed", 1)
 	for range 3 {
-		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, parse(t, edited), nil, quiet()); err != nil {
+		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, overrideOf(parse(t, edited)), nil, quiet()); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	}
@@ -148,7 +157,7 @@ func TestASealedStoreDoesNotReseedOnEveryBoot(t *testing.T) {
 	}
 	company := parse(t, companyYAML)
 	for range 4 {
-		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, company, cipher, quiet()); err != nil {
+		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seedOf(company), cipher, quiet()); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	}
@@ -182,10 +191,10 @@ func TestASealedStoreWithNoKeyringRefusesRatherThanReseeding(t *testing.T) {
 		t.Fatal(err)
 	}
 	company := parse(t, companyYAML)
-	if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, company, cipher, quiet()); err != nil {
+	if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seedOf(company), cipher, quiet()); err != nil {
 		t.Fatal(err)
 	}
-	err = seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, company, nil, quiet())
+	err = seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seedOf(company), nil, quiet())
 	if err == nil {
 		t.Fatal("a node with no keyring seeded over a sealed revision")
 	}
@@ -228,7 +237,7 @@ func TestANodeWithNoPointerPublishesItsActiveRevision(t *testing.T) {
 	company := parse(t, companyYAML)
 
 	// A first start, which seeds the revision and publishes the pointer.
-	if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, company, nil, quiet()); err != nil {
+	if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seedOf(company), nil, quiet()); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	active, found, err := db.Configs().Active(t.Context())
@@ -239,7 +248,7 @@ func TestANodeWithNoPointerPublishesItsActiveRevision(t *testing.T) {
 	// A restart onto a FRESH coordination store, with the same file and
 	// the same database.
 	fleet := coordmemory.NewFleet()
-	if err := seedCompany(t.Context(), db, fleet, nil, company, nil, quiet()); err != nil {
+	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(company), nil, quiet()); err != nil {
 		t.Fatalf("restart: %v", err)
 	}
 	target, found, err := fleet.Target(t.Context())
@@ -259,7 +268,7 @@ func TestAStaleLocalRevisionDoesNotOverwriteTheFleet(t *testing.T) {
 	t.Parallel()
 	db := seedStore(t)
 	fleet := coordmemory.NewFleet()
-	if err := seedCompany(t.Context(), db, fleet, nil, parse(t, companyYAML), nil, quiet()); err != nil {
+	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)), nil, quiet()); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	// A PEER activated something else, later.
@@ -269,7 +278,7 @@ func TestAStaleLocalRevisionDoesNotOverwriteTheFleet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("peer activate: %v", err)
 	}
-	if err := seedCompany(t.Context(), db, fleet, nil, parse(t, companyYAML), nil, quiet()); err != nil {
+	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)), nil, quiet()); err != nil {
 		t.Fatalf("restart: %v", err)
 	}
 	after, _, err := fleet.Target(t.Context())
@@ -279,5 +288,139 @@ func TestAStaleLocalRevisionDoesNotOverwriteTheFleet(t *testing.T) {
 	if after.RevisionID != peer.RevisionID {
 		t.Fatalf("a restarting node rolled the fleet back to %s, want the peer's %s",
 			after.RevisionID, peer.RevisionID)
+	}
+}
+
+// seedOf is a `-company` bootstrap seed: imported only into an empty store.
+func seedOf(c *config.Company) tierBSeed {
+	return tierBSeed{Path: "company.yaml", Company: c}
+}
+
+// overrideOf is the `-import-company` form: activated over whatever is there.
+func overrideOf(c *config.Company) tierBSeed {
+	return tierBSeed{Path: "company.yaml", Override: true, Company: c}
+}
+
+// A BOOTSTRAP SEED NEVER OVERWRITES A COMPANY THAT EXISTS.
+//
+// This is the whole reason there are two flags. `-company` used to import
+// whenever its content differed from the active revision, which made every
+// restart a write: an operator edits their company live — the dashboard, PUT
+// /config, `crewlet config import` — then restarts a node whose file is a
+// month old, and the file wins. A deleted role comes back, a changed model
+// reverts, and nothing says so.
+//
+// The store has to be left EXACTLY as it was: not just "still active", but no
+// new revision, no moved pointer, and the same document underneath. A seed
+// that chained a revision and then activated the old one back would pass a
+// weaker check and still have rewritten the fleet's history.
+func TestABootstrapSeedDoesNotOverwriteAnExistingCompany(t *testing.T) {
+	t.Parallel()
+	db := seedStore(t)
+	fleet := coordmemory.NewFleet()
+	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)), nil, quiet()); err != nil {
+		t.Fatal(err)
+	}
+	before, _, err := db.Configs().Active(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pointerBefore, _, err := fleet.Target(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The stale file, booted repeatedly, exactly as a restart would.
+	edited := strings.Replace(companyYAML, "name: Acme", "name: Acme Renamed", 1)
+	for range 3 {
+		if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, edited)), nil, quiet()); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+
+	revisions, err := db.Configs().List(t.Context(), 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(revisions) != 1 {
+		t.Fatalf("%d revisions, want only the one that bootstrapped the store: "+
+			"a stale file rewrote a live company", len(revisions))
+	}
+	after, _, err := db.Configs().Active(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ID != before.ID {
+		t.Errorf("the active revision moved from %s to %s", before.ID, after.ID)
+	}
+	var company map[string]any
+	if err := json.Unmarshal(after.Payload, &company); err != nil {
+		t.Fatal(err)
+	}
+	if company["name"] != "Acme" {
+		t.Errorf("active company = %v, want the one already in the store", company["name"])
+	}
+	pointerAfter, _, err := fleet.Target(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pointerAfter.RevisionID != pointerBefore.RevisionID {
+		t.Errorf("the activation pointer moved from %s to %s — every peer "+
+			"rebuilt its epoch for a file that should have been ignored",
+			pointerBefore.RevisionID, pointerAfter.RevisionID)
+	}
+}
+
+// NO FILE AT ALL IS A NORMAL WAY TO RUN A NODE. The store is authoritative, so
+// a node whose company already lives there needs no Tier B document — and the
+// documented bootstrap path (start the node, then PUT /config) needs the node
+// to start without one.
+func TestNoSeedFileLeavesTheStoreAlone(t *testing.T) {
+	t.Parallel()
+	db := seedStore(t)
+	fleet := coordmemory.NewFleet()
+	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)), nil, quiet()); err != nil {
+		t.Fatal(err)
+	}
+	before, _, err := db.Configs().Active(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// tierBSeed with no Company: `crewlet run` with no company.yaml.
+	if err := seedCompany(t.Context(), db, fleet, nil, tierBSeed{Path: "company.yaml"}, nil, quiet()); err != nil {
+		t.Fatalf("seed with no file: %v", err)
+	}
+	revisions, err := db.Configs().List(t.Context(), 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(revisions) != 1 {
+		t.Fatalf("%d revisions, want the store untouched", len(revisions))
+	}
+	after, _, err := db.Configs().Active(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ID != before.ID {
+		t.Errorf("the active revision changed with no file to change it")
+	}
+}
+
+// AND AN EMPTY STORE WITH NO FILE IS NOT AN ERROR. It is the unconfigured
+// node: it has nothing to activate and nothing to say about it, and its API is
+// what an operator pushes the first revision into.
+func TestNoSeedAndNoRevisionIsNotAFailure(t *testing.T) {
+	t.Parallel()
+	db := seedStore(t)
+	if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil,
+		tierBSeed{Path: "company.yaml"}, nil, quiet()); err != nil {
+		t.Fatalf("an unconfigured node failed to seed: %v", err)
+	}
+	revisions, err := db.Configs().List(t.Context(), 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(revisions) != 0 {
+		t.Fatalf("%d revisions, want none", len(revisions))
 	}
 }
