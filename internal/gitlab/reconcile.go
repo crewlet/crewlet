@@ -305,7 +305,12 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 				fmt.Errorf("gitlab: %s: mint token: %w", seat.Handle, err))
 		}
 		minted[seat.Handle] = mintedToken{
-			userID: user.ID, tokenID: token.ID, createdAccount: created,
+			// THE GROUP IT WAS MINTED THROUGH, carried rather than
+			// recomputed: a rollback that reached for the other route
+			// would fail to revoke exactly the credential it just
+			// created, which is the one moment a live token is loose.
+			groupID: mintGroup(opts, group.ID),
+			userID:  user.ID, tokenID: token.ID, createdAccount: created,
 		}
 		// RECORDED IMMEDIATELY. The value above is the only copy there
 		// will ever be.
@@ -322,7 +327,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		// administrator may have minted a token on this account by hand,
 		// and revoking it would break whatever is using it — silently,
 		// since nothing here knows what that is.
-		retired, err := retirePrevious(ctx, opts, user.ID, seat, token.ID)
+		retired, err := retirePrevious(ctx, opts, mintGroup(opts, group.ID), user.ID, seat, token.ID)
 		if err != nil {
 			return nil, rollback(ctx, opts, minted,
 				fmt.Errorf("gitlab: %s: %w", seat.Handle, err))
@@ -384,6 +389,11 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 
 // mintedToken is one credential this run created, as its rollback needs it.
 type mintedToken struct {
+	// groupID is the group the token was minted THROUGH, or zero for the
+	// instance route. Carried rather than recomputed: a rollback reaching
+	// for the other route would fail to revoke exactly the credential it
+	// just created, which is the one moment a live token is loose.
+	groupID int
 	userID  int
 	tokenID int
 	// createdAccount says the account is this run's, which decides HOW
@@ -460,8 +470,10 @@ func status(err error) int {
 }
 
 // retirePrevious revokes this tool's earlier tokens on an existing account.
-func retirePrevious(ctx context.Context, opts Options, userID int, seat provision.Seat, keep int) (int, error) {
-	tokens, err := opts.Client.Tokens(ctx, userID)
+func retirePrevious(
+	ctx context.Context, opts Options, groupID, userID int, seat provision.Seat, keep int,
+) (int, error) {
+	tokens, err := opts.Client.Tokens(ctx, groupID, userID)
 	if err != nil {
 		return 0, fmt.Errorf("list tokens: %w", err)
 	}
@@ -474,7 +486,7 @@ func retirePrevious(ctx context.Context, opts Options, userID int, seat provisio
 		if token.ID == keep || token.Revoked || token.Name != TokenName(seat.Handle) {
 			continue
 		}
-		if err := opts.Client.RevokeToken(ctx, token.ID); err != nil {
+		if err := opts.Client.RevokeToken(ctx, groupID, userID, token.ID); err != nil {
 			return retired, fmt.Errorf("revoke the previous token: %w", err)
 		}
 		retired++
@@ -1072,9 +1084,9 @@ func rollback(ctx context.Context, opts Options, minted map[string]mintedToken, 
 		if m.createdAccount {
 			// Nothing else has ever minted on an account this run made,
 			// so taking everything takes exactly what this run caused.
-			err = opts.Client.RevokeTokens(ctx, m.userID)
+			err = opts.Client.RevokeTokens(ctx, m.groupID, m.userID)
 		} else {
-			err = opts.Client.RevokeToken(ctx, m.tokenID)
+			err = opts.Client.RevokeToken(ctx, m.groupID, m.userID, m.tokenID)
 		}
 		if err != nil {
 			problems = append(problems, fmt.Sprintf("%s: %v", handle, err))

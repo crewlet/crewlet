@@ -227,15 +227,21 @@ It is **held** rather than asked for each time, and the reason is the disconnect
 | **Self-managed**, `-mode group` (default) | An **instance admin PAT**, **or** a group Owner PAT with the instance setting `allow_top_level_group_owners_to_create_service_accounts` enabled |
 | **Self-managed**, `-mode instance` | An **instance admin PAT**, always — a group Owner cannot create an account the instance owns. A `403` on this route says so by name, because the same status means a different remedy in each mode and "403 Forbidden" alone tells an operator nothing about which |
 
-**A seat's token is minted through the group that owns the account**
-(`POST /groups/:id/service_accounts/:user_id/personal_access_tokens`), which
-is what makes the GitLab.com row above true. The instance route
-(`POST /users/:id/personal_access_tokens`) is admin only, and on GitLab.com
-nobody is an instance admin: a run that created accounts through the group
-route and minted through that one got a `403` on every seat, leaving accounts
-with no token and agents authenticating as nobody. Instance mode still uses
-the admin route, because there the credential is an admin token and no group
-owns the account.
+**Every token operation goes through the group that owns the account**, which
+is what makes the GitLab.com row above true:
+
+| Operation | Group route (a group Owner may call) | Instance route (admin only) |
+|---|---|---|
+| Mint | `POST /groups/:id/service_accounts/:uid/personal_access_tokens` | `POST /users/:uid/personal_access_tokens` |
+| List | `GET /groups/:id/service_accounts/:uid/personal_access_tokens` | `GET /personal_access_tokens?user_id=` |
+| Revoke | `DELETE …/personal_access_tokens/:token_id` under the group | `DELETE /personal_access_tokens/:token_id` |
+
+On GitLab.com nobody is an instance admin, so a run reaching for the right
+column is refused, and the three refusals arrive at three different moments: a
+mint `403`s outright, a list `401`s on the *next* pass after minting has
+already succeeded, and a revoke fails inside a rollback whose message says a
+live credential was left behind. Instance mode uses the right column, because
+there the credential is an admin token and no group owns the account.
 
 On the GitLab.com Free tier, **annual token rotation is the norm** — every new PAT expires within 365 days (non-expiring service-account tokens require the Premium group setting). Wire `crewlet gitlab provision -rotate` into a yearly cron.
 

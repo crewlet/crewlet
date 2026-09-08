@@ -175,7 +175,11 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 		// caller that never asks for page 2 look correct.
 		json.NewEncoder(w).Encode(pageOf(out, r.URL.Query()))
 
-	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/groups/7/service_accounts/"):
+	// THE ACCOUNT ITSELF, and not a token on it: the group's token routes
+	// live under this same prefix, so a prefix match alone deleted the
+	// whole account when a run asked to revoke one of its tokens.
+	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/groups/7/service_accounts/") &&
+		!strings.Contains(path, "/personal_access_tokens"):
 		id := atoi(strings.TrimPrefix(path, "/groups/7/service_accounts/"))
 		for name, uid := range f.users {
 			if uid != id {
@@ -334,7 +338,29 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 			"token": token.Value, "id": token.ID, "name": token.Name,
 		})
 
+	// THE GROUP'S OWN LISTING, which is what a group Owner may read. The
+	// admin listing below answers 401 for anyone else, and that 401 is
+	// what a run hit on its SECOND pass, after minting had already
+	// succeeded.
+	case r.Method == http.MethodGet && strings.HasSuffix(path, "/personal_access_tokens") &&
+		strings.Contains(path, "/service_accounts/"):
+		id, _ := mintTarget(path)
+		out := make([]map[string]any, 0, len(f.tokens[atoi(id)]))
+		for _, t := range f.tokens[atoi(id)] {
+			row := map[string]any{"id": t.ID, "name": t.Name, "revoked": t.Revoked}
+			if !t.ExpiresAt.IsZero() {
+				row["expires_at"] = t.ExpiresAt.Format(time.DateOnly)
+			}
+			out = append(out, row)
+		}
+		json.NewEncoder(w).Encode(out)
+
 	case r.Method == http.MethodGet && path == "/personal_access_tokens":
+		if !f.instanceAdmin {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"message":"401 Unauthorized"}`))
+			return
+		}
 		id := atoi(r.URL.Query().Get("user_id"))
 		out := make([]map[string]any, 0, len(f.tokens[id]))
 		for _, t := range f.tokens[id] {
@@ -345,6 +371,15 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 			out = append(out, row)
 		}
 		json.NewEncoder(w).Encode(out)
+
+	// AND THE GROUP'S OWN REVOKE, the third of the three routes a group
+	// Owner may call. Rewritten onto the admin shape so one handler serves
+	// both: what differs is the permission, which is checked above.
+	case r.Method == http.MethodDelete && strings.Contains(path, "/service_accounts/") &&
+		strings.Contains(path, "/personal_access_tokens/"):
+		at := strings.LastIndex(path, "/personal_access_tokens/")
+		path = "/personal_access_tokens/" + path[at+len("/personal_access_tokens/"):]
+		fallthrough
 
 	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/personal_access_tokens/"):
 		if f.failTokenRevoke {
@@ -2255,7 +2290,7 @@ func TestADecommissionSeesPastTheFirstPageOfMembers(t *testing.T) {
 // minted through the admin one got a 403 on every seat, for ever: an account
 // existed with no token, the seat authenticated as nobody, and the card said
 // the sync would take care of it.
-func TestAGroupOwnerMintsThroughTheGroupRoute(t *testing.T) {
+func TestAGroupOwnerUsesTheGroupRouteForEveryTokenOperation(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
 	// NOT AN ADMIN, which is every gitlab.com credential: the fake refuses
@@ -2269,14 +2304,25 @@ func TestAGroupOwnerMintsThroughTheGroupRoute(t *testing.T) {
 		t.Fatalf("result = %+v", res)
 	}
 
-	// THE GROUP'S OWN ROUTE, and never the instance's.
-	var minted string
+	// THE GROUP'S OWN ROUTES, and never the instance's. All three of them:
+	// the mint 403s outright, the list 401s on the NEXT pass after minting
+	// had already succeeded, and the revoke fails inside a rollback where
+	// the message says a live credential was left behind.
 	for _, call := range f.calls {
-		if strings.HasPrefix(call, "POST ") && strings.HasSuffix(call, "/personal_access_tokens") {
-			minted = call
+		if !strings.Contains(call, "/personal_access_tokens") {
+			continue
+		}
+		if !strings.Contains(call, "/service_accounts/") {
+			t.Errorf("a token operation went through %q, which a group Owner "+
+				"may not call: on gitlab.com nobody is an instance admin", call)
 		}
 	}
-	if !strings.Contains(minted, "/service_accounts/") {
-		t.Errorf("the token was minted through %q, which a group Owner may not call", minted)
+
+	// AND A SECOND PASS IS THE ONE THAT LISTS. The first mints; the next
+	// reads the tokens back to decide whether to keep what it finds, and
+	// that read is the admin listing unless it goes through the group.
+	if _, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"}, nil); err != nil {
+		t.Fatalf("a second pass could not read the tokens it had minted: %v", err)
 	}
 }

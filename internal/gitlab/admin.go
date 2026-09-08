@@ -342,9 +342,39 @@ func (d *Date) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
+// tokenPath is where an account's tokens live, and it follows who owns the
+// account because the PERMISSION does.
+//
+// THE INSTANCE ROUTES ARE ADMIN ONLY, all three of them: listing another
+// account's tokens, minting one, and revoking one. Nobody is an instance
+// admin on gitlab.com, so a group Owner reaching for any of them is refused,
+// and the three refusals arrive at three different points in a run: the mint
+// 403s outright, the list 401s on the next pass, and the revoke fails inside
+// a rollback where the message says a live credential was left behind.
+//
+// The group routes are the counterpart of the group creation and are what a
+// group Owner may call. So groupID decides: non-zero addresses the group that
+// owns the account, zero the instance, which is the self-managed path where
+// the credential IS an admin token and no group owns the account.
+func tokenPath(groupID, userID int) string {
+	if groupID != 0 {
+		return "/groups/" + strconv.Itoa(groupID) + "/service_accounts/" +
+			strconv.Itoa(userID) + "/personal_access_tokens"
+	}
+	return "/users/" + strconv.Itoa(userID) + "/personal_access_tokens"
+}
+
 // Tokens lists an account's personal access tokens.
-func (c *Client) Tokens(ctx context.Context, userID int) ([]Token, error) {
+//
+// THROUGH THE GROUP where one owns the account: `/personal_access_tokens` is
+// an admin listing, and asking it as a group Owner answers 401. See
+// [tokenPath].
+func (c *Client) Tokens(ctx context.Context, groupID, userID int) ([]Token, error) {
 	var tokens []Token
+	if groupID != 0 {
+		err := c.get(ctx, tokenPath(groupID, userID), nil, &tokens)
+		return tokens, err
+	}
 	err := c.get(ctx, "/personal_access_tokens",
 		url.Values{"user_id": {strconv.Itoa(userID)}}, &tokens)
 	return tokens, err
@@ -376,13 +406,8 @@ func (c *Client) CreateToken(
 	if !expiry.IsZero() {
 		body["expires_at"] = expiry.UTC().Format(time.DateOnly)
 	}
-	path := "/users/" + strconv.Itoa(userID) + "/personal_access_tokens"
-	if groupID != 0 {
-		path = "/groups/" + strconv.Itoa(groupID) + "/service_accounts/" +
-			strconv.Itoa(userID) + "/personal_access_tokens"
-	}
 	var out Token
-	err := c.send(ctx, http.MethodPost, path, body, &out)
+	err := c.send(ctx, http.MethodPost, tokenPath(groupID, userID), body, &out)
 	if err != nil {
 		return Token{}, err
 	}
@@ -395,9 +420,12 @@ func (c *Client) CreateToken(
 }
 
 // RevokeToken removes one token.
-func (c *Client) RevokeToken(ctx context.Context, tokenID int) error {
-	err := c.send(ctx, http.MethodDelete,
-		"/personal_access_tokens/"+strconv.Itoa(tokenID), nil, nil)
+func (c *Client) RevokeToken(ctx context.Context, groupID, userID, tokenID int) error {
+	path := "/personal_access_tokens/" + strconv.Itoa(tokenID)
+	if groupID != 0 {
+		path = tokenPath(groupID, userID) + "/" + strconv.Itoa(tokenID)
+	}
+	err := c.send(ctx, http.MethodDelete, path, nil, nil)
 	if isNotFound(err) {
 		return nil
 	}
@@ -411,14 +439,14 @@ func (c *Client) RevokeToken(ctx context.Context, tokenID int) error {
 // this run caused. On an account that already existed the rollback revokes
 // by id instead — sweeping it would take an administrator's own token with
 // no way to tell that it had.
-func (c *Client) RevokeTokens(ctx context.Context, userID int) error {
-	tokens, err := c.Tokens(ctx, userID)
+func (c *Client) RevokeTokens(ctx context.Context, groupID, userID int) error {
+	tokens, err := c.Tokens(ctx, groupID, userID)
 	if err != nil {
 		return err
 	}
 	var failures []string
 	for _, t := range tokens {
-		if err := c.RevokeToken(ctx, t.ID); err != nil {
+		if err := c.RevokeToken(ctx, groupID, userID, t.ID); err != nil {
 			failures = append(failures, strconv.Itoa(t.ID))
 		}
 	}
