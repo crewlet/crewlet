@@ -532,7 +532,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		summary = datadog.Summary()
 		reqs = datadog.Requirements(block, s.resolve)
 		at := mcpEnvAt([]string{datadog.SeatEnv}, datadog.CredentialKeys)
-		at.Identity = derivedIdentity("Service account", func(handle string) string {
+		at.Identity = derivedIdentity(func(handle string) string {
 			if block == nil {
 				return ""
 			}
@@ -601,7 +601,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		summary = gitlab.Summary()
 		reqs = gitlab.Requirements(block, s.resolve)
 		at := mcpEnvAt([]string{gitlab.SeatEnv}, gitlab.CredentialKeys)
-		at.Identity = derivedIdentity("Service account", func(handle string) string {
+		at.Identity = derivedIdentity(func(handle string) string {
 			if block == nil {
 				return ""
 			}
@@ -621,7 +621,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		// card reported Connected over a company whose agents had no bots,
 		// which is the half an operator cannot act on.
 		at := mattermostAt
-		at.Identity = derivedIdentity("Bot", func(handle string) string {
+		at.Identity = derivedIdentity(func(handle string) string {
 			if block == nil {
 				return ""
 			}
@@ -896,26 +896,25 @@ func mcpEnvAt(envs, keys []string) seatCredentialAt {
 // document holds a reference and a roster wants the account.
 func atlassianIdentity(resolve func(string) (string, bool)) func(*config.Role) string {
 	return func(role *config.Role) string {
-		if email := setup.Deref(atlassian.SeatEmail(role.MCPEnv), resolve); email != "" {
-			return "Account " + email
-		}
-		return ""
+		return setup.Deref(atlassian.SeatEmail(role.MCPEnv), resolve)
 	}
 }
 
 // derivedIdentity is the account an app's provisioner names a seat by, for
 // the apps that derive it from the handle rather than being told it.
 //
+// THE VALUE ALONE, with no noun in front of it. What the row is for is
+// matching against the app's own user list, and a reader doing that is
+// looking for the string, which "Service account " pushes right and makes
+// every row start the same way.
+//
 // THE SAME FUNCTION THE PASS USES, so the roster and the account are one
 // answer: a second rule here would name the wrong account the day either
 // changed, and the failure is an operator hunting a user list for a name
 // nothing created.
-func derivedIdentity(noun string, name func(handle string) string) func(*config.Role) string {
+func derivedIdentity(name func(handle string) string) func(*config.Role) string {
 	return func(role *config.Role) string {
-		if who := name(role.Seat().Handle()); who != "" {
-			return noun + " " + who
-		}
-		return ""
+		return name(role.Seat().Handle())
 	}
 }
 
@@ -1288,15 +1287,17 @@ func githubSeats(company *config.Company, resolve func(string) (string, bool)) [
 				// difference between two finished seats but not the
 				// question a roster of agents raises first: the login is
 				// what appears on every commit, comment and review this
-				// agent writes, and it is what an operator matches
-				// against GitHub's own pages.
+				// agent writes (as `<slug>[bot]`), and it is what an
+				// operator matches against GitHub's own pages. The slug
+				// alone, because the suffix is the same on every row and
+				// the app's own settings page is keyed on the slug.
 				//
 				// The scope follows only where the installation NARROWS
 				// it. "Every repository the installation covers" is the
 				// answer an operator already gave when they installed
 				// the app, and repeating it after the login pushes the
 				// name off a narrow row to say nothing.
-				state.Detail = github.BotLogin(app.AppSlug)
+				state.Detail = app.AppSlug
 				if len(app.Repos) > 0 {
 					state.Detail += " in " + strings.Join(app.Repos, ", ")
 				}

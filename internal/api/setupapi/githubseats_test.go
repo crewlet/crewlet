@@ -562,7 +562,7 @@ func TestAFinishedGitHubSeatNamesItsLogin(t *testing.T) {
 		t.Fatal("the roster does not list the finished seat")
 	}
 	detail, _ := seat["detail"].(string)
-	if detail != "acme-reviewer[bot]" {
+	if detail != "acme-reviewer" {
 		t.Errorf("detail = %q, want the login this agent acts as", detail)
 	}
 	// AND NOT THE SCOPE AN OPERATOR ALREADY CHOSE. "Every repository the

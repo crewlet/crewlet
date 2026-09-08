@@ -82,12 +82,12 @@ func TestAWorkingSeatNamesTheAccountItIsAtEachApp(t *testing.T) {
 	for kind, want := range map[string]string{
 		// RECORDED, not derived: Atlassian assigns the address when it
 		// creates the account, so the pass writes it onto the seat.
-		"jira": "Account crewlet-sre-lead@acme.invalid",
+		"jira": "crewlet-sre-lead@acme.invalid",
 		// DERIVED BY THE SAME FUNCTION THE PASS USES, so the roster and
 		// the account are one answer rather than two rules that can drift.
-		"gitlab":     "Service account crewlet-sre-lead",
-		"datadog":    "Service account crewlet-sre-lead@",
-		"mattermost": "Bot @agent-sre-lead",
+		"gitlab":     "crewlet-sre-lead",
+		"datadog":    "crewlet-sre-lead@",
+		"mattermost": "@agent-sre-lead",
 	} {
 		if got := detailOf(t, s, kind); !strings.HasPrefix(got, want) {
 			t.Errorf("%s detail = %q, want it to name the account, starting %q", kind, got, want)
@@ -111,9 +111,11 @@ func TestASeatWithNothingSealedNamesNoAccount(t *testing.T) {
 
 	for _, kind := range []string{"gitlab", "datadog", "mattermost", "jira"} {
 		got := detailOf(t, s, kind)
-		if strings.HasPrefix(got, "Service account") || strings.HasPrefix(got, "Bot ") ||
-			strings.HasPrefix(got, "Account ") {
-			t.Errorf("%s detail = %q, which names an account nothing has created", kind, got)
+		// THE SENTENCE SAYING WHAT IS WRONG, rather than an account name.
+		// A derived name printed here would name an account nothing has
+		// created, over a badge reading "not set up".
+		if !strings.Contains(got, "yet") && !strings.Contains(got, "did not resolve") {
+			t.Errorf("%s detail = %q, which reads as an account rather than a next step", kind, got)
 		}
 		if got == "" {
 			t.Errorf("%s detail is empty, so the row says nothing at all", kind)
