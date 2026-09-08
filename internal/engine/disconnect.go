@@ -88,14 +88,36 @@ func (d vendorDisconnect) Disconnect(ctx context.Context, removeSeats bool) erro
 func (e *Engine) dropBlock(
 	ctx context.Context, kind integration.Kind, vendor func(context.Context) error,
 ) error {
+	// BOTH PRECONDITIONS BEFORE THE VENDOR IS TOUCHED. Each is a thing
+	// THIS NODE lacks rather than anything wrong with the surface, so each
+	// is reported as "not yet": the row is left alone, no attempt is
+	// counted, and a node that has what is missing finishes the disconnect.
+	// A teardown that ran and then could not remove the block would leave
+	// an integration configured, live, and stripped of everything that
+	// made it work.
+	if e.Company() == nil {
+		// NO ACTIVE REVISION. Every pass reads the credential it
+		// authenticates with off `Company().Config`, so without one
+		// there is nothing to authenticate as and no block to drop.
+		//
+		// GUARDED HERE rather than in each of the seven Teardown methods
+		// for the reason [passConverger.Run] is guarded at its own
+		// boundary: this is the loop's OTHER way into a pass, and the
+		// two have to answer a company-less node the same way. Left to
+		// the passes it was seven chances to forget, and the loop reads
+		// its rows off the COORDINATION store — so a disconnect asked
+		// for on a node that holds the document is found by one that
+		// does not, and an unguarded read there is not an error the loop
+		// records but a nil dereference in its detached goroutine,
+		// taking down a process whose seats were running perfectly.
+		return fmt.Errorf("%w: this node has no active company revision",
+			integration.ErrDisconnectUnavailable)
+	}
 	writer := e.configWriterOrNil()
 	if writer == nil {
-		// REFUSED BEFORE THE VENDOR IS TOUCHED, and reported as "not
-		// yet" rather than as a failure: this is normally the window
-		// between the loop arming and the API wiring, which resolves on
-		// its own within a second. A teardown that ran and then could
-		// not remove the block would leave an integration configured,
-		// live, and stripped of everything that made it work.
+		// NO CONFIG SURFACE YET. Normally the window between the loop
+		// arming and the API wiring, which resolves on its own within a
+		// second.
 		return fmt.Errorf("%w: no config surface is wired on this node",
 			integration.ErrDisconnectUnavailable)
 	}
