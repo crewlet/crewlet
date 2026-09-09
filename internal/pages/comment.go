@@ -183,6 +183,115 @@ func (s *Store) subscribeMentions(ctx context.Context, actor Actor, pageID strin
 }
 
 // commentID mints a comment's id, deterministically for a turn.
+// EditComment replaces the body of a comment its own author wrote.
+//
+// # Why the author and nobody else
+//
+// A comment is a remark somebody made, and an edit that anybody could make
+// would be a remark attributed to a person who did not make it — on a record
+// that outlives the page's body and is quoted in a wake. So the rule is the
+// narrow one: the author edits their own, and everyone else who wants the
+// record changed adds a comment saying so. An operator is not an exception,
+// because an operator editing somebody's words silently is the failure this
+// rule exists to prevent rather than the case it did not consider.
+//
+// # Why the change is comment_edited and not comment
+//
+// A reader tells "somebody said something" from "somebody changed what they
+// said" only by the kind. Reusing `comment` would wake a page's watchers with
+// a remark they have already read, and the prompt that renders a wake would
+// describe an edit as a new comment — which is how a seat comes to answer
+// something twice.
+//
+// The comment's own record is REWRITTEN rather than versioned. A page's body
+// has a revision history because prose is worked on; a remark is not, and a
+// hundred revisions of a typo fix is an ageless bucket paying for an edit
+// nobody will read. What survives is the change record, which carries the
+// excerpt as it stands after the edit.
+func (s *Store) EditComment(ctx context.Context, actor Actor, pageID, commentID, body string) (Comment, Written, error) {
+	if err := actor.validate(); err != nil {
+		return Comment{}, Written{}, err
+	}
+	body = strings.TrimSpace(body)
+	switch {
+	case body == "":
+		return Comment{}, Written{}, invalid("body",
+			"an edit needs something in it — removing a remark is not an edit")
+	case len(body) > MaxComment:
+		return Comment{}, Written{}, invalid("body",
+			"%d bytes, past the %d-byte cap — a comment is refused rather than "+
+				"cut, because half a remark reads as a different remark",
+			len(body), MaxComment)
+	}
+
+	pageRec, found, err := s.docs.Document(ctx, coord.FamilyPages, PageKey(pageID))
+	if err != nil {
+		return Comment{}, Written{}, fmt.Errorf("pages: read %s: %w", pageID, err)
+	}
+	if !found {
+		return Comment{}, Written{}, fmt.Errorf("%w: page %s", ErrNotFound, pageID)
+	}
+	page, err := DecodePage(pageRec.Value)
+	if err != nil {
+		return Comment{}, Written{}, err
+	}
+
+	key := CommentKey(pageID, commentID)
+	rec, found, err := s.docs.Document(ctx, coord.FamilyPages, key)
+	if err != nil {
+		return Comment{}, Written{}, fmt.Errorf("pages: read comment %s: %w", commentID, err)
+	}
+	if !found {
+		return Comment{}, Written{}, fmt.Errorf("%w: comment %s", ErrNotFound, commentID)
+	}
+	comment, err := DecodeComment(rec.Value)
+	if err != nil {
+		return Comment{}, Written{}, err
+	}
+	if comment.Author != actor.Name() || comment.AuthorKind != actor.Kind {
+		return Comment{}, Written{}, fmt.Errorf(
+			"%w: comment %s was written by %s, and a comment is edited by its "+
+				"own author — add one saying what changed instead",
+			ErrInvalid, commentID, comment.Author)
+	}
+	if comment.Body == body {
+		// NOTHING CHANGED. Writing a change record here would wake the
+		// page's watchers about an edit that edited nothing, which is the
+		// same noise as an edit nobody made.
+		return comment, Written{Page: page, Revision: pageRec.Version}, nil
+	}
+
+	at := s.now()
+	comment.Body = body
+	comment.UpdatedAt = at
+	change := s.change(actor, page, ChangeCommentEdited, at)
+	change.CommentID = comment.ID
+	change.Excerpt = excerpt(body)
+	change.HeadRevision = pageRec.Version
+	comment.LastChange = &change
+
+	data, err := EncodeComment(comment)
+	if err != nil {
+		return Comment{}, Written{}, err
+	}
+	// COMPARE-AND-SET on the version this edit read, so two edits of one
+	// comment are a race with exactly one winner rather than a last-writer
+	// that silently discards the other's words.
+	ok, err := s.docs.UpdateDocument(ctx, coord.FamilyPages, key, data, rec.Version)
+	if err != nil {
+		return Comment{}, Written{}, fmt.Errorf("pages: edit comment %s: %w", commentID, err)
+	}
+	if !ok {
+		return Comment{}, Written{}, fmt.Errorf(
+			"%w: comment %s changed while this edit was being written — re-read "+
+				"it and apply the edit again", ErrConflict, commentID)
+	}
+	if err := s.writeChange(ctx, change); err != nil {
+		return comment, Written{}, err
+	}
+	return comment, Written{Page: page, Revision: pageRec.Version, ChangeID: change.ID}, nil
+}
+
 func (s *Store) commentID(pageID string, in NewComment) string {
 	if strings.TrimSpace(in.TurnKey) == "" {
 		return s.newID()

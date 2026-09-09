@@ -89,7 +89,7 @@ A body that does not arrive inside its deadline fails the read like any other tr
 | `GET` | `/work` | The company's own tracker: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `native` — a company on Jira gets `404 unknown_query`, not an empty board (see [below](#the-native-tracker-and-knowledge-base)) |
 | `GET` | `/work/{id}` | One item with its description, thread, history and links. `{id}` is either the key (`ENG-42`) or the id — a person holds the first and every internal link the second |
 | `GET` | `/pages` | The company's own knowledge base: a filtered listing. Served only where `knowledge.backend` is `native` |
-| `GET` | `/pages/{id}` | One page with its body, comments, revision metadata, children and ancestor breadcrumb. `{id}` is the id, or `CONTAINER/Title` |
+| `GET` | `/pages/{id}` | One page with its body, comments, revision metadata, children and ancestor breadcrumb. `{id}` is the id, or `CONTAINER/Title` — the title matches the way the fleet CLAIMED it, so case and runs of whitespace are ignored and `ENG/deploy runbook` reaches a page called "Deploy  Runbook" |
 | `GET` | `/containers` | Every knowledge container this node knows about |
 | `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection (REST fallback for the WebSocket) |
 | `WS`  | `/ws/stream` | Live dashboard stream — agents, events, LLM invocations, health |

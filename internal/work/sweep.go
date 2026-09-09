@@ -89,15 +89,16 @@ func NewSweeper(docs Documents, now func() time.Time) *Sweeper {
 // says when. A build that changed how ids are minted would silently change
 // what this deleted if it read the key.
 func (s *Sweeper) SweepChanges(ctx context.Context, cutoff time.Time) (int, error) {
-	records, err := s.docs.Documents(ctx, coord.FamilyWork, "")
+	// LISTED BY CLASS. Every class shares one family, and the change
+	// records are a small part of it — so a listing with no prefix
+	// transfers every item, comment and project in the company, hourly, to
+	// find the ones a year old.
+	records, err := s.docs.Documents(ctx, coord.FamilyWork, ClassChange)
 	if err != nil {
 		return 0, fmt.Errorf("work: list the record for the retention sweep: %w", err)
 	}
 	var swept int
 	for _, rec := range records {
-		if class, ok := ClassOf(rec.Key); !ok || class != ClassChange {
-			continue
-		}
 		change, err := DecodeChange(rec.Value)
 		if err != nil {
 			// A change this build cannot decode is LEFT, not deleted. It

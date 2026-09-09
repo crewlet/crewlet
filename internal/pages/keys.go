@@ -1,6 +1,8 @@
 package pages
 
 import (
+	"strconv"
+
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
@@ -83,6 +85,25 @@ func ChangePrefix(pageID string) string {
 // address rather than a coin flip.
 func TitleKey(container, title string) string {
 	return coord.DocumentKey(ClassTitle, container, NormalizeTitle(title))
+}
+
+// RevisionOf recovers the page and the VERSION a revision key names.
+//
+// The version is IN THE KEY — `r.<page>.<n>` — which is what makes a sweep
+// over a page's history a listing of key names rather than a transfer of every
+// body it ever had. False for any other class, and for a version segment that
+// is not a number: a key this grammar did not write is one nothing here may
+// act on.
+func RevisionOf(key string) (pageID string, version int, ok bool) {
+	segs, found := SegmentsOf(key)
+	if !found || len(segs) != 3 || segs[0] != ClassRevision {
+		return "", 0, false
+	}
+	n, err := strconv.Atoi(segs[2])
+	if err != nil || n <= 0 {
+		return "", 0, false
+	}
+	return segs[1], n, true
 }
 
 // ClassOf is which class a key belongs to, and false for a key this grammar

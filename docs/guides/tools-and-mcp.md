@@ -40,7 +40,7 @@ learns to distrust the whole catalogue.
 | `get_page` | One page's body, breadcrumb, children and history |
 | `write_page` | Create one. Titles are addresses and are unique per container |
 | `save_page` | Edit one, stating the version you read — there is no per-field merge that makes overwriting prose safe |
-| `comment_on_page` | Remark on a page |
+| `comment_on_page` | Remark on a page, or replace one of your own with `edit` |
 
 The three writes on each side count as a **delivery** for the turn's own
 did-this-reach-anybody gate, and each waits for its own write to reach this

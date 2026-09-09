@@ -200,3 +200,38 @@ func TestAnItemIsFoundByKeyOrByID(t *testing.T) {
 		t.Errorf("a missing item gave %v, want ErrNotFound", err)
 	}
 }
+
+// A WILDCARD IN A TEXT FILTER IS TEXT.
+//
+// `%` and `_` are LIKE's own wildcards, so an unescaped filter for "100%"
+// matches every item on the board and a filter for "a_b" matches "axb". It is
+// not an injection — the value is bound — it is a WRONG ANSWER with nothing
+// anywhere saying the filter did not apply, which is how a seat concludes
+// there are more items like this one than there are.
+func TestATextFilterTreatsWildcardsAsText(t *testing.T) {
+	t.Parallel()
+	s, db := projected(t)
+	hit := file(t, s, human("jane"), work.NewItem{Title: "100% coverage"})
+	file(t, s, human("jane"), work.NewItem{Title: "ordinary work"})
+	file(t, s, human("jane"), work.NewItem{Title: "another one"})
+	settle(t, func() bool { return rowCount(t, db, `SELECT COUNT(*) FROM work_items`) == 3 },
+		"the items never projected")
+
+	r := reader(t, db)
+	got, err := r.List(t.Context(), work.Filter{Text: "100%"})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 1 || got[0].Key != hit.Item.Key {
+		t.Fatalf("a filter for %q matched %v — the wildcard was not escaped, so "+
+			"it matched everything", "100%", keysOf(got))
+	}
+
+	// AND AN UNDERSCORE IS AN UNDERSCORE. It is the wildcard people never
+	// think of, and the one an item key is full of.
+	if got, err := r.List(t.Context(), work.Filter{Text: "o_dinary"}); err != nil {
+		t.Fatalf("list: %v", err)
+	} else if len(got) != 0 {
+		t.Errorf("a filter for %q matched %v", "o_dinary", keysOf(got))
+	}
+}

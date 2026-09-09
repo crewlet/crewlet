@@ -19,6 +19,7 @@ type fakeKB struct {
 	created  []pages.NewPage
 	saved    []pages.Save
 	comments []pages.NewComment
+	edits    []commentEdit
 	actors   []pages.Actor
 
 	readErr  error
@@ -76,6 +77,19 @@ func (f *fakeKB) Comment(_ context.Context, actor pages.Actor, _ string, in page
 	f.actors = append(f.actors, actor)
 	return pages.Comment{ID: "m1", Mentions: in.Mentions},
 		pages.Written{Page: pages.Page{ID: "p1"}, Revision: 12}, nil
+}
+
+// commentEdit is one EditComment call the fake took.
+type commentEdit struct{ commentID, body string }
+
+func (f *fakeKB) EditComment(_ context.Context, actor pages.Actor, _, commentID, body string) (pages.Comment, pages.Written, error) {
+	if f.writeErr != nil {
+		return pages.Comment{}, pages.Written{}, f.writeErr
+	}
+	f.edits = append(f.edits, commentEdit{commentID: commentID, body: body})
+	f.actors = append(f.actors, actor)
+	return pages.Comment{ID: commentID, Body: body},
+		pages.Written{Page: pages.Page{ID: "p1"}, Revision: 13}, nil
 }
 
 func kbRegistry(t *testing.T, deps builtin.PageDeps) *tools.Registry {
@@ -296,5 +310,51 @@ func TestThePageWritesAreClassifiedAsSharedWrites(t *testing.T) {
 		if !mcp.ReadOnlyProven(entry.Annotations) {
 			t.Errorf("%s is not proven read-only", name)
 		}
+	}
+}
+
+// AN EDIT IS THE SAME TOOL, because it is the same gesture: a model
+// correcting its own remark is putting words on a page, and a second name in
+// the registry is a second thing to learn and a second thing to get wrong.
+func TestCommentOnPageEditsWhenGivenACommentID(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
+
+	out := callWork(t, reg, builtin.CommentOnPageTool, map[string]any{
+		"page": "p1", "body": "a better thought", "edit": "m1",
+	})
+	if out.Failed {
+		t.Fatalf("edit failed: %s", out.Output)
+	}
+	if len(kb.edits) != 1 {
+		t.Fatalf("%d edits recorded, want 1 (comments: %d)", len(kb.edits), len(kb.comments))
+	}
+	if kb.edits[0].commentID != "m1" || kb.edits[0].body != "a better thought" {
+		t.Errorf("edit = %+v", kb.edits[0])
+	}
+	// AND IT DID NOT ALSO POST ONE. An edit that added a comment beside the
+	// one it edited would leave the page saying the thing twice.
+	if len(kb.comments) != 0 {
+		t.Errorf("the edit also posted %d new comment(s)", len(kb.comments))
+	}
+	if !strings.Contains(out.Output, `"edited"`) || !strings.Contains(out.Output, "true") {
+		t.Errorf("the result does not say it edited: %s", out.Output)
+	}
+}
+
+// WITHOUT `edit` IT STILL COMMENTS, which is the case that must not regress.
+func TestCommentOnPageStillPostsWithoutAnEditID(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
+
+	if out := callWork(t, reg, builtin.CommentOnPageTool, map[string]any{
+		"page": "p1", "body": "a first thought",
+	}); out.Failed {
+		t.Fatalf("comment failed: %s", out.Output)
+	}
+	if len(kb.comments) != 1 || len(kb.edits) != 0 {
+		t.Errorf("%d comments and %d edits, want 1 and 0", len(kb.comments), len(kb.edits))
 	}
 }

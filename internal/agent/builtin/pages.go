@@ -46,6 +46,7 @@ type PageWriter interface {
 	Create(ctx context.Context, actor pages.Actor, in pages.NewPage) (pages.Written, error)
 	SavePage(ctx context.Context, actor pages.Actor, pageID string, save pages.Save) (pages.Written, error)
 	Comment(ctx context.Context, actor pages.Actor, pageID string, in pages.NewComment) (pages.Comment, pages.Written, error)
+	EditComment(ctx context.Context, actor pages.Actor, pageID, commentID, body string) (pages.Comment, pages.Written, error)
 }
 
 // PageDeps are the knowledge base's halves plus what a write needs.
@@ -476,7 +477,9 @@ func (t *commentOnPage) Description() string {
 	return "Comment on a page — to ask about something it says, or to flag " +
 		"that it has gone stale. Anyone you @-mention by handle is woken; " +
 		"people watching the page are told. If the answer is a change to the " +
-		"page, make the change with save_page rather than describing it here."
+		"page, make the change with save_page rather than describing it here. " +
+		"Pass `edit` with the id of a comment YOU wrote to replace what it " +
+		"says instead of adding another."
 }
 
 func (t *commentOnPage) Parameters() map[string]any {
@@ -495,6 +498,12 @@ func (t *commentOnPage) Parameters() map[string]any {
 			"reply_to": map[string]any{
 				"type":        "string",
 				"description": "The id of the comment you are answering.",
+			},
+			"edit": map[string]any{
+				"type": "string",
+				"description": "The id of one of YOUR OWN comments to " +
+					"replace with this body. Somebody else's is refused — " +
+					"add a comment saying what changed instead.",
 			},
 		},
 		"required": []any{"page", "body"},
@@ -528,6 +537,22 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		return failed(fmt.Sprintf("There is no page %q.", clip(ref))), nil
 	case err != nil:
 		return failed(readFailure(CommentOnPageTool, err)), nil
+	}
+
+	// AN EDIT IS THE SAME GESTURE, which is why it is this tool rather than
+	// a sixth name in the registry: a model correcting its own remark is
+	// putting words on a page, and the guard that matters — only the author
+	// — lives in the store either way.
+	if edit := strings.TrimSpace(argString(args, "edit")); edit != "" {
+		comment, written, err := t.deps.Writer.EditComment(ctx, actor, detail.Page.ID, edit, body)
+		if err != nil {
+			return failed(pageWriteFailure(CommentOnPageTool, err)), nil
+		}
+		t.deps.settle(ctx, written.Revision)
+		return jsonResult(map[string]any{
+			"comment_id": comment.ID, "page": detail.Page.Title,
+			"edited": true, "revision": written.Revision,
+		})
 	}
 
 	in := pages.NewComment{

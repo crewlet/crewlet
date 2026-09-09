@@ -58,16 +58,18 @@ func NewSweeper(docs Documents, now func() time.Time) *Sweeper {
 }
 
 // SweepChanges purges change records older than cutoff.
+//
+// LISTED BY CLASS. All six classes share one family, so a listing with no
+// prefix transfers every page body and every revision in the company to find
+// the change records — which is the whole of the knowledge base, on a pass
+// that runs hourly and deletes a handful of keys.
 func (s *Sweeper) SweepChanges(ctx context.Context, cutoff time.Time) (int, error) {
-	records, err := s.docs.Documents(ctx, coord.FamilyPages, "")
+	records, err := s.docs.Documents(ctx, coord.FamilyPages, ClassChange)
 	if err != nil {
 		return 0, fmt.Errorf("pages: list the record for the retention sweep: %w", err)
 	}
 	var swept int
 	for _, rec := range records {
-		if class, ok := ClassOf(rec.Key); !ok || class != ClassChange {
-			continue
-		}
 		change, err := DecodeChange(rec.Value)
 		if err != nil {
 			// LEFT, not deleted, on [work.Sweeper.SweepChanges]'s rule: a
@@ -101,33 +103,36 @@ func (s *Sweeper) SweepChanges(ctx context.Context, cutoff time.Time) (int, erro
 // written in the same millisecond by two nodes have distinct versions and
 // indistinguishable timestamps.
 func (s *Sweeper) SweepRevisions(ctx context.Context) (int, error) {
-	records, err := s.docs.Documents(ctx, coord.FamilyPages, "")
+	// KEYS ONLY, and the version comes OUT OF THE KEY.
+	//
+	// A revision key is `r.<page>.<n>`, and n is the version — the same
+	// number the head counts and a reader asks for. Decoding every
+	// revision body to read it back transferred every past body of every
+	// page in the company, hourly, to sort a list of integers the keys
+	// already spell: at a 512 KiB cap and a hundred revisions a page, that
+	// is the largest single transfer this engine makes, for a pass that
+	// usually purges nothing.
+	keys, err := s.docs.DocumentKeys(ctx, coord.FamilyPages, ClassRevision)
 	if err != nil {
-		return 0, fmt.Errorf("pages: list the record for the revision sweep: %w", err)
+		return 0, fmt.Errorf("pages: list the revisions for the sweep: %w", err)
 	}
 
 	type versioned struct {
-		key     string
-		version uint64
-		number  int
+		key    string
+		number int
 	}
 	byPage := map[string][]versioned{}
-	for _, rec := range records {
-		if class, ok := ClassOf(rec.Key); !ok || class != ClassRevision {
-			continue
-		}
-		pageID, ok := PageIDOf(rec.Key)
+	for _, key := range keys {
+		pageID, number, ok := RevisionOf(key)
 		if !ok {
+			// A key this grammar did not write, or one whose version
+			// segment is not a number. Left in place: the sweep does not
+			// delete what it cannot read.
+			log.WarnContext(ctx, "pages_revision_key_unreadable", "key", key,
+				"detail", "left in place")
 			continue
 		}
-		rev, err := DecodeRevision(rec.Value)
-		if err != nil {
-			log.WarnContext(ctx, "pages_revision_undecodable", "key", rec.Key,
-				"error", err.Error(), "detail", "left in place")
-			continue
-		}
-		byPage[pageID] = append(byPage[pageID],
-			versioned{key: rec.Key, version: rec.Version, number: rev.Version})
+		byPage[pageID] = append(byPage[pageID], versioned{key: key, number: number})
 	}
 
 	var swept int
@@ -138,7 +143,22 @@ func (s *Sweeper) SweepRevisions(ctx context.Context) (int, error) {
 		// NEWEST FIRST, so the tail of the slice is what goes.
 		slices.SortFunc(revs, func(a, b versioned) int { return b.number - a.number })
 		for _, rev := range revs[RevisionsKept:] {
-			if _, err := s.docs.PurgeDocument(ctx, coord.FamilyPages, rev.key, rev.version); err != nil {
+			// THE RECORD IS READ ONLY FOR THE ONES BEING PURGED, and only
+			// for its coordination version: a purge is a compare-and-set,
+			// so it needs the version the key is at, and nothing needs the
+			// body.
+			record, found, err := s.docs.Document(ctx, coord.FamilyPages, rev.key)
+			if err != nil {
+				return swept, fmt.Errorf("pages: read revision %d of %s: %w",
+					rev.number, pageID, err)
+			}
+			if !found {
+				// A peer swept it between the listing and this read, which
+				// is the ordinary outcome of two nodes running the same
+				// pass rather than a fault.
+				continue
+			}
+			if _, err := s.docs.PurgeDocument(ctx, coord.FamilyPages, rev.key, record.Version); err != nil {
 				return swept, fmt.Errorf("pages: purge revision %d of %s: %w",
 					rev.number, pageID, err)
 			}
@@ -156,65 +176,132 @@ func (s *Sweeper) SweepRevisions(ctx context.Context) (int, error) {
 // THE TITLE CLAIM IS THE ONE THAT MATTERS. A stray comment costs a key; a
 // stray claim makes a title unusable, and on this backend a title is how a
 // person addresses a page.
+//
+// # What it transfers
+//
+// The live page set and the two child classes are KEY LISTINGS: a comment key
+// and a revision key both name their page, so whether they are orphaned is a
+// question the key answers. Only the title claims are read, because a claim
+// names its page in its VALUE and nowhere else — and there is one per page.
+//
+// A record's own timestamp is read only for the keys whose page is already
+// gone, which on a healthy company is none. What this pass used to do was
+// transfer every page body, every past revision and every comment in the
+// company, hourly, to find the handful a crash left behind.
 func (s *Sweeper) SweepOrphans(ctx context.Context, at time.Time) (int, error) {
-	records, err := s.docs.Documents(ctx, coord.FamilyPages, "")
+	pageKeys, err := s.docs.DocumentKeys(ctx, coord.FamilyPages, ClassPage)
 	if err != nil {
-		return 0, fmt.Errorf("pages: list the record for the orphan sweep: %w", err)
+		return 0, fmt.Errorf("pages: list the pages for the orphan sweep: %w", err)
 	}
 	live := map[string]bool{}
-	for _, rec := range records {
-		if class, ok := ClassOf(rec.Key); ok && class == ClassPage {
-			if id, ok := PageIDOf(rec.Key); ok {
-				live[id] = true
-			}
+	for _, key := range pageKeys {
+		if id, ok := PageIDOf(key); ok {
+			live[id] = true
 		}
 	}
 
 	var swept int
-	for _, rec := range records {
-		class, ok := ClassOf(rec.Key)
-		if !ok {
+
+	// THE CLAIMS, read: a claim names its page in its value.
+	claims, err := s.docs.Documents(ctx, coord.FamilyPages, ClassTitle)
+	if err != nil {
+		return 0, fmt.Errorf("pages: list the title claims for the orphan sweep: %w", err)
+	}
+	for _, rec := range claims {
+		claim, err := DecodeClaim(rec.Value)
+		if err != nil {
+			log.WarnContext(ctx, "pages_claim_undecodable", "key", rec.Key,
+				"error", err.Error(), "detail", "left in place")
 			continue
 		}
-		var (
-			pageID  string
-			written time.Time
-		)
-		switch class {
-		case ClassTitle:
-			claim, err := DecodeClaim(rec.Value)
-			if err != nil {
-				log.WarnContext(ctx, "pages_claim_undecodable", "key", rec.Key,
-					"error", err.Error(), "detail", "left in place")
-				continue
-			}
-			pageID, written = claim.PageID, claim.CreatedAt
-		case ClassComment:
-			comment, err := DecodeComment(rec.Value)
-			if err != nil {
-				log.WarnContext(ctx, "pages_comment_undecodable", "key", rec.Key,
-					"error", err.Error(), "detail", "left in place")
-				continue
-			}
-			pageID, written = comment.PageID, comment.CreatedAt
-		case ClassRevision:
-			rev, err := DecodeRevision(rec.Value)
-			if err != nil {
-				continue
-			}
-			pageID, written = rev.PageID, rev.CreatedAt
-		default:
+		if claim.PageID == "" || live[claim.PageID] || at.Sub(claim.CreatedAt) < ClaimGrace {
 			continue
 		}
-		if pageID == "" || live[pageID] || at.Sub(written) < ClaimGrace {
-			continue
+		purged, err := s.purgeOrphan(ctx, rec.Key, rec.Version, ClassTitle, claim.PageID)
+		if err != nil {
+			return swept, err
 		}
-		if _, err := s.docs.PurgeDocument(ctx, coord.FamilyPages, rec.Key, rec.Version); err != nil {
-			return swept, fmt.Errorf("pages: purge the orphan %s: %w", rec.Key, err)
+		if purged {
+			swept++
 		}
-		log.InfoContext(ctx, "pages_orphan_swept", "key", rec.Key,
-			"class", class, "page", pageID)
-		swept++
+	}
+
+	// THE CHILDREN, by key: both classes name their page in the key, so an
+	// orphan is identifiable without reading anything.
+	for _, class := range []string{ClassComment, ClassRevision} {
+		keys, err := s.docs.DocumentKeys(ctx, coord.FamilyPages, class)
+		if err != nil {
+			return swept, fmt.Errorf("pages: list %q for the orphan sweep: %w", class, err)
+		}
+		for _, key := range keys {
+			pageID, ok := PageIDOf(key)
+			if !ok || pageID == "" || live[pageID] {
+				continue
+			}
+			// READ ONLY NOW, and only for its timestamp: the grace is
+			// what tells a crash's debris from a removal still in
+			// flight, and it is a fact on the record rather than on the
+			// key.
+			rec, found, err := s.docs.Document(ctx, coord.FamilyPages, key)
+			if err != nil {
+				return swept, fmt.Errorf("pages: read the orphan %s: %w", key, err)
+			}
+			if !found {
+				// Swept by a peer between the listing and this read.
+				continue
+			}
+			written, ok := s.writtenAt(ctx, class, rec)
+			if !ok || at.Sub(written) < ClaimGrace {
+				continue
+			}
+			purged, err := s.purgeOrphan(ctx, key, rec.Version, class, pageID)
+			if err != nil {
+				return swept, err
+			}
+			if purged {
+				swept++
+			}
+		}
 	}
 	return swept, nil
+}
+
+// writtenAt is when an orphaned child record was written, and false for one
+// this build cannot decode — which is LEFT IN PLACE, on the same rule the
+// change sweep follows: a record this build cannot read is one a peer wrote.
+func (s *Sweeper) writtenAt(ctx context.Context, class string, rec coord.Record) (time.Time, bool) {
+	switch class {
+	case ClassComment:
+		comment, err := DecodeComment(rec.Value)
+		if err != nil {
+			log.WarnContext(ctx, "pages_comment_undecodable", "key", rec.Key,
+				"error", err.Error(), "detail", "left in place")
+			return time.Time{}, false
+		}
+		return comment.CreatedAt, true
+	case ClassRevision:
+		rev, err := DecodeRevision(rec.Value)
+		if err != nil {
+			log.WarnContext(ctx, "pages_revision_undecodable", "key", rec.Key,
+				"error", err.Error(), "detail", "left in place")
+			return time.Time{}, false
+		}
+		return rev.CreatedAt, true
+	}
+	return time.Time{}, false
+}
+
+// purgeOrphan removes one record whose page is gone.
+func (s *Sweeper) purgeOrphan(ctx context.Context, key string, version uint64,
+	class, pageID string,
+) (bool, error) {
+	purged, err := s.docs.PurgeDocument(ctx, coord.FamilyPages, key, version)
+	if err != nil {
+		return false, fmt.Errorf("pages: purge the orphan %s: %w", key, err)
+	}
+	if !purged {
+		return false, nil
+	}
+	log.InfoContext(ctx, "pages_orphan_swept", "key", key, "class", class, "page", pageID)
+	return true, nil
 }

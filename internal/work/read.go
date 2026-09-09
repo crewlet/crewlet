@@ -176,8 +176,12 @@ func (r *Reader) List(ctx context.Context, f Filter) ([]Summary, error) {
 		args = append(args, f.Watcher)
 	}
 	if text := strings.TrimSpace(f.Text); text != "" {
-		where = append(where, "(i.item_key LIKE ? OR i.title LIKE ?)")
-		like := "%" + text + "%"
+		// ESCAPED, and the ESCAPE clause says so — see [store.LikeContains].
+		// An item key is exactly the shape that breaks a naive filter, and
+		// a search for "100%" matching every item is a wrong answer with
+		// nothing to say it was wrong.
+		where = append(where, `(i.item_key LIKE ? ESCAPE '\' OR i.title LIKE ? ESCAPE '\')`)
+		like := store.LikeContains(text)
 		args = append(args, like, like)
 	}
 

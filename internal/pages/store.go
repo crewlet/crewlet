@@ -18,6 +18,7 @@ import (
 type Documents interface {
 	Document(ctx context.Context, family coord.Family, key string) (coord.Record, bool, error)
 	Documents(ctx context.Context, family coord.Family, prefix string) ([]coord.Record, error)
+	DocumentKeys(ctx context.Context, family coord.Family, prefix string) ([]string, error)
 	CreateDocument(ctx context.Context, family coord.Family, key string, value []byte) (bool, error)
 	UpdateDocument(ctx context.Context, family coord.Family, key string, value []byte, version uint64) (bool, error)
 	PurgeDocument(ctx context.Context, family coord.Family, key string, version uint64) (bool, error)

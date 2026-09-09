@@ -264,14 +264,15 @@ func (a *Applier) applyPage(ctx context.Context, tx *sql.Tx, change coord.Change
 	}
 
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO pages (id, container, parent_id, title, body, status, author,
-		                   version, skill, onboarding, created_at, updated_at,
-		                   trashed_at, revision, document)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO pages (id, container, parent_id, title, title_norm, body,
+		                   status, author, version, skill, onboarding,
+		                   created_at, updated_at, trashed_at, revision, document)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			container  = excluded.container,
 			parent_id  = excluded.parent_id,
 			title      = excluded.title,
+			title_norm = excluded.title_norm,
 			body       = excluded.body,
 			status     = excluded.status,
 			author     = excluded.author,
@@ -283,7 +284,12 @@ func (a *Applier) applyPage(ctx context.Context, tx *sql.Tx, change coord.Change
 			revision   = excluded.revision,
 			document   = excluded.document
 		WHERE excluded.revision > pages.revision`,
-		page.ID, page.Container, page.ParentID, page.Title, page.Body,
+		// THE ADDRESS, from the one function the claim key uses. A second
+		// normalisation here would be a second answer to "what is this
+		// page's address", and the two would differ on exactly the titles
+		// the claim exists to arbitrate.
+		page.ID, page.Container, page.ParentID, page.Title,
+		NormalizeTitle(page.Title), page.Body,
 		string(page.Status), page.Author, page.Version, skill, onboarding,
 		store.EncodeTime(page.CreatedAt), store.EncodeTime(page.UpdatedAt),
 		nullableTime(page.TrashedAt), int64(change.Revision),
