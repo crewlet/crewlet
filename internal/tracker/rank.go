@@ -518,3 +518,79 @@ func RespreadWindow(a, b Rank) (int, error) {
 		}
 	}
 }
+
+// RespreadKeys is n keys, evenly spaced, all sharing one integer head.
+//
+// # Why the re-spread does not use [KeysBetween]
+//
+// KeysBetween subdivides an interval by repeated bisection, which is exactly
+// right for "put this card between those two" and exactly wrong here: half its
+// keys crowd against the upper bound and inherit its length, so re-spreading a
+// project whose keys are 69 characters long produces keys that are 70. The
+// walk that exists to SHORTEN keys would lengthen them.
+//
+// What a re-spread wants instead is a fresh integer position and n evenly
+// spaced fractions inside it, each as short as the count allows: at 62 symbols
+// a three-digit fraction holds 238 328 positions, so every key a real project
+// can produce is five characters. The spacing is uniform rather than bisected
+// because there is no reason to prefer one end — the whole order is being
+// rewritten, so every gap should be the same size.
+//
+// The keys are all strictly greater than head alone and strictly less than the
+// next integer up, which is what makes the caller's "below the project's
+// minimum" reserve enough to place the whole walk.
+func RespreadKeys(head Rank, n int) ([]Rank, error) {
+	if n <= 0 {
+		return nil, nil
+	}
+	integer, err := integerPart(string(head))
+	if err != nil {
+		return nil, err
+	}
+
+	// THE NARROWEST FRACTION THAT LEAVES A GAP OF AT LEAST TWO between
+	// consecutive keys. Two rather than one because the last digit is
+	// nudged off '0' below, and a gap of one would let that nudge
+	// overtake the next key.
+	span := uint64(1)
+	width := 0
+	for span < uint64(2*(n+1)) {
+		span *= uint64(len(RankDigits))
+		width++
+		if width > 10 {
+			return nil, fmt.Errorf("tracker: %d keys need a fraction wider "+
+				"than ten symbols, which is more positions than a project can "+
+				"hold — the order needs rebuilding rather than re-spreading", n)
+		}
+	}
+
+	keys := make([]Rank, 0, n)
+	for i := range n {
+		// EVENLY SPACED, and the arithmetic is over the whole span so
+		// rounding cannot make two keys equal: consecutive values differ
+		// by at least two because the span was chosen for it.
+		value := span * uint64(i+1) / uint64(n+1)
+		fraction := renderFraction(value, width)
+		keys = append(keys, Rank(integer+fraction))
+	}
+	return keys, nil
+}
+
+// renderFraction writes a value in the rank alphabet, fixed width, never
+// ending in '0'.
+//
+// The trailing '0' is forbidden because a key ending in one has a shorter
+// equivalent that sorts identically, and two spellings of one position is a
+// second thing for every comparison to agree about.
+func renderFraction(value uint64, width int) string {
+	base := uint64(len(RankDigits))
+	digits := make([]byte, width)
+	for i := width - 1; i >= 0; i-- {
+		digits[i] = RankDigits[value%base]
+		value /= base
+	}
+	if digits[width-1] == '0' {
+		digits[width-1] = RankDigits[1]
+	}
+	return string(digits)
+}
