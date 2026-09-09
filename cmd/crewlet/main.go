@@ -51,6 +51,7 @@ import (
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/tracing"
+	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/version"
 
 	"gopkg.in/yaml.v3"
@@ -1879,7 +1880,7 @@ func appStateKeyMaterial(boot *config.Bootstrap) []string {
 // question — the exact shape [Engine.Knowledge]'s own doc warns about, in a
 // place where the check is a registration rather than a call.
 func nativeWork(e *engine.Engine) queries.WorkReader {
-	if r := e.Work(); r != nil {
+	if r := e.Tracker(); r != nil {
 		return r
 	}
 	return nil
@@ -1907,13 +1908,20 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 	if c := e.Company(); c != nil && c.Config != nil {
 		opts.Company = c.Config.Name
 	}
-	if reader, writer := e.Work(), e.WorkStore(); reader != nil && writer != nil {
+	if reader, writer := e.Tracker(), e.TrackerWriter(); reader != nil && writer != nil {
 		opts.Work = builtin.WorkDeps{
-			Reader: reader, Writer: writer,
-			Actor: opsmcp.WorkActor,
-			Await: func(ctx context.Context, revision uint64) error {
-				return e.WaitApplied(ctx, coord.FamilyWork, revision)
+			Reader: reader,
+			// THE OPERATOR'S OWN CREDENTIAL IS THE PARTY, and it comes
+			// from the request's context rather than from the call: a
+			// tracker whose author field is chosen by the writer is not
+			// an audit trail, and there is deliberately no way to name a
+			// seat to act as.
+			Writer: func(actor builtin.Actor) builtin.WorkWriter {
+				return writer.As(actor.Handle, actor.Kind,
+					tracker.Provenance{OperatorID: actor.OperatorID})
 			},
+			Actor: opsmcp.WorkActor,
+			Await: e.WaitCommitted,
 		}
 	}
 	if reader, writer := e.Pages(), e.PagesStore(); reader != nil && writer != nil {

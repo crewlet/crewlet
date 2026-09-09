@@ -49,7 +49,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/work"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 var log = logging.Get("api.opsmcp")
@@ -199,19 +199,30 @@ func (s *Server) Handler() http.Handler {
 //
 // A Tier A token has a NAME — the key in `api.auth.tokens` — and that name is
 // what lands on the record: `founder`, `ci`, `ops-bot`. It is not a seat and
-// must not look like one, so the actor kind is [work.AuthorOperator] and the
-// handle is left empty rather than filled with a name that would render as a
-// colleague in every thread it appears in.
+// must not look like one, so the actor KIND is [tracker.AuthorOperator] — the
+// discriminator every renderer and every recipient rule already reads — and
+// the credential is recorded again in `OperatorID` so an audit can ask what
+// one token did without reasoning about kinds.
+//
+// The name goes in the author field rather than being left empty because the
+// tracker requires one: a record carrying no author is a history row nobody
+// can attribute, which is the single thing this surface exists to prevent.
 //
 // The alternative — asking the caller to name a seat to act as — was rejected:
 // it lets anybody with the token write as anybody, and a tracker whose author
 // field can be chosen by the writer is not an audit trail.
-func WorkActor(ctx context.Context, _ *turnctx.Turn) (work.Actor, error) {
+func WorkActor(ctx context.Context, _ *turnctx.Turn) (builtin.Actor, error) {
 	id, ok := auth.OperatorFrom(ctx)
 	if !ok || id == "" {
-		return work.Actor{}, fmt.Errorf("opsmcp: no operator on this request")
+		return builtin.Actor{}, fmt.Errorf("opsmcp: no operator on this request")
 	}
-	return work.Actor{Kind: work.AuthorOperator, OperatorID: id}, nil
+	// THE OPERATOR'S OWN NAME IS THE HANDLE, and the kind says it is not a
+	// seat. A tracker whose author field is chosen by the writer is not an
+	// audit trail, so there is deliberately no way for a caller to name a
+	// seat to act as.
+	return builtin.Actor{
+		Handle: id, Kind: tracker.AuthorOperator, OperatorID: id,
+	}, nil
 }
 
 // PageActor is [WorkActor] for the knowledge base.

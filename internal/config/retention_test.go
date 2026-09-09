@@ -190,20 +190,50 @@ func TestTheLogCeilingIsDerivedFromTheVolume(t *testing.T) {
 // THE VECTOR CHANGELOG IS SIZED FOR THE PEAK, and the peak is a model change
 // republishing every source at once — 93× the steady state. A default sized
 // from the steady state would refuse the one operation it exists to survive.
+//
+// AND THE PEAK IS CAPPED BY THE DISK, which is the other half: the default is
+// a number nobody chose for this volume, and a broker refuses a reservation it
+// cannot back — so a node with a small disk gets a ceiling that fits and boots,
+// rather than a ceiling that is right in principle and a refusal in fact.
 func TestTheVectorCeilingIsSizedForAModelChange(t *testing.T) {
 	t.Parallel()
 	// The modelled year-five peak: every source's current message inside
 	// the window at once.
 	const yearFivePeak = int64(8_460_000_000)
+	// A volume with room for it.
+	const roomy = int64(512) << 30
 	var s config.Stream
-	if got := s.VectorsMaxBytes(); float64(got) < 1.5*float64(yearFivePeak) {
-		t.Errorf("the default vector ceiling is %d, under 1.5× the modelled "+
-			"year-five peak of %d — a width change would be refused partway "+
-			"through", got, yearFivePeak)
+	got, capped := s.VectorsMaxBytes(roomy)
+	if float64(got) < 1.5*float64(yearFivePeak) {
+		t.Errorf("the default vector ceiling is %d on a roomy volume, under "+
+			"1.5× the modelled year-five peak of %d — a width change would be "+
+			"refused partway through", got, yearFivePeak)
 	}
+	if capped {
+		t.Error("the default was reported as capped on a volume with room for it")
+	}
+
+	// AND ON A SMALL DISK IT IS CAPPED AND SAYS SO.
+	small, capped := config.Stream{}.VectorsMaxBytes(8 << 30)
+	if !capped {
+		t.Error("a ceiling the disk cannot back was not reported as capped")
+	}
+	if small >= config.DefaultTrackerVectorsMaxBytes {
+		t.Errorf("the capped ceiling is %d, which is not below the default %d",
+			small, config.DefaultTrackerVectorsMaxBytes)
+	}
+	if small < config.TrackerVectorsMaxBytesFloor {
+		t.Errorf("the capped ceiling is %d, under the floor %d — below it a log "+
+			"is a window that refuses appends within a week",
+			small, config.TrackerVectorsMaxBytesFloor)
+	}
+
+	// AN OPERATOR'S OWN NUMBER IS NOT CAPPED. They named a limit for a
+	// broker they can see, and silently lowering it would be the engine
+	// deciding a limit an emergency grant had just raised.
 	s.TrackerVectorsMaxBytes = 2 << 30
-	if got := s.VectorsMaxBytes(); got != 2<<30 {
-		t.Errorf("a configured ceiling read back as %d", got)
+	if got, capped := s.VectorsMaxBytes(1 << 30); got != 2<<30 || capped {
+		t.Errorf("a configured ceiling read back as %d (capped %v)", got, capped)
 	}
 }
 

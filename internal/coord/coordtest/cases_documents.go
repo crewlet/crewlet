@@ -198,17 +198,17 @@ var documentCases = []fleetCase{
 			// is the reason the match is whole-segment.
 			"index",
 		} {
-			if _, err := h.f.CreateDocument(h.ctx, coord.FamilyWork, key, []byte(`{}`)); err != nil {
+			if _, err := h.f.CreateDocument(h.ctx, coord.FamilyPages, key, []byte(`{}`)); err != nil {
 				h.t.Fatalf("seed %s: %v", key, err)
 			}
 		}
 
 		for _, prefix := range []string{"", "i", "c"} {
-			records, err := h.f.Documents(h.ctx, coord.FamilyWork, prefix)
+			records, err := h.f.Documents(h.ctx, coord.FamilyPages, prefix)
 			if err != nil {
 				h.t.Fatalf("Documents(%q): %v", prefix, err)
 			}
-			keys, err := h.f.DocumentKeys(h.ctx, coord.FamilyWork, prefix)
+			keys, err := h.f.DocumentKeys(h.ctx, coord.FamilyPages, prefix)
 			if err != nil {
 				h.t.Fatalf("DocumentKeys(%q): %v", prefix, err)
 			}
@@ -229,7 +229,7 @@ var documentCases = []fleetCase{
 	}},
 	{"a create is first-writer-wins and losing is not a fault", func(h *fleetHarness) {
 		key := coord.DocumentKey("i", "one")
-		created, err := h.f.CreateDocument(h.ctx, coord.FamilyWork, key, []byte(`{"n":1}`))
+		created, err := h.f.CreateDocument(h.ctx, coord.FamilyPages, key, []byte(`{"n":1}`))
 		if err != nil || !created {
 			h.t.Fatalf("first create = %v, %v; want true, nil", created, err)
 		}
@@ -237,14 +237,14 @@ var documentCases = []fleetCase{
 		// deterministic id and creates again; if that came back as a
 		// failure the turn would report work it had actually done as
 		// broken, and a rescue path would do it twice.
-		created, err = h.f.CreateDocument(h.ctx, coord.FamilyWork, key, []byte(`{"n":2}`))
+		created, err = h.f.CreateDocument(h.ctx, coord.FamilyPages, key, []byte(`{"n":2}`))
 		if err != nil {
 			h.t.Fatalf("second create errored: %v", err)
 		}
 		if created {
 			h.t.Error("a second create reported the document as new")
 		}
-		record, ok, err := h.f.Document(h.ctx, coord.FamilyWork, key)
+		record, ok, err := h.f.Document(h.ctx, coord.FamilyPages, key)
 		if err != nil || !ok {
 			h.t.Fatalf("read back = %v, %v", ok, err)
 		}
@@ -255,14 +255,14 @@ var documentCases = []fleetCase{
 
 	{"an update at a stale version is a lost race, not a fault", func(h *fleetHarness) {
 		key := coord.DocumentKey("i", "two")
-		if _, err := h.f.CreateDocument(h.ctx, coord.FamilyWork, key, []byte(`a`)); err != nil {
+		if _, err := h.f.CreateDocument(h.ctx, coord.FamilyPages, key, []byte(`a`)); err != nil {
 			h.t.Fatal(err)
 		}
-		record, _, err := h.f.Document(h.ctx, coord.FamilyWork, key)
+		record, _, err := h.f.Document(h.ctx, coord.FamilyPages, key)
 		if err != nil {
 			h.t.Fatal(err)
 		}
-		held, err := h.f.UpdateDocument(h.ctx, coord.FamilyWork, key, []byte(`b`), record.Version)
+		held, err := h.f.UpdateDocument(h.ctx, coord.FamilyPages, key, []byte(`b`), record.Version)
 		if err != nil || !held {
 			h.t.Fatalf("update at the read version = %v, %v; want true, nil", held, err)
 		}
@@ -270,7 +270,7 @@ var documentCases = []fleetCase{
 		// False and no error, because the caller's next move is to
 		// re-read and re-decide — an error would send it to a retry loop
 		// for a store that is working perfectly.
-		held, err = h.f.UpdateDocument(h.ctx, coord.FamilyWork, key, []byte(`c`), record.Version)
+		held, err = h.f.UpdateDocument(h.ctx, coord.FamilyPages, key, []byte(`c`), record.Version)
 		if err != nil {
 			h.t.Fatalf("a stale update errored: %v", err)
 		}
@@ -281,21 +281,21 @@ var documentCases = []fleetCase{
 
 	{"a purge at a stale version leaves the document", func(h *fleetHarness) {
 		key := coord.DocumentKey("i", "three")
-		if _, err := h.f.CreateDocument(h.ctx, coord.FamilyWork, key, []byte(`a`)); err != nil {
+		if _, err := h.f.CreateDocument(h.ctx, coord.FamilyPages, key, []byte(`a`)); err != nil {
 			h.t.Fatal(err)
 		}
-		first, _, _ := h.f.Document(h.ctx, coord.FamilyWork, key)
-		if _, err := h.f.UpdateDocument(h.ctx, coord.FamilyWork, key, []byte(`b`), first.Version); err != nil {
+		first, _, _ := h.f.Document(h.ctx, coord.FamilyPages, key)
+		if _, err := h.f.UpdateDocument(h.ctx, coord.FamilyPages, key, []byte(`b`), first.Version); err != nil {
 			h.t.Fatal(err)
 		}
-		gone, err := h.f.PurgeDocument(h.ctx, coord.FamilyWork, key, first.Version)
+		gone, err := h.f.PurgeDocument(h.ctx, coord.FamilyPages, key, first.Version)
 		if err != nil {
 			h.t.Fatalf("a stale purge errored: %v", err)
 		}
 		if gone {
 			h.t.Error("a purge at a superseded version removed the document")
 		}
-		if _, ok, _ := h.f.Document(h.ctx, coord.FamilyWork, key); !ok {
+		if _, ok, _ := h.f.Document(h.ctx, coord.FamilyPages, key); !ok {
 			h.t.Error("the document is gone after a refused purge")
 		}
 	}},
@@ -307,14 +307,14 @@ var documentCases = []fleetCase{
 		// over it is the difference between reusing an id and refusing
 		// one forever.
 		key := coord.DocumentKey("i", "four")
-		if _, err := h.f.CreateDocument(h.ctx, coord.FamilyWork, key, []byte(`a`)); err != nil {
+		if _, err := h.f.CreateDocument(h.ctx, coord.FamilyPages, key, []byte(`a`)); err != nil {
 			h.t.Fatal(err)
 		}
-		record, _, _ := h.f.Document(h.ctx, coord.FamilyWork, key)
-		if gone, err := h.f.PurgeDocument(h.ctx, coord.FamilyWork, key, record.Version); err != nil || !gone {
+		record, _, _ := h.f.Document(h.ctx, coord.FamilyPages, key)
+		if gone, err := h.f.PurgeDocument(h.ctx, coord.FamilyPages, key, record.Version); err != nil || !gone {
 			h.t.Fatalf("purge = %v, %v", gone, err)
 		}
-		created, err := h.f.CreateDocument(h.ctx, coord.FamilyWork, key, []byte(`b`))
+		created, err := h.f.CreateDocument(h.ctx, coord.FamilyPages, key, []byte(`b`))
 		if err != nil {
 			h.t.Fatalf("re-create errored: %v", err)
 		}
@@ -333,11 +333,11 @@ var documentCases = []fleetCase{
 			coord.DocumentKey("counter", "ENG"),
 			coord.DocumentKey("i", "item"),
 		} {
-			if _, err := h.f.CreateDocument(h.ctx, coord.FamilyWork, key, []byte(`x`)); err != nil {
+			if _, err := h.f.CreateDocument(h.ctx, coord.FamilyPages, key, []byte(`x`)); err != nil {
 				h.t.Fatal(err)
 			}
 		}
-		got, err := h.f.Documents(h.ctx, coord.FamilyWork, "c")
+		got, err := h.f.Documents(h.ctx, coord.FamilyPages, "c")
 		if err != nil {
 			h.t.Fatal(err)
 		}
@@ -364,10 +364,10 @@ var documentCases = []fleetCase{
 
 	{"a watch opens with what is there, marks caught up, then follows", func(h *fleetHarness) {
 		seeded := coord.DocumentKey("i", "seeded")
-		if _, err := h.f.CreateDocument(h.ctx, coord.FamilyWork, seeded, []byte(`a`)); err != nil {
+		if _, err := h.f.CreateDocument(h.ctx, coord.FamilyPages, seeded, []byte(`a`)); err != nil {
 			h.t.Fatal(err)
 		}
-		w, err := h.f.WatchDocuments(h.ctx, coord.FamilyWork, 0)
+		w, err := h.f.WatchDocuments(h.ctx, coord.FamilyPages, 0)
 		if err != nil {
 			h.t.Fatal(err)
 		}
@@ -382,7 +382,7 @@ var documentCases = []fleetCase{
 		// apart would either serve an empty board as though it were the
 		// company's or wait forever for a family that is genuinely empty.
 		live := coord.DocumentKey("i", "live")
-		if _, err := h.f.CreateDocument(h.ctx, coord.FamilyWork, live, []byte(`b`)); err != nil {
+		if _, err := h.f.CreateDocument(h.ctx, coord.FamilyPages, live, []byte(`b`)); err != nil {
 			h.t.Fatal(err)
 		}
 		change := next(h.t, w)
@@ -401,18 +401,18 @@ var documentCases = []fleetCase{
 		// removal keeps it on somebody's board until a person deletes it
 		// a second time.
 		key := coord.DocumentKey("i", "doomed")
-		if _, err := h.f.CreateDocument(h.ctx, coord.FamilyWork, key, []byte(`a`)); err != nil {
+		if _, err := h.f.CreateDocument(h.ctx, coord.FamilyPages, key, []byte(`a`)); err != nil {
 			h.t.Fatal(err)
 		}
-		w, err := h.f.WatchDocuments(h.ctx, coord.FamilyWork, 0)
+		w, err := h.f.WatchDocuments(h.ctx, coord.FamilyPages, 0)
 		if err != nil {
 			h.t.Fatal(err)
 		}
 		defer func() { _ = w.Stop() }()
 		drainToMarker(h.t, w)
 
-		record, _, _ := h.f.Document(h.ctx, coord.FamilyWork, key)
-		if gone, err := h.f.PurgeDocument(h.ctx, coord.FamilyWork, key, record.Version); err != nil || !gone {
+		record, _, _ := h.f.Document(h.ctx, coord.FamilyPages, key)
+		if gone, err := h.f.PurgeDocument(h.ctx, coord.FamilyPages, key, record.Version); err != nil || !gone {
 			h.t.Fatalf("purge = %v, %v", gone, err)
 		}
 		change := next(h.t, w)
@@ -423,16 +423,16 @@ var documentCases = []fleetCase{
 
 	{"a watch resumed from a revision replays only what followed", func(h *fleetHarness) {
 		first := coord.DocumentKey("i", "first")
-		if _, err := h.f.CreateDocument(h.ctx, coord.FamilyWork, first, []byte(`a`)); err != nil {
+		if _, err := h.f.CreateDocument(h.ctx, coord.FamilyPages, first, []byte(`a`)); err != nil {
 			h.t.Fatal(err)
 		}
-		mark, _, _ := h.f.Document(h.ctx, coord.FamilyWork, first)
+		mark, _, _ := h.f.Document(h.ctx, coord.FamilyPages, first)
 		second := coord.DocumentKey("i", "second")
-		if _, err := h.f.CreateDocument(h.ctx, coord.FamilyWork, second, []byte(`b`)); err != nil {
+		if _, err := h.f.CreateDocument(h.ctx, coord.FamilyPages, second, []byte(`b`)); err != nil {
 			h.t.Fatal(err)
 		}
 
-		w, err := h.f.WatchDocuments(h.ctx, coord.FamilyWork, mark.Version+1)
+		w, err := h.f.WatchDocuments(h.ctx, coord.FamilyPages, mark.Version+1)
 		if err != nil {
 			h.t.Fatal(err)
 		}
@@ -450,11 +450,11 @@ var documentCases = []fleetCase{
 
 	{"an exact revision read never answers absent for a store that is behind", func(h *fleetHarness) {
 		key := coord.DocumentKey("i", "exact")
-		if _, err := h.f.CreateDocument(h.ctx, coord.FamilyWork, key, []byte(`a`)); err != nil {
+		if _, err := h.f.CreateDocument(h.ctx, coord.FamilyPages, key, []byte(`a`)); err != nil {
 			h.t.Fatal(err)
 		}
-		record, _, _ := h.f.Document(h.ctx, coord.FamilyWork, key)
-		got, ok, err := h.f.DocumentAt(h.ctx, coord.FamilyWork, key, record.Version)
+		record, _, _ := h.f.Document(h.ctx, coord.FamilyPages, key)
+		got, ok, err := h.f.DocumentAt(h.ctx, coord.FamilyPages, key, record.Version)
 		if err != nil || !ok {
 			h.t.Fatalf("exact read = %v, %v; want the document", ok, err)
 		}
@@ -466,33 +466,52 @@ var documentCases = []fleetCase{
 		// Both backends answer it without panicking, which is the whole
 		// assertion: the KV backend raises (a replica may simply be
 		// behind), the twin reports absent, and neither invents a value.
-		if _, ok, err := h.f.DocumentAt(h.ctx, coord.FamilyWork, key, record.Version+99); ok {
+		if _, ok, err := h.f.DocumentAt(h.ctx, coord.FamilyPages, key, record.Version+99); ok {
 			h.t.Errorf("a revision nobody wrote was answered: %v", err)
 		}
 	}},
 
 	{"families are separate stores", func(h *fleetHarness) {
-		// One key, two families. A projection reads one family at a time
+		// ONE KEY, EVERY FAMILY. A projection reads one family at a time
 		// and a cursor is a position in one bucket's sequence, so a
-		// backend that shared a namespace would make a page's revision
-		// advance because somebody filed a work item.
+		// backend that shared a namespace would make one family's
+		// revision advance because somebody wrote to another.
+		//
+		// DRIVEN OFF [coord.Families] rather than off two names, which
+		// is what keeps this honest as the set changes: today there is
+		// ONE family — the tracker and the embeddings became state-log
+		// domains — so the pairwise half below compares nothing and the
+		// case is deliberately vacuous rather than deleted. A second
+		// family returning re-arms it with no edit, which is the only
+		// shape under which "we checked that" stays true.
 		key := coord.DocumentKey("x", "shared")
-		if _, err := h.f.CreateDocument(h.ctx, coord.FamilyWork, key, []byte(`work`)); err != nil {
-			h.t.Fatal(err)
+		for _, family := range coord.Families() {
+			if _, err := h.f.CreateDocument(h.ctx, family, key,
+				[]byte(family)); err != nil {
+				h.t.Fatal(err)
+			}
 		}
-		if _, err := h.f.CreateDocument(h.ctx, coord.FamilyPages, key, []byte(`pages`)); err != nil {
-			h.t.Fatal(err)
+		for _, family := range coord.Families() {
+			got, held, err := h.f.Document(h.ctx, family, key)
+			switch {
+			case err != nil:
+				h.t.Fatal(err)
+			case !held:
+				h.t.Fatalf("%s lost the document written under it", family)
+			case string(got.Value) != string(family):
+				h.t.Errorf("reading %s at %q answered %q — the families share "+
+					"a namespace, so one's revision advances when another is "+
+					"written", family, key, got.Value)
+			}
 		}
-		work, _, err := h.f.Document(h.ctx, coord.FamilyWork, key)
-		if err != nil {
-			h.t.Fatal(err)
-		}
-		pages, _, err := h.f.Document(h.ctx, coord.FamilyPages, key)
-		if err != nil {
-			h.t.Fatal(err)
-		}
-		if string(work.Value) != "work" || string(pages.Value) != "pages" {
-			h.t.Errorf("families share a namespace: %s / %s", work.Value, pages.Value)
+
+		// AND A FAMILY THIS BUILD DOES NOT SERVE IS REFUSED rather than
+		// answered from some other family's bucket. That half is not
+		// vacuous at any family count, and it is the one that catches a
+		// backend resolving an unknown name to a default.
+		if _, _, err := h.f.Document(h.ctx, coord.Family("work"), key); err == nil {
+			h.t.Error("a family this build does not serve was answered rather " +
+				"than refused")
 		}
 	}},
 
@@ -507,7 +526,7 @@ var documentCases = []fleetCase{
 		}
 		want := errors.New("the store is unreachable")
 		faulty.FailNext(want)
-		_, exists, err := h.f.Document(h.ctx, coord.FamilyWork, coord.DocumentKey("i", "any"))
+		_, exists, err := h.f.Document(h.ctx, coord.FamilyPages, coord.DocumentKey("i", "any"))
 		if err == nil {
 			h.t.Fatal("an unreachable store answered a read")
 		}

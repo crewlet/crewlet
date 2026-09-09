@@ -29,7 +29,7 @@ var feedCases = []fleetCase{
 		// and exactly once, at the worst possible moment.
 		mustCreate(h, coord.DocumentKey("c", "old", "1"), `{"before":true}`)
 
-		feed, err := feeder.FeedDocuments(h.ctx, coord.FamilyWork, "c", h.name("history"))
+		feed, err := feeder.FeedDocuments(h.ctx, coord.FamilyPages, "c", h.name("history"))
 		if err != nil {
 			h.t.Fatalf("open the feed: %v", err)
 		}
@@ -48,7 +48,7 @@ var feedCases = []fleetCase{
 		if !ok {
 			h.t.Skip("this backend serves no feeds")
 		}
-		feed, err := feeder.FeedDocuments(h.ctx, coord.FamilyWork, "c", h.name("filter"))
+		feed, err := feeder.FeedDocuments(h.ctx, coord.FamilyPages, "c", h.name("filter"))
 		if err != nil {
 			h.t.Fatalf("open the feed: %v", err)
 		}
@@ -74,7 +74,7 @@ var feedCases = []fleetCase{
 		if !ok {
 			h.t.Skip("this backend serves no feeds")
 		}
-		feed, err := feeder.FeedDocuments(h.ctx, coord.FamilyWork, "c", h.name("redeliver"))
+		feed, err := feeder.FeedDocuments(h.ctx, coord.FamilyPages, "c", h.name("redeliver"))
 		if err != nil {
 			h.t.Fatalf("open the feed: %v", err)
 		}
@@ -117,7 +117,7 @@ var feedCases = []fleetCase{
 		if !ok {
 			h.t.Skip("this backend serves no feeds")
 		}
-		feed, err := feeder.FeedDocuments(h.ctx, coord.FamilyWork, "c", h.name("purge"))
+		feed, err := feeder.FeedDocuments(h.ctx, coord.FamilyPages, "c", h.name("purge"))
 		if err != nil {
 			h.t.Fatalf("open the feed: %v", err)
 		}
@@ -128,11 +128,11 @@ var feedCases = []fleetCase{
 		created := nextDelivery(h, feed)
 		_ = created.Ack()
 
-		rec, found, err := h.f.Document(h.ctx, coord.FamilyWork, key)
+		rec, found, err := h.f.Document(h.ctx, coord.FamilyPages, key)
 		if err != nil || !found {
 			h.t.Fatalf("read back: found=%v err=%v", found, err)
 		}
-		if ok, err := h.f.PurgeDocument(h.ctx, coord.FamilyWork, key, rec.Version); err != nil || !ok {
+		if ok, err := h.f.PurgeDocument(h.ctx, coord.FamilyPages, key, rec.Version); err != nil || !ok {
 			h.t.Fatalf("purge: ok=%v err=%v", ok, err)
 		}
 		got := nextDelivery(h, feed)
@@ -149,12 +149,12 @@ var feedCases = []fleetCase{
 			h.t.Skip("this backend serves no feeds")
 		}
 		group := h.name("shared")
-		a, err := feeder.FeedDocuments(h.ctx, coord.FamilyWork, "c", group)
+		a, err := feeder.FeedDocuments(h.ctx, coord.FamilyPages, "c", group)
 		if err != nil {
 			h.t.Fatalf("open feed A: %v", err)
 		}
 		defer a.Stop()
-		b, err := feeder.FeedDocuments(h.ctx, coord.FamilyWork, "c", group)
+		b, err := feeder.FeedDocuments(h.ctx, coord.FamilyPages, "c", group)
 		if err != nil {
 			h.t.Fatalf("open feed B: %v", err)
 		}
@@ -197,7 +197,7 @@ var feedCases = []fleetCase{
 			h.t.Skip("this backend serves no feeds")
 		}
 		group := h.name("resume")
-		first, err := feeder.FeedDocuments(h.ctx, coord.FamilyWork, "c", group)
+		first, err := feeder.FeedDocuments(h.ctx, coord.FamilyPages, "c", group)
 		if err != nil {
 			h.t.Fatalf("open the feed: %v", err)
 		}
@@ -214,7 +214,7 @@ var feedCases = []fleetCase{
 		}
 		mustCreate(h, coord.DocumentKey("c", "item", "u2"), `{"n":2}`)
 
-		second, err := feeder.FeedDocuments(h.ctx, coord.FamilyWork, "c", group)
+		second, err := feeder.FeedDocuments(h.ctx, coord.FamilyPages, "c", group)
 		if err != nil {
 			h.t.Fatalf("reopen the feed: %v", err)
 		}
@@ -249,7 +249,7 @@ func contextWithTimeout(h *fleetHarness, d time.Duration) (context.Context, cont
 // mustCreate writes a document or fails the case.
 func mustCreate(h *fleetHarness, key, value string) {
 	h.t.Helper()
-	created, err := h.f.CreateDocument(h.ctx, coord.FamilyWork, key, []byte(value))
+	created, err := h.f.CreateDocument(h.ctx, coord.FamilyPages, key, []byte(value))
 	if err != nil || !created {
 		h.t.Fatalf("create %s: created=%v err=%v", key, created, err)
 	}

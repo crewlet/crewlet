@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/api/queries"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -37,6 +36,28 @@ type roundTrip struct {
 }
 
 func newRoundTrip(t *testing.T) *roundTrip {
+	t.Helper()
+	r := newRoundTripWithoutProject(t)
+	// THE PROJECT FIRST, because a create is a SEQUENCE: it takes a key
+	// from that project's counter before it writes a task, and a project
+	// this node has not applied is one whose counter it cannot mint from.
+	// Seeding it here rather than in each case is what keeps the cases
+	// about what they are named for.
+	if _, err := r.writer.WriteDocument(t.Context(), "op-project",
+		tracker.ProjectSubject("ENG"), "", tracker.Project{
+			V: 1, Key: "ENG", Name: "Engineering",
+			CreatedAt: wednesday, UpdatedAt: wednesday,
+		}, nil); err != nil {
+		t.Fatalf("seed the project: %v", err)
+	}
+	r.drain()
+	return r
+}
+
+// newRoundTripWithoutProject is the same harness with NO project seeded,
+// which is the state a company is actually in the moment it boots. The chart
+// apply is what leaves it, and its own cases need to see the before.
+func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 	t.Helper()
 	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
 	if err != nil {
@@ -106,19 +127,6 @@ func newRoundTrip(t *testing.T) *roundTrip {
 		applier: tracker.NewApplier("node-a"),
 		reader:  tracker.NewReader(db), waiter: waiter,
 	}
-	// THE PROJECT FIRST, because a create is a SEQUENCE: it takes a key
-	// from that project's counter before it writes a task, and a project
-	// this node has not applied is one whose counter it cannot mint from.
-	// Seeding it here rather than in each case is what keeps the cases
-	// about what they are named for.
-	if _, err := writer.WriteDocument(t.Context(), "op-project",
-		tracker.ProjectSubject("ENG"), "", tracker.Project{
-			V: 1, Key: "ENG", Name: "Engineering",
-			CreatedAt: wednesday, UpdatedAt: wednesday,
-		}, nil); err != nil {
-		t.Fatalf("seed the project: %v", err)
-	}
-	r.drain()
 	return r
 }
 
@@ -232,7 +240,7 @@ func (r *roundTrip) apply(from, last uint64) {
 
 func (r *roundTrip) ask(kv map[string]any) tracker.Answer {
 	r.t.Helper()
-	q, err := tracker.ParseQuery(queries.FromMap(kv), wednesday, berlin)
+	q, err := tracker.ParseQuery(tracker.MapParams(kv), wednesday, berlin)
 	if err != nil {
 		r.t.Fatalf("ParseQuery: %v", err)
 	}
@@ -317,7 +325,7 @@ func TestATaskWrittenIsATaskRead(t *testing.T) {
 	}
 
 	// AND A SECOND WRITE ARBITRATES AGAINST THE FIRST.
-	if _, err := r.writer.UpdateTask(t.Context(), "op-patch", "t-1", "ENG",
+	if _, err := r.writer.UpdateTask(t.Context(), "op-patch", "t-1", "ENG", tracker.NoIfMatch,
 		tracker.TaskPatch{Title: ptr("wired")}, nil); err != nil {
 		t.Fatalf("UpdateTask: %v", err)
 	}

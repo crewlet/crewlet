@@ -3,7 +3,9 @@ package statelog
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -59,4 +61,32 @@ func CursorsInFile(ctx context.Context, path string) (map[string]Position, error
 		return nil, fmt.Errorf("statelog: read the checkpoints in %s: %w", path, err)
 	}
 	return out, nil
+}
+
+// CursorFor reads ONE stream's committed checkpoint out of a LIVE replicated
+// estate, reporting false when this node has never committed on it.
+//
+// Two callers need it and both need the same three values: the loop resumes
+// its broker consumer from the sequence, stamps its records with the
+// generation, and detects a recreated stream from the instant. Reading them
+// separately is how one of them ends up describing a different checkpoint from
+// the other two.
+func CursorFor(ctx context.Context, db *store.DB, stream string) (Position, time.Time, bool, error) {
+	var generation, seq, created int64
+	err := db.Read(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx,
+			`SELECT generation, seq, stream_created_at FROM statelog_cursor WHERE stream = ?`,
+			stream).Scan(&generation, &seq, &created)
+	})
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return Position{Stream: stream}, time.Time{}, false, nil
+	case err != nil:
+		return Position{}, time.Time{}, false,
+			fmt.Errorf("statelog: read %s's checkpoint: %w", stream, err)
+	}
+	return Position{
+			Stream: stream, Generation: uint32(generation), Seq: uint64(seq),
+		},
+		store.DecodeTime(created), true, nil
 }

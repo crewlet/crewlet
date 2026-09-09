@@ -1,15 +1,36 @@
 // Package projection is each node's local, rebuildable copy of the fleet's
-// document families — the read side of the native tracker and knowledge base.
+// document families — the read side of the native knowledge base.
+//
+// # One family is left, and this package goes with it
+//
+// It began with three. The work tracker and the knowledge embeddings are
+// [internal/statelog] DOMAINS now — one ordered stream per domain as the
+// write-ahead log, N identical SQL copies as the state, and the checkpoint
+// committed in the same transaction as the rows — and the wiki is the last
+// family here.
+//
+// The move is not a relocation. What a projector structurally cannot state is
+// the thing every caller of a read actually needs: a cursor can be behind with
+// no way to say by how much, so [ErrNotHydrated] is a bool where the honest
+// answer is a distance, and [ErrRevisionTooNew] tells a writer its own write
+// has not arrived without telling it when it will. An applier's position is a
+// place on a log the fleet shares, so a read reports the level it was actually
+// served at and a caller can WAIT for its own write — which is the difference
+// between a tool loop that can read what it just wrote and one that files the
+// duplicate.
+//
+// Everything below is why the shape here is what it is, and it holds for as
+// long as the wiki rides a bucket.
 //
 // # Why a copy exists at all
 //
 // The record of truth is [coord.Documents], and it has to be: every node has
-// to agree on a work item, so it cannot live in a node's own store (see
-// migrations 0010-0013 for what that cost the last time). But a coordination
-// bucket answers one question well — read this key — and a board asks a
-// different one entirely: every open item in this project, newest first,
-// filtered by assignee, searched by text. Answering that from the bucket is
-// O(keys) message deliveries per screen.
+// to agree on a page, so it cannot live in a node's own store (see migrations
+// 0010-0013 for what that cost the last time). But a coordination bucket
+// answers one question well — read this key — and a listing asks a different
+// one entirely: every page in this container, newest first, filtered by label,
+// searched by text. Answering that from the bucket is O(keys) message
+// deliveries per screen.
 //
 // So the bucket holds the truth and every node keeps a projection of it, in
 // its own database, maintained by following the bucket's watch. That is the
@@ -36,21 +57,21 @@
 // recreated at sequence 1 produces, and what cloning a node's data directory
 // from a peer produces. A node in that state sits at a plausible cursor over
 // an empty projection, for ever, and every screen it serves says the company
-// has no work. So nothing waits on the cursor: a seat's mailbox attaches only
+// has nothing written down. So nothing waits on the cursor: a seat's mailbox attaches only
 // after [Projector.Hydrated], and hydration is established by a per-key
 // reconcile rather than by comparing numbers.
 //
 // # What is NOT here
 //
-// The write path. A mutation is [internal/work]'s or [internal/pages]', and
-// it goes to coordination — never to these tables. A row written here that
+// The write path. A mutation is [internal/pages]', and it goes to
+// coordination — never to these tables. A row written here that
 // coordination did not see is a row the next reconcile silently erases, and
 // it would look exactly like the engine losing somebody's work.
 //
-// Best effort is also NOT the contract, unlike [knowledge]. A read that
-// cannot be served raises: "this item does not exist" is an answer a seat
-// acts on — it files a duplicate, it abandons work it was told to do — and a
-// projection that has not caught up must never be able to say it.
+// Best effort is also NOT the contract, unlike [internal/knowledge]. A read
+// that cannot be served raises: "this page does not exist" is an answer a seat
+// acts on — it writes the duplicate, it abandons what it was told to build on
+// — and a projection that has not caught up must never be able to say it.
 package projection
 
 import (
@@ -128,18 +149,15 @@ const (
 type Family = coord.Family
 
 // The families this package projects.
-const (
-	FamilyWork  = coord.FamilyWork
-	FamilyPages = coord.FamilyPages
-)
+const FamilyPages = coord.FamilyPages
 
 // Projected is every family a projector follows, in a stable order.
 //
-// NOT [coord.Families]: the vector family is written by the indexer against
-// its own source versions and read by the searcher, never applied as a change
-// feed, so a projector that followed it would burn a watch on records it has
-// no apply rule for.
-func Projected() []Family { return []Family{FamilyWork, FamilyPages} }
+// ONE, now that the tracker and the embeddings are state-log DOMAINS: their
+// state is derived by an applier from an ordered stream rather than by a
+// projector from a bucket's change feed. The wiki is what is left, and this
+// package goes with it.
+func Projected() []Family { return []Family{FamilyPages} }
 
 // Status is what a projector reports about one family, for the node status
 // the fleet view renders.

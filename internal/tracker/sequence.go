@@ -470,7 +470,7 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 
 	lists := markPromoted(parent, itemID, subtask.ID)
 	marked, err := w.UpdateTask(ctx, stepID(opID, "parent"), parentID,
-		parent.Project, TaskPatch{Checklists: &lists}, nil)
+		parent.Project, NoIfMatch, TaskPatch{Checklists: &lists}, nil)
 	if err != nil {
 		return created, fmt.Errorf("tracker: subtask %s was created and its "+
 			"item in %s is still un-marked; re-run the promotion, which "+
@@ -739,7 +739,7 @@ func (w *Writer) moveOne(ctx context.Context, opID string, task Task,
 	// NO NOTIFICATION AND NO HISTORY BUMP on a descendant: a subtree that
 	// moved wakes the people watching the root, not everybody watching
 	// every task beneath it.
-	return w.UpdateTask(ctx, opID, task.ID, task.Project, patch, nil)
+	return w.UpdateTask(ctx, opID, task.ID, task.Project, NoIfMatch, patch, nil)
 }
 
 // claimAlias takes a former key, create-only, so the key keeps resolving.
@@ -891,7 +891,7 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 		CreatedBy: w.Actor, CreatedAt: w.Now(),
 	})
 	merging := true
-	if _, err := w.UpdateTask(ctx, stepID(opID, "mark"), duplicate, task.Project,
+	if _, err := w.UpdateTask(ctx, stepID(opID, "mark"), duplicate, task.Project, NoIfMatch,
 		TaskPatch{Relations: &relations, Merging: &merging}, nil); err != nil {
 		return WriteResult{}, err
 	}
@@ -901,7 +901,7 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 			continue
 		}
 		if _, err := w.UpdateTask(ctx, stepID(opID, fmt.Sprintf("c%d", i)),
-			child.ID, child.Project, TaskPatch{Parent: &into}, nil); err != nil {
+			child.ID, child.Project, NoIfMatch, TaskPatch{Parent: &into}, nil); err != nil {
 			return WriteResult{}, fmt.Errorf("tracker: %d of %d children "+
 				"re-parented onto %s; the tracker duty completes the rest: %w",
 				i, len(children), into, err)
@@ -910,7 +910,7 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 
 	cancelled := StatusCancelled
 	done := false
-	return w.UpdateTask(ctx, stepID(opID, "close"), duplicate, task.Project,
+	return w.UpdateTask(ctx, stepID(opID, "close"), duplicate, task.Project, NoIfMatch,
 		TaskPatch{Status: &cancelled, Merging: &done}, notify)
 }
 
@@ -1171,7 +1171,7 @@ func (w *Writer) UpdateTasks(ctx context.Context, opID string, ids []string,
 	result := WriteResult{Failed: map[string]string{}}
 	for i, id := range subjects {
 		one, err := w.UpdateTask(ctx, stepID(opID, fmt.Sprintf("b%d", i)),
-			id, project, patch, notify)
+			id, project, NoIfMatch, patch, notify)
 		if err != nil {
 			result.Failed[id] = err.Error()
 			continue

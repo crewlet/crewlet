@@ -89,7 +89,7 @@ func TestAWriteOnAPurgedTaskIsRefusedAsDeleted(t *testing.T) {
 	}
 	r.drain()
 
-	_, err := r.writer.UpdateTask(t.Context(), "op-late", "t-1", "ENG",
+	_, err := r.writer.UpdateTask(t.Context(), "op-late", "t-1", "ENG", tracker.NoIfMatch,
 		tracker.TaskPatch{Title: ptr("back from the dead")}, nil)
 	if err == nil {
 		t.Fatal("a write on a purged task was accepted")
@@ -118,7 +118,7 @@ func TestTheDeletionGateCountsItsHits(t *testing.T) {
 		t.Fatalf("CreateTask: %v", err)
 	}
 	r.drain()
-	patch, err := r.writer.UpdateTask(t.Context(), "op-late", "t-1", "ENG",
+	patch, err := r.writer.UpdateTask(t.Context(), "op-late", "t-1", "ENG", tracker.NoIfMatch,
 		tracker.TaskPatch{Title: ptr("late")}, nil)
 	if err != nil {
 		t.Fatalf("UpdateTask: %v", err)

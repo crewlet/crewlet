@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -256,5 +257,64 @@ func TestOpenPreparedAppliesThePoolBounds(t *testing.T) {
 	if busyMS != int(defaultBusyTimeout.Milliseconds()) {
 		t.Errorf("busy_timeout = %dms, want the store default %dms",
 			busyMS, defaultBusyTimeout.Milliseconds())
+	}
+}
+
+// A MIGRATION'S NUMBER IS ITS ORDER, so two files may not share one.
+//
+// # Why this is a guard rather than a convention
+//
+// The prefix IS the ordering — [schemaVersions] sorts filenames and there is
+// no second source of truth — so two files at one number are ordered by
+// whatever follows the underscore, alphabetically. That is not an ordering
+// anybody chose, and it is not one anybody reading the directory would
+// predict: `0022_a…` runs before `0022_z…` for a reason nothing states.
+//
+// Nothing else notices. Both files apply, both get their own row in
+// `schema_migrations` (which keys on the base filename), and a fresh database
+// ends up identical to one that applied them in the other order — right up
+// until the day the two touch the same table, when one estate has a column
+// the other does not and the difference is a build artefact.
+//
+// The numbers are also CONTIGUOUS from 1, which is the half that catches the
+// other mistake: a gap is a migration somebody wrote, numbered, and never
+// committed — or one that was deleted after it had already been applied
+// somewhere, which is a divergence no later file can repair.
+func TestEveryMigrationHasItsOwnNumberAndNoneAreMissing(t *testing.T) {
+	t.Parallel()
+	for _, estate := range Estates {
+		t.Run(string(estate), func(t *testing.T) {
+			seen := map[int]string{}
+			for _, name := range SchemaVersions(estate) {
+				prefix, _, ok := strings.Cut(name, "_")
+				if !ok {
+					t.Errorf("%q has no numeric prefix, so its place in the "+
+						"order is whatever sorting says", name)
+					continue
+				}
+				n, err := strconv.Atoi(prefix)
+				if err != nil || n < 1 {
+					t.Errorf("%q is prefixed %q, which is not a migration "+
+						"number", name, prefix)
+					continue
+				}
+				if first, held := seen[n]; held {
+					t.Errorf("%q and %q are both migration %d — the prefix is "+
+						"the ordering, so these two run in alphabetical order "+
+						"of what follows it, which is an order nobody chose",
+						first, name, n)
+					continue
+				}
+				seen[n] = name
+			}
+			for n := 1; n <= len(seen); n++ {
+				if _, held := seen[n]; !held {
+					t.Errorf("the %s estate has %d migrations and none numbered "+
+						"%d — a gap is a file that was written and never "+
+						"committed, or one deleted after it had already run",
+						estate, len(seen), n)
+				}
+			}
+		})
 	}
 }

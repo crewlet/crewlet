@@ -36,8 +36,9 @@ A deployment's durable state lives in four estates:
 
 | Estate | Where | What it holds |
 |---|---|---|
-| **The node's store files** | `store.path` and `store.replicated_path`, each with its `-wal` sidecar | The seat's memory — diary, episodes, counterparty profiles, synthesized skills, onboarding markers, the [conversation ledger](../concepts/conversation-sessions.md) — which is also [replicated onto the stream](../concepts/seat-ownership.md#a-seats-memory-follows-it), so this file is a cache of it rather than its only copy; and, held here **only**: the audit event log (30 days), scheduled-run history, the company-config revision history, the [secret store's](../concepts/secret-store.md) bootstrap rows |
-| **The stream estate** | `stream.store_dir` per embedded member, or the external NATS cluster | Agent mailboxes (unacked in-flight work), the shared event and config streams, and every [coordination](../concepts/coordination.md) KV bucket: seat leases and fencing epochs, the activation pointer with the current company payload, the completion ledger, delivery dedupe, budget counters, scheduled-fire claims, detached sandbox-run records, the sealed credentials |
+| **The node's own store file** | `store.path`, with its `-wal` sidecar | The seat's memory — diary, episodes, counterparty profiles, synthesized skills, onboarding markers, the [conversation ledger](../concepts/conversation-sessions.md) — which is also [replicated onto the stream](../concepts/seat-ownership.md#a-seats-memory-follows-it), so this file is a cache of it rather than its only copy; and, held here **only**: the audit event log (30 days), scheduled-run history, the company-config revision history, the [secret store's](../concepts/secret-store.md) bootstrap rows, and this node's own record of any snapshot it has adopted |
+| **The replicated estate** | `store.replicated_path`, with its `-wal` sidecar | Everything a state log's applier derives from the fleet's own records — today the work tracker and the knowledge embeddings — together with the checkpoint that says how far this node has applied. Derivable by replay **only while the log still holds the records**: past the trim floor, a node with no copy of this file adopts a peer's snapshot instead |
+| **The stream estate** | `stream.store_dir` per embedded member, or the external NATS cluster | Agent mailboxes (unacked in-flight work), the shared event and config streams, one ordered **log per state-log domain** — which is the record of truth the file above is derived from — and every [coordination](../concepts/coordination.md) KV bucket: seat leases and fencing epochs, the activation pointer with the current company payload, the completion ledger, delivery dedupe, budget counters, scheduled-fire claims, detached sandbox-run records, the sealed credentials |
 | **Tier A, on disk** | `crewlet.yaml` and the environment it reads | The keyring (`CREWLET_SECRET_KEY_*`) — the sole root of trust for everything sealed — plus API tokens and any NATS credential/TLS files |
 | **cli-agent homes** | Per-seat state directories on the engine host | Subscription CLI logins (portable via `crewlet llm export`) |
 
@@ -52,6 +53,14 @@ Classify before you size the job:
   new node — so a store file lost with the stream estate intact costs at most
   the last sync cycle, and the seat re-hydrates the rest on its next
   acquisition.
+- **Derived, and rebuildable *only within the replay window*:** everything in
+  the replicated estate. A node that loses that file replays the domain logs
+  from the beginning and arrives at exactly the same rows — but only if the
+  logs still hold them. Past the trim floor the records are gone, and the node
+  fetches a peer's verified snapshot instead, which it does automatically at
+  boot. That fallback needs a **peer**: a single-node company that loses this
+  file and whose logs have been trimmed has lost the trimmed history, which is
+  the case `retention.backup_max_age` exists to keep from arising.
 - **Authoritative, with no other copy:** the event log's history, the config
   revision history, the sealed credential bucket, the budget counters, and
   each detached sandbox-run record, which is the only thing that knows a
@@ -88,8 +97,9 @@ Three properties worth knowing:
   the audit log, memory, the config revisions and the secret bootstrap; the
   replicated estate holds everything a state log's applier writes. They are
   separate files because a snapshot for a joining node is a copy of the second
-  one alone — see [state log](../concepts/coordination.md). Restoring one
-  without the other gives a company whose halves are from different moments.
+  one alone, and it must not carry the donor's audit log or the bootstrap half
+  of its secret store. Restoring one without the other gives a company whose
+  halves are from different moments.
 - **Streams are enumerated, not listed.** A namespace stream is created on
   first publish and a coordination bucket's name depends on a configurable
   prefix, so what gets captured is what is actually there.

@@ -5,11 +5,13 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/projection"
-	"github.com/crewlet/crewlet/internal/work"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // stubWork and stubPages record what filter the surface built, which is the
@@ -17,23 +19,21 @@ import (
 // almost entirely about turning a query string into a Filter, and a test that
 // only checked the rows would pass with every filter dropped.
 type stubWork struct {
-	filter work.Filter
-	items  []work.Summary
-	detail work.Detail
+	query  tracker.Query
+	answer tracker.Answer
+	detail tracker.TaskDetail
 	err    error
 }
 
-func (s *stubWork) List(_ context.Context, f work.Filter) ([]work.Summary, error) {
-	s.filter = f
-	return s.items, s.err
+func (s *stubWork) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tracker.Answer, error) {
+	s.query = q
+	return s.answer, s.err
 }
 
-func (s *stubWork) Get(_ context.Context, _ string) (work.Detail, error) {
+func (s *stubWork) Task(_ context.Context, _ string, _ tracker.DetailWants,
+	_ statelog.ReadLevel) (tracker.TaskDetail, error) {
+
 	return s.detail, s.err
-}
-
-func (s *stubWork) Counters(context.Context) (map[string]int, error) {
-	return map[string]int{"ENG": 42}, s.err
 }
 
 type stubPages struct {
@@ -93,7 +93,7 @@ func TestAnUnhydratedProjectionIsUnavailableRatherThanEmpty(t *testing.T) {
 // A RECORD THAT IS NOT THERE IS NOT A FAILURE. A mistyped item key must read
 // to an operator as a dead link, not as the server being broken.
 func TestAMissingRecordIsNotFound(t *testing.T) {
-	w := &stubWork{err: work.ErrNotFound}
+	w := &stubWork{err: tracker.ErrNoTask}
 	_, err := askNative(t, queries.Sources{Work: w}, "work_item", map[string]any{"id": "ENG-999"})
 	if !errors.Is(err, queries.ErrNotFound) {
 		t.Errorf("a missing item answered %v, want not-found", err)
@@ -112,55 +112,54 @@ func TestAMissingRecordIsNotFound(t *testing.T) {
 func TestABoardFilterReachesTheReader(t *testing.T) {
 	w := &stubWork{}
 	if _, err := askNative(t, queries.Sources{Work: w}, "work_items", map[string]any{
-		"project": "eng", "assignee": "swe", "label": "urgent",
-		"status": "todo,in_progress", "q": "deploy", "limit": 10, "offset": 20,
+		"container": "project:eng", "assignee": "swe", "tag": "urgent",
+		"status": "todo,in_progress", "q": "deploy", "limit": 10,
 	}); err != nil {
 		t.Fatalf("work_items: %v", err)
 	}
-	got := w.filter
+	got := w.query
 	// UPPERCASED, because a project key is compared upper everywhere else
 	// and a board that only matched the case somebody typed would answer
 	// empty for the same project spelled two ways.
-	if got.Project != "ENG" {
-		t.Errorf("project reached the reader as %q, want it upper-cased", got.Project)
+	if got.Scope.Project != "ENG" {
+		t.Errorf("project reached the reader as %q, want it upper-cased",
+			got.Scope.Project)
 	}
-	if got.Assignee != "swe" || got.Label != "urgent" || got.Text != "deploy" {
+	if len(got.Assignee) != 1 || got.Assignee[0] != "swe" {
+		t.Errorf("assignee reached the reader as %v", got.Assignee)
+	}
+	if len(got.Tags.Tags) != 1 || got.Tags.Tags[0] != "urgent" || got.Text != "deploy" {
 		t.Errorf("a filter was dropped on the way: %+v", got)
 	}
-	if len(got.Status) != 2 || got.Status[0] != work.StatusTodo {
+	if len(got.Status) != 2 || got.Status[0] != tracker.StatusTodo {
 		t.Errorf("statuses reached the reader as %v", got.Status)
 	}
-	if got.Limit != 10 || got.Offset != 20 {
-		t.Errorf("paging reached the reader as limit=%d offset=%d", got.Limit, got.Offset)
+	if got.Limit != 10 {
+		t.Errorf("paging reached the reader as limit=%d", got.Limit)
 	}
 }
 
-// AN ABSENT `open` ASKS FOR EVERYTHING; open=false asks for the closed items.
-// Reading an absent filter as false would make the default board show only
-// finished work — which is the shape of bug a bool with no third state
-// produces every time.
-func TestOpenIsThreeStated(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		params map[string]any
-		want   *bool
+// AN ABSENT SCOPE IS NEITHER THE WORKSPACE NOR A PROJECT, and the caller
+// resolves it from its own surface. Defaulting an omitted container to the
+// workspace would make the cheapest thing to type the most expensive query in
+// the system — every seat's idle board scanning every project.
+func TestAnAbsentContainerIsNeither(t *testing.T) {
+	for name, tc := range map[string]struct {
+		params    map[string]any
+		workspace bool
+		project   string
 	}{
-		{name: "absent", params: nil},
-		{name: "open", params: map[string]any{"open": true}, want: ptrTo(true)},
-		{name: "closed", params: map[string]any{"open": false}, want: ptrTo(false)},
+		"absent":    {params: nil},
+		"workspace": {params: map[string]any{"container": "workspace"}, workspace: true},
+		"a project": {params: map[string]any{"container": "project:ENG"}, project: "ENG"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(name, func(t *testing.T) {
 			w := &stubWork{}
 			if _, err := askNative(t, queries.Sources{Work: w}, "work_items", tc.params); err != nil {
 				t.Fatalf("work_items: %v", err)
 			}
-			switch {
-			case tc.want == nil && w.filter.Open != nil:
-				t.Errorf("an absent `open` reached the reader as %v", *w.filter.Open)
-			case tc.want != nil && w.filter.Open == nil:
-				t.Errorf("open=%v reached the reader as absent", *tc.want)
-			case tc.want != nil && *w.filter.Open != *tc.want:
-				t.Errorf("open=%v reached the reader as %v", *tc.want, *w.filter.Open)
+			if w.query.Scope.Workspace != tc.workspace || w.query.Scope.Project != tc.project {
+				t.Errorf("the scope reached the reader as %+v", w.query.Scope)
 			}
 		})
 	}
@@ -193,24 +192,37 @@ func TestAnUnknownStatusIsRefusedNamingTheSet(t *testing.T) {
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Fatalf("an unknown status answered %v, want bad params", err)
 	}
-	if msg := err.Error(); !strings.Contains(msg, "finished") || !strings.Contains(msg, string(work.StatusDone)) {
+	if msg := err.Error(); !strings.Contains(msg, "finished") ||
+		!strings.Contains(msg, "six") {
 		t.Errorf("the refusal does not name the value and the set: %q", msg)
 	}
 }
 
-// The board header's minted counters ride with the listing. A page's length
-// is not a project's size, and a header that reported one as the other would
-// say "50 items" for every project with more than fifty.
-func TestTheBoardCarriesTheMintedCounters(t *testing.T) {
-	got, err := askNative(t, queries.Sources{Work: &stubWork{}}, "work_items", nil)
+// THE BOARD'S TOTAL IS A SEPARATE HINT, never len(items). A header reporting
+// the page size as the project's size says "50 items" for every project with
+// more than fifty — and an EXACT total over an unbounded set is the one query
+// in this grammar that turns a poll into a scan, which is why it says hint.
+func TestTheBoardCarriesItsOwnTotalAndReadLevel(t *testing.T) {
+	w := &stubWork{answer: tracker.Answer{
+		Rows:      []tracker.TaskRow{{ID: "i1", Key: "ENG-1"}},
+		TotalHint: 42, Level: statelog.ReadStale, Complete: true,
+	}}
+	got, err := askNative(t, queries.Sources{Work: w}, "work_items", nil)
 	if err != nil {
 		t.Fatalf("work_items: %v", err)
 	}
 	payload, _ := got.(map[string]any)
-	minted, _ := payload["minted"].(map[string]int)
-	if minted["ENG"] != 42 {
-		t.Errorf("the board carried minted=%v", payload["minted"])
+	if payload["total_hint"] != 42 {
+		t.Errorf("the board carried total_hint=%v with one row", payload["total_hint"])
+	}
+	// AND THE READ LEVEL RIDES WITH IT. A screen that could not say how
+	// stale its answer is would render a lagging node identically to a
+	// caught-up one — which is the one thing this framework's read levels
+	// exist to make impossible.
+	if payload["read_level"] != statelog.ReadStale {
+		t.Errorf("the board carried read_level=%v", payload["read_level"])
+	}
+	if payload["complete"] != true {
+		t.Errorf("the board carried complete=%v", payload["complete"])
 	}
 }
-
-func ptrTo[T any](v T) *T { return &v }

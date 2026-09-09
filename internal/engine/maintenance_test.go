@@ -9,7 +9,6 @@ import (
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/schedule"
-	"github.com/crewlet/crewlet/internal/work"
 )
 
 // THE assertion whose absence was the bug. Every one of these tables ships a
@@ -70,8 +69,18 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		"page_orphans",
 		"page_revisions",
 		"scheduled_runs",
-		"work_changes",
-		"work_orphans",
+		// The TRACKER'S OWN JOBS, and they are a different kind of
+		// thing from every entry above: nothing here deletes anything.
+		// Its records are a LOG, which is trimmed by the retention gate
+		// rather than swept — so what these do is finish work a crash
+		// left half-done and tell the tasks a close unblocked. They are
+		// on this list because the list is what says a job exists at
+		// all, and a job nobody registered is a re-spread that never
+		// runs and a board that stays wrong.
+		"tracker_abandoned_merges",
+		"tracker_duplicate_ranks",
+		"tracker_respread",
+		"tracker_unblocked",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("swept tables:\n got %v\nwant %v", got, want)
@@ -95,13 +104,14 @@ func TestEveryRetentionOutlastsTheSweepInterval(t *testing.T) {
 		"a2a_channels_idle":     maintenance.ChannelIdleTimeout,
 		"chat_thread_follows":   maintenance.FollowRetention,
 		"counterparty_profiles": maintenance.CounterpartyRetention,
-		// The native backends' change horizons. Obviously past the tick
+		// The knowledge base's change horizons. Obviously past the tick
 		// today; here so that a later reader shortening one — the
 		// tempting edit, since these are the largest key sets a company
-		// holds — has to reckon with the same rule as every other.
-		"work_changes": work.ChangeRetention,
+		// holds — has to reckon with the same rule as every other. The
+		// TRACKER has no entry any more: its records are a log, trimmed
+		// by the retention gate rather than swept, so there is no
+		// horizon here to outlast anything.
 		"page_changes": pages.ChangeRetention,
-		"work_orphans": work.OrphanGrace,
 		"page_orphans": pages.ClaimGrace,
 	} {
 		if horizon <= maintenance.Interval {

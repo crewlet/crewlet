@@ -158,7 +158,7 @@ func (w *Writer) TellUnblocked(ctx context.Context, opID string, u Unblock) (Wri
 	// stamped by the APPLIER from this notification rather than carried
 	// as a field: a writer-supplied instant would be one node's clock
 	// where the column has to be a MAX every node computes alike.
-	return w.UpdateTask(ctx, opID, u.Task, u.Project, TaskPatch{}, &Notify{
+	return w.UpdateTask(ctx, opID, u.Task, u.Project, NoIfMatch, TaskPatch{}, &Notify{
 		Kind: ChangeRelations,
 		// LATE, and the flag is what tells a reader this wake is a
 		// repair rather than the change itself — a person who receives

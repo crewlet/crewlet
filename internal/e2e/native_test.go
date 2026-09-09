@@ -4,11 +4,15 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/pages"
-	"github.com/crewlet/crewlet/internal/work"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // The engine's own tracker and knowledge base, end to end.
@@ -20,9 +24,30 @@ import (
 // projection. Every one of those is a wire, and a company on the default
 // backends has no other way to record anything.
 
-// operator writes as a person's own credential would.
-func operator() work.Actor {
-	return work.Actor{Kind: work.AuthorOperator, OperatorID: "e2e"}
+// operator is the tracker's write authority acting as a person's own
+// credential would — one writer per party, derived with [tracker.Writer.As]
+// from an identity the caller cannot choose per call.
+func operator(t *testing.T, n *node) *tracker.Writer {
+	t.Helper()
+	w := n.engine.TrackerWriter().As("e2e", tracker.AuthorOperator,
+		tracker.Provenance{OperatorID: "e2e"})
+	if w == nil {
+		t.Fatal("the operator identity was refused")
+	}
+	return w
+}
+
+// newTask is one task as a caller files it: the fields a create names, and
+// the derived ones the write path fills in.
+func newTask(project, title string) tracker.Task {
+	now := time.Now().UTC()
+	return tracker.Task{
+		V: tracker.DocumentVersion, ID: uuid.NewString(), Project: project,
+		Type: tracker.DefaultType, Title: title, Status: tracker.StatusTodo,
+		StatusGroup: tracker.GroupNotStarted, Priority: tracker.PriorityNormal,
+		Rank: tracker.RankOrigin, Reporter: "e2e",
+		CreatedAt: now, UpdatedAt: now,
+	}
 }
 
 func pageOperator() pages.Actor {
@@ -37,7 +62,7 @@ func TestADefaultCompanyHasATrackerAndAWiki(t *testing.T) {
 	n := start(t)
 	waitFor(t, "the native backends to hydrate", n.engine.NativeHydrated)
 
-	if n.engine.WorkStore() == nil || n.engine.Work() == nil {
+	if n.engine.TrackerWriter() == nil || n.engine.Tracker() == nil {
 		t.Fatal("a company that declares no tracker got no native one")
 	}
 	if n.engine.PagesStore() == nil || n.engine.Pages() == nil {
@@ -65,46 +90,62 @@ func TestAnItemWrittenToTheFleetLandsOnTheBoard(t *testing.T) {
 	n := start(t)
 	waitFor(t, "the native backends to hydrate", n.engine.NativeHydrated)
 
-	written, err := n.engine.WorkStore().Create(t.Context(), operator(), work.NewItem{
-		Project: "ENG", Type: work.TypeBug, Title: "the deploy hangs on rollback",
-		Body: "reproduces on every second run", Assignee: "ceo",
-	})
+	task := newTask("ENG", "the deploy hangs on rollback")
+	task.Body = "reproduces on every second run"
+	task.Assignee = "ceo"
+	written, err := operator(t, n).CreateTask(t.Context(), "e2e-create-1", task, nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if !strings.HasPrefix(written.Item.Key, "ENG-") {
-		t.Errorf("the item was keyed %q, not ENG-n", written.Item.Key)
+	if !strings.HasPrefix(written.Key, "ENG-") {
+		t.Errorf("the task was keyed %q, not ENG-n", written.Key)
+	}
+	// THE THREE OUTCOMES ARE NOT A BOOL. A create that reported `pending`
+	// is one the fleet holds and this node has not applied — the wait
+	// below is what turns it into `applied`, and collapsing the two is
+	// how a caller reports work that was never recorded.
+	if written.Outcome == statelog.OutcomeUnknown {
+		t.Fatalf("the create resolved to %q", written.Outcome)
 	}
 
-	// READ THROUGH THE PROJECTION, not through the store: this is what a
-	// board, a tool and the REST route all use, and it is the copy that
+	// READ THROUGH THIS NODE'S OWN ROWS, not through the log: this is what
+	// a board, a tool and the REST route all use, and it is the copy that
 	// can be behind.
-	if err := n.engine.WaitApplied(t.Context(), coord.FamilyWork, written.Revision); err != nil {
-		t.Fatalf("wait for the projection: %v", err)
+	if err := n.engine.WaitCommitted(t.Context(), written.Position); err != nil {
+		t.Fatalf("wait for the applier: %v", err)
 	}
-	detail, err := n.engine.Work().Get(t.Context(), written.Item.Key)
+	detail, err := n.engine.Tracker().Task(t.Context(), written.Key,
+		tracker.DetailWants{History: true}, statelog.ReadSession)
 	if err != nil {
-		t.Fatalf("read %s back: %v", written.Item.Key, err)
+		t.Fatalf("read %s back: %v", written.Key, err)
 	}
-	if detail.Item.Title != "the deploy hangs on rollback" {
-		t.Errorf("the projected item reads %q", detail.Item.Title)
+	if detail.Task.Title != "the deploy hangs on rollback" {
+		t.Errorf("the applied task reads %q", detail.Task.Title)
 	}
-	if detail.Item.Assignee != "ceo" {
-		t.Errorf("the projected assignee is %q", detail.Item.Assignee)
+	if detail.Task.Assignee != "ceo" {
+		t.Errorf("the applied assignee is %q", detail.Task.Assignee)
+	}
+	// AND THE ANSWER SAYS HOW COMPLETE IT IS. A detail read that could not
+	// distinguish a caught-up node from a lagging one would be the one
+	// screen in the product where the difference is invisible.
+	if !detail.Complete {
+		t.Errorf("a read after its own write reports incomplete: %+v", detail.Incomplete)
 	}
 
-	// AND THE LISTING FINDS IT, which is a different query from the get:
-	// a board filters, and a filter that reached no rows would draw an
-	// empty board over a company that has work.
-	items, err := n.engine.Work().List(t.Context(), work.Filter{Project: "ENG"})
+	// AND THE BOARD FINDS IT, which is a different query from the detail
+	// read: a board filters, and a filter that reached no rows would draw
+	// an empty board over a company that has work.
+	answer, err := n.engine.Tracker().Tasks(t.Context(), tracker.Query{
+		Scope: tracker.Scope{Project: "ENG"},
+	}, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	found := slices.ContainsFunc(items, func(s work.Summary) bool {
-		return s.Key == written.Item.Key
+	found := slices.ContainsFunc(answer.Rows, func(r tracker.TaskRow) bool {
+		return r.Key == written.Key
 	})
 	if !found {
-		t.Errorf("the board lists %d items and not the one just filed", len(items))
+		t.Errorf("the board lists %d tasks and not the one just filed", len(answer.Rows))
 	}
 }
 
@@ -164,38 +205,30 @@ func TestAnOperatorWriteIsStillAnOperatorWriteOnTheBoard(t *testing.T) {
 	n := start(t)
 	waitFor(t, "the native backends to hydrate", n.engine.NativeHydrated)
 
-	written, err := n.engine.WorkStore().Create(t.Context(), operator(), work.NewItem{
-		Project: "OPS", Type: work.TypeTask, Title: "rotate the signing key",
-	})
+	written, err := operator(t, n).CreateTask(t.Context(), "e2e-create-2",
+		newTask("OPS", "rotate the signing key"), nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if err := n.engine.WaitApplied(t.Context(), coord.FamilyWork, written.Revision); err != nil {
-		t.Fatalf("wait for the projection: %v", err)
+	if err := n.engine.WaitCommitted(t.Context(), written.Position); err != nil {
+		t.Fatalf("wait for the applier: %v", err)
 	}
-	detail, err := n.engine.Work().Get(t.Context(), written.Item.Key)
+	detail, err := n.engine.Tracker().Task(t.Context(), written.Key,
+		tracker.DetailWants{History: true}, statelog.ReadSession)
 	if err != nil {
 		t.Fatalf("read back: %v", err)
 	}
 	if len(detail.History) == 0 {
-		t.Fatal("the item has no history, so nothing records who filed it")
+		t.Fatal("the task has no history, so nothing records who filed it")
 	}
 	change := detail.History[len(detail.History)-1]
-	if change.ActorKind != work.AuthorOperator {
+	// THE KIND IS THE DISCRIMINATOR, and it is what every renderer and
+	// every recipient rule reads. An author string alone cannot say
+	// whether `e2e` is a credential or a colleague.
+	if change.ActorKind != tracker.AuthorOperator {
 		t.Errorf("the filing is attributed as %q, not as an operator", change.ActorKind)
 	}
-	if change.OperatorID != "e2e" {
-		t.Errorf("the record names the operator %q", change.OperatorID)
-	}
-	// AND THE RENDERED NAME IS NAMESPACED, so it cannot be mistaken for a
-	// colleague: a seat handle is lowercase alphanumerics and hyphens and
-	// can never contain a colon, so `operator:e2e` is unambiguous wherever
-	// the two appear in one column.
-	if change.Actor != "operator:e2e" {
-		t.Errorf("the change renders its actor as %q, want the namespaced "+
-			"operator form", change.Actor)
-	}
-	if !strings.Contains(change.Actor, ":") {
-		t.Error("an operator's rendered name is indistinguishable from a handle")
+	if change.Actor != "e2e" {
+		t.Errorf("the change names its author %q", change.Actor)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -194,3 +195,198 @@ func (c *DomainConsumer) Pending(ctx context.Context) (uint64, error) {
 // Name is what this consumer is called on the broker, for an operator tracing
 // a stalled applier back to the thing that is not delivering.
 func (c *DomainConsumer) Name() string { return c.name }
+
+// DomainGroup is a FLEET-WIDE pull consumer over one domain's log.
+//
+// # Why this exists beside the per-node one
+//
+// [DomainConsumer] is replication: every node reads every record, so each has
+// its own. This is the opposite shape — one consumer SHARED by the fleet,
+// where a record is handled by whichever node gets there first — and it is
+// what a change feed needs.
+//
+// A GROUP RATHER THAN A DUTY, and the difference is a real outage: a duty is
+// held by one node under a lease, so a lease flap stalls the whole company's
+// notifications for work that is stateless. A group has no holder to lose.
+type DomainGroup struct {
+	cons     jetstream.Consumer
+	messages jetstream.MessagesContext
+	stream   string
+	name     string
+
+	// closed ends the context watcher, and once guards the iterator's
+	// stop so a Stop from the caller and one from a cancelled context are
+	// the same Stop.
+	//
+	// THE ITERATOR HAS NO CONTEXT OF ITS OWN. [jetstream.MessagesContext.Next]
+	// blocks until a message arrives or the iterator is stopped, and a
+	// quiet log means it blocks for ever — so a caller that only
+	// cancelled a context would hang on the goroutine it was joining.
+	// That is not a theoretical shutdown wart: the tracker's wake feed
+	// sits in exactly this call, and it wedged every engine test that
+	// stopped before its own context expired.
+	closed chan struct{}
+	once   sync.Once
+}
+
+// DomainDelivery is one record delivered to a group.
+type DomainDelivery struct {
+	// Subject is the wire subject, which is what a translator reads the
+	// object's kind and id out of.
+	Subject string
+
+	// Seq is the broker's sequence and StoredAt its own timestamp — the
+	// instant every node reads identically.
+	Seq      uint64
+	StoredAt time.Time
+
+	Payload []byte
+
+	// Ack marks the record handled, and Nak returns it for redelivery
+	// after a delay. A handler that could not reach something it needs
+	// naks; one that decided the record means nothing to it ACKS, because
+	// a decision is handling.
+	Ack func() error
+	Nak func(time.Duration) error
+}
+
+// Group opens (or creates) a fleet-wide consumer over this log.
+//
+// DELIVER ALL, always. A group created at the head exists and still discards
+// everything published before its first consumer — which for a wake feed is
+// every notification the company owed while nothing was watching.
+func (l *DomainLog) Group(ctx context.Context, name string) (*DomainGroup, error) {
+	if name == "" {
+		return nil, fmt.Errorf("jetstream: a domain group has no name — it is " +
+			"the durable consumer's identity, and an unnamed one would be a " +
+			"fresh consumer per process that replays the whole log on restart")
+	}
+	safe := domainGroupName(l.name, name)
+	cons, err := l.js.CreateOrUpdateConsumer(ctx, l.name, jetstream.ConsumerConfig{
+		Durable:       safe,
+		AckPolicy:     jetstream.AckExplicitPolicy,
+		AckWait:       domainConsumerAckWait,
+		DeliverPolicy: jetstream.DeliverAllPolicy,
+		// NO MaxDeliver, for the reason the per-node consumer gives: a
+		// record nobody could handle yet is a retry rather than a poison
+		// message, and a budget that ran out would drop a wake silently.
+		MaxDeliver: -1,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("jetstream: open the group %s on %s: %w",
+			safe, l.name, err)
+	}
+	messages, err := cons.Messages()
+	if err != nil {
+		return nil, fmt.Errorf("jetstream: consume %s on %s: %w", safe, l.name, err)
+	}
+	group := &DomainGroup{
+		cons: cons, messages: messages, stream: l.name, name: safe,
+		closed: make(chan struct{}),
+	}
+	// The context is turned into a Stop by a goroutine, for the reason
+	// [DomainGroup.closed] gives. It exits with the group, so a
+	// long-lived process holds one goroutine per group rather than one
+	// per read.
+	go func() {
+		select {
+		case <-ctx.Done():
+			group.stop()
+		case <-group.closed:
+		}
+	}()
+	return group, nil
+}
+
+// domainGroupName escapes a group's name the way every derived consumer name
+// here is escaped, and appends a digest over the exact pair.
+func domainGroupName(stream, group string) string {
+	safe := func(s string) string {
+		return strings.NewReplacer(".", "_", "*", "_", ">", "_", " ", "_").Replace(s)
+	}
+	sum := sha256.Sum256([]byte(group + "\x00" + stream))
+	id := hex.EncodeToString(sum[:6])
+	readable := safe(group) + "__" + safe(stream)
+	if max := consumerNameMax - len(id) - 2; len(readable) > max {
+		readable = readable[:max]
+	}
+	return readable + "__" + id
+}
+
+// Next blocks for the next delivery.
+//
+// A NIL DELIVERY WITH A NIL ERROR MEANS THE CONSUMER CLOSED, which is how a
+// caller tells a shutdown from a failure — the two have opposite responses,
+// and a shutdown reported as a failure is a log line on every clean stop.
+func (g *DomainGroup) Next(ctx context.Context) (*DomainDelivery, error) {
+	msg, err := g.messages.Next()
+	switch {
+	case errors.Is(err, jetstream.ErrMsgIteratorClosed):
+		return nil, nil
+	case err != nil:
+		if ctx.Err() != nil {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("jetstream: read %s: %w", g.name, err)
+	}
+	meta, err := msg.Metadata()
+	if err != nil {
+		// NOT ACKNOWLEDGED, and not returned: a delivery this node
+		// cannot place in the log is one it cannot derive a stable wake
+		// id from, and acknowledging it would drop the wake outright.
+		return nil, fmt.Errorf("jetstream: read %s's metadata: %w", g.name, err)
+	}
+	return &DomainDelivery{
+		Subject: msg.Subject(), Seq: meta.Sequence.Stream,
+		StoredAt: meta.Timestamp, Payload: msg.Data(),
+		Ack: msg.Ack,
+		Nak: func(delay time.Duration) error { return msg.NakWithDelay(delay) },
+	}, nil
+}
+
+// Stop ends this process's consumption. THE DURABLE POSITION SURVIVES, which
+// is what makes a restart resume rather than replay: it is the fleet's
+// position, not this process's.
+func (g *DomainGroup) Stop() error {
+	g.stop()
+	return nil
+}
+
+// stop ends the iterator once, however it was reached.
+//
+// DRAIN RATHER THAN Stop, which is the choice [internal/coord/kv]'s feed makes
+// for the same reason: a drain naks what it has pulled ahead and not yet
+// handed over, so a peer receives those records at once rather than after the
+// full ack window. This node is going away and has done nothing with them.
+func (g *DomainGroup) stop() {
+	g.once.Do(func() {
+		close(g.closed)
+		g.messages.Drain()
+	})
+}
+
+// Name is what this group is called on the broker.
+func (g *DomainGroup) Name() string { return g.name }
+
+// StreamBudget is what the broker will actually let this account store, and
+// how much of it is already used.
+//
+// # Why a ceiling is MEASURED here rather than modelled
+//
+// A stream's byte ceiling is a RESERVATION: the broker refuses to create one it
+// could not honour, with `insufficient storage resources available` and nothing
+// naming the number it compared against. So a ceiling derived from the disk —
+// a share of free space, a fixed default — can be refused on a machine that has
+// the space, because the account's own limit is what decides and it is not the
+// disk.
+//
+// This is that number. A limit of -1 means unlimited, which an in-memory or
+// explicitly unbounded server reports; the caller reads it as "no cap to apply"
+// rather than as zero, which would refuse every stream.
+func (q *Queue) StreamBudget(ctx context.Context) (limit, used int64, err error) {
+	info, err := q.js.AccountInfo(ctx)
+	if err != nil {
+		return 0, 0, fmt.Errorf("jetstream: read the account's storage limits: %w", err)
+	}
+	return info.Limits.MaxStore, int64(info.Store), nil
+}

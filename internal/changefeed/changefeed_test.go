@@ -115,7 +115,7 @@ type probe struct {
 func newProbe() *probe { return &probe{wake: true} }
 
 func (p *probe) Source() changefeed.Source {
-	return changefeed.Source{Name: "work", Group: changefeed.Group(coord.FamilyWork)}
+	return changefeed.Source{Name: "work", Group: changefeed.Group(coord.FamilyPages)}
 }
 
 func (p *probe) Translate(_ context.Context, rec changefeed.Record) (changefeed.Delivery, bool, error) {
@@ -155,7 +155,7 @@ func (p *probe) translations() int {
 func run(t *testing.T, docs *memory.Fleet, pub *capture, cl *claims, tr changefeed.Translator) {
 	t.Helper()
 	feed, err := changefeed.New(changefeed.Options{
-		Opener:    changefeed.DocumentSource(docs, coord.FamilyWork, "c"),
+		Opener:    changefeed.DocumentSource(docs, coord.FamilyPages, "c"),
 		Publisher: pub, Claims: cl, Translator: tr,
 	})
 	if err != nil {
@@ -195,7 +195,7 @@ func settle(t *testing.T, want func() bool, why string) {
 func writeChange(t *testing.T, docs *memory.Fleet, id string) {
 	t.Helper()
 	key := coord.DocumentKey("c", "item", id)
-	created, err := docs.CreateDocument(t.Context(), coord.FamilyWork, key, []byte(`{}`))
+	created, err := docs.CreateDocument(t.Context(), coord.FamilyPages, key, []byte(`{}`))
 	if err != nil || !created {
 		t.Fatalf("write change %s: created=%v err=%v", id, created, err)
 	}
@@ -357,15 +357,23 @@ func TestClaimKeysAreScopedBySource(t *testing.T) {
 }
 
 // The durable group's name IS the fleet's position, so it must be stable and
-// distinct per family: renaming one creates a second consumer at the head and
-// silently abandons whatever the first had not handled.
+// derived from the family: renaming one creates a second consumer at the head
+// and silently abandons whatever the first had not handled.
+//
+// One family is left — the tracker and the embeddings are state-log domains
+// now, and a log feed's group is the DOMAIN's — so what this pins is the
+// derivation and the one name it currently produces, not a distinctness that
+// a single value cannot demonstrate.
 func TestTheGroupNameIsStableAndPerFamily(t *testing.T) {
 	t.Parallel()
-	if changefeed.Group(coord.FamilyWork) == changefeed.Group(coord.FamilyPages) {
-		t.Error("two families share a durable consumer")
-	}
-	if got := changefeed.Group(coord.FamilyWork); got != "crewlet-work-feed" {
+	if got := changefeed.Group(coord.FamilyPages); got != "crewlet-pages-feed" {
 		t.Errorf("group = %q — renaming it abandons the fleet's position", got)
+	}
+	for _, family := range coord.Families() {
+		if got := changefeed.Group(family); got != "crewlet-"+string(family)+"-feed" {
+			t.Errorf("%s derives the group %q, breaking the convention every "+
+				"other estate's name follows", family, got)
+		}
 	}
 }
 
@@ -374,7 +382,7 @@ func TestTheGroupNameIsStableAndPerFamily(t *testing.T) {
 func TestAFeedRefusesAnIncompleteWiring(t *testing.T) {
 	t.Parallel()
 	docs := memory.NewFleet()
-	opener := changefeed.DocumentSource(docs, coord.FamilyWork, "c")
+	opener := changefeed.DocumentSource(docs, coord.FamilyPages, "c")
 	for _, opts := range []changefeed.Options{
 		{Publisher: &capture{}, Translator: newProbe()},
 		{Opener: opener, Translator: newProbe()},
@@ -396,12 +404,12 @@ func TestAFeedRefusesAnIncompleteWiring(t *testing.T) {
 type nameless struct{ probe }
 
 func (n *nameless) Source() changefeed.Source {
-	return changefeed.Source{Group: "crewlet-work-feed"}
+	return changefeed.Source{Group: "crewlet-pages-feed"}
 }
 
 type groupless struct{ probe }
 
-func (g *groupless) Source() changefeed.Source { return changefeed.Source{Name: "work"} }
+func (g *groupless) Source() changefeed.Source { return changefeed.Source{Name: "page"} }
 
 // A REMOVED RECORD IS ACKED AND NEVER TRANSLATED.
 //
@@ -420,11 +428,11 @@ func TestARemovedRecordIsAckedWithoutTranslation(t *testing.T) {
 	key := coord.DocumentKey("c", "item", "u1")
 	writeChange(t, docs, "u1")
 	settle(t, func() bool { return p.translations() == 1 }, "the change was never translated")
-	rec, found, err := docs.Document(t.Context(), coord.FamilyWork, key)
+	rec, found, err := docs.Document(t.Context(), coord.FamilyPages, key)
 	if err != nil || !found {
 		t.Fatalf("read the change back: found=%v err=%v", found, err)
 	}
-	if purged, err := docs.PurgeDocument(t.Context(), coord.FamilyWork, key, rec.Version); err != nil || !purged {
+	if purged, err := docs.PurgeDocument(t.Context(), coord.FamilyPages, key, rec.Version); err != nil || !purged {
 		t.Fatalf("purge the change: purged=%v err=%v", purged, err)
 	}
 
@@ -449,8 +457,8 @@ func TestARemovedRecordIsAckedWithoutTranslation(t *testing.T) {
 func TestABucketDeliveryCarriesNoStreamOrGeneration(t *testing.T) {
 	t.Parallel()
 	docs := memory.NewFleet()
-	records, err := changefeed.DocumentSource(docs, coord.FamilyWork, "c").
-		Open(t.Context(), changefeed.Group(coord.FamilyWork))
+	records, err := changefeed.DocumentSource(docs, coord.FamilyPages, "c").
+		Open(t.Context(), changefeed.Group(coord.FamilyPages))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

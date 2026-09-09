@@ -37,6 +37,15 @@ const (
 )
 
 // Statuses are the six, in the order a board renders them.
+// DefaultType is the type a task takes when nothing names one.
+//
+// A PLAIN STRING and not an enum, because the type catalogue is the
+// WORKSPACE's: a company that files "incident" and "spike" is filing tasks
+// this build has never heard of, and a closed set here would refuse them. What
+// the constant is for is the one case that has no answer to fall back on — a
+// caller that named no type at all.
+const DefaultType = "task"
+
 var Statuses = []Status{
 	StatusTodo, StatusInProgress, StatusInReview,
 	StatusDone, StatusCancelled, StatusClosed,

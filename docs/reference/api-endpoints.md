@@ -1202,8 +1202,23 @@ REST route calls, so the two surfaces cannot diverge:
 | `a2a_channels` | — | The fleet's agent-to-agent authorization record: who asked whom, how many messages crossed, and when. `available: false` when this node could not reach the coordination store — which is not the same as no channels having been opened |
 | `knowledge` | `{q}` | The company's own knowledge search, run live through the same `knowledge.Searcher` seam a seat's own `search_knowledge` tool uses. Searched as the ORG with no seat, so it applies the engine's own account and nothing more — searching as a named seat would let a dashboard reader read, through that seat's credential, material their own account may not have. Registered whenever a company is active, NOT only when a searcher exists — "this company has no knowledge backend" is a fact the company establishes on its own, and it is a far more useful answer than an unknown query. `available: false` covers all three of no company, no backend, and a backend wired with no org-wide read scope. `reason` (`no_company` / `no_backend` / `no_scope`, empty when the search ran) is the value to branch on and `note` is the prose for a person — a screen picking which remedy to offer must not string-match the note, nor infer the state from an empty `backend`, which means "no backend" and "no company" alike. The `no_scope` note names `knowledge.scope`, because an operator whose integration is correct must not be sent to re-check it. It carries a reason on a failed search too, because search is best effort by contract and an empty result is not proof that nothing matches |
 | `integrations` | — | `GET /integrations` |
-| `work_items` | `{project, status, assignee, reporter, label, parent, watcher, q, open, limit, offset}` | `GET /work`. `status` is comma-separated, because a socket frame's JSON object cannot carry a repeated key and a filter only one transport can express is exactly the divergence this channel exists to prevent. `open` is THREE-STATED: absent asks for everything, `true` for open work, `false` for closed. An unknown status is refused naming the closed set rather than matching nothing |
-| `work_item` | `{id}` | `GET /work/{id}` — key or id |
+| `work_items` | `{container, status, status_group, assignee, reporter, watcher, collaborator, tag, type, priority, sprint, parent, root, q, cursor, limit, …}` | `GET /work`. `container` is the scope — `workspace`, or `project:ENG` (a bare `ENG` works too, and the key is upper-cased because the column is) — and an ABSENT container is neither: the engine refuses to default it, because an omitted key would otherwise be the most expensive query in the system. Every list key is comma-separated, because a socket frame's JSON object cannot carry a repeated key and a filter only one transport can express is exactly the divergence this channel exists to prevent; `status` also takes `!` negation. There is no `open` flag — open and closed are STATUS GROUPS (`not_started`, `active`, `done`, `closed`), which is the level every rule in the tracker is written at. An unknown status or group is refused naming the closed set rather than matching nothing. The answer carries `total_hint` (capped — an exact total over an unbounded set turns a poll into a scan), `next_cursor`, and the coverage half below |
+| `work_item` | `{id}` | `GET /work/{id}` — key or id. Answers `{task, comments, history, links}` plus the same coverage half |
+
+**Every tracker answer carries how far this node had got, and both halves
+matter.** `read_level` is the level the read was ACTUALLY served at, never the
+one asked for — a level never silently downgrades, so the two can differ only
+by a refusal you can see. `log_seq` is this node's committed position and
+`applied_through` the prefix whose consequences it actually holds; they are two
+numbers because a node applying nothing while its position advances looks
+identical to a caught-up one from either alone. `log_lag` is **absent** rather
+than zero when the broker could not be reached, because a read asks how far
+behind an answer may be and an unreachable broker answering "not at all" is the
+confident wrong answer. And `complete: false` — with `incomplete` naming the
+count, the affected objects and the record version — says rows may be missing,
+rows that should have gone may still be present, and the totals were computed
+over the incomplete set. That is a different fact from staleness, and a client
+that renders `read_level` and swallows `complete` looks confidently right.
 | `pages` | `{container, parent, status, label, watcher, title, skills, onboarding, limit, offset}` | `GET /pages`. `skills` is three-stated on the same terms as `open`: only the tool-skill pages, everything but them, or everything |
 | `page` | `{id}` | `GET /pages/{id}` — id or `CONTAINER/Title` |
 | `containers` | — | `GET /containers`. A separate question from `pages` rather than a facet of it: a browser draws the container list once and the page list on every navigation |

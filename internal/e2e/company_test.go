@@ -47,6 +47,25 @@ roles:
     kind: human
     contact:
       slack_user_id: U0FOUNDER
+# TWO UNITS WITH PROJECTS, and they are BELOW the seats deliberately: several
+# fixtures here extend this document by replacing the first "roles:\n" in it,
+# and a unit's own indented roles key would match that one first. Keeping the
+# units last means a fixture patching the seats still patches the seats.
+#
+# They exist because a project is NOT created on demand: a task takes its key
+# from its project's own counter, so the project has to be an object before
+# anything can be filed in it — and the only thing that makes one is the chart
+# apply reading these keys. A company that declared none could file no work at
+# all, which is what these two exercise end to end.
+units:
+  - name: Engineering
+    purpose: builds and runs the product
+    project: ENG
+    lead: CEO
+  - name: Operations
+    purpose: keeps the lights on
+    project: OPS
+    lead: CEO
 turn_engine:
   max_iterations: 1
   max_tool_rounds: 3

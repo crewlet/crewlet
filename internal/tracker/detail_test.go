@@ -24,7 +24,7 @@ func TestATaskReadsBackWholeAndByEveryNameItHasHad(t *testing.T) {
 	r := newRoundTrip(t)
 	created := r.createTask("Rate limits in the GitLab client")
 
-	if _, err := r.writer.UpdateTask(t.Context(), "op-assign", created.ID, "ENG",
+	if _, err := r.writer.UpdateTask(t.Context(), "op-assign", created.ID, "ENG", tracker.NoIfMatch,
 		tracker.TaskPatch{Assignee: strptr("ana")}, nil); err != nil {
 		t.Fatalf("assign: %v", err)
 	}
@@ -196,7 +196,7 @@ func (r *roundTrip) createTask(title string) tracker.Task {
 func (r *roundTrip) relate(from, to string, kind tracker.RelationKind) {
 	r.t.Helper()
 	if _, err := r.writer.UpdateTask(r.t.Context(), "op-rel-"+from+to, from, "ENG",
-		tracker.TaskPatch{
+		tracker.NoIfMatch, tracker.TaskPatch{
 			Relations: &[]tracker.Relation{{Kind: kind, Other: to}},
 		}, nil); err != nil {
 		r.t.Fatalf("relate: %v", err)

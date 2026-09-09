@@ -214,9 +214,9 @@ func TestABootProjectsEverythingTheBucketAlreadyHeld(t *testing.T) {
 	docs := memory.NewFleet()
 	db := openStore(t)
 	for i := range 5 {
-		put(t, docs, projection.FamilyWork, fmt.Sprintf("i.%d", i), fmt.Sprintf("item %d", i))
+		put(t, docs, projection.FamilyPages, fmt.Sprintf("i.%d", i), fmt.Sprintf("item %d", i))
 	}
-	p := newProjector(t, docs, db, newRowApplier(t, db, projection.FamilyWork))
+	p := newProjector(t, docs, db, newRowApplier(t, db, projection.FamilyPages))
 	start(t, p)
 	awaitHydrated(t, p)
 
@@ -238,7 +238,7 @@ func TestAReadBeforeHydrationIsRefusedRatherThanEmpty(t *testing.T) {
 	t.Parallel()
 	docs := memory.NewFleet()
 	db := openStore(t)
-	p := newProjector(t, docs, db, newRowApplier(t, db, projection.FamilyWork))
+	p := newProjector(t, docs, db, newRowApplier(t, db, projection.FamilyPages))
 	if p.Hydrated() {
 		t.Fatal("a projector that has not run reports hydrated")
 	}
@@ -257,14 +257,14 @@ func TestALiveWriteLandsOnBothNodes(t *testing.T) {
 	t.Parallel()
 	docs := memory.NewFleet()
 	dbA, dbB := openStore(t), openStore(t)
-	a := newProjector(t, docs, dbA, newRowApplier(t, dbA, projection.FamilyWork))
-	b := newProjector(t, docs, dbB, newRowApplier(t, dbB, projection.FamilyWork))
+	a := newProjector(t, docs, dbA, newRowApplier(t, dbA, projection.FamilyPages))
+	b := newProjector(t, docs, dbB, newRowApplier(t, dbB, projection.FamilyPages))
 	start(t, a)
 	start(t, b)
 	awaitHydrated(t, a)
 	awaitHydrated(t, b)
 
-	rev := put(t, docs, projection.FamilyWork, "i.new", "filed on A")
+	rev := put(t, docs, projection.FamilyPages, "i.new", "filed on A")
 	for _, tc := range []struct {
 		name string
 		p    *projection.Projector
@@ -287,19 +287,19 @@ func TestAPurgeRemovesTheRowAndStaysRemoved(t *testing.T) {
 	t.Parallel()
 	docs := memory.NewFleet()
 	db := openStore(t)
-	put(t, docs, projection.FamilyWork, "i.gone", "here")
-	p := newProjector(t, docs, db, newRowApplier(t, db, projection.FamilyWork))
+	put(t, docs, projection.FamilyPages, "i.gone", "here")
+	p := newProjector(t, docs, db, newRowApplier(t, db, projection.FamilyPages))
 	start(t, p)
 	awaitHydrated(t, p)
 	if rows(t, db)["i.gone"] != "here" {
 		t.Fatal("the row did not project")
 	}
 
-	rec, _, err := docs.Document(t.Context(), projection.FamilyWork, "i.gone")
+	rec, _, err := docs.Document(t.Context(), projection.FamilyPages, "i.gone")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := docs.PurgeDocument(t.Context(), projection.FamilyWork, "i.gone", rec.Version); err != nil || !ok {
+	if ok, err := docs.PurgeDocument(t.Context(), projection.FamilyPages, "i.gone", rec.Version); err != nil || !ok {
 		t.Fatalf("purge: ok=%v err=%v", ok, err)
 	}
 	waitFor(t, func() bool { _, still := rows(t, db)["i.gone"]; return !still },
@@ -309,7 +309,7 @@ func TestAPurgeRemovesTheRowAndStaysRemoved(t *testing.T) {
 	// removal was applied, so the next reconcile neither re-fetches it nor
 	// re-applies the purge.
 	p.Stop()
-	applier := newRowApplier(t, db, projection.FamilyWork)
+	applier := newRowApplier(t, db, projection.FamilyPages)
 	p2 := newProjector(t, docs, db, applier)
 	start(t, p2)
 	awaitHydrated(t, p2)
@@ -329,9 +329,9 @@ func TestARestartAppliesOnlyWhatChanged(t *testing.T) {
 	docs := memory.NewFleet()
 	db := openStore(t)
 	for i := range 3 {
-		put(t, docs, projection.FamilyWork, fmt.Sprintf("i.%d", i), "v1")
+		put(t, docs, projection.FamilyPages, fmt.Sprintf("i.%d", i), "v1")
 	}
-	first := newRowApplier(t, db, projection.FamilyWork)
+	first := newRowApplier(t, db, projection.FamilyPages)
 	p := newProjector(t, docs, db, first)
 	start(t, p)
 	awaitHydrated(t, p)
@@ -340,9 +340,9 @@ func TestARestartAppliesOnlyWhatChanged(t *testing.T) {
 	}
 	p.Stop()
 
-	put(t, docs, projection.FamilyWork, "i.1", "v2")
+	put(t, docs, projection.FamilyPages, "i.1", "v2")
 
-	second := newRowApplier(t, db, projection.FamilyWork)
+	second := newRowApplier(t, db, projection.FamilyPages)
 	p2 := newProjector(t, docs, db, second)
 	start(t, p2)
 	awaitHydrated(t, p2)
@@ -364,17 +364,17 @@ func TestABootConvergesFromACursorAheadOfTheBucket(t *testing.T) {
 	t.Parallel()
 	docs := memory.NewFleet()
 	db := openStore(t)
-	newRowApplier(t, db, projection.FamilyWork)
+	newRowApplier(t, db, projection.FamilyPages)
 
 	// A cursor from a deployment whose bucket held far more than this one.
 	if _, err := db.SQL().ExecContext(t.Context(), `
 		INSERT INTO projection_cursor (family, revision, hydrated, updated_at)
-		VALUES (?, 999999, 1, 0)`, string(projection.FamilyWork)); err != nil {
+		VALUES (?, 999999, 1, 0)`, string(projection.FamilyPages)); err != nil {
 		t.Fatal(err)
 	}
-	put(t, docs, projection.FamilyWork, "i.restored", "from the backup")
+	put(t, docs, projection.FamilyPages, "i.restored", "from the backup")
 
-	p := newProjector(t, docs, db, newRowApplier(t, db, projection.FamilyWork))
+	p := newProjector(t, docs, db, newRowApplier(t, db, projection.FamilyPages))
 	start(t, p)
 	awaitHydrated(t, p)
 	if got := rows(t, db)["i.restored"]; got != "from the backup" {
@@ -389,19 +389,19 @@ func TestABootDropsWhatTheBucketNoLongerHolds(t *testing.T) {
 	t.Parallel()
 	docs := memory.NewFleet()
 	db := openStore(t)
-	newRowApplier(t, db, projection.FamilyWork)
+	newRowApplier(t, db, projection.FamilyPages)
 	if _, err := db.SQL().ExecContext(t.Context(), `
 		INSERT INTO projection_probe (key, value, revision) VALUES ('i.stale', 'left over', 4)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.SQL().ExecContext(t.Context(), `
 		INSERT INTO projection_keys (family, key, revision, purged) VALUES (?, 'i.stale', 4, 0)`,
-		string(projection.FamilyWork)); err != nil {
+		string(projection.FamilyPages)); err != nil {
 		t.Fatal(err)
 	}
-	put(t, docs, projection.FamilyWork, "i.live", "current")
+	put(t, docs, projection.FamilyPages, "i.live", "current")
 
-	p := newProjector(t, docs, db, newRowApplier(t, db, projection.FamilyWork))
+	p := newProjector(t, docs, db, newRowApplier(t, db, projection.FamilyPages))
 	start(t, p)
 	awaitHydrated(t, p)
 	got := rows(t, db)
@@ -421,13 +421,13 @@ func TestAFailingApplyDropsHydration(t *testing.T) {
 	t.Parallel()
 	docs := memory.NewFleet()
 	db := openStore(t)
-	applier := newRowApplier(t, db, projection.FamilyWork)
+	applier := newRowApplier(t, db, projection.FamilyPages)
 	p := newProjector(t, docs, db, applier)
 	start(t, p)
 	awaitHydrated(t, p)
 
 	applier.breakWith(errors.New("the store said no"))
-	put(t, docs, projection.FamilyWork, "i.doomed", "never lands")
+	put(t, docs, projection.FamilyPages, "i.doomed", "never lands")
 	waitFor(t, func() bool { return !p.Hydrated() },
 		"a failing apply left the projector reporting hydrated")
 	if got := p.Status(); !strings.Contains(got.Err, "the store said no") {
@@ -448,7 +448,7 @@ func TestWaitAppliedReportsNotYetRatherThanFailure(t *testing.T) {
 	t.Parallel()
 	docs := memory.NewFleet()
 	db := openStore(t)
-	p := newProjector(t, docs, db, newRowApplier(t, db, projection.FamilyWork))
+	p := newProjector(t, docs, db, newRowApplier(t, db, projection.FamilyPages))
 	start(t, p)
 	awaitHydrated(t, p)
 
@@ -458,7 +458,7 @@ func TestWaitAppliedReportsNotYetRatherThanFailure(t *testing.T) {
 		t.Errorf("waiting for revision 0 blocked: %v", err)
 	}
 
-	rev := put(t, docs, projection.FamilyWork, "i.mine", "just filed")
+	rev := put(t, docs, projection.FamilyPages, "i.mine", "just filed")
 	if err := p.WaitApplied(t.Context(), rev); err != nil {
 		t.Fatalf("the projector never applied its own write: %v", err)
 	}
@@ -473,17 +473,27 @@ func TestWaitAppliedReportsNotYetRatherThanFailure(t *testing.T) {
 	}
 }
 
-// THE VECTOR FAMILY IS NOT PROJECTED. It is written by the indexer against
-// its own source versions and read by the searcher, so a projector following
-// it would burn a watch on records it has no apply rule for.
-func TestOnlyTheTwoDocumentFamiliesAreProjected(t *testing.T) {
+// A PROJECTOR FOLLOWS EVERY FAMILY AND NOTHING ELSE.
+//
+// Both halves matter and each fails silently on its own. A family this list
+// omits is a bucket whose changes reach no node's rows — a screen that renders
+// stale for the life of the deployment with nothing reporting it. A name here
+// that is not a family is a watch on records the applier has no rule for,
+// which drains the buffer into nothing and reports it as progress.
+//
+// The list shrank to one when the tracker and the embeddings became state-log
+// DOMAINS: an applier derives their state from an ordered stream, so there is
+// no bucket to watch and no cursor here to be behind.
+func TestEveryDocumentFamilyIsProjectedAndNothingElse(t *testing.T) {
 	t.Parallel()
 	got := projection.Projected()
-	if !slices.Equal(got, []projection.Family{coord.FamilyWork, coord.FamilyPages}) {
-		t.Errorf("Projected() = %v", got)
+	if !slices.Equal(got, coord.Families()) {
+		t.Errorf("Projected() = %v, and the families are %v — the difference "+
+			"is either a bucket nothing applies or a watch with no apply rule",
+			got, coord.Families())
 	}
-	if slices.Contains(got, coord.FamilyKBVectors) {
-		t.Error("the derived vector family is being projected as a change feed")
+	if !slices.Contains(got, projection.FamilyPages) {
+		t.Error("the wiki is not projected, so no node's rows would ever move")
 	}
 }
 
@@ -492,7 +502,7 @@ func TestOnlyTheTwoDocumentFamiliesAreProjected(t *testing.T) {
 func TestAProjectorRefusesAnIncompleteWiring(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	a := newRowApplier(t, db, projection.FamilyWork)
+	a := newRowApplier(t, db, projection.FamilyPages)
 	for _, tc := range []struct {
 		name string
 		opts projection.Options
@@ -534,7 +544,7 @@ func TestTheCommitHookFiresOnlyForABatchThatLanded(t *testing.T) {
 	t.Parallel()
 	docs := memory.NewFleet()
 	db := openStore(t)
-	applier := newRowApplier(t, db, projection.FamilyWork)
+	applier := newRowApplier(t, db, projection.FamilyPages)
 	p := newProjector(t, docs, db, applier)
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -542,7 +552,7 @@ func TestTheCommitHookFiresOnlyForABatchThatLanded(t *testing.T) {
 	go func() { _ = p.Run(ctx) }()
 	waitFor(t, p.Hydrated, "the projector never hydrated")
 
-	put(t, docs, projection.FamilyWork, "i.one", `{"n":1}`)
+	put(t, docs, projection.FamilyPages, "i.one", `{"n":1}`)
 	waitFor(t, func() bool { return applier.committed() > 0 },
 		"a committed batch fired no post-commit hook")
 	landed := applier.committed()
@@ -552,7 +562,7 @@ func TestTheCommitHookFiresOnlyForABatchThatLanded(t *testing.T) {
 	// grow again once the applier is healthy — what must not happen is a
 	// hook for the batch that broke.
 	applier.breakWith(errors.New("apply refused"))
-	put(t, docs, projection.FamilyWork, "i.two", `{"n":2}`)
+	put(t, docs, projection.FamilyPages, "i.two", `{"n":2}`)
 	time.Sleep(200 * time.Millisecond)
 	if got := applier.committed(); got > landed {
 		t.Errorf("a failed batch fired %d post-commit hooks", got-landed)

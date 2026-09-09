@@ -5,13 +5,15 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/opsmcp"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/pages"
-	"github.com/crewlet/crewlet/internal/work"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // A COMPANY ON JIRA GETS NO SURFACE AT ALL. An endpoint that exists and lists
@@ -30,14 +32,11 @@ func TestNoNativeBackendServesNothing(t *testing.T) {
 // that fail at the call.
 func TestEachHalfIsOfferedOnItsOwn(t *testing.T) {
 	t.Parallel()
-	docs := memory.NewFleet()
-	tracker, err := work.NewStore(work.Options{Documents: docs})
-	if err != nil {
-		t.Fatalf("work store: %v", err)
-	}
-
 	only := opsmcp.New(opsmcp.Options{
-		Work: builtin.WorkDeps{Writer: tracker, Actor: opsmcp.WorkActor},
+		Work: builtin.WorkDeps{
+			Reader: stubWorkReader{}, Writer: stubWorkWriter,
+			Actor: opsmcp.WorkActor,
+		},
 	})
 	if only == nil {
 		t.Fatal("a company with only the native tracker got no surface")
@@ -67,17 +66,20 @@ func TestAnOperatorWriteCarriesTheTokensOwnLabel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WorkActor: %v", err)
 	}
-	if actor.Kind != work.AuthorOperator {
+	if actor.Kind != tracker.AuthorOperator {
 		t.Errorf("an operator write is attributed as %q", actor.Kind)
 	}
 	if actor.OperatorID != "ops-bot" {
 		t.Errorf("the record names the operator %q", actor.OperatorID)
 	}
-	// THE HANDLE IS EMPTY, deliberately. A token is not a seat, and a
-	// name in the handle field would render as a colleague in every
-	// thread it appeared in.
-	if actor.Handle != "" {
-		t.Errorf("an operator write carries the handle %q, which reads as a seat", actor.Handle)
+	// THE AUTHOR IS THE TOKEN'S OWN NAME, and the KIND is what says it is
+	// not a seat. An empty author is the one thing this surface must never
+	// record — a history row nobody can attribute — so the discriminator
+	// is the kind, which every renderer and every recipient rule already
+	// reads, rather than the emptiness of a string.
+	if actor.Handle != "ops-bot" {
+		t.Errorf("an operator write is authored by %q, want the token's name",
+			actor.Handle)
 	}
 
 	page, err := opsmcp.PageActor(ctx, nil)
@@ -131,16 +133,12 @@ func TestTheOperatorSurfaceIsNeverAnonymous(t *testing.T) {
 func TestTheOperatorCatalogueIsDrawnFromTheSeatOne(t *testing.T) {
 	t.Parallel()
 	docs := memory.NewFleet()
-	tracker, err := work.NewStore(work.Options{Documents: docs})
-	if err != nil {
-		t.Fatalf("work store: %v", err)
-	}
 	wiki, err := pages.NewStore(pages.Options{Documents: docs})
 	if err != nil {
 		t.Fatalf("pages store: %v", err)
 	}
 	s := opsmcp.New(opsmcp.Options{
-		Work:  builtin.WorkDeps{Reader: stubWorkReader{}, Writer: tracker, Actor: opsmcp.WorkActor},
+		Work:  builtin.WorkDeps{Reader: stubWorkReader{}, Writer: stubWorkWriter, Actor: opsmcp.WorkActor},
 		Pages: builtin.PageDeps{Reader: stubPageReader{}, Writer: wiki, Actor: opsmcp.PageActor},
 	})
 	if s == nil {
@@ -162,11 +160,35 @@ func TestTheOperatorCatalogueIsDrawnFromTheSeatOne(t *testing.T) {
 	}
 }
 
+// The tracker halves this surface needs to EXIST. What is under test here is
+// which tools are offered and who a write is attributed to — neither of which
+// reaches a store — so the stubs answer the shapes and nothing else.
 type stubWorkReader struct{}
 
-func (stubWorkReader) List(context.Context, work.Filter) ([]work.Summary, error) { return nil, nil }
-func (stubWorkReader) Get(context.Context, string) (work.Detail, error) {
-	return work.Detail{}, work.ErrNotFound
+func (stubWorkReader) Tasks(context.Context, tracker.Query, time.Time) (tracker.Answer, error) {
+	return tracker.Answer{}, nil
+}
+
+func (stubWorkReader) Task(context.Context, string, tracker.DetailWants,
+	statelog.ReadLevel) (tracker.TaskDetail, error) {
+
+	return tracker.TaskDetail{}, tracker.ErrNoTask
+}
+
+type stubWorkWriterT struct{}
+
+func stubWorkWriter(builtin.Actor) builtin.WorkWriter { return stubWorkWriterT{} }
+
+func (stubWorkWriterT) CreateTask(context.Context, string, tracker.Task,
+	*tracker.Notify) (tracker.WriteResult, error) {
+
+	return tracker.WriteResult{}, nil
+}
+
+func (stubWorkWriterT) UpdateTask(context.Context, string, string, string, uint64,
+	tracker.TaskPatch, *tracker.Notify) (tracker.WriteResult, error) {
+
+	return tracker.WriteResult{}, nil
 }
 
 type stubPageReader struct{}

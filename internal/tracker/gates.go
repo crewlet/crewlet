@@ -246,28 +246,16 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject, writer, opID
 // at all — and reading its absence as "somebody else won" would re-decide
 // against a row that moved because of this very write.
 func (g *Gates) AdoptedAt(ctx context.Context) (time.Time, bool, error) {
-	var completed sql.NullInt64
-	// THE NODE'S OWN ESTATE, not the replicated one: an adoption record is
-	// a fact about THIS machine's history, and a donated snapshot must not
-	// carry the recipient's own.
-	err := g.db.Read(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx,
-			`SELECT completed_at FROM statelog_adoption WHERE id = 'current'`).
-			Scan(&completed)
-	})
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return time.Time{}, false, nil
-	case err != nil:
-		return time.Time{}, false, fmt.Errorf("tracker: read this node's "+
-			"adoption record: %w", err)
-	case !completed.Valid:
-		// AN INCOMPLETE ADOPTION IS NOT AN ABSENT ONE. A node mid-join
-		// has a scrubbed ledger and no instant to compare against, so
-		// the honest answer is that it cannot answer for any op id.
-		return time.Time{}, false, nil
-	}
-	return store.DecodeTime(completed.Int64), true, nil
+	// THE FRAMEWORK'S OWN READER, not a second query against its table.
+	// This one had drifted into looking for a row keyed `id = 'current'`
+	// on a table keyed on `started_at` — which fails on every call with a
+	// missing column rather than reporting no adoption, and the caller
+	// then treats a working node as one that cannot answer for anything.
+	//
+	// It is still THE NODE'S OWN ESTATE that is read: an adoption record
+	// is a fact about this machine's history, and a donated snapshot must
+	// not carry the recipient's own.
+	return statelog.AdoptedAt(ctx, g.db)
 }
 
 // GateRecordVersion is the version every gate-installing record carries, FOR

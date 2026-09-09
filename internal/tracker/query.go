@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -264,7 +264,34 @@ type Query struct {
 // resolves against the company's own clock and a parser that read a package
 // clock could not be tested at a boundary — and half the tokens in this grammar
 // are boundaries.
-func ParseQuery(p queries.Params, now time.Time, loc *time.Location) (Query, error) {
+// Params is the request's own parameters, as this parser reads them.
+//
+// DECLARED HERE, BY THE CONSUMER, and kept to the five methods the grammar
+// actually calls. The concrete bag lives with the API surface that fills it
+// from a query string or a socket frame — and a parser that imported that
+// surface would be the tracker depending on the transport it is read through,
+// which is also an import cycle the moment the surface reads a tracker type.
+type Params interface {
+	// String is one value, empty when absent.
+	String(key string) string
+
+	// Int and Bool take a default, because "absent" and "zero" are
+	// different answers for both: `limit=0` is a caller asking for
+	// nothing, and an absent limit is a caller asking for the default.
+	Int(key string, def int) int
+	Bool(key string, def bool) bool
+
+	// Has distinguishes them, which is what makes `open=false` and no
+	// `open` at all two different questions.
+	Has(key string) bool
+
+	// Keys is every parameter named, so an unknown one is REFUSED rather
+	// than ignored: a filter nobody parsed is a board showing more than
+	// the person asked for, silently.
+	Keys() []string
+}
+
+func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
 	q := Query{
 		Subtasks:   SubtasksCollapsed,
 		Archived:   ArchivedExclude,
@@ -358,7 +385,7 @@ func ParseQuery(p queries.Params, now time.Time, loc *time.Location) (Query, err
 // seat's own projects, and a human's to everything. Defaulting to the
 // workspace here would make an omitted key the most expensive query in the
 // system.
-func (q *Query) parseScope(p queries.Params) error {
+func (q *Query) parseScope(p Params) error {
 	value := strings.TrimSpace(p.String("container"))
 	switch {
 	case value == "":
@@ -374,12 +401,17 @@ func (q *Query) parseScope(p queries.Params) error {
 	if key == "" {
 		return fmt.Errorf("tracker: container %q names no project", value)
 	}
-	q.Scope.Project = key
+	// UPPER-CASED, because a project key is stored upper and the scope is
+	// an EXACT compare against `project_key`. A board asked for
+	// `project:eng` would otherwise answer an empty list rather than a
+	// refusal — the one failure shape a person acts on, by filing the
+	// duplicate or concluding the migration lost their work.
+	q.Scope.Project = strings.ToUpper(key)
 	return nil
 }
 
 // parseStatus reads the status and status_group keys, with `!` negation.
-func (q *Query) parseStatus(p queries.Params) error {
+func (q *Query) parseStatus(p Params) error {
 	for _, value := range csv(p.String("status")) {
 		negated := strings.HasPrefix(value, "!")
 		slug := Status(strings.TrimPrefix(value, "!"))
@@ -406,7 +438,7 @@ func (q *Query) parseStatus(p queries.Params) error {
 }
 
 // parseTags reads the tag filter and its mode.
-func (q *Query) parseTags(p queries.Params) error {
+func (q *Query) parseTags(p Params) error {
 	value := strings.TrimSpace(p.String("tag"))
 	if value == "" {
 		return nil
@@ -425,7 +457,7 @@ func (q *Query) parseTags(p queries.Params) error {
 	return nil
 }
 
-func (q *Query) parsePriorities(p queries.Params) error {
+func (q *Query) parsePriorities(p Params) error {
 	for _, value := range csv(p.String("priority")) {
 		priority := Priority(value)
 		if !priority.Valid() {
@@ -436,7 +468,7 @@ func (q *Query) parsePriorities(p queries.Params) error {
 	return nil
 }
 
-func (q *Query) parseSubtasks(p queries.Params) error {
+func (q *Query) parseSubtasks(p Params) error {
 	switch value := SubtaskMode(p.String("subtasks")); value {
 	case "":
 	case SubtasksCollapsed, SubtasksExpanded, SubtasksSeparate:
@@ -459,7 +491,7 @@ var dateKeys = []string{
 	"status_entered",
 }
 
-func (q *Query) parseDates(p queries.Params, now time.Time, loc *time.Location) error {
+func (q *Query) parseDates(p Params, now time.Time, loc *time.Location) error {
 	for _, key := range dateKeys {
 		value := strings.TrimSpace(p.String(key))
 		if value == "" {
@@ -474,7 +506,7 @@ func (q *Query) parseDates(p queries.Params, now time.Time, loc *time.Location) 
 	return nil
 }
 
-func (q *Query) parseNumbers(p queries.Params) error {
+func (q *Query) parseNumbers(p Params) error {
 	for key, target := range map[string]**NumFilter{
 		"estimate": &q.Estimate,
 		"points":   &q.Points,
@@ -540,7 +572,7 @@ func parseNumFilter(value string) (NumFilter, error) {
 // declared type, and the declaration lives in a catalogue this parser does not
 // read. A parser that read one could fail on a store, and a query that cannot
 // be parsed without I/O cannot be parsed inside a transaction.
-func (q *Query) parseFields(p queries.Params) {
+func (q *Query) parseFields(p Params) {
 	for _, key := range p.Keys() {
 		ref, ok := strings.CutPrefix(key, "f.")
 		if !ok || ref == "" {
@@ -559,7 +591,7 @@ func (q *Query) parseFields(p queries.Params) {
 	// place the property could be true.
 }
 
-func (q *Query) parseBools(p queries.Params) {
+func (q *Query) parseBools(p Params) {
 	for key, target := range map[string]**bool{
 		"blocked":          &q.Blocked,
 		"blocking":         &q.Blocking,
@@ -576,7 +608,7 @@ func (q *Query) parseBools(p queries.Params) {
 	}
 }
 
-func (q *Query) parseText(p queries.Params) error {
+func (q *Query) parseText(p Params) error {
 	q.Text = strings.TrimSpace(p.String("q"))
 	if len(q.Text) > MaxQueryText {
 		return fmt.Errorf("tracker: the text query is %d bytes and the bound is "+
@@ -606,7 +638,7 @@ func (q *Query) parseText(p queries.Params) error {
 	return nil
 }
 
-func (q *Query) parseShowClosed(p queries.Params) error {
+func (q *Query) parseShowClosed(p Params) error {
 	value := strings.TrimSpace(p.String("show_closed"))
 	switch value {
 	case "", "false":
@@ -628,7 +660,7 @@ func (q *Query) parseShowClosed(p queries.Params) error {
 	return nil
 }
 
-func (q *Query) parseArchived(p queries.Params) error {
+func (q *Query) parseArchived(p Params) error {
 	switch value := ArchivedMode(p.String("archived")); value {
 	case "":
 	case ArchivedExclude, ArchivedInclude, ArchivedOnly:
@@ -647,7 +679,7 @@ var groupKeys = []string{
 	"due:day", "due:week", "start:week",
 }
 
-func (q *Query) parseGrouping(p queries.Params) error {
+func (q *Query) parseGrouping(p Params) error {
 	q.GroupLimit = p.Int("group_limit", 0)
 	for key, target := range map[string]*string{
 		"group_by":  &q.GroupBy,
@@ -685,7 +717,7 @@ var sortKeys = []string{
 	"points", "spend", "status_entered",
 }
 
-func (q *Query) parseSort(p queries.Params) error {
+func (q *Query) parseSort(p Params) error {
 	for _, value := range csv(p.String("sort")) {
 		descending := strings.HasPrefix(value, "-")
 		key := strings.TrimPrefix(value, "-")
@@ -697,7 +729,7 @@ func (q *Query) parseSort(p queries.Params) error {
 	return nil
 }
 
-func (q *Query) parseTotals(p queries.Params) error {
+func (q *Query) parseTotals(p Params) error {
 	q.Totals = csv(p.String("totals"))
 	if len(q.Totals) > MaxTotals {
 		return fmt.Errorf("tracker: %d totals were asked for and the cap is %d — "+
@@ -712,7 +744,7 @@ func (q *Query) parseTotals(p queries.Params) error {
 	return nil
 }
 
-func (q *Query) parseLevel(p queries.Params) error {
+func (q *Query) parseLevel(p Params) error {
 	value := strings.TrimSpace(p.String("read_level"))
 	if value == "" {
 		// ABSENT IS NOT A FOURTH STATE. It resolves to the SURFACE's own
@@ -745,7 +777,7 @@ func (q *Query) parseLevel(p queries.Params) error {
 // keys that are about the ANSWER rather than about the rows — a branch with its
 // own limit, cursor, sort or grouping would be a second query pretending to be
 // a predicate.
-func (q *Query) parseAny(p queries.Params, now time.Time, loc *time.Location) error {
+func (q *Query) parseAny(p Params, now time.Time, loc *time.Location) error {
 	raw := strings.TrimSpace(p.String("any"))
 	if raw == "" {
 		return nil
@@ -770,7 +802,7 @@ func (q *Query) parseAny(p queries.Params, now time.Time, loc *time.Location) er
 					"predicate, not a second query", i, forbidden)
 			}
 		}
-		parsed, err := ParseQuery(queries.FromMap(branch), now, loc)
+		parsed, err := ParseQuery(MapParams(branch), now, loc)
 		if err != nil {
 			return fmt.Errorf("any branch %d: %w", i, err)
 		}
@@ -787,5 +819,69 @@ func csv(value string) []string {
 			out = append(out, part)
 		}
 	}
+	return out
+}
+
+// MapParams reads a query written as a plain object.
+//
+// TWO CALLERS AND ONE OF THEM IS INSIDE THIS FILE. A disjunction branch is a
+// query written inside a query — the transport's own bag holds the outer one,
+// and the inner one has never been through a query string — and a seat's tool
+// builds one from the arguments a model passed. Both parse through exactly the
+// same grammar as a query typed into a URL, which is the whole point: a filter
+// honoured on one surface and ignored on another is the failure one grammar
+// exists to prevent.
+type MapParams map[string]any
+
+// String is one value. It renders a number or a bool the way the transport's
+// own bag does, because a branch written as `{"limit": 5}` in JSON and
+// `limit=5` in a query string must parse identically.
+func (m MapParams) String(key string) string {
+	switch v := m[key].(type) {
+	case nil:
+		return ""
+	case string:
+		return v
+	case bool:
+		return strconv.FormatBool(v)
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	case int:
+		return strconv.Itoa(v)
+	}
+	return fmt.Sprint(m[key])
+}
+
+func (m MapParams) Int(key string, def int) int {
+	if raw := m.String(key); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil {
+			return n
+		}
+	}
+	return def
+}
+
+func (m MapParams) Bool(key string, def bool) bool {
+	if raw := m.String(key); raw != "" {
+		if b, err := strconv.ParseBool(raw); err == nil {
+			return b
+		}
+	}
+	return def
+}
+
+func (m MapParams) Has(key string) bool {
+	_, held := m[key]
+	return held
+}
+
+// Keys is every parameter named, SORTED, so a refusal names the same unknown
+// key on every run rather than whichever the map iterated to first.
+func (m MapParams) Keys() []string {
+	out := make([]string, 0, len(m))
+	for key := range m {
+		out = append(out, key)
+	}
+	sort.Strings(out)
 	return out
 }

@@ -10,7 +10,7 @@
 -- The vector domain is what settles it: an embedding is now a record on an
 -- ordered stream, applied by one deterministic applier into the REPLICATED
 -- estate, so the fleet pays the embedding bill once and every node holds the
--- answer. `0024_the_vector_domain_lands.sql` in that estate is where the
+-- answer. `0003_the_vector_domain_lands.sql` in that estate is where the
 -- reshaped `kb_vectors` and its 1-bit sibling are created.
 --
 -- NOTHING IS CARRIED ACROSS, and that is a fact about this build rather than

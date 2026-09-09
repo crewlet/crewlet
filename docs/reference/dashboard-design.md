@@ -163,7 +163,7 @@ meets their company first and the engine last.
 | **Company** | People | `#/people?group=&q=` | every seat and what it is doing — grouped by state, by unit, or flat |
 | | Org chart | `#/org?lens=chart\|directory\|charter` | the hierarchy, the directory, and the company's own mission, vision and policies |
 | | *a seat* | `#/seats/{handle}?tab=` | overview · model activity · memory · cost · access |
-| **Work** | Work board | `#/work?project=&status=&scope=&q=` | `work_items` — the company's own tracker, this node's copy of the fleet's record. Read-only: work is filed and moved by the seats themselves |
+| **Work** | Work board | `#/work?project=&status=&scope=&q=` | `work_items` — the company's own tracker, derived on this node from the fleet's own ordered log. Read-only: work is filed and moved by the seats themselves. The answer's coverage half is rendered, not swallowed — `read_level` as a badge, and `complete: false` as a banner above the rows naming what the node could not account for |
 | | *an item* | `#/work/{key\|id}` | `work_item` — description, thread, history and links |
 | | Coding runs | `#/runs?run=` | the live `sandboxes` plus the durable `sandbox_runs` — including runs whose box has been reclaimed |
 | | Agent-to-agent | `#/conversations` | `a2a_channels` — who asked whom, how many messages, and when |

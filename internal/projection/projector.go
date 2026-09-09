@@ -16,9 +16,8 @@ import (
 // transaction.
 //
 // DECLARED HERE, implemented by the packages that own the documents:
-// [internal/work] knows what an item's classes mean and [internal/pages]
-// knows what a page's do, and neither belongs in a package whose subject is
-// keeping a local copy in step. What this package guarantees in return is
+// [internal/pages] knows what a page's classes mean, and that does not
+// belong in a package whose subject is keeping a local copy in step. What this package guarantees in return is
 // the part an applier must not have to think about — exactly-once by
 // revision, one writer, a transaction per batch, and a cursor that advances
 // only after a commit.

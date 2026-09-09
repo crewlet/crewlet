@@ -19,7 +19,7 @@ import (
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why SIXTEEN buckets and not one
+// # Why FOURTEEN buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -60,16 +60,10 @@ import (
 //	           that expired would make a converged surface read as one
 //	           nobody has looked at, sending the loop to re-provision
 //	           against a third-party app it had already agreed with
-//	work       none at all, and here an age would delete the company's own
-//	           record: an item is not a horizon-bounded fact, and a bucket
-//	           that expired one would erase work nobody closed
-//	pages      none at all, for the same reason as work — a page is the
-//	           company's own document, and its revisions are its history
-//	kbVectors  none at all: they are DERIVED, so an age would not lose
-//	           anything permanently, but it would silently degrade search
-//	           to keyword-only on a timer with nothing reporting it. They
-//	           are dropped WHOLESALE when the embedding width changes,
-//	           which is a gesture rather than a horizon
+//	pages      none at all, and here an age would delete the company's own
+//	           record: a page is the company's own document and its
+//	           revisions are its history, neither of them a
+//	           horizon-bounded fact
 //	positions  none at all, and this is the one where an age would be
 //	           worst: a node's position is what the trim reads to decide
 //	           what every other node may delete, and a key that expired
@@ -208,9 +202,7 @@ type FleetStore struct {
 
 	// The document families. Ageless, and each its own bucket — see
 	// documents.go for why the split is by family rather than by class.
-	work      jetstream.KeyValue
 	pages     jetstream.KeyValue
-	kbVectors jetstream.KeyValue
 	positions jetstream.KeyValue
 
 	// js is the JetStream context, held so a feed can create the durable
@@ -297,12 +289,8 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 			"Crewlet sealed credentials; NO TTL — an expiring secret is an outage on a timer", 0},
 		{&store.integrations, integrationsSuffix,
 			"Crewlet integration reconcile status; NO TTL, standing state rather than a short horizon", 0},
-		{&store.work, workSuffix,
-			"Crewlet work items, comments and changes; NO TTL — an item is the company's own record", 0},
 		{&store.pages, pagesSuffix,
 			"Crewlet knowledge-base pages and revisions; NO TTL — a page is the company's own record", 0},
-		{&store.kbVectors, kbVectorsSuffix,
-			"Crewlet knowledge embeddings; NO TTL — derived, and dropped wholesale when the width changes", 0},
 		{&store.positions, positionsSuffix,
 			"Crewlet per-node state-log positions; NO TTL — an expired position reads as a node that applied nothing", 0},
 	} {

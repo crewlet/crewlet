@@ -336,6 +336,9 @@ func applyPatch(task Task, patch TaskPatch) Task {
 	if patch.Merging != nil {
 		task.Merging = *patch.Merging
 	}
+	if patch.Reassignments != nil {
+		task.Reassignments = *patch.Reassignments
+	}
 	if patch.Archived != nil {
 		task.Archived = *patch.Archived
 	}

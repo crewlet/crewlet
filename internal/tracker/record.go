@@ -546,6 +546,13 @@ type TaskPatch struct {
 	// walk whose holder died.
 	Merging *bool `json:"merging,omitempty"`
 
+	// Reassignments is the hand-off counter this write leaves behind,
+	// decided by the WRITER inside its own snapshot — see
+	// [Writer.chargeHandOff]. Carried as a value rather than derived at
+	// apply time because a counter two nodes derive independently is a
+	// counter two nodes can disagree about.
+	Reassignments *int `json:"reassignments,omitempty"`
+
 	// The collections, carried WHOLE when touched.
 	Collaborators *[]string                   `json:"collaborators,omitempty"`
 	Watchers      *[]string                   `json:"watchers,omitempty"`

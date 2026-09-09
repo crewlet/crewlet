@@ -761,88 +761,180 @@ export interface KnowledgeAnswer {
 // tag; the wire shape is [work.Summary], [work.Detail], [pages.Summary] and
 // [pages.Detail], serialised as they stand.
 
-export type WorkStatus = "todo" | "in_progress" | "blocked" | "in_review" | "done" | (string & {});
-export type WorkType = "task" | "bug" | "story" | "epic" | "spike" | (string & {});
-export type WorkPriority = "low" | "normal" | "high" | "urgent" | (string & {});
+/** The tracker's SIX statuses. `blocked` is deliberately not among them: a
+ *  blocker is DATA a badge and a filter read, carried beside the status on
+ *  `WorkSummary.blocked`, because a task can be both in progress and blocked
+ *  and a single field cannot say so. There is no `close_reason` either —
+ *  `cancelled` IS "finished without being delivered", which is what keeps it
+ *  invisible to velocity with no second value to keep in step. */
+export type WorkStatus =
+  | "todo"
+  | "in_progress"
+  | "in_review"
+  | "done"
+  | "cancelled"
+  | "closed"
+  | (string & {});
 
-/** One item as a board row draws it. The BODY IS ABSENT — fifty items at
+/** The four groups every rule is written at. */
+export type WorkStatusGroup = "not_started" | "active" | "done" | "closed" | (string & {});
+
+/** OPEN, not an enum: the type catalogue is the workspace's, and a company
+ *  filing "incident" is filing something this build has never heard of. */
+export type WorkType = string;
+export type WorkPriority = "none" | "low" | "normal" | "high" | "urgent" | (string & {});
+
+/** How stale an answer may be, as the engine ACTUALLY served it — never the
+ *  level asked for. A level never silently downgrades, so the two can differ
+ *  only by a refusal. */
+export type ReadLevel = "stale" | "session" | "monotonic" | "linearizable" | (string & {});
+
+/** One task as a board row draws it. The BODY IS ABSENT — fifty tasks at
  *  64 KiB each is three megabytes to draw a list of titles. */
 export interface WorkSummary {
   id: string;
   key: string;
   project: string;
-  type: WorkType;
   title: string;
   status: WorkStatus;
-  priority: WorkPriority;
+  status_group?: WorkStatusGroup;
+  priority?: WorkPriority;
   assignee?: string;
-  reporter?: string;
-  parent_id?: string;
-  labels?: string[];
+  sprint?: number;
+  parent?: string;
+  depth?: number;
+  start?: string;
   due?: string;
-  updated_at: string;
-  revision: number;
+  /** The row's OWN copy of the overdue predicate, so a renderer never
+   *  re-derives it differently — which is how one screen shows a task as
+   *  overdue and another does not. */
+  overdue?: boolean;
+  estimate_min?: number;
+  points?: number;
+  /** Data a badge and a filter read. It gates nothing: closing a task with
+   *  open blockers is allowed. */
+  blocked?: boolean;
+  archived?: boolean;
+  rank?: string;
+  updated: string;
+  /** The composed log position this row was last written at. */
+  version: number;
+}
+
+/** What an answer could NOT account for: records this node holds and cannot
+ *  decode, whose scope could intersect the question. */
+export interface WorkIncomplete {
+  records: number;
+  from: { stream: string; generation: number; seq: number };
+  /** What is affected. It does NOT say in which direction — that is what
+   *  "cannot decode" means. */
+  scope: string[];
+  /** The record version this node could not read, which is the one number an
+   *  operator needs to pick a build. */
+  version: number;
 }
 
 export interface WorkItemsAnswer {
   items: WorkSummary[];
-  limit: number;
-  offset: number;
-  /** The last key number minted per project — the board header's "ENG-42 was
-   *  the last one". A different fact from how many are open, and the one
-   *  nothing else can supply. */
-  minted: Record<string, number>;
+  /** Capped by construction: an exact total over an unbounded set is the one
+   *  query in this grammar that turns a poll into a scan. */
+  total_hint: number;
+  next_cursor?: string;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  /** ABSENT rather than zero when the broker could not be reached: a read
+   *  asks how far behind an answer may be, and an unreachable broker answers
+   *  "not at all". */
+  log_lag?: number;
+  /** False means rows may be missing, rows that should have left may still be
+   *  present, and the totals were computed over the incomplete set. A screen
+   *  that swallows this is worse than a stale tile: staleness and coverage
+   *  are different facts, and `read_level` speaks only to the first. */
+  complete: boolean;
+  incomplete?: WorkIncomplete;
 }
 
 export interface WorkComment {
   id: string;
-  item_id: string;
+  task: string;
   author: string;
   author_kind?: string;
   body: string;
   reply_to?: string;
   mentions?: string[];
+  resolved?: boolean;
+  resolved_by?: string;
+  resolved_at?: string;
+  removed?: boolean;
   created_at: string;
-  edited_at?: string;
+  updated_at?: string;
 }
 
 export interface WorkChange {
   id: string;
-  item_id: string;
   kind: string;
   actor?: string;
   actor_kind?: string;
-  fields?: Record<string, { from: string; to: string }>;
+  operator_id?: string;
   comment_id?: string;
   excerpt?: string;
-  created_at: string;
+  turn_id?: string;
+  fields?: Record<string, unknown>;
+  /** A commit that woke nobody — a fact about the change rather than about
+   *  its importance, since a bulk edit is quiet by construction. */
+  quiet?: boolean;
+  /** The EFFECTIVE instant: the fleet-agreed one rather than the writer's own
+   *  clock, so two nodes render one feed in one order. */
+  at: string;
+  /** Where the change sits on the log, which is the cursor a feed pages on.
+   *  A position on one stream, so it is never compared with one from
+   *  another. */
+  log_seq: number;
 }
 
 export interface WorkLink {
   kind: string;
-  other_id: string;
+  other: string;
   key?: string;
   title?: string;
   status?: WorkStatus;
+  note?: string;
   /** The half nobody authored. A UI renders it differently, and an editor
    *  knows which end to change. */
   derived?: boolean;
+  /** An edge whose mirror was never written, and one whose mirror was
+   *  refused permanently. The first is a repair a duty retries; the second is
+   *  an attention flag a person resolves. */
+  one_sided?: boolean;
+  one_sided_final?: boolean;
 }
 
 export interface WorkItem extends WorkSummary {
+  type?: WorkType;
   body?: string;
+  reporter?: string;
+  collaborators?: string[];
   watchers?: string[];
+  tags?: string[];
+  /** The item's own hand-off budget, spent by an agent reassigning it and
+   *  reset by any human touch. Past its cap the engine refuses the next
+   *  hand-off rather than letting the item circle. */
   reassignments?: number;
-  close_reason?: string;
   created_at?: string;
+  updated_at?: string;
 }
 
 export interface WorkItemDetail {
-  item: WorkItem;
-  revision: number;
+  task: WorkItem;
   comments?: WorkComment[];
   history?: WorkChange[];
   links?: WorkLink[];
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
 }
 
 export type PageStatus = "published" | "draft" | "trashed" | (string & {});

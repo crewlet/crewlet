@@ -14,20 +14,21 @@ same question, and each is coherent on its own terms.
 
 ## `native` — the engine is the tracker
 
-The company's items live in the fleet's own
-[coordination store](coordination.md) as versioned documents, and every node
-keeps a rebuildable [projection](#the-projection) of them to read from. There
-is a board on the dashboard, tools a seat calls, and an
+Every change to the company's work is one **record on an ordered log the whole
+fleet shares**, and every node derives the same SQL tables from that log — see
+[the log and the copies](#the-log-and-the-copies). There is a board on the
+dashboard, tools a seat calls, and an
 [MCP surface](../reference/api-endpoints.md#operatormcp--your-own-assistant)
 your own AI assistant can reach.
 
-**This is not a mirror.** The record here *is* the source of truth, so the
+**This is not a mirror.** The log here *is* the source of truth, so the
 staleness argument below does not apply to it: there is no other copy to
 disagree with, no webhook to miss, and no reconciliation poller because
-nothing is being reconciled. A node's projection can be behind, and that is
-handled by saying so — a read refuses with "still catching up" rather than
-answering "there is no such item", because the second is an answer somebody
-acts on.
+nothing is being reconciled. A node's own tables can be behind the log, and
+that is handled by saying so — every answer carries how far this node has
+applied and what it could not account for, and a read that cannot be served
+refuses rather than answering "there is no such item", because the second is
+an answer somebody acts on.
 
 What it is deliberately **not** is a Jira. There is no workflow engine, no
 custom field, no sprint, no board configuration and no permission scheme. An
@@ -65,30 +66,60 @@ the way a webhook becomes a turn — none of it knows which backend answered. A
 unit's `project` key names its project on whichever tracker the company runs,
 which is why the field is not called `jira_project`.
 
-## The projection
+## The log and the copies
 
-On the native backend each node keeps its own copy of the fleet's record, in
-its local store, rebuilt from the coordination bucket at boot. It exists so
-that "what is on the board" is a SQL query rather than a listing over the
-whole coordination family — which is `O(keys)` message deliveries, on a
-request path, for a screen somebody refreshes.
+On the native backend a write does not go to a node's database. It is
+**published as a record** onto the domain's own log, on the subject of the
+object it changes — one task, one project, one sprint — and the broker
+arbitrates: two writers racing on one task contend there and exactly one wins,
+while two writers on different tasks never contend at all. Every node then
+consumes that log in order and applies the same records into its own SQL
+tables, committing **the rows and its position on the log in one
+transaction**. There is no node whose copy is the real one and no leader, and
+every node arrives at the same rows because they all replay the same order.
 
-Three properties follow from it, and each is visible:
+What that shape buys is that a copy can say exactly how far along it is, which
+a cache cannot:
 
-- **A node claims no new seats until its projection has caught up.** A seat
-  whose tools read an incomplete projection would answer "there is no such
-  item" and act on it, by filing the duplicate or telling a person their link
-  is dead. The node keeps every seat it already holds — a projection catching
-  up is not a reason to drop work in hand — and the fleet view reports how
-  many of its projections are ready.
-- **A read that cannot be answered says so.** `503`, not an empty list.
-- **A write waits for its own projection before it answers**, so a turn that
-  files an item and then lists the project sees what it just filed.
+- **Every answer carries the level it was actually served at**, never the one
+  the caller asked for. A read never silently downgrades, so the two can
+  differ only by a refusal you can see.
+- **A write's outcome has three values, not two.** `applied` means the record
+  is durable *and* in this node's rows. `pending` means it is durable and this
+  node has not consumed it yet — which is a fact about this node, not a failed
+  write, and never something to retry. `unknown` means the acknowledgement was
+  lost and the record may or may not be there; that is the one worth retrying,
+  and the reply carries the operation id to retry it with, which collapses a
+  duplicate rather than filing one.
+- **A write can wait for itself.** A turn that files a task and then lists the
+  project sees what it just filed, because the tool waits for this node to
+  apply its own position before it reads.
+- **An answer that could not account for everything says so.** A node holding
+  a record a newer build wrote — one this build cannot decode — reports the
+  answer as incomplete, names how many records and which objects, and the
+  board renders that above the rows. It is a different fact from staleness,
+  and a screen that showed only staleness would look confidently right.
+- **A node claims no new seats until every domain that gates admission is
+  established.** A seat whose tools read incomplete tables would answer "there
+  is no such task" and act on it, by filing the duplicate or telling a person
+  their link is dead. The node keeps every seat it already holds — catching up
+  is not a reason to drop work in hand — and the fleet view reports how many
+  of its copies are ready.
 
-Retention is the one asymmetry worth knowing: items, comments and pages are
+**A node too far behind to catch up adopts a peer's snapshot.** The log does
+not keep records for ever (see below), so a node that was down long enough, or
+that has never run, can be below the oldest record the log still holds — and
+there is nothing left for it to replay. At boot it asks the fleet, verifies
+what it is offered against its own requirements and checksum, and installs it
+wholesale before anything reads from it. A company with no peer able to donate
+starts anyway, on the history it has, and says what it cannot account for.
+
+Retention is the one asymmetry worth knowing: tasks, comments and pages are
 kept **for ever** — a tracker that forgot would stop answering the question it
-exists for — while the change records behind them age out after a year, and a
-page's history is capped at a hundred revisions.
+exists for — while a domain's log keeps only the replay window, which is
+bounded by durability rather than by age: a record is trimmed once every node
+has applied past it, a complete backup covers it, and it is at least a week
+old. A company that never backs up never trims, deliberately.
 
 ---
 

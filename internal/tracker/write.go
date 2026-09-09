@@ -33,6 +33,43 @@ import (
 // caller retries a write that landed — and collapsing them into "succeeded" is
 // how a caller reports work that was never recorded.
 
+// ErrStaleVersion reports an update conditioned on a version that has moved.
+//
+// ITS OWN SENTINEL because the caller's answer differs from every other
+// refusal: nothing is wrong with the request, somebody else simply got there
+// first, and the correct next move is to re-read and decide again — never to
+// retry the same patch, which is what a generic failure invites.
+var ErrStaleVersion = errors.New("tracker: the task has changed since it was read")
+
+// ErrReassignmentBudget reports a hand-off past [ReassignmentBudget].
+var ErrReassignmentBudget = errors.New("tracker: this task has been handed on too many times")
+
+// NoIfMatch omits an update's version precondition, which MERGES the patch
+// onto whatever the task currently is. Named rather than a bare zero, because
+// a literal 0 in a seven-argument call says nothing about which of the two
+// behaviours it selects.
+const NoIfMatch uint64 = 0
+
+// ReassignmentBudget is how many times AGENTS may hand one task on before the
+// engine refuses and the item needs a person.
+//
+// # Why the budget is on the ITEM and not on the delegation depth
+//
+// An assignment is an ownership transfer down a chart of KNOWN HEIGHT, not a
+// nested ask: handing a task to your report is one hop on a graph a founder
+// authored, and bounding it by the delegation cap would refuse a legitimate
+// escalation four levels down while permitting an infinite ping-pong between
+// two peers. What actually goes wrong is the loop — two seats each convinced
+// the other owns it — and a loop is a property of the ITEM.
+//
+// Eight, because the deepest chart this engine is designed for is four tiers
+// (founder, lead, senior, individual) and a legitimate path is an escalation
+// UP and a delegation back DOWN — seven hops at the very worst, plus one so
+// the honest worst case is not itself the refusal. Past that nothing is being
+// routed; the item is circulating, and the counter resets on any human or
+// operator touch so a person unblocking it hands back a full budget.
+const ReassignmentBudget = 8
+
 // Writer is the tracker's write authority.
 type Writer struct {
 	publisher *statelog.Publisher
@@ -50,12 +87,20 @@ type Writer struct {
 	claims Claims
 	nodeID string
 
-	// Actor and ActorKind are who this writer acts as. ON THE WRITER
-	// rather than on each call, because a surface acts as exactly one
-	// party for its whole life — and a tracker whose author field is
-	// chosen per call is not an audit trail.
-	Actor     string
-	ActorKind AuthorKind
+	// Actor and ActorKind are who this writer acts as, and OperatorID,
+	// TurnID and Chain the provenance that travels with it.
+	//
+	// ON THE WRITER rather than on each call, because a surface acts as
+	// exactly one party — and a tracker whose author field is an argument
+	// is not an audit trail. A surface serving many parties takes one
+	// writer per party through [Writer.As], which is the same rule stated
+	// the other way round: the identity comes from the surface's own
+	// immutable context, never from the call.
+	Actor      string
+	ActorKind  AuthorKind
+	OperatorID string
+	TurnID     string
+	Chain      []string
 
 	// metrics is where the counters this package owns are recorded. Nil
 	// records nothing, which is what a writer built for a test gets: the
@@ -73,6 +118,12 @@ type Writer struct {
 	// argument rather than a package call, so a test can pin it and so
 	// nothing on the write path reads a clock the applier is forbidden.
 	Now func() time.Time
+
+	// refusal is set by [Writer.As] when the identity it was handed
+	// cannot author a record. It is checked at the one funnel every write
+	// passes through — see the comment there for why it is carried rather
+	// than returned.
+	refusal error
 }
 
 // WriterDeps is everything a writer needs that it does not own.
@@ -86,6 +137,65 @@ type WriterDeps struct {
 	Actor     string
 	ActorKind AuthorKind
 	Now       func() time.Time
+}
+
+// As is this writer acting as somebody else, and it is the ONLY way the actor
+// ever changes.
+//
+// # Why a copy rather than an argument
+//
+// The rule is that a writer acts as exactly one party, because a history row
+// whose author was chosen by the caller is not an audit trail. A surface that
+// serves many parties — a seat's tool loop, an operator's MCP session —
+// therefore takes one writer per party, derived from that surface's own
+// IMMUTABLE identity: the seat bound into the turn context, or the credential
+// on the request. Neither is something a model or a request body can set.
+//
+// The copy is shallow and shares the publisher, the store and the claims,
+// which is what makes a per-call writer cost nothing.
+func (w *Writer) As(actor string, kind AuthorKind, provenance Provenance) *Writer {
+	if w == nil {
+		return nil
+	}
+	clone := *w
+	if actor == "" || !kind.Valid() {
+		// THE SAME REFUSAL [NewWriter] MAKES, because this is the other
+		// door into the same state: a clone that skipped it would be the
+		// one writer in the tree recording history rows nobody can
+		// attribute.
+		//
+		// CARRIED rather than returned, because the caller is a surface
+		// resolving an identity it has already established — there is no
+		// second identity to fall back to and nothing useful to do with
+		// an error at that point. Every write goes through one funnel,
+		// so the refusal surfaces at the call that would have written,
+		// naming the operation, rather than as a nil pointer somewhere
+		// deeper.
+		clone.refusal = fmt.Errorf("tracker: a writer cannot act as %q of "+
+			"kind %q — every record carries who wrote it", actor, kind)
+	}
+	clone.Actor = actor
+	clone.ActorKind = kind
+	clone.OperatorID = provenance.OperatorID
+	clone.TurnID = provenance.TurnID
+	clone.Chain = provenance.Chain
+	return &clone
+}
+
+// Provenance is what an audit walks from a record back to what produced it.
+//
+// It BOUNDS NOTHING. A hand-off is charged to the task's own reassignment
+// counter and not to the delegation depth, so the chain here is a trail rather
+// than a budget.
+type Provenance struct {
+	// OperatorID is the credential a person's own write was made under,
+	// recorded beside the actor rather than instead of it.
+	OperatorID string
+
+	// TurnID is the turn that produced this write, and Chain the
+	// delegation path that reached it.
+	TurnID string
+	Chain  []string
 }
 
 // NewWriter builds the tracker's write authority.
@@ -116,8 +226,29 @@ func NewWriter(d WriterDeps) (*Writer, error) {
 // ARBITRATED AGAINST THE TASK'S OWN LAST RECORD, which is what makes two
 // writers on one task contend at the broker and two writers on different tasks
 // never contend at all.
+//
+// # ifMatch, and why it is a PARAMETER rather than a patch field
+//
+// ifMatch is the caller's own precondition: the version it read, refused if
+// anybody has moved the task since. Zero omits it, which MERGES — the honest
+// default for a caller naming two fields it does not want to lose a race over.
+//
+// It is not on [TaskPatch] because a patch is the RECORD, replayed by every
+// node's applier forever, and a precondition has no meaning at apply time: the
+// broker already arbitrated, so a node re-checking it would either agree
+// (waste) or disagree (and diverge from its peers). The check belongs at the
+// one place the framework guarantees a single consistent read — inside the
+// decide snapshot — which is exactly where it is.
+//
+// # And why the hand-off budget is charged here too
+//
+// [ReassignmentBudget] is a decision about the task's CURRENT counter, so it
+// is formed from the same snapshot as everything else and travels as a value
+// on the record. Deciding it in the applier instead would make every node
+// re-derive it from rows it applied in its own order, and a counter derived
+// twice is a counter two nodes can disagree about.
 func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
-	patch TaskPatch, notify *Notify) (WriteResult, error) {
+	ifMatch uint64, patch TaskPatch, notify *Notify) (WriteResult, error) {
 
 	switch {
 	case id == "":
@@ -165,7 +296,17 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 					"removed by %s at %s; restore it first",
 					id, current.Removed.By, current.Removed.At.Format(time.RFC3339))
 			}
-			decision, err := w.decide(subject, OpPatch, scope, opID, patch, notify, at)
+			if ifMatch != 0 && uint64(current.Version) != ifMatch {
+				return statelog.Decision{}, fmt.Errorf("%w: task %s is at "+
+					"version %d and the edit was conditioned on %d — re-read "+
+					"it and decide again rather than re-sending this patch",
+					ErrStaleVersion, id, current.Version, ifMatch)
+			}
+			charged, err := w.chargeHandOff(current, patch)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			decision, err := w.decide(subject, OpPatch, scope, opID, charged, notify, at)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -177,6 +318,50 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 		result.Warnings = bodyWarnings(*patch.Body)
 	}
 	return result, err
+}
+
+// chargeHandOff settles the reassignment counter this patch leaves behind, or
+// refuses the hand-off.
+//
+// THREE CASES, and each is a different answer to "who is routing this":
+//
+//   - An AGENT moving the assignee to somebody else spends one. Past
+//     [ReassignmentBudget] it is refused: the task is circulating rather than
+//     being routed, and the next move is a person's.
+//   - A HUMAN or an OPERATOR touching the task at all resets it to zero,
+//     whatever they changed. Somebody looked, so the budget that exists to
+//     notice nobody is looking starts again.
+//   - Anything else leaves the counter alone — the engine's own writes
+//     (a sprint rollover, a duty's repair) neither spend nor forgive.
+//
+// A no-op assignment does not spend: re-asserting the current assignee is what
+// an idempotent retry looks like, and charging it would let a redelivered
+// record exhaust a budget nobody used.
+func (w *Writer) chargeHandOff(current Task, patch TaskPatch) (TaskPatch, error) {
+	switch w.ActorKind {
+	case AuthorHuman, AuthorOperator:
+		if current.Reassignments != 0 {
+			reset := 0
+			patch.Reassignments = &reset
+		}
+		return patch, nil
+	case AuthorAgent:
+		if patch.Assignee == nil || *patch.Assignee == current.Assignee {
+			return patch, nil
+		}
+		if current.Reassignments >= ReassignmentBudget {
+			return patch, fmt.Errorf("%w: %s has been handed on %d times "+
+				"without a person touching it, and the budget is %d — say "+
+				"what is blocking it on the item instead, and let somebody "+
+				"reassign it", ErrReassignmentBudget, current.Key,
+				current.Reassignments, ReassignmentBudget)
+		}
+		spent := current.Reassignments + 1
+		patch.Reassignments = &spent
+		return patch, nil
+	default:
+		return patch, nil
+	}
 }
 
 // MoveTasks repositions tasks in a project's manual order.
@@ -335,10 +520,13 @@ func (w *Writer) decide(subject Subject, op OpKind, scope ScopeSet, opID string,
 			V: RecordVersion, OpID: opID, Subject: subject, Op: op,
 			CreatedAt: at, Scope: scope,
 		},
-		Mutation:  body,
-		Actor:     w.Actor,
-		ActorKind: w.ActorKind,
-		Notify:    notify,
+		Mutation:   body,
+		Actor:      w.Actor,
+		ActorKind:  w.ActorKind,
+		OperatorID: w.OperatorID,
+		TurnID:     w.TurnID,
+		Chain:      w.Chain,
+		Notify:     notify,
 	}
 	encoded, err := record.Encode()
 	if err != nil {
@@ -398,6 +586,13 @@ func (w *Writer) published(ctx context.Context, req statelog.Request) (WriteResu
 // on a removed task is a restore, and an unknown outcome is a resolution
 // rather than a retry.
 func (w *Writer) publish(ctx context.Context, req statelog.Request) (statelog.Result, error) {
+	if w.refusal != nil {
+		// THE GUARD IS HERE AND NOT IN [Writer.published], because two
+		// sequences publish through this directly — a guard on the outer
+		// helper would cover ten write paths and leave two open, which
+		// is the shape of every hole this package has had.
+		return statelog.Result{}, w.refusal
+	}
 	result, err := w.publisher.Publish(ctx, req)
 	switch {
 	case err == nil:

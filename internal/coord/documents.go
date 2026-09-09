@@ -15,11 +15,22 @@ import (
 // # Why this exists at all
 //
 // The estate rule is one question — does the company have to agree on this,
-// or one node? — and a work item or a wiki page answers "every node, or the
-// answer is wrong on all of them". That rules out the store: it is one file
-// owned by one process under an OS lock, so a duty holder could not hand it
-// to its successor, and migrations 0010-0013 are the recorded cost of putting
+// or one node? — and a wiki page answers "every node, or the answer is wrong
+// on all of them". That rules out the node's own store: it is one file owned
+// by one process under an OS lock, so a duty holder could not hand it to its
+// successor, and migrations 0010-0013 are the recorded cost of putting
 // company-wide facts there anyway.
+//
+// # And why the tracker is no longer one of these
+//
+// A family answers "who has to agree" and stops there. It cannot answer the
+// second question a caller of a big dataset actually has — how far behind is
+// the copy I am reading, and can I wait for my own write — because a
+// projector's cursor is a tail position with no shared meaning. The work
+// tracker and the knowledge embeddings are [internal/statelog] DOMAINS for
+// that reason: an ordered log per domain, applied into every node's rows with
+// the position committed alongside them. The wiki is the last family here,
+// and this package goes when it follows.
 //
 // What is new is the SIZE and the SHAPE. Every fleet record before this one
 // was a counter, a claim or a small ledger row read by key; these are
@@ -53,36 +64,29 @@ type Family string
 // wire is a value rather than a panic — and so the bucket inventory a
 // retention test asserts stays exact.
 const (
-	// FamilyWork is the tracker: items, their comments, the change keys a
-	// wake is derived from, and the per-project key counters.
-	FamilyWork Family = "work"
-
 	// FamilyPages is the knowledge base: containers, pages, revisions,
 	// comments, change keys and title claims.
-	FamilyPages Family = "pages"
-
-	// FamilyKBVectors is the embedding of a page or an item, keyed on the
-	// source's version.
 	//
-	// ITS OWN FAMILY because it is DERIVED and its lifecycle says so: it
-	// can be dropped and rebuilt wholesale when the embedding provider or
-	// its width changes, which is a thing you must never do to the pages
-	// themselves. Absent entirely for a company that has not configured
-	// embeddings.
-	FamilyKBVectors Family = "kb_vectors"
+	// THE LAST FAMILY. The tracker and the knowledge embeddings were the
+	// other two and both are now state-log DOMAINS — an ordered stream
+	// per domain and N identical SQL copies — because a bucket answers
+	// "read this key" and a board asks for every open task in a project,
+	// filtered and sorted, which over a bucket is O(keys) deliveries. The
+	// wiki follows; until it does this family is what it rides.
+	FamilyPages Family = "pages"
 )
 
 // Valid reports whether f is a family this build serves.
 func (f Family) Valid() bool {
 	switch f {
-	case FamilyWork, FamilyPages, FamilyKBVectors:
+	case FamilyPages:
 		return true
 	}
 	return false
 }
 
 // Families is every family, in bucket order.
-func Families() []Family { return []Family{FamilyWork, FamilyPages, FamilyKBVectors} }
+func Families() []Family { return []Family{FamilyPages} }
 
 // Op is what happened to a document, as a watcher sees it.
 type Op string

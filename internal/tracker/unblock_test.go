@@ -40,7 +40,7 @@ func TestAnUnblockedDependentIsFoundAfterAGapOfAnyLength(t *testing.T) {
 	}
 
 	done := tracker.StatusDone
-	if _, err := r.writer.UpdateTask(t.Context(), "op-close", "t-1", "ENG",
+	if _, err := r.writer.UpdateTask(t.Context(), "op-close", "t-1", "ENG", tracker.NoIfMatch,
 		tracker.TaskPatch{Status: &done},
 		&tracker.Notify{Kind: tracker.ChangeStatus}); err != nil {
 		t.Fatalf("close the blocker: %v", err)
@@ -96,7 +96,7 @@ func TestADependentWithASecondOpenBlockerIsNotTold(t *testing.T) {
 	r.drain()
 
 	done := tracker.StatusDone
-	if _, err := r.writer.UpdateTask(t.Context(), "op-close", "t-1", "ENG",
+	if _, err := r.writer.UpdateTask(t.Context(), "op-close", "t-1", "ENG", tracker.NoIfMatch,
 		tracker.TaskPatch{Status: &done},
 		&tracker.Notify{Kind: tracker.ChangeStatus}); err != nil {
 		t.Fatalf("close one blocker: %v", err)
@@ -107,7 +107,7 @@ func TestADependentWithASecondOpenBlockerIsNotTold(t *testing.T) {
 			"workable: %+v", scan.Pending)
 	}
 
-	if _, err := r.writer.UpdateTask(t.Context(), "op-close-2", "t-2", "ENG",
+	if _, err := r.writer.UpdateTask(t.Context(), "op-close-2", "t-2", "ENG", tracker.NoIfMatch,
 		tracker.TaskPatch{Status: &done},
 		&tracker.Notify{Kind: tracker.ChangeStatus}); err != nil {
 		t.Fatalf("close the second blocker: %v", err)

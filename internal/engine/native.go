@@ -16,54 +16,74 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/projection"
-	"github.com/crewlet/crewlet/internal/work"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // The native backends, wired.
 //
 // # What is per-NODE and what is per-EPOCH, and why the split is not obvious
 //
-// The projectors, the indexer and the change feeds are per-NODE: they follow
-// a coordination family, and a family does not change when a company
-// revision does. Rebuilding them on an apply would drop every node's
-// projection and re-run a boot reconcile on every configuration change,
-// which for a company that edits its org chart twice a day is a projection
-// that is never hydrated.
+// The apply loops, the projector, the indexer and the change feeds are
+// per-NODE: they follow a LOG or a coordination family, and neither changes
+// when a company revision does. Rebuilding them on an apply would restart
+// every node's applier and re-run a boot reconcile on every configuration
+// change, which for a company that edits its org chart twice a day is a node
+// that is never established.
 //
 // The parsers, the prompts and the tool wiring are per-EPOCH, because all
 // three depend on the org chart: the lead map a fallback routes through, the
 // default project a seat files into, the reserved containers. Those are
 // exactly what an apply changes.
 //
-// # Seat acquisition waits on hydration, and nothing else does
+// # Seat acquisition waits on ESTABLISHMENT, and nothing else does
 //
-// A seat whose mailbox attached before its node's projection was hydrated
-// would answer "there is no such item" to its own tools — which is an answer
-// it acts on. So [Engine.NativeHydrated] gates the claim, and /ready
-// deliberately does not: the control plane's rule is that lag alone never
-// sheds a node, and a node that is behind should stop taking new seats
-// rather than be declared unhealthy.
+// A seat whose mailbox attached before its node's tracker was established
+// would answer "there is no such task" to its own tools — which is an answer
+// it acts on, by filing a duplicate or abandoning work it was told to do. So
+// [Engine.NativeHydrated] gates the claim, and /ready deliberately does not:
+// the control plane's rule is that lag alone never sheds a node, and a node
+// that is behind should stop taking new seats rather than be declared
+// unhealthy.
+//
+// The gate is per DOMAIN rather than per node, from each domain's own
+// declaration: a compacted domain's gap is a coverage number rather than a
+// fault, so shedding a company's seats for one would be the outage the number
+// exists to avoid.
 
 // native holds this node's native-backend runtime.
 type native struct {
 	mu sync.Mutex
 
-	// tracker and wiki are the projectors. Nil when the company runs the
-	// vendor backend instead, which is the whole switch: a company on Jira
-	// has no work projector at all rather than an empty one.
-	tracker *projection.Projector
-	wiki    *projection.Projector
+	// nodeID is who this node is: the name its own domain consumer takes,
+	// the writer stamped on every record it publishes, and what the
+	// eviction gate compares against. Held here because three subsystems
+	// need it after boot and the bootstrap it came from is not kept.
+	nodeID string
+
+	// log is this node's state-log runtime: the tracker's domain and the
+	// vector domain, each with its own apply loop and write authority.
+	// Nil when the company runs the vendor tracker instead, which is the
+	// whole switch — a company on Jira runs no domain at all rather than
+	// an empty one.
+	log *stateLog
+
+	// wiki is the pages projector, which is still a coordination family.
+	// It adopts the state log in its own step; until then this node runs
+	// one projector and one log side by side, and that is visible here
+	// rather than hidden behind a common name.
+	wiki *projection.Projector
 
 	// indexer keeps the lexical search index behind the page projection.
 	indexer *projection.Indexer
 
-	// work and pages are the write paths.
-	work  *work.Store
-	pages *pages.Store
+	// writer is the tracker's write authority and pages the wiki's.
+	writer *tracker.Writer
+	pages  *pages.Store
 
-	// workReader and pageReader are the read paths over the projection.
-	workReader *work.Reader
-	pageReader *pages.Reader
+	// trackerReader and pageReader are the read paths.
+	trackerReader *tracker.Reader
+	pageReader    *pages.Reader
 
 	// searcher answers the knowledge seam natively.
 	searcher *pages.Searcher
@@ -102,36 +122,62 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		// error: it serves what it can see.
 		return nil
 	}
-	tracker := c.Config.TrackerBackendFor() == config.TrackerNative
+	runTracker := c.Config.TrackerBackendFor() == config.TrackerNative
 	wiki := c.Config.KnowledgeBackendFor() == config.KnowledgeNative
-	if !tracker && !wiki {
+	if !runTracker && !wiki {
 		return nil
 	}
-	e.warnIfEphemeral(ctx, boot, tracker, wiki)
+	e.warnIfEphemeral(ctx, boot, runTracker, wiki)
 
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	n := &native{run: runCtx, stop: cancel, skillNudge: make(chan struct{}, 1)}
+	// THE RESOLVED ID, not the raw field. `node.id` may be absent, a
+	// `${VAR}` reference, or come from the environment — and the value
+	// three durable things are named after (this node's own consumer, the
+	// writer stamped on its records, the eviction gate's key) must be the
+	// same one the broker's server name and the presence row already use.
+	nodeID, err := config.ResolveNodeID(boot, config.EnvOnly())
+	if err != nil {
+		cancel()
+		return err
+	}
+	n := &native{
+		run: runCtx, stop: cancel, nodeID: nodeID,
+		skillNudge: make(chan struct{}, 1),
+	}
 
-	if tracker {
-		p, err := projection.New(projection.Options{
-			Documents: e.backends.Fleet, DB: e.backends.Store,
-			Applier: work.NewApplier(),
-		})
+	if runTracker {
+		// THE LOG COMES UP BEFORE ANYTHING READS IT, and its own
+		// context outlives this call: an apply loop started under the
+		// caller's context is one stopNative can never end.
+		sl, err := e.startStateLog(ctx, boot, nodeID, c.Epoch())
 		if err != nil {
 			cancel()
-			return fmt.Errorf("engine: work projection: %w", err)
+			return err
 		}
-		n.tracker = p
-		if n.work, err = work.NewStore(work.Options{Documents: e.backends.Fleet}); err != nil {
+		n.log = sl
+		writer, err := tracker.NewWriter(tracker.WriterDeps{
+			Publisher: sl.Domain(tracker.Domain{}.Name()).publisher,
+			DB:        e.backends.Store,
+			Claims:    e.backends.Coord,
+			NodeID:    nodeID,
+			// THE NODE'S OWN WRITER ACTS AS THE SYSTEM, and every
+			// surface derives its own from it with Writer.As: a seat's
+			// tools act as that seat, an operator's session as that
+			// credential. What is left acting as the system is what the
+			// node itself does — a duty finishing an abandoned walk, a
+			// repair telling somebody they were unblocked — and
+			// attributing those to a person would make a machine's
+			// housekeeping indistinguishable from somebody's decision.
+			Actor:     nodeID,
+			ActorKind: tracker.AuthorSystem,
+		})
+		if err != nil {
+			sl.Stop()
 			cancel()
-			return fmt.Errorf("engine: work store: %w", err)
+			return fmt.Errorf("engine: tracker writer: %w", err)
 		}
-		if n.workReader, err = work.NewReader(work.ReaderOptions{
-			DB: e.backends.Store, Hydrated: p.Hydrated,
-		}); err != nil {
-			cancel()
-			return fmt.Errorf("engine: work reader: %w", err)
-		}
+		n.writer = writer
+		n.trackerReader = tracker.NewReader(e.backends.Store)
 	}
 	if wiki {
 		p, err := projection.New(projection.Options{
@@ -168,7 +214,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		})
 	}
 
-	for _, p := range []*projection.Projector{n.tracker, n.wiki} {
+	for _, p := range []*projection.Projector{n.wiki} {
 		if p == nil {
 			continue
 		}
@@ -194,8 +240,16 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	e.native = n
 	// AFTER e.native is set, because the worker reads through it.
 	e.startNativeSkills()
+	// AND THE CHART, so the projects this company's units name are objects
+	// before any seat files into one. A create takes its key from its
+	// project's own counter, so a project that does not exist refuses
+	// every write into it — and the first thing a fresh company does is
+	// file work. Best effort here for the reason [Engine.applyChart]
+	// gives: a failure costs the projects that did not land and nothing
+	// else, and the next apply retries them.
+	e.applyChart(ctx, c)
 	log.InfoContext(ctx, "native_backends_started",
-		"tracker", tracker, "knowledge", wiki)
+		"tracker", runTracker, "knowledge", wiki)
 	return nil
 }
 
@@ -206,6 +260,11 @@ func (e *Engine) stopNative() {
 	}
 	e.native.stop()
 	e.native.done.Wait()
+	// THE APPLY LOOPS LAST, after the feeds and the projector that read
+	// what they write. A loop stopped first leaves a feed consuming a log
+	// nothing is applying, which is not wrong so much as a shutdown that
+	// looks like a stall in every log line it produces on the way out.
+	e.native.log.Stop()
 }
 
 // NativeHydrated reports whether every native projection this node runs has
@@ -220,43 +279,103 @@ func (e *Engine) NativeHydrated() bool {
 	if e.native == nil {
 		return true
 	}
-	for _, p := range []*projection.Projector{e.native.tracker, e.native.wiki} {
-		if p != nil && !p.Hydrated() {
-			return false
-		}
+	if e.native.wiki != nil && !e.native.wiki.Hydrated() {
+		return false
 	}
-	return true
+	// STRICT, because this is seat admission rather than a read: a node
+	// that is merely inside the trim floor still serves rows that are
+	// behind, and a seat attaching to one acts on them.
+	ok, refusal := e.native.log.Established(e.native.run, true)
+	if !ok && refusal != "" {
+		log.DebugContext(e.native.run, "seat_admission_withheld",
+			"reason", string(refusal))
+	}
+	return ok
 }
 
-// NativeStatus is what this node reports about its projections, for the fleet
-// view. Empty for a node running no native backend.
-func (e *Engine) NativeStatus() []projection.Status {
+// ReplicationStatus is one of this node's replication loops, as the fleet view
+// counts them.
+//
+// # Why one type over two mechanisms
+//
+// This node runs two kinds of loop and they are genuinely different: a
+// PROJECTOR follows a coordination bucket's change feed and holds a revision
+// cursor, and a state-log APPLIER consumes an ordered stream and commits a
+// checkpoint with the rows it derives. Nothing about their internals is
+// shared, and forcing one into the other's status struct would put a revision
+// where a position belongs.
+//
+// What the fleet view asks is not about either mechanism. It asks "how many of
+// this node's copies of the company's state have caught up" — the question
+// behind an operator's "why is the new node holding no seats" — and a count
+// that included only one of the two kinds would answer 1 of 1 for a node whose
+// tracker is hours behind. So the shared thing is the QUESTION, and this is
+// its shape: a name, whether it is ready, and the detail an operator reads
+// when it is not.
+type ReplicationStatus struct {
+	// Name is the family or the domain, which is what an operator sees.
+	Name string
+
+	// Kind is `projection` or `domain`, so the two mechanisms are
+	// distinguishable when the detail below is not enough.
+	Kind string
+
+	// Ready is the same fact for both: this loop's copy is one a seat's
+	// tools may be attached to. It is NOT strict readiness — see
+	// [Engine.NativeHydrated], which asks the stricter question that
+	// actually gates admission.
+	Ready bool
+
+	// Detail is why it is not ready, in the loop's own words. Empty for a
+	// loop that is.
+	Detail string
+}
+
+// NativeStatus is what this node reports about its replication loops, for the
+// fleet view. Empty for a node running no native backend.
+//
+// IT TAKES THE CALLER'S CONTEXT, and that is load-bearing rather than
+// idiomatic tidiness: a domain's row is assembled from the broker's own bounds
+// and the fleet's published floor, which are two network calls per domain, and
+// the caller is a heartbeat with a budget. Reading them under this node's
+// long-lived run context instead would let one unreachable broker hold the
+// heartbeat open past its own deadline — which is a node that stops
+// advertising itself at all, reported by nothing, because it was assembling a
+// report about being behind.
+func (e *Engine) NativeStatus(ctx context.Context) []ReplicationStatus {
 	if e.native == nil {
 		return nil
 	}
-	var out []projection.Status
-	for _, p := range []*projection.Projector{e.native.tracker, e.native.wiki} {
-		if p != nil {
-			out = append(out, p.Status())
+	var out []ReplicationStatus
+	if e.native.wiki != nil {
+		got := e.native.wiki.Status()
+		row := ReplicationStatus{
+			Name: string(got.Family), Kind: "projection", Ready: got.Hydrated,
 		}
+		if !row.Ready {
+			row.Detail = fmt.Sprintf("hydrating: %d change(s) buffered at "+
+				"revision %d", got.Pending, got.Revision)
+		}
+		out = append(out, row)
 	}
+	out = append(out, e.native.log.Status(ctx)...)
 	return out
 }
 
-// Work is this node's tracker read side, or nil.
-func (e *Engine) Work() *work.Reader {
+// Tracker is this node's tracker read side, or nil.
+func (e *Engine) Tracker() *tracker.Reader {
 	if e.native == nil {
 		return nil
 	}
-	return e.native.workReader
+	return e.native.trackerReader
 }
 
-// WorkStore is this node's tracker write side, or nil.
-func (e *Engine) WorkStore() *work.Store {
+// TrackerWriter is this node's tracker write side, or nil.
+func (e *Engine) TrackerWriter() *tracker.Writer {
 	if e.native == nil {
 		return nil
 	}
-	return e.native.work
+	return e.native.writer
 }
 
 // Pages is this node's knowledge read side, or nil.
@@ -292,12 +411,28 @@ func (e *Engine) WaitApplied(ctx context.Context, family coord.Family, revision 
 	if e.native == nil || revision == 0 {
 		return nil
 	}
-	for _, p := range []*projection.Projector{e.native.tracker, e.native.wiki} {
-		if p != nil && p.Family() == family {
-			return p.WaitApplied(ctx, revision)
-		}
+	if p := e.native.wiki; p != nil && p.Family() == family {
+		return p.WaitApplied(ctx, revision)
 	}
 	return nil
+}
+
+// WaitCommitted blocks until this node's tracker applier has consumed through
+// a position.
+//
+// THE READ-YOUR-WRITES PRIMITIVE ON THE LOG, and it takes a POSITION rather
+// than a revision because that is what a write answers with: a bucket write
+// returns a revision on one family, and a log write returns a place on a
+// stream that only compares against the same stream and the same generation.
+func (e *Engine) WaitCommitted(ctx context.Context, at statelog.Position) error {
+	if e.native == nil || e.native.log == nil || at.Seq == 0 {
+		return nil
+	}
+	running := e.native.log.Domain(tracker.Domain{}.Name())
+	if running == nil {
+		return nil
+	}
+	return running.runner.WaitCommitted(ctx, at)
 }
 
 // startNativeFeeds starts the change feeds, per node.
@@ -336,11 +471,22 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 		opener     changefeed.Opener
 	}
 	sources := []source{}
-	if e.native.work != nil {
-		sources = append(sources, source{
-			translator: work.NewTranslator(),
-			opener:     changefeed.DocumentSource(feeder, coord.FamilyWork, work.ClassChange),
-		})
+	if running := e.native.log.Domain(tracker.Domain{}.Name()); running != nil {
+		// THE LOG IS THE SOURCE, and it is the piece the domain
+		// replaced outright: a bucket feed needs a family and a key
+		// class, and a log delivery has neither. Its own fleet-wide
+		// group over the same stream the applier reads is what derives
+		// a wake from a committed record.
+		feed, err := trackerFeedSource(running)
+		if err != nil {
+			log.ErrorContext(ctx, "changefeed_unavailable",
+				"source", tracker.Source, "error", err.Error())
+		} else {
+			sources = append(sources, source{
+				translator: tracker.NewTranslator(),
+				opener:     feed,
+			})
+		}
 	}
 	if e.native.pages != nil {
 		sources = append(sources, source{
@@ -387,11 +533,13 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 		parsers []notify.Parser
 		prompts []notify.Prompt
 	)
-	if e.native.work != nil {
-		parsers = append(parsers, work.NewParser(work.ParserOptions{
-			Leads: projectLeads(c.Org), BaseURL: e.publicBase(c),
-		}))
-		prompts = append(prompts, work.Prompt{})
+	if e.native.writer != nil {
+		// NO LEAD MAP AND NO BASE URL. The tracker's own parser reads a
+		// record's routing snapshot, which the WRITER resolved at commit
+		// — a mention resolved at read time names whoever holds the role
+		// later, which is a different person.
+		parsers = append(parsers, tracker.NewParser(tracker.ParserOptions{}))
+		prompts = append(prompts, tracker.Prompt{})
 	}
 	if e.native.pages != nil {
 		parsers = append(parsers, pages.NewParser(pages.ParserOptions{
@@ -440,6 +588,104 @@ func (e *Engine) reconcileNative(ctx context.Context, c *Company) {
 				"detail", "the previous routing is still current")
 		}
 	}
+	e.applyChart(ctx, c)
+}
+
+// applyChart makes the projects this company's chart names exist.
+//
+// # Why it runs here and not at the first write
+//
+// A create is a SEQUENCE — it takes the next number from its project's own
+// counter and then writes the task — so the project has to be an object before
+// anything can be filed in it. Creating it inside the create instead is the
+// shape that gives two nodes two projects, two counters and two ENG-1s when
+// they file at once. Deriving it from the chart makes it one arbitrated write
+// per project, on that project's own subject.
+//
+// # And on every apply rather than only at boot
+//
+// A founder adds a unit with a new `project:` key and the seats in it start
+// filing immediately. A reconcile that only ran at boot would leave every one
+// of those refused with "project X is not on this node" until somebody
+// restarted the fleet — a failure whose remedy is invisible from the message.
+// After the first node has done it the apply is free: the operation id is
+// derived from the revision and the key, so the losers of the broker's
+// arbitration write nothing.
+//
+// # Best effort, and what that costs
+//
+// A failure is LOGGED rather than raised, because this is one clause of an
+// epoch apply and the rest of it — the routing, the models, the tools — is
+// still correct without it. What a failure costs is exactly the projects that
+// did not land, and the next apply or the next boot retries them.
+func (e *Engine) applyChart(ctx context.Context, c *Company) {
+	writer := e.TrackerWriter()
+	if writer == nil || c == nil || c.Org == nil {
+		return
+	}
+	chart := chartProjects(c.Org)
+	if len(chart) == 0 {
+		return
+	}
+	wrote, err := writer.ApplyChart(ctx, tracker.ChartEpochOf(time.Now()), chart)
+	if err != nil {
+		log.ErrorContext(ctx, "tracker_chart_not_applied",
+			"error", err.Error(), "wrote", wrote,
+			"detail", "a project the chart names may not exist yet, and work "+
+				"filed into it is refused until it does; the next config apply "+
+				"or restart retries it")
+		return
+	}
+	if len(wrote) > 0 {
+		log.InfoContext(ctx, "tracker_chart_applied", "projects", wrote)
+	}
+}
+
+// chartProjects is every project the org chart names, with the three fields
+// the chart owns.
+//
+// DE-DUPLICATED ON THE KEY, because two units legitimately share a project —
+// that is what [projectLeads] reports on — and one project written twice in
+// one pass would contend with itself at the broker and log a failure for a
+// configuration that is fine. The FIRST declaration wins, which matches how
+// the lead is chosen for the same key.
+func chartProjects(o *org.Organization) []tracker.ChartProject {
+	var out []tracker.ChartProject
+	seen := map[string]bool{}
+	add := func(key, name, purpose, unit string) {
+		// NORMALIZED THE WAY EVERY OTHER SCOPE IS, through the org's own
+		// helper: a project key is compared upper everywhere — a task's
+		// key is `ENG-42` and the column is an exact match — and a chart
+		// that wrote `eng` would create a project no board could find.
+		key = org.NormalizeScope(key)
+		if key == "" || seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, tracker.ChartProject{
+			Key: key, Name: name, Purpose: purpose, Unit: unit,
+		})
+	}
+	for unit := range o.AllUnits() {
+		add(unit.Project, unit.Name, unit.Purpose, unit.Name)
+	}
+	for role := range o.AllRoles() {
+		// EVERY seat, not just the root-level ones: `Organization.Roles`
+		// holds only the seats declared outside a unit, and a seat
+		// nested in one that names its own project would otherwise get
+		// no project at all — and file nothing, for ever.
+		//
+		// A ROLE'S OWN PROJECT takes the ROLE's name, because that is
+		// what a founder naming one on a seat meant — a project for that
+		// seat's work rather than for its unit's — and its home unit,
+		// so the project still says where in the company it sits.
+		var home string
+		if unit := o.UnitFor(role); unit != nil {
+			home = unit.Name
+		}
+		add(role.Project, role.Name, "", home)
+	}
+	return out
 }
 
 // projectLeads maps a tracker project to the handle that owns it.
@@ -448,7 +694,7 @@ func (e *Engine) reconcileNative(ctx context.Context, c *Company) {
 // lives: the tracker's only contribution is naming the field. The ambiguity
 // report is logged rather than refused, because two units sharing a project
 // is an ordinary arrangement and only a DISAGREEMENT about the lead matters.
-func projectLeads(o *org.Organization) work.Leads {
+func projectLeads(o *org.Organization) map[string]string {
 	if o == nil {
 		return nil
 	}
@@ -467,7 +713,7 @@ func projectLeads(o *org.Organization) work.Leads {
 			"declared_by", conflict.DeclaredBy, "chose", conflict.Chose,
 			"candidates", conflict.Candidates)
 	}
-	return work.Leads(leads)
+	return leads
 }
 
 // containerLeads maps a knowledge container to the handle that owns it.
@@ -570,12 +816,20 @@ func (skillDetector) IsSkill(body string) bool { return skills.IsSkill(body) }
 // the point: a seat offered a tool against a tracker its company does not
 // run would reach for it and fail at the call.
 func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
-	if e.native == nil || e.native.workReader == nil || e.native.work == nil {
+	if e.native == nil || e.native.trackerReader == nil || e.native.writer == nil {
 		return builtin.WorkDeps{}
 	}
 	return builtin.WorkDeps{
-		Reader:   e.native.workReader,
-		Writer:   e.native.work,
+		Reader: e.native.trackerReader,
+		// ONE WRITER PER ACTOR, derived from the turn's own seat: the
+		// tracker's rule is that a writer acts as exactly one party, and
+		// the party here is the immutable seat the tool surface bound
+		// rather than anything a model can name.
+		Writer: func(actor builtin.Actor) builtin.WorkWriter {
+			return e.native.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
+				TurnID: actor.TurnID, Chain: actor.Chain,
+			})
+		},
 		Mentions: seatMentions{org: c.Org},
 		// PER CALL against the epoch current when the tool runs, not
 		// against the one that equipped it: a seat's tools are cloned
@@ -586,10 +840,48 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 				func(u *org.Unit) string { return u.Project },
 				func(r *org.Role) string { return r.Project })
 		},
-		Await: func(ctx context.Context, revision uint64) error {
-			return e.WaitApplied(ctx, coord.FamilyWork, revision)
-		},
+		// THE LEAD MAP IS READ PER CALL against the epoch current when the
+		// tool runs, for the reason the default project is: a seat's
+		// tools are cloned into its lease, an apply does not rebuild the
+		// clone, and a captured map would route a change by the org chart
+		// that has since moved.
+		Leads: liveLeads{engine: e},
+		Now:   func() time.Time { return time.Now().UTC() },
+		Zone:  c.Config.Tracker.Native.Location(),
+		Await: e.WaitCommitted,
 	}
+}
+
+// liveLeads resolves a wake's two fallbacks against the CURRENT epoch.
+type liveLeads struct{ engine *Engine }
+
+// ProjectLead is who hears about unassigned work in a project.
+func (l liveLeads) ProjectLead(project string) string {
+	if project == "" {
+		return ""
+	}
+	return projectLeads(l.engine.Company().Org)[strings.ToUpper(project)]
+}
+
+// UnitLead is who hears about work routed to a unit.
+func (l liveLeads) UnitLead(unit string) string {
+	if unit == "" {
+		return ""
+	}
+	chart := l.engine.Company().Org
+	if chart == nil {
+		return ""
+	}
+	for u := range chart.AllUnits() {
+		if !strings.EqualFold(u.ID, unit) {
+			continue
+		}
+		if lead := chart.EffectiveLead(u); lead != nil {
+			return lead.Handle()
+		}
+		return ""
+	}
+	return ""
 }
 
 // pageDeps is the knowledge half, on the same terms.

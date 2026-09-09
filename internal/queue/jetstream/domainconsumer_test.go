@@ -1,6 +1,7 @@
 package jetstream
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -156,3 +157,62 @@ func seqOf(msgs []statelog.Message) uint64 {
 
 func id(i int) string   { return string(rune('a' + i)) }
 func itoa(i int) string { return string(rune('0' + i)) }
+
+// A CANCELLED CONTEXT ENDS A GROUP'S BLOCKING READ.
+//
+// # Why this is a hang rather than a leak
+//
+// [jetstream.MessagesContext.Next] takes no context and blocks until a
+// message arrives or the iterator is stopped. A quiet log means it blocks for
+// ever — so a consumer that only cancelled a context and then joined its
+// reader would wait on a goroutine that has no way to notice.
+//
+// It is not hypothetical. The tracker's wake feed sits in exactly this call
+// for the life of a node, and shutdown joins it: without the watcher this
+// asserts, every engine test that stopped before its own context expired
+// wedged, and the only symptom was a suite that never finished.
+//
+// The assertion is the WALL CLOCK, because that is the symptom. A flag saying
+// the watcher exists would go on being true while the block moved elsewhere.
+func TestAGroupsBlockingReadEndsWithItsContext(t *testing.T) {
+	t.Parallel()
+	q, log := openDomain(t, "CREWLET_GROUP_CANCEL", "crewlet.groupcancel")
+	defer func() { _ = q.Stop(context.Background()) }()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	group, err := log.Group(ctx, "waker")
+	if err != nil {
+		t.Fatalf("open the group: %v", err)
+	}
+	// NOTHING IS PUBLISHED, deliberately: an empty log is the state a
+	// company spends almost all of its time in, and it is the one where
+	// the blocking read never returns on its own.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			delivery, err := group.Next(ctx)
+			if err != nil || delivery == nil {
+				return
+			}
+		}
+	}()
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("a group's blocking read outlived its cancelled context, so " +
+			"anything joining it waits for ever")
+	}
+
+	// AND AN EXPLICIT STOP IS THE SAME STOP, so a caller that does both —
+	// which a shutdown ordering change makes ordinary — does not panic on
+	// a second close.
+	if err := group.Stop(); err != nil {
+		t.Errorf("stopping an already-cancelled group: %v", err)
+	}
+	if err := group.Stop(); err != nil {
+		t.Errorf("stopping twice: %v", err)
+	}
+}
