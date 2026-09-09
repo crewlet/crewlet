@@ -102,15 +102,48 @@ Three properties worth knowing:
 
 It is a copy of a **moment**, not an instant — the engine keeps working
 throughout, and the pieces are separated by however long the copy took. The
-store is copied **first**, deliberately, which leaves it slightly older than
-the stream estate. That is the safe direction because nothing in the store
-decides whether work runs again: the completion ledger, the delivery dedupe
-and the fire claims all live in coordination and travel with the streams. So
-the cost is a bounded gap in one seat's own memory and audit, and no change
-to what the fleet does next. The reverse order would leave the ledger not yet
-recording work whose episode the store already holds — the trigger is still
-unacked in its mailbox, so it runs again and the duplicate reaches whoever
-the seat was talking to.
+store is copied **first**, and that order is now mandatory rather than
+preferable.
+
+The store carries a **position**: the tracker's rows are derived from an
+ordered log by an applier that commits its checkpoint in the same transaction
+as the rows, so a store copy is a claim about what has already been applied.
+
+- **Store first** leaves the artefact holding a store at position *P* beside a
+  log that has since moved past it. A restore replays the difference. The gap
+  is bounded and replayable, and it costs a few minutes of work being applied
+  twice — which is free, because the applier's guard is monotone in the
+  position.
+- **Store last** would leave a store at position *P* beside a log whose newest
+  record is *below* it. Every subsequent record then lands at a sequence the
+  store has already marked applied, and the version-guarded write drops it
+  **silently**. That is not a gap, it is a permanent hole nothing reports — a
+  restored company quietly missing whatever was written during the copy.
+
+So the order trades a bounded, replayable gap against a permanent, silent one.
+
+**The gap is only replayable while the log still has the records**, and the
+fleet's own trim deletes a record once every counted node has committed past
+it. A backup is not a counted node, so two things close that window and they
+are different kinds of thing:
+
+- **A trim hold** is taken before the first byte is copied, at the position
+  this node's appliers stand at, and released when the manifest is written. It
+  is what makes the race not happen. It is *heartbeated*: a pin that outlived
+  its owner would stop the trim for ever and the log would grow to its ceiling,
+  so the fleet ignores a hold nobody has renewed. A node that cannot write the
+  hold refuses the backup rather than taking one whose gap may be trimmed away
+  while it runs.
+- **An assertion** — the log's first surviving sequence must be at or below the
+  copy's position plus one, checked per domain after the stream snapshots from
+  bounds those snapshots already captured. It is what makes "restorable" a
+  *checkable inequality* rather than a hope. A backup that cannot assert it
+  writes **no manifest**, which is how a reader tells debris from a backup.
+
+The manifest records the position **read from the copy itself**, not from the
+live database: the checkpoint commits with the rows, so the position inside a
+file is the only one that describes that file, and the applier ran throughout
+the copy.
 
 ### One node, or every node?
 
@@ -127,16 +160,23 @@ matter which node wrote them. On a clustered embedded stream you are
 snapshotting a replicated stream, so one member's snapshot carries what its
 peers hold too.
 
-The **store file is that node's alone**, and what only lives there is what
-only *that node* did: its audit event log, its scheduled-run history, its
-share of the config revision history. Those do not exist anywhere else and no
-peer's backup contains them.
+A node is **two** database files, and they answer differently.
+
+The **replicated estate** is a copy of state every node holds: the tracker's
+projects, tasks, comments and history, derived from an ordered log by an
+applier that runs identically everywhere. Any healthy node's copy of it is the
+company's, in the same sense the stream estate is.
+
+The **node estate** is that node's alone, and what only lives there is what
+only *that node* did: its audit event log, its scheduled-run history, its share
+of the config revision history. Those exist nowhere else and no peer's backup
+contains them.
 
 So:
 
 - **For the company's state — one node is enough.** Everything a restore needs
-  to bring the company back is on the stream estate, and a single node's
-  backup captures all of it.
+  to bring the company back is on the stream estate and the replicated estate,
+  and a single node's backup captures both.
 - **For the complete audit trail — take one per node**, on the same schedule,
   and keep them together. The event log is per-node history with no second
   copy, so a fleet-wide audit trail is the union of every node's.
@@ -153,6 +193,38 @@ second step. Schedule it the way you schedule anything else against a node
 (cron, a systemd timer, your orchestrator) — one directory per run, named by
 timestamp, since a destination that already holds something is refused rather
 than merged.
+
+**The schedule is yours, and so is its cost.** Every run is a full copy, so the
+footprint is arithmetic rather than a judgement:
+
+```
+backup storage = copies retained x replicated estate bytes
+```
+
+A flat *every 6 hours, retained 14 days* is 56 copies, which at a year-five
+estate of ≈ 44 GB is **≈ 2.4 TB** — plus a full `VACUUM INTO` of that estate
+four times a day on a live node, competing with the applier's own commits for
+the same disk. That is a real cost nobody quotes, so the shipped guidance is
+**tiered**:
+
+| Tier | Kept | Covers |
+|---|---|---|
+| every 6 hours | 8 copies | the last two days, at the granularity an incident needs |
+| daily | 14 copies | the fortnight, at the granularity a discovered problem needs |
+
+Twenty copies rather than fifty-six — **≈ 875 GB** at the same year-five
+estate, for a recovery point that is worse by nothing anybody has ever
+needed. `snapshot.duration` is what measures the copy's own cost against your
+hardware; start from the table and move it once you have that number.
+
+**How stale is too stale is a separate setting.** `retention.backup_max_age`
+is what the trim reads, and it is deliberately not derived from the schedule:
+a company that never backs up never trims, loudly and by design, so the engine
+has to know what "recent enough" means to *you* rather than inferring it from
+how often a cron happened to fire. The age itself is read from the newest
+complete **manifest** on disk rather than from a counter the engine keeps —
+a counter records that a process believed it took a backup, and the disk
+records that one exists. They differ in exactly the cases the alarm is for.
 
 Two rules carry over from the cold runbook and are worth repeating because
 this path makes them easier to forget: the directory holds every credential

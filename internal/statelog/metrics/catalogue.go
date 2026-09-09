@@ -343,6 +343,34 @@ func Catalogue() []Instrument {
 				"with a cause an operator can act on.",
 		},
 
+		// ---- the backup -----------------------------------------------
+		{
+			Name: "crewlet.backup.age", Kind: KindGauge, Unit: UnitSeconds,
+			Attributes: nil,
+			Shows: "How long ago the newest COMPLETE backup finished, read " +
+				"from the manifests on disk rather than from a counter this " +
+				"process keeps. A counter records that a process believed it " +
+				"took a backup; the disk records that one exists, and they " +
+				"differ in exactly the cases the alarm is for — a copy " +
+				"deleted, a volume never mounted, a schedule pointing at a " +
+				"path nobody ships from.",
+		},
+		{
+			Name: "crewlet.backup.duration", Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: nil,
+			Shows: "How long a backup took, which is the window the trim " +
+				"hold covers and the I/O the copy spends competing with the " +
+				"applier's own commits. It is what turns the retention " +
+				"guide's worked example into a number for THIS hardware.",
+		},
+		{
+			Name: "crewlet.backup.holds", Kind: KindGauge, Unit: UnitCount,
+			Attributes: nil,
+			Shows: "Live trim holds. A pin that outlives its owner stops the " +
+				"trim until the stale bound expires it, so a count that does " +
+				"not return to zero is a backup that crashed mid-copy.",
+		},
+
 		// ---- the store ------------------------------------------------
 		{
 			Name: "crewlet.store.pool.wait", Kind: KindHistogram, Unit: UnitMilliseconds,

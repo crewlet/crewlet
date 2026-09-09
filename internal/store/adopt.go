@@ -75,6 +75,38 @@ func AdoptFile(ctx context.Context, live, prepared string) error {
 	return nil
 }
 
+// QuiesceCopy makes a COPY of a database self-contained again: it folds the
+// -wal back in and removes every sidecar, including the lock.
+//
+// # Why a reader needs this at all
+//
+// Opening a SQLite database creates a -wal and a -shm beside it, even for a
+// read, and this package's own advisory lock adds a third. That is invisible
+// while a process owns a live database and a problem the moment somebody READS
+// A COPY: a backup artefact is a set of files whose meaning depends on being
+// that set, so a sidecar left behind is debris carrying the reader's own umask
+// rather than the directory's deliberate 0700, and a restore script looking
+// for named files finds one it does not know.
+//
+// # Why the name says COPY
+//
+// The lock sidecar is deliberately never removed from a live database — see
+// [fileLock.release]: unlinking it races a peer that has already opened it and
+// is about to lock, and two processes would then believe they hold it. A copy
+// has no peer: nothing else will ever open it in place, because a restore
+// moves it first. So the constraint is in the name rather than in a comment
+// somebody reads afterwards, and the file must already be CLOSED by whoever
+// opened it.
+func QuiesceCopy(ctx context.Context, path string) error {
+	if err := checkpointAndClose(ctx, path); err != nil {
+		return fmt.Errorf("store: quiesce %s: %w", path, err)
+	}
+	if err := removeSidecars(path); err != nil {
+		return err
+	}
+	return remove(path + lockSuffix)
+}
+
 // checkpointAndClose opens path, folds its -wal into it, and closes.
 //
 // TRUNCATE rather than PASSIVE: passive leaves the -wal file in place with

@@ -54,3 +54,47 @@ func (f *Fleet) ForgetPositions(_ context.Context, nodeID string) error {
 	delete(f.positions, nodeID)
 	return nil
 }
+
+// PutHold writes or renews a trim hold. See the KV backend for why it lives
+// in the same register as a node's positions.
+func (f *Fleet) PutHold(_ context.Context, h coord.TrimHold) error {
+	if err := h.Validate(); err != nil {
+		return err
+	}
+	if h.At.IsZero() {
+		h.At = time.Now().UTC()
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.holds == nil {
+		f.holds = map[string]coord.TrimHold{}
+	}
+	// CLONED ON THE WAY IN, for the reason the positions row is: a shared
+	// map is the one aliasing bug a twin can have and the real backend
+	// cannot, because the real one serialises.
+	hold := h
+	hold.Domains = maps.Clone(h.Domains)
+	f.holds[h.Owner] = hold
+	return nil
+}
+
+// Holds reads every live pin, in owner order so two captures are diffable.
+func (f *Fleet) Holds(_ context.Context) ([]coord.TrimHold, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]coord.TrimHold, 0, len(f.holds))
+	for _, owner := range slices.Sorted(maps.Keys(f.holds)) {
+		hold := f.holds[owner]
+		hold.Domains = maps.Clone(hold.Domains)
+		out = append(out, hold)
+	}
+	return out, nil
+}
+
+// ReleaseHold removes one.
+func (f *Fleet) ReleaseHold(_ context.Context, owner string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.holds, owner)
+	return nil
+}

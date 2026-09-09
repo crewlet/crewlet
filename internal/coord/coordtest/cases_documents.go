@@ -18,6 +18,97 @@ import (
 // hold under a replicated stream, a lagging replica and a compacting bucket,
 // and these are the questions whose answers must not differ between them.
 var documentCases = []fleetCase{
+	{"a trim hold round-trips, and it never reads back as a node", func(h *fleetHarness) {
+		// THE TWO KEY CLASSES SHARE ONE REGISTER, and this case is the
+		// whole reason that is safe. A hold decoded as a positions row
+		// is a node id of "" with a domains map of zero values, which
+		// the trim reads as a node that has applied NOTHING — so the
+		// pin becomes a permanent floor at zero, from a key nobody
+		// thinks of as a node, and the log grows to its ceiling.
+		if err := h.f.PutPositions(h.ctx, coord.NodePositions{
+			NodeID:  "node-a",
+			Domains: map[string]coord.DomainPosition{"tracker": {Seq: 90, Generation: 1}},
+		}); err != nil {
+			h.t.Fatalf("PutPositions: %v", err)
+		}
+		hold := coord.TrimHold{
+			Owner:  coord.HoldOwner("node-a", "backup"),
+			Reason: "a backup is copying the store",
+			Domains: map[string]coord.Position{
+				"tracker": {Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 88},
+			},
+		}
+		if err := h.f.PutHold(h.ctx, hold); err != nil {
+			h.t.Fatalf("PutHold: %v", err)
+		}
+
+		nodes, err := h.f.Positions(h.ctx)
+		if err != nil {
+			h.t.Fatalf("Positions: %v", err)
+		}
+		if len(nodes) != 1 || nodes[0].NodeID != "node-a" {
+			h.t.Fatalf("the register lists %d node row(s) with a hold beside "+
+				"one node: %+v — a hold read as a node pins the trim at zero "+
+				"for ever", len(nodes), nodes)
+		}
+
+		holds, err := h.f.Holds(h.ctx)
+		if err != nil {
+			h.t.Fatalf("Holds: %v", err)
+		}
+		if len(holds) != 1 || holds[0].Owner != hold.Owner {
+			h.t.Fatalf("the register lists %d hold(s): %+v", len(holds), holds)
+		}
+		if got := holds[0].Domains["tracker"]; got.Seq != 88 || got.Stream == "" {
+			h.t.Fatalf("the hold came back pinning %+v — a bare sequence from "+
+				"before a reanchor names a dead number space", got)
+		}
+		if holds[0].At.IsZero() {
+			h.t.Fatal("the hold came back with no renewal instant, so the " +
+				"stale bound that stops a crashed holder pinning the log for " +
+				"ever has nothing to compare")
+		}
+
+		// RELEASE IS THE NORMAL PATH, and it must not take the node's
+		// row with it.
+		if err := h.f.ReleaseHold(h.ctx, hold.Owner); err != nil {
+			h.t.Fatalf("ReleaseHold: %v", err)
+		}
+		holds, err = h.f.Holds(h.ctx)
+		if err != nil {
+			h.t.Fatalf("Holds after release: %v", err)
+		}
+		if len(holds) != 0 {
+			h.t.Fatalf("%d hold(s) survive a release", len(holds))
+		}
+		nodes, err = h.f.Positions(h.ctx)
+		if err != nil {
+			h.t.Fatalf("Positions after release: %v", err)
+		}
+		if len(nodes) != 1 {
+			h.t.Fatalf("releasing a hold left %d node row(s)", len(nodes))
+		}
+	}},
+	{"a hold that pins nothing is refused", func(h *fleetHarness) {
+		// A hold with no owner would be written over somebody else's pin
+		// and released by their work finishing; one naming no domain
+		// pins nothing while looking like a pin.
+		if err := h.f.PutHold(h.ctx, coord.TrimHold{
+			Domains: map[string]coord.Position{"tracker": {Stream: "S", Seq: 1}},
+		}); err == nil {
+			h.t.Error("a hold with no owner was written")
+		}
+		if err := h.f.PutHold(h.ctx, coord.TrimHold{Owner: "node-a/backup"}); err == nil {
+			h.t.Error("a hold naming no domain was written")
+		}
+		if err := h.f.PutHold(h.ctx, coord.TrimHold{
+			Owner:   "node-a/backup",
+			Domains: map[string]coord.Position{"tracker": {Seq: 1}},
+		}); err == nil {
+			h.t.Error("a hold pinning a bare sequence with no stream was written")
+		}
+	}},
+
 	{"a node's positions round-trip, and only an operator removes a row", func(h *fleetHarness) {
 		row := coord.NodePositions{
 			NodeID:        "node-a",
