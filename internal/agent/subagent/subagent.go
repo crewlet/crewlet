@@ -939,11 +939,15 @@ func publishFallback(ctx context.Context, cfg Config, f chain.Fallback) {
 	if cfg.Publisher == nil {
 		return
 	}
-	turnID := ""
+	// The PARENT's identity, matching the role name beside it: a worker is
+	// ephemeral and holds no seat in the org, so it has no agent id of its
+	// own — the hand-off belongs to the seat whose chain fell through.
+	turnID, agentID := "", ""
 	if cfg.Turn != nil {
-		turnID = cfg.Turn.ID
+		turnID, agentID = cfg.Turn.ID, cfg.Turn.AgentID()
 	}
 	ev := events.New(types.ProviderFallback{
+		Agent:    agentID,
 		RoleName: cfg.Seat.Role.Name,
 		TurnID:   turnID,
 		Phase:    types.Phase(phase.Subagent),

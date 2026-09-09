@@ -2494,7 +2494,10 @@ func (b benched) Complete(context.Context, llm.Request) (*llm.Completion, error)
 // The seat's own phases publish these; for a while its fan-out did not, and a
 // chain is unstable exactly where the fan-out is. The turn id is what makes
 // the row selectable at all — without it the hand-off is an anonymous line in
-// the log rather than something the turn that caused it can show.
+// the log rather than something the turn that caused it can show, and the
+// agent id is the other half of that address: the fan-out published it empty
+// while the seat's own phases filled it, so one company's provider_fallback
+// rows were attributable and the other's were not.
 func TestAWorkersProviderHandOffIsPublishedAgainstTheParentTurn(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
@@ -2523,7 +2526,17 @@ func TestAWorkersProviderHandOffIsPublishedAgainstTheParentTurn(t *testing.T) {
 		t.Fatal("a worker walked past a benched member and published nothing")
 	}
 	f := got[0]
+	// The PARENT seat's derived id. A worker holds no seat in the org and so
+	// has no id of its own, and this row's whole doc says it is addressed
+	// like a phase event — agent id, role, turn id — so publishing it with
+	// the promoted column empty leaves the hand-off unattributable to the
+	// seat whose chain fell through.
+	wantAgent, ok := cfg.Seat.Org.AgentIDFor(cfg.Seat.Role)
+	if !ok {
+		t.Fatal("the parent seat has no derived agent id; the fixture is not an agent seat")
+	}
 	for _, c := range []struct{ field, got, want string }{
+		{"agent_id", f.Agent, wantAgent.String()},
 		{"turn_id", f.TurnID, "t-9"},
 		{"role", f.RoleName, "CTO"},
 		// SUBAGENT, not execute: a reader has to be able to tell the seat's
