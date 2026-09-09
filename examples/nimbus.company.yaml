@@ -416,8 +416,10 @@ integrations:
   # silent.  ``addressed`` shows it only when someone is actually waiting
   # on THAT agent — a DM, a direct @mention, or a thread it already
   # follows — which is what keeps a shared channel from lighting up one
-  # indicator per bot on every message.  ``always`` covers every
-  # Mattermost-triggered turn; ``off`` (the default) disables it.
+  # indicator per bot on every message.  ``always`` (the default) covers
+  # every Mattermost-triggered turn.  There is deliberately no ``off``: a
+  # reader who sees nothing cannot tell an agent working from an agent
+  # that is dead, so an operator who finds it noisy wants ``addressed``.
   #
   # There is deliberately no ``status_phrases`` here, unlike the Slack
   # block this replaced: Mattermost renders a fixed client-side "is

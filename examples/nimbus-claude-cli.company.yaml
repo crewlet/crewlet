@@ -595,11 +595,13 @@ scheduling:
 # silent.  ``addressed`` shows it only when someone is actually waiting
 # on THAT agent — a DM, a direct @mention, or a thread it already
 # follows — which is what keeps a shared channel from lighting up one
-# indicator per bot on every message.  ``always`` covers every
-# Mattermost-triggered turn; ``off`` (the default) disables it.  It is
-# worth having on here: a subscription CLI is slower to first token than
-# an API call, and the indicator is what tells a person the seat heard
-# them.
+# indicator per bot on every message.  ``always`` (the default) covers
+# every Mattermost-triggered turn.  There is deliberately no ``off``: a
+# reader who sees nothing cannot tell an agent working from an agent that
+# is dead, so an operator who finds it noisy wants ``addressed``.  Some
+# indicator matters more here than on the full-stack config: a
+# subscription CLI is slower to first token than an API call, so the
+# indicator is what tells a person the seat heard them.
 #
 # There is deliberately no ``status_phrases`` here, unlike the Slack block
 # this replaced: Mattermost renders a fixed client-side "is typing…" and
