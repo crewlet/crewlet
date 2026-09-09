@@ -314,6 +314,22 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 	return db, nil
 }
 
+// OpenEstate opens ONE estate's file, alone.
+//
+// [Open] opens a NODE: two files, two migration sequences, and the pairing
+// between them. This opens one — which is the shape a COPY of a single estate
+// has, and a snapshot artefact and a backup member are both exactly that.
+//
+// Opening such a copy with [Open] is not an error a caller sees: the migrator
+// applies the OTHER estate's whole sequence to it, creates that estate's
+// tables inside it, records them as applied, and opens a second file beside it
+// for the estate the caller thought it had. The artefact is then no longer a
+// copy of anything, and the only thing that ever notices is a table name the
+// two estates happen to share.
+func OpenEstate(ctx context.Context, estate Estate, path string, opts Options) (*DB, error) {
+	return openEstate(ctx, estate, path, opts)
+}
+
 // ReplicatedPath is where the replicated estate lives for a node whose own
 // estate is at nodePath.
 //
@@ -395,6 +411,7 @@ func openEstate(ctx context.Context, estate Estate, path string, opts Options) (
 		"vector_functions", db.caps.VectorFunctions,
 		"vector_index", db.caps.VectorIndex,
 		"full_text_search", db.caps.FullTextSearch,
+		"without_rowid", db.caps.WithoutRowid,
 		"max_variables", db.caps.MaxVariables,
 		"page_cache_kib", db.caps.PageCacheKiB,
 		"pinned_writers", db.pins.declared,

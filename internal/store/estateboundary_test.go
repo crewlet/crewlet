@@ -139,10 +139,22 @@ func bothEstates(text string, node, replicated map[string]bool) bool {
 	return sawNode && sawReplicated
 }
 
-// createTable finds the tables an estate's DDL declares.
-var createTable = regexp.MustCompile(`(?is)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*)`)
+// createTable finds the tables an estate's DDL declares, and dropTable the
+// ones a later migration takes away again.
+var (
+	createTable = regexp.MustCompile(`(?is)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*)`)
+	dropTable   = regexp.MustCompile(`(?im)^\s*DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?([a-z_][a-z0-9_]*)`)
+)
 
-// tablesIn is every table one estate's embedded schema creates.
+// tablesIn is every table one estate's embedded schema LEAVES BEHIND.
+//
+// THE DROPS COUNT, and reading only the creates is the bug that hid behind
+// this being append-only: a table that moves estate is created in the new one
+// and dropped in the old, and a derivation blind to the drop reports it in
+// both — which fails the one-estate rule below for exactly the change that
+// satisfies it, and silently makes every statement naming that table look like
+// a boundary crossing. The files are walked in migration order, so a create
+// after a drop is a table that came back.
 func tablesIn(t *testing.T, estate store.Estate) map[string]bool {
 	t.Helper()
 	dir := filepath.Join(moduleRoot(t), "internal", "store", "schema", string(estate))
@@ -152,14 +164,52 @@ func tablesIn(t *testing.T, estate store.Estate) map[string]bool {
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
 		}
-		for _, m := range createTable.FindAllStringSubmatch(string(body), -1) {
-			out[strings.ToLower(m[1])] = true
+		// DROPS FIRST WITHIN ONE FILE would be wrong for a migration
+		// that drops and recreates, so each file is applied in the
+		// order its statements appear.
+		for _, m := range ddlStatements(string(body)) {
+			if m.drop {
+				delete(out, m.table)
+				continue
+			}
+			out[m.table] = true
 		}
 	}
 	// schema_migrations is created by the migrator rather than by a file,
 	// and exists in BOTH estates — so it is neither estate's and naming it
 	// is never a crossing.
 	delete(out, "schema_migrations")
+	return out
+}
+
+// ddlStatement is one CREATE TABLE or DROP TABLE, in the order it appears.
+type ddlStatement struct {
+	table string
+	drop  bool
+}
+
+// ddlStatements walks one migration's creates and drops in source order.
+//
+// SOURCE ORDER, not creates-then-drops: a migration that drops a table and
+// recreates it in a new shape is a table the estate still has, and the reverse
+// reading loses it.
+func ddlStatements(body string) []ddlStatement {
+	type at struct {
+		pos int
+		st  ddlStatement
+	}
+	var all []at
+	for _, m := range createTable.FindAllStringSubmatchIndex(body, -1) {
+		all = append(all, at{m[0], ddlStatement{table: strings.ToLower(body[m[2]:m[3]])}})
+	}
+	for _, m := range dropTable.FindAllStringSubmatchIndex(body, -1) {
+		all = append(all, at{m[0], ddlStatement{table: strings.ToLower(body[m[2]:m[3]]), drop: true}})
+	}
+	slices.SortFunc(all, func(a, b at) int { return a.pos - b.pos })
+	out := make([]ddlStatement, 0, len(all))
+	for _, a := range all {
+		out = append(out, a.st)
+	}
 	return out
 }
 

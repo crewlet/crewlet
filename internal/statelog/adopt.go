@@ -332,7 +332,12 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer) (Manifest, error) {
 // inside the file is the only one that describes the file — and a manifest
 // that names a different one is describing a different artefact.
 func (a *Adopter) verifyPositions(ctx context.Context, path string, m Manifest) error {
-	db, err := store.Open(ctx, path, store.Options{})
+	// THE ARTEFACT IS ONE ESTATE, so it is opened as one. store.Open would
+	// treat it as a node — applying the node estate's whole migration
+	// sequence into this copy of the replicated file and opening a second
+	// file beside it — and would then answer this query from the handle on
+	// the wrong half.
+	db, err := store.OpenEstate(ctx, store.EstateReplicated, path, store.Options{})
 	if err != nil {
 		return fmt.Errorf("statelog: open the artefact: %w", err)
 	}

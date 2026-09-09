@@ -59,6 +59,22 @@ type Capabilities struct {
 	// index reaches Go is a day this project notices.
 	FullTextSearch bool
 
+	// WithoutRowid is whether the driver accepts a `WITHOUT ROWID` table.
+	//
+	// FALSE on the pinned driver, which answers `Parse error: WITHOUT ROWID
+	// tables are an experimental feature` — measured through Open with this
+	// engine's own session pragmas. It is a TRIPWIRE with a caller waiting
+	// for it: `kb_vectors_bin` is the narrow table every semantic search
+	// scans first, and its rowid is pure overhead on a table whose primary
+	// key is the only way anything reaches a row. The same is true of
+	// `tracker_log_deferred_scope`.
+	//
+	// The design must probe what it depends on, which is why this is here
+	// rather than remembered: a migration written with `WITHOUT ROWID`
+	// would fail on every node and every store would refuse to open, and
+	// nothing in the tree uses it today so no existing test would catch it.
+	WithoutRowid bool
+
 	// MaxVariables is how many bound parameters one statement accepts,
 	// measured rather than assumed.
 	//
@@ -101,6 +117,7 @@ func probe(ctx context.Context, db *sql.DB) Capabilities {
 		VectorFunctions: probeVectorFunctions(ctx, db),
 		VectorIndex:     probeVectorIndex(ctx, db),
 		FullTextSearch:  probeFullText(ctx, db),
+		WithoutRowid:    probeWithoutRowid(ctx, db),
 		MaxVariables:    probeMaxVariables(ctx, db),
 		PageCacheKiB:    probePageCache(ctx, db),
 	}
@@ -249,6 +266,19 @@ func probeVectorIndex(ctx context.Context, db *sql.DB) bool {
 		}
 	}
 	return false
+}
+
+// probeWithoutRowid asks for the narrower table shape two of this engine's own
+// tables would take.
+//
+// CREATED AND ROLLED BACK, because the refusal is a PARSE error rather than a
+// capability flag: there is no pragma to read, and the only honest question is
+// whether the statement a migration would carry is one this driver accepts.
+func probeWithoutRowid(ctx context.Context, db *sql.DB) bool {
+	return probeInRollback(ctx, db, []string{
+		`CREATE TABLE crewlet_probe_wr (a TEXT NOT NULL, b TEXT NOT NULL, ` +
+			`PRIMARY KEY (a, b)) WITHOUT ROWID`,
+	})
 }
 
 // probeFullText accepts either mechanism, because the capability the engine

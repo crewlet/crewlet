@@ -229,14 +229,23 @@ func (t tables) retain(ctx context.Context, tx *sql.Tx, rec Record, compacted bo
 	key := rec.Position.Packed()
 	subject := rec.Subject.String()
 	if compacted {
-		if _, err := tx.ExecContext(ctx,
-			`DELETE FROM `+t.deferred+` WHERE subject = ?`, subject); err != nil {
-			return fmt.Errorf("statelog: supersede the deferred record on %s: %w", subject, err)
-		}
+		// THE CHILD GOES FIRST, and the order is the whole statement
+		// pair. There is no foreign key here — a cascade is a delete
+		// nobody committed — so the scope rows are found through the
+		// parent's own position, and a parent deleted first leaves a
+		// subquery that matches nothing and scope rows that outlive
+		// every record. A probe then reports a deferral on a record
+		// this node no longer holds, for ever: the read barrier waits
+		// on it and the writer's step 0 refuses to publish, with
+		// nothing able to clear either.
 		if _, err := tx.ExecContext(ctx,
 			`DELETE FROM `+t.scope+` WHERE position IN
 				(SELECT position FROM `+t.deferred+` WHERE subject = ?)`, subject); err != nil {
 			return fmt.Errorf("statelog: supersede the deferred scope on %s: %w", subject, err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM `+t.deferred+` WHERE subject = ?`, subject); err != nil {
+			return fmt.Errorf("statelog: supersede the deferred record on %s: %w", subject, err)
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `
