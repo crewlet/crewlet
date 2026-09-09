@@ -50,6 +50,7 @@ import (
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -752,6 +753,11 @@ func runEngine(args []string, stderr io.Writer) error {
 	debug := fs.Bool("debug", false, "shorthand for -log-level debug")
 	roles := fs.String("roles", "",
 		"what this node runs, overriding node.roles: ingress, seats, workers")
+	mode := fs.String("mode", string(statelog.ModeNormal),
+		"normal (default), maintenance or seal. The two maintenance modes start "+
+			"this node's broker and NO publisher, for a stream capacity change; "+
+			"every node of the fleet has to be in the same one. See "+
+			"`crewlet retention set-capacity`")
 	apiHost := fs.String("api-host", "", "bind address, overriding api.host")
 	apiPort := fs.Int("api-port", -1,
 		"bind port, overriding api.port; 0 serves no HTTP at all")
@@ -782,7 +788,7 @@ func runEngine(args []string, stderr io.Writer) error {
 		fmt.Fprintln(stderr, "usage: crewlet run [<config.yaml>] "+
 			"[-company <company.yaml> | -import-company <company.yaml>] "+
 			"[-log-level …] [-log-format …] [-debug] "+
-			"[-roles …] [-api-host …] [-api-port …]")
+			"[-roles …] [-mode …] [-api-host …] [-api-port …]")
 		return errors.New("name at most one config document")
 	}
 	if file != "" {
@@ -830,6 +836,18 @@ func runEngine(args []string, stderr io.Writer) error {
 	// HTTP at all and make every integration go deaf.
 	if err = overrideNode(boot, fs, *roles, *apiHost, *apiPort); err != nil {
 		return err
+	}
+	// THE MODE IS A FLAG AND NEVER A CONFIG FIELD, deliberately. Every
+	// node of the fleet restarts into it and out of it again, three times
+	// over one capacity change — so it is a property of THIS RUN rather
+	// than of the deployment, and a file that carried it would leave a
+	// node that came back after an unrelated restart still refusing to
+	// publish, with the reason sitting in a file nobody re-read.
+	nodeMode := statelog.MaintenanceMode(strings.TrimSpace(*mode))
+	if !nodeMode.Valid() {
+		return fmt.Errorf("-mode %q is not one of %v: the two maintenance modes "+
+			"start no publisher, so a typo here would be a node that boots, "+
+			"reports healthy and runs nothing", *mode, statelog.MaintenanceModes)
 	}
 
 	// The engine owns the process signals exclusively — one handler per
@@ -899,7 +917,7 @@ func runEngine(args []string, stderr io.Writer) error {
 	log.InfoContext(ctx, "engine_starting", "version", version.String(),
 		"company", companyName(company))
 	e, err := engine.New(ctx, engine.Options{
-		Bootstrap: boot, Company: company, Metrics: recorder,
+		Bootstrap: boot, Company: company, Metrics: recorder, Mode: nodeMode,
 	})
 	if err != nil {
 		return err
@@ -1359,6 +1377,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// coordination write — so it goes through the same writer a
 		// seat's tools do, and carries the same three-valued outcome.
 		Nodes: nativeNodes(e),
+		// The capacity window. The engine itself refuses the verb when
+		// this node is publishing, so the route exists in every mode and
+		// answers "you are in the wrong one" rather than 404 — which is
+		// the difference between an operator reading a procedure and an
+		// operator looking for a version mismatch.
+		Capacity: e,
 		// Both estates a node holds, reachable only from inside it: the
 		// store is locked to this process and the broker binds no
 		// socket. See internal/backup.

@@ -124,10 +124,22 @@ type PositionRegister interface {
 
 // PositionKey is a node's key in the register.
 //
-// THE REGISTER HOLDS FOUR KEY CLASSES — this one, [HoldKey], [BackupPointKey]
-// and [FloorKey] — because all four answer the same question (what may the
-// trim delete): the first three are its inputs and the fourth is its published
-// answer. All four need the same retention, which is NONE. A listing over either class
+// THE REGISTER HOLDS SEVEN KEY CLASSES, and every one needs the same
+// retention, which is NONE.
+//
+// Four are the trim's: this one, [HoldKey] and [BackupPointKey] are its
+// inputs, and [FloorKey] is its published answer. Three are the capacity
+// window's: [MaintenanceKey], whose existence IS the exclusion,
+// [AdmissionKey], which is one node's positive record that it intends to
+// publish, and [MaintenanceAckKey], which is one participant's evidence that
+// its process restarted.
+//
+// They share a bucket because they share that retention and because a bucket
+// is a stream with a replica count, a place in every sweep and a retention
+// decision of its own. What none of them may have is an AGE: an expiring
+// position reads as a node that has applied nothing, an expiring operation
+// admits every publisher in the fleet, an expiring admission hides one, and an
+// expiring acknowledgement un-seals a barrier that has already run. A listing over either class
 // filters on the first segment, and that filter is load-bearing rather than
 // tidy: a hold decoded as a positions row is a node id of "" with a domains
 // map of zero values, which the trim reads as a node that has applied nothing

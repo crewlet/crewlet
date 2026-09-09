@@ -91,6 +91,12 @@ A body that does not arrive inside its deadline fails the read like any other tr
 | `POST` | `/work/retention/ack` | Publish an operator backup floor, for `backup_floor: operator` |
 | `POST` | `/work/retention/evict/{node}` | Install the eviction gate on a node, so the trim can pass a floor it is pinning |
 | `POST` | `/work/retention/readmit/{node}` | Lift it — the inverse commit rather than a delete |
+| `POST` | `/work/retention/capacity` | Drive a log's byte-ceiling change as far as this node's mode allows |
+| `GET` | `/work/retention/maintenance` | Where that window stands and what is holding it |
+| `POST` | `/work/retention/maintenance/abandon` | Change what the operation is trying to reach, never the barrier it must cross |
+| `POST` | `/work/retention/maintenance/exclude` | Record that a participant's process is stopped and holds no outstanding request |
+| `GET` | `/work/retention/reanchor` | The live stream's own `created_at`, which a reanchor's confirmation has to echo |
+| `POST` | `/work/retention/reanchor` | Adopt a recreated stream at the next generation |
 | `GET` | `/work/{id}` | One item with its description, thread, history and links. `{id}` is either the key (`ENG-42`) or the id — a person holds the first and every internal link the second |
 | `GET` | `/pages` | The company's own knowledge base: a filtered listing. Served only where `knowledge.backend` is `native` |
 | `GET` | `/pages/{id}` | One page with its body, comments, revision metadata, children and ancestor breadcrumb. `{id}` is the id, or `CONTAINER/Title` — the title matches the way the fleet CLAIMED it, so case and runs of whitespace are ignored and `ENG/deploy runbook` reaches a page called "Deploy  Runbook" |
@@ -1478,6 +1484,44 @@ writing and one that is about to.
 A process with no coordination store answers `503`, not `404`. The route exists
 on this build, and telling an operator it does not sends them looking for a
 version mismatch that is not there.
+
+### The capacity window
+
+`stream.max_bytes` is not a live setting, and these routes are the window in
+which it changes. The
+[procedure is documented once](../guides/retention.md#changing-a-logs-ceiling);
+what follows is the wire surface.
+
+| Route | What it does |
+|---|---|
+| `POST /work/retention/capacity?stream=NAME&bytes=N&confirm=N` | Opens or resumes the operation and drives it as far as this node's mode allows. `confirm` repeats `bytes` and a mismatch is `400`: the target is chosen once for the life of an operation. `assert_excluded=true` is required only on an external broker. |
+| `GET /work/retention/maintenance?stream=NAME` | The operation, every acknowledgement, every admission, and — computed here rather than by each client — whether the seal holds, what is blocking it, and which admissions block activation. |
+| `POST /work/retention/maintenance/abandon?stream=NAME` | From `opened` clears the operation outright; from anywhere else enters the seal. |
+| `POST /work/retention/maintenance/exclude?stream=NAME&node=ID&confirm=ID` | Waives one participant's acknowledgement and withdraws its admission. |
+
+**A node in `normal` mode refuses the write routes**, naming the restart: the
+usage a resize is decided against has to be a quantity nothing can move. The
+three-mode boot is `crewlet run -mode`; see
+[the CLI reference](cli.md#crewlet-run).
+
+The `sealed` / `blocking` / `admissions_blocking` fields are **computed
+server-side**, from the same predicate the coordinator itself runs. A client
+that re-derived them would be a second opinion about one barrier, and the two
+would drift.
+
+### Re-anchoring
+
+| Route | What it does |
+|---|---|
+| `GET /work/retention/reanchor?stream=NAME` | The stream's own `created_at` and the current generation. |
+| `POST /work/retention/reanchor?stream=NAME&confirm=<created_at>[&force=true]` | Runs the generation transition, answering with the new generation. |
+
+`confirm` is the value the `GET` returns, supplied by the caller: the
+confirmation means *I looked at the thing I am re-anchoring*, so the two are
+deliberately separate round trips rather than one route that reads and acts.
+`force=true` is refused-by-default's escape, for a fleet whose hydrated peer
+cannot be reached — adopting that peer's snapshot is strictly the better
+recovery, and the refusal names it.
 
 ## Agent Memory
 

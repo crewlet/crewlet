@@ -63,6 +63,12 @@ type App struct {
 	// seam from the one above. Nil on a process with no native tracker.
 	nodes NodeGate
 
+	// capacity drives a stream's byte ceiling through the maintenance
+	// window. Nil on a process with no state log — and on one that is
+	// publishing, the verb refuses rather than the route being absent,
+	// because "you are in the wrong mode" is the answer an operator needs.
+	capacity capacityRunner
+
 	// configured flips once a company revision is active. Atomic because
 	// the config refresher sets it from its own goroutine while every
 	// health probe reads it.
@@ -169,6 +175,10 @@ type Options struct {
 	// readmit routes answering 503.
 	Nodes NodeGate
 
+	// Capacity drives a stream's byte ceiling. Nil leaves the maintenance
+	// routes answering 503.
+	Capacity capacityRunner
+
 	// Backup copies this node's durable state to a path an operator
 	// names. Nil where there is nothing to copy — a process running
 	// neither a store nor a broker — which the route reports as such.
@@ -268,6 +278,7 @@ func New(opts Options) *App {
 	a.budgets = opts.Budgets
 	a.backup = opts.Backup
 	a.retention, a.nodes = opts.Retention, opts.Nodes
+	a.capacity = opts.Capacity
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", http.HandlerFunc(a.serveHealth))
@@ -289,6 +300,11 @@ func New(opts Options) *App {
 	// writing and letting it write again are not reads, whatever the
 	// anonymous-read posture allows. See retention.go.
 	a.mountRetention(mux)
+	// The capacity window's own control surface. It is the one thing a
+	// maintenance-mode node serves that a publishing one does not need,
+	// and it is why the verb can run at all on a topology whose broker
+	// binds no socket. See retention.go.
+	a.mountCapacity(mux)
 	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.stream, a.answer))
 	// The OPERATOR MCP surface: the same tracker and knowledge tools a
 	// seat holds, offered to a person's own assistant. Under its own

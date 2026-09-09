@@ -34,6 +34,7 @@ import (
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -68,6 +69,17 @@ type Engine struct {
 	setupRunner func() *setup.Runner
 	// metrics is the process's one recorder, from [Options.Metrics].
 	metrics *metrics.Recorder
+
+	// mode is what this node started for, and incarnation is this
+	// PROCESS's identity — the two facts the capacity window's handshake
+	// and its barrier are written in terms of.
+	mode        statelog.MaintenanceMode
+	incarnation string
+
+	// id is this node's stable identity, resolved once at construction.
+	// A PLACEMENT rather than a process: what registers under it must
+	// survive a restart, which is the opposite property to incarnation's.
+	id string
 
 	// startedAt is when THIS engine started, which on a split deployment
 	// is a different process on a different clock from the API's own
@@ -317,6 +329,16 @@ type Options struct {
 	Bootstrap *config.Bootstrap
 	Company   *config.Company
 
+	// Mode is what this node starts for: normal, or one of the two
+	// maintenance modes a capacity change restarts the fleet into.
+	//
+	// A RUN'S PROPERTY rather than the deployment's, so it is never read
+	// from Tier A: every node enters and leaves it three times over one
+	// change, and a file carrying it would leave a node that came back
+	// after an unrelated restart still refusing to publish, with the
+	// reason in a file nobody re-read. Empty is normal.
+	Mode statelog.MaintenanceMode
+
 	// Metrics is where this node's measurements are written.
 	//
 	// ONE RECORDER FOR THE PROCESS, built by the caller and shared with
@@ -434,6 +456,21 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		bridge = mcpbridge.Build(os.Getenv, keyMaterial(opts.Bootstrap))
 	}
 
+	// THE MODE AND THE INCARNATION, resolved once. An unset mode is
+	// normal, which is what every caller that does not know about
+	// maintenance gets; the incarnation is minted here rather than at the
+	// lease, because the capacity barrier compares it and a second mint
+	// would be a second identity for one process.
+	mode := opts.Mode
+	if mode == "" {
+		mode = statelog.ModeNormal
+	}
+	nodeIdentity, err := config.ResolveNodeID(opts.Bootstrap, nil)
+	if err != nil {
+		return nil, err
+	}
+	incarnation := config.NewIncarnation(nodeIdentity)
+
 	e := &Engine{
 		backends: backends, ownsBackends: ownsBackends,
 		onboarded: runner.NewLatch(), skills: skills.NewRegistry(),
@@ -441,6 +478,9 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		sandboxOtel: otel,
 		bridge:      bridge,
 		metrics:     opts.Metrics,
+		mode:        mode,
+		incarnation: incarnation,
+		id:          nodeIdentity,
 		startedAt:   time.Now().UTC(),
 		// Built before equip, which is what writes the company's own
 		// numbers into it, and before node.New, which hands the same
@@ -473,6 +513,20 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		return fail(err)
 	}
 	e.cipher = cipher
+
+	// THE ADMISSION HANDSHAKE, BEFORE ANY PUBLISHER — and this is the
+	// earliest point at which it can run, because it needs the
+	// coordination backend and nothing else. Everything below it starts
+	// something that writes.
+	//
+	// A NODE IN A MAINTENANCE MODE SKIPS IT AND ACKNOWLEDGES INSTEAD: it
+	// is not admitting itself to publish, it is offering the evidence the
+	// capacity barrier is established from. See maintenance_mode.go.
+	if err := e.admit(ctx, maintenanceStreams()); err != nil {
+		return fail(err)
+	}
+	e.acknowledge(ctx, maintenanceStreams())
+
 	// MIGRATED BEFORE THE SNAPSHOT, so a value set on this node while the
 	// engine was stopped is on the fleet before anything resolves it —
 	// and, once it is, so are this node's peers. See [Engine.migrateSecrets].
@@ -630,6 +684,28 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	e.watchdog.Watch("seat-host", n.Host())
 	e.node = n
 	e.dispatch = e.buildDispatcher(opts, backends)
+
+	// EVERYTHING BELOW THIS LINE PUBLISHES, and a maintenance-mode node
+	// starts none of it: the seat host and its mailboxes, every duty, the
+	// scheduler, the change feeds, the notification spine, the retention
+	// trim and the reflection pass.
+	//
+	// ONE GATE RATHER THAN A CONDITION PER LOOP. Each of these is started
+	// by its own call and a per-call check is a list somebody maintains —
+	// which is the shape that lets one publisher be forgotten and the
+	// whole exclusion be a claim. What makes this correct is that the
+	// gate is the LAST thing in the constructor: a loop added after it
+	// cannot be started by accident, because there is no code after it to
+	// add one to.
+	if !e.mode.Publishes() {
+		log.InfoContext(ctx, "maintenance_mode_started",
+			"mode", e.mode, "node", nodeID, "incarnation", e.incarnation,
+			"detail", "the broker and the coordination estate are up and no "+
+				"publisher is: no seats, no duties, no scheduler, no change "+
+				"feed and no write routes")
+		return e, nil
+	}
+
 	// LAST, because its fleet-singleton duty is claimed under the node's
 	// own incarnation.
 	if err := e.startSandboxWaiter(ctx, opts.SandboxPollInterval); err != nil {
@@ -831,6 +907,15 @@ func (e *Engine) Stop(ctx context.Context) {
 	e.stopNotifications(ctx)
 	e.stopMaintenance()
 	e.stopRetention()
+	// AFTER THE DRAIN AND AFTER EVERY LOOP, which is what the admission
+	// says: the key means "this process may be publishing", so withdrawing
+	// it while a seat was still finishing a turn would tell a coordinator
+	// the opposite of the truth.
+	if err := e.withdraw(ctx); err != nil {
+		log.WarnContext(ctx, "admission_not_withdrawn", "err", err,
+			"detail", "a capacity operation will see this node as a possible "+
+				"publisher until an operator excludes it")
+	}
 	e.stopIntegrations()
 	// AFTER the drain, which released every seat and flushed each one's
 	// memory on the way out. Stopping it before the drain would leave the

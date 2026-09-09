@@ -11,6 +11,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -237,4 +239,255 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 			"op_id":    result.OpID,
 		})
 	}
+}
+
+// capacityRunner is the slice of the engine the capacity routes need.
+//
+// Declared here, by the consumer: a route that could also reach the seat host
+// or the config surface would eventually be given a reason to.
+type capacityRunner interface {
+	Reanchor(ctx context.Context, req engine.ReanchorRequest) (uint32, error)
+	ReanchorStatus(ctx context.Context, stream string) (time.Time, uint32, error)
+	SetCapacity(ctx context.Context, req engine.CapacityRequest) (coord.MaintenanceOperation, error)
+	AbandonCapacity(ctx context.Context, stream string) (coord.MaintenanceOperation, error)
+	ExcludeParticipant(ctx context.Context, stream, node string) (coord.MaintenanceOperation, error)
+	CapacityStatus(ctx context.Context, stream string) (
+		coord.MaintenanceOperation, []coord.MaintenanceAck, []coord.Admission, bool, error)
+	Mode() statelog.MaintenanceMode
+}
+
+// mountCapacity registers the maintenance surface.
+//
+// # Why these are routes at all, on a node that starts no publisher
+//
+// The verb needs a broker and no publisher, and on the default topology the
+// embedded broker binds NO SOCKET — so a tool outside the process has no
+// address to reach it at, and a node-client command needs the node this
+// procedure requires to be stopped. Both cannot hold. What resolves it is that
+// the maintenance-mode node runs its API: these are that mode's own control
+// surface rather than the write routes the mode withholds.
+func (a *App) mountCapacity(mux *http.ServeMux) {
+	mux.Handle("POST /work/retention/capacity", http.HandlerFunc(a.serveSetCapacity))
+	mux.Handle("GET /work/retention/maintenance", http.HandlerFunc(a.serveMaintenanceStatus))
+	mux.Handle("POST /work/retention/maintenance/abandon", http.HandlerFunc(a.serveAbandon))
+	mux.Handle("POST /work/retention/maintenance/exclude", http.HandlerFunc(a.serveExclude))
+	mux.Handle("GET /work/retention/reanchor", http.HandlerFunc(a.serveReanchorStatus))
+	mux.Handle("POST /work/retention/reanchor", http.HandlerFunc(a.serveReanchor))
+}
+
+// serveReanchorStatus answers GET /work/retention/reanchor: the stream's own
+// creation instant, which is the value the confirmation has to echo.
+//
+// A SEPARATE READ, because the confirmation is meant to say "I looked at the
+// thing I am re-anchoring": a verb that printed the value and accepted it back
+// in one call would be confirming against its own output.
+func (a *App) serveReanchorStatus(w http.ResponseWriter, r *http.Request) {
+	if a.capacity == nil {
+		writeJSON(w, http.StatusServiceUnavailable,
+			map[string]string{"error": "no_state_log"})
+		return
+	}
+	stream := r.URL.Query().Get("stream")
+	if stream == "" {
+		writeJSON(w, http.StatusBadRequest,
+			map[string]string{"error": "stream_required"})
+		return
+	}
+	createdAt, generation, err := a.capacity.ReanchorStatus(r.Context(), stream)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound,
+			map[string]string{"error": "unknown_stream", "detail": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"stream": stream, "created_at": createdAt, "generation": generation,
+	})
+}
+
+// serveReanchor answers POST /work/retention/reanchor.
+func (a *App) serveReanchor(w http.ResponseWriter, r *http.Request) {
+	if a.capacity == nil {
+		writeJSON(w, http.StatusServiceUnavailable,
+			map[string]string{"error": "no_state_log"})
+		return
+	}
+	stream, confirm := r.URL.Query().Get("stream"), r.URL.Query().Get("confirm")
+	if stream == "" || confirm == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "confirm_required",
+			"detail": "echo the stream's own created_at from GET " +
+				"/work/retention/reanchor — a reanchor declares every position " +
+				"below the new generation stale, and the confirmation is what " +
+				"says you looked at the stream you are re-anchoring",
+		})
+		return
+	}
+	operator, _ := auth.OperatorFrom(r.Context())
+	gen, err := a.capacity.Reanchor(r.Context(), engine.ReanchorRequest{
+		Stream: stream, Confirm: confirm, By: operator,
+		Force: r.URL.Query().Get("force") == "true",
+	})
+	if err != nil {
+		log.Warn("api_reanchor_refused", "stream", stream, "error", err)
+		writeJSON(w, http.StatusConflict,
+			map[string]string{"error": "reanchor_refused", "detail": err.Error()})
+		return
+	}
+	log.Warn("reanchored", "operator", operator, "stream", stream, "generation", gen)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"stream": stream, "generation": gen,
+	})
+}
+
+// serveSetCapacity answers POST /work/retention/capacity.
+func (a *App) serveSetCapacity(w http.ResponseWriter, r *http.Request) {
+	if a.capacity == nil {
+		writeJSON(w, http.StatusServiceUnavailable,
+			map[string]string{"error": "no_state_log"})
+		return
+	}
+	stream := r.URL.Query().Get("stream")
+	target, err := strconv.ParseUint(r.URL.Query().Get("bytes"), 10, 64)
+	if stream == "" || err != nil || target == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "target_required",
+			"detail": "name the stream and the byte ceiling — a target is chosen " +
+				"once for the life of an operation and never changed, so there " +
+				"is no value to guess",
+		})
+		return
+	}
+	if confirm := r.URL.Query().Get("confirm"); confirm != strconv.FormatUint(target, 10) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "confirm_required",
+			"detail": "repeat the byte count in ?confirm= — this restarts the " +
+				"whole fleet three times and changes what the broker will accept",
+		})
+		return
+	}
+	operator, _ := auth.OperatorFrom(r.Context())
+	op, err := a.capacity.SetCapacity(r.Context(), engine.CapacityRequest{
+		Stream: stream, TargetMaxBytes: target, By: operator,
+		Assert: r.URL.Query().Get("assert_excluded") == "true",
+	})
+	if err != nil {
+		// THE OPERATION IS RETURNED WITH THE REFUSAL where there is one:
+		// a caller told only that something failed cannot tell an
+		// operation that never opened from one that is open and stuck,
+		// and those have opposite next steps.
+		log.Warn("api_set_capacity_refused", "stream", stream, "error", err)
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": "capacity_refused", "detail": err.Error(),
+			"operation": operationOrNil(op),
+		})
+		return
+	}
+	log.Info("capacity_requested", "operator", operator, "stream", stream,
+		"target", target, "phase", op.Phase)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"operation": operationOrNil(op), "mode": a.capacity.Mode(),
+	})
+}
+
+// serveMaintenanceStatus answers GET /work/retention/maintenance.
+func (a *App) serveMaintenanceStatus(w http.ResponseWriter, r *http.Request) {
+	if a.capacity == nil {
+		writeJSON(w, http.StatusServiceUnavailable,
+			map[string]string{"error": "no_state_log"})
+		return
+	}
+	stream := r.URL.Query().Get("stream")
+	if stream == "" {
+		writeJSON(w, http.StatusBadRequest,
+			map[string]string{"error": "stream_required"})
+		return
+	}
+	op, acks, admissions, found, err := a.capacity.CapacityStatus(r.Context(), stream)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError,
+			map[string]string{"error": "maintenance_unreadable", "detail": err.Error()})
+		return
+	}
+	body := map[string]any{
+		"stream": stream, "open": found, "mode": a.capacity.Mode(),
+		"acks": acks, "admissions": admissions,
+	}
+	if found {
+		body["operation"] = op
+		// WHAT IS MISSING, computed here rather than left to a reader:
+		// the whole question an operator runs this for is why the seal
+		// has not held, and a list of acknowledgements is that answer
+		// only if you already know the rule.
+		held, missing := statelog.SealHolds(op, acks)
+		body["sealed"] = held
+		body["blocking"] = missing
+		body["admissions_blocking"] = statelog.AdmissionBlocks(admissions, op.Excluded)
+	}
+	writeJSON(w, http.StatusOK, body)
+}
+
+// serveAbandon answers POST /work/retention/maintenance/abandon.
+func (a *App) serveAbandon(w http.ResponseWriter, r *http.Request) {
+	a.capacityGesture(w, r, "abandon", func(ctx context.Context, stream string) (
+		coord.MaintenanceOperation, error) {
+		return a.capacity.AbandonCapacity(ctx, stream)
+	})
+}
+
+// serveExclude answers POST /work/retention/maintenance/exclude.
+func (a *App) serveExclude(w http.ResponseWriter, r *http.Request) {
+	node := r.URL.Query().Get("node")
+	if node == "" || r.URL.Query().Get("confirm") != node {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "confirm_required",
+			"detail": "repeat the node id in ?confirm= — excluding a participant " +
+				"asserts that its process is stopped and holds no outstanding " +
+				"request, which is the only thing that waives its acknowledgement",
+		})
+		return
+	}
+	a.capacityGesture(w, r, "exclude", func(ctx context.Context, stream string) (
+		coord.MaintenanceOperation, error) {
+		return a.capacity.ExcludeParticipant(ctx, stream, node)
+	})
+}
+
+// capacityGesture is the shared shape of the two operator writes.
+func (a *App) capacityGesture(w http.ResponseWriter, r *http.Request, what string,
+	run func(context.Context, string) (coord.MaintenanceOperation, error)) {
+
+	if a.capacity == nil {
+		writeJSON(w, http.StatusServiceUnavailable,
+			map[string]string{"error": "no_state_log"})
+		return
+	}
+	stream := r.URL.Query().Get("stream")
+	if stream == "" {
+		writeJSON(w, http.StatusBadRequest,
+			map[string]string{"error": "stream_required"})
+		return
+	}
+	op, err := run(r.Context(), stream)
+	if err != nil {
+		log.Warn("api_capacity_gesture_refused", "gesture", what,
+			"stream", stream, "error", err)
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": "capacity_refused", "detail": err.Error(),
+			"operation": operationOrNil(op),
+		})
+		return
+	}
+	operator, _ := auth.OperatorFrom(r.Context())
+	log.Info("capacity_gesture", "operator", operator, "gesture", what, "stream", stream)
+	writeJSON(w, http.StatusOK, map[string]any{"operation": operationOrNil(op)})
+}
+
+// operationOrNil renders an operation, or nil where there is none — so a
+// reader can tell "no window" from "a window in phase opened", which are
+// different facts with different next steps.
+func operationOrNil(op coord.MaintenanceOperation) any {
+	if op.OperationID == "" {
+		return nil
+	}
+	return op
 }

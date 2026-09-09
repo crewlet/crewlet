@@ -49,9 +49,10 @@ func (f *FleetStore) Positions(ctx context.Context) ([]coord.NodePositions, erro
 
 	var out []coord.NodePositions
 	for key := range keys.Keys() {
-		// THE BUCKET HOLDS FOUR KEY CLASSES — a node's positions, a
-		// trim hold, a backup point and a domain's published floor — so
-		// the listing filters, and this filter is the load-bearing half of putting
+		// THE BUCKET HOLDS SEVEN KEY CLASSES — a node's positions, a
+		// trim hold, a backup point, a domain's published floor, a
+		// capacity operation, a node's admission and its maintenance
+		// acknowledgement — so the listing filters, and this filter is the load-bearing half of putting
 		// them together. A hold decoded as a positions row yields an
 		// EMPTY node id and a domains map of zero values, which the trim
 		// reads as a node that has applied nothing: the pin becomes a
@@ -134,7 +135,7 @@ func (f *FleetStore) Holds(ctx context.Context) ([]coord.TrimHold, error) {
 
 	var out []coord.TrimHold
 	for key := range keys.Keys() {
-		// THE BUCKET HOLDS FOUR KEY CLASSES, so the listing filters. A
+		// THE BUCKET HOLDS SEVEN KEY CLASSES, so the listing filters. A
 		// positions row decoded as a hold would answer Validate's
 		// questions with zero values and pin nothing, which is the
 		// quiet version of not reading it at all.
@@ -213,7 +214,7 @@ func (f *FleetStore) Floors(ctx context.Context) ([]coord.TrimFloor, error) {
 
 	var out []coord.TrimFloor
 	for key := range keys.Keys() {
-		// THE BUCKET HOLDS FOUR KEY CLASSES, so the listing filters —
+		// THE BUCKET HOLDS SEVEN KEY CLASSES, so the listing filters —
 		// and this one filters for the same load-bearing reason the
 		// other two do: a positions row decoded as a floor yields an
 		// empty domain and an empty `blocked_by`, which renders as a
@@ -322,4 +323,268 @@ func (f *FleetStore) ForgetBackupPoint(ctx context.Context, owner string) error 
 		return unavailable("forget a backup point", err)
 	}
 	return nil
+}
+
+// OpenMaintenance takes the exclusion, first-writer-wins.
+//
+// CREATE-ONLY, so two coordinators cannot both believe they opened one. It
+// reports what IS there when the key is taken, because the caller has to tell
+// its OWN operation from somebody else's: the id is minted once and reused
+// across create attempts, so a create that finds the key holding that id has
+// won on an earlier attempt whose answer was lost.
+func (f *FleetStore) OpenMaintenance(ctx context.Context, op coord.MaintenanceOperation) (
+	coord.MaintenanceOperation, bool, error) {
+
+	if err := op.Validate(); err != nil {
+		return coord.MaintenanceOperation{}, false, err
+	}
+	if op.EnteredAt.IsZero() {
+		op.EnteredAt = time.Now().UTC()
+	}
+	body, err := json.Marshal(op)
+	if err != nil {
+		return coord.MaintenanceOperation{}, false,
+			fmt.Errorf("coord: encode the maintenance operation on %s: %w", op.Stream, err)
+	}
+	revision, err := f.positions.Create(ctx, coord.MaintenanceKey(op.Stream), body)
+	switch {
+	case err == nil:
+		op.Revision = revision
+		return op, true, nil
+	case !lostCreateRace(err):
+		// AN UNKNOWN CREATE ESTABLISHES NOTHING. The request may never
+		// have been received and may still be outstanding, so the
+		// caller retries with the SAME id rather than concluding
+		// anything — see [coord.MaintenanceRegister].
+		return coord.MaintenanceOperation{}, false,
+			unavailable("open a maintenance window", err)
+	}
+	held, found, err := f.Maintenance(ctx, op.Stream)
+	if err != nil {
+		return coord.MaintenanceOperation{}, false, err
+	}
+	if !found {
+		// TAKEN AND GONE BETWEEN THE TWO CALLS, which is somebody
+		// else's window closing rather than this caller's opening.
+		return coord.MaintenanceOperation{}, false, nil
+	}
+	return held, false, nil
+}
+
+// Maintenance reads one stream's operation.
+func (f *FleetStore) Maintenance(ctx context.Context, stream string) (
+	coord.MaintenanceOperation, bool, error) {
+
+	entry, err := f.positions.Get(ctx, coord.MaintenanceKey(stream))
+	switch {
+	case errors.Is(err, jetstream.ErrKeyNotFound):
+		return coord.MaintenanceOperation{}, false, nil
+	case err != nil:
+		return coord.MaintenanceOperation{}, false,
+			unavailable("read the maintenance operation", err)
+	}
+	var op coord.MaintenanceOperation
+	if err := json.Unmarshal(entry.Value(), &op); err != nil {
+		// RAISED, NEVER SKIPPED, and here the direction is the worst in
+		// the estate: a record that does not decode read as "no
+		// maintenance" admits every publisher in the fleet while a
+		// resize is unresolved.
+		return coord.MaintenanceOperation{}, false, fmt.Errorf(
+			"coord: the maintenance operation on %s does not decode: reading "+
+				"this as \"no maintenance\" admits every publisher in the fleet "+
+				"while a resize is unresolved: %w", stream, err)
+	}
+	op.Revision = entry.Revision()
+	return op, true, nil
+}
+
+// UpdateMaintenance writes the operation back, conditional on the revision it
+// was read at.
+func (f *FleetStore) UpdateMaintenance(ctx context.Context, op coord.MaintenanceOperation) error {
+	if err := op.Validate(); err != nil {
+		return err
+	}
+	if op.Revision == 0 {
+		return fmt.Errorf("coord: the maintenance operation on %s was written "+
+			"with no revision: every mutation is a compare-and-set, because a "+
+			"successor resumes the same operation id and an id comparison "+
+			"checks the one quantity guaranteed not to change", op.Stream)
+	}
+	body, err := json.Marshal(op)
+	if err != nil {
+		return fmt.Errorf("coord: encode the maintenance operation on %s: %w",
+			op.Stream, err)
+	}
+	if _, err := f.positions.Update(ctx, coord.MaintenanceKey(op.Stream), body,
+		op.Revision); err != nil {
+		if lostUpdateRace(err) {
+			return fmt.Errorf("coord: the maintenance operation on %s moved "+
+				"since it was read: %w", op.Stream, coord.ErrMaintenanceMoved)
+		}
+		return unavailable("write the maintenance operation", err)
+	}
+	return nil
+}
+
+// CloseMaintenance releases the exclusion, conditional on the same revision.
+//
+// ONE WRITE. The operation IS the exclusion, so there is no second key to
+// order against and no crash-between-the-halves state to interpret.
+func (f *FleetStore) CloseMaintenance(ctx context.Context, stream, operationID string,
+	revision uint64) error {
+
+	if revision == 0 {
+		return fmt.Errorf("coord: closing the maintenance window on %s needs the "+
+			"revision it was read at — an unconditional delete commits against "+
+			"whatever the record has since become, which may be the NEXT "+
+			"operation", stream)
+	}
+	err := f.positions.Purge(ctx, coord.MaintenanceKey(stream),
+		jetstream.LastRevision(revision))
+	switch {
+	case err == nil, errors.Is(err, jetstream.ErrKeyNotFound):
+		return nil
+	case lostUpdateRace(err):
+		return fmt.Errorf("coord: the maintenance operation on %s moved since "+
+			"it was read, so this delete was refused: %w", stream, coord.ErrMaintenanceMoved)
+	}
+	return unavailable("close the maintenance window", err)
+}
+
+// PutAdmission records that a node is about to publish.
+func (f *FleetStore) PutAdmission(ctx context.Context, a coord.Admission) error {
+	if err := a.Validate(); err != nil {
+		return err
+	}
+	if a.At.IsZero() {
+		a.At = time.Now().UTC()
+	}
+	body, err := json.Marshal(a)
+	if err != nil {
+		return fmt.Errorf("coord: encode node %s's admission: %w", a.NodeID, err)
+	}
+	if _, err := f.positions.Put(ctx, coord.AdmissionKey(a.NodeID), body); err != nil {
+		return unavailable("record a node's admission", err)
+	}
+	return nil
+}
+
+// Admissions reads every node's.
+func (f *FleetStore) Admissions(ctx context.Context) ([]coord.Admission, error) {
+	var out []coord.Admission
+	err := f.eachPositionKey(ctx, "admitted", "the admissions",
+		func(key string, value []byte) error {
+			var a coord.Admission
+			if err := json.Unmarshal(value, &a); err != nil {
+				return fmt.Errorf("coord: the admission at %s does not decode: a "+
+					"coordinator reads these to establish that nothing is "+
+					"publishing, so one skipped here is a publisher it cannot "+
+					"see: %w", key, err)
+			}
+			out = append(out, a)
+			return nil
+		})
+	return out, err
+}
+
+// ForgetAdmission withdraws one, conditional on the incarnation that holds it.
+//
+// CONDITIONAL, so a coordinator's late cleanup after a crashed node cannot
+// remove the admission a NEWER process on that node has since written.
+func (f *FleetStore) ForgetAdmission(ctx context.Context, nodeID, incarnation string) error {
+	key := coord.AdmissionKey(nodeID)
+	entry, err := f.positions.Get(ctx, key)
+	switch {
+	case errors.Is(err, jetstream.ErrKeyNotFound):
+		return nil
+	case err != nil:
+		return unavailable("read a node's admission", err)
+	}
+	var held coord.Admission
+	if err := json.Unmarshal(entry.Value(), &held); err != nil {
+		return fmt.Errorf("coord: the admission at %s does not decode: %w", key, err)
+	}
+	if held.Incarnation != incarnation {
+		// A NEWER PROCESS HOLDS IT, which is not this caller's to
+		// withdraw. Silent rather than an error: the withdrawal did
+		// what it is for, which is that this incarnation's admission
+		// is gone.
+		return nil
+	}
+	if err := f.positions.Purge(ctx, key, jetstream.LastRevision(entry.Revision())); err != nil &&
+		!errors.Is(err, jetstream.ErrKeyNotFound) && !lostUpdateRace(err) {
+		return unavailable("withdraw a node's admission", err)
+	}
+	return nil
+}
+
+// PutMaintenanceAck records one participant's restart.
+func (f *FleetStore) PutMaintenanceAck(ctx context.Context, ack coord.MaintenanceAck) error {
+	if err := ack.Validate(); err != nil {
+		return err
+	}
+	if ack.At.IsZero() {
+		ack.At = time.Now().UTC()
+	}
+	body, err := json.Marshal(ack)
+	if err != nil {
+		return fmt.Errorf("coord: encode node %s's maintenance acknowledgement: %w",
+			ack.NodeID, err)
+	}
+	if _, err := f.positions.Put(ctx, coord.MaintenanceAckKey(ack.NodeID), body); err != nil {
+		return unavailable("record a maintenance acknowledgement", err)
+	}
+	return nil
+}
+
+// MaintenanceAcks reads every participant's.
+func (f *FleetStore) MaintenanceAcks(ctx context.Context) ([]coord.MaintenanceAck, error) {
+	var out []coord.MaintenanceAck
+	err := f.eachPositionKey(ctx, "maintenance-ack", "the maintenance acknowledgements",
+		func(key string, value []byte) error {
+			var ack coord.MaintenanceAck
+			if err := json.Unmarshal(value, &ack); err != nil {
+				return fmt.Errorf("coord: the maintenance acknowledgement at %s "+
+					"does not decode: the seal is established from these, so "+
+					"one skipped here holds a barrier that has already run: %w",
+					key, err)
+			}
+			out = append(out, ack)
+			return nil
+		})
+	return out, err
+}
+
+// eachPositionKey walks one key class of the positions register.
+//
+// ONE WALK for the classes added after the first three, because the filter is
+// the load-bearing half of sharing a bucket and six copies of it is six
+// chances for one to be written with the wrong prefix — a positions row
+// decoded as an admission is a publisher nobody can see.
+func (f *FleetStore) eachPositionKey(ctx context.Context, class, what string,
+	fn func(key string, value []byte) error) error {
+
+	keys, err := f.positions.ListKeys(ctx)
+	if err != nil {
+		return unavailable("list "+what, err)
+	}
+	defer func() { _ = keys.Stop() }()
+
+	for key := range keys.Keys() {
+		segments, ok := coord.DocumentSegments(key)
+		if !ok || len(segments) < 2 || segments[0] != class {
+			continue
+		}
+		entry, err := f.positions.Get(ctx, key)
+		switch {
+		case errors.Is(err, jetstream.ErrKeyNotFound):
+			continue
+		case err != nil:
+			return unavailable("read "+what, err)
+		}
+		if err := fn(key, entry.Value()); err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
 }

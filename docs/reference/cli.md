@@ -20,6 +20,10 @@ subcommand below is served by it.
 | `crewlet retention ack -stream NAME -position N` | Publish an operator backup floor, for `backup_floor: operator`. It exists because the engine cannot see a copy that has left the host |
 | `crewlet retention evict <node> -confirm <node>` | Stop a node's records applying anywhere in the fleet, so the trim can pass a floor an absent machine is pinning. Prints the watermark before and after |
 | `crewlet retention readmit <node> -confirm <node>` | The inverse commit. Can be refused when the node's own position is below the current trim floor, and the refusal prints both |
+| `crewlet retention set-capacity <stream> <bytes> -confirm <bytes>` | Change a log's byte ceiling. Runs inside a fleet-wide maintenance window and costs three restarts — `stream.max_bytes` is not a live setting |
+| `crewlet retention maintenance status\|abandon\|exclude -stream NAME` | Where that window stands, who has not acknowledged, and the two gestures that act on it |
+| `crewlet retention reanchor -stream NAME -confirm <created_at>` | Adopt a recreated stream: declare every position below the next generation comparable and safely stale |
+| `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load Tier B YAML, activate as a new `company_config` revision |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
@@ -79,7 +83,7 @@ subcommand below is served by it.
 
 ```
 crewlet run [<config.yaml>] [-company PATH | -import-company PATH] [-debug]
-            [-log-level LEVEL] [-log-format FORMAT]
+            [-log-level LEVEL] [-log-format FORMAT] [-mode MODE]
             [-roles ROLE[,ROLE...]] [-api-host HOST] [-api-port PORT]
 ```
 
@@ -117,6 +121,7 @@ the wrong document on a machine that has both. Tier B is read from the `company_
 | `-debug` | Shorthand for `-log-level debug`; wins if both are given. It only ever *raises* — to quieten a file that sets `logging.level: debug`, pass `-log-level info`. |
 | `-api-host HOST` | Bind address, overriding `api.host` |
 | `-api-port PORT` | Bind port, overriding `api.port`. `0` serves **no HTTP at all** — no dashboard, no REST, no webhook endpoint, so every integration goes deaf. That is why leaving the flag off is not the same as passing `0`. |
+| `-mode MODE` | `maintenance` or `seal`: boot for a [capacity window](../guides/retention.md#changing-a-logs-ceiling) rather than for service. Both start the broker and **no publisher** — no seats, no duties, no schedulers — and the difference is that `maintenance` may write stream configuration while `seal` may not, which is exactly what makes a `seal`-mode acknowledgement evidence. Leave it off for a node in service; a node in either mode refuses to run a company. |
 | `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all three — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. See [Running a Fleet](../guides/fleet.md). |
 
 The logging flags override the Tier A `logging:` block **only when they are actually given**: a flag carries its default whether or not anyone typed it, so applying them unconditionally would pin every node at `info` and make the file's own setting dead on arrival.
@@ -541,16 +546,20 @@ what the copy is a copy *of*, and how a restore uses it.
 ## `crewlet retention`
 
 ```
-crewlet retention status|snapshots|ack|evict|readmit [<config.yaml>] [-url URL] [-token TOKEN]
+crewlet retention status|snapshots|ack|evict|readmit|set-capacity|maintenance|reanchor|verify
+    [<config.yaml>] [-url URL] [-token TOKEN]
 ```
 
 What the state log is holding, why it is not shrinking, and the gestures that
-change it. A **group** rather than five top-level verbs, because two of them
-stop a machine writing and that should not sit at the same level as `version`.
+change it. A **group** rather than nine top-level verbs, because several of
+them stop a machine writing and that should not sit at the same level as
+`version`.
 
-Every verb talks to a running node, for `backup`'s reason: the register they
-read and write is a coordination bucket on a broker embedded in the engine,
-which binds no socket, so there is no address any other tool could be given.
+Every verb but one talks to a running node, for `backup`'s reason: the register
+they read and write is a coordination bucket on a broker embedded in the
+engine, which binds no socket, so there is no address any other tool could be
+given. The exception is `verify --restore`, which reads an artefact off disk on
+purpose — see below.
 
 ### `crewlet retention status`
 
@@ -618,6 +627,100 @@ history survives a replay. It can be refused when the node's own position is
 below the current trim floor — that node has to adopt a snapshot first — and
 the refusal prints its position beside the floor, because that inequality is
 the reason.
+
+### `crewlet retention set-capacity`
+
+```
+crewlet retention set-capacity CREWLET_TRACKER_LOG 8589934592 -confirm 8589934592
+```
+
+Changes a log's byte ceiling. `stream.max_bytes` is not a live setting: a
+resize is decided against the usage the log is at, and a publisher makes that a
+moving quantity — so this runs with the whole fleet in a maintenance mode and
+costs **three fleet-wide restarts**, two more per retry. The
+[procedure is documented once](../guides/retention.md#changing-a-logs-ceiling),
+in the retention guide; this command's help prints the five steps.
+
+`-confirm` repeats the byte count, and the target is then fixed for the life of
+the operation: a verify compares the observed ceiling against it, so a target
+that could move would make a mismatch unreadable.
+
+`-i-have-excluded-all-publishers` is required only on `stream.type: nats`.
+There the engine does not run the broker and cannot establish who else holds a
+connection to it, so the assertion is yours in your own words rather than a
+check that quietly proves nothing.
+
+Run from a node in `normal` mode it refuses outright, naming the restart. Run
+from `maintenance` it opens, baselines and applies; run from `seal` it collects
+the barrier, seals, verifies and confirms. It prints the phase it reached and
+the next gesture, never the transition table.
+
+### `crewlet retention maintenance`
+
+```
+crewlet retention maintenance status  -stream CREWLET_TRACKER_LOG
+crewlet retention maintenance exclude -stream CREWLET_TRACKER_LOG -node node-4 -confirm node-4
+crewlet retention maintenance abandon -stream CREWLET_TRACKER_LOG -confirm capacity-01J...
+```
+
+`status` is the one page an operator can see why a fleet is still excluded: the
+operation, its phase and attempt, every participant's baselined incarnation
+against what it acknowledged as, which acknowledgements are missing, any
+unresolved write attempt, and any admission still blocking activation. On a
+fleet with no window it says so — *no window* and *a window in phase `opened`*
+are different facts with different next steps.
+
+`exclude` is your assertion that a participant's **process is stopped** and
+holds no outstanding request. It is the only thing that waives an
+acknowledgement; an eviction does not, because that is about whose records
+apply and this is about whose process is running.
+
+`abandon` changes what the operation is trying to reach and never the barrier
+it must cross. From `opened` it clears outright — no request was issued. From
+anywhere else the fleet still has to restart into `seal`, because a paused
+coordinator's request is outstanding whether or not a person has read a status
+page. `-confirm` repeats the operation id from `status`.
+
+### `crewlet retention reanchor`
+
+```
+crewlet retention reanchor -stream CREWLET_TRACKER_LOG
+crewlet retention reanchor -stream CREWLET_TRACKER_LOG -confirm 2031-04-02T03:00:00Z
+```
+
+The recovery for a stream that was genuinely recreated. Run without `-confirm`
+it **prints the live stream's own `created_at` and refuses**: the confirmation
+means *I looked at the thing I am re-anchoring*, and a verb that read the value
+and fed it straight back would be confirming against its own output.
+
+It refuses while any peer is hydrated on the live stream, **naming the peer** —
+adopting that peer's snapshot recovers history a reanchor discards. `-force` is
+for the case where the peer cannot be reached.
+
+It does not recover records that were on the old stream and were never applied
+here, and the refusal says so. See
+[Re-anchoring a recreated stream](../guides/retention.md#re-anchoring-a-recreated-stream).
+
+### `crewlet retention verify --restore`
+
+```
+crewlet retention verify --restore -dir /var/backups/crewlet [-cadence 720h]
+```
+
+**The one verb here that talks to no node.** It restores the newest artefact
+under `-dir` and opens the copy — the point is to establish that the artefact
+alone is enough, and running it through a running engine would be asking the
+thing under test to test itself. It writes nothing to the live store and takes
+no lock on it, so it is safe beside a running node.
+
+It prints what the artefact holds and **exits non-zero past its cadence**,
+which defaults to 30 days. Put it in cron: a lapsed restore test that exits
+zero is a paragraph in a runbook nobody read.
+
+A directory with no manifest is **debris** rather than a partial backup — the
+manifest is written last — and an artefact naming no domain position cannot be
+verified whatever else it contains, because a restore replays from that
+sequence.
 
 See [Retention](../guides/retention.md) for the six terms, the snapshot
 repository and the join runbook.

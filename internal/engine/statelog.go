@@ -1409,3 +1409,21 @@ func (s *stateLog) positionGauges(row coord.NodePositions) {
 			applyLagOf(health, running).Seconds(), attrs)
 	}
 }
+
+// domainOf is the domain name whose log is this stream, or empty.
+//
+// A REVERSE LOOKUP over the register rather than a stored map, because the
+// register is small and fixed and a second map is a second thing to keep in
+// step with it.
+func (s *stateLog) domainOf(stream string) string {
+	if s == nil {
+		return ""
+	}
+	for _, name := range s.order {
+		if running := s.domains[name]; running != nil &&
+			running.domain.Stream().Name == stream {
+			return name
+		}
+	}
+	return ""
+}
