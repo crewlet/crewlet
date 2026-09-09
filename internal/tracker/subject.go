@@ -277,3 +277,37 @@ func ParseSubject(wire string) (Subject, bool) {
 	}
 	return Subject{Kind: ObjectKind(kind), ID: id}, true
 }
+
+// HomedInAProject reports a kind whose scope path is qualified by a project it
+// does not name itself.
+//
+// # The four, and why they are the four
+//
+// A scope path is a containment hierarchy, so an object's own path sits under
+// its container's — which is what makes a project-wide deferral cover its
+// tasks. Most kinds derive that container from their own subject: a project,
+// counter, tag set or rank order IS a container key; a sprint and an alias
+// carry the project in their id; a catalogue and a person live in a family;
+// and the three fleet-wide kinds are about the whole domain.
+//
+// These four do not. A task's subject is a uuid and its project is a mutable
+// column, and a turn's subject is the task it is about — so for both the
+// container is a fact only the writer holds. A view and a goal may live in a
+// project or at the top of the company, so their container is a choice rather
+// than a lookup.
+//
+// [KindTask] and [KindTurn] additionally REQUIRE one: there is no such thing
+// as a task outside a project, so an empty container there is a writer that
+// forgot rather than a workspace-homed object.
+func (k ObjectKind) HomedInAProject() bool {
+	switch k {
+	case KindTask, KindTurn, KindView, KindGoal:
+		return true
+	}
+	return false
+}
+
+// RequiresAProject reports a kind that cannot live at the top of the company.
+func (k ObjectKind) RequiresAProject() bool {
+	return k == KindTask || k == KindTurn
+}

@@ -2,6 +2,7 @@ package tracker_test
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -96,6 +97,62 @@ func TestTheSubjectSentinelIsOneByteOnTheWire(t *testing.T) {
 	}
 }
 
+// A SUBJECT'S CONTAINER SURVIVES THE ROUND TRIP, AND THE WRITER'S PATH IS THE
+// APPLIER'S.
+//
+// # The failure this exists to catch
+//
+// A task's scope path sits under its project's, and the project is a column on
+// the row rather than anything in the subject — so it has to travel ON THE
+// RECORD. It used to be an argument to Resolve, which meant the writer passed
+// the project and the envelope decoder, which has no row to read it from,
+// passed nothing.
+//
+// Nothing raised. The publisher probed the deferral index over t/c/ENG/o/<id>
+// while the applier filed every deferral under t/c/workspace/o/<id>, so the
+// two-clause containment probe — the one piece of SQL in this design where a
+// wrong clause is data loss rather than a wrong answer — simply never matched.
+// A writer would be told its task was clean while a record it could not decode
+// sat deferred against it, take the retry-at-zero branch, and overwrite a
+// mutation no reprocess recovers.
+//
+// So: encode, decode, resolve, and compare against the writer's own path.
+func TestAScopesContainerSurvivesTheWire(t *testing.T) {
+	t.Parallel()
+	subject := tracker.TaskSubject("b1b2b3b4-0000-4000-8000-000000000001")
+	written := tracker.ScopeSet{Subject: true, Container: "ENG"}
+
+	body, err := json.Marshal(written)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if string(body) != `"s/ENG"` {
+		t.Fatalf("a subject scope in a project encodes as %s, and the container "+
+			"is what every project-scoped probe matches on", body)
+	}
+	var read tracker.ScopeSet
+	if err := json.Unmarshal(body, &read); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !read.Subject || read.Container != "ENG" {
+		t.Fatalf("the scope decoded as %+v and was written as %+v", read, written)
+	}
+	if got, want := read.Resolve(subject).Paths, written.Resolve(subject).Paths; !slices.Equal(got, want) {
+		t.Fatalf("the applier resolves %v and the writer resolved %v — a record "+
+			"filed under one and probed for under the other is a deferral "+
+			"nobody sees", got, want)
+	}
+
+	// AND THE PROJECT IS WHAT MAKES IT A PROJECT'S. A container dropped
+	// on the wire would resolve to the workspace and still look like a
+	// path, which is exactly why the comparison above is not enough.
+	if slices.Equal(read.Resolve(subject).Paths,
+		tracker.ScopeSet{Subject: true}.Resolve(subject).Paths) {
+		t.Fatal("a task in ENG resolves to the same path as one in no project " +
+			"at all, so the container is not reaching the path")
+	}
+}
+
 // AN UNREADABLE SCOPE IS THE WHOLE DOMAIN, NEVER THE SUBJECT AND NEVER EMPTY.
 //
 // This runs on a node reading a record a newer build wrote. Assuming a V1
@@ -150,10 +207,10 @@ func TestAContainerCoversItsTasksAndSiblingsDoNot(t *testing.T) {
 	t.Parallel()
 	project := tracker.ScopeSet{Terms: []tracker.ScopeTerm{
 		{Kind: tracker.TermContainer, ID: "ENG"},
-	}}.Resolve(tracker.ProjectSubject("ENG"), "ENG")
-	one := tracker.ScopeSet{Subject: true}.Resolve(tracker.TaskSubject("t-1"), "ENG")
-	two := tracker.ScopeSet{Subject: true}.Resolve(tracker.TaskSubject("t-2"), "ENG")
-	elsewhere := tracker.ScopeSet{Subject: true}.Resolve(tracker.TaskSubject("t-3"), "OPS")
+	}}.Resolve(tracker.ProjectSubject("ENG"))
+	one := tracker.ScopeSet{Subject: true, Container: "ENG"}.Resolve(tracker.TaskSubject("t-1"))
+	two := tracker.ScopeSet{Subject: true, Container: "ENG"}.Resolve(tracker.TaskSubject("t-2"))
+	elsewhere := tracker.ScopeSet{Subject: true, Container: "OPS"}.Resolve(tracker.TaskSubject("t-3"))
 
 	if !project.Intersects(one) {
 		t.Error("a record deferred on a project does not block a write to a task " +
@@ -174,8 +231,8 @@ func TestAContainerCoversItsTasksAndSiblingsDoNot(t *testing.T) {
 // every linearizable read wait behind every other one.
 func TestABarrierIntersectsNothing(t *testing.T) {
 	t.Parallel()
-	barrier := tracker.ScopeSet{Subject: true}.Resolve(tracker.BarrierSubject(), "")
-	task := tracker.ScopeSet{Subject: true}.Resolve(tracker.TaskSubject("t-1"), "ENG")
+	barrier := tracker.ScopeSet{Subject: true}.Resolve(tracker.BarrierSubject())
+	task := tracker.ScopeSet{Subject: true, Container: "ENG"}.Resolve(tracker.TaskSubject("t-1"))
 	if barrier.Intersects(task) {
 		t.Fatal("a barrier's scope intersects a task's")
 	}
@@ -192,11 +249,11 @@ func TestABarrierIntersectsNothing(t *testing.T) {
 // deferred gate is the one failure with no inverse.
 func TestAGateCoversEverything(t *testing.T) {
 	t.Parallel()
-	gate := tracker.ScopeSet{Subject: true}.Resolve(tracker.EvictionSubject("node-9"), "")
+	gate := tracker.ScopeSet{Subject: true}.Resolve(tracker.EvictionSubject("node-9"))
 	for _, other := range []statelog.ScopeSet{
-		tracker.ScopeSet{Subject: true}.Resolve(tracker.TaskSubject("t-1"), "ENG"),
-		tracker.ScopeSet{Subject: true}.Resolve(tracker.ProjectSubject("OPS"), "OPS"),
-		tracker.ScopeSet{Subject: true}.Resolve(tracker.PersonSubject("ana"), ""),
+		tracker.ScopeSet{Subject: true, Container: "ENG"}.Resolve(tracker.TaskSubject("t-1")),
+		tracker.ScopeSet{Subject: true, Container: "OPS"}.Resolve(tracker.ProjectSubject("OPS")),
+		tracker.ScopeSet{Subject: true}.Resolve(tracker.PersonSubject("ana")),
 	} {
 		if !gate.Intersects(other) {
 			t.Errorf("an eviction's scope does not cover %v", other.Paths)
@@ -276,7 +333,7 @@ func TestEncodeRefusesARecordThatCannotBeApplied(t *testing.T) {
 			Subject:   tracker.TaskSubject("t-1"),
 			Op:        tracker.OpPatch,
 			CreatedAt: time.Unix(1_700_000_000, 0).UTC(),
-			Scope:     tracker.ScopeSet{Subject: true},
+			Scope:     tracker.ScopeSet{Subject: true, Container: "ENG"},
 		},
 	}
 	if _, err := base.Encode(); err != nil {

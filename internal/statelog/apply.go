@@ -518,7 +518,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 			// always-decodable envelope, because it happens
 			// whatever the record then does.
 			if arbitrates(r.spec.ArbitratedKinds, rec.Subject.Kind) {
-				if err := r.tables.advanceAnchor(ctx, tx, r.subjectOf(rec.Subject), rec.Position); err != nil {
+				if err := r.tables.advanceAnchor(ctx, tx, r.tables.subjectOf(rec.Subject), rec.Position); err != nil {
 					return err
 				}
 			}
@@ -654,7 +654,7 @@ func (r *Runner) applyOne(ctx context.Context, tx *sql.Tx, rec Record, opts Appl
 	if err != nil {
 		return 0, false, fmt.Errorf("statelog: apply %s at %s: %w", rec.Kind, rec.Position, err)
 	}
-	if err := r.tables.writeOp(ctx, tx, rec.OpID, r.subjectOf(rec.Subject), rec.Position, opts.Now); err != nil {
+	if err := r.tables.writeOp(ctx, tx, rec.OpID, r.tables.subjectOf(rec.Subject), rec.Position, opts.Now); err != nil {
 		return 0, false, err
 	}
 	if r.metrics != nil {
@@ -743,11 +743,6 @@ func (r *Runner) stop(ctx context.Context, err error) error {
 		"domain", r.domain.Name(), "stream", r.spec.Name,
 		"position", r.Committed().String(), "error", err.Error())
 	return err
-}
-
-// subjectOf renders a subject as the wire string the anchor keys on.
-func (r *Runner) subjectOf(s Subject) string {
-	return r.spec.SubjectPrefix + "." + s.String()
 }
 
 // results counts what happened to the records one transaction consumed.

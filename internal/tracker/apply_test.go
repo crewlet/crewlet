@@ -126,7 +126,7 @@ func taskRecord(id string, op tracker.OpKind, payload any, notify *tracker.Notif
 			V: tracker.RecordVersion, OpID: id + "-" + string(op),
 			Subject: tracker.TaskSubject(id), Op: op,
 			CreatedAt: time.Unix(1_700_000_000, 0).UTC(),
-			Writer:    "node-a", Scope: tracker.ScopeSet{Subject: true},
+			Writer:    "node-a", Scope: tracker.ScopeSet{Subject: true, Container: "ENG"},
 		},
 		Mutation: body, Actor: "ana", ActorKind: tracker.AuthorHuman,
 		Notify: notify,
@@ -162,7 +162,7 @@ func TestATurnsSpendCannotBeCountedTwice(t *testing.T) {
 			V: tracker.RecordVersion, OpID: "turn-1",
 			Subject: tracker.TurnSubject("t-1"), Op: tracker.OpTurn,
 			CreatedAt: time.Unix(1_700_000_200, 0).UTC(),
-			Writer:    "node-a", Scope: tracker.ScopeSet{Subject: true},
+			Writer:    "node-a", Scope: tracker.ScopeSet{Subject: true, Container: "ENG"},
 		},
 		Mutation: mustJSON(map[string]any{
 			"task": "t-1",
@@ -204,7 +204,7 @@ func TestATurnForAnAbsentTaskStopsTheLoop(t *testing.T) {
 		RecordEnvelope: tracker.RecordEnvelope{
 			V: tracker.RecordVersion, OpID: "turn-1",
 			Subject: tracker.TurnSubject("missing"), Op: tracker.OpTurn,
-			Writer: "node-a", Scope: tracker.ScopeSet{Subject: true},
+			Writer: "node-a", Scope: tracker.ScopeSet{Subject: true, Container: "ENG"},
 		},
 		Mutation: mustJSON(map[string]any{
 			"task": "missing", "spend": map[string]int{"turns": 1},

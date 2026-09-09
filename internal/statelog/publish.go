@@ -863,6 +863,10 @@ func (p *Publisher) waitSession(ctx context.Context, req Request) error {
 
 // subjectOf renders a subject as the wire string, which is the domain's own
 // prefix plus the object's kind and id.
+//
+// The publisher keeps its own because it holds the prefix and not the table
+// helper; both are the same one line, and the ANCHOR's key comes from the
+// table helper on both sides — which is the pairing that has to agree.
 func (p *Publisher) subjectOf(s Subject) string {
 	return p.prefix + "." + s.String()
 }

@@ -87,7 +87,7 @@ func (Domain) Envelope(payload []byte) (statelog.Envelope, error) {
 		Op:      string(env.Op),
 		OpID:    env.OpID,
 		Gen:     env.Gen,
-		Scope:   env.Scope.Resolve(env.Subject, ""),
+		Scope:   env.Scope.Resolve(env.Subject),
 		Writer:  env.Writer,
 	}, nil
 }

@@ -78,7 +78,7 @@ func (r *SnapshotRows) Snapshot(ctx context.Context, subj Subject, scope ScopeSe
 		// because that is the generation the write will publish in: an
 		// anchor from a previous one is comparable and safely stale
 		// rather than an expectation.
-		anchor, err := r.tables.anchor(ctx, tx, subj.String(), decision.Envelope.Gen)
+		anchor, err := r.tables.anchor(ctx, tx, r.tables.subjectOf(subj), decision.Envelope.Gen)
 		if err != nil {
 			return err
 		}
@@ -199,17 +199,17 @@ func CheckTables(ctx context.Context, db *store.DB, d Domain) error {
 		if _, _, err := t.deferredIn(ctx, tx, rec.Scope); err != nil {
 			return fmt.Errorf("the deferral probe: %w", err)
 		}
-		if err := t.writeOp(ctx, tx, rec.OpID, rec.Subject.String(), at,
+		if err := t.writeOp(ctx, tx, rec.OpID, t.subjectOf(rec.Subject), at,
 			store.DecodeTime(0)); err != nil {
 			return fmt.Errorf("the operation ledger: %w", err)
 		}
 		if _, _, err := t.op(ctx, tx, rec.OpID); err != nil {
 			return fmt.Errorf("the operation ledger's own read: %w", err)
 		}
-		if err := t.advanceAnchor(ctx, tx, rec.Subject.String(), at); err != nil {
+		if err := t.advanceAnchor(ctx, tx, t.subjectOf(rec.Subject), at); err != nil {
 			return fmt.Errorf("the arbitration anchor: %w", err)
 		}
-		if _, err := t.anchor(ctx, tx, rec.Subject.String(), at.Generation); err != nil {
+		if _, err := t.anchor(ctx, tx, t.subjectOf(rec.Subject), at.Generation); err != nil {
 			return fmt.Errorf("the arbitration anchor's own read: %w", err)
 		}
 		return probe

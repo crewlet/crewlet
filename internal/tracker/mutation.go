@@ -269,8 +269,31 @@ type ScopeSet struct {
 	// object its subject names, and nothing else.
 	Subject bool
 
+	// Container is the project the subject lives in, and rides the
+	// sentinel.
+	//
+	// # Why the container is ON THE RECORD and not derived from the subject
+	//
+	// A subject names an object, not its home: a task's subject is its
+	// uuid, and which project it lives in is a fact about the row — one
+	// that CHANGES, because a task can move between projects. So the path
+	// a record's scope resolves to cannot be computed from the subject
+	// alone, and the only party that knows it at the moment the record is
+	// written is the writer.
+	//
+	// Leaving it out is silent rather than wrong-looking. Every task
+	// record would file its deferral under the workspace container while
+	// every project-scoped read probed its own, and the two-clause
+	// containment probe — the one piece of SQL here where a wrong clause
+	// is data loss and not a wrong answer — would simply never match.
+	//
+	// Empty is [WorkspaceContainer], which is what the objects that
+	// genuinely live at the top of the company resolve to.
+	Container string
+
 	// Terms is the enumeration, when the record touches more than its own
-	// subject.
+	// subject. A container rides the sentinel and never an enumeration:
+	// every term already states its own.
 	Terms []ScopeTerm
 }
 
@@ -279,8 +302,16 @@ const ScopeSentinel = "s"
 
 // MarshalJSON encodes the sentinel as a bare string and everything else as an
 // array, so the common case is one byte on the wire.
+//
+// A container is appended to the sentinel with the path separator — "s/ENG" —
+// which keeps the workspace case at one byte and costs a project key on the
+// records that have one. The separator cannot appear inside a container: a
+// project key is a slug, checked by [ValidSlug].
 func (s ScopeSet) MarshalJSON() ([]byte, error) {
 	if s.Subject || len(s.Terms) == 0 {
+		if s.Container != "" {
+			return json.Marshal(ScopeSentinel + statelog.ScopeSeparator + s.Container)
+		}
 		return json.Marshal(ScopeSentinel)
 	}
 	return json.Marshal(s.Terms)
@@ -295,10 +326,12 @@ func (s ScopeSet) MarshalJSON() ([]byte, error) {
 func (s *ScopeSet) UnmarshalJSON(b []byte) error {
 	var sentinel string
 	if err := json.Unmarshal(b, &sentinel); err == nil {
-		*s = ScopeSet{Subject: sentinel == ScopeSentinel}
-		if !s.Subject {
-			s.Terms = []ScopeTerm{{Kind: TermDomain}}
+		head, container, _ := strings.Cut(sentinel, statelog.ScopeSeparator)
+		if head != ScopeSentinel {
+			*s = ScopeSet{Terms: []ScopeTerm{{Kind: TermDomain}}}
+			return nil
 		}
+		*s = ScopeSet{Subject: true, Container: container}
 		return nil
 	}
 	var terms []ScopeTerm
@@ -310,15 +343,16 @@ func (s *ScopeSet) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// Resolve renders the scope as the framework's own path set, given the subject
-// the record was published to and that subject's container.
+// Resolve renders the scope as the framework's own path set.
 //
-// The container is passed IN rather than parsed out of the subject, because a
-// subject names an object and not its home: a task's subject is its uuid, and
-// which project it lives in is a fact about the row.
-func (s ScopeSet) Resolve(subject Subject, container string) statelog.ScopeSet {
+// ONE ARGUMENT, deliberately: the container used to be passed in beside the
+// subject, and a scope resolved with it on the write path and without it on
+// the decode path is two different paths for one record — the writer probing
+// the project's closure and the applier filing under the workspace's. It takes
+// the subject alone now, and the container comes from the record itself.
+func (s ScopeSet) Resolve(subject Subject) statelog.ScopeSet {
 	if s.Subject || len(s.Terms) == 0 {
-		return statelog.ScopeSet{Paths: []string{subjectPath(subject, container)}}
+		return statelog.ScopeSet{Paths: []string{subjectPath(subject, s.Container)}}
 	}
 	paths := make([]string, 0, len(s.Terms))
 	for _, t := range s.Terms {
@@ -371,7 +405,34 @@ func (s ScopeSet) Validate() error {
 				"sentinel and %d enumerated term(s): the two say different "+
 				"things about the same record", len(s.Terms))
 		}
+		if s.Container != "" {
+			// THE SEPARATOR IS WHAT THE SENTINEL ENCODING RESTS ON, and a
+			// blank segment is what the path join drops. A container
+			// carrying either decodes as a DIFFERENT container and files
+			// the record's deferral under a path no probe reaches — so
+			// both are refused where the value is accepted rather than
+			// trusted where it is split.
+			switch {
+			case strings.Contains(s.Container, statelog.ScopeSeparator):
+				return fmt.Errorf("tracker: container %q contains %q, which is "+
+					"the path separator the sentinel encoding splits on — it "+
+					"would decode as %q and file this record where no probe "+
+					"for it looks", s.Container, statelog.ScopeSeparator,
+					strings.SplitN(s.Container, statelog.ScopeSeparator, 2)[0])
+			case strings.TrimSpace(s.Container) == "":
+				return fmt.Errorf("tracker: container %q is blank, and a blank "+
+					"segment is dropped from the path — the record would "+
+					"resolve to its container's own path rather than to its "+
+					"own", s.Container)
+			}
+		}
 		return nil
+	}
+	if s.Container != "" {
+		return fmt.Errorf("tracker: a scope enumerates %d term(s) and also "+
+			"names container %q: every term states its own container, so the "+
+			"field says nothing an enumeration has not already said",
+			len(s.Terms), s.Container)
 	}
 	if len(s.Terms) == 0 {
 		return fmt.Errorf("tracker: a scope is empty — a record that touches " +
