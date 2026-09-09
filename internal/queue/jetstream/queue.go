@@ -277,7 +277,7 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 	// actually depends on it: doing it in StartServer instead would make
 	// the first member of a fresh cluster wait for a quorum that cannot
 	// exist until the peers it is blocking have started.
-	if err := embedded.awaitClusterReady(ctx); err != nil {
+	if err := embedded.awaitClusterReady(ctx, q.cfg.Replicas); err != nil {
 		q.nc.Close()
 		return nil, err
 	}
@@ -315,7 +315,24 @@ func (q *Queue) ensureStreams(ctx context.Context) error {
 // message at the end.
 func (q *Queue) createStream(ctx context.Context, config jetstream.StreamConfig) error {
 	for attempt := 0; ; attempt++ {
-		_, err := q.js.CreateOrUpdateStream(ctx, config)
+		// CREATE, NOT CreateOrUpdate, and the difference is the whole
+		// race guard above rather than a preference.
+		//
+		// CreateOrUpdate never returns [jetstream.ErrStreamNameAlreadyInUse]
+		// — it UPDATES instead — so the caller's "a peer won the race,
+		// read what it made" branch was unreachable and the losers of a
+		// simultaneous boot each rewrote a configuration they already
+		// agreed with. Measured on three engines starting together: the
+		// update request never returns, and the boot fails after its
+		// whole provisioning deadline naming a stream rather than a
+		// cluster.
+		//
+		// It is also the honest ownership rule, and [Queue.observeStream]
+		// states it: a running stream's configuration is not something a
+		// booting node writes — "one node writing a shared stream's
+		// configuration at boot is how a ceiling an operator raised gets
+		// silently lowered".
+		_, err := q.js.CreateStream(ctx, config)
 		if err == nil || !unplaceable(err) {
 			return err
 		}
@@ -461,22 +478,56 @@ func (q *Queue) createOrObserveStream(
 		return fmt.Errorf("ensure stream %s: %w", spec.name, err)
 	}
 
-	if err := q.createStream(ctx, config); err != nil {
-		if !errors.Is(err, jetstream.ErrStreamNameAlreadyInUse) {
-			return fmt.Errorf("ensure stream %s: %w", spec.name, err)
-		}
-		// A PEER WON THE RACE. Read what it created and hold it to the
-		// same comparison — the alternative is trusting a stream this
-		// node never looked at because it lost by milliseconds.
-		info, err = q.js.Stream(ctx, spec.name)
-		if err != nil {
-			return fmt.Errorf("ensure stream %s: read back after a lost "+
-				"creation race: %w", spec.name, err)
-		}
-		return q.observeStream(spec, config, info)
+	createErr := q.createStream(ctx, config)
+	if createErr == nil {
+		return nil
 	}
-	return nil
+	// A PEER MAY HAVE WON THE RACE, and it announces that in two shapes
+	// rather than one.
+	//
+	// The tidy shape is [jetstream.ErrStreamNameAlreadyInUse]: this
+	// node's create arrived after the winner's had committed.
+	//
+	// The other shape is a TIMEOUT, and it is the one a fleet booting
+	// together actually produces. Two members create the same stream in
+	// the same instant; the server commits one and holds the other while
+	// the metadata group settles, and the held request outlives the
+	// caller's deadline. The stream is there — the loser simply never
+	// heard so. Reported as a failure, that is a node refusing to boot
+	// because a peer beat it, on a cluster where everything worked.
+	//
+	// So the question is re-asked rather than assumed either way: does
+	// the stream exist now? A read-back is one round trip, it answers
+	// exactly that, and it holds whatever it finds to the same comparison
+	// a stream this node found on the first look gets. The read gets its
+	// OWN context, because the one above is the deadline that just
+	// expired.
+	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), streamReadBack)
+	defer cancel()
+	info, err = q.js.Stream(readCtx, spec.name)
+	if err != nil {
+		// THE CREATE'S ERROR IS WHAT IS REPORTED, with the read-back's
+		// beside it: "no suitable peers" or "deadline exceeded" on the
+		// create says what went wrong, and "not found" on the read
+		// only says the create really did fail.
+		return fmt.Errorf("ensure stream %s: %w (and it is not there: %w)",
+			spec.name, createErr, err)
+	}
+	q.log.Info("jetstream_stream_created_by_peer", "stream", spec.name,
+		"create_error", createErr.Error(),
+		"detail", "this node's own create did not complete and the stream "+
+			"exists, which is a peer having won the race; its configuration "+
+			"is compared here exactly as one found on the first look would be")
+	return q.observeStream(spec, config, info)
 }
+
+// streamReadBack bounds the one read that asks whether a peer won the race.
+//
+// SHORT, and deliberately not the provisioning deadline: this is an ordinary
+// metadata read against a group that has just proven it is working — it either
+// answers in a round trip or the cluster has gone away, and inheriting thirty
+// seconds would double a failing boot's time to say so.
+const streamReadBack = 5 * time.Second
 
 // observeStream compares a running stream against this node's spec and decides
 // per FIELD CLASS what the difference means. It writes nothing.
@@ -610,6 +661,36 @@ func (q *Queue) ackWait() time.Duration {
 // The queue keeps ownership: closing it is Stop's job, not the caller's.
 func (q *Queue) Conn() *nats.Conn { return q.nc }
 
+// DialOwned opens a SECOND connection to the same broker, which the caller
+// owns and closes.
+//
+// # Why a caller would want its own rather than [Queue.Conn]
+//
+// Because some subsystems close what they are given, and they are right to:
+// the state log's snapshot DONOR serves for the life of a node and shuts its
+// connection down when it stops, which is the honest lifetime for a
+// long-running server of a request/reply subject.
+//
+// Handed the queue's own connection, that close takes the ENGINE's broker
+// with it — every publish, every consumer and the coordination store, all
+// through one `nc.Close()` in a subsystem that thought it owned what it had.
+// Worse where the queue was BORROWED: a caller that lent a broker to an
+// engine gets it back closed.
+//
+// So the ownership is in the name. Callers that ride the shared connection
+// take [Queue.Conn] and must not close it; callers with their own lifetime
+// take this and must.
+func (q *Queue) DialOwned() (*nats.Conn, error) {
+	if q.embedded != nil {
+		return q.embedded.connect()
+	}
+	if q.cfg.URL == "" {
+		return nil, fmt.Errorf("jetstream: this queue has no embedded server " +
+			"and no URL, so a second connection cannot be opened")
+	}
+	return dial(q.cfg)
+}
+
 // Backend names this backend for operator display. Nothing may branch on it.
 func (q *Queue) Backend() string {
 	if q.embedded != nil {
@@ -716,7 +797,7 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 		return false, fmt.Errorf("inspect consumer %s: %w", name, getErr)
 	}
 
-	if _, err := q.js.CreateOrUpdateConsumer(ctx, stream, jetstream.ConsumerConfig{
+	if _, err := q.ensureDurableConsumer(ctx, stream, jetstream.ConsumerConfig{
 		Durable:       name,
 		FilterSubject: topic,
 		AckPolicy:     jetstream.AckExplicitPolicy,
@@ -730,6 +811,47 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 		return false, fmt.Errorf("ensure consumer %s: %w", name, err)
 	}
 	return !existed, nil
+}
+
+// ensureDurableConsumer creates a durable consumer, tolerating a PEER having
+// created the same one at the same moment.
+//
+// # Why a durable consumer needs this and an ephemeral one does not
+//
+// A durable consumer is named, and every node of a fleet ensures the SAME
+// names at boot: a seat's mailbox, the notification feed, a change feed. So on
+// a fleet starting together N members issue one call for one name, and the
+// server commits one while holding the rest — and a held request outlives the
+// caller's deadline. The consumer is there; the losers never heard so, and a
+// node that reported that as a failure would refuse to boot because a peer
+// beat it.
+//
+// An ephemeral consumer is nobody else's, so none of this applies and the
+// callers that make one do not come through here.
+//
+// A read-back is one round trip and answers exactly the question — does the
+// consumer exist now — so the timeout is re-asked rather than assumed either
+// way. It gets its OWN context, because the caller's may be the deadline that
+// just expired.
+func (q *Queue) ensureDurableConsumer(ctx context.Context, stream string,
+	cfg jetstream.ConsumerConfig) (jetstream.Consumer, error) {
+
+	if cfg.Durable == "" {
+		return nil, fmt.Errorf("jetstream: ensureDurableConsumer on %s was "+
+			"given no durable name — an ephemeral consumer is this caller's "+
+			"alone and races nobody, so it does not belong here", stream)
+	}
+	cons, createErr := q.js.CreateConsumer(ctx, stream, cfg)
+	if createErr == nil {
+		return cons, nil
+	}
+	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), streamReadBack)
+	defer cancel()
+	cons, err := q.js.Consumer(readCtx, stream, cfg.Durable)
+	if err != nil {
+		return nil, fmt.Errorf("%w (and it is not there: %w)", createErr, err)
+	}
+	return cons, nil
 }
 
 // DeleteSubscription destroys the durable consumer and the mail it retains.

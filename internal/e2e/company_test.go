@@ -83,6 +83,12 @@ type node struct {
 	app    *api.App
 	server *httptest.Server
 	model  *scriptedModel
+
+	// snapshotDir is where this node writes its own snapshots of the
+	// replicated estate. Held because a case that asserts a node TOOK one
+	// has to read the directory, and deriving it a second time from the
+	// bootstrap would be a second place to decide where they go.
+	snapshotDir string
 }
 
 // start stands one up.

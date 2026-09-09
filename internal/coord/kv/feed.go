@@ -3,6 +3,7 @@ package kv
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -43,7 +44,16 @@ func (f *FleetStore) FeedDocuments(ctx context.Context, family coord.Family, cla
 	stream := "KV_" + bucket
 	filter := "$KV." + bucket + "." + class + ".>"
 
-	consumer, err := f.js.CreateOrUpdateConsumer(ctx, stream, jetstream.ConsumerConfig{
+	// CREATE-ELSE-OBSERVE rather than create-or-update, which is the
+	// fleet's own shape and the reason [openBucket] takes it too: every
+	// node opens this same durable name at boot, so N members race one
+	// create — the server commits one and holds the rest, and a held
+	// request outlives the caller's deadline. See [ensureFeedConsumer].
+	//
+	// It is also the only shape that keeps DeliverNew meaning what the
+	// comment below says: an update ignores it, so a later node adopting
+	// the fleet's position must READ rather than write.
+	consumer, err := ensureFeedConsumer(ctx, f.js, stream, jetstream.ConsumerConfig{
 		Durable:       group,
 		FilterSubject: filter,
 		AckPolicy:     jetstream.AckExplicitPolicy,
@@ -264,3 +274,37 @@ func (f *kvFeed) stop() {
 }
 
 var _ coord.Feeder = (*FleetStore)(nil)
+
+// ensureFeedConsumer creates the fleet's durable feed consumer, tolerating a
+// PEER having created the same name at the same instant.
+//
+// The two shapes a lost race takes are [jetstream.ErrConsumerExists] and a
+// TIMEOUT — the second being what a fleet booting together actually produces,
+// since the server commits one create and holds the rest while the metadata
+// group settles. Either way the consumer is there and the loser simply never
+// heard so, and a node reporting that as a failure is one refusing to boot
+// because a peer beat it.
+//
+// The read-back gets its OWN context, because the caller's may be the deadline
+// that just expired.
+func ensureFeedConsumer(ctx context.Context, js jetstream.JetStream, stream string,
+	cfg jetstream.ConsumerConfig) (jetstream.Consumer, error) {
+
+	switch cons, err := js.Consumer(ctx, stream, cfg.Durable); {
+	case err == nil:
+		return cons, nil
+	case !errors.Is(err, jetstream.ErrConsumerNotFound):
+		return nil, err
+	}
+	cons, createErr := js.CreateConsumer(ctx, stream, cfg)
+	if createErr == nil {
+		return cons, nil
+	}
+	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bucketReadBack)
+	defer cancel()
+	cons, err := js.Consumer(readCtx, stream, cfg.Durable)
+	if err != nil {
+		return nil, fmt.Errorf("%w (and it is not there: %w)", createErr, err)
+	}
+	return cons, nil
+}

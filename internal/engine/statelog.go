@@ -4,7 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/version"
 )
 
 // This node's STATE-LOG RUNTIME: which domains it runs, and the four objects
@@ -187,6 +192,11 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 		s.domains[domain.Name()] = running
 		s.order = append(s.order, domain.Name())
 	}
+	// AFTER EVERY DOMAIN IS RUNNING. The heartbeat reports each domain's
+	// position and the snapshot gate reads each one's health, so both need
+	// the loops they describe to exist.
+	s.startPositionHeartbeat()
+	e.startSnapshots(ctx, boot, s)
 	log.InfoContext(ctx, "statelog_started", "node", nodeID, "domains", s.order)
 	return s, nil
 }
@@ -991,4 +1001,364 @@ func lagOf(h statelog.Health) uint64 {
 		return 0
 	}
 	return *h.Lag
+}
+
+// startSnapshots runs the two halves of the fleet's own recovery path: this
+// node TAKES snapshots of its replicated estate on a timer, and SERVES them to
+// a peer that asks.
+//
+// # Why both halves, and why neither is optional
+//
+// A node too far behind to replay adopts a peer's snapshot — that is
+// [Engine.joinIfBehind], and it is the recipient. A recipient with no donor is
+// a mechanism that can never complete: the join asks the fleet, nothing
+// answers, and the node comes up on the history it has for ever. Half of this
+// wired is worse than none, because the half that IS wired reports itself
+// working.
+//
+// So they start together, and they are the same node's: every member both
+// takes and serves, because there is no leader here to be the designated
+// donor and a fleet whose only donor was down would have nothing to give.
+//
+// # Both are BEST EFFORT and neither gates the boot
+//
+// A node that cannot take a snapshot still serves its company perfectly — what
+// it loses is the ability to help a peer that falls behind, which is a fleet
+// property rather than this node's. A node that cannot serve one is the same
+// fact from the other side. So a failure here is logged and the node comes up;
+// the alternative is a company that will not start because a recovery path
+// nobody is currently using could not be armed.
+func (e *Engine) startSnapshots(ctx context.Context, boot *config.Bootstrap, s *stateLog) {
+	if s == nil || boot == nil || e.backends == nil {
+		return
+	}
+	// TWO SEAMS, deliberately: the join RIDES the engine's own connection
+	// for one short request/reply exchange, and the donor gets its OWN
+	// because it closes what it is given — a server of a subject for the
+	// life of a node owns its connection, and handed the engine's it would
+	// take the whole broker down when it stopped.
+	broker, ok := e.backends.Queue.(interface {
+		Conn() *nats.Conn
+		DialOwned() (*nats.Conn, error)
+	})
+	if !ok || broker.Conn() == nil {
+		// NO BROKER CONNECTION, which is the memory twin in a test. A
+		// transfer is megabytes over request/reply rather than anything
+		// the event-queue contract carries.
+		return
+	}
+	dir := boot.Store.SnapshotDirFor()
+
+	snapshotter, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
+		Domains:       slices.Collect(maps.Values(s.registered())),
+		DB:            e.backends.Store,
+		Dir:           dir,
+		NodeID:        s.nodeID,
+		EngineVersion: version.String(),
+		Counted:       e.countedNodes,
+		Interval:      boot.Stream.TrackerRetention.SnapshotInterval(),
+		Logger:        log,
+	})
+	if err != nil {
+		log.ErrorContext(ctx, "statelog_snapshots_unavailable", "error", err.Error(),
+			"detail", "this node takes no snapshots, so it can donate nothing to "+
+				"a peer that falls below the log's floor; the fleet's other "+
+				"members still can")
+		return
+	}
+	donor, err := statelog.NewDonor(statelog.DonorDeps{
+		NodeID: s.nodeID,
+		Dial:   func(context.Context) (*nats.Conn, error) { return broker.DialOwned() },
+		Newest: func() (statelog.Manifest, bool) { return newestSnapshot(dir) },
+		Path: func(m statelog.Manifest) string {
+			return filepath.Join(dir, fmt.Sprintf("snapshot-%d.db", newestSeqOf(m)))
+		},
+		Logger: log,
+	})
+	if err != nil {
+		log.ErrorContext(ctx, "statelog_donor_unavailable", "error", err.Error(),
+			"detail", "this node answers no offer request, so a peer below the "+
+				"log's floor cannot adopt from it")
+		return
+	}
+
+	s.done.Add(2)
+	go func() {
+		defer s.done.Done()
+		// THE DONOR FIRST and for the node's whole life: a peer asks at
+		// ITS boot, which is any moment at all, so there is no window in
+		// which not answering is acceptable.
+		if err := donor.Serve(s.run); err != nil && s.run.Err() == nil {
+			log.ErrorContext(s.run, "statelog_donor_stopped", "error", err.Error(),
+				"detail", "a peer below the log's floor can no longer adopt from "+
+					"this node; the fleet's other members still answer")
+		}
+	}()
+	go func() {
+		defer s.done.Done()
+		e.snapshotLoop(s.run, snapshotter, boot.Stream.TrackerRetention.SnapshotInterval())
+	}()
+}
+
+// snapshotLoop takes one at boot and then on the interval — but a SKIP is not
+// the interval's business.
+//
+// # Why a skipped tick retries soon and a taken one waits
+//
+// [statelog.Snapshotter.Take] has five preconditions, and every one of them is
+// TRANSIENT AT BOOT: caught up on each domain, not too far behind, more than
+// one node counted in the fleet, room on the volume, nothing deferred. A node
+// coming up fails several of them for the first seconds of its life — the
+// fleet is not counted until its peers have published a position, and it is
+// not caught up until its appliers have drained.
+//
+// So a loop that only ever ticked on the configured interval would take its
+// first snapshot a DAY after the node started, and a node restarted more often
+// than that would take none at all. The fleet would then have no donor, and
+// the only symptom is a peer that falls below the floor finding nothing to
+// adopt — months later, in the one situation where it matters.
+//
+// A taken snapshot is different: the preconditions held, and the next one is a
+// question about staleness rather than about readiness. That is what the
+// operator's interval is for, and it is what waits.
+//
+// The retry is deliberately not tight. A skip is a state that clears on its
+// own in seconds to minutes, the gate itself is a few reads, and a node that
+// is genuinely unable to snapshot must not spend its life asking.
+func (e *Engine) snapshotLoop(ctx context.Context, s *statelog.Snapshotter,
+	interval time.Duration) {
+
+	// everTook is what decides how LOUD a skip is, and the distinction is
+	// the one an operator actually has: a node that has taken a snapshot
+	// and skips a tick is a node whose fleet has a donor, and a node that
+	// has never taken one is a node the fleet cannot recover from. The
+	// snapshotter reports every skip at info, which is right for the first
+	// case and much too quiet for the second.
+	var everTook bool
+	for {
+		wait := interval
+		switch _, err := s.Take(ctx); {
+		case err == nil:
+			everTook = true
+		case !isSkip(err):
+			log.WarnContext(ctx, "statelog_snapshot_failed",
+				"error", err.Error(), "ever_took", everTook,
+				"detail", "this node's newest artefact is older than the "+
+					"interval, so a peer adopting from it replays further")
+			wait = min(snapshotSkipRetry, interval)
+		case !everTook:
+			reason, _ := statelog.Skipped(err)
+			log.WarnContext(ctx, "statelog_no_snapshot_yet",
+				"reason", string(reason), "retry_in", snapshotSkipRetry,
+				"detail", "this node has never taken a snapshot, so it can "+
+					"donate nothing to a peer that falls below the log's "+
+					"floor; the preconditions clear on their own as this node "+
+					"catches up and its peers publish their positions")
+			wait = min(snapshotSkipRetry, interval)
+		default:
+			wait = min(snapshotSkipRetry, interval)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+	}
+}
+
+// isSkip reports a tick that declined rather than failed.
+func isSkip(err error) bool {
+	_, skipped := statelog.Skipped(err)
+	return skipped
+}
+
+// snapshotSkipRetry is how soon a skipped attempt is retried.
+//
+// THIRTY SECONDS, which is a boot's own settling time rather than a guess: a
+// node's peers publish their positions on the heartbeat, its appliers drain
+// what the log holds, and both are seconds on a healthy fleet. Shorter would
+// spend a wedged node's life on a gate it cannot pass; much longer would leave
+// a restarted node without an artefact for minutes, which is exactly the
+// window a rolling upgrade lives in.
+const snapshotSkipRetry = 30 * time.Second
+
+// countedNodes is how many members the fleet counts, which is what decides
+// whether there is anybody to donate to at all.
+//
+// FROM THE POSITIONS REGISTER rather than from the lease view, because that is
+// the register the trim reads: a node counted there is one whose position
+// holds the log back, and one holding the log back is exactly a node that
+// might one day need a snapshot.
+func (e *Engine) countedNodes(ctx context.Context) (int, error) {
+	if e.backends == nil || e.backends.Fleet == nil {
+		return 0, fmt.Errorf("engine: no coordination to count the fleet with")
+	}
+	rows, err := e.backends.Fleet.Positions(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return len(rows), nil
+}
+
+// newestSnapshot reads the newest complete manifest in a directory.
+//
+// THE MANIFEST IS THE CLAIM, which is [internal/backup]'s rule and holds here
+// for the same reason: the manifest is written last, so a directory entry
+// without one is the debris of a run that did not finish rather than a
+// snapshot somebody can adopt.
+func newestSnapshot(dir string) (statelog.Manifest, bool) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return statelog.Manifest{}, false
+	}
+	var newest statelog.Manifest
+	var found bool
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		m, err := statelog.ReadManifest(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		// AND THE BYTES BESIDE IT. A manifest whose artefact was rotated
+		// away describes a transfer that would fail after the recipient
+		// had already chosen it over every other offer.
+		if _, err := os.Stat(filepath.Join(dir,
+			fmt.Sprintf("snapshot-%d.db", newestSeqOf(m)))); err != nil {
+			continue
+		}
+		if !found || m.TakenAt.After(newest.TakenAt) {
+			newest, found = m, true
+		}
+	}
+	return newest, found
+}
+
+// newestSeqOf is the sequence a manifest's file name is built from — the
+// highest position it names, which is what [statelog.Snapshotter] names it
+// after. Derived rather than stored, so the two cannot disagree about which
+// file a manifest describes.
+func newestSeqOf(m statelog.Manifest) uint64 {
+	var newest uint64
+	for _, at := range m.Domains {
+		if at.Seq > newest {
+			newest = at.Seq
+		}
+	}
+	return newest
+}
+
+// startPositionHeartbeat publishes this node's row in the fleet's position
+// register, for as long as the node runs.
+//
+// # What reads it, and what an absent row costs
+//
+// The register is not telemetry. Three things read it and each one is wrong
+// without this node's row:
+//
+//   - THE TRIM takes a minimum across every counted node's position to decide
+//     what records the fleet has finished with. A node that publishes nothing
+//     is a node the trim cannot see, so the log is trimmed past records this
+//     node still needs — and the node discovers that by falling below the
+//     floor and having to adopt a snapshot.
+//   - THE WRITE FENCE reads the published floor to decide whether an
+//     expectation of zero is safe on a quiet subject. With nobody publishing,
+//     the floor is zero for ever, which is the conservative direction — but
+//     it is conservative by accident rather than by design.
+//   - THE SNAPSHOT GATE counts the register to decide whether there is
+//     anybody to donate to. An empty register reads as a fleet of one, so no
+//     node ever takes a snapshot and no node can ever donate one. That is not
+//     a hypothetical: it is what a three-node fleet did before this existed.
+//
+// # Why it is a heartbeat rather than a write per commit
+//
+// The position moves on every applied record — thousands a minute on a busy
+// company — and the register is a coordination bucket the whole fleet reads.
+// Writing it per commit would put the fleet's slowest shared store on the
+// applier's own loop. What every reader actually needs is a recent number
+// rather than a current one: the trim is conservative in the safe direction
+// with a stale row, and the gate's question changes on the scale of nodes
+// joining. So it is a timer, and the row carries its own instant so a reader
+// can say how stale it is.
+func (s *stateLog) startPositionHeartbeat() {
+	if s == nil || s.fleet == nil || len(s.order) == 0 {
+		return
+	}
+	s.done.Add(1)
+	go func() {
+		defer s.done.Done()
+		tick := time.NewTicker(PositionHeartbeat)
+		defer tick.Stop()
+		for {
+			// AT ONCE, then on the tick: a node that published nothing
+			// for its first interval is a node the trim cannot see for
+			// that interval, and a node restarted more often than the
+			// interval would never appear at all.
+			s.publishPositions(s.run)
+			select {
+			case <-s.run.Done():
+				return
+			case <-tick.C:
+			}
+		}
+	}()
+}
+
+// PositionHeartbeat is how often a node republishes its row.
+//
+// TEN SECONDS, taken from what the readers need rather than from what the
+// writer can afford. The trim runs on a horizon of days and is conservative
+// with a stale row; the snapshot gate's question — is there anybody else —
+// changes when a node joins or leaves, which an operator expects to see
+// reflected in seconds rather than minutes. Ten is well inside that and is a
+// single small write per node per interval against a bucket with no age.
+const PositionHeartbeat = 10 * time.Second
+
+// publishPositions writes one row describing every domain this node runs.
+//
+// EVERY DOMAIN IN ONE ROW, which is the register's own shape: the trim asks
+// "what has every node applied" about all of them at once, and a row per
+// domain would be N writes saying one thing.
+//
+// A FAILURE IS LOGGED AND THE LOOP CONTINUES. The row is a recent number
+// rather than a current one by construction, so one missed interval costs
+// nothing a reader can notice — and a node that stopped its heartbeat because
+// coordination blinked would then be invisible to the trim, which is the
+// failure this whole loop exists to prevent.
+func (s *stateLog) publishPositions(ctx context.Context) {
+	row := coord.NodePositions{
+		NodeID:        s.nodeID,
+		At:            time.Now().UTC(),
+		EngineVersion: version.String(),
+		Domains:       make(map[string]coord.DomainPosition, len(s.order)),
+	}
+	for _, name := range s.order {
+		running := s.domains[name]
+		at := running.runner.Committed()
+		pos := coord.DomainPosition{
+			Seq: at.Seq, Generation: at.Generation, AppliedThrough: at.Seq,
+		}
+		// APPLIED_THROUGH IS LOWER WHEN SOMETHING IS DEFERRED, and the
+		// two numbers are what tell a lagging node from a stalled one:
+		// a position that advances while nothing is applied is exactly
+		// what a retained record produces.
+		if deferral, held := running.runner.Deferred(); held {
+			pos.Deferred = 1
+			if deferral.Position.Seq > 0 {
+				pos.AppliedThrough = deferral.Position.Seq - 1
+			}
+		}
+		row.Domains[name] = pos
+	}
+	if err := s.fleet.PutPositions(ctx, row); err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		log.WarnContext(ctx, "statelog_position_not_published",
+			"node", s.nodeID, "error", err.Error(),
+			"detail", "the trim cannot see this node until it publishes again, "+
+				"so it may delete records this node still needs; the next "+
+				"heartbeat retries")
+	}
 }

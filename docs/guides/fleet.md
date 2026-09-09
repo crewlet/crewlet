@@ -281,6 +281,46 @@ own — every rollout produces lag. See
 [the control plane](../concepts/control-plane.md) for when lag becomes a
 posture change.
 
+## How a node that fell behind catches up
+
+The work tracker and the knowledge embeddings are derived on every node from
+an ordered log the fleet shares. A node replays that log from wherever its own
+rows say it stopped — which works only while the log still **holds** those
+records. It does not hold them for ever: once every node has applied past a
+record, a backup covers it and it is at least a week old, it is trimmed.
+
+So a node that was down long enough, or that has never run at all, can wake up
+below what the log still holds. There is nothing left for it to replay, and no
+amount of waiting produces it. What it does instead is ask the fleet for a
+**snapshot** — a copy of another member's replicated estate — verify it
+against its own requirements and a checksum, and install it wholesale before
+anything reads from it. That happens automatically, at boot, before the node
+serves anything.
+
+Three things make that work, and all three are per node:
+
+- **Every node publishes its own position**, every ten seconds. This is what
+  the trim reads to decide what the fleet has finished with — a node that
+  publishes nothing is a node the trim cannot see, and the log is then
+  trimmed past records that node still needs.
+- **Every node takes snapshots**, into `store.snapshot_dir` (by default
+  `snapshots/` beside the store file), no more often than
+  `stream.tracker_retention.snapshot_interval` (default 24h). A node declines
+  to take one while it is still catching up, while it holds a record it
+  cannot decode, while the disk is short, or while it is the only member —
+  and retries shortly rather than waiting out the interval.
+- **Every node serves them.** There is no designated donor: a fleet whose
+  only donor was down would have nothing to give.
+
+**A fleet with no successful backups eventually stops trimming**, which is
+deliberate — see [Backup and restore](backup.md). Until it trims, nothing can
+fall below the floor, and this path is never needed.
+
+Watch for **`statelog_no_snapshot_yet`**, which says a node has never
+successfully taken one and why. A fleet where every node logs it has no
+recovery path: a member that falls behind will find nothing to adopt, months
+later, in the one situation where it matters.
+
 ## See also
 
 - [Running one agent somewhere else](satellite-nodes.md) — the
