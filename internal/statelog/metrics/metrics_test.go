@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -193,5 +194,38 @@ func TestAYoungWindowIsLabelledPartial(t *testing.T) {
 	at = at.Add(24 * time.Hour)
 	if w.Partial() {
 		t.Error("a window older than its own period is still marked partial")
+	}
+}
+
+// EVERY INSTRUMENT HAS ITS OWN NAME, and nothing else asserted it.
+//
+// Two entries for one measurement is not a tidiness problem: the catalogue is
+// what the reference page and the recorder are both derived from, so a
+// duplicate ships as two rows an operator has to choose between and two series
+// that each carry half the events. It happened — `apply.tx.aborts` and
+// `apply.tx_aborts` were one measurement under two spellings, differing only
+// in a separator — and nothing here noticed.
+func TestNoTwoInstrumentsShareAName(t *testing.T) {
+	t.Parallel()
+	seen := map[string]string{}
+	for _, inst := range Catalogue() {
+		if _, dup := seen[inst.Name]; dup {
+			t.Errorf("%q appears twice — one measurement under two entries is "+
+				"two series each carrying half the events", inst.Name)
+		}
+		seen[inst.Name] = inst.Shows
+	}
+
+	// AND NO TWO NAMES DIFFER ONLY IN A SEPARATOR, which is how the
+	// duplicate above got in: `a.b.c` and `a.b_c` are one name to a reader
+	// and two to every collector.
+	flat := map[string]string{}
+	for name := range seen {
+		key := strings.ReplaceAll(name, "_", ".")
+		if first, dup := flat[key]; dup {
+			t.Errorf("%q and %q differ only in a separator — one of them is a "+
+				"second spelling of the other", first, name)
+		}
+		flat[key] = name
 	}
 }
