@@ -388,6 +388,16 @@ type Envelope struct {
 	// Kind is the record kind within the domain.
 	Kind string
 
+	// Op is the operation within that kind, for the one question a kind
+	// cannot answer: whether this record INSTALLS A GATE.
+	//
+	// A domain's gates are not always a kind of their own — this tree's
+	// purge is an ordinary task subject with a destructive operation on it
+	// — and the gate question has to be answerable by a node that cannot
+	// decode the payload. The framework never interprets this field; it
+	// carries it back to [Domain.InstallsGate], which is the only reader.
+	Op string
+
 	// Subject is the object this record arbitrates over.
 	Subject Subject
 
