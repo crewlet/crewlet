@@ -45,7 +45,11 @@ func page(t *testing.T, db *store.DB, id, container, title, body string, version
 func indexAll(t *testing.T, x *search.Indexer) {
 	t.Helper()
 	quiet := 0
-	for range 100 {
+	// Bounded only so a broken sweep fails rather than hangs. One sweep
+	// carries [search.IndexBatch] documents, so the ceiling has to clear
+	// the largest fixture in this package with room for the orphan and
+	// stale walks that share the tick.
+	for range 500 {
 		worked, err := x.Sweep(t.Context())
 		if err != nil {
 			t.Fatalf("index sweep: %v", err)

@@ -76,9 +76,13 @@ func (a Applier) embed(ctx context.Context, tx *sql.Tx, vec VectorRecord, at sta
 	container := vec.Container
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO kb_vectors
-			(source, source_id, container, model, dim, source_rev, text_sha,
-			 embedding, embedded_at, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			(source, source_id, container, search_shard, model, dim,
+			 source_rev, text_sha, embedding, embedded_at, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		-- THE SHARD IS ABSENT FROM THE UPDATE on purpose: it is a pure
+		-- function of the two conflict columns, so an existing row's
+		-- bucket cannot change. See [Indexer.upsertOne] for what
+		-- re-stamping it would cost the one time it did anything.
 		ON CONFLICT (source, source_id) DO UPDATE SET
 			container   = excluded.container,
 			model       = excluded.model,
@@ -89,7 +93,8 @@ func (a Applier) embed(ctx context.Context, tx *sql.Tx, vec VectorRecord, at sta
 			embedded_at = excluded.embedded_at,
 			version     = excluded.version
 		WHERE excluded.version > kb_vectors.version`,
-		string(vec.Subject.Source), vec.Subject.ID, container, vec.Model, vec.Dim,
+		string(vec.Subject.Source), vec.Subject.ID, container,
+		ShardOf(string(vec.Subject.Source), vec.Subject.ID), vec.Model, vec.Dim,
 		int64(vec.SourceRev), vec.TextSHA, vec.Embedding,
 		store.EncodeTime(vec.CreatedAt), version)
 	if err != nil {
@@ -113,14 +118,19 @@ func (a Applier) embed(ctx context.Context, tx *sql.Tx, vec VectorRecord, at sta
 	// second stream, no second cursor and no coverage number of its own —
 	// which is the entire reason the first stage costs nothing to maintain.
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO kb_vectors_bin (source, source_id, container, model, dim, bits)
-		VALUES (?, ?, ?, ?, ?, vector1bit(?))
+		INSERT INTO kb_vectors_bin
+			(source, source_id, container, search_shard, model, dim, bits)
+		VALUES (?, ?, ?, ?, ?, ?, vector1bit(?))
 		ON CONFLICT (source, source_id) DO UPDATE SET
-			container = excluded.container,
-			model     = excluded.model,
-			dim       = excluded.dim,
-			bits      = excluded.bits`,
-		string(vec.Subject.Source), vec.Subject.ID, container, vec.Model,
+			container    = excluded.container,
+			model        = excluded.model,
+			dim          = excluded.dim,
+			bits         = excluded.bits`,
+		string(vec.Subject.Source), vec.Subject.ID, container,
+		// THE SAME CALL, in the same transaction as the row above. Two
+		// shards for one document is a document the candidate scan finds
+		// in one bucket and the rerank looks for in another.
+		ShardOf(string(vec.Subject.Source), vec.Subject.ID), vec.Model,
 		vec.Dim, vec.Embedding); err != nil {
 		return 0, fmt.Errorf("search: write the sign code for %s at %s: %w",
 			vec.Subject, at, err)

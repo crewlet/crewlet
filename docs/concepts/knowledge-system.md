@@ -141,6 +141,37 @@ search filters on the *pair* — so documents still on the old model are not
 ranked badly, they are simply not in the candidate pool. `crewlet search eval`
 names every space it finds, which is how you see a refill in progress.
 
+### Every document carries a bucket
+
+Both halves of the native backend stamp each document with a **search shard** —
+a stable hash of its own identity into 64 fixed buckets, written beside the row
+by the same function in both estates.
+
+It is unrelated to everything else the engine partitions on. Not a stream, not a
+project, not a container, not a log position, not the node holding the row. That
+independence is the point:
+
+- **A source that moves keeps its bucket.** Bucketing on the filed project would
+  re-bucket every task a re-file touches, and a search over the old bucket would
+  miss it — silently, because a result set that is one document short looks
+  exactly like a corpus that is one document short.
+- **The division follows the corpus, not the company's shape.** Bucketing on a
+  project puts the busiest project in one bucket.
+- **A document with no embedding is still in a bucket**, because the bucket is a
+  function of the id rather than of anything derived from it.
+
+**Every search still reads every bucket.** There is no routing plan and nothing
+computes one; a node holds the whole corpus and takes all 64 buckets, which is
+exactly what it did before the column existed. What the column buys today is
+that a scan's cost is measurable per *bucket range* rather than per corpus held
+— which is the measurement any future division would have to be decided from.
+
+The count is fixed for the life of a deployment and is deliberately not
+configurable. Changing it re-buckets every document, which costs a full index
+rebuild rather than a rebalance — a knob that can be turned exactly once, at the
+price of the whole index, is one that gets turned by somebody who did not know
+the price.
+
 ### Confluence: no local copy at all
 
 Shared knowledge is read straight from the backend on demand, so there is no sync worker to run, no index to keep fresh, and no staleness window. It authenticates as the agent's own user, which is what makes the backend's own permissions the ones that apply.
