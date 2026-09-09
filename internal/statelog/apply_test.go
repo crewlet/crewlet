@@ -890,3 +890,47 @@ func TestAFailedApplyLeavesNothingBehind(t *testing.T) {
 			"back", len(h.fetch.ackedAll()))
 	}
 }
+
+// APPLY IS STRICTLY BY SEQUENCE ACROSS TRANSACTION BOUNDARIES.
+//
+// The budget splits a batch at a RECORD boundary and the next transaction
+// resumes at the next sequence with no re-sorting — which is what makes "two
+// nodes at one checkpoint hold the same rows" a statement about the log's
+// order rather than about how either node happened to batch it.
+func TestApplyIsStrictlyBySequenceAcrossTransactionBoundaries(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	// Each record costs a third of the row budget, so ten records cannot
+	// fit in fewer than three transactions.
+	h.applier.rowsPer = statelog.ApplyTxRowBudget/3 + 1
+	const records = 10
+	for seq := uint64(1); seq <= records; seq++ {
+		h.fetch.offer(seq, env(seq, "edit", fmt.Sprintf("o%d", seq), fmt.Sprintf("op-%d", seq), 1))
+	}
+	if err := h.run(records); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	seen := h.applier.seen()
+	if len(seen) != records {
+		t.Fatalf("the applier saw %d record(s), want %d", len(seen), records)
+	}
+	for i := range seen {
+		if seen[i].Seq != uint64(i+1) {
+			t.Fatalf("the applier saw %v — records apply in strictly increasing "+
+				"position, contiguously, and a transaction boundary is not a "+
+				"place the order may change", seen)
+		}
+	}
+	// AND IT REALLY DID SPLIT. A case that fitted everything in one
+	// transaction asserts nothing about a boundary.
+	h.applier.mu.Lock()
+	commits := h.applier.commits
+	h.applier.mu.Unlock()
+	if commits < 3 {
+		t.Fatalf("%d transaction(s) for %d records at %d rows each against a "+
+			"budget of %d — the split never happened, so this case proved "+
+			"nothing about a boundary",
+			commits, records, h.applier.rowsPer, statelog.ApplyTxRowBudget)
+	}
+}
