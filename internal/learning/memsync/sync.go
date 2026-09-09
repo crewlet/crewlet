@@ -12,6 +12,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -137,6 +138,17 @@ func (s *Syncer) Hydrate(ctx context.Context, handle string) (int, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, hydrateWait)
 	defer cancel()
+
+	// CONTRACT 1 FIRST, before a single row is read.
+	//
+	// A recreated changelog is EMPTY, so every check below reads it as a
+	// seat with nothing to carry and reports success. That is not a
+	// degraded hydration — it is every seat on this node silently losing
+	// its diary and its episodes, with a `memory_hydrated` line saying
+	// zero rows and nothing anywhere saying why.
+	if err := s.checkIdentity(ctx); err != nil {
+		return 0, err
+	}
 
 	// An EPHEMERAL consumer over this seat's subjects, from the start of
 	// the stream. Ephemeral because this is a one-shot read of a keyed
@@ -273,5 +285,99 @@ func (s *Syncer) Forget(handle string) {
 		if strings.HasPrefix(key, handle+"\x00") {
 			delete(s.marks, key)
 		}
+	}
+}
+
+// THE TWO CONTRACTS THIS PACKAGE DECLARES, and what each buys.
+//
+// # ReplayCompacted, declared rather than implemented privately
+//
+// The memory changelog is a compacted stream: one message retained per
+// subject, so a replay from the start is the CURRENT picture rather than a
+// history. Every rule in [Syncer.Hydrate] follows from that — the consumer is
+// ephemeral because the next hydration wants the whole picture again, the
+// upsert is idempotent because a redelivery is the same row, and deletes
+// deliberately do not travel because a tombstone would be a second thing to
+// keep correct forever.
+//
+// It was true here before it was said. Naming the protocol is what makes the
+// difference between a package that happens to work under compaction and one
+// that has DECLARED the shape it depends on — and the difference shows the
+// first time somebody changes the stream's retention.
+//
+// # Stream identity, which it did not have at all
+//
+// See [statelog.IdentityOf]. A compacted stream has no checkpoint and no
+// generation to answer a recreation with, so its only honest answer is to
+// refuse the work that depended on it — which for this package means refusing
+// the seat rather than admitting one with an empty memory.
+
+// ReplayProtocol is the contract this package's stream is read under.
+//
+// DECLARED, so a change to the changelog's retention has something to
+// contradict.
+func (s *Syncer) ReplayProtocol() statelog.ReplayProtocol { return statelog.ReplayCompacted }
+
+// checkIdentity refuses a hydration from a changelog that is not the one this
+// node last saw.
+//
+// # Why it refuses rather than repairs
+//
+// There is nothing to repair. A recreated changelog holds nothing, and what
+// this node needs is on the stream that is gone — so the choices are to admit
+// the seat with an empty memory or to refuse it, and only one of those is
+// visible. A seat admitted empty answers "I have never spoken to you before"
+// to somebody it has worked with for months, and nothing anywhere says why.
+//
+// # And why an unreadable instant refuses too
+//
+// UNKNOWN IS NOT SAME. Reading a broker that would not answer as "the stream I
+// know" resumes against a stream this node cannot identify, which is the whole
+// failure this guard is about. It costs a delayed seat on a broker having a
+// bad minute, which the caller retries.
+func (s *Syncer) checkIdentity(ctx context.Context) error {
+	if s == nil || s.js == nil || s.db == nil {
+		return nil
+	}
+	info, err := s.js.Stream(ctx, topics.MemoryStream)
+	if err != nil {
+		return fmt.Errorf("memsync: read the memory changelog's identity: %w — "+
+			"a seat is not admitted from a stream this node cannot identify, "+
+			"because a recreated one is EMPTY and would hydrate every seat to "+
+			"nothing while reporting success", err)
+	}
+	created := info.CachedInfo().Created.UTC()
+
+	recorded, known, err := statelog.RecordedIdentity(ctx, s.db, topics.MemoryStream)
+	if err != nil {
+		return err
+	}
+	switch state := statelog.IdentityOf(recorded, created, known); state {
+	case statelog.StreamSame:
+		return nil
+	case statelog.StreamFirstSight:
+		// A FRESH NODE, a fresh company, or the first boot after this
+		// guard shipped. Recorded rather than refused: refusing here
+		// would make every first boot an outage.
+		return statelog.RecordIdentity(ctx, s.db, topics.MemoryStream,
+			created, time.Now().UTC())
+	case statelog.StreamUnknown:
+		return fmt.Errorf("memsync: the memory changelog reports no creation "+
+			"instant, so this node cannot tell it from a recreated one: %w",
+			statelog.ErrStreamRecreated)
+	default:
+		log.ErrorContext(ctx, "memory_changelog_recreated",
+			"stream", topics.MemoryStream,
+			"recorded_created_at", recorded, "stream_created_at", created,
+			"detail", "this node refuses to hydrate a seat's memory from a "+
+				"changelog it has not seen before: a recreated stream is EMPTY, "+
+				"so hydrating would report success and give every seat on this "+
+				"node a blank diary. Nothing here can recover what was on the "+
+				"old stream; an operator who intends the new one clears this "+
+				"node's stream_identity row")
+		return fmt.Errorf("memsync: the memory changelog was created at %s and "+
+			"this node last saw one created at %s: %w",
+			created.Format(time.RFC3339), recorded.Format(time.RFC3339),
+			statelog.ErrStreamRecreated)
 	}
 }
