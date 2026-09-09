@@ -9,7 +9,9 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // probe answers a sequence's stored instant from a table, and reports which
@@ -359,5 +361,88 @@ func TestABackupThatDoesNotCoverALogIsNotABackupAtZero(t *testing.T) {
 	if have {
 		t.Fatalf("a backup covering another log answered (%d, true) for the "+
 			"vectors — an absent term must block rather than permit", seq)
+	}
+}
+
+// THE SEARCH ALARMS' INPUTS ARE ACTUALLY FED.
+//
+// `search_scoped`, `search_degraded` and `search_slow` are each a property of
+// the answers this node gave, and the alarm table can only read them off a
+// [statelog.Reading]. Nothing recorded them for the life of the alarm table:
+// the rows existed, the conditions were right, and all three were permanently
+// silent — which is indistinguishable from a node with nothing wrong.
+func TestTheSearchAlarmsReadWhatTheAnswersActuallyCovered(t *testing.T) {
+	t.Parallel()
+	recorder, err := metrics.New()
+	if err != nil {
+		t.Fatalf("recorder: %v", err)
+	}
+	e := &Engine{metrics: recorder}
+
+	// Four answers: one over part of the corpus, one without its semantic
+	// half, two complete.
+	e.reportSearch(search.Answer{BucketsAnswered: 64}, 10*time.Millisecond)
+	e.reportSearch(search.Answer{BucketsAnswered: 64}, 12*time.Millisecond)
+	e.reportSearch(search.Answer{
+		BucketsAnswered: 32, BucketsMissing: 32, Absent: []string{"node-b"},
+	}, 15*time.Millisecond)
+	e.reportSearch(search.Answer{BucketsAnswered: 64, SemanticSkipped: true},
+		11*time.Millisecond)
+
+	r := &retention{metrics: recorder}
+	var reading statelog.Reading
+	r.observed(&reading)
+
+	if got := reading.SearchScopedFraction; got != 0.25 {
+		t.Errorf("one of four answers was over part of the corpus and the "+
+			"reading says %.3f — a fraction nobody counts is an alarm that "+
+			"never fires", got)
+	}
+	if got := reading.SearchDegradedFraction; got != 0.25 {
+		t.Errorf("one of four answers ran without its semantic half and the "+
+			"reading says %.3f", got)
+	}
+	if reading.SearchP95 <= 0 {
+		t.Error("four measured searches left the p95 at zero, so `search_slow` " +
+			"has no input and cannot fire")
+	}
+
+	// AND THE ALARM TABLE ACTUALLY FIRES ON THEM, which is the half a
+	// reading alone does not prove: a field filled in and never read is
+	// the same silence with an extra step.
+	fired := map[statelog.Kind]bool{}
+	for _, alarm := range statelog.Evaluate(reading) {
+		fired[alarm.Kind] = true
+	}
+	for _, kind := range []statelog.Kind{
+		statelog.KindSearchScoped, statelog.KindSearchDegraded,
+	} {
+		if !fired[kind] {
+			t.Errorf("%s did not fire on a reading that says it should", kind)
+		}
+	}
+}
+
+// A LEXICAL-ONLY COMPANY IS NOT A DEGRADED ONE.
+//
+// A company that has configured no embeddings provider runs every search
+// without a semantic half by request. Counting those as degraded would fire
+// `search_degraded` at 100% for the life of the deployment, which is an alarm
+// nobody reads and therefore an alarm that no longer reports the real thing.
+func TestASearchWithNoSemanticHalfAskedForIsNotDegraded(t *testing.T) {
+	t.Parallel()
+	recorder, err := metrics.New()
+	if err != nil {
+		t.Fatalf("recorder: %v", err)
+	}
+	e := &Engine{metrics: recorder}
+	for range 5 {
+		e.reportSearch(search.Answer{BucketsAnswered: 64}, time.Millisecond)
+	}
+	var reading statelog.Reading
+	(&retention{metrics: recorder}).observed(&reading)
+	if reading.SearchDegradedFraction != 0 {
+		t.Fatalf("a company running lexical search by choice reports %.2f of "+
+			"its answers degraded", reading.SearchDegradedFraction)
 	}
 }

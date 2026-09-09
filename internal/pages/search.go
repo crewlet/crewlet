@@ -1,8 +1,10 @@
 package pages
 
 import (
+	"cmp"
 	"context"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
@@ -38,6 +40,13 @@ import (
 type Searcher struct {
 	index *search.Indexer
 
+	// fan is the bucket fan-out this search is answered through, and it
+	// is ALWAYS present — a single node is the same coordinator with one
+	// participant taking every bucket. One path rather than two, because
+	// a solo search and a fanned-out one that took different code would
+	// be two rankings to keep in step.
+	fan *search.FanOut
+
 	// skills names the tool-skills container, whose pages a search never
 	// returns: they are machinery, and a seat told to read one would
 	// follow it as an instruction.
@@ -54,6 +63,23 @@ type Searcher struct {
 type SearcherOptions struct {
 	Index *search.Indexer
 
+	// Node is this node's id, which is its name in the fan-out's
+	// assignment table. Empty on an embedded engine and in every test,
+	// where there is one participant and its name never travels.
+	Node string
+
+	// Peers and Roster are the fleet half of the fan-out. BOTH NIL IS THE
+	// ORDINARY DEPLOYMENT — one node, an embedded engine, every test —
+	// and it means this node takes every bucket, exactly as it did before
+	// the fan-out existed.
+	Peers  search.Peers
+	Roster func(ctx context.Context) ([]string, error)
+
+	// Report is told what every answer covered and what it cost. Nil
+	// counts nothing, which is what an embedded engine with no recorder
+	// gets.
+	Report func(search.Answer, time.Duration)
+
 	// SkillsContainer names the reserved tool-skills container, excluded
 	// from every result. A FUNCTION because the value is live config; nil,
 	// or one returning empty, excludes nothing — which is the company that
@@ -63,8 +89,27 @@ type SearcherOptions struct {
 
 // NewSearcher builds the native knowledge searcher.
 func NewSearcher(opts SearcherOptions) *Searcher {
-	return &Searcher{index: opts.Index, skills: opts.SkillsContainer}
+	s := &Searcher{index: opts.Index, skills: opts.SkillsContainer}
+	if opts.Index != nil {
+		s.fan = &search.FanOut{
+			Self:   cmp.Or(opts.Node, soloNode),
+			Local:  search.NodeScanner{Index: opts.Index},
+			Peers:  opts.Peers,
+			Roster: opts.Roster,
+			Corpus: opts.Index.Corpus,
+			Report: opts.Report,
+		}
+	}
+	return s
 }
+
+// soloNode is what a node with no id calls itself in its own assignment table.
+//
+// It never travels: a fan-out with no peers scatters nothing, and the name is
+// only ever compared against a table this same coordinator wrote. A node that
+// HAS an id passes it, because then the name is what a peer matches its own
+// row against.
+const soloNode = "self"
 
 var _ knowledge.Searcher = (*Searcher)(nil)
 
@@ -112,10 +157,10 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hi
 		return nil
 	}
 	scope := knowledge.Scope(scopeOf(q.Org))
-	hits, err := s.index.Search(ctx, search.SearchQuery{
+	answer, err := s.fan.Search(ctx, search.FanQuery{
 		Text:       q.Text,
 		Containers: scope,
-		Sources:    []string{"page"},
+		Sources:    []string{string(search.SourcePage)},
 		// OVER-FETCHED, because the exclusions below drop hits after
 		// ranking: asking for exactly the limit and then removing three
 		// skill pages would return five results where eight were
@@ -126,6 +171,24 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hi
 		log.WarnContext(ctx, "pages_search_failed", "error", err.Error(),
 			"detail", "the knowledge block degrades to empty; a turn must not "+
 				"die because an index was slow")
+		return nil
+	}
+	if answer.Partial() {
+		// LOGGED, NEVER REFUSED. The block is best effort by contract,
+		// and an answer over part of the corpus is better than none —
+		// but a short result set is indistinguishable from a short
+		// corpus, so the one place that knows says so.
+		log.WarnContext(ctx, "pages_search_scoped",
+			"buckets_answered", answer.BucketsAnswered,
+			"buckets_missing", answer.BucketsMissing,
+			"absent", strings.Join(answer.Absent, ","),
+			"detail", "the answer was complete for what was searched and "+
+				"silent about what was not")
+	}
+	hits, err := s.index.Hydrate(ctx, answer.Hits, q.Text)
+	if err != nil {
+		log.WarnContext(ctx, "pages_search_failed", "error", err.Error(),
+			"detail", "the fused answer could not be read back")
 		return nil
 	}
 

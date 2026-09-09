@@ -57,6 +57,7 @@ const (
 	StoreWalBytes                    = "crewlet.store.wal.bytes"
 	TrackerBulkApplySeconds          = "crewlet.tracker.bulk.apply_seconds"
 	TrackerBulkCalls                 = "crewlet.tracker.bulk.calls"
+	TrackerSearchAnswers             = "crewlet.tracker.search.answers"
 	TrackerSearchConcurrency         = "crewlet.tracker.search.concurrency"
 	TrackerSearchScanDuration        = "crewlet.tracker.search.scan.duration"
 	TrackerVectorCoverage            = "crewlet.tracker.vector.coverage"

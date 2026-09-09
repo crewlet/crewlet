@@ -347,3 +347,132 @@ func TestTheVectorsTwoRowsCarryOneBucket(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A LEXICAL QUERY IS NOT A DEGRADED ONE, AND A FAILED SEMANTIC SCAN IS.
+//
+// `search_degraded` is a fraction of the answers, so what counts toward it
+// decides whether the alarm reports anything. A company that has configured no
+// embeddings provider asks for one half by design; counting those would put
+// the alarm at 100% for the life of the deployment, and an alarm that is
+// always red is an alarm nobody reads.
+func TestALexicalQueryIsNotADegradedOne(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	x := search.NewIndexer(db)
+	page(t, db, "p.1", "ENG", "Doc", "the migration plan is here", 1)
+	indexAll(t, x)
+	scanner := search.NodeScanner{Index: x}
+
+	asked, err := scanner.Scan(t.Context(),
+		search.FanQuery{Text: "migration plan"}, search.Everything())
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if asked.SemanticSkipped {
+		t.Fatal("a query carrying no vector reported a skipped semantic half " +
+			"— every search a company without an embeddings provider runs " +
+			"would count as degraded, which is an alarm that is red for the " +
+			"life of the deployment")
+	}
+	if len(asked.Lexical) != 1 {
+		t.Fatalf("the lexical half returned %d hits", len(asked.Lexical))
+	}
+
+	// AND A SCAN THAT WAS MEANT TO RUN AND DID NOT *IS* A DEGRADATION.
+	// The width is wrong for every stored vector, which is what a model
+	// change or a corrupt query embedding looks like from here.
+	failed, err := scanner.Scan(t.Context(), search.FanQuery{
+		Text: "migration plan", Vector: []byte{1, 2, 3}, Model: "m", Dim: 999,
+	}, search.Everything())
+	if err != nil {
+		t.Fatalf("a failed semantic half must not fail the scan: %v", err)
+	}
+	if !failed.SemanticSkipped {
+		t.Fatal("a semantic scan that was asked for and did not run reported " +
+			"no degradation — what was lost is exactly the class the semantic " +
+			"half exists for, and nothing would say so")
+	}
+	if len(failed.Lexical) != 1 {
+		t.Fatalf("the lexical half lost its hits to the semantic half's "+
+			"failure: %d", len(failed.Lexical))
+	}
+}
+
+// THE SCAN IS BUCKET-LIMITED AND THE STATISTICS ARE GLOBAL.
+//
+// This is the sentence the whole fan-out rests on. BM25 weights a term by how
+// rare it is across the corpus and normalises a document by the corpus's
+// average length — and both of those would be a function of the SLICE if each
+// participant computed them from the buckets it scanned. A term common in the
+// corpus but rare in one node's range would be weighted as rare there, so the
+// same document would score differently depending on how the fleet happened to
+// be divided, and no merge across the slices could put it back.
+//
+// It costs nothing to hold, and that is the point: every node holds the whole
+// corpus, so the statistics come off its complete tables whatever range the
+// scan read. A design that divided STORAGE could not borrow this.
+func TestTheLexicalStatisticsAreGlobalWhateverWasScanned(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	x := search.NewIndexer(db)
+
+	// A CORPUS WITH A LOPSIDED TERM: "retention" is in almost every
+	// document, "migration" in a handful. Split by bucket, a slice's own
+	// view of how rare each is differs from the corpus's.
+	target := ""
+	for i := range 300 {
+		body := "this page is about retention and the sweep that enforces it"
+		if i%50 == 0 {
+			body = "the migration plan is here, and retention follows it"
+			if target == "" {
+				target = fmt.Sprintf("p.%03d", i)
+			}
+		}
+		page(t, db, fmt.Sprintf("p.%03d", i), "ENG",
+			fmt.Sprintf("Doc %03d", i), body, 1)
+	}
+	indexAll(t, x)
+	if target == "" {
+		t.Fatal("the fixture wrote no document holding the rare term")
+	}
+	shard := search.ShardOf("page", target)
+
+	score := func(a search.Assignment) float64 {
+		t.Helper()
+		hits, err := x.Search(t.Context(), search.SearchQuery{
+			Text: "migration retention", Limit: 500, Shards: a,
+		})
+		if err != nil {
+			t.Fatalf("search: %v", err)
+		}
+		for _, hit := range hits {
+			if hit.ID == target {
+				return hit.Score
+			}
+		}
+		t.Fatalf("%s was not returned by an assignment that contains its "+
+			"bucket %d", target, shard)
+		return 0
+	}
+
+	whole := score(search.Everything())
+	// The narrowest range that still holds the document, which is the
+	// most lopsided view of the corpus a participant can have.
+	alone := score(search.Assignment{From: shard, To: shard + 1})
+	if whole != alone {
+		t.Fatalf("%s scores %.6f when the whole corpus is scanned and %.6f "+
+			"when only its own bucket is — the statistics followed the scan, "+
+			"so a document's rank depends on how the fleet was divided and no "+
+			"merge across the slices can put it back", target, whole, alone)
+	}
+
+	// AND THE SAME OVER A HALF, because a single bucket is a special case
+	// a partial predicate might happen to get right.
+	half := score(search.Assignment{
+		From: (shard / 32) * 32, To: (shard/32)*32 + 32,
+	})
+	if whole != half {
+		t.Fatalf("%s scores %.6f over the whole corpus and %.6f over half of "+
+			"it", target, whole, half)
+	}
+}

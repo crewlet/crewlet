@@ -86,6 +86,19 @@ func Everything() Assignment { return Assignment{} }
 // Covers reports whether this assignment names a bounded range.
 func (a Assignment) Covers() bool { return a.To > a.From }
 
+// Width is how many buckets this assignment holds.
+//
+// AN UNBOUNDED ASSIGNMENT IS [SearchShards] WIDE, not zero, on the same
+// reasoning [Everything] rests on: a range that covers everything holds
+// everything, and reporting nought would make a solo node's search claim it
+// scanned none of the corpus it in fact scanned all of.
+func (a Assignment) Width() int {
+	if !a.Covers() {
+		return SearchShards
+	}
+	return a.To - a.From
+}
+
 // Contains reports whether one shard is in this assignment.
 func (a Assignment) Contains(shard int) bool {
 	if !a.Covers() {

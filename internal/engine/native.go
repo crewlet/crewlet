@@ -11,11 +11,15 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -83,6 +87,11 @@ type native struct {
 
 	// searcher answers the knowledge seam natively.
 	searcher *pages.Searcher
+
+	// stopSlices withdraws this node as an answerer for the fleet's
+	// search fan-out. Nil when there is no queue to serve on, which is
+	// every embedded engine and every test.
+	stopSlices queue.Unsubscribe
 
 	// skillNudge asks the sync worker to re-read the tool-skill
 	// container. Buffered by ONE, because the slot means "re-read" rather
@@ -220,7 +229,24 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		// key underneath it.
 		n.searcher = pages.NewSearcher(pages.SearcherOptions{
 			Index: n.indexer, SkillsContainer: e.skillsContainer,
+			Node:   nodeID,
+			Peers:  e.searchPeers(),
+			Roster: e.searchRoster,
+			Report: e.reportSearch,
 		})
+		// AND THIS NODE ANSWERS FOR ITS PEERS. Registered here rather
+		// than beside the coordinator because they are different jobs
+		// on one node: every node with an index answers, whether or not
+		// anybody on it ever searches.
+		if e.backends.Queue != nil {
+			stop, err := search.ServeSlices(runCtx, e.backends.Queue, nodeID,
+				search.NodeScanner{Index: n.indexer})
+			if err != nil {
+				cancel()
+				return fmt.Errorf("engine: serve search slices: %w", err)
+			}
+			n.stopSlices = stop
+		}
 	}
 
 	// NO PROJECTOR LOOP HERE ANY MORE. Both native backends are state-log
@@ -255,6 +281,16 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 func (e *Engine) stopNative() {
 	if e.native == nil {
 		return
+	}
+	if e.native.stopSlices != nil {
+		// FIRST, and before the context that would cancel an answerer
+		// mid-scan: a node that has decided to go away must stop
+		// claiming buckets its peers are counting on before it stops
+		// being able to scan them. Withdrawing costs a coordinator one
+		// missing assignment on its next search, where a registration
+		// that outlived the scan costs it a silent empty slice it
+		// counts as answered.
+		_ = e.native.stopSlices(context.WithoutCancel(e.native.run))
 	}
 	e.native.stop()
 	e.native.done.Wait()
@@ -1098,3 +1134,63 @@ func (e *Engine) syncNativeSkills(ctx context.Context) {
 // condition variable here would be a second thing to keep correct for a wait
 // that happens once per process.
 const hydrationPoll = 250 * time.Millisecond
+
+// searchPeers is the fleet half of the knowledge search's fan-out.
+//
+// NIL WHEN THERE IS NO QUEUE, which is a legal deployment rather than a
+// degradation: an embedded engine with no broker holds the whole corpus and
+// takes every bucket, exactly as a single node does.
+func (e *Engine) searchPeers() search.Peers {
+	if e.backends == nil || e.backends.Queue == nil {
+		return nil
+	}
+	return search.Broker{Queue: e.backends.Queue}
+}
+
+// searchRoster answers which nodes may be given a bucket range.
+//
+// FROM THE LEASE VIEW rather than from the positions register, and the two
+// differ in exactly the way that matters here: a position row is held by every
+// node the trim has to wait for, INCLUDING one that has been gone for hours,
+// while a lease expires. A dead node in the roster costs every search on this
+// node a partial answer for as long as its row survives.
+func (e *Engine) searchRoster(ctx context.Context) ([]string, error) {
+	if e.backends == nil || e.backends.Coord == nil {
+		return nil, nil
+	}
+	leases, err := e.backends.Coord.ListLive(ctx, coord.NodePrefix)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(leases))
+	for _, lease := range leases {
+		if profile, ok := placement.FromLease(lease); ok {
+			out = append(out, profile.ID)
+		}
+	}
+	return out, nil
+}
+
+// reportSearch counts what one answer covered.
+//
+// THE ONLY THING THAT MAKES THREE ALARMS ABLE TO FIRE. `search_slow`,
+// `search_degraded` and `search_scoped` are each a property of the answers a
+// node gave, and an alarm whose input nobody records is permanently silent —
+// which looks exactly like a system with nothing wrong.
+func (e *Engine) reportSearch(answer search.Answer, took time.Duration) {
+	if e.metrics == nil {
+		return
+	}
+	e.metrics.Observe(metrics.TrackerSearchScanDuration, took,
+		metrics.Attrs{"path": "interactive", "rung": "hybrid"})
+	coverage := "complete"
+	if answer.Partial() {
+		coverage = "scoped"
+	}
+	semantic := "full"
+	if answer.SemanticSkipped {
+		semantic = "skipped"
+	}
+	e.metrics.Add(metrics.TrackerSearchAnswers, 1,
+		metrics.Attrs{"coverage": coverage, "semantic": semantic})
+}

@@ -52,11 +52,11 @@ var alarmMeaning = map[Kind]string{
 	KindPrefetchSlow: "Turn-start context assembly is over its budget. Every " +
 		"turn on this node pays it before its first token.",
 	KindSearchSlow: "Interactive search is over its target. The corpus has " +
-		"outgrown one shard's index.",
+		"outgrown what one node's share of it can scan in the budget.",
 	KindSearchDegraded: "Searches are being answered without their semantic " +
 		"half — the embeddings provider or the vector domain is failing.",
 	KindSearchScoped: "Searches are being answered over part of the corpus " +
-		"because a shard was unreachable.",
+		"because a node did not answer its bucket range.",
 	KindRecallBelowFloor: "Less of the corpus has current vectors than " +
 		"semantic recall claims to cover.",
 	KindRecordsGated: "An apply gate dropped a record. A gated record is " +
