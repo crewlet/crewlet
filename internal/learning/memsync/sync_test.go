@@ -11,6 +11,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -343,5 +344,131 @@ func TestABrokerThatCannotCountPendingFailsTheHydration(t *testing.T) {
 	}
 	if got := countRows(t, newOwner, "agent_diary"); got != 0 {
 		t.Errorf("the failed hydration left %d diary rows behind", got)
+	}
+}
+
+// A RECREATED CHANGELOG IS DETECTED, and the node REFUSES the seat rather
+// than hydrating it empty.
+//
+// # The failure this is the whole guard against
+//
+// A stream that is deleted and remade restarts at sequence 1 and holds
+// nothing. Every check in Hydrate then reads it as a seat with nothing to
+// carry: the pending count is zero, the replay is skipped, and the seat is
+// admitted with a `memory_hydrated` line saying zero rows. Nothing is wrong
+// anywhere — and every seat on the node has silently lost its diary and its
+// episodes, which it reports to a colleague as never having spoken to them.
+//
+// The broker's own creation instant is the only thing that can tell the two
+// apart. A sequence cannot: a recreated stream's sequences are plausible. A
+// count cannot: an empty stream and an emptied one are the same count.
+func TestMemoryChangelogRecreationIsDetected(t *testing.T) {
+	t.Parallel()
+	conn := broker(t)
+	ctx := context.Background()
+
+	// A node that has seen the stream once and hydrated from it.
+	owner := openStore(t)
+	seedMemory(t, owner)
+	if _, err := syncerOn(t, owner, conn).Publish(ctx, seat.Handle); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	node := openStore(t)
+	if _, err := syncerOn(t, node, conn).Hydrate(ctx, seat.Handle); err != nil {
+		t.Fatalf("the first hydration failed: %v", err)
+	}
+
+	// THE STREAM IS RECREATED. Same name, same subjects, same settings —
+	// and nothing on it.
+	js, err := jetstream.New(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := js.DeleteStream(ctx, topics.MemoryStream); err != nil {
+		t.Fatalf("delete the changelog: %v", err)
+	}
+	// The creation instant has one-second resolution on the wire, so a
+	// stream remade inside the same second is indistinguishable from the
+	// one it replaced — which is a real limit of the detector and not
+	// something this case should paper over by asserting a shorter one.
+	time.Sleep(1100 * time.Millisecond)
+	if _, err := js.CreateStream(ctx, jetstream.StreamConfig{
+		Name:              topics.MemoryStream,
+		Subjects:          []string{topics.MemoryPrefix + ">"},
+		Storage:           jetstream.FileStorage,
+		Retention:         jetstream.LimitsPolicy,
+		MaxMsgsPerSubject: 1,
+	}); err != nil {
+		t.Fatalf("recreate the changelog: %v", err)
+	}
+
+	carried, err := syncerOn(t, node, conn).Hydrate(ctx, seat.Handle)
+	if !errors.Is(err, statelog.ErrStreamRecreated) {
+		t.Fatalf("hydrating from a recreated changelog carried %d rows and "+
+			"answered %v — a seat admitted from an empty stream reports "+
+			"success and has forgotten everything", carried, err)
+	}
+	if carried != 0 {
+		t.Errorf("%d rows were carried from a stream that holds none", carried)
+	}
+}
+
+// A FIRST BOOT IS NOT A RECREATION. A fresh node, a fresh company and the
+// first boot after this guard shipped all reach a stream they have no record
+// of, and refusing there would make every first boot an outage.
+func TestAStreamThisNodeHasNeverSeenIsNotARecreation(t *testing.T) {
+	t.Parallel()
+	conn := broker(t)
+	ctx := context.Background()
+
+	owner := openStore(t)
+	seedMemory(t, owner)
+	if _, err := syncerOn(t, owner, conn).Publish(ctx, seat.Handle); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	fresh := openStore(t)
+	carried, err := syncerOn(t, fresh, conn).Hydrate(ctx, seat.Handle)
+	if err != nil {
+		t.Fatalf("a node seeing the changelog for the first time was refused: %v", err)
+	}
+	if carried != len(tables) {
+		t.Fatalf("carried %d rows, want %d", carried, len(tables))
+	}
+
+	// AND THE SECOND HYDRATION IS THE SAME STREAM, which is what makes the
+	// first one a record rather than a shrug: a node that never wrote what
+	// it saw would treat every boot as a first sight and the guard would
+	// never fire at all.
+	if _, err := syncerOn(t, fresh, conn).Hydrate(ctx, seat.Handle); err != nil {
+		t.Fatalf("the second hydration was refused: %v", err)
+	}
+}
+
+// THE COMPARISON ITSELF, over the four answers it can give.
+//
+// A pure function over two instants, so every consumer reaches the same
+// verdict — and so the one answer that is neither "same" nor "recreated" is
+// reachable in a test at all.
+func TestIdentityTellsTheFourCasesApart(t *testing.T) {
+	t.Parallel()
+	early := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
+	later := early.Add(time.Hour)
+	for name, tc := range map[string]struct {
+		recorded, current time.Time
+		known             bool
+		want              statelog.StreamState
+	}{
+		"the stream this node last saw":     {early, early, true, statelog.StreamSame},
+		"a stream it has no record of":      {time.Time{}, early, false, statelog.StreamFirstSight},
+		"a record with a zero instant":      {time.Time{}, early, true, statelog.StreamFirstSight},
+		"a different stream, same name":     {early, later, true, statelog.StreamRecreated},
+		"an instant nobody could establish": {early, time.Time{}, true, statelog.StreamUnknown},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := statelog.IdentityOf(tc.recorded, tc.current, tc.known); got != tc.want {
+				t.Fatalf("IdentityOf = %s, want %s", got, tc.want)
+			}
+		})
 	}
 }
