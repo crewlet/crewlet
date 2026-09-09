@@ -15,6 +15,11 @@ subcommand below is served by it.
 | `crewlet budgets show [config]` | Print token usage per scope (`org`, `agent:<id>`), read from a running node — the counter is the fleet's, not this file's |
 | `crewlet budgets reset [config]` | Zero token usage on a running node — durable across restarts, so resetting is deliberate. `-scope` limits it to one scope, and the report names what it cleared |
 | `crewlet backup -dir PATH [config]` | Copy a running node's store **and** its stream estate into one verified directory on the *engine's* host — the only way to copy either, since the store is locked to that process and the embedded broker binds no socket. See [Backups & Restore](../guides/backup.md) |
+| `crewlet retention status [config]` | What each domain's log is holding, what the trim concluded and which of the six terms is stopping it, every node's position, and what this node costs to replace. **Exits non-zero when any alarm is active**, printing each one's measurement and remedy on stderr — the hook for your own cron |
+| `crewlet retention snapshots [config]` | The per-node snapshot inventory: what each machine holds, per domain, how old and how large — or why it holds none. The question you ask when a join fails |
+| `crewlet retention ack -stream NAME -position N` | Publish an operator backup floor, for `backup_floor: operator`. It exists because the engine cannot see a copy that has left the host |
+| `crewlet retention evict <node> -confirm <node>` | Stop a node's records applying anywhere in the fleet, so the trim can pass a floor an absent machine is pinning. Prints the watermark before and after |
+| `crewlet retention readmit <node> -confirm <node>` | The inverse commit. Can be refused when the node's own position is below the current trim floor, and the refusal prints both |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load Tier B YAML, activate as a new `company_config` revision |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
@@ -530,6 +535,92 @@ past any plausible duration for that reason.
 
 See [Backups & Restore](../guides/backup.md) for what the directory contains,
 what the copy is a copy *of*, and how a restore uses it.
+
+---
+
+## `crewlet retention`
+
+```
+crewlet retention status|snapshots|ack|evict|readmit [<config.yaml>] [-url URL] [-token TOKEN]
+```
+
+What the state log is holding, why it is not shrinking, and the gestures that
+change it. A **group** rather than five top-level verbs, because two of them
+stop a machine writing and that should not sit at the same level as `version`.
+
+Every verb talks to a running node, for `backup`'s reason: the register they
+read and write is a coordination bucket on a broker embedded in the engine,
+which binds no socket, so there is no address any other tool could be given.
+
+### `crewlet retention status`
+
+The blocking term is printed **first and in prose**, because it is the answer
+to the only question anybody runs this for:
+
+```
+Nothing is being trimmed on tracker: the newest complete backup is 3 days old
+(backup_max_age is 24h).
+```
+
+Then one row per registered domain — its stream, generation, replay protocol,
+both ends, bytes, ceiling and headroom — the six terms with their state and
+detail, one row per node per domain, and this node's own replica line.
+
+A term that does not apply to a domain prints `n/a` rather than `0`: a
+compacted domain has no wake feed, and an absent term is a different fact from
+one that permits nothing.
+
+**It exits non-zero exactly when this node has an active alarm**, on the
+report's own rule rather than a second one in the CLI — the shell script
+watching this exit code would otherwise be watching the definition nobody
+maintained. Each alarm's measurement and remedy go to **stderr**, so a cron
+capturing stdout for a dashboard still gets the reason in its own mail.
+
+`-domain <name>` narrows the log and watermark blocks to one domain.
+
+### `crewlet retention snapshots`
+
+Its own verb rather than a block of `status`, because the repository is per
+node: *which of my machines can donate, and how old is what they hold* is a
+disk question. A node with no artefact still gets a row, carrying the reason —
+`sole_node`, `lagging`, `unhydrated`, `deferred`, `insufficient_space` or
+`recent` — because the absence is the answer to "why did the join fail".
+
+### `crewlet retention ack`
+
+```
+crewlet retention ack -stream CREWLET_TRACKER_LOG -position 918100000
+```
+
+Publishes an operator backup floor. Under `backup_floor: operator` the trim
+follows this rather than the engine's own copies, because a backup is not a
+backup until it leaves the host and the engine cannot see that it has. Both
+flags are required: an acknowledgement moves the floor the trim deletes
+against, so there is no value to guess.
+
+### `crewlet retention evict` / `readmit`
+
+```
+crewlet retention evict node-4 -confirm node-4
+```
+
+An absent node pins the `applied` term for ever — its position never advances,
+so nothing above it can be deleted. That is deliberate for a node that is
+coming back; eviction is the gesture for one that is not.
+
+`-confirm` repeats the node id, the same shape the other destructive gestures
+use. The command prints the watermark before and after and the instant the
+eviction takes effect: **the node stays counted for about a minute**, so a live
+one is certain to have read its own tombstone before the trim passes it.
+
+`readmit` is the inverse commit rather than a delete, so the eviction's whole
+history survives a replay. It can be refused when the node's own position is
+below the current trim floor — that node has to adopt a snapshot first — and
+the refusal prints its position beside the floor, because that inequality is
+the reason.
+
+See [Retention](../guides/retention.md) for the six terms, the snapshot
+repository and the join runbook.
 
 ---
 

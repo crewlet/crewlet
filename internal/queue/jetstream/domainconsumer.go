@@ -393,3 +393,41 @@ func (q *Queue) StreamBudget(ctx context.Context) (limit, used int64, err error)
 	}
 	return info.Limits.MaxStore, int64(info.Store), nil
 }
+
+// GroupAckFloor is how far a fleet-wide group has acknowledged, WITHOUT
+// attaching to it.
+//
+// # Why the retention gate cannot just ask the group
+//
+// The trim's feed term is "a record the wake feed has not seen is one nobody
+// has been told about", and the node evaluating it is whichever one holds the
+// trim duty — which is not necessarily a node running the feed at all. So the
+// question has to be answerable from the consumer's NAME, which is stable by
+// construction ([DomainLog.Group] derives it from the stream and the group),
+// rather than from a handle.
+//
+// It reports (0, false, nil) when no such consumer exists. That is an ordinary
+// answer and a load-bearing one: a fleet that has never run the feed has not
+// failed to read it, and the two must not look alike — an unreadable term
+// blocks the trim, while an absent feed is a domain that does not have one.
+func (l *DomainLog) GroupAckFloor(ctx context.Context, group string) (uint64, bool, error) {
+	cons, err := l.stream.Consumer(ctx, domainGroupName(l.name, group))
+	switch {
+	case errors.Is(err, jetstream.ErrConsumerNotFound):
+		return 0, false, nil
+	case err != nil:
+		return 0, false, fmt.Errorf("jetstream: read the group %q on %s: %w",
+			group, l.name, err)
+	}
+	info, err := cons.Info(ctx)
+	if err != nil {
+		return 0, false, fmt.Errorf("jetstream: read the group %q on %s: %w",
+			group, l.name, err)
+	}
+	// THE ACK FLOOR RATHER THAN THE DELIVERED SEQUENCE. Delivered says a
+	// record left the broker; the floor says every record below it was
+	// handled. The trim needs the second, because a wake the feed fetched
+	// and had not finished acting on is one the record still has to be
+	// there for.
+	return info.AckFloor.Stream, true, nil
+}

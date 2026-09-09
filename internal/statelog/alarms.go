@@ -275,8 +275,9 @@ var table = []rule{
 					"than ordinary lag", round(r.RefusalsSince)),
 				r.RefusalsSince > coord.ReconcileInterval
 		},
-		remedy: "Read the refusal code in the logs. Anything other than `behind`, " +
-			"`too_stale` or `lag_unknown` is a fault rather than a wait.",
+		remedy: "Read the refusal code in the logs. Anything other than `" +
+			string(RefuseBehind) + "` or `" + string(RefuseTooStale) +
+			"` is a fault rather than a wait.",
 	},
 	{
 		kind: KindBarrierSlow,
@@ -531,3 +532,20 @@ func bytesHuman(n int64) string {
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
+
+// RefusalAlarmFloor is what a surface reports when it can see that reads are
+// being refused for a fault but cannot say for how long.
+//
+// # Why a floor rather than a duration
+//
+// The condition is written in time — reads refused for longer than one
+// reconcile interval — because a single refusal during an election is not a
+// fault and a sustained one is. A recorder holds a COUNT, not an age: it can
+// say a fault-class refusal happened, and cannot say when it started.
+//
+// So a surface with only the count reports this floor, which is one interval
+// past the threshold: the alarm fires, and the detail says what was measured.
+// The alternative — reporting zero because the age is unknown — is the
+// three-valued mistake this whole engine is organised against, and it silences
+// the alarm on exactly the fault it exists for.
+const RefusalAlarmFloor = 2 * coord.ReconcileInterval

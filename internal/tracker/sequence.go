@@ -1162,11 +1162,11 @@ func (w *Writer) UpdateTasks(ctx context.Context, opID string, ids []string,
 
 	release, err := w.admit(ctx, len(subjects))
 	if err != nil {
-		w.count("crewlet.tracker.bulk.calls", metrics.Attrs{"result": "refused"})
+		w.count(metrics.TrackerBulkCalls, metrics.Attrs{"result": "refused"})
 		return WriteResult{}, err
 	}
 	defer release()
-	w.count("crewlet.tracker.bulk.calls", metrics.Attrs{"result": "admitted"})
+	w.count(metrics.TrackerBulkCalls, metrics.Attrs{"result": "admitted"})
 
 	result := WriteResult{Failed: map[string]string{}}
 	for i, id := range subjects {
@@ -1203,7 +1203,7 @@ func (w *Writer) admit(ctx context.Context, rows int) (func(), error) {
 		// THE PROJECTION IS WHAT IS SUMMED, not the wall clock: it is the
 		// applier occupancy this call is about to impose on EVERY node,
 		// and the wall clock here would measure only this one.
-		w.metrics.AddValue("crewlet.tracker.bulk.apply_seconds", projected, nil)
+		w.metrics.AddValue(metrics.TrackerBulkApplySeconds, projected, nil)
 	}
 	ttl := 2 * time.Duration(projected*float64(time.Second))
 	if ttl < ClaimHeartbeat {

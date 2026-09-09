@@ -114,7 +114,7 @@ func TestTheBackupPinsTheLogWhileItCopiesAndReleasesIt(t *testing.T) {
 	// the copy is about to include, and the copy has not happened yet. A
 	// pin at the copy's own position would be taken after the window it
 	// exists to protect.
-	if at := pinned.Domains["CREWLET_TRACKER_LOG"]; at.Seq != 900 || at.Generation != 2 {
+	if at := pinned.Streams["CREWLET_TRACKER_LOG"]; at.Seq != 900 || at.Generation != 2 {
 		t.Fatalf("the hold pins %+v", at)
 	}
 	if pinned.Reason == "" {
@@ -330,3 +330,61 @@ var errRefused = errorString("the coordination store cannot be reached")
 type errorString string
 
 func (e errorString) Error() string { return string(e) }
+
+// TestAFinishedBackupAnnouncesWhatItCovers is the input the trim's backup term
+// has and nothing else can supply.
+//
+// The term refuses to let the log delete anything the newest backup does not
+// hold, and the node evaluating it is whichever one holds the trim duty — not
+// necessarily the node that took the copy, and never a node that can see a
+// directory on another host. A backup that ran and announced nothing leaves a
+// fleet with a working nightly schedule whose log grows for ever, which is the
+// most confusing shape this gate has.
+func TestAFinishedBackupAnnouncesWhatItCovers(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	seedCursor(t, db, "CREWLET_TRACKER_LOG", 2, 900)
+	fleet := memory.NewFleet()
+
+	dir := filepath.Join(t.TempDir(), "b")
+	service := backup.New(backup.Options{
+		Store: db, NodeID: "node-0", Backups: fleet,
+		Now: func() time.Time { return clock },
+	})
+	if _, err := service.Take(t.Context(), dir); err != nil {
+		t.Fatalf("take: %v", err)
+	}
+
+	points, err := fleet.BackupPoints(t.Context())
+	if err != nil {
+		t.Fatalf("BackupPoints: %v", err)
+	}
+	newest, ok := coord.NewestBackup(points)
+	if !ok {
+		t.Fatal("a finished backup announced nothing — the trim's backup term " +
+			"has no input at all and refuses for ever, so this fleet's log " +
+			"grows with a working backup schedule behind it")
+	}
+	if newest.Owner != "node-0" || !newest.Verified {
+		t.Fatalf("the point is %+v, want node-0's own verified copy", newest)
+	}
+	if !newest.At.Equal(clock) {
+		// THE INSTANT THE COPY STARTED, not the one it finished:
+		// nothing in the artefact is older than that, and the term's
+		// age comparison is about the state the copy describes rather
+		// than about how long writing it took.
+		t.Fatalf("the point is stamped %s, want the copy's own start %s",
+			newest.At, clock)
+	}
+	at, covers := newest.Streams["CREWLET_TRACKER_LOG"]
+	if !covers || at.Seq != 900 || at.Generation != 2 {
+		t.Fatalf("the point reaches %+v, want the log at generation 2 sequence "+
+			"900 — a bare sequence from before a reanchor names a dead "+
+			"number space", at)
+	}
+	if newest.Dir != dir {
+		t.Fatalf("the point names %q as its directory, want %q — \"the newest "+
+			"backup is three days old\" is an answer somebody then has to go "+
+			"and find the directory for", newest.Dir, dir)
+	}
+}

@@ -811,6 +811,8 @@ type Fleet interface {
 	Documents
 	PositionRegister
 	HoldRegister
+	FloorRegister
+	BackupRegister
 }
 
 // SortUsage puts the org counter first, then the seats by scope.

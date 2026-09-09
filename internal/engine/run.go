@@ -34,6 +34,7 @@ import (
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
@@ -65,6 +66,8 @@ type Engine struct {
 	// operator's pass, the reconcile loop's tick and a disconnect's
 	// teardown all take it from here.
 	setupRunner func() *setup.Runner
+	// metrics is the process's one recorder, from [Options.Metrics].
+	metrics *metrics.Recorder
 
 	// startedAt is when THIS engine started, which on a split deployment
 	// is a different process on a different clock from the API's own
@@ -281,6 +284,13 @@ type Engine struct {
 	maintenance  *maintenance.Worker
 	integrations *integration.Worker
 
+	// retention is the state log's trim: the fleet singleton that decides
+	// how far each domain's log may be purged and publishes what it
+	// concluded. On the ENGINE for the reason maintenance is — it is a
+	// loop this process runs, and rebuilding it on an apply would leave
+	// two loops publishing one fleet's floor.
+	retention *retention
+
 	// scheduler is the role/unit cron tick. On the ENGINE rather than on an
 	// epoch for the same reason maintenance is: it is a loop this process
 	// runs, and rebuilding it on an apply would leave two loops racing for
@@ -306,6 +316,20 @@ type Engine struct {
 type Options struct {
 	Bootstrap *config.Bootstrap
 	Company   *config.Company
+
+	// Metrics is where this node's measurements are written.
+	//
+	// ONE RECORDER FOR THE PROCESS, built by the caller and shared with
+	// [tracing.Configure], whose MeterProvider is a READER of it — two
+	// recorders would make a collector's dashboard and `crewlet retention
+	// status` disagree about the same event, which is the drift the single
+	// catalogue exists to prevent.
+	//
+	// Nil records nothing, which is a legal deployment (a test, an
+	// embedded engine) and NOT the normal one: every instrument in
+	// [metrics.Catalogue] is declared either way, so a nil recorder is a
+	// documented catalogue nothing fills.
+	Metrics *metrics.Recorder
 
 	// OtelReceiver mints the per-run OTLP endpoints a sandbox exports to.
 	// Nil builds one from the environment; see
@@ -416,6 +440,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		mcp:         mcp.NewBridge(nil),
 		sandboxOtel: otel,
 		bridge:      bridge,
+		metrics:     opts.Metrics,
 		startedAt:   time.Now().UTC(),
 		// Built before equip, which is what writes the company's own
 		// numbers into it, and before node.New, which hands the same
@@ -611,6 +636,14 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		return fail(fmt.Errorf("engine: sandbox waiter: %w", err))
 	}
 	e.startMaintenance(ctx)
+	// THE LOG'S OWN TRIM, beside the sweep and after the node exists for
+	// the same reason: its duty is claimed under the node's incarnation,
+	// and a trim that ran before the lease existed would run on every node
+	// at once. Without it a domain's log only ever grows — to its ceiling,
+	// where appends are refused.
+	if e.native != nil {
+		e.startRetention(ctx, opts.Bootstrap, e.native.log)
+	}
 	// Beside the sweep, and a fleet singleton on the same terms: two nodes
 	// reconciling one third-party app at the same moment can each create an identity
 	// for one seat, and no later pass can detect or repair that.
@@ -797,6 +830,7 @@ func (e *Engine) Stop(ctx context.Context) {
 	e.stopSandbox()
 	e.stopNotifications(ctx)
 	e.stopMaintenance()
+	e.stopRetention()
 	e.stopIntegrations()
 	// AFTER the drain, which released every seat and flushed each one's
 	// memory on the way out. Stopping it before the drain would leave the

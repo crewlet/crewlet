@@ -184,6 +184,18 @@ type Sources struct {
 	// cannot read the value must not be the reason a screen calls a healthy
 	// registration stale.
 	PublicBase func() string
+	// Retention is this node's answer about the state log's own history:
+	// how far each domain's log may be trimmed, what is stopping it, and
+	// what this node costs to replace.
+	//
+	// A FUNCTION rather than a value, for the reason [Sources.Company] is
+	// one: the answer is assembled per call from coordination and from
+	// this node's own loops, and a document captured when the API was
+	// assembled would name a fleet from before every node it describes
+	// had reported. Nil leaves the question unregistered, which is honest
+	// for a process running no state log — a standalone API has no
+	// applier and no stream to say anything about.
+	Retention func(ctx context.Context) any
 
 	// NodeID names this node in the fleet answer, so a reader can tell
 	// which row is the one they are talking to.
@@ -284,6 +296,14 @@ func Register(r *Registry, s Sources) {
 	}
 	if s.Sandbox != nil {
 		r.Register("sandbox_runs", s.sandboxRuns)
+	}
+	if s.Retention != nil {
+		// OPERATOR-ONLY. The answer names every node in the fleet, its
+		// position, its disk and its snapshot repository — a map of
+		// which machine to take out to lose the company's history — and
+		// it is read by a person or their cron, never by the dashboard's
+		// anonymous shell.
+		r.RegisterOperator("retention", s.retention)
 	}
 	// The NATIVE backends, each gated on its own reader: a company can run
 	// the native tracker on Confluence, or the native knowledge base on
@@ -633,4 +653,15 @@ func (s Sources) trace(ctx context.Context, p Params) (any, error) {
 		"events":    rows,
 		"truncated": len(rows) >= store.MaxTraceEvents,
 	}, nil
+}
+
+// retention answers what the state log's history costs and what is stopping it
+// from shrinking.
+//
+// A PASS-THROUGH, deliberately: the document is assembled by the node that
+// runs the appliers, because half its fields are facts only that node can
+// state. Re-shaping it here would be a second definition of the answer, and
+// `crewlet retention status` reads exactly these bytes.
+func (s Sources) retention(ctx context.Context, _ Params) (any, error) {
+	return s.Retention(ctx), nil
 }

@@ -68,7 +68,7 @@ func TestAttributeCardinalityIsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	r.Add("crewlet.statelog.read.served", 1, Attrs{
+	r.Add(StatelogReadServed, 1, Attrs{
 		"domain": "tracker", "level": "linearizable",
 		// The one that must not survive.
 		"task_key": "ENG-1",
@@ -106,9 +106,9 @@ func TestQuantileIsAnUpperBound(t *testing.T) {
 	// 99 fast observations and one slow one, so p95 must land on the fast
 	// side and p99+ must see the slow one.
 	for range 99 {
-		r.Observe("crewlet.statelog.barrier.duration", 2*time.Millisecond, Attrs{"domain": "d"})
+		r.Observe(StatelogBarrierDuration, 2*time.Millisecond, Attrs{"domain": "d"})
 	}
-	r.Observe("crewlet.statelog.barrier.duration", 8*time.Second, Attrs{"domain": "d"})
+	r.Observe(StatelogBarrierDuration, 8*time.Second, Attrs{"domain": "d"})
 
 	s := r.Read()[0]
 	p95 := s.Quantile(0.95)

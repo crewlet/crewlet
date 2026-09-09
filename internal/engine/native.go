@@ -155,11 +155,18 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			return err
 		}
 		n.log = sl
+		running := sl.Domain(tracker.Domain{}.Name())
 		writer, err := tracker.NewWriter(tracker.WriterDeps{
-			Publisher: sl.Domain(tracker.Domain{}.Name()).publisher,
-			DB:        e.backends.Store,
-			Claims:    e.backends.Coord,
-			NodeID:    nodeID,
+			Publisher: running.publisher,
+			// THE APPLIER'S OWN MEASURED RATE, so a refusal's
+			// `retry_after_seconds` is derived from what this node
+			// actually applies rather than from the one-record-a-second
+			// floor a nil reader falls back to — which reported a node
+			// two thousand records behind as half an hour behind.
+			Drain:  running.runner.Drain,
+			DB:     e.backends.Store,
+			Claims: e.backends.Coord,
+			NodeID: nodeID,
 			// THE NODE'S OWN WRITER ACTS AS THE SYSTEM, and every
 			// surface derives its own from it with Writer.As: a seat's
 			// tools act as that seat, an operator's session as that
@@ -170,6 +177,9 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			// housekeeping indistinguishable from somebody's decision.
 			Actor:     nodeID,
 			ActorKind: tracker.AuthorSystem,
+			// The process's one recorder, so every write outcome and
+			// every rejection is counted rather than merely declared.
+			Metrics: e.metrics,
 		})
 		if err != nil {
 			sl.Stop()

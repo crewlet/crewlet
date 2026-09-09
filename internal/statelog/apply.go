@@ -134,7 +134,33 @@ type Runner struct {
 	hasDefer  bool
 	stopped   error
 	appliedAt time.Time
+
+	// drain is this loop's measured records per second, smoothed.
+	//
+	// # Why it is measured rather than a constant
+	//
+	// Three answers divide a record backlog by it and report the result as
+	// a TIME: a bounded stale read's "am I within the caller's staleness",
+	// a refusal's `retry_after_seconds`, and the apply-lag alarm. Without a
+	// measurement all three fall back to one record per second — so a node
+	// two thousand records behind, which is one second of real work,
+	// reports itself half an hour behind, refuses reads that should have
+	// been served and fires an alarm nobody can act on.
+	//
+	// SMOOTHED rather than last-batch, because a single small batch at the
+	// tail of a burst is not this loop's rate: an exponentially weighted
+	// mean over batches lets the figure follow a genuine slowdown while
+	// ignoring the shape of any one fetch.
+	drain float64
 }
+
+// DrainSmoothing is how much of a new batch's rate enters the measurement.
+//
+// A QUARTER, which is the ratio this tree already uses for a smoothed
+// operational figure: four batches of a new rate move the estimate about 68 %
+// of the way, so a real slowdown is visible within seconds of applying while
+// one anomalous batch moves it by a quarter of its own error.
+const DrainSmoothing = 0.25
 
 // NewRunner builds a domain's apply loop, refusing a dependency set that
 // cannot produce a correct apply rather than discovering it mid-stream.
@@ -389,7 +415,7 @@ func (r *Runner) nextRun(ctx context.Context, tail []Record, buffer *reorderBuff
 			// is a partial batch.
 			wait = ApplyLinger
 			if target, waiting := r.waiters.minimum(); waiting && r.have(run, target) {
-				r.count("crewlet.statelog.linger.yields")
+				r.count(metrics.StatelogLingerYields)
 				return run, nil
 			}
 		}
@@ -625,8 +651,47 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 	r.applier.Committed(ctx)
 	r.ack(ctx, consumed)
 
+	r.measureDrain(started, len(consumed))
 	r.observe(started, rows, boundBy, tally, consumed[len(consumed)-1])
 	return consumed, nil
+}
+
+// measureDrain folds one batch's rate into the smoothed estimate.
+//
+// A BATCH THAT TOOK NO MEASURABLE TIME IS SKIPPED rather than treated as
+// infinitely fast: the clock's resolution is not a rate, and one such batch
+// would push the estimate to a number that makes every lag read as zero.
+func (r *Runner) measureDrain(started time.Time, records int) {
+	elapsed := r.now().Sub(started)
+	if records <= 0 || elapsed <= 0 {
+		return
+	}
+	rate := float64(records) / elapsed.Seconds()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.drain == 0 {
+		// THE FIRST BATCH IS THE ESTIMATE, because smoothing from zero
+		// would make a node report a quarter of its real rate for its
+		// first several batches — which is exactly the window after a
+		// restart, when the backlog is longest and the figure matters
+		// most.
+		r.drain = rate
+		return
+	}
+	r.drain += DrainSmoothing * (rate - r.drain)
+}
+
+// Drain is this loop's measured records per second, and 0 before it has
+// applied anything.
+//
+// ZERO MEANS UNMEASURED, and every caller reads it that way: dividing a
+// backlog by it would be a division by zero, so each one falls back to a floor
+// rather than to a guess. A node that has applied nothing has no rate, which
+// is a different fact from a node applying nothing per second.
+func (r *Runner) Drain() float64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.drain
 }
 
 // applyOne runs the domain's state machine for one record, unless a gate says
@@ -645,7 +710,7 @@ func (r *Runner) applyOne(ctx context.Context, tx *sql.Tx, rec Record, opts Appl
 		r.logger.WarnContext(ctx, "statelog_record_gated",
 			"domain", r.domain.Name(), "position", rec.Position.String(),
 			"kind", rec.Kind, "gate", string(reason), "writer", rec.Writer)
-		r.countWith("crewlet.statelog.records_gated", metrics.Attrs{
+		r.countWith(metrics.StatelogRecordsGated, metrics.Attrs{
 			"gate": string(reason), "subject_kind": rec.Subject.Kind,
 		})
 		return 0, true, nil
@@ -662,7 +727,7 @@ func (r *Runner) applyOne(ctx context.Context, tx *sql.Tx, rec Record, opts Appl
 		// read can be delayed: a single record past the time budget is
 		// still one transaction, so the batch's own duration cannot
 		// bound it.
-		r.metrics.Observe("crewlet.statelog.apply.record.duration", r.now().Sub(started),
+		r.metrics.Observe(metrics.StatelogApplyRecordDuration, r.now().Sub(started),
 			metrics.Attrs{"domain": r.domain.Name(), "kind": rec.Kind})
 	}
 	return n, false, nil
@@ -767,16 +832,16 @@ func (r *Runner) observe(started time.Time, rows int, boundBy string, tally resu
 		boundBy = "drained"
 	}
 	now := r.now()
-	r.metrics.Observe("crewlet.statelog.apply.tx.duration", now.Sub(started),
+	r.metrics.Observe(metrics.StatelogApplyTxDuration, now.Sub(started),
 		metrics.Attrs{"domain": domain, "bound_by": boundBy})
-	r.metrics.ObserveValue("crewlet.statelog.apply.batch.rows", float64(rows),
+	r.metrics.ObserveValue(metrics.StatelogApplyBatchRows, float64(rows),
 		metrics.Attrs{"domain": domain})
 	for result, n := range map[string]int{
 		"applied": tally.applied, "retained": tally.retained,
 		"gated": tally.gated, "skipped": tally.skipped,
 	} {
 		if n > 0 {
-			r.metrics.Add("crewlet.statelog.apply.records", uint64(n),
+			r.metrics.Add(metrics.StatelogApplyRecords, uint64(n),
 				metrics.Attrs{"domain": domain, "result": result})
 		}
 	}
@@ -785,10 +850,10 @@ func (r *Runner) observe(started time.Time, rows int, boundBy string, tally resu
 	// policy about this quantity, and a node's own fetch time hides
 	// exactly the delay the policy is about.
 	if !last.StoredAt.IsZero() {
-		r.metrics.Observe("crewlet.statelog.apply.latency", now.Sub(last.StoredAt),
+		r.metrics.Observe(metrics.StatelogApplyLatency, now.Sub(last.StoredAt),
 			metrics.Attrs{"domain": domain})
 	}
-	r.metrics.Set("crewlet.statelog.waiters", float64(r.waiters.len()),
+	r.metrics.Set(metrics.StatelogWaiters, float64(r.waiters.len()),
 		metrics.Attrs{"domain": domain})
 }
 

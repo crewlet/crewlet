@@ -236,6 +236,30 @@ complete **manifest** on disk rather than from a counter the engine keeps —
 a counter records that a process believed it took a backup, and the disk
 records that one exists. They differ in exactly the cases the alarm is for.
 
+**The backup interval IS the recovery point for history below the trim
+floor.** Above that floor the log holds every record on R replicas and every
+node holds the applied rows, so losing a node loses nothing. Below it the log
+holds nothing, and each node's own database file is the only copy of that
+history — N of them, independent, none replicated. A schedule of six hours is
+therefore a six-hour RPO for that half of the company's past, and no replica
+count changes it. See [Retention](retention.md).
+
+**A finished backup announces itself to the fleet.** When the manifest is
+written, the taker publishes what the copy reaches — per stream, with the
+generation — so the trim's backup term can see it from whichever node holds the
+duty. That node is often not the one that took the copy, and can never see a
+directory on another host. A backup that ran and announced nothing leaves a
+fleet with a working nightly schedule whose log grows for ever, so a failure to
+announce is logged rather than silent — and it is bounded and self-correcting:
+the log keeps a longer window than it needed to, and the next backup announces
+again.
+
+**Name the owner.** `retention.backup_owner` is free text — a person, a team, a
+scheduler's name — and `crewlet backup` records it in the manifest, which is
+where it stops being configuration and becomes durable evidence of who was
+responsible for the artefact somebody is now restoring. `crewlet validate`
+warns when it is unset.
+
 Two rules carry over from the cold runbook and are worth repeating because
 this path makes them easier to forget: the directory holds every credential
 the company has, so treat it exactly as you treat the secret store; and the

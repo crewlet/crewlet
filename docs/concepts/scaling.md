@@ -62,6 +62,18 @@ replicate between them (`stream.cluster.*`, `stream.replicas: 3`) — and
 somebody else runs. One estate either way, carrying both slots — see
 [what the fleet shares](#what-the-fleet-shares).
 
+**Every node is a full replica, and there is no thin-node role.** A node that
+runs the native tracker holds the whole corpus — every task, page, comment and
+turn the company has ever recorded — in its own database, applied from the same
+ordered log as every other node's. There is no shard, no cache tier, and no way
+to run a node that holds part of it.
+
+That is a deliberate trade and it is the reason the read path is simple: every
+answer can be served locally, a search scans one node's complete tables, and
+there is no routing decision to get wrong. What it costs is that the corpus is
+held N times, so the storage forecast scales with the fleet — see
+[Retention](../guides/retention.md).
+
 **The node id must be distinct and stable across restarts.** It comes from the
 deployment (`CREWLET_NODE_ID`, or `node.id` in the Tier A file) rather than
 being generated, because a fresh value per boot orphans whatever the previous

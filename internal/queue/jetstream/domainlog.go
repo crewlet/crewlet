@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -31,6 +32,35 @@ type DomainLog struct {
 	// way that survives a peer creating the same name at the same instant.
 	// See [Queue.ensureDurableConsumer].
 	q *Queue
+
+	// state is a SECOND handle, used by [DomainLog.Stats] and by nothing
+	// else, and stateMu serialises the callers that share it.
+	//
+	// # Why the state read cannot go through the handle above
+	//
+	// The vendored stream handle is not safe for concurrent use, and the
+	// shared mutable state is exactly one field: `Info` caches its reply
+	// into `s.info` with no lock (stream.go:498), and `getMsg` — which is
+	// what `GetMsg` and `GetLastMsgForSubject` are — READS `s.info.Config`
+	// on the same handle (stream.go:577). So one goroutine asking for the
+	// log's size races every goroutine reading a record by sequence or by
+	// subject, on a DomainLog that is shared by design: the applier's
+	// readiness check, the publisher's expectation read and the retention
+	// tick all hold this one.
+	//
+	// A SECOND HANDLE RATHER THAN ONE MUTEX OVER ALL OF IT, because the
+	// callers are not alike. `LastSeq` is on the WRITE path — every
+	// conditional append that loses its expectation reads it — and
+	// serialising that behind a state read would put a round trip's
+	// latency on a hot path to protect a field it never touches. Nothing
+	// calls `Info` on the shared handle, so its `s.info` is written once
+	// at open and read immutably thereafter.
+	//
+	// The mutex is still needed HERE, because two state reads share this
+	// handle. Its callers are the readiness check, the trim tick and the
+	// operator report — none of them hot.
+	state   jetstream.Stream
+	stateMu sync.Mutex
 }
 
 // DomainLog opens the append surface for a stream this node has provisioned.
@@ -44,7 +74,15 @@ func (q *Queue) DomainLog(ctx context.Context, stream string) (*DomainLog, error
 	if err != nil {
 		return nil, fmt.Errorf("jetstream: open the log %q: %w", stream, err)
 	}
-	return &DomainLog{js: q.js, stream: s, name: stream, q: q}, nil
+	// THE SECOND HANDLE, opened here rather than lazily: a lazy one would
+	// need its own lock to build, and the whole point of the split is that
+	// the shared handle never takes one.
+	state, err := q.js.Stream(ctx, stream)
+	if err != nil {
+		return nil, fmt.Errorf("jetstream: open the log %q's state reader: %w",
+			stream, err)
+	}
+	return &DomainLog{js: q.js, stream: s, state: state, name: stream, q: q}, nil
 }
 
 // Append publishes one record.
@@ -121,11 +159,14 @@ func (l *DomainLog) End(ctx context.Context) (uint64, error) {
 // caller can pair a first sequence from before a trim with a last sequence
 // from after it and compute a window neither describes.
 func (l *DomainLog) Bounds(ctx context.Context) (first, last uint64, err error) {
-	info, err := l.stream.Info(ctx)
+	// THROUGH [DomainLog.Stats], so the pairing rule above has one
+	// implementation: a second read of the same stream info is a second
+	// place for a caller to end up holding two ends from two instants.
+	stats, err := l.Stats(ctx)
 	if err != nil {
-		return 0, 0, fmt.Errorf("jetstream: read %q's bounds: %w", l.name, err)
+		return 0, 0, err
 	}
-	return info.State.FirstSeq, info.State.LastSeq, nil
+	return stats.FirstSeq, stats.LastSeq, nil
 }
 
 // At reads one record back by sequence.
@@ -154,4 +195,83 @@ func (l *DomainLog) At(ctx context.Context, seq uint64) (subject string,
 			fmt.Errorf("jetstream: read %q at %d: %w", l.name, seq, err)
 	}
 	return msg.Subject, msg.Data, msg.Time, true, nil
+}
+
+// LogStats is everything the retention gate reads about a log, in ONE answer.
+//
+// # Why it is one call and not four
+//
+// [DomainLog.Bounds] already gives the reason for two of them, and the trim
+// needs four: it divides bytes by the ceiling to publish headroom, compares
+// the first sequence against what it is about to remove, and reports the last
+// one as the fleet's head. Read separately, a tick can pair a byte count from
+// before a purge with a first sequence from after it and publish a headroom
+// figure describing no state the stream was ever in — which is the number an
+// operator watches approach a threshold.
+type LogStats struct {
+	// FirstSeq and LastSeq are the log's two ends.
+	FirstSeq, LastSeq uint64
+
+	// Messages is how many records survive between them, which is not
+	// LastSeq − FirstSeq once anything has been purged.
+	Messages uint64
+
+	// Bytes is what the stream holds and MaxBytes the ceiling the BROKER
+	// is enforcing — read from the stream's own configuration rather than
+	// from the Tier A field, because Tier A is per node and takes effect
+	// at restart: between an edit and a restart the field names a ceiling
+	// nothing is applying, and this is the number an operator divides by.
+	//
+	// MaxBytes is zero when the stream declares no ceiling, which is a
+	// real setting rather than a full log.
+	Bytes, MaxBytes uint64
+
+	// CreatedAt is the broker's own creation instant for the stream, which
+	// is what detects a recreated one.
+	CreatedAt time.Time
+}
+
+// Stats reads the log's ends, its size and its ceiling in one round trip.
+func (l *DomainLog) Stats(ctx context.Context) (LogStats, error) {
+	l.stateMu.Lock()
+	info, err := l.state.Info(ctx)
+	l.stateMu.Unlock()
+	if err != nil {
+		return LogStats{}, fmt.Errorf("jetstream: read %q's state: %w", l.name, err)
+	}
+	stats := LogStats{
+		FirstSeq:  info.State.FirstSeq,
+		LastSeq:   info.State.LastSeq,
+		Messages:  info.State.Msgs,
+		Bytes:     info.State.Bytes,
+		CreatedAt: info.Created,
+	}
+	if info.Config.MaxBytes > 0 {
+		stats.MaxBytes = uint64(info.Config.MaxBytes)
+	}
+	return stats, nil
+}
+
+// Purge removes every record BELOW upTo, which is the exclusive sequence the
+// retention gate concluded may go.
+//
+// # Why nothing here re-decides
+//
+// The six terms are a minimum taken somewhere else, deliberately: the gate is
+// a policy with an inversion in it that three readers got backwards, and a
+// policy that can only be exercised through a live broker is one nobody
+// checks. This call is the effect, and its only judgement is the one thing the
+// arithmetic cannot know — that removing nothing is not worth a round trip.
+//
+// The broker's own semantics are what make the exclusive bound safe: a purge
+// at sequence N leaves N itself, so a caller that has established every node
+// committed THROUGH N − 1 can pass N without arithmetic of its own.
+func (l *DomainLog) Purge(ctx context.Context, upTo uint64) error {
+	if upTo == 0 {
+		return nil
+	}
+	if err := l.stream.Purge(ctx, jetstream.WithPurgeSequence(upTo)); err != nil {
+		return fmt.Errorf("jetstream: purge %q below %d: %w", l.name, upTo, err)
+	}
+	return nil
 }

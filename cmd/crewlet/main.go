@@ -50,6 +50,7 @@ import (
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/version"
@@ -150,6 +151,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runBudgets(rest, stdout, stderr)
 	case "backup":
 		return runBackup(rest, stdout, stderr)
+	case "retention":
+		return runRetention(rest, stdout, stderr)
 	case "llm":
 		return runLLM(rest, stdout, stderr)
 	case "search":
@@ -174,6 +177,8 @@ Usage:
   crewlet budgets <cmd>       Show or reset the durable token counters
   crewlet backup -dir PATH    Copy this node's store and stream estate, through
                               the running engine, to a path on ITS host
+  crewlet retention <cmd>     What the state log is holding, why it is not
+                              shrinking, and the gestures that change it
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet llm <cmd>           Log in, verify and export the subscription CLI backends
@@ -849,9 +854,21 @@ func runEngine(args []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// ONE RECORDER FOR THE PROCESS, built here and handed to both halves.
+	// The engine writes into it from its apply loops and its write paths;
+	// the MeterProvider tracing installs is a READER of it. Two recorders
+	// would make a collector's dashboard and `crewlet retention status`
+	// disagree about the same event, which is the drift a single generated
+	// catalogue exists to prevent — and building it in neither place is
+	// how every instrument stayed declared and unobserved.
+	recorder, err := metrics.New()
+	if err != nil {
+		return err
+	}
 	flushTraces, err := tracing.Configure(ctx, tracing.Options{
-		NodeID:  nodeID,
-		Version: version.String(),
+		NodeID:   nodeID,
+		Version:  version.String(),
+		Recorder: recorder,
 	})
 	if err != nil {
 		return err
@@ -881,7 +898,9 @@ func runEngine(args []string, stderr io.Writer) error {
 
 	log.InfoContext(ctx, "engine_starting", "version", version.String(),
 		"company", companyName(company))
-	e, err := engine.New(ctx, engine.Options{Bootstrap: boot, Company: company})
+	e, err := engine.New(ctx, engine.Options{
+		Bootstrap: boot, Company: company, Metrics: recorder,
+	})
 	if err != nil {
 		return err
 	}
@@ -1309,9 +1328,16 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// epoch. Nil-typed-nil is not a risk either, because these
 			// accessors return an untyped nil for a node with no
 			// backend.
-			Work:   nativeWork(e),
-			Pages:  nativePages(e),
-			NodeID: nodeID,
+			Work:  nativeWork(e),
+			Pages: nativePages(e),
+			// WHAT THIS NODE CAN SAY ABOUT THE LOG'S OWN HISTORY —
+			// how far each domain may be trimmed, what is stopping
+			// it, and what this node costs to replace. Assembled per
+			// call, because half of it is coordination that changes
+			// under the answer and the other half is this node's own
+			// loops.
+			Retention: nativeRetention(e),
+			NodeID:    nodeID,
 		},
 		// The inbound edge. It republishes onto THIS node's queue and
 		// dedupes through the FLEET'S coordination store, which is what
@@ -1325,6 +1351,14 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// that can reach it — which is why the reset is a route and not
 		// only a CLI subcommand.
 		Budgets: e.Backends().Fleet,
+		// The fleet's record of what the log may delete, for the one
+		// retention gesture the engine cannot make on its own: an
+		// operator's assertion that a copy has left the host.
+		Retention: e.Backends().Fleet,
+		// And the eviction gate, which is a RECORD rather than a
+		// coordination write — so it goes through the same writer a
+		// seat's tools do, and carries the same three-valued outcome.
+		Nodes: nativeNodes(e),
 		// Both estates a node holds, reachable only from inside it: the
 		// store is locked to this process and the broker binds no
 		// socket. See internal/backup.
@@ -1335,8 +1369,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// so without this the fleet's own trim can delete exactly
 			// the records the artefact's store-to-stream gap needs to
 			// be replayable — and the backup would report success.
-			Holds:  e.Backends().Fleet,
-			NodeID: boot.Node.ID,
+			Holds: e.Backends().Fleet,
+			// And where a finished copy is announced. Without it the
+			// trim's backup term has no input at all and refuses for
+			// ever, so a fleet with a working nightly backup would
+			// still never trim its log.
+			Backups: e.Backends().Fleet,
+			NodeID:  boot.Node.ID,
 		}),
 		Config:  configSurface,
 		Secrets: secretSurface,
@@ -1886,6 +1925,16 @@ func nativeWork(e *engine.Engine) queries.WorkReader {
 	return nil
 }
 
+// nativeNodes is the eviction gate, or nil where this node runs no tracker —
+// converted for [nativeWork]'s reason: a typed nil would pass the route's
+// registration check and panic on the first press.
+func nativeNodes(e *engine.Engine) api.NodeGate {
+	if w := e.TrackerWriter(); w != nil {
+		return w
+	}
+	return nil
+}
+
 func nativePages(e *engine.Engine) queries.PageReader {
 	if r := e.Pages(); r != nil {
 		return r
@@ -1975,4 +2024,20 @@ func (k operatorKnowledge) Search(ctx context.Context, q knowledge.Query) []know
 		return nil
 	}
 	return s.Search(ctx, q)
+}
+
+// nativeRetention is this node's retention answer, or nil where there is none.
+//
+// NIL RATHER THAN AN EMPTY DOCUMENT, on the rule every optional surface here
+// follows: a process running no state log has no applier, no stream and no
+// floor, and a report of zeros would claim a fleet whose log is perfectly
+// trimmed. The question is simply unregistered instead.
+func nativeRetention(e *engine.Engine) func(context.Context) any {
+	if _, runs := e.RetentionReport(context.Background()); !runs {
+		return nil
+	}
+	return func(ctx context.Context) any {
+		report, _ := e.RetentionReport(ctx)
+		return report
+	}
 }

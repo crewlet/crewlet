@@ -41,7 +41,7 @@ func TestTheProviderIsInstalledWithoutAnEndpoint(t *testing.T) {
 	if otel.GetMeterProvider() == nil {
 		t.Fatal("no MeterProvider is installed")
 	}
-	rec.Observe("crewlet.statelog.barrier.duration", 2*time.Millisecond,
+	rec.Observe(metrics.StatelogBarrierDuration, 2*time.Millisecond,
 		metrics.Attrs{"domain": "tracker"})
 	got := rec.Read()
 	if len(got) != 1 || got[0].Count != 1 {

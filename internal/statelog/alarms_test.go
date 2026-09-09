@@ -306,7 +306,7 @@ func kindsOf(alarms []statelog.Alarm) []statelog.Kind {
 func gauge(t *testing.T, rec *metrics.Recorder, kind statelog.Kind) float64 {
 	t.Helper()
 	for _, s := range rec.Read() {
-		if s.Name == "crewlet.alarm.active" && s.Attrs["kind"] == string(kind) {
+		if s.Name == metrics.AlarmActive && s.Attrs["kind"] == string(kind) {
 			return s.Value
 		}
 	}

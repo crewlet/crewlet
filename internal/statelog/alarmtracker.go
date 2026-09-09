@@ -14,7 +14,7 @@ import (
 var log = logging.Get("statelog")
 
 // alarmGauge is the instrument every firing alarm sets.
-const alarmGauge = "crewlet.alarm.active"
+const alarmGauge = metrics.AlarmActive
 
 // Tracker turns successive evaluations into the two surfaces that are not a
 // screen: a log line on every transition, and a gauge an operator's

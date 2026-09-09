@@ -91,7 +91,7 @@ func Catalogue() []Instrument {
 	return []Instrument{
 		// ---- the write path -------------------------------------------
 		{
-			Name: "crewlet.statelog.publish.duration", Kind: KindHistogram, Unit: UnitMilliseconds,
+			Name: StatelogPublishDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"domain", "outcome"},
 			Shows: "A write path slowing down before it starts refusing. The " +
 				"outcome dimension separates the three answers a write has, " +
@@ -99,7 +99,7 @@ func Catalogue() []Instrument {
 				"rather than as a broker getting slower.",
 		},
 		{
-			Name: "crewlet.statelog.publish.rounds", Kind: KindHistogram, Unit: UnitCount,
+			Name: StatelogPublishRounds, Kind: KindHistogram, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "Contention on one subject, which the compare-and-set round " +
 				"cap bounds and nothing measured. A distribution creeping " +
@@ -107,7 +107,7 @@ func Catalogue() []Instrument {
 				"model reads as a colleague editing the same thing.",
 		},
 		{
-			Name: "crewlet.statelog.publish.outcomes", Kind: KindCounter, Unit: UnitCount,
+			Name: StatelogPublishOutcomes, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain", "outcome"},
 			Shows: "The three-valued write outcome, counted, and only the " +
 				"three — a refusal is on `publish.refusals` instead, because " +
@@ -117,7 +117,7 @@ func Catalogue() []Instrument {
 				"the answer.",
 		},
 		{
-			Name: "crewlet.statelog.publish.conflicts", Kind: KindCounter, Unit: UnitCount,
+			Name: StatelogPublishConflicts, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain", "subject_kind"},
 			Shows: "Writes that spent their whole round budget losing races " +
 				"on one subject, BY KIND. The refusal counter beside it " +
@@ -126,14 +126,14 @@ func Catalogue() []Instrument {
 				"design question and a contended kind is a hot subject.",
 		},
 		{
-			Name: "crewlet.statelog.publish.rejections", Kind: KindCounter, Unit: UnitCount,
+			Name: StatelogPublishRejections, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain", "subject_kind"},
 			Shows: "How often a write loses a race, per kind of subject. It is " +
 				"what says whether a counter, a rank order or an ordinary " +
 				"object is the contended one.",
 		},
 		{
-			Name: "crewlet.statelog.publish.refusals", Kind: KindCounter, Unit: UnitCount,
+			Name: StatelogPublishRefusals, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain", "reason"},
 			Shows: "Writes refused before or instead of an append, by reason — " +
 				"an evicted node, a deferred record covering the object, a " +
@@ -143,7 +143,7 @@ func Catalogue() []Instrument {
 				"one counter with an outcome dimension would hide all four.",
 		},
 		{
-			Name: "crewlet.statelog.write.session_wait", Kind: KindHistogram, Unit: UnitMilliseconds,
+			Name: StatelogWriteSessionWait, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"domain"},
 			Shows: "The wait a write pays for its own previous write to apply. " +
 				"Zero when the caller is caught up, which is the common case, " +
@@ -152,7 +152,7 @@ func Catalogue() []Instrument {
 
 		// ---- the read path --------------------------------------------
 		{
-			Name: "crewlet.statelog.barrier.duration", Kind: KindHistogram, Unit: UnitMilliseconds,
+			Name: StatelogBarrierDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"domain"},
 			Shows: "The broker round trip under every linearizable read, and " +
 				"the first number a drifting fsync or a degrading quorum " +
@@ -160,7 +160,7 @@ func Catalogue() []Instrument {
 				"and nothing in production.",
 		},
 		{
-			Name: "crewlet.statelog.read.wait", Kind: KindHistogram, Unit: UnitMilliseconds,
+			Name: StatelogReadWait, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"domain", "level"},
 			Shows: "How much of the read budget a barrier or session wait " +
 				"actually spends. A p95 approaching the budget is reads about " +
@@ -168,28 +168,28 @@ func Catalogue() []Instrument {
 				"is too late to be.",
 		},
 		{
-			Name: "crewlet.statelog.read.refusals", Kind: KindCounter, Unit: UnitCount,
+			Name: StatelogReadRefusals, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain", "level", "code"},
 			Shows: "Every refusal code, counted. Twelve codes with different " +
 				"remedies had no counter between them, so an operator had no " +
 				"rejection rate for any of them.",
 		},
 		{
-			Name: "crewlet.statelog.read.served", Kind: KindCounter, Unit: UnitCount,
+			Name: StatelogReadServed, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain", "level"},
 			Shows: "Reads answered per level, which is the denominator every " +
 				"refusal fraction needs and the check on the assumed read " +
 				"rate the log's own size is derived from.",
 		},
 		{
-			Name: "crewlet.statelog.barrier.appends", Kind: KindCounter, Unit: UnitCount,
+			Name: StatelogBarrierAppends, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "Barrier records appended. Against reads served it is the " +
 				"single-flight ratio, which says whether coalescing is doing " +
 				"anything at all.",
 		},
 		{
-			Name: "crewlet.statelog.linger.yields", Kind: KindCounter, Unit: UnitCount,
+			Name: StatelogLingerYields, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "How often a waiter cut a batch short. It is the batching " +
 				"the applier gives up to answer a read promptly, and without " +
@@ -198,14 +198,14 @@ func Catalogue() []Instrument {
 
 		// ---- the applier ----------------------------------------------
 		{
-			Name: "crewlet.statelog.apply.latency", Kind: KindHistogram, Unit: UnitMilliseconds,
+			Name: StatelogApplyLatency, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"domain"},
 			Shows: "THE COMMIT-TO-APPLY GAP: from the broker's own timestamp " +
 				"on a record to this node committing it. Every read level is " +
 				"a policy about this quantity and nothing measured it.",
 		},
 		{
-			Name: "crewlet.statelog.apply.tx.duration", Kind: KindHistogram, Unit: UnitMilliseconds,
+			Name: StatelogApplyTxDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"domain", "bound_by"},
 			Shows: "How long one apply transaction holds the store's writer, " +
 				"and which budget ended it. A transaction is what every " +
@@ -213,7 +213,7 @@ func Catalogue() []Instrument {
 				"the duration.",
 		},
 		{
-			Name: "crewlet.statelog.apply.record.duration", Kind: KindHistogram, Unit: UnitMilliseconds,
+			Name: StatelogApplyRecordDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"domain", "kind"},
 			Shows: "One record's apply. A single record past the time budget " +
 				"is still one transaction, so this is the real ceiling on how " +
@@ -221,20 +221,20 @@ func Catalogue() []Instrument {
 				"until it was measured.",
 		},
 		{
-			Name: "crewlet.statelog.apply.batch.rows", Kind: KindHistogram, Unit: UnitCount,
+			Name: StatelogApplyBatchRows, Kind: KindHistogram, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "Rows per apply transaction, which is what the row budget " +
 				"bounds and what the drain rate divides.",
 		},
 		{
-			Name: "crewlet.statelog.apply.records", Kind: KindCounter, Unit: UnitCount,
+			Name: StatelogApplyRecords, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain", "result"},
 			Shows: "Records consumed, by what happened to them: applied, " +
 				"retained, gated or skipped. A node applying nothing while " +
 				"its position advances is healthy on lag alone.",
 		},
 		{
-			Name: "crewlet.statelog.apply.tx.aborts", Kind: KindCounter, Unit: UnitCount,
+			Name: StatelogApplyTxAborts, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "Apply transactions the store aborted on a conflict and the " +
 				"loop retried. It is the number that says whether this " +
@@ -246,20 +246,20 @@ func Catalogue() []Instrument {
 				"than held in reserve.",
 		},
 		{
-			Name: "crewlet.statelog.apply.retries", Kind: KindCounter, Unit: UnitCount,
+			Name: StatelogApplyRetries, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "Transient apply failures retried in place, which are " +
 				"otherwise a silent backoff inside the loop.",
 		},
 		{
-			Name: "crewlet.statelog.records_gated", Kind: KindCounter, Unit: UnitCount,
+			Name: StatelogRecordsGated, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"gate", "subject_kind"},
 			Shows: "Records an apply gate dropped. A dropped commit is " +
 				"recoverable by nothing, and this is the only place anyone " +
 				"would see that it happened.",
 		},
 		{
-			Name: "crewlet.statelog.drain.rows_per_second", Kind: KindGauge, Unit: UnitCount,
+			Name: StatelogDrainRowsPerSecond, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "The applier's observed drain, which every retry hint " +
 				"divides by. Seeded from a benchmark and then measured, so a " +
@@ -267,7 +267,7 @@ func Catalogue() []Instrument {
 				"somebody else's.",
 		},
 		{
-			Name: "crewlet.statelog.drain.commits_per_second", Kind: KindGauge, Unit: UnitCount,
+			Name: StatelogDrainCommitsPerSecond, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "Commits per second, which is the fsync rate under " +
 				"`synchronous = FULL` and the number a device budget is " +
@@ -276,12 +276,12 @@ func Catalogue() []Instrument {
 
 		// ---- position and health --------------------------------------
 		{
-			Name: "crewlet.statelog.apply.lag.seq", Kind: KindGauge, Unit: UnitCount,
+			Name: StatelogApplyLagSeq, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows:      "How many records this node is behind the log's head.",
 		},
 		{
-			Name: "crewlet.statelog.apply.lag.seconds", Kind: KindGauge, Unit: UnitSeconds,
+			Name: StatelogApplyLagSeconds, Kind: KindGauge, Unit: UnitSeconds,
 			Attributes: []string{"domain"},
 			Shows: "How OLD the oldest unapplied record is. Seconds are what " +
 				"a stall grace, a pending outcome and a seat move all turn " +
@@ -289,26 +289,26 @@ func Catalogue() []Instrument {
 				"whether anything is wrong.",
 		},
 		{
-			Name: "crewlet.statelog.applied_through", Kind: KindGauge, Unit: UnitCount,
+			Name: StatelogAppliedThrough, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "The prefix this node has actually applied, which is lower " +
 				"than its checkpoint whenever a record was retained.",
 		},
 		{
-			Name: "crewlet.statelog.deferred.count", Kind: KindGauge, Unit: UnitCount,
+			Name: StatelogDeferredCount, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "Records this build could not read and kept. Non-zero is a " +
 				"rolling upgrade in progress; non-zero and not falling is one " +
 				"that stopped.",
 		},
 		{
-			Name: "crewlet.statelog.deferred.oldest_age_seconds", Kind: KindGauge, Unit: UnitSeconds,
+			Name: StatelogDeferredOldestAgeSeconds, Kind: KindGauge, Unit: UnitSeconds,
 			Attributes: []string{"domain"},
 			Shows: "How long the oldest retained record has been retained, " +
 				"which is what decides whether this node's seats move.",
 		},
 		{
-			Name: "crewlet.statelog.waiters", Kind: KindGauge, Unit: UnitCount,
+			Name: StatelogWaiters, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "Callers blocked on the applier right now. It is the depth " +
 				"of the queue a slow apply is making.",
@@ -316,19 +316,19 @@ func Catalogue() []Instrument {
 
 		// ---- retention and capacity -----------------------------------
 		{
-			Name: "crewlet.statelog.log.bytes", Kind: KindGauge, Unit: UnitBytes,
+			Name: StatelogLogBytes, Kind: KindGauge, Unit: UnitBytes,
 			Attributes: []string{"domain"},
 			Shows:      "What the log actually holds, against its ceiling below.",
 		},
 		{
-			Name: "crewlet.statelog.log.max_bytes", Kind: KindGauge, Unit: UnitBytes,
+			Name: StatelogLogMaxBytes, Kind: KindGauge, Unit: UnitBytes,
 			Attributes: []string{"domain"},
 			Shows: "The ceiling, read from the running stream rather than " +
 				"from this node's own configuration — the two differ, and the " +
 				"running one is what refuses the append.",
 		},
 		{
-			Name: "crewlet.statelog.log.headroom_fraction", Kind: KindGauge, Unit: UnitCount,
+			Name: StatelogLogHeadroomFraction, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "How much of the ceiling is left. A full log refuses every " +
 				"write AND every linearizable read, and the remedy is a " +
@@ -336,7 +336,7 @@ func Catalogue() []Instrument {
 				"worth alarming on long before it is small.",
 		},
 		{
-			Name: "crewlet.statelog.trim.blocked_seconds", Kind: KindGauge, Unit: UnitSeconds,
+			Name: StatelogTrimBlockedSeconds, Kind: KindGauge, Unit: UnitSeconds,
 			Attributes: []string{"domain", "term"},
 			Shows: "How long one retention term has held the trim, named. A " +
 				"trim blocked for weeks is a log walking toward its ceiling " +
@@ -345,7 +345,7 @@ func Catalogue() []Instrument {
 
 		// ---- the backup -----------------------------------------------
 		{
-			Name: "crewlet.backup.age", Kind: KindGauge, Unit: UnitSeconds,
+			Name: BackupAge, Kind: KindGauge, Unit: UnitSeconds,
 			Attributes: nil,
 			Shows: "How long ago the newest COMPLETE backup finished, read " +
 				"from the manifests on disk rather than from a counter this " +
@@ -356,7 +356,7 @@ func Catalogue() []Instrument {
 				"path nobody ships from.",
 		},
 		{
-			Name: "crewlet.backup.duration", Kind: KindHistogram, Unit: UnitMilliseconds,
+			Name: BackupDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: nil,
 			Shows: "How long a backup took, which is the window the trim " +
 				"hold covers and the I/O the copy spends competing with the " +
@@ -364,7 +364,7 @@ func Catalogue() []Instrument {
 				"guide's worked example into a number for THIS hardware.",
 		},
 		{
-			Name: "crewlet.backup.holds", Kind: KindGauge, Unit: UnitCount,
+			Name: BackupHolds, Kind: KindGauge, Unit: UnitCount,
 			Attributes: nil,
 			Shows: "Live trim holds. A pin that outlives its owner stops the " +
 				"trim until the stale bound expires it, so a count that does " +
@@ -373,20 +373,20 @@ func Catalogue() []Instrument {
 
 		// ---- the store ------------------------------------------------
 		{
-			Name: "crewlet.store.pool.wait", Kind: KindHistogram, Unit: UnitMilliseconds,
+			Name: StorePoolWait, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"file"},
 			Shows: "How long a reader waited for a connection. It is what " +
 				"says the reader pool is too small on this node, which " +
 				"nothing could say before.",
 		},
 		{
-			Name: "crewlet.store.wal.bytes", Kind: KindGauge, Unit: UnitBytes,
+			Name: StoreWalBytes, Kind: KindGauge, Unit: UnitBytes,
 			Attributes: []string{"file"},
 			Shows: "A write-ahead log a checkpoint cannot pass grows, and " +
 				"this is the only way to see it before the volume fills.",
 		},
 		{
-			Name: "crewlet.store.bytes", Kind: KindGauge, Unit: UnitBytes,
+			Name: StoreBytes, Kind: KindGauge, Unit: UnitBytes,
 			Attributes: []string{"file"},
 			Shows: "The store's size on disk, which the snapshot's free-space " +
 				"precondition and the provisioning rule are both derived from.",
@@ -394,7 +394,7 @@ func Catalogue() []Instrument {
 
 		// ---- search ---------------------------------------------------
 		{
-			Name: "crewlet.tracker.search.scan.duration", Kind: KindHistogram, Unit: UnitMilliseconds,
+			Name: TrackerSearchScanDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"path", "rung"},
 			Shows: "The semantic scan, split by whether it ran for a turn's " +
 				"prefetch or for somebody's deliberate search. Only the " +
@@ -402,14 +402,14 @@ func Catalogue() []Instrument {
 				"path is the one with a target.",
 		},
 		{
-			Name: "crewlet.tracker.search.concurrency", Kind: KindGauge, Unit: UnitCount,
+			Name: TrackerSearchConcurrency, Kind: KindGauge, Unit: UnitCount,
 			Attributes: nil,
 			Shows: "Scans in flight, which is the row of the supported-corpus " +
 				"table this node is actually on. The published figure is a " +
 				"single reader on an idle node.",
 		},
 		{
-			Name: "crewlet.tracker.vector.coverage", Kind: KindGauge, Unit: UnitCount,
+			Name: TrackerVectorCoverage, Kind: KindGauge, Unit: UnitCount,
 			Attributes: nil,
 			Shows: "The fraction of sources carrying a current vector. It is " +
 				"how a stalled embedding backlog is reported, since it never " +
@@ -418,7 +418,7 @@ func Catalogue() []Instrument {
 
 		// ---- bulk -----------------------------------------------------
 		{
-			Name: "crewlet.tracker.bulk.calls", Kind: KindCounter, Unit: UnitCount,
+			Name: TrackerBulkCalls, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"result"},
 			Shows: "How often a bulk edit is issued and how often one is " +
 				"refused because another is applying. The refusal " +
@@ -426,7 +426,7 @@ func Catalogue() []Instrument {
 				"no counter behind it; this is that number.",
 		},
 		{
-			Name: "crewlet.tracker.bulk.apply_seconds", Kind: KindCounter, Unit: UnitSeconds,
+			Name: TrackerBulkApplySeconds, Kind: KindCounter, Unit: UnitSeconds,
 			Attributes: nil,
 			Shows: "Seconds of applier occupancy bulk edits projected, " +
 				"summed. Over 24 hours it IS the fleet-wide read-degradation " +
@@ -435,7 +435,7 @@ func Catalogue() []Instrument {
 		},
 		// ---- alarms ---------------------------------------------------
 		{
-			Name: "crewlet.alarm.active", Kind: KindGauge, Unit: UnitCount,
+			Name: AlarmActive, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"kind"},
 			Shows: "Whether each named alarm is firing right now, 0 or 1. It " +
 				"is the same table the operator record renders and the CLI " +

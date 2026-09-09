@@ -810,7 +810,24 @@ func staleSnapshot(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "snapshot is stale") ||
-		strings.Contains(msg, "database is locked")
+		strings.Contains(msg, "database is locked") ||
+		// A CONNECTION THE POOL HANDED BACK WITH A TRANSACTION STILL
+		// OPEN, which the driver reports on the next BEGIN over it.
+		//
+		// It is retryable for a reason that is about the POOL rather
+		// than about the database: the next attempt draws a different
+		// connection, and a clean one begins normally. Without this a
+		// caller that happened to draw the dirty one fails permanently
+		// — the projector's boot reconcile did exactly that, restarting
+		// every two seconds against the same connection and never
+		// hydrating, with the failure visible only as a WARN nobody was
+		// watching.
+		//
+		// It is NOT the whole fix. What leaves a connection dirty is a
+		// rollback that failed and was discarded, which [DB.tx] now
+		// reports instead — see there. This clause is what keeps a
+		// caller working while that report reaches somebody.
+		strings.Contains(msg, "transaction within a transaction")
 }
 
 // sleepFor waits, or returns early if the context is done.
@@ -831,16 +848,49 @@ func (d *DB) tx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 	}
 	defer func() {
 		if p := recover(); p != nil {
-			_ = tx.Rollback()
+			rollback(ctx, tx)
 			panic(p)
 		}
 	}()
 	if err := fn(tx); err != nil {
-		_ = tx.Rollback()
+		rollback(ctx, tx)
 		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("store: commit: %w", err)
 	}
 	return nil
+}
+
+// rollback undoes an attempt and REPORTS a rollback that did not happen.
+//
+// # Why a discarded rollback error is not harmless
+//
+// database/sql returns the connection to the pool when the transaction ends.
+// If the rollback failed, the transaction is still open on that connection and
+// the pool does not know: the next caller to draw it gets "cannot start a
+// transaction within a transaction" from its own BEGIN, on a connection it did
+// nothing to. The driver reports the failure and does not answer ErrBadConn, so
+// nothing retires the connection either.
+//
+// This does not repair it — there is nothing here that can, short of closing a
+// connection the pool owns. What it does is make it VISIBLE, at WARN, naming
+// the consequence. Discarding it made a poisoned pool entry into a mystery that
+// surfaced somewhere else entirely, as a subsystem that had been failing every
+// two seconds for as long as the process had been up.
+//
+// [staleSnapshot] classifies the downstream symptom as retryable, so a caller
+// that draws the dirty connection recovers on the next one. The two halves are
+// deliberately separate: one keeps the engine working, and this one is how
+// anybody finds out it had to.
+func rollback(ctx context.Context, tx *sql.Tx) {
+	// ErrTxDone is the ORDINARY case and not a failure: the driver ends a
+	// transaction itself when a statement inside it aborts, so a rollback
+	// after one has nothing left to undo.
+	if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+		log.WarnContext(ctx, "store_rollback_failed", "error", err.Error(),
+			"detail", "the transaction may still be open on the connection this "+
+				"returned to the pool, and the next caller to draw it will be "+
+				"refused its own BEGIN")
+	}
 }

@@ -34,8 +34,8 @@ var documentCases = []fleetCase{
 		hold := coord.TrimHold{
 			Owner:  coord.HoldOwner("node-a", "backup"),
 			Reason: "a backup is copying the store",
-			Domains: map[string]coord.Position{
-				"tracker": {Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 88},
+			Streams: map[string]coord.Position{
+				"CREWLET_TRACKER_LOG": {Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 88},
 			},
 		}
 		if err := h.f.PutHold(h.ctx, hold); err != nil {
@@ -59,7 +59,7 @@ var documentCases = []fleetCase{
 		if len(holds) != 1 || holds[0].Owner != hold.Owner {
 			h.t.Fatalf("the register lists %d hold(s): %+v", len(holds), holds)
 		}
-		if got := holds[0].Domains["tracker"]; got.Seq != 88 || got.Stream == "" {
+		if got := holds[0].Streams["CREWLET_TRACKER_LOG"]; got.Seq != 88 || got.Stream == "" {
 			h.t.Fatalf("the hold came back pinning %+v — a bare sequence from "+
 				"before a reanchor names a dead number space", got)
 		}
@@ -94,18 +94,144 @@ var documentCases = []fleetCase{
 		// and released by their work finishing; one naming no domain
 		// pins nothing while looking like a pin.
 		if err := h.f.PutHold(h.ctx, coord.TrimHold{
-			Domains: map[string]coord.Position{"tracker": {Stream: "S", Seq: 1}},
+			Streams: map[string]coord.Position{"S": {Stream: "S", Seq: 1}},
 		}); err == nil {
 			h.t.Error("a hold with no owner was written")
 		}
 		if err := h.f.PutHold(h.ctx, coord.TrimHold{Owner: "node-a/backup"}); err == nil {
-			h.t.Error("a hold naming no domain was written")
+			h.t.Error("a hold naming no stream was written")
 		}
 		if err := h.f.PutHold(h.ctx, coord.TrimHold{
 			Owner:   "node-a/backup",
-			Domains: map[string]coord.Position{"tracker": {Seq: 1}},
+			Streams: map[string]coord.Position{"S": {Seq: 1}},
 		}); err == nil {
 			h.t.Error("a hold pinning a bare sequence with no stream was written")
+		}
+	}},
+
+	{"a published floor round-trips, and never reads back as a node or a hold", func(h *fleetHarness) {
+		// THE THIRD KEY CLASS, and this case is why sharing the register
+		// is safe. A floor decoded as a positions row is a node id of ""
+		// applying nothing, which pins the trim at zero for ever; a
+		// positions row decoded as a floor is a domain of "" with an
+		// empty `blocked_by`, which renders as a healthy trim on a
+		// domain nobody named — and that is the answer that stops
+		// anybody looking.
+		if err := h.f.PutPositions(h.ctx, coord.NodePositions{
+			NodeID:  "node-a",
+			Domains: map[string]coord.DomainPosition{"tracker": {Seq: 90, Generation: 1}},
+		}); err != nil {
+			h.t.Fatalf("PutPositions: %v", err)
+		}
+		if err := h.f.PutHold(h.ctx, coord.TrimHold{
+			Owner:   coord.HoldOwner("node-a", "backup"),
+			Streams: map[string]coord.Position{"S": {Stream: "S", Seq: 88}},
+		}); err != nil {
+			h.t.Fatalf("PutHold: %v", err)
+		}
+		blockedSince := time.Now().UTC().Add(-3 * time.Hour).Truncate(time.Second)
+		floor := coord.TrimFloor{
+			Domain:       "tracker",
+			Generation:   1,
+			TrimTo:       0,
+			BlockedBy:    "backup_floor",
+			BlockedSince: blockedSince,
+			By:           "node-a",
+			Terms: []coord.TrimTerm{
+				{Name: "applied", Seq: 90, Known: true},
+				{Name: "backup_floor", Known: false, Detail: "no backup has been taken"},
+				{Name: "feed_ack_floor", Absent: true},
+			},
+		}
+		if err := h.f.PutFloor(h.ctx, floor); err != nil {
+			h.t.Fatalf("PutFloor: %v", err)
+		}
+
+		nodes, err := h.f.Positions(h.ctx)
+		if err != nil {
+			h.t.Fatalf("Positions: %v", err)
+		}
+		if len(nodes) != 1 || nodes[0].NodeID != "node-a" {
+			h.t.Fatalf("the register lists %d node row(s) beside one node, one "+
+				"hold and one floor: %+v", len(nodes), nodes)
+		}
+		holds, err := h.f.Holds(h.ctx)
+		if err != nil {
+			h.t.Fatalf("Holds: %v", err)
+		}
+		if len(holds) != 1 {
+			h.t.Fatalf("the register lists %d hold(s) beside one floor", len(holds))
+		}
+
+		floors, err := h.f.Floors(h.ctx)
+		if err != nil {
+			h.t.Fatalf("Floors: %v", err)
+		}
+		if len(floors) != 1 || floors[0].Domain != "tracker" {
+			h.t.Fatalf("the register lists %d floor(s): %+v", len(floors), floors)
+		}
+		got := floors[0]
+		if got.BlockedBy != "backup_floor" || !got.Blocked() {
+			h.t.Fatalf("the floor came back blocked by %q — the term that came "+
+				"lowest is the answer nobody else can re-derive", got.BlockedBy)
+		}
+		if !got.BlockedSince.Equal(blockedSince) {
+			h.t.Fatalf("blocked_since came back %s, want %s — a duty that moves "+
+				"on a lease carries no memory across the move, so this field is "+
+				"the only thing that reaches the twenty-four-hour condition",
+				got.BlockedSince, blockedSince)
+		}
+		if len(got.Terms) != 3 || !got.Terms[2].Absent {
+			h.t.Fatalf("the floor came back with %+v — an absent term renders "+
+				"n/a and a zero one renders 0, and they are different facts",
+				got.Terms)
+		}
+		if got.At.IsZero() {
+			h.t.Fatal("the floor came back with no tick instant, so a duty " +
+				"that stopped running is indistinguishable from one that ran")
+		}
+
+		// A SECOND WRITE REPLACES, on the singleton's own rule.
+		got.BlockedBy, got.TrimTo = "", 88
+		if err := h.f.PutFloor(h.ctx, got); err != nil {
+			h.t.Fatalf("PutFloor again: %v", err)
+		}
+		floors, err = h.f.Floors(h.ctx)
+		if err != nil {
+			h.t.Fatalf("Floors after the second tick: %v", err)
+		}
+		if len(floors) != 1 || floors[0].Blocked() || floors[0].TrimTo != 88 {
+			h.t.Fatalf("a second tick left %+v", floors)
+		}
+
+		if err := h.f.ForgetFloor(h.ctx, "tracker"); err != nil {
+			h.t.Fatalf("ForgetFloor: %v", err)
+		}
+		floors, err = h.f.Floors(h.ctx)
+		if err != nil {
+			h.t.Fatalf("Floors after forgetting: %v", err)
+		}
+		if len(floors) != 0 {
+			h.t.Fatalf("%d floor(s) survive a forget", len(floors))
+		}
+		if nodes, err := h.f.Positions(h.ctx); err != nil || len(nodes) != 1 {
+			h.t.Fatalf("forgetting a floor left %d node row(s) (err %v)", len(nodes), err)
+		}
+	}},
+	{"a floor that says nothing is refused", func(h *fleetHarness) {
+		// A floor with no domain would be written over another domain's
+		// conclusion and read as that domain's.
+		if err := h.f.PutFloor(h.ctx, coord.TrimFloor{TrimTo: 10}); err == nil {
+			h.t.Error("a floor naming no domain was written")
+		}
+		// A tick that removed nothing did so for a reason, and an empty
+		// `blocked_by` beside a zero `trim_to` renders as a healthy
+		// fleet — which is the one rendering that stops anybody looking.
+		if err := h.f.PutFloor(h.ctx, coord.TrimFloor{
+			Domain: "tracker",
+			Terms:  []coord.TrimTerm{{Name: "applied", Known: true}},
+		}); err == nil {
+			h.t.Error("a floor permitting nothing and naming no blocking term was written")
 		}
 	}},
 

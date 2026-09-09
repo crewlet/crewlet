@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/version"
@@ -102,6 +103,10 @@ type stateLog struct {
 	db     *store.DB
 	fleet  coord.Fleet
 
+	// metrics is the process's one recorder, threaded down so the apply
+	// loop's instruments are observed rather than merely declared.
+	metrics *metrics.Recorder
+
 	// ceilings is the byte ceiling each domain's stream is CREATED with,
 	// from Tier A. It overrides the domain's own default, which is the
 	// value a domain declares in the absence of an operator — and the
@@ -146,6 +151,7 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 	s := &stateLog{
 		domains: map[string]*runningDomain{},
 		nodeID:  nodeID, db: e.backends.Store, fleet: e.backends.Fleet,
+		metrics:  e.metrics,
 		ceilings: ceilingsFor(ctx, host, boot),
 		run:      runCtx, stop: cancel,
 	}
@@ -284,7 +290,7 @@ func (s *stateLog) start(ctx context.Context, host domainHost, domain statelog.D
 		// adoption row, which is deliberately not replicated), so the
 		// asymmetry here is real rather than an oversight.
 		DB: s.db.Replicated(), Generation: at.Generation, StreamCreatedAt: created,
-		Epoch: epoch,
+		Epoch: epoch, Metrics: s.metrics,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: build %s's applier: %w", domain.Name(), err)
@@ -876,7 +882,11 @@ func (s *stateLog) stillUsable(ctx context.Context, logs map[string]*jetstream.D
 // stale window, which is the one way a repair makes the fleet worse.
 func (s *stateLog) holdTail(ctx context.Context, at map[string]uint64) (func(), error) {
 	owner := s.nodeID + ":join"
-	domains := make(map[string]coord.Position, len(at))
+	// KEYED BY STREAM, which is what [coord.TrimHold.Streams] holds: a
+	// hold is a pin on a LOG, and the backup's own hold — taken from
+	// `statelog_cursor`, which is keyed on the stream — has to land in the
+	// same key space or the trim reads one of the two as pinning nothing.
+	streams := make(map[string]coord.Position, len(at))
 	for _, domain := range registeredDomains() {
 		name := domain.Name()
 		seq, held := at[name]
@@ -892,12 +902,12 @@ func (s *stateLog) holdTail(ctx context.Context, at map[string]uint64) (func(), 
 		if err != nil {
 			return nil, err
 		}
-		domains[name] = coord.Position{
+		streams[domain.Stream().Name] = coord.Position{
 			Stream: domain.Stream().Name, Generation: cursor.Generation, Seq: seq,
 		}
 	}
 	if err := s.fleet.PutHold(ctx, coord.TrimHold{
-		Owner: owner, At: time.Now().UTC(), Domains: domains,
+		Owner: owner, At: time.Now().UTC(), Streams: streams,
 		Reason: "this node is below the log's floor and is fetching a peer's snapshot",
 	}); err != nil {
 		return nil, fmt.Errorf("engine: pin the replay tail for the join: %w", err)
@@ -1351,6 +1361,7 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 		}
 		row.Domains[name] = pos
 	}
+	s.positionGauges(row)
 	if err := s.fleet.PutPositions(ctx, row); err != nil {
 		if ctx.Err() != nil {
 			return
@@ -1360,5 +1371,41 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 			"detail", "the trim cannot see this node until it publishes again, "+
 				"so it may delete records this node still needs; the next "+
 				"heartbeat retries")
+	}
+}
+
+// positionGauges publishes each domain's progress on the same beat the
+// register row is written.
+//
+// ON THE HEARTBEAT rather than in the apply loop, because these are STATES
+// rather than events: what a collector wants is "how far behind is this node
+// now", and setting it per applied batch would make the answer a function of
+// how busy the log is — a quiet log would leave the last burst's lag standing
+// for as long as nothing was published.
+func (s *stateLog) positionGauges(row coord.NodePositions) {
+	if s.metrics == nil {
+		return
+	}
+	for name, at := range row.Domains {
+		attrs := metrics.Attrs{"domain": name}
+		s.metrics.Set(metrics.StatelogAppliedThrough, float64(at.AppliedThrough), attrs)
+		s.metrics.Set(metrics.StatelogDeferredCount, float64(at.Deferred), attrs)
+		running := s.domains[name]
+		if running == nil {
+			continue
+		}
+		s.metrics.Set(metrics.StatelogDrainRowsPerSecond, running.runner.Drain(), attrs)
+		health, err := s.health(context.Background(), running)
+		if err != nil || health.Lag == nil {
+			// UNREADABLE IS NOT ZERO, and a gauge has no third
+			// value — so the lag gauges are left at whatever they
+			// last held rather than being set to a number that
+			// reads as caught up. The alarm reading takes the same
+			// view from the same health.
+			continue
+		}
+		s.metrics.Set(metrics.StatelogApplyLagSeq, float64(*health.Lag), attrs)
+		s.metrics.Set(metrics.StatelogApplyLagSeconds,
+			applyLagOf(health, running).Seconds(), attrs)
 	}
 }

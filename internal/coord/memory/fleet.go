@@ -43,6 +43,8 @@ type Fleet struct {
 	integrations map[string][]byte
 	positions    map[string]coord.NodePositions
 	holds        map[string]coord.TrimHold
+	floors       map[string]coord.TrimFloor
+	backups      map[string]coord.BackupPoint
 
 	// documents is the fleet's document families. Lazily built, so a
 	// caller that never touches one carries no watcher bookkeeping.

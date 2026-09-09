@@ -87,6 +87,10 @@ A body that does not arrive inside its deadline fails the read like any other tr
 | `POST` | `/backup` | Copy this node's store and stream estate into `?dir=` **on the engine's host**. **Always needs a token** — it writes every credential the company holds to a path the caller names (see [below](#post-backup)) |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/work` | The company's own tracker: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `native` — a company on Jira gets `404 unknown_query`, not an empty board (see [below](#the-native-tracker-and-knowledge-base)) |
+| `GET` | `/work/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every node's position, and what this node costs to replace. **Operator-only, reads included** (see [below](#get-workretention--what-the-log-is-holding)) |
+| `POST` | `/work/retention/ack` | Publish an operator backup floor, for `backup_floor: operator` |
+| `POST` | `/work/retention/evict/{node}` | Install the eviction gate on a node, so the trim can pass a floor it is pinning |
+| `POST` | `/work/retention/readmit/{node}` | Lift it — the inverse commit rather than a delete |
 | `GET` | `/work/{id}` | One item with its description, thread, history and links. `{id}` is either the key (`ENG-42`) or the id — a person holds the first and every internal link the second |
 | `GET` | `/pages` | The company's own knowledge base: a filtered listing. Served only where `knowledge.backend` is `native` |
 | `GET` | `/pages/{id}` | One page with its body, comments, revision metadata, children and ancestor breadcrumb. `{id}` is the id, or `CONTAINER/Title` — the title matches the way the fleet CLAIMED it, so case and runs of whitespace are ignored and `ENG/deploy runbook` reaches a page called "Deploy  Runbook" |
@@ -1368,11 +1372,14 @@ migration failed — so a node that has not finished reading what the fleet hold
 must not be able to say it. The reconcile is `O(keys)` and finishes; the screen
 fills in on its own.
 
-**They are read-only.** There is no `POST /work`. An item is filed and moved by
-a seat's own tools, or by an operator through the
+**The item surface is read-only.** There is no `POST /work`. An item is filed
+and moved by a seat's own tools, or by an operator through the
 [MCP surface](../guides/tools-and-mcp.md), and both are attributed to somebody
 — where a dashboard button would write as "the dashboard", which is not a
-person and not a seat and cannot be asked why.
+person and not a seat and cannot be asked why. The three routes under
+`/work/retention/` below are the exception, and they are not about items: they
+are operator gestures against the log's own history, attributed to the token
+that made them.
 
 ### Paging and filters
 
@@ -1394,6 +1401,83 @@ An unknown enum value is refused naming the closed set — `?status=finished`
 answers `400` saying which statuses exist — rather than matching nothing. A
 listing that answered empty for a typo would send somebody looking for items
 that were never missing.
+
+### `GET /work/retention` — what the log is holding
+
+**Operator-only, reads included**, on the same rule `/config` and `/secrets`
+follow: the answer names every node in the fleet, its position, its disk and
+its snapshot repository, which is a map of which machine to take out to lose
+the company's history. It is never eligible for `allow_anonymous_read`.
+
+The document is assembled by the node you ask, and says so: half its fields are
+facts only that node can state — its own applier's lag, its snapshot, its disk
+— and half are fleet-wide, read from coordination. `node_id` is on the document
+rather than beside it, because a report pasted into a ticket without its author
+is three per-node facts attributed to a fleet.
+
+```json
+{
+  "node_id": "node-1",
+  "at": "2031-04-02T03:14:00Z",
+  "backup_owner": "platform-oncall",
+  "register_readable": true,
+  "domains": [
+    {
+      "domain": "tracker",
+      "stream": "CREWLET_TRACKER_LOG",
+      "generation": 0,
+      "first_seq": 918100000,
+      "last_seq": 918280001,
+      "bytes": 67108864,
+      "max_bytes": 4294967296,
+      "headroom_fraction": 0.984,
+      "trim_floor": 918100000,
+      "blocked_by": "backup_floor",
+      "blocked_since": "2031-03-30T02:00:00Z",
+      "prose": "Nothing is being trimmed on tracker: ...",
+      "terms": [{"name": "applied", "state": "known", "seq": 918279004, "detail": "..."}]
+    }
+  ],
+  "nodes": [...],
+  "snapshots": [...],
+  "replica": {"store_bytes": 10415140864, "projected_join_seconds": 308,
+              "rejoin_window_seconds": 1800},
+  "alarms": [{"kind": "backup_age", "detail": "...", "remedy": "..."}]
+}
+```
+
+`register_readable` is the field that keeps an empty `nodes` block honest: "this
+fleet has no nodes" cannot happen, and "coordination could not be listed"
+happens during exactly the outage somebody is running this in. Without the flag
+a renderer prints the impossible one.
+
+`headroom_fraction` is a **pointer** and is absent when the broker could not be
+asked. A fraction of an unknown ceiling is not zero headroom, and zero is what
+the one alarm an operator cannot ignore fires on.
+
+`crewlet retention status` renders exactly these bytes.
+
+### The three retention gestures that write
+
+All three are **POSTs**, so the anonymous-read posture never reaches them:
+moving the floor the trim deletes against, stopping a machine writing and
+letting it write again are not reads, whatever a laptop deployment allows.
+
+| Route | What it does |
+|---|---|
+| `POST /work/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, and `503` when the fleet's generation cannot be established — a bare sequence at the wrong generation pins a position on a log that no longer exists. |
+| `POST /work/retention/evict/{node}?confirm={node}` | Installs the eviction gate. |
+| `POST /work/retention/readmit/{node}?confirm={node}` | The inverse commit. |
+
+`confirm` echoes the node id, and a mismatch is `400`. Both gate routes answer
+with the write's **three-valued outcome** — `applied`, `pending` or `unknown` —
+its position and its operation id: a gate the caller believes has landed and
+which is only `pending` is the difference between a node that has stopped
+writing and one that is about to.
+
+A process with no coordination store answers `503`, not `404`. The route exists
+on this build, and telling an operator it does not sends them looking for a
+version mismatch that is not there.
 
 ## Agent Memory
 
