@@ -21,34 +21,52 @@ import (
 // table of sign codes is scanned first and the survivors are reranked exactly
 // against the vectors they came from, by primary key.
 //
-// Measured on this container at 3 072 dimensions, mean of twelve probes at a
-// stage-1 depth of 400 — the shipped depth is 1 200, which is a further +7.6 %
-// on the first stage and is DERIVED rather than measured:
+// Measured on this container at 3 072 dimensions, at the SHIPPED depths — 1 200
+// candidates, 150 returned — warm, one reader:
 //
-//	N        stage 1 alone   two-stage        the exact f32 scan
-//	 10 000   11.1 ms         14.5 ms          75.7 ms
-//	 40 000   43.8 ms         55.0 ms         306.8 ms
-//	120 000  148.3 ms        150.6 ms         979.2 ms
+//	N        two-stage   the exact f32 scan it replaces
+//	 20 000     50 ms     259 ms      5.2x
+//	 40 000     98 ms       —
 //
-// The rerank is essentially free — 2.3 ms of the 150.6 at the largest size —
-// because it is O(candidates) and not O(N).
+// The rerank is essentially free, because it is O(candidates) and not O(N):
+// stage one alone at 20 000 is 36 ms of the 50.
 //
-// # Why the query code is computed by a one-row CTE
+// THE ONE-READER NUMBER IS NOT THE BUDGET. Eight concurrent readers on four
+// cores cost 2.4x that p95 — see BenchmarkSemanticScanUnderLoad, which reports
+// both axes precisely so the idle figure cannot be quoted as the supported
+// one.
 //
-// The first stage orders by `vector_distance_cos(bits, <the query's own sign
-// code>)`, and that code has to be in the driver's own encoding or the two
-// values are different lengths and the function is undefined. Computing it in
-// Go would mean this package reproducing an encoding it can only observe;
-// computing it inline in the ORDER BY risks re-evaluating `vector1bit` once
-// per row, since nothing marks it constant. A one-row CTE cross-joined into the
-// scan is evaluated once and keeps the whole thing one statement.
+// # Why there is no index on the table it scans, and why that is measured
+//
+// The whole cost model is `N x c_row over a NARROW table`: a row is stored
+// contiguously, so what makes the first stage fast is that its rows are 400
+// bytes rather than 12 kilobytes. An index over it is a second copy of the row
+// order plus a random access per row, and every row matches `model` and `dim`
+// in a company that has not just changed model — measured, the indexed scan is
+// 69 ms against 29 ms for the plain one, and 27 ms against 20 ms with a
+// container filter matching a third of the corpus.
+//
+// The second stage's join is the other half and it cost far more: with an
+// index leading on `source` present, the planner used it instead of the
+// primary key, and each of 1 200 candidates scanned half of `kb_vectors`
+// looking for its `source_id` — 1 min 44 s against 50 ms. Both indexes are
+// dropped by 0025, and `TestEveryIndexServesARegisteredQuery` is what stops
+// them coming back.
+//
+// # The query's own sign code is computed inline, and that too is measured
+//
+// `vector1bit(?)` in the ORDER BY reads like a per-row call. It is not: the
+// argument is a bound parameter and nothing else, so it is hoisted — the
+// inline form, a one-row CTE cross-joined in, and a code precomputed by a
+// separate statement all measure within noise of each other (50 / 49 / 50 ms).
+// The inline form is one statement with no join to explain.
 //
 // # Why the container filter is on the NARROW table
 //
 // It is the only place it does any good. Pushing it onto the wide table would
 // filter after the scan that the filter exists to shrink, and joining
-// `kb_vectors` inside the stage-1 subquery to reach it turns a sequential scan
-// of a narrow table into an indexed lookup per candidate row.
+// `kb_vectors` inside the stage-1 subquery to reach it is the shape the
+// hundred seconds above came from.
 
 // SemanticQuery is one semantic search.
 type SemanticQuery struct {
@@ -142,11 +160,11 @@ func Semantic(ctx context.Context, tx *sql.Tx, q SemanticQuery) ([]SemanticHit, 
 	candidates = max(candidates, limit)
 
 	// THE ARGUMENTS ARE BUILT IN STATEMENT ORDER, which is the only order
-	// a positional bind has: the query vector twice — once for the sign
-	// code the first stage orders by and once for the exact distance the
-	// second computes — then the predicate, then the two limits with the
-	// width filter between them.
-	args := []any{q.Vector, q.Vector}
+	// a positional bind has: the exact distance's own vector first, then
+	// the predicate, then the vector again for the sign code the first
+	// stage orders by, then the two limits with the width filter between
+	// them.
+	args := []any{q.Vector}
 	where := []string{"b.model = ?", "b.dim = ?"}
 	args = append(args, q.Model, q.Dim)
 	if len(q.Sources) > 0 {
@@ -161,7 +179,7 @@ func Semantic(ctx context.Context, tx *sql.Tx, q SemanticQuery) ([]SemanticHit, 
 			args = append(args, c)
 		}
 	}
-	args = append(args, candidates, len(q.Vector), limit)
+	args = append(args, q.Vector, candidates, len(q.Vector), limit)
 
 	// THE TIE BREAK IS DECLARED AT BOTH STAGES. Hamming distance over a
 	// 3 072-bit code takes at most 3 073 distinct values whatever the
@@ -170,14 +188,14 @@ func Semantic(ctx context.Context, tx *sql.Tx, q SemanticQuery) ([]SemanticHit, 
 	// scan's own row order, so two nodes rerank different pools and a
 	// paged answer can repeat or skip a document.
 	statement := `
-		WITH q(code) AS (SELECT vector1bit(?))
 		SELECT c.source, c.source_id, c.container,
 		       vector_distance_cos(v.embedding, ?) AS distance
 		FROM (
 			SELECT b.source, b.source_id, b.container
-			FROM kb_vectors_bin b, q
+			FROM kb_vectors_bin b
 			WHERE ` + strings.Join(where, " AND ") + `
-			ORDER BY vector_distance_cos(b.bits, q.code), b.source, b.source_id
+			ORDER BY vector_distance_cos(b.bits, vector1bit(?)),
+			         b.source, b.source_id
 			LIMIT ?
 		) AS c
 		JOIN kb_vectors v ON v.source = c.source AND v.source_id = c.source_id

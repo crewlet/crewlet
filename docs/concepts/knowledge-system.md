@@ -19,7 +19,7 @@ knowledge:
 | | `native` | `confluence` |
 |---|---|---|
 | Where pages live | the fleet's own [coordination store](coordination.md), projected onto each node | a Confluence site |
-| How search works | BM25 over the node's own lexical index, plus optional vector recall | CQL against the site's search API, live at query time |
+| How search works | keyword (BM25 over the node's own lexical index), semantic (two-stage 1-bit retrieval with an exact rerank), or `hybrid` — both, fused | CQL against the site's search API, live at query time |
 | Who it searches as | the engine — every seat reads every page, so there is no per-seat credential to be missing | **the agent's own user**, so Confluence enforces its page permissions natively |
 | Staleness | the index is built behind the projection; a node still indexing SAYS SO rather than answering empty | none — there is no local copy at all |
 | What it costs to set up | nothing | a site, a space, and a per-seat account |
@@ -43,6 +43,102 @@ part that stops a 20 KB runbook outranking the one-paragraph page that is
 actually the answer. There is no phrase query, no proximity and no query
 language, because the seam deliberately does not have one: a planner writes a
 keyword line and a person types into a box.
+
+### Semantic search: two stages, no index, no new dependency
+
+Keyword search finds what shares words. Semantic search finds what shares
+*meaning* — the question "how do we handle rate limits" against the page
+titled "429 backoff in the GitLab client", which share no term at all. That is
+the class the semantic half exists for, and it is worth naming precisely
+because it is also the class that is hardest to keep: a document only the
+semantic half found leaves the fused answer entirely if the semantic half
+drops it, where a document both halves found merely slides down.
+
+There is **no approximate-nearest-neighbour index**, because the driver this
+engine ships has none — `internal/store/caps.go` probes for one on every open
+and reports what it found. The alternatives were a full exact scan of every
+vector on every query, or embedding a search library with its own index
+format, file and backup story on every node. Instead the search is **two
+stages**, which is the shape every production vector engine uses anyway:
+
+1. **Stage one** scans a narrow table of **1-bit sign codes** — one bit per
+   dimension, 387 bytes at 3 072 dimensions against 12 KB for the vector — and
+   keeps the nearest 1 200 by Hamming distance.
+2. **Stage two** reranks exactly those candidates against their full vectors,
+   by primary key, and returns 150.
+
+The narrow *sibling table* is the load-bearing part rather than a compression
+detail. A row is stored contiguously, so reading any column of a 12 KB row
+costs traversing that row's overflow pages: the identical 1-bit column
+measures 7.31 µs/row inside the wide row and 0.99 µs/row in a narrow one. A
+generated column, an expression index and a second column on the vector table
+all buy the compression; none of them buys the speed.
+
+**The score you see is always the exact one.** A sign code decides which
+documents are looked at and never how they are ordered.
+
+#### What the quality of this can and cannot be promised
+
+A sign code keeps only each vector's orthant, and how much an orthant says
+about cosine rank is a property of *your corpus's* distribution and of nothing
+else. Over a family of embedding-shaped generators at one corpus size, recall
+at the shipped over-fetch spans **0.29 to 0.98**. So the engine's own gate
+measures the *arithmetic* — that an exact rerank over a 1-bit candidate pool
+recovers the exact ranking at sufficient depth — and deliberately makes no
+claim about recall on your documents.
+
+`crewlet search eval` is what answers that, against your own vectors. The
+ground truth is the exact scan's own top-K, so nobody authors a judgement:
+
+```console
+$ crewlet search eval -store /var/lib/crewlet/crewlet-replicated.db
+corpus       118432 sources, text-embedding-3-large at 3072 dimensions
+measured     25 queries at depth 150 from 1200 candidates
+recall       0.9761  (floor 0.9312 for this corpus size)
+worst query  0.9467
+head misses  0  (documents dropped from the exact top ten)
+verdict      the two-stage search recovers the exact ranking at the shipped depth
+```
+
+It exits non-zero when the recall is below the floor for that corpus size, so
+it can go in a schedule. Run it **monthly, and after any change to
+`providers.embeddings.model` or `.dimensions`** — those are the two inputs
+that move the answer. It reads a *file* rather than a running node: point it
+at the copy inside a backup, which needs nothing stopped and measures the same
+rows.
+
+The floor is a **curve** rather than a number, because recall from a sign code
+decreases as the corpus grows — 0.98 at twenty thousand sources, 0.93 at a
+hundred and twenty thousand, 0.88 at half a million. A single threshold would
+certify the smallest deployment and say nothing about the largest.
+
+If a run comes back below the floor, the remedy is decided in advance:
+
+1. Raise the quantization over-fetch. It measured **free** in latency, because
+   stage one is a full scan whose cost does not depend on how many candidates
+   it keeps.
+2. Failing that, an 8-bit first stage, which is a code change shipped in the
+   same release that moves the model default.
+
+#### Where the vectors come from
+
+Embedding a document costs a provider call, and it is the one thing in the
+search path a node cannot recompute on its own. So it is not done per node and
+not on the write path — a page save would otherwise carry a third-party HTTP
+round trip inside its own transaction. One **fleet-singleton duty** embeds each
+source once and publishes a record; every node applies it. The company pays the
+bill once and holds the answer everywhere.
+
+A cold fill of 110 000 sources is roughly **108 minutes and 860 batched
+requests**, and those numbers do not move with the configured width — providers
+bill per input *token*, and `dimensions` is a truncation parameter the request
+already carries.
+
+**A model change at the same width is the case to know about.** Until the
+refill finishes, the corpus holds two incompatible embedding spaces, and a
+search filters on the *pair* — so documents still on the old model are not
+ranked badly, they are simply not in the candidate pool. `crewlet search eval`
+names every space it finds, which is how you see a refill in progress.
 
 ### Confluence: no local copy at all
 
