@@ -146,9 +146,20 @@ func (r *Recorder) ObserveValue(name string, v float64, attrs Attrs) {
 	r.record(name, KindHistogram, v, attrs)
 }
 
-// Add increments a counter.
+// Add increments a counter by a whole number of events.
 func (r *Recorder) Add(name string, n uint64, attrs Attrs) {
 	r.record(name, KindCounter, float64(n), attrs)
+}
+
+// AddValue increments a counter by a fractional amount.
+//
+// A COUNTER NEED NOT COUNT EVENTS. Some of what is summed here is a duration
+// or a projection — seconds of applier occupancy a bulk edit imposes, where
+// one call's contribution is a few hundredths — and rounding each to a whole
+// number sums a company's whole day to zero, which is the one answer that
+// looks like a healthy fleet.
+func (r *Recorder) AddValue(name string, v float64, attrs Attrs) {
+	r.record(name, KindCounter, v, attrs)
 }
 
 // Set writes a gauge.

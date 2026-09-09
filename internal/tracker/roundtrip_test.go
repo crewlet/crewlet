@@ -3,6 +3,7 @@ package tracker_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -93,17 +94,32 @@ func newRoundTrip(t *testing.T) *roundTrip {
 		t.Fatalf("build the publisher: %v", err)
 	}
 	writer, err := tracker.NewWriter(tracker.WriterDeps{
-		Publisher: publisher, Actor: "ana", ActorKind: tracker.AuthorHuman,
+		Publisher: publisher, DB: db, NodeID: "node-a",
+		Actor: "ana", ActorKind: tracker.AuthorHuman,
 		Now: func() time.Time { return wednesday },
 	})
 	if err != nil {
 		t.Fatalf("build the writer: %v", err)
 	}
-	return &roundTrip{
+	r := &roundTrip{
 		t: t, db: db, log: log, writer: writer,
 		applier: tracker.NewApplier("node-a"),
 		reader:  tracker.NewReader(db), waiter: waiter,
 	}
+	// THE PROJECT FIRST, because a create is a SEQUENCE: it takes a key
+	// from that project's counter before it writes a task, and a project
+	// this node has not applied is one whose counter it cannot mint from.
+	// Seeding it here rather than in each case is what keeps the cases
+	// about what they are named for.
+	if _, err := writer.WriteDocument(t.Context(), "op-project",
+		tracker.ProjectSubject("ENG"), "", tracker.Project{
+			V: 1, Key: "ENG", Name: "Engineering",
+			CreatedAt: wednesday, UpdatedAt: wednesday,
+		}, nil); err != nil {
+		t.Fatalf("seed the project: %v", err)
+	}
+	r.drain()
+	return r
 }
 
 // drain consumes every record the broker holds beyond what this node has
@@ -298,7 +314,7 @@ func TestASecondCreateIsRefusedFromTheGuardingRow(t *testing.T) {
 	if err == nil {
 		t.Fatal("a second create for the same task was accepted")
 	}
-	if !errorsIs(err, statelog.ErrExists) {
+	if !errors.Is(err, statelog.ErrExists) {
 		t.Fatalf("the refusal is %v, not the one a caller handles", err)
 	}
 }
@@ -315,8 +331,14 @@ func TestARankMoveArbitratesOnTheOrder(t *testing.T) {
 		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, newTask(id), nil); err != nil {
 			t.Fatalf("CreateTask %s: %v", id, err)
 		}
+		// DRAINED BETWEEN THE TWO, because both mint from the same
+		// counter and the second cannot decide against a number this
+		// node has not applied. A create that did not drain is refused
+		// `behind` naming that counter, which is the case
+		// TestASecondWriteBehindIsRefusedRatherThanWaitingForEver
+		// covers.
+		r.drain()
 	}
-	r.drain()
 
 	moved, err := r.writer.MoveTasks(t.Context(), "op-move", "ENG",
 		[]tracker.Placement{{Task: "t-2", Rank: "a1"}})
@@ -353,16 +375,59 @@ func TestARankMoveArbitratesOnTheOrder(t *testing.T) {
 	}
 }
 
-func errorsIs(err, target error) bool {
-	for err != nil {
-		if err == target {
-			return true
-		}
-		unwrapped, ok := err.(interface{ Unwrap() error })
-		if !ok {
-			return false
-		}
-		err = unwrapped.Unwrap()
+// A WRITE AGAINST A SUBJECT THIS NODE IS BEHIND ON IS REFUSED, NOT WAITED OUT.
+//
+// # The failure this exists to catch
+//
+// A rejected append means a peer wrote in this generation and this node has not
+// applied it, so re-deciding needs the subject's true last position. The wait
+// for it used to run on the caller's own context with no budget of its own —
+// and the state producing it is an applier that has not caught up, which is
+// unbounded by construction. A request with no deadline waited FOR EVER, and
+// one with a deadline got a cancellation where it needed the reason.
+//
+// Two creates back to back mint from one counter, so the second is exactly that
+// case. It must come back refused, under a budget, naming the position it was
+// waiting for — because that number is what turns "a colleague is editing this"
+// into something a caller can retry against.
+func TestASecondWriteBehindIsRefusedRatherThanWaitingForEver(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.writer.CreateTask(t.Context(), "op-1", newTask("t-1"), nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
 	}
-	return false
+
+	// NO DRAIN: this node holds the first create's counter record on the
+	// log and has not applied it.
+	started := time.Now()
+	_, err := r.writer.CreateTask(t.Context(), "op-2", newTask("t-2"), nil)
+	if err == nil {
+		t.Fatal("a create against a counter this node has not caught up on " +
+			"was accepted, so it decided from a state below its own peer's write")
+	}
+	var unavailable *statelog.Unavailable
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("the refusal is %v, which is not the typed one a caller reads "+
+			"a retry position out of", err)
+	}
+	if unavailable.Reason != statelog.ReasonBehind {
+		t.Errorf("the refusal's reason is %q and the caller's remedy depends "+
+			"on it being %q", unavailable.Reason, statelog.ReasonBehind)
+	}
+	if unavailable.Position.Seq == 0 {
+		t.Error("the refusal names no position, so the caller has nothing to " +
+			"wait for and nothing to retry against")
+	}
+	if waited := time.Since(started); waited > 30*time.Second {
+		t.Fatalf("the write waited %s before refusing — the wait is bounded by "+
+			"the write path's own budget, and an unbounded one blocks the "+
+			"caller for as long as this node stays behind", waited)
+	}
+
+	// AND IT SUCCEEDS ONCE THE APPLIER CATCHES UP, which is what makes the
+	// refusal a retry rather than a failure.
+	r.drain()
+	if _, err := r.writer.CreateTask(t.Context(), "op-2", newTask("t-2"), nil); err != nil {
+		t.Fatalf("the same create after the drain: %v", err)
+	}
 }

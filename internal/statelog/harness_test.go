@@ -92,6 +92,14 @@ type applier struct {
 	// cannot catch up looks like: every round re-decides against the
 	// same anchor and the round budget is what ends it.
 	frozen bool
+
+	// stalled makes WaitCommitted BLOCK, which is the other half of the
+	// same situation and a different failure: frozen models an applier
+	// that answers instantly and never moves, and this one models an
+	// applier that does not answer at all. Only the second exercises the
+	// wait's own budget, and without it an unbounded wait there looks
+	// exactly like a fast one.
+	stalled bool
 }
 
 func newApplier() *applier {
@@ -133,9 +141,14 @@ func (a *applier) Committed() statelog.Position {
 
 func (a *applier) WaitCommitted(ctx context.Context, p statelog.Position) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
+	stalled := a.stalled
 	if !a.frozen && a.committed.Packed() < p.Packed() {
 		a.committed = p
+	}
+	a.mu.Unlock()
+	if stalled {
+		<-ctx.Done()
+		return ctx.Err()
 	}
 	return nil
 }

@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // The write paths, and the one sentence they all follow.
@@ -35,12 +37,37 @@ import (
 type Writer struct {
 	publisher *statelog.Publisher
 
+	// db is the replicated estate, read by the sequences that need to see
+	// a subtree BEFORE their first append. It is never the write path's
+	// own snapshot — that is the framework's, taken per append — and
+	// nothing decided here is paired with an expectation.
+	db *store.DB
+
+	// claims is the coordination a walking sequence takes its claim from,
+	// and nodeID is who holds it. Both may be nil or empty on a writer
+	// that only makes single-append writes; a sequence that needs one
+	// refuses by name rather than running without it.
+	claims Claims
+	nodeID string
+
 	// Actor and ActorKind are who this writer acts as. ON THE WRITER
 	// rather than on each call, because a surface acts as exactly one
 	// party for its whole life — and a tracker whose author field is
 	// chosen per call is not an audit trail.
 	Actor     string
 	ActorKind AuthorKind
+
+	// metrics is where the counters this package owns are recorded. Nil
+	// records nothing, which is what a writer built for a test gets: the
+	// instruments are the engine's, and a nil check here is cheaper than
+	// a second recorder nobody reads.
+	metrics *metrics.Recorder
+
+	// Drain is the applier's measured rows a second on this node, which
+	// is the divisor of every projection and every retry hint computed
+	// from one. Nil means unmeasured, which the projection reads as its
+	// pessimistic floor rather than as infinity.
+	Drain func() float64
 
 	// Now is the clock the AUTHORED instants are stamped from. An
 	// argument rather than a package call, so a test can pin it and so
@@ -51,6 +78,11 @@ type Writer struct {
 // WriterDeps is everything a writer needs that it does not own.
 type WriterDeps struct {
 	Publisher *statelog.Publisher
+	DB        *store.DB
+	Claims    Claims
+	NodeID    string
+	Metrics   *metrics.Recorder
+	Drain     func() float64
 	Actor     string
 	ActorKind AuthorKind
 	Now       func() time.Time
@@ -73,67 +105,10 @@ func NewWriter(d WriterDeps) (*Writer, error) {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &Writer{
-		publisher: d.Publisher, Actor: d.Actor, ActorKind: d.ActorKind, Now: now,
+		publisher: d.Publisher, db: d.DB, claims: d.Claims, nodeID: d.NodeID,
+		metrics: d.Metrics, Actor: d.Actor, ActorKind: d.ActorKind,
+		Drain: d.Drain, Now: now,
 	}, nil
-}
-
-// CreateTask mints a task.
-//
-// A CREATE IS PUBLISHED AT AN EXPECTATION OF ZERO, which is what makes two
-// nodes minting the same id collide harmlessly at the broker: exactly one
-// wins, the loser is told so, and there is nothing to repair on either side.
-func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
-	notify *Notify) (statelog.Result, error) {
-
-	if task.ID == "" {
-		return statelog.Result{}, fmt.Errorf("tracker: a create names no task id")
-	}
-	if task.Project == "" {
-		return statelog.Result{}, fmt.Errorf("tracker: task %s names no project "+
-			"— a task's scope path sits under its project's, so one without a "+
-			"project files its deferral where no project-scoped probe looks",
-			task.ID)
-	}
-	subject := TaskSubject(task.ID)
-	scope := ScopeSet{Subject: true, Container: task.Project}
-	at := w.Now()
-	task.CreatedAt, task.UpdatedAt = at, at
-	if task.Status == "" {
-		task.Status = StatusTodo
-	}
-	task.StatusGroup = task.Status.Group()
-	if task.Priority == "" {
-		task.Priority = PriorityNone
-	}
-	if task.Rank == "" {
-		return statelog.Result{}, fmt.Errorf("tracker: task %s has no rank — a "+
-			"create mints one from the key counter it already obtained, so a "+
-			"record without one is a writer that skipped the mint", task.ID)
-	}
-
-	return w.publish(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternCreate,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
-			// THE GUARD ROW IS READ INSIDE THE SNAPSHOT, because a task
-			// below the trim floor has no record left on the log to
-			// prove it existed and its own row is what still says so.
-			var present int
-			if err := tx.QueryRowContext(ctx,
-				`SELECT COUNT(*) FROM tracker_tasks WHERE id = ?`, task.ID).
-				Scan(&present); err != nil {
-				return statelog.Decision{}, fmt.Errorf("tracker: read the "+
-					"guarding row for %s: %w", task.ID, err)
-			}
-			if present > 0 {
-				return statelog.Decision{}, statelog.ErrExists
-			}
-			return w.decide(subject, OpCreate, scope, opID, task, notify, at)
-		},
-	})
 }
 
 // UpdateTask changes one.
@@ -142,13 +117,13 @@ func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 // writers on one task contend at the broker and two writers on different tasks
 // never contend at all.
 func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
-	patch TaskPatch, notify *Notify) (statelog.Result, error) {
+	patch TaskPatch, notify *Notify) (WriteResult, error) {
 
 	switch {
 	case id == "":
-		return statelog.Result{}, fmt.Errorf("tracker: an update names no task")
+		return WriteResult{}, fmt.Errorf("tracker: an update names no task")
 	case project == "":
-		return statelog.Result{}, fmt.Errorf("tracker: an update on task %s "+
+		return WriteResult{}, fmt.Errorf("tracker: an update on task %s "+
 			"names no project — the caller resolved a key to reach this task "+
 			"and therefore holds one", id)
 	}
@@ -166,7 +141,7 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 	}
 	at := w.Now()
 
-	return w.publish(ctx, statelog.Request{
+	result, err := w.published(ctx, statelog.Request{
 		Subject:  wire(subject),
 		Scope:    scope.Resolve(subject),
 		OpID:     opID,
@@ -198,6 +173,10 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			return decision, nil
 		},
 	})
+	if patch.Body != nil {
+		result.Warnings = bodyWarnings(*patch.Body)
+	}
+	return result, err
 }
 
 // MoveTasks repositions tasks in a project's manual order.
@@ -216,23 +195,29 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 // covering term instead, which is what keeps the field bounded by construction
 // rather than by a cap a writer can hit and then have to handle.
 func (w *Writer) MoveTasks(ctx context.Context, opID, project string,
-	placements []Placement) (statelog.Result, error) {
+	placements []Placement) (WriteResult, error) {
 
 	switch {
 	case project == "":
-		return statelog.Result{}, fmt.Errorf("tracker: a move names no project")
+		return WriteResult{}, fmt.Errorf("tracker: a move names no project")
 	case len(placements) == 0:
-		return statelog.Result{}, fmt.Errorf("tracker: a move places no task")
-	case len(placements) > MaxScopeTerms:
-		return statelog.Result{}, fmt.Errorf("tracker: a move carries %d "+
-			"placements and one record carries at most %d",
-			len(placements), MaxScopeTerms)
+		return WriteResult{}, fmt.Errorf("tracker: a move places no task")
+	case len(placements) > MaxBulkTasks+RankRespreadInline:
+		// THE CALLER'S OWN MOVES PLUS A RE-SPREAD'S WORTH OF
+		// NEIGHBOURS. The scope is the project CONTAINER rather than an
+		// enumeration precisely so the placement list is not bounded by
+		// the term cap: one drag can legitimately rewrite hundreds of
+		// neighbouring keys, and a covering term costs one path.
+		return WriteResult{}, fmt.Errorf("tracker: a move carries %d "+
+			"placements and one record carries at most %d — %d moves plus "+
+			"a re-spread's %d neighbours", len(placements),
+			MaxBulkTasks+RankRespreadInline, MaxBulkTasks, RankRespreadInline)
 	}
 	subject := RankOrderSubject(project)
 	scope := ScopeSet{Terms: []ScopeTerm{{Kind: TermContainer, ID: project}}}
 	at := w.Now()
 
-	return w.publish(ctx, statelog.Request{
+	return w.published(ctx, statelog.Request{
 		Subject:  wire(subject),
 		Scope:    scope.Resolve(subject),
 		OpID:     opID,
@@ -262,24 +247,24 @@ func (w *Writer) MoveTasks(ctx context.Context, opID, project string,
 // patch semantics to get wrong — and the kinds that take it are exactly the
 // ones small enough for that to be affordable.
 func (w *Writer) WriteDocument(ctx context.Context, opID string, subject Subject,
-	container string, document any, notify *Notify) (statelog.Result, error) {
+	container string, document any, notify *Notify) (WriteResult, error) {
 
 	if _, _, err := documentTable(subject); err != nil {
-		return statelog.Result{}, err
+		return WriteResult{}, err
 	}
 	// THE CONTAINER IS TAKEN AND CHECKED RATHER THAN ASSUMED. Most kinds
 	// carry their own home in their subject and must not be given a second
 	// one; a view and a goal choose theirs. Accepting one where it means
 	// nothing would let a caller file a person's record under a project.
 	if container != "" && !subject.Kind.HomedInAProject() {
-		return statelog.Result{}, fmt.Errorf("tracker: a %s names container %q, "+
+		return WriteResult{}, fmt.Errorf("tracker: a %s names container %q, "+
 			"and its own path is derived from its subject — a container here "+
 			"would file its deferral where no probe for it looks",
 			subject.Kind, container)
 	}
 	scope := ScopeSet{Subject: true, Container: container}
 	at := w.Now()
-	return w.publish(ctx, statelog.Request{
+	return w.published(ctx, statelog.Request{
 		Subject:  wire(subject),
 		Scope:    scope.Resolve(subject),
 		OpID:     opID,
@@ -297,17 +282,17 @@ func (w *Writer) WriteDocument(ctx context.Context, opID string, subject Subject
 // a turn records something that already happened. Its idempotency is its own
 // row's insert rather than an arbitration.
 func (w *Writer) RecordTurn(ctx context.Context, opID, taskID, project string,
-	payload any) (statelog.Result, error) {
+	payload any) (WriteResult, error) {
 
 	if project == "" {
-		return statelog.Result{}, fmt.Errorf("tracker: a turn on task %s names "+
+		return WriteResult{}, fmt.Errorf("tracker: a turn on task %s names "+
 			"no project — a turn's path is its task's, so one without a project "+
 			"files under a container the task is not in", taskID)
 	}
 	subject := TurnSubject(taskID)
 	scope := ScopeSet{Subject: true, Container: project}
 	at := w.Now()
-	return w.publish(ctx, statelog.Request{
+	return w.published(ctx, statelog.Request{
 		Subject:  wire(subject),
 		Scope:    scope.Resolve(subject),
 		OpID:     opID,
@@ -396,6 +381,14 @@ func wire(s Subject) statelog.Subject {
 	return statelog.Subject{Kind: string(s.Kind), ID: s.ID}
 }
 
+// published is [Writer.publish] with the domain's own result around it, for
+// the paths whose only extra fact is the body warning — which is every
+// single-append path.
+func (w *Writer) published(ctx context.Context, req statelog.Request) (WriteResult, error) {
+	result, err := w.publish(ctx, req)
+	return WriteResult{Result: result}, err
+}
+
 // publish runs one request and translates the framework's refusals into the
 // caller's own vocabulary.
 //
@@ -414,4 +407,121 @@ func (w *Writer) publish(ctx context.Context, req statelog.Request) (statelog.Re
 			req.Subject.ID, err)
 	}
 	return result, err
+}
+
+// MoveTask drops one task between two neighbours, re-spreading inline when the
+// gap has run out of room.
+//
+// # The gesture, and the one place a rank key can grow without bound
+//
+// A drag mints a key strictly between the two neighbours it landed between.
+// Repeatedly dropping at the same spot subdivides the same gap, and the key
+// grows one symbol per halving — so a board somebody keeps re-ordering at one
+// point reaches [RankRenormaliseAt] in a few hundred drags. That is the
+// designed rate, not a fault: what makes it harmless is that the mint is
+// REPLACED by a re-spread rather than allowed to keep growing.
+//
+// A re-spread rewrites a window of neighbours to evenly spaced short keys and
+// carries them in the SAME record as the drag, so the order is never observed
+// half-spread. The window is derived from the gap rather than fixed —
+// [RespreadWindow] widens until the keys it would produce are short — and it
+// stops at [RankRespreadInline]. Past that the drag STILL SUCCEEDS with its
+// long key, and the applier flags the project for the duty's paced walk on
+// every node: a drag refused because a board is crowded is a person told their
+// own board is broken.
+func (w *Writer) MoveTask(ctx context.Context, opID, project, taskID string,
+	after, before Rank) (WriteResult, error) {
+
+	switch {
+	case project == "":
+		return WriteResult{}, fmt.Errorf("tracker: a move names no project")
+	case taskID == "":
+		return WriteResult{}, fmt.Errorf("tracker: a move names no task")
+	}
+	placements, err := w.placeBetween(ctx, project, taskID, after, before)
+	if err != nil {
+		return WriteResult{}, err
+	}
+	return w.MoveTasks(ctx, opID, project, placements)
+}
+
+// placeBetween mints the drag's own key and, when it is too long, the window
+// of neighbours that shortens it.
+func (w *Writer) placeBetween(ctx context.Context, project, taskID string,
+	after, before Rank) ([]Placement, error) {
+
+	key, err := KeyBetween(after, before)
+	if err != nil {
+		return nil, fmt.Errorf("tracker: mint a key between %q and %q: %w",
+			after, before, err)
+	}
+	if len(key) <= RankRenormaliseAt {
+		return []Placement{{Task: taskID, Rank: key}}, nil
+	}
+	window, err := RespreadWindow(after, before)
+	if err != nil {
+		return nil, err
+	}
+	if w.db == nil {
+		// NO STORE, NO RE-SPREAD, AND THE DRAG STILL LANDS. The applier
+		// flags the project from the key's own length, so the repair is
+		// scheduled by the record rather than by whoever wrote it.
+		return []Placement{{Task: taskID, Rank: key}}, nil
+	}
+
+	var neighbours []Placement
+	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `
+			SELECT id, rank FROM tracker_tasks
+			WHERE project_key = ? AND rank > ? AND rank < ?
+			ORDER BY rank, id LIMIT ?`,
+			project, string(after), string(before), window)
+		if err != nil {
+			return fmt.Errorf("tracker: read the re-spread window in %s: %w",
+				project, err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var p Placement
+			var rank string
+			if err := rows.Scan(&p.Task, &rank); err != nil {
+				return fmt.Errorf("tracker: read a re-spread neighbour: %w", err)
+			}
+			p.Rank = Rank(rank)
+			neighbours = append(neighbours, p)
+		}
+		return rows.Err()
+	}); err != nil {
+		return nil, err
+	}
+
+	// THE MOVED TASK TAKES ITS PLACE IN THE WINDOW rather than being
+	// appended to it: the whole point of the re-spread is that the record
+	// states one consistent order, and a drag written beside a window it
+	// is not part of would land between two keys the same record has just
+	// moved.
+	fresh, err := KeysBetween(after, before, len(neighbours)+1)
+	if err != nil {
+		return nil, fmt.Errorf("tracker: re-spread %d neighbours between %q "+
+			"and %q: %w", len(neighbours), after, before, err)
+	}
+	placements := make([]Placement, 0, len(fresh))
+	placements = append(placements, Placement{Task: taskID, Rank: fresh[0]})
+	for i, neighbour := range neighbours {
+		placements = append(placements, Placement{
+			Task: neighbour.Task, Rank: fresh[i+1],
+		})
+	}
+	return placements, nil
+}
+
+// count records one of this package's own counters.
+//
+// NIL RECORDS NOTHING, deliberately: the instruments belong to the engine,
+// which builds one recorder for the whole process, and a writer in a test has
+// no reason to carry a second one whose numbers nobody reads.
+func (w *Writer) count(name string, attrs metrics.Attrs) {
+	if w.metrics != nil {
+		w.metrics.Add(name, 1, attrs)
+	}
 }

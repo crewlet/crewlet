@@ -76,6 +76,7 @@ Only ever rises. Rates and totals are your collector's arithmetic, never this en
 | Metric | Unit | Attributes | What it makes visible |
 |---|---|---|---|
 | `crewlet.statelog.publish.outcomes` | `1` | `domain`, `outcome` | The three-valued write outcome, counted, and only the three — a refusal is on `publish.refusals` instead, because it says the write never happened at all. `unknown` is the one that matters most and had no counter: a broker flapping into ambiguity was visible only to the model that received the answer. |
+| `crewlet.statelog.publish.conflicts` | `1` | `domain`, `subject_kind` | Writes that spent their whole round budget losing races on one subject, BY KIND. The refusal counter beside it says a conflict happened and not what it was about, and the remedy differs entirely: one contended object is a design question and a contended kind is a hot subject. |
 | `crewlet.statelog.publish.rejections` | `1` | `domain`, `subject_kind` | How often a write loses a race, per kind of subject. It is what says whether a counter, a rank order or an ordinary object is the contended one. |
 | `crewlet.statelog.publish.refusals` | `1` | `domain`, `reason` | Writes refused before or instead of an append, by reason — an evicted node, a deferred record covering the object, a caller waiting on its own previous write, a full log. A refusal is not one of the three outcomes: it says the write never happened, and each reason has a different remedy, so one counter with an outcome dimension would hide all four. |
 | `crewlet.statelog.read.refusals` | `1` | `domain`, `level`, `code` | Every refusal code, counted. Twelve codes with different remedies had no counter between them, so an operator had no rejection rate for any of them. |
@@ -86,6 +87,8 @@ Only ever rises. Rates and totals are your collector's arithmetic, never this en
 | `crewlet.statelog.apply.tx.aborts` | `1` | `domain` | Apply transactions the store aborted on a conflict and the loop retried. It is the number that says whether this driver's transaction conflicts are row-scoped or database-scoped, on the operator's own hardware rather than on a benchmark's — measured at zero against a writer committing to tables the applier never touches, so a non-zero count means the retry budget is being spent rather than held in reserve. |
 | `crewlet.statelog.apply.retries` | `1` | `domain` | Transient apply failures retried in place, which are otherwise a silent backoff inside the loop. |
 | `crewlet.statelog.records_gated` | `1` | `gate`, `subject_kind` | Records an apply gate dropped. A dropped commit is recoverable by nothing, and this is the only place anyone would see that it happened. |
+| `crewlet.tracker.bulk.calls` | `1` | `result` | How often a bulk edit is issued and how often one is refused because another is applying. The refusal arithmetic rested on an assumed ten a day, a number with no counter behind it; this is that number. |
+| `crewlet.tracker.bulk.apply_seconds` | `s` | — | Seconds of applier occupancy bulk edits projected, summed. Over 24 hours it IS the fleet-wide read-degradation budget: every second here is a second in which reads are behind and writes are pending on every node. |
 
 ## What is deliberately not here
 

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/store"
@@ -165,8 +164,16 @@ func applyPatch(task Task, patch TaskPatch) Task {
 	setString(&task.Type, patch.Type)
 	setString(&task.Assignee, patch.Assignee)
 	setString(&task.RoutingUnit, patch.RoutingUnit)
-	setString(&task.Key, patch.Key)
 	setString(&task.Project, patch.Project)
+	if patch.Mint != nil {
+		// THE MINT IS THE AUTHORITY FOR BOTH, derived rather than
+		// carried, so a record cannot claim a key and a rank that
+		// disagree about which counter value it took.
+		task.Key = fmt.Sprintf("%s-%d", task.Project, patch.Mint.N)
+		if rank, err := IntegerAt(patch.Mint.N); err == nil {
+			task.Rank = rank
+		}
+	}
 	if patch.Status != nil {
 		task.Status = *patch.Status
 		task.StatusGroup = task.Status.Group()
@@ -204,6 +211,9 @@ func applyPatch(task Task, patch TaskPatch) Task {
 	}
 	if patch.Points != nil {
 		task.Points = *patch.Points
+	}
+	if patch.Merging != nil {
+		task.Merging = *patch.Merging
 	}
 	if patch.Archived != nil {
 		task.Archived = *patch.Archived
@@ -267,12 +277,12 @@ func upsertTask(ctx context.Context, tx *sql.Tx, task Task, document []byte,
 			 points, spend_turns, spend_rounds, spend_input, spend_output,
 			 spend_cache_read, spend_cache_write, spend_wall_ms, spend_tokens,
 			 done_at, closed_at, finished_at, archived, archived_at, removed_at,
-			 removed_with, batch_id, reassignments, policy_stamp,
+			 removed_with, batch_id, merging, reassignments, policy_stamp,
 			 unblocked_told_at, search_rev, embed_rev, inconsistent_project,
 			 cycle, too_deep, key_collision, created_at, updated_at, version,
 			 scoped_through, document)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?,?,?,?,
-		        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,0,0,0,0,0,0,?,?,?,0,?)
+		        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,0,0,0,0,0,0,?,?,?,0,?)
 		ON CONFLICT (id) DO UPDATE SET
 			key = excluded.key, project_key = excluded.project_key,
 			routing_unit = excluded.routing_unit,
@@ -289,6 +299,7 @@ func upsertTask(ctx context.Context, tx *sql.Tx, task Task, document []byte,
 			finished_at = excluded.finished_at, archived = excluded.archived,
 			archived_at = excluded.archived_at, removed_at = excluded.removed_at,
 			removed_with = excluded.removed_with, batch_id = excluded.batch_id,
+			merging = excluded.merging,
 			reassignments = excluded.reassignments,
 			policy_stamp = excluded.policy_stamp,
 			updated_at = excluded.updated_at, version = excluded.version,
@@ -307,7 +318,7 @@ func upsertTask(ctx context.Context, tx *sql.Tx, task Task, document []byte,
 		nullableTime(task.ClosedAt), nullableTime(task.FinishedAt()),
 		boolInt(task.Archived), nullableTime(task.ArchivedAt),
 		removedAt(task), removedWith(task), batchOf(c.record),
-		task.Reassignments, task.PolicyStamp,
+		boolInt(task.Merging), task.Reassignments, task.PolicyStamp,
 		store.EncodeTime(task.CreatedAt), store.EncodeTime(task.UpdatedAt),
 		c.packed, document)
 	if err != nil {
@@ -477,6 +488,29 @@ func (a *Applier) maintainDeps(ctx context.Context, tx *sql.Tx, task Task) (int,
 // taskKeyPattern is what a body or a comment is scanned for.
 var taskKeyPattern = regexp.MustCompile(`[A-Z][A-Z0-9]{1,9}-[0-9]+`)
 
+// taskKeysIn is every distinct key a body names, IN DOCUMENT ORDER.
+//
+// Document order rather than sorted, and the difference is which sixty-four
+// survive the cap: sorting drops the key somebody wrote first in favour of
+// sixty-four that happen to start with an earlier letter. Both are
+// deterministic and therefore both replicate — this one also links what the
+// author was writing about.
+//
+// ONE SCANNER for the applier's rows and the write path's warning, because
+// two would let a body be warned about at one count and capped at another.
+func taskKeysIn(body string) []string {
+	found := taskKeyPattern.FindAllString(body, -1)
+	seen := make(map[string]bool, len(found))
+	keys := make([]string, 0, len(found))
+	for _, key := range found {
+		if !seen[key] {
+			seen[key] = true
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
 // maintainReferences derives the mention graph from the task's own body.
 //
 // CAPPED AFTER DEDUPE, so a pathological body is a bounded number of lookups
@@ -489,9 +523,7 @@ func (a *Applier) maintainReferences(ctx context.Context, tx *sql.Tx, task Task)
 		task.ID); err != nil {
 		return 0, fmt.Errorf("tracker: clear the references of %s: %w", task.ID, err)
 	}
-	keys := taskKeyPattern.FindAllString(task.Body, -1)
-	slices.Sort(keys)
-	keys = slices.Compact(keys)
+	keys := taskKeysIn(task.Body)
 	if len(keys) > MaxReferencesPerBody {
 		keys = keys[:MaxReferencesPerBody]
 	}

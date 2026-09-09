@@ -508,3 +508,75 @@ func (unreachable) Append(context.Context, string, string, *uint64, []byte) (uin
 func (unreachable) LastSeq(context.Context, string) (uint64, bool, error) {
 	return 0, false, fmt.Errorf("no response from stream")
 }
+
+// THE WAIT FOR A PEER'S POSITION IS BOUNDED, AND EXPIRY IS A REASON.
+//
+// # The failure this exists to catch
+//
+// A rejected append means a peer wrote in this generation and this node has
+// not applied it, so re-deciding needs the subject's true last position. The
+// wait for it ran on the CALLER'S OWN CONTEXT with no budget — and the state
+// that produces it is an applier that has not caught up, which is unbounded by
+// construction. A request with no deadline waited for ever, holding the
+// caller's goroutine and its own snapshot; a request with a deadline got a
+// bare cancellation where it needed the reason and the position.
+//
+// This is the one shape that catches it. A frozen applier answers instantly
+// and never moves, which spends the round budget and ends in a conflict — the
+// case above — and never touches the wait's own budget at all. Only an applier
+// that does not ANSWER does.
+func TestTheWaitForAPeersPositionIsBoundedAndSaysWhy(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil, []byte("peer"))
+	if err != nil {
+		t.Fatalf("the peer's write: %v", err)
+	}
+	// The anchor is below what the log holds, so this write is behind a
+	// peer's record — and the applier never answers, which is a node that
+	// has stopped catching up rather than one losing races.
+	h.anchorAt(probeSubject("a"), peer-1)
+	h.applier.mu.Lock()
+	h.applier.stalled = true
+	h.applier.mu.Unlock()
+
+	started := time.Now()
+	// NO DEADLINE ON THE CALLER'S CONTEXT, deliberately: the budget under
+	// test is the write path's own, and a context deadline here would be
+	// the test supplying the bound it is meant to be checking.
+	_, err = h.pub.Publish(context.Background(), statelog.Request{
+		Subject:  probeSubject("a"),
+		Scope:    statelog.ScopeSet{Paths: []string{"p/a"}},
+		OpID:     "op-1",
+		MintedAt: time.Now(),
+		Pattern:  statelog.PatternArbitrated,
+		Decide: func(*sql.Tx) (statelog.Decision, error) {
+			return statelog.Decision{
+				Payload:  []byte("mine"),
+				Envelope: statelog.Envelope{Kind: "object", OpID: "op-1"},
+			}, nil
+		},
+	})
+	waited := time.Since(started)
+
+	var unavailable *statelog.Unavailable
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("the write returned %v, and a caller behind a peer needs the "+
+			"typed refusal it reads a retry position out of", err)
+	}
+	if unavailable.Reason != statelog.ReasonBehind {
+		t.Errorf("the refusal's reason is %q, want %q — the remedy differs: "+
+			"behind is waited out, and every other reason is not",
+			unavailable.Reason, statelog.ReasonBehind)
+	}
+	if unavailable.Position.Seq != peer {
+		t.Errorf("the refusal names position %d and the peer's record is at "+
+			"%d — a caller told it is behind with no number has nothing to "+
+			"wait for", unavailable.Position.Seq, peer)
+	}
+	if waited > 5*time.Second {
+		t.Fatalf("the write waited %s before refusing, and the budget is %s — "+
+			"an unbounded wait blocks the caller for as long as this node "+
+			"stays behind", waited, 250*time.Millisecond)
+	}
+}

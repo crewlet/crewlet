@@ -318,19 +318,47 @@ func (a *Applier) applyRankOrder(ctx context.Context, tx *sql.Tx, c applyContext
 		}
 		rows += n
 	}
-	// A DUPLICATE RANK IS A REPAIRABLE OBSERVABLE, not a refusal. One
-	// indexed probe rather than a per-minute scan, and the duty clears the
-	// flag the same way — because a unique index here would turn a rare
-	// cosmetic anomaly into a deterministic fleet-wide stalled log.
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE tracker_projects SET rank_duplicate_pending = 1
-		WHERE key = ? AND EXISTS (
-			SELECT 1 FROM tracker_tasks t
-			WHERE t.project_key = ?
-			GROUP BY t.rank HAVING COUNT(*) > 1)`,
-		order.Project, order.Project); err != nil {
-		return 0, fmt.Errorf("tracker: probe for duplicate ranks in %s: %w",
-			order.Project, err)
+	// A DUPLICATE RANK IS A REPAIRABLE OBSERVABLE, not a refusal, and the
+	// probe is ONE INDEXED LOOKUP PER KEY THIS RECORD WROTE — never a
+	// GROUP BY over the project.
+	//
+	// The distinction is the whole point of the decision that added the
+	// column: a company-wide aggregate on every drag is the per-minute
+	// scan no index answers, moved onto the apply path where it costs
+	// every node rather than one. A duplicate can only involve a rank this
+	// record just wrote, so those are the only ranks worth asking about,
+	// and each is an equality seek on (project_key, rank, id).
+	//
+	// A unique index instead would turn a rare cosmetic anomaly into a
+	// deterministic fleet-wide stalled log.
+	for _, placement := range order.Placements {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE tracker_projects SET rank_duplicate_pending = 1
+			WHERE key = ? AND EXISTS (
+				SELECT 1 FROM tracker_tasks t
+				WHERE t.project_key = ? AND t.rank = ? AND t.id <> ?)`,
+			order.Project, order.Project, string(placement.Rank),
+			placement.Task); err != nil {
+			return 0, fmt.Errorf("tracker: probe for a duplicate of rank %s "+
+				"in %s: %w", placement.Rank, order.Project, err)
+		}
+	}
+	// AND THE RE-SPREAD HAND-OFF, from the same records: a key past the
+	// renormalisation threshold is one the mint could not shorten inline,
+	// so the project's order needs the duty's paced walk. Set here rather
+	// than by the writer, because every node must agree that this project
+	// needs one — the writer is a single node's opinion.
+	for _, placement := range order.Placements {
+		if len(placement.Rank) <= RankRenormaliseAt {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE tracker_projects SET rank_respread_pending = 1 WHERE key = ?`,
+			order.Project); err != nil {
+			return 0, fmt.Errorf("tracker: flag %s for a re-spread: %w",
+				order.Project, err)
+		}
+		break
 	}
 	return rows, nil
 }

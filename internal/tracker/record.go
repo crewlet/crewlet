@@ -304,7 +304,11 @@ type Task struct {
 	DoneAt   *time.Time `json:"done_at,omitempty"`
 	ClosedAt *time.Time `json:"closed_at,omitempty"`
 
-	Archived   bool       `json:"archived,omitempty"`
+	Archived bool `json:"archived,omitempty"`
+
+	// Merging is true while this task's merge walk is running. See
+	// [TaskPatch.Merging].
+	Merging    bool       `json:"merging,omitempty"`
 	ArchivedAt *time.Time `json:"archived_at,omitempty"`
 	ArchivedBy string     `json:"archived_by,omitempty"`
 
@@ -505,8 +509,26 @@ type TaskPatch struct {
 	RoutingUnit *string   `json:"routing_unit,omitempty"`
 	Parent      *string   `json:"parent,omitempty"`
 	Sprint      *int      `json:"sprint,omitempty"`
-	Key         *string   `json:"key,omitempty"`
 	Project     *string   `json:"project,omitempty"`
+
+	// Mint is the counter value this record took, and THE ONLY WAY A
+	// PATCH MAY WRITE A KEY OR A RANK.
+	//
+	// # Why neither is a plain field
+	//
+	// A key is what people paste into chat and a rank is a position in a
+	// total order no single task owns, so both have exactly two producers
+	// (D144, as D156 restates it): a record carrying a counter value it
+	// minted in that project, and a record on that project's rankorder
+	// subject. A `Key *string` on this struct is a third — an ordinary
+	// edit that can name any key it likes, including one another task
+	// holds — and a `Rank *Rank` is a fourth that races every drag.
+	//
+	// Stated as the MINT, the rule is in the type: the applier derives
+	// both from the value, so a patch that did not mint one cannot write
+	// either, and a patch that did writes exactly what the counter's own
+	// arbitration gave it.
+	Mint *KeyMint `json:"mint,omitempty"`
 
 	StartAt   *time.Time `json:"start_at,omitempty"`
 	DueAt     *time.Time `json:"due_at,omitempty"`
@@ -517,6 +539,12 @@ type TaskPatch struct {
 
 	Archived *bool      `json:"archived,omitempty"`
 	Removed  *Tombstone `json:"removed,omitempty"`
+
+	// Merging is set while a merge's child walk runs and cleared by its
+	// last append. It is what makes a duplicate visibly MID-MERGE rather
+	// than silently half-merged, and what the duty selects on to finish a
+	// walk whose holder died.
+	Merging *bool `json:"merging,omitempty"`
 
 	// The collections, carried WHOLE when touched.
 	Collaborators *[]string                   `json:"collaborators,omitempty"`
@@ -1061,3 +1089,25 @@ type Position struct {
 // is refused client-side rather than closing the connection, and inside the
 // store's own encoded-record refusal.
 const MaxCommitBytes = 1_279_262
+
+// KeyMint is a counter value a record took, carried on the record that uses it.
+//
+// # Why the RANGE rides the record and is not recomputed
+//
+// A cross-project move re-keys a whole subtree from one range mint, and the
+// base is NOT recoverable afterwards: by the time a duty completes an
+// abandoned walk, other creates have advanced the counter, so a duty that
+// recomputed the base would assign a different key to the same descendant on a
+// different node. The ordering by (depth, id) fixes the ORDER; only the base on
+// the record fixes the ORIGIN — which is what makes the walk's completion a
+// pure function of the record rather than of when it runs.
+type KeyMint struct {
+	// N is the counter value this task took. Its key is "<PROJECT>-<n>"
+	// and its rank is the n-th key of the create lattice.
+	N uint64 `json:"n"`
+
+	// Base and Length describe the whole range, on the ROOT record of a
+	// moving subtree alone. Zero on every other mint.
+	Base   uint64 `json:"base,omitempty"`
+	Length int    `json:"length,omitempty"`
+}

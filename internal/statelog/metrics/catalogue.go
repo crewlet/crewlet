@@ -117,6 +117,15 @@ func Catalogue() []Instrument {
 				"the answer.",
 		},
 		{
+			Name: "crewlet.statelog.publish.conflicts", Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"domain", "subject_kind"},
+			Shows: "Writes that spent their whole round budget losing races " +
+				"on one subject, BY KIND. The refusal counter beside it " +
+				"says a conflict happened and not what it was about, and " +
+				"the remedy differs entirely: one contended object is a " +
+				"design question and a contended kind is a hot subject.",
+		},
+		{
 			Name: "crewlet.statelog.publish.rejections", Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain", "subject_kind"},
 			Shows: "How often a write loses a race, per kind of subject. It is " +
@@ -379,6 +388,23 @@ func Catalogue() []Instrument {
 				"drops a seat.",
 		},
 
+		// ---- bulk -----------------------------------------------------
+		{
+			Name: "crewlet.tracker.bulk.calls", Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"result"},
+			Shows: "How often a bulk edit is issued and how often one is " +
+				"refused because another is applying. The refusal " +
+				"arithmetic rested on an assumed ten a day, a number with " +
+				"no counter behind it; this is that number.",
+		},
+		{
+			Name: "crewlet.tracker.bulk.apply_seconds", Kind: KindCounter, Unit: UnitSeconds,
+			Attributes: nil,
+			Shows: "Seconds of applier occupancy bulk edits projected, " +
+				"summed. Over 24 hours it IS the fleet-wide read-degradation " +
+				"budget: every second here is a second in which reads are " +
+				"behind and writes are pending on every node.",
+		},
 		// ---- alarms ---------------------------------------------------
 		{
 			Name: "crewlet.alarm.active", Kind: KindGauge, Unit: UnitCount,

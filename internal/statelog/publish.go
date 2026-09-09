@@ -285,7 +285,7 @@ func NewPublisher(d Deps) (*Publisher, error) {
 func (p *Publisher) Publish(ctx context.Context, req Request) (Result, error) {
 	started := time.Now()
 	res, err := p.publish(ctx, req)
-	p.observe(started, res, err)
+	p.observe(started, req, res, err)
 	return res, err
 }
 
@@ -353,7 +353,16 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 			// A PEER WROTE IN THIS GENERATION AND THIS NODE IS BEHIND.
 			// Never expectation zero: the subject is not empty, it is
 			// ahead of this node.
-			if err := p.waiter.WaitCommitted(ctx, *behind); err != nil {
+			//
+			// UNDER THE SAME BUDGET AS THE SESSION WAIT, and refusing
+			// `behind` on expiry. An unbounded wait here is a caller
+			// blocked for as long as this node stays behind — which is
+			// unbounded by construction, because the very state that
+			// produces it is an applier that has not caught up. The
+			// caller's own context is not a budget either: a request
+			// with no deadline waits for ever, and one with a deadline
+			// gets a cancellation where it needs the reason.
+			if err := p.waitBehind(ctx, req, *behind); err != nil {
 				return Result{Rounds: round}, err
 			}
 			continue
@@ -616,8 +625,14 @@ func (p *Publisher) afterRejection(ctx context.Context, req Request, expect *uin
 		// position before re-deciding: a retake with no wait re-reads
 		// the anchor the applier has not yet advanced, and does it
 		// sixteen times.
+		//
+		// UNDER THE WRITE PATH'S OWN BUDGET, exactly as the behind
+		// branch above is: the winner's record may be one this node
+		// never applies, and the caller's context is not a bound —
+		// with no deadline it waits for ever, and with one it gets a
+		// cancellation where it needs a position to retry against.
 		at := Position{Stream: p.stream, Generation: p.generation(), Seq: seq}
-		if err := p.waiter.WaitCommitted(ctx, at); err != nil {
+		if err := p.waitBehind(ctx, req, at); err != nil {
 			return nil, err
 		}
 		return nil, nil
@@ -861,6 +876,34 @@ func (p *Publisher) waitSession(ctx context.Context, req Request) error {
 	return nil
 }
 
+// waitBehind waits for this node to reach a position a peer already wrote,
+// under the write path's own budget.
+//
+// THE SAME BUDGET AND THE SAME REFUSAL AS THE SESSION WAIT, because they are
+// the same situation seen from two sides: a snapshot below a position the
+// broker has already accepted. Both answer `behind` with the position they
+// were waiting for, which is what turns "a colleague is editing this" — the
+// conflict a caller would otherwise be told after sixteen rounds — into a
+// number the caller can retry against.
+func (p *Publisher) waitBehind(ctx context.Context, req Request, at Position) error {
+	waitCtx, cancel := context.WithTimeout(ctx, p.resolveBudget)
+	defer cancel()
+	if err := p.waiter.WaitCommitted(waitCtx, at); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return &Unavailable{
+			Reason: ReasonBehind,
+			Detail: fmt.Sprintf("%s is at %s on the log and this node has not "+
+				"applied it within %s, so a write against it would be decided "+
+				"from a state below it", req.Subject, at, p.resolveBudget),
+			Position: at,
+			OpID:     req.OpID,
+		}
+	}
+	return nil
+}
+
 // subjectOf renders a subject as the wire string, which is the domain's own
 // prefix plus the object's kind and id.
 //
@@ -877,7 +920,7 @@ func (p *Publisher) subjectOf(s Subject) string {
 // say what happened to a record; a refusal says no record happened, and each
 // reason has its own remedy — so folding them into one dimension would give
 // an operator a rate with four different meanings in it.
-func (p *Publisher) observe(started time.Time, res Result, err error) {
+func (p *Publisher) observe(started time.Time, req Request, res Result, err error) {
 	domain := p.domain.Name()
 	if err != nil {
 		reason := "error"
@@ -887,6 +930,13 @@ func (p *Publisher) observe(started time.Time, res Result, err error) {
 			reason = string(refusal.Reason)
 		case errors.Is(err, ErrConflict):
 			reason = "conflict"
+			// AND BY KIND, because the remedy differs: the refusal
+			// counter says a write lost every round and not what it
+			// was about, and one contended object is a design
+			// question where a contended KIND is a hot subject.
+			p.count("crewlet.statelog.publish.conflicts", metrics.Attrs{
+				"domain": domain, "subject_kind": req.Subject.Kind,
+			})
 		case errors.Is(err, ErrExists):
 			reason = "exists"
 		}
