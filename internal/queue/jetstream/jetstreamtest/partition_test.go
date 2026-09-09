@@ -51,9 +51,26 @@ func TestPartitionHarnessActuallyPartitions(t *testing.T) {
 	awaitRoutes(t, c, 1, 2)
 }
 
-// The majority is the point of the cut: a fleet of three that loses one
-// member has quorum and goes on working, and a harness that took the whole
-// cluster down with the partitioned member would prove the opposite.
+// THE MAJORITY SURVIVES, AFTER IT ELECTS.
+//
+// This is the point of the cut and it is why the harness exists: a fleet of
+// three that loses one member has a quorum and goes on working, and a harness
+// that took the whole cluster down with the partitioned member would prove the
+// opposite.
+//
+// # Why the publish is retried and the first attempt is expected to fail
+//
+// A publish is answered by the STREAM LEADER, and the partitioned member may
+// have been it. The remaining two cannot answer until they elect a new one —
+// measured here at several seconds, which is NATS's own election timeout and
+// not something this engine sets. So "the majority survives" is a claim about
+// the interval AFTER the election, and a test that published once immediately
+// would be asserting that a leaderless raft group answers, which no design
+// promises.
+//
+// What is asserted is that the election happens at all and that it is bounded:
+// a cluster that never elects answers nothing for ever, which is the failure
+// this case is really about.
 func TestAMajoritySurvivesAPartition(t *testing.T) {
 	t.Parallel()
 	c := StartPartitionableCluster(t, 3, js.Config{})
@@ -69,10 +86,23 @@ func TestAMajoritySurvivesAPartition(t *testing.T) {
 	c.Partition(t, 2)
 	awaitRoutes(t, c, 2, 0)
 
-	// Two of three replicas is a quorum, so this must still be durable.
-	if err := q.Publish(t.Context(), topic, events.New(probe{N: 2}, events.TraceContext{})); err != nil {
-		t.Fatalf("publish with one of three members partitioned: %v", err)
+	// Two of three replicas is a quorum, so this must become durable once
+	// the surviving pair has a leader.
+	started := time.Now()
+	deadline := started.Add(60 * time.Second)
+	var last error
+	for time.Now().Before(deadline) {
+		last = q.Publish(t.Context(), topic, events.New(probe{N: 2}, events.TraceContext{}))
+		if last == nil {
+			t.Logf("the majority accepted a publish %v after the partition",
+				time.Since(started).Round(100*time.Millisecond))
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
 	}
+	t.Fatalf("the surviving majority never accepted a publish: %v — two of three "+
+		"replicas is a quorum, so a cluster that cannot commit here has lost more "+
+		"than the member that was cut", last)
 }
 
 // awaitRoutes waits for member i to hold routes to exactly want peers.
