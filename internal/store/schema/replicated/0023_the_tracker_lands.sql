@@ -665,6 +665,7 @@ CREATE INDEX tracker_history_kind_idx ON tracker_history (kind, effective_at);  
 CREATE INDEX tracker_history_comment_idx ON tracker_history (comment_id);                                     -- resolving a comment back to the commit that wrote it
 CREATE INDEX tracker_history_batch_idx ON tracker_history (batch_id);                                         -- batch= (what one bulk call did)
 CREATE INDEX tracker_history_seq_idx ON tracker_history (log_seq);                                            -- the activity feed's since: keyset, which is a position
+CREATE INDEX tracker_history_kind_seq_idx ON tracker_history (kind, log_seq);                                  -- the missed-unblocked repair, which is bounded by its own last position and never by a clock
 
 CREATE TABLE tracker_turns (
     id             TEXT    NOT NULL PRIMARY KEY,

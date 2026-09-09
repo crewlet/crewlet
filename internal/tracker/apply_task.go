@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -49,6 +50,19 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	}
 	next.Version = uint64(c.packed)
 
+	// THE FINISH STAMPS ARE THE APPLIER'S, derived from the group the
+	// task has just entered rather than carried by the record.
+	//
+	// A writer-supplied instant would be one node's clock on a column
+	// every "recent" filter, every cycle- and lead-time report and every
+	// dependency edge's own clearing time is compared against — and the
+	// dependency edge is the one that matters most, because a blocker
+	// whose finish instant is null clears nothing and every dependent
+	// waits for ever on work that is done.
+	if err := stampFinish(&next, c); err != nil {
+		return 0, err
+	}
+
 	document, err := json.Marshal(next)
 	if err != nil {
 		return 0, fmt.Errorf("tracker: encode task %s at %s: %w", id, c.position, err)
@@ -75,7 +89,114 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 			return 0, err
 		}
 	}
-	return rows + children + counts + history + spans, nil
+	told, err := a.stampUnblocked(ctx, tx, c)
+	if err != nil {
+		return 0, err
+	}
+	return rows + children + counts + history + spans + told, nil
+}
+
+// stampUnblocked records that this commit told a dependent it is workable.
+//
+// # Why the applier writes it and not the writer
+//
+// The column is a MAX over every applied commit that named this task as
+// unblocked, which makes it order-independent and identical on every node — a
+// redelivery, a reprocess and a replay all leave the same value, so none of
+// them re-issues a wake somebody already had. A writer-supplied instant could
+// not have that property: it would be one node's clock, and two nodes telling
+// the same dependent would leave two different answers to "have they been
+// told".
+//
+// It is the EFFECTIVE instant, never the authored one, for the reason the
+// dependency edge's own clearing time is: the comparison the repair makes is
+// between two fleet-agreed values, and on authored clocks a sixty-second skew
+// re-issues a late wake for every task cleared inside that window, on every
+// tick.
+func (a *Applier) stampUnblocked(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
+	if c.record.Notify == nil || len(c.record.Notify.Snapshot.Unblocked) == 0 {
+		return 0, nil
+	}
+	written := 0
+	for _, party := range c.record.Notify.Snapshot.Unblocked {
+		if party.Task == "" {
+			continue
+		}
+		// THE DEPENDENT'S OWN EFFECTIVE INSTANT, computed exactly as
+		// every other instant on its row is: a MAX over the records
+		// this node has applied at or below this position, so two nodes
+		// applying in different orders reach the same number.
+		effective, err := effectiveAt(ctx, tx, party.Task, c)
+		if err != nil {
+			return 0, err
+		}
+		at := store.EncodeTime(effective)
+		res, err := tx.ExecContext(ctx, `
+			UPDATE tracker_tasks
+			SET unblocked_told_at = MAX(COALESCE(unblocked_told_at, 0), ?)
+			WHERE id = ? AND COALESCE(unblocked_told_at, 0) < ?`,
+			at, party.Task, at)
+		if err != nil {
+			return 0, fmt.Errorf("tracker: record that %s was told it is "+
+				"unblocked at %s: %w", party.Task, c.position, err)
+		}
+		n, err := affected(res)
+		if err != nil {
+			return 0, err
+		}
+		written += n
+	}
+	return written, nil
+}
+
+// stampFinish sets or clears the two finish instants from the group the task
+// is now in.
+//
+// BY GROUP RATHER THAN BY SLUG, because a company renames its statuses and
+// adds its own: `cancelled` and `done` are both the done group, and a report
+// that keyed on the slug would silently stop counting the day somebody added
+// `shipped`. FIRST ENTRY WINS in each group, so a task that goes done, is
+// reopened and goes done again keeps the instant of the state it is in and not
+// of the first time it ever reached it — which is why a reopen CLEARS both.
+func stampFinish(task *Task, c applyContext) error {
+	at, err := effectiveOf(c)
+	if err != nil {
+		return err
+	}
+	switch statusOf(*task).Group() {
+	case GroupDone:
+		if task.DoneAt == nil {
+			task.DoneAt = &at
+		}
+		task.ClosedAt = nil
+	case GroupClosed:
+		if task.DoneAt == nil {
+			task.DoneAt = &at
+		}
+		if task.ClosedAt == nil {
+			task.ClosedAt = &at
+		}
+	default:
+		// A REOPEN CLEARS BOTH, so "finished in the last week" agrees
+		// with the task's actual state rather than with a state it left.
+		task.DoneAt, task.ClosedAt = nil, nil
+	}
+	return nil
+}
+
+// effectiveOf is the instant a stamp derived from this record takes.
+//
+// THE BROKER'S, never a clock: the applier reads no clock at all, which is
+// what makes a derived instant byte-identical on every node that applies the
+// same record.
+func effectiveOf(c applyContext) (time.Time, error) {
+	if c.brokerAt.IsZero() {
+		return time.Time{}, fmt.Errorf("tracker: the record at %s carries no "+
+			"broker instant, and every derived stamp is that instant — a "+
+			"clock read here would put a different number on every node",
+			c.position)
+	}
+	return c.brokerAt.UTC(), nil
 }
 
 // readTask reads the stored document, reporting whether the row exists.
