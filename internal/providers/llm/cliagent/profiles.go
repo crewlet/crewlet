@@ -76,6 +76,8 @@ func (p Profile) clone() Profile {
 		CacheRead:  clonePaths(p.Usage.CacheRead),
 		CacheWrite: clonePaths(p.Usage.CacheWrite),
 	}
+	out.EventTypePath = append(Path(nil), p.EventTypePath...)
+	out.TextEvents = append([]string(nil), p.TextEvents...)
 	out.LimitMarkers = append([]LimitMarker(nil), p.LimitMarkers...)
 	out.AuthMarkers = append([]AuthMarker(nil), p.AuthMarkers...)
 	out.SeedFiles = append([]SeedFile(nil), p.SeedFiles...)

@@ -101,7 +101,7 @@ func TestEveryShippedProfileDeclaresItsLocalToolsStance(t *testing.T) {
 			t.Errorf("%s: vendor-default with no local_tools_note", name)
 		}
 	}
-	for _, name := range []string{"claude-code", "codex", "gemini-cli", "qwen-code", "opencode", "cursor-agent", "copilot"} {
+	for _, name := range []string{"claude-code", "codex", "gemini-cli", "qwen-code", "opencode", "cursor-agent", "copilot", "muse-code"} {
 		p, _ := Builtin(name)
 		if p.LocalTools != LocalToolsDenied {
 			t.Errorf("%s: local_tools = %q, want denied", name, p.LocalTools)

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -348,7 +349,7 @@ func extractStream(p Profile, stdout string) extracted {
 		if !ok {
 			continue
 		}
-		if chunk, ok := firstString(doc, p.TextPaths); ok {
+		if chunk, ok := textOf(p, doc); ok {
 			// LOCATED ON THE FIRST EVENT THAT CARRIES THE PATH, even
 			// when that event's text is empty: a stream spells one
 			// answer across many events and an empty fragment is an
@@ -381,6 +382,29 @@ func extractStream(p Profile, stdout string) extracted {
 	}
 	out.text = strings.TrimSpace(text.String())
 	return out
+}
+
+// textOf reads the assistant's text out of ONE line of a jsonl stream,
+// honouring the profile's event filter.
+//
+// A line whose discriminator is not one this profile calls text is not a
+// missing path — it is an event about something else, and it must not even
+// count as "located": a stream that spliced a tool's output into the reply
+// and then repeated the reply would look, to every frame downstream, exactly
+// like a model that had said all of it.
+func textOf(p Profile, doc map[string]any) (string, bool) {
+	if len(p.EventTypePath) == 0 {
+		return firstString(doc, p.TextPaths)
+	}
+	kind, ok := lookup(doc, p.EventTypePath)
+	if !ok {
+		return "", false
+	}
+	name, isString := kind.(string)
+	if !isString || !slices.Contains(p.TextEvents, name) {
+		return "", false
+	}
+	return firstString(doc, p.TextPaths)
 }
 
 func decodeObject(s string) (map[string]any, bool) {

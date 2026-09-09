@@ -565,13 +565,14 @@ const (
 	CLICursorAgent CLIAgentName = "cursor-agent"
 	CLICopilot     CLIAgentName = "copilot"
 	CLIGrok        CLIAgentName = "grok"
+	CLIMuseCode    CLIAgentName = "muse-code"
 	CLICustom      CLIAgentName = "custom"
 )
 
 // CLIAgentNames is the closed set.
 var CLIAgentNames = []CLIAgentName{
 	CLIClaudeCode, CLICodex, CLIGeminiCLI, CLIQwenCode,
-	CLIOpenCode, CLICursorAgent, CLICopilot, CLIGrok, CLICustom,
+	CLIOpenCode, CLICursorAgent, CLICopilot, CLIGrok, CLIMuseCode, CLICustom,
 }
 
 // CLIAgentMode is HOW the engine uses a coding CLI.
@@ -663,7 +664,7 @@ type CLIAgentAuth struct {
 // CLIAgent is the cli-agent block of a providers.llm entry.
 type CLIAgent struct {
 	// Agent is which CLI to drive.
-	Agent CLIAgentName `yaml:"agent,omitempty" json:"agent,omitempty" js:"enum=claude-code|codex|gemini-cli|qwen-code|opencode|cursor-agent|copilot|grok|custom" desc:"Which coding CLI to drive."`
+	Agent CLIAgentName `yaml:"agent,omitempty" json:"agent,omitempty" js:"enum=claude-code|codex|gemini-cli|qwen-code|opencode|cursor-agent|copilot|grok|muse-code|custom" desc:"Which coding CLI to drive."`
 
 	// Mode is text (the default) or agent. See [CLIAgentMode].
 	Mode CLIAgentMode `yaml:"mode,omitempty" json:"mode,omitempty" js:"enum=text|agent" desc:"text (a model behind the engine's tool loop) or agent (the CLI runs the executor)."`

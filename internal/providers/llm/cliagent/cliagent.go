@@ -266,7 +266,13 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 			// text path at all, so "did this one event match" is
 			// not the question. Whether the PROFILE matches is
 			// decided once, over the whole stream, by extract.
-			chunk, _ := firstString(doc, p.profile.TextPaths)
+			//
+			// The SAME event filter the extractor applies, so a
+			// stream is streamed as it will be read: a profile that
+			// takes its answer from one terminal event delivers it
+			// in one delta at the end rather than pushing a tool's
+			// output through as though the model had said it.
+			chunk, _ := textOf(p.profile, doc)
 			req.Send(llm.Delta{Content: chunk})
 		}
 	}
@@ -297,13 +303,22 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// profile puts the model flag before it: a CLI taking its prompt on
 	// argv reads the first non-flag argument, so anything appended after it
 	// is read as part of the prompt.
-	if p.profile.mode() == PromptArgv {
+	switch p.profile.mode() {
+	case PromptArgv:
 		// PromptArgs and then the prompt, ADJACENT and last: a CLI that
 		// takes its prompt as a flag's value needs the two together, and
 		// anything appended between them becomes the prompt instead.
 		in.args = append(in.args, p.profile.PromptArgs...)
 		in.args = append(in.args, prompt)
-	} else {
+	case PromptFile:
+		// Only the flag and the PATH go on argv; the transcript itself
+		// stays in the per-call working directory at 0600.
+		rendered, writeErr := promptArgs(p.profile.PromptArgs, prompt, checkout.Work)
+		if writeErr != nil {
+			return nil, p.fail(llm.KindFatal, 0, writeErr)
+		}
+		in.args = append(in.args, rendered...)
+	default:
 		in.stdin = prompt
 	}
 
@@ -380,7 +395,7 @@ func (p *Provider) completion(ctx context.Context, prompt string, res *rawResult
 	// them adds false-positive surface for nothing. When the answer WAS
 	// located it is the only thing the vendor said that matters.
 	said := nonEmpty(out.text, res.stdout)
-	if kind, retry, ok := p.classifyMarkers(said, res.stderr); ok {
+	if kind, retry, ok := classifyMarkers(p.profile, said, res.stderr); ok {
 		return nil, p.fail(kind, retry,
 			fmt.Errorf("%s", firstLine(said, res.stderr)))
 	}
@@ -510,9 +525,13 @@ func (p *Provider) completion(ctx context.Context, prompt string, res *rawResult
 // "usage limit" case-insensitively across a reply is what made this wrong
 // before: a model asked about rate limits writes the phrase itself, and every
 // such answer was thrown away as a spent plan.
-func (p *Provider) classifyMarkers(text, stderr string) (llm.ErrorKind, time.Duration, bool) {
+// A FUNCTION OF THE PROFILE, not a method on the provider: what a vendor's
+// spent plan looks like is a property of the profile table, and the only way
+// to check a shipped profile's sentinels against the output its CLI actually
+// produces is to be able to ask without a running provider.
+func classifyMarkers(p Profile, text, stderr string) (llm.ErrorKind, time.Duration, bool) {
 	haystacks := []string{text, stderr}
-	for _, marker := range p.profile.LimitMarkers {
+	for _, marker := range p.LimitMarkers {
 		for _, hay := range haystacks {
 			idx := strings.Index(hay, marker.Sentinel)
 			if idx < 0 {
@@ -521,7 +540,7 @@ func (p *Provider) classifyMarkers(text, stderr string) (llm.ErrorKind, time.Dur
 			return llm.KindRateLimit, resetAfter(hay[idx:], marker), true
 		}
 	}
-	for _, marker := range p.profile.AuthMarkers {
+	for _, marker := range p.AuthMarkers {
 		for _, hay := range haystacks {
 			if strings.Contains(hay, marker.Sentinel) {
 				return llm.KindAuth, 0, true

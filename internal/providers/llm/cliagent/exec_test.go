@@ -67,6 +67,33 @@ func TestCLIAgentFakeCLI(t *testing.T) {
 			return
 		}
 		fmt.Printf("%s|%s", os.Getenv(os.Getenv("FAKE_READ_SYSTEM_PROMPT")), body)
+	case os.Getenv("FAKE_PROMPT_FILE") != "":
+		// Answers the whole prompt-file question FROM INSIDE THE CHILD,
+		// which is the only place it can be answered honestly: the
+		// per-call working directory is removed on release, so a parent
+		// that opened the path afterwards would be reading a file the CLI
+		// never saw. It prints the argv it was given, the file's mode, and
+		// its bytes, so one probe settles "the path is on argv, the
+		// transcript is not, the child could read it, and it is private".
+		flag := os.Getenv("FAKE_PROMPT_FILE")
+		path := ""
+		for i, arg := range os.Args {
+			if arg == flag && i+1 < len(os.Args) {
+				path = os.Args[i+1]
+			}
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			fmt.Print("UNREADABLE: ", err)
+			return
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			fmt.Print("UNSTATABLE: ", err)
+			return
+		}
+		fmt.Printf("%s|%o|%s", strings.Join(os.Args, " "), info.Mode().Perm(),
+			base64.StdEncoding.EncodeToString(body))
 	case os.Getenv("FAKE_ECHO_STDIN") == "1":
 		// Base64 rather than verbatim: the prompt CONTAINS the response
 		// contract's own fenced example, so echoing it raw would be
