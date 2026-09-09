@@ -484,9 +484,28 @@ func textReply(text string) string {
 // out waiting for the suspended turn to be resumed", which named the symptom
 // and not one fact about the state that produced it. A condition worth waiting
 // on is worth saying what it saw instead.
+// waitBudget is how long every wait in this suite gets.
+//
+// # Why it is this large
+//
+// The conditions here are not in-process flags: they are a seat claimed
+// through a lease, an engine booted, a detached sandbox run recovered from a
+// row. And the machine they run on is not this one — CI runs the WHOLE suite
+// under the race detector, so an e2e engine boots while a dozen other
+// packages compete for the same cores, and a wait sized for an idle laptop is
+// a wait that fails on the runner and passes on a re-run.
+//
+// Measured: this suite's slowest wait — a second engine booting and taking
+// over a running sandbox job — completes in about 2 s idle and was seen to
+// miss a 30 s budget with several other test binaries running beside it. Three
+// times that budget is sized for the loaded case, and it costs nothing when
+// the condition is met: the loop polls every 20 ms and returns on the first
+// true. What it costs is only how long a GENUINE failure takes to report.
+const waitBudget = 90 * time.Second
+
 func waitFor(t *testing.T, what string, cond func() bool, diag ...func() string) {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(waitBudget)
 	for time.Now().Before(deadline) {
 		if cond() {
 			return

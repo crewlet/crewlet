@@ -85,6 +85,7 @@ Only ever rises. Rates and totals are your collector's arithmetic, never this en
 | `crewlet.statelog.apply.tx.aborts` | `1` | `domain` | Apply transactions the store aborted on a conflict. It is the number that says whether this driver's transaction conflicts are row-scoped or database-scoped, on the operator's own hardware rather than on a benchmark's. |
 | `crewlet.statelog.apply.retries` | `1` | `domain` | Transient apply failures retried in place, which are otherwise a silent backoff inside the loop. |
 | `crewlet.statelog.records_gated` | `1` | `gate`, `subject_kind` | Records an apply gate dropped. A dropped commit is recoverable by nothing, and this is the only place anyone would see that it happened. |
+| `crewlet.statelog.apply.tx_aborts` | `1` | `domain` | Apply transactions retried because the store aborted them. Measured at zero against a writer committing to tables the applier never touches — this is what says so on hardware and a driver nobody benchmarked, and a non-zero count means the retry budget is being spent rather than held in reserve. |
 
 ## What is deliberately not here
 

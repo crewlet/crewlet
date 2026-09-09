@@ -14,14 +14,19 @@ import (
 
 // openPinned is the fixture the cases below share: a store sized for n pinned
 // writers, with one probe table.
+//
+// IT RETURNS THE REPLICATED ESTATE, which is where a pin belongs: a pinned
+// writer is an applier's, an applier writes the replicated tables, and the
+// node estate is sized for readers alone.
 func openPinned(t *testing.T, pins int) *store.DB {
 	t.Helper()
-	db, err := store.Open(t.Context(),
+	node, err := store.Open(t.Context(),
 		filepath.Join(t.TempDir(), "pinned.db"), store.Options{PinnedWriters: pins})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
+	t.Cleanup(func() { _ = node.Close() })
+	db := node.Replicated()
 	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(),
 			`CREATE TABLE crewlet_pin_probe (id INTEGER PRIMARY KEY, n INTEGER NOT NULL)`)

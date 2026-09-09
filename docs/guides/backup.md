@@ -18,7 +18,8 @@ crewlet backup -dir /var/backups/crewlet/2026-08-30T18-00
 Backup written to /var/backups/crewlet/2026-08-30T18-00 on node-0 in 1.412s
 
 WHAT                     FILE                                  SIZE       CONTENTS
-store                    store.db                              252.0 KiB  14 migrations
+store (node)             store.db                              252.0 KiB  20 migrations
+store (replicated)       store-replicated.db                   1.2 MiB    3 migrations
 stream CREWLET_AGENT     streams/CREWLET_AGENT.snapshot        1.1 KiB    5 messages
 bucket crewlet_budgets   streams/KV_crewlet_budgets.snapshot   512 B      3 messages
 …
@@ -35,7 +36,7 @@ A deployment's durable state lives in four estates:
 
 | Estate | Where | What it holds |
 |---|---|---|
-| **The node's store file** | `store.path`, plus its `-wal` sidecar | The seat's memory — diary, episodes, counterparty profiles, synthesized skills, onboarding markers, the [conversation ledger](../concepts/conversation-sessions.md) — which is also [replicated onto the stream](../concepts/seat-ownership.md#a-seats-memory-follows-it), so this file is a cache of it rather than its only copy; and, held here **only**: the audit event log (30 days), scheduled-run history, the company-config revision history, the [secret store's](../concepts/secret-store.md) bootstrap rows |
+| **The node's store files** | `store.path` and `store.replicated_path`, each with its `-wal` sidecar | The seat's memory — diary, episodes, counterparty profiles, synthesized skills, onboarding markers, the [conversation ledger](../concepts/conversation-sessions.md) — which is also [replicated onto the stream](../concepts/seat-ownership.md#a-seats-memory-follows-it), so this file is a cache of it rather than its only copy; and, held here **only**: the audit event log (30 days), scheduled-run history, the company-config revision history, the [secret store's](../concepts/secret-store.md) bootstrap rows |
 | **The stream estate** | `stream.store_dir` per embedded member, or the external NATS cluster | Agent mailboxes (unacked in-flight work), the shared event and config streams, and every [coordination](../concepts/coordination.md) KV bucket: seat leases and fencing epochs, the activation pointer with the current company payload, the completion ledger, delivery dedupe, budget counters, scheduled-fire claims, detached sandbox-run records, the sealed credentials |
 | **Tier A, on disk** | `crewlet.yaml` and the environment it reads | The keyring (`CREWLET_SECRET_KEY_*`) — the sole root of trust for everything sealed — plus API tokens and any NATS credential/TLS files |
 | **cli-agent homes** | Per-seat state directories on the engine host | Subscription CLI logins (portable via `crewlet llm export`) |
@@ -66,7 +67,8 @@ why the manifest is written last.
 ```
 2026-08-30T18-00/
 ├── manifest.json                          what was captured, from which node
-├── store.db                               the store, one self-contained file
+├── store.db                               the node estate, self-contained
+├── store-replicated.db                    the replicated estate, self-contained
 └── streams/
     ├── CREWLET_AGENT.snapshot             a mailbox stream
     ├── KV_crewlet_secrets.snapshot        a coordination bucket
@@ -75,11 +77,19 @@ why the manifest is written last.
 
 Three properties worth knowing:
 
-- **The store copy is taken with `VACUUM INTO` and then verified** — reopened,
-  integrity-checked, and its schema recorded — before it is renamed into
-  place. A copy that will not open is a failed backup rather than a surprise
-  on the worst day of the deployment's life. It is also self-contained: no
-  `-wal` travels with it.
+- **Each store copy is taken with `VACUUM INTO` and then verified** — reopened,
+  integrity-checked, its schema compared against the database it came from,
+  and a sha256 of the finished file recorded in the manifest — before it is
+  renamed into place. A copy that will not open is a failed backup rather than
+  a surprise on the worst day of the deployment's life; the digest is what
+  tells a copy that was truncated in transit from one that was bad when it was
+  made. Each is self-contained: no `-wal` travels with it.
+- **A node is two databases, and a backup carries both.** The node estate holds
+  the audit log, memory, the config revisions and the secret bootstrap; the
+  replicated estate holds everything a state log's applier writes. They are
+  separate files because a snapshot for a joining node is a copy of the second
+  one alone — see [state log](../concepts/coordination.md). Restoring one
+  without the other gives a company whose halves are from different moments.
 - **Streams are enumerated, not listed.** A namespace stream is created on
   first publish and a coordination bucket's name depends on a configurable
   prefix, so what gets captured is what is actually there.
@@ -183,9 +193,13 @@ every hazard below is about ordering and identity, and a tool that hid them
 behind one verb would be hiding exactly what has to be got right. What
 `crewlet backup` produces is what these steps move.
 
-The store half is a file copy: put `store.db` from the backup at the node's
-`store.path`, with no `-wal` beside it — the copy is self-contained, and a
-stale sidecar from the old database is the one thing that would corrupt it.
+The store half is two file copies: put `store.db` at the node's `store.path`
+and `store-replicated.db` at its `store.replicated_path` (by default
+`crewlet-replicated.db` beside `store.path`), with no `-wal` beside either —
+each copy is self-contained, and a stale sidecar from the old database is the
+one thing that would corrupt it. **Both, from the same backup set**: they are
+one node's state, and a restore holding one of them has an audit log and a
+tracker from different moments.
 The stream half is restored into a broker with `nats stream restore` per
 snapshot for an external cluster; for the embedded topology, restore into a
 fresh `stream.store_dir` on a node started for that purpose. Then:

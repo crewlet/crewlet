@@ -67,7 +67,7 @@ COMPANY ?=
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build crewlet install fmt tidy schema \
+.PHONY: help build crewlet install fmt tidy schema metrics-doc \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
         check fmt-check tidy-check signoff-check signoff-test vet lint test test-norace test-cross test-e2e \
         require-npm \
@@ -335,6 +335,13 @@ gitlab-down: ## stop the GitLab stack
 schema: ## regenerate schema/*.schema.json from the config models
 	$(GO) run ./cmd/crewlet schema bootstrap -o schema/bootstrap.schema.json
 	$(GO) run ./cmd/crewlet schema company -o schema/company.schema.json
+
+# docs/reference/metrics.md is generated from the instrument catalogue for the
+# same reason and with the same guard — internal/statelog/metrics regenerates
+# it and compares, so an instrument added without running this is a failing
+# test rather than a reference an operator cannot find their metric in.
+metrics-doc: ## regenerate docs/reference/metrics.md from the instrument catalogue
+	$(GO) run ./internal/statelog/metrics/gen > docs/reference/metrics.md
 
 # The whole release pipeline, without a tag and without touching GitHub —
 # the same two commands release.yml's snapshot job runs, in the same order.

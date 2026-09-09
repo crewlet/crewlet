@@ -437,6 +437,17 @@ type Store struct {
 	// Path is the database file. Created if absent, along with its parent.
 	Path string `yaml:"path,omitempty" json:"path,omitempty" desc:"Local database file this node owns exclusively."`
 
+	// ReplicatedPath is the second database this node owns: everything a
+	// state log's applier writes. Empty puts it beside Path, which is
+	// what makes "back up the data directory" true.
+	//
+	// Separable because the two files have different appetites — the
+	// replicated one is what a snapshot copies and what a node joining the
+	// fleet writes at line rate — so an operator with a fast local disk
+	// and a large network volume has a real reason to split them. Both are
+	// still this node's alone, and neither is shared with a peer.
+	ReplicatedPath string `yaml:"replicated_path,omitempty" json:"replicated_path,omitempty" desc:"Second local database, for replicated state; empty puts it beside path."`
+
 	// MaxOpenConns bounds the connection pool; 0 takes the store's own
 	// default, which is sized to the dashboard's query concurrency.
 	MaxOpenConns int `yaml:"max_open_conns,omitempty" json:"max_open_conns,omitempty" js:"min=0" desc:"Connection pool bound; 0 takes the store default."`
@@ -452,6 +463,15 @@ func (s *Store) validate(path string) error {
 		p.add(at(path, "path"), ErrMissing,
 			"the store is a local file this node owns; name one (e.g. %q)",
 			DefaultStorePath)
+	}
+	// THE SAME FILE TWICE IS TWO EXCLUSIVE LOCKS ON ONE PATH, which this
+	// process would take and then deadlock nothing — it would simply
+	// migrate one estate's schema into the other's database and run both
+	// appliers against the audit log's file.
+	if rp := strings.TrimSpace(s.ReplicatedPath); rp != "" && rp == strings.TrimSpace(s.Path) {
+		p.add(at(path, "replicated_path"), ErrConflict,
+			"is the same file as store.path; the two estates are two databases, "+
+				"and one file holding both is neither")
 	}
 	if s.MaxOpenConns < 0 {
 		p.add(at(path, "max_open_conns"), ErrOutOfRange,

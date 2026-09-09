@@ -1,0 +1,4 @@
+The replicated estate's migration sequence. Empty until the state log's own
+tables land, and the directory exists ahead of them on purpose: `store.Open`
+reads it by name, so a missing directory is a build failure rather than a
+sequence that silently applies nothing.

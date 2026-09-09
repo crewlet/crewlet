@@ -101,12 +101,19 @@ func (w *Writer) tx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 }
 
 // Conn exposes the pinned connection for statements that are not transactions
-// — a prepared-statement cache, a PRAGMA, a single read.
+// — a PRAGMA, a single read.
 //
-// It is the SAME connection every Tx runs on, which is what makes a statement
-// prepared through it reusable: database/sql caches a prepared statement per
-// connection, so preparing through the pool would re-prepare on whichever
-// connection answered.
+// It is the SAME connection every Tx runs on. There is deliberately NO
+// prepared-statement cache on it, and the reason is a measurement rather than
+// a preference: on this driver, executing an applier-shaped upsert 4 000 times
+// through a statement prepared once on this connection is not faster than
+// passing the SQL text each time — 549 ms against 543 ms, and the ordering
+// flips between runs. The driver implements ExecerContext, so an "unprepared"
+// exec is already one round trip with its arguments, and the parse it saves is
+// not what the time is spent on. The shape that DOES pay is the multi-row
+// insert — 4 000 rows in 137 ms against 573 ms, four times faster — which is
+// [RowsPerInsert] and [Chunks], and BenchmarkLogApplyDrain is the record of
+// both numbers.
 func (w *Writer) Conn() *sql.Conn { return w.conn }
 
 // Close releases the pinned connection back to the pool.

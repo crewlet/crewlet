@@ -248,6 +248,16 @@ func Catalogue() []Instrument {
 				"`synchronous = FULL` and the number a device budget is " +
 				"spent by.",
 		},
+		{
+			Name: "crewlet.statelog.apply.tx_aborts", Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"domain"},
+			Shows: "Apply transactions retried because the store aborted " +
+				"them. Measured at zero against a writer committing to " +
+				"tables the applier never touches — this is what says so " +
+				"on hardware and a driver nobody benchmarked, and a " +
+				"non-zero count means the retry budget is being spent " +
+				"rather than held in reserve.",
+		},
 
 		// ---- position and health --------------------------------------
 		{

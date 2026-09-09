@@ -77,8 +77,13 @@ var log = logging.Get("backup")
 // or a shipping script has to look for — see docs/guides/backup.md.
 const ManifestName = "manifest.json"
 
-// storeFileName is the store copy inside a backup directory.
-const storeFileName = "store.db"
+// storeFileNames are the database copies inside a backup directory, one per
+// estate. Named rather than derived, because these strings are what a restore
+// procedure and every shipping script look for — see docs/guides/backup.md.
+var storeFileNames = map[store.Estate]string{
+	store.EstateNode:       "store.db",
+	store.EstateReplicated: "store-replicated.db",
+}
 
 // streamDirName holds the stream snapshots.
 const streamDirName = "streams"
@@ -122,15 +127,23 @@ type Manifest struct {
 
 	// Store describes the database copy, absent on a node running without
 	// one.
-	Store *StoreArtifact `json:"store,omitempty"`
+	Stores []StoreArtifact `json:"stores,omitempty"`
 
 	// Streams is every stream captured, coordination buckets included.
 	// Absent on a node with no broker reachable.
 	Streams []StreamArtifact `json:"streams,omitempty"`
 }
 
-// StoreArtifact describes the database copy inside a backup.
+// StoreArtifact describes one database copy inside a backup.
+//
+// ONE PER ESTATE, and a backup carries every estate or it carries none: a node
+// is two databases, and a restore holding one of them has a company whose
+// tracker and whose audit log are from different moments — which is not a
+// partial restore, it is an inconsistent one.
 type StoreArtifact struct {
+	// Estate is which of the node's databases this copy is.
+	Estate store.Estate `json:"estate"`
+
 	// File is the copy, relative to the backup directory.
 	File string `json:"file"`
 
@@ -140,6 +153,12 @@ type StoreArtifact struct {
 
 	// Bytes is its size.
 	Bytes int64 `json:"bytes"`
+
+	// SHA256 is the hex digest of the copy as it was written, taken by the
+	// engine at the moment the copy passed its integrity check. What it
+	// answers is the one question a shipped artifact raises: whether the
+	// file that arrived is the file that was verified.
+	SHA256 string `json:"sha256"`
 
 	// Migrations is the schema the copy carries. What a restore brings
 	// back, and the thing to compare against a binary before restoring
@@ -233,8 +252,14 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 	// convenience — see the package doc. A store copy older than the
 	// stream estate makes a restore repeat work; the other way round makes
 	// it lose work.
-	if s.store != nil {
-		info, err := s.store.Backup(ctx, filepath.Join(dir, storeFileName))
+	// BOTH ESTATES, and neither is optional. A backup with the node
+	// estate alone has every credential and no tracker; with the
+	// replicated estate alone it has the tracker and no audit log, no
+	// memory and no secret bootstrap. Either one restores into a company
+	// that is missing half of itself while looking like a backup.
+	for _, db := range estates(s.store) {
+		name := storeFileNames[db.Estate()]
+		info, err := db.Backup(ctx, filepath.Join(dir, name))
 		if err != nil {
 			// The store's own destination refusals join this package's,
 			// so one question answers for the whole subsystem.
@@ -243,12 +268,14 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 			}
 			return Manifest{}, err
 		}
-		manifest.Store = &StoreArtifact{
-			File:       storeFileName,
-			Source:     s.store.Path(),
+		manifest.Stores = append(manifest.Stores, StoreArtifact{
+			Estate:     db.Estate(),
+			File:       name,
+			Source:     db.Path(),
 			Bytes:      info.Bytes,
+			SHA256:     info.SHA256,
 			Migrations: info.Migrations,
-		}
+		})
 	}
 
 	if s.conn != nil {
@@ -270,6 +297,19 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 		"stream_bytes", snapshotSize(manifest.Streams),
 		"took", manifest.FinishedAt.Sub(started).String())
 	return manifest, nil
+}
+
+// estates is every database handle a node holds, in copy order, and empty on
+// a node running without a store.
+func estates(db *store.DB) []*store.DB {
+	if db == nil {
+		return nil
+	}
+	out := []*store.DB{db}
+	if peer := db.Replicated(); peer != nil {
+		out = append(out, peer)
+	}
+	return out
 }
 
 // emptyDir makes dir if it is absent, refuses it if it holds anything, and
@@ -332,10 +372,11 @@ func writeManifest(dir string, manifest Manifest) error {
 	return nil
 }
 
-// storeBytes reports the store copy's size, or 0 when there is none.
+// storeBytes reports the size of every database copy, or 0 when there is none.
 func storeBytes(m Manifest) int64 {
-	if m.Store == nil {
-		return 0
+	var total int64
+	for _, s := range m.Stores {
+		total += s.Bytes
 	}
-	return m.Store.Bytes
+	return total
 }

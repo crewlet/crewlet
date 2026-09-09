@@ -78,12 +78,14 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 		TakenAt    time.Time `json:"taken_at"`
 		FinishedAt time.Time `json:"finished_at"`
 		NodeID     string    `json:"node_id"`
-		Store      *struct {
+		Stores     []struct {
+			Estate     string   `json:"estate"`
 			File       string   `json:"file"`
 			Source     string   `json:"source"`
 			Bytes      int64    `json:"bytes"`
+			SHA256     string   `json:"sha256"`
 			Migrations []string `json:"migrations"`
-		} `json:"store"`
+		} `json:"stores"`
 		Streams []streamRow `json:"streams"`
 	}
 	if err := client.patiently(*wait).post(context.Background(),
@@ -100,11 +102,12 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 		*dir, manifest.NodeID, manifest.FinishedAt.Sub(manifest.TakenAt).Round(time.Millisecond))
 	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "\nWHAT\tFILE\tSIZE\tCONTENTS")
-	if manifest.Store != nil {
-		fmt.Fprintf(w, "store\t%s\t%s\t%d migrations\n",
-			manifest.Store.File, humanBytes(manifest.Store.Bytes), len(manifest.Store.Migrations))
-	} else {
+	if len(manifest.Stores) == 0 {
 		fmt.Fprintln(w, "store\t—\t—\tnot on this node")
+	}
+	for _, st := range manifest.Stores {
+		fmt.Fprintf(w, "store (%s)\t%s\t%s\t%d migrations\n",
+			st.Estate, st.File, humanBytes(st.Bytes), len(st.Migrations))
 	}
 	streams := manifest.Streams
 	slices.SortFunc(streams, func(a, b streamRow) int { return cmp.Compare(a.Name, b.Name) })
@@ -120,7 +123,7 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 	if err := w.Flush(); err != nil {
 		return err
 	}
-	if manifest.Store == nil || len(manifest.Streams) == 0 {
+	if len(manifest.Stores) == 0 || len(manifest.Streams) == 0 {
 		// Said plainly rather than left to be inferred from a dash: a
 		// backup missing an estate is not restorable on its own, and an
 		// operator running this against an ingress node would otherwise

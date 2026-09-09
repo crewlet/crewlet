@@ -209,6 +209,10 @@
         "path": {
           "description": "Local database file this node owns exclusively.",
           "type": "string"
+        },
+        "replicated_path": {
+          "description": "Second local database, for replicated state; empty puts it beside path.",
+          "type": "string"
         }
       },
       "type": "object"
