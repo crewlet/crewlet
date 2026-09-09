@@ -395,6 +395,22 @@ stream:
   #   peers:                        #   the member name, so it must survive a
   #     - "nats://node-1:6222"      #   restart — a name minted at boot orphans
   #     - "nats://node-2:6222"      #   this member's replicas every time
+  #   host: 10.0.0.11               #   the interface the route port binds.
+                                    #   Unset binds EVERY interface, and a route
+                                    #   port is unauthenticated cluster access —
+                                    #   set it to the private address the peers
+                                    #   reach
+  #   advertise: "node-1.internal:6222"
+                                    #   what peers should DIAL for this member,
+                                    #   when that differs from what it binds — a
+                                    #   mapped container port, a NAT, a load
+                                    #   balancer. Members learn each other from
+                                    #   the members they already have, so unset
+                                    #   this address is derived from the
+                                    #   connection's remote address, which
+                                    #   behind a NAT is unreachable or somebody
+                                    #   else's. A bare host keeps this member's
+                                    #   own route port
   # sync: always                    # what an acknowledged publish has actually
                                     #   reached. `always` (the default, at every
                                     #   replica count) fsyncs every write before

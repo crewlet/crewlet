@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -139,6 +141,39 @@ func (s *Server) Conn() (*nats.Conn, error) {
 		return nil, errors.New("jetstream: server is shut down")
 	}
 	return s.embedded.connect()
+}
+
+// RoutePeers names the cluster members this server currently holds a route
+// to, sorted, and never itself.
+//
+// Test-facing, and it exists for one assertion: that a partition harness
+// actually cut something. NATS keeps an established route open indefinitely
+// and re-dials a lost one on its own schedule, so a harness that only stops
+// listeners partitions nothing — and every fleet-failure case above it then
+// passes for the wrong reason. A partitioned member's list is empty.
+//
+// PEERS RATHER THAN CONNECTIONS, which is the whole reason this is not
+// nats-server's own NumRoutes: since 2.10 a member opens a POOL of route
+// connections to each peer (three by default) plus a pinned one per
+// system account, so a healthy three-node cluster reports eight routes and
+// counting them says nothing a reader can check against the topology.
+func (s *Server) RoutePeers() []string {
+	if s.embedded == nil {
+		return nil
+	}
+	rz, err := s.embedded.ns.Routez(nil)
+	if err != nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	for _, r := range rz.Routes {
+		if r.RemoteName != "" {
+			seen[r.RemoteName] = struct{}{}
+		}
+	}
+	peers := slices.Collect(maps.Keys(seen))
+	slices.Sort(peers)
+	return peers
 }
 
 // Shutdown stops the broker. Every client of it should be stopped first.
@@ -280,7 +315,16 @@ func embeddedOptions(cfg Config) (*server.Options, string, error) {
 		opts.StoreDir, scratch = dir, dir
 	}
 	if cfg.ClusterName != "" {
-		opts.Cluster = server.ClusterOpts{Name: cfg.ClusterName, Port: cfg.ClusterPort}
+		opts.Cluster = server.ClusterOpts{
+			Name: cfg.ClusterName, Port: cfg.ClusterPort,
+			// Both empty on an ordinary single-homed node, which is why
+			// they are pass-through rather than derived: the engine has
+			// no way to tell which of a multi-homed host's addresses its
+			// peers can reach, and guessing wrong forms a cluster with a
+			// member nobody can route to.
+			Host:      cfg.ClusterHost,
+			Advertise: cfg.ClusterAdvertise,
+		}
 		opts.Routes = server.RoutesFromStr(joinURLs(cfg.ClusterURLs))
 	}
 	return opts, scratch, nil

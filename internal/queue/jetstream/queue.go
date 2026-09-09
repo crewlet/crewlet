@@ -50,6 +50,38 @@ type Config struct {
 	ClusterURLs []string
 	ClusterPort int
 
+	// ClusterHost is the interface this member's route listener binds.
+	//
+	// Empty binds EVERY interface, which is right for a node with one
+	// address and wrong twice over otherwise. On a multi-homed host it is
+	// a security setting: the route port is unauthenticated cluster
+	// access, and a member that binds it on a public interface is
+	// offering that to anyone who can reach the machine. On a host whose
+	// peers are on a private network it is also the only way to say which
+	// address that is.
+	//
+	// It says nothing about what peers are TOLD to dial — that is
+	// ClusterAdvertise below, and the two differ precisely when they have
+	// to.
+	ClusterHost string
+
+	// ClusterAdvertise is the address peers should dial to reach this
+	// member, when that is not the address it binds.
+	//
+	// A member's route address travels between peers: when member A
+	// accepts a route from member B it tells every peer it already has
+	// where B can be found, and each of them dials that address itself.
+	// With this unset the address is derived from the CONNECTION'S REMOTE
+	// ADDRESS — which is correct on a flat network and wrong wherever the
+	// address B is seen from is not an address anyone else can use: a
+	// container with a mapped port, a NAT, a member behind a load
+	// balancer. There the derived address is either unreachable or, worse,
+	// somebody else's.
+	//
+	// Host and port both, or a bare host to keep this member's own route
+	// port: "nats-1.internal:6222", "203.0.113.9".
+	ClusterAdvertise string
+
 	// ServerName is this member's identity inside the cluster. REQUIRED
 	// when clustering and ignored otherwise.
 	//

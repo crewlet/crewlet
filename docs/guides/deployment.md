@@ -97,12 +97,40 @@ stream:
     peers:                             # the others' route URLs
       - "nats://crewlet-2.internal:6222"
       - "nats://crewlet-3.internal:6222"
+    host: 10.0.0.11                    # bind the route port to the private
+                                       #   interface, not to all of them
   replicas: 3                          # a publish is committed by a quorum
                                        #   before Publish returns
 
 coordination:
   type: embedded-kv                    # the leases ride the stream's own
                                        #   connection; nothing else to set
+```
+
+**Bind the route port to the network the peers are on.** `cluster.host` is the
+interface the route listener binds, and leaving it unset binds every
+interface. A route port is how a member JOINS — and a member that joins reads
+and writes every stream and every coordination bucket — so on a host with a
+public interface an unset `host` publishes unauthenticated access to the
+company's whole event history. Set it to the private address, or keep the port
+off the public interface with a firewall; the engine cannot tell which of a
+host's addresses is the private one, so it does not guess.
+
+**`cluster.advertise` is for when what a member binds is not what its peers can
+dial.** Members learn about each other from the members they already have: when
+node 1 accepts a route from node 2 it tells node 3 where to find node 2, and
+node 3 dials that address itself. With nothing configured that address is
+derived from the connection's own remote address, which is correct on a flat
+network and wrong wherever the address a member is seen from is not one anybody
+else can use — a container with a mapped port, a NAT, a member behind a load
+balancer. There, set `advertise` to the address peers should dial (host and
+port, or a bare host to keep this member's own route port):
+
+```yaml
+stream:
+  cluster:
+    host: 0.0.0.0                      # inside the container, bind everything
+    advertise: "crewlet-1.internal:6222"  # outside it, this is the address
 ```
 
 **`node.id` is this member's identity in the cluster, and it has to survive a
