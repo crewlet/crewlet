@@ -13,12 +13,12 @@
  */
 
 import { useState } from "react";
-import { Badge, PhaseTag, cx } from "~/ui/primitives.tsx";
+import { Badge, Button, PhaseTag, cx } from "~/ui/primitives.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { PhaseCard } from "./PhaseCard.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { href } from "~/app/router.tsx";
+import { useNavigator } from "~/app/router.tsx";
 import type { TurnGroup } from "~/lib/phases.ts";
 
 export function TurnCard({
@@ -32,6 +32,7 @@ export function TurnCard({
 }) {
   const [open, setOpen] = useState(!!defaultOpen);
   const now = useNow();
+  const nav = useNavigator();
 
   // The turn's own wall time, from its first phase to its last. The engine's
   // `turn_completed` carries an exact `duration_ms`, but it is a separate
@@ -59,14 +60,25 @@ export function TurnCard({
             {group.phases.map((p) => (
               <PhaseTag key={p.key} phase={p.phase} />
             ))}
-            {trigger?.integration && (
-              <Badge outline mono>
-                {trigger.integration}
-              </Badge>
-            )}
           </div>
         </div>
         <span className="spacer" />
+        {/* WHERE THIS TURN CAME FROM, in the metadata cluster with the turn's
+            other attributes — how much, how long, when.
+            It has been three other places and each was worse for the same
+            reason: it moved. Beside the phase tags it read as a third phase;
+            in front of the trigger text the eye hit a label before the
+            sentence it labels; after that text it sat wherever the sentence
+            happened to end, which is a different spot on every card. The rule
+            this header already keeps is that the same facts are in the same
+            places always, so a reader scanning a list can compare a column
+            rather than hunt a row — and a source is exactly the kind of thing
+            somebody scans down. */}
+        {trigger?.integration && (
+          <Badge outline mono title="where this turn's trigger came from">
+            {trigger.integration}
+          </Badge>
+        )}
         {group.live && (
           <Badge tone="info" dot>
             running
@@ -103,14 +115,25 @@ export function TurnCard({
               defaultOpen={i === 0 && group.phases.length === 1}
             />
           ))}
+          {/* THE WAY OUT OF THIS CARD, drawn as a control rather than as a
+              mono caption in a footer corner. It was a link styled like debug
+              output, with the sentence explaining it pushed to the OPPOSITE
+              end of the row — so the most useful action on the card looked
+              like a row of hex, and the promise it makes was too far away to
+              read as its label. */}
           <footer className="phase-foot">
-            <a className="t-caption mono" href={href(["turns", group.turnId])}>
-              turn {group.turnId.slice(0, 8)} →
-            </a>
-            <span className="spacer" />
+            <Button
+              size="sm"
+              icon="layers"
+              onClick={() => nav.to(["turns", group.turnId])}
+              title={`turn ${group.turnId}`}
+            >
+              Open the whole turn
+            </Button>
             <span className="t-caption">
-              every event of this turn, including the ones no phase carries
+              what woke it, what it was given, and what it learned — the events no phase carries
             </span>
+            <span className="spacer" />
           </footer>
         </div>
       )}

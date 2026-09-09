@@ -64,17 +64,19 @@ func TestATextModeSeatGetsNoAgentLauncher(t *testing.T) {
 	if got := e.agentRunFor(c, "swe", &turnctx.Turn{ID: "t1"}); got != nil {
 		t.Fatalf("a text-mode seat got %T, want a nil interface", got)
 	}
-	if c.AgentModeSeat(c.Org.Roles[0]) {
-		t.Error("a text-mode seat reports itself in agent mode")
-	}
 }
 
 // AN AGENT-MODE SEAT GETS ONE, carrying the CLI and the cell resolved from its
 // own entry — resolved ONCE, before the turn, so an apply landing mid-turn
 // cannot move a run that is already going.
+//
+// Its PRESENCE is also the whole signal the runner reads to decide that this
+// executor already holds a shell and must not also be offered run_sandbox
+// (see runner.offersSandbox), so these two tests pin that too: there is no
+// second derivation of "is this seat in agent mode" to keep in step.
 func TestAnAgentModeSeatGetsALauncherForItsOwnCLIAndCell(t *testing.T) {
 	t.Parallel()
-	c, seat := modeCompany(t, "opencode", true, config.PlacementE2B)
+	c, _ := modeCompany(t, "opencode", true, config.PlacementE2B)
 	e := &Engine{}
 	got := e.agentRunFor(c, "swe", &turnctx.Turn{ID: "t1"})
 	if got == nil {
@@ -89,9 +91,6 @@ func TestAnAgentModeSeatGetsALauncherForItsOwnCLIAndCell(t *testing.T) {
 	}
 	if launcher.placement != sandbox.E2B {
 		t.Errorf("placement = %q, want the entry's own run_in", launcher.placement)
-	}
-	if !c.AgentModeSeat(seat) {
-		t.Error("an agent-mode seat does not report itself in agent mode")
 	}
 }
 

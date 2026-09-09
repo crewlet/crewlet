@@ -187,3 +187,127 @@ func TestAProfileWithoutAModelFlagRefusesAModel(t *testing.T) {
 		t.Errorf("error %q does not name the field to declare", err)
 	}
 }
+
+// `crewlet llm doctor` exists to settle one question — are these token counts
+// the vendor's or this engine's guess — so the predicate behind it has to ask
+// what the EXTRACTOR asks, not a narrower question that happens to agree on
+// the built-in profiles.
+func TestReadsUsageAgreesWithWhatTheExtractorActuallyReads(t *testing.T) {
+	t.Parallel()
+	usage := UsagePaths{
+		Input:  []Path{{"usage", "input_tokens"}},
+		Output: []Path{{"usage", "output_tokens"}},
+	}
+	for _, tc := range []struct {
+		name string
+		p    Profile
+		want bool
+	}{
+		{"json with usage paths", Profile{Output: OutputJSON, TextPaths: []Path{{"result"}}, Usage: usage}, true},
+		{"jsonl with usage paths", Profile{Output: OutputJSONL, TextPaths: []Path{{"result"}}, Usage: usage}, true},
+		{"json with none", Profile{Output: OutputJSON, TextPaths: []Path{{"result"}}}, false},
+		// The one that was wrong: `output: text` is a one-line override,
+		// and the JSON paths it inherits are then walked by nothing —
+		// extract never decodes a document in that mode.
+		{"text, inheriting a json profile's usage paths", Profile{Output: OutputText, Usage: usage}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tc.p.ReadsUsage(); got != tc.want {
+				t.Errorf("ReadsUsage() = %v, want %v", got, tc.want)
+			}
+			// The claim is only worth anything if it matches reality.
+			out := extract(tc.p, `{"result":"hi","usage":{"input_tokens":3,"output_tokens":4}}`)
+			if out.reported != tc.p.ReadsUsage() {
+				t.Errorf("ReadsUsage() = %v but a real extraction reported = %v",
+					tc.p.ReadsUsage(), out.reported)
+			}
+		})
+	}
+}
+
+// A sentinel is matched as a plain substring against whatever the CLI printed,
+// which on a healthy call is the MODEL'S OWN ANSWER — so one that can occur in
+// ordinary text does not recognise a spent plan, it misclassifies replies as
+// one. Both kinds a marker produces bench the credential, so the cost is a
+// working subscription taken out of service.
+func TestASentinelWithNoLettersIsRefused(t *testing.T) {
+	t.Parallel()
+	base := Profile{
+		Binary:       "x",
+		CompleteArgs: []string{"-p"},
+		Output:       OutputText,
+	}
+	for _, tc := range []struct {
+		name    string
+		mutate  func(*Profile)
+		wantErr string
+	}{
+		{"a bare HTTP status as a limit marker",
+			func(p *Profile) { p.LimitMarkers = []LimitMarker{{Sentinel: "429"}} },
+			"limit_markers[0].sentinel"},
+		{"punctuation only",
+			func(p *Profile) { p.LimitMarkers = []LimitMarker{{Sentinel: "!!!"}} },
+			"limit_markers[0].sentinel"},
+		// Auth markers were not checked AT ALL — not even for emptiness —
+		// and KindAuth exhausts the credential exactly as a spent plan does.
+		{"an auth marker with no letters",
+			func(p *Profile) { p.AuthMarkers = []AuthMarker{{Sentinel: "401"}} },
+			"auth_markers[0].sentinel"},
+		{"an empty auth marker",
+			func(p *Profile) { p.AuthMarkers = []AuthMarker{{Sentinel: ""}} },
+			"auth_markers[0].sentinel is empty"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := base
+			tc.mutate(&p)
+			err := p.validate("test")
+			if err == nil {
+				t.Fatal("a sentinel that matches ordinary text was accepted")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("message does not name the field: %v", err)
+			}
+		})
+	}
+
+	// The rule is "it has to contain a letter" and nothing more: a short
+	// vendor string is legitimate, and a length floor would be a constant
+	// nobody can defend.
+	for _, ok := range []string{"quota", "429 Too Many Requests", "Quota exceeded"} {
+		p := base
+		p.LimitMarkers = []LimitMarker{{Sentinel: ok}}
+		if err := p.validate("test"); err != nil {
+			t.Errorf("sentinel %q was refused: %v", ok, err)
+		}
+	}
+}
+
+// No shipped profile may carry one, which is the half a rule alone does not
+// give you: `429` sat in the opencode profile until this test existed.
+func TestNoShippedSentinelCanMatchOrdinaryText(t *testing.T) {
+	t.Parallel()
+	for _, name := range BuiltinNames() {
+		if name == "custom" {
+			// Ships nothing on purpose, so it does not load — see
+			// TestCustomShipsNothingAndSaysWhatIsMissing.
+			continue
+		}
+		p, err := Load(name, nil)
+		if err != nil {
+			t.Errorf("Load(%q): %v", name, err)
+			continue
+		}
+		for _, m := range p.LimitMarkers {
+			if problem := sentinelProblem(m.Sentinel); problem != "" {
+				t.Errorf("%s limit marker %s", name, problem)
+			}
+		}
+		for _, m := range p.AuthMarkers {
+			if problem := sentinelProblem(m.Sentinel); problem != "" {
+				t.Errorf("%s auth marker %s", name, problem)
+			}
+		}
+	}
+}

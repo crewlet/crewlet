@@ -150,19 +150,35 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 	return names, nil
 }
 
-// annotationsFor classifies a builtin for the delivery gate.
+// annotationsFor classifies a builtin for the delivery gate and the sub-agent
+// guard.
 //
-// THE DELIVERY CHECK IS WHY THIS MATTERS. A turn that set out to act and then
-// only read is a turn that delivered nothing, and the check can only see that
-// if it knows which calls were reads. Unannotated counts as NOT a known read — the safe
-// default for an MCP server nobody has classified — so a read-only builtin
-// left unannotated would make every recall look like a delivery.
+// THE DELIVERY CHECK IS WHY ReadOnly MATTERS. A turn that set out to act and
+// then only read is a turn that delivered nothing, and the check can only see
+// that if it knows which calls were reads. Unannotated counts as NOT a known
+// read — the safe default for an MCP server nobody has classified — so a
+// read-only builtin left unannotated would make every recall look like a
+// delivery.
 //
-// None of these writes to a SHARED surface: an agent's own diary, its own
-// skills and its own onboarding marker are private state, and an A2A ask is a
-// message to one colleague rather than something the company can see. The
-// distinction is the one `writes_to_shared_surface` exists to draw — see
-// docs/concepts/tool-capabilities.md.
+// OPEN-WORLD IS A TRI-STATE, AND THE THIRD VALUE IS LOAD-BEARING HERE. The
+// sub-agent guard asks [mcp.WritesToSharedSurface], whose rule is `ReadOnly ==
+// No` AND `OpenWorld != No` — so leaving OpenWorld UNSET on a tool that writes
+// only the agent's own private state classifies it as a write to a surface a
+// human reads. That is the exact shape internal/mcp/probe.go reaches past the
+// SDK to avoid producing by accident for a third-party server ("the sub-agent
+// guard would deny every under-annotated tool in the company, having been told
+// nothing at all"), and these three produced it by hand: a diary note, a
+// refined skill and an onboarding marker were all denied to a worker the
+// parent had explicitly granted them to, on the strength of a hint nobody had
+// set. Each says `OpenWorld: mcp.No` now, because each is genuinely false —
+// the question the classifier asks is whether a sub-agent would write "to a
+// surface a human reads, under the parent agent's identity", and an agent's
+// own memory is read by its own next turn and by nobody else.
+//
+// The DEFAULT arm stays conservative and is meant to have no members: a
+// builtin nobody classified is treated as a shared write, so a future tool
+// that posts somewhere is denied to workers until someone says otherwise.
+// See docs/concepts/tool-capabilities.md.
 func annotationsFor(name string) tools.Annotations {
 	switch name {
 	case LookupColleagueTool, UseSkillTool, QueryEpisodesTool, RefreshMemoryTool,
@@ -171,30 +187,53 @@ func annotationsFor(name string) tools.Annotations {
 		// nothing, which is what lets a phase retry one safely.
 		return tools.Annotations{ReadOnly: mcp.Yes, Idempotent: mcp.Yes}
 	case A2AAskTool:
-		// The only one that leaves this process. Not destructive — an ask
+		// One of the two that leave this process. Not destructive — an ask
 		// is a message, not an edit — but NOT idempotent: asking twice
-		// wakes a colleague twice and spends two of their turns.
+		// wakes a colleague twice and spends two of their turns. A worker
+		// is additionally denied it BY NAME, because "one colleague's desk"
+		// is a narrower objection than open-world and deserves its own
+		// sentence; see internal/agent/subagent.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
 	case MarkOnboardedTool:
 		// A write whose repeat is genuinely free: the marker is a fact
-		// about this seat, and setting it again sets the same fact.
-		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, Idempotent: mcp.Yes}
+		// about this seat, and setting it again sets the same fact. Private
+		// state — a row in the seat's own store — so OpenWorld is
+		// explicitly No.
+		return tools.Annotations{
+			ReadOnly: mcp.No, Destructive: mcp.No, Idempotent: mcp.Yes, OpenWorld: mcp.No,
+		}
+	case ReflectAndPersistTool:
+		// The agent's own diary: a write, and each call is another note, so
+		// nowhere near idempotent. Private state — read back by this seat's
+		// own next turn and by nobody else — so OpenWorld is explicitly No.
+		// It used to fall through the default arm, where the missing hint
+		// made it a shared write.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.No}
 	case RunSandboxTool:
 		// The one builtin that writes to a SHARED SURFACE, which
 		// ReadOnly=No plus OpenWorld=Yes is how that is stated: a coding
 		// run pushes branches and opens pull requests other people see, so
 		// mcp.WritesToSharedSurface reads true and the sub-agent guard
-		// keeps it away from a sub-agent acting under its parent's name.
+		// keeps it away from a sub-agent acting under its parent's name,
+		// which ALSO denies it by name for a second and independent
+		// reason — a worker cannot park for a detached run's result.
 		// Not destructive — a branch and a pull request are additive — and
 		// nowhere near idempotent: a second call is a second run, a second
 		// box, and a second set of commits.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
 	case RefineSkillTool:
 		// It replaces a body. The prior version is archived, so this is
-		// reversible — which is exactly what Destructive asks about.
-		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No}
+		// reversible — which is exactly what Destructive asks about. The
+		// body lives in the agent's OWN learning store, not in the
+		// knowledge base `load_tool_skill` reads, so OpenWorld is
+		// explicitly No.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.No}
 	default:
-		// reflect_and_persist: a write, and each call is another note.
+		// NO MEMBERS, deliberately. Every builtin is named above, and a new
+		// one that lands here is classified as a write to a shared surface
+		// until somebody says which it is — the fail-closed direction for a
+		// security boundary, and the reason the private-state tools are
+		// named rather than defaulted.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No}
 	}
 }

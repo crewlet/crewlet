@@ -104,7 +104,7 @@ what to select on.
 
 ### Tier B example (`company.yaml`)
 
-Everything that defines the company — see [examples/nimbus.company.yaml](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml) for a complete reference.
+Everything that defines the company — see [examples/nimbus.company.yaml](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml) for a complete working document, and the [configuration reference](../getting-started/configuration.md) for every field including the ones that example does not use.
 
 ---
 

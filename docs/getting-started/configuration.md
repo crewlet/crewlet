@@ -246,8 +246,11 @@ providers:
       timeout_seconds: 120              # optional — per-call HTTP timeout (default: 120); raise for slow / large-output reasoning models
                                         #   (the cli-agent backend drives a subprocess and uses cli.timeout_seconds instead)
       reasoning: false                  # optional — enable reasoning/extended thinking (default: false)
-      reasoning_effort: medium          # optional — OpenAI reasoning effort: low | medium | high (default: medium)
+      reasoning_effort: medium          # optional — OpenAI reasoning effort: low | medium | high | max (default: medium)
       reasoning_budget_tokens: 10000    # optional — Anthropic thinking budget in tokens (default: 10000)
+                                        #   All three are REFUSED on a cli-agent entry: a coding CLI driven
+                                        #   headlessly takes no per-call reasoning flag and carries its own
+                                        #   configuration. Pick the reasoning model with `model` instead
     budget:                             # multiple providers supported
       type: openai
       model: gpt-4o-mini
@@ -291,8 +294,12 @@ providers:
                                         #   blob; empty falls back to
                                         #   CREWLET_LLM_CLI_<KEY>_CREDENTIALS
         overrides: {}                   # optional — replace any profile field when a
-                                        #   vendor renames a flag (validated here, so a
-                                        #   typo fails `crewlet validate`)
+                                        #   vendor renames a flag OR moves the field the
+                                        #   answer lives in (`text_paths`); validated
+                                        #   here, so a typo fails `crewlet validate`.
+                                        #   A moved answer field is the drift that
+                                        #   passes validation and fails at a seat's
+                                        #   first turn — `crewlet llm doctor` names it
 
   embeddings:                           # optional — similarity search for the
                                         #   agent-learning subsystem (agent_diary

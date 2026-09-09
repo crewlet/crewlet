@@ -307,6 +307,42 @@ func TestAFailedResumeUnclaimsSoTheRetryCanWin(t *testing.T) {
 	}
 }
 
+// A RESUME THAT BROKE AFTER WRITING OUTSIDE THE ENGINE KEEPS ITS CLAIM.
+//
+// The counterpart of the un-claim above and the reason that one needs a
+// condition. Reverting hands the completion back to a retry, and the retry
+// re-enters the SAME suspended conversation — so every branch pushed and every
+// issue commented on since the box came back happens a second time, up to the
+// broker's whole delivery budget. The suspended turn is lost either way once
+// the phase breaks; only one of the two outcomes also repeats the writes.
+func TestAResumeThatBrokeAfterActingKeepsItsClaim(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done"})
+	rig.resumer.err = fmt.Errorf("%w: the reviewer's provider went away", ErrResumeActed)
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the completion was NAKed, so it will be redelivered into a "+
+			"conversation whose writes already landed: %v", err)
+	}
+	if got := rig.get("t1"); got.Status == StatusRunning {
+		t.Fatalf("status = %q, want the claim left taken so no retry wins the flip", got.Status)
+	}
+
+	// AND THE RETRY DOES NOT WIN. This is the invariant, not the status
+	// string: a second delivery of the same completion must not resume.
+	rig.resumer.mu.Lock()
+	rig.resumer.err = nil
+	rig.resumer.mu.Unlock()
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the redelivery raised: %v", err)
+	}
+	if got := len(rig.resumer.calls()); got != 0 {
+		t.Fatalf("resumed %d times after abandoning, want none", got)
+	}
+}
+
 // The claim snapshots the EXACT prior status, so a run answered out of a
 // clarification reverts there rather than to running.
 func TestAFailedResumeRevertsToWhereTheClaimFoundIt(t *testing.T) {

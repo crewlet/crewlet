@@ -595,7 +595,8 @@ that work is established here rather than in the config document. `KEY` is the
 logged in. **`doctor`** is the one to run before a company's first turn: it
 checks the CLI is installed, the credentials answer, and — unless you pass
 `-no-smoke` — that a real completion comes back, which is the only check that
-catches a plan whose quota is exhausted. The same run measures two claims the
+catches a plan whose quota is exhausted, or a profile whose `text_paths` no
+longer find the answer in what the CLI prints. The same run measures two claims the
 profile makes rather than trusting them: that the CLI's own **shell is
 refused** (it runs on the engine host, so a denial that stopped working is a
 seat reading whatever the engine user can read) and that its **web tool

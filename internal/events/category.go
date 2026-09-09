@@ -94,8 +94,6 @@ var categories = map[string]string{
 	"agent_turn_completed":         "system",
 	"agent_phase_started":          "system",
 	"agent_phase_completed":        "system",
-	"execute.missing_tool":         "system",
-	"phase.tool_activated":         "system",
 	"phase.tool_skill_blocked":     "system",
 	"prompt.size":                  "system",
 	"turn.guard_breach":            "system",

@@ -35,9 +35,12 @@ to operate and nothing to point a DSN at.
 
 The Docker stack is for the **self-hostable integrations**: Mattermost and
 GitLab, each behind its own compose profile with a bootstrap script that
-stands it up and provisions the example company's seats — `make mattermost-up`
-and `make gitlab-up` are the profile and its script in one step, and take
-`COMPANY=` to provision a config's seats in the same run. Jira and Confluence
+stands it up and provisions a config's seats — `make mattermost-up` and
+`make gitlab-up` are the profile and its script in one step, and take
+`COMPANY=` to provision that config's seats in the same run.
+`make mattermost-up COMPANY=examples/nimbus.company.yaml` is the whole setup
+for the bundled example, whose only integration is chat; the GitLab profile
+needs a config that declares `integrations.gitlab`, which that one does not. Jira and Confluence
 have no profile — Atlassian is not something a compose file can stand up. See
 [docs/integrations/](docs/integrations/).
 
@@ -490,7 +493,8 @@ package directory under `internal/` — `agent`, `api`, `coord`, `engine`,
 `sandbox`, `schedule`, `seat`, `secrets`, `store`, `tools`, and so on — so a
 reader can go from a subject line to a directory without guessing. Two scopes
 name a component by the name people use rather than by its import path:
-`dashboard` for `static/dashboard/`, and `cli` for `cmd/crewlet/`. Outside
+`dashboard` for the dashboard — its source in `dashboard/` and the built
+bundle in `static/dashboard/` — and `cli` for `cmd/crewlet/`. Outside
 `internal/`, scope by area: `docs`, `deps`, `examples`, `schema`, `scripts` —
 and for CI, the workflow's own name (`ci(release)`, `ci(docs-publish)`).
 

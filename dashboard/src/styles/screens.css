@@ -326,6 +326,23 @@
 .disclosure {
   min-width: 0;
 }
+/* The toggle and the section's own controls are SIBLINGS. A copy button
+   nested inside the toggle would be a button inside a button — invalid, and
+   worse, clicking it would collapse the very thing it just copied.
+   `width: auto` on the head is load-bearing: it carries `width: 100%` for the
+   standalone case, which inside this row makes it claim the whole line and
+   push the controls onto one of their own. */
+.disclosure-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.disclosure-bar > .disclosure-head {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
 .disclosure-head {
   display: flex;
   align-items: center;
@@ -503,11 +520,58 @@
   font-size: var(--fs-xs);
   min-width: 0;
 }
+/* A row on a page about ONE turn.
+   NOT `.feed-row`, which this borrowed at first and which is a FOUR-column
+   grid (time, actor, summary, tail). Three children landed in the first
+   three tracks, so the summary was squeezed into the 132px actor column and
+   truncated at about twenty characters while the raw event type had the
+   whole tail to itself, and a full date wrapped to three lines inside the
+   62px time column. Every row was three lines tall to show half a sentence.
+   Here the summary is the content and gets the space; the time is one
+   instant inside a turn the header already dates, so it needs only a clock. */
+.turn-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: baseline;
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: left;
+  font-size: var(--fs-xs);
+  min-width: 0;
+}
+.turn-row:last-child {
+  border-bottom: none;
+}
+.turn-row:hover {
+  background: var(--surface-hover);
+}
+.turn-row.failed {
+  box-shadow: inset 2px 0 0 var(--critical);
+}
+.turn-row > .what {
+  color: var(--text);
+  min-width: 0;
+}
 .feed-row:last-child {
   border-bottom: none;
 }
 .feed-row:hover {
   background: var(--surface-hover);
+}
+/* A ROW IS NOT AN INLINE LINK. `a:hover` underlines, which is right for a
+   link inside a sentence and wrong for a whole row that happens to be an
+   anchor: hovering one struck a line under its timestamp, its summary AND
+   its type, three unrelated fragments at once. A row-shaped link is already
+   telling you it is hoverable with its ground. */
+.feed-row:hover,
+.turn-row:hover,
+.seat-card:hover,
+.attention-row.clickable:hover,
+.brand:hover,
+.hit-title:hover {
+  text-decoration: none;
 }
 .feed-row.failed {
   box-shadow: inset 2px 0 0 var(--critical);

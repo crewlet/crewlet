@@ -104,7 +104,13 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 		prior:        priorRounds(state),
 	})
 	if err != nil {
-		return turn.Work{}, turn.Surface{}, err
+		// resumedCalls, not calls: a resumed phase's record has to carry
+		// the PRE-SUSPEND rounds too. The round that called run_sandbox
+		// was never closed — [turn.Run] returns on a suspend without
+		// appending it — so its writes exist in no ledger anywhere, and a
+		// resume that broke would otherwise report a turn that had done
+		// nothing when it is precisely the turn that has done the most.
+		return turn.Work{Calls: resumedCalls(surface, state)}, describe(surface), err
 	}
 
 	if res.Suspended {
@@ -129,7 +135,7 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 		run: r.cfg.Resume.Run,
 	})
 	if err != nil {
-		return turn.Work{}, turn.Surface{}, err
+		return turn.Work{Calls: resumedCalls(surface, state)}, describe(surface), err
 	}
 	// The WHOLE phase's calls, pre-suspend rounds included — see
 	// resumedCalls.

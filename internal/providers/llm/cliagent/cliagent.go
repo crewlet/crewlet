@@ -206,6 +206,12 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	seat := llm.SeatOf(ctx)
 	callID := CallOf(ctx)
 
+	// THE SYSTEM PROMPT ON ITS OWN CHANNEL where the CLI has one. Lifted
+	// before the transcript is rendered, so it is never both.
+	var system string
+	if len(p.profile.SystemPromptArgs) > 0 || p.profile.SystemPromptEnv != "" {
+		system, req = SplitSystem(req)
+	}
 	prompt, err := RenderPrompt(req)
 	if err != nil {
 		return nil, p.fail(llm.KindFatal, 0, err)
@@ -255,10 +261,47 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 			if !ok {
 				return
 			}
-			req.Send(llm.Delta{Content: firstString(doc, p.profile.TextPaths)})
+			// The bool is deliberately dropped HERE and only here:
+			// a stream is many events and most of them carry no
+			// text path at all, so "did this one event match" is
+			// not the question. Whether the PROFILE matches is
+			// decided once, over the whole stream, by extract.
+			chunk, _ := firstString(doc, p.profile.TextPaths)
+			req.Send(llm.Delta{Content: chunk})
 		}
 	}
+	if system != "" {
+		// One channel or the other — the profile validator refuses a
+		// build that declares both.
+		switch {
+		case len(p.profile.SystemPromptArgs) > 0:
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
+			args, err := systemArgs(p.profile.SystemPromptArgs, system, checkout.Work)
+			if err != nil {
+				return nil, p.fail(llm.KindFatal, 0, err)
+			}
+			in.args = append(in.args, args...)
+		case p.profile.SystemPromptEnv != "":
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
+			pair, err := systemEnv(p.profile.SystemPromptEnv, system, checkout.Work)
+			if err != nil {
+				return nil, p.fail(llm.KindFatal, 0, err)
+			}
+			// APPENDED, so it wins: the child env is assembled from the
+			// allowlist and the profile's own config_env above, and the
+			// last assignment of a name is the one exec applies.
+			in.env = append(in.env, pair)
+		}
+	}
+	// THE PROMPT LAST, and after the system args for the same reason the
+	// profile puts the model flag before it: a CLI taking its prompt on
+	// argv reads the first non-flag argument, so anything appended after it
+	// is read as part of the prompt.
 	if p.profile.mode() == PromptArgv {
+		// PromptArgs and then the prompt, ADJACENT and last: a CLI that
+		// takes its prompt as a flag's value needs the two together, and
+		// anything appended between them becomes the prompt instead.
+		in.args = append(in.args, p.profile.PromptArgs...)
 		in.args = append(in.args, prompt)
 	} else {
 		in.stdin = prompt
@@ -272,7 +315,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	log.DebugContext(ctx, "cli_agent_call", "provider", p.key, "agent", p.agent, "model", p.model,
 		"seat", seat, "exit", res.exitCode, "elapsed_ms", time.Since(started).Milliseconds())
 
-	return p.completion(prompt, res)
+	return p.completion(ctx, prompt, res)
 }
 
 // argv is the invocation's arguments: the profile's completion argv, then the
@@ -290,7 +333,12 @@ func (p *Provider) argv() []string {
 
 // completion turns a finished invocation into an answer or a classified
 // failure.
-func (p *Provider) completion(prompt string, res *rawResult) (*llm.Completion, error) {
+//
+// It takes a context only to log with: an answer this backend hands back
+// EMPTY is a real outcome rather than an error (see the fall-through below),
+// and the one place that can say so is here, where the token counts that
+// explain it are still in hand.
+func (p *Provider) completion(ctx context.Context, prompt string, res *rawResult) (*llm.Completion, error) {
 	if res.timedOut {
 		return nil, p.fail(llm.KindTimeout, 0, fmt.Errorf(
 			"the CLI did not answer within %s — raise cli.timeout_seconds if this model "+
@@ -318,22 +366,90 @@ func (p *Provider) completion(prompt string, res *rawResult) (*llm.Completion, e
 	// A spent subscription is checked BEFORE the exit code, because it
 	// arrives on a successful one: the process exits 0 and the answer is
 	// the vendor's own sentence about the plan.
-	if kind, retry, ok := p.classifyMarkers(out.text, res.stderr); ok {
-		return nil, p.fail(kind, retry, fmt.Errorf("%s", firstLine(out.text, res.stderr)))
+	//
+	// THE ANSWER IF THERE IS ONE, EVERYTHING PRINTED IF THERE IS NOT.
+	// A marker is something the VENDOR said, so losing it because this
+	// profile's text paths no longer resolve would classify a spent plan
+	// as a server fault and burn the chain's next member on it — and a
+	// spent plan is exactly when a drifted-looking run is most likely,
+	// since the CLI answers with prose where the envelope should be.
+	//
+	// Not stdout unconditionally, though, which was the first shape of
+	// this: some shipped markers are short generic phrases rather than
+	// vendor sentences, and scanning a healthy run's whole telemetry for
+	// them adds false-positive surface for nothing. When the answer WAS
+	// located it is the only thing the vendor said that matters.
+	said := nonEmpty(out.text, res.stdout)
+	if kind, retry, ok := p.classifyMarkers(said, res.stderr); ok {
+		return nil, p.fail(kind, retry,
+			fmt.Errorf("%s", firstLine(said, res.stderr)))
 	}
 
 	if res.exitCode != 0 || out.failed {
 		return nil, p.fail(llm.KindFatal, 0, fmt.Errorf(
-			"the CLI exited %d:\n%s", res.exitCode, tail(nonEmpty(res.stderr, out.text))))
+			"the CLI exited %d:\n%s", res.exitCode,
+			tail(nonEmpty(res.stderr, out.text, res.stdout))))
 	}
-	if strings.TrimSpace(out.text) == "" {
-		// Exit zero and nothing on stdout. Not a fatal request problem —
-		// nothing about the prompt was refused — so the chain is free to
-		// try another member, and the credential is not cooled.
+	if strings.TrimSpace(res.stdout) == "" {
+		// Exit zero and nothing on stdout AT ALL — no envelope, no
+		// banner, no prose. Checked before the two cases below because
+		// neither can say anything true about output that does not
+		// exist: there is no shape for a path to miss and no field to
+		// find empty. Not a fatal request problem — nothing about the
+		// prompt was refused — so the chain is free to try another
+		// member, and the credential is not cooled.
 		return nil, p.fail(llm.KindServer, 0, fmt.Errorf(
-			"the CLI exited 0 but produced no output:\n%s", tail(res.stderr)))
+			"the %s CLI exited 0 but printed nothing at all%s",
+			p.agent, stderrDetail(res.stderr)))
 	}
-
+	if !out.located {
+		// THE PROFILE HAS DRIFTED FROM THE CLI. Its output parsed, and
+		// none of the paths that say where the answer lives resolved to
+		// a string — so this build cannot tell which part of what the
+		// CLI printed is the model's reply, and the honest answer is
+		// that it has none.
+		//
+		// It used to hand the whole of stdout back as the reply instead,
+		// on the reasoning that an operator could then see the shape and
+		// write an override. They could — but only after it had already
+		// been spoken as an agent: the tool loop appends it to the
+		// conversation, the reviewer judges the turn on it, and the
+		// dashboard prints it as the sentence the seat said. The shape
+		// belongs in THIS message, where the person who can fix it is
+		// the only reader.
+		//
+		// KindServer, so the chain may try another member and the
+		// credential is not benched: nothing about the prompt was
+		// refused.
+		return nil, p.fail(llm.KindServer, 0, fmt.Errorf(
+			"the %s CLI's output parsed, but none of the text_paths this profile "+
+				"looks in resolved (%s) — the profile no longer matches the "+
+				"installed CLI, so nothing it printed can be read as the model's "+
+				"reply. Run `crewlet llm doctor %s` and set "+
+				"providers.llm.%s.cli.overrides.text_paths. It printed:\n%s",
+			p.agent, PathList(p.profile.TextPaths), p.key, p.key, tail(res.stdout)))
+	}
+	// LOCATED AND EMPTY IS AN ANSWER OF NOTHING, NOT A FAULT. The CLI
+	// exited 0, reported no error, and the path this profile looks in
+	// resolved to an empty string — which is what a model that spent its
+	// whole output budget on hidden reasoning does. That is a MODEL
+	// outcome, and [llm.Provider] forbids a backend from deciding what a
+	// failure means beyond a coarse kind, so it must not be dressed as one:
+	// both API backends return exactly this shape (a Completion with empty
+	// Content) for the identical situation, and the tool loop is the frame
+	// that corrects it.
+	//
+	// It used to be a KindServer error, on the reasoning that there was no
+	// reply for the tool loop to correct. That was true only because the
+	// loop tested tool calls and never read Content; closing that gap is
+	// what makes this fall-through safe, and what stops one empty round
+	// from being reported as an outage of a CLI that demonstrably answered.
+	//
+	// Falls through rather than returning early so the round is charged:
+	// ParseEnvelope("") yields Message:"" and Parsed:false, so Content
+	// becomes "" with the vendor's real usage attached below — an empty
+	// answer costs tokens, and it was previously the one outcome that spent
+	// them without ever reaching a budget.
 	env := ParseEnvelope(out.text)
 	comp := &llm.Completion{
 		Model:        p.model,
@@ -369,6 +485,18 @@ func (p *Provider) completion(prompt string, res *rawResult) (*llm.Completion, e
 	} else {
 		comp.InputTokens = EstimateTokens(prompt)
 		comp.OutputTokens = EstimateTokens(out.text)
+	}
+
+	if strings.TrimSpace(comp.Content) == "" && len(comp.ToolCalls) == 0 {
+		// Warned rather than returned, because nothing above this frame
+		// can reconstruct WHY: the output token count is the evidence
+		// that the model worked and said nothing (a thinking-only round
+		// bills hundreds), and the text paths are the evidence a reader
+		// needs if it turns out to be profile drift after all. Same
+		// shape as agent/prefetch's own answered-nothing warning.
+		log.WarnContext(ctx, "cli_agent_answered_nothing", "provider", p.key,
+			"agent", p.agent, "model", p.model, "text_paths", PathList(p.profile.TextPaths),
+			"output_tokens", comp.OutputTokens, "reported_usage", out.reported)
 	}
 	return comp, nil
 }
@@ -459,6 +587,19 @@ func firstLine(texts ...string) string {
 		}
 	}
 	return "no output"
+}
+
+// stderrDetail appends a CLI's stderr to a message, or nothing when it wrote
+// none.
+//
+// A trailing empty ":" after a sentence that already said what went wrong is
+// how a message stops reading like one — and stderr is genuinely absent on the
+// paths that use this, because a CLI that exits 0 usually says nothing there.
+func stderrDetail(stderr string) string {
+	if strings.TrimSpace(stderr) == "" {
+		return ""
+	}
+	return " It wrote on stderr:\n" + tail(stderr)
 }
 
 // nonEmpty is the first of the given strings with content.

@@ -146,6 +146,10 @@ reinvent them:
 - [`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml) —
   a complete seven-seat company with Jira + Confluence + GitLab + Mattermost
   + sandbox.
+- [`examples/nimbus-claude-cli.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus-claude-cli.company.yaml) —
+  the SAME seven seats with everything but chat removed: Mattermost alone, on
+  a coding-CLI subscription rather than a metered key. The one to copy when a
+  founder has no tracker, wiki or code host yet.
 
 ## Invariants
 

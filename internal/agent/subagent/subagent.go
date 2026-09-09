@@ -148,8 +148,14 @@ var controlDenylist = map[string]struct{}{
 	// completion pauses the parent seat's inbox. A sub-agent's loop cannot
 	// suspend, so the parent turn would finish normally, never persist an
 	// execute state, and the seat would stay deaf for the whole coding run
-	// with nothing to resume into. It carries no annotations either, so the
-	// shared-write filter does not catch it.
+	// with nothing to resume into.
+	//
+	// The annotation filter below happens to catch it too — a coding run is
+	// open-world, and internal/agent/builtin says so. Named here anyway,
+	// and the redundancy is the point: that reason is about pushing
+	// branches other people read, and this one is about a turn that can
+	// never be resumed. Either alone would deny it; only this one survives
+	// somebody deciding a sandbox is private.
 	"run_sandbox": {},
 
 	// The PARENT's discovery pair. Both close over the parent's surface, so
@@ -162,8 +168,10 @@ var controlDenylist = map[string]struct{}{
 
 	// Cross-agent communication. A short-lived worker's half-formed
 	// conclusions must not land on a teammate's desk under the parent's
-	// name. The last three are not engine tools today; they are denied
-	// defensively in case an extension registers them.
+	// name — a narrower objection than "it leaves the process", which is
+	// why it is named here as well as annotated open-world. The last three
+	// are not engine tools today; they are denied defensively in case an
+	// extension registers them.
 	"a2a_ask":             {},
 	"request_a2a_channel": {},
 	"send_a2a_message":    {},
@@ -536,7 +544,7 @@ func Run(ctx context.Context, cfg Config, req Request) ([]Result, error) {
 
 	results := runGraph(callCtx, tasks, cfg.Limits.MaxParallel,
 		func(taskCtx context.Context, r resolved, deps []Result) Result {
-			provider, key, err := resolveProvider(cfg, r.model)
+			provider, key, err := resolveProvider(taskCtx, cfg, r.model)
 			if err != nil {
 				// A model key that does not resolve is this TASK's
 				// failure, not the call's: its siblings are running on
@@ -883,7 +891,7 @@ func (m *sliceMeter) Used() int {
 // A chain even for one member: the wrapper is a pass-through there, and a
 // one-member seat then fails, logs and reports identically to a three-member
 // one.
-func resolveProvider(cfg Config, key string) (llm.Provider, string, error) {
+func resolveProvider(ctx context.Context, cfg Config, key string) (llm.Provider, string, error) {
 	var members []chain.Member
 	if key != "" {
 		// AN EXPLICIT KEY GETS NO FALLBACK CHAIN, and no silent
@@ -907,11 +915,53 @@ func resolveProvider(cfg Config, key string) (llm.Provider, string, error) {
 		}
 		members = resolved
 	}
-	c, err := chain.New(members, chain.Options{})
+	c, err := chain.New(members, chain.Options{
+		// A worker's hand-offs are the parent turn's, published under
+		// [phase.Subagent] so a reader can tell "the seat's own executor
+		// fell through" from "one of its workers did". Without this the
+		// event exists for the seat's phases and silently not for its
+		// fan-out — and a chain that is only unstable under load is
+		// unstable exactly where the fan-out is.
+		OnFallback: func(f chain.Fallback) { publishFallback(ctx, cfg, f) },
+	})
 	if err != nil {
 		return nil, "", fmt.Errorf("subagent: %w", err)
 	}
 	return c, members[0].Key, nil
+}
+
+// publishFallback records one hand-off inside a worker's provider chain.
+//
+// Best effort, like every publish in this package: the chain has already moved
+// on to the next member and the worker is still running, so a broker that
+// refuses this must not be allowed to end it.
+func publishFallback(ctx context.Context, cfg Config, f chain.Fallback) {
+	if cfg.Publisher == nil {
+		return
+	}
+	// The PARENT's identity, matching the role name beside it: a worker is
+	// ephemeral and holds no seat in the org, so it has no agent id of its
+	// own — the hand-off belongs to the seat whose chain fell through.
+	turnID, agentID := "", ""
+	if cfg.Turn != nil {
+		turnID, agentID = cfg.Turn.ID, cfg.Turn.AgentID()
+	}
+	ev := events.New(types.ProviderFallback{
+		Agent:    agentID,
+		RoleName: cfg.Seat.Role.Name,
+		TurnID:   turnID,
+		Phase:    types.Phase(phase.Subagent),
+		// No iteration: a worker runs outside the executor/review loop
+		// the number counts, and writing the PARENT's would attribute the
+		// hand-off to a round the worker is not part of.
+		FromProviderKey: f.From,
+		ToProviderKey:   f.To,
+		ErrorKind:       f.Kind.String(),
+	}, cfg.Trace)
+	ev.Source = cfg.Seat.Role.Name
+	if err := cfg.Publisher.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
+		log.WarnContext(ctx, "provider_fallback_publish_failed", "error", err)
+	}
 }
 
 // publishCall emits the one fan-out summary event, best effort.

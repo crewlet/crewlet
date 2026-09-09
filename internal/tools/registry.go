@@ -272,6 +272,32 @@ func (r *Registry) KnownReads() []string {
 	return out
 }
 
+// KnownOpenWorld returns the names POSITIVELY annotated open-world: the tools
+// whose own annotations say they reach entities outside this process.
+//
+// The same positive rule as KnownReads, for the same reason and in the
+// opposite direction. Unknown is not open-world, so this OVER-reports nothing
+// and UNDER-reports a server that annotates nothing — which is the correct
+// asymmetry for its caller: it answers "can we PROVE this left the engine",
+// and a caller that acts on a false positive here would discard work that
+// never went anywhere.
+//
+// It is deliberately not [mcp.WritesToSharedSurface]. That function answers a
+// different question with a different default — `ReadOnly == No` and an
+// unknown OpenWorld reads true, so an agent's own diary note counts as a write
+// to a shared surface. Right for the sub-agent guard it serves, wrong here.
+func (r *Registry) KnownOpenWorld() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []string
+	for _, name := range r.order {
+		if r.byName[name].Annotations.OpenWorld == mcp.Yes {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 // ForOrigin returns a view whose Register calls all carry one origin.
 //
 // The registrant does not have to repeat itself, and — more to the point —
@@ -414,6 +440,18 @@ func (s Snapshot) KnownReads() []string {
 	var out []string
 	for _, e := range s.entries {
 		if e.Annotations.ReadOnly == mcp.Yes {
+			out = append(out, e.Name())
+		}
+	}
+	return out
+}
+
+// KnownOpenWorld returns the positively open-world names in the snapshot.
+// See [Registry.KnownOpenWorld] for what "positively" buys.
+func (s Snapshot) KnownOpenWorld() []string {
+	var out []string
+	for _, e := range s.entries {
+		if e.Annotations.OpenWorld == mcp.Yes {
 			out = append(out, e.Name())
 		}
 	}

@@ -176,7 +176,7 @@ meets their company first and the engine last.
 | | Configuration | `#/config?lens=&revision=` | `config` / `config_audit` / `config_diff` *(operator-gated)* |
 | | Secrets | `#/secrets` | `/secrets` and `/config/references` over REST: the names the fleet holds, what reads each, and the writes that store, rotate and remove one — **never a value** *(operator-gated)* |
 | — | Trace | `#/traces/{id}` | `trace` — reached from a row or from search |
-| — | Turn | `#/turns/{id}` | `turn` — everything one unit of work published |
+| — | Turn | `#/turns/{id}` | `turn` — everything one unit of work published; `Copy turn` in the header assembles the record, the phases and the rest as one JSON object, and the Turn record panel copies itself and owns ⌘A |
 | — | Event | `#/events/{id}` | `event` |
 | — | Engine | the pill in the sidebar footer | the `health` push plus the `stream` query |
 
@@ -427,7 +427,7 @@ The seat screen makes the same split, where it answers a second question:
 which of these turns is happening right now, readable at a glance from the
 accent ring rather than only by finding a badge.
 
-## One filter bar, and a control that means what it looks like
+## Controls that mean what they look like
 
 The Model screen collected eighteen controls in one sticky row — a segmented
 control, a free-text box, a chip per seat, a chip per phase and a failures
@@ -458,16 +458,278 @@ What replaced it:
   Spend's window; the screens are split by question, and duplicating one
   screen's answer at the bottom of another is how the two come to disagree.
 
+Three more controls that looked like something they were not:
+
+- **A copy button says whether it copied.** The clipboard is invisible, so a
+  control that writes to it and reports nothing is indistinguishable from a
+  dead one — and this one *was* sometimes dead: the Clipboard API is gated on
+  a secure context, so `navigator.clipboard` is simply undefined at the
+  `http://<node-ip>:8000` anyone reads the dashboard of a machine that is not
+  their laptop at. `navigator.clipboard?.writeText(x)` swallowed that. The
+  `CopyButton` primitive falls back to the deprecated `execCommand` path,
+  which is the only one that works there, and then says `Copied` or
+  `Copy failed` — announced as well as drawn.
+- **A caption-sized link is still a link.** `.t-caption` on an `<a>` sets the
+  muted colour, which wins over the anchor rule, so four real navigations —
+  a phase's own event, a turn card's id, a seat's last error, the spend
+  screen — rendered as dim static micro-text a reader could only find by
+  hovering. `.t-link` is the caption register that keeps `--accent-ink`,
+  which the palette suite already measures.
+- **Select-all is a local verb on a record.** ⌘A / Ctrl+A is a *document*
+  gesture, so on a screen whose point is one JSON record — a turn's record,
+  the active configuration — it took the nav, the stat row and every phase
+  card along with it. A `Code selectable` block is focusable and owns the
+  chord while it holds focus; everywhere else the browser keeps it. The
+  focus ring is not decoration: a keyboard verb that changes meaning on
+  click is a secret without one.
 
 The header carries the same facts in the same order whether a phase is live or
 finished — phase, decision, model, rounds, tokens, age — so the row does not
-change shape when it completes. `decision`, `exhausted_rounds`, `rescue_fired`,
-`notes`, `tools_available` and `conversation_key` are all rendered; every one of
-them was on the wire and shown nowhere.
+change shape when it completes. `decision`, `exhausted_rounds`,
+`empty_answer_rounds`, `rescue_fired`, `notes`, `tools_available` and
+`conversation_key` are all rendered; every one of them was on the wire and shown
+nowhere. `empty_answer_rounds` is the newest and the one with the least warning
+attached elsewhere: a model that answers with nothing used to fail its provider
+call, which walked the fallback chain and could end the turn as a red
+`llm_unavailable`; it is corrected in the tool loop now, so this badge is what
+keeps a seat whose model never speaks from reading as a seat that merely gets
+rescued a lot.
 
 **Nothing animates on a data push.** A list that re-flows every time a
 tool-loop round lands is a list nobody can read while it is running, and
 `agents` is pushed twice per round.
+
+---
+
+## A turn is a story, not a log of itself
+
+The Turn screen answers "what happened in this turn". It used to answer it by
+saying the same things up to five times, and by putting the things nobody else
+said into a flat list called *Everything else this turn published*. On a turn
+that self-iterated three times, six of that list's twelve rows read
+`started execute (iter 2)` — one per phase card 200px above, which already
+says EXECUTE, iter 2, its model, its rounds, its tokens and what it decided. A
+seventh was the turn's own completion event, which the same screen also
+rendered as the stat strip and as a raw JSON dump.
+
+Four rules replace it, and each one names what it fixes.
+
+1. **A duplicate is a fact with a missing half.** `agent_phase_started` and
+   `agent_phase_completed` are the same phase — same `turn_id|phase|iteration`,
+   which *is* the phase key. Read apart, the start says nothing new. Read
+   together they are the one thing the finished record cannot say alone: the
+   completed event carries only the instant the phase **landed**, so no
+   completed phase had a duration anywhere on this dashboard. The start is
+   folded onto its own card now (`withStarts`), and every phase reports how
+   long it took — which is what answers "why did this turn cost 290k tokens"
+   on exactly the self-iterating turns where the question gets asked. A nested
+   call publishes no start and reports no duration rather than a wrong one.
+
+2. **Weight is meaning.** `reflection_completed` is a sentinel whose own
+   payload doc says it deliberately carries no outcome; a guard breach is a
+   turn the engine stopped. As two identical feed rows an operator scanning
+   for the second reads past it. So the rows are grouped by the question they
+   answer — **What went wrong** (above the phases, absent on a healthy turn),
+   **What the turn was given**, **What else it did**, **What it left behind**
+   — and anything this build has no opinion about falls through to a residual
+   list rather than being dropped. The event registry is additive-only; a type
+   a newer node publishes has to still render.
+
+3. **A healthy turn must be able to say so.** A set defined by subtraction
+   (`type !== …`) has no meaningful empty state, so "nothing went wrong here"
+   was not a state this screen could reach — and a section that is always full
+   is a section nobody reads.
+
+4. **The feed's row is not this screen's row.** `EventRow` has four columns —
+   time, actor, summary, source and category. On a page about ONE turn the
+   actor is the same seat on every row (it was rendered twelve times) and the
+   category is an internal taxonomy. Half the row was noise, so these sections
+   use a narrower row that spends the space on the event's own type instead.
+
+### And the header has to read the record that has the field
+
+`duration_ms` and `review_outcome` were read off `agent_turn_completed`, which
+has **neither**. They are on `turn_completed` — the learning subsystem's
+record of the same turn, published in the same breath, sitting in the same
+query answer. So *Took* silently fell back to the span between the turn's
+first and last event on every turn that ever ran, and *Review outcome* showed
+an em dash under a caption asserting the value came from the turn's own
+record. Two events describe one turn for two consumers; the screen reads both
+and names each for what it is.
+
+Three more header rules follow from the same audit:
+
+- **A turn's outcome is a state, so it takes a tone.** `Stat` grows a `tone`
+  for the case where the value IS an outcome — `done` positive, `self_iterate`
+  caution, a guard breach critical. Deliberately not on the other tiles: a
+  token count and an elapsed time are not in a state, and tinting every tile
+  would spend the four status hues on decoration. The tile also names the
+  **executor's** own last word (`delivered` / `no_action` / `blocked` /
+  `incomplete`) beside the **reviewer's** decision, because a turn that
+  delivered nothing and a turn that delivered read identically when only the
+  reviewer's word is shown.
+- **The failure badge is derived from what failed, not from the phase
+  records.** `phases.some(p => p.failed)` misses every turn the engine killed
+  *between* phases — a refused charge, an exhausted chain, a guard that fired
+  — which are precisely the turns with no failed phase record to find.
+- **An unlabelled identifier is not information.** The conversation key sat
+  under the seat's name as a raw truncated string
+  (`mattermost:9zd7xj4…:cnjza…`) with nothing saying what it was, and it is a
+  property of the *turn* rather than of the seat. It is labelled and explained
+  beside the turn's record now. In its place the header gained the two facts
+  that were missing entirely: **what woke this turn** (the trigger rides on
+  every phase event and links to its own event) and **what it set out to do**
+  (`plan_summary` — the agent's own account, which nothing read).
+
+### What a mark MEANS, and where a control belongs
+
+Five corrections came out of reading the rebuilt screen, and each is a rule
+rather than a tweak:
+
+- **✓/✗ is a pass/fail vocabulary, so it may not describe an absence.** The
+  prefetch panel first drew a check or a cross per context block: four crosses
+  down the left of a turn where nothing had gone wrong. A seat with no prior
+  episodes on this topic, no synthesized skills yet and a turn that is not its
+  first has four empty blocks and a perfectly healthy prompt. It leads with
+  what the prompt actually GOT, sized, and names the rest in one quiet line.
+  The one genuinely diagnostic state — a block that was never *searched*,
+  because the trigger was a bare pointer — stays called out on its own.
+- **A section's name must not be readable as a failure.** "What it left behind"
+  read as work abandoned. It is the reflection pass, and everything in it is
+  something the seat now knows: **What the seat learned**.
+- **"Nothing went wrong" is a badge, not a banner.** It is a property of the
+  turn, so it belongs beside the phase count where the reader already looks
+  for the turn's state, and in the slot the problem badge would occupy. A
+  full-width banner said the same thing at ten times the weight, after
+  everything else, reading as an announcement about nothing. It is claimed
+  only on a *finished* turn with a record to claim it from: "nothing went
+  wrong" and "nothing was read" must not render alike.
+- **A link to the page you are on is a lie.** A phase card carries `event →`
+  to its own event — a way out on the turn and on the seat, and on that
+  event's own page a loop. `useIsCurrent` answers it generally, so no
+  component has to know where it is rendered. Outside a Router it answers
+  "no" rather than throwing: a phase card renders fine on its own, and a
+  router should not be the price of drawing one.
+- **The way into a turn is a control, not a caption.** The turn card's
+  `turn 28e93bc3 →` was a mono link in a footer corner with the sentence
+  explaining it pushed to the opposite end of the row — the most useful action
+  on the card, styled like debug output. It is a button now, with its promise
+  beside it.
+
+And **a chip's shape is a claim about what kind of thing it is.** The turn
+card put the trigger's integration in the same row, size and shape as the
+phase tags, so `EXECUTE  REVIEW  mattermost` read as three phases, one of them
+a chat product. The trigger and its source are one fact and belong on one
+line; the phases are a different one.
+
+**A qualifier follows what it qualifies.** Moving that chip onto the trigger
+line put it in FRONT of the text, which is its own mistake: the eye landed on
+a label before the sentence it labels, and the one thing worth reading on the
+row — what actually woke the turn — was pushed to second place. The subject
+comes first and the source follows it, with the flex sizing deciding who gives
+way on a narrow card: the message truncates, the source stays whole.
+
+### The document does not scroll
+
+`.screen` scrolls, and it is the only thing that may. The sidebar is a fixed
+rail beside a scrolling pane, so a page that can *also* scroll as a whole
+carries that rail off the top of the window and leaves the reader looking at
+background below the app — with two scrollbars, neither obviously the one they
+want.
+
+`body { min-height: 100dvh }` only asked the body to be at least a viewport
+tall. It still permitted it to grow, so the invariant held because nothing
+happened to exceed it rather than because anything enforced it. `height:
+100dvh` with `overflow: hidden` makes it unreachable instead of merely unused,
+and costs nothing: `.app` is already exactly that height. Verified by driving
+the built bundle in a browser — with 6000px of injected content and an
+explicit `window.scrollTo(0, 5000)`, `window.scrollY` stays 0 and the rail
+stays at the top, at every viewport from 600×900 to 1854×890.
+
+### A panel has one left edge
+
+`.panel-body.tight` reduced the horizontal padding as well as the vertical
+one, so a tight panel's content sat on a different vertical line from its own
+heading — visibly closer to the border than the title above it — and a code
+block inside one was pushed hard against the panel's right edge with nowhere
+for its scrollbar. What `tight` is for is a panel whose rows carry their own
+vertical rhythm (a stack of cards, a footer strip), and that is a claim about
+height. It is vertical-only now, on the `--space-4` inset the head sets, and
+all five tight panels in the product align with their own titles.
+
+### A fact that moves is a fact nobody can scan
+
+The turn card's source chip took four positions before landing. Beside the
+phase tags it read as a third phase; in front of the trigger text the eye hit
+a label before the sentence it labels; after that text it sat wherever the
+sentence happened to end, which is a different spot on every card. It belongs
+in the header's metadata cluster with the turn's other attributes — how much,
+how long, when — because the rule this header already keeps is that the same
+facts are in the same places always. That is what lets a reader scan a list
+down a column instead of hunting each row, and a source is exactly the kind of
+thing somebody scans.
+
+### `KeyValue` is a metadata list, not a panel layout
+
+Its grid is `minmax(120px, max-content) 1fr`, sized for compact pairs — an id,
+a timestamp, a key. Used for a panel's actual content it puts everything in a
+narrow left band with the panel empty beside it: one line of prose sat in a
+column sized to the longest label, and a byte count sat stranded mid-panel
+with the whole right half unused.
+
+Two shapes replace it, both already in the product. **Prose takes a
+micro-label above it and the full width below** (the seat's Profile panel has
+always done this) — these are sentences, not fields. **A figure goes at the
+far end of a full-width row**, behind a `.spacer`, with the heading naming the
+unit once rather than every row repeating it — a bare "134 B" beside a label
+says nothing about what was measured.
+
+`KeyValue` keeps the one thing it is for on this screen: the conversation key,
+which really is a label and a value.
+
+And **a chip must not repeat the sentence beside it.** The trigger's summary
+is built by the vendor's own summariser and already opens with who wrote it
+("Message from founder: …"), so a `founder` chip next to that line was the
+same fact twice — and two chips plus a link after one line of prose is a
+hedge, not a header. Only the integration stays: it is the one thing the
+sentence does not reliably carry.
+
+### A row is not an inline link
+
+`a:hover` underlines, which is right for a link inside a sentence and wrong
+for a whole ROW that happens to be an anchor: hovering one struck a line under
+its timestamp, its summary and its type at once — three unrelated fragments,
+none of them a link in the sense the underline means. A row-shaped link
+already says it is hoverable with its ground, so the decoration is suppressed
+on every one of them (`.feed-row`, `.turn-row`, `.seat-card`,
+`.attention-row`, `.brand`, `.hit-title`). `.nav-item` had always done this;
+the rest had not, and nothing connected them.
+
+### A row is not a row
+
+`EventRow` is the activity feed's row, on a four-track grid: time, actor,
+summary, tail. The turn screen borrowed the class and passed three children,
+so the summary landed in the 132px *actor* column and truncated at about
+twenty characters while the raw event type had the whole tail to itself, and a
+full date wrapped to three lines inside the 62px time column. Every row was
+three lines tall to show half a sentence.
+
+A page about ONE turn needs a different row, and the differences are all the
+same point — the columns that carry information in a feed carry none here. The
+actor is the same seat on every row; the category is an internal taxonomy; the
+date is a turn the header already dates. The actor has to come off the
+**summary** too, not just out of a column: the engine builds these lines as
+`lead(actor, …)`, so each one opens with the seat's name, and four rows under
+that seat's own heading do not each need to repeat it.
+
+Finally, **a nested call hangs off the phase that made it.** `host_phase` and
+`host_iteration` have always been on the wire, `groupTurns` has always done
+the split and `PhaseCard` has always had the prop — this screen used none of
+it, so a delegate fan-out of eight rendered as eight siblings of the turn's
+own two phases, and both the "N phases" badge and the token total disagreed
+with the feed's card for the same turn. The token tile now counts the turn's
+own phases and reports worker spend beside it, which is what the engine's own
+`total_tokens` / `subagent_tokens` split means.
 
 ---
 
@@ -590,5 +852,11 @@ rendered idle from the first phase to the last.
 11. **A screen subscribes to the slices it reads and no others.**
 12. **Numbers are tabular**, and an absent number is an em dash rather than a
     zero — zero is a measurement.
-13. **Run `make dashboard` and commit `static/dashboard` with the change.** CI
+13. **A control reports its own outcome**, especially an invisible one. A copy,
+    a write, a revoke — if the reader cannot see the result, the control says
+    it, in text a screen reader reaches as well as an icon.
+14. **A link reads as a link at every size.** A text-register class on an `<a>`
+    that overrides its colour makes a navigation into decoration; `.t-link` is
+    the caption-sized register that keeps the accent.
+15. **Run `make dashboard` and commit `static/dashboard` with the change.** CI
     diffs it; a bundle that has drifted from its source is a red build.

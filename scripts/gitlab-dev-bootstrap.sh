@@ -11,7 +11,7 @@
 #
 # examples/nimbus.company.yaml targets gitlab.com as shipped. To provision
 # it against this local GitLab, copy it and set integrations.gitlab.url to
-# http://gitlab.local:8929 (and swap gitlab.com → gitlab.local:8929 in the
+# http://gitlab.local:8929 (and swap gitlab.com -> gitlab.local:8929 in the
 # git-auth setup step), then pass that copy as COMPANY below.
 #
 # Usage:

@@ -74,8 +74,8 @@ func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm
 	// document is allowed to write a reference into. Tier B stores "${VAR}"
 	// verbatim, so a backend handed the raw field receives the literal
 	// "${LLM_BASE_URL}" and sends every request to a URL that is not one —
-	// and examples/nimbus.company.yaml ships exactly that reference, against
-	// the variable docs/reference/environment-variables.md documents.
+	// which is exactly the reference an openai-compatible entry is
+	// documented to carry (docs/reference/environment-variables.md).
 	model := r.Value(spec.Model)
 	baseURL := r.Value(spec.BaseURL)
 	// Through the accessors, not the raw fields: those apply the bounds and

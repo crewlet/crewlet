@@ -61,8 +61,16 @@
 .panel-body {
   padding: var(--space-4);
 }
+/* TIGHT IS VERTICAL ONLY. A panel has ONE left edge, and its head sets it:
+   `--space-4`, the same inset the title sits on. Reducing the horizontal
+   padding too put the body's content on a different vertical line from the
+   heading above it — content noticeably closer to the border than its own
+   title — and pushed a code block hard against the panel's right edge with
+   nowhere for its scrollbar to sit. What `tight` is actually for is a panel
+   whose rows carry their own vertical rhythm (a stack of cards, a footer
+   strip), and that is a claim about height, not about the edge. */
 .panel-body.tight {
-  padding: var(--space-2);
+  padding: var(--space-2) var(--space-4);
 }
 .panel-body.none {
   padding: 0;
@@ -911,6 +919,22 @@ a.brand:hover {
   gap: var(--space-2);
   min-width: 0;
 }
+/* A stat's value takes a status ink when the number IS an outcome — a turn's
+   decision, a probe's verdict. Ink only, never a fill: the fill/ink split is
+   what the palette test measures, and a tinted block behind a --fs-2xl number
+   would read as a button. Most stats carry no tone at all; see Stat's prop. */
+.stat-value.tone-positive {
+  color: var(--positive-ink);
+}
+.stat-value.tone-caution {
+  color: var(--caution-ink);
+}
+.stat-value.tone-critical {
+  color: var(--critical-ink);
+}
+.stat-value.tone-info {
+  color: var(--info-ink);
+}
 .stat-value .unit {
   font-size: var(--fs-sm);
   font-weight: var(--fw-normal);
@@ -1066,6 +1090,21 @@ a.brand:hover {
 .code.plain {
   white-space: pre;
   overflow-wrap: normal;
+}
+/* A block that owns ⌘A / Ctrl+A.
+   Select-all is a DOCUMENT verb, so on a screen that is mostly one JSON
+   record it selected the nav, the stat row and every phase card along with
+   it. This block takes focus, and while it has focus select-all means "this
+   record" — which is the only thing anybody was reaching for. The ring is
+   what says so: without a visible focus state a keyboard verb that changes
+   meaning on click is a secret. */
+.code.selectable {
+  cursor: text;
+}
+.code.selectable:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: -1px;
+  border-color: var(--accent-line);
 }
 code.inline {
   font-size: 0.92em;

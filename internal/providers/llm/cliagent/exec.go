@@ -261,13 +261,32 @@ type extracted struct {
 	// failed is the CLI's own is_error flag, for a vendor that reports a
 	// failure inside a successful exit.
 	failed bool
+
+	// located reports that the profile FOUND where this CLI puts its
+	// answer: a declared text path resolved to a string — empty or not —
+	// or the output mode makes the whole of stdout the answer.
+	//
+	// THREE-VALUED EXTRACTION, and it has to be. "The model answered with
+	// nothing" and "this profile does not describe this CLI's output" are
+	// different facts about a run, and collapsing them into an empty
+	// string is what made a Claude Code telemetry envelope — session id,
+	// millisecond timings, a token breakdown, `"result":""` — render on a
+	// dashboard as the sentence an agent had spoken. The fallback that
+	// did it read `if out.text == "" { out.text = stdout }`, which cannot
+	// tell the two apart because [firstString] returned "" for both.
+	//
+	// Set by [extract] only; there is no other constructor, which is why
+	// the false zero value is not a claim about anything.
+	located bool
 }
 
 // extract pulls the answer and the usage out of one CLI's stdout.
 func extract(p Profile, stdout string) extracted {
 	switch p.output() {
 	case OutputText:
-		return extracted{text: strings.TrimSpace(stdout)}
+		// Located by definition: a text profile declares that stdout IS
+		// the answer, so there is no path that could fail to resolve.
+		return extracted{text: strings.TrimSpace(stdout), located: true}
 	case OutputJSONL:
 		return extractStream(p, stdout)
 	default:
@@ -291,12 +310,17 @@ func extractObject(p Profile, stdout string) extracted {
 		// Not JSON at all: the CLI printed prose, which is still an
 		// answer. Reporting an unparseable-output error here would fail
 		// a turn over a vendor's banner.
-		return extracted{text: strings.TrimSpace(stdout)}
+		//
+		// LOCATED, unlike the resolved-nothing case below: there was no
+		// document to look inside, so the whole reply is the answer on
+		// the same reading a text profile takes. It is also the path a
+		// spent subscription arrives on — the vendor's sentence about
+		// the plan, printed plain on a zero exit — and losing it would
+		// cost the marker classification its haystack.
+		return extracted{text: strings.TrimSpace(stdout), located: true}
 	}
-	out := extracted{text: firstString(doc, p.TextPaths)}
-	if out.text == "" {
-		out.text = strings.TrimSpace(stdout)
-	}
+	text, located := firstString(doc, p.TextPaths)
+	out := extracted{text: text, located: located}
 	out.failed = firstBool(doc, p.ErrorPaths)
 	out.input, out.reported = firstInt(doc, p.Usage.Input)
 	if got, ok := firstInt(doc, p.Usage.Output); ok {
@@ -324,7 +348,16 @@ func extractStream(p Profile, stdout string) extracted {
 		if !ok {
 			continue
 		}
-		if chunk := firstString(doc, p.TextPaths); chunk != "" {
+		if chunk, ok := firstString(doc, p.TextPaths); ok {
+			// LOCATED ON THE FIRST EVENT THAT CARRIES THE PATH, even
+			// when that event's text is empty: a stream spells one
+			// answer across many events and an empty fragment is an
+			// ordinary part of one. What matters is whether this
+			// profile recognises the stream's shape at all.
+			out.located = true
+			if chunk == "" {
+				continue
+			}
 			if text.Len() > 0 {
 				text.WriteString("\n")
 			}
@@ -347,12 +380,6 @@ func extractStream(p Profile, stdout string) extracted {
 		}
 	}
 	out.text = strings.TrimSpace(text.String())
-	if out.text == "" {
-		// A stream whose text events this profile does not recognise is
-		// still better reported as its raw output than as an empty
-		// answer — the operator can see the shape and write an override.
-		out.text = strings.TrimSpace(stdout)
-	}
 	return out
 }
 
@@ -391,17 +418,37 @@ func lookup(doc map[string]any, path Path) (any, bool) {
 	return current, true
 }
 
-func firstString(doc map[string]any, paths []Path) string {
+// firstString reads the answer out of a decoded document, and reports whether
+// any declared path RESOLVED at all.
+//
+// The bool is the whole point, and it is not the same as a non-empty return:
+// a path that resolved to "" says the CLI answered with nothing, a path that
+// resolved to nothing says this profile no longer describes this CLI. Callers
+// that collapse the two hand a vendor's telemetry back as the model's words —
+// see [extracted.located].
+//
+// A resolved-but-empty path does NOT stop the walk: `text_paths` is a list
+// precisely so a vendor that moved the field between releases needs no
+// override, and cursor-agent's `[["result"], ["response"]]` depends on an
+// empty `result` falling through to `response`. So the first NON-EMPTY hit
+// wins, and an all-empty walk still reports located.
+func firstString(doc map[string]any, paths []Path) (string, bool) {
+	located := false
 	for _, path := range paths {
 		v, ok := lookup(doc, path)
 		if !ok {
 			continue
 		}
-		if s, isString := v.(string); isString && s != "" {
-			return s
+		s, isString := v.(string)
+		if !isString {
+			continue
+		}
+		located = true
+		if s != "" {
+			return s, true
 		}
 	}
-	return ""
+	return "", located
 }
 
 func firstBool(doc map[string]any, paths []Path) bool {

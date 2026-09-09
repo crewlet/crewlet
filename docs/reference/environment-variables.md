@@ -2,7 +2,7 @@
 
 All environment variables used by Crewlet and its integrations.
 
-Two kinds of variable appear below. A few names are **read directly by the engine or CLI** (marked as such). Everything else is a **`${VAR}` reference convention**: any string value in the YAML config can reference any environment variable (see [Usage in YAML](#usage-in-yaml)), and the names listed here are simply the conventions the bundled [`examples/nimbus.company.yaml`](../../examples/nimbus.company.yaml) uses — rename them freely as long as the config references match.
+Two kinds of variable appear below. A few names are **read directly by the engine or CLI** (marked as such). Everything else is a **`${VAR}` reference convention**: any string value in the YAML config can reference any environment variable (see [Usage in YAML](#usage-in-yaml)), and the names listed here are simply the conventions the bundled [`examples/nimbus.company.yaml`](../../examples/nimbus.company.yaml) uses — rename them freely as long as the config references match. (Its smaller sibling, [`examples/nimbus-claude-cli.company.yaml`](../../examples/nimbus-claude-cli.company.yaml), is chat-only on a coding-CLI subscription and so references a small subset: `MATTERMOST_*` and `CREWLET_*`.)
 
 ---
 

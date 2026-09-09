@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
@@ -201,7 +202,12 @@ func (r Request) Ask() []*events.Event {
 //   - the completion WRITE comes after the turn, and a turn that failed is
 //     still recorded: the ledger answers "has this trigger been worked", not
 //     "did the work succeed", and re-running a failing turn on every
-//     redelivery is how one bad trigger becomes an infinite loop.
+//     redelivery is how one bad trigger becomes an infinite loop. A turn whose
+//     PHASE broke is recorded too, but only when its own record proves it had
+//     already reached outside the engine — see [Dispatcher.abandon] for why
+//     that is a different question from "did it fail", and why answering it
+//     with `err != nil` alone replayed a turn's external writes up to
+//     twenty-five times.
 func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.Event) queue.Result {
 	screening := inbox.Screen(d.conditions(handle), evs)
 	if screening.NoteDeferred && d.NoteDeferred != nil {
@@ -353,12 +359,99 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 
 	result, err := d.Turn(ctx, req)
 	if err != nil {
-		// A broken phase, not a failed turn. NAK so the delivery comes
-		// back: nothing was recorded, so a redelivery runs it cleanly.
-		return queue.Nak(fmt.Errorf("engine: turn for %s: %w", handle, err))
+		// A broken phase, not a failed turn — but WHICH broken phase
+		// decides what to do with the delivery, and `err != nil` does not
+		// say. See [Abandon].
+		if !result.Acted {
+			// Nothing this turn did can be proven to have left the
+			// engine, so a redelivery really does run it cleanly. This
+			// is the sentence the old comment claimed for every failure.
+			return queue.Nak(fmt.Errorf("engine: turn for %s: %w", handle, err))
+		}
+		return d.abandon(ctx, handle, req, err)
 	}
 	d.recordWorked(ctx, handle, req, result)
 	return queue.Ack()
+}
+
+// abandon stops redelivering a trigger whose turn broke AFTER it had already
+// reached outside the engine.
+//
+// THE REDELIVERY IS THE HARM HERE, not the failure. A broken phase used to NAK
+// unconditionally, on the premise — written into the comment this replaces —
+// that "nothing was recorded, so a redelivery runs it cleanly". That premise
+// holds for the two writes [workkey] guards and for nothing else: every MCP
+// write, every chat post, every `a2a_ask` (a fresh channel per call) and every
+// `run_sandbox` is keyed on nothing at all. A deterministic mid-turn failure
+// therefore replayed round one's external effects up to the broker's whole
+// delivery budget — 25 attempts a second apart — and the seat's own colleagues,
+// issue trackers and billed boxes wore every one of them.
+//
+// So the trigger is recorded and acked. That LOSES the rest of the turn, which
+// is the honest price and the reason this needs proof rather than suspicion:
+// the record is [turn.Acted], which counts only calls a tool's own annotations
+// prove reached outside. Everything else — a provider that never answered, a
+// runner that could not be built, a refused budget, a seat handed to another
+// node mid-call — proves nothing, keeps today's NAK and keeps its retry.
+//
+// It is not silent. The turn has already published its own completion marked
+// failed (see [Engine.publishTurnCompleted], which fires on the error path),
+// and this adds the half that record cannot carry: that the trigger behind it
+// will not come back. Both halves name the same seat and the same work key.
+func (d *Dispatcher) abandon(ctx context.Context, handle string, req Request, cause error) queue.Result {
+	log.ErrorContext(ctx, "turn_abandoned_after_acting", "seat", handle,
+		"work_key", req.WorkKey, "error", cause.Error(),
+		"detail", "the turn broke after it had already written outside the engine, "+
+			"so its trigger is recorded rather than redelivered — a retry would "+
+			"repeat those writes and cannot take them back")
+
+	// The completion rows ONLY, never RecordSession. A broken turn has no
+	// reply to file: its artifact is whichever round closed last, and
+	// writing that to the thread as this turn's answer is the bug
+	// [Dispatcher.RecordSession]'s own doc commemorates for the suspended
+	// case — the next turn reads it back as what this one did.
+	if d.Completions != nil {
+		for _, ev := range req.Events {
+			if !d.ledgered(ev.Type) {
+				continue
+			}
+			key := workkey.Derive([]string{ev.ID.String()})
+			if err := d.Completions.Record(ctx, handle, key, "", d.now()); err != nil {
+				log.WarnContext(ctx, "abandoned_trigger_not_recorded", "seat", handle,
+					"error", err, "detail", "the trigger may be redelivered and "+
+						"repeat this turn's outward writes")
+			}
+		}
+	}
+	d.noteAbandoned(ctx, handle, req.Events, cause)
+	return queue.Ack()
+}
+
+// noteAbandoned puts each abandoned constituent on the record.
+//
+// [types.TurnTriggerSkipped] rather than a type of its own: it already means
+// "this trigger will not be worked, and here is why", and its Reason is the
+// field that says which why. The FAILURE is already red in the feed — the
+// turn's own completion carries it — and a second failure event for one turn
+// would double-count it in every projection that reads them.
+func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*events.Event, cause error) {
+	if d.Observe == nil {
+		return
+	}
+	for _, ev := range evs {
+		if ev == nil {
+			continue
+		}
+		rec := events.New(types.TurnTriggerSkipped{
+			AgentHandle: handle,
+			TriggerID:   ev.ID.String(),
+			TriggerType: ev.Type,
+			Reason: "the turn broke after writing outside the engine, so it was " +
+				"not redelivered: " + textcut.Ellipsis(cause.Error(), 200),
+		}, triggerTrace([]*events.Event{ev}))
+		rec.Source = "engine.dispatch"
+		d.Observe(ctx, rec)
+	}
 }
 
 // answered offers a parked seat's delivery to its waiting coding run.

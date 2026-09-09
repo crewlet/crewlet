@@ -48,14 +48,15 @@ type Seats func() []string
 
 // Background runs the passes no turn drives.
 type Background struct {
-	lifecycle *Lifecycle
-	skills    *Skills
-	cluster   *Synthesizer
-	promoter  *Promoter
-	roleFor   func(handle string) *org.Role
-	policy    CuratorPolicy
-	seats     Seats
-	publish   Announce
+	lifecycle  *Lifecycle
+	skills     *Skills
+	cluster    *Synthesizer
+	promoter   *Promoter
+	roleFor    func(handle string) *org.Role
+	agentIDFor func(seat *org.Role) string
+	policy     CuratorPolicy
+	seats      Seats
+	publish    Announce
 
 	curatorEvery   time.Duration
 	lifecycleEvery time.Duration
@@ -93,6 +94,19 @@ type BackgroundOptions struct {
 	// role cannot resolve a model, and answering with the first role in
 	// the org would charge one seat's work to another's chain.
 	RoleFor func(handle string) *org.Role
+
+	// AgentIDFor derives the seat's agent id, which the clustering pass
+	// stamps on the skill it publishes.
+	//
+	// It takes the ROLE the pass already resolved rather than the handle,
+	// so the id and the role name on one event cannot name two seats: a
+	// second lookup would read the epoch again and could answer about a
+	// seat an apply renamed in between.
+	//
+	// Optional. Nil answers empty, which is the shape a caller with no org
+	// takes — the event still carries the handle and the role, and its
+	// promoted agent_id column is empty rather than wrong.
+	AgentIDFor func(seat *org.Role) string
 
 	// Promoter distils what several seats in a unit independently learned
 	// into a knowledge-base draft; nil disables that pass, which is what a
@@ -132,7 +146,8 @@ func NewBackground(opts BackgroundOptions) *Background {
 	b := &Background{
 		lifecycle: opts.Lifecycle, skills: opts.Skills,
 		cluster: opts.Cluster, promoter: opts.Promoter, roleFor: opts.RoleFor,
-		policy: opts.Policy, seats: opts.Seats, publish: opts.Publish,
+		agentIDFor: opts.AgentIDFor,
+		policy:     opts.Policy, seats: opts.Seats, publish: opts.Publish,
 		curatorEvery: opts.CuratorInterval, lifecycleEvery: opts.LifecycleInterval,
 		clusterEvery: opts.ClusterInterval, promoteEvery: opts.PromotionInterval,
 		claimDuty: opts.ClaimDuty, now: opts.Now,
@@ -246,7 +261,7 @@ func (b *Background) clusterPass(ctx context.Context) {
 				"agent_handle", handle)
 			continue
 		}
-		payloads, err := b.cluster.ClusterPass(ctx, role, handle)
+		payloads, err := b.cluster.ClusterPass(ctx, role, handle, b.agentID(role))
 		if err != nil {
 			log.WarnContext(ctx, "skill_clustering_failed", "seat", handle, "error", err.Error())
 		}
@@ -383,6 +398,14 @@ func (b *Background) handles() []string {
 		return nil
 	}
 	return b.seats()
+}
+
+// agentID derives the seat's agent id, or "" when no resolver was wired.
+func (b *Background) agentID(seat *org.Role) string {
+	if b.agentIDFor == nil {
+		return ""
+	}
+	return b.agentIDFor(seat)
 }
 
 // Announce publishes one background pass's lifecycle event.

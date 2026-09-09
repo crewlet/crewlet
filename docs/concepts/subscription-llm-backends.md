@@ -261,6 +261,107 @@ a message saying to use the shell it already has, and no second box is
 provisioned. `self` is refused on any other runtime, and is not offerable
 as a company-wide default.
 
+## The system prompt in text mode
+
+A coding CLI takes a prompt, not a conversation, so the transcript is
+flattened into one text: `## system`, `## user`, `## assistant`,
+`## tool result: name (call id)`. Everything below is about the one
+section that does **not** belong there.
+
+Folded into that text, a system prompt arrives as **user content** — the
+model is asked to treat an ordinary message as its standing instructions,
+underneath a vendor default that keeps saying what it is. So where a CLI
+has a channel of its own for it, the profile names it in
+`system_prompt_args` and the text travels there instead. Claude Code's is
+declared as:
+
+```yaml
+system_prompt_args: ["--system-prompt-file", "{file}"]
+```
+
+Two decisions in that one line, both measured against Claude Code 2.1.263
+rather than assumed:
+
+- **Replace, not append.** Asked "who are you?" as a PM seat, the same
+  model answers *"I'm Agent PM at Nimbus, an AI assistant helping with
+  software engineering tasks and project work through Claude Code"* with
+  the default prompt in force, and *"I'm Agent PM at Nimbus, your AI
+  assistant for project management and technical collaboration"* with it
+  replaced. A coding-agent identity over the top of whatever seat is
+  actually being served is not a cosmetic problem: it is the seat's
+  standing instructions arguing with themselves. The default prose also
+  costs ~3.5k input tokens on every round of every phase, describing
+  tools this backend denies. Replacing it leaves the web tools working —
+  a `WebFetch` probe still fetches, which is what `crewlet llm doctor`
+  measures on every run.
+- **The file variant, not the inline one.** A seat's system prompt
+  carries the org chart, the company's policies, that seat's backstory
+  and roster, and its `## Personal memory` and `## Relevant knowledge`
+  prefetches. On argv all of that is readable by every account on the
+  machine through `/proc/<pid>/cmdline`, and bounded by `ARG_MAX`
+  (256 KB on macOS — the limit the `copilot` profile's argv prompt
+  already lives under). The text is written `0600` into the per-call
+  working directory, which is created empty for one call and removed on
+  release, so it cannot outlive the call or reach the next one.
+
+`{file}` substitutes that path; `{system}` substitutes the text straight
+into argv, for a CLI that offers no file variant. A profile that declares
+neither leaves the system prompt in the transcript, which is what a CLI
+with no such flag can take.
+
+### Which CLIs actually have one
+
+Checked by running each CLI's own `--help`, at the version named — not
+from vendor documentation, which lags:
+
+| `cli.agent` | version checked | flag | in the profile |
+|---|---|---|---|
+| `claude-code` | 2.1.263 | flag, file: `--system-prompt-file` (`--append-…-file` appends) | `system_prompt_args: ["--system-prompt-file", "{file}"]` |
+| `gemini-cli` | 0.58.0 | **env var, file**: `GEMINI_SYSTEM_MD` — no flag exists | `system_prompt_env: GEMINI_SYSTEM_MD` |
+| `qwen-code` | 0.23.0 | **both**: `QWEN_SYSTEM_MD` (file) *and* `--system-prompt` (string) | `system_prompt_env: QWEN_SYSTEM_MD` |
+| `grok` | 1.0.13 | flag, string: `--system-prompt-override` (`--rules` appends) | `system_prompt_args: ["--system-prompt-override", "{system}"]` |
+| `codex` | 0.153.4 | none, on `codex` or `codex exec` alike | — |
+| `opencode` | 1.18.29 | none (`--agent` names a persona from its own config, not a per-call prompt) | — |
+| `copilot` | 1.0.83 | none (`--no-custom-instructions` only disables its own) | — |
+| `cursor-agent` | 2026.09.02 | none | — |
+
+**There are two channels, and `--help` only shows one of them.** A CLI may
+take the prompt as an *argument* (`system_prompt_args`, with `{file}`
+substituting a path and `{system}` the text itself) or from a *file named by
+an environment variable* (`system_prompt_env`). Gemini CLI and its Qwen fork
+have no flag at all and are configured entirely through the second — which is
+why both were once recorded here as having no system-prompt channel, on the
+strength of reading `--help`. A profile declares one or the other; naming
+both is refused at load, because which copy a CLI honours when handed the
+same prompt twice is the vendor's business.
+
+**Prefer the file wherever both exist.** `{system}` puts the seat's system
+prompt — the org chart, the policies, that seat's own memory — into argv,
+where `/proc/<pid>/cmdline` makes it readable by every account on the
+machine. `qwen-code` is the one CLI offering both, and this profile takes the
+variable for exactly that reason. `grok` has only the string form, but its
+*prompt* already travels on argv (`prompt_mode: argv`) so nothing changes
+there; on a shared host, `cli.overrides.system_prompt_args: []` puts the
+prompt back in the transcript.
+
+**Check the CLI you actually have.** `grok` is the trap: xAI's own CLI
+(`x.ai/cli`, [xai-org/grok-build](https://github.com/xai-org/grok-build))
+and a same-named community package on npm both put a `grok` on PATH, and
+they are different programs — the official one has the flag, the npm one
+has none of this profile's flags at all. If `grok --version` prints a
+`0.0.x`, you have the other one.
+
+**Qwen Code is where the Gemini fork has diverged.** It renamed its parent's
+variable (`QWEN_SYSTEM_MD`, and this build reads neither the other's) and
+added two flags its parent does not have, so "same shape as `gemini-cli`" no
+longer holds here.
+
+For the four with no channel at all, `cli.overrides.system_prompt_args` and
+`cli.overrides.system_prompt_env` are how you adopt one the day its vendor
+ships it — no engine release needed.
+
+---
+
 ## Tool calls in text mode
 
 Every one of these CLIs has its own tools — file edits, shell, web
@@ -271,16 +372,27 @@ work through them would fork the engine's tool surface in two.
 
 So every profile **denies the CLI's shell and file tools** wherever the
 vendor offers a way to, and each says how: a flag on the command line
-(Claude Code's `--disallowedTools`, Copilot's `--deny-tool`, Codex's
-read-only sandbox) or a settings file the engine writes into the seat's
-own home or the per-call working directory before every call (Gemini's
-`settings.json`, OpenCode's `opencode.json`, Cursor's `.cursor/cli.json`).
-The shell is the one that matters: the seat's home and environment are
-isolated, but the filesystem is not, and a CLI with a shell on the engine
-host reads whatever the engine user can read. A vendor with no such
-switch is declared as `local_tools: vendor-default` with a note saying
-which switch is missing — and `crewlet llm doctor` **measures** the
-stance rather than trusting it (see [Operating it](#operating-it)).
+(Claude Code's `--disallowedTools`, Copilot's `--deny-tool`, grok's
+`--disallowed-tools`, Codex's read-only sandbox) or a settings file the
+engine writes into the seat's own home or the per-call working directory
+before every call (Gemini's `settings.json`, OpenCode's `opencode.json`,
+Cursor's `.cursor/cli.json`). The shell is the one that matters: the
+seat's home and environment are isolated, but the filesystem is not, and
+a CLI with a shell on the engine host reads whatever the engine user can
+read. A vendor with no such switch is declared as
+`local_tools: vendor-default` with a note saying which switch is missing
+— and `crewlet llm doctor` **measures** the stance rather than trusting
+it (see [Operating it](#operating-it)).
+
+**A deny list, not an allow list, where a vendor offers both.** grok has
+both and the profile takes `--disallowed-tools`, which reads backwards
+until you look at how each is applied. Its allowlist is honoured only if
+*every* entry resolves: one name the build does not recognise and the whole
+filter is skipped with a warning, leaving every tool enabled. The deny list
+always applies and only warns about the entry that matched nothing. So a
+name this profile gets wrong costs one tool on a deny list and costs
+everything on an allow list — and a vendor renaming a tool is exactly the
+drift these profiles are built to expect.
 
 **Web is the one local tool that stays on.** A subscription seat must
 not have less reach than the same CLI at a terminal, and a fetch is a
@@ -326,6 +438,74 @@ malformed reply costs a round; it never crashes a turn.
 **A call with no tools gets no contract.** Auxiliary work
 (summarisation, the relevance filter) sends a plain prompt and reads a
 plain answer, with no envelope to get wrong.
+
+### Finding the answer in the CLI's output
+
+Before any of that, something has to decide *which part of what the CLI
+printed is the model's reply*. That is `output` plus `text_paths` on the
+profile: `text` takes the whole of stdout, `json` reads one document and
+`jsonl` concatenates every event that carries a text path, in stream
+order. `text_paths` is a **list** so a vendor that moved the field
+between releases needs no override — the first path that resolves to a
+non-empty string wins, and an empty one falls through to the next.
+
+Four outcomes, kept apart on purpose, because three of them used to be
+one — and only two of them are failures:
+
+| What happened | What the engine does |
+|---|---|
+| A text path resolved to text | That text is the reply. |
+| A text path resolved and every one was **empty** | The CLI answered with nothing. **An answer, not a failure**: a completion with empty content and the round's real token usage attached, which is exactly what the `openai` and `anthropic` backends return for a model that spends its whole budget thinking. The [tool loop](agent-runtime.md) corrects it — see [When the CLI answers with nothing](#when-the-cli-answers-with-nothing). |
+| **No** text path resolved at all | The profile no longer matches the installed CLI. A retryable `SERVER` failure that names `text_paths`, points at `crewlet llm doctor`, and prints the **tail** of what the CLI output so you can write the override. |
+| The CLI printed **nothing at all** on a zero exit | Its own message, because neither of the two above can say anything true about output that does not exist. A retryable `SERVER` failure carrying whatever it wrote on stderr, which is the only clue there is. |
+
+Output that is not JSON at all is still an answer: a CLI that printed a
+banner, a warning, or the vendor's own sentence about a spent plan is
+read as prose rather than refused, which is what lets the
+[limit sentinels](#falling-back-to-a-metered-key) be recognised on a
+zero exit. Those sentinels are matched against the CLI's whole stdout
+and stderr, so a drifted profile still yields a real `RATE_LIMIT` with
+the vendor's own reset instant rather than a server fault.
+
+**Why the last two are failures rather than answers.** They used to be
+one case with the empty one, and the answer handed back was the CLI's raw
+stdout — on the reasoning that an operator would then see the shape and
+write an override. They would, but only after it had been *spoken as an
+agent* first: an empty `result` on a Claude Code envelope meant the
+seat's reply became
+`{"duration_api_ms":11377,…,"result":"","type":"result"}`, the tool loop
+appended that to the conversation and re-sent it every round, the
+reviewer judged the turn on it, and the dashboard printed it as the
+sentence the agent had said. The shape belongs in the error message,
+where the only person who can act on it is the only one reading. Both
+remaining failures are about *this build not being able to read the CLI*,
+which is a fact about your machine — so the chain walking to another
+entry is the right move.
+
+### When the CLI answers with nothing
+
+A model that spends its whole output budget on hidden reasoning exits 0,
+reports success, bills hundreds of output tokens and leaves the answer
+field **empty**. That is a *model* outcome, so the backend hands it back
+as an answer of nothing rather than dressing it as an outage:
+
+- **The round is charged.** An empty answer costs tokens, and it used to
+  be the one outcome that spent them without ever reaching a budget.
+- **The tool loop asks again, once.** A round that produced neither prose
+  nor a tool call gets one corrective re-prompt naming what went wrong.
+  One and not two: unlike a declined tool call, a second identical nudge
+  is just the same prompt against the same model. A phase that required a
+  tool call gets that corrective instead — `call one of these tools` is
+  the better instruction and already covers it.
+- **It is counted.** `empty_answer_rounds` on the phase record is the
+  number of rounds that reached nobody. A seat whose model habitually
+  answers nothing shows up there, and in `crewlet llm doctor`, which
+  names an empty answer as such rather than reporting `it said: ""`.
+
+If you see it repeatedly, the entry's **`model`** is the field to change.
+`reasoning_effort` and `reasoning_budget_tokens` are refused on a
+cli-agent entry precisely so nobody spends an afternoon on them: they are
+per-call API parameters and a headless coding CLI takes neither.
 
 ### Token accounting
 
@@ -392,11 +572,20 @@ problems:
 crewlet llm login default
 ```
 
-Runs the real `claude /login` / `codex login` / `opencode auth login`
+Runs the real `claude auth login` / `codex login` / `opencode auth login`
 attached to your terminal — follow its prompts exactly as you would by
 hand. The only thing Crewlet controls is *where* the credential lands:
 in the provider's isolated `credentials/` directory, separate from your
 personal CLI login on the same machine.
+
+Each profile names its vendor's own one-shot **auth subcommand**, which
+prints its OAuth URL and returns once you have signed in. A profile that
+named an in-session slash command instead would open an interactive
+session rather than run a login: the session asks you to sign in itself,
+then replays the slash command and asks a *second* time, and leaves you
+in a REPL you have to interrupt — after a login that had already
+succeeded. `crewlet llm login` returning you to your shell is the
+signal that it worked; `crewlet llm doctor <KEY>` confirms it.
 
 ### 2. Capture a headless token (best where it exists)
 
@@ -410,6 +599,12 @@ profile's token variable — `CLAUDE_CODE_OAUTH_TOKEN` for Claude Code.
 **Prefer this whenever the CLI offers it:** no credential files to sync,
 no refresh-token rotation, and it survives an ephemeral container with
 no persistent volume.
+
+Minting is *interactive* — the CLI opens the same browser sign-in as
+option 1 — so its prompts and its sign-in URL are shown on your terminal
+while the token itself is captured. The token never touches stdout, which
+is what leaves `-print-token` free to pipe cleanly into your own secret
+manager.
 
 Already have a token from elsewhere?
 
@@ -505,14 +700,14 @@ entirely.
 
 | `cli.agent` | Binary | Subscription | Notes |
 |---|---|---|---|
-| `claude-code` | `claude` | Claude Pro / Max | `claude setup-token` gives a headless `CLAUDE_CODE_OAUTH_TOKEN`. Reports full usage incl. cache tokens. |
+| `claude-code` | `claude` | Claude Pro / Max | `claude auth login` (and `auth status` / `auth logout`). `claude setup-token` gives a headless `CLAUDE_CODE_OAUTH_TOKEN`. Reports full usage incl. cache tokens. |
 | `codex` | `codex` | ChatGPT Plus / Pro | `codex login`. Streams JSONL events; runs `--sandbox read-only`. |
 | `gemini-cli` | `gemini` | Google AI Pro / free tier | First run starts the auth picker. `GOOGLE_CLOUD_PROJECT` passes through. |
 | `qwen-code` | `qwen` | Qwen OAuth | Gemini CLI fork; same shape. |
 | `opencode` | `opencode` | Anthropic / Copilot / any | `opencode auth login`; the one built-in profile with a credential login. |
 | `cursor-agent` | `cursor-agent` | Cursor seat | `cursor-agent login`. |
 | `copilot` | `copilot` | GitHub Copilot seat | Prompt goes on argv, so very long transcripts are bounded by `ARG_MAX`. Authenticates with a GitHub token, so `GITHUB_TOKEN` is its `api_key_env` — reached via `auth.mode: api-key` or `inherit-env`, never forwarded silently. |
-| `grok` | `grok` | xAI | Accepts `GROK_API_KEY` (or `XAI_API_KEY`, via an `api_key_env` override) through `auth.mode: api-key`. |
+| `grok` | `grok` | xAI | **xAI's own CLI** from [x.ai/cli](https://x.ai/cli), not the same-named npm package. Accepts `XAI_API_KEY` (the variable its own signed-out message names) through `auth.mode: api-key`. |
 | `custom` | — | — | Ships nothing; declare everything under `overrides`. |
 
 ### CLI flags drift — and that's a config edit, not a release
@@ -535,6 +730,34 @@ rather than an agent's first turn. `crewlet llm doctor` prints the CLI
 version the built-in profile was written against next to the version you
 actually have.
 
+A drift that only shows up at *runtime* — the flags still work, the JSON
+still parses, and the answer field moved — names itself: the completion
+fails with the `text_paths` this profile looked in and the output the CLI
+actually produced. See
+[Finding the answer in the CLI's output](#finding-the-answer-in-the-clis-output).
+
+**`limit_markers` and `auth_markers` drift the most quietly.** Every other
+field fails visibly when it goes stale — a renamed flag is a non-zero exit
+`doctor` reports on the spot. A sentinel is matched *verbatim* against the
+CLI's own prose, so one the vendor has reworded simply never fires: a spent
+plan then classifies as a fatal error instead of `RATE_LIMIT`, the
+[fallback chain](#falling-back-to-a-metered-key) never carries the seat onto
+a metered key, and nothing says so until somebody hits their cap. If your
+CLI's wording differs from the built-in profile's, override it:
+
+```yaml
+cli:
+  agent: claude-code
+  overrides:
+    limit_markers:
+      - sentinel: "Usage limit reached"
+    auth_markers:
+      - sentinel: "Please run /login"
+```
+
+Take the sentinel from what your CLI actually prints, not from what it used
+to print.
+
 ---
 
 ## Configuration reference
@@ -554,7 +777,10 @@ providers:
         # Where credentials and per-seat homes live. Empty uses
         # $CREWLET_LLM_CLI_HOME/<key>, falling back to
         # ~/.crewlet/llm-cli/<key>. Point at a persistent volume when
-        # the engine runs in an ephemeral container.
+        # the engine runs in an ephemeral container. A LITERAL PATH —
+        # unlike the credential fields here it is not ${VAR}-expanded,
+        # because it names where the engine keeps files rather than a
+        # secret (the same reason the store path is a Tier A field).
 
         timeout_seconds: 300           # one CLI invocation, wall clock
         max_concurrent: 4              # CLI processes at once
@@ -670,7 +896,9 @@ to be.)
 ## Falling back to a metered key
 
 A spent subscription window arrives as prose on a *successful* exit
-("Usage limit reached. Resets at 4pm."). Crewlet matches that wording and
+("Usage limit reached · continuing automatically"). Crewlet matches that
+wording — and, where the CLI relays the API's own error instead, the
+`"type":"rate_limit_error"` in it — and
 reports it as `RATE_LIMIT`, which is retryable — so the ordinary
 [provider chain](turn-engine.md#per-phase-llm-models) carries the role
 onto a metered key for the rest of the window and back again afterwards,
@@ -695,6 +923,30 @@ roles:
 
 An expired login classifies as `AUTH`, which is also retryable — so the
 chain keeps the seat working while you re-run `crewlet llm login`.
+
+### What a sentinel may be
+
+Both recognitions are `limit_markers` / `auth_markers` on the profile: a
+literal substring the vendor emits, plus (where it carries one) the field
+holding the reset instant, so the retry-after is a datum rather than a
+guess. They are matched against whatever the CLI printed — which on a
+healthy call is **the model's own answer** — and a match benches the
+credential for a cooldown and hands the seat to the next entry in the
+chain.
+
+So a sentinel has to be the vendor's *wording*, and a profile is refused
+at `crewlet validate` if one contains no letters. The rule exists because
+a shipped profile carried `sentinel: "429"`, and three digits matched as
+a substring is not a rate limit — it is a model quoting an HTTP status, a
+stack trace's line number, a token count, or any ten-digit epoch. Every
+one of those took a working subscription out of service.
+
+The other way a sentinel stops working is quieter — the vendor reworded
+it, so it simply never fires. Both are fixed the same way, with
+`cli.overrides.limit_markers`; see
+[CLI flags drift](#cli-flags-drift--and-thats-a-config-edit-not-a-release)
+for the shape, and take the wording from the sentence your CLI actually
+printed, which a `FATAL` failure carries verbatim so that you can.
 
 ---
 

@@ -61,10 +61,10 @@ api:
   port: 8000        # a port > 0 makes `crewlet run` serve the API EMBEDDED in
                     # the engine process (dashboard + webhooks included) — one
                     # process is the whole stack. (Any free port will do; pick
-                    # one nothing else on the host has already taken. The full
-                    # Nimbus example uses port 80 instead so webhook URLs need
-                    # no port suffix — see examples/nimbus.config.yaml for the
-                    # trade-offs.)
+                    # one nothing else on the host has already taken. Port 80
+                    # is worth the privileged bind only once an external
+                    # service registers a webhook URL against this engine —
+                    # see guides/deployment.md.)
   auth:
     # Needed for WRITES and for /config. Reads — the dashboard, /events,
     # /agents — serve without one by default; add
@@ -451,7 +451,10 @@ each), then wire them in:
   Provisioners can write there directly (`crewlet gitlab provision …
   -secret-store`), so a minted credential reaches the engine with no file to
   source and no shell to be in
-- Explore the full [Nimbus example](../../examples/) — a seven-seat company
-  with Jira + Confluence + GitLab + Mattermost + sandbox wired end-to-end
+- Explore the [Nimbus example](../../examples/) — a seven-seat company on
+  Mattermost, running on a coding-CLI subscription rather than an API key.
+  It is the next step up from this page and still needs nothing but the chat
+  server in this repo's compose file; every integration above adds on top of
+  it
 - Add [MCP servers](../guides/tools-and-mcp.md#extending-the-engine) so agents can reach your own systems
 - See the full [configuration reference](configuration.md) for all YAML options

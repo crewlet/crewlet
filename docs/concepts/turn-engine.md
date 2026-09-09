@@ -395,6 +395,29 @@ turn spent on the one failure a model reliably fixes when it is asked
 again. `review_max_tool_rounds` = 4 is that arithmetic: one submission,
 two correctives, one spare.
 
+**A round that said nothing at all is not a finish either.** The other
+half of "think then stop" is a round with **no tool call and no prose** —
+a model that spent its whole output budget on hidden reasoning. It costs
+real tokens (Claude Code on `haiku` bills hundreds for one) and reaches
+nobody, and the loop used to take the same branch it takes for a model
+that answered. It now re-prompts once, naming what went wrong, on any
+caller that did *not* force a tool call — the **executor** and
+**sub-agent workers**. A `required` caller gets the tool corrective
+above instead: "call one of these tools" is the better instruction for a
+phase whose only output *is* a call, and it already covers the same
+model, so the reviewer's and onboarding's round budgets are untouched.
+
+The bound is **one**, not two, and the asymmetry is deliberate. Naming
+the tools is a genuinely new instruction to a model that misread the
+surface, so a second attempt earns its round; a second identical nudge
+after an empty answer is the same prompt against the same model, which is
+the retry [the provider contract](subscription-llm-backends.md) refuses
+to do. One also fits inside the smallest budget any caller declares —
+`workers.max_turns` is validated at ≥ 1 — so the corrective can never eat
+a delegated task's whole allowance. Rounds that reached nobody are
+counted on the phase record as `empty_answer_rounds`, and the dashboard
+badges them.
+
 The **executor** stays on `auto`, and the **judge** takes no tools at
 all — it answers in two lines of text, and a tool on its surface would
 invite a model to call it and answer nothing. A text answer on an `auto`
@@ -444,7 +467,9 @@ Every invariant is enforced in code, not in prompts (`internal/agent/turn/guards
 9. **A busy agent queues — it never drops.** `run_turn` on a `WORKING` agent **waits** for the current turn to finish (raced against the shutdown gate, which NAKs the trigger to the next engine), keeping per-agent turns strictly serialized without erroring: erroring instead would NAK the triggering event into bounded redelivery (25 deliveries, then the dead-letter topic) and spend that budget on events whose only problem is that they arrived during a minutes-long turn. An agent parked on a detached sandbox job (`AWAITING_SANDBOX` — potentially hours) is handled differently: the inbox handler **requeues + acks** those deliveries, so nothing is held against a broker ack window.
 
 > **Known gap.** Nothing takes a pause hold on the seat's inbox while it is parked, although this page and three others have said the coordinator does. The requeued copies therefore land back on a topic the seat is still consuming and are re-parked immediately, so a seat parked on a long run spins on republish-and-ack for the length of the run. The work is not lost — the same-id dedupe and the completion ledger hold — but the loop is real. Fixing it means a pause taken at the park AND released when the run settles; a pause without the release is strictly worse, because a seat that never resumes is deaf until the process restarts. `ResumeTopic` has no caller today, so both halves land together or neither does. `CREATED`/`TERMINATED` still fail fast — that's a caller bug, not queuing.
-10. **A suspended turn owns its busy transition.** A turn whose Execute suspended for a detached sandbox run flips its agent `WORKING → AWAITING_SANDBOX` in its own `finally` — the state never passes through `IDLE`, so a queued event cannot slip a turn in between the suspend and the coordinator's (asynchronous) `SandboxRunStarted` handling. The coordinator only pauses the inbox and re-enters the busy state after an engine restart; on completion the agent stays busy through result collection and is freed immediately before the resume dispatch, whose failure un-claims the run row so a redelivery can retry (the suspended Execute loop is never lost).
+10. **A phase that breaks is two cases, not one.** `turn.Run` returns an error only when a *phase itself* broke — a failed turn, an exhausted round budget and a not-done review are all results. What the dispatcher does with that error depends on what the turn's own record proves it already did: a turn that reached outside the engine (an MCP write, a colleague ask, a coding run) is **recorded and acked**, because a redelivery would repeat writes it cannot take back; one that proved nothing is **redelivered** exactly as before, which keeps the retry for every pre-effect failure. See [A turn that broke halfway](seat-ownership.md#a-turn-that-broke-halfway) for the predicate and why it is deliberately narrow.
+
+11. **A suspended turn owns its busy transition.** A turn whose Execute suspended for a detached sandbox run flips its agent `WORKING → AWAITING_SANDBOX` in its own `finally` — the state never passes through `IDLE`, so a queued event cannot slip a turn in between the suspend and the coordinator's (asynchronous) `SandboxRunStarted` handling. The coordinator only pauses the inbox and re-enters the busy state after an engine restart; on completion the agent stays busy through result collection and is freed immediately before the resume dispatch, whose failure un-claims the run row so a redelivery can retry (the suspended Execute loop is never lost) — unless the resumed turn had already written outside the engine, in which case the claim is left taken so the completion is not redelivered into a conversation whose writes already landed.
 
 ---
 
@@ -604,7 +629,7 @@ Each phase row in that view is keyed to its **phase colour** (execute / review /
 | `agent_turn_completed` | Extended with top-level fields `turn_id`, `execute_model`, `review_model`, `subagent_count`, `subagent_tokens`, `iterations`, `decision`, `trigger` (the turn's source descriptor) (inherits `delegation_depth` / `parent_turn_id` / `delegation_chain` from the `Event` base) |
 | `turn.guard_breach` | A runtime invariant stopped the turn; `kind` names which one (`depth_cap`, `stall`, `max_iter`) and `detail` carries its message |
 | `a2a_channel_opened` / `a2a_message_sent` / `a2a_message_delivered` / `a2a_channel_closed` | The channel an `a2a_ask` opened and its traffic — the only *recorded* delegation edge (see [What a delegation records](#what-a-delegation-records)). The target's `a2a_request` wake carries `delegation_depth + 1` and the requester appended to `delegation_chain` |
-| `phase.tool_activated` | The executor promoted a catalogue tool into its active surface via `activate_tool`. Routine: nothing names its tools in advance, so discovery is how every MCP tool reaches a turn |
+| `prompt.size` | The final size of one phase's prompt — system and user characters, plus a ~4-chars-per-token approximation — so prompt growth is measurable across builds without reading every phase payload back |
 | `phase.tool_skill_blocked` | The required-skill guard rejected a tool call: the session tried a tool covered by a required [tool skill](tool-skills.md) (the default; `required: false` opts out) before loading it via `load_tool_skill`. Carries the tool name and the missing skill keys; the LLM recovers by loading and retrying |
 | `budget_exhausted` | Unchanged; emitted by the shared tool-loop's budget check |
 

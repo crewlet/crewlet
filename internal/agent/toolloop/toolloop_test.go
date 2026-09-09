@@ -292,6 +292,130 @@ func TestProseWithoutARequiredToolCallIsACleanFinish(t *testing.T) {
 	}
 }
 
+// --- the round that reached nobody -----------------------------------------
+
+// A round with no tool call AND no prose is not a finish.
+//
+// The failure this protects against is a whole turn produced by a model that
+// spent its output on hidden reasoning: the loop used to read only
+// len(ToolCalls) and take the same branch it takes for a model that finished
+// with an answer, so the phase ended having said nothing and the executor's
+// rescue path fired for a round one sentence would have fixed.
+func TestARoundThatSaidNothingAtAllIsCorrectedRatherThanAccepted(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{
+		{Content: "", ReasoningContent: "thinking very hard", OutputTokens: 627},
+		{Content: "the answer"},
+	}}
+	s := &fakeSurface{tools: []llm.ToolDef{def("read")}}
+
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: s, MaxRounds: 5,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.RoundsUsed != 2 {
+		t.Fatalf("rounds = %d, want 2 — the empty round was accepted as a finish",
+			res.RoundsUsed)
+	}
+	if !strings.Contains(res.Text, "the answer") {
+		t.Errorf("text = %q, want the answer the corrective produced", res.Text)
+	}
+	// Keyed on CONTENT, not on reasoning: reasoning is not an answer that
+	// reached anybody, so a thinking-only round is the same failure.
+	var corrected bool
+	for _, m := range res.Messages {
+		if m.Role == llm.RoleUser && strings.Contains(m.Content, "empty") {
+			corrected = true
+		}
+	}
+	if !corrected {
+		t.Error("no corrective re-prompt was issued for the empty round")
+	}
+	if res.EmptyAnswers != 1 {
+		t.Errorf("EmptyAnswers = %d, want 1 — the count is what survives into "+
+			"the phase record once the failure event is gone", res.EmptyAnswers)
+	}
+}
+
+// One corrective, not two. A declined tool call gets a genuinely new
+// instruction and is worth a second attempt; an empty answer re-prompted twice
+// is the same prompt against the same model, which is the retry the provider
+// contract refuses to do.
+func TestTheEmptyAnswerCorrectiveIsBoundedToOne(t *testing.T) {
+	t.Parallel()
+	empty := llm.Completion{Content: ""}
+	p := &scriptedProvider{turns: []llm.Completion{empty, empty, empty, empty, empty}}
+	s := &fakeSurface{tools: []llm.ToolDef{def("read")}}
+
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: s, MaxRounds: 10,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.RoundsUsed != 2 {
+		t.Errorf("rounds = %d, want 2 — one attempt plus one corrective", res.RoundsUsed)
+	}
+	if res.EmptyAnswers != 2 {
+		t.Errorf("EmptyAnswers = %d, want 2 — both rounds reached nobody", res.EmptyAnswers)
+	}
+}
+
+// The forced corrective WINS on a caller that required a tool call, so a
+// reviewer's four-round budget is not taxed twice for one round that said
+// nothing. "Call one of these tools" is strictly the better instruction for a
+// phase whose only output is a call, and it already covers a model that
+// thought and stopped.
+func TestARequiredToolCallGetsTheToolCorrectiveNotTheEmptyOne(t *testing.T) {
+	t.Parallel()
+	empty := llm.Completion{Content: ""}
+	p := &scriptedProvider{turns: []llm.Completion{empty, empty, empty, empty, empty}}
+	s := &fakeSurface{tools: []llm.ToolDef{def("submit_work")}}
+
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: s, MaxRounds: 10, ToolChoice: "required",
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// One attempt plus the two forced correctives, and NOT a third round
+	// from the empty-answer corrective piling on after they ran out.
+	if res.RoundsUsed != 3 {
+		t.Errorf("rounds = %d, want 3 — the two correctives both fired on one round",
+			res.RoundsUsed)
+	}
+	for _, m := range res.Messages {
+		if m.Role == llm.RoleUser && strings.Contains(m.Content, "Your last reply was empty") {
+			t.Error("the empty-answer corrective fired on a forced caller, taxing " +
+				"a round budget sized for the tool corrective alone")
+		}
+	}
+}
+
+// The counterfactual that keeps the guard honest: an empty round is only the
+// rounds with NEITHER, so a model that narrated and called nothing further is
+// still a clean finish.
+func TestProseWithNoToolCallStaysACleanFinish(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{{Content: "the answer"}}}
+	s := &fakeSurface{tools: []llm.ToolDef{def("read")}}
+
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: s, MaxRounds: 5,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.EmptyAnswers != 0 {
+		t.Errorf("EmptyAnswers = %d, want 0 — prose reached somebody", res.EmptyAnswers)
+	}
+	if res.RoundsUsed != 1 {
+		t.Errorf("rounds = %d, want 1", res.RoundsUsed)
+	}
+}
+
 // --- the budget ------------------------------------------------------------
 
 func TestARefusedSpendNamesItsScopeAndStopsTheLoop(t *testing.T) {

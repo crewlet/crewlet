@@ -10,7 +10,7 @@
 // @vitest-environment node
 
 import { describe, expect, test } from "vitest";
-import { buildHash, parseHash } from "./router.tsx";
+import { buildHash, parseHash, samePath } from "./router.tsx";
 import { ALL_NAV, activeNavKey, titleFor } from "./nav.ts";
 
 describe("parsing", () => {
@@ -75,5 +75,40 @@ describe("navigation identity", () => {
     for (const item of ALL_NAV) {
       expect(item.hint.length, item.key).toBeGreaterThan(10);
     }
+  });
+});
+
+describe("am I already here", () => {
+  // For the links a component draws without knowing where it is rendered. A
+  // phase card carries "event →" to its own event: a way out on the turn and
+  // on the seat, and on that event's own page a link back to itself — the
+  // reader clicks, the URL does not change, nothing moves, and the only thing
+  // they learn is that the control was a lie.
+
+  test("the same page is the same page", () => {
+    expect(samePath(parseHash("#/events/abc").path, ["events", "abc"])).toBe(true);
+  });
+
+  test("a different id is a different page", () => {
+    expect(samePath(parseHash("#/events/abc").path, ["events", "def"])).toBe(false);
+  });
+
+  test("a prefix is not a match", () => {
+    // `#/events` lists events; `#/events/abc` is one of them. A link from the
+    // list to a row must not be suppressed as a self-link.
+    expect(samePath(parseHash("#/events").path, ["events", "abc"])).toBe(false);
+    expect(samePath(parseHash("#/events/abc").path, ["events"])).toBe(false);
+  });
+
+  test("a query string does not make it a different page", () => {
+    // A filter or a tab the reader happens to have on the URL is still the
+    // same page, and a self-link is still a loop.
+    expect(samePath(parseHash("#/events/abc?category=system").path, ["events", "abc"])).toBe(true);
+  });
+
+  test("segments are compared as segments, never as a joined string", () => {
+    // A join makes `["events", "a/b"]` and `["events", "a", "b"]` equal, and
+    // an id is not a path.
+    expect(samePath(["events", "a/b"], ["events", "a", "b"])).toBe(false);
   });
 });

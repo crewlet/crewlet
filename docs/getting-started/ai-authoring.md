@@ -121,9 +121,14 @@ config and re-validate. One integration per pass — a failure is then
 unambiguous.
 
 Tier B is live-editable, so applying a change is
-`crewlet config import company.yaml`, no restart. Full worked
-reference with everything connected:
-[`examples/nimbus.company.yaml`](../../examples/nimbus.company.yaml).
+`crewlet config import company.yaml`, no restart. A full worked
+seven-seat company, with every setting's reasoning in a comment:
+[`examples/nimbus.company.yaml`](../../examples/nimbus.company.yaml) — the
+full stack, on a tracker, a wiki and a code host. Its sibling
+[`examples/nimbus-claude-cli.company.yaml`](../../examples/nimbus-claude-cli.company.yaml)
+is the same company with chat on Mattermost and nothing else, which is the
+shape one of these passes should land on before it adds the next
+integration.
 
 ---
 

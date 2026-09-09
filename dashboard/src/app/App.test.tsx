@@ -286,6 +286,9 @@ describe("a turn watched to its end", () => {
     expect(screen.getAllByText("execute").length).toBeGreaterThan(0);
     // And the transcript the reader had open is still open: the card is
     // remounted when it crosses lists, so its latched state does not travel.
-    expect(screen.getAllByText(/^turn t1/).length).toBeGreaterThan(0);
+    // Probed on the open card's own footer control, whose title still names
+    // THIS turn — so the assertion stays about the turn that crossed rather
+    // than about any card that happens to be open.
+    expect(screen.getAllByTitle(/^turn t1/).length).toBeGreaterThan(0);
   });
 });

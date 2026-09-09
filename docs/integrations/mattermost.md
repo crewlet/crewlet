@@ -764,92 +764,37 @@ COMPANY=my_company.yaml scripts/mattermost-dev-bootstrap.sh
 
 ### First run, end to end
 
-The example org in `examples/nimbus.company.yaml` is **not** the shortest way
-to try this. It configures Jira, Confluence and `integrations.gitlab.enabled:
-true`, so loading it needs an Atlassian site and a GitLab — a lot of
-infrastructure to stand up before you can send one chat message. Adding Mattermost to Nimbus is a supported thing to do
-(chat backends run alongside each other, and alongside Slack), but do it
-*after* you have seen the loop work.
+The example org in [`examples/nimbus-claude-cli.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus-claude-cli.company.yaml)
+**is** the shortest way to try this. It is the same seven-seat company as
+[`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml)
+beside it — the full-stack reference, on Jira, Confluence, GitLab and a
+metered key — with everything but chat taken out.
 
-For a first run, use a two-agent config that enables nothing but chat. Save
-this as `mm-company.yaml`:
+Its only integration is Mattermost and its only model is a coding CLI you
+already subscribe to, so there is no Atlassian site to stand up, no code
+host, no metered API key, and nothing that has to reach the engine from
+outside. Its three engineering seats still run code: their executor *is* the
+coding CLI's own agentic loop, in a [sandbox](../concepts/code-sandbox.md)
+box on the engine host that reuses the same CLI login — so that costs nothing
+extra to set up either, beyond one environment variable in step 5.
 
-```yaml
-name: "Mattermost Test Co"
-mission: "Verify the Mattermost chat backend end to end"
+Add a tracker, a wiki or a code host afterwards, once you have seen the loop
+work; each has its own page, `examples/nimbus.company.yaml` shows them all
+already wired, and nothing here has to be undone first.
 
-providers:
-  llm:
-    default:
-      type: anthropic
-      model: claude-sonnet-5
-      api_keys:
-        - "${ANTHROPIC_API_KEY}"
+Two things the config expects of you, both once:
 
-integrations:
-  mattermost:
-    enabled: true
-    url: "${MATTERMOST_URL}"     # written by the bootstrap
-    team: nimbus                 # the team the bootstrap creates
-    typing_status: addressed     # always by default; narrowed here
-    provisioning:
-      channels: [town-square, engineering, product]
-      display_name_suffix: " (AI)"
-
-mcp_servers:
-  # How the agents reply. Without this they receive messages and plan a
-  # response, but have no tool to send one with.
-  - name: mattermost
-    shared: false                # per-agent identity
-    command: uvx
-    args: ["mcp-server-mattermost"]
-    env:
-      MATTERMOST_URL: "${MATTERMOST_URL}"
-    tool_prefix: "mattermost_"
-
-roles:
-  # You, in the chart, so escalation has a person to stop at. `founder` is
-  # the admin username the bootstrap creates.
-  - name: Founder
-    kind: human
-    manages: [Agent PM]
-    contact:
-      mattermost_user_id: founder
-
-units:
-  - name: Core
-    type: team
-    lead: Agent PM
-    purpose: "Answer questions and coordinate work in chat"
-    roles:
-      - name: Agent PM
-        goal: "Triage what arrives in chat and answer or delegate"
-        backstory: "A crisp product manager who replies briefly and clearly"
-        manages: [Agent SWE]
-        integrations:
-          mattermost:
-            bot_token: "${MATTERMOST_TOKEN_PM}"
-            channel: engineering
-        mcp_env:
-          mattermost:
-            MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_PM}"
-
-      - name: Agent SWE
-        goal: "Answer engineering questions asked in chat"
-        backstory: "A pragmatic engineer who explains things without hedging"
-        integrations:
-          mattermost:
-            bot_token: "${MATTERMOST_TOKEN_SWE}"
-            channel: engineering
-        mcp_env:
-          mattermost:
-            MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_SWE}"
-```
-
-The role names are what name the bot accounts: handles derive from them, so
-`Agent PM` becomes `agent-pm` and the bot is created as `@agent-pm`. Leave
-`provisioning.username_prefix` unset here — with handles that already start
-with `agent-`, a prefix would produce `@agent-agent-pm`.
+- **The bot tokens.** Every `${MATTERMOST_TOKEN_*}` in the file is a
+  placeholder the provisioner mints — see [Automated
+  Setup](#automated-setup-crewlet-mattermost-provision). Leave
+  `provisioning.username_prefix` unset: the handles already start with
+  `agent-`, and a prefix would produce `@agent-agent-ceo`.
+- **A model.** `providers.llm.default` is a
+  [`cli-agent`](../concepts/subscription-llm-backends.md) entry driving the
+  `claude` CLI on your own Claude subscription, so the binary has to be on
+  the machine running `crewlet run` and Crewlet needs its own copy of the
+  login. Swap it for an `anthropic` / `openai` entry with an `api_keys` list
+  if you would rather spend a metered key.
 
 Then, from the repo root:
 
@@ -860,28 +805,60 @@ Then, from the repo root:
 #    embedded.
 docker compose --profile mattermost up -d --wait
 
-# 2. Admin account, PAT, team, channels -> .env
-scripts/mattermost-dev-bootstrap.sh
+# 2. Admin account, PAT, team, channels -> .env, then the seven bots and
+#    their tokens into the same file. (Drop COMPANY= to do the bots in a
+#    separate `crewlet mattermost provision` run.)
+COMPANY=examples/nimbus-claude-cli.company.yaml scripts/mattermost-dev-bootstrap.sh
 
-# 3. Check the plan before it touches the server
+# 3. Check the plan before it touches the server again, and prove the
+#    whole path before booting
 set -a; . ./.env; set +a
-crewlet mattermost provision mm-company.yaml --dry-run --print
+crewlet mattermost provision examples/nimbus-claude-cli.company.yaml --dry-run --print
+crewlet mattermost doctor examples/nimbus-claude-cli.company.yaml
 
-# 4. Create the bots and mint their tokens into .env
-crewlet mattermost provision mm-company.yaml
+# 4. Authenticate the model — once, on this machine. `-from-host` copies
+#    the login `claude` already has here into Crewlet's own directory; plain
+#    `crewlet llm login default` brokers `claude auth login` instead if this
+#    machine has none.
+crewlet llm login default -from-host \
+    -company examples/nimbus-claude-cli.company.yaml -config examples/nimbus-claude-cli.config.yaml
+crewlet llm doctor default \
+    -company examples/nimbus-claude-cli.company.yaml -config examples/nimbus-claude-cli.config.yaml
 
-# 5. Prove the whole path before booting
-crewlet mattermost doctor mm-company.yaml
-
-# 6. Boot — one websocket per agent seat
-export ANTHROPIC_API_KEY=sk-ant-...
-crewlet run -config examples/nimbus.config.yaml -company mm-company.yaml
+# 5. Boot — one websocket per agent seat. CREWLET_MCP_BRIDGE_URL is what
+#    the engineering seats' agent-mode runs dial back on for their tools;
+#    it has to match api.port in the Tier A file.
+export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
+export CREWLET_MCP_BRIDGE_URL="http://127.0.0.1:8000"
+crewlet run -config examples/nimbus-claude-cli.config.yaml \
+            -company examples/nimbus-claude-cli.company.yaml
 ```
 
-Step 3 prints one line per seat — handle, bot username, and the variables it
-would mint. Step 4 writes `MATTERMOST_TOKEN_PM` and `MATTERMOST_TOKEN_SWE`
-into `.env`, which the engine reads on boot; nothing has to be re-sourced.
-Both steps are idempotent, so re-run either freely.
+Step 3's `--dry-run --print` prints one line per seat — handle, bot
+username, and the variables it would mint. Step 2 already wrote
+`MATTERMOST_TOKEN_CEO`, `…_CTO`, `…_PM`, `…_DEVREL`, `…_SWE`, `…_FE` and
+`…_AI` into `.env`, which the engine reads on boot; nothing has to be
+re-sourced. Every step is idempotent, so re-run any of them freely.
+
+Step 4 is the one that has no analogue in an API-key deployment, and
+`crewlet llm doctor` is the half that matters: a `cli-agent` entry can be
+configured perfectly and still not work — a missing binary, a profile whose
+flags drifted from the installed CLI, an expired login, or the one nothing
+else catches, a model that answers prose instead of the tool-call envelope.
+Only a real completion with a real tool proves the last one, so `doctor`
+runs one, and running it before the first turn is the difference between one
+error now and every seat losing a corrective round for ever.
+
+`-capture-token` — which mints a headless `CLAUDE_CODE_OAUTH_TOKEN` and
+avoids the shared refresh token `-from-host` leaves you with — writes into
+the [encrypted secret store](../concepts/secret-store.md), so it needs a
+Tier A keyring first: `crewlet secrets keygen -key-id 2026-01`, then
+uncomment the `secrets:` block in `examples/nimbus-claude-cli.config.yaml`. Worth doing
+before you run this anywhere but a laptop; without a keyring the command
+stops and says so. See [Subscription LLM
+Backends](../concepts/subscription-llm-backends.md#authentication) for the
+other login shapes (a token on stdin, a username/password where the CLI has
+one, a bundle moved onto another host).
 
 To watch it work, sign in as `founder` / `crewlet-dev-password` at the URL
 the bootstrap printed (<http://localhost:8065> on a laptop; the public
@@ -895,25 +872,33 @@ should follow, in order:
 2. `@agent-pm` replies **in a thread** on your message. Reply in that thread
    without mentioning anyone — it answers again, because it is now following
    the thread.
-3. The engine's dashboard shows the turn. Start the API with
-   `crewlet run … -api-port 8000` and open <http://localhost:8000> — the
-   **Event log** carries the inbound notification with its source, and
-   **Model activity** carries the turn it woke: each phase, the rounds it
-   took, and the tools each round called.
+3. The engine's dashboard shows the turn. `examples/nimbus-claude-cli.config.yaml`
+   serves it on <http://localhost:8000> — the **Event log** carries the
+   inbound notification with its source, and **Model activity** carries the
+   turn it woke: each phase, the rounds it took, and the tools each round
+   called.
+
+Expect a subscription CLI to be **slower to first token** than an API call:
+each round launches a process, so the indicator sits there for a few seconds
+before anything happens. That is what it is for.
 
 If a bot stays silent, check in this order:
 
-0. `crewlet mattermost doctor mm-company.yaml` — this is what it is for; the
-   checks below are what it automates.
-1. `crewlet mattermost provision mm-company.yaml --dry-run` — does the seat
-   exist, and is its token minted?
+0. `crewlet mattermost doctor examples/nimbus-claude-cli.company.yaml` — this is what it
+   is for; checks 1–3 below are what it automates.
+1. `crewlet mattermost provision examples/nimbus-claude-cli.company.yaml --dry-run` —
+   does the seat exist, and is its token minted?
 2. The engine log, for one `mattermost_ws_connected` line per seat. A
    `mattermost_ws_auth_rejected` line instead means that seat's token is
    wrong, revoked, or its bot is disabled — re-run the provisioner.
-3. Whether `uvx mcp-server-mattermost` resolves. A missing MCP server is the
-   one failure mode where the agent reasons about a reply and then has no
-   tool to send it with, so the logs show a complete turn and the channel
+3. Whether `uvx mcp-server-mattermost==0.5.1` resolves. A missing MCP server
+   is the one failure mode where the agent reasons about a reply and then has
+   no tool to send it with, so the logs show a complete turn and the channel
    stays quiet.
+4. `crewlet llm doctor default -company examples/nimbus-claude-cli.company.yaml` — on a
+   `cli-agent` provider this is the other half of the same symptom: a turn
+   that never reached a model, or one whose model answered prose instead of
+   the tool-call envelope, ends with nothing posted.
 
 Two settings the compose service sets are load-bearing rather than
 convenience. Both default to `false` in the server's own config defaults,

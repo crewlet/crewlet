@@ -160,13 +160,29 @@ func fromDocument(doc map[string]any) (Envelope, bool) {
 		if !isList {
 			continue
 		}
-		found = true
 		for _, raw := range calls {
 			call, ok := readCall(raw)
 			if ok {
 				env.ToolCalls = append(env.ToolCalls, call)
 			}
 		}
+		// A NON-EMPTY LIST NOTHING COULD BE READ FROM IS NOT AN ENVELOPE.
+		// An EMPTY list is: the model saying "no calls, here is my note",
+		// which is an ordinary final answer.
+		//
+		// The difference matters because of what happens next. A document
+		// that is not an envelope becomes assistant prose and the tool
+		// loop's `tool_choice="required"` corrective re-prompt asks again
+		// — one round, and the model reliably fixes it. Accepting this
+		// one instead reported that the model requested NO tools when it
+		// had requested several, so the turn ended on a message like
+		// "I'll post it now" with nothing delivered and nothing to say
+		// why: the exact shape the delivery derivation exists to catch,
+		// arriving one layer below where it looks.
+		if len(calls) > 0 && len(env.ToolCalls) == 0 {
+			return Envelope{}, false
+		}
+		found = true
 		break
 	}
 

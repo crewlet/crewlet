@@ -303,7 +303,15 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 		allowSuspend: true,
 	})
 	if err != nil {
-		return turn.Work{}, turn.Surface{}, err
+		// THE RECORD SURVIVES THE FAILURE. A phase that broke halfway
+		// through its tool loop has already run every call up to the
+		// break, and [tools.Surface] recorded each one — so returning an
+		// empty Work here threw away the engine's own account of what this
+		// turn did to the world, on the one path where a caller most needs
+		// it. The error is unchanged and every existing caller still reads
+		// this as a broken phase; what it can now also read is what broke
+		// AFTER.
+		return turn.Work{Calls: calls(surface)}, describe(surface), err
 	}
 
 	if res.Suspended {
@@ -471,6 +479,11 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 		toolChoice: llm.ToolChoiceRequired,
 	})
 	if err != nil {
+		// Nothing to salvage here, and nothing lost: a reviewer's surface
+		// carries its submission tool and no catalogue at all, so its
+		// record can never prove an outward write. What the EXECUTOR did
+		// before it is already in the caller's hands — [turn.Run] reads it
+		// off the Work this Review was handed.
 		return turn.Review{}, err
 	}
 
@@ -687,7 +700,15 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 	// A chain even for one member. The wrapper is a pass-through there, and
 	// uniform behaviour is worth more than the allocation: a one-member seat
 	// and a three-member one then fail, log and report identically.
-	provider, err := chain.New(members, chain.Options{})
+	//
+	// OnFallback is wired HERE rather than inside the chain because this is
+	// the innermost frame that knows which turn and which iteration the
+	// hand-off belongs to. The callback fires synchronously from inside the
+	// chain's own loop, before the next member is tried, so `ctx` and
+	// `iteration` are the ones the failing call ran under.
+	provider, err := chain.New(members, chain.Options{
+		OnFallback: func(f chain.Fallback) { emit.fallback(ctx, ph, iteration, f) },
+	})
 	if err != nil {
 		return fail(fmt.Errorf("runner: %s: %w", ph, err))
 	}
@@ -931,6 +952,11 @@ func foldOnto(done phaseResult, live toolloop.Result) toolloop.Result {
 	res.RoundsUsed = done.Rounds + live.RoundsUsed
 	res.InputTokens += done.Result.InputTokens
 	res.OutputTokens += done.Result.OutputTokens
+	// Accumulated for the same reason the token counts are: an EXTENDED
+	// phase runs the loop again and the second invocation counts only its
+	// own rounds, so a phase that answered nothing twice under two
+	// invocations would report one.
+	res.EmptyAnswers += done.Result.EmptyAnswers
 	// The model that served the phase, not the model that served the round
 	// that died. An invocation which failed before its first completion
 	// names nobody, and a record with no model on it reads as a phase that
@@ -1137,9 +1163,47 @@ func (r *Runner) executorActive(snapshot tools.Snapshot) []string {
 		if phaseScoped[e.Name()] {
 			continue
 		}
+		if e.Name() == RunSandboxTool && !r.offersSandbox() {
+			continue
+		}
 		out = append(out, e.Name())
 	}
 	return out
+}
+
+// offersSandbox reports whether run_sandbox would do anything for this seat.
+//
+// THE TOOL IS REGISTERED PER EPOCH, not per seat: the engine wires its
+// launcher once for the whole company, so every seat's registry carries it the
+// moment any seat could run code. Both refusals below therefore had to be
+// discovered by CALLING it — a wasted round each time, on a tool the model was
+// shown and reasonably believed in, which is the failure the launcher's own
+// nil-means-omit rule exists to prevent ("a model shown a tool that always
+// fails learns to distrust the whole catalogue"). Worse than the round: a seat
+// that PLANNED around a box it will never get delivers nothing while looking
+// like it tried.
+//
+// The two seats it is useless to:
+//
+//   - A seat with no enabled role.sandbox gate. The launcher refuses with
+//     "this seat's sandbox is not enabled", and the gate is the only thing
+//     that ever said the seat does code work.
+//   - A seat whose executor IS a coding agent in agent mode. It already holds
+//     a shell, an editor and a checkout; a second box beside it would give the
+//     seat two filesystems with the work in the one the turn cannot see. The
+//     launcher refuses that too (role.sandbox.run_in: self), and this is the
+//     surface that must not offer it in the first place.
+//
+// Read from cfg.AgentRun rather than re-derived from the seat's provider
+// entry: the launcher being present IS the fact that this executor runs as
+// somebody else's agentic loop, and a second derivation is a second thing to
+// keep in step with it.
+func (r *Runner) offersSandbox() bool {
+	if r.cfg.AgentRun != nil {
+		return false
+	}
+	seat := r.cfg.Seat.Role
+	return seat != nil && seat.Sandbox != nil && seat.Sandbox.Enabled
 }
 
 // phaseScoped names the first-party tools that belong to ONE phase and must
@@ -1184,7 +1248,10 @@ func calls(s *tools.Surface) []ledger.Call {
 // describe renders the surface the delivery gate judges against.
 func describe(s *tools.Surface) turn.Surface {
 	u := s.Universe()
-	return turn.Surface{Catalogue: u.Names(), MCPTools: u.MCPNames(), KnownReads: u.KnownReads()}
+	return turn.Surface{
+		Catalogue: u.Names(), MCPTools: u.MCPNames(),
+		KnownReads: u.KnownReads(), KnownOpenWorld: u.KnownOpenWorld(),
+	}
 }
 
 // missingTools are names the phase called that the surface did not have.

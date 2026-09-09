@@ -13,7 +13,16 @@ import { useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Button, Code, Empty, Panel, Segmented, Skeleton } from "~/ui/primitives.tsx";
+import {
+  Badge,
+  Button,
+  Code,
+  CopyButton,
+  Empty,
+  Panel,
+  Segmented,
+  Skeleton,
+} from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -69,17 +78,16 @@ export function ConfigScreen() {
                 title="Active revision"
                 icon="file"
                 subtitle="as the engine resolved it"
-                actions={
-                  <Button
-                    size="sm"
-                    icon="copy"
-                    onClick={() => void navigator.clipboard?.writeText(pretty)}
-                  >
-                    Copy
-                  </Button>
-                }
+                actions={<CopyButton text={pretty} title="the active revision, as JSON" />}
               >
-                <Code plain>{pretty}</Code>
+                <div className="col gap-1">
+                  <Code plain selectable label="The active company configuration, as JSON">
+                    {pretty}
+                  </Code>
+                  <span className="t-caption">
+                    Click into the revision, and ⌘A / Ctrl+A selects it alone rather than the page.
+                  </span>
+                </div>
               </Panel>
             ) : (
               <Empty

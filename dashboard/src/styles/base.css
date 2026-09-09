@@ -11,9 +11,19 @@ html {
   text-size-adjust: 100%;
 }
 
+/* THE DOCUMENT DOES NOT SCROLL. `.screen` does, and it is the only thing that
+   may: the sidebar is a fixed rail beside a scrolling pane, and a page that
+   can also scroll as a whole moves that rail off the top of the window and
+   leaves the reader looking at background below the app.
+   `min-height` only asked the body to be at least a viewport tall — it still
+   PERMITTED it to grow, so the shell's invariant held by nobody ever
+   exceeding it rather than by anything enforcing it. A fixed height plus
+   hidden overflow makes it unreachable instead of merely unused, and costs
+   nothing: `.app` is already exactly 100dvh. */
 body {
   margin: 0;
-  min-height: 100dvh;
+  height: 100dvh;
+  overflow: hidden;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
@@ -202,6 +212,22 @@ img {
 .t-caption {
   font-size: var(--fs-2xs);
   color: var(--text-muted);
+}
+/* A caption-sized thing that is a LINK, and reads as one.
+   `.t-caption` on an <a> is not: it sets the muted colour, which wins over
+   the anchor rule above, so four real navigations across the dashboard —
+   a phase's event, a turn's id, a seat's last error, the spend screen —
+   rendered as dim static micro-text a reader could only find by hovering.
+   One class rather than four local overrides: the failure was the same
+   collision every time, and a fifth caption-link would have repeated it. */
+.t-link {
+  font-size: var(--fs-2xs);
+  color: var(--accent-ink);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+}
+.t-link:hover {
+  text-decoration: underline;
 }
 /* THE one micro-label register. It is declared once and never overridden;
    the system this replaces declared it once and then overrode it in six

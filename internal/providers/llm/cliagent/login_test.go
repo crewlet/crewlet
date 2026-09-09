@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -311,4 +312,157 @@ func bundleOf(t *testing.T, name, body string) string {
 		t.Fatal(err)
 	}
 	return base64.StdEncoding.EncodeToString(raw.Bytes())
+}
+
+// An auth command must be a SUBCOMMAND the CLI runs and exits from, never a
+// prompt typed at an interactive session.
+//
+// `claude` takes a bare argument as its prompt, so the `["/login"]` this
+// profile shipped never invoked a login command at all: it opened a session
+// carrying `/login` as the first message. Against the empty login-home
+// `runInCredentialHome` hands it, that session ran its own first-run sign-in
+// and THEN replayed the queued `/login`, so an operator who had just
+// authenticated was asked to authenticate again — and was then left in a REPL
+// that never exits, having to interrupt a login that had already succeeded.
+// A leading "/" is how that mistake is spelled for every CLI here.
+func TestNoProfileBrokersAnAuthCommandAsAPrompt(t *testing.T) {
+	t.Parallel()
+	for _, name := range BuiltinNames() {
+		if name == "custom" {
+			continue
+		}
+		p, err := Load(name, nil)
+		if err != nil {
+			t.Fatalf("Load(%q): %v", name, err)
+		}
+		for label, args := range map[string][]string{
+			"login_args":         p.LoginArgs,
+			"status_args":        p.StatusArgs,
+			"logout_args":        p.LogoutArgs,
+			"capture_token_args": p.CaptureTokenArgs,
+		} {
+			if len(args) > 0 && strings.HasPrefix(args[0], "/") {
+				t.Errorf("%s: %s = %q — a slash command is a PROMPT to an interactive "+
+					"session, not a subcommand that exits", name, label, args)
+			}
+		}
+	}
+}
+
+// The docs tell every operator to run `crewlet llm status` and
+// `crewlet llm logout`, and the flagship profile has to answer both.
+//
+// It answered neither: with no status_args the command failed with "this CLI
+// has no status command" for a CLI that has one, and with no logout_args
+// `logout` deleted the local files while leaving the session live at the
+// vendor — an operator who believed they had revoked a login had not.
+func TestTheClaudeProfileCanBrokerInspectAndRevokeItsLogin(t *testing.T) {
+	t.Parallel()
+	p, err := Load("claude-code", nil)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for label, want := range map[string][]string{
+		"login_args":  {"auth", "login", "--claudeai"},
+		"status_args": {"auth", "status", "--text"},
+		"logout_args": {"auth", "logout"},
+	} {
+		got := map[string][]string{
+			"login_args": p.LoginArgs, "status_args": p.StatusArgs, "logout_args": p.LogoutArgs,
+		}[label]
+		if strings.Join(got, " ") != strings.Join(want, " ") {
+			t.Errorf("claude-code %s = %q, want %q", label, got, want)
+		}
+	}
+}
+
+// A minting command is INTERACTIVE, and the operator has to see it.
+//
+// Claude Code renders its whole sign-in UI — the OAuth URL and the "paste code
+// here" prompt — on STDOUT whenever stdin is a terminal, and writes nothing at
+// all to stderr. Capturing stdout into a buffer and showing the operator only
+// stderr therefore left them at a blank terminal, waiting to paste a code from
+// a URL they had never been shown, on the route the docs call preferred.
+func TestCapturingATokenStillShowsTheOperatorTheVendorsPrompts(t *testing.T) {
+	ui := "Browser didn't open? Use the url below to sign in\nhttps://example.com/oauth?code=true\n"
+	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": ui + "sk-ant-oat01-EXAMPLE\n"},
+		map[string]any{"capture_token_args": []any{"-test.run=TestCLIAgentFakeCLI"},
+			"token_env": "FAKE_TOKEN"})
+	var seen bytes.Buffer
+	token, err := p.CaptureToken(t.Context(), nil, &seen)
+	if err != nil {
+		t.Fatalf("CaptureToken: %v", err)
+	}
+	if token != "sk-ant-oat01-EXAMPLE" {
+		t.Errorf("token = %q", token)
+	}
+	if !strings.Contains(seen.String(), "https://example.com/oauth?code=true") {
+		t.Errorf("the operator never saw the sign-in URL; they saw: %q", seen.String())
+	}
+}
+
+// The captured stream is a rendered UI, not a report: it carries colour,
+// cursor moves, OSC-8 hyperlinks and \r redraws. A frame of decoration must
+// read as empty rather than be stored as the company's credential.
+func TestATerminalFrameIsNotMistakenForAToken(t *testing.T) {
+	t.Parallel()
+	cases := map[string]struct{ raw, want string }{
+		"trailing colour reset":  {"instructions\n\x1b[32msk-ant-oat01-A\x1b[0m\n", "sk-ant-oat01-A"},
+		"osc-8 hyperlink after":  {"sk-ant-oat01-B\n\x1b]8;;https://example.com\x07\x1b]8;;\x07\n", "sk-ant-oat01-B"},
+		"redraw with \\r":        {"waiting...\rsk-ant-oat01-C", "sk-ant-oat01-C"},
+		"decoration only at end": {"sk-ant-oat01-D\n\x1b[?25h\x1b[2K\n", "sk-ant-oat01-D"},
+		"nothing but decoration": {"\x1b[2K\x1b[?25h\n", ""},
+	}
+	for name, c := range cases {
+		if got := lastPrintedLine(c.raw); got != c.want {
+			t.Errorf("%s: lastPrintedLine(%q) = %q, want %q", name, c.raw, got, c.want)
+		}
+	}
+}
+
+// Markers are matched VERBATIM against the CLI's own words, so a sentinel the
+// installed binary never emits can never fire — and the failure is silent
+// until somebody hits their cap.
+//
+// Both of the claude profile's original sentinels were in that state: neither
+// "Claude AI usage limit reached" (with its pipe-and-epoch reset field) nor
+// "OAuth token has expired" occurs anywhere in Claude Code 2.x. A spent
+// subscription therefore classified FATAL instead of RATE_LIMIT, so the
+// fallback chain never carried the seat onto another model.
+func TestTheClaudeProfilesMarkersAreStringsTheCLIStillEmits(t *testing.T) {
+	t.Parallel()
+	p, err := Load("claude-code", nil)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// Retired with the 1.x wording that carried them; the live lines put the
+	// reset in prose, and inventing a window is worse than the pool's own
+	// configured cooldown.
+	for _, m := range p.LimitMarkers {
+		if m.ResetSeparator != "" || m.ResetUnit != "" {
+			t.Errorf("limit marker %q still claims a reset field: %+v", m.Sentinel, m)
+		}
+	}
+	for _, dead := range []string{"Claude AI usage limit reached", "OAuth token has expired"} {
+		for _, m := range p.LimitMarkers {
+			if strings.Contains(m.Sentinel, dead) {
+				t.Errorf("limit_markers still carries the retired sentinel %q", dead)
+			}
+		}
+		for _, m := range p.AuthMarkers {
+			if strings.Contains(m.Sentinel, dead) {
+				t.Errorf("auth_markers still carries the retired sentinel %q", dead)
+			}
+		}
+	}
+	for _, want := range []string{"Usage limit reached", `"type":"rate_limit_error"`} {
+		if !slices.ContainsFunc(p.LimitMarkers, func(m LimitMarker) bool { return m.Sentinel == want }) {
+			t.Errorf("limit_markers lacks %q: %+v", want, p.LimitMarkers)
+		}
+	}
+	for _, want := range []string{"Invalid API key", "OAuth token has been revoked", "Please run /login"} {
+		if !slices.ContainsFunc(p.AuthMarkers, func(m AuthMarker) bool { return m.Sentinel == want }) {
+			t.Errorf("auth_markers lacks %q: %+v", want, p.AuthMarkers)
+		}
+	}
 }

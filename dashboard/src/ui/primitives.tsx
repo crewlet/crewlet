@@ -9,7 +9,16 @@
  * clicks. A typed prop cannot be forgotten.
  */
 
-import type { CSSProperties, MouseEvent, ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import { Icon, type IconName } from "./Icon.tsx";
 
 export type Tone = "neutral" | "positive" | "caution" | "critical" | "info" | "accent";
@@ -440,12 +449,25 @@ export function Stat({
   unit,
   sub,
   icon,
+  tone,
 }: {
   label: ReactNode;
   value: ReactNode;
   unit?: ReactNode;
   sub?: ReactNode;
   icon?: IconName;
+  /**
+   * The STATE this number is in, when it has one — the ink of the value moves
+   * to that tone's step.
+   *
+   * Deliberately absent from most stats. Colour carries state and never
+   * identity, and a token count or an elapsed time is not in a state: tinting
+   * every tile would spend the four status hues on decoration and leave the
+   * one tile that means something indistinguishable from its neighbours. Use
+   * it where the value IS an outcome — a turn's decision, a probe's verdict —
+   * and nowhere else.
+   */
+  tone?: Exclude<Tone, "neutral" | "accent">;
 }) {
   return (
     <div className="stat">
@@ -453,7 +475,7 @@ export function Stat({
         {icon && <Icon name={icon} size="xs" />}
         {label}
       </div>
-      <div className="stat-value truncate">
+      <div className={cx("stat-value truncate", tone && `tone-${tone}`)}>
         {value}
         {unit && <span className="unit">{unit}</span>}
       </div>
@@ -542,6 +564,250 @@ export function KeyValue({ items }: { items: [ReactNode, ReactNode][] }) {
   );
 }
 
-export function Code({ children, plain }: { children: ReactNode; plain?: boolean }) {
-  return <pre className={cx("code", plain && "plain")}>{children}</pre>;
+/**
+ * A block of preformatted text, optionally one that OWNS select-all.
+ *
+ * `selectable` makes the block focusable and gives ⌘A / Ctrl+A a local
+ * meaning while it has focus: select this block, not the document. That is
+ * the one keyboard gesture a reader brings to a screen whose point is a
+ * single record, and the browser's own answer to it — the nav, the stat row,
+ * every phase card and the record — is never what they wanted.
+ *
+ * INTERCEPTED ON THE ELEMENT, not on the document. A document-level handler
+ * would have to guess which block the reader meant, and it would take the
+ * gesture away from the rest of the page for as long as this screen is
+ * mounted. Focus is the reader saying which one; everywhere else ⌘A keeps
+ * meaning what it has always meant.
+ */
+type CodeProps = { children: ReactNode; plain?: boolean } & (
+  | {
+      /** Take ⌘A / Ctrl+A while focused, and take focus. */
+      selectable: true;
+      /**
+       * What this block is. REQUIRED with `selectable`, not optional beside
+       * it: a focusable `role="region"` with no accessible name is a tab stop
+       * a screen reader announces as nothing, which is worse than the plain
+       * block it replaced. The union is what stops the two drifting apart —
+       * a typed prop cannot be forgotten.
+       */
+      label: string;
+    }
+  | { selectable?: false; label?: never }
+);
+
+/**
+ * A labelled section the reader opens.
+ *
+ * Lifted out of PhaseCard when a second screen needed one. The alternative was
+ * a bare `<details>`, and a bare `<details>` is not the same control: it draws
+ * the platform's own marker instead of the chevron every other expander here
+ * uses, it takes none of the hover, inset or type of `.disclosure-head`, and
+ * it cannot carry a count chip or a status mark. Two expanders that behave the
+ * same and look different is the specific thing this component library exists
+ * to stop.
+ */
+export function Disclosure({
+  label,
+  count,
+  children,
+  defaultOpen,
+  mono,
+  tone,
+  mark,
+  actions,
+}: {
+  label: ReactNode;
+  count?: ReactNode;
+  children: ReactNode;
+  defaultOpen?: boolean;
+  mono?: boolean;
+  tone?: "reasoning";
+  /** A status mark, rendered as its OWN item in the head's row. */
+  mark?: ReactNode;
+  /** Controls that belong to the section, kept OUT of the toggle. Rendered
+      beside the head rather than inside it: a button nested in a button is
+      not a thing, and clicking a copy control must not also collapse the
+      thing it copied. */
+  actions?: ReactNode;
+}) {
+  const [open, setOpen] = useState(!!defaultOpen);
+  return (
+    <div className={cx("disclosure", tone && `tone-${tone}`)}>
+      <div className="disclosure-bar">
+        <button className="disclosure-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+          <Icon name={open ? "chevronDown" : "chevronRight"} size="xs" />
+          {mark}
+          <span className={cx("truncate", mono && "mono")}>{label}</span>
+          {count != null && <span className="count-chip">{count}</span>}
+        </button>
+        {actions}
+      </div>
+      {open && <div className="disclosure-body">{children}</div>}
+    </div>
+  );
+}
+
+export function Code({ children, plain, selectable, label }: CodeProps) {
+  const box = useRef<HTMLPreElement>(null);
+
+  const onKeyDown = (e: KeyboardEvent<HTMLPreElement>) => {
+    // THE PHYSICAL KEY FIRST. Browsers resolve select-all from the key's
+    // position, not from the character a layout maps it to, so matching only
+    // `e.key` misses on every non-Latin layout — where `"ф"` or `"α"` comes
+    // back, this handler declines, and the document-wide select-all it exists
+    // to replace happens instead. `e.key` stays as the fallback for anything
+    // that reports no `code`.
+    const isA = e.code === "KeyA" || (!e.code && e.key.toLowerCase() === "a");
+    // Shift and Alt make DIFFERENT chords, several of which the browser owns
+    // (Ctrl+Shift+A is Chrome's tab search). Swallowing them would take a
+    // shortcut away and put nothing in its place.
+    if (!isA || e.altKey || e.shiftKey || !(e.metaKey || e.ctrlKey)) return;
+    const node = box.current;
+    const selection = window.getSelection?.();
+    // No Selection API — the browser's own select-all is then strictly
+    // better than nothing, so this hands the key back rather than
+    // swallowing it.
+    if (!node || !selection) return;
+    e.preventDefault();
+    selection.removeAllRanges();
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    selection.addRange(range);
+  };
+
+  return (
+    <pre
+      ref={box}
+      className={cx("code", plain && "plain", selectable && "selectable")}
+      tabIndex={selectable ? 0 : undefined}
+      role={selectable ? "region" : undefined}
+      aria-label={selectable ? label : undefined}
+      onKeyDown={selectable ? onKeyDown : undefined}
+    >
+      {children}
+    </pre>
+  );
+}
+
+/**
+ * Put text on the clipboard, and SAY WHETHER IT LANDED.
+ *
+ * Two things a bare `navigator.clipboard.writeText(x)` gets wrong, and both
+ * were live in this dashboard:
+ *
+ *  1. **It is not always there.** The Clipboard API is gated on a secure
+ *     context. `http://localhost:8000` qualifies, but the same engine
+ *     reached at `http://10.0.0.4:8000` — which is how anyone reads the
+ *     dashboard of a node that is not their laptop — does not, and
+ *     `navigator.clipboard` is then undefined. `?.` made that failure
+ *     silent: the button clicked, nothing was copied, nothing said so. The
+ *     textarea fallback is deprecated and is also the only thing that works
+ *     there, so it stays until the dashboard is only ever served over TLS.
+ *  2. **A copy with no feedback is indistinguishable from a dead button.**
+ *     The clipboard is invisible; the only way a reader learns it worked is
+ *     if the control says so.
+ */
+export function CopyButton({
+  text,
+  label = "Copy",
+  title,
+  variant,
+  size = "sm",
+}: {
+  /**
+   * The text, or a THUNK that produces it.
+   *
+   * The thunk is not a convenience: on a live turn the thing worth copying is
+   * assembled from every phase and every streamed frame, and `agents` is
+   * pushed twice per tool round — so a string prop means a full
+   * `JSON.stringify` of the whole turn on every push, for a button nobody has
+   * clicked. Resolved on click, it costs nothing until it is asked for.
+   */
+  text: string | (() => string);
+  label?: string;
+  title?: string;
+  variant?: "default" | "ghost";
+  size?: "md" | "sm";
+}) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  // The timeout outlives the component otherwise, and a screen left during
+  // the two seconds after a copy sets state on something unmounted.
+  useEffect(() => () => clearTimeout(timer.current), []);
+
+  const onClick = useCallback(() => {
+    void copyToClipboard(typeof text === "function" ? text() : text).then((ok) => {
+      setState(ok ? "copied" : "failed");
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => setState("idle"), 2000);
+    });
+  }, [text]);
+
+  const said =
+    state === "copied"
+      ? "copied to the clipboard"
+      : state === "failed"
+        ? "the browser refused the clipboard"
+        : "";
+
+  return (
+    <span className="row gap-1">
+      <Button
+        size={size}
+        variant={variant}
+        icon={state === "copied" ? "check" : state === "failed" ? "alert" : "copy"}
+        onClick={onClick}
+        title={state === "failed" ? "the browser refused the clipboard" : title}
+      >
+        {state === "copied" ? "Copied" : state === "failed" ? "Copy failed" : label}
+      </Button>
+      {/* Announced, not just drawn: the icon swap is the only signal a
+          sighted reader gets, and a screen reader gets none of it.
+
+          A SIBLING of the button, never a child. A button's accessible name
+          is computed from its contents, so inside it this named the control
+          "Copied copied to the clipboard" — the status text becoming part of
+          what the button claims to be. */}
+      <span className="sr-only" role="status">
+        {said}
+      </span>
+    </span>
+  );
+}
+
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // A denied permission and a non-secure origin both land here, and the
+    // fallback below is the answer to both.
+  }
+  return execCommandCopy(text);
+}
+
+/** The pre-Clipboard-API copy: a selected off-screen textarea. */
+function execCommandCopy(text: string): boolean {
+  if (typeof document.execCommand !== "function") return false;
+  const field = document.createElement("textarea");
+  field.value = text;
+  // Off-screen rather than hidden: a `display: none` field cannot be
+  // selected, and selecting it is the whole mechanism. `readOnly` stops a
+  // mobile keyboard appearing for the frame it exists.
+  field.setAttribute("readonly", "");
+  field.style.position = "fixed";
+  field.style.top = "-1000px";
+  field.style.opacity = "0";
+  document.body.appendChild(field);
+  try {
+    field.select();
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    field.remove();
+  }
 }

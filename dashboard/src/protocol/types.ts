@@ -70,6 +70,14 @@ export interface EventRecord {
   topic: string;
   payload?: Record<string, unknown>;
   tags?: Record<string, string>;
+  /**
+   * Whether the work this event reports failed, derived SERVER-SIDE from the
+   * event type plus the stored `failed` tag (store.EventRecord.Failed). It has
+   * always been on the wire and this interface did not declare it, so every
+   * screen reading a stored record had to cast to FeedRow to see it — which is
+   * how a turn could render red in the feed and clean on its own page.
+   */
+  failed?: boolean;
 }
 
 export interface EventsPage {

@@ -337,6 +337,11 @@ func (e *Engine) startLearningBackground(ctx context.Context) {
 		// saw, and charge a renamed seat's clustering to a chain the
 		// company has replaced.
 		RoleFor: e.seatRole,
+		// Derived from the ROLE the pass resolved, not looked up again by
+		// handle: the id and the role name land on one event, and a second
+		// epoch read could answer about a seat an apply renamed between
+		// the two.
+		AgentIDFor: e.seatAgentID,
 		Policy: learning.CuratorPolicy{
 			StaleAfter:   days(cfg.SkillCurator.StaleAfterDays),
 			ArchiveAfter: days(cfg.SkillCurator.ArchiveAfterDays),
@@ -468,6 +473,24 @@ func (e *Engine) seatRole(handle string) *org.Role {
 		return nil
 	}
 	return company.Org.AgentSeatByHandle(handle)
+}
+
+// seatAgentID derives a resolved seat's agent id, or "" when there is none.
+//
+// Empty for a human seat, which has no agent id at all rather than a zero one,
+// and for a node with no active company. The event still carries the handle and
+// the role in that case, so a reader loses the promoted column rather than the
+// attribution.
+func (e *Engine) seatAgentID(seat *org.Role) string {
+	company := e.Company()
+	if company == nil || company.Org == nil {
+		return ""
+	}
+	id, ok := company.Org.AgentIDFor(seat)
+	if !ok {
+		return ""
+	}
+	return id.String()
 }
 
 // publishLearning announces one background pass, best effort.

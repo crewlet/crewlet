@@ -120,6 +120,30 @@ func (t *Turn) Role() string {
 	return t.Seat.Name
 }
 
+// AgentID is the acting seat's derived agent id, or "".
+//
+// Derived here rather than carried, because the derivation is a pure function
+// of two values this type already pins — the org's name and the seat's handle
+// — and a carried copy is a value that can disagree with the seat beside it.
+// Empty for a human seat, which has no agent id at all rather than a zero one
+// (see [org.Organization.AgentIDFor]), and for a surface built outside a turn.
+//
+// It exists because an event addressed by agent id is published from both the
+// turn engine and the sub-agent fan-out, and only the first had the id to
+// hand: a `provider_fallback` from inside a delegate call went out with the
+// promoted column empty, so a row whose whole doc says it is addressed like a
+// phase event could not be resolved to the seat that emitted it.
+func (t *Turn) AgentID() string {
+	if t == nil || t.Seat == nil || t.Org == nil {
+		return ""
+	}
+	id, ok := t.Org.AgentIDFor(t.Seat)
+	if !ok {
+		return ""
+	}
+	return id.String()
+}
+
 // ErrNoSeat is what a seat-scoped tool returns when it was called outside a
 // turn. Its own error rather than a string, so a caller can tell "this tool is
 // unusable here" from "this tool ran and failed".

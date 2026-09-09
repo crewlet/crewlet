@@ -76,6 +76,41 @@ export function useScreen(): string {
   return useRoute().path[0] ?? "";
 }
 
+/**
+ * Whether a path is the page the reader is already on.
+ *
+ * For the links a component draws WITHOUT knowing where it is rendered. A
+ * phase card carries "event →" to its own event, which is a way out on the
+ * turn and on the seat — and on that event's own page it is a link back to
+ * itself: the reader clicks, the URL does not change, nothing moves, and the
+ * only thing they learn is that the control was a lie.
+ *
+ * Compared on the parsed path rather than on the hash string, so a query the
+ * reader happens to have on the URL — a filter, a tab — does not make the
+ * same page look like a different one.
+ */
+export function useIsCurrent(path: readonly string[]): boolean {
+  // NOT useRoute: that one throws outside a Router, deliberately, because a
+  // screen reached without one is a wiring bug. This is a leaf component's
+  // question, asked by cards that render perfectly well on their own — and
+  // outside a router the honest answer is "no", there is no page to be on.
+  // Throwing here would make a router the price of drawing a phase card.
+  const route = useContext(RouteContext);
+  return route ? samePath(route.path, path) : false;
+}
+
+/**
+ * Whether two parsed paths name the same page.
+ *
+ * Split out of the hook so the RULE is testable beside the router's other
+ * rules, which run with no DOM at all. Compared segment by segment rather than
+ * by joining: a join makes `["events", "a/b"]` and `["events", "a", "b"]`
+ * the same string, and an id is not a path.
+ */
+export function samePath(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((seg, i) => seg === b[i]);
+}
+
 export function parseHash(raw: string): Route {
   const hash = raw.replace(/^#/, "") || "/";
   const qIdx = hash.indexOf("?");

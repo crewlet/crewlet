@@ -7,13 +7,26 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 )
 
-// Turn-engine telemetry: the guards firing, the tool surface changing under a
-// phase, and the prompt-size meter. These are the events an operator reads when
-// a turn behaved oddly but did not fail.
+// Turn-engine telemetry: the guards firing, a tool call the required-skill gate
+// refused, and the prompt-size meter. These are the events an operator reads
+// when a turn behaved oddly but did not fail.
+//
+// Two types are GONE rather than merely unpublished, and the difference
+// matters: `execute.missing_tool` and `phase.tool_activated` were both defined
+// to detect PLAN INCOMPLETENESS — "the executor found a tool the plan did not
+// list" — and there is no plan phase. `ExecuteMissingTool` carried the plan's
+// own tool list as `plan_tools`. Neither ever had a producer, so no store holds
+// a row of either, and nothing had to be migrated.
+//
+// The question each was asking is either dead or already answered better. Which
+// tools a turn reached for is the `activate_tool` ledger on its own phase card,
+// verbatim, in the round that asked; a name that resolved to nothing is a
+// failed row in that same ledger. An event that fires on every non-trivial turn
+// and means "discovery worked normally" is a row per activation, forever, for a
+// question nobody can now ask of it — the docs had already downgraded it to
+// "Routine", which is the shape of a signal that has stopped being one.
 
 func init() {
-	events.Register[ExecuteMissingTool]()
-	events.Register[PhaseToolActivated]()
 	events.Register[ToolSkillGuardBlocked]()
 	events.Register[PromptSize]()
 	events.Register[TurnGuardBreach]()
@@ -37,65 +50,6 @@ const (
 	// GuardScheduledTimeout means a scheduled turn exceeded its wall-clock cap.
 	GuardScheduledTimeout GuardKind = "scheduled_timeout"
 )
-
-// ExecuteMissingTool fires when Execute's model calls a tool name that is not
-// in its surface — a signal that the plan was incomplete.
-type ExecuteMissingTool struct {
-	Agent     string   `json:"agent_id"`
-	RoleName  string   `json:"role"`
-	ToolName  string   `json:"tool_name"`
-	PlanTools []string `json:"plan_tools,omitempty"`
-}
-
-// EventType is the "execute.missing_tool" wire type. The dotted spelling is
-// this file's convention for turn-engine telemetry, and it is what the store
-// and the dashboard filter on — it is not interchangeable with an underscore.
-func (ExecuteMissingTool) EventType() string { return "execute.missing_tool" }
-
-// Role is the seat whose Execute phase asked for the tool.
-func (e ExecuteMissingTool) Role() string { return e.RoleName }
-
-// AgentID is the instance running that phase.
-func (e ExecuteMissingTool) AgentID() string { return e.Agent }
-
-// SummaryFor names the tool that was missing, not the plan's tool list: the
-// list is on the payload for whoever is diagnosing, and it is far too long for
-// a feed line.
-func (e ExecuteMissingTool) SummaryFor(actor string) string {
-	return lead(actor, "asked for unknown tool '"+e.ToolName+"'")
-}
-
-// PhaseToolActivated fires when a phase promotes a catalogue tool into its
-// active surface.
-//
-// Read it per phase: on Plan it is the planner pulling a tool in for recon,
-// expected on most non-trivial turns. On Execute it means the executor found a
-// tool the plan did not list — plan incompleteness, and chronic occurrences say
-// the planner needs more guidance.
-type PhaseToolActivated struct {
-	Agent     string `json:"agent_id"`
-	RoleName  string `json:"role"`
-	Phase     Phase  `json:"phase"`
-	ToolName  string `json:"tool_name"`
-	TurnID    string `json:"turn_id"`
-	Iteration int    `json:"iteration"`
-}
-
-// EventType is the "phase.tool_activated" wire type.
-func (PhaseToolActivated) EventType() string { return "phase.tool_activated" }
-
-// Role is the seat whose phase promoted the tool.
-func (e PhaseToolActivated) Role() string { return e.RoleName }
-
-// AgentID is the instance running that phase.
-func (e PhaseToolActivated) AgentID() string { return e.Agent }
-
-// SummaryFor leads with actor AND phase, because which phase activated the tool
-// is the whole signal: on Plan it is routine recon, on Execute it means the
-// plan was incomplete.
-func (e PhaseToolActivated) SummaryFor(actor string) string {
-	return lead(subject(actor, e.Phase), "activated '"+e.ToolName+"'")
-}
 
 // ToolSkillGuardBlocked fires when the required-skill guard rejects a tool call
 // made before the covering skill was loaded. The call never executes; the model
@@ -133,9 +87,21 @@ func (e ToolSkillGuardBlocked) SummaryFor(actor string) string {
 
 // PromptSize reports one phase's final prompt size, so prompt-slimming progress
 // is measurable over time rather than argued about.
+//
+// A SEPARATE ROW rather than a derivation, and that is the whole reason it
+// exists: AgentPhaseCompleted carries both prompts verbatim, so the size is
+// technically already stored — and reading it back means hauling every phase's
+// whole prompt and response across the driver to count characters in Go, which
+// is exactly the cost schema/0015 promoted the spend columns out of the payload
+// to avoid. Six small integers per phase answer the question at a scan.
+//
+// Addressed like every other phase event, so the size a turn actually paid is
+// readable on that turn rather than only in aggregate.
 type PromptSize struct {
 	Agent             string `json:"agent_id"`
 	RoleName          string `json:"role"`
+	TurnID            string `json:"turn_id"`
+	Iteration         int    `json:"iteration"`
 	Phase             Phase  `json:"phase"`
 	ApproximateTokens int    `json:"approximate_tokens"`
 	SystemChars       int    `json:"system_chars"`

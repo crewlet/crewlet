@@ -239,7 +239,9 @@ Two boundaries to keep in mind:
   expectations.
 
 See `examples/nimbus.company.yaml` for a complete working org with a
-founder seat above the agent CEO.
+founder seat above the agent CEO. That company's only surface is chat, so
+the founder seat there carries a single `contact` identity
+(`mattermost_user_id`); add one per surface you connect.
 
 ---
 

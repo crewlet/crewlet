@@ -197,6 +197,60 @@ Two notes on coverage:
 
 A short-circuited trigger publishes `TurnTriggerSkipped`. Without it, "the agent never answered" and "the agent already answered, on a node that has since died" are the same observation.
 
+### A turn that broke halfway
+
+The ledger above covers a turn that *finished*. The harder case is one that
+did not: a phase breaks in round two, after round one has already commented on
+an issue, woken a colleague or started a coding run.
+
+That used to hand the delivery straight back — a NAK, on the reasoning that
+"nothing was recorded, so a redelivery runs it cleanly". Nothing *was*
+recorded, and that is exactly the problem: the completion ledger is skipped on
+the error path, and the two writes a `work_key` guards are an agent's episode
+row and its counterparty profile. Every MCP write, every chat post, every
+`a2a_ask` (a fresh channel per call) and every `run_sandbox` is keyed on
+nothing at all. So one deterministic mid-turn failure replayed round one's
+external effects across the broker's whole delivery budget — **25 attempts a
+second apart**, each one a real comment on a real issue.
+
+A broken turn is now two cases, and the engine tells them apart from its own
+record rather than from `err != nil`:
+
+| what the turn's record proves | what happens |
+|---|---|
+| nothing reached outside the engine | **redelivered**, exactly as before — a provider that never answered, a runner that could not be built, a refused budget, a seat handed to another node mid-call. None of them wrote anything, and every one is worth trying again. |
+| a call reached outside the engine | **recorded and acked.** The rest of the turn is lost; its writes are not un-doable, and only one of those two is recoverable by trying again. |
+
+The proof is deliberately narrow, because a true answer *spends* a trigger.
+A call counts only when it is MCP-backed and not positively annotated
+read-only — the same rule the [delivery gate](turn-engine.md) has always used —
+or when the tool's own annotations say it is open-world, which is how
+`a2a_ask` and `run_sandbox` count despite being first-party. A tool nobody
+classified proves nothing. In particular the executor's own `submit_work`, the
+discovery pair and the sub-agent spawner carry no annotations at all, so they
+cannot trip it; a predicate written as "not proven read-only" would fire on
+every turn that closed a single round.
+
+Giving up on a trigger is never silent. The turn has already published its own
+completion marked failed, and a `TurnTriggerSkipped` beside it says the trigger
+behind it will not come back, and why.
+
+The same decision guards the other path a turn can arrive by. A **resumed**
+turn re-enters the executor's suspended conversation, so a redelivery repeats
+every call the resumed round made — and a turn coming back from a coding box is
+the one most likely to have pushed a branch already. A resume that broke after
+acting therefore leaves its run row claimed, which is what stops a retry
+winning the flip; every other resume failure still un-claims and comes back,
+because the suspended conversation is the expensive thing there and a resume
+that proved nothing has lost nothing by trying again.
+
+Two bounds worth stating plainly. The record is **per turn, in one process**:
+two nodes that both run one partition — possible if a turn outlives the
+30-minute ack window — each hold their own, so neither sees the other's. And
+the completion row is only written for [ledgered](#the-completion-ledger)
+trigger types; a type outside that set is never recorded, so its redeliveries
+re-run as they always have.
+
 ## The unowned seat
 
 A seat is unowned during a lease gap, a claim ramp, a rebalance, or a full fleet restart. Its mail must survive all of them.

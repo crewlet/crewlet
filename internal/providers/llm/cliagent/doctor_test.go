@@ -141,6 +141,52 @@ func TestTheSmokeTestCatchesACLIThatCannotProduceAToolCall(t *testing.T) {
 	}
 }
 
+// The other failure the smoke test is now the ONLY thing that catches: the CLI
+// exits 0, bills output tokens and answers with nothing at all.
+//
+// It used to be an error out of Complete, so the doctor merely relayed it.
+// Complete returns an empty completion for it now — an empty answer is a model
+// outcome and the tool loop corrects it — which makes this probe the one place
+// an operator is told the difference between a CLI that produced prose and one
+// that produced silence. Reporting silence as `It said: ""` sends them to the
+// envelope contract for a problem only a bigger model fixes.
+func TestTheSmokeTestNamesAnEmptyAnswerRatherThanQuotingIt(t *testing.T) {
+	dir := t.TempDir()
+	t.Cleanup(func() { forgetWorkspace(dir) })
+	p, err := New(Config{
+		Key: "sub", Agent: "custom", StateDir: dir, Timeout: 20 * time.Second, MaxConcurrent: 1,
+		Overrides: map[string]any{
+			"binary": os.Args[0], "complete_args": []any{"-test.run=TestCLIAgentFakeCLI"},
+			"model_args": []any{}, "output": "json",
+			"text_paths": []any{[]any{"result"}},
+			"usage":      map[string]any{"output": []any{[]any{"usage", "output_tokens"}}},
+		},
+		Env: map[string]string{
+			helperEnv:     "1",
+			"FAKE_STDOUT": `{"result":"","usage":{"output_tokens":627}}`,
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
+	if !strings.HasPrefix(d.Smoke, "failed") {
+		t.Fatalf("Smoke = %q, want a failure", d.Smoke)
+	}
+	if !strings.Contains(d.Smoke, "nothing at all") {
+		t.Errorf("the smoke failure does not name the silence: %q", d.Smoke)
+	}
+	// The token count is the EVIDENCE that the model worked and said
+	// nothing, which is what tells an operator the fix is the model rather
+	// than the prompt.
+	if !strings.Contains(d.Smoke, "627") {
+		t.Errorf("the smoke failure does not report what the silence cost: %q", d.Smoke)
+	}
+	if strings.Contains(d.Smoke, `It said: ""`) {
+		t.Errorf("silence was reported as an empty quotation: %q", d.Smoke)
+	}
+}
+
 // And it passes on one that can, or the check is a permanent red light.
 func TestTheSmokeTestPassesOnAWorkingEnvelope(t *testing.T) {
 	dir := t.TempDir()

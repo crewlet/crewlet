@@ -62,9 +62,24 @@ func (e LLMUnavailable) SummaryFor(actor string) string {
 // ProviderFallback fires each time the chain falls through from one provider to
 // the next. Dashboards count these to spot an unstable provider before it
 // exhausts a chain and takes a turn down with it.
+//
+// IT IS ADDRESSED LIKE A PHASE EVENT — agent id, role, turn id, iteration —
+// because the question it answers is "what happened during THIS turn", and for
+// as long as it carried only a handle it could not be asked that: `turn_id` is
+// the promoted column the turn lookup selects on, so a payload without one is
+// invisible to the screen built to show a turn end to end. The Turn screen's
+// own subtitle promised these rows and could never have shown one.
 type ProviderFallback struct {
-	AgentHandle     string `json:"agent_handle"`
-	Phase           Phase  `json:"phase"`
+	Agent     string `json:"agent_id"`
+	RoleName  string `json:"role"`
+	TurnID    string `json:"turn_id"`
+	Iteration int    `json:"iteration"`
+	Phase     Phase  `json:"phase"`
+	// FromProviderKey and ToProviderKey are the providers.llm keys an
+	// operator configured, not model ids: the key is what they recognise
+	// and what they would edit. ToProviderKey is EMPTY on the last member,
+	// where the fallback is to nothing and the next event is
+	// LLMUnavailable.
 	FromProviderKey string `json:"from_provider_key"`
 	ToProviderKey   string `json:"to_provider_key"`
 	ErrorKind       string `json:"error_kind"`
@@ -73,10 +88,21 @@ type ProviderFallback struct {
 // EventType is the "provider_fallback" wire type.
 func (ProviderFallback) EventType() string { return "provider_fallback" }
 
-// SummaryFor is handed the publisher as its actor: this event carries a handle
-// rather than a role or an agent id, and the chain does not read a handle —
-// contributing AgentHandle as the agent id would change behaviour.
+// Role is the seat whose chain fell through.
+func (e ProviderFallback) Role() string { return e.RoleName }
+
+// AgentID is the instance running the phase that fell through.
+func (e ProviderFallback) AgentID() string { return e.Agent }
+
+// SummaryFor names both keys and the classified failure, and says so plainly
+// when there was nowhere left to fall to: an empty ToProviderKey is the last
+// member of the chain, and rendering it as "→ " would read as a truncated line
+// rather than as the end of the chain.
 func (e ProviderFallback) SummaryFor(actor string) string {
+	if e.ToProviderKey == "" {
+		return lead(actor, fmt.Sprintf("%s failed (%s) — no provider left in the chain",
+			e.FromProviderKey, e.ErrorKind))
+	}
 	return lead(actor, fmt.Sprintf("fallback %s → %s (%s)",
 		e.FromProviderKey, e.ToProviderKey, e.ErrorKind))
 }

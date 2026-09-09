@@ -90,7 +90,8 @@ func (c SkillCluster) Size() int { return len(c.Episodes) }
 //
 // Returns the events to publish, empty when nothing qualified — which is the
 // ordinary answer for a seat whose work does not repeat, and is not an error.
-func (s *Synthesizer) ClusterPass(ctx context.Context, seat *org.Role, handle string) ([]events.Payload, error) {
+func (s *Synthesizer) ClusterPass(ctx context.Context, seat *org.Role, handle, agentID string,
+) ([]events.Payload, error) {
 	if s.episodes == nil {
 		// No episode store was wired, so there is nothing to cluster. A
 		// company with learning on always has one; this is the shape a
@@ -136,7 +137,7 @@ func (s *Synthesizer) ClusterPass(ctx context.Context, seat *org.Role, handle st
 				"agent_handle", handle, "similar_to", name, "cluster_size", cluster.Size())
 			continue
 		}
-		return s.draftFromCluster(ctx, seat, handle, cluster)
+		return s.draftFromCluster(ctx, seat, handle, agentID, cluster)
 	}
 	log.DebugContext(ctx, "skill_clustering_found_nothing", "agent_handle", handle,
 		"episodes", len(recent), "clusters", len(clusters), "min_size", s.clusterMin)
@@ -145,7 +146,7 @@ func (s *Synthesizer) ClusterPass(ctx context.Context, seat *org.Role, handle st
 
 // draftFromCluster asks the model for one skill and writes it.
 func (s *Synthesizer) draftFromCluster(ctx context.Context, seat *org.Role,
-	handle string, cluster SkillCluster,
+	handle, agentID string, cluster SkillCluster,
 ) ([]events.Payload, error) {
 	member, err := s.models.Head(seat, phase.Auxiliary)
 	if err != nil {
@@ -205,6 +206,14 @@ func (s *Synthesizer) draftFromCluster(ctx context.Context, seat *org.Role,
 		"skill_id", skill.ID, "trigger", string(types.SynthesisClustered),
 		"cluster_size", cluster.Size(), "tools", len(cluster.Sequence))
 	return []events.Payload{types.SkillSynthesized{
+		// THE AGENT ID, unlike the turn id below. The cluster spans many
+		// turns but exactly one seat — it is that seat's own episodes,
+		// read by its handle — so there is a single right answer here,
+		// where there is none for a turn. Publishing without it left the
+		// promoted agent_id column empty on precisely the skills a seat
+		// learned by repetition, while the ones it learned from a single
+		// turn carried it.
+		Agent:       agentID,
 		AgentHandle: handle,
 		RoleName:    seatName(seat),
 		// NO TurnID. The draft came from a cluster rather than from one

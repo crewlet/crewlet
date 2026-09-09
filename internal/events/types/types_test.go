@@ -58,8 +58,7 @@ func catalogue() []events.Payload {
 		SandboxRunStarted{}, SandboxRunCompleted{}, SandboxRunFailed{},
 		SandboxClarificationRequested{},
 		// turn.go
-		ExecuteMissingTool{}, PhaseToolActivated{}, ToolSkillGuardBlocked{},
-		PromptSize{}, TurnGuardBreach{},
+		ToolSkillGuardBlocked{}, PromptSize{}, TurnGuardBreach{},
 		// webhook.go
 		RawWebhook{},
 	}
@@ -92,7 +91,6 @@ var wireTypes = []string{
 	"document_created",
 	"document_updated",
 	"episode_written",
-	"execute.missing_tool",
 	"external_notification",
 	"llm_unavailable",
 	"message_sent",
@@ -101,7 +99,6 @@ var wireTypes = []string{
 	"org_started",
 	"org_stopped",
 	"persist_decider_completed",
-	"phase.tool_activated",
 	"phase.tool_skill_blocked",
 	"prefetch_summary",
 	"prompt.size",

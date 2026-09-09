@@ -367,7 +367,20 @@ type AgentPhaseCompleted struct {
 	TotalTokens     int              `json:"total_tokens"`
 	RoundsUsed      int              `json:"rounds_used"`
 	ExhaustedRounds bool             `json:"exhausted_rounds"`
-	Decision        string           `json:"decision"`
+	// EmptyAnswerRounds counts the rounds in which the model produced
+	// neither prose nor a tool call — it spent its output budget on hidden
+	// reasoning and stopped.
+	//
+	// Here rather than as an event of its own because this is the record
+	// that already knows the seat, the phase and the model. The cli-agent
+	// backend used to raise a transport error on that round, which walked
+	// the fallback chain and could end the turn as llm_unavailable; it now
+	// hands back an empty completion and the tool loop corrects it, so a
+	// model that habitually answers nothing would otherwise be visible only
+	// as unexplained rescues. A non-zero count on a phase is the
+	// explanation, and the fix is the entry's `model`.
+	EmptyAnswerRounds int    `json:"empty_answer_rounds,omitempty"`
+	Decision          string `json:"decision"`
 	// RescueFired is true when the phase's submit tool was not called on the
 	// first run of the loop, prompting a constrained rescue call. The
 	// executor and the reviewer both can; sub-agent phases never set this.

@@ -93,6 +93,31 @@ for the result. The parent turn would finish without persisting the
 suspended conversation, leaving the seat deaf for the whole coding run
 with nothing to resume into.
 
+### `open_world` is a tri-state, and unset is not `false`
+
+Read the third rule again: `read_only is False` **and** `open_world` *not
+explicitly* `False`. A tool that writes only *private* state — an agent's
+own diary, its own learned skills, its own onboarding marker — is not a
+write to a surface a human reads, but saying so takes an explicit
+`open_world: false`. Leaving the hint unset classifies it with the public
+writes.
+
+That is deliberate for a third-party server, where "nobody said" has to
+mean "assume the worst" — it is the fail-closed default, and the engine reads a
+server's annotations off the wire because the MCP Go SDK flattens the absent case for
+`readOnlyHint` and `idempotentHint`, which would otherwise make every
+under-annotated tool look exactly like a public write.
+
+It is a trap for **first-party** tools, and Crewlet fell into it: three
+builtins that write nothing but the agent's own memory (`reflect_and_persist`,
+`refine_skill`, `mark_onboarded`) declared `read_only: false` and said
+nothing about `open_world`, so the guard denied them to workers their
+parent had explicitly granted them — blaming a write to a shared surface
+that never happens. They say `open_world: false` now. The same applies to
+`tool_annotations`: a server tool that genuinely stays inside your network
+needs the key written out, because omitting it is a claim in the other
+direction.
+
 ---
 
 ## Operator overrides for under-annotating servers

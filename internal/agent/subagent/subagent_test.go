@@ -16,8 +16,10 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -219,12 +221,27 @@ func newWorld(t *testing.T) *world {
 	add("jira_lookup", tools.Origin("jira"), tools.Annotations{})
 	add("slack_post", tools.Origin("slack"), tools.Annotations{ReadOnly: mcp.No, OpenWorld: mcp.Yes})
 	add("delete_page", tools.Origin("wiki"), tools.Annotations{Destructive: mcp.Yes})
-	// The engine-control surface a parent's Execute phase really does hold.
+	// The first-party surface a parent's Execute phase really does hold,
+	// with the annotations internal/agent/builtin really does register —
+	// which its own TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead
+	// pins. Mirrored rather than imported because registering the real set
+	// needs eight dependency doubles; kept HONEST because the previous
+	// mirror had a2a_ask and run_sandbox carrying no annotations at all,
+	// which is what a comment in this file claimed for years after it
+	// stopped being true.
 	add(subagent.ToolName, tools.OriginBuiltin, tools.Annotations{})
 	add("activate_tool", tools.OriginBuiltin, tools.Annotations{})
 	add("list_mcp_server_tools", tools.OriginBuiltin, tools.Annotations{})
-	add("a2a_ask", tools.OriginBuiltin, tools.Annotations{})
-	add("run_sandbox", tools.OriginBuiltin, tools.Annotations{})
+	add("a2a_ask", tools.OriginBuiltin,
+		tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes})
+	add("run_sandbox", tools.OriginBuiltin,
+		tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes})
+	// The private-state writes. Each says OpenWorld explicitly, which is
+	// what makes it reachable by a worker its parent granted it to.
+	add("reflect_and_persist", tools.OriginBuiltin,
+		tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.No})
+	add("refine_skill", tools.OriginBuiltin,
+		tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.No})
 	w.snapshot = w.registry.Snapshot()
 	return w
 }
@@ -434,6 +451,47 @@ func TestAGrantRefusesToolsThatWriteToASharedSurface(t *testing.T) {
 		if !slices.Contains(g.Active, name) {
 			t.Errorf("%s should have been granted: active=%v rejected=%v",
 				name, g.Active, g.Rejected)
+		}
+	}
+}
+
+// A WORKER MAY WRITE TO ITS PARENT'S OWN MEMORY, and this is the behaviour the
+// annotation fix restores.
+//
+// The classifier asks whether a sub-agent would "write to a surface a human
+// reads, under the parent agent's identity" — a diary note and a refined skill
+// are read back by this seat's own next turn and by nobody else. They were
+// denied anyway, because their OpenWorld hint was UNSET rather than false, and
+// the filter's rule is `ReadOnly == No` AND `OpenWorld != No`. So a founder who
+// named `reflect_and_persist` in a worker template got a worker that could not
+// call it, with the rejection blamed on writing somewhere a human could read.
+func TestAWorkerMayBeGrantedAWriteToItsParentsOwnMemory(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	g := subagent.Permit(w.snapshot, w.parentAll(),
+		[]string{"reflect_and_persist", "refine_skill"})
+
+	for _, name := range []string{"reflect_and_persist", "refine_skill"} {
+		if !slices.Contains(g.Active, name) {
+			t.Errorf("%s writes only the parent's own memory and was refused: "+
+				"active=%v rejected=%v", name, g.Active, g.Rejected)
+		}
+	}
+}
+
+// The counterfactual, and the half that must not move: a first-party tool that
+// LEAVES the process is still refused, by name and by annotation both.
+func TestAWorkerIsStillRefusedTheToolsThatLeaveTheProcess(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	g := subagent.Permit(w.snapshot, w.parentAll(), []string{"a2a_ask", "run_sandbox"})
+
+	for _, name := range []string{"a2a_ask", "run_sandbox"} {
+		if slices.Contains(g.Active, name) {
+			t.Errorf("%s leaves the process and was granted", name)
+		}
+		if _, ok := g.Universe.Lookup(name); ok {
+			t.Errorf("%s is still discoverable by the child", name)
 		}
 	}
 }
@@ -2412,5 +2470,89 @@ func TestAWorkersNarrationSharesItsRoundsWithItsToolCalls(t *testing.T) {
 		if n.Round < 1 || n.Round > res.Rounds {
 			t.Errorf("narration numbered round %d on a worker that ran %d", n.Round, res.Rounds)
 		}
+	}
+}
+
+// --- the provider chain, when a worker's own model is benched ---------------
+
+// benched is a member that fails the way a spent key does — retryably, so the
+// chain moves on rather than returning the error to the caller.
+type benched struct{ model string }
+
+func (b benched) Model() string { return b.model }
+
+func (b benched) Complete(context.Context, llm.Request) (*llm.Completion, error) {
+	return nil, &llm.Error{
+		Kind: llm.KindRateLimit, Provider: "p", Model: b.model,
+		Err: errors.New("rate limited"),
+	}
+}
+
+// A worker's hand-off is the PARENT TURN's fact, and it has to reach the event
+// store addressed as one.
+//
+// The seat's own phases publish these; for a while its fan-out did not, and a
+// chain is unstable exactly where the fan-out is. The turn id is what makes
+// the row selectable at all — without it the hand-off is an anonymous line in
+// the log rather than something the turn that caused it can show, and the
+// agent id is the other half of that address: the fan-out published it empty
+// while the seat's own phases filled it, so one company's provider_fallback
+// rows were attributable and the other's were not.
+func TestAWorkersProviderHandOffIsPublishedAgainstTheParentTurn(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	p := &provider{name: "sub"}
+	cfg := baseConfig(t, w, p)
+	cfg.Models = models(t,
+		phase.Entry{Key: "benched", Provider: benched{model: "benched-model"}},
+		phase.Entry{Key: "default", Provider: p})
+	cfg.Seat.Role.LLMSubagent = org.ProviderKeys{"benched", "default"}
+	cfg.ParentRemaining = 0
+	cfg.Turn = &turnctx.Turn{ID: "t-9", Seat: cfg.Seat.Role, Org: cfg.Seat.Org}
+	pub := &publisher{}
+	cfg.Publisher = pub
+
+	if res := one(t, cfg, request("read_file")); res.Status != subagent.StatusOK {
+		t.Fatalf("worker did not finish on the second member: %+v", res)
+	}
+
+	var got []*types.ProviderFallback
+	for _, ev := range pub.events {
+		if f, ok := events.DataAs[*types.ProviderFallback](ev); ok {
+			got = append(got, f)
+		}
+	}
+	if len(got) == 0 {
+		t.Fatal("a worker walked past a benched member and published nothing")
+	}
+	f := got[0]
+	// The PARENT seat's derived id. A worker holds no seat in the org and so
+	// has no id of its own, and this row's whole doc says it is addressed
+	// like a phase event — agent id, role, turn id — so publishing it with
+	// the promoted column empty leaves the hand-off unattributable to the
+	// seat whose chain fell through.
+	wantAgent, ok := cfg.Seat.Org.AgentIDFor(cfg.Seat.Role)
+	if !ok {
+		t.Fatal("the parent seat has no derived agent id; the fixture is not an agent seat")
+	}
+	for _, c := range []struct{ field, got, want string }{
+		{"agent_id", f.Agent, wantAgent.String()},
+		{"turn_id", f.TurnID, "t-9"},
+		{"role", f.RoleName, "CTO"},
+		// SUBAGENT, not execute: a reader has to be able to tell the seat's
+		// own executor falling through from one of its workers doing it.
+		{"phase", string(f.Phase), "subagent"},
+		{"from_provider_key", f.FromProviderKey, "benched"},
+		{"to_provider_key", f.ToProviderKey, "default"},
+		{"error_kind", f.ErrorKind, llm.KindRateLimit.String()},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %q, want %q", c.field, c.got, c.want)
+		}
+	}
+	// The envelope's source is the only attribution the payload's role does
+	// not already carry, and it is what a role-less consumer reads.
+	if actor := pub.events[0].Actor(); actor != "CTO" {
+		t.Errorf("actor = %q, want CTO", actor)
 	}
 }

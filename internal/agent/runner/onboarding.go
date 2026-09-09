@@ -53,6 +53,7 @@ var onboardingAlwaysOn = []string{ReflectAndPersistTool, MarkOnboardedTool}
 const (
 	ReflectAndPersistTool = "reflect_and_persist"
 	MarkOnboardedTool     = "mark_onboarded"
+	RunSandboxTool        = "run_sandbox"
 )
 
 // Markers is what the onboarding pass needs from the learning store.

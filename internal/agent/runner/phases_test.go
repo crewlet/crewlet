@@ -3,6 +3,7 @@ package runner_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -174,6 +175,10 @@ type buildOpts struct {
 	agentRun runner.AgentLauncher
 	resume   *runner.Resume
 	pub      queue.Publisher
+	// execChain overrides the executor's provider keys, so a test can give
+	// the phase a real fallback chain rather than the single key the
+	// fixture's seat runs on.
+	execChain org.ProviderKeys
 }
 
 func build(t *testing.T, entries []phase.Entry, reply ...turn.Reply) (*runner.Runner, *tools.Registry) {
@@ -229,6 +234,9 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 	// resolution falls back to it, which is the counterfactual the golden
 	// suite asserts.
 	role.LLM = org.ProviderKeys{"executor"}
+	if len(opts.execChain) > 0 {
+		role.LLM = opts.execChain
+	}
 	role.LLMReview = org.ProviderKeys{"reviewer"}
 	organization := &org.Organization{Name: "Acme", Roles: []*org.Role{role}}
 
@@ -564,4 +572,77 @@ func toolNames(defs []llm.ToolDef) []string {
 		out = append(out, d.Name)
 	}
 	return out
+}
+
+// breakingProvider answers a fixed script and then fails, so a phase can be
+// stopped at a chosen point WITH tool calls already behind it. The scripted
+// provider above cannot fail at all, and "the phase broke after it had already
+// written" is not reachable any other way.
+type breakingProvider struct {
+	script []llm.Completion
+	n      int
+	err    error
+}
+
+func (p *breakingProvider) Model() string { return "breaking" }
+
+func (p *breakingProvider) Complete(_ context.Context, _ llm.Request) (*llm.Completion, error) {
+	if p.n >= len(p.script) {
+		return nil, p.err
+	}
+	c := p.script[p.n]
+	p.n++
+	return &c, nil
+}
+
+// A BROKEN PHASE HANDS BACK WHAT IT ALREADY DID.
+//
+// The seam this whole fix rests on, and the one a fake cannot vouch for: the
+// dispatcher gives up a trigger when the turn PROVES it wrote outside the
+// engine, and the proof is the record the executor carries out with its error.
+// This path used to `return turn.Work{}, turn.Surface{}, err` — throwing that
+// record away on the one path where a caller most needs it — so a turn that
+// had already commented on an issue looked exactly like one that had done
+// nothing, and its trigger was replayed until the broker gave up.
+func TestABrokenExecutorReturnsTheCallsItAlreadyMade(t *testing.T) {
+	t.Parallel()
+	prov := &breakingProvider{
+		script: []llm.Completion{
+			activate("jira_create"),
+			{ToolCalls: []llm.ToolCall{{ID: "c", Name: "jira_create"}}},
+		},
+		err: errors.New("the provider went away mid-loop"),
+	}
+	r, _ := build(t, []phase.Entry{{Key: "default", Provider: prov}})
+
+	work, surface, err := r.Execute(t.Context(), 1, "", nil)
+	if err == nil {
+		t.Fatal("the phase did not break")
+	}
+	if !slices.ContainsFunc(work.Calls, func(c ledger.Call) bool { return c.Name == "jira_create" }) {
+		t.Fatalf("calls = %+v, want the issue it created before it broke", work.Calls)
+	}
+	// AND THE SURFACE COMES WITH IT, because the record alone cannot be
+	// judged: whether a call reached outside the engine is a fact about the
+	// tool's origin and annotations, which only the surface carries.
+	if !turn.Acted(work.Calls, surface) {
+		t.Errorf("the executor created an issue and then broke, and the turn "+
+			"reads as having done nothing (surface = %+v)", surface)
+	}
+}
+
+// The counterfactual, kept beside it: a phase that broke before any call still
+// reports nothing, so a transient failure keeps its retry.
+func TestAnExecutorThatBrokeBeforeCallingAnythingReportsNothing(t *testing.T) {
+	t.Parallel()
+	prov := &breakingProvider{err: errors.New("no route to the provider")}
+	r, _ := build(t, []phase.Entry{{Key: "default", Provider: prov}})
+
+	work, surface, err := r.Execute(t.Context(), 1, "", nil)
+	if err == nil {
+		t.Fatal("the phase did not break")
+	}
+	if turn.Acted(work.Calls, surface) {
+		t.Errorf("a phase that never called anything reads as having acted: %+v", work.Calls)
+	}
 }

@@ -5,7 +5,7 @@ End-to-end recipe for bootstrapping the [`examples/nimbus.company.yaml`](https:/
 Every request below assumes:
 
 ```bash
-export CREWLET_URL="http://localhost"   # the example Tier A file binds the embedded API on port 80
+export CREWLET_URL="http://localhost"   # examples/nimbus.config.yaml binds the embedded API on port 80
 export TOKEN="$CREWLET_API_TOKEN_FOUNDER"   # matches api.auth.tokens[].token in crewlet.yaml
 export AUTH="Authorization: Bearer $TOKEN"
 ```

@@ -188,6 +188,10 @@ providers:
     default_coding_agent: claude-code
 ```
 
+Both shipped examples pair a `local:` catalogue with `run_in: direct`, and the difference between them is worth reading side by side. [`examples/nimbus.company.yaml`](../../examples/nimbus.company.yaml) runs `opencode` as the coding agent inside the box and has a code host to push to, so its runs open merge requests. [`examples/nimbus-claude-cli.company.yaml`](../../examples/nimbus-claude-cli.company.yaml) takes it one step further and has **no code host at all**: its three engineering seats run a `cli-agent` entry in [**agent mode**](subscription-llm-backends.md#agent-mode), so the *executor itself* is the coding CLI's own agentic loop in a box that reuses the operator's Claude login, and each seat's `role.sandbox.run_in: self` says its code work rides that run rather than starting a second box.
+
+That second shape is worth saying out loud, because a sandbox and a code host are often assumed to come together. A sandbox with nowhere to push is still a place to run code: a spike, a benchmark, a reproduction, an SDK example that has actually executed. Add a code host later and the same runs start opening merge requests; nothing about the sandbox block changes.
+
 **`local:` alone still needs a `default_run_in`** (or a `run_in` on every sandbox-enabled seat), because it serves two cells and choosing `direct` is choosing to run an autonomous coding agent as the engine user. It carries no mode of its own any more: `direct` and `container` are a choice about **one seat's work**, and a block-level mode could only ever answer for every seat at once.
 
 | | `run_in: direct` | `run_in: container` |
@@ -227,7 +231,7 @@ Every container box is then proved once, at creation, before anything runs in it
 
 **Setup commands get a provisioning budget, not a control one.** Each command may run for `timeout_seconds` (default 600). Real provisioning — a dependency install, a cold image pull, a large clone — takes minutes, and without its own budget these inherited the backend's control-plane timeout and were killed, failing the whole acquisition. Raise it for a step you know is slow; lower it for one that should be instant, so a hung command surfaces as a named setup failure rather than eating the turn. A failure reports the step and the command's position, never the command text: `${VAR}` references in commands are resolved before they run, so the text can carry the credential it was given.
 
-**Setup steps and the local cells.** `direct` has no filesystem virtualisation, so a setup step that writes a *system* path is refused with an error naming the mode — it would otherwise write to the engine host's real `/usr/local/bin`. The shipped [git-auth recipe](#the-git-auth-recipe) is one of these; under `direct`, root it in the box's home instead:
+**Setup steps and the local cells.** `direct` has no filesystem virtualisation, so a setup step that writes a *system* path is refused with an error naming the mode — it would otherwise write to the engine host's real `/usr/local/bin`. The [git-auth recipe](#the-git-auth-recipe) above is one of these; under `direct`, root it in the box's home instead:
 
 File paths in a setup step are absolute and are **not** shell-expanded, so `$HOME` does not work there — write the helper with a `commands` heredoc, which does run in a shell:
 
@@ -242,7 +246,7 @@ setup:
         ...
         SH
       - chmod +x "$HOME/.local/bin/git-credential-crewlet"
-      - 'git config --global credential."https://gitlab.com".helper "$HOME/.local/bin/git-credential-crewlet"'
+      - 'git config --global credential."https://github.com".helper "$HOME/.local/bin/git-credential-crewlet"'
 ```
 
 `container` mode needs no such change.
@@ -334,7 +338,7 @@ providers:
 
 Each piece is load-bearing: the helper is **scoped to the code host twice** (the credential config key *and* the `host=` check in the script), so the PAT can never be offered to a foreign host such as a malicious submodule URL; it reads the token from the env at git-runtime (never persisted to disk) and stays silent without one, so public clones fall through to anonymous; the `insteadOf` rewrites use `--add` because the key is multi-valued (without it the second value replaces the first and scp-style `git@…:` remotes stay SSH, failing on host-key verification in a keyless box); and commit identity comes from the engine's generic `$CREWLET_AGENT_*` facts, so commits attribute to the seat without the recipe hardcoding a name.
 
-The GitLab form of this recipe — same shape, `gitlab.com` scoping, `oauth2` username, MRs opened via `git push -o merge_request.create` push options — ships in [`examples/nimbus.company.yaml`](../../examples/nimbus.company.yaml); the GitHub form is documented in [GitHub Integration](../integrations/github.md). The repo to work in is **not** role config — it is task context the executor names in the brief, and the coding agent clones it inside the box with the seat's injected token.
+The GitLab form of this recipe — same shape, `gitlab.com` scoping, `oauth2` username, MRs opened via `git push -o merge_request.create` push options — is in [GitLab Integration](../integrations/gitlab.md#how-code-authoring-works); the GitHub form is documented in [GitHub Integration](../integrations/github.md). The repo to work in is **not** role config — it is task context the executor names in the brief, and the coding agent clones it inside the box with the seat's injected token.
 
 ---
 
@@ -480,4 +484,4 @@ What an operator should recognize:
 
 ## Testing
 
-`providers.sandbox.fake: true` wires the in-process fakes (`FakeSandboxProvider`, `FakeCodingAgentRunner`) — scripted results, an in-memory filesystem, no network, per the project rule that tests never touch real services. The runner tests pin the exact CLI invocations (`claude -p … --output-format json`, `opencode run … --format json`) and output parsers, and `internal/config/examples_test.go` holds the shipped git-auth recipe to its security properties (host scoping at both layers, `--add` rewrites, identity from the engine's agent facts) so an edit cannot quietly widen them.
+`providers.sandbox.fake: true` wires the in-process fakes (`FakeSandboxProvider`, `FakeCodingAgentRunner`) — scripted results, an in-memory filesystem, no network, per the project rule that tests never touch real services. The runner tests pin the exact CLI invocations (`claude -p … --output-format json`, `opencode run … --format json`) and output parsers, and `internal/config/examples_test.go` parses the git-auth recipe out of *this page* and holds it to its security properties (host scoping at both layers, `--add` rewrites, identity from the engine's agent facts) so an edit cannot quietly widen them — this is the copy readers take, so this is the copy under test.

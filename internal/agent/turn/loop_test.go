@@ -45,17 +45,18 @@ func (f *fake) Execute(_ context.Context, round int, notes string, h []ledger.It
 	f.workRounds++
 	f.notesSeen = append(f.notesSeen, notes)
 	f.historySeen = append(f.historySeen, h)
-	if f.workErr != nil {
-		return turn.Work{}, turn.Surface{}, f.workErr
-	}
-	return at(f.works, round), at(f.surfaces, round), nil
+	// THE PARTIAL RECORD TRAVELS WITH THE ERROR, which is what the real
+	// runner now does: a phase that broke halfway through its tool loop
+	// hands back the calls it made before it broke. Returning an empty Work
+	// here would model a contract the runner no longer has.
+	return at(f.works, round), at(f.surfaces, round), f.workErr
 }
 
 func (f *fake) Resume(_ context.Context, h []ledger.Iteration) (turn.Work, turn.Surface, error) {
 	f.resumeRounds++
 	f.historySeen = append(f.historySeen, h)
 	if f.resumeErr != nil {
-		return turn.Work{}, turn.Surface{}, f.resumeErr
+		return at(f.works, 1), at(f.surfaces, 1), f.resumeErr
 	}
 	// A resumed phase re-enters the FIRST round, so it reads the same slot
 	// an ordinary executor pass would have.
@@ -855,5 +856,90 @@ func TestAnUncappedTurnRunsItsRounds(t *testing.T) {
 	}
 	if res.Breach != nil {
 		t.Errorf("an uncapped turn breached: %+v", res.Breach)
+	}
+}
+
+// --- what a broken turn already did to the world --------------------------
+
+// A BROKEN PHASE STILL SAYS WHAT IT DID. The dispatcher spends a trigger on
+// this answer — a turn that acted is given up rather than redelivered — so the
+// fact has to survive the error return that used to discard it.
+func TestABrokenRoundStillReportsWhatItAlreadyWroteOutside(t *testing.T) {
+	t.Parallel()
+	f := &fake{
+		works:    []turn.Work{{Calls: []ledger.Call{{Name: "tracker_comment"}}}},
+		surfaces: []turn.Surface{{MCPTools: []string{"tracker_comment"}}},
+		workErr:  errors.New("the provider went away mid-loop"),
+	}
+	res, err := turn.Run(t.Context(), f, turn.Settings{MaxIterations: 3}, turn.Input{TurnID: "t1"})
+	if err == nil {
+		t.Fatal("Run returned no error for a broken phase")
+	}
+	if !res.Acted {
+		t.Error("the turn commented on an issue and then broke, and reported " +
+			"that nothing had happened — a redelivery would comment again")
+	}
+}
+
+// THE ZERO ANSWER IS THE SAFE ONE. A phase that broke before any call is the
+// transient case, and it must keep its retry.
+func TestARoundThatBrokeBeforeCallingAnythingReportsNothing(t *testing.T) {
+	t.Parallel()
+	f := &fake{workErr: errors.New("no model chain for this phase")}
+	res, err := turn.Run(t.Context(), f, turn.Settings{MaxIterations: 3}, turn.Input{TurnID: "t1"})
+	if err == nil {
+		t.Fatal("Run returned no error for a broken phase")
+	}
+	if res.Acted {
+		t.Error("a phase that never called anything claimed to have acted, " +
+			"which would discard a trigger worth retrying")
+	}
+}
+
+// A REVIEW FAILURE IS THE WORST CASE, and the one an executor-shaped fix
+// misses: the executor phase completed IN FULL — every write landed — and the
+// break is one frame later. The record is the executor's Work, which this
+// frame is still holding.
+func TestABrokenReviewCarriesTheExecutorsWrites(t *testing.T) {
+	t.Parallel()
+	f := &fake{
+		works:    []turn.Work{{Summary: "posted", Calls: []ledger.Call{{Name: "chat_post"}}}},
+		surfaces: []turn.Surface{{MCPTools: []string{"chat_post"}}},
+		revErr:   errors.New("the reviewer's provider went away"),
+	}
+	res, err := turn.Run(t.Context(), f, turn.Settings{MaxIterations: 3}, turn.Input{TurnID: "t1"})
+	if err == nil {
+		t.Fatal("Run returned no error for a broken review")
+	}
+	if !res.Acted {
+		t.Error("the executor posted and the REVIEWER broke, and the turn " +
+			"reported nothing had happened")
+	}
+}
+
+// ACCUMULATED, NEVER ASSIGNED. Round one posts; round two reads and breaks. A
+// per-round answer would let the quiet round un-say what the loud one did.
+func TestAQuietRoundDoesNotUnsayAnEarlierWrite(t *testing.T) {
+	t.Parallel()
+	f := &fake{
+		works: []turn.Work{
+			{Summary: "posted", Calls: []ledger.Call{{Name: "chat_post"}}},
+			{Summary: "read", Calls: []ledger.Call{{Name: "chat_history"}}},
+		},
+		surfaces: []turn.Surface{{
+			MCPTools:   []string{"chat_post", "chat_history"},
+			KnownReads: []string{"chat_history"},
+		}},
+		reviews: []turn.Review{{Decision: phase.SelfIterate, Notes: "again"}},
+		revErr:  nil,
+	}
+	// Round two breaks in Review, after a read-only round.
+	f.works[1].Calls = []ledger.Call{{Name: "chat_history"}}
+	res, err := turn.Run(t.Context(), f, turn.Settings{MaxIterations: 2}, turn.Input{TurnID: "t1"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.Acted {
+		t.Error("round two only read, and the turn forgot that round one posted")
 	}
 }

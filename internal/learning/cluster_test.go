@@ -38,8 +38,14 @@ func clusterer(t *testing.T, db *store.DB, answer string,
 	return s, p
 }
 
-// clusterSeat is the role a pass runs for.
-var clusterSeat = &org.Role{Name: "Dev"}
+// clusterSeat is the role a pass runs for, and clusterAgentID the id the
+// caller derives for it — the engine's own [org.Organization.AgentIDFor]
+// answer, passed in rather than looked up, so one event's id and role name
+// cannot name two seats.
+var (
+	clusterSeat    = &org.Role{Name: "Dev"}
+	clusterAgentID = "6b2f5d9a-0e64-5a3f-8c11-2f8a4d6e9b70"
+)
 
 // writeEpisodes appends n turns with the given tool run.
 func writeEpisodes(t *testing.T, db *store.DB, n int, outcome string, tools ...string) {
@@ -71,7 +77,7 @@ func TestARepeatedToolRunIsDistilledIntoASkill(t *testing.T) {
 		MinToolCalls: 3, ClusterMinSize: 3,
 	})
 
-	out, err := s.ClusterPass(t.Context(), clusterSeat, "dev")
+	out, err := s.ClusterPass(t.Context(), clusterSeat, "dev", clusterAgentID)
 	if err != nil {
 		t.Fatalf("ClusterPass: %v", err)
 	}
@@ -91,6 +97,18 @@ func TestARepeatedToolRunIsDistilledIntoASkill(t *testing.T) {
 	}
 	if ev.TurnID != "" {
 		t.Fatalf("TurnID = %q — a cluster has no single causing turn", ev.TurnID)
+	}
+	// The one address a cluster DOES have. Its episodes are one seat's, read
+	// by that seat's handle, so the event's promoted agent_id column has a
+	// right answer where its turn id does not — and it went out empty, so the
+	// skills a seat learned by repetition were the ones no agent-keyed read
+	// could find, while its single-turn skills carried the id.
+	if ev.Agent != clusterAgentID {
+		t.Fatalf("Agent = %q, want %q — a clustered skill is still one seat's",
+			ev.Agent, clusterAgentID)
+	}
+	if ev.AgentHandle != "dev" || ev.RoleName != "Dev" {
+		t.Fatalf("handle/role = %q/%q, want dev/Dev", ev.AgentHandle, ev.RoleName)
 	}
 
 	stored, found, err := learning.NewSkills(db).Get(t.Context(), "dev", "cut-a-release")
@@ -120,7 +138,7 @@ func TestASmallClusterEarnsNoSkillAndNoCall(t *testing.T) {
 		MinToolCalls: 3, ClusterMinSize: 3,
 	})
 
-	out, err := s.ClusterPass(t.Context(), clusterSeat, "dev")
+	out, err := s.ClusterPass(t.Context(), clusterSeat, "dev", clusterAgentID)
 	if err != nil {
 		t.Fatalf("ClusterPass: %v", err)
 	}
@@ -139,7 +157,7 @@ func TestTheConfiguredClusterMinimumIsWhatApplies(t *testing.T) {
 		MinToolCalls: 3, ClusterMinSize: 2,
 	})
 
-	out, err := s.ClusterPass(t.Context(), clusterSeat, "dev")
+	out, err := s.ClusterPass(t.Context(), clusterSeat, "dev", clusterAgentID)
 	if err != nil {
 		t.Fatalf("ClusterPass: %v", err)
 	}
@@ -164,7 +182,7 @@ func TestTheStrongestPatternIsDraftedFirst(t *testing.T) {
 		MinToolCalls: 3, ClusterMinSize: 3,
 	})
 
-	out, err := s.ClusterPass(t.Context(), clusterSeat, "dev")
+	out, err := s.ClusterPass(t.Context(), clusterSeat, "dev", clusterAgentID)
 	if err != nil {
 		t.Fatalf("ClusterPass: %v", err)
 	}
@@ -206,7 +224,7 @@ func TestAnAlreadyLearnedClusterYieldsToTheNextOne(t *testing.T) {
 		MinToolCalls: 3, ClusterMinSize: 3,
 	})
 
-	out, err := s.ClusterPass(t.Context(), clusterSeat, "dev")
+	out, err := s.ClusterPass(t.Context(), clusterSeat, "dev", clusterAgentID)
 	if err != nil {
 		t.Fatalf("ClusterPass: %v", err)
 	}
@@ -245,7 +263,7 @@ func TestTheClusterIgnoresRowsThatAreNotEvidence(t *testing.T) {
 			s, p := clusterer(t, db, goodDraft, learning.SynthesizerOptions{
 				MinToolCalls: 3, ClusterMinSize: 3,
 			})
-			out, err := s.ClusterPass(t.Context(), clusterSeat, "dev")
+			out, err := s.ClusterPass(t.Context(), clusterSeat, "dev", clusterAgentID)
 			if err != nil {
 				t.Fatalf("ClusterPass: %v", err)
 			}
@@ -274,7 +292,7 @@ func TestUnrelatedRunsDoNotPoolIntoOneCluster(t *testing.T) {
 	s, p := clusterer(t, db, goodDraft, learning.SynthesizerOptions{
 		MinToolCalls: 3, ClusterMinSize: 3,
 	})
-	out, err := s.ClusterPass(t.Context(), clusterSeat, "dev")
+	out, err := s.ClusterPass(t.Context(), clusterSeat, "dev", clusterAgentID)
 	if err != nil {
 		t.Fatalf("ClusterPass: %v", err)
 	}
@@ -303,7 +321,7 @@ func TestAFullCatalogueCostsNoClusteringWork(t *testing.T) {
 	s, p := clusterer(t, db, goodDraft, learning.SynthesizerOptions{
 		MinToolCalls: 3, ClusterMinSize: 3, MaxSkillsPerAgent: 2,
 	})
-	out, err := s.ClusterPass(t.Context(), clusterSeat, "dev")
+	out, err := s.ClusterPass(t.Context(), clusterSeat, "dev", clusterAgentID)
 	if err != nil {
 		t.Fatalf("ClusterPass: %v", err)
 	}
@@ -323,7 +341,7 @@ func TestAClusterTheModelDeclinesWritesNothing(t *testing.T) {
 	s, _ := clusterer(t, db, "{}", learning.SynthesizerOptions{
 		MinToolCalls: 3, ClusterMinSize: 3,
 	})
-	out, err := s.ClusterPass(t.Context(), clusterSeat, "dev")
+	out, err := s.ClusterPass(t.Context(), clusterSeat, "dev", clusterAgentID)
 	if err != nil {
 		t.Fatalf("ClusterPass: %v", err)
 	}
@@ -347,7 +365,7 @@ func TestTurnsOutsideTheWindowAreNotClustered(t *testing.T) {
 	s, p := clusterer(t, db, goodDraft, learning.SynthesizerOptions{
 		MinToolCalls: 3, ClusterMinSize: 3, ClusterWindow: 7 * 24 * time.Hour,
 	})
-	out, err := s.ClusterPass(t.Context(), clusterSeat, "dev")
+	out, err := s.ClusterPass(t.Context(), clusterSeat, "dev", clusterAgentID)
 	if err != nil {
 		t.Fatalf("ClusterPass: %v", err)
 	}
@@ -361,7 +379,7 @@ func TestTurnsOutsideTheWindowAreNotClustered(t *testing.T) {
 	wide, wideP := clusterer(t, db, goodDraft, learning.SynthesizerOptions{
 		MinToolCalls: 3, ClusterMinSize: 3, ClusterWindow: 90 * 24 * time.Hour,
 	})
-	out, err = wide.ClusterPass(t.Context(), clusterSeat, "dev")
+	out, err = wide.ClusterPass(t.Context(), clusterSeat, "dev", clusterAgentID)
 	if err != nil {
 		t.Fatalf("ClusterPass: %v", err)
 	}
@@ -378,7 +396,7 @@ func TestAClusterPassWithoutEpisodesIsANoop(t *testing.T) {
 	t.Parallel()
 	db := newStore(t)
 	s := synthesizer(t, db, goodDraft, learning.SynthesizerOptions{})
-	out, err := s.ClusterPass(t.Context(), clusterSeat, "dev")
+	out, err := s.ClusterPass(t.Context(), clusterSeat, "dev", clusterAgentID)
 	if err != nil || len(out) != 0 {
 		t.Fatalf("ClusterPass = %v, %v — want a silent no-op", out, err)
 	}

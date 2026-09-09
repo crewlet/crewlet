@@ -154,7 +154,9 @@ their **own identities** — so MRs/PRs come from the agent, not from you.
 ### Option A: GitLab — gitlab.com or self-hosted
 
 Per-agent identities are API-provisionable end to end, so one CLI run sets up
-the whole fleet. This is the path the bundled Nimbus example uses:
+the whole fleet — the same property that makes Mattermost the easiest chat to
+start on. [GitLab Integration](../integrations/gitlab.md#walkthrough-nimbus-against-local-gitlab)
+walks the bundled Nimbus example onto a local GitLab end to end:
 
 1. **Create the top-level group** (you) — e.g. `gitlab.com/your-group` — or run
    a self-hosted GitLab (any modern GitLab; a local instance ships as the
@@ -327,14 +329,35 @@ the same network.
 
 ## Putting it together
 
-The bundled **Nimbus example** (`examples/nimbus.company.yaml` +
-`examples/nimbus.config.yaml`) is a complete seven-seat reference wired for
-Jira + Confluence + GitLab + Mattermost + E2B sandbox + an OpenAI-compatible
-LLM. Its self-hostable half runs locally:
-`docker compose --profile gitlab --profile mattermost up -d`,
-then `scripts/gitlab-dev-bootstrap.sh` and `scripts/mattermost-dev-bootstrap.sh`,
-then
-`crewlet run -config examples/nimbus.config.yaml -company
-examples/nimbus.company.yaml`. Reading it top to bottom is the fastest way to
-see every choice on this page made concretely — each block carries the
-rationale in comments.
+Two bundled **Nimbus examples** model the same seven-seat company at opposite
+ends of this page. `examples/nimbus.company.yaml` + `examples/nimbus.config.yaml`
+is the **reference**: a pick from every row — Jira, Confluence, GitLab,
+Mattermost, a metered `openai-compatible` key, a sandbox its engineers push
+merge requests from. Read it to see what a full stack looks like written out.
+
+`examples/nimbus-claude-cli.company.yaml` + `examples/nimbus-claude-cli.config.yaml`
+is the **short path**: every pick that costs nothing extra to stand up — chat
+on **Mattermost**, the model a **coding CLI on your own subscription**, and the
+code sandbox on the **engine host** (`run_in: direct`), which reuses that same
+subscription login rather than needing an account of its own. Its three
+engineering seats run that CLI in
+[agent mode](../concepts/subscription-llm-backends.md#agent-mode), so their
+executor *is* the CLI's own agentic loop with a real shell. The rows that need
+somebody else's service are deliberately empty, which is what lets the whole
+thing run from one compose profile and one `crewlet llm login`:
+
+```bash
+docker compose --profile mattermost up -d --wait
+COMPANY=examples/nimbus-claude-cli.company.yaml scripts/mattermost-dev-bootstrap.sh
+crewlet llm login default -from-host \
+    -company examples/nimbus-claude-cli.company.yaml \
+    -config examples/nimbus-claude-cli.config.yaml
+crewlet run -config examples/nimbus-claude-cli.config.yaml \
+            -company examples/nimbus-claude-cli.company.yaml
+```
+
+Reading it top to bottom is the fastest way to see the choices on this page
+made concretely — each block carries the rationale in comments, including the
+ones it did *not* make and what adding them would take. Fill in the other rows
+one at a time from the integration pages linked above; nothing in the example
+has to be undone first.

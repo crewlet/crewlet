@@ -415,6 +415,20 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	})
 	e.publishTurnCompleted(ctx, tel, in.Run.TurnID, r.Spend(), res, err)
 	if err != nil {
+		if res.Acted {
+			// The same decision the dispatcher makes on the other path
+			// (see (*Dispatcher).abandon), taken here in this
+			// subsystem's own vocabulary: the coordinator reads the
+			// sentinel and leaves the claim taken, so the completion is
+			// not redelivered into a conversation whose writes landed.
+			//
+			// A resumed turn is the one most likely to qualify. It
+			// re-enters the executor's suspended loop with the whole
+			// pre-suspend conversation, and the round that called
+			// run_sandbox was never closed — so its writes are in no
+			// ledger and a replay would repeat every one of them.
+			return fmt.Errorf("%w: %w", sandbox.ErrResumeActed, err)
+		}
 		return err
 	}
 	// A resumed turn that suspended AGAIN persists its new conversation the

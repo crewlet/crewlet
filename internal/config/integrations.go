@@ -548,8 +548,9 @@ func (w WorkingStatus) validate(path string) error {
 // Declaring it at all — even as `slack: {}` — turns the transport and
 // per-agent webhook routing on.
 type Slack struct {
-	// TypingStatus defaults to addressed: only when someone is plausibly
-	// waiting.
+	// TypingStatus defaults to always: a Slack turn takes minutes, and its
+	// indicator renders TEXT, so the reader waiting on it learns which
+	// phase is running rather than merely that something is.
 	TypingStatus WorkingStatus `yaml:"typing_status,omitempty" json:"typing_status,omitempty" js:"enum=always|addressed" desc:"When to show the working indicator (default always)."`
 
 	// StatusPhrases replaces the words the indicator shows.
@@ -623,7 +624,9 @@ type Mattermost struct {
 	// without it.
 	Team string `yaml:"team,omitempty" json:"team,omitempty" desc:"Team slug the agent bots belong to."`
 
-	// TypingStatus defaults OFF here, unlike Slack.
+	// TypingStatus defaults to always, the same as Slack — but this is the
+	// backend where that default costs most, so an operator has a real
+	// reason to choose `addressed`.
 	//
 	// Mattermost's indicator has a fixed vocabulary ("is typing…"), so it
 	// conveys only BUSY where Slack's carries the phase, and it must be
@@ -638,7 +641,7 @@ type Mattermost struct {
 	Provisioning *MattermostProvisioning `yaml:"provisioning,omitempty" json:"provisioning,omitempty" desc:"Inputs for the provisioning CLI; ignored by the engine."`
 }
 
-// Status is the indicator mode, applying the off default.
+// Status is the indicator mode, applying the always default.
 func (m *Mattermost) Status() WorkingStatus {
 	if m.TypingStatus == "" {
 		return StatusAlways

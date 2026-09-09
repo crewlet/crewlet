@@ -189,7 +189,7 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 		d.TokenEnv = "unset"
 	}
 
-	if len(p.profile.Usage.Input) > 0 || len(p.profile.Usage.Output) > 0 {
+	if p.profile.ReadsUsage() {
 		d.TokenUsage = "reported by CLI"
 	} else {
 		d.TokenUsage = "estimated (4 characters per token)"
@@ -365,6 +365,16 @@ func (p *Provider) webProbe(ctx context.Context) string {
 	if reportsCurrentClock(comp.Content, time.Now()) {
 		return "ok — fetched " + webProbeURL
 	}
+	// Same split as smokeTest, and for the same reason: an empty answer is
+	// a completion now, so "it said: \"\"" would send an operator to the
+	// egress proxy for a model that never spoke.
+	if strings.TrimSpace(comp.Content) == "" {
+		return fmt.Sprintf(
+			"failed — the %q CLI exited 0 and answered with nothing (%d output tokens "+
+				"billed), so this probe says nothing about web access either way. "+
+				"Point this entry at a stronger model and run the doctor again",
+			p.agent, comp.OutputTokens)
+	}
 	return fmt.Sprintf(
 		"failed — the %q CLI could not fetch %s with its own web tool (it said: %q). "+
 			"Web is meant to stay on for every subscription seat: check that no vendor "+
@@ -454,6 +464,21 @@ func (p *Provider) smokeTest(ctx context.Context) string {
 		return "failed — " + err.Error()
 	}
 	if len(comp.ToolCalls) == 0 {
+		// TWO DIFFERENT FAILURES, and `It said: ""` describes only one of
+		// them. A CLI that answered with prose misread the envelope
+		// contract; a CLI that answered with NOTHING spent its output on
+		// hidden reasoning and needs a different model, not a different
+		// prompt. The provider hands both back as a completion now — an
+		// empty answer is a value, not an error — so this probe is the
+		// only command that names which one an operator has.
+		if strings.TrimSpace(comp.Content) == "" {
+			return fmt.Sprintf(
+				"failed — the CLI exited 0 and answered with nothing at all (%d output "+
+					"tokens billed), so it spent its whole answer on hidden reasoning. "+
+					"Seats on this provider will burn a corrective round and then "+
+					"produce nothing: point this entry at a stronger model",
+				comp.OutputTokens)
+		}
 		return fmt.Sprintf(
 			"failed — the CLI answered but produced no parseable tool call, so seats on "+
 				"this provider will burn a corrective round every turn. It said: %q",

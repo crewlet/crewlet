@@ -1,0 +1,1161 @@
+# yaml-language-server: $schema=../schema/company.schema.json
+# Nimbus — Cloud-native infrastructure control plane + open AI framework
+#
+# A CHAT-ONLY company: Mattermost is the single integration, and a coding
+# CLI you already subscribe to is the single LLM.  Nothing else has to
+# exist — no Atlassian site, no code host, no metered API key, no public
+# URL.  Two commands stand the whole thing up:
+#
+#     docker compose --profile mattermost up -d --wait
+#     COMPANY=examples/nimbus.company.yaml scripts/mattermost-dev-bootstrap.sh
+#
+# and one authenticates the model:
+#
+#     crewlet llm login default -from-host   # or -capture-token
+#     crewlet llm doctor default
+#
+# Then run the pair:
+#
+#     export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
+#     crewlet run -config examples/nimbus.config.yaml \
+#                 -company examples/nimbus.company.yaml
+#
+# See docs/integrations/mattermost.md § First run, end to end for the
+# walkthrough, and docs/concepts/subscription-llm-backends.md for the
+# login options.
+#
+# GROWING PAST CHAT.  Every other integration is additive and documented
+# on its own page — a work-item tracker (docs/integrations/jira.md), a
+# knowledge base (docs/integrations/confluence.md), a code host
+# (docs/integrations/gitlab.md, docs/integrations/github.md) and the code
+# sandbox that needs one (docs/concepts/code-sandbox.md).  Each page shows
+# the blocks to add here.  Nothing in this file has to be undone first.
+name: "Nimbus"
+mission: "Turn any hardware into cloud-native infrastructure — and give AI teams one open framework to build on top of it"
+vision: >
+  Phase 1 (shipped): a cloud-native control plane that turns bare metal, on-prem, cloud, and edge
+  hardware into seamless Kubernetes clusters ready to serve AI/ML pipelines and applications at
+  enterprise scale.
+  Phase 2 (in progress): an open, Python-first framework — analogous in spirit to Ray — that runs
+  on Nimbus clusters and unifies how teams develop, schedule, and serve distributed AI workloads
+  (training, fine-tuning, batch inference, online serving). The framework owns the developer surface
+  (SDK, CLI, examples, docs); the control plane (nimbuscore) owns the cluster surface (provisioning,
+  multi-region, GPU scheduling primitives). The two are designed together.
+
+# Policies reach every seat's prompt.  These are written for a company
+# whose ONLY shared surface is chat: there is no tracker to file against
+# and no wiki to write to, so the durable record is the channel and each
+# seat's own memory.
+policies:
+  - "Communicate decisions in writing, in the team channel — a decision only you can recall is a decision the company does not have"
+  - "Capture personal-context facts you need to recall later (what you agreed with whom, stakeholder preferences, ongoing operational state) via `reflect_and_persist` — pass `ttl_days` for facts that age out naturally"
+  - "Post team-relevant conclusions to the channel as well as remembering them: `reflect_and_persist` writes are personal-only and no colleague can read them"
+  - "Before starting work somebody else may already be doing, say so in the channel and check — this company has no shared backlog to look at"
+  - "Reply in the thread you were asked in; open a new thread when you start a new topic, so one conversation stays one conversation"
+  - "The Phase-2 AI framework is the AI Systems Engineer's; the control plane (nimbuscore, nimbusk0s) is the SWE's; the console and website are the Frontend SWE's — coordinate across those lines in the channel rather than assuming"
+
+# Company-wide token budget — a single hard cap on total LLM tokens across
+# EVERY agent (CEO, CTO, PM, DevRel, the three engineers, their workers,
+# and the learning/aux passes).  The engine charges this org budget on
+# every LLM completion BEFORE the per-agent budget; the first completion
+# that would push the running total past the cap stops that turn
+# immediately and emits a ``BudgetExhausted`` event (budget_type="org").
+# 0 (or omitting the field) means unlimited.  No per-agent ``token_budget``
+# is set below, so this 10M ceiling is the only budget in force and the
+# whole company shares it.
+#
+# IT STILL APPLIES ON A SUBSCRIPTION.  A cli-agent provider is not metered
+# by Crewlet, but the CLI reports its usage and the engine counts it — so
+# this cap is what stops a scheduling loop burning a whole plan window
+# overnight.  10M is roughly a week of the schedules below plus ordinary
+# chat traffic for seven seats.
+#
+# NOTE: usage is durable — the counter lives in the fleet's coordination
+# store, so it survives engine restarts and is one number for the whole
+# company however many nodes run it.  Reset it deliberately, against a
+# running node: ``crewlet budgets reset``.  See
+# docs/guides/deployment.md § Token Budgets.
+token_budget: 10000000                          # 10M tokens, org-wide (all agents combined)
+
+providers:
+  llm:
+    # ── The one model: a coding CLI on YOUR subscription ──────────────
+    #
+    # `cli-agent` drives a locally installed coding CLI as a headless text
+    # model, on the flat-rate plan you already pay for, so this company
+    # needs no metered API key at all.  Crewlet never sees a password: the
+    # CLI holds the vendor's own OAuth login and `crewlet llm login` only
+    # decides WHERE that credential lands.
+    #
+    # PREREQUISITE: the `claude` binary on the machine running
+    # `crewlet run`, and one of these, once:
+    #
+    #   crewlet llm login default -from-host  -company examples/nimbus.company.yaml \
+    #                                         -config  examples/nimbus.config.yaml
+    #
+    # `-from-host` COPIES the login this machine already has into Crewlet's
+    # own directory; your own ~/.claude is never read at runtime, because
+    # each seat's child process gets its own HOME.  Plain
+    # `crewlet llm login default` instead brokers `claude auth login`
+    # attached to your terminal, for a machine with no login yet.  It
+    # returns you to your shell once you have signed in — if a login
+    # command ever leaves you sitting in an interactive session, it did
+    # not run the vendor's auth subcommand.
+    #
+    # `-capture-token` is the better route where you can take it — it mints
+    # a headless CLAUDE_CODE_OAUTH_TOKEN, so there is no credential file to
+    # sync and no refresh token shared with your personal login — but it
+    # writes into the ENCRYPTED SECRET STORE, which needs the Tier A
+    # keyring: run `crewlet secrets keygen -key-id 2026-01` and uncomment
+    # the `secrets:` block in examples/nimbus.config.yaml first.
+    #
+    # Then, before the first turn:
+    #
+    #   crewlet llm doctor default -company examples/nimbus.company.yaml \
+    #                              -config  examples/nimbus.config.yaml
+    #
+    # `doctor` is the command that matters here.  A cli-agent entry can be
+    # configured perfectly and still not work — a missing binary, a
+    # profile whose flags drifted from the installed version, an expired
+    # login, or the one nothing else catches: a model that answers PROSE
+    # instead of the tool-call envelope, which costs every seat a
+    # corrective round for ever.  Only a real completion with a real tool
+    # proves that, so `doctor` runs one.
+    #
+    # See docs/concepts/subscription-llm-backends.md.
+    default:
+      type: cli-agent
+      model: haiku                  # whatever `claude --model` accepts:
+                                    #   haiku | sonnet | opus, or a full
+                                    #   model id.  Haiku is the cheapest
+                                    #   against a plan window and the
+                                    #   fastest to launch; it is also the
+                                    #   weakest at the tool-call envelope,
+                                    #   which is exactly what
+                                    #   `crewlet llm doctor` measures.
+      cli:
+        agent: claude-code          # or codex | gemini-cli | opencode | …
+        mode: text                  # the default: a model behind the
+                                    #   engine's own tool loop.  `agent`
+                                    #   hands the executor to the CLI's own
+                                    #   agentic loop and needs
+                                    #   providers.sandbox, which this
+                                    #   chat-only company does not
+                                    #   configure.
+        # ONE LOGIN FOR BOTH ENTRIES.  state_dir defaults to a directory
+        # derived PER PROVIDER KEY, so `default` and `coding` below would
+        # otherwise land on ~/.crewlet/llm-cli/default and .../coding —
+        # two credential directories, two `crewlet llm login` runs, two
+        # sets of per-seat homes.  Naming the same path on both is how
+        # entries say they share, and it is deliberately explicit: two
+        # unrelated providers must never silently collide and prune each
+        # other's state.  Entries that share one must also drive the SAME
+        # CLI, which `crewlet validate` checks.
+        #
+        # A LITERAL PATH — unlike every credential field here it is not
+        # ${VAR}-expanded, because it names where the engine keeps files
+        # rather than a secret (the same reason the store path is a Tier A
+        # field).  So it lives under ./nimbus-data with everything else
+        # this example writes, which does mean `rm -rf nimbus-data` logs
+        # the CLI out; `crewlet llm login default -from-host` puts it back
+        # with no browser round-trip.  Point it at a persistent volume
+        # when the engine runs in an ephemeral container.
+        state_dir: "./nimbus-data/llm-cli/claude"
+        timeout_seconds: 300        # wall clock for ONE invocation. Not the
+                                    #   HTTP timeout above it: this covers a
+                                    #   Node runtime starting (seconds before
+                                    #   the first byte), the model call, and
+                                    #   the CLI's own internal retries.
+        max_concurrent: 4           # CLI processes at once, ACROSS the whole
+                                    #   company.  Written out rather than
+                                    #   left to the identical default,
+                                    #   because on this backend it is the
+                                    #   knob that shapes the deployment:
+                                    #   each process is a full Node runtime
+                                    #   at ~200-400 MB resident (4 keeps peak
+                                    #   near 1.5 GB), and a subscription plan
+                                    #   throttles concurrency far below what
+                                    #   an API key allows — so a higher
+                                    #   number mostly buys rate-limit errors.
+                                    #   Note it is a SEPARATE ceiling from
+                                    #   Tier A's node.max_concurrent (32
+                                    #   turns): turns past this queue for a
+                                    #   CLI slot, and the learning passes
+                                    #   below queue for the same four.
+        auth:
+          mode: subscription        # subscription (default) | api-key | inherit-env.
+                                    #   Deliberately not inherit-env: a
+                                    #   backend that silently picked up a
+                                    #   stray ANTHROPIC_API_KEY would bill
+                                    #   the metered account while you
+                                    #   believed you were on a flat rate.
+
+    # ── The engineers' executor: the CLI's OWN agentic loop ──────────
+    #
+    # Same CLI, same login, same model — one field different, and it
+    # changes who drives the turn.  In `mode: text` above, Crewlet runs
+    # the loop and the CLI is a model behind it, with its shell and editor
+    # denied.  In `mode: agent` the CLI runs the seat's EXECUTOR itself:
+    # its own agentic loop, its own shell, its own editor, in a box from
+    # the sandbox catalogue below (`run_in: direct` — this machine).  The
+    # seat's own tools reach it back over the MCP bridge, so a bridged
+    # call is the same frame a native loop would call — the same guards,
+    # the same recording, the same `submit_work` ending the turn.
+    #
+    # ONLY THE EXECUTOR BRANCHES.  The reviewer, the delegated workers,
+    # the summariser and the round-cap judge are all still text calls on
+    # this same entry, which is what keeps the reviewer a genuinely
+    # separate judgement of what the run did.
+    #
+    # An agent-mode run is DETACHED: the executor phase suspends, its
+    # state goes on a durable row, and the same turn resumes when the run
+    # finishes — possibly in another process, much later.  That is the
+    # trade for the shell, and it is why only the three engineering seats
+    # below point at this entry: a seat answering a person in chat wants
+    # to answer now, not detach.
+    #
+    # TWO THINGS IT NEEDS, both already true here:
+    #   - providers.sandbox, below, configuring the cell `run_in` names.
+    #   - CREWLET_MCP_BRIDGE_URL in the engine's environment, a URL a box
+    #     can dial — `http://127.0.0.1:8000` for a `direct` box on this
+    #     machine, matching api.port in the Tier A file.  Without it agent
+    #     mode is REFUSED at launch rather than started: a coding agent
+    #     with none of the seat's tools cannot answer anybody, cannot
+    #     reach a colleague and cannot submit its work.
+    #     In a fleet that URL must address the NODE, never a load
+    #     balancer — a session is a live tool surface in one process.
+    coding:
+      type: cli-agent
+      model: haiku                  # the same model as `default`. Haiku is
+                                    #   the weakest of the three at a long
+                                    #   agentic coding loop, which is what
+                                    #   default_max_turns below bounds —
+                                    #   swap this one entry to `sonnet` if
+                                    #   your runs thrash, and the login and
+                                    #   every other seat stay as they are.
+      cli:
+        agent: claude-code
+        mode: agent                 # text (default) | agent
+        run_in: direct              # a cell of providers.sandbox below.
+                                    #   On the ENTRY rather than the seat,
+                                    #   because it is a property of this
+                                    #   runtime: the subscription login
+                                    #   lives on the engine host, so a
+                                    #   local cell reaches it directly and
+                                    #   a remote one would need a headless
+                                    #   token instead.
+        state_dir: "./nimbus-data/llm-cli/claude"   # SAME as `default`: one login
+        timeout_seconds: 300
+        max_concurrent: 4
+        auth:
+          mode: subscription
+
+    # A METERED KEY AS A BACKSTOP.  A spent plan window arrives as prose on
+    # a successful exit ("Usage limit reached. Resets at 4pm."); the engine
+    # matches that wording and reports RATE_LIMIT, which the ordinary
+    # fallback chain treats as retryable.  So `llm: [default, metered]` on
+    # a role carries it onto a key for the rest of the window and back
+    # again afterwards, with no operator in the loop:
+    #
+    # metered:
+    #   type: anthropic
+    #   model: claude-haiku-4-5-20251001
+    #   api_keys: ["${ANTHROPIC_API_KEY}"]
+
+  # ── Embeddings: OFF, deliberately ───────────────────────────────────
+  #
+  # `providers.embeddings` is what gives the learning subsystem VECTOR
+  # recall — similarity search over each seat's private diary and its past
+  # turns.  There is no embeddings backend that runs on a coding-CLI
+  # subscription, so configuring one here would reintroduce the metered
+  # API key this whole example exists to avoid.
+  #
+  # Learning still runs without it (see `learning:` below): rows are
+  # written exactly as before and recall falls back to RECENCY, which is
+  # honest but blunter — a seat remembers what it did lately rather than
+  # what resembles the question it was just asked.
+  #
+  # Turn it on the moment you have an OpenAI-compatible key; nothing else
+  # changes, and rows written while it was off simply have no vector.
+  #
+  # embeddings:
+  #   type: openai
+  #   model: text-embedding-3-small
+  #   api_key: "${OPENAI_API_KEY}"
+  #   dimensions: 1536
+
+  # ── The code sandbox: the engine host, `direct` ─────────────────────
+  #
+  # A sandbox is a place for an agent to RUN CODE, and it is worth having
+  # with or without a code host.  Here it is where the three engineering
+  # seats' EXECUTORS run: `providers.llm.coding` above is agent mode, so
+  # their whole Execute phase is the coding CLI's own agentic loop, with a
+  # real shell, a real editor and a real working directory, in a box from
+  # this catalogue.  With no code host wired up, what comes back is the
+  # work itself — a prototype, a benchmark, an answer that needed running
+  # rather than reasoning — reported into the turn and then into chat.
+  # Add a code host later and the same runs start opening merge requests,
+  # with the git-auth recipe from docs/integrations/gitlab.md as the only
+  # addition.
+  #
+  # Such a run is DETACHED: the executor phase suspends, its state goes on
+  # a durable row, and the SAME turn resumes when the run finishes —
+  # minutes later, possibly in another process after a restart.  Nothing
+  # parks a goroutine on a running job.  That is the trade for the shell,
+  # and it is why the other four seats stay in text mode: somebody waiting
+  # in a chat channel wants an answer now, not a detached run.
+  #
+  # NO EXTRA CREDENTIAL.  `default_coding_agent: claude-code` is the same
+  # CLI as the LLM above, and on a LOCAL cell the backend seeds that
+  # provider's credential files into the box and writes the refreshed one
+  # back afterwards — so the coding agent runs on the same subscription
+  # `crewlet llm login` already established.  (That seeding is exactly why
+  # a remote `e2b` cell would NOT work here: the credential files carry a
+  # refresh token whose rotation is fleet state and deliberately never
+  # leave the engine host, so a remote box needs a headless token —
+  # `crewlet llm login default -capture-token` — instead.  The engine
+  # refuses such a run up front rather than provisioning a box that
+  # cannot authenticate.)
+  sandbox:
+    # THE PROVIDER BLOCK IS A CATALOGUE: it says which boxes EXIST, and
+    # each seat picks one with `role.sandbox.run_in`.  This company
+    # configures the ENGINE HOST only — each coding job runs as a process
+    # tree on the machine running `crewlet run`, with no remote account,
+    # no API key and nothing to provision.
+    local:
+      # The local backend serves two cells, chosen per seat:
+      #
+      #   run_in: direct     state isolation only — each box gets its own
+      #                      HOME, XDG directories and an allowlisted
+      #                      environment (never the engine's own tokens),
+      #                      and file steps writing outside the box are
+      #                      refused — but the coding agent runs as the
+      #                      engine's user with the engine's filesystem
+      #                      access.  The right trade for your own
+      #                      machine, the wrong one for a shared host.
+      #
+      #   run_in: container  real host isolation.  Needs an image carrying
+      #                      the coding-agent CLI, and is where a local
+      #                      box is SIZED (run_args takes --cpus/--memory,
+      #                      mirroring how a remote box is sized by its
+      #                      template):
+      #
+      #                        image: "your-registry/coding-agent:latest"
+      #                        runtime: auto      # auto | docker | podman
+      #                        run_args: ["--cpus", "2", "--memory", "4g"]
+      state_dir: "./nimbus-data/sandboxes"       # box directories; removed at teardown,
+                                                 #   and orphans from a crashed engine are
+                                                 #   reaped on the next create
+    # WHERE A SEAT THAT NAMES NONE RUNS.  Required whenever the catalogue
+    # offers more than one cell — and `local:` alone is two, because it
+    # serves `direct` and `container`.  There is deliberately no implicit
+    # answer: `direct` runs the coding agent as the engine's user, which
+    # is a trade to make deliberately and never one to inherit by
+    # accident.
+    default_run_in: direct                       # direct | container | e2b
+    # THERE IS NO `default_coding_agent` HERE, deliberately.  It names the
+    # CLI a `run_sandbox` launch runs, and every sandbox-enabled seat in
+    # this company is an AGENT-MODE seat whose CLI comes from its own
+    # providers.llm entry instead — so a value here would be read by
+    # nothing.  Add one the day a seat runs code the other way (a gate
+    # without `run_in: self`), and `crewlet validate` will not remind you:
+    # it is optional, and its absence is only visible at that seat's
+    # first coding run.
+    default_timeout_seconds: 1200                # box TTL / keepalive window — NOT a run cap: the waiter refreshes it every tick so a job runs as long as it needs; this is just the orphan-reclaim grace if the engine stops heart-beating
+    default_pause_ttl_seconds: 1800              # a sandbox blocked on a person's answer is PAUSED (exact resume if they reply soon); on a local cell that costs disk rather than a provider's snapshot bill, but it is still held, so the engine reaps it after this long and re-seeds. 0 = never pause, always re-seed; omit the key entirely for this 1800s default.
+    # THE ONLY ENGINE-SIDE BOUND ON A RUNAWAY CODING AGENT.  A coding job
+    # is deliberately never force-stopped on a clock (see
+    # default_timeout_seconds), so without this nothing stops one that is
+    # thrashing rather than working.  The shipped default is 0 —
+    # uncapped — which is right for a company whose task sizes an operator
+    # has measured, and wrong for this one: these runs are unattended, on
+    # your own machine, spending your own plan window.  60 rounds is a
+    # genuine multi-file task at 20-60 seconds a round, so a run that has
+    # stopped making progress is caught inside an hour rather than at the
+    # end of the window.  Raise it the day a real task hits it.
+    #
+    # IT BOUNDS THE AGENT-MODE EXECUTOR RUNS TOO — those are the same
+    # detached-run machinery, so this is the cap on a whole executor phase
+    # for the three engineering seats, not just on delegated code work.
+    # It matters more on `haiku` than it would on a stronger model: the
+    # weaker the model, the likelier a long agentic loop is going in
+    # circles rather than converging.
+    default_max_turns: 60
+    # NO ENGINE-WIDE `setup:` STEPS, and that is a `direct`-specific
+    # decision rather than an omission.  Setup commands run in a shell —
+    # and under `direct` that shell is YOUR machine, as your user, so the
+    # `apt-get install` a step would use to provision a Go or Node
+    # toolchain for a remote box would install it on the engine host
+    # instead.  A `direct` box inherits whatever toolchains the machine
+    # already has, which is the point of choosing it.  Provision
+    # deliberately with `run_in: container` and an image, or with `e2b`.
+    # (File steps are not merely discouraged here: a step writing a system
+    # path is REFUSED under `direct`, naming the mode.)
+
+# Turn engine — executor/reviewer settings.  Includes the round-cap
+# extension judge: when the executor exhausts its base round cap without
+# finishing, a cheap LLM judge inspects the tool log and decides whether
+# to grant more rounds (the agent is making progress) or fall through to
+# the existing rescue path (the agent is thrashing).  Extensions chain up
+# to the per-phase ceiling.  See
+# docs/concepts/turn-engine.md#round-cap-extension-judge.
+#
+# THE ROUND CAPS ARE HALVED FROM THE ENGINE DEFAULTS (24 base / 48
+# ceiling), for two reasons that both belong to this company rather than
+# to the engine:
+#
+#   - The tool surface is ONE MCP server.  The 24 default is sized for a
+#     seat that has to discover its way around four servers and 50-150
+#     tools; a chat turn here is discover, activate, post, submit — well
+#     inside 12.
+#   - On a cli-agent backend EVERY ROUND IS A PROCESS LAUNCH.  A Node
+#     runtime costs seconds before the first byte, so 24 rounds is minutes
+#     of pure launch overhead on a turn that needed six.
+#
+# The ceiling stays 2x the base, which is what an extension is for: a
+# phase that is genuinely progressing gets a second budget, and one that
+# is thrashing hits a wall visible in the numbers.  Two grants of 6 reach
+# it exactly.  Raise all three back towards the defaults the day you add a
+# tracker, a wiki and a code host.
+turn_engine:
+  extension_enabled: true                 # round-cap extension judge
+  max_tool_rounds: 12                     # base executor rounds
+  execute_max_tool_rounds_ceiling: 24     # hard ceiling with extensions
+  extension_round_step: 6                 # max rounds the judge may grant per call
+  # llm_judge per role is not set — the judge falls back to the role's
+  # main ``llm`` (here: the org-wide ``default`` provider).
+  # Delegation bounds are left at their defaults here; the two templates
+  # below are what a seat actually reaches for.
+
+# Worker templates — the reusable delegates a seat's executor hands work
+# to with ``delegate``.  A template holds the half of a worker that does
+# not change per task (persona, tools, model, answer shape) so the seat
+# writes only the task itself.  NAMING A TOOL HERE GRANTS NOTHING: every
+# name still passes the worker filter — the caller's own live tools,
+# minus the engine-control denylist, minus anything that writes to a
+# shared surface.  See docs/concepts/turn-engine.md#workers.
+#
+# Both templates below name only BUILTIN tools, which every seat has
+# whatever integrations exist.  A worker pointed at a wiki or a tracker
+# would silently arrive with no tools at all in this company — the filter
+# drops a name the parent does not hold.
+workers:
+  recaller:
+    description: >-
+      digs through this seat's own past turns and personal memory and
+      reports what was actually decided before, with when
+    system_prompt: |
+      You search this agent's own history for what it already knows about
+      a narrow question.
+
+      Report only what you can point at, and say when it happened — a
+      decision from three months ago and one from yesterday are not
+      interchangeable. Where the history does not answer the question,
+      say so plainly rather than filling the gap: the agent that
+      delegated this cannot tell your inference from what it actually
+      did, and will act on both.
+    tools: [query_episodes, refresh_memory, lookup_colleague]
+    max_turns: 10
+    output:
+      type: object
+      properties:
+        findings:
+          type: string
+          description: What this agent's own history says about the question.
+        when:
+          type: string
+          description: Roughly when each thing you found happened.
+        gaps:
+          type: string
+          description: What the question asked that the history does not answer.
+      required: [findings]
+
+  synthesist:
+    description: >-
+      reconciles several workers' findings into one recommendation with
+      its open questions
+    system_prompt: |
+      You are given other workers' answers as your input. Reconcile them
+      into one recommendation.
+
+      Where they disagree, say so and say which you believe and why —
+      the agent reading you has to act on ONE answer, and averaging two
+      contradictory ones produces a third that neither worker supports.
+    # No ``tools:`` at all — a synthesist reasons over what it was given.
+    # A worker with no tools cannot go looking for anything, and that
+    # bound is worth having on purpose.
+    max_turns: 4
+    output:
+      type: object
+      properties:
+        recommendation:
+          type: string
+          description: The single answer the parent should act on.
+        disagreements:
+          type: string
+          description: Where the inputs conflicted, and which you believed.
+        open_questions:
+          type: string
+          description: What nobody answered and somebody has to.
+      required: [recommendation]
+
+# Agent-learning subsystem — episodic memory, reflection, skill
+# synthesis/refinement, counterparty profiling.  This is the company's
+# ONLY durable shared-context mechanism now that there is no wiki, so it
+# is worth more here than in the fully-wired org, not less.
+#
+# Two knobs are off, and both are off because of this deployment rather
+# than because the feature is unwanted:
+#
+#   - ``skill_promotion`` drafts a skill page into a unit's knowledge-base
+#     container so siblings can read it.  There is no knowledge base, so
+#     it would find nowhere to write.  The engine disables it on its own
+#     in that case; saying so here is the difference between a knob that
+#     is off and a knob that silently does nothing.
+#   - ``skill_synthesis.scheduler_enabled`` is the BACKGROUND clustering
+#     pass that looks for cross-turn patterns.  Every one of its calls
+#     takes one of the four CLI process slots above, competing with live
+#     seats answering people in chat.  Single-turn synthesis (still on)
+#     already covers the common case; turn the scheduler back on when the
+#     auxiliary phase runs on a metered key rather than a subprocess.
+#
+# Recall is RECENCY-ONLY while providers.embeddings is unset — see there.
+# See docs/concepts/agent-learning.md.
+learning:
+  enabled: true
+  reflect:
+    enabled: true                          # PersistDecider runs after every terminal turn
+    summarize_episodes: true               # cheap-model summary of query_episodes hits
+  counterparty:
+    enabled: true                          # observe + auto-inject counterparty traits
+  skill_synthesis:
+    enabled: true                          # single-turn synthesis on >=5 tool calls
+    scheduler_enabled: false               # see above — background pass competes for CLI slots
+  skill_refinement:
+    enabled: true                          # observed-in-practice / counter-example notes
+  skill_promotion:
+    enabled: false                         # see above — no knowledge base to draft into
+  personal_memory:
+    max_refreshes_per_turn: 3              # cap on distinct context_hint values per turn
+  episode_lifecycle:
+    # Drains the episodes table on a write-triggered, demand-proportional
+    # cadence: drops non-terminal noise + skill-consolidated rows past
+    # grace, LLM-compacts clusters of similar routine turns into
+    # kind='compacted' aggregate summaries.  See agent-learning.md.
+    max_raw_episodes_per_agent: 500        # threshold that fires CompactionRequested
+    non_terminal_max_age_days: 14          # drop self_iterate past this
+    consolidated_grace_days: 30            # drop skill-consolidated raw rows past this
+    compaction_min_age_days: 30            # only compact raw rows older than this
+    compaction_min_cluster_size: 3         # singletons / pairs left raw
+    compacted_max_age_days: 0              # 0 = keep compacted summaries forever
+
+# Scheduler — role/unit-scoped recurring work (cron analogue).  Auto-enabled
+# because the org below declares ``schedules:`` and a database is configured.
+#
+# SCHEDULES ARE THE ONLY WORK THIS COMPANY GENERATES BY ITSELF.  With no
+# tracker and no code host there is no webhook to wake a seat, so
+# everything that is not somebody typing in a channel arrives from here.
+# See docs/concepts/scheduling.md.
+scheduling:
+  enabled: true
+  tick_seconds: 10
+  default_timezone: "UTC"                  # schedules without their own ``timezone`` use this
+  jitter_seconds: 30                       # spread schedules that share a popular cron minute.
+                                           #   It earns its keep here: the three engineers'
+                                           #   standup fires on one minute and there are only
+                                           #   four CLI process slots to go round.
+
+# ── The one integration ───────────────────────────────────────────────
+#
+# Mattermost, and nothing else.  This is the whole ``integrations`` block:
+# no tracker, no wiki, no code host, so there is no webhook secret to
+# mint, no admin account to create by hand, and nothing that has to reach
+# the engine from outside.
+#
+# Enabling this turns on BOTH directions: the outbound transport, and the
+# inbound websocket fleet that holds one connection per agent seat.  That
+# is the structural difference from every other integration — Mattermost
+# has no usable inbound webhook, so nothing has to reach the engine and
+# this company runs behind NAT with no tunnel and no public URL.
+#
+# Per-agent bot tokens live on ``role.integrations.mattermost`` below; the
+# Mattermost MCP *tool* server is the ``mattermost`` entry under
+# ``mcp_servers``.  The bot accounts and every ${MATTERMOST_TOKEN_*}
+# secret referenced below are created automatically, with no OAuth click
+# anywhere:
+#
+#   scripts/mattermost-dev-bootstrap.sh          # server, admin, team
+#   crewlet mattermost provision examples/nimbus.company.yaml
+#   crewlet mattermost doctor examples/nimbus.company.yaml
+#
+# See docs/integrations/mattermost.md.
+#
+# ``typing_status`` drives the working indicator an agent shows while it
+# reasons about a message, cleared when it replies or decides to stay
+# silent.  ``addressed`` shows it only when someone is actually waiting
+# on THAT agent — a DM, a direct @mention, or a thread it already
+# follows — which is what keeps a shared channel from lighting up one
+# indicator per bot on every message.  ``always`` (the default) covers
+# every Mattermost-triggered turn.  There is deliberately no ``off``: a
+# reader who sees nothing cannot tell an agent working from an agent that
+# is dead, so an operator who finds it noisy wants ``addressed``.  Some
+# indicator matters more here than on the full-stack config: a
+# subscription CLI is slower to first token than an API call, so the
+# indicator is what tells a person the seat heard them.
+#
+# There is deliberately no ``status_phrases`` here, unlike the Slack block
+# this replaced: Mattermost renders a fixed client-side "is typing…" and
+# has no API for the text, so any wording the engine supplied would never
+# be shown.  The setting exists only under ``integrations.slack``.
+integrations:
+  mattermost:
+    enabled: true
+    url: "${MATTERMOST_URL}"       # e.g. http://localhost:8065 — the bootstrap writes it
+    team: nimbus
+    typing_status: addressed
+    # Read ONLY by ``crewlet mattermost provision``; the engine ignores it.
+    provisioning:
+      username_prefix: ""          # handles are already agent-*, so a prefix would double it
+      channels: [town-square, engineering, product]
+      display_name_suffix: " (AI)"
+
+# Knowledge read scope is not configured, and there is no knowledge
+# backend to scope: ``knowledge.confluence_spaces`` selects spaces of a
+# wiki this company does not have.  Every seat's ``## Relevant knowledge``
+# prefetch is therefore empty and ``search_knowledge`` is not registered
+# at all — a seat's own diary and its past turns are what it recalls
+# from.  Add ``integrations.confluence`` and this block together; the
+# pages that company would publish are in examples/nimbus-docs/.  See
+# docs/concepts/knowledge-system.md.
+
+# All tool MCP servers live here.  There is exactly ONE: without it the
+# agents receive messages, reason about a reply, and then have no tool to
+# send it with — the failure mode where the logs show a complete turn and
+# the channel stays quiet.
+mcp_servers:
+  - name: mattermost                       # per-agent token from role.mcp_env.mattermost
+    # ``shared: false`` is the identity boundary: the engine spawns one
+    # stdio server PER ROLE with that role's own MATTERMOST_TOKEN, so a
+    # post lands as that agent.  One shared server would hand every seat
+    # whichever bot started first.
+    #
+    # Pinned to an exact version, like every other dependency surface in
+    # this repo: a floating tag makes a working run a claim about a build
+    # nobody can name afterwards.
+    shared: false
+    command: uvx
+    args: ["mcp-server-mattermost==0.5.1"]
+    tool_prefix: "mattermost_"
+    env:
+      MATTERMOST_URL: "${MATTERMOST_URL}"
+
+# Root-level seats — above all units.  The founder is a HUMAN seat at
+# the top of the chart: agents know who she is (identity prompts say
+# "Reports to: Jane Founder (human)" for the CEO), the Agent CEO
+# escalates to her with an @-mention in chat, and her activity is
+# attributed to her by name in agent prompts.  She manages only the top
+# agent — lead inheritance handles the rest of the tree.  The ``contact``
+# id is how agents mention and reach her; the engine never messages her
+# as itself.
+# See docs/concepts/humans-in-the-org.md § The founder seat.
+roles:
+  - name: Jane Founder
+    kind: human
+    goal: "Own Nimbus's direction and make the final call on what ships"
+    backstory: "Founder of Nimbus."
+    responsibilities:
+      - "Final approval on strategy, roadmap trade-offs, and high-impact bets"
+      - "Unblock anything the Agent CEO escalates"
+    manages: ["Agent CEO"]
+    contact:
+      # Mattermost identifies people by username, not an opaque ID — this
+      # is the account you sign in as.  `founder` is what
+      # scripts/mattermost-dev-bootstrap.sh creates.  It is the only
+      # contact identity this company can use: the others
+      # (atlassian_account_id, gitlab_username, github_login) name
+      # surfaces it does not connect.
+      mattermost_user_id: founder
+
+# Flexible org — units can nest to any depth.
+# Each unit has a type (department, team, squad, pod, etc.) and can
+# contain roles directly and/or child units.
+units:
+  - name: Leadership
+    type: department
+    lead: Agent CEO
+    channel: town-square                   # inherited by children that set none
+    children:
+      - name: Executives
+        type: team
+        lead: Agent CEO
+        # ``channel`` is the unit's home on the company's chat surface and
+        # the one thing that reaches a seat's identity prompt ("Team
+        # channel: town-square").  It is inherited from Leadership above,
+        # so it is not repeated here.  In the fully-wired company this is
+        # also where a unit's tracker project and wiki space would go, as
+        # ``integrations.jira`` / ``integrations.confluence``.
+        roles:
+          - name: Agent CEO
+            goal: "Define Nimbus's product vision and strategic direction, prioritize high-impact initiatives across product and engineering, make final calls on roadmap trade-offs, and keep the team aligned on building an open, composable infrastructure control plane that wins in the AI/ML and enterprise market"
+            backstory: >
+              Founder-minded CEO with deep roots in cloud infrastructure and platform engineering.
+              Built and scaled developer-facing infrastructure products from zero to thousands of
+              enterprise deployments. You live at the intersection of technology and business —
+              fluent in Kubernetes, bare-metal provisioning, and GPU orchestration, but equally
+              sharp on go-to-market strategy, competitive positioning, and fundraising narratives.
+              You understand that Nimbus competes against the incumbent enterprise Kubernetes
+              management platforms and hyperscaler-native stacks — and you know exactly where
+              Nimbus's open, composable approach creates defensible differentiation. You lead by
+              setting clear priorities, removing blockers across teams, and making fast decisions
+              with incomplete information when necessary. You trust your CTO on architecture and
+              your PM on prioritization, but you hold final authority on what ships and when.
+              You communicate through writing, and you never let strategic context stay only in
+              your head.
+            manages: ["Agent CTO", "Agent PM"]
+            responsibilities:
+              - "Set and communicate Nimbus's product vision and quarterly OKRs in the leadership channel"
+              - "Prioritize initiatives across product and engineering based on strategic impact, customer demand, and competitive pressure"
+              - "Make final go/no-go decisions on features, partnerships, and architectural bets — and say so plainly, in writing"
+              - "Review and respond to proposals the PM and CTO bring you, rather than waiting to be chased"
+              - "Unblock cross-team dependencies and resolve escalated disagreements between CTO and PM"
+              - "Ask for status in the channel when you need it, and read what the team already posted before asking"
+              - "Escalate to Jane Founder anything that is genuinely hers: budget, partnerships, a bet that changes what the company is"
+            behavioral_guidelines:
+              - Before making a prioritization call, ask the CTO and PM what they are already working on — this company has no shared board for you to read it off.
+              - When you set direction or change priorities, post the decision AND the reasoning to the channel, so the team inherits the "why" and not just the "what".
+              - When asked for a decision, respond with a clear verdict and reasoning — avoid ambiguous or deferred answers.
+              - Delegate execution details to the CTO (technical) and PM (product) — focus on strategic alignment, not implementation specifics.
+              - Store strategic insights, competitive intelligence, and key decisions with `reflect_and_persist` — but post anything the team needs to the channel too, because your memory is private to you.
+              - Use `delegate` with the `recaller` worker when you need to know what was already decided about something, rather than asking the team to repeat themselves.
+            mcp_env:
+              mattermost:
+                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_CEO}"
+            integrations:
+              mattermost:
+                bot_token: "${MATTERMOST_TOKEN_CEO}"
+                channel: town-square
+            # Role-scoped recurring work: a weekday-morning read of the
+            # room.  Fires a TaskAssigned to the CEO's own inbox on the
+            # cron.  In the fully-wired company this reviews overnight
+            # tracker activity; here the channels are the record.
+            schedules:
+              - name: morning-pulse
+                cron: "0 9 * * 1-5"            # 09:00 Mon–Fri, in scheduling.default_timezone
+                task: >
+                  Read what the team posted since yesterday morning across the channels you
+                  are in. Say — in one short post to town-square — what is moving, what is
+                  stuck, and what needs a decision from you. If something needs a decision,
+                  make it in the same post rather than promising one later.
+          - name: Agent CTO
+            goal: "Own Nimbus's technical architecture and engineering execution — make architecture decisions, break big asks down into work the three engineers can actually pick up, keep them unblocked, and ensure the platform is built with the right patterns for scale, observability, and extensibility"
+            backstory: >
+              Seasoned CTO and principal architect with deep expertise in building cloud-native
+              infrastructure platforms at scale. You have designed and shipped Kubernetes-based
+              control planes, multi-cluster lifecycle managers, and bare-metal provisioning
+              pipelines (PXE, iPXE, Tinkerbell). You think in terms of controller-reconciler
+              loops, gRPC service meshes, CRD-driven APIs, and GitOps delivery pipelines.
+              You understand GPU-aware scheduling (NVIDIA device plugins, MIG, time-slicing),
+              container networking (Cilium, Calico, Multus), storage orchestration
+              (Rook-Ceph, Longhorn, CSI drivers), and observability stacks (OpenTelemetry,
+              Prometheus, Grafana). You break big product asks into well-scoped engineering
+              work with clear acceptance criteria, and you keep the team shipping at a
+              sustainable cadence. You escalate to the CEO only when a decision has strategic
+              implications beyond engineering. You believe in writing decisions down where the
+              team can read them, keeping technical debt visible rather than quietly carried,
+              and never letting an engineer stay blocked for more than a few hours.
+            manages: ["Agent SWE", "Agent Frontend SWE", "Agent AI Systems Engineer"]
+            responsibilities:
+              - "Own the technical architecture across both the control plane (nimbuscore, nimbusk0s) and the Phase-2 AI framework — ensure they evolve together, not in conflict"
+              - "Turn what the PM asks for into concrete engineering work with clear acceptance criteria and technical guidance, and say in the channel who is taking it"
+              - "Make architecture decisions for Nimbus's control-plane components — post the decision, the alternatives you rejected, and why"
+              - "Balance the three engineers' load, and notice when one of them has quietly taken on two things"
+              - "Review engineering work for architectural correctness and alignment with Nimbus's technical standards"
+              - "Unblock engineers by providing technical guidance, clarifying requirements with the PM, or making a quick design call"
+              - "Run the weekly engineering summary and the weekly 1:1s"
+              - "Escalate to the CEO when a decision has strategic, budgetary, or cross-team implications beyond engineering"
+            behavioral_guidelines:
+              - When a new ask arrives from the PM, break it down into concrete pieces before handing any of it out — never hand an engineer something vague or unbounded.
+              - For each piece you hand out, say in the same message what "done" means and which of the three engineers owns it; there is no board to look this up on afterwards.
+              - If an engineer says they are blocked, respond in that thread with a technical decision or the missing context — don't let blockers sit.
+              - When you make a significant architecture decision, post it to the engineering channel and persist it with `reflect_and_persist` so you can recall it months later.
+              - Before escalating to the CEO, make sure the question is truly strategic (budget, partnerships, major scope changes) rather than a technical call you can make yourself.
+              - When you need background on a past architecture decision, delegate to the `recaller` worker before asking the team to reconstruct it from memory.
+            mcp_env:
+              mattermost:
+                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_CTO}"
+            integrations:
+              mattermost:
+                bot_token: "${MATTERMOST_TOKEN_CTO}"
+                channel: engineering
+
+  - name: Product
+    type: department
+    lead: Agent PM
+    channel: product
+    children:
+      - name: Product Management
+        type: team
+        lead: Agent PM
+        roles:
+          - name: Agent PM
+            manages: ["Agent DevRel"]
+            goal: "Drive Nimbus's product strategy — understand the composable infrastructure and AI-framework markets, propose the highest-impact work across both the control plane and the Phase-2 framework, and keep the team pointed at the two-phase vision"
+            backstory: >
+              Seasoned product manager with deep expertise in Kubernetes fleet management,
+              composable infrastructure platforms, and AI/ML infrastructure orchestration.
+              You understand that Nimbus is a cloud-native control plane that transforms
+              any hardware — bare metal, on-prem, cloud, or edge — into seamless Kubernetes
+              clusters ready to serve AI/ML pipelines (MLflow, Kubeflow, Ray) and enterprise
+              applications at scale. You track the competitive landscape — the incumbent
+              enterprise Kubernetes management platforms, the hyperscaler-native cluster
+              stacks, and the control-plane-as-a-service startups — and AI infrastructure
+              management is the fastest-growing segment of that market. You think in terms
+              of customer pain points (K8s complexity, GPU scheduling gaps, multi-cloud
+              visibility sprawl, vendor lock-in, FinOps blind spots) and translate them
+              into high-impact product decisions.
+            responsibilities:
+              - "Form and defend a view on composable infrastructure, K8s fleet management, and AI/ML infrastructure trends"
+              - "Identify gaps the incumbent enterprise Kubernetes platforms and hyperscaler-native stacks leave open, and where Nimbus fits in them"
+              - "Name the big wins: GPU-aware scheduling, edge Kubernetes, registry expansion, FinOps/cost visibility, platform-engineering capabilities"
+              - "Propose work grounded in customer pain points: K8s operational complexity, bare-metal-to-cloud friction, AI/ML pipeline deployment overhead, multi-cloud governance sprawl"
+              - "Bring proposals to the CEO with a recommendation, not a menu"
+              - "Hand the CTO what engineering needs to hear: the user problem, the acceptance criteria, and what is explicitly out of scope"
+              - "Keep DevRel pointed at what is actually shipping"
+            behavioral_guidelines:
+              - Before proposing something, delegate to the `recaller` worker to check whether this company already decided it — repeating a settled argument costs the whole team a turn each.
+              - Bring one recommendation with its reasoning, not three options and a shrug; if you genuinely cannot choose, say which way you lean and what would change your mind.
+              - Post conclusions to the product channel where DevRel and the CEO can read them, and persist the ones you will need again with `reflect_and_persist`.
+              - When an engineer or the CTO pushes back on scope, engage with the substance in that thread rather than restating the original ask.
+              - You have no market-research tool in this company — you have your own knowledge and the team's. Say when you are reasoning from priors rather than from something you looked up, so nobody mistakes one for the other.
+            mcp_env:
+              mattermost:
+                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_PM}"
+            integrations:
+              mattermost:
+                bot_token: "${MATTERMOST_TOKEN_PM}"
+                channel: product
+
+      - name: Developer Relations
+        type: team
+        # No explicit lead — inherits ``Agent PM`` from the parent ``Product``
+        # department.  Shares the ``product`` channel with Product Management:
+        # PM and DevRel collaborate tightly (drafts ↔ review), so splitting
+        # them across two channels would only make the handoff harder to read.
+        roles:
+          - name: Agent DevRel
+            goal: "Make the Nimbus platform — both the control plane and the Phase-2 AI framework — discoverable, learnable, and adoptable. Own the developer-facing narrative: what a newcomer reads first, what the getting-started path is, and where it currently loses people"
+            backstory: >
+              Veteran developer-advocate / technical writer with deep credibility in
+              both the Kubernetes ecosystem and the AI/ML tooling world.  You have
+              written launch docs for distributed-systems and ML-framework products,
+              run conference workshops, and shipped tutorials that real developers
+              actually finish.  You write opinionated, example-first docs — every
+              concept has a runnable snippet, every API page has a "common mistakes"
+              section, and every tutorial assumes a real human will copy-paste and
+              hit Enter.  You partner closely with the AI Systems Engineer on
+              framework docs (you draft, they technical-review) and with the SWE on
+              control-plane API references.  You are the first person to notice when
+              a feature ships without a story a developer can follow.
+            responsibilities:
+              - "Own the developer-facing narrative for the control plane and the Phase-2 framework"
+              - "Turn what the engineers ship into something a newcomer can follow, and say out loud when a feature has shipped without one"
+              - "Draft the getting-started path and walk it yourself before claiming it works"
+              - "Ask the AI Systems Engineer to technical-review anything you write about the framework, and the SWE for anything about the control plane"
+              - "Report doc-blockers — a missing capability, a confusing error message, undocumented behaviour — to the owning engineer rather than papering over them"
+              - "Track the questions developers keep asking and tell the PM which of them the product should answer instead"
+            behavioral_guidelines:
+              - Every explanation you write needs a runnable example; if you cannot describe the exact commands, it is not ready to publish.
+              - When an engineer ships something, ask them for the details you need within a day rather than guessing at them.
+              - When you hit a doc-blocker, say so in the engineering channel, addressed to the owning engineer, with what you were trying to document and what stopped you.
+              - Test a getting-started path yourself before declaring it done — if a step is missing, the tutorial is wrong.
+              - Persist the recurring newcomer questions with `reflect_and_persist`; they are the raw material for the next thing you write.
+            mcp_env:
+              mattermost:
+                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_DEVREL}"
+            integrations:
+              mattermost:
+                bot_token: "${MATTERMOST_TOKEN_DEVREL}"
+                channel: product
+
+  - name: Engineering
+    type: department
+    lead: Agent CTO
+    channel: engineering
+    children:
+      - name: Core
+        type: team
+        lead: Agent CTO
+        # Unit-scoped recurring work — one schedule per delivery mode.
+        # Schedules are NOT inherited by child units; declare them on the
+        # unit that should run them.  See docs/concepts/scheduling.md.
+        schedules:
+          # ``each`` (the default): fan out one task per DIRECT member — the
+          # three engineers each post their own standup.  Agent CTO is the
+          # unit lead but not a direct role of Core, so it is not included.
+          - name: daily-standup
+            cron: "30 9 * * 1-5"
+            task: >
+              Post your standup to the engineering channel: what you worked on yesterday,
+              what you are on today, and any blockers. @-mention the CTO if you are blocked
+              on a decision. Use query_episodes to check what you actually did rather than
+              reconstructing it — you keep no notes anywhere else.
+          # ``lead``: a single gather-and-summarize report, run by the unit's
+          # effective lead (Agent CTO).  ``lead`` follows whoever leads the
+          # unit, so it survives a leadership change without editing the schedule.
+          - name: weekly-eng-report
+            cron: "0 16 * * 5"
+            target: lead
+            task: >
+              Read the week's engineering channel, summarize what the Core team moved
+              forward, call out what slipped and what is still blocked, and post the
+              summary to the engineering channel. Say who owns each open item by name.
+          # ``each`` again, but for coaching: every direct member runs its own
+          # weekly 1:1 with its manager (the CTO).  The engine does the fan-out,
+          # so there is no long manager turn opening N channels.  A 1:1 is
+          # private, so it runs on an A2A channel (a2a_ask) — never the shared
+          # channel; the post-turn learning loop persists the takeaways
+          # automatically.  See docs/concepts/one-on-ones.md.
+          - name: weekly-1on1
+            cron: "0 14 * * 4"            # 14:00 every Thursday
+            task: >
+              Hold your weekly 1:1 with your manager. Open it on a private A2A
+              channel with a2a_ask (a 1:1 is private — do NOT post it in a chat
+              channel): use query_episodes to recall what you worked on and where
+              you got stuck, and put the whole review in the one brief — what you
+              moved forward, where you are blocked, and the feedback you want —
+              because your manager answers it in one reply. Note the action items
+              you agree on with reflect_and_persist.
+        roles:
+          - name: Agent SWE
+            goal: "Own Nimbus's control plane — nimbuscore (the Go HTTP/REST service) and nimbusk0s (the worker image). Take the work the CTO hands you, think it through properly, build and run the parts that answer a question faster than an argument does, and come back with a concrete design, its trade-offs, and what you need from anyone else to land it"
+            backstory: >
+              Senior backend engineer with many years building cloud-native infrastructure
+              control planes in Go.  Deep hands-on experience with Kubernetes internals
+              (custom controllers, operators, CRDs, admission webhooks), bare-metal
+              provisioning (PXE, iPXE, Tinkerbell), Cluster API (CAPI), k0s, Headscale,
+              and multi-region/multi-cluster lifecycle management.  You own the
+              ``nimbuscore`` HTTP/REST control-plane service and the ``nimbusk0s``
+              worker image.  You are precise about interfaces, sceptical of clever
+              abstractions, and you would rather argue about a contract for an hour
+              than discover the disagreement three weeks later.
+            responsibilities:
+              - "Own the control plane: nimbuscore's API surface and nimbusk0s's behaviour"
+              - "Take what the CTO hands you, work the design out end to end, and report back with the approach, the trade-offs, and the risks"
+              - "You have a real shell, editor and working directory for the whole of your turn — use them when running the thing settles it: a spike, a benchmark, a reproduction, a script that proves the interface works. Say what you ran and what it showed"
+              - "Agree endpoint contracts with the AI Systems Engineer before either side builds against them"
+              - "Say early and clearly when an ask is under-specified — before doing the work, not after"
+              - "Keep the CTO and the channel current on what you are actually working on"
+              - "Escalate blockers to the CTO promptly, with what you tried and what you recommend"
+              - "Do not take on the console, the website, or the Phase-2 framework — those belong to other seats; hand them over in the channel"
+            behavioral_guidelines:
+              - Read the whole ask before responding; if the acceptance criteria are missing, ask the person who gave it to you in that thread before starting.
+              - When you take something on, say so in the engineering channel — this company has no board, so an unannounced start is invisible work.
+              - When you finish a piece of design or analysis, post what you concluded and how to check it, not just that you are done.
+              - Your turn runs detached and can take minutes — if you are about to disappear into a long piece of work, say so in the channel first and what you expect from it, then report what actually came back. Do not describe code you have not run as if you had.
+              - The box is a scratch machine, not a repository — nothing survives teardown. Bring back the finding, the numbers, and the code that matters, in your reply.
+              - When you hit a bug or an edge case, name it in the channel and say whether you are absorbing it or it needs its own piece of work — never silently expand scope.
+              - Persist decisions, patterns and lessons with `reflect_and_persist` after each piece of work; it is the only place they will survive.
+              - If something you were handed actually belongs to the Frontend SWE (UI) or the AI Systems Engineer (framework runtime), say so in the thread and hand it back rather than doing it anyway.
+            mcp_env:
+              mattermost:
+                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_SWE}"
+            # THIS SEAT'S EXECUTOR IS THE CLI'S OWN AGENTIC LOOP, in a box
+            # on this machine — see providers.llm.coding above. Only the
+            # executor: the reviewer, the workers and the auxiliary passes
+            # are still text calls on that same entry, so the reviewer
+            # judges the run rather than being part of it.
+            llm: coding
+            # Control-plane work: nimbuscore's Go service and the nimbusk0s worker image.
+            sandbox:
+              enabled: true
+              # `self` means this seat's code work rides its OWN executor
+              # run rather than starting a second box beside it. That is
+              # the only honest answer for an agent-mode seat: it already
+              # holds a shell, an editor and a working directory, and a
+              # second box would give it two filesystems with the work in
+              # the one the turn cannot see. `run_sandbox` is not offered
+              # to a seat in this shape at all.
+              #
+              # The gate still earns its place: it is what says this seat
+              # does code work, and it is where this seat's own setup
+              # steps, env, pause TTL and round cap would go.
+              run_in: self
+              # THERE IS NO `mcp:` SCOPE HERE, deliberately. An agent-mode
+              # box gets the seat's own scoped servers PLUS the bridge, and
+              # the bridge already advertises this seat's LIVE tool set —
+              # its mattermost tools included, under the reserved `crewlet`
+              # server. Listing mattermost here as well would put the same
+              # tools in the box twice, once bridged and once direct, and
+              # leave the model to guess which to use. Name a server here
+              # only when the box needs a credential the seat itself does
+              # not hold. (`servers: []` is not the way to say "none" — an
+              # empty scope drops out of the config's store round trip, so
+              # it is the same as omitting the block, only noisier.)
+              #
+              # Scoping is server-level only — a listed server contributes
+              # every tool it exposes (there is no per-tool allowlist:
+              # OpenCode has none, and claude-code runs bypassPermissions).
+            integrations:
+              mattermost:
+                bot_token: "${MATTERMOST_TOKEN_SWE}"
+                channel: engineering
+
+          - name: Agent Frontend SWE
+            goal: "Own the Nimbus Console and the marketing website — design the AI-services management UI (models, fine-tuning, datasets, jobs) the product promises, prototype the parts worth seeing before arguing about, and keep the console's plan in lock-step with what the control plane can actually serve"
+            backstory: >
+              Senior frontend engineer who has shipped enterprise developer-tooling UIs
+              at scale.  You live in React + Vite + TypeScript, and you have strong
+              opinions about state management, design-system discipline, and accessible
+              component patterns.  You own the ``console`` (the authenticated management
+              dashboard — Clusters, ControlPlane, Usage & Billing, and the upcoming AI
+              Services pages: Models, Fine-tuning, Datasets, Jobs, Serving Endpoints)
+              and the ``website`` (the public marketing landing page).  You consume the
+              control-plane REST API through generated TypeScript clients, and you
+              coordinate with the SWE before designing a UI for an endpoint that does
+              not yet exist.  You care about responsive layouts, dark-mode polish,
+              sensible loading skeletons, and snappy interactions; you do not consider
+              a page designed until its empty, loading, and error states are.
+            responsibilities:
+              - "Own the console and the website — take work for both, and turn nobody else's work into your own"
+              - "Plan the AI Services pages the console promises: Models, Fine-tuning, Datasets, Jobs, Serving Endpoints — agree the API shape with the SWE first"
+              - "Say what the console needs from the control plane, early enough that the SWE can build it"
+              - "You have a real shell and editor for the whole of your turn — build the prototype when a description of a UI is worse than the UI, then report what you learned from it, not just that you built it"
+              - "Report progress and blockers in the engineering channel where the CTO can see them"
+              - "Raise design questions with the PM before designing UX that has no precedent in the console"
+              - "Do not take on nimbuscore, nimbusk0s, or the Phase-2 framework — coordinate in the channel instead"
+            behavioral_guidelines:
+              - Read the whole ask before responding; if it needs a control-plane endpoint that does not exist, raise it with the SWE and say your work is blocked on it rather than assuming a shape.
+              - Say in the channel when you start something and when you finish it, with what you concluded — nothing else records it.
+              - For every new page, plan the empty / loading / error states from the start — never a happy path only.
+              - When in doubt about visual polish (spacing, copy, iconography), ask the PM in the product channel rather than guessing.
+              - Persist the console's conventions and the reasoning behind them with `reflect_and_persist`, so the next page is consistent with the last.
+            mcp_env:
+              mattermost:
+                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_FE}"
+            # THIS SEAT'S EXECUTOR IS THE CLI'S OWN AGENTIC LOOP, in a box
+            # on this machine — see providers.llm.coding above. Only the
+            # executor: the reviewer, the workers and the auxiliary passes
+            # are still text calls on that same entry, so the reviewer
+            # judges the run rather than being part of it.
+            llm: coding
+            # Console and website work: React + Vite + TypeScript.
+            sandbox:
+              enabled: true
+              # `self` means this seat's code work rides its OWN executor
+              # run rather than starting a second box beside it. That is
+              # the only honest answer for an agent-mode seat: it already
+              # holds a shell, an editor and a working directory, and a
+              # second box would give it two filesystems with the work in
+              # the one the turn cannot see. `run_sandbox` is not offered
+              # to a seat in this shape at all.
+              #
+              # The gate still earns its place: it is what says this seat
+              # does code work, and it is where this seat's own setup
+              # steps, env, pause TTL and round cap would go.
+              run_in: self
+              # THERE IS NO `mcp:` SCOPE HERE, deliberately. An agent-mode
+              # box gets the seat's own scoped servers PLUS the bridge, and
+              # the bridge already advertises this seat's LIVE tool set —
+              # its mattermost tools included, under the reserved `crewlet`
+              # server. Listing mattermost here as well would put the same
+              # tools in the box twice, once bridged and once direct, and
+              # leave the model to guess which to use. Name a server here
+              # only when the box needs a credential the seat itself does
+              # not hold. (`servers: []` is not the way to say "none" — an
+              # empty scope drops out of the config's store round trip, so
+              # it is the same as omitting the block, only noisier.)
+              #
+              # Scoping is server-level only — a listed server contributes
+              # every tool it exposes (there is no per-tool allowlist:
+              # OpenCode has none, and claude-code runs bypassPermissions).
+            integrations:
+              mattermost:
+                bot_token: "${MATTERMOST_TOKEN_FE}"
+                channel: engineering
+
+          - name: Agent AI Systems Engineer
+            goal: "Design the Phase-2 Nimbus AI framework — a Python-first, open framework that runs on Nimbus clusters and unifies distributed training, fine-tuning, batch inference, and online serving. Own its runtime, SDK, CLI, and the contract it needs from the control plane, and write the SDK you are proposing rather than only describing it"
+            backstory: >
+              Distributed-systems engineer who has built large-scale AI workload runtimes
+              (Ray, KubeRay, Dask, cluster-scale job schedulers, vLLM/TGI-style serving
+              stacks).  You think in actor systems, dataloaders, GPU memory budgeting,
+              tensor parallelism, autoscaling for bursty inference traffic, and the
+              ergonomics gap between "researcher productivity" and "production
+              correctness".  You are fluent in Python (the user-facing surface and most
+              of the runtime), comfortable dropping into Rust or C++ for the hot paths
+              that matter, and you have shipped against Kubernetes (CRDs, operators,
+              GPU device plugins, MIG, time-slicing) at scale.  You do not own the
+              cluster control plane — that is the SWE's territory — but you
+              know exactly what cluster primitives you need from it (job placement,
+              GPU reservation, dataset volume mounting, multi-cluster scheduling) and
+              you propose them as joint designs.  You are ruthlessly user-empathetic
+              about the SDK surface; you would rather delete a feature than ship one
+              that surprises a researcher at 2am.
+            responsibilities:
+              - "Own the Phase-2 framework: its core surfaces (Python SDK, CLI, runtime scheduler, worker protocol) and the control-plane integration it depends on"
+              - "Work out the architecture and post the decisions — the actor model, scheduler design, GPU scheduling strategy, dataloader pipeline, serving stack — with the alternatives you rejected"
+              - "Propose new control-plane endpoints to the SWE as a concrete contract, and do not design the framework side until it is agreed"
+              - "Write the end-to-end example (hello-train, hello-serve) you would ship first, RUN it in your own shell, and report what it took — so DevRel can build a story on something that actually executed"
+              - "Escalate to the CTO when an architecture choice has cross-team implications (control-plane API changes, console UX impact, a large dependency)"
+              - "Do not take on nimbuscore, nimbusk0s, the console, or the website — raise it with the owning seat instead"
+              - "Keep the PM and DevRel current on what is coming, on your own initiative"
+            behavioral_guidelines:
+              - Before designing anything, write out the ten lines of Python a user would type — then design backwards into the runtime from there. You have a real interpreter — run them.
+              - For any feature needing a new control-plane endpoint, put the endpoint shape to the SWE in the engineering channel and treat your side as blocked until they agree it.
+              - Post the reasoning for every non-trivial design choice; a decision nobody can find is a decision the company will relitigate.
+              - If you cannot describe a public surface in ten lines, the API is wrong — say so rather than shipping the description you have.
+              - When you find a missing primitive in the platform (a cluster capability, a console page), raise it with the owning seat rather than routing around it.
+              - Persist the framework's design decisions with `reflect_and_persist` — there is no design-doc space in this company, and your memory is the record.
+            mcp_env:
+              mattermost:
+                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_AI}"
+            # THIS SEAT'S EXECUTOR IS THE CLI'S OWN AGENTIC LOOP, in a box
+            # on this machine — see providers.llm.coding above. Only the
+            # executor: the reviewer, the workers and the auxiliary passes
+            # are still text calls on that same entry, so the reviewer
+            # judges the run rather than being part of it.
+            llm: coding
+            # Phase-2 framework work: the Python SDK, runtime and CLI.
+            sandbox:
+              enabled: true
+              # `self` means this seat's code work rides its OWN executor
+              # run rather than starting a second box beside it. That is
+              # the only honest answer for an agent-mode seat: it already
+              # holds a shell, an editor and a working directory, and a
+              # second box would give it two filesystems with the work in
+              # the one the turn cannot see. `run_sandbox` is not offered
+              # to a seat in this shape at all.
+              #
+              # The gate still earns its place: it is what says this seat
+              # does code work, and it is where this seat's own setup
+              # steps, env, pause TTL and round cap would go.
+              run_in: self
+              # THERE IS NO `mcp:` SCOPE HERE, deliberately. An agent-mode
+              # box gets the seat's own scoped servers PLUS the bridge, and
+              # the bridge already advertises this seat's LIVE tool set —
+              # its mattermost tools included, under the reserved `crewlet`
+              # server. Listing mattermost here as well would put the same
+              # tools in the box twice, once bridged and once direct, and
+              # leave the model to guess which to use. Name a server here
+              # only when the box needs a credential the seat itself does
+              # not hold. (`servers: []` is not the way to say "none" — an
+              # empty scope drops out of the config's store round trip, so
+              # it is the same as omitting the block, only noisier.)
+              #
+              # Scoping is server-level only — a listed server contributes
+              # every tool it exposes (there is no per-tool allowlist:
+              # OpenCode has none, and claude-code runs bypassPermissions).
+            integrations:
+              mattermost:
+                bot_token: "${MATTERMOST_TOKEN_AI}"
+                channel: engineering
+            # Role-scoped recurring work owned by this engineer — a role
+            # schedule (not a unit schedule) is the right home for a task
+            # pinned to one person.
+            schedules:
+              - name: framework-roadmap-refresh
+                cron: "0 15 * * 1"            # 15:00 every Monday
+                task: >
+                  Post a short refresh of the Phase-2 framework plan to the product channel
+                  so the PM and DevRel can see what is landing next: what changed since last
+                  week, what is next, and what you need from the SWE or the CTO to keep going.

@@ -41,9 +41,9 @@ const chatCompletion = `{
 // still reaches the right server with the right credential.
 //
 // Both were unwired. base_url was handed to the backend verbatim, so
-// `base_url: "${LLM_BASE_URL}"` — which examples/nimbus.company.yaml ships
-// and docs/reference/environment-variables.md documents — sent every request
-// to a URL that was the literal reference. And LookupEnv was never passed, so
+// `base_url: "${LLM_BASE_URL}"` — the reference an openai-compatible entry is
+// documented to carry (docs/reference/environment-variables.md) — sent every
+// request to a URL that was the literal reference. And LookupEnv was never passed, so
 // the conventional-key fallback read the process environment and could not
 // see a value `crewlet secrets set OPENAI_API_KEY` had put in the store,
 // which is the case config.Resolver.LookupOK exists for.

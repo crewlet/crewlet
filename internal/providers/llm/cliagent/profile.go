@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"unicode"
 )
 
 // PromptMode is how a CLI receives the prompt.
@@ -46,6 +47,29 @@ func (m OutputMode) Valid() bool {
 // Path is a route to a value inside a decoded JSON document: successive
 // object keys, or a decimal index into an array.
 type Path []string
+
+// String renders a path the way profiles.yaml would be read aloud —
+// `usage.input_tokens` for [][]string{{"usage", "input_tokens"}}.
+//
+// It exists for the message an operator reads when a profile stops matching
+// its CLI: naming the field to change is the whole point of that message, and
+// `[]cliagent.Path{{"result"}}` printed with %v names nothing.
+func (p Path) String() string { return strings.Join(p, ".") }
+
+// PathList renders a set of paths for the same message, in declaration order.
+//
+// Declaration order because that is the order they are TRIED, so an operator
+// comparing this against their CLI's real output reads the two in step.
+func PathList(paths []Path) string {
+	if len(paths) == 0 {
+		return "(none declared)"
+	}
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		out = append(out, p.String())
+	}
+	return strings.Join(out, ", ")
+}
 
 // UsagePaths locates the four token counts in a CLI's own usage report.
 //
@@ -241,6 +265,66 @@ type Profile struct {
 	// PromptMode is stdin (the default) or argv.
 	PromptMode PromptMode `yaml:"prompt_mode,omitempty"`
 
+	// SystemPromptArgs carries the system prompt on its OWN channel rather
+	// than as the first section of the transcript, where a CLI has a flag
+	// for it. Empty leaves it in the transcript, which is what a CLI with
+	// no such flag can take.
+	//
+	// A system prompt folded into the prompt text arrives as USER content:
+	// the model is asked to treat an ordinary message as its standing
+	// instructions, and a vendor whose default prompt says what it is
+	// ("I'm Claude Code, here to help with your software engineering
+	// tasks") keeps saying so over the top of a seat's own identity.
+	//
+	// Two placeholders, and the difference is not cosmetic:
+	//
+	//   {file}    the text is written to a private file in the per-call
+	//             working directory and the PATH is substituted. Prefer
+	//             this always. A seat's system prompt carries the org
+	//             chart, its policies, its backstory, its roster and its
+	//             personal-memory and knowledge prefetches.
+	//   {system}  the text is substituted INTO ARGV, where /proc/<pid>/cmdline
+	//             makes it readable by every account on the machine and
+	//             ARG_MAX bounds it (256 KB on macOS) — the same limit the
+	//             copilot profile's argv prompt already lives under. Only
+	//             for a CLI that offers no file variant.
+	SystemPromptArgs []string `yaml:"system_prompt_args,omitempty"`
+
+	// SystemPromptEnv is the THIRD channel, and the one `--help` does not
+	// show: an environment variable naming a file the CLI reads its system
+	// prompt from. Empty means the CLI has no such variable.
+	//
+	// Gemini CLI and its Qwen fork both work this way and neither has a
+	// flag for a path — `GEMINI_SYSTEM_MD` / `QWEN_SYSTEM_MD`, each taking
+	// a path and REPLACING the built-in prompt. Reading only `--help`
+	// reports both as having no system-prompt channel at all, which is how
+	// they were first recorded here.
+	//
+	// PREFERRED OVER SystemPromptArgs WHEREVER BOTH EXIST, because it is a
+	// file: the text never reaches argv, where /proc/<pid>/cmdline makes it
+	// readable by every account on the machine. Qwen Code has both and
+	// takes this one for exactly that reason.
+	//
+	// The two are mutually exclusive — a profile declaring both would hand
+	// the CLI its system prompt twice — and [Profile.validate] refuses it.
+	SystemPromptEnv string `yaml:"system_prompt_env,omitempty"`
+
+	// PromptArgs introduces the prompt in argv mode, for a CLI that takes it
+	// as a FLAG'S VALUE rather than as a positional argument. Empty appends
+	// the prompt bare, which is what every other argv profile wants.
+	//
+	// It exists because xAI's grok breaks the assumption the rest of this
+	// format is built on. Its only headless trigger is `-p <PROMPT>`, and a
+	// value is REQUIRED — so with `-p` sitting in complete_args, the model
+	// flag that follows becomes the prompt and the real prompt becomes a
+	// stray positional: `grok -p --model grok-4 "hi"` exits on
+	// "a value is required for '--single <PROMPT>' but none was supplied".
+	// Every call died at argument parsing.
+	//
+	// Appended LAST, after the model and system-prompt arguments, because
+	// that is the only position where the flag and its value stay adjacent.
+	PromptArgs []string `yaml:"prompt_args,omitempty"`
+
 	// Output is how stdout is encoded.
 	Output OutputMode `yaml:"output,omitempty"`
 
@@ -393,12 +477,31 @@ func (p *Profile) validate(name string) error {
 			add("config_env may not name HOME — it is set from the seat home already")
 		}
 	}
+	if len(p.PromptArgs) > 0 && p.PromptMode != PromptArgv {
+		add("prompt_args is set but prompt_mode is %q — the flag introduces a prompt "+
+			"on argv and there is none to introduce", p.PromptMode)
+	}
+	if len(p.SystemPromptArgs) > 0 && p.SystemPromptEnv != "" {
+		// One channel or the other. Both would hand the CLI the same
+		// system prompt twice, and which copy wins is the vendor's
+		// business rather than something this profile can state.
+		add("system_prompt_args and system_prompt_env are both set — a CLI takes " +
+			"its system prompt on ONE channel; drop whichever this build does not use")
+	}
 	for i, m := range p.LimitMarkers {
-		if m.Sentinel == "" {
-			add("limit_markers[%d].sentinel is empty", i)
+		if problem := sentinelProblem(m.Sentinel); problem != "" {
+			add("limit_markers[%d].sentinel %s", i, problem)
 		}
 		if m.ResetSeparator != "" && m.ResetUnit != "epoch" && m.ResetUnit != "seconds" {
 			add("limit_markers[%d].reset_unit %q (want epoch or seconds)", i, m.ResetUnit)
+		}
+	}
+	// Checked at all, which it was not: an auth marker fires KindAuth, and
+	// KindAuth exhausts the credential exactly as a spent plan does — so an
+	// unusable sentinel costs the same here as it does above.
+	for i, m := range p.AuthMarkers {
+		if problem := sentinelProblem(m.Sentinel); problem != "" {
+			add("auth_markers[%d].sentinel %s", i, problem)
 		}
 	}
 	if p.StdinLogin != nil && len(p.StdinLogin.Args) == 0 {
@@ -454,4 +557,58 @@ func (p *Profile) output() OutputMode {
 		return OutputJSON
 	}
 	return p.Output
+}
+
+// sentinelProblem reports why a marker sentinel cannot be matched safely, or
+// "" when it can.
+//
+// A SENTINEL IS THE VENDOR'S WORDS. It is matched as a plain substring against
+// whatever the CLI printed — which on a healthy run is the model's own answer
+// — so a sentinel that can occur inside ordinary text does not recognise a
+// spent plan, it misclassifies arbitrary replies as one. And the cost is not
+// a wrong log line: both kinds a marker produces, KindRateLimit and KindAuth,
+// BENCH THE CREDENTIAL for a cooldown and hand the seat to the fallback chain
+// (see [llm.ErrorKind.ExhaustsCredential]). A company degrades quietly.
+//
+// The shipped profiles carried `sentinel: "429"`, which is the failure in its
+// purest form: three digits matched inside free text, so a model quoting an
+// HTTP status, a stack trace's line number, a token count, or any of the ten-
+// digit epochs this very package handles would bench a working subscription.
+//
+// The rule is "it has to contain a letter", and deliberately not also a
+// minimum length. A number is not a sentence, which is derivable from what a
+// sentinel IS; a length floor would be a constant nobody can defend, and it
+// would refuse a legitimate short vendor string on a guess. See [LimitMarker].
+func sentinelProblem(sentinel string) string {
+	if sentinel == "" {
+		return "is empty"
+	}
+	if !strings.ContainsFunc(sentinel, unicode.IsLetter) {
+		return fmt.Sprintf("%q has no letters — a sentinel is the vendor's own wording, "+
+			"matched as a substring against whatever the CLI printed, so one made only of "+
+			"digits or punctuation matches ordinary replies and benches a working "+
+			"credential. Use the sentence the CLI actually prints", sentinel)
+	}
+	return ""
+}
+
+// ReadsUsage reports whether this profile can take token counts from the CLI
+// rather than estimating them.
+//
+// BOTH HALVES, because either alone is a lie. A profile with no usage paths
+// obviously cannot; less obviously, a TEXT profile cannot either — [extract]
+// never decodes a document in that mode, so declared paths are walked by
+// nothing. That combination is not an operator error to refuse: `output: text`
+// is a one-line override, and the JSON paths it inherits from the built-in
+// profile are simply inert afterwards.
+//
+// It exists so `crewlet llm doctor` and the extractor answer the same
+// question. Doctor asked a narrower one — "are usage paths declared" — and so
+// reported "reported by CLI" for a provider whose every call estimates, which
+// is precisely the question that report exists to settle.
+func (p *Profile) ReadsUsage() bool {
+	if p.output() == OutputText {
+		return false
+	}
+	return len(p.Usage.Input) > 0 || len(p.Usage.Output) > 0
 }
