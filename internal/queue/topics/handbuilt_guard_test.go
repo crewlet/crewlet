@@ -374,11 +374,9 @@ func isWireName(s string) bool {
 // subjectMarkers derives what to look for from the grammar's own constants,
 // so the guard extends itself when the grammar does.
 //
-// A constant's value is reduced to the part that identifies its DOMAIN:
-// "crewlet.agent." and "crewlet.events.>" both become "crewlet.agent" /
-// "crewlet.events", so a hand-written wildcard over a domain is caught as
-// readily as a hand-written leaf. A leading-dot value (".inbox") keeps its
-// dot, and a dotless one ("agent-") is kept whole.
+// A constant's value is reduced to the prefix it COMMITS to, with any
+// trailing wildcard stripped, so a hand-written wildcard over a domain is
+// caught as readily as a hand-written leaf. See [markersFor].
 func subjectMarkers(t *testing.T, dir string) map[string]bool {
 	t.Helper()
 
@@ -388,31 +386,43 @@ func subjectMarkers(t *testing.T, dir string) map[string]bool {
 	}
 	markers := map[string]bool{}
 	for _, v := range values {
-		if m := markerFor(v); m != "" {
+		for _, m := range markersFor(v) {
 			markers[m] = true
 		}
 	}
 	return markers
 }
 
-func markerFor(v string) string {
+// markersFor reduces one constant to what to look for.
+//
+// THE WHOLE COMMITTED PREFIX, minus any trailing wildcard — not a fixed
+// two-segment truncation, which is what the first version did. Two segments
+// was right while every subject namespace was crewlet.<one word>, and it
+// stopped being right the moment a namespace went three deep: the mutation
+// log is crewlet.tracker.log, and reducing it to crewlet.tracker made every
+// metric name under crewlet.tracker.* read as a hand-built subject. A guard
+// that flags a neighbouring grammar is a guard somebody switches off.
+//
+// A value ending in a separator ALSO yields its dotless form when that form
+// is a two-segment domain, so "crewlet.agent." still catches a bare
+// "crewlet.agent" used as the base of a concatenation. It is not added for a
+// deeper namespace, where the prefix with its separator already carries the
+// boundary, nor for a one-segment one like "dlq", where the bare word is
+// ordinary English.
+func markersFor(v string) []string {
 	if v == "" {
-		return ""
+		return nil
 	}
-	parts := strings.Split(v, ".")
-	switch {
-	case len(parts) == 1:
-		// "agent-", "-control": no domain to reduce to.
-		return v
-	case parts[0] == "":
-		// ".inbox", ".control": a suffix keeps its separator.
-		return "." + parts[1]
-	case parts[1] == "":
-		// "dlq.": a one-segment domain.
-		return parts[0] + "."
-	default:
-		return parts[0] + "." + parts[1]
+	v = strings.TrimRight(v, ">*")
+	if v == "" {
+		return nil
 	}
+	out := []string{v}
+	if bare, cut := strings.CutSuffix(v, "."); cut &&
+		len(strings.Split(bare, ".")) == 2 {
+		out = append(out, bare)
+	}
+	return out
 }
 
 // constStrings evaluates every top-level string constant in a package.
