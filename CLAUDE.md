@@ -337,3 +337,4 @@ The implementation must follow the architecture docs in `docs/concepts/`. Key su
 16. **API + Dashboard** — one wiring, embedded or standalone; the websocket is the dashboard's only data channel
 17. **Scheduler** — role/unit-scoped cron work with at-most-once delivery, catchup and a wall-clock cap
 18. **Control Plane** — the config activation pointer and per-node apply status; lag alone never sheds
+19. **State Log** — the durable-state framework: one ordered stream per domain is the write-ahead log, N identical SQL copies are the state, and the checkpoint commits in the same transaction as the rows. One write authority (take ONE snapshot, decide and form the expectation inside it, publish, let the broker arbitrate, never guess), three write outcomes, four read levels, and a read index that is a quorum-committed barrier append rather than a leader check
