@@ -96,21 +96,34 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 	// operation that removes rows, and its marker is what makes the
 	// removal permanent rather than a race a redelivery can undo.
 	if ObjectKind(rec.Subject.Kind) == KindTask {
-		var purged int
+		var author sql.NullString
 		err := tx.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM tracker_deletions WHERE task_id = ?`,
-			rec.Subject.ID).Scan(&purged)
-		if err != nil {
+			`SELECT purge_record_id FROM tracker_deletions WHERE task_id = ?`,
+			rec.Subject.ID).Scan(&author)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return "", false, nil
+		case err != nil:
 			return "", false, fmt.Errorf("tracker: read the deletion gate for "+
 				"task %s: %w", rec.Subject.ID, err)
 		}
-		if purged > 0 {
-			// A purge's own record is what WROTE that marker, so it is
-			// not gated by it — every other record about the task is.
-			if OpKind(rec.Op) != OpPurge {
-				return statelog.ReasonDeleted, true, nil
-			}
+		// THE ONE EXCEPTION IS THE RECORD THAT WROTE THE MARKER, by its
+		// own id — not by its op kind. "Any purge" would let a SECOND
+		// purge of the same task through, and a purge is the one
+		// operation that destroys rows; by the committed sequence would
+		// fail for a republished copy, leaving a node holding only that
+		// copy unable to write its own marker at all.
+		if author.Valid && author.String == rec.OpID {
+			return "", false, nil
 		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE tracker_deletions
+			SET rejects = rejects + 1, last_reject_at = ?
+			WHERE task_id = ?`, store.EncodeTime(rec.StoredAt), rec.Subject.ID); err != nil {
+			return "", false, fmt.Errorf("tracker: count a gate hit on the "+
+				"purged task %s: %w", rec.Subject.ID, err)
+		}
+		return statelog.ReasonDeleted, true, nil
 	}
 	return "", false, nil
 }

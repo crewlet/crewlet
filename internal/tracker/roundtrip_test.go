@@ -131,7 +131,22 @@ func (r *roundTrip) drain() {
 	if err != nil {
 		r.t.Fatalf("read the log's end: %v", err)
 	}
-	for seq := r.consumed + 1; seq <= last; seq++ {
+	r.apply(r.consumed+1, last)
+}
+
+// redeliver re-applies one record the applier has already consumed, which is
+// what a redelivery, a reprocess after an upgrade and a snapshot adopter's
+// replay all look like from here.
+func (r *roundTrip) redeliver(seq uint64) {
+	r.t.Helper()
+	consumed := r.consumed
+	r.apply(seq, seq)
+	r.consumed = consumed
+}
+
+func (r *roundTrip) apply(from, last uint64) {
+	r.t.Helper()
+	for seq := from; seq <= last; seq++ {
 		subject, payload, storedAt, ok, err := r.log.At(r.t.Context(), seq)
 		if err != nil {
 			r.t.Fatalf("read record %d: %v", seq, err)

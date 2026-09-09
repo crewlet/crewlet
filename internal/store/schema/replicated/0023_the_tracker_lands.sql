@@ -920,13 +920,33 @@ CREATE TABLE tracker_deletions (
     task_id       TEXT    NOT NULL PRIMARY KEY,
     task_key      TEXT    NOT NULL,
     project_key   TEXT    NOT NULL,
+    -- The purge RECORD's own operation id, and the gate's one exception.
+    --
+    -- The gate drops every commit on a purged task WHATEVER ITS POSITION, so
+    -- the purge's own record would be dropped by the marker it wrote the
+    -- moment anything reprocesses it — and a node holding only a republished
+    -- copy could never write its own marker at all. Keyed on the RECORD rather
+    -- than on the op kind, because "any purge" would let a second purge of the
+    -- same task through, and keyed on the id rather than on the committed
+    -- sequence, because a republished record carries the same id and a
+    -- different sequence.
+    purge_record_id TEXT  NOT NULL DEFAULT '',
     by            TEXT    NOT NULL,
     by_kind       TEXT    NOT NULL,
     reason        TEXT    NOT NULL DEFAULT '',
+    -- REPORTING, never a gate input: the gate is order-independent, which is
+    -- what makes a late reprocess sound.
     committed_seq INTEGER NOT NULL,
     log_stream    TEXT    NOT NULL,
     log_generation INTEGER NOT NULL DEFAULT 0,
     at            INTEGER NOT NULL,
+    -- Gate hits since the purge. A COUNTER rather than a table, which is the
+    -- strictest form of the envelope-only rule: it stores neither envelope nor
+    -- payload. The residual producers are replay-shaped — a deferred record
+    -- reprocessed after an upgrade, a snapshot adopter replaying forward — and
+    -- those are hits worth counting, not writes worth attributing.
+    rejects        INTEGER NOT NULL DEFAULT 0,
+    last_reject_at INTEGER,
     document      BLOB    NOT NULL
 );
 CREATE INDEX tracker_deletions_project_idx ON tracker_deletions (project_key, at DESC);                       -- work_retention's deletions block, and work_trash's purged half
