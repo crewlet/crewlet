@@ -275,3 +275,41 @@ func (l *DomainLog) Purge(ctx context.Context, upTo uint64) error {
 	}
 	return nil
 }
+
+// SetMaxBytes changes the log's byte ceiling.
+//
+// # The one stream-configuration write in the engine
+//
+// Every other stream call here creates, reads or purges. This one UPDATES a
+// running stream's configuration, and it is deliberately the only one: a
+// second site could raise a ceiling a capacity operation was in the middle of
+// lowering, and neither would know.
+//
+// It is safe to call only from a process that has established the exclusion —
+// see internal/engine/capacity.go, which is its one caller — because the
+// usage a resize is decided against has to be a quantity nothing can move.
+// Nothing here checks that: the exclusion is structural, established by every
+// node of the fleet running a mode that starts no publisher, and a check here
+// would be an observation of the thing the mode makes impossible.
+//
+// The update carries the stream's CURRENT configuration with one field
+// changed, read in the same call, because a JetStream update replaces the
+// whole configuration: sending a config built from this build's own defaults
+// would silently reset every field an operator or an earlier build had set.
+func (l *DomainLog) SetMaxBytes(ctx context.Context, maxBytes uint64) error {
+	l.stateMu.Lock()
+	defer l.stateMu.Unlock()
+
+	info, err := l.state.Info(ctx)
+	if err != nil {
+		return fmt.Errorf("jetstream: read %q's configuration before changing "+
+			"its ceiling: %w", l.name, err)
+	}
+	config := info.Config
+	config.MaxBytes = int64(maxBytes)
+	if _, err := l.js.UpdateStream(ctx, config); err != nil {
+		return fmt.Errorf("jetstream: set %q's ceiling to %d: %w",
+			l.name, maxBytes, err)
+	}
+	return nil
+}

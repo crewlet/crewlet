@@ -31,6 +31,18 @@ import (
 // tool could be given, and the answer has to come from a process that already
 // holds it.
 
+// THE NINE VERBS, and seven of them are node-client commands for `backup`'s
+// reason. TWO ARE NOT, and each is an exception with its own cause:
+//
+//   - `set-capacity` and `maintenance` need every node OUT of normal service,
+//     and a node-client command needs one in it. They run against a node in a
+//     maintenance mode, whose API is the mode's own control surface — see
+//     capacity.go, and note that the procedure itself is stated once, in
+//     internal/statelog.
+//   - `verify --restore` reads a backup ARTEFACT off disk. The whole point is
+//     that the artefact alone is enough, so asking a running node would be
+//     asking the thing under test to test itself.
+
 // runRetention dispatches the group.
 func runRetention(args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
@@ -45,9 +57,18 @@ func runRetention(args []string, stdout, stderr io.Writer) error {
 		return retentionGate(rest, stdout, stderr, true)
 	case "readmit":
 		return retentionGate(rest, stdout, stderr, false)
+	case "reanchor":
+		return retentionReanchor(rest, stdout, stderr)
+	case "verify":
+		return retentionVerify(rest, stdout, stderr)
+	case "set-capacity":
+		return retentionSetCapacity(rest, stdout, stderr)
+	case "maintenance":
+		return retentionMaintenance(rest, stdout, stderr)
 	case "", "help":
 		fmt.Fprintln(stderr, "usage: crewlet retention "+
-			"status|snapshots|ack|evict|readmit [<config.yaml>] [-url] [-token]")
+			"status|snapshots|ack|evict|readmit|reanchor|verify|"+
+			"set-capacity|maintenance [<config.yaml>] [-url] [-token]")
 		return flag.ErrHelp
 	default:
 		return fmt.Errorf("unknown retention command %q", sub)

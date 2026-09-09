@@ -45,6 +45,10 @@ type Fleet struct {
 	holds        map[string]coord.TrimHold
 	floors       map[string]coord.TrimFloor
 	backups      map[string]coord.BackupPoint
+	maintenance  map[string]coord.MaintenanceOperation
+	admissions   map[string]coord.Admission
+	maintAcks    map[string]coord.MaintenanceAck
+	maintRev     uint64
 
 	// documents is the fleet's document families. Lazily built, so a
 	// caller that never touches one carries no watcher bookkeeping.

@@ -46,6 +46,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) coord.Fleet) {
 		{"secrets", secretCases},
 		{"integrations", integrationCases},
 		{"documents", documentCases},
+		{"maintenance", maintenanceCases},
 		{"oversize", oversizeCases},
 		{"feed", feedCases},
 	}

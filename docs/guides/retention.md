@@ -253,6 +253,165 @@ a byte is a fifteen-minute gated job, and the log is full precisely because
 that gate is closed. A number here would be a promise the mechanism does not
 make.
 
+## Changing a log's ceiling
+
+`stream.max_bytes` is not a live setting. Raising it is a **fleet-wide
+maintenance window**, and the reason is not caution:
+
+- A resize is decided against the usage the log is at, and a publisher makes
+  that a moving quantity.
+- What retires a configuration request the broker has already queued is the
+  **broker process restarting**, not a client closing its connection. So an
+  apply whose outcome is unknown can only be resolved by everything restarting.
+
+The window costs **three fleet-wide restarts** on the happy path, and two more
+per retry:
+
+```
+# 1. every node
+crewlet run -mode maintenance
+
+# 2. from any one of them
+crewlet retention set-capacity CREWLET_TRACKER_LOG 8589934592 -confirm 8589934592
+
+# 3. every node
+crewlet run -mode seal
+
+# 4. from any one of them
+crewlet retention set-capacity CREWLET_TRACKER_LOG 8589934592 -confirm 8589934592
+
+# 5. every node, back to service
+crewlet run
+```
+
+### The three modes
+
+| `-mode` | Starts publishers | May write stream configuration |
+|---|---|---|
+| *(unset)* — `normal` | yes | no |
+| `maintenance` | no | **yes** |
+| `seal` | no | **no** |
+
+`seal` exists precisely because it *cannot* write configuration. A node
+acknowledging from it is evidence that the process making the claim is not the
+one holding the request being retired — which is what a maintenance-mode
+acknowledgement could never establish about itself.
+
+### What excludes a publisher
+
+On the default embedded topology, **nothing outside these processes can reach
+the broker at all** — it binds no socket — so a fleet in a maintenance mode is
+structurally excluded. There is no check to pass.
+
+On `stream.type: nats`, the engine does not run the broker and cannot know who
+else holds a connection to it. `set-capacity` refuses there unless you pass
+`-i-have-excluded-all-publishers`, which is your assertion in your own words. A
+check that quietly proved nothing would be worse than the refusal.
+
+A node that boots into `normal` mode writes an **admission** before it starts
+anything, then re-reads the operation and withdraws if one is open. A
+coordinator refuses to take the exclusion while any admission is held. Either
+order is then safe: a node that slipped between a check and its own start has
+left a durable record, where a silence would have let the coordinator proceed.
+
+### Where it stands, and what is holding it
+
+```
+crewlet retention maintenance status -stream CREWLET_TRACKER_LOG
+```
+
+One page: the operation and its phase and attempt, every participant's
+baselined incarnation against what it acknowledged as, which acknowledgements
+are missing, any unresolved write attempt, and any admission still blocking
+activation.
+
+Two gestures act on what it shows:
+
+| | |
+|---|---|
+| `crewlet retention maintenance exclude -stream NAME -node ID -confirm ID` | Your assertion that a participant's **process is stopped** and holds no outstanding request. The only thing that waives an acknowledgement — an eviction does not, because that is about whose records apply and this is about whose process is running. |
+| `crewlet retention maintenance abandon -stream NAME -confirm OPERATION-ID` | Changes what the operation is trying to reach; **never** the barrier it must cross. From `opened` it clears outright, because no request was ever issued. From anywhere else it still enters the seal: a paused coordinator's request is outstanding whether or not a person has read a status page. |
+
+### Why the target cannot be changed mid-window
+
+A verify compares the ceiling the broker reports against the operation's
+target. If the target could move, a mismatch would be unreadable — nobody could
+tell an unapplied request from a changed mind. Repeat the number in `-confirm`
+and it is fixed for the life of the operation; to choose a different one,
+abandon and open a new one.
+
+A mismatch at verify is a **numbered attempt**, not a re-apply: every node is
+in `seal` mode, which refuses configuration writes, so there is nowhere legal
+for a re-apply to run. Three attempts, then the operation reports blocked and
+waits for you.
+
+## Re-anchoring a recreated stream
+
+If a stream is genuinely recreated — deleted and remade, restored from a
+broker-level backup, rebuilt by hand — its sequences restart at 1. Every
+position the fleet holds then names a number space that no longer exists: a
+stored version, a consumer cursor, an arbitration anchor. Nodes refuse to
+serve, which is correct.
+
+The engine detects this from the stream's own **creation instant**, and
+`reanchor` is the response:
+
+```
+crewlet retention reanchor -stream CREWLET_TRACKER_LOG
+# prints the live stream's created_at, and refuses
+
+crewlet retention reanchor -stream CREWLET_TRACKER_LOG -confirm 2031-04-02T03:00:00Z
+```
+
+The confirmation is the stream's own `created_at`, and the verb **prints it and
+refuses** rather than reading it and feeding it straight back — otherwise it
+would be confirming against its own output.
+
+What a reanchor says is: *these rows are what they are; follow the new stream
+from its head.* The durable tables are the record of truth and the stream is a
+replay window, so the rows survive and the window is replaced. The generation
+is what makes an old position **comparable and safely stale** rather than
+indistinguishable from a current one — a stored version below it forms
+`expect = 0` on its next write, and a client cursor below it is refused by name.
+
+It does **not** recover records that were on the old stream and were never
+applied here.
+
+It refuses while any peer is hydrated on the live stream, naming the peer:
+adopting that peer's snapshot recovers the history a reanchor discards, so it
+is strictly the better recovery. `-force` is for the case where the peer cannot
+be reached.
+
+## Proving a restore
+
+```
+crewlet retention verify --restore -dir /var/backups/crewlet
+```
+
+The one verb here that talks to **no node**. It restores the newest artefact
+under `-dir` and opens the copy: the point is to establish that the artefact
+alone is enough, and running it through a running engine would be asking the
+thing under test to test itself. It writes nothing to the live store and takes
+no lock on it.
+
+It prints what the artefact holds — when it was taken and by which node, each
+estate's size and migration count, and every domain's generation and sequence —
+and then **exits non-zero past its cadence**, which defaults to 30 days
+(`-cadence`). That default is derived rather than chosen: `min_age` is 7 days,
+so a restore path broken for longer than one replay window means the log can no
+longer bridge the gap between an artefact and the present. Monthly gives four
+of those windows of margin.
+
+Two refusals are worth knowing:
+
+- **A directory with no manifest is debris**, not a partial backup — the
+  manifest is written last, so its absence means the run did not finish.
+- **An artefact naming no domain position cannot be verified**, whatever else
+  it contains: a restore replays from that sequence, and there is none.
+
+Put it in cron. A lapsed restore test that exits zero is a paragraph in a
+runbook nobody read.
+
 ## Removal, deletion and what a purge does not reach
 
 Three different things:
@@ -349,6 +508,8 @@ which:
 - **[Read consistency](consistency.md)** — what a full log costs, and the
   twelve refusals.
 - **[Backups & restore](backup.md)** — the artefact and the runbook.
+- **[CLI reference](../reference/cli.md#crewlet-retention)** — every verb's
+  flags and refusals.
 - **[Alarms](../reference/alarms.md)** — every condition and its remedy.
 - **[Metrics](../reference/metrics.md)** — the instruments a dashboard is built
   from.
