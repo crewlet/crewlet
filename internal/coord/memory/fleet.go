@@ -42,6 +42,7 @@ type Fleet struct {
 	secrets      map[string]coord.SecretRecord
 	integrations map[string][]byte
 	positions    map[string]coord.NodePositions
+	holds        map[string]coord.TrimHold
 
 	// documents is the fleet's document families. Lazily built, so a
 	// caller that never touches one carries no watcher bookkeeping.

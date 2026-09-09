@@ -123,6 +123,14 @@ type PositionRegister interface {
 }
 
 // PositionKey is a node's key in the register.
+//
+// THE REGISTER HOLDS TWO KEY CLASSES — this one and [HoldKey] — because both
+// answer the same question from opposite ends (what may the trim delete) and
+// both need the same retention, which is NONE. A listing over either class
+// filters on the first segment, and that filter is load-bearing rather than
+// tidy: a hold decoded as a positions row is a node id of "" with a domains
+// map of zero values, which the trim reads as a node that has applied nothing
+// and pins the floor at zero for ever.
 func PositionKey(nodeID string) string { return DocumentKey("node", nodeID) }
 
 // Validate reports why a row cannot be written.

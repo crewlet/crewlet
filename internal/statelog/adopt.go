@@ -2,7 +2,6 @@ package statelog
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -332,38 +331,25 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer) (Manifest, error) {
 // inside the file is the only one that describes the file — and a manifest
 // that names a different one is describing a different artefact.
 func (a *Adopter) verifyPositions(ctx context.Context, path string, m Manifest) error {
-	// THE ARTEFACT IS ONE ESTATE, so it is opened as one. store.Open would
-	// treat it as a node — applying the node estate's whole migration
-	// sequence into this copy of the replicated file and opening a second
-	// file beside it — and would then answer this query from the handle on
-	// the wrong half.
-	db, err := store.OpenEstate(ctx, store.EstateReplicated, path, store.Options{})
+	// ONE READ FOR BOTH ARTEFACTS. A snapshot and a backup both name their
+	// positions and both must read them from the file rather than from the
+	// live database, so the query lives once — see [CursorsInFile].
+	cursors, err := CursorsInFile(ctx, path)
 	if err != nil {
 		return fmt.Errorf("statelog: open the artefact: %w", err)
 	}
-	defer func() { _ = db.Close() }()
-
 	for name, want := range m.Domains {
-		var gen, seq int64
-		err := db.Read(ctx, func(tx *sql.Tx) error {
-			return tx.QueryRowContext(ctx,
-				`SELECT generation, seq FROM statelog_cursor WHERE stream = ?`,
-				want.Stream).Scan(&gen, &seq)
-		})
-		if errors.Is(err, sql.ErrNoRows) {
+		got, ok := cursors[want.Stream]
+		if !ok {
 			return fmt.Errorf("statelog: the artefact's manifest names %s at "+
 				"position %d and the file holds no checkpoint for it at all",
 				name, want.Seq)
 		}
-		if err != nil {
-			return fmt.Errorf("statelog: read %s's checkpoint from the artefact: %w",
-				name, err)
-		}
-		if uint64(seq) != want.Seq || uint32(gen) != want.Generation {
+		if got.Seq != want.Seq || got.Generation != want.Generation {
 			return fmt.Errorf("statelog: the artefact's manifest names %s at "+
 				"generation %d sequence %d and the file says %d/%d — a metadata "+
 				"claim the file does not keep is a corrupt snapshot",
-				name, want.Generation, want.Seq, gen, seq)
+				name, want.Generation, want.Seq, got.Generation, got.Seq)
 		}
 	}
 	return nil

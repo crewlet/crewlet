@@ -1328,8 +1328,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// store is locked to this process and the broker binds no
 		// socket. See internal/backup.
 		Backup: backup.New(backup.Options{
-			Store:  e.Backends().Store,
-			Conn:   e.Backends().Conn(),
+			Store: e.Backends().Store,
+			Conn:  e.Backends().Conn(),
+			// The trim-hold register. A backup is not a counted node,
+			// so without this the fleet's own trim can delete exactly
+			// the records the artefact's store-to-stream gap needs to
+			// be replayable — and the backup would report success.
+			Holds:  e.Backends().Fleet,
 			NodeID: boot.Node.ID,
 		}),
 		Config:  configSurface,
