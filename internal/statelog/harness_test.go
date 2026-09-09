@@ -291,7 +291,7 @@ type fakeGates struct {
 	adopted time.Time
 }
 
-func (g *fakeGates) GatedAt(context.Context, statelog.Subject, string, statelog.Position) (statelog.Reason, bool, error) {
+func (g *fakeGates) GatedAt(context.Context, statelog.Subject, string, string, statelog.Position) (statelog.Reason, bool, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.reason, g.gated, nil

@@ -95,8 +95,14 @@ type Fence interface {
 // budget to a conflict a model reads as a colleague editing the same object.
 type Gates interface {
 	// GatedAt reports the gate that dropped a record at p on this
-	// subject, published by writer.
-	GatedAt(ctx context.Context, subj Subject, writer string, p Position) (Reason, bool, error)
+	// subject, published by writer under opID.
+	//
+	// THE OPERATION ID IS NOT DECORATION. A gate that destroys an object
+	// is written BY a record, and that record must not be gated by the
+	// marker it wrote — otherwise a purge whose acknowledgement was lost
+	// resolves as "applied nowhere" and its caller is told the
+	// destruction it asked for did not happen, when it did.
+	GatedAt(ctx context.Context, subj Subject, writer, opID string, p Position) (Reason, bool, error)
 
 	// AdoptedAt is when this node's adoption of a donated snapshot
 	// completed, reporting false when it never adopted one.
@@ -740,7 +746,7 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 	// ABSENT, so ask the two questions that make absence mean something
 	// other than "somebody else won" — in the order that makes each
 	// answer conclusive.
-	if reason, gated, err := p.gates.GatedAt(ctx, req.Subject, p.nodeID, at); err != nil {
+	if reason, gated, err := p.gates.GatedAt(ctx, req.Subject, p.nodeID, req.OpID, at); err != nil {
 		return Result{}, fmt.Errorf("statelog: read the apply gates: %w", err)
 	} else if gated {
 		// THE RECORD APPLIED NOWHERE AND NEVER WILL. A refusal rather

@@ -808,12 +808,13 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO tracker_deletions
-			(task_id, task_key, project_key, by, by_kind, reason, committed_seq,
-			 log_stream, log_generation, at, document)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)
+			(task_id, task_key, project_key, purge_record_id, by, by_kind,
+			 reason, committed_seq, log_stream, log_generation, at, document)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT (task_id) DO NOTHING`,
-		id, task.Key, task.Project, c.record.Actor, string(c.record.ActorKind),
-		purgeReason(c), c.packed, c.position.Stream, c.position.Generation,
+		id, task.Key, task.Project, c.record.OpID, c.record.Actor,
+		string(c.record.ActorKind), purgeReason(c), c.packed,
+		c.position.Stream, c.position.Generation,
 		store.EncodeTime(c.brokerAt), []byte(c.record.Mutation))
 	if err != nil {
 		return 0, fmt.Errorf("tracker: mark %s purged at %s: %w", id, c.position, err)
