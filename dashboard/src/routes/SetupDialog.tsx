@@ -9,18 +9,34 @@
  *
  * # A secret is never rendered
  *
- * A field the engine already holds shows the `${VAR}` it points at and a
- * Replace link, never a masked value: there is no masked value to show,
- * because no route here returns one. A mintable field shows no input at all,
- * only a line saying the engine will generate it, because asking a person to
- * invent a shared token is asking them to invent a password.
+ * No route here returns a credential, so there is no masked value to show and
+ * nothing to reveal. What a field shows instead depends on how the value is
+ * kept:
  *
- * # It submits once
+ *   - A field pointing at the sealed store opens showing the `${VAR}` it
+ *     names, because that IS what the document holds.
+ *   - A field holding a hand-written LITERAL opens EMPTY, with the dots as
+ *     its placeholder — the box says a credential is held and contains
+ *     nothing, so typing produces exactly what was typed. See [HELD] for
+ *     what putting the dots in the value cost.
+ *   - A MINTABLE credential has no row at all: it is dropped from the form
+ *     by shownField, because asking a person to invent a shared token is
+ *     asking them to invent a password, and the engine generates it on
+ *     submit.
  *
- * Every value goes in one request. The engine seals the credentials, patches
- * the document and advances the epoch in that order, so there is no state
- * where this dialog holds a credential across two calls and no way for a
- * closed tab to leave the write half done.
+ * There is no Replace control. Typing over a field is what replaces what it
+ * holds, and an untouched one is not submitted.
+ *
+ * # It submits what changed, once per surface
+ *
+ * A section with nothing new is not written at all: seed() fills the form
+ * from what the engine reports, so a value equal to that is one nobody
+ * changed — and every submitted section is a revision and an epoch, because
+ * nothing on the write path compares before writing. Each section that DOES
+ * have something goes in one request, in which the engine seals the
+ * credentials, patches the document and advances the epoch in that order, so
+ * there is no state where this dialog holds a credential across two calls and
+ * no way for a closed tab to leave the write half done.
  */
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -188,8 +204,20 @@ export function splitFields(reqs: SetupRequirement[]): {
  * a required label would read as an unanswered question on a form that is
  * already complete.
  *
- * Left alone it is never submitted (see payloadFor): typing over it is what
- * replaces the credential.
+ * A PLACEHOLDER, NEVER A VALUE. It used to be seeded into the form as the
+ * field's actual value, with payloadFor guarding on an exact string compare
+ * against these sixteen characters — so anything that left the box holding
+ * something else submitted the WHOLE string as the credential. Two ordinary
+ * gestures did: clicking into the masked box and typing without select-all,
+ * which inserts at the caret; and the `${NAME}` completion, which keeps
+ * everything before the `$` and so produces dots followed by a reference,
+ * still rendered as dots because it is not a whole reference. The engine has
+ * no net for either — a value that is not a whole reference is sealed as the
+ * credential, by name.
+ *
+ * So the box is genuinely empty and this is what it shows when empty. Any
+ * keystroke then produces exactly what was typed, and "nothing was typed" is
+ * an empty string rather than a string that has to be recognised.
  */
 export const HELD = "••••••••••••••••";
 
@@ -446,6 +474,19 @@ export function SetupDialog({
     return initial;
   });
 
+  /**
+   * Whether this field still holds exactly what the engine reports.
+   *
+   * WHAT THE ENGINE HOLDS, not what the form shows. A DEFAULT is not an
+   * unchanged value: seed offers one only where the company has answered
+   * nothing, so submitting it is how the answer gets written — a hidden
+   * `enabled: true` is the whole of what turns a block on, and treating it
+   * as untouched would make a connect submit nothing at all.
+   */
+  function unchanged(r: SetupRequirement, value: string): boolean {
+    return r.value !== "" && value === r.value;
+  }
+
   function seed(
     initial: Record<string, string>,
     section: SetupSection,
@@ -476,7 +517,9 @@ export function SetupDialog({
       // Only a hand-written LITERAL arrives with no value, and that is what
       // the dots are for. See [HELD].
       if (r.kind === "secret" && !r.value && r.present) {
-        initial[key] = HELD;
+        // NOTHING IN THE BOX. That a credential is held is shown by the
+        // placeholder — see [HELD] for what seeding the dots as the value
+        // cost.
         return;
       }
       if (r.value) {
@@ -533,7 +576,15 @@ export function SetupDialog({
   // rather than the rendering.
   const editable = shownField;
 
-  /** What one section would send: only what was touched, plus its mints. */
+  /**
+   * What one section would send: only what DIFFERS from what the engine
+   * reports, plus its mints.
+   *
+   * Compared against the requirement rather than tracked as a dirty flag,
+   * because seed() fills the form from the same source: a value equal to
+   * what is stored is one nobody changed, whether they retyped it or never
+   * touched it.
+   */
   function payloadFor(
     section: SetupSection,
     reqs: SetupRequirement[],
@@ -555,11 +606,19 @@ export function SetupDialog({
       }
       const value = values[valueKey(section, r)];
       if (value === undefined) continue;
-      // AN UNTOUCHED CREDENTIAL IS LEFT ALONE. Empty, or still showing the
-      // dots that say one is held: either way there is nothing new to write,
-      // and submitting it would rewrite a working key with placeholder text.
-      // Typing over it is what replaces the credential.
-      if (r.kind === "secret" && (value.trim() === "" || value === HELD)) continue;
+      // AN UNTOUCHED CREDENTIAL IS LEFT ALONE, and untouched now means
+      // EMPTY — there is no sentinel in the box to recognise, so there is
+      // no way to leave it holding something that is neither the sentinel
+      // nor a credential. Typing is what replaces one.
+      if (r.kind === "secret" && value.trim() === "") continue;
+      // AND AN UNCHANGED VALUE IS NOT A WRITE. seed() puts every stored
+      // value into the form, so every configured field passed this point
+      // and every section was submitted: one revision per seat on a Save
+      // that touched one of them, because the write path compares nothing
+      // and the activation advances the epoch unconditionally. The
+      // comments promising "only what was touched" and "only for the
+      // surfaces that have something to send" were both untrue.
+      if (r.kind !== "secret" && unchanged(r, value)) continue;
       send[r.field] = value;
     }
     return { values: send, generate };
@@ -585,7 +644,7 @@ export function SetupDialog({
       }))
       .filter(({ body }) => Object.keys(body.values).length > 0 || body.generate.length > 0);
     if (work.length === 0) {
-      setError("Nothing to submit: fill in a field, or choose to replace a stored one.");
+      setError("Nothing to submit: change a field, or type over a credential to replace it.");
       setBusy(false);
       return;
     }
@@ -603,7 +662,17 @@ export function SetupDialog({
         rotated = rotated || answer.reloaded === true;
       }
       refused.current = undefined;
-      toast.ok(rotated ? `${title} credentials rotated and republished` : `${title} connected`);
+      // WHAT THE BUTTON SAID. The title and the button already branch on
+      // `connecting` — "a title reading Connect over a Save button is the
+      // wrong promise" — and the toast did not, so a dialog headed "Datadog
+      // settings", submitted with Save, confirmed with "Datadog connected".
+      toast.ok(
+        rotated
+          ? `${title} credentials rotated and republished`
+          : connecting
+            ? `${title} connected`
+            : `${title} settings saved`,
+      );
       onDone();
       onClose();
     } catch (err) {
@@ -972,6 +1041,10 @@ export function SetupDialog({
             kind={r.kind === "toggle" ? "choice" : (r.kind as FieldKind)}
             value={values[key] ?? ""}
             onChange={(v) => setValues((c) => ({ ...c, [key]: v }))}
+            // THE DOTS THAT SAY A CREDENTIAL IS HELD, and only that: a
+            // placeholder is not a value, so any keystroke produces
+            // exactly what was typed. See [HELD].
+            placeholder={r.kind === "secret" && !r.value && r.present ? HELD : undefined}
             secrets={secretNames}
             onSecretsNeeded={() => void loadSecrets()}
             // WHAT THE APP SAYS, and nothing about which button opened the

@@ -107,11 +107,17 @@ integrations:
 | Field | Required | Meaning |
 |---|---|---|
 | `enabled` | yes | Turn the integration on. |
-| `webhook_token` | yes | Compared against the `X-Crewlet-Token` header on every delivery. A route with nothing to check against answers **503** rather than accepting one. |
-| `route_to` | yes | The handle of the seat an alert wakes when no monitor tag names an owner. See [Routing](#routing-is-by-ownership-not-by-mention). |
-| `provisioning` | yes | The organization credential pair (`site`, `api_key`, `app_key`). The engine registers the webhook with it, so an enabled block without it is refused. |
-| `webhook_name` | no | The name of the webhook the engine keeps at Datadog, and therefore the handle a monitor writes: `@webhook-crewlet` by default. Give two deployments watching one organization two names, or each rewrites the other's address on every pass. Cannot contain a space, an `@` or a comma. |
+| `webhook_token` | yes | Compared against the `X-Crewlet-Token` header on every delivery. A route with nothing to check against answers **503** rather than accepting one, and so does one whose token is shorter than **26 characters** — see [Verification is weaker here](#verification-is-weaker-here-and-that-is-the-providers-ceiling). |
+| `route_to` | yes | The handle of an **agent** seat this company declares, or the literal `none`. An alert wakes that seat when no monitor tag names an owner; `none` dismisses those alerts on purpose. A handle no seat has, or one naming a human seat, is refused at validation — and no seat may itself be handled `none`, or it would be silenced by its own name. See [Routing](#routing-is-by-ownership-not-by-mention). |
+| `provisioning` | yes | The organization credential pair and the region it was issued in: `site`, `api_key`, `app_key`, all three required. The engine registers the webhook with them, so an enabled block missing any is refused. `site` must be a region Datadog serves — a key issued in one is refused by every other, and the hostname is the only thing that tells them apart. |
+| `webhook_name` | no | The name of the webhook the engine keeps at Datadog, and therefore the handle a monitor writes: `@webhook-crewlet` by default. Give two deployments watching one organization two names, or each rewrites the other's address on every pass. Cannot contain a space, an `@` or a comma. **Renaming leaves the old definition in place** — see below. |
 | `handle_tag` | no | The monitor tag key that names a seat. Defaults to `crewlet`. Cannot contain a colon, a comma or a space, because Datadog uses those to separate a key from its value and one tag from the next. |
+
+**Renaming `webhook_name` is a two-step change, and the engine does the first step and then tells you about the second.** The name is also the handle your monitors write, so every monitor still saying `@webhook-crewlet` keeps delivering through the old definition — same address, same token, still working. The engine therefore does not delete it: doing so would silence exactly those monitors. Nor could anything find it for you afterwards, because Datadog answers a `GET` on the webhooks collection with `405` and there is no listing to enumerate.
+
+So the engine **remembers the name it registered under**, and the first pass after a rename reports the definition left behind: the Integrations screen carries it as a note on a **Connected** integration, naming both the old definition and the new one. Nothing is broken, which is why it is an advisory rather than a fault. Repoint the monitors to the new handle, then delete the old definition at Datadog and the note clears itself. A disconnect withdraws only the name the field currently holds.
+
+A disconnect also **reads before it deletes**: a definition under your `webhook_name` that posts somewhere other than this deployment's own `/webhooks/datadog` address is not this engine's, so it is reported and left alone rather than removed.
 
 ## Routing is by ownership, not by mention
 
@@ -137,6 +143,10 @@ flowchart TD
 
 **`route_to` is required, and that is deliberate.** An alert is the one delivery that can legitimately name no party, because a monitor is not addressed to anyone. Without a floor those alerts would be accepted, verified, counted on the dashboard and delivered to nobody, which is the worst state an alerting integration can be in: it looks exactly like coverage. `crewlet validate` refuses an enabled block without one.
 
+**`none` is an answer, and it is not the same as leaving the field blank.** A company may want only the monitors it has labelled to wake anybody, and everything else to stay with whatever Datadog already does about it — that is a decision, and `route_to: none` is how it is written down. Blank is a question nobody answered, and an alert reaching nobody through it is a silent hole in the coverage. Because `none` means nobody, **no seat may be handled `none`**: one that was would be silenced by its own name, on a screen reporting the configuration exactly as written, so `crewlet validate` refuses it.
+
+**And it has to name somebody who can be woken.** A handle no seat has resolves to nothing, and one naming a **human** seat resolves fine and is then dropped as a self-action — both leave the configuration reading as correct on every screen while every untagged alert lands nowhere, which is the state the requirement exists to prevent. So validation checks the value against the company's own roster: it must be `none`, or the handle of an agent seat this company declares. A monitor **tag** naming an unknown handle is different and stays visible as an undeliverable notification, because a tag is somebody's typo in Datadog rather than a line in this document.
+
 A tag naming a seat that does not exist is **not** silently dropped. It is delivered as far as it can go and recorded as an undeliverable notification with the handle on it, because a typo in a monitor tag is something you have to be able to see.
 
 ### What a seat is asked
@@ -148,7 +158,7 @@ The prompt differs by why the seat was reached, because the two are not the same
 
 A **recovery** reaches the same seats as the alert it recovers from: the seat woken to investigate is the one that has to be told to stand down. What differs is the ask. A recovery is asked to confirm the recovery is real (a monitor with no data recovers exactly like one whose problem was fixed), close out anything it reported, and say so plainly if it cleared for reasons nobody understands.
 
-A monitor's trigger, recovery and re-trigger are **one conversation**, so a seat sees that this is the fourth time tonight rather than four unrelated pages.
+A monitor's trigger, recovery and re-trigger are **one conversation**, so a seat sees that this is the fourth time tonight rather than four unrelated pages. The thread is keyed on the monitor's own id (`$ALERT_ID` in the [payload template](#the-payload-template)), not on its title, because a Datadog title carries the alert state and would put a trigger and its recovery in two threads.
 
 ## Verification is weaker here, and that is the provider's ceiling
 
@@ -160,6 +170,8 @@ The strongest check available is therefore a constant-time comparison of a share
 - anyone holding the token can forge an alert
 
 Treat `webhook_token` as a signing key. It is doing that job with none of the guarantees. Rotate it the same way, and keep it a `${VAR}` rather than a literal.
+
+Because the token is the entire check, its length is the entire strength, so **Crewlet refuses one shorter than 26 characters** — the length the dashboard's own Generate button mints (130 bits of base32). The refusal happens in two places on purpose: `crewlet validate` and `PATCH /config` reject a short literal, and the route itself answers 503 for a short **resolved** value, so pointing a `${VAR}` at a weak token is not a way around it. The same floor applies to Confluence Cloud's `webhook_token`, which is in the same position for the same reason.
 
 ## What you do in Datadog
 
@@ -185,6 +197,7 @@ Datadog posts an **empty body** unless the webhook defines a payload template, a
 ```json
 {
   "id": "$ID",
+  "monitor_id": "$ALERT_ID",
   "title": "$EVENT_TITLE",
   "body": "$EVENT_MSG",
   "alert_transition": "$ALERT_TRANSITION",
@@ -197,6 +210,8 @@ Datadog posts an **empty body** unless the webhook defines a payload template, a
 ```
 
 `$TAGS` is what routing runs on, so an alert cannot be routed to its owner without it. `$LINK`, `$EVENT_TITLE` and `$ALERT_SCOPE` are what let a seat be told where to look rather than only that something happened.
+
+`$ID` and `$ALERT_ID` are both here because they answer different questions. `$ID` identifies the **notification** and is what the webhook edge deduplicates a retry on. `$ALERT_ID` identifies the **monitor**, and it is what makes a trigger and its recovery one conversation — a Datadog title carries the state (`[Triggered] API latency`, then `[Recovered] API latency`), so keying the thread on the title split every incident in two. An alert delivered by a definition written before this line existed carries no `monitor_id`, and falls back to the title.
 
 Every value is quoted, including `$PRIORITY`. An unquoted variable that expands to nothing yields `"priority": ,`, which is not JSON and which Datadog posts anyway. The engine still accepts a bare number, so a template somebody unquoted by hand does not lose its alerts until the next pass restores this one.
 

@@ -249,7 +249,7 @@ func (e *Engine) startGitHub(ctx context.Context, c *Company, cfg *config.GitHub
 	// lookup learns anyway, and that one degrades instead of refusing.
 	lookup := &github.SeatLookup{Opts: github.SeatAppOptions{
 		APIBase: api, WebBase: web, Org: githubOrg(cfg),
-		Seats: e.githubSeatApps(env),
+		Seats: e.githubSeatApps(c, env),
 	}}
 
 	e.notify.github.resolve(ctx, api, web, github.SeatCredentials(c.Org, env.Value))
@@ -325,8 +325,15 @@ func (e *Engine) reconcileGitHub(ctx context.Context, c *Company) {
 // what is still outstanding, and the participant lookup, which asks whose
 // credential can read a thread. Two readers of one roster would be free to
 // disagree about which apps exist.
-func (e *Engine) githubSeatApps(env *config.Resolver) []github.SeatApp {
-	company := e.Company()
+//
+// THE COMPANY IS PASSED IN, never read off the live epoch, because one caller
+// is the APPLY. A revision is wired before it is published, so
+// [Engine.Company] there is still the OUTGOING one: reading it would build
+// the new revision's participant lookup from the old revision's seat apps,
+// and a seat whose app was created, rotated or removed in the very apply
+// being wired would be looked up as whatever it was before. Every other input
+// [Engine.startGitHub] uses already comes from its own argument.
+func (e *Engine) githubSeatApps(company *Company, env *config.Resolver) []github.SeatApp {
 	out := []github.SeatApp{}
 	if company == nil {
 		return out

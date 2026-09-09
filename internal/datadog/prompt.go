@@ -55,19 +55,33 @@ func (Prompt) Addressed(n notify.Inbound) bool {
 
 // ConversationKey implements [notify.Prompt]: the MONITOR is the conversation.
 //
-// Keyed on the monitor's title rather than on the alert id, and the two are
-// opposite choices. The alert id is unique per notification, so keying on it
-// would make every firing its own conversation and a seat would never see
-// that this is the fourth time tonight. The monitor is the thing that keeps
-// firing, so a trigger, its recovery and its re-trigger coalesce into one
-// thread, which is what a person paging through an incident actually reads.
+// Keyed on the monitor rather than on the alert, and the two are opposite
+// choices. The alert id is unique per NOTIFICATION, so keying on it would
+// make every firing its own conversation and a seat would never see that this
+// is the fourth time tonight. The monitor is the thing that keeps firing, so
+// a trigger, its recovery and its re-trigger coalesce into one thread, which
+// is what a person paging through an incident actually reads. The digest
+// coalescer partitions on this key too, so it is also what keeps that story
+// together inside one window.
 //
-// The TITLE rather than a monitor id because the payload template carries no
-// id: Datadog's `$ID` is the notification's, and there is no `$MONITOR_ID`
-// variable. A retitled monitor therefore starts a new conversation, which is
-// the correct behaviour for the one case it costs anything: renaming a
-// monitor is usually redefining what it watches.
+// THE ID, NOT THE TITLE, and that distinction is the whole of it. A Datadog
+// title carries the STATE — "[Triggered] API latency" and then "[Recovered]
+// API latency" — so keying on it put a trigger and its recovery in two
+// threads, which is the precise opposite of what this function exists to do.
+// It was keyed on the title on the reasoning that "there is no $MONITOR_ID
+// variable"; true of that spelling, but the payload template is this engine's
+// own to write and Datadog's $ALERT_ID is the monitor.
+//
+// The title remains the fallback, for an alert delivered by a webhook
+// definition written before the template carried the id — an operator's
+// hand-made one, or this engine's own before the next pass rewrites it. A
+// retitled monitor then starts a new conversation, which is the correct
+// behaviour for the one case it costs anything: renaming a monitor is usually
+// redefining what it watches.
 func (Prompt) ConversationKey(metadata map[string]string, subject string) string {
+	if id := metadata[MonitorIDField]; id != "" {
+		return "monitor:" + id
+	}
 	if monitor := metadata[MonitorField]; monitor != "" {
 		return monitor
 	}

@@ -331,7 +331,7 @@ func TestADisconnectWithdrawsTheWebhookEvenWhenAccountsStay(t *testing.T) {
 	}
 	if err := datadog.Teardown(context.Background(), datadog.TeardownOptions{
 		Client: reg.client(t), Config: cfgWith(), Creds: pair,
-		RemoveSeats: false,
+		RemoveSeats: false, WebhookBase: base,
 	}); err != nil {
 		t.Fatalf("teardown: %v", err)
 	}
@@ -342,8 +342,62 @@ func TestADisconnectWithdrawsTheWebhookEvenWhenAccountsStay(t *testing.T) {
 	// failure, and refusing the second attempt would leave a disconnect
 	// stuck on work that is already done.
 	if err := datadog.Teardown(context.Background(), datadog.TeardownOptions{
-		Client: reg.client(t), Config: cfgWith(), Creds: pair,
+		Client: reg.client(t), Config: cfgWith(), Creds: pair, WebhookBase: base,
 	}); err != nil {
 		t.Fatalf("second teardown: %v", err)
+	}
+}
+
+// A DEFINITION THIS ENGINE DID NOT REGISTER IS NOT DELETED.
+//
+// The name is Datadog's primary key and it is not ownership: an organization
+// may already hold one called "crewlet". The teardown issued its DELETE
+// blind, so a disconnect took down an integration this engine never made —
+// unrecoverably, where a refused disconnect is not. Every other vendor
+// teardown in this tree proves ownership on the delivery URL first.
+func TestADisconnectLeavesSomebodyElsesWebhookAlone(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	noSeats(reg)
+	held := &stored{hook: &datadog.Webhook{
+		Name: "crewlet", URL: "https://someone-else.example.com/hooks/theirs",
+	}}
+	serveWebhook(reg, held)
+
+	err := datadog.Teardown(context.Background(), datadog.TeardownOptions{
+		Client: reg.client(t), Config: cfgWith(), Creds: pair, WebhookBase: base,
+	})
+	if err == nil {
+		t.Fatal("a webhook pointing somewhere else was removed without a word")
+	}
+	if held.hook == nil {
+		t.Fatal("somebody else's webhook was deleted")
+	}
+	// AND THE REFUSAL SAYS WHERE IT POINTS, which is the one thing an
+	// operator needs to decide what it is.
+	if !strings.Contains(err.Error(), "someone-else.example.com") {
+		t.Errorf("the refusal does not name the address: %v", err)
+	}
+}
+
+// AND WITH NO PUBLIC BASE NOTHING IS WITHDRAWN, because nothing was ever
+// registered without one — the pass refuses to, naming the missing base. A
+// teardown that deleted here would be deleting on no evidence at all.
+func TestADisconnectWithNoPublicBaseWithdrawsNothing(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	noSeats(reg)
+	held := &stored{hook: &datadog.Webhook{Name: "crewlet", URL: base + "/webhooks/datadog"}}
+	serveWebhook(reg, held)
+
+	if err := datadog.Teardown(context.Background(), datadog.TeardownOptions{
+		Client: reg.client(t), Config: cfgWith(), Creds: pair,
+	}); err != nil {
+		t.Fatalf("teardown: %v", err)
+	}
+	if held.hook == nil {
+		t.Error("a webhook was deleted by a node that could not name its own address")
 	}
 }

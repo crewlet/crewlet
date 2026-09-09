@@ -33,22 +33,40 @@ func (r *Result) Findings() []integration.Finding {
 	// all, on every pass, that something optional was missing put a
 	// permanent note on a card with nothing wrong with it.
 
-	// A TARGET THIS RUN TRIED AND COULD NOT HOOK, and only that.
+	// NO ADDRESS TO DELIVER TO IS ONE FINDING, said once.
 	//
-	// An EMPTY hook list is deliberately not a finding, because it is what
-	// a read-only pass produces by construction: with no public base URL
-	// the run registers nothing and reports nothing, and reading that as
-	// "no webhook target is registered" would park every company on a
-	// block nobody can clear. That URL is not on the integrations block
-	// today (every integration subcommand takes it as -public-url), so ingress
-	// convergence stays with the subcommand that has it.
+	// An empty hook list used to be silence, on the reasoning that a
+	// read-only pass produces one by construction and that the public base
+	// "is not on the integrations block today". It IS — it is
+	// `integrations.public_base_url`, and the reconcile loop feeds exactly
+	// that value into every pass — so the silence meant a company that
+	// never set it saw GitHub reported Ready while nothing at GitHub
+	// pointed anywhere. That is the state this whole subsystem exists to
+	// refuse.
 	//
-	// A target that WAS attempted and refused is a different fact, and it
-	// is reported per target rather than once: a partial hook-up is the
-	// state this third-party app actually reaches, an org hook the credential may
+	// ONCE rather than per target, because there is nothing per-target
+	// about it: no address means no hook anywhere, and one sentence naming
+	// the field is the whole of what an operator has to do.
+	if r.NoIngress != "" {
+		out = append(out, integration.Finding{
+			Kind:    integration.FindingIngressBlocked,
+			Subject: "integrations.public_base_url",
+			Detail:  r.NoIngress,
+		})
+	}
+
+	// AND A TARGET THIS RUN TRIED AND COULD NOT HOOK.
+	//
+	// Reported per target rather than once: a partial hook-up is the state
+	// this third-party app actually reaches, an org hook the credential may
 	// not create beside repositories it may.
 	for _, hook := range r.Hooks {
-		if hook.Hooked() {
+		// A SKIPPED TARGET IS NOT A BLOCK. An archived repository emits
+		// no events, so it has nothing to hook rather than a hook that
+		// failed — see [HookOutcome]. Reported as a block it parked the
+		// company in PhaseDegraded, retried on the admin backoff for
+		// ever, over a repository that is finished.
+		if !hook.Blocks() {
 			continue
 		}
 		out = append(out, integration.Finding{

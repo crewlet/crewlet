@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // Teardown removes the webhooks this engine registered at GitHub.
@@ -30,9 +32,6 @@ import (
 // others; the errors are joined so the operator sees every one at once rather
 // than one per retry.
 func Teardown(ctx context.Context, opts Options) error {
-	if opts.Client == nil {
-		return errors.New("github: no client")
-	}
 	if opts.Config == nil {
 		return errors.New("github: no github config")
 	}
@@ -44,6 +43,31 @@ func Teardown(ctx context.Context, opts Options) error {
 	}
 	pv := opts.Config.Provisioning
 	if pv == nil {
+		return nil
+	}
+	// NO CREDENTIAL IS NOT A FAULT, and this check sits BELOW the two above
+	// so that the ordinary no-op cases never reach it.
+	//
+	// `integrations.github.token` is optional on this host, and nothing at
+	// runtime needs it any more — each agent acts through its own app. So a
+	// nil client is the documented posture of a working company, not a
+	// misconfiguration, and returning an error for one made the disconnect
+	// UNCOMPLETABLE: the block is dropped only after the vendor step
+	// succeeds, so the surface sat "Disconnecting" and retried for the life
+	// of the deployment.
+	//
+	// What the engine cannot do it says plainly instead. The hooks it can no
+	// longer list are named for the operator to remove, which is the same
+	// bargain the app registration itself takes: GitHub offers no API to
+	// delete an app, so the engine uninstalls what it can and hands over a
+	// link for the rest.
+	if opts.Client == nil {
+		log.Warn("github_hooks_not_removed",
+			"targets", hookTargetNames(pv),
+			"delivery_url", target,
+			"detail", "no integrations.github.token resolved, so this engine "+
+				"cannot list or delete the webhooks it registered: remove any "+
+				"hook pointing at this address by hand")
 		return nil
 	}
 
@@ -88,4 +112,17 @@ func Teardown(ctx context.Context, opts Options) error {
 		}
 	}
 	return errors.Join(failures...)
+}
+
+// hookTargetNames is where a hook this engine registered may still be, for an
+// operator who has to go and remove them by hand.
+func hookTargetNames(pv *config.GitHubProvisioning) []string {
+	var out []string
+	if org := strings.TrimSpace(pv.Org); org != "" {
+		out = append(out, org)
+	}
+	for _, t := range TargetsOf(pv) {
+		out = append(out, t.Owner+"/"+t.Repo)
+	}
+	return out
 }

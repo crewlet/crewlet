@@ -122,6 +122,8 @@ What was measured, and what it decides:
 
 That makes the Cloud token exactly what [Datadog's](datadog.md) is: **a shared token doing a signing key's job with none of the guarantees.** A replayed delivery is indistinguishable from a fresh one, and anyone holding the token can forge a page event. Treat `webhook_token` as a signing key, rotate it the same way (`-recreate-webhooks` re-registers every hook with a fresh one), and keep it a `${VAR}`. The engine never logs the query string on this route.
 
+Because the token is the entire check, its length is the entire strength, so **Crewlet refuses one shorter than 26 characters** — the length `crewlet confluence provision` and the dashboard's Generate button both mint (130 bits of base32). `crewlet validate` and `PATCH /config` reject a short literal, and the route answers 503 for a short **resolved** value, so a `${VAR}` pointing at a weak token is refused exactly where the weak token itself would be.
+
 If you would rather not carry the risk of an undocumented endpoint, the Forge app below remains the supported route, and an Automation rule is the documented way to reach this same route without it.
 
 The account whose token is in `integrations.confluence.token` needs **Confluence administrator** rights to register hooks.

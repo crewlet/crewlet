@@ -149,6 +149,21 @@ type Sources struct {
 	// unchecked.
 	Reconciles func(ctx context.Context) []integration.State
 
+	// PublicBase is where third-party apps reach this deployment, RESOLVED,
+	// or nil when this process cannot say.
+	//
+	// Resolved, and that is why it is a seam rather than a read of
+	// [Sources.Company]: `public_base_url` may be a whole `${VAR}`, and what
+	// a surface REGISTERED is the address that reference resolved to. A
+	// comparison against the raw document would answer "the address moved"
+	// for every company that writes one, for ever.
+	//
+	// Nil is "cannot say", exactly as with Routed, Verifiable and Reconciles
+	// above: a standalone API has no resolution chain, and a node that
+	// cannot read the value must not be the reason a screen calls a healthy
+	// registration stale.
+	PublicBase func() string
+
 	// NodeID names this node in the fleet answer, so a reader can tell
 	// which row is the one they are talking to.
 	NodeID string
@@ -221,7 +236,15 @@ func Register(r *Registry, s Sources) {
 		// Both are projections of the epoch: what the company DECLARES,
 		// which is a different question from what it has done.
 		r.Register("schedules", s.schedules)
-		r.Register("integrations", s.integrations)
+		// OPERATOR-ONLY, alone among the projections, because of what it
+		// projects. `/setup` is guarded in FULL — reads included — for the
+		// reason its own package doc gives: "the list of which credentials
+		// a company has NOT configured is a map of what to attack." This
+		// answer is that same map, per surface: which are configured, which
+		// hold a secret, which are half-set-up, and the address each is
+		// registered against. Serving it anonymously guarded the write and
+		// published the reconnaissance.
+		r.RegisterOperator("integrations", s.integrations)
 		// Gated on the COMPANY, not on the searcher, for the same reason
 		// budgets is: "this company has no knowledge backend configured" is
 		// a fact the company alone establishes, and it is a far more useful

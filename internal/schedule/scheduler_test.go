@@ -1,7 +1,7 @@
 package schedule
 
-// Behavioural tests for the tick loop, ported from tests/test_schedule/
-// the scheduler's cases, including the ones only Go's shape makes reachable.
+// Behavioural tests for the tick loop — the scheduler's cases, including the
+// ones only Go's shape makes reachable.
 //
 // Internal (package schedule) rather than black-box for exactly one reason:
 // the loop is driven by seeding its last-tick instant, which is how a case

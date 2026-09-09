@@ -574,17 +574,21 @@ rendered idle from the first phase to the last.
    engine's own refusal beside the field it names. A button whose result is
    invisible is a button an operator presses twice.
 8. **No screen renders a credential.** The setup dialog shows the `${VAR}` a
-   field points at and never a value, because no route returns one.
+   field points at, or — for a hand-written literal — an empty box whose
+   PLACEHOLDER is dots saying one is held. Never a value, because no route
+   returns one, and never dots as the value: a placeholder cannot be
+   submitted, and a sentinel that has to be recognised on the way out is one
+   an edit can defeat.
 9. **A card is one object in two states.** The Integrations screen draws one
    bordered card per tool rather than rows in a shared panel, so a connected
    one can grow a body and still read as the thing it already was. A row that
    expands inside a list of rows pushes its neighbours around and reads as the
    list breaking. The disclosure is the identity block, never the whole
    header, so the card's own buttons are not nested inside a button.
-7. **Every screen, section and filter is in the URL**, and obeys the
-   push/replace table above.
-8. **A screen subscribes to the slices it reads and no others.**
-9. **Numbers are tabular**, and an absent number is an em dash rather than a
-   zero — zero is a measurement.
-10. **Run `make dashboard` and commit `static/dashboard` with the change.** CI
+10. **Every screen, section and filter is in the URL**, and obeys the
+    push/replace table above.
+11. **A screen subscribes to the slices it reads and no others.**
+12. **Numbers are tabular**, and an absent number is an em dash rather than a
+    zero — zero is a measurement.
+13. **Run `make dashboard` and commit `static/dashboard` with the change.** CI
     diffs it; a bundle that has drifted from its source is a red build.

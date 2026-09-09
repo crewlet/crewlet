@@ -38,6 +38,7 @@ subcommand below is served by it.
 | `crewlet llm export <KEY> [-secret-store]` | Pack the login into one portable blob — stdout, or the secret store under the name the engine restores from on a fresh host |
 | `crewlet llm import <KEY>` | Restore a bundle from **stdin** onto this host; refuses to overwrite a login that is already there |
 | `crewlet confluence import <company.yaml> <directory>` | Publish a directory of authored markdown into [Confluence](../integrations/confluence.md) spaces — one space per directory, plus the tool skills the files themselves declare. Every target space is checked before a single page is written |
+| `crewlet confluence provision <company.yaml>` | Register the inbound [Confluence](../integrations/confluence.md) webhooks and mint the credential each one carries. Cloud gets one token-bearing hook per event, Data Center one signed hook for all of them, and a re-run converges what is there rather than adding to it |
 | `crewlet confluence resync <company.yaml>` | Re-run the engine's own tool-skill walk of the Confluence skills space against a throwaway registry and print what loads — a read-only diagnostic, not a way to change a running engine |
 | `crewlet slack provision <company.yaml>` | Create, update and install one [Slack](../integrations/slack.md) app per agent seat from the canonical manifest, minting each seat's bot token and signing secret into the `${VAR}`s its config points at. The install itself is an OAuth grant, so the run hands the operator one authorize URL per seat and takes the code back |
 | `crewlet jira provision <company.yaml>` | Report a [Jira](../integrations/jira.md) instance against the config: which account each seat's own credential authenticates as, whether every project the org chart names exists and agrees about its lead, and — on Data Center — register the inbound webhook with a minted secret. Jira issues no credentials on a provisioner's behalf, so this run reports far more than it changes |
@@ -724,7 +725,7 @@ read as finished. A run that changed nothing prints no follow-up.
 |------|-------------|
 | `-admin-token` | Operator credential — a top-level group **Owner** PAT with `api` scope on GitLab.com, or an admin PAT self-managed. Falls back to `$GITLAB_ADMIN_TOKEN`. The seats' own tokens are what this run mints, so it cannot bootstrap itself from them. |
 | `-secret-store` / `-env-file PATH` / `-print` | Where minted credentials go — exactly one, and there is no default: a run with nowhere to put what it mints creates live credentials at the third-party app and prints none of them. See [the secret store](../concepts/secret-store.md). |
-| `-public-url` | This deployment's public base URL; the group webhook is registered at `<url>/webhooks/gitlab`. Omit to skip webhook registration — a hook pointing at the wrong host is worse than none, because the instance then reports a healthy integration. |
+| `-public-url` | This deployment's public base URL; the group webhook is registered at `<url>/webhooks/gitlab`. **Overrides `integrations.public_base_url` for this run**, and registration is skipped only when both are empty — a hook pointing at the wrong host is worse than none, because the instance then reports a healthy integration. |
 | `-rotate` | Mint a fresh token for every seat, including seats whose current one still works. **Restart the engine afterwards.** |
 | `-decommission` | Delete service accounts whose seats have left the config. Scoped **twice**: the username must start with `provisioning.username_prefix` (never empty — it defaults to `crewlet-`) *and* the account must be a member of this company's group, because either alone is too broad. That group scan is used in **both** modes and it is deliberate: every seat is made a member of `provisioning.group` whatever created it, so a managed account of this company is always in the group — while the instance's own service-account listing also holds every *other* company's accounts on the box, which a shared prefix would then sweep. Only the DELETE route differs by mode; sending one down the wrong route answers "no such account" for one that is still live. An account the instance refuses to delete because it is not a service account is reported rather than aborting — that refusal is GitLab catching what the scan should not have proposed, so it is a signal about the prefix. |
 | `-mode group\|instance` | Where service accounts are **owned**. `group` (the default, and all GitLab.com offers) creates them under `provisioning.group`; `instance` creates them on the instance itself, which needs an **instance-administrator** PAT and buys an account that is a member of nothing until this run adds it — so one company's seats can span several top-level groups, and an account survives its group being deleted. Everything downstream is identical: memberships are added the same way, and the token API is user-scoped on both. An unknown value is refused before the config is loaded. |
@@ -754,7 +755,7 @@ The Atlassian tracker's reconcile, and it is a different shape from its peers: *
 | Flag | Description |
 |------|-------------|
 | `-secret-store` / `-env-file PATH` / `-print` | Where a minted webhook secret goes — exactly one, and there is no default. See [the secret store](../concepts/secret-store.md). |
-| `-public-url` | This deployment's public base URL; the webhook is registered at `<url>/webhooks/jira`. Omit to skip registration — a hook pointing at the wrong host is worse than none, because the instance then reports a healthy integration that delivers into the void. |
+| `-public-url` | This deployment's public base URL; the webhook is registered at `<url>/webhooks/jira`. **Overrides `integrations.public_base_url` for this run**, and registration is skipped only when both are empty — a hook pointing at the wrong host is worse than none, because the instance then reports a healthy integration that delivers into the void. |
 | `-recreate-webhook` | Delete and remake the hook to mint a fresh secret. The only recovery for a secret that was lost, because the value cannot be read back off the hook — and destructive for every other deployment holding the old one. |
 | `-dry-run` | Read the instance and report; register nothing. The sink is not opened, so it prompts for no passphrase. |
 
@@ -784,7 +785,7 @@ The hosted code host's reconcile, and it is the same shape as Jira's for the sam
 | Flag | Description |
 |------|-------------|
 | `-secret-store` / `-env-file PATH` / `-print` | Where a minted webhook secret goes — exactly one, and there is no default. See [the secret store](../concepts/secret-store.md). |
-| `-public-url` | This deployment's public base URL; the hooks are registered at `<url>/webhooks/github`. Omit to skip registration — a hook pointing at the wrong host is worse than none, because GitHub then reports a healthy integration that delivers into the void. |
+| `-public-url` | This deployment's public base URL; the hooks are registered at `<url>/webhooks/github`. **Overrides `integrations.public_base_url` for this run**, and registration is skipped only when both are empty — a hook pointing at the wrong host is worse than none, because GitHub then reports a healthy integration that delivers into the void. |
 | `-recreate-webhooks` | Delete and remake every hook to mint a fresh secret. The only recovery for a secret that was lost, because the value cannot be read back off a hook — and destructive for every other deployment holding the old one. |
 | `-dry-run` | Read GitHub and report; register nothing. The sink is not opened, so it prompts for no passphrase. |
 
@@ -820,7 +821,7 @@ For each seat whose `integrations.slack` credentials are whole `${VAR}` referenc
 
 | Flag | Description |
 |------|-------------|
-| `-public-url` | Public HTTPS base URL of this deployment. **Required**: every app's Events API request URL and OAuth redirect URL are built from it, so an app created without one delivers nowhere and cannot be installed. |
+| `-public-url` | Public HTTPS base URL of this deployment. **Required unless `integrations.public_base_url` is set**, which it overrides for this run: every app's Events API request URL and OAuth redirect URL are built from it, so an app created without one delivers nowhere and cannot be installed. A `public_base_url` written as a `${VAR}` this process cannot resolve counts as unset, and the refusal says so. |
 | `-secret-store` / `-env-file PATH` / `-print` | Where the minted bot token and signing secret go — exactly one, and there is no default. See [the secret store](../concepts/secret-store.md). |
 | `-config-token` | The operator's app-configuration **refresh** token, from [api.slack.com/apps](https://api.slack.com/apps) → Your App Configuration Tokens. Falls back to `$SLACK_CONFIG_REFRESH_TOKEN`. Read from the environment alone, never from the secret store: it is the operator's credential rather than the company's. |
 | `-ledger` | The app ledger (default `slack-apps.json` beside the company document). It holds the client secrets Slack returns only at creation, so it is written `0600` — gitignore it like `.env`. |
@@ -865,6 +866,44 @@ The routing is the FILE'S, not the directory's, because a skill is identified by
 A company that has turned tool skills off (`integrations.confluence.skills_space: ""`) has no space for a skill file to go to: a tree containing one **stops the walk** naming both the setting and `-space`, rather than filing an instruction meant for one phase of one turn into a space every seat searches.
 
 See [Confluence Integration](../integrations/confluence.md#publishing-local-pages-from-your-machine-cli).
+
+---
+
+## `crewlet confluence provision`
+
+```
+crewlet confluence provision <company.yaml> [-secret-store|-env-file PATH|-print]
+                             [-public-url URL] [-recreate-webhooks] [-dry-run]
+```
+
+Registers the inbound webhooks that make Confluence push page and comment
+events to this deployment, and mints the credential each one carries into the
+`${VAR}` the company document already points at.
+
+**The two deployments are registered differently, because they authenticate
+differently.** On **Cloud** the run creates one hook per event at
+`<public-url>/webhooks/confluence/<event>?token=…`: Cloud signs nothing and
+honours no registration field for a header, so a shared token in the URL is
+the whole authentication, and one hook per event is how the engine knows which
+event fired at all (a Cloud payload does not say). On **Data Center** it
+creates one signed hook at `<public-url>/webhooks/confluence` covering every
+event, verified by HMAC over the body against
+`integrations.confluence.webhook_secret`.
+
+A re-run **converges** rather than adding: hooks are found by the
+`crewlet:` name prefix this engine registers under, so one whose address has
+moved is re-pointed rather than duplicated, and one an operator registered by
+hand is never touched. A hook that is already correct is left exactly as it
+is, and one event this instance refuses is reported without stopping the rest.
+
+| Flag | Meaning |
+|---|---|
+| `-secret-store` / `-env-file PATH` / `-print` | Where a minted token or secret goes. The same three sinks every provisioning command takes; a run with none of them refuses rather than minting a credential it cannot record. |
+| `-public-url URL` | This deployment's public base URL, which the hooks are registered against. **Overrides `integrations.public_base_url` for this run**, and registration is skipped only when both are empty. |
+| `-recreate-webhooks` | Delete and remake every hook with a fresh token or secret. **Destructive across deployments**: the previous value stops working everywhere else this company runs, so it is the recovery for a leaked or lost credential rather than part of an ordinary run. |
+| `-dry-run` | Read and report; register nothing. |
+
+See [Confluence Integration — Webhooks](../integrations/confluence.md#webhooks-confluence-pushes-to-agents).
 
 ---
 

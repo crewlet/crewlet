@@ -61,13 +61,26 @@ func TestEveryDocumentedReadRouteAnswers(t *testing.T) {
 		"/org",
 		"/tools",
 		"/schedules",
-		"/integrations",
 		"/budgets",
 		"/stream/snapshot",
 	} {
 		if got := status(t, a, path); got != http.StatusOK {
 			t.Errorf("GET %s = %d, want 200; it is in the published API table", path, got)
 		}
+	}
+}
+
+// AND /integrations IS IN THE TABLE AND GUARDED, which is why it is not in
+// the list above.
+//
+// It answers the same map `/setup` is guarded in full to protect: which
+// surfaces are configured, which hold a credential, which are half-set-up and
+// where each one's deliveries are pointed. A read anyone could make is
+// reconnaissance for the write nobody can.
+func TestTheIntegrationsMapIsNotServedAnonymously(t *testing.T) {
+	t.Parallel()
+	if got := status(t, restApp(t), "/integrations"); got != http.StatusUnauthorized {
+		t.Errorf("GET /integrations = %d, want 401: it is the same map /setup guards", got)
 	}
 }
 

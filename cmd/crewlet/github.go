@@ -35,7 +35,8 @@ func runGitHubProvision(args []string, stdout, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	sinks := addSinkFlags(fs)
 	publicURL := fs.String("public-url", "",
-		"this deployment's public base URL, for registering the webhooks")
+		"this deployment's public base URL, for registering the webhooks; "+
+			"defaults to integrations.public_base_url")
 	recreate := fs.Bool("recreate-webhooks", false,
 		"delete and remake every webhook to mint a fresh secret; this "+
 			"invalidates the secret every other deployment of this company holds")
@@ -111,7 +112,7 @@ func runGitHubProvision(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout,
 			"-dry-run: reading GitHub; no webhook will be registered.")
 	} else {
-		opts.WebhookBase = webhookBase(*publicURL, &company.Integrations)
+		opts.WebhookBase = webhookBase(*publicURL, &company.Integrations, env.LookupOK)
 		sink, closeSink, openErr := sinks.open(ctx, stdout)
 		if openErr != nil {
 			return openErr
@@ -153,6 +154,12 @@ func printGitHubResult(w io.Writer, res *github.Result) {
 				fmt.Fprintf(w, "  %-28s registered at %s\n", hook.Target, hook.URL)
 			case hook.Hooked():
 				fmt.Fprintf(w, "  %-28s already pointing at %s\n", hook.Target, hook.URL)
+			case !hook.Blocks():
+				// NOTHING TO HOOK, not a refusal. Printed as NOT HOOKED
+				// it reads as a problem and sends somebody to fix a
+				// repository that is finished.
+				fmt.Fprintf(w, "  %-28s skipped — %s\n",
+					hook.Target, orDash(hook.Detail))
 			default:
 				fmt.Fprintf(w, "  %-28s NOT HOOKED — %s\n",
 					hook.Target, orDash(hook.Detail))

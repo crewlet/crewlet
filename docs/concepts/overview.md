@@ -199,10 +199,20 @@ internal/
 ├── mcp/                  # MCP client and child-process supervision
 ├── tools/                # The registry, and the per-phase tool surfaces
 ├── notify/               # The backend-neutral notification spine
-├── mattermost/ slack/    # The six third-party apps: client, parser, transport,
-│   jira/ confluence/     #   prompt, provisioning reconcile — each
+├── mattermost/ slack/    # The eight third-party apps: client, parser,
+│   jira/ confluence/     #   transport, prompt, provisioning reconcile — each
 │   gitlab/ github/       #   contributing only what is genuinely its own,
-│                         #   which is why Jira has no transport
+│   datadog/ atlassian/   #   which is why Jira has no transport and why
+│                         #   Datadog routes on a monitor's TAGS: an alert is
+│                         #   addressed to nobody
+├── integration/          # The app-neutral reconcile spine: the finding
+│                         #   vocabulary every pass reports in, the cadence
+│                         #   derived from who has to act, the fleet singleton
+│                         #   that runs it, and integrationtest/ — the one
+│                         #   suite every reconciler passes
+├── setup/                # What an integration NEEDS before it works, in one
+│                         #   vocabulary every app and the dashboard share,
+│                         #   plus the guard every writer at a surface takes
 ├── configplane/          # The activation pointer's cadence and postures
 ├── node/                 # The node's own identity, presence and drain
 ├── provision/            # The shared provisioning grammar and its sinks
@@ -214,7 +224,8 @@ internal/
 ├── whsec/                # Webhook signing secrets: minting and verification
 ├── httpx/ textcut/      # The shared HTTP transport; rune-safe shortening
 ├── api/                  # REST + dashboard: webhooks/, stream/, queries/,
-│                         #   livestate/, configapi/, auth/, httpjson/
+│                         #   livestate/, configapi/, setupapi/, secretsapi/,
+│                         #   auth/, httpjson/, mcpbridge/
 ├── observe/              # The observability edge (store row + live push)
 ├── tracing/              # OpenTelemetry: one provider, W3C propagation, and
 │                         #   the bridge to the envelope's trace fields

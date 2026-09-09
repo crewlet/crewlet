@@ -221,7 +221,7 @@ func (s *Service) references(w http.ResponseWriter, r *http.Request) {
 func serveConditional(w http.ResponseWriter, r *http.Request, revision store.Revision) bool {
 	tag := etagOf(revision)
 	w.Header().Set("ETag", tag)
-	if matchesTag(r.Header.Get("If-None-Match"), tag, true) {
+	if matchesTag(r.Header.Get("If-None-Match"), tag) {
 		// RFC 9110 §13.1.2: on GET, a matching If-None-Match is 304 with
 		// no content rather than a refusal.
 		w.WriteHeader(http.StatusNotModified)
@@ -239,19 +239,25 @@ func etagOf(revision store.Revision) string { return `"` + revision.ID + `"` }
 
 // matchesTag reports whether a precondition header selects this tag.
 //
-// `*` means "any current representation", so it matches whenever there is
-// one. A list is comma-separated and any member matching is a match. A bare
+// `*` means "any current representation" and matches unconditionally here,
+// because EVERY CALLER HAS ONE: each checks `found` (or holds the revision
+// already) before asking, and answers the no-representation case itself with
+// the message that case needs. This took that as a parameter and every call
+// site passed true — a knob with one value, which reads as a decision the
+// caller gets to make and is not one.
+//
+// A list is comma-separated and any member matching is a match. A bare
 // revision id — unquoted, which is not a legal entity-tag — is accepted
 // because this surface documented and shipped that form before it had tags,
 // and breaking every script that reads a revision id out of a write response
 // to add two quotes would be a cost with nothing on the other side.
-func matchesTag(header, tag string, wildcardMatchesExisting bool) bool {
+func matchesTag(header, tag string) bool {
 	header = strings.TrimSpace(header)
 	if header == "" {
 		return false
 	}
 	if header == "*" {
-		return wildcardMatchesExisting
+		return true
 	}
 	bare := strings.Trim(tag, `"`)
 	for candidate := range strings.SplitSeq(header, ",") {
@@ -714,7 +720,7 @@ func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, acti
 		if !found {
 			return true
 		}
-		if matchesTag(none, etagOf(active), true) {
+		if matchesTag(none, etagOf(active)) {
 			writeJSON(w, http.StatusPreconditionFailed, map[string]any{
 				"error": "already_configured", "current_revision_id": active.ID,
 				"hint": "If-None-Match asked for this write to land only on a " +
@@ -756,7 +762,7 @@ func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, acti
 				"If-Match, or send If-None-Match: * to require that",
 		})
 		return false
-	case !matchesTag(expected, etagOf(active), true):
+	case !matchesTag(expected, etagOf(active)):
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"error": "revision_advanced", "current_revision_id": active.ID,
 			"your_base": expected,

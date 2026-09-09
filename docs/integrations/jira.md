@@ -56,6 +56,7 @@ integrations:
     token: "${JIRA_API_TOKEN}"            # API token (org read account)
     email: "${JIRA_EMAIL}"                # Cloud only — the account's email, for Basic auth
     webhook_secret: "${JIRA_WEBHOOK_SECRET}"  # Data Center: required, HMAC-SHA256
+    # webhook_name: crewlet              # which hook on the instance is this deployment's
 
 mcp_servers:
   - name: atlassian                     # shared by Jira + Confluence (one mcp-atlassian)
@@ -75,6 +76,8 @@ mcp_servers:
 **Which authentication scheme is used is decided by `email`.** With one, the engine sends `Basic base64(email:token)`, which is what Cloud requires; without one it sends a bearer token, which is what a Data Center personal access token wants. The same credential is rejected purely on which scheme carried it, so this field is not cosmetic.
 
 **`site_url` is the base for links a person opens.** With a `cloud_id`, the REST base is `api.atlassian.com/ex/jira/{cloud_id}`, which is not somewhere a browser can go — so without `site_url` the engine omits the link from a notification rather than printing one that looks right and opens nothing. With a plain `url` it defaults to that.
+
+**`webhook_name` says which hook on the instance is this deployment's.** The reconcile converges the hook carrying that name whatever address it currently points at, which is what stops a change of public base leaving a live orphan behind — one per change, all enabled, all delivering somewhere that no longer answers. A hook that shares the name but points at anything other than a `/webhooks/jira` path was not registered by this engine and is left alone. It defaults to `crewlet`, and **two deployments watching one instance must set two names**: staging and production of one company share this document, so with a single name each pass would repoint the other's hook and only the last to run would receive anything. `crewlet jira decommission` removes the hook by the same name, so the two halves cannot disagree about which hook is yours.
 
 On **Cloud**, `webhook_secret` is used exactly as it is on Data Center: the engine registers an admin webhook signed with it. Validation still does not *require* it for a Cloud config, because a company on the Forge relay has no HMAC in its path at all; what stops that being a silent gap is that the reconcile refuses to register a hook it cannot sign, and says so. The Forge route remains available and is verified by the app's invocation token against `integrations.forge_app_id`.
 
@@ -146,6 +149,8 @@ Events are delivered via Forge Remote to `POST /webhooks/forge`. The Forge platf
 Or let `crewlet jira provision -public-url https://your-server.com` register it for you — see [Provisioning](#provisioning).
 
 Inbound requests are verified using **HMAC-SHA256** against the `X-Hub-Signature` header, at the route, before the delivery is recorded or published — the same point at which the GitHub and GitLab webhooks verify theirs. `POST /webhooks/jira` is exempt from the API's bearer token precisely *because* it authenticates by provider HMAC, so the check belongs there. Invalid or missing signatures are rejected with `401`.
+
+**`integrations.public_base_url` is what a hook points at.** With none set, the reconcile registers nothing and the instance has nowhere to deliver to — so on Data Center that is reported as **degraded**, naming that field, rather than as a ready integration with no hook anywhere. Cloud is exempt: its events can arrive through the Forge app at an address this engine never registered, so silence there is a working company rather than a gap.
 
 `webhook_secret` is therefore **required** for Data Center webhooks: without one the endpoint answers **503** with a `Retry-After`, exactly as its peers do, rather than accepting deliveries it cannot verify. That is deliberately not a 4xx — the sender's request is fine, what is missing is on this side, and a 4xx would tell it to discard a delivery nobody else has a copy of. The delivery waits at Jira and flows once the secret is set. Cloud is unaffected — those events arrive through the Forge app on `/webhooks/forge` and carry a JWT instead.
 

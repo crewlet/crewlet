@@ -71,6 +71,25 @@ function offline(err: unknown): RestError {
 }
 
 /**
+ * How long a request may take before it is abandoned.
+ *
+ * A REQUEST THAT NEVER SETTLES NEVER SETTLES, and that is not a slow spinner
+ * here: every write in this UI runs behind a `busy` flag whose only reset is
+ * the `finally` of its own await, and every dialog disables its own exits
+ * while busy — Escape, the veil click and the Cancel button. An unresolved
+ * fetch was a modal with every way out switched off and a reload as the only
+ * escape.
+ *
+ * ANCHORED TO THE LONGEST PATH THIS API HAS: a setup submission seals a
+ * credential in the fleet's store, patches the company document, validates it
+ * whole and advances the epoch, each a round trip of its own. Thirty seconds
+ * is comfortably above that and comfortably below the point at which a person
+ * concludes the page is broken. It is exported so a caller with a genuinely
+ * longer path can say so rather than removing the deadline.
+ */
+export const REQUEST_TIMEOUT_MS = 30_000;
+
+/**
  * The one request path. `body` is already encoded, and `type` is what it is
  * encoded as — the split exists because not every write on this API takes
  * JSON. See `putText` below.
@@ -93,11 +112,24 @@ async function send(
     ...(body === undefined ? {} : { body }),
   };
 
+  // ABORTED RATHER THAN AWAITED FOR EVER — see [REQUEST_TIMEOUT_MS]. The
+  // abort surfaces as offline(), which every caller already handles: a
+  // request this process gave up on and one the engine never answered are
+  // the same fact to somebody looking at the screen.
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(), REQUEST_TIMEOUT_MS);
   let response: Response;
   try {
-    response = await fetch(location.origin + path, init);
+    response = await fetch(location.origin + path, { ...init, signal: deadline.signal });
   } catch (err) {
-    throw offline(err);
+    throw deadline.signal.aborted
+      ? new RestError(0, {
+          error: "unreachable",
+          detail: `the engine did not answer within ${REQUEST_TIMEOUT_MS / 1000} seconds`,
+        })
+      : offline(err);
+  } finally {
+    clearTimeout(timer);
   }
 
   // A 204 and a body-less 200 are both real answers. Reading them as JSON

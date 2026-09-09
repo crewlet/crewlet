@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -8,6 +9,14 @@ import (
 // knownKinds is every finding kind this build defines, in no particular
 // order. Listed rather than derived, so adding a kind without deciding where
 // it ranks fails a test rather than landing on the unknown-kind default.
+// advisories are the kinds whose verdict is READY: a note on a working
+// integration rather than something blocking it. They are listed rather than
+// derived so a kind added without deciding whether it blocks fails a test.
+var advisories = []FindingKind{FindingGrantExcess, FindingRegistrationOrphaned}
+
+// isAdvisory reports a kind from the list above.
+func isAdvisory(kind FindingKind) bool { return slices.Contains(advisories, kind) }
+
 var knownKinds = []FindingKind{
 	FindingCredentialMissing,
 	FindingCredentialRejected,
@@ -20,6 +29,7 @@ var knownKinds = []FindingKind{
 	FindingUnknownTier,
 	FindingGrantShort,
 	FindingGrantExcess,
+	FindingRegistrationOrphaned,
 }
 
 // A pass that found nothing is ready. This is the whole success path: a
@@ -45,29 +55,33 @@ func TestClassifyNoFindingsIsReady(t *testing.T) {
 // Paired against every other kind, in both slice orders, the advisory must
 // never win.
 func TestAdvisoryNeverHidesAProblem(t *testing.T) {
-	for _, other := range knownKinds {
-		if other == FindingGrantExcess {
-			continue
-		}
-		excess := Finding{Kind: FindingGrantExcess, Subject: "ceo"}
-		problem := Finding{Kind: other, Subject: "ceo"}
-
-		for _, order := range []struct {
-			name string
-			in   []Finding
-		}{
-			{"advisory first", []Finding{excess, problem}},
-			{"advisory last", []Finding{problem, excess}},
-		} {
-			got := Classify(order.in)
-			if got.Phase == PhaseReady {
-				t.Errorf("%s with %s: classified ready, so the %s finding "+
-					"is invisible to an operator", order.name, other, other)
+	for _, advisory := range advisories {
+		for _, other := range knownKinds {
+			if isAdvisory(other) {
+				continue
 			}
-			wantPhase, wantActor := other.Verdict()
-			if got.Phase != wantPhase || got.Actor != wantActor {
-				t.Errorf("%s with %s: got %s/%s, want %s/%s",
-					order.name, other, got.Phase, got.Actor, wantPhase, wantActor)
+			note := Finding{Kind: advisory, Subject: "ceo"}
+			problem := Finding{Kind: other, Subject: "ceo"}
+
+			for _, order := range []struct {
+				name string
+				in   []Finding
+			}{
+				{"advisory first", []Finding{note, problem}},
+				{"advisory last", []Finding{problem, note}},
+			} {
+				got := Classify(order.in)
+				if got.Phase == PhaseReady {
+					t.Errorf("%s (%s) with %s: classified ready, so the %s "+
+						"finding is invisible to an operator",
+						order.name, advisory, other, other)
+				}
+				wantPhase, wantActor := other.Verdict()
+				if got.Phase != wantPhase || got.Actor != wantActor {
+					t.Errorf("%s (%s) with %s: got %s/%s, want %s/%s",
+						order.name, advisory, other, got.Phase, got.Actor,
+						wantPhase, wantActor)
+				}
 			}
 		}
 	}
@@ -80,13 +94,15 @@ func TestAdvisoryNeverHidesAProblem(t *testing.T) {
 func TestUnknownKindOutranksOnlyTheAdvisory(t *testing.T) {
 	unknown := Finding{Kind: FindingKind("something_a_newer_build_found")}
 
-	got := Classify([]Finding{{Kind: FindingGrantExcess}, unknown})
-	if got.Phase == PhaseReady {
-		t.Fatalf("an unknown kind beside the advisory classified ready (%+v)", got)
+	for _, advisory := range advisories {
+		got := Classify([]Finding{{Kind: advisory}, unknown})
+		if got.Phase == PhaseReady {
+			t.Fatalf("an unknown kind beside %s classified ready (%+v)", advisory, got)
+		}
 	}
 
 	for _, other := range knownKinds {
-		if other == FindingGrantExcess {
+		if isAdvisory(other) {
 			continue
 		}
 		got := Classify([]Finding{unknown, {Kind: other}})
@@ -110,15 +126,20 @@ func TestSeverityIsAStrictOrder(t *testing.T) {
 		}
 		seen[rank] = kind
 	}
-	// The advisory is last, which is the property every other test here
-	// depends on.
+	// The advisories are last, which is the property every other test here
+	// depends on: a kind whose verdict is ready must not outrank one that
+	// blocks, or it hides it.
+	worstAdvisory := advisories[0].severity()
+	for _, advisory := range advisories {
+		worstAdvisory = min(worstAdvisory, advisory.severity())
+	}
 	for _, kind := range knownKinds {
-		if kind == FindingGrantExcess {
+		if isAdvisory(kind) {
 			continue
 		}
-		if kind.severity() >= FindingGrantExcess.severity() {
-			t.Errorf("%s ranks at or below the advisory (%d >= %d)",
-				kind, kind.severity(), FindingGrantExcess.severity())
+		if kind.severity() >= worstAdvisory {
+			t.Errorf("%s ranks at or below the advisories (%d >= %d)",
+				kind, kind.severity(), worstAdvisory)
 		}
 	}
 }
@@ -247,13 +268,140 @@ func TestOutcomeTurnsOnTheActorNotThePhase(t *testing.T) {
 	}
 }
 
-// The advisory is the one kind whose verdict is ready, and the whole ordering
-// rests on that staying true.
-func TestTheAdvisoryIsTheOnlyReadyVerdict(t *testing.T) {
+// THE ADVISORIES ARE THE ONLY READY VERDICTS, and the whole ordering rests on
+// that staying true: a kind whose verdict is ready hides every finding it
+// outranks, so one that is not on that list must never report ready.
+//
+// The list is checked in both directions. A kind that reports ready and is
+// not an advisory is a hole; an advisory that does NOT report ready is a note
+// ranked below every real problem while claiming to be one, which would make
+// it invisible instead.
+func TestTheAdvisoriesAreTheOnlyReadyVerdicts(t *testing.T) {
 	for _, kind := range knownKinds {
 		phase, _ := kind.Verdict()
-		if phase == PhaseReady && kind != FindingGrantExcess {
+		switch {
+		case phase == PhaseReady && !isAdvisory(kind):
 			t.Errorf("%s reports ready, so it hides every finding it outranks", kind)
+		case phase != PhaseReady && isAdvisory(kind):
+			t.Errorf("%s is listed as an advisory and reports %s, so it is "+
+				"ranked below every real problem while claiming to be one",
+				kind, phase)
 		}
+	}
+}
+
+// THE ORDER ITSELF, AS DATA. Not "they are all different" and not "the
+// advisory is last" — the actual sequence, so a change to it is a change to
+// this list.
+//
+// Distinctness and advisory-last are necessary and nowhere near sufficient.
+// Every drift this ranking was written to end sits in the MIDDLE of it, and
+// each one keeps both of those properties:
+//
+//   - GitLab checked excess access immediately before the short-grant check,
+//     so a seat holding too much in one dimension and too little in another
+//     reported ready with a note.
+//   - Datadog checked it before the failed-agent count, so a company with one
+//     over-granted agent and one that could not be provisioned at all
+//     reported ready.
+//   - GitHub checked its installation-level excess before the WEBHOOK check,
+//     so an app holding one spare permission reported healthy while its
+//     deliveries reached nobody.
+//
+// And two more disagreed about whether an unknown access tier outranks a
+// broken delivery path. Swapping any of those pairs leaves the ranks distinct
+// and the advisory last, and passes every other test in this file.
+func TestTheSeverityOrderIsPinned(t *testing.T) {
+	// Worst first: how much of the integration is not working, from "the
+	// pass could not authenticate" down to "it works, but somebody should
+	// look". Within one level, engine-owned work before person-owned work,
+	// because telling a person to fix something the engine is mid-way
+	// through sends them to repair what is not broken.
+	want := []FindingKind{
+		FindingCredentialMissing,
+		FindingCredentialRejected,
+		FindingApprovalRequired,
+		FindingIngressBlocked,
+		FindingIngressPending,
+		FindingIdentityMissing,
+		FindingIdentityFailed,
+		FindingGrantPending,
+		FindingUnknownTier,
+		FindingGrantShort,
+		FindingGrantExcess,
+		FindingRegistrationOrphaned,
+	}
+	if len(want) != len(knownKinds) {
+		t.Fatalf("this list has %d kinds and the package defines %d: a kind was "+
+			"added without deciding where it ranks", len(want), len(knownKinds))
+	}
+	for i := 1; i < len(want); i++ {
+		worse, better := want[i-1], want[i]
+		if worse.severity() >= better.severity() {
+			t.Errorf("%s no longer outranks %s (%d >= %d)",
+				worse, better, worse.severity(), better.severity())
+		}
+	}
+	// AND THE UNKNOWN KIND SITS BETWEEN THE LAST REAL PROBLEM AND THE
+	// ADVISORY, which is its own decision: ranked worst, an older node would
+	// report a healthy company as broken; ranked below the advisory, one
+	// spare permission would hide a finding this binary cannot read.
+	unknown := FindingKind("a-kind-from-a-newer-build").severity()
+	if unknown <= FindingGrantShort.severity() || unknown >= FindingGrantExcess.severity() {
+		t.Errorf("an unknown kind ranks %d, want between %s (%d) and %s (%d)",
+			unknown, FindingGrantShort, FindingGrantShort.severity(),
+			FindingGrantExcess, FindingGrantExcess.severity())
+	}
+}
+
+// THE REPORTED FINDING IS FIRST, so a reader wanting "what else is wrong"
+// takes the tail.
+//
+// Without an order every reader had to re-derive which finding the report was
+// about, and the dashboard instead assumed it — dropping element zero and
+// rendering the rest — so whenever the worst finding was not already first, a
+// real finding was hidden and the headline was re-printed as "1 more
+// finding". Classify picks the winner from ANY index.
+func TestTheReportedFindingIsPromotedToTheFront(t *testing.T) {
+	t.Parallel()
+	findings := []Finding{
+		{Kind: FindingGrantExcess, Subject: "ceo"},
+		{Kind: FindingCredentialRejected, Subject: "org"},
+		{Kind: FindingGrantShort, Subject: "cto", Detail: "needs maintainer"},
+	}
+	got := Promote(findings)
+	if len(got) != len(findings) {
+		t.Fatalf("Promote returned %d findings, want %d", len(got), len(findings))
+	}
+	if got[0].Kind != FindingCredentialRejected {
+		t.Fatalf("first = %q, want the kind Classify reports", got[0].Kind)
+	}
+	// AND THE REST KEEP THE PASS'S OWN ORDER. A vendor walks its seats in a
+	// stable order, so an operator reading the list twice sees the same
+	// seats in the same places; sorting by severity would shuffle equals
+	// on every pass.
+	if got[1].Subject != "ceo" || got[2].Subject != "cto" {
+		t.Errorf("the tail was reordered: %+v", got[1:])
+	}
+	// The report is about the promoted one, which is the whole point.
+	if report := Classify(got); report.Phase != Classify(findings).Phase {
+		t.Error("promoting changed what the pass classifies as")
+	}
+}
+
+// AND A LIST ALREADY IN ORDER IS UNTOUCHED, so nothing churns a stored row
+// that was already right.
+func TestPromoteLeavesAnOrderedListAlone(t *testing.T) {
+	t.Parallel()
+	findings := []Finding{
+		{Kind: FindingCredentialMissing, Subject: "org"},
+		{Kind: FindingGrantShort, Subject: "cto", Detail: "x"},
+	}
+	got := Promote(findings)
+	if got[0].Subject != "org" || got[1].Subject != "cto" {
+		t.Errorf("an ordered list was reordered: %+v", got)
+	}
+	if len(Promote(nil)) != 0 {
+		t.Error("Promote invented a finding from nothing")
 	}
 }

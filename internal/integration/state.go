@@ -27,7 +27,9 @@ type State struct {
 	Report Report `json:"report"`
 
 	// Findings is EVERYTHING the last pass observed, not only the one
-	// [Classify] promoted into Report.
+	// [Classify] promoted into Report — and the promoted one is FIRST, so a
+	// reader wanting "what else is wrong" takes the tail rather than
+	// re-deriving which finding the report is about. See [Promote].
 	//
 	// Kept because the report answers "what should I do next" and this
 	// answers "what is actually wrong", and they are different questions
@@ -80,6 +82,18 @@ type State struct {
 	// evidence there is: Slack's request URL, for one, cannot be read back
 	// without an app-configuration token the operator may not have.
 	Endpoint string `json:"endpoint,omitempty"`
+
+	// Registration is the NAME this surface's registration is held under
+	// at the third-party app, where the address is not enough to find it.
+	//
+	// Datadog is the case and today the only one: a webhook definition is
+	// addressed by name, that name is a live config field, and Datadog
+	// serves no listing at all — so a definition the engine stops managing
+	// can never be found again by anything. Recorded so a rename is VISIBLE:
+	// the previous definition goes on delivering, correctly, for every
+	// monitor still naming it, and this is the only place an operator can
+	// learn there are now two. See [StampRegistration].
+	Registration string `json:"registration,omitempty"`
 
 	// Disconnecting is set the moment somebody asks for the integration
 	// to be taken away, which is BEFORE any teardown pass has run and
@@ -162,6 +176,32 @@ func (s State) Due(now time.Time) bool { return !now.Before(s.NextAttemptAt) }
 // phase alongside it.
 const MaxLastErrorLength = 2000
 
+// MaxDetailLength bounds one finding's own sentence, and the report's.
+//
+// SMALLER THAN [MaxLastErrorLength] because there can be many: a row carries
+// one fault text and a finding PER SEAT, so a company with fifty agents on a
+// vendor that pastes response bodies into its messages writes fifty of these
+// into a single KV value. Capping only the fault left the larger half
+// unbounded, and an oversized row is not truncated by the store — it is
+// REFUSED, so the surface's whole status silently stops being recorded.
+//
+// A sentence naming what is outstanding fits easily; this is a ceiling on a
+// third-party app's prose, not a budget for the engine's own.
+const MaxDetailLength = 500
+
+// bound caps every piece of third-party text a status row carries.
+//
+// AT THE BOUNDARY rather than in each vendor, because the limit belongs to
+// what this row is written into and there are seven vendors who would each
+// have to remember it — and the two most recent did not.
+func bound(report Report, findings []Finding) (Report, []Finding) {
+	report.Detail = textcut.Ellipsis(report.Detail, MaxDetailLength)
+	for i := range findings {
+		findings[i].Detail = textcut.Ellipsis(findings[i].Detail, MaxDetailLength)
+	}
+	return report, findings
+}
+
 // truncateError applies [MaxLastErrorLength].
 //
 // Through [textcut.Ellipsis] rather than a slice, and through textcut rather
@@ -221,6 +261,11 @@ type Store interface {
 // The caller sets NextAttemptAt, through [Schedule.Next], because the cadence
 // is the loop's business and a pass run by hand does not change it.
 func Observe(state State, kind Kind, findings []Finding, err error, now time.Time) (next State, forget bool) {
+	// THE WAIT THIS ROW WAS ON before this pass changed it. Attempts pace a
+	// backoff, and a backoff only means anything within one wait — see
+	// [CadenceOf].
+	was := CadenceOf(state.Report)
+
 	state.Kind = kind
 	state.LastAttemptAt = now
 
@@ -265,8 +310,7 @@ func Observe(state State, kind Kind, findings []Finding, err error, now time.Tim
 		state.Attempts++
 		state.LastError = truncateError(err.Error())
 	default:
-		state.Report = Classify(findings)
-		state.Findings = findings
+		state.Report, state.Findings = bound(Classify(findings), Promote(findings))
 		state.LastError = ""
 		if state.Report.Phase == PhaseReady {
 			state.Attempts = 0
@@ -274,6 +318,20 @@ func Observe(state State, kind Kind, findings []Finding, err error, now time.Tim
 		} else {
 			state.Attempts++
 		}
+	}
+	// A CHANGE OF WAIT RESTARTS THE COUNT. Attempts are consecutive passes
+	// that did not settle, and [Schedule.Next] reads them against whichever
+	// wait the row is NOW on — so a surface that spent ten ticks waiting on
+	// the engine carried a count of ten into the wait for a PERSON and
+	// started it at the ceiling.
+	//
+	// That is the one cadence where the ceiling is wrong. The brisk admin
+	// interval exists so an operator who installs an app "sees provisioning
+	// continue without pressing anything", and inherited attempts skipped it
+	// entirely: the fast retries never happened, and the operator watched a
+	// screen that would not move for ten minutes.
+	if CadenceOf(state.Report) != was {
+		state.Attempts = min(state.Attempts, 1)
 	}
 	state.Outcome = state.Report.Outcome()
 	return state, false

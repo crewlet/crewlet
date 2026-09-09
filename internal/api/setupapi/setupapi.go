@@ -26,6 +26,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -479,10 +480,20 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 		}
 		tools = append(tools, state)
 	}
-	base := company.Integrations.WebhookBase()
+	base := company.Integrations.WebhookBase(s.resolve)
 	present, resolved := setup.Resolution(company.Integrations.PublicBaseURL, s.resolve)
 	httpjson.Write(w, http.StatusOK, map[string]any{
 		"tools": tools,
+		// THE REVISION THIS ANSWER DESCRIBES, so a caller can send it back
+		// as `if_match` on the write.
+		//
+		// Every write here takes that precondition and `setup.ErrStaleBase`
+		// exists to refuse a submission built on a revision that has moved
+		// — but no read handed the caller a revision to name, so a client
+		// could not use either. The guard was unreachable from the surface
+		// it guards, which made the whole stale-base path dead code that
+		// looked like protection.
+		"revision_id": s.activeRevision(r.Context()),
 		// THE ADDRESS EVERY INBOUND VENDOR IS BUILT ON, answered once
 		// rather than repeated in each tool: it is one setting, and a
 		// screen that asked for it seven times would be asking the
@@ -492,6 +503,28 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 			"config_path": "integrations.public_base_url",
 		},
 	})
+}
+
+// activeRevision is the revision this node is serving, or empty when it
+// cannot say.
+//
+// EMPTY RATHER THAN AN ERROR, because it is a courtesy on a read: a caller
+// that gets one can hold the surface still with `if_match`, and one that does
+// not is exactly where every caller was before — writing unconditionally.
+// Failing the whole read over it would trade a working screen for a
+// precondition nobody asked for.
+func (s *Service) activeRevision(ctx context.Context) string {
+	if s.writer.Config == nil {
+		return ""
+	}
+	id, err := s.writer.Config.Current(ctx)
+	if err != nil {
+		log.WarnContext(ctx, "setup_revision_unreadable", "error", err,
+			"detail", "this answer carries no revision, so a client cannot "+
+				"send if_match with its write")
+		return ""
+	}
+	return id
 }
 
 // one serves GET /setup/integrations/{kind}.
@@ -724,7 +757,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		ManagePath:    managePath,
 		NeedsOperator: s.passes.Needs(kind),
 	}
-	if base := company.Integrations.WebhookBase(); base != "" && state.InboundPath != "" {
+	if base := company.Integrations.WebhookBase(s.resolve); base != "" && state.InboundPath != "" {
 		state.PublicURL = base + state.InboundPath
 	}
 	return state, true
@@ -1089,7 +1122,7 @@ func slackSeats(company *config.Company, resolve func(string) (string, bool),
 	// where an address belongs, and Slack refuses the app with nothing
 	// naming the cause. The same mistake was measured on the Atlassian
 	// pass, which sent the literal `${ATLASSIAN_ORG_ID}` to Atlassian.
-	base := webhookBase(company, resolve)
+	base := company.Integrations.WebhookBase(resolve)
 	out := []SeatState{}
 	for role := range company.EachRole() {
 		// THROUGH THE SEAT, which is where the derivation lives: a handle
@@ -1158,19 +1191,6 @@ func slackSeats(company *config.Company, resolve func(string) (string, bool),
 	return out
 }
 
-// webhookBase is the address third-party apps reach this deployment on, as a
-// VALUE rather than as whatever the document happens to hold.
-//
-// A REFERENCE IS NOT AN ADDRESS. The field is Tier B, so `${PUBLIC_URL}` is a
-// legal way to write it and the document keeps it verbatim; everything built
-// from it here is shown to an operator or copied into a third-party app, and
-// both read the literal as the address. An unresolved reference answers
-// empty, which every caller already treats as "no address yet" and says so.
-func webhookBase(company *config.Company, resolve func(string) (string, bool)) string {
-	base := setup.Deref(company.Integrations.PublicBaseURL, resolve)
-	return strings.TrimRight(strings.TrimSpace(base), "/")
-}
-
 // repoScope is the repositories a finished seat works in.
 //
 // EMPTY MEANS EVERY ONE THE INSTALLATION COVERS, which is what the operator
@@ -1202,7 +1222,7 @@ func repoScope(repos []string) string {
 // yet is precisely the row that has to be there. Human seats are excluded,
 // because a person's GitHub account is not something this engine creates.
 func githubSeats(company *config.Company, resolve func(string) (string, bool)) []SeatState {
-	webBase := webBaseOf(company)
+	_, webBase := company.Integrations.GitHub.Bases(resolve)
 	out := []SeatState{}
 	for role := range company.EachRole() {
 		// THROUGH THE SEAT, the same derivation every other roster uses: a
@@ -1476,13 +1496,16 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	// first symptom is an agent that stopped replying. Recorded here so a
 	// later read can say the address moved.
 	//
-	// ON THE INGRESS, not on whether this build runs a pass. Datadog has a
-	// pass — it provisions accounts — and its webhook URL is still a field
-	// somebody typed into a settings page, so the pass stamping the base it
-	// ran against reported a healthy surface over an address the third-party
-	// app had never been told about. See [integration.Ingress].
+	// ON THE INGRESS, not on whether this build runs a pass. Today that
+	// admits Slack alone: its Request URL is a field on a settings page with
+	// no write API behind it, so it holds whatever address a person last
+	// typed, however much of Slack's provisioning a pass does converge.
+	// Datadog used to be here too and is not any more — its webhook
+	// definition is writable through the organization credentials its block
+	// already carries, so no person holds that address. See
+	// [integration.Kind.Ingress].
 	if after != nil && kind.Ingress() == integration.IngressOperator {
-		s.recordEndpoint(r.Context(), kind, webhookBase(after, s.resolve))
+		s.recordEndpoint(r.Context(), kind, after.Integrations.WebhookBase(s.resolve))
 	}
 	fresh := state
 	if after != nil {
@@ -1734,14 +1757,33 @@ type disconnectRequest struct {
 func (s *Service) markDisconnecting(
 	ctx context.Context, kind integration.Kind, removeSeats bool,
 ) error {
-	var state integration.State
-	if states, err := s.status.LoadIntegrations(ctx); err == nil {
-		for _, row := range states {
-			if row.Kind == kind {
-				state = row
-				break
-			}
-		}
+	// UNDER THE SURFACE'S OWN LEASE. This is the write that most needs it:
+	// the intent it records is what the loop acts on, and a tick that read
+	// the row a moment earlier would put its own back over the top — losing
+	// a disconnect an operator asked for, with the screen still reporting
+	// the integration connected. See [setup.Runner.Hold].
+	release, held, err := s.passes.Hold(ctx, kind)
+	if err != nil {
+		return fmt.Errorf(
+			"setupapi: this node could not take %s to record the disconnect: %w",
+			kind, err)
+	}
+	if !held {
+		return fmt.Errorf(
+			"setupapi: %s is being provisioned right now, so the disconnect was "+
+				"not started; try again in a moment", kind)
+	}
+	defer release()
+
+	state, err := s.currentState(ctx, kind)
+	if err != nil {
+		// REFUSED RATHER THAN WRITTEN BLIND. This one returns its error,
+		// so the operator is told the disconnect was not started instead
+		// of watching a row that says Disconnecting over a state this
+		// node overwrote without reading. See [Service.currentState].
+		return fmt.Errorf(
+			"setupapi: the fleet's record of %s could not be read, so the "+
+				"disconnect was not started: %w", kind, err)
 	}
 	state.Kind = kind
 	state.Disconnecting = true

@@ -29,7 +29,13 @@ const (
 	LinkField       = "link"
 	ScopeField      = "scope"
 	MonitorField    = "monitor"
-	TagsField       = "tags"
+
+	// MonitorIDField is the monitor's own id, which is what a conversation
+	// is keyed on. Separate from MonitorField because the two are
+	// different things: one is what a person reads, the other is what
+	// does not move when the monitor changes state.
+	MonitorIDField = "monitor_id"
+	TagsField      = "tags"
 )
 
 // The routing reasons [RoutedViaField] carries.
@@ -175,6 +181,7 @@ func inbound(alert Alert, via string) notify.Inbound {
 		ScopeField:      alert.Scope,
 		TagsField:       strings.Join(alert.Tags, ","),
 		MonitorField:    alert.Title,
+		MonitorIDField:  alert.MonitorID,
 	}
 	// NO ActorField. Every other surface stamps who caused the event so
 	// the spine can suppress waking them for their own action. A monitor

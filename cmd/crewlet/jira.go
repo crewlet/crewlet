@@ -35,7 +35,8 @@ func runJiraProvision(args []string, stdout, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	sinks := addSinkFlags(fs)
 	publicURL := fs.String("public-url", "",
-		"this deployment's public base URL, for registering the webhook")
+		"this deployment's public base URL, for registering the webhook; "+
+			"defaults to integrations.public_base_url")
 	recreate := fs.Bool("recreate-webhook", false,
 		"delete and remake the webhook to mint a fresh secret; this "+
 			"invalidates the secret every other deployment of this company holds")
@@ -111,7 +112,7 @@ func runJiraProvision(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout,
 			"-dry-run: reading the instance; no webhook will be registered.")
 	} else {
-		opts.WebhookBase = webhookBase(*publicURL, &company.Integrations)
+		opts.WebhookBase = webhookBase(*publicURL, &company.Integrations, env.LookupOK)
 		sink, closeSink, openErr := sinks.open(ctx, stdout)
 		if openErr != nil {
 			return openErr
@@ -155,7 +156,10 @@ func printJiraResult(w io.Writer, res *jira.Result) {
 		for _, p := range res.Projects {
 			switch {
 			case !p.Exists:
-				fmt.Fprintf(w, "  %-10s NOT ON THIS INSTANCE — %s\n", p.Key, p.Detail)
+				// BOTH HALVES: Jira answers 404 for a project that is not
+				// there and for one this credential may not browse.
+				fmt.Fprintf(w, "  %-10s NOT VISIBLE — no such project, or "+
+					"this credential may not browse it\n", p.Key)
 			case p.Agrees():
 				fmt.Fprintf(w, "  %-10s %s (lead %s)\n", p.Key, p.Name, p.OrgLead)
 			default:

@@ -3,6 +3,24 @@
 /crewlet
 /dist/
 
+# Python bytecode. This tree has not held a `.py` file since the Go rewrite,
+# which is exactly why the rule was missing and exactly why it is needed: the
+# pre-Go checkout left `__pycache__` directories behind as UNTRACKED debris,
+# and they survived every branch switch afterwards because git does not remove
+# what it never tracked. A `git add -A` while resolving a merge then committed
+# 623 `.pyc` files under `src/` and `tests/` -- a `src/` tree whose every
+# source file had been deleted years earlier, restored as bytecode alone. They
+# reached `main`, and this is a public repository, so deleting them does not
+# unpublish them; git history keeps what a later commit drops.
+#
+# So the pattern stays even with no Python in the tree. Whatever a contributor
+# ran to produce those caches -- a stale virtualenv, a tool reaching into an
+# old checkout -- can produce them again, and the failure is silent in both
+# directions: nothing builds Python here, so no build goes red, and the files
+# are unreadable binary, so no diff review catches them.
+__pycache__/
+*.py[cod]
+
 # The store is a local file this node owns exclusively, and the embedded
 # stream persists beside it. Both are per-checkout state, never committed.
 *.db

@@ -227,8 +227,13 @@ func TestAGitHubSeatWithWorkOutstandingHoldsTheCardOpen(t *testing.T) {
 // key and a webhook secret, both returned exactly once.
 func fakeGitHub(t *testing.T, app map[string]any) *httptest.Server {
 	t.Helper()
+	// UNDER /api/v3, which is where an Enterprise Server actually serves its
+	// REST API and therefore the only path a conversion may arrive on. The
+	// fake answered at the root, so it agreed with a caller that passed the
+	// BROWSER base as the API base — and the one deployment shape that
+	// distinguishes them is the one this fake stands in for.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/app-manifests/") {
+		if !strings.HasPrefix(r.URL.Path, "/api/v3/app-manifests/") {
 			http.NotFound(w, r)
 			return
 		}
@@ -259,7 +264,7 @@ func (s *surface) convertOneApp(t *testing.T, handle string, app map[string]any)
 		t.Fatalf("point at github = %d: %s", res.Code, res.Body)
 	}
 
-	flow := setupapi.NewAppFlow(s.setup, []string{"test-material"})
+	flow := setupapi.NewAppFlow(s.setup, []string{"test-material"}, nil)
 	s.setup.AttachAppFlow(flow)
 
 	// THROUGH THE BEGIN ROUTE, so the state the callback validates is one
@@ -304,7 +309,7 @@ func TestAnAppsWebhookSecretIsSealedAndReachable(t *testing.T) {
 	})
 
 	// SEALED under the seat's own name, beside its key.
-	if got, ok := s.vault.get("SRE_LEAD_GITHUB_APP_WEBHOOK_SECRET"); !ok || got != "the-apps-own-secret" {
+	if got, ok := s.vault.get("GITHUB_APP_WEBHOOK_SECRET_SRE_LEAD"); !ok || got != "the-apps-own-secret" {
 		t.Fatalf("the sealed webhook secret is %q (found=%v)", got, ok)
 	}
 	// AND POINTED AT from the seat, which is the half that was missing.
@@ -320,7 +325,7 @@ func TestAnAppsWebhookSecretIsSealedAndReachable(t *testing.T) {
 	if err := json.Unmarshal(body, &seat); err != nil {
 		t.Fatalf("decode the seat: %v", err)
 	}
-	if got := seat.Integrations.GitHub.WebhookSecret; got != "${SRE_LEAD_GITHUB_APP_WEBHOOK_SECRET}" {
+	if got := seat.Integrations.GitHub.WebhookSecret; got != "${GITHUB_APP_WEBHOOK_SECRET_SRE_LEAD}" {
 		t.Errorf("the seat points at %q, so nothing can verify this app's deliveries", got)
 	}
 	// THE POINTER, NEVER THE VALUE. A secret in the document is one the
@@ -354,7 +359,7 @@ func TestASeatWithNoWebhookSecretHoldsNoPointerToOne(t *testing.T) {
 	}
 	// AND THE KEY IS STILL THERE, because the conversion did happen: the
 	// absent secret is one field missing, not a failed creation.
-	if !strings.Contains(string(body), "${SRE_LEAD_GITHUB_APP_KEY}") {
+	if !strings.Contains(string(body), "${GITHUB_APP_KEY_SRE_LEAD}") {
 		t.Fatalf("the seat lost its app key: %s", body)
 	}
 }
@@ -482,7 +487,7 @@ func TestADatadogSeatCarriesTheRoleItsAccountHolds(t *testing.T) {
 	  "name": "Acme",
 	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
 	  "integrations": {"datadog": {"enabled": true, "route_to": "sre-lead",
-	    "webhook_token": "t",
+	    "webhook_token": "EXAMPLEDATADOGTOKEN0000000",
 	    "provisioning": {"api_key": "dd-api", "app_key": "dd-app", "site": "datadoghq.com", "role": "Datadog Standard Role"}}},
 	  "roles": [{"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"}]
 	}`, map[string]string{"X-Summary": "datadog on a standard role"})
@@ -524,7 +529,7 @@ func TestACustomDatadogRoleKeepsItsOwnName(t *testing.T) {
 	  "name": "Acme",
 	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
 	  "integrations": {"datadog": {"enabled": true, "route_to": "sre-lead",
-	    "webhook_token": "t",
+	    "webhook_token": "EXAMPLEDATADOGTOKEN0000000",
 	    "provisioning": {"api_key": "dd-api", "app_key": "dd-app", "site": "datadoghq.com", "role": "Acme On-Call"}}},
 	  "roles": [{"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"}]
 	}`, map[string]string{"X-Summary": "datadog on a role of our own"})

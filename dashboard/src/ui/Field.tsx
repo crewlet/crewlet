@@ -120,7 +120,25 @@ export function Field({
   // character nobody can see.
   const tight = kind === "url" || kind === "id" || kind === "email";
   const own = kind === "url" ? schemeOf(value) : "";
-  const affix = kind === "url" && own !== "http://" ? "https://" : "";
+  // AND IT STEPS ASIDE FOR A REFERENCE, for the same reason it steps aside for
+  // http. `${VAR}` is a whole value this field accepts — the engine's own
+  // `hasHTTPScheme` admits `envref.Has` — so the scheme the affix stands in
+  // for is one the reference carries itself once it resolves. Prepending
+  // produced `https://${VAR}`: a value no resolver reads, unenterable for
+  // anyone setting one, and silently written over the first keystroke for
+  // anyone who already had one.
+  //
+  // ANY LEADING `$`, not a whole reference. A person types one character at a
+  // time and `${CREWLET_PUB` is not yet whole, so a rule that waited for a
+  // complete reference would prepend on the very first keystroke and never
+  // let go again.
+  //
+  // ONLY WHERE THE VALUE CARRIES NO SCHEME OF ITS OWN. Behind one, a `$` is
+  // just the rest of the address — `https://${JIRA_HOST}` is an ordinary
+  // value — and there the affix is CARRYING a scheme rather than offering
+  // one, so it must stay.
+  const refBase = own === "" && value.trimStart().startsWith("$");
+  const affix = kind === "url" && own !== "http://" && !refBase ? "https://" : "";
   const shown = affix ? value.slice(own.length) : value;
   const describedBy = [affix ? affixID : "", help ? helpID : "", error ? errorID : ""]
     .filter(Boolean)
@@ -212,7 +230,14 @@ export function Field({
     const typed = tight ? raw.replace(/\s+/g, "") : raw;
     if (!affix) return onChange(typed);
     const carried = schemeOf(typed);
-    onChange(carried === "http://" ? typed : affix + typed.slice(carried.length));
+    // The same two escapes the affix itself makes: a value that carries its
+    // own scheme, and one that is becoming a `${VAR}`. `own` is empty here
+    // exactly when the affix is OFFERING a scheme rather than carrying one,
+    // which is the only state where a leading `$` means a reference.
+    if (carried === "http://" || (own === "" && typed.trimStart().startsWith("$"))) {
+      return onChange(typed);
+    }
+    onChange(affix + typed.slice(carried.length));
   }
 
   return (

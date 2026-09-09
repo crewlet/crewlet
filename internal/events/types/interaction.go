@@ -1,14 +1,14 @@
 package types
 
-// The canonical, platform-agnostic boundary type for inbound messages, ported
-// from src/crewlet/learning/interaction.py. It rides on TurnCompleted, which is
-// why it lives here rather than waiting for the learning package: an event's
-// wire shape cannot be described without the types its fields hold.
+// The canonical, platform-agnostic boundary type for inbound messages. It
+// rides on TurnCompleted, which is why it lives here rather than in the
+// learning package that reads it: an event's wire shape cannot be described
+// without the types its fields hold.
 //
-// Only the data is ported. The platform-aware constructor
-// (InboundInteraction.list_from_trigger_event) is the learning subsystem's one
-// place that touches Slack/Jira/GitHub metadata keys, and it belongs with the
-// learning workers that consume it, not with the catalogue.
+// Only the DATA is here. Assembling one is platform-aware — it is where a
+// trigger's Slack/Jira/GitHub metadata keys get read — so it sits with the
+// turn that has the trigger in hand (Engine.interactionsOf, in
+// internal/engine/prefetch.go) rather than in this catalogue.
 
 // ChannelKind is the coarse category of the surface a message arrived on. Used
 // for prompt-context flavour only — nothing branches on it for behaviour.

@@ -3,7 +3,6 @@ package jira
 import (
 	"context"
 	"fmt"
-	"strings"
 )
 
 // Teardown removes what this engine registered at a Jira instance.
@@ -28,20 +27,26 @@ func Teardown(ctx context.Context, opts Options) error {
 	if opts.Client == nil {
 		return fmt.Errorf("jira: no client")
 	}
-	base := strings.TrimRight(strings.TrimSpace(opts.WebhookBase), "/")
-	if base == "" {
-		// Nothing was ever registered without one, so there is nothing to
-		// withdraw and the disconnect finishes.
-		return nil
-	}
-	target := webhookTarget(base)
-
+	// NO PUBLIC BASE IS NOT A REASON TO STOP ANY MORE. It was, while a
+	// hook was identified by its address: with no base there was no
+	// address to compare against. The hook is identified by its NAME now
+	// (see [ours]), which is exactly the identity that survives a
+	// deployment losing or changing its base — and a disconnect that
+	// walked away from a live hook because this node could not name its
+	// own address would leave the instance delivering to it for ever.
 	hooks, err := opts.Client.Webhooks(ctx)
 	if err != nil {
 		return fmt.Errorf("jira: list webhooks to remove them: %w", err)
 	}
+	// BY THE SAME RULE THE RECONCILE CONVERGES ON — see [ours]. Matching on
+	// the address alone left every hook a previous public base created:
+	// this engine's own registrations, still enabled, delivering where
+	// nothing answers, surviving the disconnect that was meant to remove
+	// them. The two halves of one integration must not disagree about
+	// which hook is this deployment's.
+	name := opts.Config.WebhookNameOrDefault()
 	for _, hook := range hooks {
-		if hook.URL != target {
+		if !ours(hook, name) {
 			continue
 		}
 		if err := opts.Client.DeleteWebhook(ctx, hook.ID); err != nil {

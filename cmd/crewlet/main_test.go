@@ -239,7 +239,7 @@ func TestAWorkerOnlyNodeServesNoHTTPAndSaysSo(t *testing.T) {
 	var logged bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	surface, err := serveAPI(t.Context(), bootstrapFor(t, 0), nil, nil, nil, log)
+	surface, err := serveAPI(t.Context(), bootstrapFor(t, 0), nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestAnUnbindablePortIsReportedRatherThanIgnored(t *testing.T) {
 	port := taken.Addr().(*net.TCPAddr).Port
 
 	e := testEngine(t)
-	surface, err := serveAPI(t.Context(), bootstrapFor(t, port), e, nil, nil, logging.Get("test"))
+	surface, err := serveAPI(t.Context(), bootstrapFor(t, port), e, nil, nil, nil, logging.Get("test"))
 	if err == nil {
 		surface.stop(context.Background(), logging.Get("test"))
 		t.Fatal("binding a port already in use reported success")
@@ -284,7 +284,7 @@ func TestAMergedNodeServesItsOwnHealth(t *testing.T) {
 	boot := bootstrapFor(t, 0)
 	boot.API.Port = freePort(t)
 
-	surface, err := serveAPI(t.Context(), boot, e, nil, nil, logging.Get("test"))
+	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, logging.Get("test"))
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
@@ -868,5 +868,58 @@ func TestUsageNamesBothTierBFlags(t *testing.T) {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("usage never names %q:\n%s", want, buf.String())
 		}
+	}
+}
+
+// A WORKER-ONLY NODE STILL HAS A CONFIG WRITER.
+//
+// The writer was installed inside serveAPI, after its early return for
+// `api.port: 0` — so a node with no HTTP surface never got one. The reconcile
+// loop is armed regardless and is a FLEET SINGLETON, so it lands on exactly
+// that node as readily as on any other, and everything needing the writer
+// then failed for the life of the process: a disconnect answered "no config
+// surface is wired on this node" over an error whose own comment calls that
+// state momentary, a GitHub seat's discovered installation could never be
+// recorded, and the Atlassian pass repeated its "set cloud_id by hand" note
+// on every tick, for ever.
+//
+// It is a SOURCE assertion because there is nothing at runtime to watch: the
+// bug is which function the call sits in, and a call in the wrong one still
+// compiles, still runs, and produces a node that looks healthy.
+func TestTheConfigWriterIsInstalledOutsideTheHTTPSurface(t *testing.T) {
+	t.Parallel()
+	fset := token.NewFileSet()
+	parsed, err := parser.ParseFile(fset, "main.go", nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var installedIn []string
+	for _, decl := range parsed.Decls {
+		fn, isFunc := decl.(*ast.FuncDecl)
+		if !isFunc || fn.Body == nil {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, isCall := n.(*ast.CallExpr)
+			if !isCall {
+				return true
+			}
+			sel, isSel := call.Fun.(*ast.SelectorExpr)
+			if isSel && sel.Sel.Name == "UseConfigWriter" {
+				installedIn = append(installedIn, fn.Name.Name)
+			}
+			return true
+		})
+	}
+
+	if len(installedIn) != 1 {
+		t.Fatalf("UseConfigWriter is called from %v; there is one writer and it "+
+			"is installed once", installedIn)
+	}
+	if installedIn[0] == "serveAPI" {
+		t.Error("the config writer is installed inside serveAPI, which returns " +
+			"early for api.port 0 — a worker-only node would run the reconcile " +
+			"loop with no way to write the company document")
 	}
 }

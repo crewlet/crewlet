@@ -341,7 +341,7 @@ fi
 # later step that fails before this point would strand a live admin
 # credential nobody can read — and this script's own recovery advice for
 # that is "revoke the old token and re-run". Same write-through
-# discipline the provisioning sinks follow (src/crewlet/provisioning.py).
+# discipline the provisioning sinks follow (internal/provision/sinks.go).
 #
 # MATTERMOST_PUBLIC_URL lands in the env file too, and docker compose reads
 # `.env` from the project directory on every invocation — so a later
@@ -384,8 +384,8 @@ lines.extend(f"{k}={v}" for k, v in values.items() if k not in seen)
 # Created 0600 by os.open, never written-then-chmod'd: write_text() makes
 # the file 0666 & ~umask (0644 on a normal box), so the admin token was
 # world-readable for the window in between — and permanently, at 0644, if
-# the run died between the two calls. Same rule as EnvFileSink._write in
-# src/crewlet/provisioning.py: the mode goes on at creation.
+# the run died between the two calls. Same rule as EnvFileSink.rewrite in
+# internal/provision/sinks.go: the mode goes on at creation.
 tmp = path.with_name(path.name + ".tmp")
 fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
 with os.fdopen(fd, "w", encoding="utf-8") as fh:

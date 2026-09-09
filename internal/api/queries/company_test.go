@@ -1254,7 +1254,8 @@ func TestAMovedPublicBaseIsReportedPerSurface(t *testing.T) {
 	// comparison is the only thing that can say the address moved.
 	cfg.Integrations.Slack = &config.Slack{}
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg },
+		Company:    func() *config.Company { return cfg },
+		PublicBase: func() string { return "https://now.example.com" },
 		Reconciles: func(context.Context) []integration.State {
 			return []integration.State{
 				{Kind: integration.KindSlack, Endpoint: "https://old.example.com"},
@@ -1287,6 +1288,84 @@ func TestAMovedPublicBaseIsReportedPerSurface(t *testing.T) {
 	}
 }
 
+// A ${VAR} PUBLIC BASE IS COMPARED RESOLVED, ON BOTH SIDES.
+//
+// `public_base_url` may be a whole reference, and what a surface registered is
+// the address that reference RESOLVED to. Comparing a registration against the
+// reference itself never matches, so every company writing one would read
+// "the address moved" on every surface, for ever — an action-needed badge
+// nobody can clear, on deployments that are working perfectly.
+func TestAReferencePublicBaseIsComparedResolved(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	cfg.Integrations.PublicBaseURL = "${PUBLIC_URL}"
+	cfg.Integrations.Slack = &config.Slack{}
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+		// What the node's own chain reads the reference as, which is what
+		// the passes registered with.
+		PublicBase: func() string { return "https://now.example.com" },
+		Reconciles: func(context.Context) []integration.State {
+			return []integration.State{
+				{Kind: integration.KindSlack, Endpoint: "https://now.example.com"},
+			}
+		},
+	}, "integrations", nil))
+
+	rows, _ := body["integrations"].([]any)
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		if entry["key"] != "slack" {
+			continue
+		}
+		if got := entry["endpoint_current"]; got != true {
+			t.Errorf("endpoint_current = %v, want true: the registration holds "+
+				"exactly what this node reads the reference as", got)
+		}
+		return
+	}
+	t.Fatal("no slack row")
+}
+
+// AND A PROCESS THAT CANNOT READ THE ADDRESS SAYS NOTHING, rather than false.
+//
+// A standalone API has no resolution chain, so it cannot know what the current
+// address is. Answering false there would report every registration as stale
+// on the strength of a value this process never had — the same three-valued
+// rule Routed, Verifiable and Reconciles already follow.
+func TestAnUnknowablePublicBaseLeavesTheAnswerNull(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	cfg.Integrations.PublicBaseURL = "https://now.example.com"
+	cfg.Integrations.Slack = &config.Slack{}
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+		// PublicBase deliberately unset: this process cannot say.
+		Reconciles: func(context.Context) []integration.State {
+			return []integration.State{
+				{Kind: integration.KindSlack, Endpoint: "https://now.example.com"},
+			}
+		},
+	}, "integrations", nil))
+
+	rows, _ := body["integrations"].([]any)
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		if entry["key"] != "slack" {
+			continue
+		}
+		if got := entry["endpoint_current"]; got != nil {
+			t.Errorf("endpoint_current = %v, want null: this process has no "+
+				"resolution chain and cannot say what the address is", got)
+		}
+		if got := entry["endpoint"]; got != "https://now.example.com" {
+			t.Errorf("endpoint = %v, want the recorded address regardless", got)
+		}
+		return
+	}
+	t.Fatal("no slack row")
+}
+
 // AND A SURFACE NOTHING HAS RECORDED AN ADDRESS FOR SAYS NOTHING.
 //
 // Null is "cannot say", which is what every row said before this existed and
@@ -1308,6 +1387,51 @@ func TestAnUnrecordedEndpointIsNullRatherThanMoved(t *testing.T) {
 		entry, _ := row.(map[string]any)
 		if got := entry["endpoint_current"]; got != nil {
 			t.Errorf("%v endpoint_current = %v, want null", entry["key"], got)
+		}
+	}
+}
+
+// EVERY SURFACE THE LOOP CAN REPORT ON HAS A ROW HERE.
+//
+// The answer is a hand-written ladder, one branch per vendor, and the loop
+// writes a status row for every `integration.Kind`. When the two drift the
+// symptom is silence: the reconcile records what it found and the one screen
+// an operator watches has nowhere to draw it. Atlassian was exactly that — a
+// registered pass, a status row, and no row on the card.
+//
+// DERIVED FROM integration.Kinds rather than from a list beside it, because a
+// hardcoded list in the test is how this happened the first time: the guard
+// that was supposed to catch a vendor shipping without its wiring carried its
+// own copy of the vendors.
+func TestEveryIntegrationKindCanBeReported(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	// Every block present, so each ladder branch is reachable. The values
+	// only have to be non-nil: what is asserted is that a row appears.
+	cfg.Integrations.Slack = &config.Slack{}
+	cfg.Integrations.Mattermost = &config.Mattermost{Enabled: true, URL: "https://chat.example.com"}
+	cfg.Integrations.GitHub = &config.GitHub{Enabled: true}
+	cfg.Integrations.GitLab = &config.GitLab{Enabled: true}
+	cfg.Integrations.Jira = &config.Jira{}
+	cfg.Integrations.Confluence = &config.Confluence{}
+	cfg.Integrations.Datadog = &config.Datadog{Enabled: true, RouteTo: "sre-lead"}
+	cfg.Integrations.Atlassian = &config.Atlassian{OrgID: "acme"}
+
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+	}, "integrations", nil))
+
+	rows, _ := body["integrations"].([]any)
+	seen := map[string]bool{}
+	for _, row := range rows {
+		if entry, ok := row.(map[string]any); ok {
+			seen[entry["key"].(string)] = true
+		}
+	}
+	for _, kind := range integration.Kinds {
+		if !seen[string(kind)] {
+			t.Errorf("%s is a surface the reconcile loop reports on, and the "+
+				"integrations answer has no row for it", kind)
 		}
 	}
 }

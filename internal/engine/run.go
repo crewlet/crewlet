@@ -33,6 +33,7 @@ import (
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
@@ -54,6 +55,16 @@ type Engine struct {
 	// wiring that builds the config surface. Atomic because the loop
 	// reads it from its own goroutine while the API installs it.
 	configWriter atomic.Pointer[ConfigWriter]
+
+	// setupRunner is the provisioning runner this node serves, built once.
+	//
+	// ONE INSTANCE, and that is the whole reason it is held here rather
+	// than constructed where it is used: [setup.Runner.Hold] guards a
+	// surface with an in-process claim as well as a fleet lease, and three
+	// callers with three claim maps guard nothing against each other. The
+	// operator's pass, the reconcile loop's tick and a disconnect's
+	// teardown all take it from here.
+	setupRunner func() *setup.Runner
 
 	// startedAt is when THIS engine started, which on a split deployment
 	// is a different process on a different clock from the API's own
@@ -390,6 +401,11 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// value to every seat attachment.
 		batch: queue.DefaultBatchOptions(),
 	}
+	// ONE RUNNER PER ENGINE, because its in-process guard is half of what
+	// keeps two writers off one third-party app — see [setup.Runner.Hold].
+	// A runner per caller would give the loop, the API and a disconnect a
+	// claim map each, which guards nothing.
+	e.setupRunner = sync.OnceValue(e.newSetupRunner)
 	fail := func(err error) (*Engine, error) {
 		if ownsBackends {
 			backends.Close(ctx)

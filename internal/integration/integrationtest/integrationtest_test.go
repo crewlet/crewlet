@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/integration"
@@ -50,29 +51,49 @@ func TestACompliantReconcilerWithFindingsPasses(t *testing.T) {
 	})
 }
 
-// THE SUITE HAS TO BE ABLE TO FAIL, on every clause, or it is a claim rather
-// than coverage. Each entry below breaks exactly one clause of the contract,
-// and the suite must go red for it.
+// violation is a reconciler that breaks ONE named clause.
+type violation struct {
+	name string
+	// clause is the [integrationtest.Case] this reconciler must make fail,
+	// by name.
+	//
+	// NAMING IT IS THE WHOLE POINT. Asserting only that "some case went
+	// red" is satisfied whenever any OTHER clause catches the violator
+	// first, and most of these violators trip more than one: a reconciler
+	// that ignores cancellation fails the cancellation clause even when it
+	// was written to break idempotence. So a clause that had quietly
+	// stopped checking anything would still have looked proven, which is
+	// precisely the failure mode this test exists to rule out.
+	clause string
+	rec    integrationtest.Reconciler
+}
+
+// violations is one reconciler per clause of the contract.
 //
-// The violation's own failure output goes to the subtest's log, where a
-// person reading a failing run sees it. What this asserts is only that the
-// subtest failed at all, because that is the property that matters: a suite
-// which quietly stopped checking a clause would look exactly like one where
-// every third-party app complied.
-func TestTheSuiteRejectsEachViolation(t *testing.T) {
-	cases := []struct {
-		name string
-		rec  integrationtest.Reconciler
-	}{
+// A function rather than a package-level slice because several entries carry
+// per-run state (a write counter, a pass counter), and a table shared between
+// two tests would carry one test's passes into the other's.
+func violations() []violation {
+	return []violation{
 		{
-			name: "a kind this build does not converge",
+			name:   "a kind this build does not converge",
+			clause: "the kind is one this build converges",
 			rec: integrationtest.Reconciler{
 				New:       func(integrationtest.TB) integration.Reconciler { return unknownKind{} },
 				Mutations: func() int { return 0 },
 			},
 		},
 		{
-			name: "a converged pass that writes",
+			name:   "a kind that moves between passes",
+			clause: "the kind does not change across passes",
+			rec: integrationtest.Reconciler{
+				New:       func(integrationtest.TB) integration.Reconciler { return &drifter{} },
+				Mutations: func() int { return 0 },
+			},
+		},
+		{
+			name:   "a converged pass that writes",
+			clause: "a converged pass writes nothing",
 			rec: func() integrationtest.Reconciler {
 				writes := 0
 				return integrationtest.Reconciler{
@@ -82,14 +103,33 @@ func TestTheSuiteRejectsEachViolation(t *testing.T) {
 			}(),
 		},
 		{
-			name: "findings that churn between passes",
+			name:   "findings that churn between passes",
+			clause: "two passes over an unchanged world agree",
 			rec: integrationtest.Reconciler{
 				New:       func(integrationtest.TB) integration.Reconciler { return &churner{} },
 				Mutations: func() int { return 0 },
 			},
 		},
 		{
-			name: "a person's finding with nothing to act on",
+			name:   "a finding kind this build cannot read",
+			clause: "every finding is a kind this build knows",
+			rec: integrationtest.Reconciler{
+				New: func(integrationtest.TB) integration.Reconciler {
+					// Carries a detail, so the only clause it breaks is
+					// the one it is here for: an unknown kind is owed by
+					// the operator, and a detail-less one would trip the
+					// actionability clause as well.
+					return compliant{findings: []integration.Finding{
+						{Kind: integration.FindingKind("pager_rota_stale"), Subject: "ceo",
+							Detail: "read the peer's logs"},
+					}}
+				},
+				Mutations: func() int { return 0 },
+			},
+		},
+		{
+			name:   "a person's finding with nothing to act on",
+			clause: "a finding a person must act on says what to do",
 			rec: integrationtest.Reconciler{
 				New: func(integrationtest.TB) integration.Reconciler {
 					return compliant{findings: []integration.Finding{
@@ -100,38 +140,75 @@ func TestTheSuiteRejectsEachViolation(t *testing.T) {
 			},
 		},
 		{
-			name: "a cancelled pass reported as health",
+			name:   "a cancelled pass reported as health",
+			clause: "a cancelled pass reports a fault rather than health",
 			rec: integrationtest.Reconciler{
 				New:       func(integrationtest.TB) integration.Reconciler { return swallower{} },
 				Mutations: func() int { return 0 },
 			},
 		},
 	}
+}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if !anyCaseFails(tc.rec) {
-				t.Fatalf("every case passed a reconciler with %s, so the clause "+
-					"that forbids it is a claim rather than coverage", tc.name)
+// THE SUITE HAS TO BE ABLE TO FAIL, on every clause, or it is a claim rather
+// than coverage. Each entry breaks exactly one clause of the contract, and
+// THAT clause must go red for it.
+//
+// The violation's own failure output goes to the subtest's log, where a
+// person reading a failing run sees it. What this asserts is only that the
+// named case failed, because that is the property that matters: a suite
+// which quietly stopped checking a clause would look exactly like one where
+// every third-party app complied.
+func TestTheSuiteRejectsEachViolation(t *testing.T) {
+	for _, v := range violations() {
+		t.Run(v.name, func(t *testing.T) {
+			if !caseFails(t, v.clause, v.rec) {
+				t.Fatalf("%q passed a reconciler with %s, so that clause is a "+
+					"claim rather than coverage", v.clause, v.name)
 			}
 		})
 	}
 }
 
-// anyCaseFails drives every case against a recorder and reports whether one
-// of them went red.
+// EVERY CLAUSE NEEDS A VIOLATOR. A clause with none is checked by nothing:
+// it passes every reconciler in the tree and would go on passing if its body
+// were deleted, which is exactly how a suite stops meaning anything while
+// still reporting seven green subtests.
+func TestEveryClauseIsShownFalsifiable(t *testing.T) {
+	vs := violations()
+	for _, c := range integrationtest.Cases() {
+		if !slices.ContainsFunc(vs, func(v violation) bool { return v.clause == c.Name }) {
+			t.Errorf("no violation breaks %q, so nothing shows that clause can fail", c.Name)
+		}
+	}
+}
+
+// caseFails drives ONE named case against a recorder and reports whether it
+// went red.
 //
 // A RECORDER rather than a nested subtest, because a failing subtest fails
 // its parent whatever t.Run returns, so a deliberate violation could not be
 // asserted on from inside this file. That constraint is the whole reason
 // integrationtest.TB exists.
-func anyCaseFails(rec integrationtest.Reconciler) bool {
+func caseFails(t *testing.T, clause string, rec integrationtest.Reconciler) bool {
+	t.Helper()
 	for _, c := range integrationtest.Cases() {
-		if runCase(c, rec).failed {
-			return true
+		if c.Name == clause {
+			return runCase(c, rec).failed
 		}
 	}
+	// A renamed case, which would otherwise silently stop being exercised.
+	t.Fatalf("no case is named %q; integrationtest.Cases() has %q",
+		clause, caseNames())
 	return false
+}
+
+func caseNames() []string {
+	names := make([]string, 0, len(integrationtest.Cases()))
+	for _, c := range integrationtest.Cases() {
+		names = append(names, c.Name)
+	}
+	return names
 }
 
 // runCase drives one case and reports what it said.
@@ -193,7 +270,27 @@ func TestEveryCasePassesACompliantReconciler(t *testing.T) {
 type unknownKind struct{}
 
 func (unknownKind) Kind() integration.Kind { return integration.Kind("pagerduty") }
-func (unknownKind) Reconcile(context.Context) ([]integration.Finding, error) {
+func (unknownKind) Reconcile(ctx context.Context) ([]integration.Finding, error) {
+	return nil, ctx.Err()
+}
+
+// drifter answers to one kind before a pass and another after, which would
+// strand the first kind's status row describing a surface nothing writes to
+// any more.
+type drifter struct{ passes int }
+
+func (d *drifter) Kind() integration.Kind {
+	if d.passes == 0 {
+		return integration.KindGitLab
+	}
+	return integration.KindGitHub
+}
+
+func (d *drifter) Reconcile(ctx context.Context) ([]integration.Finding, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	d.passes++
 	return nil, nil
 }
 

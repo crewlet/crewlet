@@ -4,7 +4,6 @@ import (
 	"context"
 	"html/template"
 	"net/http"
-	"strconv"
 	"strings"
 )
 
@@ -219,15 +218,6 @@ type AppCompleter interface {
 	// InstallURL is where the operator installs the app a seat now has,
 	// or empty when it has none yet.
 	InstallURL(seat string) string
-
-	// RecordInstall adopts an installation GitHub named on the redirect.
-	//
-	// THE LOOP WOULD FIND IT ANYWAY, on its next pass, by listing the
-	// app's installations. Taking it here as well is not redundant: it is
-	// the difference between a screen that is right when the operator
-	// looks at it and one that is right a minute later, and the id is in
-	// the query GitHub already sent.
-	RecordInstall(ctx context.Context, seat string, installationID int64) error
 }
 
 // githubAppLanding serves GET /webhooks/github-app.
@@ -247,27 +237,34 @@ func (r *Receiver) githubAppLanding(w http.ResponseWriter, req *http.Request) {
 		view.Heading, view.Error, status = "App not created", describeRefusal(q), http.StatusBadRequest
 
 	case strings.TrimSpace(q.Get("installed")) != "":
-		// THE INSTALL ARRIVAL, and GitHub names the installation in the
-		// query. Recording it here is what makes the Integrations screen
-		// right when the operator gets back to it rather than a minute
-		// later; the loop would find the same id by listing the app's
-		// installations, so a failure here costs the wait and nothing
-		// more, which is why it is reported as a note and not an error.
+		// THE INSTALL ARRIVAL. GitHub names the seat and the installation
+		// in the query, and that query is the only thing this route has:
+		// it is unauthenticated, so what arrives here is whatever the
+		// caller typed.
+		//
+		// SO NOTHING IS WRITTEN, and that is the whole of this arm.
+		// Adopting the id straight off the redirect made the Integrations
+		// screen right about a minute sooner, and paid for it by letting
+		// anyone who can reach this port record an installation onto any
+		// seat that has an app — no signature, no token, no state, and a
+		// fresh config revision on every request. The `code` arm below is
+		// not exposed that way because a signed state stands in for the
+		// credential a redirect cannot carry; there is no equivalent
+		// here, since an agent's app is private and GitHub sends no state
+		// back through the installations page such an app is installed
+		// from.
+		//
+		// The reconcile loop adopts the same installation on its next
+		// pass, having LISTED the app's own installations rather than
+		// believed a query — the verified path, and the one that already
+		// existed. What that costs is the minute, and the page below has
+		// always said so: this is word for word the message it already
+		// showed whenever the write failed.
 		view.Heading = "App installed for"
 		view.Seat = strings.TrimSpace(q.Get("installed"))
 		view.Done = true
 		view.Message = "Crewlet picks the installation up on its next pass, usually " +
 			"within a minute, and the Integrations screen will say so."
-		if id := installationID(q.Get("installation_id")); id != 0 && r.appFlow != nil {
-			if err := r.appFlow.RecordInstall(req.Context(), view.Seat, id); err != nil {
-				log.Warn("github_install_not_recorded", "seat", view.Seat,
-					"error", err.Error(),
-					"detail", "the next reconcile pass finds the same installation")
-			} else {
-				view.Message = "This agent now acts as itself on GitHub."
-				log.Info("github_install_recorded", "seat", view.Seat, "installation", id)
-			}
-		}
 
 	case r.appFlow == nil:
 		view.Heading, status = "App not created", http.StatusServiceUnavailable
@@ -326,17 +323,4 @@ func describeRefusal(q map[string][]string) string {
 		return described
 	}
 	return "GitHub refused the app creation: " + first("error")
-}
-
-// installationID reads the id GitHub put on the redirect, or zero.
-//
-// ZERO FOR ANYTHING UNREADABLE, which is the safe direction: the loop
-// discovers the installation by asking GitHub, so a query this cannot parse
-// costs a minute rather than an adoption.
-func installationID(raw string) int64 {
-	id, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
-	if err != nil || id <= 0 {
-		return 0
-	}
-	return id
 }

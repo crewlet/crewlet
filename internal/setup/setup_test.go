@@ -734,3 +734,36 @@ func TestASubmissionIsTrimmedAndRefusesASpaceInsideAToken(t *testing.T) {
 		t.Errorf("the refusal does not name the field: %v", err)
 	}
 }
+
+// THE REFUSAL SHOWS THE VALUE THAT HAS THE SPACE IN IT.
+//
+// It quoted the field NAME, which by construction has no space in it, so the
+// message asserted something false about the one identifier it showed and
+// withheld the only thing an operator can act on: which of the things they
+// pasted is wrong. Every kind that reaches this branch is Kind.Tight — a URL,
+// an id, an email — and KindSecret is deliberately not one, so the value
+// echoed here is never a credential.
+func TestAnInteriorSpaceIsRefusedNamingTheValue(t *testing.T) {
+	t.Parallel()
+	reqs := []setup.Requirement{{
+		Field: "url", Kind: setup.KindURL, Required: true,
+		ConfigPath: "integrations.gitlab.url",
+	}}
+	rec := &recorder{}
+	_, err := writer(rec).Write(context.Background(), reqs, setup.Submission{
+		Kind:    integration.KindGitLab,
+		Values:  map[string]string{"url": "https://gitlab example.com"},
+		Summary: "connect gitlab", Operator: "founder",
+	})
+	if err == nil {
+		t.Fatal("a url with a space in the middle was accepted")
+	}
+	if !strings.Contains(err.Error(), "https://gitlab example.com") {
+		t.Errorf("the refusal is %q; it does not show the value that has the "+
+			"space in it, which is the only thing an operator can act on",
+			err.Error())
+	}
+	if len(rec.events) != 0 {
+		t.Errorf("a refused submission wrote %v", rec.events)
+	}
+}

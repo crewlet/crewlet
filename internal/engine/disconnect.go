@@ -71,13 +71,14 @@ type vendorDisconnect struct {
 func (d vendorDisconnect) Disconnect(ctx context.Context, removeSeats bool) error {
 	return d.engine.dropBlock(ctx, d.kind, func(ctx context.Context) error {
 		if d.pass == nil {
-			// NOTHING REGISTERED AT THE VENDOR. Datadog's webhook is
-			// created by a person in Datadog's own UI pointing at this
-			// engine, and Slack's apps are made from the command line,
-			// so neither has anything this engine put there to take
-			// away. Dropping the block is the whole disconnect, and a
-			// third-party app with no teardown must still HAVE a disconnector or
-			// the intent sits on the row for ever.
+			// NOTHING REGISTERED AT THE VENDOR. Slack is the only
+			// surface here with no pass at all — its apps are made from
+			// the command line — so it is the only one that reaches
+			// this branch, and there is nothing this engine put at
+			// Slack for a teardown to take away. Dropping the block is
+			// the whole disconnect, and a third-party app with no
+			// teardown must still HAVE a disconnector or the intent
+			// sits on the row for ever.
 			return nil
 		}
 		return d.pass.Teardown(ctx, setup.TeardownInput{RemoveSeats: removeSeats})
@@ -88,17 +89,65 @@ func (d vendorDisconnect) Disconnect(ctx context.Context, removeSeats bool) erro
 func (e *Engine) dropBlock(
 	ctx context.Context, kind integration.Kind, vendor func(context.Context) error,
 ) error {
+	// BOTH PRECONDITIONS BEFORE THE VENDOR IS TOUCHED. Each is a thing
+	// THIS NODE lacks rather than anything wrong with the surface, so each
+	// is reported as "not yet": the row is left alone, no attempt is
+	// counted, and a node that has what is missing finishes the disconnect.
+	// A teardown that ran and then could not remove the block would leave
+	// an integration configured, live, and stripped of everything that
+	// made it work.
+	if e.Company() == nil {
+		// NO ACTIVE REVISION. Every pass reads the credential it
+		// authenticates with off `Company().Config`, so without one
+		// there is nothing to authenticate as and no block to drop.
+		//
+		// GUARDED HERE rather than in each of the seven Teardown methods
+		// for the reason [passConverger.Run] is guarded at its own
+		// boundary: this is the loop's OTHER way into a pass, and the
+		// two have to answer a company-less node the same way. Left to
+		// the passes it was seven chances to forget, and the loop reads
+		// its rows off the COORDINATION store — so a disconnect asked
+		// for on a node that holds the document is found by one that
+		// does not, and an unguarded read there is not an error the loop
+		// records but a nil dereference in its detached goroutine,
+		// taking down a process whose seats were running perfectly.
+		return fmt.Errorf("%w: this node has no active company revision",
+			integration.ErrDisconnectUnavailable)
+	}
 	writer := e.configWriterOrNil()
 	if writer == nil {
-		// REFUSED BEFORE THE VENDOR IS TOUCHED, and reported as "not
-		// yet" rather than as a failure: this is normally the window
-		// between the loop arming and the API wiring, which resolves on
-		// its own within a second. A teardown that ran and then could
-		// not remove the block would leave an integration configured,
-		// live, and stripped of everything that made it work.
+		// NO CONFIG SURFACE YET, which is now genuinely only the
+		// construction window: the loop is armed when the engine is
+		// constructed and the writer is installed a few hundred
+		// milliseconds later, measured, so a tick landing in between
+		// leaves the row alone and the next one finishes.
+		//
+		// It was not only that. The writer was installed inside the
+		// function that serves HTTP, after its early return for
+		// `api.port: 0` — so a worker-only node never got one and this
+		// branch was permanent there rather than momentary, on a loop
+		// that is a fleet singleton and lands on such a node as readily
+		// as on any other.
 		return fmt.Errorf("%w: no config surface is wired on this node",
 			integration.ErrDisconnectUnavailable)
 	}
+	// AND NOT WHILE SOMETHING ELSE IS WRITING AT THIS SURFACE. A teardown
+	// and a provisioning pass are the two operations that write at the
+	// third-party app, and letting them overlap is how a disconnect deletes
+	// the webhook the pass beside it is registering. [setup.Runner.Hold] is
+	// the one guard all three writers take, so a teardown reached through
+	// the Disconnector takes it here rather than inventing a second one.
+	release, held, err := e.holdSurface(ctx, kind)
+	switch {
+	case err != nil:
+		return fmt.Errorf("%w: this node could not check whether %s is "+
+			"being provisioned right now: %w",
+			integration.ErrDisconnectUnavailable, kind, err)
+	case !held:
+		return fmt.Errorf("%w: a provisioning pass for %s is running",
+			integration.ErrDisconnectUnavailable, kind)
+	}
+	defer release()
 	if err := vendor(ctx); err != nil {
 		return fmt.Errorf("engine: %s teardown: %w", kind, err)
 	}
@@ -114,11 +163,15 @@ func (e *Engine) dropBlock(
 
 // disconnectors pairs every pass this build can tear down with the seam the
 // loop removes it through.
-// EVERY SURFACE, not only the ones with something to remove. A third-party app with no
-// teardown still has a BLOCK, and a disconnect for it that no node could
-// complete would leave the intent on the fleet row for ever with the screen
-// reporting Disconnecting and nothing moving. Datadog and Slack are that
-// case: neither has anything this engine registered at the third-party app.
+//
+// EVERY SURFACE, not only the ones with something to remove. A third-party app
+// with no teardown still has a BLOCK, and a disconnect for it that no node
+// could complete would leave the intent on the fleet row for ever with the
+// screen reporting Disconnecting and nothing moving. Slack is that case, and
+// the only one: it is the single kind with no pass, so it is the single kind
+// with nothing this engine registered to take away. Datadog was in this
+// sentence and is not any more — it registers its own webhook and tears it
+// down again.
 func (e *Engine) disconnectors() map[integration.Kind]integration.Disconnector {
 	tearers := map[integration.Kind]setup.Teardowner{}
 	for _, pass := range e.setupPasses() {
@@ -192,7 +245,17 @@ func (e *Engine) editGitHubSeat(
 ) error {
 	writer := e.configWriter.Load()
 	if writer == nil {
-		return integration.ErrDisconnectUnavailable
+		// THE SENTINEL, WRAPPED WITH WHAT IT IS ACTUALLY REFUSING. Bare, it
+		// reads "this node cannot complete a disconnect yet" — which is the
+		// sentence its doc scopes it to and is not what happened: this is a
+		// pass recording an app it just discovered, and no disconnect is in
+		// flight. It stays comparable because the loop's own
+		// [integration.Worker.tearDown] arm keys on errors.Is, and it is
+		// the right sentinel: the cause is identical, the config surface
+		// this node has not wired yet.
+		return fmt.Errorf(
+			"%w: no config surface is wired on this node, so %s's GitHub app "+
+				"cannot be recorded yet", integration.ErrDisconnectUnavailable, handle)
 	}
 	body, err := (*writer).Seat(ctx, handle)
 	if err != nil {

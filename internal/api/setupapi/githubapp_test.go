@@ -1,12 +1,17 @@
 package setupapi_test
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // THE STATE IS THE ONLY THING GUARDING AN UNAUTHENTICATED WRITE.
@@ -89,11 +94,114 @@ func TestTheServiceAlwaysHasAClock(t *testing.T) {
 	}
 	// The flow mints a state, which reads the clock. A nil one panics
 	// here rather than in a request nobody can retry.
-	flow := setupapi.NewAppFlow(s, []string{"k1:material"})
+	flow := setupapi.NewAppFlow(s, []string{"k1:material"}, nil)
 	if flow == nil {
 		t.Fatal("no app flow")
 	}
 	if got := flow.InstallURL("nobody"); got != "" {
 		t.Errorf("a seat that does not exist has an install URL: %q", got)
+	}
+}
+
+// A STATE IS SPENT THE FIRST TIME IT IS PRESENTED, and refused afterwards.
+//
+// Validation is a pure signature-and-expiry check, so without this the state
+// is a BEARER CREDENTIAL that works as many times as it is presented for the
+// whole fifteen minutes it lives — and it is the only authorization on a
+// route the webhooks mux serves unauthenticated. It travels in a query
+// string, which is exactly where a browser history and an ingress access log
+// keep it.
+//
+// The company is nil here, so a state that survives the spend fails a step
+// LATER with a different error. That is what separates the two answers: the
+// first call gets past the spend, the second does not.
+func TestACallbackStateIsRefusedTheSecondTime(t *testing.T) {
+	t.Parallel()
+	flow := setupapi.NewAppFlow(
+		setupapi.New(setupapi.Options{Company: func() *config.Company { return nil }}),
+		[]string{"k1:material"}, nil)
+	if flow == nil {
+		t.Fatal("no app flow")
+	}
+	state := runtoken.New(runtoken.Options{
+		Key: runtoken.KeyFrom("github-app-manifest", []string{"k1:material"}),
+	}).Mint("sre-lead", 15*time.Minute)
+
+	if _, err := flow.Complete(t.Context(), "code-1", state); errors.Is(err, setupapi.ErrStateRefused) {
+		t.Fatalf("the first use of a fresh state was refused: %v", err)
+	}
+	_, err := flow.Complete(t.Context(), "code-2", state)
+	if !errors.Is(err, setupapi.ErrStateRefused) {
+		t.Errorf("Complete twice = %v, want %v: a replayed link must not seal "+
+			"another app over this seat's", err, setupapi.ErrStateRefused)
+	}
+}
+
+// AND A REGISTRY THAT CANNOT ANSWER REFUSES, rather than assuming unspent.
+//
+// This inverts the policy [coord.Claims] documents for webhook dedupe, on
+// purpose. A push suppressed by a store blip is a wake nobody notices, so
+// that caller fails open; this is an authorization check, and a store that
+// could not answer is not evidence the link is unused. Failing open here
+// would mean an outage re-opened replay for as long as it lasted.
+func TestAnUnreadableClaimRegistryRefusesTheCallback(t *testing.T) {
+	t.Parallel()
+	flow := setupapi.NewAppFlow(
+		setupapi.New(setupapi.Options{Company: func() *config.Company { return nil }}),
+		[]string{"k1:material"}, blindClaims{})
+	state := runtoken.New(runtoken.Options{
+		Key: runtoken.KeyFrom("github-app-manifest", []string{"k1:material"}),
+	}).Mint("sre-lead", 15*time.Minute)
+
+	_, err := flow.Complete(t.Context(), "code-1", state)
+	if !errors.Is(err, setupapi.ErrStateRefused) {
+		t.Errorf("Complete = %v, want %v: an unreadable registry has not said "+
+			"this state is unspent", err, setupapi.ErrStateRefused)
+	}
+}
+
+// blindClaims is a registry that cannot answer.
+type blindClaims struct{}
+
+func (blindClaims) Claim(context.Context, string, time.Duration, time.Time) (bool, error) {
+	return false, errors.New("the coordination store could not be reached")
+}
+
+// A HANDLE THAT BEGINS WITH A DIGIT STILL GETS A REFERENCEABLE NAME.
+//
+// The org model accepts `7th-engineer`, and the name built for that seat used
+// to lead with the handle: `7TH_ENGINEER_GITHUB_APP_KEY`. envref's
+// whole-reference grammar requires a leading letter or underscore, so the
+// `${VAR}` written beside it resolved to nothing — and the value it pointed at
+// was the app's private key, which GitHub issues once and never reissues. The
+// app was unusable and unrecoverable from the moment it was created.
+func TestASecretNameIsReferenceableForEverySeatHandle(t *testing.T) {
+	t.Parallel()
+	for _, handle := range []string{
+		"7th-engineer", "1", "sre-lead", "_leading", "n0va", "Ops Lead",
+	} {
+		for _, field := range []string{"APP_KEY", "APP_WEBHOOK_SECRET"} {
+			name := setup.SecretNameFor(integration.KindGitHub, setup.Requirement{
+				Field: field, Seat: handle,
+			})
+			if !setup.ValidSecretName(name) {
+				t.Errorf("the name for %q/%s is %q, which no ${VAR} can reference",
+					handle, field, name)
+			}
+		}
+	}
+}
+
+// AND TWO SEATS NEVER SHARE ONE. These are per-seat credentials: one shared
+// name would have the second agent's key overwrite the first's, and both
+// seats would then authenticate as whichever app was created last.
+func TestTwoSeatsDoNotShareASecretName(t *testing.T) {
+	t.Parallel()
+	first := setup.SecretNameFor(integration.KindGitHub,
+		setup.Requirement{Field: "APP_KEY", Seat: "sre-lead"})
+	second := setup.SecretNameFor(integration.KindGitHub,
+		setup.Requirement{Field: "APP_KEY", Seat: "platform-lead"})
+	if first == second {
+		t.Errorf("both seats seal their app key under %q", first)
 	}
 }

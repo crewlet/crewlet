@@ -2,11 +2,14 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/datadog"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/provision"
 
 	"github.com/crewlet/crewlet/internal/setup"
 )
@@ -115,7 +118,23 @@ func (e *Engine) startIntegrations(ctx context.Context) {
 			if company == nil {
 				return ""
 			}
-			return company.Config.Integrations.WebhookBase()
+			return company.Config.Integrations.WebhookBase(e.resolver().LookupOK)
+		},
+		// AND THE NAME A REGISTRATION IS HELD UNDER, for the one surface
+		// where the address cannot find it again. Read fresh on every
+		// pass for the same reason the endpoint is: it is a field of the
+		// applied revision and an apply can change it — which is exactly
+		// the change this exists to notice.
+		Registration: func(kind integration.Kind) string {
+			company := e.Company()
+			if company == nil || kind != integration.KindDatadog {
+				return ""
+			}
+			cfg := company.Config.Integrations.Datadog
+			if cfg == nil {
+				return ""
+			}
+			return datadog.WebhookNameOf(cfg)
 		},
 		ClaimDuty: integration.DutyFunc(
 			e.workerDuty(integrationDutyName, integrationDutyTTL)),
@@ -197,14 +216,9 @@ func githubReconcileClient(cfg *config.GitHub, env *config.Resolver) (*github.Cl
 	if token == "" {
 		return nil, nil
 	}
-	// RESOLVED FIRST, then asked for its bases. APIBase and WebURL are
-	// derived from URL, so building them off the unresolved block would
-	// point an Enterprise Server deployment at github.com whenever the
-	// host is written as a ${VAR}.
-	resolved := *cfg
-	resolved.URL = strings.TrimSpace(env.Value(cfg.URL))
+	apiBase, webBase := cfg.Bases(env.LookupOK)
 	return github.NewClient(github.ClientOptions{
-		APIBase: resolved.APIBase(), WebBase: resolved.WebURL(), Token: token,
+		APIBase: apiBase, WebBase: webBase, Token: token,
 	})
 }
 
@@ -250,19 +264,54 @@ func (c *passConverger) Reconcile(ctx context.Context) ([]integration.Finding, e
 	}
 	// A SINK IS BEST EFFORT HERE. A node with no keyring cannot seal a
 	// minted credential, but it can still read a surface and report what
-	// it finds, and reporting is most of what this loop is for. The pass
-	// treats a nil sink as a dry run, which is the honest posture for a
-	// node that could not have recorded what it created.
+	// it finds, and reporting is most of what this loop is for.
+	//
+	// [provision.ReadOnly] RATHER THAN NIL. This passed nil and called it a
+	// dry run, which no pass implemented: two of them refused a nil sink at
+	// their entry point with ErrNoSink, so every tick reported those
+	// integrations as a FAULT — "the last pass could not read this",
+	// retried for ever — on an ordinary deployment that keeps its ${VAR}s
+	// in the environment and has no secrets.keys at all.
 	sink, err := c.engine.SetupSink(reconcileOperator)
 	if err != nil {
 		log.WarnContext(ctx, "integration_sink_unavailable",
 			"integration", c.pass.Kind().String(), "error", err,
 			"detail", "this pass reads and reports; it will mint nothing")
-		sink = nil
+		sink = provision.ReadOnly()
 	}
+	// UNDER THE SURFACE'S OWN GUARD, the same one an operator's pass takes.
+	//
+	// This tick and that button run THE SAME [setup.Pass] with the same sink
+	// and the same webhook base, so they create the same accounts, mint the
+	// same tokens and register the same hooks. Two of them at once is the
+	// collision the worker's own singleton exists to rule out — both read a
+	// surface with no account for a seat, both create one — and it is
+	// reachable between the loop and the dashboard ON ONE NODE, which is
+	// why the fleet lease alone does not close it. [setup.Runner.Hold] is
+	// both halves.
+	//
+	// The loop's own `integration-reconcile` duty covers neither: that one
+	// answers "which node runs the loop", which is a different question
+	// from "who is writing at this surface", and a lease keyed on a
+	// different name excludes nobody.
+	release, held, err := c.engine.holdSurface(ctx, c.pass.Kind())
+	switch {
+	case err != nil:
+		// UNKNOWN IS NOT FREE. A coordination store that could not
+		// answer has not said the surface is idle, and the whole point
+		// of the guard is that acting on that guess is what creates the
+		// duplicate.
+		return nil, fmt.Errorf("%w: %w", integration.ErrReconcileUnavailable, err)
+	case !held:
+		// SOMEBODY IS ALREADY DOING THIS. Nothing is recorded and no
+		// attempt is counted — see [integration.ErrReconcileUnavailable].
+		return nil, integration.ErrReconcileUnavailable
+	}
+	defer release()
+
 	return c.pass.Run(ctx, setup.PassInput{
 		Sink:        sink,
-		WebhookBase: company.Config.Integrations.WebhookBase(),
+		WebhookBase: company.Config.Integrations.WebhookBase(c.engine.resolver().LookupOK),
 	})
 }
 

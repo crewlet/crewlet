@@ -62,3 +62,38 @@ test("every timer is dropped when the screen goes away", () => {
   vi.advanceTimersByTime(WATCH_MS * 2);
   expect(read).toHaveBeenCalledTimes(1);
 });
+
+// A SECOND WATCH SUPERSEDES THE FIRST.
+//
+// The window is one boolean with no generation, and every watch() pushed its
+// own close timer without cancelling the one it replaced — so the FIRST timer
+// to fire ended the window, truncating the quick cadence for the most recent
+// write, which is the one an operator is actually watching.
+test("a later watch is not closed by an earlier one's timer", () => {
+  vi.useFakeTimers();
+  const { result } = renderHook(() => useRecheck(() => {}));
+
+  act(() => result.current.watch());
+  act(() => void vi.advanceTimersByTime(WATCH_MS / 2));
+  act(() => result.current.watch());
+
+  // The first call's original deadline. Its timer would fire here.
+  act(() => void vi.advanceTimersByTime(WATCH_MS / 2 + 1));
+  expect(result.current.watching).toBe(true);
+
+  // And the second call's own deadline still closes it.
+  act(() => void vi.advanceTimersByTime(WATCH_MS));
+  expect(result.current.watching).toBe(false);
+  vi.useRealTimers();
+});
+
+// AND THE HANDLES DO NOT ACCUMULATE. They were only ever pushed, so a screen
+// an operator worked in for a while held dead ones for the life of the mount.
+test("repeated watches do not accumulate timers", () => {
+  vi.useFakeTimers();
+  const { result } = renderHook(() => useRecheck(() => {}));
+  for (let i = 0; i < 5; i++) act(() => result.current.watch());
+  // Two live handles at most: the settle read and the window close.
+  expect(vi.getTimerCount()).toBeLessThanOrEqual(2);
+  vi.useRealTimers();
+});

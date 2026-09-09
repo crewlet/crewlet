@@ -15,14 +15,18 @@ import (
 
 // sink records what a pass mints, and can refuse a read.
 type sink struct {
-	held    map[string]string
-	readErr error
-	flushed bool
+	held      map[string]string
+	readErr   error
+	recordErr error
+	flushed   bool
 }
 
 func newSink() *sink { return &sink{held: map[string]string{}} }
 
 func (s *sink) Record(_ context.Context, name, value string) error {
+	if s.recordErr != nil {
+		return s.recordErr
+	}
 	s.held[name] = value
 	return nil
 }
@@ -242,5 +246,107 @@ func TestANonRefusalDoesNotAccuseTheCredential(t *testing.T) {
 	}
 	if errors.Is(err, integration.ErrCredentialRejected) {
 		t.Errorf("a 500 was classified as a credential rejection: %v", err)
+	}
+}
+
+// A KEY THAT COULD NOT BE RECORDED IS REVOKED.
+//
+// Datadog shows a key's value exactly once, so one this engine minted and
+// then could not persist is a credential that exists, is held by nobody, and
+// which nothing will ever remember to remove — the state
+// provision.TokenSink's contract legislates against. It also wedged the seat
+// for good: the next pass found a key it could not read a value for and
+// reported the seat permanently stuck, a state this engine created and could
+// not leave without somebody logging into Datadog.
+func TestAKeyThatCannotBeRecordedIsRevoked(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"u1","attributes":{
+			"email":"crewlet-sre@agents.test.invalid","service_account":true}}]}`))
+	}
+	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(
+		w http.ResponseWriter, r *http.Request,
+	) {
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"data":[]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"id":"k1","attributes":{"key":"v","name":"crewlet"}}}`))
+	}
+	revoked := 0
+	reg.handle["/api/v2/service_accounts/u1/application_keys/k1"] = func(
+		w http.ResponseWriter, r *http.Request,
+	) {
+		if r.Method == http.MethodDelete {
+			revoked++
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+
+	s := newSink()
+	s.recordErr = errors.New("the keyring refused the write")
+	res, err := datadog.Reconcile(context.Background(), datadog.Options{
+		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
+		Creds: pair, Sink: s,
+	})
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if revoked != 1 {
+		t.Fatalf("the key was revoked %d times; it is live at Datadog and held "+
+			"by nobody", revoked)
+	}
+	if len(res.Seats) != 1 || res.Seats[0].Err == nil {
+		t.Fatalf("seat = %+v, want the failure reported", res.Seats)
+	}
+	// AND THE ORIGINAL FAILURE SURVIVES. The reason the run stopped is
+	// what an operator has to fix; a cleanup message replacing it would
+	// hide the cause behind its consequence.
+	if !strings.Contains(res.Seats[0].Err.Error(), "the keyring refused the write") {
+		t.Errorf("the revocation replaced the cause: %v", res.Seats[0].Err)
+	}
+}
+
+// AND WHEN THE REVOCATION ALSO FAILS, somebody is told to do it by hand —
+// which is the only case where that instruction is honest.
+func TestAKeyThatCannotBeRevokedIsReportedForARealPerson(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"u1","attributes":{
+			"email":"crewlet-sre@agents.test.invalid","service_account":true}}]}`))
+	}
+	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(
+		w http.ResponseWriter, r *http.Request,
+	) {
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"data":[]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"id":"k1","attributes":{"key":"v","name":"crewlet"}}}`))
+	}
+	reg.handle["/api/v2/service_accounts/u1/application_keys/k1"] = func(
+		w http.ResponseWriter, _ *http.Request,
+	) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+
+	s := newSink()
+	s.recordErr = errors.New("the keyring refused the write")
+	res, err := datadog.Reconcile(context.Background(), datadog.Options{
+		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
+		Creds: pair, Sink: s,
+	})
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(res.Seats) != 1 || res.Seats[0].Err == nil {
+		t.Fatalf("seat = %+v", res.Seats)
+	}
+	if !strings.Contains(res.Seats[0].Err.Error(), "delete the key named") {
+		t.Errorf("nobody was told the key is live: %v", res.Seats[0].Err)
 	}
 }

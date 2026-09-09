@@ -48,7 +48,11 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 			Default:    "https://gitlab.com",
 			Help:       "Leave this as https://gitlab.com unless you run GitLab yourself.",
 			Format:     "https://gitlab.example.com",
-			Blocks:     integration.FindingCredentialMissing,
+			// AN ADDRESS IS NOT A CREDENTIAL. It claimed
+			// credential_missing, so a row reporting a group token
+			// this engine could not resolve offered the instance URL
+			// as the field that clears it.
+			Blocks: integration.FindingIngressBlocked,
 		},
 		{
 			Field:      "signing_secret",
@@ -95,11 +99,16 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 	// The administrator credential, appended rather than declared inline
 	// with the rest because it is the one whose value this function has to
 	// resolve through the same seam every other secret uses.
-	admin := AdminCredential("")
+	admin := AdminCredential()
+	var adminToken string
 	if in != nil && in.Provisioning != nil {
-		admin = AdminCredential(in.Provisioning.AdminToken)
-		admin.Present, admin.Resolved, admin.Stored = setup.Held(in.Provisioning.AdminToken, resolve)
+		adminToken = in.Provisioning.AdminToken
 	}
+	// THROUGH Held ON BOTH BRANCHES. An absent provisioning block and an
+	// empty token are the same answer here — nothing is stored, and
+	// Resolved stays nil rather than claiming a value was looked up — so
+	// there is no second path to keep in step with this one.
+	admin.Present, admin.Resolved, admin.Stored = setup.Held(adminToken, resolve)
 	reqs = append(reqs, admin)
 	return reqs
 }
@@ -118,7 +127,7 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 // store and the document gets a ${VAR} — and named in the orphaned list when
 // the integration is disconnected, so an operator knows exactly what to
 // revoke afterwards.
-func AdminCredential(stored string) setup.Requirement {
+func AdminCredential() setup.Requirement {
 	return setup.Requirement{
 		Field:      "admin_token",
 		Connect:    true,
@@ -126,8 +135,14 @@ func AdminCredential(stored string) setup.Requirement {
 		Kind:       setup.KindSecret,
 		ConfigPath: "integrations.gitlab.provisioning.admin_token",
 		Required:   true,
-		Present:    stored != "",
-		Stored:     stored,
+		// BLOCKS THE FINDING THIS FIELD ACTUALLY CLEARS. It declared
+		// none, and `url` and `team` (or `signing_secret`) claimed
+		// credential_missing instead — none of which is the credential.
+		// [setup.Requirement.Blocks] is the join a status row uses to
+		// offer "the fields whose Blocks says they clear it", so a row
+		// reporting a missing group credential offered everything but
+		// the token that supplies one.
+		Blocks: integration.FindingCredentialMissing,
 		// ONE SENTENCE carrying its own link and naming the scope as the
 		// literal it is. It was three clauses and a trailing "Open
 		// GitLab": what to do, why, and where, in that order, when what

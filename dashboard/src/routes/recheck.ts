@@ -34,25 +34,35 @@ export const WATCH_MS = 20_000;
  * the quick cadence for a while. Every timer it starts is cleared when the
  * screen goes away: a poll that outlives its screen is a request nobody will
  * ever read.
+ *
+ * A SECOND watch() SUPERSEDES THE FIRST. The window is one boolean with no
+ * generation, so an earlier timer firing set it false while a later watch was
+ * still holding it — the FIRST timer to fire ended the window rather than the
+ * last, and the quick cadence stopped early for the most recent write, which
+ * is the one an operator is watching. The handles were also only ever pushed,
+ * so a screen an operator worked in for a while accumulated dead ones for the
+ * life of the mount. Clearing before arming fixes both.
  */
 export function useRecheck(read: () => void): { watching: boolean; watch: () => void } {
   const [watching, setWatching] = useState(false);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
 
-  useEffect(
-    () => () => {
-      for (const t of timers.current) clearTimeout(t);
-      timers.current = [];
-    },
-    [],
-  );
+  const clear = useCallback(() => {
+    for (const t of timers.current) clearTimeout(t);
+    timers.current = [];
+  }, []);
+
+  useEffect(() => clear, [clear]);
 
   const watch = useCallback(() => {
+    clear();
     read();
     setWatching(true);
-    timers.current.push(setTimeout(() => read(), SETTLE_MS));
-    timers.current.push(setTimeout(() => setWatching(false), WATCH_MS));
-  }, [read]);
+    timers.current = [
+      setTimeout(() => read(), SETTLE_MS),
+      setTimeout(() => setWatching(false), WATCH_MS),
+    ];
+  }, [clear, read]);
 
   return { watching, watch };
 }

@@ -212,25 +212,75 @@ var _ setup.Teardowner = (*atlassianPass)(nil)
 // Nil rather than a runner that refuses: a pass that cannot record what it
 // mints must not run at all, and the surface above answers 503 naming the
 // keyring rather than starting something it will have to unwind.
-func (e *Engine) SetupRunner(now func() time.Time) *setup.Runner {
-	if e == nil || e.backends == nil || e.backends.Fleet == nil {
+//
+// THE SAME RUNNER EVERY TIME, built once — see [Engine.setupRunner]. A caller
+// that wants its own clock builds its own with [setup.NewRunner]; there is no
+// second runner in the engine, because a second in-process claim map would
+// mean the loop and the dashboard guard nothing against each other.
+func (e *Engine) SetupRunner() *setup.Runner {
+	if e == nil || e.setupRunner == nil {
 		return nil
 	}
-	return setup.NewRunner(e.setupPasses(), e.setupDuty, now)
+	return e.setupRunner()
 }
 
-// setupDuty is the fleet lease one integration's pass holds while it runs.
-//
-// The SAME mechanism the reconcile loop's singleton uses, under its own name,
-// so a pass and a loop tick for one integration never overlap either. The TTL is
-// generous relative to a pass: a lease that expired mid-run would let a
-// second node start minting while the first was still writing.
-func (e *Engine) setupDuty(kind integration.Kind) setup.Duty {
-	duty := e.workerDuty("setup-provision-"+string(kind), setupLeaseTTL)
-	if duty == nil {
+// newSetupRunner builds the one runner. Called through a [sync.OnceValue]
+// installed by the constructor.
+func (e *Engine) newSetupRunner() *setup.Runner {
+	if e.backends == nil || e.backends.Fleet == nil {
 		return nil
 	}
-	return setup.Duty(duty)
+	return setup.NewRunner(e.setupPasses(), e.setupDuty, nil)
+}
+
+// holdSurface takes the one guard every writer at a surface passes through.
+//
+// The loop's tick and a disconnect's teardown reach a third-party app without
+// going through [setup.Runner.Start], so they take the guard here instead —
+// the same in-process claim and the same fleet lease an operator's pass takes,
+// which is what makes the three mutually exclusive rather than merely
+// serialized in pairs.
+//
+// A node with no runner has no keyring to mint into and therefore nothing to
+// serialize: it reads and reports. held is true there, and release is a no-op.
+func (e *Engine) holdSurface(
+	ctx context.Context, kind integration.Kind,
+) (func(), bool, error) {
+	runner := e.SetupRunner()
+	if runner == nil {
+		return func() {}, true, nil
+	}
+	return runner.Hold(ctx, kind)
+}
+
+// setupDutyName is the ONE name a surface's provisioning is serialized under.
+//
+// A function rather than a spelling at each call site, because two spellings
+// is precisely the bug this had. The dashboard's pass claimed
+// `setup-provision-<kind>` and the reconcile loop claimed
+// `integration-reconcile`; leases are keyed by NAME, so those are two locks,
+// neither excluding the other and both looking exactly like exclusion. The
+// loop's singleton name is still its own — "which node runs the loop" and
+// "who is writing at this surface right now" are different questions — and
+// this is the second one, asked by both callers under one key.
+func setupDutyName(kind integration.Kind) string {
+	return "setup-provision-" + string(kind)
+}
+
+// setupDuty is the fleet lease held while ANYTHING writes at one integration —
+// a pass an operator ran, a tick of the reconcile loop, or a disconnect.
+//
+// All three write at the third-party app, and letting any two overlap is how
+// one creates the account another is deleting, or a disconnect removes the
+// webhook the pass beside it is registering. The TTL is generous relative to a
+// pass because it is a BACKSTOP for a node that died mid-run rather than a
+// deadline for the work: the lease is given back when the work ends.
+func (e *Engine) setupDuty(kind integration.Kind) setup.Duty {
+	hold := e.workerHold(setupDutyName(kind), setupLeaseTTL)
+	if hold == nil {
+		return nil
+	}
+	return setup.Duty(hold)
 }
 
 // setupLeaseTTL bounds how long one pass may hold its third-party app.
@@ -256,7 +306,7 @@ func (p *githubPass) Teardown(ctx context.Context, in setup.TeardownInput) error
 	}
 	if err := github.Teardown(ctx, github.Options{
 		Client: client, Config: cfg, Org: company.Org, Value: env.Value,
-		WebhookBase: company.Config.Integrations.WebhookBase(),
+		WebhookBase: company.Config.Integrations.WebhookBase(env.LookupOK),
 	}); err != nil {
 		return err
 	}
@@ -274,10 +324,11 @@ func (p *githubPass) Teardown(ctx context.Context, in setup.TeardownInput) error
 	// Every seat is attempted and the failures are joined, rather than
 	// stopping at the first: one seat whose key is lost must not leave the
 	// other nine installed.
+	apiBase, _ := cfg.Bases(env.LookupOK)
 	var failures []error
 	for _, seat := range p.seatApps(env) {
 		if err := github.UninstallSeat(ctx, github.SeatAppOptions{
-			APIBase: strings.TrimSpace(cfg.URL),
+			APIBase: apiBase,
 		}, seat); err != nil {
 			failures = append(failures, fmt.Errorf("%s: %w", seat.Handle, err))
 		}
@@ -342,7 +393,16 @@ func (*datadogPass) Needs() *setup.Requirement { return nil }
 func (p *datadogPass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.Datadog
-	if cfg == nil {
+	// DISABLED IS NOT CONFIGURED, the same answer gitlab, github and
+	// mattermost give. `enabled: false` is the gesture an operator makes
+	// after a leaked webhook token — the inbound route, the parser and the
+	// notification wiring all gate on it — so a loop that went on
+	// provisioning service accounts against a block somebody had just
+	// switched off, and reported the surface Connected while doing it, is
+	// answering a question nobody asked. `Datadog.validate` does not even
+	// check a disabled block, so there is no guarantee the fields this pass
+	// would read are coherent.
+	if cfg == nil || !cfg.Enabled {
 		return nil, integration.ErrNotConfigured
 	}
 	if cfg.Provisioning == nil {
@@ -423,6 +483,11 @@ func (p *datadogPass) Teardown(ctx context.Context, in setup.TeardownInput) erro
 			AppKey: strings.TrimSpace(env.Value(cfg.Provisioning.AppKey)),
 		},
 		RemoveSeats: in.RemoveSeats,
+		// WHAT PROVES THE DEFINITION IS THIS DEPLOYMENT'S. A Datadog
+		// webhook is addressed by name, and the teardown refuses to
+		// delete one pointing anywhere but here — the same expression
+		// gitlabPass.Teardown passes for the same reason.
+		WebhookBase: company.Config.Integrations.WebhookBase(env.LookupOK),
 	})
 }
 
@@ -562,7 +627,7 @@ func (p *jiraPass) Teardown(ctx context.Context, in setup.TeardownInput) error {
 	}
 	return jira.Teardown(ctx, jira.Options{
 		Client: client, Config: cfg,
-		WebhookBase: company.Config.Integrations.WebhookBase(),
+		WebhookBase: company.Config.Integrations.WebhookBase(env.LookupOK),
 	})
 }
 
@@ -742,7 +807,7 @@ func (p *gitlabPass) Teardown(ctx context.Context, in setup.TeardownInput) error
 	}
 	return gitlab.Teardown(ctx, gitlab.TeardownOptions{
 		Client: client, Config: cfg, Plan: plan,
-		WebhookBase: company.Config.Integrations.WebhookBase(),
+		WebhookBase: company.Config.Integrations.WebhookBase(env.LookupOK),
 		RemoveSeats: in.RemoveSeats,
 	})
 }
@@ -838,9 +903,10 @@ func (p *githubPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 	// in a browser that tells the engine nothing.
 	seats := p.seatApps(env)
 	if len(seats) > 0 {
+		apiBase, webBase := cfg.Bases(env.LookupOK)
 		apps, appsErr := github.ReconcileSeatApps(ctx, github.SeatAppOptions{
-			APIBase: strings.TrimSpace(cfg.URL),
-			WebBase: strings.TrimSpace(cfg.URL),
+			APIBase: apiBase,
+			WebBase: webBase,
 			Org:     githubOrg(cfg),
 			Seats:   seats,
 			// A DRY RUN RECORDS NOTHING, which is what a check is: the
@@ -864,7 +930,10 @@ func (p *githubPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 // credential can read a thread, and two readings of one roster would be free
 // to disagree about which apps exist.
 func (p *githubPass) seatApps(env *config.Resolver) []github.SeatApp {
-	return p.engine.githubSeatApps(env)
+	// THE LIVE EPOCH, which is what a pass wants: it converges the company
+	// as it is now, where the apply path wires the revision it is about to
+	// publish. See [Engine.githubSeatApps].
+	return p.engine.githubSeatApps(p.engine.Company(), env)
 }
 
 // recordInstallation writes what the pass discovered back onto the seat.
@@ -921,7 +990,7 @@ var (
 
 // gitlabAdminToken resolves the group Owner credential.
 //
-// The DOCUMENT first and the per-run override second, which is the order that
+// The per-run OVERRIDE first and the document second, which is the order that
 // makes a rotation possible: an operator holding a new token can run a pass
 // with it before the document carries it, and every other run needs no
 // credential in hand at all.

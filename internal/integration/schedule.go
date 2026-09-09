@@ -96,19 +96,18 @@ func (s Schedule) WithDefaults() Schedule {
 // Next returns how long to wait after a report, given how many consecutive
 // passes have not settled.
 //
-// settled overrides [Schedule.Settled] for one surface and is zero when that
-// surface has no reason to differ. It exists because the cost of a converged
-// pass is not comparable across surfaces: Slack's app-manifest methods are
-// rate limited to roughly one request a minute, so re-reading twenty seats
-// costs twenty minutes of waiting, while GitLab answers the same question in
-// one listing. One number would either hammer Slack or let everything else
-// drift for an hour.
-func (s Schedule) Next(report Report, attempts int, settled time.Duration) time.Duration {
+// ONE SCHEDULE FOR EVERY SURFACE. A per-surface override lived here, justified
+// by Slack's app-manifest methods being rate limited to about one request a
+// minute — but Slack registers no reconciler at all, so the surface it was
+// written for could never have used it, and nothing ever set it. It is
+// collapsed rather than left half-wired: a knob with no caller is
+// indistinguishable to the next reader from one whose caller nobody found.
+//
+// If a surface with a real reconciler and a measured rate limit needs its own
+// interval, this is where it goes back — with that surface setting it.
+func (s Schedule) Next(report Report, attempts int) time.Duration {
 	switch {
 	case report.Phase == PhaseReady:
-		if settled > 0 {
-			return settled
-		}
 		return s.Settled
 	case report.Actor == ActorAdmin:
 		return backoff(attempts, s.AdminBase, s.AdminMax)
@@ -116,6 +115,38 @@ func (s Schedule) Next(report Report, attempts int, settled time.Duration) time.
 		return s.Operator
 	default:
 		return backoff(attempts, s.WaitingBase, s.WaitingMax)
+	}
+}
+
+// Cadence names which of the four waits a report falls under.
+//
+// It exists so [Observe] can tell that the WAIT ITSELF changed. Attempts drive
+// the backoff, and a backoff is only meaningful within one class: a surface
+// that spent ten ticks waiting on the engine has an attempt count that says
+// nothing at all about how long to wait for a PERSON.
+type Cadence string
+
+// The four waits, one per branch of [Schedule.Next].
+const (
+	CadenceSettled  Cadence = "settled"
+	CadenceAdmin    Cadence = "admin"
+	CadenceOperator Cadence = "operator"
+	CadenceWaiting  Cadence = "waiting"
+)
+
+// CadenceOf is which wait a report is on. It mirrors [Schedule.Next]'s own
+// switch, and the two must agree — a class this did not distinguish would let
+// a cadence change without resetting the count that paces it.
+func CadenceOf(report Report) Cadence {
+	switch {
+	case report.Phase == PhaseReady:
+		return CadenceSettled
+	case report.Actor == ActorAdmin:
+		return CadenceAdmin
+	case report.Actor == ActorOperator:
+		return CadenceOperator
+	default:
+		return CadenceWaiting
 	}
 }
 

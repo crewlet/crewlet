@@ -45,6 +45,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
@@ -204,11 +205,39 @@ func (r *Receiver) Routes(mux *http.ServeMux) {
 
 // --- the shared pipeline ---------------------------------------------------
 
-// scheme is one provider's signature check: does this body, under this
-// secret, produce this signature. The two schemes that also need a header or a
-// clock close over them, which is what keeps [Receiver.authenticate] one
-// function rather than five.
-type scheme func(body []byte, secret, signature string) bool
+// scheme is how one provider's deliveries are authenticated, and it carries
+// TWO questions rather than one.
+//
+// verify is the familiar half: does this body, under this secret, produce
+// this signature. The two schemes that also need a header or a clock close
+// over them, which is what keeps [Receiver.authenticate] one function rather
+// than five.
+//
+// usable is what a scheme needs OF ITS OWN CONFIGURED SECRET before the
+// question is worth asking, and it is a property of the scheme rather than of
+// the route because that is where it stops being forgettable. For the signing
+// schemes it is nil: an HMAC key's shape is refused where the key is written
+// (see [whsec]), and its strength does not depend on how long an operator
+// made it. For the two providers that CANNOT SIGN it is the whole of the
+// security: the shared token is the entire check, so a token short enough to
+// guess is a route with nothing to authenticate with, and saying so here
+// means a ${VAR} pointing at a weak one is refused exactly where a weak
+// literal is.
+type scheme struct {
+	verify func(body []byte, secret, signature string) bool
+	usable func(secret string) error
+}
+
+// signed is a scheme whose secret needs nothing of it but existence.
+func signed(verify func(body []byte, secret, signature string) bool) scheme {
+	return scheme{verify: verify}
+}
+
+// sharedToken is the scheme for a provider that signs nothing, where the
+// token IS the authentication — Datadog and Confluence Cloud.
+//
+//nolint:gochecknoglobals // a value, not state
+var sharedToken = scheme{verify: verifyToken, usable: secrets.CheckSharedToken}
 
 // serving answers 503 when no company revision is active here.
 //
@@ -242,7 +271,17 @@ func (r *Receiver) authenticate(w http.ResponseWriter, source, secret, signature
 		noSecret(w, source)
 		return verified{}, false
 	}
-	if signature == "" || !check(body, secret, signature) {
+	// A SECRET THIS SCHEME CANNOT WORK WITH IS A SECRET IT DOES NOT HAVE,
+	// and it gets the same 503: the route has nothing it can check a
+	// delivery against, and a sender that retries while an operator fixes
+	// the configuration is the outcome worth having.
+	if check.usable != nil {
+		if err := check.usable(secret); err != nil {
+			weakSecret(w, source, err)
+			return verified{}, false
+		}
+	}
+	if signature == "" || !check.verify(body, secret, signature) {
 		log.Warn("webhook_signature_invalid", "source", source)
 		unauthorized(w, "invalid signature")
 		return verified{}, false
@@ -567,6 +606,22 @@ func unauthorized(w http.ResponseWriter, reason string) {
 }
 
 // noSecret is the answer when a route has no secret to verify against.
+// weakSecret refuses a route whose shared token cannot be the authentication.
+func weakSecret(w http.ResponseWriter, source string, why error) {
+	log.Error("webhook_secret_too_weak", "source", source, "error", why,
+		"detail", "this route's provider signs nothing, so the shared token is the "+
+			"whole check and this one is not strong enough to be it; answering 503 "+
+			"so the sender retries rather than discards. Set a stronger token, or "+
+			"press Generate in the setup form")
+	// ITS OWN REASON, not the absent-secret one. The status is the same
+	// because the truth is the same — this route cannot check a delivery —
+	// but the two are different misconfigurations with different fixes, and
+	// a caller correlating logs or a person reading the body should not have
+	// to guess which of them they hit. Sharing the string also made the
+	// distinction this function exists for invisible on the wire.
+	unavailable(w, "weak_webhook_secret", NoSecretRetryAfter)
+}
+
 func noSecret(w http.ResponseWriter, source string) {
 	log.Error("webhook_no_secret_configured", "source", source,
 		"detail", "this route verifies a provider credential and has none to check "+

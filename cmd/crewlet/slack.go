@@ -35,7 +35,8 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 	sinks := addSinkFlags(fs)
 	publicURL := fs.String("public-url", "",
 		"this deployment's public HTTPS base URL; every app's request URL "+
-			"and redirect URL are built from it")
+			"and redirect URL are built from it. Defaults to "+
+			"integrations.public_base_url")
 	refreshToken := fs.String("config-token", "",
 		"a Slack app-configuration REFRESH token; empty reads SLACK_CONFIG_REFRESH_TOKEN")
 	ledgerPath := fs.String("ledger", "",
@@ -57,7 +58,7 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 	if given != 1 {
 		fmt.Fprintln(stderr,
 			"usage: crewlet slack provision <company.yaml> "+
-				"[-secret-store|-env-file PATH|-print] -public-url URL "+
+				"[-secret-store|-env-file PATH|-print] [-public-url URL] "+
 				"[-config-token TOKEN] [-ledger PATH] [-handles a,b] "+
 				"[-reinstall] [-no-install] [-dry-run]")
 		return errors.New("name exactly one company document")
@@ -71,10 +72,22 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// THROUGH THE SAME CHAIN EVERY OTHER COMMAND USES, because
+	// `public_base_url` may be a whole ${VAR} and what goes into an app
+	// MANIFEST is an address: read raw, the manifest carries
+	// "${PUBLIC_URL}/webhooks/slack/<handle>" where a URL belongs, Slack
+	// refuses the app, and nothing anywhere names the cause.
+	resolveCtx := context.Background()
+	env, closeEnv, err := companyResolver(resolveCtx, *sinks.bootstrap, stdout)
+	if err != nil {
+		return err
+	}
+	defer closeEnv()
+
 	// RESOLVED ONCE. Four places below build a URL from it, and four
 	// separate reads of the flag is how one of them ends up using the flag
 	// while the others use the document.
-	base := webhookBase(*publicURL, &company.Integrations)
+	base := webhookBase(*publicURL, &company.Integrations, env.LookupOK)
 
 	plans := slack.PlanFor(organization)
 	if *ledgerPath == "" {
@@ -114,10 +127,15 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 		return nil
 	}
 	if base == "" {
-		return errors.New(
-			"no -public-url: every app's Events API request URL and OAuth " +
-				"redirect URL are built from it, so an app created without one " +
-				"delivers nowhere and cannot be installed")
+		// THREE WAYS TO BE EMPTY, and they need different work. The flag
+		// is one source and integrations.public_base_url is the other,
+		// and the second can be SET and still resolve to nothing — a
+		// whole ${VAR} this process cannot see becomes "" rather than a
+		// literal, deliberately, because registering the text of a
+		// variable is worse than registering nothing. The message named
+		// only the flag, so an operator who had set the field went
+		// looking for a flag they did not need.
+		return errors.New(noPublicBase(&company.Integrations))
 	}
 
 	ctx := context.Background()

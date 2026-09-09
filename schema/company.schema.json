@@ -663,6 +663,10 @@
           "description": "Instance URL. Give this or cloud_id, not both.",
           "type": "string"
         },
+        "webhook_name": {
+          "description": "Name the engine's own Jira webhook is registered under; give two deployments watching one instance two names (default crewlet).",
+          "type": "string"
+        },
         "webhook_secret": {
           "description": "HMAC secret for inbound webhooks.",
           "type": "string"

@@ -241,14 +241,23 @@ func TestNoActorIsStamped(t *testing.T) {
 
 // A monitor's trigger and its recovery are ONE conversation, so a seat sees
 // that this is the fourth time tonight rather than four unrelated pages.
+//
+// THE TITLES DIFFER, because that is what Datadog sends: a title carries the
+// STATE, so the recovery of "[Triggered] API latency" arrives as "[Recovered]
+// API latency". The old fixture hand-wrote the trigger's title on both, which
+// made the assertion unfalsifiable — any key derived from the title passed —
+// and it was hiding a real split: the key WAS the title, so every trigger and
+// its recovery landed in two threads.
 func TestAMonitorIsTheConversation(t *testing.T) {
 	p := NewParser(ParserOptions{Fallback: "sre-lead"})
 	fired := parse(t, p, alert(map[string]any{
-		"title": "[Triggered] API latency", "tags": "crewlet:ceo",
+		"monitor_id": "8675309",
+		"title":      "[Triggered] API latency", "tags": "crewlet:ceo",
 		"alert_transition": "Triggered",
 	}))[0]
 	recovered := parse(t, p, alert(map[string]any{
-		"title": "[Triggered] API latency", "tags": "crewlet:ceo",
+		"monitor_id": "8675309",
+		"title":      "[Recovered] API latency", "tags": "crewlet:ceo",
 		"alert_transition": "Recovered",
 	}))[0]
 
@@ -260,6 +269,33 @@ func TestAMonitorIsTheConversation(t *testing.T) {
 	}
 	if firedKey != recoveredKey {
 		t.Fatalf("the trigger keys on %q and the recovery on %q", firedKey, recoveredKey)
+	}
+	// AND TWO MONITORS ARE TWO CONVERSATIONS, or the rule above could be
+	// satisfied by a constant.
+	other := parse(t, p, alert(map[string]any{
+		"monitor_id": "1234567",
+		"title":      "[Triggered] disk full", "tags": "crewlet:ceo",
+		"alert_transition": "Triggered",
+	}))[0]
+	if prompt.ConversationKey(other.Metadata, other.Subject) == firedKey {
+		t.Error("two different monitors share one conversation")
+	}
+}
+
+// A DEFINITION WRITTEN BEFORE THE TEMPLATE CARRIED THE ID still coalesces on
+// what it does send. An operator's hand-made webhook, and this engine's own
+// until the next pass rewrites it, deliver no monitor_id at all — and falling
+// through to nothing would give every such alert its own thread.
+func TestAnAlertWithNoMonitorIDFallsBackToTheTitle(t *testing.T) {
+	p := NewParser(ParserOptions{Fallback: "sre-lead"})
+	got := parse(t, p, alert(map[string]any{
+		"title": "[Triggered] API latency", "tags": "crewlet:ceo",
+	}))[0]
+
+	if key := (Prompt{}).ConversationKey(got.Metadata, got.Subject); key == "" {
+		t.Fatal("an alert with no monitor id derived no conversation key")
+	} else if key != "[Triggered] API latency" {
+		t.Errorf("key = %q, want the title it fell back to", key)
 	}
 }
 

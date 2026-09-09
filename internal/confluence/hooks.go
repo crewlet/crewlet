@@ -196,6 +196,26 @@ func CloudWebhookTarget(base, token, event string) string {
 // in a different key order, would otherwise read as a hook pointing
 // somewhere else and be re-registered every pass.
 func SameTarget(registered, want string) bool {
+	if !SameAddress(registered, want) {
+		return false
+	}
+	a, errA := url.Parse(registered)
+	b, errB := url.Parse(want)
+	if errA != nil || errB != nil {
+		return false
+	}
+	return a.Query().Get("token") == b.Query().Get("token")
+}
+
+// SameAddress is [SameTarget] without the token, for the Data Center hook.
+//
+// A Data Center registration carries no token in its URL — it is signed
+// instead — so comparing one would refuse every match. Everything else about
+// the comparison is the same, and it is the half that matters: the Data
+// Center path compared raw strings with !=, so a registration Confluence
+// stored with a trailing slash read as a hook pointing somewhere else and was
+// re-created every pass.
+func SameAddress(registered, want string) bool {
 	a, err := url.Parse(registered)
 	if err != nil {
 		return false
@@ -205,6 +225,5 @@ func SameTarget(registered, want string) bool {
 		return false
 	}
 	return a.Scheme == b.Scheme && a.Host == b.Host &&
-		strings.TrimRight(a.Path, "/") == strings.TrimRight(b.Path, "/") &&
-		a.Query().Get("token") == b.Query().Get("token")
+		strings.TrimRight(a.Path, "/") == strings.TrimRight(b.Path, "/")
 }

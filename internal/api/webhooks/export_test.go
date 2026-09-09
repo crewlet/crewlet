@@ -19,3 +19,12 @@ func BodyKeyForTest(raw []byte) string { return bodyKey(raw) }
 // credential refuses every delivery with a 503 the third-party app's own
 // settings page reports as healthy.
 func GitHubSecretForTest(s Secrets, handle string) string { return githubSecret(s, handle) }
+
+// DatadogSummaryForTest exposes the gloss one alert gets in the feed.
+//
+// Asserted directly because the two things that were wrong with it are
+// invisible from a route: the priority is read by this function and by
+// [datadog.decode], and they disagreed about whether the wire value carries
+// its own "P" — which a delivery test cannot see, because both readings
+// accept the same payload.
+func DatadogSummaryForTest(body map[string]any) string { return datadogSummary(body) }

@@ -23,16 +23,19 @@ A pass produces **findings**, and a finding is one observation that is not "fine
 | `unknown_tier` | The company document names something the third-party app does not have. |
 | `grant_short` | A seat holds less access than its role asks for. |
 | `grant_excess` | A seat holds **more** access than its role asks for. |
+| `registration_orphaned` | Something this engine registered at the third-party app that it no longer manages, because the name it is held under changed. Datadog's webhook definition is the case: it is addressed by NAME, that name is also the handle a monitor writes, and Datadog serves no listing — so the previous definition goes on delivering correctly for every monitor still naming it, and nothing could ever find it again. Reported rather than removed, because removing it would silence exactly those monitors. |
 
 Those findings fold into one **report**, which is what an operator reads:
 
-- **`phase`** is where the integration got to: `unconfigured`, `awaiting_admin`, `provisioning`, `activating`, `degraded` or `ready`.
+- **`phase`** is where the integration got to: `disconnecting`, `unconfigured`, `awaiting_admin`, `provisioning`, `activating`, `degraded` or `ready`.
 - **`actor`** is who has to act for the phase to end: nobody, the `engine`, the `provider`, an `admin` (a person, at the third-party app), or the `operator` (a person, in this deployment's own config).
 - **`detail`** is one sentence naming what is outstanding, and **`action_url`** is where the person named by `actor` goes to do it. Both are filled only when a person owes something.
 
-### The excess-access advisory is always last
+### The advisories are always last
 
-`grant_excess` is the one finding whose verdict is **ready**. The engine did not grant that access and cannot revoke it: it comes from the operator's own scheme, usually inherited from a parent group or a second role. Agents keep working, so the integration is ready with a note rather than blocked.
+Two findings have a verdict of **ready**: `grant_excess` and `registration_orphaned`. Everything below is about the first, and applies to both.
+
+`grant_excess` is the older of the two. The engine did not grant that access and cannot revoke it: it comes from the operator's own scheme, usually inherited from a parent group or a second role. Agents keep working, so the integration is ready with a note rather than blocked.
 
 That makes its rank load-bearing. Anything the advisory outranks disappears from the report entirely, so it is ranked below every real problem. The control plane this was ported from wrote one classifier per integration and three of them returned the advisory early, which hid a short grant, a failed agent, and a webhook that reached nobody. The ordering now lives in one place with a test that pins it.
 
@@ -44,7 +47,7 @@ Not what failed. A third-party app applying a grant it already accepted finishes
 
 | The report says | Next pass |
 |---|---|
-| `ready` | 10 minutes (a third-party app may override its own; see below) |
+| `ready` | 10 minutes |
 | the `engine` or the `provider` is working | 30 seconds, doubling to 5 minutes |
 | an `admin` must act at the third-party app | 15 seconds, doubling to 10 minutes |
 | the `operator` must edit config | 1 hour, flat |
@@ -53,7 +56,9 @@ The brisk admin cadence is the point of the whole design: install the app, and p
 
 **An applied revision ignores all of it and reconciles now.** Every interval above is a wait for asking a *third-party app* again. A configuration change is the answer changing *here*, so it marks every surface due and brings the tick forward instead of waiting out the cadence: save the setup dialog and the pass runs within about a second, not at the end of whatever wait the last report earned. One operator action is one pass, because the dialog writes one request per surface (saving Atlassian applies three revisions in a row) and the applies inside a short window fold into a single tick.
 
-A third-party app can override the settled interval for itself. Slack's app-manifest methods are rate limited to roughly one request a minute, so re-reading twenty seats on the shared ten-minute cadence would spend the whole interval waiting on a rate limit.
+**Slack is not on this cadence, because it is not reconciled at all.** Its apps are created from the command line — one per agent, from a manifest — so there is nothing here to converge: it is registered teardown-only, which gives a disconnect somewhere to run without giving the loop a pass to run. It carries no reconcile report, and its row holds only the address its setup form was saved against (below).
+
+A surface *can* be given a settled interval of its own, for a third-party app whose reads are rate limited hard enough that the shared ten minutes would be spent waiting. No surface in this build sets one.
 
 ---
 
@@ -63,7 +68,7 @@ Every registration a third-party app holds points at `integrations.public_base_u
 
 Where a pass registers the hook, the next tick registers it again at the new address and the surface heals itself. Jira and Confluence match their own hook **by name**, so the address is a field they rewrite; GitLab and GitHub match **by delivery URL**, so they create one at the new address and leave the old one behind, which is debris rather than an outage.
 
-Where nothing registers the hook, nothing heals. Slack's request URL lives in each agent's app at Slack and can only be read back with an app-configuration token an operator may not have, so the engine cannot see that it is stale, cannot fix it, and the app goes on delivering to an address that no longer answers. The surface reports `ready`, because nothing it can see is wrong, and the first symptom is an agent that stopped replying.
+Where nothing registers the hook, nothing heals. Slack's request URL lives in each agent's app at Slack and can only be read back with an app-configuration token an operator may not have, so the engine cannot see that it is stale, cannot fix it, and the app goes on delivering to an address that no longer answers. And nothing reconciles Slack at all, so the surface reports **no phase** — the dashboard draws that as *Connecting*, which is what it means for a configured block the loop has not reported on — and the first symptom is an agent that stopped replying.
 
 So the address is **recorded and compared**. Every pass stamps the base it ran against onto the surface's status row, and a surface no pass converges is stamped when its setup form is saved. A row whose recorded address is not the one in force is an **ingress fault**: the card reads *Action needed*, the surface carries an `address moved` badge, and the note names both addresses, because the fix is to replace one with the other at the third-party app and a badge cannot say that.
 
@@ -110,7 +115,7 @@ That is a reversal, and the reason is what connecting an integration means. The 
 
 **It still does not tear anything down on its own, and it still does not rotate a credential that works** (above). Provisioning converges towards the company's seats: an account that should exist is created, and one that should not is left alone until somebody disconnects the integration, which is the explicit act on the other end.
 
-**A person can still ask for a pass.** `POST /setup/integrations/{kind}/provision` runs the same function on demand, holding the same kind of fleet lease under its own name so a pass and a tick never overlap, and folding its outcome into this same status. Nothing in the dashboard calls it any more, because there is nothing left for it to grant: it is there for an operator who wants a pass to run now rather than at the next tick. See [Setting an integration up](../reference/api-endpoints.md#running-the-provisioning-pass).
+**A person can still ask for a pass.** `POST /setup/integrations/{kind}/provision` runs the same function on demand, under the same guard, and folds its outcome into this same status. That guard is one thing, not two: a surface's own lease **plus** an in-process claim, taken by the operator's pass, by the loop's tick and by a disconnect's teardown alike. Both halves are needed — a lease claim by an owner that already holds it doubles as a renew, so two goroutines in one process would both be told yes, and a single-node install has no lease at all — and with them, two writers at one third-party app never overlap. Nothing in the dashboard calls it any more, because there is nothing left for it to grant: it is there for an operator who wants a pass to run now rather than at the next tick. See [Setting an integration up](../reference/api-endpoints.md#running-the-provisioning-pass).
 
 ---
 
@@ -164,13 +169,15 @@ The **findings list travels as well as the report**, because the two answer diff
 | `provisioning` | Setting up agents |
 | `activating` | Waiting for the provider |
 | `unconfigured` | Failed |
+| `disconnecting` | Disconnecting |
 
 `unconfigured` reads as **Failed** rather than "not connected" because this phase is only ever reached with a block present: an absent one is `ErrNotConfigured`, and the row is forgotten rather than reported. So what it names is an integration somebody configured whose credential is missing or the third-party app refused, and "not connected" would read as nobody having tried. A phase a newer node wrote is rendered as its own value with the underscores opened up, never guessed at.
 
-Two of backlet's phases have no counterpart here, and neither is an omission:
+One of backlet's phases has no counterpart here, and it is not an omission:
 
 - `disconnected` is a tenant who has not connected an integration yet. Here that is a company document with no block, so there is no row and no phase. The screen shows **no status badge at all**, only a Connect button. A tool nobody has configured has nothing to report.
-- `disconnecting` is a teardown pass, and this engine has one: disconnect asks the third-party app to remove what the engine registered there before the block leaves the document, so a surface sits in `disconnecting` for as long as that takes and reports it if it fails.
+
+`disconnecting` is a phase this engine does have, and it sorts **first**, so it wins a tool row's tag over every other surface: disconnect asks the third-party app to remove what the engine registered there before the block leaves the document, so a surface sits in `disconnecting` for as long as that takes and reports it if it fails. Nothing about a surface that is going away is worth reporting over the fact that it is going away.
 
 Two labels the dashboard adds for situations that are not phases: **Connecting**, for a block that is configured and that the loop has not reported on yet, which is the window of one reconcile interval after somebody connects, and **Paused**, for one whose surfaces are all disabled. Neither claims the integration works, which is the distinction the whole screen turns on.
 

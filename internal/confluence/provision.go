@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -151,6 +152,21 @@ func reconcileCloud(ctx context.Context, opts Options, base string, res *Result)
 		}
 	}
 
+	// ONE EVENT'S REFUSAL IS NOT THE PASS'S.
+	//
+	// It was: the first event Confluence refused returned an error, every
+	// event after it was skipped, and the error propagated out of Reconcile
+	// so Findings() was never called at all. That made [HookState.Detail]
+	// dead — nothing ever assigned it, so Hooked() was true for every state
+	// that reached res.Hooks and the FindingIngressBlocked branch below was
+	// unreachable code. And the two answers are opposite to the loop: an
+	// error is a FAULT, which Observe reports as the engine working on it
+	// and retries on the waiting backoff for ever, where an ingress block
+	// is degraded and owed by the admin who can grant the permission.
+	//
+	// So a refusal is recorded per event and the walk continues, which is
+	// what the sibling github.ensureRepoWebhook does and what this file's
+	// own field doc already promised.
 	for _, event := range WebhookEvents {
 		name := HookName(event)
 		target := CloudWebhookTarget(base, token, event)
@@ -160,11 +176,14 @@ func reconcileCloud(ctx context.Context, opts Options, base string, res *Result)
 		switch {
 		case found && opts.Recreate:
 			if err := opts.Client.DeleteWebhook(ctx, current.ID); err != nil {
-				return fmt.Errorf("confluence: replace webhook for %s: %w", event, err)
+				state.Detail = refusal(err)
+				res.Hooks = append(res.Hooks, state)
+				continue
 			}
-			// No `continue`: falling out of the switch reaches the
-			// create below, which is the second half of a replace.
-		case found && SameTarget(current.URL, target) && sameEvents(current.Events, event):
+			// No `continue` on success: falling out of the switch
+			// reaches the create below, which is the second half of a
+			// replace.
+		case found && converged(current, target, event):
 			// ALREADY CORRECT, and left exactly as it is. This is the
 			// steady state and the one a re-run spends most of its time
 			// in; touching it would be a write per event per run for a
@@ -175,19 +194,49 @@ func reconcileCloud(ctx context.Context, opts Options, base string, res *Result)
 		case found:
 			if _, err := opts.Client.UpdateWebhook(ctx, current.ID, name, target,
 				[]string{event}, ""); err != nil {
-				return fmt.Errorf("confluence: update webhook for %s: %w", event, err)
+				state.Detail = refusal(err)
+				res.Hooks = append(res.Hooks, state)
+				continue
 			}
 			state.URL = target
 			res.Hooks = append(res.Hooks, state)
 			continue
 		}
 		if _, err := opts.Client.CreateWebhook(ctx, name, target, []string{event}, ""); err != nil {
-			return fmt.Errorf("confluence: create webhook for %s: %w", event, err)
+			state.Detail = refusal(err)
+			res.Hooks = append(res.Hooks, state)
+			continue
 		}
 		state.URL, state.Created = target, true
 		res.Hooks = append(res.Hooks, state)
 	}
 	return nil
+}
+
+// converged reports a Cloud hook that already carries everything this pass
+// would write.
+//
+// ENABLED IS PART OF IT, and it was the piece being thrown away. Webhook.Enabled
+// is parsed off the wire on every pass and was read nowhere, so a hook at the
+// right address for the right event that the instance had DISABLED was
+// stamped as hooked and reported Ready — the one field that says whether it
+// delivers anything, fetched every pass and discarded at the only point a
+// decision was made. Both writers already send Enabled: true, so falling
+// through to the update is what re-asserts it.
+func converged(hook Webhook, target, event string) bool {
+	return hook.Enabled && SameTarget(hook.URL, target) &&
+		sameEvents(hook.Events, event)
+}
+
+// refusal is what a per-event failure records, in terms an operator can act
+// on.
+//
+// Through [integration.Reject], so a 401 or 403 from the hooks endpoint is
+// marked as the credential refusal it is rather than folded in with the
+// transport faults that clear on their own — the same treatment the identity
+// probe in this file already gets, and which the webhook calls did not.
+func refusal(err error) string {
+	return integration.Reject(err, Status(err)).Error()
 }
 
 // reconcileDataCenter converges the single signed hook Data Center wants.
@@ -204,8 +253,19 @@ func reconcileDataCenter(ctx context.Context, opts Options, base string, res *Re
 	if err != nil {
 		return fmt.Errorf("confluence: list webhooks: %w", err)
 	}
+	// BY NAME, as the Cloud half and [Teardown] both already do, and the
+	// three of them must agree about which hook is this engine's.
+	//
+	// This compared the registered URL with != and never looked at the
+	// name, which was wrong in both directions. A hook whose target had
+	// MOVED read as "not mine", so the pass created a second registration
+	// and left the first enabled with a still-valid signing secret. And a
+	// hook an operator had registered by hand at the same address was
+	// ADOPTED — renamed, re-subscribed and re-keyed with this engine's
+	// secret. The Reconcile doc says the opposite of both: "only hooks
+	// named under HookNamePrefix are this engine's to converge".
 	for _, hook := range existing {
-		if hook.URL != target {
+		if hook.Name != name {
 			continue
 		}
 		if opts.Recreate {
@@ -213,6 +273,15 @@ func reconcileDataCenter(ctx context.Context, opts Options, base string, res *Re
 				return fmt.Errorf("confluence: replace webhook: %w", err)
 			}
 			break
+		}
+		// ALREADY CORRECT, on the same terms as the Cloud branch: this
+		// pass runs every few minutes for the life of the deployment,
+		// and an unconditional PUT re-sent the name, the address, all
+		// eight events and the signing secret every time.
+		if hook.Enabled && SameAddress(hook.URL, target) &&
+			sameEventSet(hook.Events, WebhookEvents) {
+			res.Hooks = append(res.Hooks, HookState{Event: "all", URL: target})
+			return nil
 		}
 		if _, err := opts.Client.UpdateWebhook(ctx, hook.ID, name, target, WebhookEvents, secret); err != nil {
 			return fmt.Errorf("confluence: update webhook: %w", err)
@@ -225,6 +294,21 @@ func reconcileDataCenter(ctx context.Context, opts Options, base string, res *Re
 	}
 	res.Hooks = append(res.Hooks, HookState{Event: "all", URL: target, Created: true})
 	return nil
+}
+
+// sameEventSet reports a registration already carrying every event this
+// engine subscribes to.
+//
+// EXTRA events are not a reason to write: an operator who added one wanted
+// it, and rewriting the list every pass to take it away again is the opposite
+// of converging what this engine needs.
+func sameEventSet(have, want []string) bool {
+	for _, event := range want {
+		if !slices.Contains(have, event) {
+			return false
+		}
+	}
+	return true
 }
 
 // cloudToken is the value the Cloud hooks carry, minted only where nothing
@@ -258,11 +342,16 @@ func mintInto(ctx context.Context, opts Options, ref, field, role string) (strin
 	}
 	variable, ok := provision.SoleVar(ref)
 	if !ok {
+		// THE SHAPE, NEVER THE VALUE. See [provision.Shape]: this error
+		// becomes State.LastError, which the fleet stores and the
+		// integrations query serves, so a %q of a literal webhook token
+		// publishes the one credential that route authenticates with.
 		return "", nil, fmt.Errorf(
-			"confluence: integrations.confluence.%s is %q, which is neither a "+
-				"value this run could resolve nor a whole ${VAR} reference to "+
-				"mint one into; point it at a variable and set that variable, "+
-				"or drop -public-url and register the hooks by hand", field, ref)
+			"confluence: integrations.confluence.%s is %s rather than a value "+
+				"this run could resolve or a whole ${VAR} reference to mint "+
+				"one into; point it at a variable and set that variable, "+
+				"or drop -public-url and register the hooks by hand",
+			field, provision.Shape(ref))
 	}
 	if opts.Sink == nil {
 		return "", nil, provision.ErrNoSink
@@ -282,6 +371,18 @@ func mintInto(ctx context.Context, opts Options, ref, field, role string) (strin
 // sameEvents reports whether a hook subscribes to exactly one event.
 func sameEvents(have []string, want string) bool {
 	return len(have) == 1 && have[0] == want
+}
+
+// detailOr keeps a finding from ending in a dangling colon.
+//
+// The fallback the sibling github.detailOr has and this one did not: every
+// path that leaves a hook unregistered now records a reason, but a state
+// arriving from anywhere else would have rendered "…reach nobody: ".
+func detailOr(detail string) string {
+	if trimmed := strings.TrimSpace(detail); trimmed != "" {
+		return trimmed
+	}
+	return "the credential may not register one"
 }
 
 // Findings reads this run as the integration-neutral vocabulary.
@@ -304,7 +405,7 @@ func (r *Result) Findings() []integration.Finding {
 			Kind:    integration.FindingIngressBlocked,
 			Subject: hook.Event,
 			Detail: fmt.Sprintf("no webhook for %s, so those events reach nobody: %s",
-				hook.Event, hook.Detail),
+				hook.Event, detailOr(hook.Detail)),
 		})
 	}
 	return out

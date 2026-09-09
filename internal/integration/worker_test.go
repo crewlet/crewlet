@@ -114,6 +114,9 @@ func at(t *testing.T, now time.Time, store Store, claim DutyFunc, regs ...Regist
 	w, err := New(Options{
 		Registrations: regs, Store: store, ClaimDuty: claim,
 		Now: func() time.Time { return now },
+		// PINNED, so a case can assert an exact instant. What the real
+		// spread does is asserted on its own, below.
+		Spread: func(d time.Duration) time.Duration { return d },
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -747,5 +750,302 @@ func TestOnlyAnEngineRegisteredAddressIsStampedByAPass(t *testing.T) {
 		t.Errorf("mattermost endpoint = %q, want it cleared: nothing delivers "+
 			"to an address for this surface, so a stale one is a false alarm "+
 			"waiting for the next base change", got)
+	}
+}
+
+// A SURFACE SOMEBODY ELSE IS WRITING AT LEAVES NO TRACE.
+//
+// The provisioning lease is shared with the pass an operator runs from the
+// dashboard, so a tick can find it held. That is not a result: nothing was
+// observed, so nothing may be recorded. An attempt counted here would back the
+// cadence off for a pass that never ran, and a fault written here would
+// describe as broken a surface that is at that moment being provisioned
+// successfully by somebody else.
+//
+// The mirror of the ErrDisconnectUnavailable arm in tearDown, which is where
+// this shape already existed for the other half of the tick.
+func TestABusySurfaceRecordsNothing(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	r := &fakeReconciler{kind: KindGitLab, err: ErrReconcileUnavailable}
+	store := newStore()
+
+	at(t, now, store, nil, Registration{Reconciler: r}).Tick(context.Background())
+
+	if r.count() != 1 {
+		t.Fatalf("the reconciler ran %d times, want 1", r.count())
+	}
+	if store.has(KindGitLab) {
+		t.Errorf("a tick that reconciled nothing wrote a status row: %+v",
+			store.get(t, KindGitLab))
+	}
+}
+
+// AND A WRAPPED ONE TOO, because the converger wraps the store's own failure
+// around it: an unreadable lease is "not now" for the same reason a held one
+// is — neither is evidence the surface is idle.
+func TestABusySurfaceRecordsNothingWhenTheReasonIsWrapped(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	r := &fakeReconciler{
+		kind: KindGitLab,
+		err: fmt.Errorf("%w: %w", ErrReconcileUnavailable,
+			errors.New("coordination store unreachable")),
+	}
+	store := newStore()
+
+	at(t, now, store, nil, Registration{Reconciler: r}).Tick(context.Background())
+
+	if store.has(KindGitLab) {
+		t.Errorf("a deferred tick wrote a status row: %+v", store.get(t, KindGitLab))
+	}
+}
+
+// AND AN ORDINARY FAULT STILL IS RECORDED, or the arm above would be a way to
+// lose every real failure.
+func TestAnOrdinaryFaultIsStillRecorded(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	r := &fakeReconciler{kind: KindGitLab, err: errors.New("the vendor refused")}
+	store := newStore()
+
+	at(t, now, store, nil, Registration{Reconciler: r}).Tick(context.Background())
+
+	if !store.has(KindGitLab) {
+		t.Fatal("a failed pass recorded nothing")
+	}
+	if got := store.get(t, KindGitLab); got.LastError == "" {
+		t.Error("the recorded row carries no fault")
+	}
+}
+
+// THE ENDPOINT RULE IS ONE RULE, and it is three-way rather than a stamp.
+//
+// Two writers share these rows: this loop's tick and the pass an operator runs
+// from the dashboard. The rule lived inside the loop and the dashboard's pass
+// stamped every surface unconditionally, so one row meant different things
+// depending on which writer touched it last.
+func TestStampEndpointFollowsTheSurfacesIngress(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		kind  Kind
+		start string
+		want  string
+	}{
+		// A pass registers the delivery, so where it ran IS where the
+		// registration points.
+		"engine-registered takes the current address": {
+			kind: KindGitLab, start: "https://old.example.com", want: "https://now.example.com",
+		},
+		// A person typed the address at the third-party app. Stamping it
+		// would turn the one warning about a moved address into a green row.
+		"operator-typed is left exactly as it was": {
+			kind: KindSlack, start: "https://typed.example.com", want: "https://typed.example.com",
+		},
+		// Nothing delivers to an address, so carrying one is a false alarm
+		// waiting for the public base to move. Cleared, not merely skipped,
+		// so a row an earlier build stamped converges.
+		"a surface with no inbound is cleared": {
+			kind: KindAtlassian, start: "https://stale.example.com", want: "",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			state := State{Kind: tc.kind, Endpoint: tc.start}
+			StampEndpoint(&state, tc.kind, "https://now.example.com")
+			if state.Endpoint != tc.want {
+				t.Errorf("Endpoint = %q, want %q", state.Endpoint, tc.want)
+			}
+		})
+	}
+}
+
+// A PEER'S SURFACE IS SKIPPED, NOT DELETED.
+//
+// The status rows are the FLEET's, written by whichever build ran the last
+// pass, and a rolling upgrade puts a newer node's kind in front of an older
+// reader. [Kind.Valid]'s own doc promises what happens then: "an unknown kind
+// is SKIPPED by the worker and rendered as-is by the API."
+//
+// It was deleted instead, and this build cannot tell a peer's kind from a
+// departed one by looking at its own registrations — both are simply absent.
+// So an older node erased the newer node's status on every tick and the newer
+// node wrote it back on every pass, for the length of the upgrade.
+func TestAKindThisBuildDoesNotKnowIsLeftAlone(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	peer := Kind("a-surface-from-a-newer-build")
+	store := newStore(
+		State{Kind: peer, Endpoint: "https://engine.example.com"},
+		State{Kind: KindJira},
+	)
+
+	// Neither is registered here: the peer's kind because this build has
+	// never heard of it, jira because this company stopped declaring it.
+	at(t, now, store, nil, Registration{Reconciler: &fakeReconciler{kind: KindGitLab}}).
+		Tick(context.Background())
+
+	if !store.has(peer) {
+		t.Error("a surface only a newer build knows was deleted from the fleet's status")
+	}
+	if store.has(KindJira) {
+		t.Error("a departed surface this build DOES know was not forgotten")
+	}
+}
+
+// THE DUTY IS RE-CLAIMED BEFORE EACH SURFACE, not sampled once per tick.
+//
+// The claim's TTL is a small multiple of the tick interval, and the sweep
+// makes network calls to every configured surface in turn — so a tick across
+// eight vendors outlives it easily, and a duty that lapsed mid-tick means a
+// second node is already reconciling the surfaces this one has not reached.
+//
+// The re-claim sits past the not-due check, so a tick with nothing to do
+// makes none of them.
+func TestTheDutyIsReclaimedBeforeEachSurface(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	var claims int
+	// Held for the first two asks — the tick's own, and the first
+	// surface's — then lost, as a lapsed TTL looks from here.
+	claim := func(context.Context) (bool, error) {
+		claims++
+		return claims <= 2, nil
+	}
+	first := &fakeReconciler{kind: KindJira}
+	second := &fakeReconciler{kind: KindGitLab}
+
+	at(t, now, newStore(), claim,
+		Registration{Reconciler: first}, Registration{Reconciler: second}).
+		Tick(context.Background())
+
+	if first.count() != 1 {
+		t.Errorf("the first surface ran %d times, want 1", first.count())
+	}
+	if second.count() != 0 {
+		t.Errorf("the second surface ran after the duty was lost: %d passes",
+			second.count())
+	}
+}
+
+// AND A TICK WITH NOTHING DUE ASKS ONCE. The re-claim is a round trip, so it
+// belongs on the work rather than on the sweep.
+func TestATickWithNothingDueClaimsOnce(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	var claims int
+	claim := func(context.Context) (bool, error) { claims++; return true, nil }
+
+	// Recorded as settled and not due again until well after now.
+	store := newStore(State{
+		Kind: KindJira, Report: Ready(), NextAttemptAt: now.Add(time.Hour),
+	})
+	at(t, now, store, claim, Registration{Reconciler: &fakeReconciler{kind: KindJira}}).
+		Tick(context.Background())
+
+	if claims != 1 {
+		t.Errorf("a tick with nothing due claimed the duty %d times, want 1", claims)
+	}
+}
+
+// A RENAMED REGISTRATION IS REPORTED, NOT DELETED.
+//
+// A Datadog webhook definition is addressed by NAME, that name is a live
+// config field, and Datadog serves no listing — a GET on the collection
+// answers 405. So renaming it creates a second definition and abandons the
+// first, which goes on delivering correctly to this same engine for every
+// monitor still naming it, and nothing can ever find it again. Deleting it
+// would silence exactly those monitors; saying nothing left the operator with
+// two definitions and no way to learn it.
+func TestARenamedRegistrationIsReportedAsAnOrphan(t *testing.T) {
+	t.Parallel()
+	state := State{Registration: "crewlet"}
+
+	got := StampRegistration(&state, "crewlet-prod")
+	if len(got) != 1 {
+		t.Fatalf("a rename produced %d finding(s), want one", len(got))
+	}
+	if got[0].Kind != FindingRegistrationOrphaned {
+		t.Errorf("kind = %q, want %q", got[0].Kind,
+			FindingRegistrationOrphaned)
+	}
+	// BOTH NAMES, because the operator needs to know which one to repoint
+	// monitors at and which one to delete.
+	if !strings.Contains(got[0].Detail, "crewlet-prod") ||
+		!strings.Contains(got[0].Detail, `"crewlet"`) {
+		t.Errorf("the finding names only one of the two definitions: %q", got[0].Detail)
+	}
+	// AND IT IS AN ADVISORY. Nothing is broken — both definitions deliver —
+	// so a company carrying one is READY with a note rather than degraded.
+	if report := Classify(got); report.Phase != PhaseReady {
+		t.Errorf("an orphan classified %s; nothing about it is broken", report.Phase)
+	}
+	if state.Registration != "crewlet-prod" {
+		t.Errorf("the recorded name is %q, so the next pass reports the rename "+
+			"again for ever", state.Registration)
+	}
+}
+
+// AND AN UNCHANGED NAME SAYS NOTHING, or every pass would report a rename.
+func TestAnUnchangedRegistrationIsSilent(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name              string
+		previous, current string
+	}{
+		{"unchanged", "crewlet", "crewlet"},
+		// A FIRST PASS is not a rename: there is nothing recorded to have
+		// been left behind.
+		{"first pass", "", "crewlet"},
+		// AND A SURFACE WITH NO SUCH NAME never reports one. Every kind
+		// but Datadog is in this case, so the alternative would be one
+		// spurious advisory per surface the moment a row is written.
+		{"no name at this surface", "crewlet", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := State{Registration: tc.previous}
+			if got := StampRegistration(&state, tc.current); len(got) != 0 {
+				t.Errorf("reported %+v", got)
+			}
+		})
+	}
+}
+
+// THE ORPHAN REACHES THE REPORT, which is the half a unit test of
+// StampRegistration cannot see.
+//
+// It did not: the stamp ran AFTER Observe had already folded the findings, so
+// the appended finding went into a variable nothing read again. Nothing about
+// the row looked wrong — the name was recorded correctly and the rename was
+// simply never reported.
+func TestARenamedRegistrationReachesTheStatusRow(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	store := newStore()
+	store.rows[KindDatadog] = State{Kind: KindDatadog, Registration: "crewlet"}
+
+	w, err := New(Options{
+		Registrations: []Registration{{Reconciler: &fakeReconciler{kind: KindDatadog}}},
+		Store:         store,
+		Now:           func() time.Time { return now },
+		Spread:        func(d time.Duration) time.Duration { return d },
+		Registration:  func(Kind) string { return "crewlet-prod" },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	w.Tick(context.Background())
+
+	row := store.get(t, KindDatadog)
+	if row.Registration != "crewlet-prod" {
+		t.Errorf("the recorded name is %q, so the rename is reported again "+
+			"on every tick for ever", row.Registration)
+	}
+	var found bool
+	for _, f := range row.Findings {
+		if f.Kind == FindingRegistrationOrphaned {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the rename reached no finding on the row: %+v", row.Findings)
+	}
+	// AND IT DOES NOT BREAK THE SURFACE. Both definitions deliver, so a
+	// company carrying an orphan is connected with a note.
+	if row.Report.Phase != PhaseReady {
+		t.Errorf("phase = %s; an orphan is an advisory, not a fault", row.Report.Phase)
 	}
 }

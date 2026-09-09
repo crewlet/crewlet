@@ -225,11 +225,22 @@ func datadogSummary(body map[string]any) string {
 	if transition := str(body, "alert_transition"); transition != "" {
 		parts = append(parts, transition)
 	}
+	// BOUNDED AND QUOTED like every other summary here. A monitor title is
+	// whatever a person typed into Datadog, and this string is stored on the
+	// event row and rendered in the feed beside five others that all trim at
+	// 60-80 runes; unbounded, one alert's title pushes the rest of the line
+	// off the screen.
 	if title := str(body, "title"); title != "" {
-		parts = append(parts, title)
+		parts = append(parts, quoted(title, 80))
 	}
+	// READ THE WAY [datadog.decode] READS IT, which is the only other reader
+	// of this field. The template sends `$PRIORITY`, and Datadog expands that
+	// to `P1`..`P5` — so decode strips the prefix and this added a second
+	// one, and every P1 alert appeared in the feed as "PP1". Trimmed then
+	// restated, so both the templated shape and a hand-edited bare digit
+	// render as one P.
 	if priority := str(body, "priority"); priority != "" {
-		parts = append(parts, "P"+priority)
+		parts = append(parts, "P"+strings.TrimPrefix(priority, "P"))
 	}
 
 	return strings.Join(parts, " · ")

@@ -387,7 +387,11 @@ func TestASealedCredentialIsVisibleWithoutAnApply(t *testing.T) {
 
 	sink, err := e.SetupSink("test")
 	if err != nil {
-		t.Skipf("this build has no sink to exercise: %v", err)
+		// NOT A SKIP. Nothing here is environmental: the fixture always
+		// opens a temp-dir store and always installs a cipher, so a sink
+		// that cannot be built is a regression in the code under test —
+		// and skipping turned the whole mint-every-tick guard green.
+		t.Fatalf("SetupSink: %v", err)
 	}
 	if got := e.resolver().Value("${SEAT_TOKEN}"); got != "" {
 		t.Fatalf("before the pass, ${SEAT_TOKEN} = %q", got)
@@ -420,7 +424,11 @@ func TestAPassThatSealedNothingLeavesTheSnapshotAlone(t *testing.T) {
 	e.backends.Fleet = coordmem.NewFleet()
 	sink, err := e.SetupSink("test")
 	if err != nil {
-		t.Skipf("this build has no sink to exercise: %v", err)
+		// NOT A SKIP. Nothing here is environmental: the fixture always
+		// opens a temp-dir store and always installs a cipher, so a sink
+		// that cannot be built is a regression in the code under test —
+		// and skipping turned the whole mint-every-tick guard green.
+		t.Fatalf("SetupSink: %v", err)
 	}
 
 	// Written behind the resolver's back, so a rebuild is observable.

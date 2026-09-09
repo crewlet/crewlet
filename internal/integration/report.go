@@ -73,13 +73,17 @@ const (
 // below; anything else here would mean an integration that says "activating"
 // in one product and something else in the other.
 //
-// Two of backlet's phases have no counterpart here, and neither is an
-// omission. `disconnected` is a tenant who has not connected an integration
-// yet, which in this engine is a company document with no block at all, so
-// there is no row and no phase to report. `disconnecting` is a teardown pass;
-// this engine's disconnect is ONE CONFIG WRITE that removes the block, after
-// which the loop reports the surface not configured and forgets it, so there
-// is no interval during which a teardown could be shown.
+// ONE of backlet's phases has no counterpart here, and it is not an omission:
+// `disconnected` is a tenant who has not connected an integration yet, which
+// in this engine is a company document with no block at all, so there is no
+// row and no phase to report.
+//
+// `disconnecting` IS a phase here, which this comment used to deny on the
+// reasoning that a disconnect is one config write. It is not: the teardown
+// asks the third-party app to remove what this engine registered BEFORE the
+// block leaves the document, so there is an interval, it can fail, and a
+// surface sits in this phase for as long as it takes. See [PhaseDisconnecting]
+// and [State.Reported].
 func (p Phase) Label() string {
 	switch p {
 	case PhaseReady:

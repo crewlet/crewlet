@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"slices"
 	"sync"
@@ -136,6 +137,22 @@ var ErrCredentialRejected = errors.New("integration: the third-party app refused
 // disconnect that is simply early.
 var ErrDisconnectUnavailable = errors.New("integration: this node cannot complete a disconnect yet")
 
+// ErrReconcileUnavailable reports a surface this tick may not touch RIGHT NOW,
+// as distinct from one that failed.
+//
+// [ErrDisconnectUnavailable]'s twin for the other half of the tick, and it
+// exists for the same reason: the answer is about THIS MOMENT, not about the
+// integration. Today it means somebody else is already writing at the surface
+// — an operator's pass from the dashboard holds the provisioning lease this
+// tick would otherwise have taken — and the honest response is to come back,
+// not to record anything.
+//
+// Recording would be wrong twice over. An attempt backs the cadence off for a
+// pass that never ran, and a fault puts an error on the screen describing a
+// surface that is at that moment being provisioned successfully by somebody
+// else.
+var ErrReconcileUnavailable = errors.New("integration: this surface is busy, so this tick did not reconcile it")
+
 // Reject marks err as a credential refusal when the third-party app answered with an
 // authentication or authorization status, and returns it untouched otherwise.
 //
@@ -225,11 +242,6 @@ type Registration struct {
 	// wired still reconciles, and a disconnect asked for there waits for
 	// a node that can rather than failing the tick.
 	Disconnector Disconnector
-
-	// Settled overrides [Schedule.Settled] for this surface. Zero takes the
-	// schedule's own value, which is the right answer for a third-party app with no
-	// reason to differ. See [Schedule.next] for the one that does.
-	Settled time.Duration
 }
 
 // DutyFunc claims the single-owner reconcile duty for one tick.
@@ -270,8 +282,31 @@ type Options struct {
 	// "moved".
 	Endpoint func() string
 
+	// Registration reports the NAME this surface's registration is held
+	// under at the third-party app right now, for a surface where the
+	// address is not enough to find it again.
+	//
+	// Datadog is the case, and today the only one: a webhook definition is
+	// addressed by name, that name is a live config field, and Datadog
+	// serves no listing — a GET on the collection answers 405 — so a
+	// definition the engine stops managing can never be found again by
+	// anything. Renaming the field creates a second definition and orphans
+	// the first, silently and for ever.
+	//
+	// Compared with what was recorded, so the orphan is REPORTED rather
+	// than deleted: the name is also the handle a monitor writes, so every
+	// monitor still saying it goes on delivering correctly, and removing
+	// the definition would silence exactly those. Empty for a kind with no
+	// such name, and nil leaves every row's field empty.
+	Registration func(Kind) string
+
 	// Now is the clock, for tests. Nil is time.Now.
 	Now func() time.Time
+
+	// Spread scatters a computed wait, so surfaces that settled together do
+	// not stay together. Nil is [spreadWait]; a test pins it to identity so
+	// it can assert an exact instant.
+	Spread func(time.Duration) time.Duration
 }
 
 // Worker runs the registered reconcilers against whatever is due.
@@ -285,15 +320,17 @@ type Options struct {
 // identities for one agent and the engine records whichever wrote last, which
 // is not a state any later pass can detect or repair.
 type Worker struct {
-	byKind   map[Kind]Registration
-	order    []Kind
-	store    Store
-	schedule Schedule
-	claim    DutyFunc
-	endpoint func() string
-	interval time.Duration
-	settle   time.Duration
-	now      func() time.Time
+	byKind       map[Kind]Registration
+	order        []Kind
+	store        Store
+	schedule     Schedule
+	claim        DutyFunc
+	endpoint     func() string
+	registration func(Kind) string
+	interval     time.Duration
+	spread       func(time.Duration) time.Duration
+	settle       time.Duration
+	now          func() time.Time
 
 	// wake carries a config apply to the loop, so the tick that
 	// reconsiders comes now rather than at the end of the cadence. Buffered
@@ -411,11 +448,16 @@ func New(opts Options) (*Worker, error) {
 	if settle <= 0 {
 		settle = WakeSettle
 	}
+	spread := opts.Spread
+	if spread == nil {
+		spread = spreadWait
+	}
 	return &Worker{
 		byKind: byKind, order: order, store: opts.Store,
 		schedule: opts.Schedule.WithDefaults(), claim: opts.ClaimDuty,
-		endpoint: opts.Endpoint,
-		interval: interval, settle: settle, now: now,
+		endpoint:     opts.Endpoint,
+		registration: opts.Registration,
+		interval:     interval, settle: settle, now: now, spread: spread,
 		wake: make(chan struct{}, 1),
 	}, nil
 }
@@ -559,6 +601,21 @@ func (w *Worker) Tick(ctx context.Context) {
 		if !stale && !state.Due(now) {
 			continue
 		}
+		// STILL OURS? The duty was claimed once, before this loop, and its
+		// TTL is a small multiple of the tick interval — while the loop
+		// below makes network calls to every configured surface in turn. A
+		// sweep across eight vendors outlives that TTL easily, and a duty
+		// that lapsed mid-tick is a second node already sweeping the
+		// surfaces this one has not reached.
+		//
+		// RE-CLAIMED HERE, past the not-due check, so the cost lands only
+		// on a tick with work to do: a claim is one round trip on a
+		// connection the process already holds, and a tick that reconciles
+		// nothing makes none. For the same owner it doubles as the renew,
+		// so the holder keeps the duty by using it.
+		if !w.stillHoldsDuty(ctx) {
+			return
+		}
 		// A SURFACE BEING TAKEN AWAY IS NOT RECONCILED. Its block is
 		// still in the document for the whole teardown — it carries the
 		// credential the teardown authenticates with — so a reconcile
@@ -578,6 +635,53 @@ func (w *Worker) Tick(ctx context.Context) {
 	}
 
 	w.forgetDeparted(ctx, states)
+}
+
+// stillHoldsDuty re-claims the singleton before a unit of work.
+//
+// UNKNOWN STOPS THE SWEEP, exactly as it stops the tick that began it: a
+// coordination store that could not answer has not said the duty is still
+// ours, and carrying on would be entering the two-nodes-one-surface case on a
+// guess rather than on a decision.
+func (w *Worker) stillHoldsDuty(ctx context.Context) bool {
+	if w.claim == nil {
+		return true
+	}
+	held, err := w.claim(ctx)
+	if err != nil {
+		log.WarnContext(ctx, "integration_duty_unknown", "error", err,
+			"detail", "stopping this sweep rather than risking a second node "+
+				"reconciling the surfaces it has not reached")
+		return false
+	}
+	if !held {
+		log.InfoContext(ctx, "integration_duty_lost",
+			"detail", "another node holds the reconcile duty; this sweep stops here")
+	}
+	return held
+}
+
+// spreadWait scatters a wait by up to a tenth of itself, so surfaces that
+// settled together do not stay together.
+//
+// EVERY SURFACE IS STAMPED FROM ONE READING OF THE CLOCK, and the settled
+// interval is one number, so a company whose integrations all converge on the
+// same tick becomes due on the same tick — for ever. Nothing ever pulls them
+// apart again: each pass re-stamps them from the same instant with the same
+// interval. What that produces is one burst of every vendor's API at once,
+// six times an hour, instead of a steady trickle.
+//
+// A TENTH, and only downward from a full interval, because the interval is
+// also a promise: [Schedule.Settled] is "the horizon on which an
+// administrator who revokes an agent's access by hand is noticed", and
+// stretching it would make that horizon longer than it says. Ten per cent is
+// enough to decorrelate eight surfaces within one tick of each other and
+// small enough that no cadence's meaning changes.
+func spreadWait(d time.Duration) time.Duration {
+	if d <= 0 {
+		return d
+	}
+	return d - time.Duration(rand.Int64N(int64(d)/10+1))
 }
 
 // load reads the recorded state, keyed by kind.
@@ -636,7 +740,7 @@ func (w *Worker) tearDown(ctx context.Context, kind Kind, state State, now time.
 
 	log.WarnContext(ctx, "integration_teardown_failed",
 		"integration", kind.String(), "attempts", state.Attempts, "error", err)
-	state.NextAttemptAt = now.Add(w.schedule.Next(state.Report, state.Attempts, reg.Settled))
+	state.NextAttemptAt = now.Add(w.spread(w.schedule.Next(state.Report, state.Attempts)))
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := w.store.SaveIntegration(ctx, state); err != nil {
 		// The third-party app work that DID land is durable; what is lost is the
@@ -656,45 +760,50 @@ func (w *Worker) currentEndpoint() string {
 	return w.endpoint()
 }
 
+// currentRegistration is the name this surface's registration is held under
+// right now, or empty where the question does not apply or this node cannot
+// say.
+func (w *Worker) currentRegistration(kind Kind) string {
+	if w.registration == nil {
+		return ""
+	}
+	return w.registration(kind)
+}
+
 // reconcile runs one surface and records what it found.
 func (w *Worker) reconcile(ctx context.Context, kind Kind, state State, now time.Time) {
 	reg := w.byKind[kind]
 	findings, err := reg.Reconciler.Reconcile(ctx)
 
+	// NOT NOW, WHICH IS NOT A RESULT. Somebody else is writing at this
+	// surface — an operator's pass holding the provisioning lease — so this
+	// tick observed nothing and must record nothing. The mirror of the
+	// [ErrDisconnectUnavailable] arm in [Worker.tearDown], and for the same
+	// reason: an attempt counted here backs off a cadence for a pass that
+	// never ran, and a fault written here describes as broken a surface that
+	// is at this moment being provisioned successfully.
+	if errors.Is(err, ErrReconcileUnavailable) {
+		log.InfoContext(ctx, "integration_reconcile_deferred",
+			"integration", kind.String(), "detail", err.Error())
+		return
+	}
+
+	// WHAT THE REGISTRATION IS HELD UNDER, taken BEFORE the fold because
+	// the orphan a rename leaves behind is a finding like any other and has
+	// to be classified with the rest. See [StampRegistration].
+	findings = append(findings, StampRegistration(&state, w.currentRegistration(kind))...)
+
 	// THE FOLD IS integration.Observe, shared with the pass an operator
 	// runs from the dashboard: a status row must not depend on which
-	// surface produced it.
+	// surface produced it. It carries the field stamped above through.
 	state, forget := Observe(state, kind, findings, err, now)
-	// THE ADDRESS THIS PASS RAN AGAINST, and ONLY where this pass is what
-	// keeps that address current. Recorded on every pass rather than only
-	// a successful one: what it answers is "where is this surface's
+	// THE ADDRESS THIS PASS RAN AGAINST, on every pass rather than only a
+	// successful one: what it answers is "where is this surface's
 	// registration pointing", and a pass that failed still registered
-	// against the base it was given.
-	//
-	// A surface whose address a person typed at the third-party app
-	// ([IngressOperator]) is deliberately left alone here, however much of
-	// its provisioning this pass does converge: stamping it would report
-	// the base this deployment listens on as though the third-party app
-	// had been told about it, which turns the one warning an operator gets
-	// about a moved address into a green row. Datadog is exactly that
-	// surface — its pass provisions accounts and its webhook URL is a
-	// field on a settings page — and the address it was set up against is
-	// written once, by the setup write that asked a person to paste it.
-	switch kind.Ingress() {
-	case IngressEngine:
-		state.Endpoint = w.currentEndpoint()
-	case IngressNone:
-		// NOTHING DELIVERS TO AN ADDRESS HERE, so carrying one is a claim
-		// waiting to become a false alarm: the moment the public base
-		// moves, a stale value compares unequal and reports an action
-		// nobody can take on a surface that has no address to change.
-		// Cleared rather than merely not written, so a row an earlier
-		// build stamped converges on the next pass.
-		state.Endpoint = ""
-	case IngressOperator:
-		// LEFT ALONE. See the note above: only the setup write knows what
-		// a person was shown, and this pass knows nothing about it.
-	}
+	// against the base it was given. Which surfaces that applies to is
+	// [StampEndpoint]'s to decide, because the dashboard's pass writes these
+	// same rows and the two must not disagree.
+	StampEndpoint(&state, kind, w.currentEndpoint())
 	switch {
 	case forget:
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
@@ -708,7 +817,7 @@ func (w *Worker) reconcile(ctx context.Context, kind Kind, state State, now time
 			"integration", kind.String(), "attempts", state.Attempts, "error", err)
 	}
 
-	state.NextAttemptAt = now.Add(w.schedule.Next(state.Report, state.Attempts, reg.Settled))
+	state.NextAttemptAt = now.Add(w.spread(w.schedule.Next(state.Report, state.Attempts)))
 
 	if err := w.store.SaveIntegration(ctx, state); err != nil {
 		// The pass still happened, and its work at the third-party app is durable.
@@ -717,6 +826,78 @@ func (w *Worker) reconcile(ctx context.Context, kind Kind, state State, now time
 		log.WarnContext(ctx, "integration_status_unrecorded",
 			"integration", kind.String(), "error", err)
 	}
+}
+
+// StampEndpoint records the address a pass ran against, where that pass is
+// what keeps the address current.
+//
+// THREE-WAY on [Kind.Ingress], and the three answers are genuinely different:
+//
+//   - IngressEngine — a pass registers the delivery here, so the address it
+//     ran against is the address the registration points at.
+//   - IngressNone — nothing delivers to an address at all, so carrying one is
+//     a claim waiting to become a false alarm: the moment the public base
+//     moves, a stale value compares unequal and reports an action nobody can
+//     take on a surface with no address to change. CLEARED rather than merely
+//     not written, so a row an earlier build stamped converges on the next
+//     pass.
+//   - IngressOperator — a person typed the address at the third-party app.
+//     Stamping it would report the base this deployment listens on as though
+//     the third-party app had been told, which turns the one warning an
+//     operator gets about a moved address into a green row.
+//
+// EXPORTED, because two writers share these rows: the loop's tick and the
+// pass an operator runs from the dashboard. The rule lived inside the loop
+// and the dashboard's pass stamped every surface unconditionally — so the
+// same row meant one thing when a tick wrote it and another when a button
+// did, and Datadog, whose webhook URL is a field on a settings page, was
+// reported current by the button and left alone by the tick.
+func StampEndpoint(state *State, kind Kind, current string) {
+	switch kind.Ingress() {
+	case IngressEngine:
+		state.Endpoint = current
+	case IngressNone:
+		state.Endpoint = ""
+	case IngressOperator:
+	}
+}
+
+// StampRegistration records the name this surface's registration is now held
+// under, and reports the one the previous name left behind.
+//
+// A NAME IS NOT AN ADDRESS, which is why this is separate from
+// [StampEndpoint]. Where a registration is found by its address, moving the
+// address re-points it and nothing is orphaned. Where it is found by NAME —
+// Datadog's webhook definition, and only that today — changing the name
+// creates a second registration and abandons the first, which goes on
+// working: same address, same token, every monitor still naming it delivering
+// correctly.
+//
+// SO IT IS REPORTED, NEVER DELETED. Removing it would silence exactly those
+// monitors, and Datadog serves no listing, so nothing can find it again
+// afterwards either. The finding is the only place an operator can learn it
+// exists, and it is an advisory because nothing is broken — what is owed is
+// repointing the monitors and then removing the definition by hand.
+//
+// EXPORTED for the reason [StampEndpoint] is: two writers share these rows,
+// and a rule written twice is a row that means one thing when a tick wrote it
+// and another when a button did.
+func StampRegistration(state *State, current string) []Finding {
+	previous := state.Registration
+	state.Registration = current
+	if previous == "" || current == "" || previous == current {
+		return nil
+	}
+	return []Finding{{
+		Kind:    FindingRegistrationOrphaned,
+		Subject: previous,
+		Detail: fmt.Sprintf(
+			"this engine registered %q and now registers %q, so %q is still "+
+				"there and nothing manages it — it keeps delivering, which is "+
+				"why it was not removed. Repoint anything naming %q at %q, "+
+				"then delete %q at the third-party app",
+			previous, current, previous, previous, current, previous),
+	}}
 }
 
 // forgetDeparted drops state for a surface the company document no longer
@@ -728,6 +909,18 @@ func (w *Worker) reconcile(ctx context.Context, kind Kind, state State, now time
 func (w *Worker) forgetDeparted(ctx context.Context, states map[Kind]State) {
 	for kind := range states {
 		if _, live := w.byKind[kind]; live {
+			continue
+		}
+		if !kind.Valid() {
+			// A PEER'S SURFACE, NOT A DEPARTED ONE, and this build cannot
+			// tell the difference by looking at its own registrations —
+			// every kind it does not know is missing from byKind either
+			// way. [Kind.Valid] already promises what happens here: "an
+			// unknown kind is SKIPPED by the worker and rendered as-is by
+			// the API", because the store holds state written by whichever
+			// build ran the last pass. Deleting it made an older node in a
+			// rolling upgrade erase the newer node's status on every tick,
+			// and the newer node write it back on every pass of its own.
 			continue
 		}
 		if err := w.store.ForgetIntegration(ctx, kind); err != nil {

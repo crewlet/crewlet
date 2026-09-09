@@ -2,17 +2,22 @@ package setupapi
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/github"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // Giving one agent its own GitHub App, in the two acts a person performs.
@@ -46,6 +51,16 @@ import (
 // a page that only prints a code and would not be fine here: this callback
 // writes a credential into a seat.
 
+// completeDeadline bounds the detached half of a conversion.
+//
+// Generous against three HTTP calls and two seals, because it is a BACKSTOP
+// for a GitHub that stopped answering rather than a deadline for the work: the
+// window it protects is the one where the app exists and its key is not sealed
+// yet, and cutting that short is the failure it exists to prevent. Shorter
+// than [manifestTTL], so a conversion cannot still be running when the state
+// that authorized it would have expired.
+const completeDeadline = 2 * time.Minute
+
 // manifestTTL is how long a begun app creation stays valid.
 //
 // GitHub expires the one-time code at one hour, so a state that outlived it
@@ -66,6 +81,22 @@ const tokenDomain = "github-app-manifest"
 type AppFlow struct {
 	service *Service
 	signer  *runtoken.Signer
+	spent   StateClaims
+}
+
+// StateClaims is what spends a callback state, so no state is ever accepted
+// twice.
+//
+// The consumer's own interface, one method wide: this package needs
+// first-claim-wins and nothing else. The fleet's [coord.Claims] satisfies it,
+// and reading it here INVERTS that type's documented policy on purpose.
+// Webhook dedupe fails OPEN, because a push suppressed by a store blip is a
+// wake nobody notices. This is an authorization check, so it fails CLOSED: a
+// store that cannot answer is not evidence that a state is unspent, and the
+// cost of refusing is that an operator clicks again.
+type StateClaims interface {
+	// Claim records key and reports whether THIS caller was first.
+	Claim(ctx context.Context, key string, ttl time.Duration, now time.Time) (bool, error)
 }
 
 // NewAppFlow builds the completer the webhook mux serves.
@@ -75,17 +106,78 @@ type AppFlow struct {
 // different nodes would otherwise refuse every completion. Empty material
 // takes a per-process key, which is correct for one node and cannot work
 // across two, and the caller logs what that costs.
-func NewAppFlow(s *Service, material []string) *AppFlow {
+//
+// spent is where a used state is recorded, and it has the SAME fleet
+// requirement for the same reason: a callback landing on a node that cannot
+// see the first one's record would accept a replay. Nil takes a per-process
+// set, correct for one node and no more — exactly the trade the key material
+// above makes.
+func NewAppFlow(s *Service, material []string, spent StateClaims) *AppFlow {
 	if s == nil {
 		return nil
 	}
+	if spent == nil {
+		spent = &localClaims{seen: map[string]time.Time{}}
+	}
 	return &AppFlow{
 		service: s,
+		spent:   spent,
 		signer: runtoken.New(runtoken.Options{
 			Key: runtoken.KeyFrom(tokenDomain, material),
 			Now: s.clock,
 		}),
 	}
+}
+
+// localClaims is the single-node stand-in for the fleet's registry.
+//
+// Bounded by the same TTL the fleet row carries, swept on write rather than
+// on a timer: a state is spent at most once per app creation, so the map
+// holds one entry per creation for fifteen minutes and there is no loop worth
+// running to keep it smaller.
+type localClaims struct {
+	mu   sync.Mutex
+	seen map[string]time.Time
+}
+
+func (l *localClaims) Claim(_ context.Context, key string, ttl time.Duration, now time.Time) (bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for k, expiry := range l.seen {
+		if !now.Before(expiry) {
+			delete(l.seen, k)
+		}
+	}
+	if expiry, held := l.seen[key]; held && now.Before(expiry) {
+		return false, nil
+	}
+	l.seen[key] = now.Add(ttl)
+	return true, nil
+}
+
+// spend records a state as used, and reports whether this caller may use it.
+//
+// KEYED ON THE DIGEST, never the token: the fleet's registry is shared state
+// and the state IS the credential on this route, so writing it there would
+// put a live bearer token in a store read by every node.
+//
+// The claim outlives the token deliberately — the same TTL the state was
+// minted for, measured from the moment it is spent — so a token cannot be
+// replayed at any point while it would still validate.
+func (f *AppFlow) spend(ctx context.Context, state string) error {
+	digest := sha256.Sum256([]byte(state))
+	key := "github-app-state:" + hex.EncodeToString(digest[:])
+	first, err := f.spent.Claim(ctx, key, manifestTTL, f.service.now())
+	if err != nil {
+		// CLOSED. See [StateClaims]: a registry that could not answer has
+		// not told us this state is unspent.
+		return fmt.Errorf("%w: this engine could not check whether the link "+
+			"had already been used: %w", ErrStateRefused, err)
+	}
+	if !first {
+		return ErrStateRefused
+	}
+	return nil
 }
 
 // AttachAppFlow gives the service the signer its begin route needs.
@@ -114,10 +206,20 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	// THROUGH THE PACKAGE'S OWN CAP, like every other route here. A decoder
+	// straight off r.Body reads whatever is sent: this route names one seat,
+	// so the body is tens of bytes, and streaming an unbounded one into a
+	// decoder is a route that can be made to consume memory by anyone who
+	// can reach it.
+	body, err := httpjson.ReadBody(w, r, MaxBody)
+	if err != nil {
+		httpjson.Refuse(w, err)
+		return
+	}
 	var in struct {
 		Seat string `json:"seat"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	if err := json.Unmarshal(body, &in); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, codeBadBody, map[string]string{"hint": err.Error()})
 		return
 	}
@@ -171,7 +273,7 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 		// THE ACCOUNT THAT WILL OWN THE APP. An app registered under a
 		// person's own account cannot be installed on the organization
 		// that owns the repositories.
-		"action_url": github.ActionURL(webBaseOf(company), orgOf(company)),
+		"action_url": github.ActionURL(s.webBaseOf(company), orgOf(company)),
 		"manifest":   manifest,
 		"state":      state,
 	})
@@ -192,21 +294,49 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 	if handle == "" {
 		return "", ErrStateRefused
 	}
+	// SPENT HERE, BEFORE THE EXCHANGE, which is what makes [ErrStateRefused]
+	// mean what it has always said it means.
+	//
+	// The state is the ONLY authorization on this route — it is served by the
+	// unauthenticated webhooks mux — and validating it is a pure signature
+	// and expiry check, so without this it is a bearer credential that works
+	// as many times as it is presented for a full [manifestTTL]. It travels
+	// in a query string, which is where browser history and every ingress
+	// access log keep it.
+	//
+	// BEFORE the exchange rather than after, and that costs nothing: GitHub's
+	// manifest code is itself one-time, so a conversion that fails needs a
+	// fresh code and therefore a fresh creation either way. Spending first
+	// means a replay cannot race a slow exchange.
+	if err := f.spend(ctx, state); err != nil {
+		return handle, err
+	}
 	s := f.service
 	company := s.company()
 	if company == nil || seatByHandle(company, handle) == nil {
 		return handle, fmt.Errorf("setupapi: this company has no agent seat %q", handle)
 	}
 
-	app, err := github.ExchangeManifest(ctx, apiBaseOf(company), code)
+	// DETACHED FROM THE BROWSER, which is the same move [Service.runPass]
+	// makes and for a sharper reason. Everything below is irreversible: the
+	// conversion spends GitHub's one-time code, and the two values it returns
+	// are issued once and never reissued. Run on the request's own context, a
+	// person closing the tab — or a proxy timing the request out — cancels
+	// the engine between GitHub creating the app and the key being sealed,
+	// and that app is then unusable and unrecoverable, deletable only by hand
+	// at GitHub.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), completeDeadline)
+	defer cancel()
+
+	app, err := github.ExchangeManifest(ctx, f.service.apiBaseOf(company), code)
 	if err != nil {
 		return handle, err
 	}
 
 	// SEALED BEFORE ANYTHING ELSE CAN FAIL. See the note above: these two
 	// values do not exist anywhere else and cannot be asked for again.
-	keyVar := secretNameFor(handle, "GITHUB_APP_KEY")
-	hookVar := secretNameFor(handle, "GITHUB_APP_WEBHOOK_SECRET")
+	keyVar := secretNameFor(handle, "APP_KEY")
+	hookVar := secretNameFor(handle, "APP_WEBHOOK_SECRET")
 	// THROUGH s.now(), which is the guarded reading. Calling s.clock()
 	// straight panicked here on the one path where a panic costs an app:
 	// GitHub had created it, and the crash landed before its key was
@@ -310,70 +440,7 @@ func (f *AppFlow) InstallURL(handle string) string {
 	if slug == "" {
 		return ""
 	}
-	return github.InstallURL(webBaseOf(company), orgOf(company), slug)
-}
-
-// RecordInstall adopts an installation GitHub named on its redirect.
-//
-// THE SAME WRITE THE LOOP MAKES, through the same entity route, so the two
-// paths cannot disagree about where an installation is recorded. What it buys
-// is timing: the loop would find this id by listing the app's installations
-// on its next pass, and doing it here means the Integrations screen is right
-// when the operator gets back to it.
-//
-// It refuses an id for a seat with no app, because that pairing cannot be
-// true: an installation belongs to an app, so a seat without one has nothing
-// to install.
-func (f *AppFlow) RecordInstall(ctx context.Context, handle string, installationID int64) error {
-	if installationID <= 0 {
-		return fmt.Errorf("setupapi: %q is not an installation id", handle)
-	}
-	s := f.service
-	company := s.company()
-	if company == nil {
-		return errors.New("setupapi: no company configuration is active")
-	}
-	seat := seatByHandle(company, handle)
-	if seat == nil {
-		return fmt.Errorf("setupapi: this company has no agent seat %q", handle)
-	}
-	if seat.Integrations.GitHub == nil || seat.Integrations.GitHub.AppID == 0 {
-		return fmt.Errorf(
-			"setupapi: %s has no GitHub App, so there is nothing for an "+
-				"installation to belong to", handle)
-	}
-	return s.recordSeatInstallation(ctx, handle, installationID)
-}
-
-// recordSeatInstallation writes the installation onto the seat.
-func (s *Service) recordSeatInstallation(ctx context.Context, handle string, id int64) error {
-	body, err := s.writer.Config.Seat(ctx, handle)
-	if err != nil {
-		return fmt.Errorf("setupapi: read the seat %s: %w", handle, err)
-	}
-	var role map[string]any
-	if decodeErr := json.Unmarshal(body, &role); decodeErr != nil {
-		return fmt.Errorf("setupapi: decode the seat %s: %w", handle, decodeErr)
-	}
-	integrations, _ := role["integrations"].(map[string]any)
-	block, _ := integrations["github"].(map[string]any)
-	if block == nil {
-		return fmt.Errorf("setupapi: the seat %s has no github block", handle)
-	}
-	block["installation_id"] = id
-	integrations["github"] = block
-	role["integrations"] = integrations
-
-	updated, err := json.Marshal(role)
-	if err != nil {
-		return fmt.Errorf("setupapi: encode the seat %s: %w", handle, err)
-	}
-	_, _, err = s.writer.Config.SetSeat(ctx, handle, updated,
-		"record "+handle+"'s GitHub installation", "setup", "")
-	if err != nil {
-		return fmt.Errorf("setupapi: record the installation for %s: %w", handle, err)
-	}
-	return nil
+	return github.InstallURL(f.service.webBaseOf(company), orgOf(company), slug)
 }
 
 // secretNameFor is the sealed-store name one seat's value lives under.
@@ -381,23 +448,22 @@ func (s *Service) recordSeatInstallation(ctx context.Context, handle string, id 
 // PER SEAT, because these are per-seat credentials: one shared name would
 // have the second agent's app key overwrite the first's, and both seats would
 // then authenticate as whichever app was created last.
-func secretNameFor(handle, suffix string) string {
-	return setupSlug(handle) + "_" + suffix
-}
-
-// setupSlug upper-snakes a handle into the reference grammar, so the name it
-// produces is one a `${VAR}` can actually resolve through.
-func setupSlug(handle string) string {
-	var b strings.Builder
-	for _, r := range strings.ToUpper(strings.TrimSpace(handle)) {
-		switch {
-		case r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_':
-			b.WriteRune(r)
-		default:
-			b.WriteRune('_')
-		}
-	}
-	return b.String()
+//
+// THROUGH THE SHARED GRAMMAR, and the ORDER is why. This built the name as
+// `<HANDLE>_<FIELD>`, so a handle beginning with a digit — `7th-engineer`,
+// which the org model accepts — produced `7TH_ENGINEER_GITHUB_APP_KEY`. That
+// is not a name a `${VAR}` can reference: envref's whole-reference grammar
+// requires a leading letter or underscore. The pointer written beside it
+// therefore resolved to nothing, and the value it pointed at was the app's
+// private key, which GitHub issues exactly once and never reissues — so the
+// app was unusable and unrecoverable the moment it was created.
+//
+// [setup.SecretNameFor] puts the constant first, which makes a leading letter
+// structural rather than something each caller has to remember.
+func secretNameFor(handle, field string) string {
+	return setup.SecretNameFor(integration.KindGitHub, setup.Requirement{
+		Field: field, Seat: handle,
+	})
 }
 
 // seatByHandle finds one agent seat.
@@ -429,24 +495,33 @@ func orgOf(company *config.Company) string {
 
 // webBaseOf is the host a person's browser opens, which is github.com unless
 // this company runs Enterprise Server.
-func webBaseOf(company *config.Company) string {
-	gh := company.Integrations.GitHub
-	if gh == nil {
-		return ""
-	}
-	return strings.TrimSpace(gh.URL)
+func (s *Service) webBaseOf(company *config.Company) string {
+	_, web := company.Integrations.GitHub.Bases(s.resolve)
+	return web
 }
 
 // apiBaseOf is the REST base the conversion is POSTed to.
-func apiBaseOf(company *config.Company) string {
-	return webBaseOf(company)
+//
+// NOT THE BROWSER BASE, which is what this returned. They are the same string
+// only on github.com: Enterprise Server serves its REST API under `/api/v3`,
+// so the manifest conversion was POSTed to a path that answers 404 — and
+// GitHub's manifest code is one-time, so the operator was told their code was
+// already spent and had to create the app again, every time.
+func (s *Service) apiBaseOf(company *config.Company) string {
+	api, _ := company.Integrations.GitHub.Bases(s.resolve)
+	return api
 }
 
 // publicBase is the address a third-party app reaches this engine on.
+//
+// RESOLVED, because every address built from it here is baked into an app at
+// GitHub — the delivery URL, the redirect and the setup URL — and only a
+// person can change those afterwards. A `${PUBLIC_URL}` copied in literally
+// creates an app nothing can ever deliver to.
 func (s *Service) publicBase() string {
 	company := s.company()
 	if company == nil {
 		return ""
 	}
-	return strings.TrimSpace(company.Integrations.PublicBaseURL)
+	return company.Integrations.WebhookBase(s.resolve)
 }

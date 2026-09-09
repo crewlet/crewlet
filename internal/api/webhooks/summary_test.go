@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/crewlet/crewlet/internal/api/webhooks"
 )
 
 // The summary is the line the activity feed shows, and it is the only part of
@@ -229,5 +231,35 @@ func TestASummaryHasNoGapsWhereAFieldWasAbsent(t *testing.T) {
 	}
 	if summary != strings.TrimSpace(summary) {
 		t.Errorf("summary %q is padded at one end", summary)
+	}
+}
+
+// A PRIORITY IS PREFIXED ONCE. The template sends `$PRIORITY`, which Datadog
+// expands to P1..P5, so the summary added a second P and every high-priority
+// alert read "PP1" in the feed. datadog.decode is the only other reader of
+// this field and it strips the prefix; the two agree now.
+func TestADatadogPriorityIsPrefixedOnce(t *testing.T) {
+	t.Parallel()
+	for wire, want := range map[string]string{
+		"P1": "P1", // what the shipped template produces
+		"1":  "P1", // a hand-edited bare digit still reads right
+	} {
+		got := webhooks.DatadogSummaryForTest(map[string]any{
+			"alert_transition": "Triggered", "title": "disk full", "priority": wire,
+		})
+		if !strings.Contains(got, "· "+want) || strings.Contains(got, "PP") {
+			t.Errorf("priority %q rendered as %q, want one %q", wire, got, want)
+		}
+	}
+}
+
+// AND A MONITOR TITLE IS BOUNDED, like every other summary here. It is
+// whatever a person typed into Datadog, stored on the event row and drawn in a
+// feed beside five summaries that all trim.
+func TestADatadogTitleIsBounded(t *testing.T) {
+	t.Parallel()
+	got := webhooks.DatadogSummaryForTest(map[string]any{"title": strings.Repeat("x", 500)})
+	if len([]rune(got)) > 200 {
+		t.Errorf("an unbounded title reached the summary: %d runes", len([]rune(got)))
 	}
 }

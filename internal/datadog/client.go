@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // ClientTimeout bounds one call to Datadog.
@@ -189,25 +190,42 @@ func (c *Client) do(
 
 // maxResponse bounds what one answer may be.
 //
-// A list page is a few hundred accounts at most and every call here reads
-// one. The cap is what stops a proxy's HTML error page, or a region
-// answering something unexpected, from being read into memory whole.
+// A list page is a few hundred accounts at most. The cap is what stops a
+// proxy's HTML error page, or a region answering something unexpected, from
+// being read into memory whole.
 const maxResponse = 4 << 20
+
+// maxDetail bounds what a refusal contributes to an error string.
+//
+// 2048 bytes, matching the github and gitlab clients, and it is not a
+// cosmetic limit. This error becomes Finding.Detail, which
+// [integration.Observe] stores WITHOUT truncation into a State the fleet
+// writes to one coordination key shared with every other integration —
+// [integration.MaxLastErrorLength]'s own doc names this exact hazard, "a
+// client that pastes a response body into its error is a megabyte", and
+// Finding.Detail is the field its guard does not cover. Datadog's client was
+// that client: a non-JSON refusal put up to 4 MiB of HTML into it.
+const maxDetail = 2048
 
 // detailOf pulls Datadog's own message out of a refusal, so an operator
 // reads what Datadog said rather than a status code.
+//
+// BOUNDED, because the answer to a call that failed is exactly the answer
+// least likely to be the JSON this expects — see [maxDetail]. Cut through
+// [textcut] rather than by slicing, so a multi-byte rune straddling the limit
+// does not become invalid UTF-8 that a JSON encoder silently substitutes.
 func detailOf(payload []byte) string {
 	var body struct {
 		Errors []string `json:"errors"`
 	}
 	if err := json.Unmarshal(payload, &body); err == nil && len(body.Errors) > 0 {
-		return strings.Join(body.Errors, "; ")
+		return textcut.Ellipsis(strings.Join(body.Errors, "; "), maxDetail)
 	}
 	detail := strings.TrimSpace(string(payload))
 	if detail == "" {
 		return "no detail"
 	}
-	return detail
+	return textcut.Ellipsis(detail, maxDetail)
 }
 
 // Org is the organization a credential pair belongs to.
@@ -262,43 +280,114 @@ type User struct {
 // FILTERED AT THE VENDOR rather than here: an organization may hold thousands
 // of users, and walking all of them to find the handful this engine made
 // spends a rate limit on rows nobody reads.
-func (c *Client) ListServiceAccounts(ctx context.Context, creds Credentials, query string) ([]User, error) {
-	path := "/api/v2/users?filter=" + url.QueryEscape(query) +
-		"&page[size]=" + fmt.Sprint(listPageSize)
-	var body struct {
-		Data []struct {
-			ID         string `json:"id"`
-			Attributes struct {
-				Email      string `json:"email"`
-				Name       string `json:"name"`
-				Disabled   bool   `json:"disabled"`
-				ServiceAcc bool   `json:"service_account"`
-			} `json:"attributes"`
-		} `json:"data"`
-	}
-	if err := c.do(ctx, http.MethodGet, path, creds, nil, &body); err != nil {
+//
+// TO EXHAUSTION, which the sibling enumerations in this tree already are and
+// this one was not: [atlassian.Client.ListServiceAccounts] gives the reason
+// in the same words — "stopping short would report an account that exists as
+// missing and this engine would then create a second identity on top of a
+// live one" — and this listing feeds both a create path and a decommission.
+// One page was not even 100 service accounts: Datadog's filter is a free-text
+// substring match, so every PERSON whose address is under the same domain
+// consumes a slot on page one and is then dropped by the check below.
+func (c *Client) ListServiceAccounts(
+	ctx context.Context, creds Credentials, query string,
+) ([]User, error) {
+	out := []User{}
+	err := c.walk(ctx, creds, "/api/v2/users", query, func(page usersPage) {
+		for _, row := range page.Data {
+			if !row.Attributes.ServiceAcc {
+				// A PERSON matched the filter. Returning them would let
+				// a caller looking for its own accounts adopt somebody's
+				// real user and then disable it.
+				continue
+			}
+			out = append(out, User{
+				ID: row.ID, Email: row.Attributes.Email,
+				Name: row.Attributes.Name, Disabled: row.Attributes.Disabled,
+			})
+		}
+	})
+	if err != nil {
 		return nil, err
 	}
-	out := make([]User, 0, len(body.Data))
-	for _, row := range body.Data {
-		if !row.Attributes.ServiceAcc {
-			// A PERSON matched the filter. Returning them would let a
-			// caller looking for its own accounts adopt somebody's real
-			// user and then disable it.
-			continue
-		}
-		out = append(out, User{
-			ID: row.ID, Email: row.Attributes.Email,
-			Name: row.Attributes.Name, Disabled: row.Attributes.Disabled,
-		})
-	}
 	return out, nil
+}
+
+// usersPage is one page of Datadog's user listing. Roles decode into it too:
+// the fields a role does not have stay zero, and only Name is read for one.
+type usersPage struct {
+	Data []struct {
+		ID         string `json:"id"`
+		Attributes struct {
+			Email      string `json:"email"`
+			Name       string `json:"name"`
+			Disabled   bool   `json:"disabled"`
+			ServiceAcc bool   `json:"service_account"`
+		} `json:"attributes"`
+	} `json:"data"`
+	Meta struct {
+		Page struct {
+			// TotalFilteredCount is the size of the FILTERED set, which
+			// is what this walk is enumerating. TotalCount is the whole
+			// organization and would make the loop ask for pages the
+			// filter can never fill.
+			TotalFilteredCount int `json:"total_filtered_count"`
+			TotalCount         int `json:"total_count"`
+		} `json:"page"`
+	} `json:"meta"`
+}
+
+// walk reads a filtered v2 collection to exhaustion, handing each page to fn.
+//
+// A SHORT READ IS INDISTINGUISHABLE FROM A COMPLETE ONE, which is the whole
+// reason this exists: both callers treat "not in the answer" as "does not
+// exist at Datadog", and one then creates a second identity on top of a live
+// account while the other refuses the whole pass claiming the organization
+// has no role by that name.
+//
+// The stop condition is a short page rather than the reported total, with the
+// total used only as a sanity bound: a page that comes back smaller than what
+// was asked for is the end of the collection on every JSON:API implementation,
+// and trusting a count instead would loop for ever against a server that
+// reports one it will not serve.
+func (c *Client) walk(
+	ctx context.Context, creds Credentials, path, query string, fn func(usersPage),
+) error {
+	for page := 0; ; page++ {
+		if page > listWalkCeiling {
+			return fmt.Errorf(
+				"datadog: %s did not finish enumerating after %d pages of %d, "+
+					"which is not an organization Crewlet provisions into — "+
+					"narrow integrations.datadog.provisioning.email_domain or "+
+					"the role name so the filter matches fewer rows",
+				path, listWalkCeiling, listPageSize)
+		}
+		full := fmt.Sprintf("%s?filter=%s&page[size]=%d&page[number]=%d",
+			path, url.QueryEscape(query), listPageSize, page)
+		var body usersPage
+		if err := c.do(ctx, http.MethodGet, full, creds, nil, &body); err != nil {
+			return err
+		}
+		fn(body)
+		if len(body.Data) < listPageSize {
+			return nil
+		}
+	}
 }
 
 // listPageSize is what one listing asks for. Datadog's documented maximum is
 // 100; a larger value is clamped server-side, which would make a partial walk
 // look like a complete one.
 const listPageSize = 100
+
+// listWalkCeiling stops a walk that is not converging.
+//
+// 50 pages, so 5000 rows at [listPageSize] — the same number
+// [gitlab.userWalkCeiling] stops at, and for the same reason: it is an
+// enumeration a decommission decides from, so it must RAISE rather than
+// return a short list. A truncated read reaching a caller is what creates a
+// duplicate identity on top of a live account.
+const listWalkCeiling = 50
 
 // Role is a Datadog role, which is how permission is granted.
 type Role struct {
@@ -307,23 +396,23 @@ type Role struct {
 }
 
 // ListRoles reads the roles whose name matches query.
+//
+// PAGED, for a sharper reason than the listing above. Datadog's filter is a
+// substring match on the role name, so what comes back is every role
+// CONTAINING the configured one, and the caller needs an EXACT match among
+// them — [roleIDOf] refuses the whole pass when it finds none, with an error
+// telling the operator their organization has no role by that name. Read one
+// page deep, a large organization with a short role name got that accusation
+// about a role that exists, and every seat in the company went unprovisioned.
 func (c *Client) ListRoles(ctx context.Context, creds Credentials, query string) ([]Role, error) {
-	path := "/api/v2/roles?filter=" + url.QueryEscape(query) +
-		"&page[size]=" + fmt.Sprint(listPageSize)
-	var body struct {
-		Data []struct {
-			ID         string `json:"id"`
-			Attributes struct {
-				Name string `json:"name"`
-			} `json:"attributes"`
-		} `json:"data"`
-	}
-	if err := c.do(ctx, http.MethodGet, path, creds, nil, &body); err != nil {
+	out := []Role{}
+	err := c.walk(ctx, creds, "/api/v2/roles", query, func(page usersPage) {
+		for _, row := range page.Data {
+			out = append(out, Role{ID: row.ID, Name: row.Attributes.Name})
+		}
+	})
+	if err != nil {
 		return nil, err
-	}
-	out := make([]Role, 0, len(body.Data))
-	for _, row := range body.Data {
-		out = append(out, Role{ID: row.ID, Name: row.Attributes.Name})
 	}
 	return out, nil
 }
@@ -412,6 +501,30 @@ func (c *Client) CreateAppKey(
 	return AppKey{
 		ID: body.Data.ID, Name: body.Data.Attributes.Name, Key: body.Data.Attributes.Key,
 	}, nil
+}
+
+// DeleteAppKey revokes one application key.
+//
+// THE OTHER HALF OF MINTING. Datadog shows a key's value exactly once, so a
+// key this engine created and then could not record is a credential that
+// exists, is held by nobody, and which nothing will ever remember to remove
+// — the state [provision.TokenSink]'s own contract legislates against: "a run
+// that mints three tokens and cannot persist the third has to revoke all
+// three".
+//
+// A 404 is success, matching [Client.DeleteWebhook]: a key already gone is
+// the state this call is asking for, and the rollback it belongs to must be
+// safe to repeat.
+func (c *Client) DeleteAppKey(
+	ctx context.Context, creds Credentials, accountID, keyID string,
+) error {
+	path := "/api/v2/service_accounts/" + url.PathEscape(accountID) +
+		"/application_keys/" + url.PathEscape(keyID)
+	err := c.do(ctx, http.MethodDelete, path, creds, nil, nil)
+	if Status(err) == http.StatusNotFound {
+		return nil
+	}
+	return err
 }
 
 // ListAppKeys reads one account's keys, without their values.

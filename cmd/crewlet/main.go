@@ -888,7 +888,44 @@ func runEngine(args []string, stderr io.Writer) error {
 	// /ready report honestly that it holds no seats yet, and a webhook that
 	// arrives in the window is retained rather than dropped because the
 	// mailboxes are created before any claiming — see Node.Start.
-	surface, err := serveAPI(ctx, boot, e, reconciler, cipher, log)
+	// THE CONFIG SURFACE IS BUILT HERE, NOT INSIDE serveAPI, and the
+	// difference is a node with `api.port: 0`.
+	//
+	// It used to be constructed after that function's early return, so a
+	// worker-only node — a documented posture, validated as "0 (no HTTP
+	// surface)" — never installed a config writer at all. The reconcile
+	// loop is armed regardless: it is a FLEET SINGLETON, so on a split
+	// deployment it lands on exactly that node as readily as on any other,
+	// and every path needing the writer then failed for the life of the
+	// process. A disconnect answered ErrDisconnectUnavailable whose own
+	// comment calls the missing writer "the window between the loop arming
+	// and the API wiring, which resolves on its own within a second"; a
+	// GitHub seat's discovered installation could never be recorded; and
+	// the Atlassian pass emitted its "set cloud_id by hand" note on every
+	// tick, for ever.
+	//
+	// Nothing about writing the company document needs an HTTP listener —
+	// the surface takes a store, a cipher, the plane and the queue, all of
+	// which exist here — so it is built unconditionally and handed to
+	// serveAPI, which shares the ONE instance with the REST routes and the
+	// socket queries.
+	configSurface := configapi.New(configapi.Options{
+		Store: e.Backends().Store, Cipher: cipher,
+		// THE POINTER, without which the write routes have nothing to
+		// activate against. It was missing, so every /config write on
+		// this binary reached a nil plane — the live-edit path that is
+		// the whole of Tier B.
+		Plane: e.Backends().Fleet,
+		// And the nudge, so an operator's change lands on every node in
+		// milliseconds rather than at the next reconcile poll.
+		Queue: e.Backends().Queue,
+	})
+	// The surface a DISCONNECT removes a block through. Until it is set
+	// the loop refuses a disconnect rather than running the teardown at
+	// the third-party app and leaving the block behind.
+	e.UseConfigWriter(engineConfigWriter{surface: configSurface})
+
+	surface, err := serveAPI(ctx, boot, e, reconciler, cipher, configSurface, log)
 	if err != nil {
 		e.Stop(context.WithoutCancel(ctx))
 		return err
@@ -1003,7 +1040,8 @@ func companyConfig(e *engine.Engine) *config.Company {
 func companySecrets(e *engine.Engine) webhooks.Secrets { return e.WebhookSecrets() }
 
 func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
-	reconciler *engine.Reconciler, cipher secrets.Cipher, log *slog.Logger,
+	reconciler *engine.Reconciler, cipher secrets.Cipher,
+	configSurface *configapi.Service, log *slog.Logger,
 ) (*httpSurface, error) {
 	if boot.API.Port == 0 {
 		// A real posture: a worker-only node runs no dashboard, no REST
@@ -1020,21 +1058,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		return nil, fmt.Errorf("api: node identity: %w", err)
 	}
-	// ONE config surface, shared by the REST routes and the socket
-	// queries. Sealing and opening with the SAME keyring the reconciler
-	// applies through: two ciphers over one store would mean a revision
-	// written here is one no node can read.
-	configSurface := configapi.New(configapi.Options{
-		Store: e.Backends().Store, Cipher: cipher,
-		// THE POINTER, without which the write routes have nothing to
-		// activate against. It was missing, so every /config write on
-		// this binary reached a nil plane — the live-edit path that is
-		// the whole of Tier B.
-		Plane: e.Backends().Fleet,
-		// And the nudge, so an operator's change lands on every node in
-		// milliseconds rather than at the next reconcile poll.
-		Queue: e.Backends().Queue,
-	})
+	// The config surface is the caller's, built before this function so a
+	// node with no HTTP listener still has a config WRITER — see runEngine.
+	// One instance, shared by the REST routes, the socket queries and the
+	// engine's own disconnect path: sealing and opening with the SAME
+	// keyring the reconciler applies through, because two ciphers over one
+	// store would mean a revision written here is one no node can read.
 	// The fleet's secret store, sealed with the SAME keyring — a value
 	// written here is one this node and every peer opens with the key
 	// their Tier A names, and a second cipher would make a rotation
@@ -1055,11 +1084,6 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		log.Warn("setup_status_unavailable", "error", err,
 			"hint", "a provisioning pass will run and its findings will not reach the screen")
 	}
-	// The surface a DISCONNECT removes a block through, installed now
-	// because it is built here and the engine's loop started before it.
-	// Until it is set the loop refuses a disconnect rather than running
-	// the teardown at the third-party app and leaving the block behind.
-	e.UseConfigWriter(engineConfigWriter{surface: configSurface})
 	setupSurface := setupapi.New(setupapi.Options{
 		Company: func() *config.Company { return companyConfig(e) },
 		Config:  configSurface,
@@ -1076,7 +1100,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// writes its findings to. That last one is the SAME row the
 		// reconcile loop writes: a pass an operator ran and a tick that
 		// ran a minute later must not disagree about an integration.
-		Passes: e.SetupRunner(nil),
+		Passes: e.SetupRunner(),
 		Sink:   e.SetupSink,
 		Status: integrationStatus,
 		// WHICH SLACK APP EACH AGENT IS. Named nowhere in the company
@@ -1091,7 +1115,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// browser that comes back to the seat that started, and it is keyed
 	// from the SAME Tier A material every node reads, so a fleet where the
 	// two halves land on different nodes still agrees.
-	appFlow := setupapi.NewAppFlow(setupSurface, appStateKeyMaterial(boot))
+	//
+	// The fleet's claim registry SPENDS each state, so a link that reached a
+	// log or a browser history cannot be presented a second time. Nil on a
+	// node with no coordination store, which takes a per-process set — the
+	// same single-node trade the key material above makes.
+	appFlow := setupapi.NewAppFlow(setupSurface, appStateKeyMaterial(boot),
+		e.Backends().Fleet)
 	setupSurface.AttachAppFlow(appFlow)
 	if appFlow != nil && len(appStateKeyMaterial(boot)) == 0 {
 		log.Warn("github_app_state_key_is_per_process",
@@ -1154,6 +1184,19 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Knowledge: e.Knowledge(),
 			Config:    configSurface,
 			Budget:    e.Backends().Fleet,
+			// WHERE THIRD-PARTY APPS REACH THIS DEPLOYMENT, resolved
+			// through this node's own chain. `public_base_url` may be a
+			// whole ${VAR}, and what a surface registered is the address
+			// that reference RESOLVED to -- so the screen has to compare
+			// like with like or report every such company as moved.
+			PublicBase: func() string {
+				//nolint:govet // shadow: scoped to this block; see .golangci.yml
+				company := companyConfig(e)
+				if company == nil {
+					return ""
+				}
+				return company.Integrations.WebhookBase(e.LookupSecret)
+			},
 			// What the reconcile loop last found for each surface. The
 			// FLEET's record, not this node's: the loop is a worker duty,
 			// so on a split-role deployment the node answering the
@@ -1707,10 +1750,27 @@ func (w engineConfigWriter) SetSeat(
 // appStateKeyMaterial is the Tier A keyring, as the GitHub App state signer
 // is keyed from.
 //
-// THE SAME MATERIAL EVERY NODE READS, and deliberately not resolved: this
-// derives a key, not a credential, and two processes reading one document
-// have to agree rather than hold plaintext. A deployment with no keys gets a
-// per-process key, which is correct for one node and cannot work across two.
+// THE SAME KEY ON EVERY NODE, which is the only property that matters: a
+// GitHub App callback lands on whichever node the load balancer picks, and a
+// state signed with one key and verified with another is a flow that fails on
+// exactly the fleet it was built for.
+//
+// The material arrives ALREADY RESOLVED — Tier A expands its whole document
+// before decoding, which [config.Secrets.Cipher] states outright — and that
+// is what makes the agreement hold rather than something to apologise for:
+// two nodes that spell one key differently, a `${K}` here and the literal
+// there, derive the SAME signer key because both read the same resolved
+// bytes. (The comment here used to claim the opposite, that the material was
+// deliberately left unresolved to avoid holding plaintext. Under that claim
+// those two nodes would derive different keys and split the App flow across
+// the fleet.)
+//
+// Ordering cannot split it either: [runtoken.KeyFrom] sorts and hashes, so
+// two nodes listing their keys in a different order still agree.
+//
+// A deployment with no keys gets a per-process random key, which is correct
+// for one node and unusable across two — the warning this function's caller
+// logs.
 func appStateKeyMaterial(boot *config.Bootstrap) []string {
 	if boot == nil {
 		return nil
