@@ -85,6 +85,7 @@ type Factory func(t *testing.T) Candidate
 func Run(t *testing.T, new Factory) {
 	t.Helper()
 	t.Run("declaration", func(t *testing.T) { runDeclaration(t, new) })
+	t.Run("tables", func(t *testing.T) { runTables(t, new) })
 	t.Run("envelope", func(t *testing.T) { runEnvelope(t, new) })
 	t.Run("apply", func(t *testing.T) { runApply(t, new) })
 }
@@ -130,4 +131,21 @@ func countRows(t *testing.T, db *store.DB, tables map[string]statelog.TableClass
 		t.Fatalf("count the domain's rows: %v", err)
 	}
 	return out
+}
+
+// runTables certifies that the domain's declared tables accept the framework's
+// own statements.
+//
+// A domain declares three table NAMES and the framework writes their COLUMNS,
+// and nothing in Go connects the two. A migration that spelled a column
+// differently compiles, migrates, opens and serves every read — and fails the
+// first time a record this build cannot decode arrives, which is the rarest
+// path in the system and the one whose failure is a stalled log.
+func runTables(t *testing.T, new Factory) {
+	t.Helper()
+	c := new(t)
+	db := openEstate(t, c)
+	if err := statelog.CheckTables(t.Context(), db, c.Domain); err != nil {
+		t.Fatal(err)
+	}
 }
