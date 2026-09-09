@@ -67,7 +67,7 @@ COMPANY ?=
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build crewlet install fmt tidy schema metrics-doc \
+.PHONY: help build crewlet install fmt tidy schema metrics-doc alarms-doc \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
         check fmt-check tidy-check signoff-check signoff-test vet lint test test-norace test-cross test-e2e \
         require-npm \
@@ -342,6 +342,13 @@ schema: ## regenerate schema/*.schema.json from the config models
 # test rather than a reference an operator cannot find their metric in.
 metrics-doc: ## regenerate docs/reference/metrics.md from the instrument catalogue
 	$(GO) run ./internal/statelog/metrics/gen > docs/reference/metrics.md
+
+# docs/reference/alarms.md is generated from the alarm table, and diffed by
+# internal/statelog for the same reason: an operator meets an alarm for the
+# first time in a log line at an inconvenient hour, and the page is where they
+# look it up.
+alarms-doc: ## regenerate docs/reference/alarms.md from the alarm table
+	$(GO) run ./internal/statelog/alarmgen > docs/reference/alarms.md
 
 # The whole release pipeline, without a tag and without touching GitHub —
 # the same two commands release.yml's snapshot job runs, in the same order.
