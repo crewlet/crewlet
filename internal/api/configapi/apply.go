@@ -142,7 +142,7 @@ func (s *Service) Apply(ctx context.Context, req ApplyRequest) (Applied, error) 
 	// the only legal spelling — never equals a bare revision id: a caller
 	// doing the standard thing was answered 409 with their own current
 	// revision named as the conflict.
-	if req.Expect != "" && !matchesTag(req.Expect, etagOf(active), true) {
+	if req.Expect != "" && !matchesTag(req.Expect, etagOf(active)) {
 		return Applied{}, &RacedError{Base: req.Expect, Current: active.ID}
 	}
 
@@ -172,8 +172,8 @@ func (s *Service) Apply(ctx context.Context, req ApplyRequest) (Applied, error) 
 		return Applied{}, &PatchError{Err: err}
 	}
 	incoming.RestoreRedacted(prior)
-	if err := incoming.Validate(); err != nil {
-		return Applied{}, &ValidationError{Err: err}
+	if invalid := incoming.Validate(); invalid != nil {
+		return Applied{}, &ValidationError{Err: invalid}
 	}
 	// AND THE BYTES ARE WHAT IS STORED, for the same reason. Everything
 	// above worked on the full document; encoding `incoming` alone would

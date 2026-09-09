@@ -850,7 +850,6 @@ func (g *GitHub) APIBase() string {
 	return base + githubEnterpriseAPIPath
 }
 
-// WebURL is the base a shareable link is built on.
 // Bases is where GitHub is reached: the REST base and the browser base, both
 // derived from a RESOLVED url.
 //
@@ -879,6 +878,7 @@ func (g *GitHub) Bases(resolve func(name string) (string, bool)) (apiBase, webBa
 	return derived.APIBase(), derived.WebURL()
 }
 
+// WebURL is the base a shareable link is built on.
 func (g *GitHub) WebURL() string {
 	if base := strings.TrimRight(strings.TrimSpace(g.URL), "/"); base != "" {
 		return strings.TrimSuffix(base, githubEnterpriseAPIPath)
@@ -1266,15 +1266,19 @@ type Datadog struct {
 	// alerts would land at whichever reconciled last.
 	//
 	// CHANGING IT LEAVES THE PREVIOUS DEFINITION IN PLACE, deliberately,
-	// and it is the one edit here with work at Datadog attached. The name
-	// is also the handle monitors write — `@webhook-crewlet` — so every
+	// and the engine REPORTS that rather than acting on it. The name is
+	// also the handle monitors write — `@webhook-crewlet` — so every
 	// monitor still naming the old one goes on delivering through the old
 	// definition, correctly: same address, same token. Deleting it on a
-	// rename would silence exactly those monitors, which is why the engine
-	// does not, and Datadog serves no listing (a GET on the collection
-	// answers 405) so nothing can find it later either. Repoint the
-	// monitors and then remove the old definition at Datadog, or leave
-	// both: a disconnect withdraws only the name this field holds.
+	// rename would silence exactly those monitors, and Datadog serves no
+	// listing (a GET on the collection answers 405) so nothing could find
+	// it afterwards either.
+	//
+	// So the engine remembers the name it registered under and raises
+	// [integration.FindingRegistrationOrphaned] when this field moves —
+	// an advisory, because nothing is broken. Repoint the monitors and
+	// then remove the old definition at Datadog. A disconnect withdraws
+	// only the name this field holds.
 	WebhookName string `yaml:"webhook_name,omitempty" json:"webhook_name,omitempty" desc:"Name of the webhook the engine keeps at Datadog; monitors name it as @webhook-<name> (default crewlet)."`
 
 	// HandleTag is the monitor tag key that names the seat an alert wakes,

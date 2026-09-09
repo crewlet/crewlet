@@ -23,6 +23,7 @@ A pass produces **findings**, and a finding is one observation that is not "fine
 | `unknown_tier` | The company document names something the third-party app does not have. |
 | `grant_short` | A seat holds less access than its role asks for. |
 | `grant_excess` | A seat holds **more** access than its role asks for. |
+| `registration_orphaned` | Something this engine registered at the third-party app that it no longer manages, because the name it is held under changed. Datadog's webhook definition is the case: it is addressed by NAME, that name is also the handle a monitor writes, and Datadog serves no listing — so the previous definition goes on delivering correctly for every monitor still naming it, and nothing could ever find it again. Reported rather than removed, because removing it would silence exactly those monitors. |
 
 Those findings fold into one **report**, which is what an operator reads:
 
@@ -30,9 +31,11 @@ Those findings fold into one **report**, which is what an operator reads:
 - **`actor`** is who has to act for the phase to end: nobody, the `engine`, the `provider`, an `admin` (a person, at the third-party app), or the `operator` (a person, in this deployment's own config).
 - **`detail`** is one sentence naming what is outstanding, and **`action_url`** is where the person named by `actor` goes to do it. Both are filled only when a person owes something.
 
-### The excess-access advisory is always last
+### The advisories are always last
 
-`grant_excess` is the one finding whose verdict is **ready**. The engine did not grant that access and cannot revoke it: it comes from the operator's own scheme, usually inherited from a parent group or a second role. Agents keep working, so the integration is ready with a note rather than blocked.
+Two findings have a verdict of **ready**: `grant_excess` and `registration_orphaned`. Everything below is about the first, and applies to both.
+
+`grant_excess` is the older of the two. The engine did not grant that access and cannot revoke it: it comes from the operator's own scheme, usually inherited from a parent group or a second role. Agents keep working, so the integration is ready with a note rather than blocked.
 
 That makes its rank load-bearing. Anything the advisory outranks disappears from the report entirely, so it is ranked below every real problem. The control plane this was ported from wrote one classifier per integration and three of them returned the advisory early, which hid a short grant, a failed agent, and a webhook that reached nobody. The ordering now lives in one place with a test that pins it.
 

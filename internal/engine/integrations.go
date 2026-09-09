@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/datadog"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/provision"
@@ -118,6 +119,22 @@ func (e *Engine) startIntegrations(ctx context.Context) {
 				return ""
 			}
 			return company.Config.Integrations.WebhookBase(e.resolver().LookupOK)
+		},
+		// AND THE NAME A REGISTRATION IS HELD UNDER, for the one surface
+		// where the address cannot find it again. Read fresh on every
+		// pass for the same reason the endpoint is: it is a field of the
+		// applied revision and an apply can change it — which is exactly
+		// the change this exists to notice.
+		Registration: func(kind integration.Kind) string {
+			company := e.Company()
+			if company == nil || kind != integration.KindDatadog {
+				return ""
+			}
+			cfg := company.Config.Integrations.Datadog
+			if cfg == nil {
+				return ""
+			}
+			return datadog.WebhookNameOf(cfg)
 		},
 		ClaimDuty: integration.DutyFunc(
 			e.workerDuty(integrationDutyName, integrationDutyTTL)),

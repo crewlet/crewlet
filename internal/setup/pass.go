@@ -364,7 +364,7 @@ const holdID = "hold"
 func (r *Runner) hold(
 	ctx context.Context, kind integration.Kind, id string,
 ) (func(), bool, error) {
-	if err := r.claim(kind, id); err != nil {
+	if !r.claim(kind, id) {
 		// A pass is already running HERE. Definitively not held rather
 		// than an error: this is knowledge, not a failure to look.
 		return nil, false, nil
@@ -398,14 +398,22 @@ func (r *Runner) Get(id string) (*Run, bool) {
 	return run, ok
 }
 
-func (r *Runner) claim(kind integration.Kind, id string) error {
+// claim takes the in-process half of the guard, reporting whether it got it.
+//
+// A BOOL, NOT AN ERROR, because "somebody here is already writing at this
+// surface" is KNOWLEDGE rather than a failure to look — and the difference is
+// load-bearing one caller up, where an error means the coordination store
+// could not answer and a false means it answered no. Returning ErrPassInFlight
+// here made [Runner.hold] discard an error to say "not held", which is the
+// shape every three-valued answer in this engine exists to avoid.
+func (r *Runner) claim(kind integration.Kind, id string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, running := r.live[kind]; running {
-		return ErrPassInFlight
+		return false
 	}
 	r.live[kind] = id
-	return nil
+	return true
 }
 
 func (r *Runner) release(kind integration.Kind) {

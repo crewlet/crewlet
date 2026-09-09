@@ -83,6 +83,18 @@ type State struct {
 	// without an app-configuration token the operator may not have.
 	Endpoint string `json:"endpoint,omitempty"`
 
+	// Registration is the NAME this surface's registration is held under
+	// at the third-party app, where the address is not enough to find it.
+	//
+	// Datadog is the case and today the only one: a webhook definition is
+	// addressed by name, that name is a live config field, and Datadog
+	// serves no listing at all — so a definition the engine stops managing
+	// can never be found again by anything. Recorded so a rename is VISIBLE:
+	// the previous definition goes on delivering, correctly, for every
+	// monitor still naming it, and this is the only place an operator can
+	// learn there are now two. See [StampRegistration].
+	Registration string `json:"registration,omitempty"`
+
 	// Disconnecting is set the moment somebody asks for the integration
 	// to be taken away, which is BEFORE any teardown pass has run and
 	// set a phase. Without it the screen shows a connected integration

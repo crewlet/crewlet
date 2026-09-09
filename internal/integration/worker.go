@@ -282,6 +282,24 @@ type Options struct {
 	// "moved".
 	Endpoint func() string
 
+	// Registration reports the NAME this surface's registration is held
+	// under at the third-party app right now, for a surface where the
+	// address is not enough to find it again.
+	//
+	// Datadog is the case, and today the only one: a webhook definition is
+	// addressed by name, that name is a live config field, and Datadog
+	// serves no listing — a GET on the collection answers 405 — so a
+	// definition the engine stops managing can never be found again by
+	// anything. Renaming the field creates a second definition and orphans
+	// the first, silently and for ever.
+	//
+	// Compared with what was recorded, so the orphan is REPORTED rather
+	// than deleted: the name is also the handle a monitor writes, so every
+	// monitor still saying it goes on delivering correctly, and removing
+	// the definition would silence exactly those. Empty for a kind with no
+	// such name, and nil leaves every row's field empty.
+	Registration func(Kind) string
+
 	// Now is the clock, for tests. Nil is time.Now.
 	Now func() time.Time
 
@@ -302,16 +320,17 @@ type Options struct {
 // identities for one agent and the engine records whichever wrote last, which
 // is not a state any later pass can detect or repair.
 type Worker struct {
-	byKind   map[Kind]Registration
-	order    []Kind
-	store    Store
-	schedule Schedule
-	claim    DutyFunc
-	endpoint func() string
-	interval time.Duration
-	spread   func(time.Duration) time.Duration
-	settle   time.Duration
-	now      func() time.Time
+	byKind       map[Kind]Registration
+	order        []Kind
+	store        Store
+	schedule     Schedule
+	claim        DutyFunc
+	endpoint     func() string
+	registration func(Kind) string
+	interval     time.Duration
+	spread       func(time.Duration) time.Duration
+	settle       time.Duration
+	now          func() time.Time
 
 	// wake carries a config apply to the loop, so the tick that
 	// reconsiders comes now rather than at the end of the cadence. Buffered
@@ -436,8 +455,9 @@ func New(opts Options) (*Worker, error) {
 	return &Worker{
 		byKind: byKind, order: order, store: opts.Store,
 		schedule: opts.Schedule.WithDefaults(), claim: opts.ClaimDuty,
-		endpoint: opts.Endpoint,
-		interval: interval, settle: settle, now: now, spread: spread,
+		endpoint:     opts.Endpoint,
+		registration: opts.Registration,
+		interval:     interval, settle: settle, now: now, spread: spread,
 		wake: make(chan struct{}, 1),
 	}, nil
 }
@@ -740,6 +760,16 @@ func (w *Worker) currentEndpoint() string {
 	return w.endpoint()
 }
 
+// currentRegistration is the name this surface's registration is held under
+// right now, or empty where the question does not apply or this node cannot
+// say.
+func (w *Worker) currentRegistration(kind Kind) string {
+	if w.registration == nil {
+		return ""
+	}
+	return w.registration(kind)
+}
+
 // reconcile runs one surface and records what it found.
 func (w *Worker) reconcile(ctx context.Context, kind Kind, state State, now time.Time) {
 	reg := w.byKind[kind]
@@ -758,9 +788,14 @@ func (w *Worker) reconcile(ctx context.Context, kind Kind, state State, now time
 		return
 	}
 
+	// WHAT THE REGISTRATION IS HELD UNDER, taken BEFORE the fold because
+	// the orphan a rename leaves behind is a finding like any other and has
+	// to be classified with the rest. See [StampRegistration].
+	findings = append(findings, StampRegistration(&state, w.currentRegistration(kind))...)
+
 	// THE FOLD IS integration.Observe, shared with the pass an operator
 	// runs from the dashboard: a status row must not depend on which
-	// surface produced it.
+	// surface produced it. It carries the field stamped above through.
 	state, forget := Observe(state, kind, findings, err, now)
 	// THE ADDRESS THIS PASS RAN AGAINST, on every pass rather than only a
 	// successful one: what it answers is "where is this surface's
@@ -825,6 +860,44 @@ func StampEndpoint(state *State, kind Kind, current string) {
 		state.Endpoint = ""
 	case IngressOperator:
 	}
+}
+
+// StampRegistration records the name this surface's registration is now held
+// under, and reports the one the previous name left behind.
+//
+// A NAME IS NOT AN ADDRESS, which is why this is separate from
+// [StampEndpoint]. Where a registration is found by its address, moving the
+// address re-points it and nothing is orphaned. Where it is found by NAME —
+// Datadog's webhook definition, and only that today — changing the name
+// creates a second registration and abandons the first, which goes on
+// working: same address, same token, every monitor still naming it delivering
+// correctly.
+//
+// SO IT IS REPORTED, NEVER DELETED. Removing it would silence exactly those
+// monitors, and Datadog serves no listing, so nothing can find it again
+// afterwards either. The finding is the only place an operator can learn it
+// exists, and it is an advisory because nothing is broken — what is owed is
+// repointing the monitors and then removing the definition by hand.
+//
+// EXPORTED for the reason [StampEndpoint] is: two writers share these rows,
+// and a rule written twice is a row that means one thing when a tick wrote it
+// and another when a button did.
+func StampRegistration(state *State, current string) []Finding {
+	previous := state.Registration
+	state.Registration = current
+	if previous == "" || current == "" || previous == current {
+		return nil
+	}
+	return []Finding{{
+		Kind:    FindingRegistrationOrphaned,
+		Subject: previous,
+		Detail: fmt.Sprintf(
+			"this engine registered %q and now registers %q, so %q is still "+
+				"there and nothing manages it — it keeps delivering, which is "+
+				"why it was not removed. Repoint anything naming %q at %q, "+
+				"then delete %q at the third-party app",
+			previous, current, previous, previous, current, previous),
+	}}
 }
 
 // forgetDeparted drops state for a surface the company document no longer

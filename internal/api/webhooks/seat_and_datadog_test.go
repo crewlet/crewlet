@@ -314,6 +314,19 @@ func TestDatadog_RefusesAShortSharedToken(t *testing.T) {
 	if res.Code != http.StatusServiceUnavailable {
 		t.Fatalf("got %d, want 503: %s", res.Code, res.Body)
 	}
+	// AND IT SAYS WHICH MISCONFIGURATION. The status is the same as an
+	// absent secret's, because the truth is the same — this route cannot
+	// check a delivery — but the fixes differ, and a body that said
+	// no_webhook_secret over a token that IS configured sends an operator
+	// looking for a value they can see.
+	var body map[string]string
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["reason"] != "weak_webhook_secret" {
+		t.Errorf("reason = %q, which does not tell a weak token from a missing one",
+			body["reason"])
+	}
 	// AND NOTHING WAS PUBLISHED. A 503 that still woke a seat would be
 	// the failure with extra steps.
 	if e.published.count() != 0 {

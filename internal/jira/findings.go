@@ -72,8 +72,10 @@ func (r *Result) Findings() []integration.Finding {
 	}
 
 	for _, project := range r.Projects {
-		switch {
-		case !project.Exists:
+		// ONE CASE, so an `if`. It was a switch over three arms until a
+		// project read that failed stopped being a finding at all and
+		// became the fault it is — see checkProjects.
+		if !project.Exists {
 			// BOTH HALVES OF THE 404, because Jira answers the same
 			// status for a project that is not there and for one this
 			// credential may not browse — the conflation this tree's

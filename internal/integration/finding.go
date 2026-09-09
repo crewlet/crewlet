@@ -73,6 +73,23 @@ const (
 	// inherited from a parent group or a second role. Agents keep working,
 	// so the integration is READY with a note, not blocked.
 	FindingGrantExcess FindingKind = "grant_excess"
+
+	// FindingRegistrationOrphaned is something this engine registered at
+	// the third-party app that it no longer manages, because the name it is
+	// held under changed.
+	//
+	// ALSO ADVISORY, and for a sharper reason than the excess grant's: the
+	// orphan still WORKS. A Datadog webhook definition is addressed by name,
+	// and that name is also the handle a monitor writes (`@webhook-crewlet`),
+	// so renaming `webhook_name` leaves the previous definition delivering to
+	// this same engine with this same token — correctly, for every monitor
+	// still naming it. Deleting it would silence exactly those monitors,
+	// which is why the engine does not, and Datadog serves no listing, so
+	// nothing can ever find it again.
+	//
+	// So it is REPORTED. Somebody has to repoint the monitors and remove the
+	// old definition, and this is the only place they can learn it exists.
+	FindingRegistrationOrphaned FindingKind = "registration_orphaned"
 )
 
 // severity ranks the kinds from "nothing works" to "everything works, with a
@@ -141,10 +158,15 @@ func (f FindingKind) severity() int {
 	case FindingGrantShort:
 		return 9
 	case FindingGrantExcess:
-		// LAST among the kinds this build knows, and the reason is the
-		// whole comment above: its verdict is ready, so anything it
-		// outranks is a problem it hides.
+		// The FIRST of the two advisories, and the reason is the whole
+		// comment above: its verdict is ready, so anything it outranks is
+		// a problem it hides.
 		return 11
+	case FindingRegistrationOrphaned:
+		// LAST, beneath the other advisory. Both report ready; this one
+		// is the more purely informational of the two, because what it
+		// names is still working.
+		return 12
 	default:
 		// A kind this build does not know, ranked ABOVE the advisory and
 		// below every real problem. A peer on a newer build can write one
@@ -186,6 +208,11 @@ func (f FindingKind) Verdict() (Phase, Actor) {
 		return PhaseDegraded, ActorAdmin
 	case FindingGrantExcess:
 		// READY, not degraded. It is a note on a working integration.
+		return PhaseReady, ActorAdmin
+	case FindingRegistrationOrphaned:
+		// READY too, and owed by the ADMIN: what has to happen is at the
+		// third-party app — repoint the monitors, then remove the
+		// definition nothing points at any more.
 		return PhaseReady, ActorAdmin
 	default:
 		// A kind this build does not know is reported as degraded rather
@@ -232,6 +259,8 @@ func (f FindingKind) sentence(subject string) string {
 		return "an agent holds less access than its role asks for" + about
 	case FindingGrantExcess:
 		return "an agent holds more access than its role asks for" + about
+	case FindingRegistrationOrphaned:
+		return "this engine registered something that it no longer manages" + about
 	default:
 		return "this integration reported " + string(f) + about
 	}
@@ -257,19 +286,6 @@ type Finding struct {
 	ActionURL string `json:"action_url,omitempty"`
 }
 
-// Classify folds a pass's findings into the one report an operator reads.
-//
-// The worst finding wins, by [FindingKind.severity]. Ties keep the order the
-// third-party app emitted them in, so one that walks its seats in a stable
-// order reports a stable seat.
-//
-// When several findings share the winning kind, the count is named. "an agent
-// needs maintainer on api-gateway" and "an agent needs maintainer on
-// api-gateway (and 4 more)" send an operator to two very different jobs, and
-// the difference is invisible from a single seat's sentence.
-//
-// No findings is [Ready]. That is the whole of the success path: a third-party app
-// that converged reports nothing, rather than having to remember to say so.
 // worstOf is the finding [Classify] promotes, and where it sits.
 //
 // One implementation because two callers need the same answer: Classify makes
@@ -313,6 +329,19 @@ func Promote(findings []Finding) []Finding {
 	return append(out, findings[at+1:]...)
 }
 
+// Classify folds a pass's findings into the one report an operator reads.
+//
+// The worst finding wins, by [FindingKind.severity]. Ties keep the order the
+// third-party app emitted them in, so one that walks its seats in a stable
+// order reports a stable seat.
+//
+// When several findings share the winning kind, the count is named. "an agent
+// needs maintainer on api-gateway" and "an agent needs maintainer on
+// api-gateway (and 4 more)" send an operator to two very different jobs, and
+// the difference is invisible from a single seat's sentence.
+//
+// No findings is [Ready]. That is the whole of the success path: a third-party app
+// that converged reports nothing, rather than having to remember to say so.
 func Classify(findings []Finding) Report {
 	if len(findings) == 0 {
 		return Ready()

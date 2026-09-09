@@ -941,3 +941,111 @@ func TestATickWithNothingDueClaimsOnce(t *testing.T) {
 		t.Errorf("a tick with nothing due claimed the duty %d times, want 1", claims)
 	}
 }
+
+// A RENAMED REGISTRATION IS REPORTED, NOT DELETED.
+//
+// A Datadog webhook definition is addressed by NAME, that name is a live
+// config field, and Datadog serves no listing — a GET on the collection
+// answers 405. So renaming it creates a second definition and abandons the
+// first, which goes on delivering correctly to this same engine for every
+// monitor still naming it, and nothing can ever find it again. Deleting it
+// would silence exactly those monitors; saying nothing left the operator with
+// two definitions and no way to learn it.
+func TestARenamedRegistrationIsReportedAsAnOrphan(t *testing.T) {
+	t.Parallel()
+	state := State{Registration: "crewlet"}
+
+	got := StampRegistration(&state, "crewlet-prod")
+	if len(got) != 1 {
+		t.Fatalf("a rename produced %d finding(s), want one", len(got))
+	}
+	if got[0].Kind != FindingRegistrationOrphaned {
+		t.Errorf("kind = %q, want %q", got[0].Kind,
+			FindingRegistrationOrphaned)
+	}
+	// BOTH NAMES, because the operator needs to know which one to repoint
+	// monitors at and which one to delete.
+	if !strings.Contains(got[0].Detail, "crewlet-prod") ||
+		!strings.Contains(got[0].Detail, `"crewlet"`) {
+		t.Errorf("the finding names only one of the two definitions: %q", got[0].Detail)
+	}
+	// AND IT IS AN ADVISORY. Nothing is broken — both definitions deliver —
+	// so a company carrying one is READY with a note rather than degraded.
+	if report := Classify(got); report.Phase != PhaseReady {
+		t.Errorf("an orphan classified %s; nothing about it is broken", report.Phase)
+	}
+	if state.Registration != "crewlet-prod" {
+		t.Errorf("the recorded name is %q, so the next pass reports the rename "+
+			"again for ever", state.Registration)
+	}
+}
+
+// AND AN UNCHANGED NAME SAYS NOTHING, or every pass would report a rename.
+func TestAnUnchangedRegistrationIsSilent(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name              string
+		previous, current string
+	}{
+		{"unchanged", "crewlet", "crewlet"},
+		// A FIRST PASS is not a rename: there is nothing recorded to have
+		// been left behind.
+		{"first pass", "", "crewlet"},
+		// AND A SURFACE WITH NO SUCH NAME never reports one. Every kind
+		// but Datadog is in this case, so the alternative would be one
+		// spurious advisory per surface the moment a row is written.
+		{"no name at this surface", "crewlet", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := State{Registration: tc.previous}
+			if got := StampRegistration(&state, tc.current); len(got) != 0 {
+				t.Errorf("reported %+v", got)
+			}
+		})
+	}
+}
+
+// THE ORPHAN REACHES THE REPORT, which is the half a unit test of
+// StampRegistration cannot see.
+//
+// It did not: the stamp ran AFTER Observe had already folded the findings, so
+// the appended finding went into a variable nothing read again. Nothing about
+// the row looked wrong — the name was recorded correctly and the rename was
+// simply never reported.
+func TestARenamedRegistrationReachesTheStatusRow(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	store := newStore()
+	store.rows[KindDatadog] = State{Kind: KindDatadog, Registration: "crewlet"}
+
+	w, err := New(Options{
+		Registrations: []Registration{{Reconciler: &fakeReconciler{kind: KindDatadog}}},
+		Store:         store,
+		Now:           func() time.Time { return now },
+		Spread:        func(d time.Duration) time.Duration { return d },
+		Registration:  func(Kind) string { return "crewlet-prod" },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	w.Tick(context.Background())
+
+	row := store.get(t, KindDatadog)
+	if row.Registration != "crewlet-prod" {
+		t.Errorf("the recorded name is %q, so the rename is reported again "+
+			"on every tick for ever", row.Registration)
+	}
+	var found bool
+	for _, f := range row.Findings {
+		if f.Kind == FindingRegistrationOrphaned {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the rename reached no finding on the row: %+v", row.Findings)
+	}
+	// AND IT DOES NOT BREAK THE SURFACE. Both definitions deliver, so a
+	// company carrying an orphan is connected with a note.
+	if row.Report.Phase != PhaseReady {
+		t.Errorf("phase = %s; an orphan is an advisory, not a fault", row.Report.Phase)
+	}
+}

@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -8,6 +9,14 @@ import (
 // knownKinds is every finding kind this build defines, in no particular
 // order. Listed rather than derived, so adding a kind without deciding where
 // it ranks fails a test rather than landing on the unknown-kind default.
+// advisories are the kinds whose verdict is READY: a note on a working
+// integration rather than something blocking it. They are listed rather than
+// derived so a kind added without deciding whether it blocks fails a test.
+var advisories = []FindingKind{FindingGrantExcess, FindingRegistrationOrphaned}
+
+// isAdvisory reports a kind from the list above.
+func isAdvisory(kind FindingKind) bool { return slices.Contains(advisories, kind) }
+
 var knownKinds = []FindingKind{
 	FindingCredentialMissing,
 	FindingCredentialRejected,
@@ -20,6 +29,7 @@ var knownKinds = []FindingKind{
 	FindingUnknownTier,
 	FindingGrantShort,
 	FindingGrantExcess,
+	FindingRegistrationOrphaned,
 }
 
 // A pass that found nothing is ready. This is the whole success path: a
@@ -45,29 +55,33 @@ func TestClassifyNoFindingsIsReady(t *testing.T) {
 // Paired against every other kind, in both slice orders, the advisory must
 // never win.
 func TestAdvisoryNeverHidesAProblem(t *testing.T) {
-	for _, other := range knownKinds {
-		if other == FindingGrantExcess {
-			continue
-		}
-		excess := Finding{Kind: FindingGrantExcess, Subject: "ceo"}
-		problem := Finding{Kind: other, Subject: "ceo"}
-
-		for _, order := range []struct {
-			name string
-			in   []Finding
-		}{
-			{"advisory first", []Finding{excess, problem}},
-			{"advisory last", []Finding{problem, excess}},
-		} {
-			got := Classify(order.in)
-			if got.Phase == PhaseReady {
-				t.Errorf("%s with %s: classified ready, so the %s finding "+
-					"is invisible to an operator", order.name, other, other)
+	for _, advisory := range advisories {
+		for _, other := range knownKinds {
+			if isAdvisory(other) {
+				continue
 			}
-			wantPhase, wantActor := other.Verdict()
-			if got.Phase != wantPhase || got.Actor != wantActor {
-				t.Errorf("%s with %s: got %s/%s, want %s/%s",
-					order.name, other, got.Phase, got.Actor, wantPhase, wantActor)
+			note := Finding{Kind: advisory, Subject: "ceo"}
+			problem := Finding{Kind: other, Subject: "ceo"}
+
+			for _, order := range []struct {
+				name string
+				in   []Finding
+			}{
+				{"advisory first", []Finding{note, problem}},
+				{"advisory last", []Finding{problem, note}},
+			} {
+				got := Classify(order.in)
+				if got.Phase == PhaseReady {
+					t.Errorf("%s (%s) with %s: classified ready, so the %s "+
+						"finding is invisible to an operator",
+						order.name, advisory, other, other)
+				}
+				wantPhase, wantActor := other.Verdict()
+				if got.Phase != wantPhase || got.Actor != wantActor {
+					t.Errorf("%s (%s) with %s: got %s/%s, want %s/%s",
+						order.name, advisory, other, got.Phase, got.Actor,
+						wantPhase, wantActor)
+				}
 			}
 		}
 	}
@@ -80,13 +94,15 @@ func TestAdvisoryNeverHidesAProblem(t *testing.T) {
 func TestUnknownKindOutranksOnlyTheAdvisory(t *testing.T) {
 	unknown := Finding{Kind: FindingKind("something_a_newer_build_found")}
 
-	got := Classify([]Finding{{Kind: FindingGrantExcess}, unknown})
-	if got.Phase == PhaseReady {
-		t.Fatalf("an unknown kind beside the advisory classified ready (%+v)", got)
+	for _, advisory := range advisories {
+		got := Classify([]Finding{{Kind: advisory}, unknown})
+		if got.Phase == PhaseReady {
+			t.Fatalf("an unknown kind beside %s classified ready (%+v)", advisory, got)
+		}
 	}
 
 	for _, other := range knownKinds {
-		if other == FindingGrantExcess {
+		if isAdvisory(other) {
 			continue
 		}
 		got := Classify([]Finding{unknown, {Kind: other}})
@@ -110,15 +126,20 @@ func TestSeverityIsAStrictOrder(t *testing.T) {
 		}
 		seen[rank] = kind
 	}
-	// The advisory is last, which is the property every other test here
-	// depends on.
+	// The advisories are last, which is the property every other test here
+	// depends on: a kind whose verdict is ready must not outrank one that
+	// blocks, or it hides it.
+	worstAdvisory := advisories[0].severity()
+	for _, advisory := range advisories {
+		worstAdvisory = min(worstAdvisory, advisory.severity())
+	}
 	for _, kind := range knownKinds {
-		if kind == FindingGrantExcess {
+		if isAdvisory(kind) {
 			continue
 		}
-		if kind.severity() >= FindingGrantExcess.severity() {
-			t.Errorf("%s ranks at or below the advisory (%d >= %d)",
-				kind, kind.severity(), FindingGrantExcess.severity())
+		if kind.severity() >= worstAdvisory {
+			t.Errorf("%s ranks at or below the advisories (%d >= %d)",
+				kind, kind.severity(), worstAdvisory)
 		}
 	}
 }
@@ -247,13 +268,24 @@ func TestOutcomeTurnsOnTheActorNotThePhase(t *testing.T) {
 	}
 }
 
-// The advisory is the one kind whose verdict is ready, and the whole ordering
-// rests on that staying true.
-func TestTheAdvisoryIsTheOnlyReadyVerdict(t *testing.T) {
+// THE ADVISORIES ARE THE ONLY READY VERDICTS, and the whole ordering rests on
+// that staying true: a kind whose verdict is ready hides every finding it
+// outranks, so one that is not on that list must never report ready.
+//
+// The list is checked in both directions. A kind that reports ready and is
+// not an advisory is a hole; an advisory that does NOT report ready is a note
+// ranked below every real problem while claiming to be one, which would make
+// it invisible instead.
+func TestTheAdvisoriesAreTheOnlyReadyVerdicts(t *testing.T) {
 	for _, kind := range knownKinds {
 		phase, _ := kind.Verdict()
-		if phase == PhaseReady && kind != FindingGrantExcess {
+		switch {
+		case phase == PhaseReady && !isAdvisory(kind):
 			t.Errorf("%s reports ready, so it hides every finding it outranks", kind)
+		case phase != PhaseReady && isAdvisory(kind):
+			t.Errorf("%s is listed as an advisory and reports %s, so it is "+
+				"ranked below every real problem while claiming to be one",
+				kind, phase)
 		}
 	}
 }
@@ -297,6 +329,7 @@ func TestTheSeverityOrderIsPinned(t *testing.T) {
 		FindingUnknownTier,
 		FindingGrantShort,
 		FindingGrantExcess,
+		FindingRegistrationOrphaned,
 	}
 	if len(want) != len(knownKinds) {
 		t.Fatalf("this list has %d kinds and the package defines %d: a kind was "+
@@ -314,7 +347,7 @@ func TestTheSeverityOrderIsPinned(t *testing.T) {
 	// report a healthy company as broken; ranked below the advisory, one
 	// spare permission would hide a finding this binary cannot read.
 	unknown := FindingKind("a-kind-from-a-newer-build").severity()
-	if !(FindingGrantShort.severity() < unknown && unknown < FindingGrantExcess.severity()) {
+	if unknown <= FindingGrantShort.severity() || unknown >= FindingGrantExcess.severity() {
 		t.Errorf("an unknown kind ranks %d, want between %s (%d) and %s (%d)",
 			unknown, FindingGrantShort, FindingGrantShort.severity(),
 			FindingGrantExcess, FindingGrantExcess.severity())
