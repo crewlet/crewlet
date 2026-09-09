@@ -10,7 +10,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/opsmcp"
-	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -132,14 +131,9 @@ func TestTheOperatorSurfaceIsNeverAnonymous(t *testing.T) {
 // implementation, which is what this whole seam exists to avoid.
 func TestTheOperatorCatalogueIsDrawnFromTheSeatOne(t *testing.T) {
 	t.Parallel()
-	docs := memory.NewFleet()
-	wiki, err := pages.NewStore(pages.Options{Documents: docs})
-	if err != nil {
-		t.Fatalf("pages store: %v", err)
-	}
 	s := opsmcp.New(opsmcp.Options{
 		Work:  builtin.WorkDeps{Reader: stubWorkReader{}, Writer: stubWorkWriter, Actor: opsmcp.WorkActor},
-		Pages: builtin.PageDeps{Reader: stubPageReader{}, Writer: wiki, Actor: opsmcp.PageActor},
+		Pages: builtin.PageDeps{Reader: stubPageReader{}, Writer: stubPageWriter{}, Actor: opsmcp.PageActor},
 	})
 	if s == nil {
 		t.Fatal("a company on both native backends got no surface")
@@ -199,4 +193,28 @@ func (stubPageReader) List(context.Context, pages.Filter) ([]pages.Summary, erro
 
 func (stubPageReader) Get(context.Context, string) (pages.Detail, error) {
 	return pages.Detail{}, pages.ErrNotFound
+}
+
+// stubPageWriter is the knowledge base's write surface as this catalogue
+// check needs it: present, so the surface is built, and never called.
+type stubPageWriter struct{}
+
+func (stubPageWriter) Create(context.Context, pages.Actor, pages.NewPage) (pages.Written, error) {
+	return pages.Written{}, nil
+}
+
+func (stubPageWriter) SavePage(context.Context, pages.Actor, string, pages.Save) (pages.Written, error) {
+	return pages.Written{}, nil
+}
+
+func (stubPageWriter) Rename(context.Context, pages.Actor, string, string, bool) (pages.Written, error) {
+	return pages.Written{}, nil
+}
+
+func (stubPageWriter) Comment(context.Context, pages.Actor, string, pages.NewComment) (pages.Comment, pages.Written, error) {
+	return pages.Comment{}, pages.Written{}, nil
+}
+
+func (stubPageWriter) EditComment(context.Context, pages.Actor, string, string, string) (pages.Comment, pages.Written, error) {
+	return pages.Comment{}, pages.Written{}, nil
 }

@@ -476,7 +476,7 @@ func TestAFleetTakesAndOffersSnapshots(t *testing.T) {
 	// that does not name one of its own domains, so a snapshot missing a
 	// domain is one nobody can adopt — and it is indistinguishable from a
 	// healthy one until somebody needs it.
-	for _, want := range []string{"tracker", "vectors"} {
+	for _, want := range []string{"tracker", "vectors", "pages"} {
 		if _, named := manifest.Domains[want]; !named {
 			t.Errorf("the snapshot names %v and not %q — a recipient refuses "+
 				"an artefact that does not name every domain it registers",

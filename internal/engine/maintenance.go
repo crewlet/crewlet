@@ -8,7 +8,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/maintenance"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -83,10 +82,15 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 					NodeID: e.native.nodeID,
 				})...)
 			}
-			if e.native.pages != nil {
-				jobs = append(jobs, maintenance.KnowledgeJobs(
-					pages.NewSweeper(fleet, nil), pages.ChangeRetention)...)
-			}
+			// THE KNOWLEDGE BASE HAS NO SWEEP ANY MORE, and its
+			// absence is a consequence rather than an omission. Its
+			// three passes were a change retention, a revision prune
+			// and an orphan collector; the prune now RIDES EACH
+			// COMMIT as the record's own list of retired versions, the
+			// orphans cannot occur because a create is one
+			// transaction, and the history is a Replicated table an
+			// applier owns — so deleting a row here on one node's own
+			// authority is exactly what the identity claim forbids.
 		}
 	}
 

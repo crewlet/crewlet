@@ -9,7 +9,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/pages"
-	"github.com/crewlet/crewlet/internal/projection"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -76,17 +75,24 @@ func TestTheNativeQuestionsAreAbsentWithoutTheirReaders(t *testing.T) {
 	}
 }
 
-// A PROJECTION THAT HAS NOT CAUGHT UP SAYS SO. Flattening it to an empty list
+// A COPY THAT CANNOT ANSWER SAYS SO. Flattening a failure to an empty list
 // would tell a person the company has no work — an answer they act on, by
 // filing the duplicate or concluding the migration failed.
-func TestAnUnhydratedProjectionIsUnavailableRatherThanEmpty(t *testing.T) {
-	w := &stubWork{err: projection.ErrNotHydrated}
-	if _, err := askNative(t, queries.Sources{Work: w}, "work_items", nil); !errors.Is(err, queries.ErrUnavailable) {
-		t.Errorf("an unhydrated board answered %v, want unavailable", err)
+//
+// THE HYDRATION SENTINEL IS GONE with the projection that raised it: both
+// native backends are state-log domains now and both say how far behind they
+// are through the coverage on the answer itself, which is a POSITION rather
+// than a boolean. What still has to hold is that a read which FAILED is not
+// rendered as a read that found nothing.
+func TestAReadThatFailedIsNotRenderedAsEmpty(t *testing.T) {
+	sentinel := errors.New("the store could not be reached")
+	w := &stubWork{err: sentinel}
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_items", nil); !errors.Is(err, sentinel) {
+		t.Errorf("a failed board read answered %v, want the failure", err)
 	}
-	p := &stubPages{err: projection.ErrNotHydrated}
-	if _, err := askNative(t, queries.Sources{Pages: p}, "pages", nil); !errors.Is(err, queries.ErrUnavailable) {
-		t.Errorf("an unhydrated page listing answered %v, want unavailable", err)
+	p := &stubPages{err: sentinel}
+	if _, err := askNative(t, queries.Sources{Pages: p}, "pages", nil); !errors.Is(err, sentinel) {
+		t.Errorf("a failed page listing answered %v, want the failure", err)
 	}
 }
 

@@ -18,18 +18,19 @@ knowledge:
 
 | | `native` | `confluence` |
 |---|---|---|
-| Where pages live | the fleet's own [coordination store](coordination.md), projected onto each node | a Confluence site |
+| Where pages live | the fleet's own ordered log, applied into every node's database | a Confluence site |
 | How search works | keyword (BM25 over the node's own lexical index), semantic (two-stage 1-bit retrieval with an exact rerank), or `hybrid` — both, fused | CQL against the site's search API, live at query time |
 | Who it searches as | the engine — every seat reads every page, so there is no per-seat credential to be missing | **the agent's own user**, so Confluence enforces its page permissions natively |
-| Staleness | the index is built behind the projection; a node still indexing SAYS SO rather than answering empty | none — there is no local copy at all |
+| Staleness | the index is built behind the node's own applied rows; a node still indexing SAYS SO rather than answering empty | none — there is no local copy at all |
 | What it costs to set up | nothing | a site, a space, and a per-seat account |
 
 ### Native: an index, and what that means
 
-There is a local copy, and being honest about it is the whole design. Pages
-are projected onto each node and a lexical index is built behind that
-projection asynchronously — tokenising a large wiki takes minutes, and doing
-it inline would stop the node applying changes while it worked.
+There is a local copy, and being honest about it is the whole design. Every
+page change is one record on an ordered log, every node applies it into its own
+database, and a lexical index is built behind those rows asynchronously —
+tokenising a large wiki takes minutes, and doing it inline would put the whole
+index build inside the apply transaction that holds the node's only writer.
 
 So a search on a freshly joined node can be against an index that is still
 building, and that is **a different fact from an empty company**. Both the
@@ -210,7 +211,7 @@ An empty `backend` **derives** rather than defaulting blindly: a company that de
 
 ### Native backend — the engine's own pages
 
-`internal/pages` + `internal/projection`. Pages live as documents in the fleet's coordination store; each node projects them into its own database and builds a lexical index behind that projection. A search is BM25 over the index — term-frequency saturation and length normalisation, so a long runbook that mentions a word thirty times does not outrank the short page that is about it.
+`internal/pages` + `internal/search`. The knowledge base is a [state-log domain](../guides/replication.md): every change is one record on `CREWLET_PAGES_LOG`, a deterministic applier writes it into every node's replicated database, and a lexical index is built behind those rows. A search is BM25 over the index — term-frequency saturation and length normalisation, so a long runbook that mentions a word thirty times does not outrank the short page that is about it.
 
 Two properties differ from the vendor path and both are visible:
 

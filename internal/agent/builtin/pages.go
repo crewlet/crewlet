@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -45,6 +46,7 @@ type PageReader interface {
 type PageWriter interface {
 	Create(ctx context.Context, actor pages.Actor, in pages.NewPage) (pages.Written, error)
 	SavePage(ctx context.Context, actor pages.Actor, pageID string, save pages.Save) (pages.Written, error)
+	Rename(ctx context.Context, actor pages.Actor, pageID, title string, quiet bool) (pages.Written, error)
 	Comment(ctx context.Context, actor pages.Actor, pageID string, in pages.NewComment) (pages.Comment, pages.Written, error)
 	EditComment(ctx context.Context, actor pages.Actor, pageID, commentID, body string) (pages.Comment, pages.Written, error)
 }
@@ -77,19 +79,23 @@ type PageDeps struct {
 	// here — a page's SavePage takes the version it read, so a turn that
 	// writes and then re-reads through a projection that has not caught
 	// up gets a stale version and its next save is refused.
-	Await func(ctx context.Context, revision uint64) error
+	Await func(ctx context.Context, at statelog.Position) error
 }
 
-// settle waits for a write to reach this node's projection. Best effort; see
-// [WorkDeps.settle].
-func (d PageDeps) settle(ctx context.Context, revision uint64) {
-	if d.Await == nil || revision == 0 {
+// settle waits for a write to reach this node's own applied rows. Best effort;
+// see [WorkDeps.settle].
+//
+// IT TAKES A POSITION rather than a revision, which is what the log answers
+// with and what a bucket revision could never be: a place on a stream that
+// names its own stream, so nothing has to be told which family it belongs to.
+func (d PageDeps) settle(ctx context.Context, at statelog.Position) {
+	if d.Await == nil || at.Seq == 0 {
 		return
 	}
-	if err := d.Await(ctx, revision); err != nil {
-		log.WarnContext(ctx, "page_write_not_projected_yet",
-			"revision", revision, "error", err.Error(),
-			"detail", "the write landed on the fleet's record; this node's own "+
+	if err := d.Await(ctx, at); err != nil {
+		log.WarnContext(ctx, "page_write_not_applied_yet",
+			"at", at.String(), "error", err.Error(),
+			"detail", "the write landed on the fleet's log; this node's own "+
 				"copy has not caught up, so a read in this same turn may show "+
 				"the previous version")
 	}
@@ -344,7 +350,7 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 	if err != nil {
 		return failed(pageWriteFailure(WritePageTool, err)), nil
 	}
-	t.deps.settle(ctx, got.Revision)
+	t.deps.settle(ctx, got.Outcome.Position)
 	return jsonResult(map[string]any{
 		"id": got.Page.ID, "container": got.Page.Container,
 		"title": got.Page.Title, "version": got.Page.Version,
@@ -438,10 +444,6 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		body := argString(args, "body")
 		save.Body = &body
 	}
-	if _, ok := args["title"]; ok {
-		title := strings.TrimSpace(argString(args, "title"))
-		save.Title = &title
-	}
 	if _, ok := args["parent"]; ok {
 		parent := strings.TrimSpace(argString(args, "parent"))
 		save.ParentID = &parent
@@ -458,7 +460,23 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	if err != nil {
 		return failed(pageWriteFailure(SavePageTool, err)), nil
 	}
-	t.deps.settle(ctx, got.Revision)
+	// A RENAME IS ITS OWN WRITE, and it goes SECOND. An address change
+	// contends for the address and a content change contends for the page,
+	// so one record cannot arbitrate both — and doing the content first
+	// means a refused rename leaves the edit saved under the old name
+	// rather than the reverse, which is the half a person can act on.
+	if title, renaming := args["title"]; renaming {
+		want := strings.TrimSpace(fmt.Sprint(title))
+		renamed, err := t.deps.Writer.Rename(ctx, actor, detail.Page.ID, want, false)
+		if err != nil {
+			return failed(fmt.Sprintf("The edit was saved and the rename to %q "+
+				"was not: %s", clip(want),
+				pageWriteFailure(SavePageTool, err))), nil
+		}
+		got.Page = renamed.Page
+		got.Revision = renamed.Revision
+	}
+	t.deps.settle(ctx, got.Outcome.Position)
 	return jsonResult(map[string]any{
 		"id": got.Page.ID, "title": got.Page.Title,
 		"version": got.Page.Version, "revision": got.Revision,
@@ -548,7 +566,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		if err != nil {
 			return failed(pageWriteFailure(CommentOnPageTool, err)), nil
 		}
-		t.deps.settle(ctx, written.Revision)
+		t.deps.settle(ctx, written.Outcome.Position)
 		return jsonResult(map[string]any{
 			"comment_id": comment.ID, "page": detail.Page.Title,
 			"edited": true, "revision": written.Revision,
@@ -567,7 +585,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	if err != nil {
 		return failed(pageWriteFailure(CommentOnPageTool, err)), nil
 	}
-	t.deps.settle(ctx, written.Revision)
+	t.deps.settle(ctx, written.Outcome.Position)
 	return jsonResult(map[string]any{
 		"comment_id": comment.ID, "page": detail.Page.Title,
 		"mentioned": comment.Mentions, "revision": written.Revision,

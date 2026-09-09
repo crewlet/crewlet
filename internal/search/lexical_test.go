@@ -1,53 +1,67 @@
-package projection_test
+package search_test
 
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/crewlet/crewlet/internal/projection"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// page inserts a projected page row, which is the indexer's input.
+// page writes an applied page row, which is the indexer's input.
+//
+// THE REPLICATED ESTATE, because that is where a page lives now: the index is
+// this node's own and the sources are the fleet's, and the whole reason the
+// indexer walks rather than joins is that no read crosses between them.
 func page(t *testing.T, db *store.DB, id, container, title, body string, version int) {
 	t.Helper()
-	_, err := db.SQL().ExecContext(t.Context(), `
-		INSERT INTO pages (id, container, title, title_norm, body, status, version,
-		                   created_at, updated_at, revision, document)
-		VALUES (?, ?, ?, lower(?), ?, 'published', ?, 0, 0, ?, '{}')
+	_, err := db.Replicated().SQL().ExecContext(t.Context(), `
+		INSERT INTO pages_heads (id, container, parent_id, title, title_norm, body,
+		                         status, author, edit_version, created_at,
+		                         updated_at, version, scoped_through, document)
+		VALUES (?, ?, '', ?, lower(?), ?, 'published', '', 1, 0, 0, ?, 0, '{}')
 		ON CONFLICT (id) DO UPDATE SET
 			title = excluded.title, title_norm = excluded.title_norm,
 			body = excluded.body, version = excluded.version`,
-		id, container, title, title, body, version, version)
+		id, container, title, title, body, version)
 	if err != nil {
 		t.Fatalf("insert page %s: %v", id, err)
 	}
 }
 
-func indexAll(t *testing.T, x *projection.Indexer) {
+// indexAll drives the indexer to a fixed point.
+//
+// UNTIL IT FINDS NOTHING TWICE, not until [search.Indexer.Ready]. Ready is the
+// first-build gate — it counts pages the index has no row for at all — and is
+// deliberately blind to a row that is merely stale, so waiting on it would
+// return the instant an edit's page was represented by its PREVIOUS text.
+//
+// Twice, because the reconciliation walk wraps: one empty sweep can be the end
+// of a pass rather than the end of the work.
+func indexAll(t *testing.T, x *search.Indexer) {
 	t.Helper()
-	for range 50 {
-		ready, err := x.Ready(t.Context())
+	quiet := 0
+	for range 100 {
+		worked, err := x.Sweep(t.Context())
 		if err != nil {
-			t.Fatalf("ready: %v", err)
+			t.Fatalf("index sweep: %v", err)
 		}
-		if ready {
+		if worked {
+			quiet = 0
+			continue
+		}
+		if quiet++; quiet == 2 {
 			return
 		}
-		stale, err := x.Stale(t.Context(), projection.IndexBatch)
-		if err != nil {
-			t.Fatalf("stale: %v", err)
-		}
-		if err := x.Upsert(t.Context(), stale); err != nil {
-			t.Fatalf("upsert: %v", err)
-		}
 	}
-	t.Fatal("the index never caught up")
+	t.Fatal("the indexer never settled")
 }
 
-func titles(hits []projection.SearchHit) []string {
+func titles(hits []search.SearchHit) []string {
 	out := make([]string, len(hits))
 	for i, h := range hits {
 		out[i] = h.Title
@@ -62,7 +76,7 @@ func titles(hits []projection.SearchHit) []string {
 func TestTheShortAnswerBeatsTheLongRunbook(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := projection.NewIndexer(db)
+	x := search.NewIndexer(db)
 
 	page(t, db, "p.short", "ENG", "Rollback",
 		"To roll back a deploy, run the rollback command against the release.", 1)
@@ -71,7 +85,7 @@ func TestTheShortAnswerBeatsTheLongRunbook(t *testing.T) {
 			"Rollback is mentioned once here.", 1)
 	indexAll(t, x)
 
-	hits, err := x.Search(t.Context(), projection.SearchQuery{Text: "rollback"})
+	hits, err := x.Search(t.Context(), search.SearchQuery{Text: "rollback"})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
@@ -93,7 +107,7 @@ func TestTheShortAnswerBeatsTheLongRunbook(t *testing.T) {
 func TestATitleMatchOutranksABodyMention(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := projection.NewIndexer(db)
+	x := search.NewIndexer(db)
 
 	page(t, db, "p.named", "ENG", "Incident Response",
 		"This describes what the team does when something breaks.", 1)
@@ -101,7 +115,7 @@ func TestATitleMatchOutranksABodyMention(t *testing.T) {
 		"We talked about incident response and then about incident response again.", 1)
 	indexAll(t, x)
 
-	hits, err := x.Search(t.Context(), projection.SearchQuery{Text: "incident response"})
+	hits, err := x.Search(t.Context(), search.SearchQuery{Text: "incident response"})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
@@ -116,20 +130,20 @@ func TestATitleMatchOutranksABodyMention(t *testing.T) {
 func TestAnEditRemovesTheTermsItRemoved(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := projection.NewIndexer(db)
+	x := search.NewIndexer(db)
 
 	page(t, db, "p.edited", "ENG", "Deploy Notes", "we use kubernetes for this", 1)
 	indexAll(t, x)
-	if hits, _ := x.Search(t.Context(), projection.SearchQuery{Text: "kubernetes"}); len(hits) != 1 {
+	if hits, _ := x.Search(t.Context(), search.SearchQuery{Text: "kubernetes"}); len(hits) != 1 {
 		t.Fatalf("the term never indexed: %v", hits)
 	}
 
 	page(t, db, "p.edited", "ENG", "Deploy Notes", "we use nomad for this", 2)
 	indexAll(t, x)
-	if hits, _ := x.Search(t.Context(), projection.SearchQuery{Text: "kubernetes"}); len(hits) != 0 {
+	if hits, _ := x.Search(t.Context(), search.SearchQuery{Text: "kubernetes"}); len(hits) != 0 {
 		t.Errorf("the removed word still matches: %v", titles(hits))
 	}
-	if hits, _ := x.Search(t.Context(), projection.SearchQuery{Text: "nomad"}); len(hits) != 1 {
+	if hits, _ := x.Search(t.Context(), search.SearchQuery{Text: "nomad"}); len(hits) != 1 {
 		t.Errorf("the new word does not match: %v", titles(hits))
 	}
 }
@@ -141,21 +155,24 @@ func TestAnEditRemovesTheTermsItRemoved(t *testing.T) {
 func TestOnlyPublishedPagesAreIndexed(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := projection.NewIndexer(db)
+	x := search.NewIndexer(db)
 
 	page(t, db, "p.live", "ENG", "Live", "the migration plan is here", 1)
 	for id, status := range map[string]string{"p.draft": "draft", "p.gone": "trashed"} {
-		if _, err := db.SQL().ExecContext(t.Context(), `
-			INSERT INTO pages (id, container, title, title_norm, body, status, version,
-			                   created_at, updated_at, revision, document)
-			VALUES (?, 'ENG', 'Hidden', 'hidden', 'the migration plan is here', ?, 1, 0, 0, 1, '{}')`,
+		if _, err := db.Replicated().SQL().ExecContext(t.Context(), `
+			INSERT INTO pages_heads (id, container, parent_id, title, title_norm,
+			                         body, status, author, edit_version,
+			                         created_at, updated_at, version,
+			                         scoped_through, document)
+			VALUES (?, 'ENG', '', 'Hidden', 'hidden',
+			        'the migration plan is here', ?, '', 1, 0, 0, 1, 0, '{}')`,
 			id, status); err != nil {
 			t.Fatal(err)
 		}
 	}
 	indexAll(t, x)
 
-	hits, err := x.Search(t.Context(), projection.SearchQuery{Text: "migration plan"})
+	hits, err := x.Search(t.Context(), search.SearchQuery{Text: "migration plan"})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
@@ -165,17 +182,16 @@ func TestOnlyPublishedPagesAreIndexed(t *testing.T) {
 
 	// AND UNPUBLISHING REMOVES IT. A page a lead moved to draft must stop
 	// being findable, or the retraction did nothing.
-	if _, err := db.SQL().ExecContext(t.Context(),
-		`UPDATE pages SET status = 'draft' WHERE id = 'p.live'`); err != nil {
+	if _, err := db.Replicated().SQL().ExecContext(t.Context(),
+		`UPDATE pages_heads SET status = 'draft' WHERE id = 'p.live'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := x.Orphans(t.Context(), projection.IndexBatch); err != nil {
-		t.Fatal(err)
-	}
-	if err := x.Remove(t.Context(), "page", "p.live"); err != nil {
-		t.Fatal(err)
-	}
-	if hits, _ := x.Search(t.Context(), projection.SearchQuery{Text: "migration plan"}); len(hits) != 0 {
+	// THROUGH THE SWEEP, not by calling Remove directly: what has to hold
+	// is that the indexer NOTICES an unpublished page on its own, and a
+	// test that removed the row itself would pass with no orphan pass at
+	// all.
+	indexAll(t, x)
+	if hits, _ := x.Search(t.Context(), search.SearchQuery{Text: "migration plan"}); len(hits) != 0 {
 		t.Errorf("an unpublished page is still findable: %v", titles(hits))
 	}
 }
@@ -186,7 +202,7 @@ func TestOnlyPublishedPagesAreIndexed(t *testing.T) {
 func TestReadyDistinguishesABuildingIndexFromAnEmptyCompany(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := projection.NewIndexer(db)
+	x := search.NewIndexer(db)
 
 	// An empty company is READY: there is nothing to index, so a search
 	// answering empty is the truth.
@@ -213,7 +229,7 @@ func TestReadyDistinguishesABuildingIndexFromAnEmptyCompany(t *testing.T) {
 func TestTheIndexerCatchesUpOnItsOwn(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := projection.NewIndexer(db)
+	x := search.NewIndexer(db)
 	for i := range 45 { // more than one batch
 		page(t, db, fmt.Sprintf("p.%d", i), "ENG", fmt.Sprintf("Page %d", i),
 			"shared vocabulary across the whole company", i+1)
@@ -224,7 +240,7 @@ func TestTheIndexerCatchesUpOnItsOwn(t *testing.T) {
 
 	waitFor(t, func() bool { ready, _ := x.Ready(t.Context()); return ready },
 		"the indexer never caught up on its own")
-	hits, err := x.Search(t.Context(), projection.SearchQuery{Text: "vocabulary", Limit: 5})
+	hits, err := x.Search(t.Context(), search.SearchQuery{Text: "vocabulary", Limit: 5})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
@@ -240,7 +256,7 @@ func TestTheIndexerCatchesUpOnItsOwn(t *testing.T) {
 func TestAScopeNarrowsResultsWithoutChangingTheRanking(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := projection.NewIndexer(db)
+	x := search.NewIndexer(db)
 
 	page(t, db, "p.eng", "ENG", "Deploy", "the deploy pipeline runs here", 1)
 	page(t, db, "p.prod", "PROD", "Launch", "the deploy pipeline is announced here", 1)
@@ -250,14 +266,14 @@ func TestAScopeNarrowsResultsWithoutChangingTheRanking(t *testing.T) {
 	}
 	indexAll(t, x)
 
-	all, err := x.Search(t.Context(), projection.SearchQuery{Text: "deploy pipeline"})
+	all, err := x.Search(t.Context(), search.SearchQuery{Text: "deploy pipeline"})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
 	if len(all) != 2 {
 		t.Fatalf("unscoped search returned %v", titles(all))
 	}
-	scoped, err := x.Search(t.Context(), projection.SearchQuery{
+	scoped, err := x.Search(t.Context(), search.SearchQuery{
 		Text: "deploy pipeline", Containers: []string{"ENG"}})
 	if err != nil {
 		t.Fatalf("scoped search: %v", err)
@@ -283,19 +299,19 @@ func TestAScopeNarrowsResultsWithoutChangingTheRanking(t *testing.T) {
 func TestTheSameQueryRanksTheSameWay(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := projection.NewIndexer(db)
+	x := search.NewIndexer(db)
 	for i := range 12 {
 		page(t, db, fmt.Sprintf("p.%d", i), "ENG", "Tied",
 			"identical body for every one of these pages", 1)
 	}
 	indexAll(t, x)
 
-	first, err := x.Search(t.Context(), projection.SearchQuery{Text: "identical", Limit: 5})
+	first, err := x.Search(t.Context(), search.SearchQuery{Text: "identical", Limit: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for range 5 {
-		again, err := x.Search(t.Context(), projection.SearchQuery{Text: "identical", Limit: 5})
+		again, err := x.Search(t.Context(), search.SearchQuery{Text: "identical", Limit: 5})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -313,12 +329,12 @@ func TestTheSameQueryRanksTheSameWay(t *testing.T) {
 func TestAnEmptyQueryMatchesNothing(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := projection.NewIndexer(db)
+	x := search.NewIndexer(db)
 	page(t, db, "p.any", "ENG", "Anything", "some words", 1)
 	indexAll(t, x)
 
 	for _, text := range []string{"", "   ", "- , !", "a"} {
-		hits, err := x.Search(t.Context(), projection.SearchQuery{Text: text})
+		hits, err := x.Search(t.Context(), search.SearchQuery{Text: text})
 		if err != nil {
 			t.Errorf("query %q errored: %v", text, err)
 		}
@@ -328,10 +344,43 @@ func TestAnEmptyQueryMatchesNothing(t *testing.T) {
 	}
 }
 
-func ids(hits []projection.SearchHit) []string {
+func ids(hits []search.SearchHit) []string {
 	out := make([]string, len(hits))
 	for i, h := range hits {
 		out[i] = h.ID
 	}
 	return out
+}
+
+// openStore brings up one node's estates for the index tests.
+//
+// BOTH OF THEM, which is the whole shape of the indexer now: the sources it
+// reads are replicated and the index it writes is this node's own, and a test
+// over one estate would not exercise the boundary at all.
+func openStore(t *testing.T) *store.DB {
+	t.Helper()
+	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
+		store.Options{})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close the store: %v", err)
+		}
+	})
+	return db
+}
+
+// waitFor polls until want holds, or fails saying what it was waiting for.
+func waitFor(t *testing.T, want func() bool, why string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if want() {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatal(why)
 }

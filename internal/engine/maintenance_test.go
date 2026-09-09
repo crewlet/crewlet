@@ -7,7 +7,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/maintenance"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/schedule"
 )
 
@@ -57,17 +56,15 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// naming it was the only place that showed.
 		"counterparty_profiles",
 		"events",
-		// The NATIVE backends' own records, and the only entries here
-		// that sweep something the FLEET shares rather than this node's
-		// store. They earn a place for the reason every other one does:
-		// a change key is written on every edit and a title claim
-		// outlives the crash that left it, and the coordination store's
-		// usual answer — a bucket's own age — cannot express either,
-		// because items, comments, changes and claims live in one
-		// family and only some of them age out.
-		"page_changes",
-		"page_orphans",
-		"page_revisions",
+		// NEITHER NATIVE BACKEND SWEEPS ANY MORE, and the absence of
+		// their entries is the point. The knowledge base had three —
+		// a change retention, a revision prune and an orphan collector
+		// — and adopting the log removed all three: the prune RIDES
+		// EACH COMMIT as the record's own list of retired versions, the
+		// orphans cannot occur because a create is one transaction, and
+		// the history is a Replicated table an applier owns, so a
+		// delete here on one node's own authority is exactly what the
+		// identity claim forbids.
 		"scheduled_runs",
 		// The TRACKER'S OWN JOBS, and they are a different kind of
 		// thing from every entry above: nothing here deletes anything.
@@ -104,15 +101,12 @@ func TestEveryRetentionOutlastsTheSweepInterval(t *testing.T) {
 		"a2a_channels_idle":     maintenance.ChannelIdleTimeout,
 		"chat_thread_follows":   maintenance.FollowRetention,
 		"counterparty_profiles": maintenance.CounterpartyRetention,
-		// The knowledge base's change horizons. Obviously past the tick
-		// today; here so that a later reader shortening one — the
-		// tempting edit, since these are the largest key sets a company
-		// holds — has to reckon with the same rule as every other. The
-		// TRACKER has no entry any more: its records are a log, trimmed
-		// by the retention gate rather than swept, so there is no
-		// horizon here to outlast anything.
-		"page_changes": pages.ChangeRetention,
-		"page_orphans": pages.ClaimGrace,
+		// NEITHER NATIVE BACKEND HAS AN ENTRY ANY MORE, and the absence
+		// is the point rather than an omission. Both are state-log
+		// domains: their records are a log the retention gate trims, and
+		// their durable rows are written by an applier — so there is no
+		// per-node sweep to give a horizon to, and a delete on one
+		// node's own authority is what the identity claim forbids.
 	} {
 		if horizon <= maintenance.Interval {
 			t.Errorf("%s retention (%v) is not longer than the %v tick",

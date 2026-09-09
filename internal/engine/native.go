@@ -11,11 +11,10 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
-	"github.com/crewlet/crewlet/internal/projection"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -68,14 +67,11 @@ type native struct {
 	// an empty one.
 	log *stateLog
 
-	// wiki is the pages projector, which is still a coordination family.
 	// It adopts the state log in its own step; until then this node runs
 	// one projector and one log side by side, and that is visible here
 	// rather than hidden behind a common name.
-	wiki *projection.Projector
-
 	// indexer keeps the lexical search index behind the page projection.
-	indexer *projection.Indexer
+	indexer *search.Indexer
 
 	// writer is the tracker's write authority and pages the wiki's.
 	writer *tracker.Writer
@@ -145,16 +141,23 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		skillNudge: make(chan struct{}, 1),
 	}
 
+	// THE LOG COMES UP BEFORE ANYTHING READS IT, and its own context
+	// outlives this call: an apply loop started under the caller's context
+	// is one stopNative can never end.
+	//
+	// ONCE FOR THE NODE, not once per backend. The register is the node's
+	// and every domain in it runs or none does — a node running half its
+	// register serves rows derived from one log while another's records
+	// pile up unapplied, and nothing above it can tell that from a node
+	// that is merely behind.
+	sl, err := e.startStateLog(ctx, boot, nodeID, c.Epoch())
+	if err != nil {
+		cancel()
+		return err
+	}
+	n.log = sl
+
 	if runTracker {
-		// THE LOG COMES UP BEFORE ANYTHING READS IT, and its own
-		// context outlives this call: an apply loop started under the
-		// caller's context is one stopNative can never end.
-		sl, err := e.startStateLog(ctx, boot, nodeID, c.Epoch())
-		if err != nil {
-			cancel()
-			return err
-		}
-		n.log = sl
 		running := sl.Domain(tracker.Domain{}.Name())
 		writer, err := tracker.NewWriter(tracker.WriterDeps{
 			Publisher: running.publisher,
@@ -190,31 +193,27 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		n.trackerReader = tracker.NewReader(e.backends.Store)
 	}
 	if wiki {
-		p, err := projection.New(projection.Options{
-			Documents: e.backends.Fleet, DB: e.backends.Store,
-			// The registry re-reads its container when a skill page
-			// moves. Natively there is no page webhook to hang that
-			// off — the change feed deliberately drops those changes
-			// — so the APPLY is what notices; see
-			// [pages.NewBucketApplier].
-			Applier: pages.NewBucketApplier(skillDetector{}, e.nudgeSkills),
-		})
-		if err != nil {
+		running := sl.Domain(pages.Domain{}.Name())
+		if running == nil {
 			cancel()
-			return fmt.Errorf("engine: pages projection: %w", err)
+			return fmt.Errorf("engine: this node runs no pages domain, so the " +
+				"knowledge base has nowhere to write — the domain is in the " +
+				"register and its stream failed to come up")
 		}
-		n.wiki = p
-		if n.pages, err = pages.NewStore(pages.Options{Documents: e.backends.Fleet}); err != nil {
+		var err error
+		if n.pages, err = pages.NewStore(pages.Options{
+			Publisher: running.publisher, DB: e.backends.Store,
+		}); err != nil {
 			cancel()
 			return fmt.Errorf("engine: pages store: %w", err)
 		}
 		if n.pageReader, err = pages.NewReader(pages.ReaderOptions{
-			DB: e.backends.Store, Hydrated: p.Hydrated,
+			DB: e.backends.Store, Committed: running.runner.Committed,
 		}); err != nil {
 			cancel()
 			return fmt.Errorf("engine: pages reader: %w", err)
 		}
-		n.indexer = projection.NewIndexer(e.backends.Store)
+		n.indexer = search.NewIndexer(e.backends.Store)
 		// LIVE off the epoch, not off the company this node booted
 		// with: `knowledge.skills_container` is Tier B, and this
 		// searcher is built once per node while an apply can move the
@@ -224,21 +223,10 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		})
 	}
 
-	for _, p := range []*projection.Projector{n.wiki} {
-		if p == nil {
-			continue
-		}
-		n.done.Add(1)
-		go func() {
-			defer n.done.Done()
-			if err := p.Run(runCtx); err != nil {
-				log.ErrorContext(runCtx, "projection_stopped", "family", string(p.Family()),
-					"error", err.Error(),
-					"detail", "this node stops claiming seats for that backend; "+
-						"its projection is going stale")
-			}
-		}()
-	}
+	// NO PROJECTOR LOOP HERE ANY MORE. Both native backends are state-log
+	// domains, and their apply loops are the state log's own — started
+	// with the register above, stopped with it, and reporting their
+	// position rather than a hydration flag.
 	if n.indexer != nil {
 		n.done.Add(1)
 		go func() {
@@ -288,9 +276,6 @@ func (e *Engine) stopNative() {
 func (e *Engine) NativeHydrated() bool {
 	if e.native == nil {
 		return true
-	}
-	if e.native.wiki != nil && !e.native.wiki.Hydrated() {
-		return false
 	}
 	// STRICT, because this is seat admission rather than a read: a node
 	// that is merely inside the trim floor still serves rows that are
@@ -356,19 +341,11 @@ func (e *Engine) NativeStatus(ctx context.Context) []ReplicationStatus {
 	if e.native == nil {
 		return nil
 	}
-	var out []ReplicationStatus
-	if e.native.wiki != nil {
-		got := e.native.wiki.Status()
-		row := ReplicationStatus{
-			Name: string(got.Family), Kind: "projection", Ready: got.Hydrated,
-		}
-		if !row.Ready {
-			row.Detail = fmt.Sprintf("hydrating: %d change(s) buffered at "+
-				"revision %d", got.Pending, got.Revision)
-		}
-		out = append(out, row)
-	}
-	out = append(out, e.native.log.Status(ctx)...)
+	// EVERY ROW IS A DOMAIN'S NOW. The wiki's projection row went with the
+	// projector: a row that could only say hydrated or not has been
+	// replaced by a position on a log, which is the same question answered
+	// with a distance.
+	out := e.native.log.Status(ctx)
 	return out
 }
 
@@ -412,21 +389,6 @@ func (e *Engine) NativeSearcher() *pages.Searcher {
 	return e.native.searcher
 }
 
-// WaitApplied blocks until this node has applied a family's revision.
-//
-// The read-your-writes primitive a REST write and a tool call use before they
-// answer. A caller with no projector for that family returns at once, which
-// is correct: there is nothing to wait for.
-func (e *Engine) WaitApplied(ctx context.Context, family coord.Family, revision uint64) error {
-	if e.native == nil || revision == 0 {
-		return nil
-	}
-	if p := e.native.wiki; p != nil && p.Family() == family {
-		return p.WaitApplied(ctx, revision)
-	}
-	return nil
-}
-
 // WaitCommitted blocks until this node's tracker applier has consumed through
 // a position.
 //
@@ -438,7 +400,11 @@ func (e *Engine) WaitCommitted(ctx context.Context, at statelog.Position) error 
 	if e.native == nil || e.native.log == nil || at.Seq == 0 {
 		return nil
 	}
-	running := e.native.log.Domain(tracker.Domain{}.Name())
+	// THE POSITION NAMES ITS OWN STREAM, so this resolves the domain from
+	// it rather than taking one. That is what a bucket revision could never
+	// do — it was a number on a family, and the caller had to say which —
+	// and it is why both native backends now settle through one primitive.
+	running := e.native.log.Domain(e.native.log.domainOf(at.Stream))
 	if running == nil {
 		return nil
 	}
@@ -450,32 +416,18 @@ func (e *Engine) WaitCommitted(ctx context.Context, at statelog.Position) error 
 // A FLEET-WIDE GROUP rather than a duty: every node pulls, so a change is
 // handled by whichever gets there first and a lease flap on one node does not
 // stall the company's notifications. Started here rather than per epoch,
-// because the feed follows a family and a family does not change when a
-// company revision does.
+// because a feed follows a DOMAIN and a domain does not change when a company
+// revision does.
 func (e *Engine) startNativeFeeds(ctx context.Context) {
-	if e.native == nil {
-		return
-	}
-	feeder, ok := e.backends.Fleet.(coord.Feeder)
-	if !ok {
-		// A coordination backend with no feeds. Every native write still
-		// lands and every board still reads; nothing is woken by one,
-		// which is a degradation worth saying out loud.
-		log.WarnContext(ctx, "native_feeds_unavailable",
-			"detail", "this coordination backend serves no change feeds, so a "+
-				"native write reaches the record but wakes nobody")
+	if e.native == nil || e.native.log == nil {
 		return
 	}
 
-	// THE FAMILY AND THE KEY CLASS ARE NAMED HERE, by the package that
-	// wires estates to consumers. A translator says what it can read and a
-	// feed says how to run a durable consumer; which bucket the records are
-	// in is neither one's business, and it is the piece a log domain
-	// replaces outright.
-	//
-	// The class is the CHANGE class in both cases, never the head: a bucket
-	// keeps one revision per key, so rewriting a key terminates an un-acked
-	// message with nothing anywhere saying a wake was lost.
+	// EVERY SOURCE IS A LOG NOW, and the coordination Feeder this function
+	// used to require is gone with the last bucket family. A translator
+	// says what it can read and a feed says how to run a durable consumer
+	// over one domain's own stream; which estate the records are in was
+	// the piece the domains replaced outright.
 	type source struct {
 		translator changefeed.Translator
 		opener     changefeed.Opener
@@ -498,11 +450,21 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 			})
 		}
 	}
-	if e.native.pages != nil {
-		sources = append(sources, source{
-			translator: pages.NewTranslator(e.skillsContainer),
-			opener:     changefeed.DocumentSource(feeder, coord.FamilyPages, pages.ClassChange),
-		})
+	if running := e.native.log.Domain(pages.Domain{}.Name()); running != nil {
+		// THE LOG IS THE SOURCE HERE TOO. A bucket feed needed a family
+		// and a key class; a log delivery has neither, and its own
+		// fleet-wide group over the same stream the applier reads is
+		// what derives a wake from a committed record.
+		feed, err := pagesFeedSource(running)
+		if err != nil {
+			log.ErrorContext(ctx, "changefeed_unavailable",
+				"source", pages.Source, "error", err.Error())
+		} else {
+			sources = append(sources, source{
+				translator: pages.NewTranslator(e.skillsContainer),
+				opener:     feed,
+			})
+		}
 	}
 	for _, src := range sources {
 		translator := src.translator
@@ -915,9 +877,7 @@ func (e *Engine) pageDeps(c *Company) builtin.PageDeps {
 		// and refused by name at the call rather than silently landing
 		// somewhere every search excludes.
 		Reserved: reservedContainers(c.Config),
-		Await: func(ctx context.Context, revision uint64) error {
-			return e.WaitApplied(ctx, coord.FamilyPages, revision)
-		},
+		Await:    e.WaitCommitted,
 	}
 }
 
@@ -1064,12 +1024,12 @@ func (e *Engine) nudgeSkills() {
 //
 // # And it waits for hydration first
 //
-// A walk over a half-projected container is a PARTIAL set, and
-// [Engine.SyncSkills] replaces wholesale — so reading early would silently
+// A walk over a container this node has not applied through is a PARTIAL set,
+// and [Engine.SyncSkills] replaces wholesale — so reading early would silently
 // delete every skill the walk did not reach, and the next read is whenever
 // somebody next edits one.
 func (e *Engine) startNativeSkills() {
-	if e.native == nil || e.native.wiki == nil || e.native.pageReader == nil {
+	if e.native == nil || e.native.pageReader == nil {
 		return
 	}
 	e.native.done.Add(1)
@@ -1091,7 +1051,7 @@ func (e *Engine) startNativeSkills() {
 	}()
 }
 
-// awaitHydration blocks until this node's projections have caught up,
+// awaitHydration blocks until this node's own applied rows have caught up,
 // reporting false if the node stopped first.
 func (e *Engine) awaitHydration(ctx context.Context) bool {
 	ticker := time.NewTicker(hydrationPoll)

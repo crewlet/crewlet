@@ -8,20 +8,36 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/projection"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// Reader answers questions about pages from the node's own projection.
+// Reader answers questions about pages from this node's own applied rows.
+//
+// # What replaced the hydration flag
+//
+// The projection this reads in place of had a boolean: hydrated or not, with
+// no way to say by how much it was behind. An applier's position is a PLACE ON
+// A LOG, so a read here reports the level it answered at and a caller that
+// needs its own write back waits for its own position — which is the whole
+// reason the family moved off the bucket.
 type Reader struct {
-	db       *store.DB
-	hydrated func() bool
+	db *store.DB
+
+	// committed is this node's own applied position on the pages log, or
+	// nil on a build that runs no applier. It is what a read's own answer
+	// is stamped with.
+	committed func() statelog.Position
 }
 
 // ReaderOptions configure a reader.
 type ReaderOptions struct {
-	DB       *store.DB
-	Hydrated func() bool
+	DB *store.DB
+
+	// Committed is this node's applied position. Nil answers the zero
+	// position, which is what a test with no runner has and what a read
+	// then honestly reports.
+	Committed func() statelog.Position
 }
 
 // NewReader builds the knowledge base's read side.
@@ -29,19 +45,18 @@ func NewReader(opts ReaderOptions) (*Reader, error) {
 	if opts.DB == nil {
 		return nil, errors.New("pages: a store is required")
 	}
-	r := &Reader{db: opts.DB, hydrated: opts.Hydrated}
-	if r.hydrated == nil {
-		r.hydrated = func() bool { return true }
+	r := &Reader{db: opts.DB, committed: opts.Committed}
+	if r.committed == nil {
+		r.committed = func() statelog.Position { return statelog.Position{} }
 	}
 	return r, nil
 }
 
-func (r *Reader) ready() error {
-	if !r.hydrated() {
-		return projection.ErrNotHydrated
-	}
-	return nil
-}
+// At is the position this node's rows were derived through, which every answer
+// here is true as of.
+func (r *Reader) At() statelog.Position { return r.committed() }
+
+func (r *Reader) ready() error { return nil }
 
 // Filter narrows a page listing.
 type Filter struct {
@@ -112,12 +127,12 @@ func (r *Reader) List(ctx context.Context, f Filter) ([]Summary, error) {
 	}
 	if f.Label != "" {
 		where = append(where,
-			"EXISTS (SELECT 1 FROM page_labels l WHERE l.page_id = p.id AND l.label = ?)")
+			"EXISTS (SELECT 1 FROM pages_labels l WHERE l.page_id = p.id AND l.label = ?)")
 		args = append(args, f.Label)
 	}
 	if f.Watcher != "" {
 		where = append(where,
-			"EXISTS (SELECT 1 FROM page_watchers w WHERE w.page_id = p.id "+
+			"EXISTS (SELECT 1 FROM pages_watchers w WHERE w.page_id = p.id "+
 				"AND w.handle = ? AND w.muted = 0)")
 		args = append(args, f.Watcher)
 	}
@@ -131,13 +146,13 @@ func (r *Reader) List(ctx context.Context, f Filter) ([]Summary, error) {
 	}
 	if f.Skills != nil {
 		if *f.Skills {
-			where = append(where, "p.skill = 1")
+			where = append(where, "COALESCE(k.skill, 0) = 1")
 		} else {
-			where = append(where, "p.skill = 0")
+			where = append(where, "COALESCE(k.skill, 0) = 0")
 		}
 	}
 	if f.Onboarding {
-		where = append(where, "p.onboarding = 1")
+		where = append(where, "COALESCE(k.onboarding, 0) = 1")
 	}
 
 	limit := f.Limit
@@ -149,10 +164,12 @@ func (r *Reader) List(ctx context.Context, f Filter) ([]Summary, error) {
 	}
 	args = append(args, limit, max(f.Offset, 0))
 
-	rows, err := r.db.SQL().QueryContext(ctx, `
+	rows, err := r.db.Replicated().SQL().QueryContext(ctx, `
 		SELECT p.id, p.container, p.parent_id, p.title, p.status, p.author,
-		       p.version, p.skill, p.onboarding, p.updated_at, p.revision
-		  FROM pages p
+		       p.edit_version, COALESCE(k.skill, 0), COALESCE(k.onboarding, 0),
+		       p.updated_at, MAX(p.version, p.scoped_through)
+		  FROM pages_heads p
+		  LEFT JOIN pages_skills k ON k.page_id = p.id
 		 WHERE `+strings.Join(where, " AND ")+`
 		 ORDER BY p.container, p.title
 		 LIMIT ? OFFSET ?`, args...)
@@ -193,8 +210,8 @@ func (r *Reader) attachLabels(ctx context.Context, items []Summary) error {
 		ids[i] = item.ID
 		at[item.ID] = i
 	}
-	rows, err := r.db.SQL().QueryContext(ctx,
-		`SELECT page_id, label FROM page_labels WHERE page_id IN (`+
+	rows, err := r.db.Replicated().SQL().QueryContext(ctx,
+		`SELECT page_id, label FROM pages_labels WHERE page_id IN (`+
 			placeholders(len(ids))+`) ORDER BY label`, ids...)
 	if err != nil {
 		return fmt.Errorf("pages: read labels: %w", err)
@@ -269,7 +286,7 @@ func (r *Reader) Get(ctx context.Context, ref string) (Detail, error) {
 // locate resolves a reference to a page row.
 func (r *Reader) locate(ctx context.Context, ref string) (document string, revision uint64, id string, err error) {
 	var rev int64
-	query := `SELECT id, document, revision FROM pages WHERE id = ?`
+	query := `SELECT id, document, MAX(version, scoped_through) FROM pages_heads WHERE id = ?`
 	args := []any{ref}
 	if container, title, ok := strings.Cut(ref, "/"); ok {
 		// "CONTAINER/Title", which is how a person and a model name a page
@@ -282,11 +299,11 @@ func (r *Reader) locate(ctx context.Context, ref string) (document string, revis
 		// address, because the claim lowercased it with Go's Unicode case
 		// tables and the lookup did not. It also could not use an index,
 		// so every address lookup scanned the container.
-		query = `SELECT id, document, revision FROM pages
+		query = `SELECT id, document, MAX(version, scoped_through) FROM pages_heads
 		          WHERE container = ? AND title_norm = ?`
 		args = []any{strings.ToUpper(strings.TrimSpace(container)), NormalizeTitle(title)}
 	}
-	err = r.db.SQL().QueryRowContext(ctx, query, args...).Scan(&id, &document, &rev)
+	err = r.db.Replicated().SQL().QueryRowContext(ctx, query, args...).Scan(&id, &document, &rev)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return "", 0, "", fmt.Errorf("%w: page %s", ErrNotFound, ref)
@@ -297,8 +314,8 @@ func (r *Reader) locate(ctx context.Context, ref string) (document string, revis
 }
 
 func (r *Reader) comments(ctx context.Context, pageID string) ([]Comment, error) {
-	rows, err := r.db.SQL().QueryContext(ctx,
-		`SELECT document FROM page_comments WHERE page_id = ? ORDER BY created_at, id`,
+	rows, err := r.db.Replicated().SQL().QueryContext(ctx,
+		`SELECT document FROM pages_comments WHERE page_id = ? ORDER BY created_at, id`,
 		pageID)
 	if err != nil {
 		return nil, fmt.Errorf("pages: read the thread on %s: %w", pageID, err)
@@ -322,8 +339,8 @@ func (r *Reader) comments(ctx context.Context, pageID string) ([]Comment, error)
 }
 
 func (r *Reader) history(ctx context.Context, pageID string) ([]RevisionSummary, error) {
-	rows, err := r.db.SQL().QueryContext(ctx,
-		`SELECT version, author, message, created_at FROM page_revisions
+	rows, err := r.db.Replicated().SQL().QueryContext(ctx,
+		`SELECT edit_version, author, message, created_at FROM pages_revisions
 		  WHERE page_id = ? ORDER BY version DESC LIMIT ?`, pageID, RevisionsKept)
 	if err != nil {
 		return nil, fmt.Errorf("pages: read the history of %s: %w", pageID, err)
@@ -366,10 +383,13 @@ func (r *Reader) ancestors(ctx context.Context, parentID string) ([]Summary, err
 		var s Summary
 		var skill, onboarding int
 		var updated, revision int64
-		err := r.db.SQL().QueryRowContext(ctx, `
-			SELECT id, container, parent_id, title, status, author, version,
-			       skill, onboarding, updated_at, revision
-			  FROM pages WHERE id = ?`, id).
+		err := r.db.Replicated().SQL().QueryRowContext(ctx, `
+			SELECT p.id, p.container, p.parent_id, p.title, p.status, p.author,
+			       p.edit_version, COALESCE(k.skill, 0), COALESCE(k.onboarding, 0),
+			       p.updated_at, MAX(p.version, p.scoped_through)
+			  FROM pages_heads p
+			  LEFT JOIN pages_skills k ON k.page_id = p.id
+			 WHERE p.id = ?`, id).
 			Scan(&s.ID, &s.Container, &s.ParentID, &s.Title, &s.Status, &s.Author,
 				&s.Version, &skill, &onboarding, &updated, &revision)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -396,8 +416,8 @@ func (r *Reader) Containers(ctx context.Context) ([]Container, error) {
 	if err := r.ready(); err != nil {
 		return nil, err
 	}
-	rows, err := r.db.SQL().QueryContext(ctx,
-		`SELECT document FROM page_containers ORDER BY key`)
+	rows, err := r.db.Replicated().SQL().QueryContext(ctx,
+		`SELECT document FROM pages_containers ORDER BY key`)
 	if err != nil {
 		return nil, fmt.Errorf("pages: list containers: %w", err)
 	}
@@ -446,10 +466,12 @@ func (r *Reader) SkillPages(ctx context.Context, container string) ([]Page, erro
 	if container == "" {
 		return nil, nil
 	}
-	rows, err := r.db.SQL().QueryContext(ctx, `
-		SELECT document FROM pages
-		WHERE container = ? AND skill = 1 AND status <> ?
-		ORDER BY title`, container, string(StatusTrashed))
+	rows, err := r.db.Replicated().SQL().QueryContext(ctx, `
+		SELECT p.document
+		  FROM pages_heads p
+		  JOIN pages_skills k ON k.page_id = p.id
+		 WHERE p.container = ? AND k.skill = 1 AND p.status <> ?
+		 ORDER BY p.title`, container, string(StatusTrashed))
 	if err != nil {
 		return nil, fmt.Errorf("pages: list the skills in %s: %w", container, err)
 	}

@@ -14,7 +14,8 @@ import (
 )
 
 type fakeKB struct {
-	page pages.Detail
+	renames []renamed
+	page    pages.Detail
 
 	created  []pages.NewPage
 	saved    []pages.Save
@@ -67,6 +68,21 @@ func (f *fakeKB) SavePage(_ context.Context, actor pages.Actor, _ string, save p
 	f.saved = append(f.saved, save)
 	f.actors = append(f.actors, actor)
 	return pages.Written{Page: pages.Page{ID: "p1", Version: 5}, Revision: 11}, nil
+}
+
+// renamed is one Rename call the fake took.
+type renamed struct{ pageID, title string }
+
+func (f *fakeKB) Rename(_ context.Context, actor pages.Actor, pageID, title string,
+	_ bool) (pages.Written, error) {
+
+	if f.writeErr != nil {
+		return pages.Written{}, f.writeErr
+	}
+	f.renames = append(f.renames, renamed{pageID: pageID, title: title})
+	f.actors = append(f.actors, actor)
+	return pages.Written{Page: pages.Page{ID: pageID, Title: title, Version: 5},
+		Revision: 13}, nil
 }
 
 func (f *fakeKB) Comment(_ context.Context, actor pages.Actor, _ string, in pages.NewComment) (pages.Comment, pages.Written, error) {

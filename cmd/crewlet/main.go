@@ -37,7 +37,6 @@ import (
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -2002,9 +2001,7 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 			Reader: reader, Writer: writer,
 			Actor:    opsmcp.PageActor,
 			Reserved: reservedFor(e),
-			Await: func(ctx context.Context, revision uint64) error {
-				return e.WaitApplied(ctx, coord.FamilyPages, revision)
-			},
+			Await:    e.WaitCommitted,
 		}
 	}
 	// SEARCH IS OFFERED WHENEVER THE COMPANY HAS A BACKEND, native or not:
