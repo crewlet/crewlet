@@ -183,9 +183,9 @@ func TestTrackerTasksIndexCount(t *testing.T) {
 			count++
 		}
 	}
-	// Fifteen plain and nine partial, each enumerated in the migration with
-	// the query it serves.
-	const want = 24
+	// Seventeen plain and nine partial, each enumerated in the migration
+	// with the query it serves.
+	const want = 26
 	if count != want {
 		t.Fatalf("tracker_tasks carries %d indexes and the enumeration is %d — "+
 			"every one of them is a write cost on every commit, so the two have "+

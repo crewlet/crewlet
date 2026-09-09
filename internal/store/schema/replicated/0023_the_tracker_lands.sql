@@ -123,6 +123,12 @@ CREATE TABLE tracker_tasks (
     removed_at           INTEGER,
     removed_with         TEXT,
     batch_id             TEXT,
+    -- Set while a merge's child walk is running and cleared by its last
+    -- append, so a duplicate is visibly MID-MERGE rather than silently
+    -- half-merged. It is what the duty selects on to finish an abandoned
+    -- walk, and the difference between a state somebody can wait out and one
+    -- they have to reconstruct.
+    merging              INTEGER NOT NULL DEFAULT 0,
     reassignments        INTEGER NOT NULL DEFAULT 0,
     policy_stamp         TEXT    NOT NULL DEFAULT '',
     -- A MAX over every applied commit that named this task as unblocked, so it
@@ -176,7 +182,9 @@ CREATE INDEX tracker_tasks_flagged_idx ON tracker_tasks (id)
     WHERE inconsistent_project = 1 OR cycle = 1 OR too_deep = 1 OR key_collision = 1;                         -- flag= (the attention queue) and the repair duty
 CREATE INDEX tracker_tasks_archived_idx ON tracker_tasks (project_key, archived);                             -- archived=false, the default filter, joined against the project
 CREATE INDEX tracker_tasks_embed_idx ON tracker_tasks (embed_rev) WHERE removed_at IS NULL;                   -- the embed duty's selection
-CREATE INDEX tracker_tasks_respread_idx ON tracker_tasks (project_key, rank, id) WHERE length(rank) > 64;     -- the rank duty's order-preserving re-spread walk
+CREATE INDEX tracker_tasks_rank_idx ON tracker_tasks (project_key, rank, id);                                  -- ORDER BY rank at project scope, and the apply's per-key duplicate probe
+CREATE INDEX tracker_tasks_respread_idx ON tracker_tasks (project_key, rank, id) WHERE length(rank) > 64;     -- the rank duty's order-preserving re-spread walk (a fraction of the index above, which is why both)
+CREATE INDEX tracker_tasks_merging_idx ON tracker_tasks (id) WHERE merging = 1;                                -- the tracker duty's selection of an abandoned merge walk
 
 CREATE TABLE tracker_comments (
     id           TEXT    NOT NULL PRIMARY KEY,

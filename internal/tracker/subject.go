@@ -25,6 +25,7 @@ package tracker
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -310,4 +311,23 @@ func (k ObjectKind) HomedInAProject() bool {
 // RequiresAProject reports a kind that cannot live at the top of the company.
 func (k ObjectKind) RequiresAProject() bool {
 	return k == KindTask || k == KindTurn
+}
+
+// splitSprintID takes a sprint subject's id apart.
+//
+// The id IS "<PROJECT>.<number>", which is what makes minting sprint 7 a
+// create-only append two nodes collide harmlessly on — so taking it apart is
+// the inverse of [SprintSubject] and lives beside it rather than at the one
+// call site that needs it.
+func splitSprintID(id string) (project string, number int, err error) {
+	project, rest, ok := strings.Cut(id, ".")
+	if !ok || project == "" {
+		return "", 0, fmt.Errorf("tracker: %q is not a sprint id — a sprint's "+
+			"id is its project key, a dot and its number", id)
+	}
+	number, err = strconv.Atoi(rest)
+	if err != nil || number < 1 {
+		return "", 0, fmt.Errorf("tracker: sprint id %q names no number", id)
+	}
+	return project, number, nil
 }
