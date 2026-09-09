@@ -154,37 +154,81 @@ CREATE TABLE tracker_tasks (
     document             BLOB    NOT NULL
 );
 
--- Fifteen plain indexes, each naming its reader.
-CREATE INDEX tracker_tasks_key_idx ON tracker_tasks (key);                                                    -- key resolution, and every former-key lookup that lands here
-CREATE INDEX tracker_tasks_board_idx ON tracker_tasks (project_key, status, rank, id);                        -- the board: list_tasks(container=project:, sort=rank)
-CREATE INDEX tracker_tasks_recent_idx ON tracker_tasks (project_key, status_group, updated_at DESC);          -- list_tasks(sort=-updated) inside a project
-CREATE INDEX tracker_tasks_queue_idx ON tracker_tasks (assignee, status_group, prio_rank DESC, due_at);       -- preset=my_queue, and every assignee= filter
-CREATE INDEX tracker_tasks_sprint_idx ON tracker_tasks (project_key, sprint_number, status_group);            -- sprint= filters and the burndown's open set
-CREATE INDEX tracker_tasks_children_idx ON tracker_tasks (parent_id, rank, id);                               -- subtasks=expanded, children_count, checklist promotion
-CREATE INDEX tracker_tasks_root_idx ON tracker_tasks (root_id);                                               -- root= and the descendant cap on a re-parent
-CREATE INDEX tracker_tasks_spend_idx ON tracker_tasks (spend_tokens DESC);                                    -- sort=spend, spend= filters, totals spend_tokens:sum
-CREATE INDEX tracker_tasks_estimate_idx ON tracker_tasks (estimate_min);                                      -- estimate= filters and totals estimate_min:sum
-CREATE INDEX tracker_tasks_points_idx ON tracker_tasks (points);                                              -- points= filters, totals points:sum, sprint capacity
-CREATE INDEX tracker_tasks_batch_idx ON tracker_tasks (batch_id);                                             -- batch= (what one bulk call touched)
-CREATE INDEX tracker_tasks_filed_unit_idx ON tracker_tasks (filed_unit);                                      -- unit= over every spelling a unit has been keyed by
-CREATE INDEX tracker_tasks_routing_unit_idx ON tracker_tasks (routing_unit);                                  -- routing_unit=, the lead's own queue
-CREATE INDEX tracker_tasks_type_idx ON tracker_tasks (type);                                                  -- type= and group_by=type
-CREATE INDEX tracker_tasks_updated_idx ON tracker_tasks (updated_at DESC);                                    -- sort=-updated at workspace scope, the default outside a project
+-- NINE INDEXES THE PLANNER NEVER CHOSE ARE NOT HERE, and their absence is a
+-- measurement rather than an oversight.
+--
+-- Five were shadowed by the board index's own seek: `(project_key,
+-- status_group, status, rank)`, `(project_key, sprint_number, …)`,
+-- `(parent_id, …)`, `(root_id, …)` and `(project_key, archived)`. Inside a
+-- project that seek already narrows to a thirtieth of the corpus and the
+-- residual predicate rides along on those rows; outside one, a sprint number
+-- and a parent id are not questions the grammar asks.
+--
+-- Four more — `(status, …)`, `(due_at, …)`, `(start_at, …)`, `(finished_at,
+-- …)` and the four-flag attention index — lost to the ORDER BY. Every list
+-- query here is ordered and limited, and under a limit this engine's planner
+-- prefers walking the ordering index to seeking a filter and sorting: measured
+-- at twenty thousand rows over thirty projects with a tenth of the corpus
+-- carrying a due date, the plan is the ordering scan whether or not the filter
+-- index exists. What WOULD reach them is an aggregate with no order — a total,
+-- a burndown — and the step that adds those readers adds the index with the
+-- plan that proves it.
+--
+-- Each was a write cost on every one of a year's ≈ 2.4 M commits, on every
+-- node, for a plan that never ran.
+--
+-- EVERY ORDERED INDEX ENDS IN `id`, because every ordered read does.
+--
+-- [orderBy] appends `t.id` to every sort as the tiebreak that makes a page
+-- stable, so an index that stops one column short does not match the order the
+-- query asks for — and this engine's planner does not then seek it and sort a
+-- hundred rows, it ABANDONS the index and scans the table. Measured: the same
+-- board query orders by `rank, id` and seeks, and by `updated_at DESC, id` and
+-- scans, against indexes differing only in that last column.
+--
+-- EVERY QUERY-SERVING INDEX CARRIES `WHERE removed_at IS NULL`, and it is not
+-- a size optimisation — it is what makes the planner reach for them at all.
+--
+-- Every registered query filters removed tasks out, and SQLite's planner
+-- treats a partial index as usable only when the query implies its `WHERE`.
+-- The embed duty's index was the only one carrying that predicate, so for a
+-- board read — `project_key = ? AND removed_at IS NULL ORDER BY rank` —
+-- the planner picked `(embed_rev) WHERE removed_at IS NULL`, SCANNED it and
+-- SORTED, in preference to seeking a full index that gave it both the project
+-- and the order. Measured on 400 rows and on the same query with the predicate
+-- removed, which seeks: the cost of the plan is a property of the predicate,
+-- not of the fixture. `TestEveryIndexServesARegisteredQuery` is what says so.
+--
+-- The exceptions are the three that must see a removed task — key resolution,
+-- the trash, and the subtree restore — plus the apply-path probes, which are
+-- about a row rather than about a query.
 
--- Nine partial indexes. Each `WHERE` is what keeps the index the size of the
--- answer rather than the size of the table.
-CREATE INDEX tracker_tasks_due_idx ON tracker_tasks (due_at) WHERE due_at IS NOT NULL;                        -- due=, preset=overdue, the calendar's span
-CREATE INDEX tracker_tasks_start_idx ON tracker_tasks (start_at) WHERE start_at IS NOT NULL;                  -- start=, span_field=start_due
-CREATE INDEX tracker_tasks_finished_idx ON tracker_tasks (finished_at) WHERE finished_at IS NOT NULL;         -- show_closed=recent:, finished=, cycle and lead time
+-- Fifteen plain indexes, each naming its reader.
+CREATE INDEX tracker_tasks_key_idx ON tracker_tasks (key);                                                    -- key resolution, and every former-key lookup that lands here (a reference to a REMOVED task still resolves, which is why this one is not partial)
+CREATE INDEX tracker_tasks_rank_idx ON tracker_tasks (project_key, rank, id);                                 -- the apply's per-key duplicate probe, which is about a row and carries no query's predicates
+CREATE INDEX tracker_tasks_board_idx ON tracker_tasks (project_key, rank, id)
+    WHERE removed_at IS NULL;                                                                                 -- the board: list_tasks(container=project:, sort=rank), and every project-scoped read that orders
+CREATE INDEX tracker_tasks_recent_idx ON tracker_tasks (project_key, updated_at DESC, id)
+    WHERE removed_at IS NULL;                                                                                 -- list_tasks(sort=-updated) inside a project
+CREATE INDEX tracker_tasks_queue_idx ON tracker_tasks (assignee, status_group, prio_rank DESC, due_at)
+    WHERE removed_at IS NULL;                                                                                 -- preset=my_queue, and every assignee= filter
+CREATE INDEX tracker_tasks_spend_idx ON tracker_tasks (spend_tokens DESC, id) WHERE removed_at IS NULL;       -- sort=spend, spend= filters, totals spend_tokens:sum
+CREATE INDEX tracker_tasks_estimate_idx ON tracker_tasks (estimate_min, id) WHERE removed_at IS NULL;         -- estimate= filters and totals estimate_min:sum
+CREATE INDEX tracker_tasks_points_idx ON tracker_tasks (points, id) WHERE removed_at IS NULL;                 -- points= filters, totals points:sum, sprint capacity
+CREATE INDEX tracker_tasks_batch_idx ON tracker_tasks (batch_id) WHERE removed_at IS NULL;                    -- batch= (what one bulk call touched)
+CREATE INDEX tracker_tasks_filed_unit_idx ON tracker_tasks (filed_unit) WHERE removed_at IS NULL;             -- unit= over every spelling a unit has been keyed by
+CREATE INDEX tracker_tasks_routing_unit_idx ON tracker_tasks (routing_unit) WHERE removed_at IS NULL;         -- routing_unit=, the lead's own queue
+CREATE INDEX tracker_tasks_type_idx ON tracker_tasks (type) WHERE removed_at IS NULL;                         -- type= and group_by=type
+CREATE INDEX tracker_tasks_updated_idx ON tracker_tasks (updated_at DESC, id) WHERE removed_at IS NULL;       -- sort=-updated at workspace scope, the default outside a project
+
+-- The rest are partial on something OTHER than the tombstone. Each `WHERE` is
+-- what keeps the index the size of the answer rather than the size of the
+-- table.
 CREATE INDEX tracker_tasks_removed_idx ON tracker_tasks (removed_at DESC) WHERE removed_at IS NOT NULL;       -- work_trash
 CREATE INDEX tracker_tasks_removed_with_idx ON tracker_tasks (removed_with) WHERE removed_with IS NOT NULL;   -- restoring a subtree removed together
-CREATE INDEX tracker_tasks_flagged_idx ON tracker_tasks (id)
-    WHERE inconsistent_project = 1 OR cycle = 1 OR too_deep = 1 OR key_collision = 1;                         -- flag= (the attention queue) and the repair duty
-CREATE INDEX tracker_tasks_archived_idx ON tracker_tasks (project_key, archived);                             -- archived=false, the default filter, joined against the project
 CREATE INDEX tracker_tasks_embed_idx ON tracker_tasks (embed_rev) WHERE removed_at IS NULL;                   -- the embed duty's selection
-CREATE INDEX tracker_tasks_rank_idx ON tracker_tasks (project_key, rank, id);                                  -- ORDER BY rank at project scope, and the apply's per-key duplicate probe
-CREATE INDEX tracker_tasks_respread_idx ON tracker_tasks (project_key, rank, id) WHERE length(rank) > 64;     -- the rank duty's order-preserving re-spread walk (a fraction of the index above, which is why both)
-CREATE INDEX tracker_tasks_merging_idx ON tracker_tasks (id) WHERE merging = 1;                                -- the tracker duty's selection of an abandoned merge walk
+CREATE INDEX tracker_tasks_respread_idx ON tracker_tasks (project_key, rank, id) WHERE length(rank) > 64;     -- the rank duty's order-preserving re-spread walk (a fraction of the board index, which is why both)
+CREATE INDEX tracker_tasks_merging_idx ON tracker_tasks (id) WHERE merging = 1;                               -- the tracker duty's selection of an abandoned merge walk
 
 CREATE TABLE tracker_comments (
     id           TEXT    NOT NULL PRIMARY KEY,

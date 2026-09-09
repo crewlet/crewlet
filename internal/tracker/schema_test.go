@@ -183,9 +183,12 @@ func TestTrackerTasksIndexCount(t *testing.T) {
 			count++
 		}
 	}
-	// Seventeen plain and nine partial, each enumerated in the migration
-	// with the query it serves.
-	const want = 26
+	// Eighteen: eleven plain and seven partial. EVERY ONE IS REACHED BY A
+	// PLAN, which is what TestEveryIndexServesARegisteredQuery
+	// establishes and this count makes visible — an index added without a
+	// reader moves this number before it moves a benchmark, and nine that
+	// no plan reached were deleted to reach it.
+	const want = 18
 	if count != want {
 		t.Fatalf("tracker_tasks carries %d indexes and the enumeration is %d — "+
 			"every one of them is a write cost on every commit, so the two have "+

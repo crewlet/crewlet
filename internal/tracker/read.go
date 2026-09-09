@@ -154,11 +154,11 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 	if limit > PageMax {
 		limit = PageMax
 	}
-	order := orderBy(q)
+	terms := sortTerms(q)
 
 	answer := Answer{Level: q.Level, Complete: true}
 	err = r.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-		rows, cursor, err := readTasks(ctx, tx, where, args, order, limit)
+		rows, cursor, err := readTasks(ctx, tx, where, args, terms, limit)
 		if err != nil {
 			return err
 		}
@@ -351,6 +351,15 @@ func compile(q Query, now time.Time) (string, []any, error) {
 		clause, values := numClause(column, *filter)
 		add(clause, values...)
 	}
+	if len(q.Flags) > 0 {
+		// THE INDEX'S OWN PREDICATE, stated because it is what makes the
+		// index reachable. The attention index is partial over the four
+		// flags together — a task with any of them is a fraction of a
+		// percent of the table — and `cycle = 1` alone does not imply
+		// that disjunction to a planner, so a flag filter without it
+		// reads every task in the company.
+		add(anyFlagSet)
+	}
 	for _, flag := range q.Flags {
 		column, ok := flagColumn(flag)
 		if !ok {
@@ -472,19 +481,31 @@ func dateClause(key string, filter DateFilter) (string, []any, error) {
 		return "", nil, fmt.Errorf("tracker: %q names no date column", key)
 	}
 	from := store.EncodeTime(filter.From.At)
+
+	// THE NULL PREDICATE IS SPELLED OUT, and it is not redundant.
+	//
+	// Every date column here is indexed PARTIALLY — `WHERE due_at IS NOT
+	// NULL` — because most tasks have no due date and an index over the
+	// whole table would be mostly empty entries. A partial index is usable
+	// only when the query IMPLIES its predicate, and this engine's planner
+	// does not infer `x IS NOT NULL` from `x < ?`: without the clause the
+	// index its own comment names is never reached and every date filter
+	// reads the table. Measured by TestEveryIndexServesARegisteredQuery,
+	// which is why it is a clause here rather than a sentence in the DDL.
+	notNull := column + " IS NOT NULL AND "
 	switch filter.Op {
 	case DateLT:
-		return column + " < ?", []any{from}, nil
+		return notNull + column + " < ?", []any{from}, nil
 	case DateLTE:
-		return column + " <= ?", []any{from}, nil
+		return notNull + column + " <= ?", []any{from}, nil
 	case DateGT:
-		return column + " > ?", []any{from}, nil
+		return notNull + column + " > ?", []any{from}, nil
 	case DateGTE:
-		return column + " >= ?", []any{from}, nil
+		return notNull + column + " >= ?", []any{from}, nil
 	case DateRange:
 		// HALF-OPEN, which is what makes "this week" contain every
 		// instant of Sunday.
-		return column + " >= ? AND " + column + " < ?",
+		return notNull + column + " >= ? AND " + column + " < ?",
 			[]any{from, store.EncodeTime(filter.To.At)}, nil
 	}
 	return "", nil, fmt.Errorf("tracker: %q is not a date comparison", filter.Op)
@@ -513,6 +534,11 @@ func numClause(column string, filter NumFilter) (string, []any) {
 // flagColumn maps an attention flag to its column, from a CLOSED SET — the one
 // place a grammar value reaches a statement as a name rather than a bound
 // value, and therefore the one that has to be enumerated.
+// anyFlagSet is the attention index's own partial predicate, written once so
+// the DDL and the query cannot disagree about what it is.
+const anyFlagSet = `(t.inconsistent_project = 1 OR t.cycle = 1 OR ` +
+	`t.too_deep = 1 OR t.key_collision = 1)`
+
 func flagColumn(flag string) (string, bool) {
 	switch flag {
 	case "cycle":
@@ -533,35 +559,73 @@ func flagColumn(flag string) (string, bool) {
 // if a duplicate rank ever occurs — and it is free, because the three
 // rank-bearing indexes carry it as a trailing column and still serve the range
 // scan with no sort step.
-func orderBy(q Query) string {
-	columns := map[string]string{
-		"rank": "t.rank", "updated": "t.updated_at", "due": "t.due_at",
-		"priority": "t.prio_rank", "created": "t.created_at",
-		"title": "t.title", "estimate": "t.estimate_min", "points": "t.points",
-		"spend": "t.spend_tokens", "status_entered": "t.status_entered_at",
-	}
-	var terms []string
+// sortTerm is one column of the order, with the direction it is read in.
+//
+// THE ORDER IS A VALUE, not a string, because the page cursor is derived from
+// it: a keyset resume has to compare exactly the columns the order sorts by,
+// in exactly their directions, and a rendered string cannot be taken apart
+// again without parsing SQL.
+type sortTerm struct {
+	Column     string
+	Descending bool
+}
+
+// sortColumns is what a caller may order by.
+var sortColumns = map[string]string{
+	"rank": "t.rank", "updated": "t.updated_at", "due": "t.due_at",
+	"priority": "t.prio_rank", "created": "t.created_at",
+	"title": "t.title", "estimate": "t.estimate_min", "points": "t.points",
+	"spend": "t.spend_tokens", "status_entered": "t.status_entered_at",
+}
+
+// sortTerms compiles the sort, ALWAYS ENDING IN THE ID.
+//
+// The id is the tiebreak that makes a page stable: two tasks with one rank, or
+// one update instant, would otherwise come back in whatever order the storage
+// felt like, and a page boundary between them would drop one and repeat the
+// other on every poll.
+func sortTerms(q Query) []sortTerm {
+	var terms []sortTerm
 	for _, sort := range q.Sort {
-		column, known := columns[sort.Key]
+		column, known := sortColumns[sort.Key]
 		if !known {
 			continue
 		}
-		if sort.Descending {
-			column += " DESC"
-		}
-		terms = append(terms, column)
+		terms = append(terms, sortTerm{Column: column, Descending: sort.Descending})
 	}
 	if len(terms) == 0 {
 		// The default is the manual order inside a project and the most
 		// recently touched everywhere else, because a rank is only an
 		// order within the container that owns it.
 		if q.Scope.Project != "" {
-			terms = append(terms, "t.rank")
+			terms = append(terms, sortTerm{Column: "t.rank"})
 		} else {
-			terms = append(terms, "t.updated_at DESC")
+			terms = append(terms, sortTerm{Column: "t.updated_at", Descending: true})
 		}
 	}
-	return strings.Join(append(terms, "t.id"), ", ")
+	return append(terms, sortTerm{Column: "t.id"})
+}
+
+// orderBy renders a query's sort as SQL.
+func orderBy(q Query) string { return renderOrder(sortTerms(q)) }
+
+// renderOrder renders compiled sort terms as SQL.
+func renderOrder(terms []sortTerm) string {
+	rendered := make([]string, 0, len(terms))
+	for _, term := range terms {
+		if term.Descending {
+			rendered = append(rendered, term.Column+" DESC")
+			continue
+		}
+		rendered = append(rendered, term.Column)
+	}
+	return strings.Join(rendered, ", ")
+}
+
+// page is what a cursor carries: the last row's value for EVERY column the
+// order sorts by, ending in its id.
+type page struct {
+	Keys []any `json:"k"`
 }
 
 // cursorClause turns an opaque page cursor back into a predicate.
@@ -569,27 +633,70 @@ func orderBy(q Query) string {
 // KEYSET RATHER THAN OFFSET, because an offset re-reads and re-sorts every row
 // it skips: page fifty of a board costs fifty times page one, and a row
 // inserted between two polls shifts every page after it.
+//
+// # Why it compares the WHOLE order and not just the id
+//
+// The predicate has to be "after the last row IN THIS ORDER", and for any
+// order but by-id that is not `id > last`. On a board ordered by rank, every
+// task with a later rank and a smaller id is SKIPPED — it sorts after the page
+// boundary and fails the predicate — while every task with an earlier rank and
+// a larger id is REPEATED on every subsequent page. Both at once, silently: a
+// caller paging a board would see some of its tasks twice and never see
+// others, and nothing in the answer would say so.
+//
+// So the comparison is lexicographic over the sort terms, expanded rather than
+// written as a row value because the directions differ: for `a ASC, b DESC,
+// id ASC` it is `a > ? OR (a = ? AND (b < ? OR (b = ? AND id > ?)))`. The
+// nesting is the definition of "later in this order" and nothing shorter is
+// correct for a mixed-direction sort.
 func cursorClause(q Query) (string, []any, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(q.Cursor)
 	if err != nil {
 		return "", nil, fmt.Errorf("tracker: the cursor is not one this surface "+
 			"minted: %w", err)
 	}
-	var page struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(raw, &page); err != nil || page.ID == "" {
+	var resume page
+	if err := json.Unmarshal(raw, &resume); err != nil {
 		return "", nil, fmt.Errorf("tracker: the cursor names no row to resume " +
 			"after")
 	}
-	return "t.id > ?", []any{page.ID}, nil
+	terms := sortTerms(q)
+	if len(resume.Keys) != len(terms) {
+		// A CURSOR FROM A DIFFERENT ORDER IS REFUSED, never applied to
+		// this one: resuming a rank-ordered page inside an
+		// update-ordered query is a page boundary computed against a
+		// column the query does not sort by, which drops rows without
+		// saying so.
+		return "", nil, fmt.Errorf("tracker: this cursor carries %d key(s) and "+
+			"this order has %d — a cursor belongs to the order that minted it, "+
+			"and re-sorting starts a new page", len(resume.Keys), len(terms))
+	}
+	clause, args := keysetAfter(terms, resume.Keys)
+	return clause, args, nil
+}
+
+// keysetAfter builds the lexicographic "strictly after" predicate.
+func keysetAfter(terms []sortTerm, keys []any) (string, []any) {
+	// THE DIRECTION DECIDES THE COMPARISON. "After" in a descending order
+	// is a SMALLER value, and a keyset that compared the same way in both
+	// directions would return the page before the boundary rather than the
+	// one after it — every descending page repeating the first.
+	after := ">"
+	if terms[0].Descending {
+		after = "<"
+	}
+	if len(terms) == 1 {
+		return terms[0].Column + " " + after + " ?", []any{keys[0]}
+	}
+	rest, restArgs := keysetAfter(terms[1:], keys[1:])
+	args := append([]any{keys[0], keys[0]}, restArgs...)
+	return "(" + terms[0].Column + " " + after + " ? OR (" +
+		terms[0].Column + " = ? AND " + rest + "))", args
 }
 
 // mintCursor encodes the page's own resume point.
-func mintCursor(last TaskRow) string {
-	body, err := json.Marshal(struct {
-		ID string `json:"id"`
-	}{ID: last.ID})
+func mintCursor(keys []any) string {
+	body, err := json.Marshal(page{Keys: keys})
 	if err != nil {
 		return ""
 	}
@@ -597,7 +704,18 @@ func mintCursor(last TaskRow) string {
 }
 
 func readTasks(ctx context.Context, tx *sql.Tx, where string, args []any,
-	order string, limit int) ([]TaskRow, string, error) {
+	terms []sortTerm, limit int) ([]TaskRow, string, error) {
+
+	// THE SORT COLUMNS ARE SELECTED TOO, because the page cursor is their
+	// values: a keyset resume compares exactly the columns the order sorts
+	// by, and a row whose sort value was never read cannot be resumed
+	// after. They are scanned as opaque values — nothing here needs to
+	// know what a rank or an instant IS, only what the next page must be
+	// strictly after.
+	keys := make([]string, 0, len(terms))
+	for _, term := range terms {
+		keys = append(keys, term.Column)
+	}
 
 	// ONE MORE THAN THE PAGE, which is how the answer knows whether there
 	// is another page without a second count.
@@ -606,10 +724,11 @@ func readTasks(ctx context.Context, tx *sql.Tx, where string, args []any,
 	                 t.depth, t.start_at, t.due_at, t.estimate_min, t.points,
 	                 t.archived, t.rank, t.updated_at, t.version,
 	                 EXISTS (SELECT 1 FROM tracker_task_deps d
-	                         WHERE d.task_id = t.id AND d.blocker_open = 1)
+	                         WHERE d.task_id = t.id AND d.blocker_open = 1), ` +
+		strings.Join(keys, ", ") + `
 	          FROM tracker_tasks t
 	          WHERE ` + where + `
-	          ORDER BY ` + order + `
+	          ORDER BY ` + renderOrder(terms) + `
 	          LIMIT ?`
 	rows, err := tx.QueryContext(ctx, query, append(append([]any{}, args...), limit+1)...)
 	if err != nil {
@@ -618,6 +737,7 @@ func readTasks(ctx context.Context, tx *sql.Tx, where string, args []any,
 	defer func() { _ = rows.Close() }()
 
 	var out []TaskRow
+	var pageKeys [][]any
 	for rows.Next() {
 		var row TaskRow
 		var sprint, parent, start, due sql.NullInt64
@@ -625,12 +745,18 @@ func readTasks(ctx context.Context, tx *sql.Tx, where string, args []any,
 		var archived, blocked int
 		var updated int64
 		var version int64
-		if err := rows.Scan(&row.ID, &row.Key, &row.Title, &row.Status,
+		sortValues := make([]any, len(terms))
+		targets := []any{&row.ID, &row.Key, &row.Title, &row.Status,
 			&row.StatusGroup, &row.Priority, &row.Assignee, &row.Project,
 			&sprint, &parentID, &row.Depth, &start, &due, &row.EstimateMinutes,
-			&row.Points, &archived, &row.Rank, &updated, &version, &blocked); err != nil {
+			&row.Points, &archived, &row.Rank, &updated, &version, &blocked}
+		for i := range sortValues {
+			targets = append(targets, &sortValues[i])
+		}
+		if err := rows.Scan(targets...); err != nil {
 			return nil, "", fmt.Errorf("tracker: read a task row: %w", err)
 		}
+		pageKeys = append(pageKeys, sortValues)
 		_ = parent
 		if sprint.Valid {
 			n := int(sprint.Int64)
@@ -659,7 +785,7 @@ func readTasks(ctx context.Context, tx *sql.Tx, where string, args []any,
 	cursor := ""
 	if len(out) > limit {
 		out = out[:limit]
-		cursor = mintCursor(out[len(out)-1])
+		cursor = mintCursor(pageKeys[limit-1])
 	}
 	// AND THE OVERDUE FLAG IS DERIVED ONCE, here, so every renderer agrees.
 	for i := range out {
