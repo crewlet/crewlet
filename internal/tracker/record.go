@@ -848,10 +848,6 @@ type Project struct {
 	// tags, and NOT on the pointer.
 	PolicyVersion int `json:"policy_version,omitempty"`
 
-	// RankRespreadPending marks a project whose manual order needs the
-	// duty's paced walk, set when an inline re-spread would exceed its cap.
-	RankRespreadPending bool `json:"rank_respread_pending,omitempty"`
-
 	Archived  bool      `json:"archived,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

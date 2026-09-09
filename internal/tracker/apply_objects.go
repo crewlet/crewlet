@@ -343,22 +343,27 @@ func (a *Applier) applyRankOrder(ctx context.Context, tx *sql.Tx, c applyContext
 				"in %s: %w", placement.Rank, order.Project, err)
 		}
 	}
-	// AND THE RE-SPREAD HAND-OFF, from the same records: a key past the
-	// renormalisation threshold is one the mint could not shorten inline,
-	// so the project's order needs the duty's paced walk. Set here rather
-	// than by the writer, because every node must agree that this project
-	// needs one — the writer is a single node's opinion.
-	for _, placement := range order.Placements {
-		if len(placement.Rank) <= RankRenormaliseAt {
-			continue
-		}
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE tracker_projects SET rank_respread_pending = 1 WHERE key = ?`,
-			order.Project); err != nil {
-			return 0, fmt.Errorf("tracker: flag %s for a re-spread: %w",
-				order.Project, err)
-		}
-		break
+	// AND THE RE-SPREAD HAND-OFF, SET AND CLEARED FROM THE SAME PROBE.
+	//
+	// A key past the renormalisation threshold is one the mint could not
+	// shorten inline, so the project's order needs the duty's paced walk.
+	// The applier owns the column in both directions — the walk's own last
+	// batch is what clears it — because a RECORD clearing it would be a
+	// second owner: the flag is derived from the rows this node holds, and
+	// a node whose applier had not yet caught up would clear a flag its
+	// own rows still justify.
+	//
+	// One indexed probe on the partial index over long keys, which is a
+	// fraction of the project rather than a scan of it.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE tracker_projects SET rank_respread_pending = EXISTS (
+			SELECT 1 FROM tracker_tasks t
+			WHERE t.project_key = ? AND t.removed_at IS NULL
+			  AND length(t.rank) > ?)
+		WHERE key = ?`,
+		order.Project, RankRenormaliseAt, order.Project); err != nil {
+		return 0, fmt.Errorf("tracker: set %s's re-spread hand-off: %w",
+			order.Project, err)
 	}
 	return rows, nil
 }
