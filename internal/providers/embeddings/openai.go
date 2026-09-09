@@ -132,6 +132,66 @@ func New(cfg Config) (*Provider, error) {
 // Width implements [Embedder].
 func (p *Provider) Width() int { return p.width }
 
+// EmbedBatch implements [BatchEmbedder].
+//
+// ONE-TO-ONE WITH THE INPUT, positionally, which is the contract's whole
+// content: the caller matches vectors to documents by index, so an empty or
+// unembeddable input must still occupy its slot. It does, as a nil vector,
+// rather than being dropped — dropping one would re-file every document after
+// it onto the wrong vector, silently, and the only symptom would be a search
+// that returns the wrong answers.
+func (p *Provider) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	out := make([][]float32, len(texts))
+	// The inputs the provider is actually asked for, with the slot each
+	// one came from — an empty input is not sent and not billed for.
+	input := make([]string, 0, len(texts))
+	slot := make([]int, 0, len(texts))
+	for i, text := range texts {
+		if normalized := normalize(text); normalized != "" {
+			input = append(input, normalized)
+			slot = append(slot, i)
+		}
+	}
+	if len(input) == 0 {
+		return out, nil
+	}
+	res, err := p.client.Embeddings.New(ctx, sdk.EmbeddingNewParams{
+		Model:      p.model,
+		Input:      sdk.EmbeddingNewParamsInputUnion{OfArrayOfStrings: input},
+		Dimensions: sdk.Int(int64(p.width)),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("embeddings: %s: %w", p.model, err)
+	}
+	if len(res.Data) != len(input) {
+		return nil, fmt.Errorf("embeddings: %s returned %d vectors for %d "+
+			"inputs — a caller matches them positionally, so a short answer "+
+			"is not a partial result but a re-filing of every document after "+
+			"the gap", p.model, len(res.Data), len(input))
+	}
+	for i, item := range res.Data {
+		// THE INDEX THE PROVIDER RETURNS IS AUTHORITATIVE where it is
+		// present: the API documents that results may come back out of
+		// order, and trusting position alone is the same silent
+		// re-filing as a short answer.
+		at := i
+		if idx := int(item.Index); idx >= 0 && idx < len(input) {
+			at = idx
+		}
+		raw := item.Embedding
+		vector := make([]float32, len(raw))
+		for j, v := range raw {
+			vector[j] = float32(v)
+		}
+		checked, err := checkedWidth(vector, p.width, p.model)
+		if err != nil {
+			return nil, err
+		}
+		out[slot[at]] = checked
+	}
+	return out, nil
+}
+
 // Embed implements [Embedder].
 func (p *Provider) Embed(ctx context.Context, text string) ([]float32, error) {
 	normalized := normalize(text)
