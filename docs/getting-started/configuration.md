@@ -449,9 +449,21 @@ stream:
                                     #   unset, and a private CA is one file
 
 store:
-  path: "./crewlet-data/company.db"   # ONE file, owned exclusively by this
-                                    #   process. Not a shared database, and no
-                                    #   DSN: two engines on one file corrupt it
+  path: "./crewlet-data/company.db"   # the NODE estate — the audit log, memory,
+                                    #   config revisions, the secret bootstrap.
+                                    #   Owned exclusively by this process. Not a
+                                    #   shared database, and no DSN: two engines
+                                    #   on one file corrupt it
+  # replicated_path: "./crewlet-data/crewlet-replicated.db"
+                                    #   the REPLICATED estate — everything a
+                                    #   state log's applier writes. Empty puts it
+                                    #   beside `path`, which is what makes "back
+                                    #   up the data directory" true. It is a
+                                    #   second FILE rather than more tables
+                                    #   because a snapshot for a joining node is
+                                    #   a copy of this one alone; separate it
+                                    #   only to put it on a different disk, and
+                                    #   never onto the same file as `path`
 
 coordination:
   type: local                       # one node holding its own seat leases;

@@ -219,8 +219,9 @@ func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (
 // openStore opens this node's local database.
 func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*store.DB, error) {
 	opts := store.Options{
-		MaxOpenConns: b.Store.MaxOpenConns,
-		BusyTimeout:  b.Store.BusyTimeout(),
+		MaxOpenConns:   b.Store.MaxOpenConns,
+		ReplicatedPath: b.Store.ReplicatedPath,
+		BusyTimeout:    b.Store.BusyTimeout(),
 	}
 	// Nil embeddings means no vector recall is configured, which the store
 	// reads as width 0: no DECLARED width, so it checks nothing against it

@@ -2,11 +2,15 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -66,6 +70,14 @@ type BackupInfo struct {
 	// restore into a binary that migrates it forward again from the wrong
 	// place.
 	Migrations []string
+
+	// SHA256 is the hex digest of the finished copy.
+	//
+	// Taken HERE rather than by whoever ships the file, because this is the
+	// last moment the bytes are known to be the ones that passed the
+	// integrity check: a digest computed later cannot tell a good copy that
+	// was truncated in transit from a bad copy that was faithfully carried.
+	SHA256 string
 
 	// TookFor is how long the copy ran. An operator sizing a backup
 	// window needs the real number from their own database, not this
@@ -208,7 +220,14 @@ func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 			"copy of %s but %s holds no database, so nothing was backed up", d.path, part)
 	}
 
-	migrations, err := verifyBackup(ctx, part)
+	// The source's own applied set, read before the verify so the copy is
+	// compared with what it was made from.
+	source, err := d.appliedVersions(ctx)
+	if err != nil {
+		_ = removeDatabaseFiles(part)
+		return BackupInfo{}, err
+	}
+	migrations, err := verifyBackup(ctx, part, source)
 	if err != nil {
 		// The unverified copy is REMOVED rather than kept for
 		// inspection. It is a database that failed to open or failed an
@@ -235,6 +254,14 @@ func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 		_ = removeDatabaseFiles(part)
 		return BackupInfo{}, fmt.Errorf("store: backup: secure %s: %w", part, chmodErr)
 	}
+	// THE DIGEST BEFORE THE RENAME, over the file the rename will place —
+	// after the sidecars are gone and the mode is set, so what is hashed is
+	// byte-for-byte what an operator will ship.
+	digest, err := fileDigest(part)
+	if err != nil {
+		_ = removeDatabaseFiles(part)
+		return BackupInfo{}, err
+	}
 	if renameErr := os.Rename(part, dest); renameErr != nil {
 		_ = removeDatabaseFiles(part)
 		return BackupInfo{}, fmt.Errorf("store: backup: place %s: %w", dest, renameErr)
@@ -244,10 +271,12 @@ func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 		return BackupInfo{}, fmt.Errorf("store: backup: measure %s: %w", dest, err)
 	}
 	log.InfoContext(ctx, "store_backed_up",
+		"estate", string(d.estate),
 		"source", d.path, "path", dest, "bytes", info.Size(),
-		"took", took.String(), "migrations", len(migrations))
+		"took", took.String(), "migrations", len(migrations), "sha256", digest)
 	return BackupInfo{
 		Path:       dest,
+		SHA256:     digest,
 		Bytes:      info.Size(),
 		Migrations: migrations,
 		TookFor:    took,
@@ -267,7 +296,7 @@ func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 // reasons that both matter: Open MIGRATES, which would mutate the artifact
 // being verified, and Open takes the exclusive lock, which is a claim on a
 // file this process is about to rename.
-func verifyBackup(ctx context.Context, path string) ([]string, error) {
+func verifyBackup(ctx context.Context, path string, want []string) ([]string, error) {
 	pool, err := openPrepared(ctx, path, Options{MaxOpenConns: 1})
 	if err != nil {
 		return nil, fmt.Errorf("store: backup verify: the copy at %s will not open: %w", path, err)
@@ -295,9 +324,22 @@ func verifyBackup(ctx context.Context, path string) ([]string, error) {
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("store: backup verify: read schema_migrations in the copy: %w", err)
 	}
-	if len(applied) == 0 {
-		return nil, fmt.Errorf("store: backup verify: the copy at %s records no schema at all, "+
-			"so it is not a copy of a migrated database", path)
+	// AGAINST THE SOURCE'S OWN SCHEMA, not against "more than none".
+	//
+	// The rule this replaces — a copy with no migrations is not a copy of a
+	// migrated database — was a proxy for the real question and stopped
+	// being true the day a node grew a second estate: the replicated
+	// estate's sequence is empty until the state log's tables land, so its
+	// backup would have been refused for faithfully reproducing an empty
+	// sequence. Comparing against the source answers the actual question,
+	// and is strictly stronger everywhere the old rule held: a copy that
+	// carries FEWER migrations than the live database is one a restore
+	// would migrate forward from the wrong place, whether that number is
+	// zero or twelve.
+	if !slices.Equal(applied, want) {
+		return nil, fmt.Errorf("store: backup verify: the copy at %s records schema %v "+
+			"but the database it was copied from has applied %v, so a restore of it "+
+			"would migrate forward from the wrong place", path, applied, want)
 	}
 	return applied, nil
 }
@@ -400,4 +442,19 @@ func sameFile(a, b string) bool {
 		return false
 	}
 	return os.SameFile(ai, bi)
+}
+
+// fileDigest is the sha256 of a file, hex-encoded.
+func fileDigest(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("store: backup: read %s to checksum it: %w", path, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	sum := sha256.New()
+	if _, err := io.Copy(sum, f); err != nil {
+		return "", fmt.Errorf("store: backup: checksum %s: %w", path, err)
+	}
+	return hex.EncodeToString(sum.Sum(nil)), nil
 }

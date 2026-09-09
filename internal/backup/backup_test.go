@@ -132,17 +132,37 @@ func TestABackupCapturesBothEstates(t *testing.T) {
 		t.Fatalf("take: %v", err)
 	}
 
-	if manifest.Store == nil {
-		t.Fatal("the manifest describes no store copy")
+	// BOTH ESTATES, each as its own file with its own digest. A restore
+	// that found one of them would rebuild a company whose audit log and
+	// whose tracker came from different moments.
+	if len(manifest.Stores) != 2 {
+		t.Fatalf("the manifest describes %d store copies, want both estates: %+v",
+			len(manifest.Stores), manifest.Stores)
 	}
-	if manifest.Store.Bytes <= 0 {
-		t.Errorf("store copy is %d bytes", manifest.Store.Bytes)
+	seen := map[store.Estate]bool{}
+	for _, st := range manifest.Stores {
+		seen[st.Estate] = true
+		if st.Bytes <= 0 {
+			t.Errorf("the %s copy is %d bytes", st.Estate, st.Bytes)
+		}
+		if len(st.SHA256) != 64 {
+			t.Errorf("the %s copy carries digest %q, want a sha256 taken at the "+
+				"moment the copy passed its integrity check", st.Estate, st.SHA256)
+		}
+		if _, err := os.Stat(filepath.Join(dir, st.File)); err != nil {
+			t.Errorf("the %s copy the manifest names is not there: %v", st.Estate, err)
+		}
 	}
-	if !slicesContain(manifest.Store.Migrations, store.SchemaVersions()[0]) {
-		t.Errorf("the manifest records schema %v", manifest.Store.Migrations)
+	if !seen[store.EstateNode] || !seen[store.EstateReplicated] {
+		t.Errorf("the manifest covers %v, want both estates", seen)
 	}
-	if _, err := os.Stat(filepath.Join(dir, manifest.Store.File)); err != nil {
-		t.Errorf("the store copy the manifest names is not there: %v", err)
+	for _, st := range manifest.Stores {
+		if st.Estate != store.EstateNode {
+			continue
+		}
+		if !slicesContain(st.Migrations, store.SchemaVersions(store.EstateNode)[0]) {
+			t.Errorf("the manifest records schema %v", st.Migrations)
+		}
 	}
 
 	// Both the stream AND the coordination bucket — a bucket is a stream,
@@ -262,8 +282,9 @@ func TestANodeWithOnlyOneEstateBacksUpWhatItHas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store-only take: %v", err)
 	}
-	if manifest.Store == nil {
-		t.Error("the store-only backup describes no store")
+	if len(manifest.Stores) != 2 {
+		t.Errorf("the store-only backup describes %d copies, want both estates",
+			len(manifest.Stores))
 	}
 	if len(manifest.Streams) != 0 {
 		t.Errorf("a node with no broker reported %d streams", len(manifest.Streams))
@@ -277,8 +298,8 @@ func TestANodeWithOnlyOneEstateBacksUpWhatItHas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stream-only take: %v", err)
 	}
-	if manifest.Store != nil {
-		t.Error("a node with no store described one")
+	if len(manifest.Stores) != 0 {
+		t.Errorf("a node with no store described %d copies", len(manifest.Stores))
 	}
 	if len(manifest.Streams) == 0 {
 		t.Error("the stream-only backup captured nothing")
