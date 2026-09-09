@@ -671,7 +671,40 @@ func (r MutationRecord) Encode() ([]byte, error) {
 	if err := r.Scope.Validate(); err != nil {
 		return nil, err
 	}
-	return json.Marshal(r)
+	body, err := json.Marshal(r)
+	if err != nil || len(r.Extra) == 0 {
+		return body, err
+	}
+
+	// A RECORD FROM A NEWER BUILD RE-ENCODES WITH ITS UNKNOWN FIELDS.
+	//
+	// [Extra] is what the decoder kept and this is what puts it back:
+	// without it a relayed record loses everything the writer wrote that
+	// this build has no field for, and the "decodes, round-trips and
+	// re-publishes losslessly" contract that makes a rolling upgrade
+	// possible is false. The change feed is where it shows: a parser on a
+	// newer node reads a record an older node relayed, and sees only the
+	// half its relay understood.
+	//
+	// The map path is taken ONLY when there is something to add. A record
+	// this build wrote has no unknown fields, so its bytes are the
+	// struct's own — which is what keeps the barrier's literal
+	// byte-identical, and its size is the figure the read index's whole
+	// cost model rests on.
+	var merged map[string]json.RawMessage
+	if err := json.Unmarshal(body, &merged); err != nil {
+		return nil, fmt.Errorf("tracker: re-encode a record carrying %d "+
+			"field(s) this build does not know: %w", len(r.Extra), err)
+	}
+	for key, value := range r.Extra {
+		// A KNOWN KEY WINS. Extra should never hold one — the decoder
+		// only files what is not in the struct — and if it somehow does,
+		// this build's own value is the one it can be held to.
+		if _, taken := merged[key]; !taken {
+			merged[key] = value
+		}
+	}
+	return json.Marshal(merged)
 }
 
 // ChangeKind is what happened, as a recipient needs to be told it.
