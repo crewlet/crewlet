@@ -26,9 +26,11 @@ var log = logging.Get("integration")
 //
 // It is also what the control plane's own reconcile poll ticks at, and the
 // two cost about the same: a tick with nothing due is one duty claim and one
-// read of a coordination bucket holding at most seven keys, on a connection
-// the process already holds. Nothing is fetched from a third-party app unless
-// one is due.
+// read of the activation pointer plus one status row per node, on a connection
+// the process already holds. That is the SHAPE rather than a count — a fixed
+// number here was a claim about how many nodes a fleet has, which is the one
+// thing about it nothing in this package knows. Nothing is fetched from a
+// third-party app unless one is due.
 const Interval = 15 * time.Second
 
 // WakeSettle is how long a config apply waits before the tick it brings
