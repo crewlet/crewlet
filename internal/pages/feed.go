@@ -43,25 +43,20 @@ func (t *Translator) skillsContainer() string {
 	return strings.TrimSpace(t.skills())
 }
 
-// Family is the family this translator serves.
-func (t *Translator) Family() coord.Family { return coord.FamilyPages }
-
-// Class is the key class the feed filters on: the change class, never a
-// rewritable key.
-func (t *Translator) Class() string { return ClassChange }
-
-// Source is the notification source name.
-func (t *Translator) Source() string { return Source }
+// Source is the estate this translator serves: the notification source name
+// parsers register under, and the pages family's durable consumer, whose name
+// comes from [changefeed.Group] so it stays byte-identical to the one the
+// fleet is already positioned on.
+func (t *Translator) Source() changefeed.Source {
+	return changefeed.Source{Name: Source, Group: changefeed.Group(coord.FamilyPages)}
+}
 
 // Translate decides whether a change wakes anybody.
-func (t *Translator) Translate(ctx context.Context, change coord.Change) (changefeed.Delivery, bool, error) {
-	if change.Op == coord.OpPurge {
-		return changefeed.Delivery{}, false, nil
-	}
-	record, err := DecodeChange(change.Value)
+func (t *Translator) Translate(ctx context.Context, rec changefeed.Record) (changefeed.Delivery, bool, error) {
+	record, err := DecodeChange(rec.Payload)
 	if err != nil {
 		return changefeed.Delivery{}, false, fmt.Errorf(
-			"pages: read the change on %s: %w", change.Key, err)
+			"pages: read the change on %s: %w", rec.Key, err)
 	}
 	if record.Quiet {
 		log.DebugContext(ctx, "pages_change_quiet", "change", record.ID,
