@@ -36,7 +36,7 @@ func projected(t *testing.T) (*pages.Store, *store.DB, *projection.Projector) {
 		t.Fatal(err)
 	}
 	p, err := projection.New(projection.Options{
-		Documents: docs, DB: db, Applier: pages.NewApplier(skillWhen("<!--skill-->"), nil),
+		Documents: docs, DB: db, Applier: pages.NewBucketApplier(skillWhen("<!--skill-->"), nil),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -251,7 +251,7 @@ func TestABootReconcileNeverDropsAPagesHistory(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	p, err := projection.New(projection.Options{
-		Documents: docs, DB: db, Applier: pages.NewApplier(nil, nil),
+		Documents: docs, DB: db, Applier: pages.NewBucketApplier(nil, nil),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -414,7 +414,7 @@ func TestASkillPageMovingTellsTheRegistry(t *testing.T) {
 
 	p, err := projection.New(projection.Options{
 		Documents: docs, DB: db,
-		Applier: pages.NewApplier(skillWhen("<!--skill-->"), notified),
+		Applier: pages.NewBucketApplier(skillWhen("<!--skill-->"), notified),
 	})
 	if err != nil {
 		t.Fatal(err)
