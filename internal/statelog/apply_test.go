@@ -652,16 +652,35 @@ func TestACompactedDomainStepsOverHolesAndSupersedesItsDeferrals(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 
-	var count, position int64
+	var count, position, orphans int64
 	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(t.Context(),
 			`SELECT COUNT(*) FROM probe_log_deferred`).Scan(&count); err != nil {
+			return err
+		}
+		// THE SCOPE CHILD IS SUPERSEDED WITH ITS PARENT. There is no
+		// foreign key, so the child is found through the parent's own
+		// position — and a supersede that removed the parent first
+		// would leave rows no record owns, which every later probe
+		// reads as a deferral this node cannot clear: the read barrier
+		// waits on it and the writer's step 0 refuses to publish.
+		if err := tx.QueryRowContext(t.Context(), `
+			SELECT COUNT(*) FROM probe_deferred_scope s
+			WHERE NOT EXISTS (
+				SELECT 1 FROM probe_log_deferred d WHERE d.position = s.position)`).
+			Scan(&orphans); err != nil {
 			return err
 		}
 		return tx.QueryRowContext(t.Context(),
 			`SELECT position FROM probe_log_deferred`).Scan(&position)
 	}); err != nil {
 		t.Fatalf("read the deferred records: %v", err)
+	}
+	if orphans != 0 {
+		t.Fatalf("%d scope row(s) outlived the record they index — a probe "+
+			"reads them as a deferral this node holds and cannot clear, so "+
+			"the read barrier waits and the write path refuses, for ever",
+			orphans)
 	}
 	if count != 1 {
 		t.Fatalf("%d deferred record(s) for one subject, want 1 — a compacted "+

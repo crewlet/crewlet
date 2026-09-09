@@ -33,9 +33,11 @@ import (
 // in Go, which at 5 000 rows of 1 536 dimensions was 144 ms and 35.8 MB
 // against 34 ms and 35.8 KB for the same ranking. The SHAPE did not: it is
 // still linear in the seat's row count, still with no ceiling, and this pass
-// is still the only thing that puts one there. The original measurement,
-// before the move — 6 ms at 100 rows, 32 ms at 500, 63 ms at 1000, 122 ms at
-// 2000, ~62 µs per row — is what the pass was sized against.
+// is still the only thing that puts one there. The measurement AFTER the move,
+// which is the one this pass is now sized against — 1.9 ms at 100 rows, 3.9 ms
+// at 500, 7.3 ms at 1000, 15.2 ms at 2000, 7.5 µs per row — is in
+// BenchmarkRecallScan. The pre-move figures it replaces were 8× higher and
+// described the Go loop this package deleted.
 //
 // Four actions, cheapest first, so an expensive one never runs over rows the
 // cheap ones were about to delete:
@@ -193,11 +195,19 @@ const (
 	// defaultThreshold is the raw-row count that makes a pass due.
 	//
 	// MEASURED, and it is a latency budget rather than a storage one: recall
-	// scans and cosines every embedded row a seat owns, once per turn, at
-	// ~62 µs per row (see the package block above). 500 rows is ~32 ms on
-	// the Plan phase of every turn — a rounding error next to one LLM round.
-	// 2000 would be ~122 ms and still climbing linearly, because nothing
-	// else in the system bounds this number.
+	// scans every embedded row a seat owns, once per turn, at 7.5 µs per
+	// row at 1 536 dimensions (BenchmarkRecallScan, re-measured at the pin).
+	// 500 rows is ~3.9 ms on the Plan phase of every turn — a rounding error
+	// next to one LLM round. 2000 is ~15 ms and still climbing linearly,
+	// because nothing else in the system bounds this number.
+	//
+	// THE 62 µs/row THIS REPLACES WAS 8× STALE, and it had already been
+	// contradicted inside this package: the ORDER BY moved into the database
+	// and only the rows surviving the LIMIT cross the driver boundary now.
+	// The threshold does not move with the correction — it is a latency
+	// budget and the budget is met by a wide margin — but the ANCHOR does,
+	// because the next person to raise this number would have reasoned from
+	// a per-row cost that has not been true since the Go loop went.
 	//
 	// It must stay in step with config.DefaultEpisodeLifecycle, which is
 	// what an operator actually edits; the two agreeing is asserted by a
@@ -222,7 +232,7 @@ const (
 	// speaks to. A tool-free turn IS a conversation — it answered somebody
 	// without doing anything — so its value as "similar prior work" decays
 	// with the thread it belonged to, while its cost does not decay at all:
-	// it is a row recall scans on every Plan phase at ~62 µs, permanently.
+	// it is a row recall scans on every Plan phase at 7.5 µs, permanently.
 	//
 	// Deliberately far longer than the other two raw-row horizons here (14
 	// and 30 days), because those drop rows that are half-finished or
@@ -316,8 +326,8 @@ func (o Options) withDefaults() Options {
 		// VALUE of this struct produce summaries with no anchors at all,
 		// and a summary nobody can open is the failure this whole exemplar
 		// mechanism exists to prevent. What it costs to keep them is two
-		// rows per fold, which at the measured ~62 µs of recall scan per
-		// row is 124 µs a turn.
+		// rows per fold, which at the measured 7.5 µs of recall scan per
+		// row is 15 µs a turn.
 		o.ExemplarCount = defaultExemplarCount
 	}
 	return o

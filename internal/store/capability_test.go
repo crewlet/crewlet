@@ -36,12 +36,14 @@ import (
 //
 // turso.tech/database/tursogo v0.8.0-pre.7: the vector functions ship;
 // libsql_vector_idx() in CREATE INDEX and the fts() index expression are both
-// parse errors, and fts5 is not a registered module.
+// parse errors, fts5 is not a registered module, and WITHOUT ROWID is refused
+// as an experimental feature.
 var capabilityMatrix = struct {
 	vectorFunctions bool
 	vectorIndex     bool
 	fullTextSearch  bool
-}{vectorFunctions: true, vectorIndex: false, fullTextSearch: false}
+	withoutRowid    bool
+}{vectorFunctions: true, vectorIndex: false, fullTextSearch: false, withoutRowid: false}
 
 func TestCapabilityMatrix(t *testing.T) {
 	t.Parallel()
@@ -69,6 +71,42 @@ func TestCapabilityMatrix(t *testing.T) {
 			"a queryable full-text index reaches the Go driver")
 		exerciseFullText(t, db)
 	})
+	t.Run("WithoutRowid", func(t *testing.T) {
+		gate(t, caps.WithoutRowid, want.withoutRowid,
+			"WITHOUT ROWID tables reach the Go driver")
+		exerciseWithoutRowid(t, db)
+	})
+}
+
+// exerciseWithoutRowid does the thing the capability is for: the narrow
+// clustered table `kb_vectors_bin` would be if the driver allowed one.
+//
+// THE DAY THIS RUNS IS THE DAY THE DECISION IS REVISITED. The stage-1 scan
+// reaches a row only through its primary key, so the rowid it is forced to
+// carry is an extra b-tree and an extra indirection per candidate — on the one
+// table every semantic search reads end to end.
+func exerciseWithoutRowid(t *testing.T, db *store.DB) {
+	t.Helper()
+	ctx := t.Context()
+	if _, err := db.SQL().ExecContext(ctx,
+		`CREATE TABLE cap_wr (source TEXT NOT NULL, source_id TEXT NOT NULL, `+
+			`bits BLOB NOT NULL, PRIMARY KEY (source, source_id)) WITHOUT ROWID`,
+	); err != nil {
+		t.Fatalf("create WITHOUT ROWID: %v", err)
+	}
+	if _, err := db.SQL().ExecContext(ctx,
+		`INSERT INTO cap_wr (source, source_id, bits) VALUES ('page', 'p1', x'00')`,
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	var got string
+	if err := db.SQL().QueryRowContext(ctx,
+		`SELECT source_id FROM cap_wr WHERE source = 'page'`).Scan(&got); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if got != "p1" {
+		t.Fatalf("read back %q", got)
+	}
 }
 
 // gate compares the probe against the recorded matrix and decides whether the
