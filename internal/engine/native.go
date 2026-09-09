@@ -196,8 +196,8 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			// moves. Natively there is no page webhook to hang that
 			// off — the change feed deliberately drops those changes
 			// — so the APPLY is what notices; see
-			// [pages.NewApplier].
-			Applier: pages.NewApplier(skillDetector{}, e.nudgeSkills),
+			// [pages.NewBucketApplier].
+			Applier: pages.NewBucketApplier(skillDetector{}, e.nudgeSkills),
 		})
 		if err != nil {
 			cancel()

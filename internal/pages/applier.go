@@ -24,8 +24,14 @@ type SkillDetector interface {
 	IsSkill(body string) bool
 }
 
-// Applier projects the pages family into a node's own tables.
-type Applier struct {
+// BucketApplier projects the pages family into a node's own tables.
+//
+// NAMED FOR WHAT IT READS rather than for what it is, because it is going
+// away: [Applier] is the pages DOMAIN's state machine, which derives the same
+// rows from an ordered log instead of from a coordination bucket. The two
+// coexist for exactly as long as the write paths take to move, and the name
+// here is the one that will read correctly in the commit that deletes it.
+type BucketApplier struct {
 	skills SkillDetector
 
 	// touched is called after a batch that changed a TOOL-SKILL page.
@@ -54,19 +60,19 @@ type Applier struct {
 	skillMoved bool
 }
 
-// NewApplier builds the knowledge base's applier.
+// NewBucketApplier builds the projection's applier.
 //
 // onSkillChange is called after a committed batch that touched a tool-skill
 // page, so a registry can re-read the container. AFTER THE COMMIT, never
 // inside the transaction: a callback that ran mid-apply would see rows the
 // batch had not committed, and a slow one would hold the projection's own
 // write lock while every other change queued behind it.
-func NewApplier(skills SkillDetector, onSkillChange func()) *Applier {
-	return &Applier{skills: skills, touched: onSkillChange}
+func NewBucketApplier(skills SkillDetector, onSkillChange func()) *BucketApplier {
+	return &BucketApplier{skills: skills, touched: onSkillChange}
 }
 
 // Family is the family this applier serves.
-func (a *Applier) Family() projection.Family { return coord.FamilyPages }
+func (a *BucketApplier) Family() projection.Family { return coord.FamilyPages }
 
 // Committed implements [projection.Applier]: tell the registry if a
 // tool-skill page moved in this batch.
@@ -76,7 +82,7 @@ func (a *Applier) Family() projection.Family { return coord.FamilyPages }
 // twenty. The flag is cleared before the callback runs, so a change that
 // lands during the re-read sets it again and is picked up by the next batch
 // rather than being swallowed.
-func (a *Applier) Committed(context.Context) {
+func (a *BucketApplier) Committed(context.Context) {
 	a.mu.Lock()
 	moved := a.skillMoved
 	a.skillMoved = false
@@ -93,7 +99,7 @@ func (a *Applier) Committed(context.Context) {
 // been overwritten. A read failure answers false and is not an error — the
 // worst it costs is a registry that keeps an evicted skill until the next
 // change, where failing the batch would stop the projection over a page.
-func (a *Applier) wasSkill(ctx context.Context, tx *sql.Tx, id string) bool {
+func (a *BucketApplier) wasSkill(ctx context.Context, tx *sql.Tx, id string) bool {
 	var skill int
 	err := tx.QueryRowContext(ctx, `SELECT skill FROM pages WHERE id = ?`, id).Scan(&skill)
 	return err == nil && skill == 1
@@ -105,7 +111,7 @@ func (a *Applier) wasSkill(ctx context.Context, tx *sql.Tx, id string) bool {
 // a skill edited into ordinary prose has to leave the registry, and a
 // registry that only heard about arrivals would serve its last-good body
 // for ever. See the eviction rule in [internal/agent/skills].
-func (a *Applier) noteSkill() {
+func (a *BucketApplier) noteSkill() {
 	a.mu.Lock()
 	a.skillMoved = true
 	a.mu.Unlock()
@@ -118,7 +124,7 @@ func (a *Applier) noteSkill() {
 // projection key set then records it as applied — so nothing re-fetches it and
 // a page's history is permanently short. See [projection.Applier.Order] for
 // the measurement that produced this.
-func (a *Applier) Order(key string) int {
+func (a *BucketApplier) Order(key string) int {
 	class, ok := ClassOf(key)
 	if !ok {
 		return orderUnknown
@@ -149,7 +155,7 @@ const (
 )
 
 // Apply writes one change's rows.
-func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, change coord.Change) error {
+func (a *BucketApplier) Apply(ctx context.Context, tx *sql.Tx, change coord.Change) error {
 	class, ok := ClassOf(change.Key)
 	if !ok {
 		log.WarnContext(ctx, "pages_projection_foreign_key", "key", change.Key,
@@ -176,7 +182,7 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, change coord.Change) er
 }
 
 // Reset drops every row this applier owns.
-func (a *Applier) Reset(ctx context.Context, tx *sql.Tx) error {
+func (a *BucketApplier) Reset(ctx context.Context, tx *sql.Tx) error {
 	for _, table := range []string{
 		"page_history", "page_comments", "page_revisions", "page_watchers",
 		"page_labels", "pages", "page_containers",
@@ -188,7 +194,7 @@ func (a *Applier) Reset(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-func (a *Applier) applyContainer(ctx context.Context, tx *sql.Tx, change coord.Change) error {
+func (a *BucketApplier) applyContainer(ctx context.Context, tx *sql.Tx, change coord.Change) error {
 	segs, ok := SegmentsOf(change.Key)
 	if !ok || len(segs) != 2 {
 		return nil
@@ -220,7 +226,7 @@ func (a *Applier) applyContainer(ctx context.Context, tx *sql.Tx, change coord.C
 	return nil
 }
 
-func (a *Applier) applyPage(ctx context.Context, tx *sql.Tx, change coord.Change) error {
+func (a *BucketApplier) applyPage(ctx context.Context, tx *sql.Tx, change coord.Change) error {
 	id, ok := PageIDOf(change.Key)
 	if !ok {
 		return nil
@@ -303,7 +309,7 @@ func (a *Applier) applyPage(ctx context.Context, tx *sql.Tx, change coord.Change
 	return a.replaceWatchers(ctx, tx, page)
 }
 
-func (a *Applier) replaceWatchers(ctx context.Context, tx *sql.Tx, page Page) error {
+func (a *BucketApplier) replaceWatchers(ctx context.Context, tx *sql.Tx, page Page) error {
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM page_watchers WHERE page_id = ?`, page.ID); err != nil {
 		return fmt.Errorf("pages: clear watchers on %q: %w", page.Title, err)
@@ -330,7 +336,7 @@ func (a *Applier) replaceWatchers(ctx context.Context, tx *sql.Tx, page Page) er
 }
 
 // applyRevision projects a revision's METADATA. The body stays in the bucket.
-func (a *Applier) applyRevision(ctx context.Context, tx *sql.Tx, change coord.Change) error {
+func (a *BucketApplier) applyRevision(ctx context.Context, tx *sql.Tx, change coord.Change) error {
 	segs, ok := SegmentsOf(change.Key)
 	if !ok || len(segs) != 3 {
 		return nil
@@ -370,7 +376,7 @@ func (a *Applier) applyRevision(ctx context.Context, tx *sql.Tx, change coord.Ch
 	return nil
 }
 
-func (a *Applier) applyComment(ctx context.Context, tx *sql.Tx, change coord.Change) error {
+func (a *BucketApplier) applyComment(ctx context.Context, tx *sql.Tx, change coord.Change) error {
 	segs, ok := SegmentsOf(change.Key)
 	if !ok || len(segs) != 3 {
 		return nil
@@ -411,7 +417,7 @@ func (a *Applier) applyComment(ctx context.Context, tx *sql.Tx, change coord.Cha
 }
 
 // applyChange appends to a page's history. Append-only, matching the bucket.
-func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, change coord.Change) error {
+func (a *BucketApplier) applyChange(ctx context.Context, tx *sql.Tx, change coord.Change) error {
 	segs, ok := SegmentsOf(change.Key)
 	if !ok || len(segs) != 3 {
 		return nil
