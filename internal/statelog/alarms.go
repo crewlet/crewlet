@@ -468,7 +468,8 @@ var table = []rule{
 					float64(r.LinearizableReads) > CensusDriftFactor*float64(r.LinearizableReadsExpected)
 		},
 		remedy: "Re-derive the log's ceiling and the trim's cadence from the real " +
-			"rate. See docs/guides/retention.md.",
+			"rate. See `stream.tracker_retention` in " +
+			"docs/getting-started/configuration.md.",
 	},
 }
 
