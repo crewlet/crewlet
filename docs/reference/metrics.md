@@ -83,10 +83,9 @@ Only ever rises. Rates and totals are your collector's arithmetic, never this en
 | `crewlet.statelog.barrier.appends` | `1` | `domain` | Barrier records appended. Against reads served it is the single-flight ratio, which says whether coalescing is doing anything at all. |
 | `crewlet.statelog.linger.yields` | `1` | `domain` | How often a waiter cut a batch short. It is the batching the applier gives up to answer a read promptly, and without it that trade is invisible. |
 | `crewlet.statelog.apply.records` | `1` | `domain`, `result` | Records consumed, by what happened to them: applied, retained, gated or skipped. A node applying nothing while its position advances is healthy on lag alone. |
-| `crewlet.statelog.apply.tx.aborts` | `1` | `domain` | Apply transactions the store aborted on a conflict. It is the number that says whether this driver's transaction conflicts are row-scoped or database-scoped, on the operator's own hardware rather than on a benchmark's. |
+| `crewlet.statelog.apply.tx.aborts` | `1` | `domain` | Apply transactions the store aborted on a conflict and the loop retried. It is the number that says whether this driver's transaction conflicts are row-scoped or database-scoped, on the operator's own hardware rather than on a benchmark's — measured at zero against a writer committing to tables the applier never touches, so a non-zero count means the retry budget is being spent rather than held in reserve. |
 | `crewlet.statelog.apply.retries` | `1` | `domain` | Transient apply failures retried in place, which are otherwise a silent backoff inside the loop. |
 | `crewlet.statelog.records_gated` | `1` | `gate`, `subject_kind` | Records an apply gate dropped. A dropped commit is recoverable by nothing, and this is the only place anyone would see that it happened. |
-| `crewlet.statelog.apply.tx_aborts` | `1` | `domain` | Apply transactions retried because the store aborted them. Measured at zero against a writer committing to tables the applier never touches — this is what says so on hardware and a driver nobody benchmarked, and a non-zero count means the retry budget is being spent rather than held in reserve. |
 
 ## What is deliberately not here
 
