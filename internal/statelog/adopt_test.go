@@ -33,6 +33,11 @@ type joinHarness struct {
 	phases   []statelog.AdoptionPhase
 	closes   atomic.Int64
 	reopens  atomic.Int64
+
+	// stillUsable is step 7's re-check, nil by default. A case sets it to
+	// stage the one thing the hold is a belt against: a fleet that
+	// trimmed past the artefact while it was in flight.
+	stillUsable func(context.Context, statelog.Manifest) error
 }
 
 func newJoinHarness(t *testing.T) *joinHarness {
@@ -168,6 +173,7 @@ func (h *joinHarness) adopter(t *testing.T) *statelog.Adopter {
 			h.phases = append(h.phases, phase)
 			return nil
 		},
+		StillUsable: h.stillUsable,
 	})
 	if err != nil {
 		t.Fatalf("NewAdopter: %v", err)

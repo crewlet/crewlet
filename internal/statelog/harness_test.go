@@ -302,6 +302,9 @@ type countingAppender struct {
 	lastSeq atomic.Int64
 
 	mu sync.Mutex
+	// expects is every expectation an append carried, in order. A nil
+	// entry is an additive write, which forms none.
+	expects []*uint64
 	// failNext, when set, is returned instead of publishing — which is
 	// how the ambiguous path is reached without unplugging a broker.
 	failNext error
@@ -315,6 +318,7 @@ func (c *countingAppender) Append(ctx context.Context, subject, msgID string, ex
 	c.mu.Lock()
 	fail, swallow := c.failNext, c.swallow
 	c.failNext = nil
+	c.expects = append(c.expects, expect)
 	c.mu.Unlock()
 	if fail != nil && swallow {
 		return 0, false, fail
@@ -335,6 +339,13 @@ func (c *countingAppender) Append(ctx context.Context, subject, msgID string, ex
 
 func (c *countingAppender) LastSeq(ctx context.Context, subject string) (uint64, bool, error) {
 	return c.inner.LastSeq(ctx, subject)
+}
+
+// expectations is every expectation the publisher formed, in order.
+func (c *countingAppender) expectations() []*uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]*uint64(nil), c.expects...)
 }
 
 func (c *countingAppender) fail(err error, swallow bool) {

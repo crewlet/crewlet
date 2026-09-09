@@ -65,6 +65,25 @@ type NodePositions struct {
 	At            time.Time                 `json:"at"`
 	EngineVersion string                    `json:"engine_version,omitempty"`
 	Domains       map[string]DomainPosition `json:"domains"`
+
+	// SnapshotBytes is the size of the artefact those per-domain snapshot
+	// positions came from.
+	//
+	// ON THE ROW RATHER THAN ON EACH DOMAIN, because a snapshot is ONE
+	// file covering every domain: a byte count per domain would be the
+	// same number written N times, and the first time they disagreed a
+	// reader would have to decide which was the file.
+	SnapshotBytes int64 `json:"snapshot_bytes,omitempty"`
+
+	// SnapshotSkip is why this node holds no current snapshot, in its own
+	// loop's words, and empty when it holds one.
+	//
+	// THE OPERATOR'S ANSWER TO "why can this node not donate", which is
+	// the question a failed join raises and the one nothing else on this
+	// row can answer: an absent snapshot position says a node has none and
+	// is silent about whether that is a disk that filled, a node that is
+	// lagging, or a loop that has simply not run yet.
+	SnapshotSkip string `json:"snapshot_skip,omitempty"`
 }
 
 // PositionRegister is the fleet's record of where every node stands.
