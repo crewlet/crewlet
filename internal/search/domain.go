@@ -1,10 +1,13 @@
 package search
 
 import (
+	"context"
+	"database/sql"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // Domain is the vector half as the state-log framework sees it.
@@ -172,3 +175,81 @@ func (Domain) ReadinessInput() bool { return false }
 // the claim exists to be checkable — a claim nobody can check is worse than
 // none, because it is the one a fleet report would print.
 func (Domain) ClaimsIdentity() bool { return false }
+
+// NewRows builds the publisher's read seam for this domain.
+//
+// THE FRAMEWORK IMPLEMENTS IT, for the reason the tracker's own seam gives:
+// three of the four things a snapshot returns are the framework's own tables,
+// and the two-clause containment probe over them is the one piece of SQL where
+// a wrong clause is silent data loss rather than a wrong answer.
+//
+// The guards answer FALSE for both, and that is this domain's own answer
+// rather than an omission: an object here is created by its first record and
+// removed by a forget record, so there is no permanent deletion marker to
+// consult and no guarding row a first write has to see. It publishes
+// additively and arbitrates nothing.
+func NewRows(db *store.DB) (statelog.Rows, error) {
+	return statelog.NewRows(db, Domain{},
+		func(context.Context, *sql.Tx, statelog.Subject) (bool, bool, error) {
+			return false, false, nil
+		})
+}
+
+// Fence is this domain's eviction fence, and it is OPEN BY DECLARATION.
+//
+// # Why an eviction does not reach here, and what does instead
+//
+// The mutation log's fence exists because an evicted node's append is accepted
+// by the broker and dropped by every applier, so a writer that does not know
+// it is out collects acknowledgements for records nobody applies. Neither half
+// of that is true here: this domain installs no apply gate, so a record from
+// any node applies everywhere, and nothing is waiting on the acknowledgement.
+//
+// What actually stops an evicted node writing vectors is stronger than a
+// fence: the duty is a FLEET SINGLETON and an evicted node does not hold the
+// lease. That guard is also earlier — it stops the provider call, which a
+// fence checked at append time would already have paid for.
+type Fence struct{}
+
+// NewFence builds it.
+func NewFence() Fence { return Fence{} }
+
+// Evicted implements [statelog.Fence]. See the type doc for why it is open.
+func (Fence) Evicted(context.Context) (bool, error) { return false, nil }
+
+// ClearForZero implements [statelog.Fence].
+//
+// UNREACHABLE ON THIS DOMAIN and answering nil rather than an error, which is
+// the honest pair: it is asked only of a write publishing at an expectation of
+// zero, and every write here is additive and carries no expectation at all. An
+// error would refuse a call that would be correct if it ever came.
+func (Fence) ClearForZero(context.Context, statelog.Position) error { return nil }
+
+// Gates answers whether a durable record produced rows on no node.
+//
+// NOTHING GATES A VECTOR, which [Applier.Gated] states from the applier's side
+// and this states from the publisher's. The two must agree: a resolution that
+// looked for a gate the applier never installs would read every unapplied
+// record as "somebody else won".
+type Gates struct{}
+
+// NewGates builds it.
+func NewGates() Gates { return Gates{} }
+
+// GatedAt implements [statelog.Gates].
+func (Gates) GatedAt(context.Context, statelog.Subject, string, string, statelog.Position) (statelog.Reason, bool, error) {
+	return "", false, nil
+}
+
+// AdoptedAt implements [statelog.Gates], and is UNREACHABLE on this domain.
+//
+// It exists to qualify a read of the OPERATION LEDGER — an op id minted before
+// this node adopted a donated snapshot cannot be answered for, because the
+// ledger travels scrubbed. This domain keeps no ledger, so the publisher's
+// resolution never reaches the arm that asks. Answering "never adopted" is
+// therefore not a claim about the node; it is the value of a question nobody
+// asks, and a domain that reached for the framework's adoption row here would
+// be reading a table to feed a branch that cannot run.
+func (Gates) AdoptedAt(context.Context) (time.Time, bool, error) {
+	return time.Time{}, false, nil
+}

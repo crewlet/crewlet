@@ -2,6 +2,7 @@ package embeddings
 
 import (
 	"context"
+	"errors"
 	"hash/fnv"
 	"math"
 	"strings"
@@ -25,7 +26,7 @@ import (
 // silently worse in exactly the cases recall exists for.
 type Fake struct{ width int }
 
-var _ Embedder = (*Fake)(nil)
+var _ BatchEmbedder = (*Fake)(nil)
 
 // NewFake builds a fake at the given width. Zero takes a small one, because
 // a test asserting a store round trip cares about the width matching, not
@@ -72,4 +73,28 @@ func (f *Fake) Embed(_ context.Context, text string) ([]float32, error) {
 		vector[i] /= norm
 	}
 	return vector, nil
+}
+
+// EmbedBatch implements [BatchEmbedder].
+//
+// A LOOP, and that is the honest implementation for a backend with no network
+// call to amortise: what the batch interface buys is round trips, and this one
+// makes none. What it must still honour is the positional contract — an
+// unembeddable input keeps its slot as a nil vector rather than being dropped,
+// because a caller matching results to documents by index is what the contract
+// is for, and a fake that quietly compacted its answer would be a fake that
+// only ever tested the happy corpus.
+func (f *Fake) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	out := make([][]float32, len(texts))
+	for i, text := range texts {
+		vector, err := f.Embed(ctx, text)
+		if errors.Is(err, ErrEmpty) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		out[i] = vector
+	}
+	return out, nil
 }
