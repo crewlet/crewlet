@@ -363,6 +363,14 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	if opts.Bootstrap == nil {
 		return nil, fmt.Errorf("engine: no bootstrap config")
 	}
+	// THE CROSS-TIER RULES, before anything is opened. Each tier validated
+	// alone on its way in; what neither could see is the other, and the one
+	// rule that needs both — a native tracker whose log would live on an
+	// in-memory stream — produces a node that refuses to serve
+	// permanently rather than one that fails on the way up.
+	if err := config.CheckTiers(opts.Bootstrap, opts.Company); err != nil {
+		return nil, fmt.Errorf("engine: %w", err)
+	}
 
 	backends := opts.Backends
 	ownsBackends := false

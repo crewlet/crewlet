@@ -157,6 +157,16 @@
       },
       "type": "object"
     },
+    "Retention": {
+      "additionalProperties": false,
+      "properties": {
+        "backup_owner": {
+          "description": "Who owns this deployment's backups — a person, a team, a scheduler. Warned about when unset.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "SecretKey": {
       "additionalProperties": false,
       "properties": {
@@ -213,6 +223,10 @@
         "replicated_path": {
           "description": "Second local database, for replicated state; empty puts it beside path.",
           "type": "string"
+        },
+        "snapshot_dir": {
+          "description": "Where this node keeps snapshots of the replicated estate; empty is \u003cdir of path\u003e/snapshots.",
+          "type": "string"
         }
       },
       "type": "object"
@@ -251,6 +265,21 @@
         "token": {
           "description": "Bearer token for an external server; ${VAR} supported.",
           "type": "string"
+        },
+        "tracker_log_max_bytes": {
+          "description": "Byte ceiling on the mutation log; unset derives a quarter of the stream volume's free space, clamped to 4 GiB..64 GiB.",
+          "maximum": 1099511627776,
+          "minimum": 1073741824,
+          "type": "integer"
+        },
+        "tracker_retention": {
+          "$ref": "#/$defs/TrackerRetention"
+        },
+        "tracker_vectors_max_bytes": {
+          "description": "Byte ceiling on the vector changelog; default 16 GiB, sized for a model change rather than the steady state.",
+          "maximum": 274877906944,
+          "minimum": 1073741824,
+          "type": "integer"
         },
         "type": {
           "description": "embedded (default) or nats.",
@@ -294,6 +323,36 @@
           "maximum": 65535,
           "minimum": 0,
           "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "TrackerRetention": {
+      "additionalProperties": false,
+      "properties": {
+        "backup_floor": {
+          "description": "Whose word the trim takes for what is backed up: engine (default) or operator.",
+          "enum": [
+            "engine",
+            "operator"
+          ],
+          "type": "string"
+        },
+        "backup_max_age": {
+          "description": "How stale the newest backup may be before the trim stops (default 24h, 1h..30d).",
+          "type": "string"
+        },
+        "min_age": {
+          "description": "Age floor no trim may cross (default 7d, 24h..90d).",
+          "type": "string"
+        },
+        "rejoin_window": {
+          "description": "Budget for a node to become a complete replica (default 30m, 5m..24h).",
+          "type": "string"
+        },
+        "snapshot_interval": {
+          "description": "How stale a node's newest snapshot may be before it takes another (default 24h, 1h..7d).",
+          "type": "string"
         }
       },
       "type": "object"
@@ -486,6 +545,9 @@
     },
     "node": {
       "$ref": "#/$defs/Node"
+    },
+    "retention": {
+      "$ref": "#/$defs/Retention"
     },
     "secrets": {
       "$ref": "#/$defs/Secrets"

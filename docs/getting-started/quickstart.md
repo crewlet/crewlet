@@ -93,7 +93,9 @@ providers:
         - "${ANTHROPIC_API_KEY}"
   embeddings:
     type: openai
-    model: text-embedding-3-small
+    model: text-embedding-3-large       # the model decides the vector width
+                                        # (3072 here), so there is no
+                                        # `dimensions` to set
     api_key: "${OPENAI_API_KEY}"        # used by the agent-learning subsystem
                                         # (diary vector search + episode recall)
 

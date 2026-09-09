@@ -321,9 +321,12 @@ providers:
                                         #   Omit it and both fall back to recency;
                                         #   nothing else changes.
     type: openai                        # openai | openai-compatible
-    model: text-embedding-3-small       # required — no default, because a default
-                                        #   here would be a width the store was not
-                                        #   sized for
+    model: text-embedding-3-large       # required, and it DECIDES THE WIDTH: this
+                                        #   one emits 3072, text-embedding-3-small
+                                        #   1536. A new company gets the large one,
+                                        #   because the width is what search quality
+                                        #   rests on and it is not a knob worth
+                                        #   guessing
     api_key: "${OPENAI_API_KEY}"        # supports ${ENV_VAR} references; empty falls
                                         #   back to OPENAI_API_KEY, the same variable
                                         #   the chat backend reads
@@ -331,11 +334,24 @@ providers:
                                         #   difference between `openai` and
                                         #   `openai-compatible`, so a local embedding
                                         #   server needs nothing else
-    dimensions: 1536                    # the vector width. Requested from the API
-                                        #   (third-generation models truncate on
-                                        #   request), and checked against what comes
-                                        #   back on every call
+  # dimensions: 1024                  # OPTIONAL OVERRIDE, 64..4096. Unset takes the
+                                        #   named model's OWN width, which is what
+                                        #   you want unless you are deliberately
+                                        #   shortening it: third-generation models
+                                        #   truncate on request, and a shorter vector
+                                        #   is a smaller index and a worse answer.
+                                        #   A model this build does not know is
+                                        #   REFUSED with `dimensions` unset rather
+                                        #   than given a guess — name a known model
+                                        #   or state the width yourself
 ```
+
+**The width belongs to the model.** `text-embedding-3-large` emits 3072,
+`text-embedding-3-small` 1536, `gemini-embedding-001` 3072 and `embed-v4.0`
+1536, and leaving `dimensions` unset takes whichever the model named here
+emits. There is no global default, because a number that was right for one
+model is silently wrong for the next — and a model this build does not know is
+refused rather than guessed at, naming both ways to fix it.
 
 **The width is a contract with the store, not with the model.** Vectors of
 two different widths cannot be compared, so a row written at the wrong one is
@@ -432,6 +448,69 @@ stream:
                                     #   failure domain). Declining it on a real
                                     #   three-host fleet is a legitimate trade
                                     #   and costs 1–3 ms per write on NVMe
+  # tracker_log_max_bytes: 17179869184
+                                    #   the byte ceiling on the mutation log —
+                                    #   the ordered stream the engine's own
+                                    #   tracker writes through. UNSET DERIVES a
+                                    #   quarter of the stream volume's free
+                                    #   space, clamped to 4..64 GiB, because one
+                                    #   fixed number is five years of history on
+                                    #   the modelled rate and one boot on a
+                                    #   small disk. CROSSING IT REFUSES, it does
+                                    #   not shed: there is no age bound on this
+                                    #   stream, so a full log drops no history —
+                                    #   the append is refused, loudly, naming
+                                    #   whatever is blocking the trim
+  # tracker_vectors_max_bytes: 17179869184
+                                    #   the vector changelog's ceiling (default
+                                    #   16 GiB). SIZED FOR THE PEAK: the stream
+                                    #   keeps one message per source, so a
+                                    #   week's minting is ~91 MB — but changing
+                                    #   the embedding model rewrites EVERY source
+                                    #   in a few hours, and for the following
+                                    #   week all of them are in the window. A
+                                    #   ceiling sized from the steady state would
+                                    #   refuse the one operation it exists to
+                                    #   survive
+  # tracker_retention:              # when the log may be trimmed. Every term
+                                    #   here is a statement about the OPERATOR's
+                                    #   estate rather than the company's policy,
+                                    #   which is why it is Tier A
+  #   min_age: 7d                   #   the age floor NO trim may cross, whatever
+                                    #   the other terms say (24h..90d). It can
+                                    #   only make a trim more conservative, so it
+                                    #   is a lower bound on how long the log
+                                    #   keeps a record and never a ceiling — and
+                                    #   it says nothing about any node's own
+                                    #   store file
+  #   backup_max_age: 24h           #   how stale the newest backup may be before
+                                    #   the trim STOPS ENTIRELY (1h..30d). A
+                                    #   company that never backs up never trims:
+                                    #   the log is the only copy of what no node
+                                    #   has applied yet
+  #   backup_floor: engine          #   whose word the trim takes for what is
+                                    #   backed up. `engine` follows the newest
+                                    #   backup the engine wrote and verified;
+                                    #   `operator` follows an explicit
+                                    #   acknowledgement, for a company that trims
+                                    #   only what has left the host — and then
+                                    #   trims NOTHING until somebody says so
+  #   snapshot_interval: 24h        #   how stale a node's newest snapshot may be
+                                    #   before it takes another (1h..7d). A
+                                    #   snapshot is a full copy of the replicated
+                                    #   estate, so four a day is a day's worth of
+                                    #   I/O to save a joining node a replay it
+                                    #   can do in under a minute. CROSS-FIELD:
+                                    #   `snapshot_interval × 2 < min_age`, or
+                                    #   every snapshot is older than the trim
+                                    #   floor and a node that lost its store has
+                                    #   nothing to resume from
+  #   rejoin_window: 30m            #   the budget for a node to become a
+                                    #   complete replica (5m..24h) — what a join
+                                    #   is measured against and reported on. A
+                                    #   setting rather than a constant, because
+                                    #   the answer is a property of the
+                                    #   operator's disks and network
   # event_retention_hours: 720      # 0 takes the queue's own default (30 days).
                                     #   Unbounded is deliberately not expressible:
                                     #   an event log nothing sweeps grows for the
@@ -454,6 +533,18 @@ store:
                                     #   Owned exclusively by this process. Not a
                                     #   shared database, and no DSN: two engines
                                     #   on one file corrupt it
+  # snapshot_dir: "./crewlet-data/snapshots"
+                                    #   where this node keeps its own snapshots
+                                    #   of the replicated estate — the file a
+                                    #   peer joining the fleet copies instead of
+                                    #   replaying the whole log. Absolute, or
+                                    #   relative to the store's directory. THE
+                                    #   DEFAULT PUTS A FULL COPY ON THE SAME
+                                    #   VOLUME as the live database, which is why
+                                    #   the snapshot loop refuses below 1.1× the
+                                    #   store's size free rather than filling the
+                                    #   disk the applier is committing to. A
+                                    #   separate volume is the production shape
   # replicated_path: "./crewlet-data/crewlet-replicated.db"
                                     #   the REPLICATED estate — everything a
                                     #   state log's applier writes. Empty puts it
@@ -495,7 +586,26 @@ logging:
   level: info       # debug, info (default), warn, error
   format: console   # console (default: columns and colour for a person),
                     #   text (slog key=value), json (for a log shipper)
+
+retention:
+  backup_owner: platform-oncall   # who owns this deployment's backups: a
+                                  #   person, a team, a scheduler's name. Free
+                                  #   text, read by a human at the moment an
+                                  #   alarm names it. `crewlet validate` warns
+                                  #   when it is unset — a company that never
+                                  #   backs up never trims, so "who is
+                                  #   responsible for this" has a real answer on
+                                  #   every deployment that intends to keep
+                                  #   working
 ```
+
+**`crewlet validate` prints warnings as well as refusals**, and they are
+separate on purpose: the exit code turns on refusals alone, so a CI step gates
+on what cannot run and still prints what its operator should read. A warning is
+a configuration that is valid and carries a consequence worth knowing before it
+is applied — a declined fsync's window, a trim that will never advance until
+somebody acknowledges a backup, an embedded stream with nowhere to persist, a
+unit keyed on a name somebody will rename.
 
 `api.host` and `api.port` are what this node **binds**, which is rarely where it
 **answers**: a fleet behind a load balancer binds `0.0.0.0:8000` and is reached
@@ -503,8 +613,8 @@ at `https://crewlet.example.com`. That outside address is Tier B's
 [`integrations.public_base_url`](#integrations), written once and read by every
 provisioner and every link the engine composes.
 
-It belongs in **Tier A** for that reason. Binding a person to a credential goes
-the other way: an `api.auth.tokens[].id` is named from the company document's
+Binding a person to a credential crosses the tiers the other way: an
+`api.auth.tokens[].id` is named from the company document's
 `roles[].contact.crewlet_operator_id`, never from a `seat:` field on the token,
 because Tier A holds the keys to the secret store and may never read Tier B.
 
@@ -544,7 +654,28 @@ nesting depth — flat teams, departments with sub-teams, divisions, or custom t
 
 ```yaml
 units:
-  - name: Engineering                   # required — unit name
+  - name: Engineering                   # required — unit name, and what people
+                                        #   read: in a prompt, on a board, in a
+                                        #   channel topic
+    id: engineering                     # optional — the unit's STABLE IDENTITY.
+                                        #   Lowercase letters, digits, `-` and
+                                        #   `_`, starting with a letter. A name
+                                        #   is prose and gets renamed; an id is
+                                        #   read by nobody and survives, so
+                                        #   everything durable keys on the id
+                                        #   when there is one. Unique across the
+                                        #   chart, and it may not equal another
+                                        #   unit's NAME. Adding one to a unit
+                                        #   that already has work filed against
+                                        #   it rewrites nothing: a filter on a
+                                        #   unit matches its id and its name.
+                                        #   IT DOES NOT STOP A RENAME
+                                        #   RE-ONBOARDING the seats beneath it —
+                                        #   onboarding turns on the NAME, which
+                                        #   is what an agent reads as its team,
+                                        #   so changing the name changes the
+                                        #   context those seats were introduced
+                                        #   with, id or no id
     type: department                    # optional — unit type (default: "team")
     lead: CTO                           # optional — inherited from parent if omitted
     purpose: "Build and ship the product"  # optional
@@ -796,6 +927,43 @@ tracker:
 Which **work tracker** this company runs, on exactly the terms `knowledge.backend` runs on. Unset derives `jira` when an `integrations.jira` block is declared and `native` otherwise; `native` beside `integrations.jira` is refused, because work would be filed in two places and a unit's `project` key would name two trackers. `none` is a company where schedules and chat are the only things that wake a seat.
 
 The two axes are **separate** on purpose. A company running a native tracker against a Confluence wiki, or Jira against native pages, is an ordinary arrangement rather than a mixture to refuse — they are two products with separate routing and separate lead maps.
+
+### The native tracker's own policy
+
+```yaml
+tracker:
+  backend: native
+  native:                                # ONLY on a native company — a block of
+                                         #   working days on a company running Jira
+                                         #   describes nothing, and is refused
+    timezone: Europe/Berlin              # the company's ONE clock, IANA name
+                                         #   (default UTC). It resolves "next
+                                         #   Friday", places an all-day date at
+                                         #   midnight and decides where a sprint's
+                                         #   window starts. It is a clock for
+                                         #   AUTHORED instants and calendar
+                                         #   boundaries only — no duration is
+                                         #   measured against it, because a duration
+                                         #   measured against a wall clock changes
+                                         #   length twice a year
+    non_working_weekdays:                # days this company does not work. Shades
+      - saturday                         #   the calendar and shapes the burndown
+      - sunday                           #   guideline, and does nothing else: work
+                                         #   can still be filed, due or done on a
+                                         #   Sunday, because a company that says it
+                                         #   does not work weekends is describing its
+                                         #   rhythm rather than issuing a rule
+    inbox_retention_days: 365            # how long a person's inbox keeps a row
+                                         #   (default 365, 30..3650). THE HISTORY IT
+                                         #   POINTS AT IS UNTOUCHED — this is a
+                                         #   mailbox horizon, not an archive one, and
+                                         #   "what was I told about last year" is
+                                         #   answered by the history either way
+```
+
+Everything else a tracker could be told is either a fact about the **operator** — how they back up, how long their disk holds a replay window — which lives in Tier A under [`stream.tracker_retention`](#stream), or a decision the engine makes once for everybody.
+
+**A native tracker needs a stream that survives a restart.** Its write-ahead log lives on the stream, and an embedded stream with no `stream.store_dir` keeps its streams in memory — so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve the tracker permanently, with no snapshot that helps. `crewlet validate` refuses that pair when it is given both documents, and so does the engine at boot. A company on a vendor tracker starts no log at all and is unaffected, which is why the rule needs both files to see.
 
 ---
 

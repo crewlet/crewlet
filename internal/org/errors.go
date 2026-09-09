@@ -39,6 +39,14 @@ var (
 	// activity attribution.
 	ErrDuplicateHandle = errors.New("duplicate handle")
 
+	// ErrDuplicateUnit reports two units answering to one key.
+	//
+	// A unit's key is what work, routing and pages are filed under, so a
+	// collision sends one team's work to whichever unit a reader resolved
+	// first — and it arrives by a door nobody watches, because an id may
+	// collide with another unit's NAME as readily as with another id.
+	ErrDuplicateUnit = errors.New("duplicate unit key")
+
 	// ErrHumanSeatField reports a runtime-only field set on a human seat.
 	// Human seats are addressable but never spawned, so an LLM key or a
 	// budget on one is dead config at best and misleading at worst.

@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -349,6 +350,22 @@ func (c *Company) Validate() error {
 	for i := range c.Units {
 		p.wrap(c.Units[i].validate(idx("units", i)))
 	}
+	p.wrap(c.Tracker.Native.validate("tracker.native"))
+	// A NATIVE BLOCK ON A COMPANY THAT IS NOT NATIVE describes nothing,
+	// and the failure that produces is silence: an operator sets working
+	// days and a timezone, nothing reads either, and the calendar keeps
+	// shading Saturday.
+	//
+	// The check is against the DERIVED backend rather than the literal
+	// field, because an empty `backend` with no Jira integration IS
+	// native — refusing the default configuration would be the opposite of
+	// the intent.
+	if c.Tracker.Native != nil && c.TrackerBackendFor() != TrackerNative {
+		p.add("tracker.native", ErrConflict,
+			"this company's tracker is %q, and `tracker.native` is the engine's "+
+				"own tracker's policy — nothing would read it. Remove the block, "+
+				"or run the native tracker", c.TrackerBackendFor())
+	}
 
 	// The hierarchy's own rules — duplicate handles, human seats carrying
 	// runtime fields, schedules with no runner — are the org model's, and
@@ -423,9 +440,16 @@ func (c *Company) validateKnowledgeBackend() error {
 			p.add("knowledge.scope", ErrConflict,
 				"a read scope needs a knowledge backend")
 		}
-		if c.Knowledge.Vectors != nil && *c.Knowledge.Vectors {
+		// VECTORS NEED SOMETHING TO SEARCH, and a knowledge base is not
+		// the only thing there is: the engine's own tracker is a corpus
+		// too, and a company that keeps its knowledge in Confluence's
+		// competitor's head and its work here is entitled to semantic
+		// recall over the work.
+		if c.Knowledge.Vectors != nil && *c.Knowledge.Vectors &&
+			c.TrackerBackendFor() != TrackerNative {
 			p.add("knowledge.vectors", ErrConflict,
-				"vectors need a knowledge backend")
+				"vectors need a knowledge backend or a native tracker — with "+
+					"neither there is no corpus to embed")
 		}
 	}
 	if c.Knowledge.Vectors != nil && *c.Knowledge.Vectors && c.Providers.Embeddings == nil {
@@ -531,6 +555,148 @@ type Tracker struct {
 	// Backend is which tracker this company runs. Empty derives: `jira`
 	// when integrations.jira is declared, `native` otherwise.
 	Backend TrackerBackend `yaml:"backend,omitempty" json:"backend,omitempty" js:"enum=native|jira|none" desc:"Which work tracker: native, jira, or none. Empty derives from integrations.jira."`
+
+	// Native is the engine's own tracker's policy — the settings that
+	// exist because the company owns the tracker rather than renting one.
+	//
+	// PRESENT ONLY ON A NATIVE COMPANY, and refused otherwise: a block of
+	// working days and an inbox horizon on a company running Jira is
+	// config that describes nothing, and the failure it produces is
+	// silence.
+	Native *TrackerNativeConfig `yaml:"native,omitempty" json:"native,omitempty"`
+}
+
+// TrackerNativeConfig is the founder's policy over the engine's own tracker.
+//
+// # Why these three and nothing else
+//
+// Everything else a tracker could be told is either a fact about the operator
+// (which is Tier A, under `stream.`) or a decision the engine makes once for
+// everybody. What is left is genuinely a company's own: which days it works,
+// which clock its dates mean, and how long a person's inbox keeps a row.
+type TrackerNativeConfig struct {
+	// NonWorkingWeekdays are the days this company does not work.
+	//
+	// USED FOR THE CALENDAR AND THE BURNDOWN AND NOTHING ELSE. It shades a
+	// chart and shapes a guideline; it does not stop work being filed, due
+	// or done on a Sunday, because a company that says so is describing
+	// its own rhythm rather than issuing a rule.
+	NonWorkingWeekdays []string `yaml:"non_working_weekdays,omitempty" json:"non_working_weekdays,omitempty" desc:"Days this company does not work — used by the calendar and the burndown guideline. Full English names, e.g. saturday."`
+
+	// Timezone is the company's ONE clock, as an IANA name.
+	//
+	// It resolves a relative date ("next Friday"), places an all-day date
+	// at midnight, and decides where a sprint's window starts and ends. It
+	// is a clock for AUTHORED INSTANTS AND CALENDAR BOUNDARIES ONLY — no
+	// duration is measured against it, because a duration measured against
+	// a wall clock changes length twice a year.
+	Timezone string `yaml:"timezone,omitempty" json:"timezone,omitempty" desc:"IANA timezone for authored dates and sprint boundaries (default UTC)."`
+
+	// InboxRetentionDays is how long a person's inbox keeps a row.
+	//
+	// THE ONE HORIZON HERE THAT DELETES ANYTHING, and it deletes a row
+	// DERIVED from a record rather than the record: the history those rows
+	// point at is untouched and answers for ever. A year because it is a
+	// MAILBOX rather than an archive — the vendors' own defaults are a
+	// quarter of that — and because the question "what was I told about in
+	// 2024" is answered by the history, not by the inbox.
+	InboxRetentionDays int `yaml:"inbox_retention_days,omitempty" json:"inbox_retention_days,omitempty" js:"min=0;max=3650" desc:"How long a person's inbox keeps a row (default 365, 30..3650). The history it points at is untouched."`
+}
+
+// The inbox horizon's default and bounds.
+const (
+	// DefaultInboxRetentionDays is a year.
+	DefaultInboxRetentionDays = 365
+
+	// MinInboxRetentionDays is a month, below which an inbox stops being
+	// one: a person away for four weeks would come back to nothing.
+	MinInboxRetentionDays = 30
+
+	// MaxInboxRetentionDays is ten years, past which the field is not a
+	// mailbox horizon but a second copy of the history.
+	MaxInboxRetentionDays = 3650
+)
+
+// InboxRetention is how long an inbox row lives, with the default applied.
+func (t *TrackerNativeConfig) InboxRetention() time.Duration {
+	days := DefaultInboxRetentionDays
+	if t != nil && t.InboxRetentionDays > 0 {
+		days = t.InboxRetentionDays
+	}
+	return time.Duration(days) * 24 * time.Hour
+}
+
+// Location is the company's clock, or UTC. Validation has already established
+// that a configured name loads.
+func (t *TrackerNativeConfig) Location() *time.Location {
+	if t == nil || strings.TrimSpace(t.Timezone) == "" {
+		return time.UTC
+	}
+	loc, err := time.LoadLocation(strings.TrimSpace(t.Timezone))
+	if err != nil {
+		return time.UTC
+	}
+	return loc
+}
+
+// NonWorking is the set of weekdays this company does not work.
+func (t *TrackerNativeConfig) NonWorking() map[time.Weekday]bool {
+	if t == nil || len(t.NonWorkingWeekdays) == 0 {
+		return nil
+	}
+	out := make(map[time.Weekday]bool, len(t.NonWorkingWeekdays))
+	for _, name := range t.NonWorkingWeekdays {
+		if day, ok := weekdayNamed(name); ok {
+			out[day] = true
+		}
+	}
+	return out
+}
+
+// weekdayNamed resolves a weekday name, case-insensitively.
+func weekdayNamed(name string) (time.Weekday, bool) {
+	for day := time.Sunday; day <= time.Saturday; day++ {
+		if strings.EqualFold(strings.TrimSpace(name), day.String()) {
+			return day, true
+		}
+	}
+	return 0, false
+}
+
+func (t *TrackerNativeConfig) validate(path string) error {
+	var p problems
+	if t == nil {
+		return nil
+	}
+	seen := map[time.Weekday]string{}
+	for i, name := range t.NonWorkingWeekdays {
+		day, ok := weekdayNamed(name)
+		if !ok {
+			p.add(idx(at(path, "non_working_weekdays"), i), ErrUnknownValue,
+				"%q is not a weekday — write the full English name, e.g. saturday", name)
+			continue
+		}
+		if first, dup := seen[day]; dup {
+			p.add(idx(at(path, "non_working_weekdays"), i), ErrConflict,
+				"%q repeats %q", name, first)
+			continue
+		}
+		seen[day] = name
+	}
+	if tz := strings.TrimSpace(t.Timezone); tz != "" {
+		if _, err := time.LoadLocation(tz); err != nil {
+			p.add(at(path, "timezone"), ErrUnknownValue,
+				"%q is not an IANA timezone (e.g. Europe/Berlin, America/New_York): %v",
+				tz, err)
+		}
+	}
+	if d := t.InboxRetentionDays; d != 0 && (d < MinInboxRetentionDays || d > MaxInboxRetentionDays) {
+		p.add(at(path, "inbox_retention_days"), ErrOutOfRange,
+			"%d is outside %d..%d — below a month an inbox stops being one, and "+
+				"past ten years it is a second copy of the history it points at",
+			d, MinInboxRetentionDays, MaxInboxRetentionDays)
+	}
+	return p.err()
 }
 
 // TrackerBackend is which work tracker a company runs.

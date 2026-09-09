@@ -467,11 +467,36 @@ func detectTier(raw []byte) (Tier, error) {
 // renderer reads this struct too, rather than being a second pass over the
 // same data that eventually disagrees with it.
 type validation struct {
-	Valid   bool              `json:"valid"`
-	Tier    Tier              `json:"tier"`
-	File    string            `json:"file,omitempty"`
-	Errors  []validationError `json:"errors"`
-	Summary map[string]any    `json:"summary,omitempty"`
+	Valid  bool              `json:"valid"`
+	Tier   Tier              `json:"tier"`
+	File   string            `json:"file,omitempty"`
+	Errors []validationError `json:"errors"`
+
+	// Warnings are configurations that are VALID and worth knowing about
+	// before applying — a declined fsync's window, a trim that will never
+	// advance, a unit keyed on a name somebody will rename.
+	//
+	// THEIR OWN FIELD rather than errors with a flag: the exit code turns
+	// on Errors alone, so a CI step gates on refusals and still prints
+	// what its operator should read. A warning that could fail a build is
+	// one somebody suppresses.
+	Warnings []validationWarning `json:"warnings,omitempty"`
+
+	Summary map[string]any `json:"summary,omitempty"`
+}
+
+// validationWarning is one valid-but-worth-knowing configuration.
+type validationWarning struct {
+	Path    string `json:"path"`
+	Message string `json:"message"`
+}
+
+func warningsOf(ws []config.Warning) []validationWarning {
+	out := make([]validationWarning, 0, len(ws))
+	for _, w := range ws {
+		out = append(out, validationWarning{Path: w.Path, Message: w.Message})
+	}
+	return out
 }
 
 // validationError is one problem, with the parts an authoring loop needs to
@@ -575,6 +600,7 @@ func validateOne(file string, tier Tier, asJSON bool, stdout io.Writer) error {
 			return report(stdout, res, asJSON)
 		}
 		res.Valid = true
+		res.Warnings = warningsOf(boot.Warnings())
 		res.Summary = map[string]any{
 			"stream": boot.Stream.Type, "coordination": boot.Coordination.Type,
 			"store": boot.Store.Path, "roles": boot.Node.Roles,
@@ -597,6 +623,7 @@ func validateOne(file string, tier Tier, asJSON bool, stdout io.Writer) error {
 		return report(stdout, res, asJSON)
 	}
 	res.Valid = true
+	res.Warnings = warningsOf(company.Warnings())
 	res.Summary = map[string]any{
 		"company": company.Name, "seats": len(epoch.Seats()),
 		"llm_providers": len(epoch.Models.Keys()),
@@ -616,12 +643,24 @@ func validateBoth(cfg configFlags, asJSON bool, stdout io.Writer) error {
 		res.Errors = faultsOf(err)
 		return report(stdout, res, asJSON)
 	}
+	// THE RULES THAT NEED BOTH DOCUMENTS, which is the whole reason this
+	// two-flag form exists: neither tier can see the other, so a
+	// configuration that is valid twice over and unrecoverable together is
+	// only refusable here.
+	if err := config.CheckTiers(boot, company); err != nil {
+		res.Errors = faultsOf(err)
+		return report(stdout, res, asJSON)
+	}
 	epoch, err := engine.NewCompany(company)
 	if err != nil {
 		res.Errors = faultsOf(err)
 		return report(stdout, res, asJSON)
 	}
 	res.Valid = true
+	// BOTH TIERS' WARNINGS, for the reason both tiers' errors are
+	// reported: an operator who fixes one file and is told about the other
+	// on the next run has been made to pay twice for one edit.
+	res.Warnings = append(warningsOf(boot.Warnings()), warningsOf(company.Warnings())...)
 	res.Summary = map[string]any{
 		"company": company.Name, "seats": len(epoch.Seats()),
 		"llm_providers": len(epoch.Models.Keys()),
@@ -661,6 +700,12 @@ func report(stdout io.Writer, res validation, asJSON bool) error {
 			b.WriteString("\n  " + e.Message)
 		}
 		return errors.New(strings.TrimPrefix(b.String(), "\n  "))
+	}
+	for _, w := range res.Warnings {
+		// ON STDOUT BESIDE THE SUMMARY rather than on stderr: the command
+		// succeeded, and a warning is part of its answer rather than a
+		// diagnostic about it.
+		fmt.Fprintf(stdout, "warning  %s: %s\n", w.Path, w.Message)
 	}
 	fmt.Fprintln(stdout, summaryLine(res))
 	return nil

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"iter"
 	"slices"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -465,10 +466,101 @@ func (o *Organization) Validate() error {
 	if err := o.validateHandles(); err != nil {
 		errs = append(errs, err)
 	}
+	if err := o.validateUnitKeys(); err != nil {
+		errs = append(errs, err)
+	}
 	if err := o.validateLeadSchedules(); err != nil {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
+}
+
+// validateUnitKeys enforces chart-wide uniqueness of a unit's identity.
+//
+// # What a collision costs
+//
+// [Unit.Key] is what work, routing and pages are filed under, and
+// [Organization.Unit] resolves a name to the FIRST unit carrying it. So two
+// units answering to one key do not conflict loudly — one of them simply
+// receives the other's work, for ever, and the chart looks correct.
+//
+// # Why an id may not collide with another unit's NAME either
+//
+// Key falls back to the name, so a company that gives one unit the id
+// "platform" while another is NAMED "Platform" has exactly the collision
+// above. It arrives by a door nobody is watching: adding an id that is
+// already some other unit's name.
+//
+// The comparison is case-insensitive on the name side because a name is prose
+// and "Platform" and "platform" are one team; an id is already lowercase.
+func (o *Organization) validateUnitKeys() error {
+	var errs []error
+	owner := make(map[string]unitPath)
+	claim := func(key string, by unitPath) {
+		key = strings.ToLower(strings.TrimSpace(key))
+		if key == "" {
+			return
+		}
+		// POINTER IDENTITY, not the key's text: a unit whose id equals
+		// its own name claims the same key twice and collides with
+		// nobody.
+		if first, taken := owner[key]; taken && first.unit != by.unit {
+			errs = append(errs, fmt.Errorf(
+				"%w %q: %s and %s — a unit's key is what work, routing and pages "+
+					"are filed under, and two units answering to one key send a "+
+					"team's work to whichever one a reader resolved first",
+				ErrDuplicateUnit, key, first.path, by.path))
+			return
+		}
+		owner[key] = by
+	}
+
+	// EVERY NAME IS CLAIMED BEFORE ANY ID, so an id colliding with a name
+	// is reported against the id — which is the field somebody just added,
+	// and the one they can change without renaming a team.
+	units := slices.Collect(o.unitsWithPaths())
+	for _, c := range units {
+		claim(c.unit.Name, c)
+	}
+	for _, c := range units {
+		if strings.TrimSpace(c.unit.ID) != "" {
+			claim(c.unit.ID, c)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// unitPath is a unit and where it sits in the chart. The path is the only
+// thing that tells two units of the SAME NAME apart in a message.
+type unitPath struct {
+	unit *Unit
+	path string
+}
+
+// unitsWithPaths walks the chart yielding each unit with its slash-joined
+// ancestry, depth-first and parents before children — the same order
+// [Organization.AllUnits] uses, so a message names units in the order they
+// appear in the document.
+func (o *Organization) unitsWithPaths() iter.Seq[unitPath] {
+	return func(yield func(unitPath) bool) {
+		var walk func(prefix string, units []*Unit) bool
+		walk = func(prefix string, units []*Unit) bool {
+			for _, u := range units {
+				path := u.Name
+				if prefix != "" {
+					path = prefix + "/" + u.Name
+				}
+				if !yield(unitPath{unit: u, path: path}) {
+					return false
+				}
+				if !walk(path, u.Children) {
+					return false
+				}
+			}
+			return true
+		}
+		walk("", o.Units)
+	}
 }
 
 // validateHandles enforces org-wide handle uniqueness.

@@ -338,7 +338,8 @@
           "type": "string"
         },
         "dimensions": {
-          "description": "Vector width; must match the model's output size.",
+          "description": "Vector width; 0 takes the named model's own width. 64..4096 to override, and it must match what the model produces.",
+          "maximum": 4096,
           "minimum": 0,
           "type": "integer"
         },
@@ -1978,6 +1979,32 @@
             "none"
           ],
           "type": "string"
+        },
+        "native": {
+          "$ref": "#/$defs/TrackerNativeConfig"
+        }
+      },
+      "type": "object"
+    },
+    "TrackerNativeConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "inbox_retention_days": {
+          "description": "How long a person's inbox keeps a row (default 365, 30..3650). The history it points at is untouched.",
+          "maximum": 3650,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "non_working_weekdays": {
+          "description": "Days this company does not work — used by the calendar and the burndown guideline. Full English names, e.g. saturday.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "timezone": {
+          "description": "IANA timezone for authored dates and sprint boundaries (default UTC).",
+          "type": "string"
         }
       },
       "type": "object"
@@ -2061,6 +2088,11 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "id": {
+          "description": "Stable identity for this unit, so a rename does not move what is keyed on it. Lowercase, starts with a letter.",
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+          "type": "string"
         },
         "knowledge": {
           "description": "Free-text knowledge references. Not a read scope.",

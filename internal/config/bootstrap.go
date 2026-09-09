@@ -57,7 +57,29 @@ type Bootstrap struct {
 
 	// Logging is how loud this node is, and in what shape.
 	Logging Logging `yaml:"logging,omitempty" json:"logging"`
+
+	// Retention is the operator's own half of keeping this deployment's
+	// history: who owns its backups. The trim's terms live under
+	// `stream.tracker_retention`, beside the log they bound.
+	Retention Retention `yaml:"retention,omitempty" json:"retention,omitzero"`
 }
+
+// Retention is what the operator owns about this deployment's history.
+type Retention struct {
+	// BackupOwner is who owns the backup: a person, a team, a scheduler's
+	// name. Free text, because it is read by a human at the moment an
+	// alarm names it and by nothing else.
+	//
+	// UNSET IS WARNED ABOUT rather than refused. A company that never
+	// backs up never trims — the log is the only copy of what no node has
+	// applied yet — so "who is responsible for this" is a question with a
+	// real answer on every deployment that intends to keep working, and
+	// nowhere to put it is how it goes unasked.
+	BackupOwner string `yaml:"backup_owner,omitempty" json:"backup_owner,omitempty" desc:"Who owns this deployment's backups — a person, a team, a scheduler. Warned about when unset."`
+}
+
+// IsZero lets an unset retention block drop out of a JSON round trip.
+func (r Retention) IsZero() bool { return strings.TrimSpace(r.BackupOwner) == "" }
 
 // Logging is Tier A's logging surface: the level this node emits at and the
 // shape it writes.
@@ -437,6 +459,20 @@ type Store struct {
 	// Path is the database file. Created if absent, along with its parent.
 	Path string `yaml:"path,omitempty" json:"path,omitempty" desc:"Local database file this node owns exclusively."`
 
+	// SnapshotDir is where this node keeps its own snapshots of the
+	// replicated estate — the file a peer joining the fleet copies instead
+	// of replaying the whole log.
+	//
+	// DELIBERATELY NOT UNDER stream., because it is a disk fact rather
+	// than a broker fact. Absolute, or relative to the store's directory.
+	//
+	// THE DEFAULT PUTS A FULL COPY OF THE ESTATE ON THE SAME VOLUME as the
+	// live database and its write-ahead log, which is why the snapshot
+	// loop carries a free-space precondition and refuses rather than
+	// filling the disk the applier is committing to. A separate volume is
+	// the production shape.
+	SnapshotDir string `yaml:"snapshot_dir,omitempty" json:"snapshot_dir,omitempty" desc:"Where this node keeps snapshots of the replicated estate; empty is <dir of path>/snapshots."`
+
 	// ReplicatedPath is the second database this node owns: everything a
 	// state log's applier writes. Empty puts it beside Path, which is
 	// what makes "back up the data directory" true.
@@ -571,7 +607,141 @@ type Stream struct {
 	// construction. Three copies of the same unflushed page cache is one
 	// copy.
 	Sync string `yaml:"sync,omitempty" json:"sync,omitempty" desc:"always (default) fsyncs every write before acknowledging it; a duration (30s) declines the fsync and names the window an acknowledged write may be behind the disk."`
+
+	// TrackerLogMaxBytes is the byte ceiling on the mutation log — the
+	// ordered stream a state-log domain writes through.
+	//
+	// UNSET DERIVES IT from the volume the stream is stored on: a quarter
+	// of its free space, clamped to 4 GiB..64 GiB. A fixed default is
+	// wrong in both directions — the same number is five years of history
+	// on the modelled write rate and one boot on a small disk — and the
+	// value is recorded on the stream when it is created, so a node that
+	// derived it can say what it derived it from.
+	//
+	// WHAT THIS FIELD DOES IS NARROWER THAN IT LOOKS. It is the value the
+	// stream is CREATED with, and thereafter a DECLARATION the engine
+	// checks the broker's actual ceiling against and reports on. Editing
+	// it on a running fleet changes nothing by itself: a stream's
+	// configuration has one writer and a booting node is not it, so
+	// re-applying it at boot would let restart order decide a shared limit
+	// and let a late node lower a ceiling an emergency grant had just
+	// raised.
+	//
+	// CROSSING IT REFUSES; IT DOES NOT SHED. There is no age bound on this
+	// stream, so a full log drops no history — the append is refused,
+	// loudly, naming this field and whatever is blocking the trim.
+	TrackerLogMaxBytes int64 `yaml:"tracker_log_max_bytes,omitempty" json:"tracker_log_max_bytes,omitempty" js:"min=1073741824;max=1099511627776" desc:"Byte ceiling on the mutation log; unset derives a quarter of the stream volume's free space, clamped to 4 GiB..64 GiB."`
+
+	// TrackerVectorsMaxBytes is the byte ceiling on the vector changelog.
+	//
+	// SIZED FOR THE PEAK, NOT THE STEADY STATE, and the two differ by 93×.
+	// The stream keeps one message per source and bounds their age, so a
+	// week's minting is about 91 MB. But changing the embedding model or
+	// its width rewrites EVERY source in a few hours, and for the
+	// following week every source's current message is inside the window:
+	// 8.46 GB at the modelled year-five corpus. The default is twice that.
+	// Sizing this field from the steady state would refuse the one
+	// operation it exists to survive.
+	TrackerVectorsMaxBytes int64 `yaml:"tracker_vectors_max_bytes,omitempty" json:"tracker_vectors_max_bytes,omitempty" js:"min=1073741824;max=274877906944" desc:"Byte ceiling on the vector changelog; default 16 GiB, sized for a model change rather than the steady state."`
+
+	// TrackerRetention is when the log may be trimmed, and it is the one
+	// block here that can stop a fleet's log growing for ever — or stop it
+	// trimming at all, deliberately, when a term it depends on is unknown.
+	TrackerRetention TrackerRetention `yaml:"tracker_retention,omitempty" json:"tracker_retention,omitzero"`
 }
+
+// TrackerRetention is the operator's half of the log trim.
+//
+// # Why these are Tier A and not the company's config
+//
+// Every one of them is a statement about the OPERATOR's estate rather than
+// about the company: how they back up, how long their disk should hold a
+// replay window, how much I/O their machines can spend, how long they will
+// wait for a node to become a complete replica. None is a policy a founder
+// sets, and Tier B is edited live — so lowering a durability gate there would
+// move it underneath a trim that had already computed against it.
+//
+// # Why the duration fields carry a Raw suffix
+//
+// The Go name and the YAML key are allowed to differ, and here they must: the
+// operator writes `min_age: 7d` and every reader wants a [time.Duration], so
+// the field holds the text and the method holds the value. A field and a
+// method cannot share a name, and of the two the METHOD should have the plain
+// one — the parsed value is what the engine uses everywhere and the text is
+// read in exactly one place.
+type TrackerRetention struct {
+	// MinAgeRaw is the age floor no trim may cross, whatever the other terms
+	// say. It can only make a trim MORE conservative, so it is a LOWER
+	// bound on how long the log keeps a record and never a ceiling — and
+	// it says nothing at all about any node's own store file.
+	//
+	// Seven days is the horizon this fleet already treats as how long a
+	// node may be away, and a retention floor that disagreed with it would
+	// be a second answer to one question.
+	//
+	// THE 24-HOUR FLOOR HAS THREE REASONS: a value below a day cannot
+	// outlast a nightly backup cycle; it is the margin that keeps a quiet
+	// object writable, because an object whose last record has been
+	// trimmed away has to be recognised as trimmed rather than as absent;
+	// and it is the age bound on the vector changelog, so lowering it
+	// shortens the window a joining node's vector gap is refilled from.
+	MinAgeRaw string `yaml:"min_age,omitempty" json:"min_age,omitempty" desc:"Age floor no trim may cross (default 7d, 24h..90d)."`
+
+	// BackupMaxAge is how stale the newest complete backup may be before
+	// the trim stops entirely.
+	//
+	// A COMPANY THAT NEVER BACKS UP NEVER TRIMS. The log is the only copy
+	// of what no node has applied yet, and trimming past the newest backup
+	// is deleting the last thing that could rebuild it. A day is the
+	// cadence a nightly backup keeps against a trim that runs every
+	// fifteen minutes, so a fleet with a working nightly never notices and
+	// a fleet with a broken one stops within a day.
+	BackupMaxAgeRaw string `yaml:"backup_max_age,omitempty" json:"backup_max_age,omitempty" desc:"How stale the newest backup may be before the trim stops (default 24h, 1h..30d)."`
+
+	// BackupFloor is whose word the trim takes for what is backed up.
+	//
+	// `engine` follows the newest backup the engine itself wrote and
+	// verified. `operator` follows an explicit acknowledgement, for a
+	// company whose policy is "trim only what is off-site" — which the
+	// engine cannot see for itself, because a backup is not a backup until
+	// it leaves the host. Under `operator` the trim does not advance until
+	// that acknowledgement has been given at least once, which is a state
+	// worth being warned about rather than discovering.
+	BackupFloor BackupFloor `yaml:"backup_floor,omitempty" json:"backup_floor,omitempty" js:"enum=engine|operator" desc:"Whose word the trim takes for what is backed up: engine (default) or operator."`
+
+	// SnapshotInterval is how stale a node's newest snapshot may be before
+	// it takes another.
+	//
+	// A day rather than six hours, and the arithmetic is the reason: a
+	// snapshot is a full copy of the replicated estate — tens of gigabytes
+	// at a mature company — so four a day is a day's worth of I/O to save
+	// a joining node a replay it can do in under a minute.
+	SnapshotIntervalRaw string `yaml:"snapshot_interval,omitempty" json:"snapshot_interval,omitempty" desc:"How stale a node's newest snapshot may be before it takes another (default 24h, 1h..7d)."`
+
+	// RejoinWindow is the operator's budget for a node to become a
+	// complete replica — what a join is measured against and reported on.
+	//
+	// A SETTING RATHER THAN A CONSTANT because the answer is a property of
+	// the operator's disks and network, and the spread between a
+	// conservative and a fast profile is more than twice.
+	RejoinWindowRaw string `yaml:"rejoin_window,omitempty" json:"rejoin_window,omitempty" desc:"Budget for a node to become a complete replica (default 30m, 5m..24h)."`
+}
+
+// BackupFloor is whose word the trim takes for what is backed up.
+type BackupFloor string
+
+const (
+	// BackupFloorEngine follows the newest backup the engine wrote and
+	// verified itself.
+	BackupFloorEngine BackupFloor = "engine"
+
+	// BackupFloorOperator follows an explicit acknowledgement, for a
+	// company that trims only what has left the host.
+	BackupFloorOperator BackupFloor = "operator"
+)
+
+// BackupFloors is the closed set.
+var BackupFloors = []BackupFloor{BackupFloorEngine, BackupFloorOperator}
 
 // StreamSyncAlways is [Stream.Sync]'s strong value.
 const StreamSyncAlways = "always"
@@ -668,6 +838,11 @@ func (s *Stream) validate(path string) error {
 	// advertise address while STARTING, logs it and shuts the server down
 	// — which surfaces as a node that boots, fails and leaves the operator
 	// reading broker logs for a typo in their own config file.
+	bytesInRange(&p, path, "tracker_log_max_bytes", s.TrackerLogMaxBytes,
+		TrackerLogMaxBytesFloor, TrackerLogMaxBytesCeiling)
+	bytesInRange(&p, path, "tracker_vectors_max_bytes", s.TrackerVectorsMaxBytes,
+		TrackerVectorsMaxBytesFloor, TrackerVectorsMaxBytesCeiling)
+	p.wrap(s.TrackerRetention.validate(at(path, "tracker_retention")))
 	if adv := strings.TrimSpace(s.Cluster.Advertise); adv != "" {
 		if err := validateAdvertise(adv); err != nil {
 			p.add(at(path, "cluster.advertise"), ErrShape, "%v", err)

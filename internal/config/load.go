@@ -298,6 +298,12 @@ var retiredBootstrapFields = map[string]string{
 		"the log level and it is gone. Write `logging:` with `level: debug` " +
 		"under it (and `level: info` is the default, so a `debug: false` " +
 		"can simply be deleted)",
+	"Stream.tracker_snapshot_max_bytes": "`stream.tracker_snapshot_max_bytes` " +
+		"is retired: snapshots are files on this node's disk rather than " +
+		"objects in the broker, so what bounds them is where they are kept. " +
+		"Set `store.snapshot_dir`, and give that directory the space — the " +
+		"snapshot loop refuses rather than filling the volume the database " +
+		"is committing to",
 	"Store.driver": "`store.driver` is no longer a setting: it chose between " +
 		"two store implementations and there is one. Turso is the database; " +
 		"the mainline-SQLite fallback and the CREWLET_STORE_DRIVER variable " +
@@ -317,6 +323,35 @@ var retiredBootstrapFields = map[string]string{
 // in the same move, because a unit's project is the company's fact and not a
 // product's.
 var retiredCompanyFields = map[string]string{
+	// The four horizons the native tracker was going to carry, and does
+	// not. Each names what replaced it, and two of them say plainly that
+	// the replacement is not the same thing — which is the whole reason
+	// they are refused rather than ignored.
+	"TrackerNativeConfig.trash_retention_days": "`trash_retention_days` is " +
+		"retired: a removal on the native tracker has NO horizon at all. A " +
+		"removed item is marked removed and stays that way, because a " +
+		"tracker that quietly deleted what somebody removed by mistake is " +
+		"one nobody can undo a mistake in. Delete the line",
+	"TrackerNativeConfig.trash_compaction_days": "`trash_compaction_days` is " +
+		"retired, on the same terms as `trash_retention_days`: nothing " +
+		"compacts a removal, because the removal IS the record. Delete the line",
+	"TrackerNativeConfig.change_compaction_days": "`change_compaction_days` is " +
+		"retired. The nearest thing is `stream.tracker_retention.min_age` in " +
+		"the OPERATOR's config, and it is NOT the same thing: it is a safety " +
+		"floor on trimming the log's replay window, never a horizon after " +
+		"which history is deleted. The history is kept. See " +
+		"docs/getting-started/configuration.md",
+	"TrackerNativeConfig.turn_compaction_days": "`turn_compaction_days` is " +
+		"retired, on the same terms as `change_compaction_days`: " +
+		"`stream.tracker_retention.min_age` bounds the log's replay window " +
+		"and deletes no history. See `stream.tracker_retention` in " +
+		"docs/getting-started/configuration.md",
+	"Tracker.retention": "a `tracker.native.retention:` block is retired. " +
+		"Those settings describe the OPERATOR's estate rather than the " +
+		"company's policy — how they back up, how long their disk holds a " +
+		"replay window — so they live in Tier A under " +
+		"`stream.tracker_retention`",
+
 	"Knowledge.confluence_spaces": "`knowledge.confluence_spaces` is now " +
 		"`knowledge.scope`, and it scopes whichever knowledge base the " +
 		"company runs rather than Confluence specifically. The values are " +
