@@ -98,6 +98,19 @@ type SemanticQuery struct {
 	// Candidates caps stage one. Zero takes [Stage1Depth]; anything above
 	// [BinaryCandidateCeiling] is clamped to it.
 	Candidates int
+
+	// Shards is the bucket range this scan may read.
+	//
+	// THE ZERO VALUE IS EVERY BUCKET, which is what a single node has and
+	// what every query on a fleet that has not divided its corpus gets. A
+	// zero value meaning "no buckets" would answer every search with
+	// nothing — silently, because an empty answer and an empty corpus are
+	// the same shape.
+	//
+	// What the predicate buys today is the MEASUREMENT: stage one's cost
+	// becomes a function of the bucket range scanned rather than of the
+	// corpus held, which is the number a fan-out is decided from.
+	Shards Assignment
 }
 
 // SemanticHit is one ranked document, with the EXACT distance rather than the
@@ -178,6 +191,15 @@ func Semantic(ctx context.Context, tx *sql.Tx, q SemanticQuery) ([]SemanticHit, 
 		for _, c := range q.Containers {
 			args = append(args, c)
 		}
+	}
+	if q.Shards.Covers() {
+		// A HALF-OPEN RANGE, and it is a range rather than a set because
+		// that is what a power-of-two split produces: a set would be an
+		// IN clause of up to sixty-four terms on the hottest scan there
+		// is, and the planner would read it as sixty-four predicates
+		// over a table it is walking anyway.
+		where = append(where, "b.search_shard >= ? AND b.search_shard < ?")
+		args = append(args, q.Shards.From, q.Shards.To)
 	}
 	args = append(args, q.Vector, candidates, len(q.Vector), limit)
 

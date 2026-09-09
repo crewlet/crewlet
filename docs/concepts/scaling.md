@@ -65,8 +65,14 @@ somebody else runs. One estate either way, carrying both slots — see
 **Every node is a full replica, and there is no thin-node role.** A node that
 runs the native tracker holds the whole corpus — every task, page, comment and
 turn the company has ever recorded — in its own database, applied from the same
-ordered log as every other node's. There is no shard, no cache tier, and no way
-to run a node that holds part of it.
+ordered log as every other node's. There is no cache tier, no thin replica, and
+no way to run a node that holds part of it.
+
+The knowledge index is the one place a division is even *expressible*: every
+indexed document carries a [search shard](knowledge-system.md#every-document-carries-a-bucket),
+and a search can be told which bucket range to read. Nothing tells it one — a
+node holds every bucket and reads every bucket. The column exists so a scan's
+cost can be measured per bucket range instead of per corpus held.
 
 That is a deliberate trade and it is the reason the read path is simple: every
 answer can be served locally, a search scans one node's complete tables, and

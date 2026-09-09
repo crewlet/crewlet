@@ -132,9 +132,19 @@ func (x *Indexer) upsertOne(ctx context.Context, tx *sql.Tx, doc Doc, now int64)
 		length += n
 	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO kb_docs (id, source, source_id, container, title, excerpt,
-		                     length, source_rev, indexed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO kb_docs (id, source, source_id, search_shard, container,
+		                     title, excerpt, length, source_rev, indexed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		-- THE SHARD IS NOT RE-STAMPED, and that is the invariant rather
+		-- than an omission: the id column is derived from the same two
+		-- source columns the bucket is, so a row's bucket cannot change
+		-- while its key stays the same. Re-stamping it would do something
+		-- only if the scheme itself changed -- and then it would
+		-- re-bucket exactly the documents that happened to be re-indexed,
+		-- leaving the corpus half in each scheme with searches silently
+		-- missing whatever is on the other side. A scheme change costs a
+		-- full index rebuild; repair-on-touch is not a cheaper version of
+		-- one, it is a corpus nobody can reason about.
 		ON CONFLICT (id) DO UPDATE SET
 			container  = excluded.container,
 			title      = excluded.title,
@@ -142,8 +152,8 @@ func (x *Indexer) upsertOne(ctx context.Context, tx *sql.Tx, doc Doc, now int64)
 			length     = excluded.length,
 			source_rev = excluded.source_rev,
 			indexed_at = excluded.indexed_at`,
-		id, doc.Source, doc.ID, doc.Container, doc.Title,
-		excerptOf(doc.Body), length, int64(doc.Version), now); err != nil {
+		id, doc.Source, doc.ID, ShardOf(doc.Source, doc.ID), doc.Container,
+		doc.Title, excerptOf(doc.Body), length, int64(doc.Version), now); err != nil {
 		return fmt.Errorf("search: index %s: %w", id, err)
 	}
 	if _, err := tx.ExecContext(ctx,

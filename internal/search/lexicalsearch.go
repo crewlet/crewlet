@@ -25,6 +25,13 @@ type SearchQuery struct {
 
 	// Limit caps the hits.
 	Limit int
+
+	// Shards is the bucket range this scan may read.
+	//
+	// THE ZERO VALUE IS EVERY BUCKET, on [SemanticQuery.Shards]'s terms:
+	// one meaning "no buckets" would answer every search with nothing, and
+	// an empty answer is indistinguishable from an empty corpus.
+	Shards Assignment
 }
 
 // SearchHit is one ranked document.
@@ -138,6 +145,15 @@ func (x *Indexer) postings(ctx context.Context, term string, q SearchQuery) ([]t
 		for _, s := range q.Sources {
 			args = append(args, s)
 		}
+	}
+	if q.Shards.Covers() {
+		// THE SHARD IS ON THE DOCUMENT, not the posting. A posting
+		// belongs to its document, so a term's list is filtered through
+		// the join rather than by a column of its own — which is also
+		// why kb_postings has no shard: it would be the document's own
+		// value written once per term it contains.
+		where = append(where, "d.search_shard >= ? AND d.search_shard < ?")
+		args = append(args, q.Shards.From, q.Shards.To)
 	}
 	args = append(args, maxPostingScan)
 
