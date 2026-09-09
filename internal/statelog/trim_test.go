@@ -1,6 +1,9 @@
 package statelog_test
 
 import (
+	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -298,4 +301,109 @@ func TestTheTrimTermsAreAClosedSet(t *testing.T) {
 			t.Errorf("%q is a term and nothing evaluates it", name)
 		}
 	}
+}
+
+// THE TRIM AND A TRANSFER RACE, AND THE HOLD IS WHAT DECIDES IT.
+//
+// A joining node replays the tail its artefact stops at. The trim's job is to
+// delete that tail. Four arms, because the hold has four states and each one
+// produces a different correct answer — and getting any of them wrong looks
+// identical from the joiner's side: a snapshot installs, the replay starts,
+// and the records between the artefact and the live stream are simply gone.
+func TestTrimRacesATransfer(t *testing.T) {
+	t.Parallel()
+
+	// ARM 1 — THE HOLD IS TAKEN BEFORE THE TICK READS IT. The adopter
+	// pins the tail as step 1 of nine, before a byte is fetched, so every
+	// tick from then on sees it and the minimum cannot pass it.
+	t.Run("a hold taken before the tick pins the tail", func(t *testing.T) {
+		t.Parallel()
+		in := baseInputs()
+		in.AgeFloor = 9_000
+		in.Holds = []statelog.Hold{{
+			Owner: "joiner", Generation: 1, Seq: 4_000, At: in.Now,
+		}}
+		d := statelog.Trim(in.Terms())
+		if d.Blocked() {
+			t.Fatalf("blocked by %s: %s", d.BlockedBy, d.Detail)
+		}
+		if d.To != 4_000 {
+			t.Fatalf("the trim would remove up to %d while a transfer holds "+
+				"4000 — the hold is the whole mechanism, not a hint", d.To)
+		}
+	})
+
+	// ARM 2 — THE HOLD IS RENEWED FOR THE WHOLE TRANSFER. A gigabyte-scale
+	// copy outlives many ticks, and a hold that only covered the first one
+	// would be a race the joiner loses by being slow.
+	t.Run("a renewed hold pins the tail for as long as the copy runs", func(t *testing.T) {
+		t.Parallel()
+		in := baseInputs()
+		in.AgeFloor = 9_000
+		for tick := range 20 {
+			// The adopter renews on its own cadence; the tick moves on.
+			in.Now = in.Now.Add(statelog.TrimHoldStale / 4)
+			in.Holds = []statelog.Hold{{
+				Owner: "joiner", Generation: 1, Seq: 4_000, At: in.Now,
+			}}
+			if d := statelog.Trim(in.Terms()); d.To != 4_000 {
+				t.Fatalf("tick %d would remove up to %d, want 4000", tick, d.To)
+			}
+		}
+	})
+
+	// ARM 3 — THE HOLDER CRASHED. A hold nothing renews cannot pin the log
+	// for ever: the joiner is gone, and the alternative is a company whose
+	// log grows until somebody notices a machine that never came back.
+	t.Run("a crashed holder stops pinning the tail", func(t *testing.T) {
+		t.Parallel()
+		in := baseInputs()
+		in.AgeFloor = 9_000
+		in.Holds = []statelog.Hold{{
+			Owner: "joiner", Generation: 1, Seq: 4_000,
+			At: in.Now.Add(-statelog.TrimHoldStale - time.Second),
+		}}
+		d := statelog.Trim(in.Terms())
+		if d.Blocked() {
+			t.Fatalf("blocked by %s: %s", d.BlockedBy, d.Detail)
+		}
+		if d.To == 4_000 {
+			t.Fatal("a hold nobody has renewed for longer than the stale bound " +
+				"still pins the log, which is a crashed joiner holding a " +
+				"company's retention open indefinitely")
+		}
+	})
+
+	// ARM 4 — THE TRIM WON ANYWAY. The hold is a belt: a fleet that
+	// trimmed past the artefact regardless — an operator's purge, a
+	// hold that was never taken, a floor that moved under a retry — must
+	// not have its snapshot installed, because the joiner would come up
+	// pointing at a replay tail that no longer exists.
+	t.Run("an artefact the fleet trimmed past is not installed", func(t *testing.T) {
+		t.Parallel()
+		h := newJoinHarness(t)
+		h.stillUsable = func(context.Context, statelog.Manifest) error {
+			return errors.New("the trim floor is 6000 and this artefact stops at 4000")
+		}
+		_, err := h.adopter(t).Join(t.Context())
+		if err == nil {
+			t.Fatal("an artefact the fleet trimmed past during the transfer was " +
+				"installed: the node comes up with a checkpoint below the log's " +
+				"first surviving sequence and nothing to replay from")
+		}
+		if !strings.Contains(err.Error(), "stopped being usable") {
+			t.Fatalf("the refusal is %q and does not say the artefact went stale "+
+				"during the transfer", err)
+		}
+		// AND THE LIVE DATABASE SURVIVED. Step 7 is before step 8, which
+		// is the one place the engine replaces a database.
+		if h.closes.Load() != 0 {
+			t.Errorf("the live database was closed %d time(s) for an install "+
+				"that must never have started", h.closes.Load())
+		}
+		if h.held.Load() != 1 || h.released.Load() != 1 {
+			t.Errorf("held=%d released=%d: a refused join must not leave the log "+
+				"pinned", h.held.Load(), h.released.Load())
+		}
+	})
 }

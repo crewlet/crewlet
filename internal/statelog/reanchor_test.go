@@ -267,3 +267,189 @@ func reanchorStore(t *testing.T) *store.DB {
 	})
 	return db
 }
+
+// seedAnchor writes one subject's arbitration anchor at a generation.
+func seedAnchor(t *testing.T, db *store.DB, subject string, gen uint32, seq uint64) {
+	t.Helper()
+	packed := int64(gen)*statelog.GenerationStride + int64(seq)
+	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
+			INSERT INTO statelog_anchor (stream, subject, anchor) VALUES (?, ?, ?)
+			ON CONFLICT (stream, subject) DO UPDATE SET anchor = excluded.anchor`,
+			probeStream, subject, packed)
+		return err
+	}); err != nil {
+		t.Fatalf("seed the anchor on %s: %v", subject, err)
+	}
+}
+
+// seedCursor writes the domain's committed cursor at a generation, which is
+// what a node that has been running has.
+func seedCursor(t *testing.T, db *store.DB, gen uint32, seq uint64) {
+	t.Helper()
+	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
+			INSERT INTO statelog_cursor
+				(stream, generation, seq, stream_created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT (stream) DO UPDATE SET
+				generation = excluded.generation, seq = excluded.seq`,
+			probeStream, gen, seq, reanchorCreated.UnixMilli(), reanchorCreated.UnixMilli())
+		return err
+	}); err != nil {
+		t.Fatalf("seed the cursor: %v", err)
+	}
+}
+
+// anchorGeneration reads one subject's anchor back as a generation.
+func anchorGeneration(t *testing.T, db *store.DB, subject string) uint32 {
+	t.Helper()
+	var packed int64
+	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(),
+			`SELECT anchor FROM statelog_anchor WHERE stream = ? AND subject = ?`,
+			probeStream, subject).Scan(&packed)
+	}); err != nil {
+		t.Fatalf("read the anchor on %s back: %v", subject, err)
+	}
+	return uint32(packed / statelog.GenerationStride)
+}
+
+// cursorGeneration reads the domain's committed cursor back as a generation.
+func cursorGeneration(t *testing.T, db *store.DB) uint32 {
+	t.Helper()
+	var gen int64
+	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(),
+			`SELECT generation FROM statelog_cursor WHERE stream = ?`,
+			probeStream).Scan(&gen)
+	}); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0
+		}
+		t.Fatalf("read the cursor back: %v", err)
+	}
+	return uint32(gen)
+}
+
+// AN INTERRUPTED REANCHOR IS FINISHED BY RE-RUNNING IT, AND NEEDS NO REPAIRER.
+//
+// Step 4 rewrites every anchor in bounded transactions because half a million
+// of them cannot be one, and a process that dies partway leaves a table where
+// some rows carry the new generation and some carry the old. That state is
+// CORRECT rather than damaged, and the reason is contract 1's lazy rule: a row
+// below the current generation is "no anchor at this generation", so its next
+// write forms an expectation of zero and the broker arbitrates it against a
+// subject that genuinely holds nothing.
+//
+// Both halves are asserted here — the re-run, and the rule that makes the
+// residue harmless — because either one alone is an argument rather than a
+// check.
+func TestAReanchorIsResumable(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a crash inside the reset is finished by re-running", func(t *testing.T) {
+		t.Parallel()
+		db := reanchorStore(t)
+		seedCursor(t, db, 1, 9_000)
+		seedAnchor(t, db, "probe.reached", 1, 500)
+		seedAnchor(t, db, "probe.missed", 1, 600)
+
+		crash := errors.New("the process died between two bounded transactions")
+		var attempts, published, recorded atomic.Int64
+		deps := statelog.ReanchorDeps{
+			Domains: map[string]statelog.Registered{"probe": {Domain: probeDomain{}}},
+			DB:      db,
+			ResetVersions: func(_ context.Context, gen uint32) error {
+				if attempts.Add(1) == 1 {
+					// One bounded transaction committed, then the
+					// process died before the next.
+					seedAnchor(t, db, "probe.reached", gen, 0)
+					return crash
+				}
+				return nil
+			},
+			PublishGeneration: func(context.Context, uint32, statelog.ReanchorInputs) error {
+				published.Add(1)
+				return nil
+			},
+			RecordGeneration: func(context.Context, *sql.Tx, uint32, statelog.ReanchorInputs) error {
+				recorded.Add(1)
+				return nil
+			},
+		}
+
+		if _, err := statelog.Reanchor(t.Context(), deps, reanchorInputs(), confirmed()); !errors.Is(err, crash) {
+			t.Fatalf("Reanchor returned %v, want the crash — a failed reset must "+
+				"not be reported as a completed transition", err)
+		}
+		// NOTHING PAST STEP 4 RAN. The record and the cursors are what
+		// make the transition fleet-visible, and a crash inside the
+		// reset must leave the fleet on the old generation.
+		if published.Load() != 0 || recorded.Load() != 0 {
+			t.Fatalf("a crash inside the reset still published=%d recorded=%d",
+				published.Load(), recorded.Load())
+		}
+		if got := cursorGeneration(t, db); got != 1 {
+			t.Fatalf("the cursor moved to generation %d during a reset that "+
+				"crashed", got)
+		}
+
+		// THE RE-RUN DERIVES THE SAME GENERATION. It is derived from
+		// the estate's own audit table, which the crash did not move —
+		// so a second attempt is a retry rather than a second
+		// transition, and the record it publishes is the one the first
+		// attempt would have.
+		gen, err := statelog.Reanchor(t.Context(), deps, reanchorInputs(), confirmed())
+		if err != nil {
+			t.Fatalf("the re-run failed: %v", err)
+		}
+		if gen != 2 {
+			t.Fatalf("the re-run reanchored to generation %d, want the same 2 the "+
+				"crashed attempt derived", gen)
+		}
+		if got := cursorGeneration(t, db); got != 2 {
+			t.Fatalf("the cursor is at generation %d after a completed re-run", got)
+		}
+		if got := anchorGeneration(t, db, "probe.reached"); got != 2 {
+			t.Errorf("the anchor the crashed reset DID reach is at generation %d", got)
+		}
+		// AND THE ONE IT DID NOT REACH IS STILL AT THE OLD GENERATION,
+		// deliberately. Nothing repairs it, and the next subtest is why
+		// that is safe.
+		if got := anchorGeneration(t, db, "probe.missed"); got != 1 {
+			t.Errorf("the anchor the reset never reached is at generation %d, "+
+				"want 1 — the resumable design rests on that row being left "+
+				"alone rather than on a repairer nobody wrote", got)
+		}
+	})
+
+	t.Run("a row the reset never reached writes at an expectation of zero", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		subject := statelog.Subject{Kind: "task", ID: "left-behind"}
+		// A durable row whose anchor is from BEFORE the reanchor: the
+		// generation the reset would have raised, and did not.
+		h.rows.stage(subject, statelog.Position{
+			Stream: probeStream, Generation: 1, Seq: 500,
+		})
+		h.gen.Store(2)
+
+		if _, err := h.write(subject, "op-after-reanchor", "hello"); err != nil {
+			t.Fatalf("a write on a row the reset never reached failed: %v", err)
+		}
+		expects := h.appends.expectations()
+		if len(expects) != 1 {
+			t.Fatalf("the write took %d append(s), want one", len(expects))
+		}
+		if expects[0] == nil {
+			t.Fatal("an arbitrated write formed no expectation at all")
+		}
+		if *expects[0] != 0 {
+			t.Fatalf("the write formed an expectation of %d against a subject the "+
+				"new stream has never held: an anchor below the current "+
+				"generation names a sequence in a dead number space, and "+
+				"publishing at it is refused for ever", *expects[0])
+		}
+	})
+}
