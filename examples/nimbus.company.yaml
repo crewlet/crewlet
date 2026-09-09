@@ -74,9 +74,11 @@ providers:
         - "${LLM_API_KEY}"
   embeddings:
     type: openai
-    model: text-embedding-3-small
+    # The model decides the width — 3072 here — so `dimensions` is left
+    # unset. It is an override for deliberately shortening a vector, not a
+    # field every config has to carry.
+    model: text-embedding-3-large
     api_key: "${OPENAI_API_KEY}"
-    dimensions: 1536
   # Code-runtime sandbox — lets a sandbox-enabled role run its Execute
   # phase as a coding agent (Claude Code / OpenCode) inside an isolated
   # E2B sandbox that implements the work and opens a merge request under

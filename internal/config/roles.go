@@ -1,6 +1,7 @@
 package config
 
 import (
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -605,6 +606,16 @@ func (r Role) IdentityKey() string { return r.Seat().Handle() }
 type Unit struct {
 	Name string `yaml:"name" json:"name" js:"required" desc:"Unit name; also what a manages entry can reference."`
 
+	// ID is this unit's stable identity — see [org.Unit.ID]. A name is
+	// read by people and therefore renamed; an id is not read by anybody
+	// and therefore survives.
+	//
+	// THE PATTERN IS ON THE FIELD as well as in the validator, because the
+	// generator emits it into the published schema — and a schema that
+	// accepts ids the engine refuses is exactly the drift the schema-diff
+	// test cannot see.
+	ID string `yaml:"id,omitempty" json:"id,omitempty" js:"pattern=^[a-z][a-z0-9_-]{0,63}$" desc:"Stable identity for this unit, so a rename does not move what is keyed on it. Lowercase, starts with a letter."`
+
 	// Type is an informational label — department, team, squad, pod, or
 	// anything else. Nothing in the engine behaves differently for one.
 	Type org.UnitType `yaml:"type,omitempty" json:"type,omitempty" desc:"Informational label: team (default), department, squad, ..."`
@@ -672,6 +683,12 @@ func (u *Unit) validate(path string) error {
 	if strings.TrimSpace(u.Name) == "" {
 		p.add(at(path, "name"), ErrMissing, "every unit needs a name")
 	}
+	if id := strings.TrimSpace(u.ID); id != "" && !unitID.MatchString(id) {
+		p.add(at(path, "id"), ErrShape,
+			"%q is not a unit id: lowercase letters, digits, `-` and `_`, "+
+				"starting with a letter, up to 64 characters. It is chosen once "+
+				"and read by nobody, so it can be short and dull", id)
+	}
 	for i := range u.Roles {
 		p.wrap(u.Roles[i].validate(idx(at(path, "roles"), i)))
 	}
@@ -680,6 +697,14 @@ func (u *Unit) validate(path string) error {
 	}
 	return p.err()
 }
+
+// unitID is what a unit id may look like.
+//
+// Narrow on purpose. The id is a KEY — it appears in durable rows, in filter
+// arguments a model types, and in a subject token path — so the character set
+// is the intersection of what every one of those carries safely rather than
+// what a name may contain.
+var unitID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 
 // Unit transforms the authored unit into the runtime one, recursively.
 //
@@ -691,6 +716,7 @@ func (u *Unit) validate(path string) error {
 func (u *Unit) Unit() *org.Unit {
 	unit := &org.Unit{
 		Name:          u.Name,
+		ID:            strings.TrimSpace(u.ID),
 		Type:          u.Type,
 		Purpose:       u.Purpose,
 		Lead:          u.Lead,

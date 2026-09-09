@@ -35,6 +35,26 @@ type Unit struct {
 	Name string   `yaml:"name" json:"name"`
 	Type UnitType `yaml:"type,omitempty" json:"type,omitempty"`
 
+	// ID is this unit's STABLE IDENTITY, and the reason it exists is that
+	// a name is not one.
+	//
+	// A unit's name is what people read — in a prompt, on a board, in a
+	// channel topic — so it is renamed for the reasons prose is renamed,
+	// and everything keyed on it moves when it does. An id is chosen once
+	// and never read by anybody, so what is keyed on it survives the
+	// rename.
+	//
+	// OPTIONAL, and absent means exactly today's behaviour: [Unit.Key]
+	// falls back to the name. Adding one to a unit that already has work
+	// filed against it does not rewrite those rows and does not have to —
+	// a filter on a unit matches the SET of its id and its name.
+	//
+	// IT DOES NOT STOP A RENAME RE-ONBOARDING THE SEATS BENEATH IT. That
+	// is a different mechanism: onboarding turns on the unit's NAME, which
+	// is what an agent reads as its team, so changing the name changes the
+	// context those seats were introduced with, id or no id.
+	ID string `yaml:"id,omitempty" json:"id,omitempty"`
+
 	Purpose string `yaml:"purpose,omitempty" json:"purpose,omitempty"`
 
 	// Lead names the seat that leads this unit — routing work within it,
@@ -83,6 +103,21 @@ type Unit struct {
 	// units: a standup that fanned out to every descendant of a division
 	// would wake the whole company.
 	Schedules []Schedule `yaml:"schedules,omitempty" json:"schedules,omitempty"`
+}
+
+// Key is this unit's identity: its id when it has one, its name otherwise.
+//
+// EVERYTHING DURABLE KEYS ON THIS and everything a person reads keys on
+// [Unit.Name]. The two are the same string on a company that set no ids,
+// which is what makes the field optional rather than a migration.
+func (u *Unit) Key() string {
+	if u == nil {
+		return ""
+	}
+	if id := strings.TrimSpace(u.ID); id != "" {
+		return id
+	}
+	return strings.TrimSpace(u.Name)
 }
 
 // Role returns the direct member with this name, or nil.

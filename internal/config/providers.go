@@ -870,23 +870,62 @@ type EmbeddingProvider struct {
 	APIKey  string                `secret:"true" yaml:"api_key,omitempty" json:"api_key,omitempty" desc:"API key or ${VAR} reference."`
 	BaseURL string                `yaml:"base_url,omitempty" json:"base_url,omitempty" desc:"Endpoint for an openai-compatible embedding service."`
 
-	// Dimensions is the vector width. It MUST match what the model
-	// produces: the store's vector columns are sized from this at open
-	// time, and a mismatch is not a degraded search but a write that
-	// cannot be read back.
-	Dimensions int `yaml:"dimensions,omitempty" json:"dimensions,omitempty" js:"min=0" desc:"Vector width; must match the model's output size."`
+	// Dimensions is the vector width, and 0 means THE MODEL'S OWN.
+	//
+	// The width is a property of the model, not a setting with a global
+	// default: text-embedding-3-large emits 3072 and -3-small emits 1536,
+	// and a number that was right for one is silently wrong for the other.
+	// So an unset value resolves from [ModelWidths], and a model this
+	// build does not know is REFUSED rather than given a guess — see
+	// Width.
+	//
+	// A value is an OVERRIDE, 64..4096, for a model that supports
+	// shortening its output. It must match what the model actually
+	// produces: the store's vector columns are checked against it, and a
+	// mismatch is not a degraded search but a write that cannot be read
+	// back.
+	Dimensions int `yaml:"dimensions,omitempty" json:"dimensions,omitempty" js:"min=0;max=4096" desc:"Vector width; 0 takes the named model's own width. 64..4096 to override, and it must match what the model produces."`
 }
 
-// defaultEmbeddingDimensions matches text-embedding-3-small, which is what
-// an entry that names no model gets.
-const defaultEmbeddingDimensions = 1536
+// ModelWidths is what each embedding model this build knows emits.
+//
+// # Why a table and not a default
+//
+// The width decides whether a vector written today can be read tomorrow, and
+// it is a fact about the MODEL. A single default was wrong the moment a
+// company named a model that emits something else — and the default this
+// replaces justified itself by a case that could not exist: it was documented
+// as "what an entry that names no model gets", while validation refuses
+// exactly that entry.
+//
+// A model absent from this table is refused rather than guessed at, naming
+// both ways to fix it: name a model this build knows, or state the width.
+var ModelWidths = map[string]int{
+	"text-embedding-3-large": 3072,
+	"text-embedding-3-small": 1536,
+	"gemini-embedding-001":   3072,
+	"embed-v4.0":             1536,
+}
 
-// Width is the configured vector width, applying the default.
+// The bounds on an explicit width.
+const (
+	// MinEmbeddingWidth is the narrowest width worth storing. Below it the
+	// binary quantization the search's first stage uses degrades sharply,
+	// and the vendors that support shortening do not go lower.
+	MinEmbeddingWidth = 64
+
+	// MaxEmbeddingWidth is anchored to the widest width any model in
+	// current use emits.
+	MaxEmbeddingWidth = 4096
+)
+
+// Width is the vector width this provider produces, and 0 when the answer is
+// unknown — which validation refuses, so no caller meets it.
 func (e *EmbeddingProvider) Width() int {
-	if e.Dimensions <= 0 {
-		return defaultEmbeddingDimensions
+	if e.Dimensions > 0 {
+		return e.Dimensions
 	}
-	return e.Dimensions
+	return ModelWidths[strings.TrimSpace(e.Model)]
 }
 
 func (e *EmbeddingProvider) validate(path string) error {
@@ -897,17 +936,52 @@ func (e *EmbeddingProvider) validate(path string) error {
 	if strings.TrimSpace(e.Model) == "" {
 		p.add(at(path, "model"), ErrMissing, "name the embedding model")
 	}
-	// Left unbounded, a negative or absurd width is not a tuning
-	// mistake — the store sizes its vector columns from it, so it
-	// decides whether a written embedding can ever be read back.
-	if e.Dimensions < 0 {
+	// A width is not a tuning mistake — the store checks its vector
+	// columns against it, so it decides whether a written embedding can
+	// ever be read back.
+	//
+	// THE js TAG CANNOT EXPRESS "0 OR 64..4096", so the schema publishes
+	// 0..4096 and the floor lives here, in a message naming both forms.
+	switch {
+	case e.Dimensions < 0:
 		p.add(at(path, "dimensions"), ErrOutOfRange,
-			"must be 0 (the default of %d) or positive, got %d",
-			defaultEmbeddingDimensions, e.Dimensions)
+			"must be 0 (the named model's own width) or %d..%d, got %d",
+			MinEmbeddingWidth, MaxEmbeddingWidth, e.Dimensions)
+	case e.Dimensions > 0 && e.Dimensions < MinEmbeddingWidth:
+		p.add(at(path, "dimensions"), ErrOutOfRange,
+			"%d is below the %d floor — leave it unset to take %q's own width, "+
+				"or state a width of at least %d",
+			e.Dimensions, MinEmbeddingWidth, strings.TrimSpace(e.Model), MinEmbeddingWidth)
+	case e.Dimensions > MaxEmbeddingWidth:
+		p.add(at(path, "dimensions"), ErrOutOfRange,
+			"%d is past the %d ceiling, which is the widest any model in current "+
+				"use emits", e.Dimensions, MaxEmbeddingWidth)
+	case e.Dimensions == 0 && strings.TrimSpace(e.Model) != "":
+		// AN UNKNOWN MODEL WITH NO WIDTH IS REFUSED, not defaulted. The
+		// width decides whether a vector written today can be read
+		// tomorrow, and a guess here is a company whose recall silently
+		// stops working the day it is turned on.
+		if _, known := ModelWidths[strings.TrimSpace(e.Model)]; !known {
+			p.add(at(path, "dimensions"), ErrMissing,
+				"this build does not know how wide %q's vectors are. Either name "+
+					"a model it knows (%s) or state `dimensions` yourself",
+				strings.TrimSpace(e.Model), knownModels())
+		}
 	}
 	if e.Type == EmbeddingOpenAICompatible && strings.TrimSpace(e.BaseURL) == "" {
 		p.add(at(path, "base_url"), ErrMissing,
 			"an openai-compatible embedding provider needs the endpoint to talk to")
 	}
 	return p.err()
+}
+
+// knownModels lists the models whose width this build carries, sorted, for
+// the refusal above.
+func knownModels() string {
+	out := make([]string, 0, len(ModelWidths))
+	for model := range ModelWidths {
+		out = append(out, model)
+	}
+	slices.Sort(out)
+	return strings.Join(out, ", ")
 }
