@@ -75,8 +75,9 @@ Only ever rises. Rates and totals are your collector's arithmetic, never this en
 
 | Metric | Unit | Attributes | What it makes visible |
 |---|---|---|---|
-| `crewlet.statelog.publish.outcomes` | `1` | `domain`, `outcome` | The three-valued write outcome, counted. `unknown` is the one that matters most and had no counter at all: a broker flapping into ambiguity was visible only to the model that received the answer. |
+| `crewlet.statelog.publish.outcomes` | `1` | `domain`, `outcome` | The three-valued write outcome, counted, and only the three — a refusal is on `publish.refusals` instead, because it says the write never happened at all. `unknown` is the one that matters most and had no counter: a broker flapping into ambiguity was visible only to the model that received the answer. |
 | `crewlet.statelog.publish.rejections` | `1` | `domain`, `subject_kind` | How often a write loses a race, per kind of subject. It is what says whether a counter, a rank order or an ordinary object is the contended one. |
+| `crewlet.statelog.publish.refusals` | `1` | `domain`, `reason` | Writes refused before or instead of an append, by reason — an evicted node, a deferred record covering the object, a caller waiting on its own previous write, a full log. A refusal is not one of the three outcomes: it says the write never happened, and each reason has a different remedy, so one counter with an outcome dimension would hide all four. |
 | `crewlet.statelog.read.refusals` | `1` | `domain`, `level`, `code` | Every refusal code, counted. Twelve codes with different remedies had no counter between them, so an operator had no rejection rate for any of them. |
 | `crewlet.statelog.read.served` | `1` | `domain`, `level` | Reads answered per level, which is the denominator every refusal fraction needs and the check on the assumed read rate the log's own size is derived from. |
 | `crewlet.statelog.barrier.appends` | `1` | `domain` | Barrier records appended. Against reads served it is the single-flight ratio, which says whether coalescing is doing anything at all. |
