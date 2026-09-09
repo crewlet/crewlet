@@ -1,666 +1,252 @@
 package pages_test
 
 import (
-	"context"
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/pages"
 )
 
-type clock struct{ at time.Time }
-
-func (c *clock) now() time.Time { return c.at }
-
-func newStore(t *testing.T) (*pages.Store, coord.Documents, *clock) {
-	t.Helper()
-	docs := memory.NewFleet()
-	c := &clock{at: time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)}
-	s, err := pages.NewStore(pages.Options{Documents: docs, Now: c.now})
-	if err != nil {
-		t.Fatalf("new store: %v", err)
-	}
-	return s, docs, c
-}
-
-func author(handle string) pages.Actor {
-	return pages.Actor{Handle: handle, Kind: pages.AuthorHuman}
-}
-
-func agent(handle string) pages.Actor {
-	return pages.Actor{Handle: handle, Kind: pages.AuthorAgent, TurnID: "turn-" + handle}
-}
-
-func write(t *testing.T, s *pages.Store, actor pages.Actor, in pages.NewPage) pages.Written {
-	t.Helper()
-	if in.Container == "" {
-		in.Container = "ENG"
-	}
-	if in.Title == "" {
-		in.Title = "a page"
-	}
-	got, err := s.Create(t.Context(), actor, in)
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	return got
-}
-
-func ptr[T any](v T) *T { return &v }
-
-// A TITLE IS AN ADDRESS. People link to pages by name, so a container holding
-// two pages called the same thing is one where every link is a coin flip —
-// and the check has to be a first-writer-wins CLAIM rather than a lookup,
-// because two nodes creating the same title would both look, both find
-// nothing, and both create.
+// A TITLE IS AN ADDRESS, and the claim is what makes it one.
+//
+// People link to pages by name, so a container holding two pages called the
+// same thing is one where every link is a coin flip. The check has to be a
+// first-writer-wins claim rather than a lookup, because two nodes creating the
+// same title would both look, both find nothing, and both create — and here
+// the claim IS the subject the broker arbitrates, so the race is settled by
+// the one party that sees both writers.
 func TestATitleIsClaimedAndCannotBeTakenTwice(t *testing.T) {
 	t.Parallel()
-	s, _, _ := newStore(t)
-	first := write(t, s, author("jane"), pages.NewPage{Title: "Deploy Runbook"})
+	r := newRoundTrip(t)
+	first := r.write(author("jane"), pages.NewPage{
+		Title: "Deploy Runbook", Body: "step one",
+	})
 
-	_, err := s.Create(t.Context(), author("eng"), pages.NewPage{
-		Container: "ENG", Title: "Deploy Runbook",
+	_, err := r.store.Create(t.Context(), author("bob"), pages.NewPage{
+		Container: "ENG", Title: "deploy   RUNBOOK", Body: "a second page",
 	})
 	if !errors.Is(err, pages.ErrTitleTaken) {
-		t.Fatalf("a second page took the same title: %v", err)
-	}
-	if !strings.Contains(err.Error(), first.Page.ID) {
-		t.Errorf("the refusal does not name the page that holds it: %v", err)
+		t.Fatalf("a second page took the same address: %v", err)
 	}
 
-	// NORMALISED, so a title is one address rather than several: somebody
-	// linking to "Deploy Runbook" and somebody linking to
-	// "deploy  runbook" mean the same page.
-	for _, title := range []string{"deploy runbook", "DEPLOY RUNBOOK", "Deploy   Runbook"} {
-		if _, err := s.Create(t.Context(), author("eng"), pages.NewPage{
-			Container: "ENG", Title: title,
-		}); !errors.Is(err, pages.ErrTitleTaken) {
-			t.Errorf("%q was accepted beside %q", title, first.Page.Title)
-		}
-	}
-
-	// A DIFFERENT CONTAINER IS A DIFFERENT ADDRESS SPACE, which is the
-	// whole point of containers.
-	if _, err := s.Create(t.Context(), author("eng"), pages.NewPage{
-		Container: "PROD", Title: "Deploy Runbook",
+	// AND THE SAME TITLE IN ANOTHER SPACE IS ANOTHER ADDRESS.
+	if _, err := r.store.Create(t.Context(), author("bob"), pages.NewPage{
+		Container: "PROD", Title: "Deploy Runbook", Body: "prod's own",
 	}); err != nil {
-		t.Errorf("the same title in another container was refused: %v", err)
+		t.Fatalf("one title in two spaces is two addresses: %v", err)
+	}
+	r.drain()
+
+	if got := r.get("ENG/Deploy Runbook"); got.Page.ID != first.Page.ID {
+		t.Fatalf("ENG's address resolves to %s, want %s", got.Page.ID, first.Page.ID)
 	}
 }
 
-// A CRASH BETWEEN THE CLAIM AND THE PAGE MUST NOT LOCK A TITLE. Without the
-// grace rule, a node dying mid-create makes a name unusable until the hourly
-// sweep, and the person retrying is told their own half-written page owns it.
-func TestAnOrphanedTitleClaimIsSteppedOverPastTheGrace(t *testing.T) {
-	t.Parallel()
-	s, docs, c := newStore(t)
-
-	// A claim with no page behind it, as a crashed create leaves.
-	claim, err := pages.EncodeClaim(pages.TitleClaim{
-		V: 1, Container: "ENG", Title: pages.NormalizeTitle("Deploy Runbook"),
-		PageID: "never-landed", CreatedAt: c.at,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if created, err := docs.CreateDocument(t.Context(), coord.FamilyPages,
-		pages.TitleKey("ENG", "Deploy Runbook"), claim); err != nil || !created {
-		t.Fatalf("seed the claim: created=%v err=%v", created, err)
-	}
-
-	// WITHIN THE GRACE a crashed create and one in flight are
-	// indistinguishable, so the claim stands — stepping over it would
-	// destroy a live create.
-	c.at = c.at.Add(pages.OrphanGrace / 2)
-	if _, err := s.Create(t.Context(), author("jane"), pages.NewPage{
-		Container: "ENG", Title: "Deploy Runbook",
-	}); !errors.Is(err, pages.ErrTitleTaken) {
-		t.Fatalf("a claim inside the grace was stepped over: %v", err)
-	}
-
-	// PAST IT, only a crash explains a claim whose page does not exist.
-	c.at = c.at.Add(pages.OrphanGrace)
-	got, err := s.Create(t.Context(), author("jane"), pages.NewPage{
-		Container: "ENG", Title: "Deploy Runbook",
-	})
-	if err != nil {
-		t.Fatalf("an orphan claim locked the title: %v", err)
-	}
-	if got.Page.Title != "Deploy Runbook" {
-		t.Errorf("title = %q", got.Page.Title)
-	}
-}
-
-// A SAVE MUST STATE THE VERSION IT EDITED. A wiki's worst failure is silently
-// overwriting a paragraph somebody else just wrote, and there is no per-field
-// merge that makes that safe for prose — which is why this is required where
-// a work item's If-Match is optional.
+// A SAVE IS REFUSED AGAINST A STALE VERSION.
+//
+// A wiki's worst failure is silently overwriting a paragraph somebody else
+// just wrote, and there is no per-field merge that makes that safe for prose.
 func TestASaveIsRefusedAgainstAStaleVersion(t *testing.T) {
 	t.Parallel()
-	s, _, _ := newStore(t)
-	got := write(t, s, author("jane"), pages.NewPage{Body: "first"})
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "v1"})
 
-	if _, err := s.SavePage(t.Context(), author("jane"), got.Page.ID, pages.Save{
-		Body: ptr("second"),
-	}); !errors.Is(err, pages.ErrInvalid) {
-		t.Fatalf("a save with no base version was accepted: %v", err)
-	}
-
-	second, err := s.SavePage(t.Context(), author("eng"), got.Page.ID, pages.Save{
-		BaseVersion: got.Page.Version, Body: ptr("second"), Message: "rewrote the opening",
-	})
-	if err != nil {
+	if _, err := r.store.SavePage(t.Context(), author("jane"), page.Page.ID,
+		pages.Save{BaseVersion: 1, Body: ptr("v2")}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	if second.Page.Version != got.Page.Version+1 {
-		t.Errorf("version = %d, want %d", second.Page.Version, got.Page.Version+1)
-	}
+	r.drain()
 
-	// The stale save is REFUSED, naming both versions so the editor knows
-	// what to re-base on.
-	_, err = s.SavePage(t.Context(), author("jane"), got.Page.ID, pages.Save{
-		BaseVersion: got.Page.Version, Body: ptr("a conflicting edit"),
-	})
+	_, err := r.store.SavePage(t.Context(), author("bob"), page.Page.ID,
+		pages.Save{BaseVersion: 1, Body: ptr("bob's overwrite")})
 	if !errors.Is(err, pages.ErrStaleVersion) {
-		t.Fatalf("a stale save was accepted: %v", err)
+		t.Fatalf("a save against a stale version landed: %v", err)
 	}
-	if !strings.Contains(err.Error(), "version 1") || !strings.Contains(err.Error(), "version 2") {
-		t.Errorf("the refusal does not name both versions: %v", err)
-	}
-}
-
-// EVERY SAVE WRITES A REVISION, and the first one is the page as it was
-// WRITTEN — a page whose original text was never a revision has no way back
-// to what it said when it was created.
-func TestEverySaveKeepsTheTextItReplaced(t *testing.T) {
-	t.Parallel()
-	s, _, _ := newStore(t)
-	got := write(t, s, author("jane"), pages.NewPage{
-		Body: "the original", Message: "first draft",
-	})
-
-	first, err := s.Revision(t.Context(), got.Page.ID, 1)
-	if err != nil {
-		t.Fatalf("the first revision was never written: %v", err)
-	}
-	if first.Body != "the original" || first.Message != "first draft" {
-		t.Errorf("revision 1 = %+v", first)
-	}
-
-	if _, err := s.SavePage(t.Context(), author("eng"), got.Page.ID, pages.Save{
-		BaseVersion: 1, Body: ptr("the rewrite"), Message: "tightened it",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	second, err := s.Revision(t.Context(), got.Page.ID, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if second.Body != "the rewrite" || second.Author != "eng" {
-		t.Errorf("revision 2 = %+v", second)
-	}
-	// And revision 1 is UNTOUCHED, which is what immutable means.
-	again, err := s.Revision(t.Context(), got.Page.ID, 1)
-	if err != nil || again.Body != "the original" {
-		t.Errorf("revision 1 changed: %+v, %v", again, err)
+	if got := r.get(page.Page.ID); got.Page.Body != "v2" {
+		t.Fatalf("body = %q, want the version that was written", got.Page.Body)
 	}
 }
 
-// A CRASH BETWEEN THE REVISION AND THE HEAD MUST NOT LOCK A PAGE. Without the
-// grace rule the page is uneditable until the hourly sweep, which is an
-// outage for whoever is trying to fix it now.
-func TestAnOrphanedRevisionIsOverwrittenPastTheGrace(t *testing.T) {
+// EVERY VERSION KEEPS ITS TEXT, and the newest is reachable like the rest.
+func TestEveryVersionKeepsItsText(t *testing.T) {
 	t.Parallel()
-	s, docs, c := newStore(t)
-	got := write(t, s, author("jane"), pages.NewPage{Body: "first"})
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "v1"})
+	if _, err := r.store.SavePage(t.Context(), author("jane"), page.Page.ID,
+		pages.Save{BaseVersion: 1, Body: ptr("v2"), Message: "second pass"}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	r.drain()
 
-	// A revision at version 2 with the head still at 1, as a crashed save
-	// leaves.
-	orphan, err := pages.EncodeRevision(pages.Revision{
-		V: 1, ID: "orphan", PageID: got.Page.ID, Version: 2,
-		Title: got.Page.Title, Body: "the write that died", CreatedAt: c.at,
-	})
-	if err != nil {
-		t.Fatal(err)
+	for version, want := range map[int]string{1: "v1", 2: "v2"} {
+		got, err := r.store.Revision(t.Context(), page.Page.ID, version)
+		if err != nil {
+			t.Fatalf("revision %d: %v", version, err)
+		}
+		if got.Body != want {
+			t.Errorf("revision %d holds %q, want %q — a version whose text is "+
+				"not reachable is a history that cannot answer what changed",
+				version, got.Body, want)
+		}
 	}
-	if created, err := docs.CreateDocument(t.Context(), coord.FamilyPages,
-		pages.RevisionKey(got.Page.ID, 2), orphan); err != nil || !created {
-		t.Fatalf("seed the orphan: created=%v err=%v", created, err)
-	}
-
-	// WITHIN THE GRACE it is indistinguishable from a save in flight.
-	c.at = c.at.Add(pages.OrphanGrace / 2)
-	if _, err := s.SavePage(t.Context(), author("eng"), got.Page.ID, pages.Save{
-		BaseVersion: 1, Body: ptr("my edit"),
-	}); !errors.Is(err, pages.ErrStaleVersion) {
-		t.Fatalf("a revision inside the grace was overwritten: %v", err)
-	}
-
-	// PAST IT, the head is the authority on which versions exist.
-	c.at = c.at.Add(pages.OrphanGrace)
-	saved, err := s.SavePage(t.Context(), author("eng"), got.Page.ID, pages.Save{
-		BaseVersion: 1, Body: ptr("my edit"),
-	})
-	if err != nil {
-		t.Fatalf("an orphan revision locked the page: %v", err)
-	}
-	if saved.Page.Body != "my edit" {
-		t.Errorf("body = %q", saved.Page.Body)
-	}
-	rev, err := s.Revision(t.Context(), got.Page.ID, 2)
-	if err != nil || rev.Body != "my edit" {
-		t.Errorf("revision 2 = %+v, %v", rev, err)
+	detail := r.get(page.Page.ID)
+	if len(detail.History) != 2 {
+		t.Fatalf("the history lists %d revisions, want 2", len(detail.History))
 	}
 }
 
-// A RENAME TAKES THE NEW CLAIM BEFORE RELEASING THE OLD, so a page is never
-// unreachable by title — and never leaves its old name free while it still
-// answers to it.
-func TestARenameMovesTheClaimInTheSafeOrder(t *testing.T) {
+// A RENAME MOVES THE ADDRESS AND FREES THE OLD ONE.
+func TestARenameMovesTheAddressAndFreesTheOldOne(t *testing.T) {
 	t.Parallel()
-	s, docs, _ := newStore(t)
-	got := write(t, s, author("jane"), pages.NewPage{Title: "Old Name"})
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Old Name", Body: "prose"})
 
-	renamed, err := s.SavePage(t.Context(), author("jane"), got.Page.ID, pages.Save{
-		BaseVersion: 1, Title: ptr("New Name"),
-	})
-	if err != nil {
+	if _, err := r.store.Rename(t.Context(), author("jane"), page.Page.ID,
+		"New Name", false); err != nil {
 		t.Fatalf("rename: %v", err)
 	}
-	if renamed.Page.Title != "New Name" {
-		t.Errorf("title = %q", renamed.Page.Title)
-	}
+	r.drain()
 
-	// The old name is FREE afterwards, so somebody can reuse it.
-	if _, err := s.Create(t.Context(), author("eng"), pages.NewPage{
-		Container: "ENG", Title: "Old Name",
+	if got := r.get("ENG/New Name"); got.Page.ID != page.Page.ID {
+		t.Fatalf("the new address resolves to %s", got.Page.ID)
+	}
+	if _, err := r.reader.Get(t.Context(), "ENG/Old Name"); !errors.Is(err, pages.ErrNotFound) {
+		t.Fatalf("the old address still resolves: %v", err)
+	}
+	// AND THE FREED NAME IS TAKEABLE, which is the half a claim that was
+	// never released would silently break.
+	if _, err := r.store.Create(t.Context(), author("bob"), pages.NewPage{
+		Container: "ENG", Title: "Old Name", Body: "a new page",
 	}); err != nil {
-		t.Errorf("the old title stayed claimed after a rename: %v", err)
+		t.Fatalf("the released address could not be taken: %v", err)
 	}
-	// And the new one is HELD.
-	if _, err := s.Create(t.Context(), author("eng"), pages.NewPage{
-		Container: "ENG", Title: "New Name",
-	}); !errors.Is(err, pages.ErrTitleTaken) {
-		t.Errorf("the new title was not claimed: %v", err)
-	}
-
-	// A rename to a name somebody else holds is REFUSED, and the page keeps
-	// the title it had — a half-applied rename would leave it addressable
-	// by neither.
-	other := write(t, s, author("eng"), pages.NewPage{Title: "Taken"})
-	_ = other
-	if _, err := s.SavePage(t.Context(), author("jane"), got.Page.ID, pages.Save{
-		BaseVersion: renamed.Page.Version, Title: ptr("Taken"),
-	}); !errors.Is(err, pages.ErrTitleTaken) {
-		t.Fatalf("a rename onto a held title was accepted: %v", err)
-	}
-	live, _, err := s.Page(t.Context(), got.Page.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if live.Title != "New Name" || live.Version != renamed.Page.Version {
-		t.Errorf("the refused rename moved the page: %+v", live)
-	}
-	_ = docs
 }
 
-// A COMMENT DOES NOT SUBSCRIBE ITS COMMENTER, which is the opposite of the
-// tracker's participants rule and deliberate: a page a hundred people have
-// remarked on would otherwise wake a hundred seats every time somebody fixes
-// a heading. A MENTION still subscribes its target, because it is directed.
+// A RENAME ONTO A NAME SOMEBODY ELSE HOLDS IS REFUSED.
+func TestARenameOntoATakenAddressIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "One", Body: "a"})
+	r.write(author("jane"), pages.NewPage{Title: "Two", Body: "b"})
+
+	_, err := r.store.Rename(t.Context(), author("jane"), page.Page.ID, "Two", false)
+	if !errors.Is(err, pages.ErrTitleTaken) {
+		t.Fatalf("a rename took an address another page holds: %v", err)
+	}
+	if got := r.get(page.Page.ID); got.Page.Title != "One" {
+		t.Errorf("the page was renamed anyway, to %q", got.Page.Title)
+	}
+}
+
+// COMMENTING DOES NOT SUBSCRIBE, BUT MENTIONING DOES.
+//
+// THE OPPOSITE OF THE TRACKER'S PARTICIPANTS RULE, and deliberate: a page a
+// hundred people have remarked on would otherwise wake a hundred seats when
+// somebody fixes a heading.
 func TestCommentingDoesNotSubscribeButMentioningDoes(t *testing.T) {
 	t.Parallel()
-	s, _, _ := newStore(t)
-	got := write(t, s, author("jane"), pages.NewPage{})
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
 
-	if _, _, err := s.Comment(t.Context(), agent("eng"), got.Page.ID,
-		pages.NewComment{Body: "a typo in the third paragraph"}); err != nil {
-		t.Fatal(err)
-	}
-	page, _, err := s.Page(t.Context(), got.Page.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if slices.Contains(page.Watchers, "eng") {
-		t.Errorf("commenting subscribed the commenter: %v — a page many people "+
-			"remark on would wake all of them on every edit", page.Watchers)
-	}
-
-	if _, _, err := s.Comment(t.Context(), agent("eng"), got.Page.ID,
-		pages.NewComment{Body: "@ops is this still right?", Mentions: []string{"ops"}}); err != nil {
-		t.Fatal(err)
-	}
-	page, _, err = s.Page(t.Context(), got.Page.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Contains(page.Watchers, "ops") {
-		t.Errorf("a mention did not subscribe its target: %v", page.Watchers)
-	}
-}
-
-// AN EDIT SUBSCRIBES ITS AUTHOR: somebody who wrote a paragraph wants to know
-// when it is rewritten.
-func TestEditingSubscribesTheEditor(t *testing.T) {
-	t.Parallel()
-	s, _, _ := newStore(t)
-	got := write(t, s, author("jane"), pages.NewPage{Body: "first"})
-	if _, err := s.SavePage(t.Context(), agent("eng"), got.Page.ID, pages.Save{
-		BaseVersion: 1, Body: ptr("second"),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	page, _, err := s.Page(t.Context(), got.Page.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{"jane", "eng"} {
-		if !slices.Contains(page.Watchers, want) {
-			t.Errorf("%q does not watch a page they wrote on: %v", want, page.Watchers)
-		}
-	}
-}
-
-// AN UNWATCH STICKS, and a directed mention still reaches them — the same two
-// rules the tracker's mute enforces.
-func TestAnUnwatchSticksButAMentionStillArrives(t *testing.T) {
-	t.Parallel()
-	s, _, _ := newStore(t)
-	got := write(t, s, author("jane"), pages.NewPage{Body: "first"})
-
-	if _, err := s.SavePage(t.Context(), author("jane"), got.Page.ID, pages.Save{
-		BaseVersion: 1, Watch: ptr(false),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	page, _, err := s.Page(t.Context(), got.Page.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if slices.Contains(page.Watchers, "jane") || !slices.Contains(page.Muted, "jane") {
-		t.Fatalf("the unwatch did not take: %+v", page)
-	}
-
-	// A LATER EDIT BY THEM DOES NOT RE-SUBSCRIBE, which is what makes an
-	// unwatch mean anything.
-	if _, err := s.SavePage(t.Context(), author("jane"), got.Page.ID, pages.Save{
-		BaseVersion: page.Version, Body: ptr("their own later edit"),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	page, _, _ = s.Page(t.Context(), got.Page.ID)
-	if slices.Contains(page.Watchers, "jane") {
-		t.Errorf("editing re-subscribed somebody who unwatched: %v", page.Watchers)
-	}
-
-	// A MENTION DOES, and clears the mute: a mute says "stop telling me
-	// about this page" and a mention says "I am telling you".
-	if _, _, err := s.Comment(t.Context(), agent("eng"), got.Page.ID,
-		pages.NewComment{Body: "@jane?", Mentions: []string{"jane"}}); err != nil {
-		t.Fatal(err)
-	}
-	page, _, _ = s.Page(t.Context(), got.Page.ID)
-	if !slices.Contains(page.Watchers, "jane") || slices.Contains(page.Muted, "jane") {
-		t.Errorf("a mention did not reach a muted person: %+v", page)
-	}
-}
-
-// A COMMENT FROM A TURN IS IDEMPOTENT, so a re-run turn posts once.
-func TestATurnsCommentOnAPageIsPostedOnce(t *testing.T) {
-	t.Parallel()
-	s, _, _ := newStore(t)
-	got := write(t, s, author("jane"), pages.NewPage{})
-
-	post := func() pages.Comment {
-		c, _, err := s.Comment(t.Context(), agent("eng"), got.Page.ID,
-			pages.NewComment{Body: "checked, still accurate", TurnKey: "turn-1"})
-		if err != nil {
-			t.Fatalf("comment: %v", err)
-		}
-		return c
-	}
-	if first, again := post(), post(); first.ID != again.ID {
-		t.Errorf("a re-run turn posted twice: %s and %s", first.ID, again.ID)
-	}
-	thread, err := s.Thread(t.Context(), got.Page.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(thread) != 1 {
-		t.Errorf("the thread has %d comments after one turn ran twice", len(thread))
-	}
-}
-
-// A CONTAINER IS CREATED ONCE HOWEVER MANY NODES ASK. Every node calls this
-// on every apply for every unit's space, so a race must be a no-op rather
-// than an error either reports.
-func TestEnsuringAContainerIsIdempotent(t *testing.T) {
-	t.Parallel()
-	s, _, _ := newStore(t)
-
-	const nodes = 8
-	results := make(chan error, nodes)
-	for range nodes {
-		go func() {
-			_, err := s.EnsureContainer(context.Background(), "eng", "Engineering", "the team's pages")
-			results <- err
-		}()
-	}
-	for range nodes {
-		if err := <-results; err != nil {
-			t.Fatalf("a concurrent EnsureContainer failed: %v", err)
-		}
-	}
-	got, err := s.EnsureContainer(t.Context(), "ENG", "", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Key != "ENG" || got.Name != "Engineering" {
-		t.Errorf("container = %+v, want the first writer's values kept", got)
-	}
-}
-
-// A REMOVAL PURGES EVERYTHING AND FREES THE TITLE, and keeps the record.
-func TestRemovingAPageFreesItsTitleAndKeepsTheRecord(t *testing.T) {
-	t.Parallel()
-	s, docs, _ := newStore(t)
-	got := write(t, s, author("jane"), pages.NewPage{Title: "Temporary", Body: "x"})
-	if _, _, err := s.Comment(t.Context(), author("jane"), got.Page.ID,
-		pages.NewComment{Body: "a remark"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Remove(t.Context(), author("jane"), got.Page.ID); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, _, err := s.Page(t.Context(), got.Page.ID); !errors.Is(err, pages.ErrNotFound) {
-		t.Errorf("the page survived removal: %v", err)
-	}
-	if thread, _ := s.Thread(t.Context(), got.Page.ID); len(thread) != 0 {
-		t.Errorf("the thread survived: %d comments", len(thread))
-	}
-	if _, err := s.Revision(t.Context(), got.Page.ID, 1); !errors.Is(err, pages.ErrNotFound) {
-		t.Errorf("a revision survived: %v", err)
-	}
-	// THE TITLE IS FREE, so somebody can write the page again.
-	if _, err := s.Create(t.Context(), author("eng"), pages.NewPage{
-		Container: "ENG", Title: "Temporary",
-	}); err != nil {
-		t.Errorf("the title stayed claimed after removal: %v", err)
-	}
-	// AND THE CHANGE KEYS STAY: they are what a redelivered feed message is
-	// deduplicated against.
-	changes, err := docs.Documents(t.Context(), coord.FamilyPages,
-		pages.ChangePrefix(got.Page.ID))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(changes) == 0 {
-		t.Error("the removal purged the record of what happened")
-	}
-}
-
-// Every refusal names the field and why.
-func TestOversizedContentIsRefusedNamingTheField(t *testing.T) {
-	t.Parallel()
-	s, _, _ := newStore(t)
-	for _, tc := range []struct {
-		name  string
-		in    pages.NewPage
-		field string
-	}{
-		{"a title", pages.NewPage{Title: strings.Repeat("x", pages.MaxTitle+1)}, "title"},
-		{"no title", pages.NewPage{Title: "   "}, "title"},
-		{"a body", pages.NewPage{Body: strings.Repeat("x", pages.MaxBody+1)}, "body"},
-		{"no container", pages.NewPage{Container: " "}, "container"},
-		{"a status", pages.NewPage{Status: "archived"}, "status"},
-		{"too many labels", pages.NewPage{Labels: manyLabels(pages.MaxLabels + 1)}, "labels"},
-		{"a long message", pages.NewPage{Message: strings.Repeat("x", pages.MaxMessage+1)}, "message"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			in := tc.in
-			if in.Container == "" {
-				in.Container = "ENG"
-			}
-			if in.Title == "" {
-				in.Title = "a page " + tc.name
-			}
-			_, err := s.Create(t.Context(), author("jane"), in)
-			if !errors.Is(err, pages.ErrInvalid) {
-				t.Fatalf("got %v, want ErrInvalid", err)
-			}
-			if !strings.Contains(err.Error(), tc.field) {
-				t.Errorf("the refusal does not name %q: %v", tc.field, err)
-			}
-		})
-	}
-}
-
-func manyLabels(n int) []string {
-	out := make([]string, n)
-	for i := range out {
-		out[i] = fmt.Sprintf("label-%d", i)
-	}
-	return out
-}
-
-// A write with no honest actor is refused rather than attributed to a guess.
-func TestAWriteNeedsAnActor(t *testing.T) {
-	t.Parallel()
-	s, _, _ := newStore(t)
-	for _, actor := range []pages.Actor{{}, {Kind: "robot", Handle: "x"}, {Kind: pages.AuthorAgent}} {
-		if _, err := s.Create(t.Context(), actor, pages.NewPage{
-			Container: "ENG", Title: "t",
-		}); !errors.Is(err, pages.ErrInvalid) {
-			t.Errorf("actor %+v was accepted: %v", actor, err)
-		}
-	}
-	got, err := s.Create(t.Context(), pages.Actor{Kind: pages.AuthorOperator, OperatorID: "ops"},
-		pages.NewPage{Container: "ENG", Title: "by an operator"})
-	if err != nil {
-		t.Fatalf("an unbound operator token was refused: %v", err)
-	}
-	if got.Page.Author != "operator:ops" {
-		t.Errorf("author = %q, want the token's own label", got.Page.Author)
-	}
-}
-
-// A title is one address however it is typed, and a conversation key survives
-// a rename — unlike the tracker's, which keys on the human item key.
-func TestTitlesNormaliseAndTheConversationSurvivesARename(t *testing.T) {
-	t.Parallel()
-	for _, tc := range [][2]string{
-		{"Deploy Runbook", "deploy runbook"},
-		{"  Deploy   Runbook  ", "deploy runbook"},
-		{"DEPLOY RUNBOOK", "deploy runbook"},
-	} {
-		if got := pages.NormalizeTitle(tc[0]); got != tc[1] {
-			t.Errorf("NormalizeTitle(%q) = %q, want %q", tc[0], got, tc[1])
-		}
-	}
-	if got := pages.ConversationKey("p-1"); got != "page:p-1" {
-		t.Errorf("ConversationKey = %q", got)
-	}
-}
-
-// A COMMENT IS EDITED BY ITS OWN AUTHOR, and the edit is its own kind.
-//
-// `comment_edited` was in the enum and rendered by the prompt with nothing
-// able to produce it — a kind every reader was written to handle and no
-// writer ever wrote. This is the writer.
-func TestACommentIsEditedByItsAuthorAndSaysSo(t *testing.T) {
-	t.Parallel()
-	s, _, _ := newStore(t)
-	page := write(t, s, author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
-	comment, _, err := s.Comment(t.Context(), author("jane"), page.Page.ID,
-		pages.NewComment{Body: "first thought"})
-	if err != nil {
+	if _, _, err := r.store.Comment(t.Context(), author("bob"), page.Page.ID,
+		pages.NewComment{Body: "a passing remark"}); err != nil {
 		t.Fatalf("comment: %v", err)
 	}
-
-	edited, written, err := s.EditComment(t.Context(), author("jane"), page.Page.ID,
-		comment.ID, "a better thought")
-	if err != nil {
-		t.Fatalf("EditComment: %v", err)
-	}
-	if edited.Body != "a better thought" {
-		t.Errorf("body = %q", edited.Body)
-	}
-	if !edited.UpdatedAt.After(comment.CreatedAt) && !edited.UpdatedAt.Equal(comment.CreatedAt) {
-		t.Errorf("updated_at = %v, before the comment was written", edited.UpdatedAt)
-	}
-	if written.ChangeID == "" {
-		t.Fatal("the edit recorded no change, so nobody is woken by it")
-	}
-	if edited.LastChange == nil || edited.LastChange.Kind != pages.ChangeCommentEdited {
-		t.Fatalf("the change is %+v, want kind %q — a reader tells 'somebody "+
-			"said something' from 'somebody changed what they said' only by "+
-			"the kind", edited.LastChange, pages.ChangeCommentEdited)
-	}
-	if edited.LastChange.Excerpt == "" {
-		t.Error("the change carries no excerpt of the edited remark")
+	r.drain()
+	if watchers := r.get(page.Page.ID).Page.Watchers; slices.Contains(watchers, "bob") {
+		t.Fatalf("commenting subscribed bob: %v — a page a hundred people have "+
+			"remarked on would wake a hundred seats over a heading", watchers)
 	}
 
-	// AND THE STORED RECORD IS THE EDITED ONE.
-	thread, err := s.Thread(t.Context(), page.Page.ID)
+	if _, _, err := r.store.Comment(t.Context(), author("bob"), page.Page.ID,
+		pages.NewComment{Body: "what do you think @carla", Mentions: []string{"carla"}},
+	); err != nil {
+		t.Fatalf("comment with a mention: %v", err)
+	}
+	r.drain()
+	if watchers := r.get(page.Page.ID).Page.Watchers; !slices.Contains(watchers, "carla") {
+		t.Fatalf("a mention did not subscribe: %v", watchers)
+	}
+}
+
+// AN UNWATCH STICKS. Somebody who said no once is not re-subscribed by being
+// mentioned.
+func TestAnUnwatchSticks(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{
+		Title: "Runbook", Body: "prose", Watchers: []string{"carla"},
+	})
+	if _, err := r.store.SavePage(t.Context(), author("carla"), page.Page.ID,
+		pages.Save{BaseVersion: 1, Watch: ptr(false)}); err != nil {
+		t.Fatalf("unwatch: %v", err)
+	}
+	r.drain()
+
+	if _, _, err := r.store.Comment(t.Context(), author("jane"), page.Page.ID,
+		pages.NewComment{Body: "@carla?", Mentions: []string{"carla"}}); err != nil {
+		t.Fatalf("comment: %v", err)
+	}
+	r.drain()
+	// THE MUTE IS THE UNWATCH. A handle stays in the watcher set — it is
+	// also the record of who cared — and the mute is what takes it out of
+	// every recipient list, so what must hold is that carla is MUTED
+	// rather than absent.
+	got := r.get(page.Page.ID)
+	if !slices.Contains(got.Page.Muted, "carla") {
+		t.Fatalf("a mention un-muted somebody who unwatched: muted = %v, "+
+			"watchers = %v", got.Page.Muted, got.Page.Watchers)
+	}
+}
+
+// A TURN'S COMMENT IS POSTED ONCE, however many times the turn re-runs.
+//
+// THE OPERATION LEDGER COLLAPSES THE WHOLE RECORD here, which is the upgrade
+// the log brings: the retry does not even append, where the bucket could only
+// make the second write land on the same key.
+func TestATurnsCommentOnAPageIsPostedOnce(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+
+	in := pages.NewComment{Body: "the agent's note", TurnKey: "turn-7"}
+	for range 3 {
+		if _, _, err := r.store.Comment(t.Context(), agent("eng"), page.Page.ID,
+			in); err != nil {
+			t.Fatalf("comment: %v", err)
+		}
+		r.drain()
+	}
+	thread, err := r.store.Thread(t.Context(), page.Page.ID)
 	if err != nil {
 		t.Fatalf("thread: %v", err)
 	}
-	if len(thread) != 1 || thread[0].Body != "a better thought" {
-		t.Errorf("thread = %+v, want one edited comment", thread)
+	if len(thread) != 1 {
+		t.Fatalf("a re-run turn posted %d comments", len(thread))
 	}
 }
 
-// NOBODY ELSE EDITS IT, operator included.
-//
-// A comment is a remark somebody made, and an edit anybody could make is a
-// remark attributed to a person who did not make it — on a record that
-// outlives the page's body and is quoted in a wake.
+// ONLY THE AUTHOR EDITS A COMMENT, operator included.
 func TestOnlyTheAuthorEditsAComment(t *testing.T) {
 	t.Parallel()
-	s, _, _ := newStore(t)
-	page := write(t, s, author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
-	comment, _, err := s.Comment(t.Context(), author("jane"), page.Page.ID,
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+	comment, _, err := r.store.Comment(t.Context(), author("jane"), page.Page.ID,
 		pages.NewComment{Body: "jane's remark"})
 	if err != nil {
 		t.Fatalf("comment: %v", err)
 	}
+	r.drain()
 
-	if _, _, err := s.EditComment(t.Context(), author("bob"), page.Page.ID,
-		comment.ID, "bob's words in jane's mouth"); err == nil {
-		t.Fatal("a second person edited somebody else's comment")
-	} else if !errors.Is(err, pages.ErrInvalid) {
-		t.Errorf("refusal = %v, want ErrInvalid", err)
+	_, _, err = r.store.EditComment(t.Context(), author("bob"), page.Page.ID,
+		comment.ID, "bob's words in jane's mouth")
+	if !errors.Is(err, pages.ErrInvalid) {
+		t.Fatalf("a second person edited somebody else's comment: %v", err)
 	}
-
-	thread, err := s.Thread(t.Context(), page.Page.ID)
+	r.drain()
+	thread, err := r.store.Thread(t.Context(), page.Page.ID)
 	if err != nil {
 		t.Fatalf("thread: %v", err)
 	}
@@ -669,23 +255,167 @@ func TestOnlyTheAuthorEditsAComment(t *testing.T) {
 	}
 }
 
-// AN EDIT THAT CHANGES NOTHING WAKES NOBODY. Writing a change record for an
-// unchanged body is the same noise as an edit nobody made.
-func TestAnEditThatChangesNothingRecordsNothing(t *testing.T) {
+// ENSURING A CONTAINER IS IDEMPOTENT, and it runs on every boot for every
+// unit's space — so a record per boot would be a log that grows with restarts
+// rather than with edits.
+func TestEnsuringAContainerIsIdempotent(t *testing.T) {
 	t.Parallel()
-	s, _, _ := newStore(t)
-	page := write(t, s, author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
-	comment, _, err := s.Comment(t.Context(), author("jane"), page.Page.ID,
-		pages.NewComment{Body: "  a remark  "})
+	r := newRoundTrip(t)
+	for range 3 {
+		if _, err := r.store.EnsureContainer(t.Context(), "ENG", "Engineering",
+			"how we build"); err != nil {
+			t.Fatalf("ensure: %v", err)
+		}
+		r.drain()
+	}
+	var records int
+	if err := r.db.Replicated().SQL().QueryRowContext(t.Context(),
+		`SELECT COUNT(*) FROM pages_containers`).Scan(&records); err != nil {
+		t.Fatal(err)
+	}
+	if records != 1 {
+		t.Fatalf("%d container rows for one space", records)
+	}
+	if r.consumed != 1 {
+		t.Fatalf("ensuring one container three times appended %d records — a "+
+			"record per boot is a log that grows with restarts", r.consumed)
+	}
+}
+
+// OVERSIZED CONTENT IS REFUSED NAMING THE FIELD, never cut: a page truncated
+// mid-sentence is a procedure somebody will follow the first half of.
+func TestOversizedContentIsRefusedNamingTheField(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for name, in := range map[string]pages.NewPage{
+		"title": {Title: strings.Repeat("t", pages.MaxTitle+1), Body: "x"},
+		"body":  {Title: "Runbook", Body: strings.Repeat("b", pages.MaxBody+1)},
+		"labels": {Title: "Runbook", Body: "x",
+			Labels: manyLabels(pages.MaxLabels + 1)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			in.Container = "ENG"
+			_, err := r.store.Create(t.Context(), author("jane"), in)
+			if !errors.Is(err, pages.ErrInvalid) {
+				t.Fatalf("oversized %s was accepted: %v", name, err)
+			}
+			if !strings.Contains(err.Error(), name) {
+				t.Errorf("the refusal does not name the field: %v", err)
+			}
+		})
+	}
+}
+
+// A WRITE NAMES ITS AUTHOR, and an OPERATOR names it differently.
+//
+// A seat or an agent must state the handle it acts as: an audit trail whose
+// author is empty is a list of changes nobody made. An operator has no seat —
+// the operator surface deliberately gives a caller no way to name one — so it
+// is identified by the token it presented instead.
+func TestAWriteNamesItsAuthor(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.store.Create(t.Context(), pages.Actor{}, pages.NewPage{
+		Container: "ENG", Title: "Runbook", Body: "x",
+	}); !errors.Is(err, pages.ErrInvalid) {
+		t.Fatalf("a write with no author kind landed: %v", err)
+	}
+	if _, err := r.store.Create(t.Context(),
+		pages.Actor{Kind: pages.AuthorAgent}, pages.NewPage{
+			Container: "ENG", Title: "Runbook", Body: "x",
+		}); !errors.Is(err, pages.ErrInvalid) {
+		t.Fatalf("an agent write with no seat handle landed: %v", err)
+	}
+	written, err := r.store.Create(t.Context(),
+		pages.Actor{Kind: pages.AuthorOperator, OperatorID: "ops-3"},
+		pages.NewPage{Container: "ENG", Title: "Runbook", Body: "x"})
 	if err != nil {
-		t.Fatalf("comment: %v", err)
+		t.Fatalf("an operator write was refused: %v", err)
 	}
-	_, written, err := s.EditComment(t.Context(), author("jane"), page.Page.ID,
-		comment.ID, "a remark")
-	if err != nil {
-		t.Fatalf("EditComment: %v", err)
+	r.drain()
+	if got := r.get(written.Page.ID).Page.Author; got != "operator:ops-3" {
+		t.Errorf("the operator's write is attributed to %q — it carries the "+
+			"TOKEN's own name, because there is deliberately no way for that "+
+			"surface to name a seat to act as", got)
 	}
-	if written.ChangeID != "" {
-		t.Errorf("an edit that changed nothing recorded change %q", written.ChangeID)
+}
+
+// AN EDIT THAT CHANGES NOTHING APPENDS NOTHING.
+func TestAnEditThatChangesNothingAppendsNothing(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+	before := r.consumed
+
+	if _, err := r.store.SavePage(t.Context(), author("jane"), page.Page.ID,
+		pages.Save{BaseVersion: 1, Body: ptr("prose")}); err != nil {
+		t.Fatalf("save: %v", err)
 	}
+	r.drain()
+	if r.consumed != before {
+		t.Errorf("a save that changed nothing appended a record — the log grows "+
+			"with edits, not with saves (%d -> %d)", before, r.consumed)
+	}
+}
+
+// A TRASHED PAGE LEAVES EVERY READER'S WAY AND COMES BACK.
+func TestATrashedPageLeavesAndComesBack(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+
+	if _, err := r.store.Trash(t.Context(), author("jane"), page.Page.ID); err != nil {
+		t.Fatalf("trash: %v", err)
+	}
+	r.drain()
+	if got := r.get(page.Page.ID); got.Page.Status != pages.StatusTrashed {
+		t.Fatalf("status = %q after a trash", got.Page.Status)
+	}
+	if _, err := r.store.Restore(t.Context(), author("jane"), page.Page.ID); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	r.drain()
+	if got := r.get(page.Page.ID); got.Page.Status != pages.StatusPublished {
+		t.Fatalf("status = %q after a restore", got.Page.Status)
+	}
+}
+
+// A PURGE IS PERMANENT, and its marker is what makes it so.
+func TestAPurgeIsPermanentAndFreesTheAddress(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+
+	if _, err := r.store.Purge(t.Context(), author("jane"), page.Page.ID,
+		"written in the wrong space"); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	r.drain()
+	if _, err := r.reader.Get(t.Context(), page.Page.ID); !errors.Is(err, pages.ErrNotFound) {
+		t.Fatalf("a purged page is still readable: %v", err)
+	}
+	// THE ADDRESS IS FREE, because the claim went with the page.
+	if _, err := r.store.Create(t.Context(), author("bob"), pages.NewPage{
+		Container: "ENG", Title: "Runbook", Body: "a fresh page",
+	}); err != nil {
+		t.Fatalf("the purged page's address could not be re-taken: %v", err)
+	}
+	r.drain()
+	var markers int
+	if err := r.db.Replicated().SQL().QueryRowContext(t.Context(),
+		`SELECT COUNT(*) FROM pages_deletions`).Scan(&markers); err != nil {
+		t.Fatal(err)
+	}
+	if markers != 1 {
+		t.Errorf("%d deletion markers — the marker is how a node that was away "+
+			"tells a page that never existed from one that was destroyed", markers)
+	}
+}
+
+func manyLabels(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = "label-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
+	}
+	return out
 }

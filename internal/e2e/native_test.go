@@ -8,7 +8,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -152,10 +151,10 @@ func TestAnItemWrittenToTheFleetLandsOnTheBoard(t *testing.T) {
 // A PAGE IS FINDABLE BY SEARCH, which is the whole reason the knowledge base
 // keeps an index rather than only rows.
 //
-// The index is built BEHIND the projection, asynchronously — so this also
-// asserts the one thing that makes that safe: a node still indexing reports
-// itself as building rather than answering an empty search, because an empty
-// answer is one a seat acts on by writing a page that already exists.
+// The index is built BEHIND this node's applied rows, asynchronously — so this
+// also asserts the one thing that makes that safe: a node still indexing
+// reports itself as building rather than answering an empty search, because an
+// empty answer is one a seat acts on by writing a page that already exists.
 func TestAPageBecomesSearchable(t *testing.T) {
 	t.Parallel()
 	n := start(t)
@@ -168,8 +167,8 @@ func TestAPageBecomesSearchable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create page: %v", err)
 	}
-	if err := n.engine.WaitApplied(t.Context(), coord.FamilyPages, written.Revision); err != nil {
-		t.Fatalf("wait for the projection: %v", err)
+	if err := n.engine.WaitCommitted(t.Context(), written.Outcome.Position); err != nil {
+		t.Fatalf("wait for this node to apply the write: %v", err)
 	}
 
 	searcher := n.engine.NativeSearcher()

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/pages"
-	"github.com/crewlet/crewlet/internal/projection"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -27,17 +26,16 @@ import (
 // the answers rather than hidden here: the tracker's rows are derived by an
 // applier from an ordered log, so every answer carries the level it was served
 // at and what it could not account for; the wiki's are maintained by a
-// projector following a bucket's change feed, which can only say hydrated or
+// projector following a bucket's change feed, which could only say hydrated or
 // not.
 //
-// # A COPY THAT HAS NOT CAUGHT UP RAISES rather than answering empty
+// # A COPY THAT HAS NOT CAUGHT UP SAYS SO rather than answering empty
 //
-// The wiki's reader refuses with [projection.ErrNotHydrated] and this surface
-// passes that through as unavailable rather than flattening it to an empty
-// list; the tracker says the same thing in its own vocabulary, through the
-// coverage every answer carries. "This company has no work" is an answer a
-// person acts on — they file the duplicate, they conclude the migration failed
-// — and a node that has not caught up must never be able to say it.
+// Both native backends are state-log domains now, so both say it the same way:
+// through the coverage every answer carries, which is a POSITION rather than a
+// boolean. "This company has no work" is an answer a person acts on — they
+// file the duplicate, they conclude the migration failed — and a node that has
+// not caught up must never be able to say it without saying so.
 
 // WorkReader is the tracker read side this surface calls. Declared here, by
 // the consumer, so the package depends on the shape rather than on the store.
@@ -60,18 +58,6 @@ type PageReader interface {
 	Containers(ctx context.Context) ([]pages.Container, error)
 }
 
-// notHydrated turns the projection's refusal into this surface's own.
-//
-// ONE PLACE, because every one of these answers has to do it and the failure
-// of forgetting is silent: a screen that rendered an empty board during a
-// boot reconcile looks exactly like a company with no work.
-func notHydrated(err error) error {
-	if errors.Is(err, projection.ErrNotHydrated) {
-		return ErrUnavailable
-	}
-	return err
-}
-
 // ---- work -------------------------------------------------------------- //
 
 func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
@@ -82,7 +68,7 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	}
 	answer, err := s.Work.Tasks(ctx, q, now)
 	if err != nil {
-		return nil, notHydrated(err)
+		return nil, err
 	}
 	out := map[string]any{
 		"items": answer.Rows,
@@ -133,7 +119,7 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 	case errors.Is(err, tracker.ErrNoTask):
 		return nil, ErrNotFound
 	case err != nil:
-		return nil, notHydrated(err)
+		return nil, err
 	}
 	return detail, nil
 }
@@ -168,7 +154,7 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 
 	list, err := s.Pages.List(ctx, f)
 	if err != nil {
-		return nil, notHydrated(err)
+		return nil, err
 	}
 	return map[string]any{"pages": list, "limit": f.Limit, "offset": f.Offset}, nil
 }
@@ -183,7 +169,7 @@ func (s Sources) page(ctx context.Context, p Params) (any, error) {
 	case errors.Is(err, pages.ErrNotFound):
 		return nil, ErrNotFound
 	case err != nil:
-		return nil, notHydrated(err)
+		return nil, err
 	}
 	return detail, nil
 }
@@ -191,7 +177,7 @@ func (s Sources) page(ctx context.Context, p Params) (any, error) {
 func (s Sources) containers(ctx context.Context, _ Params) (any, error) {
 	list, err := s.Pages.Containers(ctx)
 	if err != nil {
-		return nil, notHydrated(err)
+		return nil, err
 	}
 	return map[string]any{"containers": list}, nil
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -122,6 +123,24 @@ func trackerFeedSource(running *runningDomain) (tracker.FeedSource, error) {
 			"committed record")
 	}
 	return tracker.FeedSource{Log: domainFeed{
+		log:    running.log,
+		stream: running.domain.Stream().Name,
+		envel:  running.domain.Envelope,
+	}}, nil
+}
+
+// pagesFeedSource is the knowledge base's own consumer over its log.
+//
+// The same shape [trackerFeedSource] has, and separate rather than generic
+// because each domain declares its own group name — which IS the fleet's
+// position, so a helper that derived one would be a rename waiting to happen.
+func pagesFeedSource(running *runningDomain) (pages.FeedSource, error) {
+	if running == nil {
+		return pages.FeedSource{}, fmt.Errorf("engine: the pages domain is not " +
+			"running on this node, so nothing derives a wake from a committed " +
+			"record")
+	}
+	return pages.FeedSource{Log: domainFeed{
 		log:    running.log,
 		stream: running.domain.Stream().Name,
 		envel:  running.domain.Envelope,

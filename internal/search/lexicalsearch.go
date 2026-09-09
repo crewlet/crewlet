@@ -1,4 +1,4 @@
-package projection
+package search
 
 import (
 	"context"
@@ -102,7 +102,7 @@ func (x *Indexer) corpus(ctx context.Context) (textindex.Corpus, error) {
 	err := x.db.SQL().QueryRowContext(ctx,
 		`SELECT COUNT(*), COALESCE(AVG(length), 0) FROM kb_docs`).Scan(&docs, &avg)
 	if err != nil {
-		return textindex.Corpus{}, fmt.Errorf("projection: read index statistics: %w", err)
+		return textindex.Corpus{}, fmt.Errorf("search: read index statistics: %w", err)
 	}
 	return textindex.Corpus{Docs: docs, AvgLength: avg}, nil
 }
@@ -119,7 +119,7 @@ func (x *Indexer) postings(ctx context.Context, term string, q SearchQuery) ([]t
 	var total int
 	if err := x.db.SQL().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM kb_postings WHERE term = ?`, term).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("projection: count postings for %q: %w", term, err)
+		return nil, 0, fmt.Errorf("search: count postings for %q: %w", term, err)
 	}
 	if total == 0 {
 		return nil, 0, nil
@@ -149,19 +149,19 @@ func (x *Indexer) postings(ctx context.Context, term string, q SearchQuery) ([]t
 		 ORDER BY p.freq DESC
 		 LIMIT ?`, args...)
 	if err != nil {
-		return nil, 0, fmt.Errorf("projection: read postings for %q: %w", term, err)
+		return nil, 0, fmt.Errorf("search: read postings for %q: %w", term, err)
 	}
 	defer rows.Close()
 	var out []textindex.Posting
 	for rows.Next() {
 		var p textindex.Posting
 		if err := rows.Scan(&p.DocID, &p.Freq, &p.Length); err != nil {
-			return nil, 0, fmt.Errorf("projection: scan posting for %q: %w", term, err)
+			return nil, 0, fmt.Errorf("search: scan posting for %q: %w", term, err)
 		}
 		out = append(out, p)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("projection: read postings for %q: %w", term, err)
+		return nil, 0, fmt.Errorf("search: read postings for %q: %w", term, err)
 	}
 	return out, total, nil
 }
@@ -184,7 +184,7 @@ func (x *Indexer) hydrateHits(ctx context.Context, scores map[string]float64, te
 		SELECT id, source, source_id, container, title, excerpt
 		  FROM kb_docs WHERE id IN (`+binds(len(ids))+`)`, ids...)
 	if err != nil {
-		return nil, fmt.Errorf("projection: read index hits: %w", err)
+		return nil, fmt.Errorf("search: read index hits: %w", err)
 	}
 	defer rows.Close()
 	byID := map[string]SearchHit{}
@@ -193,14 +193,14 @@ func (x *Indexer) hydrateHits(ctx context.Context, scores map[string]float64, te
 		var hit SearchHit
 		if err := rows.Scan(&id, &hit.Source, &hit.ID, &hit.Container,
 			&hit.Title, &excerpt); err != nil {
-			return nil, fmt.Errorf("projection: scan index hit: %w", err)
+			return nil, fmt.Errorf("search: scan index hit: %w", err)
 		}
 		hit.Score = scores[id]
 		hit.Snippet = textindex.Snippet(excerpt, terms, snippetBytes)
 		byID[id] = hit
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("projection: read index hits: %w", err)
+		return nil, fmt.Errorf("search: read index hits: %w", err)
 	}
 	out := make([]SearchHit, 0, len(top))
 	for _, id := range top {

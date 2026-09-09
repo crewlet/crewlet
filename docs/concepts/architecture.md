@@ -526,9 +526,7 @@ What each of the three holds, in full:
 | **`synthesized_skills`** · `synthesized_skill_versions` · `counterparty_profiles` · `agent_onboarding_markers` | The rest of the learning subsystem — skill induction and its versions, counterparty profiles, first-turn onboarding markers |
 | **`conversation_sessions`** | What this seat already said in that thread |
 | `company_config` · `scheduled_runs` · `chat_thread_follows` · `secret_values` | Revisions, cron bookkeeping, thread follows, and the secret store's bootstrap half |
-| `pages` · `page_revisions` · … | **The wiki's projection — a REBUILDABLE COPY, never authoritative.** The record of truth is the coordination bucket below; these tables exist because a listing asks for every page in a container, filtered and sorted, and a listing over a KV bucket is O(keys) message deliveries. Truncating them and re-running the boot reconcile is a supported repair, and a write that coordination did not see is one the next reconcile silently erases |
 | `kb_docs` · `kb_postings` | The **lexical** half of the knowledge search index over those rows, built asynchronously behind them and droppable wholesale when the analyzer changes. The semantic half is not here — an embedding costs a provider call, so it is derived once by the fleet and lives in the estate below |
-| `projection_keys` · `projection_cursor` | How far each family has been applied here, and which keys — the two halves of the boot reconcile |
 | `statelog_adoption` | This node's own record of any peer snapshot it has adopted, which is what tells an operation minted before the join from one this node's ledger can answer for |
 
 **Every node, identically — the replicated store.**

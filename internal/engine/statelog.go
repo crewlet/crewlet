@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -107,6 +108,15 @@ type stateLog struct {
 	// loop's instruments are observed rather than merely declared.
 	metrics *metrics.Recorder
 
+	// skills is this build's tool-skill parser and nudge, threaded down
+	// because the PAGES APPLIER is what notices a skill page arriving or
+	// leaving: natively there is no page webhook and the change feed
+	// deliberately drops those changes, so the apply is the only thing
+	// that sees both halves. Nil answers "not a skill" and nudges nobody,
+	// which is a build with no skill parser wired.
+	skills      pages.SkillDetector
+	nudgeSkills func()
+
 	// ceilings is the byte ceiling each domain's stream is CREATED with,
 	// from Tier A. It overrides the domain's own default, which is the
 	// value a domain declares in the absence of an operator — and the
@@ -151,7 +161,8 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 	s := &stateLog{
 		domains: map[string]*runningDomain{},
 		nodeID:  nodeID, db: e.backends.Store, fleet: e.backends.Fleet,
-		metrics:  e.metrics,
+		metrics: e.metrics,
+		skills:  skillDetector{}, nudgeSkills: e.nudgeSkills,
 		ceilings: ceilingsFor(ctx, host, boot),
 		run:      runCtx, stop: cancel,
 	}
@@ -222,7 +233,7 @@ func (s *stateLog) Stop() {
 // because the order is load-bearing for the operator surfaces and an
 // init-order registration is exactly the thing nobody can read off the source.
 func registeredDomains() []statelog.Domain {
-	return []statelog.Domain{tracker.Domain{}, search.Domain{}}
+	return []statelog.Domain{tracker.Domain{}, search.Domain{}, pages.Domain{}}
 }
 
 // provision creates one domain's stream if it is not there and opens it.
@@ -270,7 +281,7 @@ func (s *stateLog) start(ctx context.Context, host domainHost, domain statelog.D
 		return nil, fmt.Errorf("engine: open %s's consumer: %w", domain.Name(), err)
 	}
 
-	applier, err := applierFor(domain, s.nodeID)
+	applier, err := s.applierFor(domain)
 	if err != nil {
 		return nil, err
 	}
@@ -359,6 +370,15 @@ func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.Doma
 			return nil, fmt.Errorf("engine: build %s's read seam: %w", domain.Name(), err)
 		}
 		deps.Rows, deps.Fence, deps.Gates = rows, search.NewFence(), search.NewGates()
+	case pages.Domain{}.Name():
+		rows, err := pages.NewRows(s.db)
+		if err != nil {
+			return nil, fmt.Errorf("engine: build %s's read seam: %w", domain.Name(), err)
+		}
+		fence := pages.NewFence(s.db, s.nodeID)
+		fence.Cursor = runner.Committed
+		fence.Floor = s.trimFloor(domain.Name())
+		deps.Rows, deps.Fence, deps.Gates = rows, fence, pages.NewGates(s.db)
 	default:
 		return nil, fmt.Errorf("engine: domain %q is registered and has no "+
 			"write authority, so nothing could ever append to its log",
@@ -484,12 +504,19 @@ func (s *stateLog) health(ctx context.Context, running *runningDomain) (statelog
 // at all. What this costs is that a new domain fails HERE, at boot, naming
 // itself — rather than being registered with no state machine and applying
 // nothing.
-func applierFor(domain statelog.Domain, nodeID string) (statelog.Applier, error) {
+func (s *stateLog) applierFor(domain statelog.Domain) (statelog.Applier, error) {
 	switch domain.Name() {
 	case tracker.Domain{}.Name():
-		return tracker.NewApplier(nodeID), nil
+		return tracker.NewApplier(s.nodeID), nil
 	case search.Domain{}.Name():
 		return search.NewApplier(), nil
+	case pages.Domain{}.Name():
+		// THE PARSER AND THE NUDGE COME FROM HERE, because the apply is
+		// what notices a tool-skill page arriving or leaving and there is
+		// no other delivery to hang the resync off. The nudge is safe to
+		// take before the native runtime exists: it is a non-blocking
+		// send that returns when there is nothing to send to.
+		return pages.NewApplier(s.nodeID, s.skills, s.nudgeSkills), nil
 	}
 	return nil, fmt.Errorf("engine: domain %q is registered and has no applier, "+
 		"so its records would be consumed and produce no rows on this node",

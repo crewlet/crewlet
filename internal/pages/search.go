@@ -6,7 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/projection"
+	"github.com/crewlet/crewlet/internal/search"
 )
 
 // Searcher answers the company's knowledge search over its own pages.
@@ -36,7 +36,7 @@ import (
 // them apart so a seat on a fresh node is not told the company has written
 // nothing down.
 type Searcher struct {
-	index *projection.Indexer
+	index *search.Indexer
 
 	// skills names the tool-skills container, whose pages a search never
 	// returns: they are machinery, and a seat told to read one would
@@ -52,7 +52,7 @@ type Searcher struct {
 
 // SearcherOptions configure a searcher.
 type SearcherOptions struct {
-	Index *projection.Indexer
+	Index *search.Indexer
 
 	// SkillsContainer names the reserved tool-skills container, excluded
 	// from every result. A FUNCTION because the value is live config; nil,
@@ -112,7 +112,7 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hi
 		return nil
 	}
 	scope := knowledge.Scope(scopeOf(q.Org))
-	hits, err := s.index.Search(ctx, projection.SearchQuery{
+	hits, err := s.index.Search(ctx, search.SearchQuery{
 		Text:       q.Text,
 		Containers: scope,
 		Sources:    []string{"page"},

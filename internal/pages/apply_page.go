@@ -258,29 +258,36 @@ func (a *Applier) applyStatusChange(ctx context.Context, tx *sql.Tx,
 	case OpPurge:
 		return a.applyPurge(ctx, tx, at, p)
 	case OpTombstone, OpRestore:
-		status, trashed := StatusTrashed, sql.NullInt64{
-			Int64: store.EncodeTime(at.brokerAt), Valid: true,
+		head, found, err := readHead(ctx, tx, id)
+		if err != nil {
+			return 0, err
+		}
+		if !found {
+			return 0, fmt.Errorf("pages: the %s at %s names page %s, which this "+
+				"node has no row for — under a strict replay its create is "+
+				"below this position", at.record.Op, at.position, id)
 		}
 		kind := ChangeRemoved
+		head.Status, kind = StatusTrashed, ChangeRemoved
+		trashed := at.brokerAt
+		head.TrashedAt = &trashed
 		if at.record.Op == OpRestore {
-			status, trashed, kind = StatusPublished, sql.NullInt64{}, ChangeStatus
+			head.Status, head.TrashedAt, kind = StatusPublished, nil, ChangeStatus
 		}
-		res, err := tx.ExecContext(ctx, `
-			UPDATE pages_heads
-			SET status = ?, trashed_at = ?, updated_at = ?, version = ?
-			WHERE id = ? AND version < ?`,
-			string(status), trashed, store.EncodeTime(at.brokerAt), at.packed,
-			id, at.packed)
+		head.UpdatedAt = at.brokerAt
+		// THROUGH THE HEAD WRITER, never a column update: every reader
+		// here decodes the `document`, so a status moved in the column
+		// alone is a trash no reader can see — which is exactly the
+		// shape of a page that stays visible after somebody removed it.
+		rows, err := a.writeHead(ctx, tx, at, head)
 		if err != nil {
-			return 0, fmt.Errorf("pages: set %s's status at %s: %w",
-				id, at.position, err)
+			return 0, err
 		}
-		n, _ := res.RowsAffected()
 		entry, err := a.writeHistory(ctx, tx, at, id, kind, "")
 		if err != nil {
 			return 0, err
 		}
-		return int(n) + entry, nil
+		return rows + entry, nil
 	}
 	return 0, fmt.Errorf("pages: %s is not a status operation, and the record "+
 		"at %s carries one", at.record.Op, at.position)

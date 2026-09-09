@@ -1,4 +1,4 @@
-package projection
+package search
 
 import (
 	"context"
@@ -7,19 +7,22 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/textindex"
 )
 
+var log = logging.Get("search")
+
 // Doc is one document offered to the index — a page or a work item.
 //
 // The SOURCE ROWS ARE NOT INDEXED IN PLACE, and that separation is the point:
-// the index is a different lifecycle from the projection. Rows land in
-// seconds; the index is built asynchronously behind them, can be dropped and
-// rebuilt wholesale when the analyzer changes, and is what a search reads so
-// that a query is one scan over postings rather than a UNION over two
-// schemas.
+// the index is a different lifecycle from the rows it covers. They land with
+// their record's own commit; the index is built asynchronously behind them,
+// can be dropped and rebuilt wholesale when the analyzer changes, and is what
+// a search reads so that a query is one scan over postings rather than a UNION
+// over two schemas.
 type Doc struct {
 	// Source is "page" or "item".
 	Source string
@@ -56,16 +59,36 @@ func docKey(source, id string) string { return source + ":" + id }
 // exists and reports false meanwhile.
 const IndexBatch = 20
 
-// Indexer maintains the lexical index behind the projection.
+// Indexer maintains the lexical index behind this node's own applied rows.
 //
-// SEPARATE FROM THE PROJECTOR, and it must be: an apply has to be fast and
-// synchronous with the change feed, while indexing a page is tokenising tens
-// of kilobytes and writing hundreds of posting rows. Doing it inline would
-// put the whole index build inside the change feed's own transaction, and a
-// node catching up on a large company would stop applying changes entirely
-// while it worked.
+// SEPARATE FROM THE APPLIER, and it must be: an apply carries the checkpoint
+// in its own transaction and has to be fast, while indexing a page is
+// tokenising tens of kilobytes and writing hundreds of posting rows. Doing it
+// inline would put the whole index build inside the apply transaction — which
+// holds this store's only writer — and a node catching up on a large company
+// would stop applying records entirely while it worked.
+//
+// It also lives in a DIFFERENT ESTATE from what it indexes: the sources are
+// replicated rows derived from a log, and the index is this node's own. No
+// read joins the two, which is why every comparison here is a batch from each
+// side rather than a JOIN.
 type Indexer struct {
 	db *store.DB
+
+	// cursor and orphanCursor are where the two reconciliation walks are.
+	//
+	// IN MEMORY rather than in a table, and that is deliberate: losing
+	// them costs one extra cycle over rows that are already correct, which
+	// is exactly what the walk is for. A durable cursor would be a second
+	// piece of state to keep in step with an index that is itself
+	// rebuildable.
+	//
+	// UNGUARDED because [Indexer.Run] is ONE loop, and every walk runs
+	// inside it. A second caller would be a second indexer over one node's
+	// tables, which is a race about the postings long before it is a race
+	// about these.
+	cursor       string
+	orphanCursor string
 }
 
 // NewIndexer builds an indexer over a node's store.
@@ -121,17 +144,17 @@ func (x *Indexer) upsertOne(ctx context.Context, tx *sql.Tx, doc Doc, now int64)
 			indexed_at = excluded.indexed_at`,
 		id, doc.Source, doc.ID, doc.Container, doc.Title,
 		excerptOf(doc.Body), length, int64(doc.Version), now); err != nil {
-		return fmt.Errorf("projection: index %s: %w", id, err)
+		return fmt.Errorf("search: index %s: %w", id, err)
 	}
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM kb_postings WHERE doc_id = ?`, id); err != nil {
-		return fmt.Errorf("projection: clear postings for %s: %w", id, err)
+		return fmt.Errorf("search: clear postings for %s: %w", id, err)
 	}
 	for term, freq := range terms {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO kb_postings (term, doc_id, freq) VALUES (?, ?, ?)`,
 			term, id, freq); err != nil {
-			return fmt.Errorf("projection: write posting %q for %s: %w", term, id, err)
+			return fmt.Errorf("search: write posting %q for %s: %w", term, id, err)
 		}
 	}
 	return nil
@@ -187,32 +210,100 @@ func (x *Indexer) Stale(ctx context.Context, limit int) ([]Doc, error) {
 	// unfinished thought and a trashed page is deleted as far as a reader
 	// is concerned, and surfacing either in a knowledge search would put
 	// content in front of an agent that no person considers current.
-	rows, err := x.db.SQL().QueryContext(ctx, `
-		SELECT 'page', p.id, p.container, p.title, p.body, p.version
-		  FROM pages p
-		  LEFT JOIN kb_docs d ON d.source = 'page' AND d.source_id = p.id
-		 WHERE p.status = 'published'
-		   AND (d.id IS NULL OR d.source_rev <> p.version)
-		 LIMIT ?`, limit)
+	batch, err := x.sources(ctx, limit)
 	if err != nil {
-		return nil, fmt.Errorf("projection: find stale index rows: %w", err)
+		return nil, err
+	}
+	if len(batch) == 0 {
+		// THE WALK WRAPS. It is a cursor over ids rather than a
+		// watermark over versions, so reaching the end is the ordinary
+		// case rather than a failure.
+		x.cursor = ""
+		return nil, nil
+	}
+	x.cursor = batch[len(batch)-1].ID
+
+	indexed, err := x.versions(ctx, batch)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Doc, 0, len(batch))
+	for _, doc := range batch {
+		if held, ok := indexed[doc.ID]; ok && held == doc.Version {
+			continue
+		}
+		out = append(out, doc)
+	}
+	return out, nil
+}
+
+// sources reads the next batch of indexable documents from the REPLICATED
+// estate.
+//
+// # Why this is a walk rather than a join
+//
+// The source rows and the index rows are in DIFFERENT ESTATES — a page is
+// replicated state derived from a log, and the index is this node's own
+// derived copy — and no read joins across the two. So the comparison the old
+// LEFT JOIN made in SQL is made here in Go, over a batch bounded by an id
+// cursor.
+//
+// What that costs is a full walk per cycle even on a quiet corpus: at
+// [IndexBatch] a ten-thousand-page company re-reads its own ids every five
+// hundred steps. What it buys is a repair the version compare never had — an
+// index row that drifted for any reason at all is rebuilt on the next pass,
+// where a watermark over versions would only ever notice a source that moved.
+func (x *Indexer) sources(ctx context.Context, limit int) ([]Doc, error) {
+	rows, err := x.db.Replicated().SQL().QueryContext(ctx, `
+		SELECT id, container, title, body, MAX(version, scoped_through)
+		  FROM pages_heads
+		 WHERE status = 'published' AND id > ?
+		 ORDER BY id
+		 LIMIT ?`, x.cursor, limit)
+	if err != nil {
+		return nil, fmt.Errorf("search: read the next documents to index: %w", err)
 	}
 	defer rows.Close()
 	var out []Doc
 	for rows.Next() {
-		var doc Doc
+		doc := Doc{Source: "page"}
 		var version int64
-		if err := rows.Scan(&doc.Source, &doc.ID, &doc.Container,
-			&doc.Title, &doc.Body, &version); err != nil {
-			return nil, fmt.Errorf("projection: scan stale index row: %w", err)
+		if err := rows.Scan(&doc.ID, &doc.Container, &doc.Title, &doc.Body,
+			&version); err != nil {
+			return nil, fmt.Errorf("search: scan a document to index: %w", err)
 		}
 		doc.Version = uint64(version)
 		out = append(out, doc)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("projection: find stale index rows: %w", err)
+		return nil, fmt.Errorf("search: read the next documents to index: %w", err)
 	}
 	return out, nil
+}
+
+// versions is what the index already holds for one batch of sources.
+func (x *Indexer) versions(ctx context.Context, batch []Doc) (map[string]uint64, error) {
+	ids := make([]any, 0, len(batch))
+	for _, doc := range batch {
+		ids = append(ids, docKey(doc.Source, doc.ID))
+	}
+	rows, err := x.db.SQL().QueryContext(ctx,
+		`SELECT source_id, source_rev FROM kb_docs WHERE id IN (`+
+			binds(len(ids))+`)`, ids...)
+	if err != nil {
+		return nil, fmt.Errorf("search: read what the index holds: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string]uint64, len(batch))
+	for rows.Next() {
+		var id string
+		var version int64
+		if err := rows.Scan(&id, &version); err != nil {
+			return nil, fmt.Errorf("search: scan an index version: %w", err)
+		}
+		out[id] = uint64(version)
+	}
+	return out, rows.Err()
 }
 
 // Orphans returns index rows whose source is gone, so the indexer can drop
@@ -225,42 +316,95 @@ func (x *Indexer) Orphans(ctx context.Context, limit int) ([]string, error) {
 	if limit <= 0 {
 		limit = IndexBatch
 	}
-	rows, err := x.db.SQL().QueryContext(ctx, `
-		SELECT d.source_id FROM kb_docs d
-		 WHERE d.source = 'page'
-		   AND NOT EXISTS (
-		       SELECT 1 FROM pages p WHERE p.id = d.source_id AND p.status = 'published')
-		 LIMIT ?`, limit)
+	// THE SAME ESTATE BOUNDARY as [Indexer.Stale], and the same answer: a
+	// batch of index rows read here, and their sources checked against the
+	// replicated estate in a second read.
+	rows, err := x.db.SQL().QueryContext(ctx,
+		`SELECT source_id FROM kb_docs WHERE source = 'page' AND source_id > ?
+		  ORDER BY source_id LIMIT ?`, x.orphanCursor, limit)
 	if err != nil {
-		return nil, fmt.Errorf("projection: find orphan index rows: %w", err)
+		return nil, fmt.Errorf("search: read the next index rows to check: %w", err)
 	}
-	defer rows.Close()
-	var out []string
+	var candidates []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("projection: scan orphan index row: %w", err)
+			_ = rows.Close()
+			return nil, fmt.Errorf("search: scan an index row: %w", err)
 		}
-		out = append(out, id)
+		candidates = append(candidates, id)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("search: read the next index rows to check: %w", err)
+	}
+	_ = rows.Close()
+	if len(candidates) == 0 {
+		x.orphanCursor = ""
+		return nil, nil
+	}
+	x.orphanCursor = candidates[len(candidates)-1]
+
+	ids := make([]any, 0, len(candidates))
+	for _, id := range candidates {
+		ids = append(ids, id)
+	}
+	live, err := x.db.Replicated().SQL().QueryContext(ctx,
+		`SELECT id FROM pages_heads
+		  WHERE status = 'published' AND id IN (`+binds(len(ids))+`)`, ids...)
+	if err != nil {
+		return nil, fmt.Errorf("search: check which indexed pages still "+
+			"exist: %w", err)
+	}
+	defer live.Close()
+	published := map[string]bool{}
+	for live.Next() {
+		var id string
+		if err := live.Scan(&id); err != nil {
+			return nil, fmt.Errorf("search: scan a live page id: %w", err)
+		}
+		published[id] = true
+	}
+	if err := live.Err(); err != nil {
+		return nil, fmt.Errorf("search: check which indexed pages still "+
+			"exist: %w", err)
+	}
+	var out []string
+	for _, id := range candidates {
+		if !published[id] {
+			out = append(out, id)
+		}
+	}
+	return out, nil
 }
 
 // Pending is how many documents are waiting to be indexed.
+// TWO COUNTS AND A SUBTRACTION, because the sources and the index are in
+// different estates and no read joins them. It answers how many published
+// pages are NOT represented in the index — which is what the gate below needs
+// — and deliberately not how many are STALE: a page whose body moved is
+// already searchable, just by its previous text, where a page with no row at
+// all is a page a search reports as not existing.
 func (x *Indexer) Pending(ctx context.Context) (int, error) {
-	var n int
-	err := x.db.SQL().QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM pages p
-		  LEFT JOIN kb_docs d ON d.source = 'page' AND d.source_id = p.id
-		 WHERE p.status = 'published'
-		   AND (d.id IS NULL OR d.source_rev <> p.version)`).Scan(&n)
-	if err != nil {
-		return 0, fmt.Errorf("projection: count pending index rows: %w", err)
+	var published, indexed int
+	if err := x.db.Replicated().SQL().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pages_heads WHERE status = 'published'`).
+		Scan(&published); err != nil {
+		return 0, fmt.Errorf("search: count the published pages: %w", err)
 	}
-	return n, nil
+	if err := x.db.SQL().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM kb_docs WHERE source = 'page'`).
+		Scan(&indexed); err != nil {
+		return 0, fmt.Errorf("search: count the indexed pages: %w", err)
+	}
+	// NEVER NEGATIVE. The index can legitimately hold rows the sources no
+	// longer have — a page trashed between the two reads, an orphan the
+	// next sweep removes — and a negative "pending" would read as a gate
+	// that is more than ready.
+	return max(published-indexed, 0), nil
 }
 
-// Ready reports whether the index has caught up with the projection.
+// Ready reports whether the index has caught up with this node's own rows.
 //
 // THE SEARCH GATE, and it exists because "no results" and "not indexed yet"
 // are different answers a person acts on differently. A seat on a freshly
@@ -282,16 +426,16 @@ func (x *Indexer) Ready(ctx context.Context) (bool, error) {
 // steady state costs one indexed count per idle tick.
 func (x *Indexer) Run(ctx context.Context) {
 	for {
-		worked, err := x.step(ctx)
+		worked, err := x.Sweep(ctx)
 		if ctx.Err() != nil {
 			return
 		}
 		switch {
 		case err != nil:
-			log.WarnContext(ctx, "projection_index_step_failed",
+			log.WarnContext(ctx, "lexical_index_step_failed",
 				"error", err.Error(),
-				"detail", "the lexical index is behind the projection; search "+
-					"reports itself as building until it catches up")
+				"detail", "the lexical index is behind this node's own rows; "+
+					"search reports itself as building until it catches up")
 		case worked:
 			continue
 		}
@@ -305,15 +449,23 @@ func (x *Indexer) Run(ctx context.Context) {
 
 // indexIdle is how long the indexer waits when it found nothing to do.
 //
-// Two seconds. The index is behind the projection by at most this plus one
-// batch, which is the latency between saving a page and finding it in search
+// Two seconds. The index is behind this node's own rows by at most this plus
+// one batch, which is the latency between saving a page and finding it in
+// search
 // — short enough that a person who saves and immediately searches finds their
 // own page, long enough that an idle node runs one cheap count every two
 // seconds rather than spinning.
 const indexIdle = 2 * time.Second
 
-// step does one unit of index work, reporting whether it found any.
-func (x *Indexer) step(ctx context.Context) (bool, error) {
+// Sweep does ONE unit of index work, reporting whether it found any.
+//
+// EXPORTED because two callers need exactly this and neither should reach past
+// it: [Indexer.Run] is the loop, and a test drives the index to a fixed point
+// by calling this until it stops finding work. The alternative — a test that
+// waited on [Indexer.Ready] — waits on the FIRST-BUILD gate, which counts rows
+// the index is missing and is deliberately blind to a row that is merely
+// stale.
+func (x *Indexer) Sweep(ctx context.Context) (bool, error) {
 	orphans, err := x.Orphans(ctx, IndexBatch)
 	if err != nil {
 		return false, err

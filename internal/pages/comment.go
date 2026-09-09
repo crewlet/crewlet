@@ -3,472 +3,362 @@ package pages
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
-// NewComment is a remark to add to a page.
-type NewComment struct {
-	Body     string
-	Mentions []string
-	ReplyTo  string
+// COMMENTS, AND THE ONE RULE THAT MAKES THEM DIFFERENT FROM THE TRACKER'S.
+//
+// A comment rides the PAGE's subject, so two people commenting on one page
+// contend at the broker and one retries — the same trade the tracker makes for
+// a task's comments, and for the same reason: a comment changes what the
+// page's card shows and what its history says, so the two are one object's
+// state and not two.
+//
+// What is NOT the same is subscription. A COMMENT DOES NOT SUBSCRIBE ITS
+// COMMENTER here, which is the opposite of the tracker's participants rule and
+// deliberate: a page a hundred people have remarked on would otherwise wake a
+// hundred seats when somebody fixes a heading. Only a MENTION subscribes, and
+// only the person mentioned.
 
-	// TurnKey makes a comment made from a turn idempotent, on [work]'s
-	// terms: a re-run turn posts once.
+// NewComment is a remark to add.
+type NewComment struct {
+	Body string
+
+	// ReplyTo is the comment this one answers, for threading.
+	ReplyTo string
+
+	// Mentions are handles this comment named. Each is woken whether or
+	// not they watch, and each is subscribed.
+	Mentions []string
+
+	// TurnKey makes a comment made from a turn idempotent: a re-run turn
+	// posts once.
+	//
+	// IT DERIVES THE OPERATION ID rather than only the comment's own,
+	// which is the upgrade the log brings: the operation ledger collapses
+	// the whole record, so a retried turn does not even append — where the
+	// bucket could only make the second write land on the same key.
 	TurnKey string
 
 	Quiet bool
 }
 
-// Comment adds a remark to a page.
-//
-// # The watcher asymmetry, and why it is kept
-//
-// An EDIT subscribes its author and a MENTION subscribes its target, but a
-// COMMENT DOES NOT subscribe its commenter — which is the opposite of the
-// tracker's participants rule, and deliberate rather than an oversight.
-//
-// A tracker item is a piece of work with an owner, and everyone who says
-// anything about it has a stake in how it ends. A wiki page is a document:
-// people comment on one to point out a typo or ask a question, and
-// subscribing each of them means a page a hundred people have remarked on
-// wakes a hundred seats every time somebody fixes a heading. The Confluence
-// integration drew that line and it has held; the founder's participants
-// decision was about the TRACKER, where the stake is real.
-//
-// Somebody who wants the page follows it explicitly, and a mention still
-// reaches a muted person because it is directed.
-func (s *Store) Comment(ctx context.Context, actor Actor, pageID string, in NewComment) (Comment, Written, error) {
+// Comment adds one remark to a page.
+func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
+	in NewComment) (Comment, Written, error) {
+
 	if err := actor.validate(); err != nil {
 		return Comment{}, Written{}, err
 	}
 	body := strings.TrimSpace(in.Body)
-	switch {
-	case body == "":
-		return Comment{}, Written{}, invalid("body", "a comment needs something in it")
-	case len(body) > MaxComment:
+	if body == "" {
+		return Comment{}, Written{}, invalid("body", "a comment needs a body")
+	}
+	if len(body) > MaxComment {
 		return Comment{}, Written{}, invalid("body",
-			"%d bytes, past the %d-byte cap — a comment is refused rather than "+
-				"cut, because half a remark reads as a different remark",
-			len(body), MaxComment)
+			"%d bytes, past the %d-byte cap", len(body), MaxComment)
 	}
-
-	rec, found, err := s.docs.Document(ctx, coord.FamilyPages, PageKey(pageID))
-	if err != nil {
-		return Comment{}, Written{}, fmt.Errorf("pages: read %s: %w", pageID, err)
-	}
-	if !found {
-		return Comment{}, Written{}, fmt.Errorf("%w: page %s", ErrNotFound, pageID)
-	}
-	page, err := DecodePage(rec.Value)
-	if err != nil {
-		return Comment{}, Written{}, err
-	}
+	mentions := cleanList(in.Mentions)
 
 	at := s.now()
+	opID := s.commentOpID(pageID, in)
+	subject := PageSubject(pageID)
 	comment := Comment{
-		V: DocumentVersion, ID: s.commentID(page.ID, in), PageID: page.ID,
+		V: DocumentVersion, ID: opID, PageID: pageID,
 		Author: actor.Name(), AuthorKind: actor.Kind, Body: body,
-		Mentions: cleanList(in.Mentions), ReplyTo: in.ReplyTo,
+		Mentions: mentions, ReplyTo: strings.TrimSpace(in.ReplyTo),
 		CreatedAt: at, UpdatedAt: at,
 	}
-	change := s.change(actor, page, ChangeComment, at)
-	change.CommentID = comment.ID
-	change.Excerpt = excerpt(body)
-	change.Mentions = comment.Mentions
-	change.Quiet = in.Quiet
-	comment.LastChange = &change
 
-	data, err := EncodeComment(comment)
+	result, err := s.publish(ctx, statelog.Request{
+		Subject:  statelog.Subject{Kind: string(KindPage), ID: pageID},
+		Scope:    ScopeSet{Subject: true}.Resolve(subject),
+		OpID:     opID,
+		MintedAt: at,
+		Pattern:  statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+			head, err := readHeadTx(ctx, tx, pageID)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			patch := PagePatch{V: DocumentVersion, Comment: &CommentPatch{
+				ID: comment.ID, Body: &body, Author: comment.Author,
+				AuthorKind: actor.Kind, ReplyTo: comment.ReplyTo,
+				Mentions: mentions,
+			}}
+			// A MENTION SUBSCRIBES, and nothing else does. It is
+			// carried on the patch as the whole watcher set, because
+			// a collection the write touches travels whole — a delta
+			// could not rebuild the row on a replay from zero.
+			if subscribed := subscribeMentions(&head, mentions); subscribed {
+				patch.Watchers = head.Watchers
+				patch.Muted = head.Muted
+			}
+			scope := ScopeSet{Subject: true, Container: head.Container}
+			notify := s.notifyOf(in.Quiet, ChangeComment, head,
+				excerpt(body), mentions)
+			return s.decide(actor, subject, OpPatch, scope, opID, patch, notify, at)
+		},
+	})
 	if err != nil {
 		return Comment{}, Written{}, err
 	}
-	created, err := s.docs.CreateDocument(ctx, coord.FamilyPages,
-		CommentKey(page.ID, comment.ID), data)
-	if err != nil {
-		return Comment{}, Written{}, fmt.Errorf("pages: comment on %q: %w", page.Title, err)
-	}
-	if !created {
-		// The deterministic id collided: this exact remark from this exact
-		// turn is already there. Returning the existing one is the point.
-		existing, err := s.readComment(ctx, page.ID, comment.ID)
-		if err != nil {
-			return Comment{}, Written{}, err
-		}
-		return existing, Written{Page: page, Revision: rec.Version}, nil
-	}
-
-	// A MENTION SUBSCRIBES ITS TARGET even when muted: a mute says "stop
-	// telling me about this page", and somebody typing a handle is telling
-	// THAT PERSON specifically. Nothing else about a comment changes the
-	// head, which is why a page with no mentions takes no head write at all
-	// — a comment on a busy page must not contend with every other comment.
-	if len(comment.Mentions) == 0 {
-		change.HeadRevision = rec.Version
-		if err := s.writeChange(ctx, change); err != nil {
-			return comment, Written{}, err
-		}
-		return comment, Written{Page: page, Revision: rec.Version, ChangeID: change.ID}, nil
-	}
-
-	written, err := s.subscribeMentions(ctx, actor, page.ID, comment, change)
-	if err != nil {
-		return comment, Written{}, err
-	}
-	return comment, written, nil
+	return comment, Written{
+		Revision: result.Position.Seq, ChangeID: opID, Outcome: result,
+	}, nil
 }
 
-// subscribeMentions folds a comment's mentions into the page's watchers.
-func (s *Store) subscribeMentions(ctx context.Context, actor Actor, pageID string,
-	comment Comment, change Change) (Written, error) {
-	key := PageKey(pageID)
-	for range casRounds {
-		rec, found, err := s.docs.Document(ctx, coord.FamilyPages, key)
-		if err != nil {
-			return Written{}, fmt.Errorf("pages: read %s: %w", pageID, err)
-		}
-		if !found {
-			return Written{}, fmt.Errorf("%w: page %s", ErrNotFound, pageID)
-		}
-		page, err := DecodePage(rec.Value)
-		if err != nil {
-			return Written{}, err
-		}
-		before := len(page.Watchers)
-		for _, handle := range comment.Mentions {
-			mention(&page, handle)
-		}
-		if len(page.Watchers) == before {
-			// Everyone named already follows it. No head write, so a busy
-			// page's comments do not contend.
-			change.HeadRevision = rec.Version
-			change.Snapshot = snapshotOf(page)
-			if err := s.writeChange(ctx, change); err != nil {
-				return Written{}, err
-			}
-			return Written{Page: page, Revision: rec.Version, ChangeID: change.ID}, nil
-		}
-		page.UpdatedAt = change.CreatedAt
-		change.Snapshot = snapshotOf(page)
-		page.LastChange = &change
+// EditComment rewrites one remark's body.
+func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
+	commentID, body string) (Comment, Written, error) {
 
-		data, err := EncodePage(page)
-		if err != nil {
-			return Written{}, err
-		}
-		ok, err := s.docs.UpdateDocument(ctx, coord.FamilyPages, key, data, rec.Version)
-		if err != nil {
-			return Written{}, fmt.Errorf("pages: write %s: %w", pageID, err)
-		}
-		if !ok {
-			continue
-		}
-		revision, err := s.revisionOf(ctx, key)
-		if err != nil {
-			return Written{}, err
-		}
-		change.HeadRevision = revision
-		if err := s.writeChange(ctx, change); err != nil {
-			return Written{}, err
-		}
-		return Written{Page: page, Revision: revision, ChangeID: change.ID}, nil
-	}
-	return Written{}, fmt.Errorf("%w: %s", ErrConflict, pageID)
-}
-
-// commentID mints a comment's id, deterministically for a turn.
-// EditComment replaces the body of a comment its own author wrote.
-//
-// # Why the author and nobody else
-//
-// A comment is a remark somebody made, and an edit that anybody could make
-// would be a remark attributed to a person who did not make it — on a record
-// that outlives the page's body and is quoted in a wake. So the rule is the
-// narrow one: the author edits their own, and everyone else who wants the
-// record changed adds a comment saying so. An operator is not an exception,
-// because an operator editing somebody's words silently is the failure this
-// rule exists to prevent rather than the case it did not consider.
-//
-// # Why the change is comment_edited and not comment
-//
-// A reader tells "somebody said something" from "somebody changed what they
-// said" only by the kind. Reusing `comment` would wake a page's watchers with
-// a remark they have already read, and the prompt that renders a wake would
-// describe an edit as a new comment — which is how a seat comes to answer
-// something twice.
-//
-// The comment's own record is REWRITTEN rather than versioned. A page's body
-// has a revision history because prose is worked on; a remark is not, and a
-// hundred revisions of a typo fix is an ageless bucket paying for an edit
-// nobody will read. What survives is the change record, which carries the
-// excerpt as it stands after the edit.
-func (s *Store) EditComment(ctx context.Context, actor Actor, pageID, commentID, body string) (Comment, Written, error) {
 	if err := actor.validate(); err != nil {
 		return Comment{}, Written{}, err
 	}
 	body = strings.TrimSpace(body)
-	switch {
-	case body == "":
+	if body == "" {
+		return Comment{}, Written{}, invalid("body", "a comment needs a body")
+	}
+	if len(body) > MaxComment {
 		return Comment{}, Written{}, invalid("body",
-			"an edit needs something in it — removing a remark is not an edit")
-	case len(body) > MaxComment:
-		return Comment{}, Written{}, invalid("body",
-			"%d bytes, past the %d-byte cap — a comment is refused rather than "+
-				"cut, because half a remark reads as a different remark",
-			len(body), MaxComment)
-	}
-
-	pageRec, found, err := s.docs.Document(ctx, coord.FamilyPages, PageKey(pageID))
-	if err != nil {
-		return Comment{}, Written{}, fmt.Errorf("pages: read %s: %w", pageID, err)
-	}
-	if !found {
-		return Comment{}, Written{}, fmt.Errorf("%w: page %s", ErrNotFound, pageID)
-	}
-	page, err := DecodePage(pageRec.Value)
-	if err != nil {
-		return Comment{}, Written{}, err
-	}
-
-	key := CommentKey(pageID, commentID)
-	rec, found, err := s.docs.Document(ctx, coord.FamilyPages, key)
-	if err != nil {
-		return Comment{}, Written{}, fmt.Errorf("pages: read comment %s: %w", commentID, err)
-	}
-	if !found {
-		return Comment{}, Written{}, fmt.Errorf("%w: comment %s", ErrNotFound, commentID)
-	}
-	comment, err := DecodeComment(rec.Value)
-	if err != nil {
-		return Comment{}, Written{}, err
-	}
-	if comment.Author != actor.Name() || comment.AuthorKind != actor.Kind {
-		return Comment{}, Written{}, fmt.Errorf(
-			"%w: comment %s was written by %s, and a comment is edited by its "+
-				"own author — add one saying what changed instead",
-			ErrInvalid, commentID, comment.Author)
-	}
-	if comment.Body == body {
-		// NOTHING CHANGED. Writing a change record here would wake the
-		// page's watchers about an edit that edited nothing, which is the
-		// same noise as an edit nobody made.
-		return comment, Written{Page: page, Revision: pageRec.Version}, nil
+			"%d bytes, past the %d-byte cap", len(body), MaxComment)
 	}
 
 	at := s.now()
-	comment.Body = body
-	comment.UpdatedAt = at
-	change := s.change(actor, page, ChangeCommentEdited, at)
-	change.CommentID = comment.ID
-	change.Excerpt = excerpt(body)
-	change.HeadRevision = pageRec.Version
-	comment.LastChange = &change
+	opID := s.newSeqID()
+	subject := PageSubject(pageID)
+	var out Comment
 
-	data, err := EncodeComment(comment)
+	result, err := s.publish(ctx, statelog.Request{
+		Subject:  statelog.Subject{Kind: string(KindPage), ID: pageID},
+		Scope:    ScopeSet{Subject: true}.Resolve(subject),
+		OpID:     opID,
+		MintedAt: at,
+		Pattern:  statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+			head, err := readHeadTx(ctx, tx, pageID)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			held, err := readCommentTx(ctx, tx, pageID, commentID)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			// ONLY THE AUTHOR, operator included. A comment is a remark
+			// somebody made, and an edit anybody could make is a remark
+			// attributed to a person who did not make it — on a record
+			// that outlives the page's body and is quoted in a wake.
+			if held.Author != actor.Name() {
+				return statelog.Decision{}, invalid("comment",
+					"comment %s was written by %s and only its author may edit "+
+						"it — a remark somebody else can rewrite is a remark "+
+						"attributed to a person who did not make it",
+					commentID, held.Author)
+			}
+			if held.Body == body {
+				out = held
+				return statelog.Decision{}, nil
+			}
+			out = held
+			out.Body, out.UpdatedAt = body, at
+			scope := ScopeSet{Subject: true, Container: head.Container}
+			notify := s.notifyOf(false, ChangeCommentEdited, head,
+				excerpt(body), nil)
+			return s.decide(actor, subject, OpPatch, scope, opID, PagePatch{
+				V: DocumentVersion, Comment: &CommentPatch{
+					ID: commentID, Body: &body, Author: held.Author,
+					AuthorKind: held.AuthorKind, ReplyTo: held.ReplyTo,
+					Mentions: held.Mentions,
+				},
+			}, notify, at)
+		},
+	})
 	if err != nil {
 		return Comment{}, Written{}, err
 	}
-	// COMPARE-AND-SET on the version this edit read, so two edits of one
-	// comment are a race with exactly one winner rather than a last-writer
-	// that silently discards the other's words.
-	ok, err := s.docs.UpdateDocument(ctx, coord.FamilyPages, key, data, rec.Version)
-	if err != nil {
-		return Comment{}, Written{}, fmt.Errorf("pages: edit comment %s: %w", commentID, err)
-	}
-	if !ok {
-		return Comment{}, Written{}, fmt.Errorf(
-			"%w: comment %s changed while this edit was being written — re-read "+
-				"it and apply the edit again", ErrConflict, commentID)
-	}
-	if err := s.writeChange(ctx, change); err != nil {
-		return comment, Written{}, err
-	}
-	return comment, Written{Page: page, Revision: pageRec.Version, ChangeID: change.ID}, nil
+	return out, Written{
+		Revision: result.Position.Seq, ChangeID: opID, Outcome: result,
+	}, nil
 }
 
-func (s *Store) commentID(pageID string, in NewComment) string {
+// RemoveComment takes one remark down.
+func (s *Store) RemoveComment(ctx context.Context, actor Actor, pageID,
+	commentID string) (Written, error) {
+
+	if err := actor.validate(); err != nil {
+		return Written{}, err
+	}
+	at := s.now()
+	opID := s.newSeqID()
+	subject := PageSubject(pageID)
+
+	result, err := s.publish(ctx, statelog.Request{
+		Subject:  statelog.Subject{Kind: string(KindPage), ID: pageID},
+		Scope:    ScopeSet{Subject: true}.Resolve(subject),
+		OpID:     opID,
+		MintedAt: at,
+		Pattern:  statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+			head, err := readHeadTx(ctx, tx, pageID)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			scope := ScopeSet{Subject: true, Container: head.Container}
+			notify := s.notifyOf(true, ChangeCommentEdited, head, "", nil)
+			return s.decide(actor, subject, OpPatch, scope, opID, PagePatch{
+				V:       DocumentVersion,
+				Comment: &CommentPatch{ID: commentID, Removed: true},
+			}, notify, at)
+		},
+	})
+	if err != nil {
+		return Written{}, err
+	}
+	return Written{
+		Revision: result.Position.Seq, ChangeID: opID, Outcome: result,
+	}, nil
+}
+
+// subscribeMentions adds the handles a comment named, reporting whether the
+// set moved.
+//
+// ONLY A MENTION SUBSCRIBES, which is this package's rule and the opposite of
+// the tracker's: a page a hundred people have remarked on would wake a hundred
+// seats when somebody fixes a heading.
+func subscribeMentions(page *Page, mentions []string) bool {
+	moved := false
+	for _, handle := range mentions {
+		if handle == "" || contains(page.Watchers, handle) {
+			continue
+		}
+		// A MUTED PERSON WHO IS MENTIONED IS NOT RE-SUBSCRIBED. They
+		// said no once; a mention wakes them for this one comment,
+		// which the notification's own Mentions field carries.
+		if contains(page.Muted, handle) {
+			continue
+		}
+		page.Watchers = append(page.Watchers, handle)
+		moved = true
+	}
+	if moved {
+		slicesSort(page.Watchers)
+	}
+	return moved
+}
+
+// readCommentTx reads one comment from inside a decision's own transaction.
+func readCommentTx(ctx context.Context, tx *sql.Tx, pageID, commentID string) (
+	Comment, error) {
+
+	var document []byte
+	err := tx.QueryRowContext(ctx,
+		`SELECT document FROM pages_comments WHERE id = ? AND page_id = ?`,
+		commentID, pageID).Scan(&document)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return Comment{}, fmt.Errorf("%w: comment %s on page %s",
+			ErrNotFound, commentID, pageID)
+	case err != nil:
+		return Comment{}, fmt.Errorf("pages: read comment %s: %w", commentID, err)
+	}
+	return DecodeComment(document)
+}
+
+// commentOpID is the operation this comment belongs to.
+//
+// DERIVED FROM THE TURN when one is named, so a re-run turn is one operation
+// the ledger collapses rather than a second comment. The comment's own id is
+// the same value: one comment is one operation here, and two identifiers for
+// one thing is two places for a retry to disagree with itself.
+func (s *Store) commentOpID(pageID string, in NewComment) string {
 	if strings.TrimSpace(in.TurnKey) == "" {
-		return s.newID()
+		return s.newSeqID()
 	}
 	sum := sha256.Sum256([]byte(strings.TrimSpace(in.Body)))
-	name := pageID + "\x00" + in.TurnKey + "\x00" + hex.EncodeToString(sum[:])
+	name := pageID + "\x00" + strings.TrimSpace(in.TurnKey) + "\x00" +
+		hex.EncodeToString(sum[:])
 	return uuid.NewSHA1(commentNamespace, []byte(name)).String()
 }
 
-// commentNamespace scopes the derived comment ids. Fixed for the life of the
+// commentNamespace scopes the derived operation ids. FIXED for the life of the
 // deployment: a new one would make every re-run turn post a duplicate.
 var commentNamespace = uuid.MustParse("9c1d2e3f-4a5b-5c6d-8e7f-0a1b2c3d4e5f")
 
-func (s *Store) readComment(ctx context.Context, pageID, commentID string) (Comment, error) {
-	rec, found, err := s.docs.Document(ctx, coord.FamilyPages, CommentKey(pageID, commentID))
-	if err != nil {
-		return Comment{}, fmt.Errorf("pages: read comment %s: %w", commentID, err)
-	}
-	if !found {
-		return Comment{}, fmt.Errorf("%w: comment %s", ErrNotFound, commentID)
-	}
-	return DecodeComment(rec.Value)
-}
-
-// Remove deletes a page and everything under it.
+// Thread is one page's comments, oldest first.
 //
-// TRASHING IS THE ORDINARY GESTURE — a status change, recoverable, and what
-// the sweep turns into this after thirty days. This is the permanent one, and
-// it purges rather than deletes because these buckets are ageless: a delete's
-// tombstone would outlive the deployment and a listing returning tombstones
-// is a tree with ghosts in it.
-//
-// THE CHANGE KEY IS WRITTEN FIRST, before anything is purged: a wake saying
-// "stop working on this" is worth more than a clean purge, and a crash
-// between the two leaves a change a projector applies as a removal — the same
-// end state.
-func (s *Store) Remove(ctx context.Context, actor Actor, pageID string) error {
-	if err := actor.validate(); err != nil {
-		return err
-	}
-	rec, found, err := s.docs.Document(ctx, coord.FamilyPages, PageKey(pageID))
-	if err != nil {
-		return fmt.Errorf("pages: read %s: %w", pageID, err)
-	}
-	if !found {
-		return fmt.Errorf("%w: page %s", ErrNotFound, pageID)
-	}
-	page, err := DecodePage(rec.Value)
-	if err != nil {
-		return err
-	}
-
-	change := s.change(actor, page, ChangeRemoved, s.now())
-	change.Excerpt = excerpt(page.Title)
-	change.HeadRevision = rec.Version
-	if err := s.writeChange(ctx, change); err != nil {
-		return err
-	}
-
-	for _, prefix := range []string{CommentPrefix(pageID), RevisionPrefix(pageID)} {
-		records, err := s.docs.Documents(ctx, coord.FamilyPages, prefix)
+// ON THE STORE rather than only on the reader, because a caller that just
+// wrote a comment reads the thread back to render it — and routing that
+// through the reader would mean two seams for one question.
+func (s *Store) Thread(ctx context.Context, pageID string) ([]Comment, error) {
+	var out []Comment
+	err := s.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx,
+			`SELECT document FROM pages_comments WHERE page_id = ?
+			  ORDER BY created_at, id`, pageID)
 		if err != nil {
-			return fmt.Errorf("pages: list %s under %q: %w", prefix, page.Title, err)
+			return fmt.Errorf("pages: read the thread on %s: %w", pageID, err)
 		}
-		for _, r := range records {
-			if _, err := s.docs.PurgeDocument(ctx, coord.FamilyPages, r.Key, r.Version); err != nil {
-				return fmt.Errorf("pages: remove a record under %q: %w", page.Title, err)
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var document []byte
+			if err := rows.Scan(&document); err != nil {
+				return fmt.Errorf("pages: scan a comment on %s: %w", pageID, err)
 			}
+			comment, err := DecodeComment(document)
+			if err != nil {
+				return err
+			}
+			out = append(out, comment)
 		}
-	}
-	if _, err := s.docs.PurgeDocument(ctx, coord.FamilyPages, PageKey(pageID), rec.Version); err != nil {
-		return fmt.Errorf("pages: remove %q: %w", page.Title, err)
-	}
-	// The title is released LAST, so the name is never free while the page
-	// still exists.
-	s.releaseTitle(ctx, page.Container, page.Title, page.ID)
-
-	// THE CHANGE KEYS STAY, as the tracker's do: they are what a
-	// redelivered feed message is deduplicated against, and the yearly
-	// sweep is what ends them.
-	log.InfoContext(ctx, "pages_page_removed", "page", page.ID,
-		"title", page.Title, "container", page.Container, "actor", actor.Name())
-	return nil
+		return rows.Err()
+	})
+	return out, err
 }
 
-// Page reads one head from coordination, for a caller that must not see a
-// stale one. Ordinary reads go to the projection.
+// Page is one page's head, read outside a decision.
 func (s *Store) Page(ctx context.Context, pageID string) (Page, uint64, error) {
-	rec, found, err := s.docs.Document(ctx, coord.FamilyPages, PageKey(pageID))
-	if err != nil {
-		return Page{}, 0, fmt.Errorf("pages: read %s: %w", pageID, err)
-	}
-	if !found {
-		return Page{}, 0, fmt.Errorf("%w: page %s", ErrNotFound, pageID)
-	}
-	page, err := DecodePage(rec.Value)
+	head, err := s.head(ctx, pageID)
 	if err != nil {
 		return Page{}, 0, err
 	}
-	return page, rec.Version, nil
+	return head, 0, nil
 }
 
-// Revision reads one past body.
-//
-// FROM COORDINATION, not the projection, and that is the design: the
-// projection keeps revision METADATA only, because a 512 KiB body times a
-// hundred revisions times every page would be a local copy an order of
-// magnitude larger than the record it copies, on every node, to answer a
-// question a person asks about one page at a time.
-func (s *Store) Revision(ctx context.Context, pageID string, version int) (Revision, error) {
-	rec, found, err := s.docs.Document(ctx, coord.FamilyPages, RevisionKey(pageID, version))
-	if err != nil {
-		return Revision{}, fmt.Errorf("pages: read revision %d of %s: %w", version, pageID, err)
-	}
-	if !found {
-		return Revision{}, fmt.Errorf("%w: revision %d of page %s", ErrNotFound, version, pageID)
-	}
-	return DecodeRevision(rec.Value)
-}
+// Revision is one immutable body.
+func (s *Store) Revision(ctx context.Context, pageID string, version int) (
+	Revision, error) {
 
-// EnsureContainer creates a container if it does not exist.
-//
-// IDEMPOTENT AND FIRST-WRITER-WINS: every node calls it on every apply for
-// every unit's space, so a race between two nodes booting must be a no-op
-// rather than an error either of them reports.
-func (s *Store) EnsureContainer(ctx context.Context, key, name, purpose string) (Container, error) {
-	key = strings.ToUpper(strings.TrimSpace(key))
-	if key == "" {
-		return Container{}, invalid("container", "a container needs a key")
-	}
-	rec, found, err := s.docs.Document(ctx, coord.FamilyPages, ContainerKey(key))
-	if err != nil {
-		return Container{}, fmt.Errorf("pages: read the container %s: %w", key, err)
-	}
-	if found {
-		return DecodeContainer(rec.Value)
-	}
-	container := Container{
-		V: DocumentVersion, Key: key, Name: strings.TrimSpace(name),
-		Purpose: strings.TrimSpace(purpose), CreatedAt: s.now(),
-	}
-	data, err := EncodeContainer(container)
-	if err != nil {
-		return Container{}, err
-	}
-	created, err := s.docs.CreateDocument(ctx, coord.FamilyPages, ContainerKey(key), data)
-	if err != nil {
-		return Container{}, fmt.Errorf("pages: create the container %s: %w", key, err)
-	}
-	if !created {
-		// A peer got there first, which is the ordinary case on a fleet
-		// boot. Read theirs.
-		rec, found, err := s.docs.Document(ctx, coord.FamilyPages, ContainerKey(key))
-		if err != nil || !found {
-			return Container{}, fmt.Errorf("pages: read the container %s back: %w", key, err)
+	var out Revision
+	err := s.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		var author, message, title, body string
+		var created int64
+		err := tx.QueryRowContext(ctx, `
+			SELECT title, body, message, author, created_at
+			  FROM pages_revisions WHERE page_id = ? AND edit_version = ?`,
+			pageID, version).Scan(&title, &body, &message, &author, &created)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: revision %d of page %s", ErrNotFound,
+				version, pageID)
 		}
-		return DecodeContainer(rec.Value)
-	}
-	return container, nil
-}
-
-// Thread reads a page's comments from coordination, oldest first.
-func (s *Store) Thread(ctx context.Context, pageID string) ([]Comment, error) {
-	records, err := s.docs.Documents(ctx, coord.FamilyPages, CommentPrefix(pageID))
-	if err != nil {
-		return nil, fmt.Errorf("pages: read the thread on %s: %w", pageID, err)
-	}
-	out := make([]Comment, 0, len(records))
-	for _, rec := range records {
-		comment, err := DecodeComment(rec.Value)
 		if err != nil {
-			log.WarnContext(ctx, "pages_comment_unreadable", "page", pageID,
-				"key", rec.Key, "error", err.Error())
-			continue
+			return fmt.Errorf("pages: read revision %d of %s: %w",
+				version, pageID, err)
 		}
-		out = append(out, comment)
-	}
-	slices.SortFunc(out, func(a, b Comment) int { return a.CreatedAt.Compare(b.CreatedAt) })
-	return out, nil
+		out = Revision{
+			V: DocumentVersion, PageID: pageID, Version: version,
+			Title: title, Body: body, Message: message, Author: author,
+			CreatedAt: store.DecodeTime(created),
+		}
+		return nil
+	})
+	return out, err
 }
