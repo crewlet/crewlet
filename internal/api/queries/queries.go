@@ -124,6 +124,19 @@ func (p Params) Bool(key string, def bool) bool {
 	return def
 }
 
+// Keys returns every parameter name, sorted.
+//
+// FOR THE ONE READER THAT CANNOT NAME ITS KEYS IN ADVANCE: the tracker's
+// custom-field filters are `f.<slug>`, where the slug is whatever a company
+// declared, so the only way to find them is to enumerate. Sorted, because the
+// order reaches a parsed query and two callers passing the same filters in a
+// different order must produce the same one.
+func (p Params) Keys() []string {
+	out := slices.Collect(maps.Keys(p.values))
+	slices.Sort(out)
+	return out
+}
+
 // Has reports whether a key was supplied at all, which is distinct from it
 // being empty: a filter set to "" asks for rows with no value, and a filter
 // absent asks for all of them.
