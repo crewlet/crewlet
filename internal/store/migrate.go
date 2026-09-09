@@ -274,6 +274,29 @@ type Schema struct {
 	Pending []string
 }
 
+// KnownMigrations is every schema version THIS BINARY carries for an estate,
+// in application order.
+//
+// A recipient adopting a snapshot needs it to answer the one question
+// [PendingEstate] cannot: not what the artefact is missing, but what the
+// artefact has that this binary does not. A file shaped by code this node does
+// not run is a file whose rows it cannot reason about.
+func KnownMigrations(estate Estate) ([]string, error) {
+	return schemaVersions(estate)
+}
+
+// PendingEstate reports ONE estate file's applied and pending migrations,
+// without migrating it.
+//
+// It exists for the one caller that holds a database file which is not a
+// node's own: a snapshot being adopted. That file is a replicated estate and
+// nothing else, and it must be inspected BEFORE anything migrates it — a
+// recipient refuses a donor whose migrations this binary does not carry, and
+// migrating first would answer the question by changing it.
+func PendingEstate(ctx context.Context, estate Estate, path string, opts Options) (Schema, error) {
+	return pendingOne(ctx, estate, path, opts)
+}
+
 func pendingOne(ctx context.Context, estate Estate, path string, opts Options) (Schema, error) {
 	out := Schema{Estate: estate, Path: path}
 
