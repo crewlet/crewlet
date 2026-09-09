@@ -1,6 +1,7 @@
 package jetstreamtest
 
 import (
+	"net"
 	"testing"
 	"time"
 
@@ -134,5 +135,36 @@ func holdRoutes(t *testing.T, c *Cluster, i, want int, d time.Duration) {
 			t.Fatalf("member %d rose to %v, want %d peers held", i, got, want)
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// THE PORT PROBE IS WHAT TURNS A TWO-MINUTE TIMEOUT INTO A RETRY.
+//
+// A clustered member whose route port has been taken does not fail fast: it
+// starts, serves clients, never forms a route, and is reported only when its
+// own readiness budget expires — which was measured, in a full run of this
+// repository's suite, as a hundred and twenty seconds of a harness waiting for
+// peers that could never arrive.
+func TestThePortProbeSeesAHeldPort(t *testing.T) {
+	t.Parallel()
+	var lc net.ListenConfig
+	held, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("take a port: %v", err)
+	}
+	port := held.Addr().(*net.TCPAddr).Port
+
+	if portFree(port) {
+		t.Fatalf("the probe reports port %d free while this test holds it — a "+
+			"probe that cannot see a held port is a probe that never fires",
+			port)
+	}
+	if err := held.Close(); err != nil {
+		t.Fatalf("release the port: %v", err)
+	}
+	if !portFree(port) {
+		t.Fatalf("the probe reports port %d taken after it was released — a "+
+			"probe that never passes would restart every cluster four times",
+			port)
 	}
 }

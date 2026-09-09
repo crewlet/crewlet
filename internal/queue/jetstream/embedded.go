@@ -176,6 +176,28 @@ func (s *Server) RoutePeers() []string {
 	return peers
 }
 
+// ClusterPort is the port this member's ROUTE listener actually bound, and 0
+// when it bound none.
+//
+// # Why a caller needs to ask
+//
+// A member whose route port is already taken does not fail to start: the
+// server logs the listener error and carries on serving clients, so every
+// readiness check passes and the member simply never forms a route. From the
+// outside that is indistinguishable from a cluster that is merely slow to
+// converge — which is how it was found, as a harness waiting out its whole
+// budget for peers that could never arrive.
+func (s *Server) ClusterPort() int {
+	if s.embedded == nil {
+		return 0
+	}
+	addr := s.embedded.ns.ClusterAddr()
+	if addr == nil {
+		return 0
+	}
+	return addr.Port
+}
+
 // Shutdown stops the broker. Every client of it should be stopped first.
 func (s *Server) Shutdown() {
 	if s.embedded != nil {
