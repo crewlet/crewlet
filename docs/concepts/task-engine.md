@@ -30,12 +30,21 @@ applied and what it could not account for, and a read that cannot be served
 refuses rather than answering "there is no such item", because the second is
 an answer somebody acts on.
 
-What it is deliberately **not** is a Jira. There is no workflow engine, no
-custom field, no sprint, no board configuration and no permission scheme. An
-item has a key, a type, a status from a closed set, an assignee, a thread and
-a history. That is what an agent company actually uses, and every one of the
-missing features is a screen somebody would have to configure before their
-company could file its first ticket.
+What it is deliberately **not** is a Jira. There is **no workflow engine and
+no permission scheme**, and nothing has to be configured before a company can
+file its first ticket: declaring a unit with a project key in the config
+creates the project, on every node, with no gesture from anybody.
+
+What it does carry is what an agent company actually uses — a key, a type from
+a per-project catalogue, a status from a closed set of six in four groups, an
+assignee, a thread, a history, subtasks, tags, typed custom fields, sprints,
+goals, and saved views in three shapes. The line is between **structure a
+company records** and **process a tool enforces**: the first is here, the
+second is not. There is no gate that refuses a transition, no scheme that
+hides a field from a role, and no configuration screen standing between a
+founder and their first task.
+
+The whole surface is in **[The Work Tracker](../guides/work-tracker.md)**.
 
 ### Why the engine grew one
 

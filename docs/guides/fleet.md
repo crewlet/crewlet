@@ -55,7 +55,13 @@ choice, not a second backend.
 **`stream.replicas: 3` on a clustered fleet.** Replication is what makes a
 publish a quorum commit before it returns, so "published" means "survives
 losing this node" rather than "reached the member I happened to be talking
-to". Tier A refuses `replicas` above 1 when no peers are configured, because
+to". **What it does not cover is a disk that is lost while the members share
+one host, or a site**: replicas placed on one machine survive that machine's
+process and not its hardware, and the engine cannot tell whether your hosts
+are in different failure domains — so it does not claim they are. The failure
+matrix, per topology, is in [Replication](replication.md).
+
+Tier A refuses `replicas` above 1 when no peers are configured, because
 there is nothing to replicate to. Expect a boot to pause the first time a
 cluster forms: a member waits for the metadata group to elect a leader before
 it provisions anything — measured at about eight seconds on a quiet

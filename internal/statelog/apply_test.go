@@ -953,3 +953,42 @@ func TestApplyIsStrictlyBySequenceAcrossTransactionBoundaries(t *testing.T) {
 			commits, records, h.applier.rowsPer, statelog.ApplyTxRowBudget)
 	}
 }
+
+// TestTheApplierMeasuresItsOwnDrain is the input three answers divide a record
+// backlog by to state a TIME: a bounded stale read's "am I inside the caller's
+// staleness", a refusal's `retry_after_seconds`, and the apply-lag alarm.
+//
+// Unmeasured, all three fall back to one record per second — so a node two
+// thousand records behind, which is about a second of real work, reports
+// itself half an hour behind, refuses reads it should have served and fires an
+// alarm nobody can act on.
+func TestTheApplierMeasuresItsOwnDrain(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	if got := h.runner.Drain(); got != 0 {
+		t.Fatalf("a loop that has applied nothing reports a drain of %v — zero "+
+			"means unmeasured, and every caller falls back to a floor rather "+
+			"than dividing by a guess", got)
+	}
+	for seq := uint64(1); seq <= 20; seq++ {
+		h.fetch.offer(seq, env(seq, "edit", fmt.Sprintf("o%d", seq),
+			fmt.Sprintf("op-%d", seq), 1))
+	}
+	if err := h.run(20); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	drain := h.runner.Drain()
+	if drain <= 0 {
+		t.Fatalf("after applying twenty records the drain is %v — an unmeasured "+
+			"rate makes every lag figure in the engine a count in disguise",
+			drain)
+	}
+	// A SANITY BOUND rather than a threshold: what is being asserted is
+	// that the figure is a RATE — records divided by the time they took —
+	// and not a count, a constant, or the one-per-second fallback.
+	if drain < 1 {
+		t.Fatalf("the drain is %v records/second over twenty records applied in "+
+			"a test — that is the unmeasured fallback rather than a "+
+			"measurement", drain)
+	}
+}

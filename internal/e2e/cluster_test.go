@@ -94,6 +94,7 @@ func startMeshOnce(t *testing.T, relays *jetstreamtest.Relays, n, attempt int) *
 	// peers this loop has not started yet and then fail naming a cluster
 	// nobody could have formed.
 	errs := make([]error, n)
+	stops := make([][]func(), n)
 	var wg sync.WaitGroup
 	for i := range n {
 		wg.Add(1)
@@ -103,38 +104,61 @@ func startMeshOnce(t *testing.T, relays *jetstreamtest.Relays, n, attempt int) *
 			// failure is carried back rather than raised here — a
 			// FailNow from another goroutine ends that goroutine and
 			// leaves the test running with a nil member.
-			c.nodes[i], errs[i] = buildMember(t, relays, i, n)
+			c.nodes[i], stops[i], errs[i] = buildMember(t, relays, i, n)
 		}()
 	}
 	wg.Wait()
+
+	failed := -1
 	for i, err := range errs {
-		if err != nil {
-			// RETRIED RATHER THAN FAILED, which is [jetstreamtest]'s own
-			// idiom for a start that lost a race it does not control.
-			//
-			// A three-member cluster provisions better than twenty raft
-			// groups while the metadata group is still settling, and the
-			// engine's provisioning deadline is sized for a healthy
-			// cluster rather than for one competing with the rest of a
-			// test binary. Under `go test ./...` the packages run
-			// concurrently, so what expires is a deadline this case has
-			// no way to influence — and the members it did start are
-			// already shut down by their own cleanups.
-			//
-			// Inflating the production deadline to make this pass would
-			// be the wrong fix twice over: it would hide a genuinely
-			// wedged cluster in a deployment, to buy a test a margin it
-			// only needs because it is sharing a machine.
-			if attempt < clusterStartAttempts {
-				t.Logf("cluster attempt %d/%d lost a race at member %d: %v "+
-					"(relays: %s)", attempt, clusterStartAttempts, i, err,
-					relays.Describe())
-				return nil
-			}
-			t.Fatalf("member %d: %v (relays: %s)", i, err, relays.Describe())
+		if err != nil && failed < 0 {
+			failed = i
 		}
 	}
-	return c
+	if failed < 0 {
+		// THE SUCCESSFUL ATTEMPT'S TEARDOWN IS THE TEST'S, so members
+		// live for the case that asked for them.
+		t.Cleanup(func() { stopAll(stops) })
+		return c
+	}
+
+	// EVERY MEMBER THIS ATTEMPT STARTED IS STOPPED BEFORE THE NEXT ONE,
+	// and it is the difference between a retry and a pile-up.
+	//
+	// A member holds its cluster route PORT, which the relay mesh assigns
+	// per member and reuses across attempts. Left running, it makes the
+	// next attempt's member unable to bind — and any member that does come
+	// up forms a cluster with the ghost, whose engine is still applying,
+	// still heartbeating and still competing for the same four cores. The
+	// observed shape was attempt 1 timing out on one member, attempt 2
+	// failing to become ready at all, and attempt 3 failing worse: not
+	// slowness, but each attempt racing everything the last one left.
+	//
+	// t.Cleanup cannot do this. It runs when the TEST ends, which is after
+	// every attempt — so registering teardown there is registering it for
+	// the wrong moment.
+	stopAll(stops)
+	if attempt < clusterStartAttempts {
+		t.Logf("cluster attempt %d/%d lost a race at member %d: %v "+
+			"(relays: %s)", attempt, clusterStartAttempts, failed, errs[failed],
+			relays.Describe())
+		return nil
+	}
+	t.Fatalf("member %d: %v (relays: %s)", failed, errs[failed], relays.Describe())
+	return nil
+}
+
+// stopAll runs every member's teardown, in reverse order within each member.
+//
+// REVERSE, because that is the order the pieces were built in and each one's
+// stop assumes the ones after it are still there: the projector reads the
+// queue the engine owns, and the server serves the app.
+func stopAll(stops [][]func()) {
+	for _, member := range stops {
+		for i := len(member) - 1; i >= 0; i-- {
+			member[i]()
+		}
+	}
 }
 
 // clusterStartAttempts is how many times a fleet is stood up before the case
@@ -149,11 +173,21 @@ const clusterStartAttempts = 3
 // what a fleet is: n machines, each with its own disk. Sharing either would
 // make this one node wearing three hats, and every fleet mechanism under it
 // would pass for the wrong reason.
-func buildMember(t *testing.T, relays *jetstreamtest.Relays, i, n int) (*node, error) {
+func buildMember(t *testing.T, relays *jetstreamtest.Relays, i, n int) (
+	*node, []func(), error) {
+
+	// THE TEARDOWN IS RETURNED, NOT REGISTERED WITH t.Cleanup, because an
+	// attempt that fails has to stop what it started BEFORE the next one
+	// starts — see [startMeshOnce]. It is built up as each piece comes up,
+	// so a member that fails halfway still hands back a way to undo the
+	// half that worked.
+	var stops []func()
+	fail := func(err error) (*node, []func(), error) { return nil, stops, err }
+
 	model := newScriptedModel(t)
 	cfg, err := config.ParseCompany([]byte(fmt.Sprintf(companyDoc, model.url)))
 	if err != nil {
-		return nil, fmt.Errorf("company config: %w", err)
+		return fail(fmt.Errorf("company config: %w", err))
 	}
 
 	port, peers, advertise := relays.Member(i)
@@ -179,11 +213,11 @@ func buildMember(t *testing.T, relays *jetstreamtest.Relays, i, n int) (*node, e
 
 	e, err := engine.New(t.Context(), engine.Options{Bootstrap: &boot, Company: cfg})
 	if err != nil {
-		return nil, fmt.Errorf("engine.New: %w", err)
+		return fail(fmt.Errorf("engine.New: %w", err))
 	}
-	t.Cleanup(func() { e.Stop(context.Background()) })
+	stops = append(stops, func() { e.Stop(context.Background()) })
 	if err := e.Start(t.Context()); err != nil {
-		return nil, fmt.Errorf("engine.Start: %w", err)
+		return fail(fmt.Errorf("engine.Start: %w", err))
 	}
 
 	app := api.New(api.Options{
@@ -197,20 +231,20 @@ func buildMember(t *testing.T, relays *jetstreamtest.Relays, i, n int) (*node, e
 	})
 	app.SetConfigured(true)
 	app.Start(t.Context())
-	t.Cleanup(app.Stop)
+	stops = append(stops, app.Stop)
 
 	projector := observe.NewProjector(e.Backends().Queue, app.Stream())
 	if err := projector.Start(t.Context()); err != nil {
-		return nil, fmt.Errorf("projector: %w", err)
+		return fail(fmt.Errorf("projector: %w", err))
 	}
-	t.Cleanup(func() { projector.Stop(context.Background()) })
+	stops = append(stops, func() { projector.Stop(context.Background()) })
 
 	srv := httptest.NewServer(app)
-	t.Cleanup(srv.Close)
+	stops = append(stops, srv.Close)
 	return &node{
 		engine: e, app: app, server: srv, model: model,
 		snapshotDir: boot.Store.SnapshotDirFor(),
-	}, nil
+	}, stops, nil
 }
 
 // hydrated waits for every member's replication loops to catch up.

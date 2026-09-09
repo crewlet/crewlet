@@ -629,3 +629,39 @@ func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 	}
 	return out
 }
+
+// JoinSecondsPerGB and JoinFixedSeconds project how long a peer needs to
+// become a complete replica of a store of a given size.
+//
+// # Where the two numbers come from
+//
+// The per-gigabyte term is the CONSERVATIVE profile — a network volume rather
+// than local NVMe — because a projection an operator sizes a rejoin window
+// against must not be the optimistic one: a window that fits only the fast
+// path is a window that expires during exactly the incident it was set for.
+// The fast profile is about 2.3× better and is deliberately not what this
+// reports.
+//
+// The fixed term is 25 s of setup — opening the estates, running the
+// migrator, establishing the donor — plus the 18 s the read barriers add to a
+// twenty-four-hour replay, which costs 793 fetches rather than 272 at about
+// 35 ms each.
+//
+// # Why it is a projection and says so
+//
+// Nothing here is measured on this host. It is arithmetic over a size, and its
+// job is to answer "is the operator's window plausible" rather than to predict
+// a particular join — which is why [ReplicaReport] carries the window beside it
+// and the surfaces render both.
+const (
+	JoinSecondsPerGB = 27.33
+	JoinFixedSeconds = 43.0
+)
+
+// ProjectJoinSeconds is the conservative projection for a store of this size.
+func ProjectJoinSeconds(storeBytes int64) float64 {
+	if storeBytes <= 0 {
+		return JoinFixedSeconds
+	}
+	return JoinSecondsPerGB*(float64(storeBytes)/(1<<30)) + JoinFixedSeconds
+}

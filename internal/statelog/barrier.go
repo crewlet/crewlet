@@ -232,9 +232,9 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 		}
 		run.seq = seq
 		if r.metrics != nil {
-			r.metrics.Observe("crewlet.statelog.barrier.duration", time.Since(started),
+			r.metrics.Observe(metrics.StatelogBarrierDuration, time.Since(started),
 				metrics.Attrs{"domain": r.domain})
-			r.metrics.Add("crewlet.statelog.barrier.appends", 1,
+			r.metrics.Add(metrics.StatelogBarrierAppends, 1,
 				metrics.Attrs{"domain": r.domain})
 		}
 	}()

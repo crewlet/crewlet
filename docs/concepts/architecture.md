@@ -556,7 +556,7 @@ leader and no node whose copy is the real one.
 | **`crewlet_budgets`** · `crewlet_rate` · `crewlet_cooldowns` | The token counter, the notification valve, benched credentials |
 | **`crewlet_secrets`** · `crewlet_channels` · `crewlet_sandbox_runs` | The company's sealed credentials, open A2A channels, detached coding runs |
 | **`crewlet_pages`** | **The knowledge base — authoritative, with no other copy.** Ageless: a page is a fact for the life of the deployment, and removing one is a decision a sweep takes rather than a horizon that reaps it while a person is still reading it |
-| `crewlet_statelog_positions` | Two key classes: each node's position per domain, and the trim holds a backup or a join takes. The trim reads a minimum across the first and refuses to pass the second. **No age at all**, and this is the one where an age would be worst — an expired position reads as a node that has applied *nothing*, which either pins the trim for ever or, read the other way, deletes records that node still needs |
+| `crewlet_statelog_positions` | **Four key classes**, all answering what the log may delete: each node's position per domain; the trim holds a backup or a join takes; what each owner's newest backup covers, which is the only input the backup term has; and the floor the trim published, with the term holding it and how long it has been holding — the last is the one nothing can re-derive, because a duty that moves on a lease carries no memory across the move. **No age at all**, and this is the one where an age would be worst — an expired position reads as a node that has applied *nothing*, which either pins the trim for ever or, read the other way, deletes records that node still needs |
 
 **In flight, or keyed — the event stream.**
 
@@ -568,7 +568,7 @@ leader and no node whose copy is the real one.
 | **`CREWLET_CONFIG`** | `crewlet.config.>` |
 | **`CREWLET_MEMORY`** | `crewlet.memory.>` — *one message per subject: a keyed table, not a log* |
 | **`CREWLET_DLQ`** | `dlq.>` — *deliberately outside* `crewlet.*` |
-| **`CREWLET_TRACKER_LOG`** | `crewlet.tracker.log.>` — **the write-ahead log the replicated estate's tracker tables are derived from.** One subject per object, which is what makes the subject the unit two writers contend on; retention is bounded by durability rather than by age |
+| **`CREWLET_TRACKER_LOG`** | `crewlet.tracker.log.>` — **the write-ahead log the replicated estate's tracker tables are derived from.** One subject per object, which is what makes the subject the unit two writers contend on; retention is bounded by durability rather than by age. Two of its subjects carry no object at all: **`…log.barrier`**, which every `linearizable` read appends one record to and then waits for — the acknowledgement is what proves a quorum agrees on a position, where a field read can be served by an isolated former leader; and **`…log.rankorder.<PROJECT>`**, which is where a board drag is arbitrated, so two people reordering one project's board contend and two reordering different ones never do |
 | **`CREWLET_TRACKER_VECTORS`** | `crewlet.tracker.vectors.>` — the same shape for embeddings, **compacted**: one message retained per subject, because the current embedding of a source is the only one anybody wants and a history of superseded vectors is a bill nobody asked for |
 
 **Mailboxes and event history are different kinds of stream.** The two

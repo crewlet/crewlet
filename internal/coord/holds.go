@@ -51,10 +51,19 @@ type TrimHold struct {
 	// the log for ever.
 	At time.Time `json:"at"`
 
-	// Domains is the position held per domain — a triple each, because a
+	// Streams is the position held per STREAM — a triple each, because a
 	// bare sequence from before a reanchor names a dead number space and
 	// would compare as if it were current.
-	Domains map[string]Position `json:"domains"`
+	//
+	// KEYED BY STREAM RATHER THAN BY DOMAIN, unlike [NodePositions], and
+	// the difference is deliberate rather than an accident of whoever
+	// wrote each one. A hold is taken by something copying a LOG — a
+	// backup reads `statelog_cursor`, which is keyed on the stream — and
+	// a position's whole number space belongs to the stream it came from.
+	// The key repeats [Position.Stream] on purpose: a map whose key and
+	// whose value's own name could disagree is one where a reader has to
+	// decide which is authoritative, and here they never differ.
+	Streams map[string]Position `json:"streams"`
 
 	// Reason is what the hold is for, in the holder's own words. It is
 	// what an operator reads when the trim is not advancing, and the one
@@ -109,15 +118,15 @@ func (h TrimHold) Validate() error {
 			"so a hold without one would be written over somebody else's pin " +
 			"and released by their work finishing")
 	}
-	if len(h.Domains) == 0 {
-		return fmt.Errorf("coord: the trim hold held by %s names no domain — a "+
+	if len(h.Streams) == 0 {
+		return fmt.Errorf("coord: the trim hold held by %s names no stream — a "+
 			"hold that pins nothing is indistinguishable from one whose owner "+
-			"forgot the domain it was reading", h.Owner)
+			"forgot the log it was reading", h.Owner)
 	}
-	for name, at := range h.Domains {
+	for name, at := range h.Streams {
 		if at.Stream == "" {
-			return fmt.Errorf("coord: the trim hold held by %s pins domain %q "+
-				"at a position with no stream — a bare sequence from before a "+
+			return fmt.Errorf("coord: the trim hold held by %s pins %q at a "+
+				"position with no stream — a bare sequence from before a "+
 				"reanchor names a dead number space", h.Owner, name)
 		}
 	}

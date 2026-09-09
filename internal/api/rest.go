@@ -55,6 +55,7 @@ var namedRoutes = []struct {
 	// above, so /work/counters is not read as an item whose key is
 	// "counters" — net/http resolves the more specific pattern rather
 	// than the first registered.
+	{method: "GET", pattern: "/work/retention", what: "retention"},
 	{method: "GET", pattern: "/work/{id}", what: "work_item", path: map[string]string{"id": "id"}},
 	{method: "GET", pattern: "/work", what: "work_items"},
 	{method: "GET", pattern: "/pages/{id}", what: "page", path: map[string]string{"id": "id"}},

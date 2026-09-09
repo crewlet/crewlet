@@ -73,7 +73,7 @@ func (f *Fleet) PutHold(_ context.Context, h coord.TrimHold) error {
 	// map is the one aliasing bug a twin can have and the real backend
 	// cannot, because the real one serialises.
 	hold := h
-	hold.Domains = maps.Clone(h.Domains)
+	hold.Streams = maps.Clone(h.Streams)
 	f.holds[h.Owner] = hold
 	return nil
 }
@@ -85,7 +85,7 @@ func (f *Fleet) Holds(_ context.Context) ([]coord.TrimHold, error) {
 	out := make([]coord.TrimHold, 0, len(f.holds))
 	for _, owner := range slices.Sorted(maps.Keys(f.holds)) {
 		hold := f.holds[owner]
-		hold.Domains = maps.Clone(hold.Domains)
+		hold.Streams = maps.Clone(hold.Streams)
 		out = append(out, hold)
 	}
 	return out, nil
@@ -96,5 +96,90 @@ func (f *Fleet) ReleaseHold(_ context.Context, owner string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.holds, owner)
+	return nil
+}
+
+// PutFloor writes one domain's published trim floor. See the KV backend for
+// why it lives in the same register as the positions and the holds.
+func (f *Fleet) PutFloor(_ context.Context, floor coord.TrimFloor) error {
+	if err := floor.Validate(); err != nil {
+		return err
+	}
+	if floor.At.IsZero() {
+		floor.At = time.Now().UTC()
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.floors == nil {
+		f.floors = map[string]coord.TrimFloor{}
+	}
+	// CLONED ON THE WAY IN, for the reason the other two rows are: the
+	// terms are a slice the caller keeps, and a shared one is the aliasing
+	// bug only a twin can have.
+	row := floor
+	row.Terms = slices.Clone(floor.Terms)
+	f.floors[floor.Domain] = row
+	return nil
+}
+
+// Floors reads every domain's row, in domain order so two captures are
+// diffable.
+func (f *Fleet) Floors(_ context.Context) ([]coord.TrimFloor, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]coord.TrimFloor, 0, len(f.floors))
+	for _, domain := range slices.Sorted(maps.Keys(f.floors)) {
+		row := f.floors[domain]
+		row.Terms = slices.Clone(row.Terms)
+		out = append(out, row)
+	}
+	return out, nil
+}
+
+// ForgetFloor removes one domain's row.
+func (f *Fleet) ForgetFloor(_ context.Context, domain string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.floors, domain)
+	return nil
+}
+
+// PutBackupPoint writes one owner's newest backup. See the KV backend for why
+// it lives in the same register as the positions, the holds and the floors.
+func (f *Fleet) PutBackupPoint(_ context.Context, p coord.BackupPoint) error {
+	if err := p.Validate(); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.backups == nil {
+		f.backups = map[string]coord.BackupPoint{}
+	}
+	// CLONED ON THE WAY IN, for the reason every row here is.
+	row := p
+	row.Streams = maps.Clone(p.Streams)
+	f.backups[p.Owner] = row
+	return nil
+}
+
+// BackupPoints reads every owner's row, in owner order so two captures are
+// diffable.
+func (f *Fleet) BackupPoints(_ context.Context) ([]coord.BackupPoint, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]coord.BackupPoint, 0, len(f.backups))
+	for _, owner := range slices.Sorted(maps.Keys(f.backups)) {
+		row := f.backups[owner]
+		row.Streams = maps.Clone(row.Streams)
+		out = append(out, row)
+	}
+	return out, nil
+}
+
+// ForgetBackupPoint removes one owner's row.
+func (f *Fleet) ForgetBackupPoint(_ context.Context, owner string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.backups, owner)
 	return nil
 }

@@ -86,12 +86,17 @@ func (w *Writer) tx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 	}
 	defer func() {
 		if p := recover(); p != nil {
-			_ = tx.Rollback()
+			rollback(ctx, tx)
 			panic(p)
 		}
 	}()
 	if err := fn(tx); err != nil {
-		_ = tx.Rollback()
+		// THROUGH THE SAME HELPER, and here the consequence is worse
+		// than on the pool: this connection is PINNED, so a rollback
+		// that failed leaves a transaction open on the one connection
+		// this applier will ever use — every subsequent attempt is
+		// refused its own BEGIN and the domain stops applying entirely.
+		rollback(ctx, tx)
 		return err
 	}
 	if err := tx.Commit(); err != nil {

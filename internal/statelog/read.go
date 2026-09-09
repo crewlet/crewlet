@@ -596,10 +596,10 @@ func (r *Reader) refuse(h Health, q Query, code ReadRefusal, detail string, star
 		lag = *h.Lag
 	}
 	if r.metrics != nil {
-		r.metrics.Add("crewlet.statelog.read.refusals", 1, metrics.Attrs{
+		r.metrics.Add(metrics.StatelogReadRefusals, 1, metrics.Attrs{
 			"domain": r.domain.Name(), "level": string(q.Level), "code": string(code),
 		})
-		r.metrics.Observe("crewlet.statelog.read.wait", time.Since(started), metrics.Attrs{
+		r.metrics.Observe(metrics.StatelogReadWait, time.Since(started), metrics.Attrs{
 			"domain": r.domain.Name(), "level": string(q.Level),
 		})
 	}
@@ -642,10 +642,10 @@ func (r *Reader) observeServed(level ReadLevel, started time.Time) {
 	if r.metrics == nil {
 		return
 	}
-	r.metrics.Add("crewlet.statelog.read.served", 1, metrics.Attrs{
+	r.metrics.Add(metrics.StatelogReadServed, 1, metrics.Attrs{
 		"domain": r.domain.Name(), "level": string(level),
 	})
-	r.metrics.Observe("crewlet.statelog.read.wait", time.Since(started), metrics.Attrs{
+	r.metrics.Observe(metrics.StatelogReadWait, time.Since(started), metrics.Attrs{
 		"domain": r.domain.Name(), "level": string(level),
 	})
 }

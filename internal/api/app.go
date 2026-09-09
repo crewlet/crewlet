@@ -53,6 +53,16 @@ type App struct {
 	// rather than hides.
 	backup backupTaker
 
+	// retention is the fleet's own record of what the log may delete, for
+	// the one gesture that WRITES to it: an operator's backup
+	// acknowledgement. Nil on a standalone API with no coordination store.
+	retention retentionWriter
+
+	// nodes installs and lifts the eviction gate. A RECORD on the log
+	// rather than a coordination write, which is why it is a different
+	// seam from the one above. Nil on a process with no native tracker.
+	nodes NodeGate
+
 	// configured flips once a company revision is active. Atomic because
 	// the config refresher sets it from its own goroutine while every
 	// health probe reads it.
@@ -149,6 +159,15 @@ type Options struct {
 	// method that clears one would put it a typo away from every screen
 	// that renders spend.
 	Budgets budgetResetter
+
+	// Retention is the fleet's record of what the log may delete, for the
+	// operator's backup acknowledgement. Nil leaves that route answering
+	// 503 rather than 404 — the route exists on this build.
+	Retention retentionWriter
+
+	// Nodes installs and lifts the eviction gate. Nil leaves the evict and
+	// readmit routes answering 503.
+	Nodes NodeGate
 
 	// Backup copies this node's durable state to a path an operator
 	// names. Nil where there is nothing to copy — a process running
@@ -248,6 +267,7 @@ func New(opts Options) *App {
 	queries.Register(a.queries, sources)
 	a.budgets = opts.Budgets
 	a.backup = opts.Backup
+	a.retention, a.nodes = opts.Retention, opts.Nodes
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", http.HandlerFunc(a.serveHealth))
@@ -264,6 +284,11 @@ func New(opts Options) *App {
 	// every seat's memory to a path the caller names is not a read,
 	// whatever the anonymous-read posture allows.
 	mux.Handle("POST /backup", http.HandlerFunc(a.serveBackup))
+	// The three retention gestures that write. POSTs for the same reason:
+	// moving the floor the trim deletes against, stopping a machine
+	// writing and letting it write again are not reads, whatever the
+	// anonymous-read posture allows. See retention.go.
+	a.mountRetention(mux)
 	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.stream, a.answer))
 	// The OPERATOR MCP surface: the same tracker and knowledge tools a
 	// seat holds, offered to a person's own assistant. Under its own

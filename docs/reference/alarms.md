@@ -16,7 +16,7 @@ below.
 | Alarm | What it means | What to do |
 |---|---|---|
 | `apply_lag` | This node is more than a minute behind the log. Its seats move if it stays behind for thirty. | Check this node's applier: `crewlet retention status` names the domain and its position. A node that stays behind past the deferral grace loses its seats to a peer. |
-| `read_refusals` | Reads are being refused for something other than ordinary lag, and have been for longer than a heartbeat. | Read the refusal code in the logs. Anything other than `behind`, `too_stale` or `lag_unknown` is a fault rather than a wait. |
+| `read_refusals` | Reads are being refused for something other than ordinary lag, and have been for longer than a heartbeat. | Read the refusal code in the logs. Anything other than `behind` or `too_stale` is a fault rather than a wait. |
 | `barrier_slow` | The read barrier — the append every linearizable read waits on — is spending a quarter of the whole read budget. | The barrier is an append and a wait: check the broker's own latency and this node's apply drain before looking anywhere else. |
 | `log_headroom` | The log is within a tenth of its byte ceiling. A full log refuses writes rather than dropping records. | Raise the log's ceiling with `crewlet retention set-capacity` during a maintenance window, or find out why the trim is not advancing. A full log refuses writes; it does not drop records. |
 | `backup_age` | The newest verified backup is older than the policy asks for. The trim will not advance past it. | Run `crewlet backup` against a node holding seats, and check whatever was meant to run it. The trim will not advance past a backup this old. |

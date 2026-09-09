@@ -234,17 +234,30 @@ type Options struct {
 	// assertion is what makes its absence loud.
 	Holds coord.HoldRegister
 
+	// Backups is where a finished copy is announced to the fleet. Nil on a
+	// process with no coordination, exactly as Holds is.
+	//
+	// WITHOUT IT THE TRIM CANNOT ADVANCE AT ALL, which is why it is here
+	// rather than left to a caller: the trim's backup term refuses to
+	// delete anything the newest backup does not hold, the node evaluating
+	// that term is not necessarily this one, and a copy nobody announced
+	// is a copy the fleet cannot see. A backup that ran and said nothing
+	// leaves a log that grows for ever with a healthy backup schedule
+	// behind it — the most confusing shape this gate has.
+	Backups coord.BackupRegister
+
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
 }
 
 // Service takes backups. Nil when nothing on this node can be backed up.
 type Service struct {
-	store  *store.DB
-	conn   *nats.Conn
-	holds  coord.HoldRegister
-	nodeID string
-	now    func() time.Time
+	store   *store.DB
+	conn    *nats.Conn
+	holds   coord.HoldRegister
+	backups coord.BackupRegister
+	nodeID  string
+	now     func() time.Time
 }
 
 // HoldPurpose names this subsystem in the trim-hold register, so an operator
@@ -276,7 +289,7 @@ func New(opts Options) *Service {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &Service{store: opts.Store, conn: opts.Conn, holds: opts.Holds,
-		nodeID: opts.NodeID, now: now}
+		backups: opts.Backups, nodeID: opts.NodeID, now: now}
 }
 
 // Take writes a complete backup into dir and returns its manifest.
@@ -422,6 +435,12 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 	if err := writeManifest(dir, manifest); err != nil {
 		return Manifest{}, err
 	}
+	// AFTER THE MANIFEST, because the manifest is the claim: a point
+	// announced before it would name an artefact a crash could leave as
+	// debris, and the trim would delete the log against a backup that does
+	// not exist. See [Service.announce] for why a failure here does not
+	// fail the backup.
+	s.announce(ctx, dir, manifest)
 	log.InfoContext(ctx, "backup_taken",
 		"dir", dir,
 		"store_bytes", storeBytes(manifest),
@@ -540,7 +559,7 @@ func (s *Service) hold(ctx context.Context) (func(), error) {
 	owner := coord.HoldOwner(s.nodeID, HoldPurpose)
 	put := func(ctx context.Context) error {
 		return s.holds.PutHold(ctx, coord.TrimHold{
-			Owner: owner, At: s.now(), Domains: live,
+			Owner: owner, At: s.now(), Streams: live,
 			Reason: "a backup is copying this node's store",
 		})
 	}
@@ -676,4 +695,47 @@ func assertReplayable(m Manifest) error {
 		}
 	}
 	return nil
+}
+
+// announce publishes what this backup covers, so the fleet's trim can see it.
+//
+// # Why a failure here does not fail the backup
+//
+// The artefact on disk is complete and restorable the moment its manifest is
+// written; this call is what lets the log be trimmed against it. Those are
+// different goods, and failing the backup because the announcement did not
+// land would throw away the first to report the second — while an operator's
+// cron reports a failed backup that in fact succeeded.
+//
+// The cost of a lost announcement is bounded and self-correcting: the trim's
+// backup term goes on refusing, the log keeps a longer window than it needed
+// to, and the next backup announces again. That is the safe direction, and it
+// is why this is a WARN rather than an error.
+func (s *Service) announce(ctx context.Context, dir string, manifest Manifest) {
+	if s.backups == nil || len(manifest.Domains) == 0 {
+		// NO DOMAINS IS NOT AN EMPTY ANNOUNCEMENT. A node with no state
+		// log has nothing to say about how far a log is covered, and a
+		// point claiming to reach no domain would be refused anyway —
+		// see [coord.BackupPoint.Validate].
+		return
+	}
+	point := coord.BackupPoint{
+		Owner: s.nodeID,
+		// THE INSTANT THE COPY STARTED, not the one it finished. Nothing
+		// in the artefact is older than that, and the trim's age
+		// comparison has to be against the state the copy describes
+		// rather than against how long writing it took.
+		At:       manifest.TakenAt,
+		Dir:      dir,
+		Streams:  map[string]coord.Position{},
+		Verified: true,
+	}
+	for stream, at := range manifest.Domains {
+		point.Streams[stream] = coord.Position{
+			Stream: stream, Generation: at.Generation, Seq: at.Seq,
+		}
+	}
+	if err := s.backups.PutBackupPoint(ctx, point); err != nil {
+		log.WarnContext(ctx, "backup_unannounced", "dir", dir, "err", err)
+	}
 }

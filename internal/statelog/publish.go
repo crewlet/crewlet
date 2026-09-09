@@ -455,7 +455,7 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 		return Result{Rounds: round}, dispRetake, nil
 
 	default:
-		p.count("crewlet.statelog.publish.rejections", metrics.Attrs{
+		p.count(metrics.StatelogPublishRejections, metrics.Attrs{
 			"domain": p.domain.Name(), "subject_kind": req.Subject.Kind,
 		})
 		return Result{Rounds: round}, dispRejected, nil
@@ -755,7 +755,7 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 		p.logger.Warn("statelog_write_gated",
 			"domain", p.domain.Name(), "subject", req.Subject.String(),
 			"gate", string(reason), "position", at.String(), "op_id", req.OpID)
-		p.count("crewlet.statelog.records_gated", metrics.Attrs{
+		p.count(metrics.StatelogRecordsGated, metrics.Attrs{
 			"gate": string(reason), "subject_kind": req.Subject.Kind,
 		})
 		return Result{}, &Unavailable{
@@ -860,7 +860,7 @@ func (p *Publisher) waitSession(ctx context.Context, req Request) error {
 	waitCtx, cancel := context.WithTimeout(ctx, p.resolveBudget)
 	defer cancel()
 	err := p.waiter.WaitCommitted(waitCtx, req.Session)
-	p.observeMillis("crewlet.statelog.write.session_wait", started, metrics.Attrs{
+	p.observeMillis(metrics.StatelogWriteSessionWait, started, metrics.Attrs{
 		"domain": p.domain.Name(),
 	})
 	if err != nil {
@@ -940,23 +940,23 @@ func (p *Publisher) observe(started time.Time, req Request, res Result, err erro
 			// counter says a write lost every round and not what it
 			// was about, and one contended object is a design
 			// question where a contended KIND is a hot subject.
-			p.count("crewlet.statelog.publish.conflicts", metrics.Attrs{
+			p.count(metrics.StatelogPublishConflicts, metrics.Attrs{
 				"domain": domain, "subject_kind": req.Subject.Kind,
 			})
 		case errors.Is(err, ErrExists):
 			reason = "exists"
 		}
-		p.observeMillis("crewlet.statelog.publish.duration", started,
+		p.observeMillis(metrics.StatelogPublishDuration, started,
 			metrics.Attrs{"domain": domain, "outcome": "refused"})
-		p.count("crewlet.statelog.publish.refusals",
+		p.count(metrics.StatelogPublishRefusals,
 			metrics.Attrs{"domain": domain, "reason": reason})
 		return
 	}
 	attrs := metrics.Attrs{"domain": domain, "outcome": string(res.Outcome)}
-	p.observeMillis("crewlet.statelog.publish.duration", started, attrs)
-	p.count("crewlet.statelog.publish.outcomes", attrs)
+	p.observeMillis(metrics.StatelogPublishDuration, started, attrs)
+	p.count(metrics.StatelogPublishOutcomes, attrs)
 	if res.Rounds > 0 && p.metrics != nil {
-		p.metrics.ObserveValue("crewlet.statelog.publish.rounds", float64(res.Rounds),
+		p.metrics.ObserveValue(metrics.StatelogPublishRounds, float64(res.Rounds),
 			metrics.Attrs{"domain": domain})
 	}
 }
