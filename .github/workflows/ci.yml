@@ -58,6 +58,48 @@ jobs:
             exit 1
           fi
 
+  # THE DCO GATE — the one job here whose subject is git history rather than
+  # the tree, and therefore the one whose failure cannot be fixed by editing a
+  # file: a missing trailer is repaired by REWRITING the commit. That is the
+  # whole argument for checking it here, at the moment a pull request opens,
+  # instead of at review time when the rewrite costs a force-push under a
+  # reviewer who has already read the diff. `make signoff-check` is the same
+  # script against origin/main..HEAD, which is the cheapest moment of all.
+  #
+  # Nothing checked this until it existed, and 61 of the 361 non-merge commits
+  # behind it carry no trailer — which is what a convention held by memory
+  # alone decays into. Only a pull request's OWN commits are judged, so that
+  # history stays as it is. What the script certifies, and what it
+  # deliberately does NOT (the trailer is never matched against the author),
+  # is written at its top.
+  signoff:
+    name: sign-off
+    # `pull_request` only. A push to main is the squash of a branch this job
+    # has already judged, and a push event's own range is unusable anyway:
+    # `github.event.before` is all-zeros on a branch's first push and points
+    # at a discarded history after a force-push. A second answer that is
+    # wrong more often than right is worse than no answer.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Not shallow: the default single-commit fetch has neither the base
+          # commit nor the branch's own history, so there would be no range
+          # to walk and this job would pass by having nothing to look at.
+          fetch-depth: 0
+      # The pull request's OWN base and head, not origin/main..HEAD: the
+      # checkout sits on the merge ref, and a fork's origin is the fork.
+      # Both values are commit SHAs GitHub computed, taken through the
+      # environment rather than interpolated into the shell — a `run:` that
+      # pastes `${{ }}` into its script is the shape that becomes an
+      # injection the day one of those fields is not what you assumed.
+      - name: every commit carries a Signed-off-by trailer
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: scripts/check-signoff.sh "$BASE_SHA" "$HEAD_SHA"
+
   # The dashboard is a React + TypeScript application built by Vite. Its own
   # ~200 assertions run here — the wire protocol, the router's history rules,
   # the ordering comparators, and the MEASURED contrast of every colour token
