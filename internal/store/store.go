@@ -517,6 +517,22 @@ func (d *DB) Caps() Capabilities { return d.caps }
 // Path reports the file this handle owns.
 func (d *DB) Path() string { return d.path }
 
+// ReplicatedPath is where the replicated estate lives, whichever estate this
+// handle is.
+//
+// A caller measuring what a snapshot will cost is asking about the replicated
+// file — the artefact is a copy of it alone — and it should not have to know
+// whether it is holding the node handle or the replicated one to ask.
+func (d *DB) ReplicatedPath() string {
+	if d.estate == EstateReplicated {
+		return d.path
+	}
+	if d.replicated != nil {
+		return d.replicated.path
+	}
+	return ""
+}
+
 // EmbeddingDim reports the configured vector width, or 0 when no embedding
 // model is configured. See Options.EmbeddingDim for why this is not in the
 // schema.

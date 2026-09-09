@@ -445,7 +445,15 @@ func sameFile(a, b string) bool {
 }
 
 // fileDigest is the sha256 of a file, hex-encoded.
-func fileDigest(path string) (string, error) {
+func fileDigest(path string) (string, error) { return FileDigest(path) }
+
+// FileDigest is the SHA-256 of a file, streamed rather than read whole.
+//
+// EXPORTED because a snapshot's manifest carries one and a recipient
+// recomputes it, and the two must be the same digest over the same bytes — a
+// second implementation is how one comes to hash the file and the other its
+// path.
+func FileDigest(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("store: backup: read %s to checksum it: %w", path, err)
