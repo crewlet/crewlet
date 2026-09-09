@@ -34,7 +34,7 @@ below.
 | `volume_low` | The volume has less free space than the next restore, vacuum or snapshot needs for a second copy. | Add space. A backup, a vacuum and a peer's join all need it, and each fails partway through without it. |
 | `wal_large` | The write-ahead log has grown past a gibibyte, which means a checkpoint is not happening. | A checkpoint is not happening, which usually means a reader is holding a snapshot open. It has no other symptom until the volume fills. |
 | `pool_starved` | Callers are queuing for a database connection before their query starts. | Raise `store.max_open_conns`, or find the caller holding one. Every read on this node is queuing before it starts. |
-| `census_drift` | This company is doing more than twice the reads its log was sized for, so every sizing decision under it is stale. | Re-derive the log's ceiling and the trim's cadence from the real rate. See docs/guides/retention.md. |
+| `census_drift` | This company is doing more than twice the reads its log was sized for, so every sizing decision under it is stale. | Re-derive the log's ceiling and the trim's cadence from the real rate. See `stream.tracker_retention` in docs/getting-started/configuration.md. |
 
 An alarm that fires on a healthy node is a defect in this table, not a
 threshold for an operator to tune: each one fires at the number that already
