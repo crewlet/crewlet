@@ -818,7 +818,6 @@ type Fleet interface {
 	SandboxRuns
 	Secrets
 	Integrations
-	Documents
 	PositionRegister
 	HoldRegister
 	FloorRegister

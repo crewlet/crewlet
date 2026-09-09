@@ -59,7 +59,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -67,16 +66,6 @@ import (
 )
 
 var log = logging.Get("changefeed")
-
-// Group is the durable consumer name for a document family's change feed.
-//
-// ONE PER FAMILY, and stable for the life of the deployment: the name IS the
-// fleet's position, so renaming it creates a second consumer at the head and
-// silently abandons whatever the first had not yet handled. It survives the
-// move to [Source] as the helper that keeps those names byte-identical —
-// which is the whole reason a family's feed did not move a position when this
-// package stopped speaking families.
-func Group(family coord.Family) string { return "crewlet-" + string(family) + "-feed" }
 
 // ClaimTTL is how long a handled change stays claimed.
 //
@@ -98,9 +87,9 @@ const nakDelay = 2 * time.Second
 
 // Source identifies the estate a feed reads.
 //
-// A STRING rather than a [coord.Family], because a log is not a family and
-// adding one to name it would start a projector over a bucket that does not
-// exist.
+// A STRING, because every estate this reads is now a LOG: the document
+// families it was written against are gone, and a log delivery has no family,
+// no key class and no change record to name one with.
 type Source struct {
 	// Name is the notification source a parser registers under, and the
 	// scope of this estate's claim keys — "work", "page", "tracker".
@@ -109,7 +98,13 @@ type Source struct {
 	// Group is the durable consumer's name, and it is STABLE for the
 	// deployment's life: the name is where the fleet is, so a rename
 	// starts a second consumer at the head and abandons everything the
-	// first had not handled. [Group] builds a family's.
+	// first had not handled.
+	//
+	// EACH ESTATE DECLARES ITS OWN, as a constant beside the translator
+	// that reads it. The helper that used to derive one from a document
+	// family is gone with the families — and what it was for survives as
+	// a rule rather than a function: a name is chosen once and never
+	// improved.
 	Group string
 }
 

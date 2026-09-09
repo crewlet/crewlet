@@ -3,15 +3,16 @@ package changefeed_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
-	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // ---- the fixture ------------------------------------------------------ //
@@ -115,8 +116,13 @@ type probe struct {
 func newProbe() *probe { return &probe{wake: true} }
 
 func (p *probe) Source() changefeed.Source {
-	return changefeed.Source{Name: "work", Group: changefeed.Group(coord.FamilyPages)}
+	return changefeed.Source{Name: "work", Group: testGroup}
 }
+
+// testGroup is this fixture's own consumer name. Declared as a constant beside
+// the translator that reads it, which is the shape every real estate has now
+// that no helper derives one from a document family.
+const testGroup = "crewlet-test-feed"
 
 func (p *probe) Translate(_ context.Context, rec changefeed.Record) (changefeed.Delivery, bool, error) {
 	p.mu.Lock()
@@ -128,10 +134,9 @@ func (p *probe) Translate(_ context.Context, rec changefeed.Record) (changefeed.
 	// THE ID INSIDE THE RECORD, not the delivery's own: the translator is
 	// the only thing that can read it, which is why the claim seed is its
 	// output rather than the framework's input.
-	segs, _ := coord.DocumentSegments(rec.Key)
 	id := rec.Key
-	if len(segs) == 3 {
-		id = segs[2]
+	if _, rest, ok := strings.Cut(rec.Key, "/"); ok {
+		id = rest
 	}
 	return changefeed.Delivery{
 		Body:  map[string]any{"key": rec.Key},
@@ -152,11 +157,10 @@ func (p *probe) translations() int {
 	return p.seen
 }
 
-func run(t *testing.T, docs *memory.Fleet, pub *capture, cl *claims, tr changefeed.Translator) {
+func run(t *testing.T, docs *estate, pub *capture, cl *claims, tr changefeed.Translator) {
 	t.Helper()
 	feed, err := changefeed.New(changefeed.Options{
-		Opener:    changefeed.DocumentSource(docs, coord.FamilyPages, "c"),
-		Publisher: pub, Claims: cl, Translator: tr,
+		Opener: docs, Publisher: pub, Claims: cl, Translator: tr,
 	})
 	if err != nil {
 		t.Fatalf("new feed: %v", err)
@@ -192,13 +196,9 @@ func settle(t *testing.T, want func() bool, why string) {
 	}
 }
 
-func writeChange(t *testing.T, docs *memory.Fleet, id string) {
+func writeChange(t *testing.T, docs *estate, id string) {
 	t.Helper()
-	key := coord.DocumentKey("c", "item", id)
-	created, err := docs.CreateDocument(t.Context(), coord.FamilyPages, key, []byte(`{}`))
-	if err != nil || !created {
-		t.Fatalf("write change %s: created=%v err=%v", id, created, err)
-	}
+	docs.deliver(changefeed.Record{ID: id, Key: "item/" + id, Payload: []byte(`{}`)})
 }
 
 // ---- the cases -------------------------------------------------------- //
@@ -208,7 +208,7 @@ func writeChange(t *testing.T, docs *memory.Fleet, id string) {
 // the publish costs a redelivery, not a lost notification.
 func TestACommittedChangeBecomesAWake(t *testing.T) {
 	t.Parallel()
-	docs, pub, cl := memory.NewFleet(), &capture{}, newClaims()
+	docs, pub, cl := newEstate(), &capture{}, newClaims()
 	run(t, docs, pub, cl, newProbe())
 
 	writeChange(t, docs, "u1")
@@ -225,7 +225,7 @@ func TestACommittedChangeBecomesAWake(t *testing.T) {
 	// THE RECORD TRAVELS IN THE BODY, so the node that wins the message
 	// routes without reading anything — a projection that had not caught up
 	// would otherwise route from a stale head or block the feed.
-	if w.Body["key"] != coord.DocumentKey("c", "item", "u1") {
+	if w.Body["key"] != "item/u1" {
 		t.Errorf("the body does not carry the record: %+v", w.Body)
 	}
 	if w.Handle != "eng" {
@@ -238,7 +238,7 @@ func TestACommittedChangeBecomesAWake(t *testing.T) {
 // wakes everybody a second time.
 func TestARedeliveredChangeIsPublishedOnce(t *testing.T) {
 	t.Parallel()
-	docs, pub, cl := memory.NewFleet(), &capture{}, newClaims()
+	docs, pub, cl := newEstate(), &capture{}, newClaims()
 	p := newProbe()
 	run(t, docs, pub, cl, p)
 
@@ -265,7 +265,7 @@ func TestARedeliveredChangeIsPublishedOnce(t *testing.T) {
 // nobody is ever told about.
 func TestAnUnreachableClaimStorePublishesAnyway(t *testing.T) {
 	t.Parallel()
-	docs, pub, cl := memory.NewFleet(), &capture{}, newClaims()
+	docs, pub, cl := newEstate(), &capture{}, newClaims()
 	cl.breakWith(errors.New("the coordination store is unreachable"))
 	run(t, docs, pub, cl, newProbe())
 
@@ -279,7 +279,7 @@ func TestAnUnreachableClaimStorePublishesAnyway(t *testing.T) {
 // been handled correctly.
 func TestAChangeThatWakesNobodyIsAckedRatherThanRetried(t *testing.T) {
 	t.Parallel()
-	docs, pub, cl := memory.NewFleet(), &capture{}, newClaims()
+	docs, pub, cl := newEstate(), &capture{}, newClaims()
 	p := newProbe()
 	p.set(false, nil)
 	run(t, docs, pub, cl, p)
@@ -307,7 +307,7 @@ func TestAChangeThatWakesNobodyIsAckedRatherThanRetried(t *testing.T) {
 // exists to prevent.
 func TestAFailedPublishReleasesItsClaim(t *testing.T) {
 	t.Parallel()
-	docs, pub, cl := memory.NewFleet(), &capture{}, newClaims()
+	docs, pub, cl := newEstate(), &capture{}, newClaims()
 	pub.breakWith(errors.New("the broker is down"))
 	run(t, docs, pub, cl, newProbe())
 
@@ -356,24 +356,31 @@ func TestClaimKeysAreScopedBySource(t *testing.T) {
 	}
 }
 
-// The durable group's name IS the fleet's position, so it must be stable and
-// derived from the family: renaming one creates a second consumer at the head
-// and silently abandons whatever the first had not handled.
+// THE DURABLE GROUP'S NAME IS THE FLEET'S POSITION, so it must be stable and
+// it must be each estate's own.
 //
-// One family is left — the tracker and the embeddings are state-log domains
-// now, and a log feed's group is the DOMAIN's — so what this pins is the
-// derivation and the one name it currently produces, not a distinctness that
-// a single value cannot demonstrate.
-func TestTheGroupNameIsStableAndPerFamily(t *testing.T) {
+// Nothing derives one any more. The helper that built a name from a document
+// family went with the families, and each estate now declares a constant
+// beside the translator that reads it — so what can still be checked, and what
+// matters, is that the shipped names are DISTINCT: two estates sharing a group
+// share a position, and each would ack the other's records into a void.
+func TestEveryEstateDeclaresItsOwnGroupAndTheyAreDistinct(t *testing.T) {
 	t.Parallel()
-	if got := changefeed.Group(coord.FamilyPages); got != "crewlet-pages-feed" {
-		t.Errorf("group = %q — renaming it abandons the fleet's position", got)
-	}
-	for _, family := range coord.Families() {
-		if got := changefeed.Group(family); got != "crewlet-"+string(family)+"-feed" {
-			t.Errorf("%s derives the group %q, breaking the convention every "+
-				"other estate's name follows", family, got)
+	seen := map[string]string{}
+	for estate, group := range map[string]string{
+		"work": tracker.FeedGroup,
+		"page": pages.FeedGroup,
+	} {
+		if group == "" {
+			t.Errorf("%s declares no group, so its feed has no durable "+
+				"position at all", estate)
+			continue
 		}
+		if other, clash := seen[group]; clash {
+			t.Errorf("%s and %s share the group %q — one estate's consumer "+
+				"would ack the other's records", estate, other, group)
+		}
+		seen[group] = estate
 	}
 }
 
@@ -381,8 +388,7 @@ func TestTheGroupNameIsStableAndPerFamily(t *testing.T) {
 // which on this path means a company whose writes silently wake nobody.
 func TestAFeedRefusesAnIncompleteWiring(t *testing.T) {
 	t.Parallel()
-	docs := memory.NewFleet()
-	opener := changefeed.DocumentSource(docs, coord.FamilyPages, "c")
+	opener := newEstate()
 	for _, opts := range []changefeed.Options{
 		{Publisher: &capture{}, Translator: newProbe()},
 		{Opener: opener, Translator: newProbe()},
@@ -416,73 +422,30 @@ func (g *groupless) Source() changefeed.Source { return changefeed.Source{Name: 
 // The decision moved out of the two domain translators and into the framework
 // when the seam did, and it can only live in one place: every estate answers
 // it the same way — the wake this record once produced was delivered when it
-// was written — and a log estate never produces one at all. Left to the
-// translators it was two copies of one rule, and a third estate would have
-// been a third copy or a silent nak loop into the dead-letter path.
+// was written — so a removal must not reach a translator and must not circle
+// back through the dead-letter path.
 func TestARemovedRecordIsAckedWithoutTranslation(t *testing.T) {
 	t.Parallel()
-	docs, pub, cl := memory.NewFleet(), &capture{}, newClaims()
+	docs, pub, cl := newEstate(), &capture{}, newClaims()
 	p := newProbe()
 	run(t, docs, pub, cl, p)
 
-	key := coord.DocumentKey("c", "item", "u1")
 	writeChange(t, docs, "u1")
 	settle(t, func() bool { return p.translations() == 1 }, "the change was never translated")
-	rec, found, err := docs.Document(t.Context(), coord.FamilyPages, key)
-	if err != nil || !found {
-		t.Fatalf("read the change back: found=%v err=%v", found, err)
-	}
-	if purged, err := docs.PurgeDocument(t.Context(), coord.FamilyPages, key, rec.Version); err != nil || !purged {
-		t.Fatalf("purge the change: purged=%v err=%v", purged, err)
-	}
+	docs.deliver(changefeed.Record{ID: "u1", Key: "item/u1", Removed: true})
 
-	// The purge must not reach the translator, and it must not circle:
+	// The removal must not reach the translator, and it must not circle:
 	// a later change is translated exactly once, which it would not be if
-	// the purge were being redelivered.
+	// the removal were being redelivered.
 	writeChange(t, docs, "u2")
 	settle(t, func() bool { return p.translations() == 2 }, "the second change never arrived")
 	time.Sleep(100 * time.Millisecond)
 	if got := p.translations(); got != 2 {
-		t.Errorf("%d translations for two changes and a purge — the purge is "+
-			"being translated or retried", got)
+		t.Errorf("%d translations for two changes and a removal — the removal "+
+			"is being translated or retried", got)
 	}
-}
-
-// A BUCKET FILLS IN WHAT A BUCKET HAS, and leaves the rest empty.
-//
-// Stream and generation are a LOG's identity, and a wake stamped with a
-// position from one estate must never be comparable with a position from the
-// other. Inventing a value here — the family name as a stream, 1 as a
-// generation — is how that comparison silently becomes possible.
-func TestABucketDeliveryCarriesNoStreamOrGeneration(t *testing.T) {
-	t.Parallel()
-	docs := memory.NewFleet()
-	records, err := changefeed.DocumentSource(docs, coord.FamilyPages, "c").
-		Open(t.Context(), changefeed.Group(coord.FamilyPages))
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { _ = records.Stop() })
-	writeChange(t, docs, "u1")
-
-	msg, err := records.Next(t.Context())
-	if err != nil || msg == nil {
-		t.Fatalf("next: msg=%v err=%v", msg, err)
-	}
-	key := coord.DocumentKey("c", "item", "u1")
-	if msg.ID != key || msg.Key != key {
-		t.Errorf("id=%q key=%q, want both %q", msg.ID, msg.Key, key)
-	}
-	if msg.Stream != "" || msg.Gen != 0 {
-		t.Errorf("a bucket delivery claims stream %q generation %d", msg.Stream, msg.Gen)
-	}
-	if msg.Position == 0 {
-		t.Error("the bucket revision did not travel as the position")
-	}
-	if string(msg.Payload) != "{}" {
-		t.Errorf("payload = %q, want the value verbatim", msg.Payload)
-	}
-	if err := msg.Ack(); err != nil {
-		t.Errorf("ack: %v", err)
+	if got := docs.acks("u1"); got < 2 {
+		t.Errorf("the removal was acked %d time(s) beyond its change — a "+
+			"removal that is not acked comes back for ever", got-1)
 	}
 }
