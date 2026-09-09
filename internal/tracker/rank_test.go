@@ -369,3 +369,71 @@ func TestAnIllFormedKeyIsNotValid(t *testing.T) {
 		}
 	}
 }
+
+// A RE-SPREAD'S KEYS ARE SHORT, ORDERED AND INSIDE THEIR OWN INTEGER.
+//
+// # The failure this exists to catch
+//
+// The walk first minted its keys with KeysBetween, which subdivides by
+// repeated bisection — so half of them crowded against the upper bound and
+// inherited its length. Re-spreading a project whose keys were 69 characters
+// long produced keys that were 70: the walk that exists to SHORTEN keys
+// lengthened them, and the project came back for another walk immediately.
+func TestRespreadKeysAreShortOrderedAndBounded(t *testing.T) {
+	t.Parallel()
+	for _, n := range []int{1, 2, 63, 64, 1_000, 10_000} {
+		keys, err := tracker.RespreadKeys("a0", n)
+		if err != nil {
+			t.Fatalf("RespreadKeys(%d): %v", n, err)
+		}
+		if len(keys) != n {
+			t.Fatalf("RespreadKeys(%d) minted %d", n, len(keys))
+		}
+		for i, key := range keys {
+			if !key.Valid() {
+				t.Fatalf("%q is not a well-formed key", key)
+			}
+			if len(key) > tracker.RankRenormaliseAt {
+				t.Fatalf("re-spreading %d tasks minted a %d-character key, "+
+					"past the %d threshold the walk exists to bring them "+
+					"under — the walk would immediately need another",
+					n, len(key), tracker.RankRenormaliseAt)
+			}
+			if i > 0 && !(keys[i-1] < key) {
+				t.Fatalf("re-spreading %d tasks minted %q at %d and %q at %d, "+
+					"which do not ascend — two tasks would share a position "+
+					"and the board's order would be undefined between them",
+					n, keys[i-1], i-1, key, i)
+			}
+			// INSIDE THE RESERVE, which is what makes "one integer
+			// position below the minimum" enough room for the whole
+			// walk.
+			if !strings.HasPrefix(string(key), "a0") || key == "a0" {
+				t.Fatalf("%q is not strictly inside the integer it was minted "+
+					"in, so the walk can collide with whatever holds the "+
+					"positions around it", key)
+			}
+		}
+	}
+}
+
+// A RE-SPREAD'S KEY IS NEVER ONE A CREATE COULD HAVE MINTED.
+//
+// The two mint sets are disjoint by the SHAPE of the value, which is what
+// makes the proof survive a paused create, an out-of-order landing and a
+// numbering gap alike — none of which a bound computed from the counter did.
+func TestARespreadNeverMintsIntoTheCreateLattice(t *testing.T) {
+	t.Parallel()
+	keys, err := tracker.RespreadKeys("a0", 500)
+	if err != nil {
+		t.Fatalf("RespreadKeys: %v", err)
+	}
+	for _, key := range keys {
+		if key.FromCreate() {
+			t.Fatalf("the walk minted %q, which is a key only a create can "+
+				"have minted — the two sets are disjoint by the value's own "+
+				"shape, and a walk inside the lattice can collide with a "+
+				"create nobody can see", key)
+		}
+	}
+}
