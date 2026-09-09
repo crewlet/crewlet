@@ -248,7 +248,16 @@ jobs:
       # concurrency model changed from one cooperative event loop to real
       # parallelism, so every "atomic because asyncio" assumption the
       # Python code made is a potential data race in the port.
-      - run: go test ./... -race -count=1
+      #
+      # -timeout is a HANG DETECTOR rather than a budget, and it is stated
+      # because go's own default is 10 minutes PER PACKAGE — which
+      # internal/e2e does not fit in: it starts a real engine, a real broker
+      # and the real API per test and measures 776s under -race. Left at the
+      # default this job cannot pass on a runner this speed, and the failure
+      # reads as a hung test rather than as a budget nobody set. Thirty
+      # minutes is 2.3x the measured run and still twelve times inside this
+      # job's own limit. The Makefile's TEST_TIMEOUT carries the same value.
+      - run: go test ./... -race -count=1 -timeout 30m
 
   gates:
     name: end-to-end gates
@@ -273,7 +282,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: latest
-      - run: go test ./internal/e2e/... -race -count=1 -v
+      - run: go test ./internal/e2e/... -race -count=1 -v -timeout 30m
 
   # THERE IS NO SEPARATE "stores" JOB ANY MORE. One existed, running the store
   # contract suites twice over CREWLET_STORE_DRIVER=turso|sqlite, because
