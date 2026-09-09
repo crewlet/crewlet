@@ -93,9 +93,23 @@ func Hamming(a, b []uint64) int {
 // code occupies, which is what the table's own size arithmetic is written
 // against.
 //
-// MEASURED at the pin: 387 at 3072 and 195 at 1536 — the packed bits plus a
-// three-byte trailer the driver writes and nothing here interprets. It is
-// stated as a function rather than as two constants because the width is a
-// property of the company's model, and a size claim that only held at one
-// width would be re-derived wrongly at the other.
-func CodeBytes(dimensions int) int { return (dimensions+7)/8 + 3 }
+// # The alignment is measured, and the obvious formula is wrong
+//
+// The packed bits are followed by a trailer, and the whole value is padded to
+// an ODD length — two-byte alignment plus a one-byte type tag. So the overhead
+// is three bytes over an even byte-count and two over an odd one, which is not
+// something a reader would guess: at 3 072 and 1 536 dimensions the byte-count
+// is even and a flat `+3` is right, and at 100 dimensions it is one byte over.
+//
+// Measured at the pin across nineteen widths (TestTheEncodedWidthIsTwoByte
+// Aligned): 3 B at 1, 7 and 8 dimensions, 5 B at 9 through 24, 15 B at 100,
+// 195 B at 1 536 and 387 B at 3 072.
+//
+// It is a function rather than two constants because the width is a property
+// of the company's model, and a size claim that only held at one width would
+// be re-derived wrongly at the other.
+func CodeBytes(dimensions int) int {
+	packed := (dimensions + 7) / 8
+	// The trailer, then padding to an odd total.
+	return packed + 3 - packed%2
+}
