@@ -492,15 +492,23 @@ func textReply(text string) string {
 // through a lease, an engine booted, a detached sandbox run recovered from a
 // row. And the machine they run on is not this one — CI runs the WHOLE suite
 // under the race detector, so an e2e engine boots while a dozen other
-// packages compete for the same cores, and a wait sized for an idle laptop is
-// a wait that fails on the runner and passes on a re-run.
+// packages compete for the same cores.
 //
-// Measured: this suite's slowest wait — a second engine booting and taking
-// over a running sandbox job — completes in about 2 s idle and was seen to
-// miss a 30 s budget with several other test binaries running beside it. Three
-// times that budget is sized for the loaded case, and it costs nothing when
-// the condition is met: the loop polls every 20 ms and returns on the first
-// true. What it costs is only how long a GENUINE failure takes to report.
+// # What a long budget does NOT fix
+//
+// A wait that will never complete. When this was raised from thirty seconds
+// the reasoning was that a loaded machine missed the budget — and that was
+// wrong: the restart case was losing a RACE, because its stand-in coding job
+// slept for a fixed three seconds and a loaded second boot took longer, so
+// recovery found a run that had already finished and the seat was never
+// parked. The test then waited out whatever budget it had and failed at
+// thirty-six seconds, and at ninety-six, and would have at any number.
+//
+// That case now holds its job open until the test releases it. The budget
+// stays generous because these waits really do cover multi-second fleet
+// operations on a shared runner, and it costs nothing when the condition is
+// met — but a wait that times out here is a staging bug to find, not a number
+// to raise.
 const waitBudget = 90 * time.Second
 
 func waitFor(t *testing.T, what string, cond func() bool, diag ...func() string) {
