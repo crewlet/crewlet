@@ -473,6 +473,25 @@ type DomainStream struct {
 	// takes longer than the window appends the record twice.
 	Duplicates time.Duration
 
+	// MaxPerSubject turns the stream from a log into a KEYED TABLE by
+	// keeping only the newest message on each subject. Zero is a log; one
+	// is the compacted shape a derived, recomputable domain uses.
+	//
+	// It is the domain's because it is what the domain IS, and it is the
+	// one field here that changes what replay means: keeping one message
+	// per subject removes an INTERIOR sequence, so a loop that treats
+	// contiguity as an invariant stalls on the first ordinary write. The
+	// framework refuses the mismatch rather than inferring the loop.
+	MaxPerSubject int
+
+	// MaxAge bounds how long a message is kept, and it is legitimate on
+	// exactly one shape: a compacted stream whose rows are durable in SQL
+	// on every node anyway, so an expired message deletes nothing.
+	//
+	// ZERO ON A LOG, always. An age bound on a log deletes records a node
+	// has not applied, and there is no node whose word it takes.
+	MaxAge time.Duration
+
 	// Replicas is unused here and named to say so: the replication factor
 	// is Tier A's, identical for every stream on the node, and a domain
 	// choosing its own would be a domain choosing its own durability.
@@ -519,9 +538,11 @@ func (d DomainStream) spec() streamSpec {
 		allowDirect:  false,
 		mirrorDirect: false,
 
-		// Every record is kept until the trim moves the floor. An age
-		// bound here would delete state a node has not applied.
-		maxAge:        0,
-		maxPerSubject: 0,
+		// A log keeps every record until the trim moves the floor; a
+		// compacted stream keeps one per subject and may bound its own
+		// age, because its rows are durable in SQL on every node and an
+		// expired message therefore deletes nothing.
+		maxAge:        d.MaxAge,
+		maxPerSubject: d.MaxPerSubject,
 	}
 }
