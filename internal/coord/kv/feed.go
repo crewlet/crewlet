@@ -132,12 +132,8 @@ const (
 // suffixFor is a family's bucket suffix.
 func suffixFor(family coord.Family) (string, error) {
 	switch family {
-	case coord.FamilyWork:
-		return workSuffix, nil
 	case coord.FamilyPages:
 		return pagesSuffix, nil
-	case coord.FamilyKBVectors:
-		return kbVectorsSuffix, nil
 	}
 	return "", coord.ErrUnknownFamily(family)
 }

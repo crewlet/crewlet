@@ -248,6 +248,14 @@ type DB struct {
 	// no file to exclude anyone from. See lock.go.
 	lock *fileLock
 
+	// opened is the Options this handle was opened with, kept so
+	// [DB.ReplaceReplicated] can bring the peer back up IDENTICALLY. A
+	// second Options assembled at the reopen is a second place to decide
+	// the pool bounds, the pin count and the embedding width — and the
+	// one thing a node must not do after adopting a peer's database is
+	// come back up configured differently from how it went down.
+	opened Options
+
 	// pins bounds how many connections [DB.Writer] may hand out, and how
 	// many it has. DECLARED rather than discovered: a pin past the count
 	// the pool was sized for is refused NAMING the count, because the
@@ -311,6 +319,7 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 	// statements to hear the same answer.
 	replicated.caps = db.caps
 	db.replicated = replicated
+	db.opened = opts
 	return db, nil
 }
 

@@ -124,9 +124,16 @@ func TestFamiliesAreAClosedSet(t *testing.T) {
 			t.Errorf("%q is valid and should not be", f)
 		}
 	}
-	if len(coord.Families()) != 3 {
+	// ONE, and it is a count rather than a list because what the number
+	// protects is the INVENTORY: a family added here needs a bucket in
+	// coord/kv, a projection table set, a suffix in the feed's own switch
+	// and a row in the coordination doc, and every one of those fails
+	// silently when it is missing — the family simply never receives a
+	// change. The tracker and the embeddings left this set when they
+	// became state-log domains; the wiki is what is left.
+	if len(coord.Families()) != 1 {
 		t.Errorf("Families() has %d entries: a family added here needs a bucket, "+
-			"a projection table set and a row in the coordination doc",
-			len(coord.Families()))
+			"a projection table set, a suffix in the feed's switch and a row in "+
+			"the coordination doc", len(coord.Families()))
 	}
 }

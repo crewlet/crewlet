@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
@@ -17,8 +18,9 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/work"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // memorySandbox is a pending-run store with nothing in it: this sweep is
@@ -123,9 +125,15 @@ func everySeam(t *testing.T) queries.Sources {
 // fakeChannels' terms: this sweep is about which NAMES exist.
 type emptyWork struct{}
 
-func (emptyWork) List(context.Context, work.Filter) ([]work.Summary, error) { return nil, nil }
-func (emptyWork) Get(context.Context, string) (work.Detail, error)          { return work.Detail{}, nil }
-func (emptyWork) Counters(context.Context) (map[string]int, error)          { return nil, nil }
+func (emptyWork) Tasks(context.Context, tracker.Query, time.Time) (tracker.Answer, error) {
+	return tracker.Answer{}, nil
+}
+
+func (emptyWork) Task(context.Context, string, tracker.DetailWants,
+	statelog.ReadLevel) (tracker.TaskDetail, error) {
+
+	return tracker.TaskDetail{}, nil
+}
 
 type emptyPages struct{}
 

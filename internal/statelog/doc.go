@@ -21,8 +21,8 @@
 // fail to write. That is [internal/coord]'s three-valued discipline one layer
 // down: "held" is a PubAck, "definitively not held" is a wrong-last-sequence
 // refusal, and "the store could not be reached" is no answer at all. Reading
-// local rows to decide is safe here — the inversion [internal/work]'s key mint
-// forbids in its own words — for exactly one reason: the BROKER checks the
+// local rows to decide is safe here — the inversion a projection-backed key
+// mint forbids in its own words — for exactly one reason: the BROKER checks the
 // expectation, so a stale snapshot is a claim that gets refused rather than a
 // decision that gets committed. That reason holds only while the expectation
 // travels with the decision it was read beside.

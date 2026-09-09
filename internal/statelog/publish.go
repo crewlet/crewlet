@@ -13,9 +13,9 @@ import (
 
 // casRounds bounds a read-decide-write retry.
 //
-// SIXTEEN, the shape [internal/sandbox]'s run store and [internal/work]'s
-// writes both use and for the same reason: each round is a lost race against
-// another writer, and sixteen consecutive losses on one object means
+// SIXTEEN, the shape [internal/sandbox]'s run store uses and for the same
+// reason: each round is a lost race against another writer, and sixteen
+// consecutive losses on one object means
 // something is rewriting it in a loop rather than that this caller is
 // unlucky. Reporting "it kept changing" then is the honest answer; retrying
 // for ever would hold a request open against a write storm.

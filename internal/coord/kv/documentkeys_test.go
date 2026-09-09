@@ -46,12 +46,12 @@ func TestAKeyListingTransfersNoValues(t *testing.T) {
 	}
 	for i := range docs {
 		key := coord.DocumentKey("i", string(rune('a'+i)))
-		if _, err := f.CreateDocument(ctx, coord.FamilyWork, key, big); err != nil {
+		if _, err := f.CreateDocument(ctx, coord.FamilyPages, key, big); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	}
 
-	keys, err := f.DocumentKeys(ctx, coord.FamilyWork, "i")
+	keys, err := f.DocumentKeys(ctx, coord.FamilyPages, "i")
 	if err != nil {
 		t.Fatalf("DocumentKeys: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestAKeyListingTransfersNoValues(t *testing.T) {
 	// listing does not READ them, and the observable for that is the
 	// per-call cost: this returns in the time a metadata pass takes
 	// against a bucket holding 320 KiB of values.
-	records, err := f.Documents(ctx, coord.FamilyWork, "i")
+	records, err := f.Documents(ctx, coord.FamilyPages, "i")
 	if err != nil {
 		t.Fatalf("Documents: %v", err)
 	}

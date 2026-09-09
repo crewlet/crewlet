@@ -96,11 +96,30 @@ func (l *DomainLog) LastSeq(ctx context.Context, subject string) (uint64, bool, 
 // zero on a busy company because the subject a node happened to ask about is
 // quiet.
 func (l *DomainLog) End(ctx context.Context) (uint64, error) {
+	_, last, err := l.Bounds(ctx)
+	return last, err
+}
+
+// Bounds is BOTH ends of the log: the first sequence still held and the last
+// one written.
+//
+// # Why the first end is not a detail
+//
+// A consumer whose position falls below the stream's first sequence is CLAMPED
+// UPWARD by the server with no error at all, and then reports itself perfectly
+// caught up — over a hole. The only thing that can notice is a comparison
+// against this number, so a readiness check that read only the end would call
+// such a node established for ever.
+//
+// ONE ROUND TRIP for both, because they are one answer: read separately, a
+// caller can pair a first sequence from before a trim with a last sequence
+// from after it and compute a window neither describes.
+func (l *DomainLog) Bounds(ctx context.Context) (first, last uint64, err error) {
 	info, err := l.stream.Info(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("jetstream: read %q's end: %w", l.name, err)
+		return 0, 0, fmt.Errorf("jetstream: read %q's bounds: %w", l.name, err)
 	}
-	return info.State.LastSeq, nil
+	return info.State.FirstSeq, info.State.LastSeq, nil
 }
 
 // At reads one record back by sequence.

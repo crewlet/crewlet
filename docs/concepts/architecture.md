@@ -487,20 +487,33 @@ reviewer. A turn holds the company it started under until it ends.
 
 ## 5. Where state lives
 
-Three estates, and which one a fact belongs to is decided by a single
-question: **who has to agree on it?**
+Four estates, and which one a fact belongs to is decided by a single
+question: **who has to agree on it?** — with the fourth answering a second
+question the first three cannot: *and does everybody have to reach the same
+answer by the same route?*
 
 ```mermaid
 flowchart LR
     Q{"Who has to agree<br/>on this fact?"}
-    LOCAL["<b>This node alone</b> — the store<br/><i>one file, one process, exclusively owned</i>"]
-    FLEET["<b>The whole company</b> — coordination KV<br/><i>sixteen buckets on the stream's own connection</i>"]
-    STREAM["<b>In flight, or keyed</b> — the event stream<br/><i>6 streams</i>"]
+    LOCAL["<b>This node alone</b> — the node store<br/><i>one file, one process, exclusively owned</i>"]
+    DERIVED["<b>Every node, identically</b> — the replicated store<br/><i>a second file, written only by a state log's applier</i>"]
+    FLEET["<b>The whole company</b> — coordination KV<br/><i>fourteen buckets on the stream's own connection</i>"]
+    STREAM["<b>In flight, or keyed</b> — the streams<br/><i>6 message streams + one ordered log per domain</i>"]
 
     Q -->|"nobody — it is this node's<br/>own record of what it did"| LOCAL
+    Q -->|"everybody, and each derives it<br/>from the same ordered log"| DERIVED
     Q -->|"every node, or the answer<br/>is wrong on all of them"| FLEET
     Q -->|"it is a message, or a<br/>row that has to travel"| STREAM
 ```
+
+**Why the store is two files and not one.** A snapshot is a copy of ONE
+estate: a node too far behind to replay fetches a peer's replicated file and
+installs it wholesale, and that file must not carry the donor's audit log, its
+learning rows or the bootstrap half of its secret store. Taken from a single
+file the artefact would be a copy of everything followed by a delete — and
+with no in-place `VACUUM`, the deleted pages ride along in the artefact, the
+transfer, the checksum and the integrity check anyway. No transaction spans
+the two and no read joins across them.
 
 What each of the three holds, in full:
 
@@ -513,9 +526,23 @@ What each of the three holds, in full:
 | **`synthesized_skills`** · `synthesized_skill_versions` · `counterparty_profiles` · `agent_onboarding_markers` | The rest of the learning subsystem — skill induction and its versions, counterparty profiles, first-turn onboarding markers |
 | **`conversation_sessions`** | What this seat already said in that thread |
 | `company_config` · `scheduled_runs` · `chat_thread_follows` · `secret_values` | Revisions, cron bookkeeping, thread follows, and the secret store's bootstrap half |
-| `work_items` · `work_comments` · `work_history` · `pages` · `page_revisions` · … | **The projection — a REBUILDABLE COPY, never authoritative.** The record of truth is the coordination buckets below; these tables exist because a board asks for every open item in a project, filtered and sorted, and a listing over a KV bucket is O(keys) message deliveries. Truncating them and re-running the boot reconcile is a supported repair, and a write that coordination did not see is one the next reconcile silently erases |
-| `kb_docs` · `kb_postings` · `kb_vectors` | The knowledge search index over those rows, built asynchronously behind them and droppable wholesale when the analyzer or the embedding width changes |
+| `pages` · `page_revisions` · … | **The wiki's projection — a REBUILDABLE COPY, never authoritative.** The record of truth is the coordination bucket below; these tables exist because a listing asks for every page in a container, filtered and sorted, and a listing over a KV bucket is O(keys) message deliveries. Truncating them and re-running the boot reconcile is a supported repair, and a write that coordination did not see is one the next reconcile silently erases |
+| `kb_docs` · `kb_postings` | The **lexical** half of the knowledge search index over those rows, built asynchronously behind them and droppable wholesale when the analyzer changes. The semantic half is not here — an embedding costs a provider call, so it is derived once by the fleet and lives in the estate below |
 | `projection_keys` · `projection_cursor` | How far each family has been applied here, and which keys — the two halves of the boot reconcile |
+| `statelog_adoption` | This node's own record of any peer snapshot it has adopted, which is what tells an operation minted before the join from one this node's ledger can answer for |
+
+**Every node, identically — the replicated store.**
+
+One file per node, written **only** by a state log's applier: records arrive
+in one order from the log, every node applies the same ones, and the rows plus
+this node's position on the log commit in a single transaction. There is no
+leader and no node whose copy is the real one.
+
+| Tables | What they hold |
+|---|---|
+| **`tracker_tasks`** · `tracker_comments` · `tracker_history` · … | The company's work — the tracker's whole state, derived from `CREWLET_TRACKER_LOG` |
+| **`kb_vectors`** · `kb_vectors_bin` | Page and task embeddings and their 1-bit codes, derived from `CREWLET_TRACKER_VECTORS`. The fleet pays the provider bill **once** and every node holds the answer, which is precisely why these are not in the node's own file |
+| `statelog_cursor` · each domain's operation ledger and deferred records | Where this node is on each log, which operations it has already applied, and any record a newer build wrote that this one cannot decode |
 
 **The whole company — coordination KV.**
 
@@ -528,8 +555,8 @@ What each of the three holds, in full:
 | **`crewlet_ledger`** · **`crewlet_claims`** · `crewlet_fires` | Turn completions, webhook delivery claims, scheduled-fire claims |
 | **`crewlet_budgets`** · `crewlet_rate` · `crewlet_cooldowns` | The token counter, the notification valve, benched credentials |
 | **`crewlet_secrets`** · `crewlet_channels` · `crewlet_sandbox_runs` | The company's sealed credentials, open A2A channels, detached coding runs |
-| **`crewlet_work`** · **`crewlet_pages`** | **The native tracker and knowledge base — authoritative, with no other copy.** Ageless: an item is a fact for the life of the deployment, and removing one is a decision a sweep takes rather than a horizon that reaps it while a person is still reading it |
-| `crewlet_kb_vectors` | Page and item embeddings, keyed on the source's version. **Derived** — dropped and rebuilt wholesale when the embedding provider or its width changes, which is a thing you must never do to the pages themselves |
+| **`crewlet_pages`** | **The knowledge base — authoritative, with no other copy.** Ageless: a page is a fact for the life of the deployment, and removing one is a decision a sweep takes rather than a horizon that reaps it while a person is still reading it |
+| `crewlet_statelog_positions` | Two key classes: each node's position per domain, and the trim holds a backup or a join takes. The trim reads a minimum across the first and refuses to pass the second. **No age at all**, and this is the one where an age would be worst — an expired position reads as a node that has applied *nothing*, which either pins the trim for ever or, read the other way, deletes records that node still needs |
 
 **In flight, or keyed — the event stream.**
 
@@ -541,6 +568,8 @@ What each of the three holds, in full:
 | **`CREWLET_CONFIG`** | `crewlet.config.>` |
 | **`CREWLET_MEMORY`** | `crewlet.memory.>` — *one message per subject: a keyed table, not a log* |
 | **`CREWLET_DLQ`** | `dlq.>` — *deliberately outside* `crewlet.*` |
+| **`CREWLET_TRACKER_LOG`** | `crewlet.tracker.log.>` — **the write-ahead log the replicated estate's tracker tables are derived from.** One subject per object, which is what makes the subject the unit two writers contend on; retention is bounded by durability rather than by age |
+| **`CREWLET_TRACKER_VECTORS`** | `crewlet.tracker.vectors.>` — the same shape for embeddings, **compacted**: one message retained per subject, because the current embedding of a source is the only one anybody wants and a history of superseded vectors is a bill nobody asked for |
 
 **Mailboxes and event history are different kinds of stream.** The two
 mailbox streams use *interest* retention — a message lives until its durable

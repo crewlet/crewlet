@@ -5,7 +5,7 @@
 //
 // A company running Crewlet needs somewhere to write things down, and until
 // now that somewhere had to be Confluence. This is the first-party
-// alternative, on exactly the terms [internal/work] is the tracker's: the
+// alternative, on exactly the terms [internal/tracker] is the tracker's: the
 // record here is the only copy, held in [coord.FamilyPages], projected into
 // every node for reading, and refused by the config beside an
 // `integrations.confluence` block — pages in two places with nothing keeping

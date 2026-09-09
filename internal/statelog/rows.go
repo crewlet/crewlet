@@ -25,10 +25,10 @@ import (
 //
 // # Why reading here is safe at all
 //
-// [internal/work]'s key mint forbids exactly this inversion in its own words —
-// "It NEVER reads the projection. A stale local number would mint a key that
-// already exists" — and that rule was right while the local number WAS the
-// decision. Here the BROKER checks the expectation, so a stale snapshot is a
+// A projection-backed key mint forbids exactly this inversion, and in its own
+// words: it never reads the projection, because a stale local number would
+// mint a key that already exists. That rule was right while the local number
+// WAS the decision. Here the BROKER checks the expectation, so a stale snapshot is a
 // claim that gets refused rather than a decision that gets committed. The
 // reason holds only while the expectation travels with the decision it was
 // read beside, which is what Snapshot's single transaction enforces.

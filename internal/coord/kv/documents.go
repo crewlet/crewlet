@@ -23,7 +23,6 @@ import (
 const (
 	workSuffix      = "_work"
 	pagesSuffix     = "_pages"
-	kbVectorsSuffix = "_kb_vectors"
 	positionsSuffix = "_statelog_positions"
 )
 
@@ -32,12 +31,8 @@ const (
 // call, and the caller could not tell a missing family from a broken store.
 func (f *FleetStore) bucketFor(family coord.Family) (jetstream.KeyValue, error) {
 	switch family {
-	case coord.FamilyWork:
-		return f.work, nil
 	case coord.FamilyPages:
 		return f.pages, nil
-	case coord.FamilyKBVectors:
-		return f.kbVectors, nil
 	}
 	return nil, coord.ErrUnknownFamily(family)
 }

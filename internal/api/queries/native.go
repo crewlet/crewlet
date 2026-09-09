@@ -5,36 +5,52 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/projection"
-	"github.com/crewlet/crewlet/internal/work"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // The native tracker and knowledge base, read for a screen.
 //
-// # These read the PROJECTION, and that is the whole reason they are cheap
+// # These read THIS NODE'S OWN COPY, and that is the whole reason they are cheap
 //
 // Every other way to answer "what is on the board" is a listing over the
-// fleet's coordination record — O(keys) message deliveries, on a request
-// path, for a page a dashboard refreshes. The projection is exactly the copy
-// that makes this a SQL query instead, and it is the same copy a seat's own
-// tools read, so an operator and an agent looking at one item see one item.
+// fleet's own record — O(keys) message deliveries, on a request path, for a
+// page a dashboard refreshes. This node's copy is what makes it a SQL query
+// instead, and it is the same copy a seat's own tools read, so an operator and
+// an agent looking at one task see one task.
 //
-// # A projection that has not caught up RAISES rather than answering empty
+// The two halves reach that copy differently, and the difference is visible in
+// the answers rather than hidden here: the tracker's rows are derived by an
+// applier from an ordered log, so every answer carries the level it was served
+// at and what it could not account for; the wiki's are maintained by a
+// projector following a bucket's change feed, which can only say hydrated or
+// not.
 //
-// [work.Reader] and [pages.Reader] refuse with [projection.ErrNotHydrated],
-// and this surface passes that through as unavailable rather than flattening
-// it to an empty list. "This company has no work" is an answer a person acts
-// on — they file the duplicate, they conclude the migration failed — and a
-// node that has not finished its boot reconcile must never be able to say it.
+// # A COPY THAT HAS NOT CAUGHT UP RAISES rather than answering empty
+//
+// The wiki's reader refuses with [projection.ErrNotHydrated] and this surface
+// passes that through as unavailable rather than flattening it to an empty
+// list; the tracker says the same thing in its own vocabulary, through the
+// coverage every answer carries. "This company has no work" is an answer a
+// person acts on — they file the duplicate, they conclude the migration failed
+// — and a node that has not caught up must never be able to say it.
 
 // WorkReader is the tracker read side this surface calls. Declared here, by
 // the consumer, so the package depends on the shape rather than on the store.
+//
+// THE QUERY GRAMMAR IS THE PARAMETERS. This surface hands the request's own
+// parameters straight to the tracker's parser rather than translating them
+// into a second filter type — one grammar serves the board, the socket, the
+// REST route and a seat's own tool, and a second parser here would be the one
+// place a filter meant something slightly different.
 type WorkReader interface {
-	List(ctx context.Context, f work.Filter) ([]work.Summary, error)
-	Get(ctx context.Context, idOrKey string) (work.Detail, error)
-	Counters(ctx context.Context) (map[string]int, error)
+	Tasks(ctx context.Context, q tracker.Query, now time.Time) (tracker.Answer, error)
+	Task(ctx context.Context, idOrKey string, want tracker.DetailWants,
+		level statelog.ReadLevel) (tracker.TaskDetail, error)
 }
 
 // PageReader is the knowledge read side this surface calls.
@@ -59,52 +75,50 @@ func notHydrated(err error) error {
 // ---- work -------------------------------------------------------------- //
 
 func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
-	f := work.Filter{
-		Project:  strings.ToUpper(strings.TrimSpace(p.String("project"))),
-		Assignee: strings.TrimSpace(p.String("assignee")),
-		Reporter: strings.TrimSpace(p.String("reporter")),
-		Label:    strings.TrimSpace(p.String("label")),
-		Parent:   strings.TrimSpace(p.String("parent")),
-		Watcher:  strings.TrimSpace(p.String("watcher")),
-		Text:     strings.TrimSpace(p.String("q")),
-		Limit:    Clamp(p.Int("limit", 0), work.DefaultLimit, work.MaxLimit),
-		Offset:   p.Int("offset", 0),
+	now := time.Now().UTC()
+	q, err := tracker.ParseQuery(p, now, time.UTC)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrBadParams, err)
 	}
-	for _, name := range splitList(p.String("status")) {
-		status := work.Status(name)
-		if !status.Valid() {
-			return nil, badParams("status", name, names(work.Statuses()))
-		}
-		f.Status = append(f.Status, status)
-	}
-	// PRESENCE, not truth: `open` absent asks for everything, and
-	// `open=false` asks for the closed items. Reading an absent filter as
-	// false would make the default board show only finished work.
-	if p.Has("open") {
-		open := p.Bool("open", true)
-		f.Open = &open
-	}
-
-	items, err := s.Work.List(ctx, f)
+	answer, err := s.Work.Tasks(ctx, q, now)
 	if err != nil {
 		return nil, notHydrated(err)
 	}
-	// A SEPARATE COUNT, not len(items): the listing is a page, and a board
-	// header that reported the page size as the project's size would say
-	// "50 items" for every project with more than fifty.
-	counters, err := s.Work.Counters(ctx)
-	if err != nil {
-		return nil, notHydrated(err)
+	out := map[string]any{
+		"items": answer.Rows,
+		// A SEPARATE COUNT, not len(items): the listing is a page, and a
+		// board header reporting the page size as the project's size
+		// would say "50 items" for every project with more than fifty.
+		// It is a HINT and says so — an exact total over an unbounded set
+		// is the one query in this grammar that turns a poll into a scan.
+		"total_hint": answer.TotalHint,
+		"read_level": answer.Level,
+		"log_seq":    answer.LogSeq,
+		// APPLIED_THROUGH BESIDE LOG_SEQ, never instead of it: a node
+		// applying nothing while its position advances looks identical
+		// to a caught-up one from either number alone, and a screen
+		// showing only the position renders a deferral as lag.
+		"applied_through": answer.AppliedThrough,
+		"complete":        answer.Complete,
 	}
-	return map[string]any{
-		"items":  items,
-		"limit":  f.Limit,
-		"offset": f.Offset,
-		// The last number minted per project — the board header's "ENG-42
-		// was the last key", which is a different fact from how many are
-		// open and is the one nothing else can supply.
-		"minted": counters,
-	}, nil
+	if answer.LogLag != nil {
+		// ABSENT RATHER THAN ZERO when the broker could not be reached.
+		// A read asks how far behind an answer may be, and an
+		// unreachable broker answering "not at all" is the confident
+		// wrong answer this whole shape exists to avoid.
+		out["log_lag"] = *answer.LogLag
+	}
+	if answer.NextCursor != "" {
+		out["next_cursor"] = answer.NextCursor
+	}
+	if answer.Incomplete != nil {
+		// WHAT THE ANSWER COULD NOT ACCOUNT FOR, rendered rather than
+		// dropped: "this company has no work" is a thing a person acts
+		// on, and a node holding records it cannot read must never be
+		// able to say it without saying so.
+		out["incomplete"] = answer.Incomplete
+	}
+	return out, nil
 }
 
 func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
@@ -112,9 +126,11 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 	if ref == "" {
 		return nil, badParams("id", "", nil)
 	}
-	detail, err := s.Work.Get(ctx, ref)
+	detail, err := s.Work.Task(ctx, ref, tracker.DetailWants{
+		Comments: true, History: true, Links: true,
+	}, statelog.ReadStale)
 	switch {
-	case errors.Is(err, work.ErrNotFound):
+	case errors.Is(err, tracker.ErrNoTask):
 		return nil, ErrNotFound
 	case err != nil:
 		return nil, notHydrated(err)

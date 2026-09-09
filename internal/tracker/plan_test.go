@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -50,7 +49,7 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	used := map[string]bool{}
 	for name, params := range registeredQueries() {
 		t.Run(name, func(t *testing.T) {
-			q, err := ParseQuery(queries.FromMap(params), planNow, time.UTC)
+			q, err := ParseQuery(MapParams(params), planNow, time.UTC)
 			if err != nil {
 				t.Fatalf("ParseQuery: %v", err)
 			}

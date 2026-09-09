@@ -130,3 +130,82 @@ func checkpointAndClose(ctx context.Context, path string) error {
 	}
 	return nil
 }
+
+// CloseReplicated and ReopenReplicated bracket a join's install, keeping the
+// handle every caller holds valid across it.
+//
+// # Why a bracket and not a reconstruction
+//
+// A join arrives at a node that is already assembled: the engine holds one
+// *DB and hands it to the applier, the write authority, the read seam, the
+// projector and the backup. Returning a NEW handle would mean re-threading
+// every one of them, and the failure of missing one is silent — a subsystem
+// still reading the file that was replaced, which opens, answers, and answers
+// from the state this node adopted its way out of.
+//
+// So the outer handle is stable and its PEER is what changes. A caller that
+// took [DB.Replicated] before the swap holds the old one, which is why this is
+// only ever called at boot, before an applier, a projector or a seat exists.
+//
+// # Why the close is separate from the rename
+//
+// [AdoptFile] takes no handle and both files must already be closed when it
+// runs: this process's claim is on the PATH rather than the inode, so an open
+// handle would go on writing into a file that is no longer at that name. The
+// join owns the rename between these two calls, and it is the join that knows
+// whether it reached it.
+func (d *DB) CloseReplicated() error {
+	switch {
+	case d == nil || d.sql == nil:
+		return fmt.Errorf("store: no handle to close a replicated estate on")
+	case d.estate != EstateNode:
+		return fmt.Errorf("store: a %s handle has no replicated peer — the "+
+			"bracket is the node handle's, because that is the one every "+
+			"caller reaches the replicated estate through", d.estate)
+	case d.replicated == nil:
+		// ALREADY CLOSED IS NOT AN ERROR: a join that failed between
+		// the close and the rename unwinds by reopening, and an unwind
+		// that had to know how far it got would be a second state
+		// machine beside the phase the adoption row already records.
+		return nil
+	}
+	err := d.replicated.Close()
+	d.replicated = nil
+	if err != nil {
+		return fmt.Errorf("store: close the replicated estate: %w", err)
+	}
+	return nil
+}
+
+// ReopenReplicated brings the peer back up at the same path, with the same
+// options, running the migrator: an artefact from a peer on an OLDER build is
+// one this node brings forward, and one from a newer build was refused before
+// the transfer started.
+//
+// A failure here leaves the node with NO replicated estate rather than with
+// the old one, and says so: after the rename the old database is gone, and a
+// handle that quietly went on answering from a file the caller cannot name is
+// the failure the whole sequence is against.
+func (d *DB) ReopenReplicated(ctx context.Context) error {
+	switch {
+	case d == nil || d.sql == nil:
+		return fmt.Errorf("store: no handle to reopen a replicated estate on")
+	case d.estate != EstateNode:
+		return fmt.Errorf("store: a %s handle has no replicated peer to reopen",
+			d.estate)
+	case d.replicated != nil:
+		return nil
+	}
+	path := ReplicatedPath(d.path, d.opened.ReplicatedPath)
+	replicated, err := openEstate(ctx, EstateReplicated, path, d.opened)
+	if err != nil {
+		return fmt.Errorf("store: reopen the replicated estate at %s — this "+
+			"node has none open and cannot serve without one: %w", path, err)
+	}
+	// THE PROBE IS NOT REPEATED, for [Open]'s reason: it answers a
+	// question about the driver compiled into this process, and a file
+	// arriving from a peer did not change which driver that is.
+	replicated.caps = d.caps
+	d.replicated = replicated
+	return nil
+}

@@ -3,7 +3,6 @@ package tracker
 import (
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
@@ -307,7 +306,7 @@ func promptContext(b *strings.Builder, meta map[string]string) {
 		return
 	}
 	b.WriteString("\n## Get full context" +
-		"\nRead **" + key + "** with `" + builtin.GetWorkItemTool + "` — its " +
+		"\nRead **" + key + "** with `" + GetWorkItemTool + "` — its " +
 		"type, status, priority, description, links and the whole comment " +
 		"thread — before deciding on next steps. Do not act on partial " +
 		"information.\n")
@@ -337,13 +336,13 @@ func promptWhyYou(b *strings.Builder, project string) {
 		" away silently, it goes nowhere." +
 		"\n\nDecide one of:" +
 		"\n- **Delegate** — set the assignee to the right teammate with `" +
-		builtin.UpdateWorkItemTool + "`. Future changes route to them rather" +
+		UpdateWorkItemTool + "`. Future changes route to them rather" +
 		" than back to you." +
 		"\n- **Take it yourself** — only if the work clearly falls to you." +
 		" Assign it to yourself so the routing reflects reality from now on." +
 		"\n- **Escalate** — if it is out of scope or you cannot identify the" +
 		" right owner, hand it to your own manager (named in your identity" +
-		" prompt): comment mentioning them with `" + builtin.CommentOnWorkTool +
+		" prompt): comment mentioning them with `" + CommentOnWorkTool +
 		"`, or reassign it to them. Either keeps the trail on the task.\n")
 }
 
@@ -375,8 +374,8 @@ func promptHandling(b *strings.Builder, meta map[string]string, reason Reason) {
 		" first. If your prior comment, or a teammate's, already covers the" +
 		" question, do not restate it." +
 		"\n3. **If you are acting**, move the task to an active status with `" +
-		builtin.UpdateWorkItemTool + "`, make sure the assignee names you, and" +
-		" post ONE substantive summary with `" + builtin.CommentOnWorkTool +
+		UpdateWorkItemTool + "`, make sure the assignee names you, and" +
+		" post ONE substantive summary with `" + CommentOnWorkTool +
 		"` when you are done." +
 		` Avoid running commentary ("starting work", "still on it") — that is` +
 		" noise on a surface other people are reading." +

@@ -2,7 +2,7 @@
 --
 -- Everything here is written by exactly one thing — the vector domain's
 -- applier, from records committed on CREWLET_TRACKER_VECTORS — and by nothing
--- else, which is the rule 0023 states for the tracker and the reason both live
+-- else, which is the rule 0002 states for the tracker and the reason both live
 -- in this estate rather than beside the lexical index.
 --
 -- # Why an embedding is replicated and the lexical index is not
@@ -14,7 +14,7 @@
 -- embedding, which costs a provider call per source and cannot be recomputed
 -- by a node on its own. One fleet-singleton duty embeds each source once, the
 -- record carries the vector, and every node applies it: the company pays the
--- bill once and holds the answer N times. `0022_the_vectors_leave.sql` in the
+-- bill once and holds the answer N times. `0023_the_vectors_leave.sql` in the
 -- node estate is where the unwritten table this replaces is dropped.
 --
 -- # Why this domain is COMPACTED, and what that costs
@@ -25,7 +25,7 @@
 -- from a log into a keyed table — and makes an ordinary write remove an
 -- interior sequence, which is why the domain declares ReplayCompacted and why
 -- a gap here is a coverage number rather than a fault. Three consequences are
--- durable and are the reason this file differs from 0023:
+-- durable and are the reason this file differs from 0002:
 --
 --   * NO OPERATION LEDGER. There is no `vectors_ops` table, because the apply
 --     is a total function under a monotone version guard and the duty that
@@ -136,7 +136,7 @@ CREATE INDEX kb_vectors_bin_scope_idx ON kb_vectors_bin (model, dim, source, con
 
 -- vectors_log_deferred — a record this build cannot decode, byte for byte.
 --
--- The shape 0022's header documents, with ONE addition a compacted domain
+-- the shape 0001's header documents, with ONE addition a compacted domain
 -- needs and a strict one does not: an index on `subject`. A compacted domain's
 -- retention keys on the subject rather than the position — the stream itself
 -- keeps one message per subject, so a positional retention would keep records
@@ -157,7 +157,7 @@ CREATE INDEX vectors_log_deferred_wire_idx ON vectors_log_deferred (subject);
 -- vectors_log_deferred_scope — one row per scope path of a deferred record,
 -- written in the SAME transaction as its parent.
 --
--- A plain rowid table and no foreign key, for the two reasons 0023 gives for
+-- A plain rowid table and no foreign key, for the two reasons 0002 gives for
 -- the tracker's: `WITHOUT ROWID` is refused by the pin, and a cascade is a
 -- delete nobody committed — the supersede removes these rows through the
 -- parent's own position, child first, in the statement pair the framework

@@ -242,12 +242,30 @@ func (s Stream) LogMaxBytes(free int64) (int64, bool) {
 	return DerivedLogMaxBytes(free), true
 }
 
-// VectorsMaxBytes is the vector changelog's ceiling with the default applied.
-func (s Stream) VectorsMaxBytes() int64 {
+// VectorsMaxBytes is the vector changelog's ceiling, and whether it was
+// derived.
+//
+// # Why an UNSET value is capped by the disk and a SET one is not
+//
+// The default is sized for the PEAK rather than the steady state, and the two
+// differ by 93x: the stream keeps one message per source and bounds their age,
+// so a week's minting is small — but changing the embedding model rewrites
+// every source in a few hours, and for the following week every source's
+// current message is inside the window. Sizing the default from the steady
+// state would refuse the one operation it exists to survive.
+//
+// That default is a number nobody chose for THIS disk, though, and a broker
+// refuses a reservation it cannot back — so an unset value is capped by the
+// same share of free space the mutation log derives from, and the node boots.
+// An operator who WROTE a number gets it: they named a ceiling for a disk they
+// can see, and silently lowering it would be the engine deciding a limit an
+// emergency grant had just raised.
+func (s Stream) VectorsMaxBytes(free int64) (int64, bool) {
 	if s.TrackerVectorsMaxBytes > 0 {
-		return s.TrackerVectorsMaxBytes
+		return s.TrackerVectorsMaxBytes, false
 	}
-	return DefaultTrackerVectorsMaxBytes
+	capped := min(DefaultTrackerVectorsMaxBytes, DerivedLogMaxBytes(free))
+	return max(capped, TrackerVectorsMaxBytesFloor), capped != DefaultTrackerVectorsMaxBytes
 }
 
 // SnapshotDirFor is where a node keeps its snapshots, with the default

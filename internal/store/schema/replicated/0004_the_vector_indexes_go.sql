@@ -1,7 +1,7 @@
 -- Two of the vector domain's three indexes are DELETED, because measurement
 -- says each one makes the query it was written for slower.
 --
--- 0024 created them a week ago and they were never right. They are removed by
+-- 0003 created them a week ago and they were never right. They are removed by
 -- a new migration rather than by editing that file, because schema_migrations
 -- keys on the FILENAME: a change there silently never runs on a database that
 -- already applied it, and every one of those keeps the old shape while this
@@ -60,6 +60,6 @@ DROP INDEX kb_vectors_bin_scope_idx;
 -- test fixture: `TestEveryIndexServesARegisteredQuery` asserts that every
 -- index the schema declares appears in some registered plan, and an assertion
 -- over an empty set passes for the wrong reason. `kb_vectors_model_idx`
--- survives 0024 and is what that half of the check actually reads — a covering
+-- survives 0003 and is what that half of the check actually reads — a covering
 -- index whose only reader is the `GROUP BY model, dim` an operator runs to see
 -- a refill in progress.

@@ -170,7 +170,7 @@ func TestTheDutyClearsAnAbandonedMerge(t *testing.T) {
 	// THE MARKER WITHOUT THE REST, which is what a holder that died
 	// between the first append and the last leaves behind.
 	merging := true
-	if _, err := r.writer.UpdateTask(t.Context(), "op-mark", "t-1", "ENG",
+	if _, err := r.writer.UpdateTask(t.Context(), "op-mark", "t-1", "ENG", tracker.NoIfMatch,
 		tracker.TaskPatch{Merging: &merging}, nil); err != nil {
 		t.Fatalf("UpdateTask: %v", err)
 	}

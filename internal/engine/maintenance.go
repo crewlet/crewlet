@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
-	"github.com/crewlet/crewlet/internal/work"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // maintenanceDutyName is the fleet singleton the retention sweep claims.
@@ -70,10 +70,18 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 		// node's list runs per tick, and a node with no backend
 		// contributes nothing rather than an empty sweep.
 		if e.native != nil {
-			if e.native.work != nil {
-				jobs = append(jobs, maintenance.TrackerJobs(
-					work.NewSweeper(fleet, nil),
-					work.ChangeRetention, work.OrphanGrace)...)
+			if e.native.writer != nil {
+				// THE TRACKER'S OWN JOBS, and they are a different
+				// kind of thing from a sweep: its records are a log
+				// and nothing deletes them here. What these do is
+				// finish work a crash left half-done — a re-spread
+				// walk, an abandoned merge — and tell the tasks a
+				// close unblocked. Every one is GATED, so a tick
+				// with nothing to do costs one indexed read.
+				jobs = append(jobs, tracker.Jobs(tracker.DutyDeps{
+					DB: e.backends.Store, Writer: e.native.writer,
+					NodeID: e.native.nodeID,
+				})...)
 			}
 			if e.native.pages != nil {
 				jobs = append(jobs, maintenance.KnowledgeJobs(

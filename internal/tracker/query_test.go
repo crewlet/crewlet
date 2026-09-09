@@ -5,14 +5,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 func parse(t *testing.T, kv map[string]any) (tracker.Query, error) {
 	t.Helper()
-	return tracker.ParseQuery(queries.FromMap(kv), wednesday, berlin)
+	return tracker.ParseQuery(tracker.MapParams(kv), wednesday, berlin)
 }
 
 func mustParse(t *testing.T, kv map[string]any) tracker.Query {
@@ -39,7 +38,12 @@ func TestAnAbsentContainerIsNotTheWorkspace(t *testing.T) {
 	if got := mustParse(t, map[string]any{"container": "workspace"}); !got.Scope.Workspace {
 		t.Error("an explicit workspace did not parse as one")
 	}
-	for _, form := range []string{"project:ENG", "ENG"} {
+	// AND THE KEY IS UPPER-CASED, both forms. The scope is an EXACT
+	// compare against `project_key`, which is stored upper — so a board
+	// asked for the same project in the case somebody typed would answer
+	// an empty list rather than a refusal, and an empty board is a thing
+	// a person acts on.
+	for _, form := range []string{"project:ENG", "ENG", "project:eng", "eng"} {
 		if got := mustParse(t, map[string]any{"container": form}); got.Scope.Project != "ENG" {
 			t.Errorf("%q parsed as project %q", form, got.Scope.Project)
 		}

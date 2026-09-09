@@ -5,7 +5,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/pages"
-	"github.com/crewlet/crewlet/internal/work"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // THE DURABLE CONSUMER NAMES ARE FROZEN, and this is the assertion that keeps
@@ -14,9 +14,14 @@ import (
 // The group name IS the fleet's position. A rename does not fail, log, or
 // error: it creates a second consumer at the current head, so every change
 // the first had not yet handled is abandoned silently, and the only symptom
-// is notifications nobody ever received. The refactor that moved this package
-// off [coord.Family] passed the name through [changefeed.Group] for exactly
-// this reason, and these two literals are what "byte-identical" meant.
+// is notifications nobody ever received.
+//
+// The tracker's group changed ONCE, when its estate did — a bucket feed and a
+// log feed are two different consumers over two different things, and the old
+// name would have been a position on an estate that no longer exists. The
+// SOURCE name did not change with it, deliberately: it appears in every event's
+// source column and every dashboard filter, and a company's existing
+// notification rules go on meaning what they meant.
 func TestTheNativeFeedGroupNamesNeverMove(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -24,7 +29,7 @@ func TestTheNativeFeedGroupNamesNeverMove(t *testing.T) {
 		wantName       string
 		wantGroupExact string
 	}{
-		"the tracker": {work.NewTranslator().Source(), "work", "crewlet-work-feed"},
+		"the tracker": {tracker.NewTranslator().Source(), "work", "crewlet-tracker-feed"},
 		"the wiki":    {pages.NewTranslator(nil).Source(), "page", "crewlet-pages-feed"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -39,7 +44,7 @@ func TestTheNativeFeedGroupNamesNeverMove(t *testing.T) {
 			}
 		})
 	}
-	if work.NewTranslator().Source().Group == pages.NewTranslator(nil).Source().Group {
+	if tracker.NewTranslator().Source().Group == pages.NewTranslator(nil).Source().Group {
 		t.Error("two estates share a durable consumer, so each would handle " +
 			"records it cannot decode")
 	}

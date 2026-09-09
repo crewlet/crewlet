@@ -297,7 +297,7 @@ func TestTheRankCheckRefusesWhatTheObviousSpellingAccepts(t *testing.T) {
 // that is about the SOURCE rather than about what the driver created: a
 // trailing comment is not part of the schema the database keeps.
 func trackerSchemaSource() (string, error) {
-	body, err := store.SchemaFile(store.EstateReplicated, "0023_the_tracker_lands.sql")
+	body, err := store.SchemaFile(store.EstateReplicated, "0002_the_tracker_lands.sql")
 	if err != nil {
 		return "", err
 	}

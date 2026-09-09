@@ -285,7 +285,7 @@ func (d *duty) finishMerges(ctx context.Context, now, _ time.Time) (int64, error
 		}
 		done := false
 		if _, err := d.deps.Writer.UpdateTask(ctx,
-			d.opID("merge", id, now), task, project,
+			d.opID("merge", id, now), task, project, NoIfMatch,
 			TaskPatch{Merging: &done}, nil); err != nil {
 			return finished, err
 		}

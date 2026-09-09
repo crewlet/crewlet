@@ -31,6 +31,7 @@ import { href, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import {
   Badge,
+  Banner,
   Chip,
   Empty,
   Panel,
@@ -48,24 +49,31 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { fmtDateTime, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import type { WorkStatus, WorkSummary } from "~/protocol/index.ts";
+import type { WorkIncomplete, WorkStatus, WorkSummary } from "~/protocol/index.ts";
 
 /** The board's own vocabulary, rendered. A closed set, so a status the engine
  *  adds later shows as itself rather than vanishing from the filter. */
+/** The tracker's SIX. `blocked` is NOT one: a blocker is data carried beside
+ *  the status, because a task can be both in progress and blocked and a single
+ *  field cannot say so — so it is a badge and a filter, never a column value.
+ *  `cancelled` is here and reads as "finished without being delivered", which
+ *  is the whole of what a close reason used to say. */
 const STATUSES: { value: WorkStatus; label: string }[] = [
   { value: "todo", label: "To do" },
   { value: "in_progress", label: "In progress" },
-  { value: "blocked", label: "Blocked" },
   { value: "in_review", label: "In review" },
   { value: "done", label: "Done" },
+  { value: "cancelled", label: "Cancelled" },
+  { value: "closed", label: "Closed" },
 ];
 
 const STATUS_TONE: Record<string, "positive" | "caution" | "critical" | "info" | "neutral"> = {
   todo: "neutral",
   in_progress: "info",
-  blocked: "critical",
   in_review: "caution",
   done: "positive",
+  cancelled: "neutral",
+  closed: "neutral",
 };
 
 const PRIORITY_TONE: Record<string, "positive" | "caution" | "critical" | "info" | "neutral"> = {
@@ -92,12 +100,19 @@ export function Work() {
   const [scope, setScope] = useParam("scope", "open");
 
   const params: Record<string, unknown> = {};
-  if (project) params.project = project;
+  // THE CONTAINER IS THE SCOPE, and an absent one is NEITHER the workspace
+  // nor a project — the engine refuses to default it, because an omitted key
+  // would otherwise be the most expensive query in the system. This screen is
+  // a person's, so the default is everything and it says so.
+  params.container = project ? `project:${project}` : "workspace";
   if (status) params.status = status;
   if (assignee) params.assignee = assignee;
   if (q) params.q = q;
-  if (scope === "open") params.open = true;
-  if (scope === "closed") params.open = false;
+  // OPEN AND CLOSED ARE STATUS GROUPS, not a boolean: the four groups are
+  // what every rule in the tracker is written at, and `done` and `closed` are
+  // two of them rather than one negation.
+  if (scope === "open") params.status_group = "not_started,active";
+  if (scope === "closed") params.status_group = "done,closed";
 
   // A change to an item publishes onto the seat inbox rather than to the
   // dashboard socket, so there is no push behind this and a poll is correct.
@@ -106,21 +121,31 @@ export function Work() {
   const { data, loading, error } = useQuery("work_items", params, { pollMs: 20_000 });
 
   const rows = useMemo(
-    () => [...(data?.items ?? [])].sort((a, b) => tsKey(b.updated_at) - tsKey(a.updated_at)),
+    () => [...(data?.items ?? [])].sort((a, b) => tsKey(b.updated) - tsKey(a.updated)),
     [data],
   );
 
+  // FROM THE ROWS ALONE. The board used to take the project list from a
+  // minted-counter map the bucket carried; a task's counter is now arbitrated
+  // on its project's own subject and no listing carries it, so the filter
+  // offers what this page actually contains — which is also what a filter
+  // built from a page can honestly offer.
   const projects = useMemo(() => {
-    const keys = new Set<string>(Object.keys(data?.minted ?? {}));
+    const keys = new Set<string>();
     for (const item of rows) keys.add(item.project);
     return [...keys].sort();
-  }, [data, rows]);
+  }, [rows]);
 
   const byStatus = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const item of rows) counts[item.status] = (counts[item.status] ?? 0) + 1;
     return counts;
   }, [rows]);
+
+  // BLOCKED IS COUNTED FROM THE FLAG, not from a status: a task is blocked
+  // AND in progress, so counting it as a status would have hidden it in
+  // whichever of the two the row happened to carry.
+  const blocked = useMemo(() => rows.filter((r) => r.blocked).length, [rows]);
 
   const seatName = (handle: string) => index.byHandle.get(handle)?.name ?? handle;
 
@@ -136,13 +161,13 @@ export function Work() {
           "50 items" for every project with more than fifty. */}
       {!loading && !error && (
         <StatRow cols={4}>
-          <Stat label="Shown" value={rows.length} sub={`of at most ${data?.limit ?? 0}`} />
-          <Stat label="In progress" value={byStatus.in_progress ?? 0} />
           <Stat
-            label="Blocked"
-            value={byStatus.blocked ?? 0}
-            icon={byStatus.blocked ? "alert" : undefined}
+            label="Shown"
+            value={rows.length}
+            sub={totalHint(data?.total_hint ?? 0, rows.length)}
           />
+          <Stat label="In progress" value={byStatus.in_progress ?? 0} />
+          <Stat label="Blocked" value={blocked} icon={blocked ? "alert" : undefined} />
           <Stat label="In review" value={byStatus.in_review ?? 0} />
         </StatRow>
       )}
@@ -205,6 +230,7 @@ export function Work() {
               }
         }
       >
+        <Coverage answer={data} />
         <Panel>
           <DataTable
             rows={rows}
@@ -233,28 +259,32 @@ export function Work() {
                 ),
               },
               {
-                key: "type",
-                header: "Type",
-                shrink: true,
-                sortValue: (r) => r.type,
-                cell: (r) => <Badge outline>{r.type}</Badge>,
-              },
-              {
                 key: "status",
                 header: "Status",
                 shrink: true,
                 sortValue: (r) => r.status,
                 cell: (r) => (
-                  <Badge tone={STATUS_TONE[r.status] ?? "neutral"} dot>
-                    {STATUSES.find((s) => s.value === r.status)?.label ?? r.status}
-                  </Badge>
+                  <>
+                    <Badge tone={STATUS_TONE[r.status] ?? "neutral"} dot>
+                      {STATUSES.find((s) => s.value === r.status)?.label ?? r.status}
+                    </Badge>
+                    {/* BESIDE the status rather than instead of it, which is
+                        the whole reason it is its own field: a task in
+                        progress with an open blocker is both, and a column
+                        that showed one would hide the other. */}
+                    {r.blocked && (
+                      <Badge tone="critical" outline>
+                        Blocked
+                      </Badge>
+                    )}
+                  </>
                 ),
               },
               {
                 key: "priority",
                 header: "Priority",
                 shrink: true,
-                sortValue: (r) => r.priority,
+                sortValue: (r) => r.priority ?? "",
                 cell: (r) =>
                   r.priority && r.priority !== "normal" ? (
                     <Badge tone={PRIORITY_TONE[r.priority] ?? "neutral"}>{r.priority}</Badge>
@@ -282,10 +312,8 @@ export function Work() {
                 header: "Updated",
                 shrink: true,
                 align: "right",
-                sortValue: (r) => tsKey(r.updated_at),
-                cell: (r) => (
-                  <span title={fmtDateTime(r.updated_at)}>{relTime(r.updated_at, now)}</span>
-                ),
+                sortValue: (r) => tsKey(r.updated),
+                cell: (r) => <span title={fmtDateTime(r.updated)}>{relTime(r.updated, now)}</span>,
               },
             ]}
           />
@@ -315,7 +343,7 @@ export function WorkItem({ id }: { id: string }) {
   );
 
   const seatName = (handle: string) => index.byHandle.get(handle)?.name ?? handle;
-  const item = data?.item;
+  const item = data?.task;
 
   return (
     <>
@@ -328,7 +356,12 @@ export function WorkItem({ id }: { id: string }) {
               <Badge tone={STATUS_TONE[item.status] ?? "neutral"} dot>
                 {STATUSES.find((s) => s.value === item.status)?.label ?? item.status}
               </Badge>
-              <Badge outline>{item.type}</Badge>
+              {item.blocked && (
+                <Badge tone="critical" outline>
+                  Blocked
+                </Badge>
+              )}
+              {item.type && <Badge outline>{item.type}</Badge>}
               {item.project && <Badge outline>{item.project}</Badge>}
             </>
           ) : undefined
@@ -340,6 +373,7 @@ export function WorkItem({ id }: { id: string }) {
       <QueryState error={error} loading={loading}>
         {item && (
           <div className="stack">
+            <Coverage answer={data} />
             <Panel title="Description">
               {item.body ? (
                 <div className="prose">{item.body}</div>
@@ -384,13 +418,13 @@ export function WorkItem({ id }: { id: string }) {
                 <ul className="list">
                   {data.links.map((link) => (
                     <li
-                      key={`${link.kind}:${link.other_id}`}
+                      key={`${link.kind}:${link.other}`}
                       className="row"
                       style={{ gap: "var(--space-2)" }}
                     >
                       <Badge outline>{link.kind.replace(/_/g, " ")}</Badge>
-                      <a href={href(["work", link.key || link.other_id])} className="mono">
-                        {link.key || link.other_id}
+                      <a href={href(["work", link.key || link.other])} className="mono">
+                        {link.key || link.other}
                       </a>
                       <span className="truncate">{link.title}</span>
                       {/* The DERIVED half is the one nobody authored — an
@@ -412,7 +446,8 @@ export function WorkItem({ id }: { id: string }) {
                         <span className="dim" title={fmtDateTime(c.created_at)}>
                           {relTime(c.created_at, now)}
                         </span>
-                        {c.edited_at && <span className="dim">(edited)</span>}
+                        {c.updated_at && <span className="dim">(edited)</span>}
+                        {c.resolved && <Badge tone="positive">Resolved</Badge>}
                       </div>
                       <div className="prose">{c.body}</div>
                     </div>
@@ -431,15 +466,23 @@ export function WorkItem({ id }: { id: string }) {
                       <Icon name="activity" size="sm" />
                       <span>{change.actor ? seatName(change.actor) : "the engine"}</span>
                       <span className="dim">{change.kind.replace(/_/g, " ")}</span>
+                      {/* The snapshot records what changed as VALUES, not as
+                          from/to pairs — the applier writes the state the
+                          change produced, and the previous value survives in
+                          the entry before it. */}
                       {change.fields &&
-                        Object.entries(change.fields).map(([field, delta]) => (
+                        Object.keys(change.fields).map((field) => (
                           <span key={field} className="dim">
-                            {field}: {delta.from || "—"} → {delta.to || "—"}
+                            {field}
                           </span>
                         ))}
+                      {/* A COMMIT THAT WOKE NOBODY is a fact about the change
+                          rather than about its importance: a bulk edit is
+                          quiet by construction. */}
+                      {change.quiet && <span className="dim">(quiet)</span>}
                       <span className="spacer" />
-                      <span className="dim" title={fmtDateTime(change.created_at)}>
-                        {relTime(change.created_at, now)}
+                      <span className="dim" title={fmtDateTime(change.at)}>
+                        {relTime(change.at, now)}
                       </span>
                     </li>
                   ))}
@@ -453,4 +496,90 @@ export function WorkItem({ id }: { id: string }) {
       </QueryState>
     </>
   );
+}
+
+/** The coverage half every tracker answer carries — a board's and a task's
+ *  alike, which is why this is its own type rather than either answer's. */
+interface CoverageFacts {
+  read_level?: string;
+  complete?: boolean;
+  log_seq?: number;
+  applied_through?: number;
+  incomplete?: WorkIncomplete;
+}
+
+/** How stale an answer may be, and what it could not account for.
+ *
+ * # Two different facts, and a screen that shows only one lies
+ *
+ * `read_level` says how FRESH the answer is — whether it came from this
+ * node's rows as they stood, or from a position the caller's own write is at
+ * or below. `complete` says whether the answer could account for everything
+ * it was asked about: a node holding records this build cannot decode has
+ * rows that may be missing, rows that should have left and may still be
+ * present, and totals computed over the incomplete set.
+ *
+ * A screen that renders the freshness badge and swallows the coverage flag is
+ * worse than a stale tile, because a person reads "a moment ago" and
+ * concludes the board is right. So the incomplete line is a BANNER above the
+ * rows rather than a badge beside them, it names the count and the scope, and
+ * it says the remedy — which is a build that can read the records, not a
+ * refresh.
+ */
+function Coverage({ answer }: { answer?: CoverageFacts | null }) {
+  if (!answer) return null;
+  const behind =
+    answer.applied_through !== undefined &&
+    answer.log_seq !== undefined &&
+    answer.applied_through < answer.log_seq;
+
+  return (
+    <>
+      {answer.complete === false && (
+        <Banner tone="caution">
+          <strong>
+            This answer is incomplete
+            {answer.incomplete
+              ? ` — ${answer.incomplete.records} record(s) this build cannot read`
+              : ""}
+          </strong>{" "}
+          Rows may be missing, rows that should have gone may still be here, and the
+          counts were computed over what is shown.
+          {answer.incomplete?.scope?.length
+            ? ` Affected: ${answer.incomplete.scope.join(", ")}.`
+            : ""}
+          {answer.incomplete
+            ? ` Record version ${answer.incomplete.version}, from sequence ${answer.incomplete.from.seq} — a build that can read it is what resolves this, not a refresh.`
+            : ""}
+        </Banner>
+      )}
+      <div className="row" style={{ gap: "var(--space-2)" }}>
+        {answer.read_level && (
+          <Badge outline title="How fresh this answer is, as the engine actually served it">
+            {answer.read_level}
+          </Badge>
+        )}
+        {/* APPLIED_THROUGH BESIDE SEQ, so a node holding something it cannot
+            apply is visible as its own state rather than as lag. */}
+        {behind && (
+          <Badge tone="caution" outline>
+            applied through {answer.applied_through} of {answer.log_seq}
+          </Badge>
+        )}
+      </div>
+    </>
+  );
+}
+
+/** The board's own count against the engine's hint.
+ *
+ * The hint is CAPPED by construction — an exact total over an unbounded set
+ * is the one query in this grammar that turns a poll into a scan — so at the
+ * ceiling it says "10000+" rather than a number nobody needs.
+ */
+function totalHint(hint: number, shown: number): string {
+  if (hint <= 0) return "";
+  if (hint >= 10_000) return "of 10000+ matching";
+  if (hint <= shown) return `of ${hint} matching`;
+  return `of ${hint} matching — page through for the rest`;
 }

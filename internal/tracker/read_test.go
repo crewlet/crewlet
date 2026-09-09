@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -37,7 +36,7 @@ func (h *readHarness) seed(id string, mutate func(*tracker.Task)) {
 
 func (h *readHarness) ask(kv map[string]any) tracker.Answer {
 	h.t.Helper()
-	q, err := tracker.ParseQuery(queries.FromMap(kv), wednesday, berlin)
+	q, err := tracker.ParseQuery(tracker.MapParams(kv), wednesday, berlin)
 	if err != nil {
 		h.t.Fatalf("ParseQuery(%v): %v", kv, err)
 	}
@@ -468,7 +467,7 @@ func TestACursorFromAnotherOrderIsRefused(t *testing.T) {
 	if first.NextCursor == "" {
 		t.Fatal("the first page minted no cursor, so this case asserts nothing")
 	}
-	q, err := tracker.ParseQuery(queries.FromMap(map[string]any{
+	q, err := tracker.ParseQuery(tracker.MapParams(map[string]any{
 		"container": "project:ENG", "sort": "rank", "cursor": first.NextCursor,
 	}), wednesday, berlin)
 	if err != nil {

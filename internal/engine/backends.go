@@ -222,6 +222,14 @@ func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*st
 		MaxOpenConns:   b.Store.MaxOpenConns,
 		ReplicatedPath: b.Store.ReplicatedPath,
 		BusyTimeout:    b.Store.BusyTimeout(),
+		// ONE PINNED CONNECTION PER STATE-LOG DOMAIN. Each domain's apply
+		// loop holds one for its life — it is the single writer of that
+		// domain's tables, and a loop that had to reacquire one per batch
+		// would be competing with the readers it is applying for. The
+		// count is DECLARED rather than discovered so the pool is sized
+		// for them: an undeclared pin is a reader starved out of the pool
+		// by a writer that never gives its connection back.
+		PinnedWriters: len(registeredDomains()),
 	}
 	// Nil embeddings means no vector recall is configured, which the store
 	// reads as width 0: no DECLARED width, so it checks nothing against it
