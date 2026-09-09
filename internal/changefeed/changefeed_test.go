@@ -114,24 +114,27 @@ type probe struct {
 
 func newProbe() *probe { return &probe{wake: true} }
 
-func (p *probe) Family() coord.Family { return coord.FamilyWork }
-func (p *probe) Class() string        { return "c" }
-func (p *probe) Source() string       { return "work" }
+func (p *probe) Source() changefeed.Source {
+	return changefeed.Source{Name: "work", Group: changefeed.Group(coord.FamilyWork)}
+}
 
-func (p *probe) Translate(_ context.Context, change coord.Change) (changefeed.Delivery, bool, error) {
+func (p *probe) Translate(_ context.Context, rec changefeed.Record) (changefeed.Delivery, bool, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.seen++
 	if p.err != nil {
 		return changefeed.Delivery{}, false, p.err
 	}
-	segs, _ := coord.DocumentSegments(change.Key)
-	id := change.Key
+	// THE ID INSIDE THE RECORD, not the delivery's own: the translator is
+	// the only thing that can read it, which is why the claim seed is its
+	// output rather than the framework's input.
+	segs, _ := coord.DocumentSegments(rec.Key)
+	id := rec.Key
 	if len(segs) == 3 {
 		id = segs[2]
 	}
 	return changefeed.Delivery{
-		Body:  map[string]any{"key": change.Key},
+		Body:  map[string]any{"key": rec.Key},
 		ID:    id,
 		Actor: "eng",
 	}, p.wake, nil
@@ -152,7 +155,8 @@ func (p *probe) translations() int {
 func run(t *testing.T, docs *memory.Fleet, pub *capture, cl *claims, tr changefeed.Translator) {
 	t.Helper()
 	feed, err := changefeed.New(changefeed.Options{
-		Feeder: docs, Publisher: pub, Claims: cl, Translator: tr,
+		Opener:    changefeed.DocumentSource(docs, coord.FamilyWork, "c"),
+		Publisher: pub, Claims: cl, Translator: tr,
 	})
 	if err != nil {
 		t.Fatalf("new feed: %v", err)
@@ -370,13 +374,107 @@ func TestTheGroupNameIsStableAndPerFamily(t *testing.T) {
 func TestAFeedRefusesAnIncompleteWiring(t *testing.T) {
 	t.Parallel()
 	docs := memory.NewFleet()
+	opener := changefeed.DocumentSource(docs, coord.FamilyWork, "c")
 	for _, opts := range []changefeed.Options{
 		{Publisher: &capture{}, Translator: newProbe()},
-		{Feeder: docs, Translator: newProbe()},
-		{Feeder: docs, Publisher: &capture{}},
+		{Opener: opener, Translator: newProbe()},
+		{Opener: opener, Publisher: &capture{}},
+		// A translator whose source names no estate and no group: the
+		// first would share a claim key space with every other estate,
+		// the second is the fleet's own position.
+		{Opener: opener, Publisher: &capture{}, Translator: &nameless{}},
+		{Opener: opener, Publisher: &capture{}, Translator: &groupless{}},
 	} {
 		if _, err := changefeed.New(opts); err == nil {
 			t.Errorf("an incomplete wiring was accepted: %+v", opts)
 		}
+	}
+}
+
+// nameless and groupless are translators whose source is incomplete in each
+// of the two ways that matter.
+type nameless struct{ probe }
+
+func (n *nameless) Source() changefeed.Source {
+	return changefeed.Source{Group: "crewlet-work-feed"}
+}
+
+type groupless struct{ probe }
+
+func (g *groupless) Source() changefeed.Source { return changefeed.Source{Name: "work"} }
+
+// A REMOVED RECORD IS ACKED AND NEVER TRANSLATED.
+//
+// The decision moved out of the two domain translators and into the framework
+// when the seam did, and it can only live in one place: every estate answers
+// it the same way — the wake this record once produced was delivered when it
+// was written — and a log estate never produces one at all. Left to the
+// translators it was two copies of one rule, and a third estate would have
+// been a third copy or a silent nak loop into the dead-letter path.
+func TestARemovedRecordIsAckedWithoutTranslation(t *testing.T) {
+	t.Parallel()
+	docs, pub, cl := memory.NewFleet(), &capture{}, newClaims()
+	p := newProbe()
+	run(t, docs, pub, cl, p)
+
+	key := coord.DocumentKey("c", "item", "u1")
+	writeChange(t, docs, "u1")
+	settle(t, func() bool { return p.translations() == 1 }, "the change was never translated")
+	rec, found, err := docs.Document(t.Context(), coord.FamilyWork, key)
+	if err != nil || !found {
+		t.Fatalf("read the change back: found=%v err=%v", found, err)
+	}
+	if purged, err := docs.PurgeDocument(t.Context(), coord.FamilyWork, key, rec.Version); err != nil || !purged {
+		t.Fatalf("purge the change: purged=%v err=%v", purged, err)
+	}
+
+	// The purge must not reach the translator, and it must not circle:
+	// a later change is translated exactly once, which it would not be if
+	// the purge were being redelivered.
+	writeChange(t, docs, "u2")
+	settle(t, func() bool { return p.translations() == 2 }, "the second change never arrived")
+	time.Sleep(100 * time.Millisecond)
+	if got := p.translations(); got != 2 {
+		t.Errorf("%d translations for two changes and a purge — the purge is "+
+			"being translated or retried", got)
+	}
+}
+
+// A BUCKET FILLS IN WHAT A BUCKET HAS, and leaves the rest empty.
+//
+// Stream and generation are a LOG's identity, and a wake stamped with a
+// position from one estate must never be comparable with a position from the
+// other. Inventing a value here — the family name as a stream, 1 as a
+// generation — is how that comparison silently becomes possible.
+func TestABucketDeliveryCarriesNoStreamOrGeneration(t *testing.T) {
+	t.Parallel()
+	docs := memory.NewFleet()
+	records, err := changefeed.DocumentSource(docs, coord.FamilyWork, "c").
+		Open(t.Context(), changefeed.Group(coord.FamilyWork))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = records.Stop() })
+	writeChange(t, docs, "u1")
+
+	msg, err := records.Next(t.Context())
+	if err != nil || msg == nil {
+		t.Fatalf("next: msg=%v err=%v", msg, err)
+	}
+	key := coord.DocumentKey("c", "item", "u1")
+	if msg.ID != key || msg.Key != key {
+		t.Errorf("id=%q key=%q, want both %q", msg.ID, msg.Key, key)
+	}
+	if msg.Stream != "" || msg.Gen != 0 {
+		t.Errorf("a bucket delivery claims stream %q generation %d", msg.Stream, msg.Gen)
+	}
+	if msg.Position == 0 {
+		t.Error("the bucket revision did not travel as the position")
+	}
+	if string(msg.Payload) != "{}" {
+		t.Errorf("payload = %q, want the value verbatim", msg.Payload)
+	}
+	if err := msg.Ack(); err != nil {
+		t.Errorf("ack: %v", err)
 	}
 }

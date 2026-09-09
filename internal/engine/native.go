@@ -322,21 +322,41 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 		return
 	}
 
-	translators := []changefeed.Translator{}
+	// THE FAMILY AND THE KEY CLASS ARE NAMED HERE, by the package that
+	// wires estates to consumers. A translator says what it can read and a
+	// feed says how to run a durable consumer; which bucket the records are
+	// in is neither one's business, and it is the piece a log domain
+	// replaces outright.
+	//
+	// The class is the CHANGE class in both cases, never the head: a bucket
+	// keeps one revision per key, so rewriting a key terminates an un-acked
+	// message with nothing anywhere saying a wake was lost.
+	type source struct {
+		translator changefeed.Translator
+		opener     changefeed.Opener
+	}
+	sources := []source{}
 	if e.native.work != nil {
-		translators = append(translators, work.NewTranslator())
+		sources = append(sources, source{
+			translator: work.NewTranslator(),
+			opener:     changefeed.DocumentSource(feeder, coord.FamilyWork, work.ClassChange),
+		})
 	}
 	if e.native.pages != nil {
-		translators = append(translators, pages.NewTranslator(e.skillsContainer))
+		sources = append(sources, source{
+			translator: pages.NewTranslator(e.skillsContainer),
+			opener:     changefeed.DocumentSource(feeder, coord.FamilyPages, pages.ClassChange),
+		})
 	}
-	for _, translator := range translators {
+	for _, src := range sources {
+		translator := src.translator
 		feed, err := changefeed.New(changefeed.Options{
-			Feeder: feeder, Publisher: e.backends.Queue,
+			Opener: src.opener, Publisher: e.backends.Queue,
 			Claims: e.backends.Fleet, Translator: translator,
 		})
 		if err != nil {
 			log.ErrorContext(ctx, "changefeed_unavailable",
-				"source", translator.Source(), "error", err.Error())
+				"source", translator.Source().Name, "error", err.Error())
 			continue
 		}
 		e.native.done.Add(1)
@@ -346,7 +366,7 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 			// goroutine is joined by stopNative, which ends that one.
 			if err := feed.Run(e.native.run); err != nil {
 				log.ErrorContext(ctx, "changefeed_stopped",
-					"source", translator.Source(), "error", err.Error(),
+					"source", translator.Source().Name, "error", err.Error(),
 					"detail", "native writes still land; nothing is woken by them "+
 						"until this node or a peer reopens the feed")
 			}

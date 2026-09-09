@@ -1,4 +1,4 @@
-// Package changefeed turns a committed change record into a wake.
+// Package changefeed turns a committed record into a wake.
 //
 // # The principle
 //
@@ -7,9 +7,25 @@
 // courtesy. The engine has both failure modes already: the Mattermost socket
 // path swallows a failed publish, and the webhook path is safe only because
 // the vendor retries. A native write has no vendor to retry it, so the
-// durable record is the retry: the change key is created, and a fleet-wide
-// consumer over that key is what eventually reaches a seat. A node that dies
+// durable record is the retry: the record is committed, and a fleet-wide
+// consumer over it is what eventually reaches a seat. A node that dies
 // between the write and the publish costs a redelivery, not a lost wake.
+//
+// # Why the estate is a seam and not a family
+//
+// This package once spoke the coordination estate's own vocabulary: a
+// [coord.Family], a bucket key class, a [coord.Change]. A durable record does
+// not have to live in a bucket — a state machine's LOG is the other shape,
+// and a log delivery has no family, no key class and no change. Manufacturing
+// a family for one would be worse than the vocabulary it fixed: a family is
+// also what starts a projector, so the engine would stand one up over a
+// bucket that does not exist.
+//
+// So the seam is one level up. A [Source] names the estate as a STRING, an
+// [Opener] opens one durable consumer over it, and a [Record] is one delivered
+// change from either — the bucket adapter is [DocumentSource] here, and a log
+// domain supplies its own. Everything below this comment is unchanged by that
+// and is why the package exists.
 //
 // # Why a group and not a duty
 //
@@ -52,11 +68,14 @@ import (
 
 var log = logging.Get("changefeed")
 
-// Group is the durable consumer name for a family's change feed.
+// Group is the durable consumer name for a document family's change feed.
 //
 // ONE PER FAMILY, and stable for the life of the deployment: the name IS the
 // fleet's position, so renaming it creates a second consumer at the head and
-// silently abandons whatever the first had not yet handled.
+// silently abandons whatever the first had not yet handled. It survives the
+// move to [Source] as the helper that keeps those names byte-identical —
+// which is the whole reason a family's feed did not move a position when this
+// package stopped speaking families.
 func Group(family coord.Family) string { return "crewlet-" + string(family) + "-feed" }
 
 // ClaimTTL is how long a handled change stays claimed.
@@ -77,6 +96,107 @@ const ClaimTTL = 5 * time.Minute
 // redelivery cap is what ends a change that keeps failing.
 const nakDelay = 2 * time.Second
 
+// Source identifies the estate a feed reads.
+//
+// A STRING rather than a [coord.Family], because a log is not a family and
+// adding one to name it would start a projector over a bucket that does not
+// exist.
+type Source struct {
+	// Name is the notification source a parser registers under, and the
+	// scope of this estate's claim keys — "work", "page", "tracker".
+	Name string
+
+	// Group is the durable consumer's name, and it is STABLE for the
+	// deployment's life: the name is where the fleet is, so a rename
+	// starts a second consumer at the head and abandons everything the
+	// first had not handled. [Group] builds a family's.
+	Group string
+}
+
+// Opener opens one durable consumer over an estate.
+//
+// DECLARED HERE, by the consumer, and satisfied by [DocumentSource] for a
+// bucket family and by a state log's own domain for a log. The group name is
+// passed rather than held so there is exactly one place it comes from — the
+// translator's own [Source].
+type Opener interface {
+	Open(ctx context.Context, group string) (Records, error)
+}
+
+// Records is an open durable consumer.
+type Records interface {
+	// Next blocks for the next message until the context ends.
+	//
+	// A nil Message with a nil error means the consumer has closed, which
+	// is how a caller tells a shutdown from a failure.
+	Next(ctx context.Context) (*Message, error)
+
+	// Stop ends the consumer. The DURABLE POSITION survives, which is what
+	// makes a restart resume rather than replay: it is the fleet's
+	// position, not this process's.
+	Stop() error
+}
+
+// Message is one delivered record, with the settlement the estate expects.
+type Message struct {
+	Record
+
+	// Ack marks the record handled. Called after whatever the handler
+	// produced is itself durable, never before.
+	Ack func() error
+
+	// Nak returns the record for redelivery after a delay. A handler that
+	// could not reach something it needs naks; one that decided the record
+	// means nothing to it ACKS, because a decision is handling.
+	Nak func(delay time.Duration) error
+}
+
+// Record is one delivered change, whatever estate it came from.
+type Record struct {
+	// ID is the estate's own identity for this delivery: a create-only
+	// bucket key, or a log record's operation id. Stable across
+	// redeliveries, which is what lets a translator that has no id of its
+	// own use it as one.
+	ID string
+
+	// Position is the delivery's place in its estate — the composed log
+	// position, or the bucket revision.
+	//
+	// # Why the three fields below travel with it
+	//
+	// A position alone is only comparable against the same stream and the
+	// same generation. The node that WINS a message is rarely the node
+	// that runs the woken seat, and a reanchor renumbers a log — so a
+	// wake stamped with a bare position is a number the woken node cannot
+	// safely compare with its own. A bucket feed leaves them empty and
+	// zero, which is the honest answer for an estate that has neither.
+	Position uint64
+
+	// Stream is the log's stream name, empty for a bucket feed.
+	Stream string
+
+	// Gen is the log's generation, zero for a bucket feed.
+	Gen uint64
+
+	// Key is the bucket key, or the subject, this delivery arrived on. For
+	// diagnosis, and for a translator that parses it.
+	Key string
+
+	// Payload is the record's bytes, verbatim.
+	Payload []byte
+
+	// Removed marks a delivery that says the record is GONE rather than
+	// carrying one — a retention sweep or an operator's delete on the
+	// bucket estate. A log never produces one: its records are its
+	// history.
+	//
+	// The framework acks it and never translates it, because the decision
+	// is the same in every estate and cannot be otherwise: the wake this
+	// record once produced was delivered when it was written, and there is
+	// nothing left to derive a second one from.
+	Removed bool
+}
+
 // Publisher is the queue surface this package publishes wakes through.
 type Publisher interface {
 	Publish(ctx context.Context, topic string, ev *events.Event) error
@@ -93,32 +213,26 @@ type Claims interface {
 	Release(ctx context.Context, key string) error
 }
 
-// Translator turns one change record into the delivery a parser will read.
+// Translator turns one record into the delivery a parser will read.
 //
-// DECLARED HERE, implemented by the package that owns the family's documents.
-// This package knows how to run a durable feed exactly once; it knows nothing
-// about what a work item or a page is, and adding that knowledge would put
-// two domains into one loop.
+// DECLARED HERE, implemented by the package that owns the estate's records.
+// This package knows how to run a durable consumer exactly once; it knows
+// nothing about what a work item or a page is, and adding that knowledge
+// would put two domains into one loop.
 type Translator interface {
-	// Family is which family this translator serves.
-	Family() coord.Family
+	// Source is the estate this translator serves.
+	Source() Source
 
-	// Class is the key class the feed filters on.
-	Class() string
-
-	// Source is the notification source name a parser registers under.
-	Source() string
-
-	// Translate turns a change into a delivery body, reporting whether it
+	// Translate turns a record into a delivery body, reporting whether it
 	// should wake anybody at all.
 	//
-	// FALSE IS AN ORDINARY OUTCOME and is ACKED rather than naked: a
-	// quiet import, a purge marker, a record this build cannot decode.
-	// Every one of those is a DECISION, and a decision is handling.
-	Translate(ctx context.Context, change coord.Change) (Delivery, bool, error)
+	// FALSE IS AN ORDINARY OUTCOME and is ACKED rather than naked: a quiet
+	// import, a draft, a record this build has no rule for. Every one of
+	// those is a DECISION, and a decision is handling.
+	Translate(ctx context.Context, rec Record) (Delivery, bool, error)
 }
 
-// Delivery is what a translated change becomes on the inbound topic.
+// Delivery is what a translated record becomes on the inbound topic.
 type Delivery struct {
 	// Body is the payload a parser reads. The whole record travels in it,
 	// so the node that wins a feed message routes without reading anything
@@ -126,8 +240,13 @@ type Delivery struct {
 	// stale head, or block the feed until it had.
 	Body map[string]any
 
-	// ID is the change's own id, used for the claim and as the seed of
+	// ID is the record's own id, used for the claim and as the seed of
 	// every recipient's deterministic wake id.
+	//
+	// THE TRANSLATOR'S, not [Record.ID]: the id a wake is deduplicated on
+	// is the one the record carries INSIDE it, which the parser stamps and
+	// the recipient's inbox compares. Only the estate's owner can read it
+	// out of the payload.
 	ID string
 
 	// Actor is the handle that made the change, so a parser can decline to
@@ -135,9 +254,9 @@ type Delivery struct {
 	Actor string
 }
 
-// Feed runs one family's change feed.
+// Feed runs one estate's change feed.
 type Feed struct {
-	feeder     coord.Feeder
+	opener     Opener
 	publisher  Publisher
 	claims     Claims
 	translator Translator
@@ -146,7 +265,7 @@ type Feed struct {
 
 // Options configure a feed.
 type Options struct {
-	Feeder     coord.Feeder
+	Opener     Opener
 	Publisher  Publisher
 	Claims     Claims
 	Translator Translator
@@ -158,15 +277,24 @@ type Options struct {
 // New builds a feed.
 func New(opts Options) (*Feed, error) {
 	switch {
-	case opts.Feeder == nil:
-		return nil, errors.New("changefeed: a feeder is required")
+	case opts.Opener == nil:
+		return nil, errors.New("changefeed: an opener is required")
 	case opts.Publisher == nil:
 		return nil, errors.New("changefeed: a publisher is required")
 	case opts.Translator == nil:
 		return nil, errors.New("changefeed: a translator is required")
 	}
+	src := opts.Translator.Source()
+	switch {
+	case src.Name == "":
+		return nil, errors.New("changefeed: the translator's source has no name, " +
+			"so its claims would share a key space with every other estate")
+	case src.Group == "":
+		return nil, errors.New("changefeed: the translator's source has no group, " +
+			"and the group name IS the fleet's position")
+	}
 	f := &Feed{
-		feeder: opts.Feeder, publisher: opts.Publisher,
+		opener: opts.Opener, publisher: opts.Publisher,
 		claims: opts.Claims, translator: opts.Translator, now: opts.Now,
 	}
 	if f.now == nil {
@@ -177,59 +305,66 @@ func New(opts Options) (*Feed, error) {
 
 // Run consumes the feed until the context ends.
 func (f *Feed) Run(ctx context.Context) error {
-	family := f.translator.Family()
-	feed, err := f.feeder.FeedDocuments(ctx, family, f.translator.Class(), Group(family))
+	src := f.translator.Source()
+	records, err := f.opener.Open(ctx, src.Group)
 	if err != nil {
-		return fmt.Errorf("changefeed: open the %s feed: %w", family, err)
+		return fmt.Errorf("changefeed: open the %s feed: %w", src.Name, err)
 	}
-	defer func() { _ = feed.Stop() }()
+	defer func() { _ = records.Stop() }()
 
-	log.InfoContext(ctx, "changefeed_started", "family", string(family),
-		"source", f.translator.Source(), "group", Group(family))
+	log.InfoContext(ctx, "changefeed_started", "source", src.Name, "group", src.Group)
 	for {
-		delivery, err := feed.Next(ctx)
+		msg, err := records.Next(ctx)
 		if err != nil {
-			return fmt.Errorf("changefeed: read the %s feed: %w", family, err)
+			return fmt.Errorf("changefeed: read the %s feed: %w", src.Name, err)
 		}
-		if delivery == nil {
+		if msg == nil {
 			return nil
 		}
-		f.handle(ctx, delivery)
+		f.handle(ctx, msg)
 	}
 }
 
-// handle processes one delivery, settling it exactly once.
-func (f *Feed) handle(ctx context.Context, delivery *coord.Delivery) {
-	body, wake, err := f.translator.Translate(ctx, delivery.Change)
+// handle processes one message, settling it exactly once.
+func (f *Feed) handle(ctx context.Context, msg *Message) {
+	if msg.Removed {
+		// The record is gone. Nothing to tell anybody: the wake it once
+		// produced was delivered when it was written.
+		log.DebugContext(ctx, "changefeed_record_removed", "key", msg.Key)
+		f.ack(ctx, msg)
+		return
+	}
+	body, wake, err := f.translator.Translate(ctx, msg.Record)
 	if err != nil {
 		// A translation failure is a RECORD THIS BUILD CANNOT READ, and a
 		// redelivery will not make it readable. It is naked all the same,
 		// because the consumer's own redelivery cap is what ends it — and
 		// the alternative (acking) would drop a wake permanently on a
 		// build that is about to be upgraded past the problem.
-		log.WarnContext(ctx, "changefeed_untranslatable", "key", delivery.Key,
-			"revision", delivery.Revision, "error", err.Error(),
+		log.WarnContext(ctx, "changefeed_untranslatable", "key", msg.Key,
+			"position", msg.Position, "stream", msg.Stream, "generation", msg.Gen,
+			"error", err.Error(),
 			"detail", "returned for redelivery; the consumer's own cap ends it "+
 				"if no node can read it")
-		f.nak(ctx, delivery)
+		f.nak(ctx, msg)
 		return
 	}
 	if !wake {
-		// A DECISION IS HANDLING. A quiet import, a purge marker, an
-		// actor-only change: acked, because naking would circle it to the
+		// A DECISION IS HANDLING. A quiet import, a draft, an actor-only
+		// change: acked, because naking would circle it to the
 		// dead-letter path for having been handled correctly.
-		f.ack(ctx, delivery)
+		f.ack(ctx, msg)
 		return
 	}
 
 	if !f.claim(ctx, body.ID) {
 		log.DebugContext(ctx, "changefeed_already_handled", "change", body.ID)
-		f.ack(ctx, delivery)
+		f.ack(ctx, msg)
 		return
 	}
 
 	ev := events.New(types.RawWebhook{Body: body.Body, Handle: body.Actor}, events.NewTrace())
-	ev.Source = f.translator.Source()
+	ev.Source = f.translator.Source().Name
 	if err := f.publisher.Publish(ctx, topics.NotificationsInbound, ev); err != nil {
 		// THE CLAIM IS RELEASED BEFORE THE NAK. A claim held over a
 		// delivery that never published would make the redelivery skip
@@ -238,10 +373,10 @@ func (f *Feed) handle(ctx context.Context, delivery *coord.Delivery) {
 		f.release(ctx, body.ID)
 		log.WarnContext(ctx, "changefeed_publish_failed", "change", body.ID,
 			"error", err.Error())
-		f.nak(ctx, delivery)
+		f.nak(ctx, msg)
 		return
 	}
-	f.ack(ctx, delivery)
+	f.ack(ctx, msg)
 }
 
 // claim reports whether this node should publish the wake.
@@ -254,7 +389,7 @@ func (f *Feed) claim(ctx context.Context, id string) bool {
 	if f.claims == nil {
 		return true
 	}
-	won, err := f.claims.Claim(ctx, ClaimKey(f.translator.Source(), id), ClaimTTL, f.now())
+	won, err := f.claims.Claim(ctx, ClaimKey(f.translator.Source().Name, id), ClaimTTL, f.now())
 	if err != nil {
 		log.WarnContext(ctx, "changefeed_claim_unavailable", "change", id,
 			"error", err.Error(),
@@ -269,7 +404,7 @@ func (f *Feed) release(ctx context.Context, id string) {
 	if f.claims == nil {
 		return
 	}
-	if err := f.claims.Release(ctx, ClaimKey(f.translator.Source(), id)); err != nil {
+	if err := f.claims.Release(ctx, ClaimKey(f.translator.Source().Name, id)); err != nil {
 		log.WarnContext(ctx, "changefeed_claim_release_failed", "change", id,
 			"error", err.Error())
 	}
@@ -277,7 +412,7 @@ func (f *Feed) release(ctx context.Context, id string) {
 
 // ClaimKey is the dedupe key for one change.
 //
-// SCOPED BY SOURCE, because two families mint ids independently and a bare id
+// SCOPED BY SOURCE, because two estates mint ids independently and a bare id
 // would let a page change suppress a work change that happened to collide.
 func ClaimKey(source, id string) string { return source + "|" + id }
 
@@ -300,17 +435,17 @@ func WakeID(changeID, handle string) uuid.UUID {
 // deployment: a new one would make every redelivery a fresh wake.
 var wakeNamespace = uuid.MustParse("2b3c4d5e-6f70-5182-93a4-b5c6d7e8f901")
 
-func (f *Feed) ack(ctx context.Context, delivery *coord.Delivery) {
-	if err := delivery.Ack(); err != nil {
-		log.WarnContext(ctx, "changefeed_ack_failed", "key", delivery.Key,
+func (f *Feed) ack(ctx context.Context, msg *Message) {
+	if err := msg.Ack(); err != nil {
+		log.WarnContext(ctx, "changefeed_ack_failed", "key", msg.Key,
 			"error", err.Error(),
 			"detail", "the change will be redelivered; the claim collapses it")
 	}
 }
 
-func (f *Feed) nak(ctx context.Context, delivery *coord.Delivery) {
-	if err := delivery.Nak(nakDelay); err != nil {
-		log.WarnContext(ctx, "changefeed_nak_failed", "key", delivery.Key,
+func (f *Feed) nak(ctx context.Context, msg *Message) {
+	if err := msg.Nak(nakDelay); err != nil {
+		log.WarnContext(ctx, "changefeed_nak_failed", "key", msg.Key,
 			"error", err.Error())
 	}
 }
