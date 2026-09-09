@@ -207,3 +207,107 @@ func TestTwoConcurrentBootsCreateOneStream(t *testing.T) {
 		t.Errorf("the domain stream exists %d times, want once", seen)
 	}
 }
+
+// WHAT THE SPEC ASKED FOR IS WHAT THE BROKER IS RUNNING, read back from the
+// stream's own reported configuration rather than from the struct that built
+// it.
+//
+// The distinction is the whole test. Comparing the spec against the config it
+// produced asserts that this package's own translation is self-consistent,
+// which it is by construction and would stay so if every field were dropped
+// on the way to the broker. Six of these fields are safety properties an
+// operator can never set again — a stream is created once and never updated —
+// so a field silently not applied at creation is a stream that spends its
+// life one property short, with nothing anywhere saying so.
+func TestACreatedStreamCarriesEveryFieldTheSpecAsked(t *testing.T) {
+	t.Parallel()
+	spec := probeDomain()
+	q := domainQueue(t, spec)
+
+	stream, err := q.js.Stream(t.Context(), spec.Name)
+	if err != nil {
+		t.Fatalf("read the created stream: %v", err)
+	}
+	got := stream.CachedInfo().Config
+
+	want := spec.spec()
+	if got.Name != want.name {
+		t.Errorf("name = %q, want %q", got.Name, want.name)
+	}
+	if len(got.Subjects) != len(want.subjects) || got.Subjects[0] != want.subjects[0] {
+		t.Errorf("subjects = %v, want %v", got.Subjects, want.subjects)
+	}
+	if got.Retention != want.retention {
+		t.Errorf("retention = %v, want %v", got.Retention, want.retention)
+	}
+	// THE SIX SAFETY FIELDS, each read off the broker.
+	if got.Discard != want.discard {
+		t.Errorf("discard = %v, want %v — a full log must refuse the write "+
+			"rather than drop the oldest record", got.Discard, want.discard)
+	}
+	if !got.DenyDelete {
+		t.Error("deny_delete is off: an operator or a stray client can delete " +
+			"records out of the middle of the log")
+	}
+	if got.AllowRollup {
+		t.Error("allow_rollup is on: one message can erase every record before it")
+	}
+	if got.AllowDirect || got.MirrorDirect {
+		t.Errorf("direct gets are on (allow=%v mirror=%v): a read can be served "+
+			"by a follower that has not applied what it is being asked about",
+			got.AllowDirect, got.MirrorDirect)
+	}
+	if got.MaxAge != 0 {
+		t.Errorf("max_age = %v: a log's records are trimmed by the fleet's own "+
+			"floor, never by the clock", got.MaxAge)
+	}
+	if got.MaxMsgsPerSubject != -1 {
+		t.Errorf("max_msgs_per_subject = %d, want unlimited: an ordered log "+
+			"that keeps one message per subject is not a log", got.MaxMsgsPerSubject)
+	}
+	// AND THE TWO CAPACITY FIELDS, which are the ones an operator sets.
+	if got.MaxBytes != spec.MaxBytes {
+		t.Errorf("max_bytes = %d, want %d", got.MaxBytes, spec.MaxBytes)
+	}
+	if got.Duplicates != spec.Duplicates {
+		t.Errorf("duplicates = %v, want %v", got.Duplicates, spec.Duplicates)
+	}
+}
+
+// THE SIX ENGINE STREAMS ARE BYTE-IDENTICAL to what they were before domain
+// streams existed.
+//
+// A stream is created once and never updated, so a spec that changed shape is
+// not a migration — it is a difference between the streams on a deployment
+// that upgraded and the streams on one that installed fresh, and only the
+// second has the new value. This pins every field of every engine stream, so
+// adding a field to streamSpec with a non-zero default is a failing test
+// rather than a fleet that quietly runs two topologies.
+func TestTheEngineStreamsAreUnchanged(t *testing.T) {
+	t.Parallel()
+	specs := engineStreams(0)
+	if len(specs) != 6 {
+		t.Fatalf("the engine defines %d streams, want 6", len(specs))
+	}
+	for _, spec := range specs {
+		t.Run(spec.name, func(t *testing.T) {
+			// Every field a domain stream sets and an engine stream does
+			// not. They were absent before this package grew them, and
+			// absent is what they must stay.
+			if spec.maxBytes != 0 {
+				t.Errorf("max_bytes = %d, want unset", spec.maxBytes)
+			}
+			if spec.duplicates != 0 {
+				t.Errorf("duplicates = %v, want unset", spec.duplicates)
+			}
+			if spec.discard != jetstream.DiscardOld {
+				t.Errorf("discard = %v, want the zero value", spec.discard)
+			}
+			if spec.denyDelete || spec.allowRollup || spec.allowDirect || spec.mirrorDirect {
+				t.Errorf("an engine stream sets a domain field: deny_delete=%v "+
+					"rollup=%v direct=%v mirror=%v", spec.denyDelete,
+					spec.allowRollup, spec.allowDirect, spec.mirrorDirect)
+			}
+		})
+	}
+}
