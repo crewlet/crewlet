@@ -55,6 +55,58 @@
 // own presence during exactly the outage it should ride out. Any non-nil
 // error means unknown — there is no error worth special-casing into a
 // definite answer.
+//
+// # Why coordination is not itself a replicated log
+//
+// The engine grows a durable-state framework — internal/statelog — whose
+// shape is very close to this one: an ordered log of records, a conditional
+// append per subject, and N identical SQL copies replaying it. A conditional
+// append per subject IS this package's compare-and-set one layer down, so
+// "it would not work" is not available as an answer and the refusal has to be
+// argued. Five arguments, and each one is fatal on its own:
+//
+//  1. THE FRAMEWORK'S CENTRAL PROPERTY IS THE ONE A LEASE MUST NOT HAVE. A
+//     replica can only ever be BEHIND, and that is what makes its answers
+//     safe. A lease answers NOW. A replicated read of a lease table could
+//     only ever say "held as of my checkpoint" — a FOURTH answer beside the
+//     three above, and the one no caller can act on: a node ten seconds
+//     behind would believe it holds a seat another node took nine seconds
+//     ago, and would keep running turns on it.
+//
+//  2. A FENCING EPOCH MUST SURVIVE THE PAST BEING DELETED, AND A LOG DELETES
+//     ITS PAST BY CONSTRUCTION. Rule 1 above needs the epoch monotone for the
+//     resource's LIFETIME; coord/kv states the same thing from the other end
+//     ("gaps in the counter are harmless; resets are not"). A node that
+//     re-derived an epoch from a trimmed log would derive a LOWER one — the
+//     exact reset the design forbids, produced by the retention mechanism
+//     rather than by a bug. No amount of care in the framework fixes it,
+//     because a log's whole contract is that old records go away.
+//
+//  3. THE ACTIVATION POINTER'S READERS ARE THE NODES THAT ARE BEHIND, so
+//     putting it on a log is circular. Its revision is the epoch, and
+//     internal/configplane reads it to decide whether THIS NODE IS BEHIND. A
+//     node cannot use its position on a log to discover that its position on
+//     that log is stale. There is no base case.
+//
+//  4. THESE RECORDS ARE BOUNDED, MUTABLE AND SHORT-LIVED — a bucket's shape
+//     and a log's anti-shape. Presence renews on the 15-second reconcile
+//     interval: twenty seats over five nodes is ≈ 50 M lease writes a year of
+//     pure lock traffic, every byte of it retained for the log's age floor.
+//     The framework makes this same argument about the tracker's own walk
+//     claims at a four-hundredth of the scale, and moves them INTO
+//     coordination: a claim is a lock, not state, and reproducing another
+//     node's claim on a replica is meaningless because a replica must not act
+//     on it.
+//
+//  5. THE FRAMEWORK'S OWN RETENTION GATE READS COORDINATION, so coordination
+//     cannot read the framework. Every term that decides how far a log may be
+//     trimmed — the positions register, the live trim holds, the eviction
+//     tombstones and the backup floor — is a coordination read taken BEFORE
+//     the log is purged. Putting them on the log would make the log's
+//     retention a function of the log's own contents: a cycle with no base
+//     case. It is also why the positions register is an AGELESS bucket, which
+//     is the exact inversion of the presence bucket beside it, whose whole
+//     purpose is that a node that stops reporting vanishes.
 package coord
 
 import (
