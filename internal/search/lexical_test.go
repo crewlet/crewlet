@@ -17,7 +17,7 @@ import (
 // THE REPLICATED ESTATE, because that is where a page lives now: the index is
 // this node's own and the sources are the fleet's, and the whole reason the
 // indexer walks rather than joins is that no read crosses between them.
-func page(t *testing.T, db *store.DB, id, container, title, body string, version int) {
+func page(t testing.TB, db *store.DB, id, container, title, body string, version int) {
 	t.Helper()
 	_, err := db.Replicated().SQL().ExecContext(t.Context(), `
 		INSERT INTO pages_heads (id, container, parent_id, title, title_norm, body,
@@ -42,7 +42,7 @@ func page(t *testing.T, db *store.DB, id, container, title, body string, version
 //
 // Twice, because the reconciliation walk wraps: one empty sweep can be the end
 // of a pass rather than the end of the work.
-func indexAll(t *testing.T, x *search.Indexer) {
+func indexAll(t testing.TB, x *search.Indexer) {
 	t.Helper()
 	quiet := 0
 	// Bounded only so a broken sweep fails rather than hangs. One sweep
@@ -361,7 +361,7 @@ func ids(hits []search.SearchHit) []string {
 // BOTH OF THEM, which is the whole shape of the indexer now: the sources it
 // reads are replicated and the index it writes is this node's own, and a test
 // over one estate would not exercise the boundary at all.
-func openStore(t *testing.T) *store.DB {
+func openStore(t testing.TB) *store.DB {
 	t.Helper()
 	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
 		store.Options{})

@@ -288,3 +288,64 @@ func binds(n int) string {
 	}
 	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
 }
+
+// Hydrate reads the documents behind a fused answer, in the order given.
+//
+// THE FAN-OUT RETURNS KEYS, not rows, and it has to: a slice that carried
+// titles and snippets across the broker would move a kilobyte per candidate to
+// render ten. So the coordinator fuses ids and reads the rows here — locally,
+// from tables that hold the whole corpus, which is what makes hydrating a
+// PEER's hit an ordinary local read rather than a second round trip.
+//
+// A key whose row is gone is SKIPPED rather than rendered blank, on
+// [Indexer.hydrateHits]'s terms: between the scan and this read the indexer
+// may have removed a document, and a document that no longer exists is not an
+// answer.
+func (x *Indexer) Hydrate(ctx context.Context, keys []string, text string) ([]SearchHit, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	ids := make([]any, 0, len(keys))
+	for _, key := range keys {
+		ids = append(ids, key)
+	}
+	rows, err := x.db.SQL().QueryContext(ctx, `
+		SELECT id, source, source_id, container, title, excerpt
+		  FROM kb_docs WHERE id IN (`+binds(len(ids))+`)`, ids...)
+	if err != nil {
+		return nil, fmt.Errorf("search: read fused hits: %w", err)
+	}
+	defer rows.Close()
+	terms := textindex.Terms(text)
+	byKey := make(map[string]SearchHit, len(keys))
+	for rows.Next() {
+		var id, excerpt string
+		var hit SearchHit
+		if err := rows.Scan(&id, &hit.Source, &hit.ID, &hit.Container,
+			&hit.Title, &excerpt); err != nil {
+			return nil, fmt.Errorf("search: scan a fused hit: %w", err)
+		}
+		hit.Snippet = textindex.Snippet(excerpt, terms, snippetBytes)
+		byKey[id] = hit
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("search: read fused hits: %w", err)
+	}
+	out := make([]SearchHit, 0, len(keys))
+	for _, key := range keys {
+		if hit, ok := byKey[key]; ok {
+			out = append(out, hit)
+		}
+	}
+	return out, nil
+}
+
+// Corpus reports how many documents this node's index holds, which is what the
+// fan-out floor is decided against.
+func (x *Indexer) Corpus(ctx context.Context) (int, error) {
+	stats, err := x.corpus(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return stats.Docs, nil
+}

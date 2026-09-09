@@ -226,6 +226,27 @@ func (r *retention) observed(out *statelog.Reading) {
 	if r.metrics == nil {
 		return
 	}
+	// THE ANSWER COUNTERS FIRST, because two alarms are FRACTIONS of them
+	// and a fraction needs its denominator before either numerator means
+	// anything.
+	var answers, scoped, degraded uint64
+	for _, snapshot := range r.metrics.Read() {
+		if snapshot.Name != metrics.TrackerSearchAnswers {
+			continue
+		}
+		answers += snapshot.Total
+		if snapshot.Attrs["coverage"] == "scoped" {
+			scoped += snapshot.Total
+		}
+		if snapshot.Attrs["semantic"] == "skipped" {
+			degraded += snapshot.Total
+		}
+	}
+	if answers > 0 {
+		out.SearchScopedFraction = float64(scoped) / float64(answers)
+		out.SearchDegradedFraction = float64(degraded) / float64(answers)
+	}
+
 	for _, snapshot := range r.metrics.Read() {
 		switch snapshot.Name {
 		case metrics.StatelogBarrierDuration:

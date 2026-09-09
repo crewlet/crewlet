@@ -364,8 +364,9 @@ var table = []rule{
 					round(r.SearchP95), round(InteractiveSearchTarget)),
 				r.SearchP95 > InteractiveSearchTarget
 		},
-		remedy: "The corpus has outgrown one shard's index. See " +
-			"docs/guides/search.md for partitioning.",
+		remedy: "The corpus has outgrown what one node's share can scan in " +
+			"the budget. Adding a node divides the buckets again, with no " +
+			"configuration and no rebuild. See docs/guides/search.md.",
 	},
 	{
 		kind: KindSearchDegraded,
@@ -383,8 +384,9 @@ var table = []rule{
 			return fmt.Sprintf("%.0f%% of searches were answered over part of the "+
 				"corpus", r.SearchScopedFraction*100), r.SearchScopedFraction > 0
 		},
-		remedy: "A shard was unreachable. The answers were complete for what was " +
-			"searched and silent about what was not.",
+		remedy: "A node did not answer its bucket range, so part of the corpus " +
+			"went unscanned. The answers were complete for what was searched " +
+			"and silent about what was not; the log line names who was absent.",
 	},
 	{
 		kind: KindRecallBelowFloor,

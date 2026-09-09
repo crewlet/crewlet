@@ -154,6 +154,7 @@ type Broker struct {
 	mu          sync.Mutex
 	subs        map[subKey]*subscription
 	streams     []*streamSub
+	servers     []*serveSub
 	deadLetters map[string][]*events.Event
 
 	history    []*events.Event

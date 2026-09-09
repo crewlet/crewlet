@@ -409,6 +409,15 @@ func Catalogue() []Instrument {
 				"single reader on an idle node.",
 		},
 		{
+			Name: TrackerSearchAnswers, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"coverage", "semantic"},
+			Shows: "What each answer actually covered: whether every bucket " +
+				"of the corpus was scanned, and whether the semantic half " +
+				"ran. Both alarms below it are a FRACTION of this counter, " +
+				"and a short answer is indistinguishable from a short " +
+				"corpus without it.",
+		},
+		{
 			Name: TrackerVectorCoverage, Kind: KindGauge, Unit: UnitCount,
 			Attributes: nil,
 			Shows: "The fraction of sources carrying a current vector. It is " +

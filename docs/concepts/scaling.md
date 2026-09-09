@@ -68,11 +68,14 @@ turn the company has ever recorded — in its own database, applied from the sam
 ordered log as every other node's. There is no cache tier, no thin replica, and
 no way to run a node that holds part of it.
 
-The knowledge index is the one place a division is even *expressible*: every
-indexed document carries a [search shard](knowledge-system.md#every-document-carries-a-bucket),
-and a search can be told which bucket range to read. Nothing tells it one — a
-node holds every bucket and reads every bucket. The column exists so a scan's
-cost can be measured per bucket range instead of per corpus held.
+The knowledge index is the one place the *work* is divided, and only the work:
+every indexed document carries a
+[search shard](knowledge-system.md#every-document-carries-a-bucket), and above
+10 000 documents a fleet splits those 64 buckets between its live nodes so each
+scans a range rather than the whole corpus. Every node still **holds** every
+document — what is divided is CPU, so a node that does not answer costs the
+result a slice of relevance rather than a slice of the company, and the answer
+says so. See [Search](../guides/search.md).
 
 That is a deliberate trade and it is the reason the read path is simple: every
 answer can be served locally, a search scans one node's complete tables, and

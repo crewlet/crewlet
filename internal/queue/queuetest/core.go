@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -755,7 +756,7 @@ func (s *suite) runCore(t *testing.T) {
 		}
 	})
 
-	// THE ELEVEN VERBS, AT THE TWO POINTS A QUEUE IS NOT LIVE.
+	// THE THIRTEEN VERBS, AT THE TWO POINTS A QUEUE IS NOT LIVE.
 	//
 	// Nine of them had never been sent at either point by any case in this
 	// suite, and both backends were internally inconsistent there. The twin
@@ -769,7 +770,7 @@ func (s *suite) runCore(t *testing.T) {
 	// The two points get different rules, and the asymmetry is deliberate —
 	// see queue.EventQueue's Start and Stop.
 
-	// BEFORE START a backend picks its answer and applies it to all eleven.
+	// BEFORE START a backend picks its answer and applies it to all thirteen.
 	t.Run("an_unstarted_queue_answers_the_same_way_for_every_verb", func(t *testing.T) {
 		t.Parallel()
 		q := s.newQueue(t)
@@ -897,7 +898,7 @@ func second(_ bool, err error) error { return err }
 // lifecycleVerbs sends every publish, subscription and attachment verb once
 // and reports what each answered.
 //
-// ALL ELEVEN, in one list, because the property under test is that they AGREE
+// ALL THIRTEEN, in one list, because the property under test is that they AGREE
 // — a helper that took a subset would be certifying the subset the author
 // happened to think of, which is exactly how nine of them went unsent.
 //
@@ -912,6 +913,19 @@ func lifecycleVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbRe
 		// deliver into a handler the case has already returned from.
 		_ = unsub(ctx)
 	}
+	stopServing, serveErr := q.Serve(ctx, topic, func(context.Context, []byte) ([]byte, error) {
+		return nil, nil
+	})
+	if stopServing != nil {
+		_ = stopServing(ctx)
+	}
+	// BOUNDED, because a live queue with nobody serving would otherwise
+	// wait out a context this probe never gave a deadline. What is being
+	// read here is whether the verb REFUSED, which it answers immediately
+	// either way.
+	asking, cancelAsk := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancelAsk()
+	_, askErr := q.Ask(asking, topic, []byte("probe"), 1)
 	return []verbResult{
 		{"Publish", q.Publish(ctx, topic, newEvent(topic))},
 		{"Subscribe", q.Subscribe(ctx, topic, "g", func(context.Context, *events.Event) queue.Result {
@@ -928,5 +942,7 @@ func lifecycleVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbRe
 		{"SubscribeStream", streamErr},
 		{"PauseTopic", q.PauseTopic(ctx, topic, "g", "test")},
 		{"ResumeTopic", q.ResumeTopic(ctx, topic, "g", "test")},
+		{"Serve", serveErr},
+		{"Ask", askErr},
 	}
 }

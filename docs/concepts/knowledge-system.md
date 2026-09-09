@@ -160,11 +160,13 @@ independence is the point:
 - **A document with no embedding is still in a bucket**, because the bucket is a
   function of the id rather than of anything derived from it.
 
-**Every search still reads every bucket.** There is no routing plan and nothing
-computes one; a node holds the whole corpus and takes all 64 buckets, which is
-exactly what it did before the column existed. What the column buys today is
-that a scan's cost is measurable per *bucket range* rather than per corpus held
-— which is the measurement any future division would have to be decided from.
+**A single node reads every bucket**, exactly as it did before the column
+existed. A fleet above 10 000 documents divides them: each live node scans a
+contiguous range, returns its best candidates *with scores*, and the asking node
+merges. There is no routing plan to compute and nothing to configure — the
+division is a sorted roster and a remainder, and every node computes the same
+one. See [Search](../guides/search.md) for the merge order, why BM25 stays
+comparable across a divided scan, and what a partial answer names.
 
 The count is fixed for the life of a deployment and is deliberately not
 configurable. Changing it re-buckets every document, which costs a full index
