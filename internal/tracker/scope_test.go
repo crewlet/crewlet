@@ -108,7 +108,7 @@ func TestEveryOpDeclaresItsScope(t *testing.T) {
 				t.Fatalf("the record moved no object row at all, so this case is "+
 					"asserting nothing about %s", record.Op)
 			}
-			scope := record.Scope.Resolve(record.Subject, "ENG")
+			scope := record.Scope.Resolve(record.Subject)
 			for _, id := range moved {
 				touched := statelog.ScopeSet{Paths: []string{
 					tracker.ScopeTerm{

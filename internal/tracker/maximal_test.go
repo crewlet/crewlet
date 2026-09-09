@@ -96,7 +96,7 @@ func TestTheMaximalCommitFitsItsDesignMaximum(t *testing.T) {
 			CreatedAt: time.Unix(1_700_000_000, 0).UTC(),
 			Gen:       1,
 			Writer:    "node-with-a-long-name",
-			Scope:     tracker.ScopeSet{Subject: true},
+			Scope:     tracker.ScopeSet{Subject: true, Container: "ENG"},
 		},
 		Expect:    918_280_001,
 		Actor:     "an-agent-handle",

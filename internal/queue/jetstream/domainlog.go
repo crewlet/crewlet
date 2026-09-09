@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -84,4 +85,48 @@ func (l *DomainLog) LastSeq(ctx context.Context, subject string) (uint64, bool, 
 		return 0, false, fmt.Errorf("jetstream: last message on %q: %w", subject, err)
 	}
 	return msg.Sequence, true, nil
+}
+
+// End is the stream's own last sequence, across every subject.
+//
+// SEPARATE FROM [DomainLog.LastSeq], which is per subject, because the two
+// answer different questions: a writer forming an expectation wants its own
+// subject's last message, and a reader establishing how far the log goes wants
+// the stream's. Reading one for the other is how a lag figure comes back as
+// zero on a busy company because the subject a node happened to ask about is
+// quiet.
+func (l *DomainLog) End(ctx context.Context) (uint64, error) {
+	info, err := l.stream.Info(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("jetstream: read %q's end: %w", l.name, err)
+	}
+	return info.State.LastSeq, nil
+}
+
+// At reads one record back by sequence.
+//
+// # Why a domain needs this at all
+//
+// Almost nothing reads a log by position: a consumer is how records are
+// delivered, and a consumer is what the apply loop uses. What needs this is
+// the small set of paths that address the log directly rather than following
+// it — a reanchor establishing what the old stream's head was, a snapshot's
+// verification, and any tool that has a position and needs the record at it.
+//
+// It reports (false, nil) for a sequence the stream no longer holds, which is
+// an ordinary answer rather than an error: a trimmed record is exactly what
+// the retention gate exists to produce, and a caller distinguishing "gone" from
+// "the broker is unreachable" is the whole reason it is not one error value.
+func (l *DomainLog) At(ctx context.Context, seq uint64) (subject string,
+	payload []byte, storedAt time.Time, ok bool, err error) {
+
+	msg, err := l.stream.GetMsg(ctx, seq)
+	switch {
+	case errors.Is(err, jetstream.ErrMsgNotFound):
+		return "", nil, time.Time{}, false, nil
+	case err != nil:
+		return "", nil, time.Time{}, false,
+			fmt.Errorf("jetstream: read %q at %d: %w", l.name, seq, err)
+	}
+	return msg.Subject, msg.Data, msg.Time, true, nil
 }

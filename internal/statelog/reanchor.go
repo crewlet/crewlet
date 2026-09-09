@@ -216,9 +216,15 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs, guard Rean
 	}
 	if err := d.DB.Replicated().Tx(ctx, func(tx *sql.Tx) error {
 		for _, reg := range d.Domains {
-			spec := reg.Domain.Stream()
-			t := tables{stream: spec.Name}
-			at := Position{Stream: spec.Name, Generation: gen, Seq: cursor}
+			// newTables rather than a literal: a hand-built one leaves
+			// whatever field the writer did not think of at its zero
+			// value, and every one of them is a key some other side of
+			// the framework spells in full.
+			t, err := newTables(reg.Domain)
+			if err != nil {
+				return err
+			}
+			at := Position{Stream: t.stream, Generation: gen, Seq: cursor}
 			if err := t.setCursor(ctx, tx, at, in.StreamCreatedAt, now()); err != nil {
 				return err
 			}

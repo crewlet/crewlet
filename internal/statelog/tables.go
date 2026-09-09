@@ -30,10 +30,21 @@ import (
 // a quote in it.
 type tables struct {
 	stream   string
+	prefix   string
 	ops      string
 	deferred string
 	scope    string
 }
+
+// subjectOf is the WIRE subject an anchor is keyed on.
+//
+// ONE SPELLING, and it lives here because three callers need it and two of
+// them are on opposite sides of the same key: the applier advances the anchor
+// and the publisher reads it, so a bare path in one and a prefixed one in the
+// other is a publisher that never finds an anchor at all — every arbitrated
+// write falls through to the last-message probe, loops its whole round budget
+// and reports a conflict on an object nobody else touched.
+func (t tables) subjectOf(s Subject) string { return t.prefix + "." + s.String() }
 
 // identifier is what a domain may call a table. Deliberately narrower than SQL
 // allows: these names are interpolated into statements, so the set is what is
@@ -57,6 +68,7 @@ func newTables(d Domain) (tables, error) {
 	spec := d.Stream()
 	t := tables{
 		stream:   spec.Name,
+		prefix:   spec.SubjectPrefix,
 		ops:      d.OpsTable(),
 		deferred: d.DeferredTable(),
 		scope:    d.ScopeIndex(),
