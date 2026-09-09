@@ -589,3 +589,103 @@ func TestTitlesNormaliseAndTheConversationSurvivesARename(t *testing.T) {
 		t.Errorf("ConversationKey = %q", got)
 	}
 }
+
+// A COMMENT IS EDITED BY ITS OWN AUTHOR, and the edit is its own kind.
+//
+// `comment_edited` was in the enum and rendered by the prompt with nothing
+// able to produce it — a kind every reader was written to handle and no
+// writer ever wrote. This is the writer.
+func TestACommentIsEditedByItsAuthorAndSaysSo(t *testing.T) {
+	t.Parallel()
+	s, _, _ := newStore(t)
+	page := write(t, s, author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+	comment, _, err := s.Comment(t.Context(), author("jane"), page.Page.ID,
+		pages.NewComment{Body: "first thought"})
+	if err != nil {
+		t.Fatalf("comment: %v", err)
+	}
+
+	edited, written, err := s.EditComment(t.Context(), author("jane"), page.Page.ID,
+		comment.ID, "a better thought")
+	if err != nil {
+		t.Fatalf("EditComment: %v", err)
+	}
+	if edited.Body != "a better thought" {
+		t.Errorf("body = %q", edited.Body)
+	}
+	if !edited.UpdatedAt.After(comment.CreatedAt) && !edited.UpdatedAt.Equal(comment.CreatedAt) {
+		t.Errorf("updated_at = %v, before the comment was written", edited.UpdatedAt)
+	}
+	if written.ChangeID == "" {
+		t.Fatal("the edit recorded no change, so nobody is woken by it")
+	}
+	if edited.LastChange == nil || edited.LastChange.Kind != pages.ChangeCommentEdited {
+		t.Fatalf("the change is %+v, want kind %q — a reader tells 'somebody "+
+			"said something' from 'somebody changed what they said' only by "+
+			"the kind", edited.LastChange, pages.ChangeCommentEdited)
+	}
+	if edited.LastChange.Excerpt == "" {
+		t.Error("the change carries no excerpt of the edited remark")
+	}
+
+	// AND THE STORED RECORD IS THE EDITED ONE.
+	thread, err := s.Thread(t.Context(), page.Page.ID)
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	if len(thread) != 1 || thread[0].Body != "a better thought" {
+		t.Errorf("thread = %+v, want one edited comment", thread)
+	}
+}
+
+// NOBODY ELSE EDITS IT, operator included.
+//
+// A comment is a remark somebody made, and an edit anybody could make is a
+// remark attributed to a person who did not make it — on a record that
+// outlives the page's body and is quoted in a wake.
+func TestOnlyTheAuthorEditsAComment(t *testing.T) {
+	t.Parallel()
+	s, _, _ := newStore(t)
+	page := write(t, s, author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+	comment, _, err := s.Comment(t.Context(), author("jane"), page.Page.ID,
+		pages.NewComment{Body: "jane's remark"})
+	if err != nil {
+		t.Fatalf("comment: %v", err)
+	}
+
+	if _, _, err := s.EditComment(t.Context(), author("bob"), page.Page.ID,
+		comment.ID, "bob's words in jane's mouth"); err == nil {
+		t.Fatal("a second person edited somebody else's comment")
+	} else if !errors.Is(err, pages.ErrInvalid) {
+		t.Errorf("refusal = %v, want ErrInvalid", err)
+	}
+
+	thread, err := s.Thread(t.Context(), page.Page.ID)
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	if len(thread) != 1 || thread[0].Body != "jane's remark" {
+		t.Errorf("the comment was changed anyway: %+v", thread)
+	}
+}
+
+// AN EDIT THAT CHANGES NOTHING WAKES NOBODY. Writing a change record for an
+// unchanged body is the same noise as an edit nobody made.
+func TestAnEditThatChangesNothingRecordsNothing(t *testing.T) {
+	t.Parallel()
+	s, _, _ := newStore(t)
+	page := write(t, s, author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+	comment, _, err := s.Comment(t.Context(), author("jane"), page.Page.ID,
+		pages.NewComment{Body: "  a remark  "})
+	if err != nil {
+		t.Fatalf("comment: %v", err)
+	}
+	_, written, err := s.EditComment(t.Context(), author("jane"), page.Page.ID,
+		comment.ID, "a remark")
+	if err != nil {
+		t.Fatalf("EditComment: %v", err)
+	}
+	if written.ChangeID != "" {
+		t.Errorf("an edit that changed nothing recorded change %q", written.ChangeID)
+	}
+}

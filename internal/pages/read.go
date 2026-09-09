@@ -122,8 +122,12 @@ func (r *Reader) List(ctx context.Context, f Filter) ([]Summary, error) {
 		args = append(args, f.Watcher)
 	}
 	if title := strings.TrimSpace(f.Title); title != "" {
-		where = append(where, "p.title LIKE ?")
-		args = append(args, "%"+title+"%")
+		// ESCAPED, and the ESCAPE clause says so. A title filter is text a
+		// person typed, and `%` and `_` are LIKE's own wildcards: without
+		// this, filtering for "100%" matches every page in the container
+		// and nothing says the filter did not apply.
+		where = append(where, `p.title LIKE ? ESCAPE '\'`)
+		args = append(args, store.LikeContains(title))
 	}
 	if f.Skills != nil {
 		if *f.Skills {
@@ -270,8 +274,16 @@ func (r *Reader) locate(ctx context.Context, ref string) (document string, revis
 	if container, title, ok := strings.Cut(ref, "/"); ok {
 		// "CONTAINER/Title", which is how a person and a model name a page
 		// — the title is its address, and the container scopes it.
+		// AGAINST title_norm, which is the value the fleet CLAIMED.
+		//
+		// The form this replaces compared LOWER(title) against the
+		// normalised reference, and this engine's LOWER() folds ASCII
+		// ONLY: a page titled "Qualité Étendue" was unreachable by its own
+		// address, because the claim lowercased it with Go's Unicode case
+		// tables and the lookup did not. It also could not use an index,
+		// so every address lookup scanned the container.
 		query = `SELECT id, document, revision FROM pages
-		          WHERE container = ? AND LOWER(title) = ?`
+		          WHERE container = ? AND title_norm = ?`
 		args = []any{strings.ToUpper(strings.TrimSpace(container)), NormalizeTitle(title)}
 	}
 	err = r.db.SQL().QueryRowContext(ctx, query, args...).Scan(&id, &document, &rev)

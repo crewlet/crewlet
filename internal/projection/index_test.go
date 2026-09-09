@@ -14,11 +14,13 @@ import (
 func page(t *testing.T, db *store.DB, id, container, title, body string, version int) {
 	t.Helper()
 	_, err := db.SQL().ExecContext(t.Context(), `
-		INSERT INTO pages (id, container, title, body, status, version, created_at, updated_at, revision, document)
-		VALUES (?, ?, ?, ?, 'published', ?, 0, 0, ?, '{}')
+		INSERT INTO pages (id, container, title, title_norm, body, status, version,
+		                   created_at, updated_at, revision, document)
+		VALUES (?, ?, ?, lower(?), ?, 'published', ?, 0, 0, ?, '{}')
 		ON CONFLICT (id) DO UPDATE SET
-			title = excluded.title, body = excluded.body, version = excluded.version`,
-		id, container, title, body, version, version)
+			title = excluded.title, title_norm = excluded.title_norm,
+			body = excluded.body, version = excluded.version`,
+		id, container, title, title, body, version, version)
 	if err != nil {
 		t.Fatalf("insert page %s: %v", id, err)
 	}
@@ -144,8 +146,9 @@ func TestOnlyPublishedPagesAreIndexed(t *testing.T) {
 	page(t, db, "p.live", "ENG", "Live", "the migration plan is here", 1)
 	for id, status := range map[string]string{"p.draft": "draft", "p.gone": "trashed"} {
 		if _, err := db.SQL().ExecContext(t.Context(), `
-			INSERT INTO pages (id, container, title, body, status, version, created_at, updated_at, revision, document)
-			VALUES (?, 'ENG', 'Hidden', 'the migration plan is here', ?, 1, 0, 0, 1, '{}')`,
+			INSERT INTO pages (id, container, title, title_norm, body, status, version,
+			                   created_at, updated_at, revision, document)
+			VALUES (?, 'ENG', 'Hidden', 'hidden', 'the migration plan is here', ?, 1, 0, 0, 1, '{}')`,
 			id, status); err != nil {
 			t.Fatal(err)
 		}

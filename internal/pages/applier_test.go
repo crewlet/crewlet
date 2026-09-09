@@ -458,3 +458,49 @@ func TestASkillPageMovingTellsTheRegistry(t *testing.T) {
 		"a page that stopped being a skill told the registry nothing, so an "+
 			"evicted skill would keep serving its last-good body")
 }
+
+// A PAGE IS REACHABLE BY THE ADDRESS THE FLEET CLAIMED, whatever the title
+// looks like.
+//
+// The claim key carries the NORMALISED title — lowercased and
+// whitespace-collapsed — which is what makes "Deploy Runbook" and
+// "deploy  runbook" one address rather than two pages. The projection used to
+// resolve an address with `LOWER(title) = ?` against that normalised form, and
+// this engine's LOWER() folds ASCII ONLY.
+//
+// THE NON-ASCII CASE IS THE ONE THAT WAS BROKEN, and it is the one that goes
+// red if the lookup is put back: a page titled "Qualité Étendue" was
+// unreachable by its own address, and the link that resolves through the
+// address read as a missing page. The others pass either way today, because
+// the store collapses whitespace before it writes a title — they are here
+// because that is a SECOND place the address rule lives, and this is what
+// says the two still agree.
+func TestAPageIsFoundByEveryFormOfItsAddress(t *testing.T) {
+	t.Parallel()
+	s, db, _ := projected(t)
+	for name, tc := range map[string]struct{ title, ref string }{
+		"repeated whitespace": {"Deploy   Runbook", "ENG/deploy runbook"},
+		"leading whitespace":  {"  Incident Review", "ENG/incident review"},
+		"a non-ASCII capital": {"Qualité Étendue", "ENG/qualité étendue"},
+		"mixed case":          {"On Call", "ENG/ON CALL"},
+		"a tab":               {"Post\tMortem", "ENG/post mortem"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := write(t, s, author("jane"), pages.NewPage{Title: tc.title, Body: "prose"})
+			settle(t, func() bool {
+				return rowCount(t, db,
+					`SELECT COUNT(*) FROM pages WHERE id = '`+got.Page.ID+`'`) == 1
+			}, "the page never projected")
+
+			found, err := reader(t, db).Get(t.Context(), tc.ref)
+			if err != nil {
+				t.Fatalf("Get(%q) on a page titled %q: %v — the address the "+
+					"fleet claimed does not reach the page it claimed it for",
+					tc.ref, tc.title, err)
+			}
+			if found.Page.ID != got.Page.ID {
+				t.Errorf("Get(%q) found %q, want %q", tc.ref, found.Page.ID, got.Page.ID)
+			}
+		})
+	}
+}

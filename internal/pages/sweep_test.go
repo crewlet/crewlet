@@ -225,3 +225,91 @@ func TestOnlyPageChangesAgeOut(t *testing.T) {
 		t.Errorf("the page whose whole history was swept is unreadable: %v", err)
 	}
 }
+
+// THE HISTORY SWEEP READS KEYS, NOT BODIES, and this is what proves it: every
+// revision's stored value is replaced with something no decoder accepts, and
+// the sweep still trims the right ones.
+//
+// The version is IN THE KEY — `r.<page>.<n>` — and the sweep used to decode
+// every past body to read that number back. At a 512 KiB cap and a hundred
+// revisions a page that is the largest single transfer this engine makes,
+// hourly, for a pass that usually purges nothing. A test that only counted
+// keys afterwards would pass either way.
+func TestTheHistorySweepNeverReadsARevisionBody(t *testing.T) {
+	t.Parallel()
+	s, sweeper, docs, _ := swept(t)
+	page := write(t, s, agent("eng"), pages.NewPage{Title: "Runbook", Body: "v1"})
+	for i := range pages.RevisionsKept {
+		saved, err := s.SavePage(t.Context(), agent("eng"), page.Page.ID, pages.Save{
+			BaseVersion: page.Page.Version, Body: ptr(fmt.Sprintf("body %d", i+2)),
+		})
+		if err != nil {
+			t.Fatalf("save %d: %v", i, err)
+		}
+		page = saved
+	}
+
+	// EVERY BODY MADE UNREADABLE. A sweep that decodes one fails here; a
+	// sweep that reads the key does not notice.
+	records, err := docs.Documents(t.Context(), coord.FamilyPages, pages.ClassRevision)
+	if err != nil {
+		t.Fatalf("list revisions: %v", err)
+	}
+	if len(records) != pages.RevisionsKept+1 {
+		t.Fatalf("%d revisions before the sweep, want %d",
+			len(records), pages.RevisionsKept+1)
+	}
+	for _, rec := range records {
+		ok, err := docs.UpdateDocument(t.Context(), coord.FamilyPages, rec.Key,
+			[]byte("not json at all"), rec.Version)
+		if err != nil || !ok {
+			t.Fatalf("corrupt %s: ok=%v err=%v", rec.Key, ok, err)
+		}
+	}
+
+	swept, err := sweeper.SweepRevisions(t.Context())
+	if err != nil {
+		t.Fatalf("SweepRevisions: %v", err)
+	}
+	if swept != 1 {
+		t.Fatalf("swept %d, want 1 — the sweep could not order the history "+
+			"without decoding it", swept)
+	}
+	if got := keysOfClass(t, docs, pages.ClassRevision); got != pages.RevisionsKept {
+		t.Errorf("%d revisions remain, want %d", got, pages.RevisionsKept)
+	}
+
+	// AND IT TOOK THE OLDEST. Version 1 is the one over the cap.
+	left, err := docs.Documents(t.Context(), coord.FamilyPages, pages.ClassRevision)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, rec := range left {
+		if _, version, ok := pages.RevisionOf(rec.Key); ok && version == 1 {
+			t.Error("the sweep kept version 1 and took a newer revision")
+		}
+	}
+}
+
+// A REVISION KEY CARRIES ITS VERSION, and nothing else does.
+func TestARevisionKeyNamesItsPageAndVersion(t *testing.T) {
+	t.Parallel()
+	key := pages.RevisionKey("page-7", 42)
+	pageID, version, ok := pages.RevisionOf(key)
+	if !ok || pageID != "page-7" || version != 42 {
+		t.Fatalf("RevisionOf(%q) = (%q, %d, %v)", key, pageID, version, ok)
+	}
+	// EVERY OTHER CLASS ANSWERS FALSE. A sweep that read a comment key as a
+	// revision would sort a page's comments into its history and purge the
+	// oldest of them.
+	for name, other := range map[string]string{
+		"a page":    pages.PageKey("page-7"),
+		"a comment": pages.CommentKey("page-7", "c1"),
+		"a change":  pages.ChangeKey("page-7", "x1"),
+		"a title":   pages.TitleKey("ENG", "Runbook"),
+	} {
+		if _, _, ok := pages.RevisionOf(other); ok {
+			t.Errorf("%s key %q was read as a revision", name, other)
+		}
+	}
+}

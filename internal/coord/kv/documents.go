@@ -92,13 +92,34 @@ func (f *FleetStore) DocumentAt(ctx context.Context, family coord.Family, key st
 }
 
 // Documents lists a family under a prefix.
+//
+// THE PREFIX IS A SERVER-SIDE FILTER, for the reason [FleetStore.DocumentKeys]
+// gives: a watch over the whole family transfers every VALUE in it and
+// discards the ones outside the prefix here, so a sweep looking for a handful
+// of expired change records moves every revision body in the company across
+// the wire to find them. An empty prefix still watches everything, which is
+// what "list the family" means.
+//
+// The whole-segment rule is applied on top of the server's filter, exactly as
+// it is there: the two agree for every key this engine writes, and the local
+// test is what keeps the guarantee unchanged if a filter ever admits a partial
+// segment.
 func (f *FleetStore) Documents(ctx context.Context, family coord.Family, prefix string) ([]coord.Record, error) {
 	bucket, err := f.bucketFor(family)
 	if err != nil {
 		return nil, err
 	}
 	var out []coord.Record
-	watcher, err := bucket.WatchAll(ctx, jetstream.IgnoreDeletes())
+	watch := func() (jetstream.KeyWatcher, error) {
+		if prefix == "" {
+			return bucket.WatchAll(ctx, jetstream.IgnoreDeletes())
+		}
+		// BOTH FILTERS, for the reason keyFilters exists: `p.>` misses the
+		// key that IS the prefix, and that key is a real record in every
+		// class this engine writes.
+		return bucket.WatchFiltered(ctx, keyFilters(prefix), jetstream.IgnoreDeletes())
+	}
+	watcher, err := watch()
 	if err != nil {
 		return nil, unavailable("list the family", err)
 	}

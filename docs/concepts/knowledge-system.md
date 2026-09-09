@@ -120,6 +120,12 @@ Two properties differ from the vendor path and both are visible:
 
 - **Every seat reads every page.** There is no per-seat credential, so `CanSearch` reduces to "is there an index at all" — the credential-less case below does not arise.
 - **An index that is still building says so.** It is a different fact from an empty company, and a seat is told which: "the knowledge base is not searchable from this node yet — ask a colleague rather than concluding nothing has been written down". A seat that read an empty result would act on it, by writing a page that already exists.
+- **A title is an ADDRESS.** It is unique within its container, claimed
+  first-writer-wins on the fleet, and a page is fetched by `CONTAINER/Title`
+  as readily as by its id. The address is the title NORMALISED — lowercased
+  and with runs of whitespace collapsed — so `ENG/deploy runbook` reaches a
+  page called "Deploy  Runbook", and two people cannot create pages whose
+  titles differ only in spacing or case.
 
 The tool-skills container is excluded from every result. A tool skill is machinery the engine injects into a phase, and a seat told to read one as knowledge would follow it as an instruction.
 
