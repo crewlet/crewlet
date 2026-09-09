@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -373,5 +374,109 @@ func TestTheTagModesAreThreeDifferentQuestions(t *testing.T) {
 				t.Fatalf("tag=%s answered %v, want %v", tc.filter, got, tc.want)
 			}
 		})
+	}
+}
+
+// A PAGE BOUNDARY IS THE WHOLE ORDER, NOT THE ID.
+//
+// # The failure this exists to catch
+//
+// The cursor used to carry only the last row's id and the predicate was
+// `id > ?` — while the order is `<sort column>, id`. On a board ordered by
+// rank, every task with a later rank and a smaller id SORTS AFTER the boundary
+// and FAILS the predicate, so it is never returned; every task with an earlier
+// rank and a larger id passes it on every page, so it is returned again and
+// again. Both at once, silently: a caller paging its own board would see some
+// of its tasks twice and never see others, and nothing in the answer said so.
+//
+// The fixture is the shape that catches it — ranks and ids in OPPOSITE orders
+// — because any fixture where they agree passes with either implementation.
+func TestPagingAnOrderReturnsEveryRowExactlyOnce(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	// Ranks ascend while ids descend, so "after this rank" and "after
+	// this id" name disjoint sets.
+	const total = 9
+	for i := range total {
+		task := newTask(fmt.Sprintf("t-%d", total-i))
+		if _, err := r.writer.CreateTask(t.Context(), fmt.Sprintf("op-%d", i),
+			task, nil); err != nil {
+			t.Fatalf("CreateTask: %v", err)
+		}
+		r.drain()
+	}
+
+	// BOTH DIRECTIONS. "After" in a descending order is a SMALLER value,
+	// and a keyset that compared the same way both ways would return the
+	// page BEFORE the boundary — every descending page repeating the
+	// first — which an ascending fixture cannot show.
+	for _, sort := range []string{"rank", "-rank", "-updated"} {
+		seen := map[string]int{}
+		cursor := ""
+		for page := 0; page < total+2; page++ {
+			params := map[string]any{
+				"container": "project:ENG", "sort": sort, "limit": "2",
+			}
+			if cursor != "" {
+				params["cursor"] = cursor
+			}
+			answer := r.ask(params)
+			for _, row := range answer.Rows {
+				seen[row.ID]++
+			}
+			if answer.NextCursor == "" {
+				break
+			}
+			cursor = answer.NextCursor
+		}
+
+		if len(seen) != total {
+			t.Errorf("paging by %s returned %d distinct tasks of %d — a "+
+				"boundary that compares a column the order does not sort by, "+
+				"or compares it the wrong way, drops rows on one side of it",
+				sort, len(seen), total)
+		}
+		for id, times := range seen {
+			if times != 1 {
+				t.Errorf("paging by %s returned task %s %d times; a keyset "+
+					"boundary returns each row exactly once", sort, id, times)
+			}
+		}
+	}
+}
+
+// A CURSOR BELONGS TO THE ORDER THAT MINTED IT.
+//
+// Resuming a rank-ordered page inside an update-ordered query would compute a
+// boundary against a column the query does not sort by — which drops rows
+// without saying so, and is the same defect as the one above wearing a
+// caller's mistake instead of ours.
+func TestACursorFromAnotherOrderIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for i := range 3 {
+		if _, err := r.writer.CreateTask(t.Context(), fmt.Sprintf("op-%d", i),
+			newTask(fmt.Sprintf("t-%d", i)), nil); err != nil {
+			t.Fatalf("CreateTask: %v", err)
+		}
+		r.drain()
+	}
+	first := r.ask(map[string]any{
+		"container": "project:ENG", "sort": "rank,updated", "limit": "1",
+	})
+	if first.NextCursor == "" {
+		t.Fatal("the first page minted no cursor, so this case asserts nothing")
+	}
+	q, err := tracker.ParseQuery(queries.FromMap(map[string]any{
+		"container": "project:ENG", "sort": "rank", "cursor": first.NextCursor,
+	}), wednesday, berlin)
+	if err != nil {
+		t.Fatalf("ParseQuery: %v", err)
+	}
+	if _, err := r.reader.Tasks(t.Context(), q, wednesday); err == nil {
+		t.Fatal("a cursor minted by a two-column order was applied to a " +
+			"one-column one, which computes a boundary against a column the " +
+			"query does not sort by")
 	}
 }
