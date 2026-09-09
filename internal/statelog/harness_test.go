@@ -3,6 +3,7 @@ package statelog_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -30,19 +31,30 @@ func (probeDomain) Name() string { return "probe" }
 
 func (probeDomain) Stream() statelog.StreamSpec {
 	return statelog.StreamSpec{
-		Name:          probeStream,
-		Subjects:      []string{probePrefix + ".>"},
-		SubjectPrefix: probePrefix,
-		MaxBytes:      16 << 20,
-		Duplicates:    2 * time.Minute,
-		Replay:        statelog.ReplayStrict,
+		Name:            probeStream,
+		Subjects:        []string{probePrefix + ".>"},
+		SubjectPrefix:   probePrefix,
+		MaxBytes:        16 << 20,
+		Duplicates:      2 * time.Minute,
+		Replay:          statelog.ReplayStrict,
+		ArbitratedKinds: []string{"object"},
 	}
 }
 
 func (probeDomain) RecordVersion() int { return 1 }
 
+// Envelope decodes the half every build can read.
+//
+// A REAL DECODER, not a constant: the envelope carries the version, the
+// subject, the scope and the operation id, and every branch of the apply loop
+// turns on one of them. A fake that answered a constant would exercise one
+// path and report the rest green.
 func (probeDomain) Envelope(payload []byte) (statelog.Envelope, error) {
-	return statelog.Envelope{V: 1, Kind: "probe"}, nil
+	var env statelog.Envelope
+	if err := json.Unmarshal(payload, &env); err != nil {
+		return statelog.Envelope{}, err
+	}
+	return env, nil
 }
 
 func (probeDomain) InstallsGate(statelog.Envelope) bool { return false }
@@ -54,10 +66,11 @@ func (probeDomain) Tables() map[string]statelog.TableClass {
 	}
 }
 
-func (probeDomain) ScopeIndex() string   { return "probe_deferred_scope" }
-func (probeDomain) OpsTable() string     { return "probe_ops" }
-func (probeDomain) ReadinessInput() bool { return true }
-func (probeDomain) ClaimsIdentity() bool { return true }
+func (probeDomain) DeferredTable() string { return "probe_log_deferred" }
+func (probeDomain) ScopeIndex() string    { return "probe_deferred_scope" }
+func (probeDomain) OpsTable() string      { return "probe_ops" }
+func (probeDomain) ReadinessInput() bool  { return true }
+func (probeDomain) ClaimsIdentity() bool  { return true }
 
 // applier stands in for this node's own apply loop: what it has committed,
 // and which operations it has written rows for.

@@ -62,6 +62,12 @@ type Domain interface {
 	// whichever behaviour its absence happened to produce.
 	Tables() map[string]TableClass
 
+	// DeferredTable is where a record this build cannot decode is
+	// retained, byte for byte, at its original position. Classed Local
+	// and named by the domain for the same reason its ops table is: the
+	// framework writes the statements and the domain owns the schema.
+	DeferredTable() string
+
 	// ScopeIndex is the table the framework probes for deferred records
 	// whose declared scope intersects a read's or a write's closure.
 	// Classed Local, written in the same transaction as the deferred row
@@ -154,6 +160,25 @@ type StreamSpec struct {
 	// Subjects is the subject space this domain publishes into, as the
 	// broker is told it — normally one wildcard.
 	Subjects []string
+
+	// ArbitratedKinds are the subject kinds whose writes carry a
+	// per-subject expectation, and therefore the only kinds an anchor is
+	// written for.
+	//
+	// ARBITRATION IS A PROPERTY OF THE SUBJECT KIND, not of the stream,
+	// and a stream-wide flag cannot say so. One log carries kinds that
+	// arbitrate, a kind that is additive and needs no expectation at all,
+	// and the framework's own barrier, which nobody arbitrates. Writing
+	// an anchor for the last two costs a row nothing can ever read — and
+	// for the barrier it is worse than waste: every barrier shares ONE
+	// subject, so a stream-wide rule would put an upsert per read on a
+	// single hot row inside the transaction holding this store's only
+	// writer, and would falsify the property that a barrier writes zero
+	// rows and never enters the applier's row budget at all.
+	//
+	// EMPTY is legal and means a domain that publishes no expectation:
+	// its idempotency is its own row guard.
+	ArbitratedKinds []string
 
 	// SubjectPrefix is what a subject's own path is appended to, and it
 	// is DECLARED rather than derived from Subjects.
@@ -394,8 +419,24 @@ type Record struct {
 	// the broker's sequence and the writer's own generation.
 	Position Position
 
-	// Payload is the record as published. The framework never decodes it.
+	// Payload is the record as published. The framework never decodes it,
+	// and a record this build cannot read is retained as exactly these
+	// bytes — LOSSLESS MEANS THE BYTES, so a later build reprocesses what
+	// was published rather than what an intermediate build understood of
+	// it.
 	Payload []byte
+
+	// StoredAt is the broker's own timestamp for this record, which is
+	// what makes it byte-identical on every node rather than a clock each
+	// one reads for itself.
+	StoredAt time.Time
+
+	// ack acknowledges this record's delivery, and is unexported because
+	// exactly one caller may use it: the apply loop, after the transaction
+	// that consumed the record has committed. An applier that could reach
+	// it would be able to acknowledge a record from inside the transaction
+	// that writes its rows — which the store may roll back and run again.
+	ack func() error
 }
 
 // Applier is a domain's deterministic state machine. ONE per domain, ONE
@@ -416,9 +457,27 @@ type Record struct {
 // There is no Order method and no Reset: a total order removes the first, and
 // a checkpoint committed with its own rows removes the second.
 type Applier interface {
-	// Apply writes this record's rows. The framework commits the rows,
-	// the op id, the anchor and the checkpoint in this same transaction.
-	Apply(ctx context.Context, tx *sql.Tx, rec Record, opts ApplyOptions) error
+	// Apply writes this record's rows and reports how many it wrote. The
+	// framework commits the rows, the op id, the anchor and the
+	// checkpoint in this same transaction.
+	//
+	// THE ROW COUNT IS THE BUDGET'S INPUT and the framework cannot derive
+	// it: a transaction ends at a record boundary at or past a row budget,
+	// and only the applier knows what its record cost. An approximation
+	// here is a transaction that holds this store's only writer for as
+	// long as the approximation is wrong.
+	Apply(ctx context.Context, tx *sql.Tx, rec Record, opts ApplyOptions) (rows int, err error)
+
+	// Gated reports whether this record must produce NO rows, read from
+	// this same transaction.
+	//
+	// A gate is a rule under which a DURABLE record applies nowhere — a
+	// permanent deletion marker on its subject, or an eviction of the node
+	// that wrote it. It is the domain's because the rows that carry it
+	// are, and it is asked inside the transaction because the answer has
+	// to come from the same committed state the record would have applied
+	// against.
+	Gated(ctx context.Context, tx *sql.Tx, rec Record) (Reason, bool, error)
 
 	// Committed runs AFTER the transaction commits, for the consequences
 	// that are not rows.
@@ -444,6 +503,11 @@ type ApplyOptions struct {
 
 	// StoredAt is the broker's own timestamp for this record.
 	StoredAt time.Time
+
+	// ArbitratedKinds is the stream's declaration, carried here so an
+	// applier that needs it reads the same static value the framework
+	// does rather than a second copy.
+	ArbitratedKinds []string
 
 	// Epoch is the per-epoch configuration the domain declared it reads.
 	// It is here rather than read by the applier because two nodes
