@@ -50,10 +50,6 @@ type Fleet struct {
 	maintAcks    map[string]coord.MaintenanceAck
 	maintRev     uint64
 
-	// documents is the fleet's document families. Lazily built, so a
-	// caller that never touches one carries no watcher bookkeeping.
-	documents *documents
-
 	epoch   int64
 	target  coord.Activation
 	set     bool

@@ -41,6 +41,8 @@ import (
 // waiting, so retrying it would turn a config mistake into a two-minute hang
 // with the same message at the end.
 const (
+	// positionsSuffix is the per-node state-log position bucket.
+	positionsSuffix = "_statelog_positions"
 	// bucketProvisionTimeout bounds one bucket create. The same size as
 	// the stream side's, and for the same reason: a replicated create is
 	// a raft round trip plus file-store setup, fast on a quiet cluster and
@@ -159,7 +161,7 @@ func unplaceableBucket(err error) bool {
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why FOURTEEN buckets and not one
+// # Why THIRTEEN buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -200,10 +202,6 @@ func unplaceableBucket(err error) bool {
 //	           that expired would make a converged surface read as one
 //	           nobody has looked at, sending the loop to re-provision
 //	           against a third-party app it had already agreed with
-//	pages      none at all, and here an age would delete the company's own
-//	           record: a page is the company's own document and its
-//	           revisions are its history, neither of them a
-//	           horizon-bounded fact
 //	positions  none at all, and this is the one where an age would be
 //	           worst: a node's position is what the trim reads to decide
 //	           what every other node may delete, and a key that expired
@@ -429,8 +427,6 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 			"Crewlet sealed credentials; NO TTL — an expiring secret is an outage on a timer", 0},
 		{&store.integrations, integrationsSuffix,
 			"Crewlet integration reconcile status; NO TTL, standing state rather than a short horizon", 0},
-		{&store.pages, pagesSuffix,
-			"Crewlet knowledge-base pages and revisions; NO TTL — a page is the company's own record", 0},
 		{&store.positions, positionsSuffix,
 			"Crewlet per-node state-log positions; NO TTL — an expired position reads as a node that applied nothing", 0},
 	} {

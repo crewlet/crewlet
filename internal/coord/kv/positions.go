@@ -588,3 +588,44 @@ func (f *FleetStore) eachPositionKey(ctx context.Context, class, what string,
 	}
 	return ctx.Err()
 }
+
+// The two CAS-race classifiers, and why they live beside the positions rather
+// than beside the caller that first needed them.
+//
+// They arrived with the document families and outlived them: every key class
+// the fleet still writes — a position, a floor, a hold, a backup point, a
+// capacity operation — is a create-only or a compare-and-set append, and each
+// one has to tell "somebody else wrote first" from "the store could not be
+// reached". Reading the second as the first is a lost update reported as a
+// conflict a caller retries into, which is the failure the three-valued rule
+// exists to prevent.
+
+// lostCreateRace reports whether a create lost to a first writer.
+//
+// THREE SHAPES FOR ONE FACT, and every one of them is somebody else's second
+// writer. ErrKeyExists is the ordinary case. A revision mismatch is what the
+// client reports when the key carried a delete or purge marker it tried to
+// step over and lost. And on a REPLICATED stream a share of those losers come
+// back as a bare API error the client wraps in neither sentinel — measured at
+// three replicas, where a fifth of the losers of a create over a marker
+// arrived that way.
+//
+// Getting this wrong is not loud. A lost race read as an outage makes a claim
+// answer "unknown", the caller fails open, and the delivery it was meant to
+// deduplicate is processed twice — on a clustered estate only, which is
+// exactly where nobody is running the single-server suite that would show it.
+func lostCreateRace(err error) bool {
+	return errors.Is(err, jetstream.ErrKeyExists) ||
+		errors.Is(err, jetstream.ErrKeyRevisionMismatch) ||
+		isWrongLastSequence(err)
+}
+
+// lostUpdateRace reports whether a conditional write lost its race.
+//
+// A deleted key lands here too: the record it was conditioned on is gone,
+// which is the same answer for the caller — re-read and re-decide.
+func lostUpdateRace(err error) bool {
+	return errors.Is(err, jetstream.ErrKeyRevisionMismatch) ||
+		errors.Is(err, jetstream.ErrKeyNotFound) ||
+		isWrongLastSequence(err)
+}
