@@ -311,3 +311,61 @@ func TestTheEngineStreamsAreUnchanged(t *testing.T) {
 		})
 	}
 }
+
+// A LOST CREATION RACE WRITES NOTHING EITHER, which is the same rule as
+// [TestBootNeverUpdatesAnExistingStream] on the one path that test cannot
+// reach.
+//
+// # The path, and why it exists
+//
+// [Queue.createOrObserveStream] reads first and observes what it finds, so a
+// node whose peer created the stream a moment earlier never calls create at
+// all. The case this covers is the other one: N nodes booting TOGETHER all
+// read "absent" in the same instant and all call create. One wins; the rest
+// arrive at a stream that now exists.
+//
+// # What went wrong
+//
+// The loser's call was `CreateOrUpdateStream`, which never returns
+// [jetstream.ErrStreamNameAlreadyInUse] — it UPDATES. So the caller's "a peer
+// won the race, read what it made" branch was unreachable, and every loser
+// rewrote the shared stream's configuration with its own. That is exactly the
+// defect [TestBootNeverUpdatesAnExistingStream] names — a ceiling an operator
+// raised, silently lowered by whichever node booted last — arriving through
+// the one door that test does not open.
+//
+// The assertion is the running stream's own capacity, before and after, for
+// that test's reason: what matters is that the stream is unchanged, whatever
+// path got there.
+func TestALostCreationRaceNeverRewritesTheStream(t *testing.T) {
+	t.Parallel()
+	q := domainQueue(t, probeDomain())
+	name := probeDomain().Name
+
+	before, err := q.js.Stream(t.Context(), name)
+	if err != nil {
+		t.Fatalf("read the created stream: %v", err)
+	}
+	want := before.CachedInfo().Config.MaxBytes
+
+	// THE LOSER'S OWN CALL, made directly: this is the moment after a
+	// peer's create committed and before this node has looked again.
+	lost := before.CachedInfo().Config
+	lost.MaxBytes = want / 2
+	err = q.createStream(t.Context(), lost)
+	if err == nil {
+		t.Fatal("creating a stream that already exists reported success, so " +
+			"the caller's read-back branch never runs and a losing node's " +
+			"configuration is what the fleet ends up with")
+	}
+
+	after, err := q.js.Stream(t.Context(), name)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if got := after.CachedInfo().Config.MaxBytes; got != want {
+		t.Errorf("max_bytes = %d after a lost creation race that wanted %d, "+
+			"want the running stream's %d — the node that lost the race "+
+			"rewrote the stream it lost to", got, lost.MaxBytes, want)
+	}
+}

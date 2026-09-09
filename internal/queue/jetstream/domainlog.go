@@ -25,6 +25,12 @@ type DomainLog struct {
 	js     jetstream.JetStream
 	stream jetstream.Stream
 	name   string
+
+	// q is the queue this log was opened on, held for the ONE thing a
+	// bare JetStream context cannot do: ensure a durable consumer in a
+	// way that survives a peer creating the same name at the same instant.
+	// See [Queue.ensureDurableConsumer].
+	q *Queue
 }
 
 // DomainLog opens the append surface for a stream this node has provisioned.
@@ -38,7 +44,7 @@ func (q *Queue) DomainLog(ctx context.Context, stream string) (*DomainLog, error
 	if err != nil {
 		return nil, fmt.Errorf("jetstream: open the log %q: %w", stream, err)
 	}
-	return &DomainLog{js: q.js, stream: s, name: stream}, nil
+	return &DomainLog{js: q.js, stream: s, name: stream, q: q}, nil
 }
 
 // Append publishes one record.

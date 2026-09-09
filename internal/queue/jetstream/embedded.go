@@ -161,7 +161,14 @@ func (s *Server) RoutePeers() []string {
 	if s.embedded == nil {
 		return nil
 	}
-	rz, err := s.embedded.ns.Routez(nil)
+	return s.embedded.routePeers()
+}
+
+// routePeers is the derivation itself, shared with [embeddedServer.awaitClusterReady]
+// — which gates a boot on the same number a partition harness asserts about.
+// Two readings of "who can this member reach" would be two answers.
+func (e *embeddedServer) routePeers() []string {
+	rz, err := e.ns.Routez(nil)
 	if err != nil {
 		return nil
 	}
@@ -407,8 +414,11 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	}, nil
 }
 
-// awaitClusterReady waits for this member's JetStream to catch up with the
-// cluster's metadata group.
+// awaitClusterReady waits for this member to be able to serve the writes the
+// caller is about to make: its JetStream caught up with the metadata group,
+// AND enough peers routed to place a replicated stream.
+//
+// # Why the metadata group is not enough on its own
 //
 // Accepting connections is NOT the same as being able to serve JetStream. A
 // clustered member answers its client port as soon as it is listening, while
@@ -416,18 +426,47 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 // eight on a quiet three-member cluster — and until it has one, creating a
 // replicated stream BLOCKS rather than failing. A node that provisioned at
 // boot therefore hung with nothing to diagnose, looking exactly like a broker
-// that is up and ignoring you.
+// that is up and ignoring you. That is the first half.
+//
+// # And why placement succeeding is not enough either
+//
+// The metadata group becomes current for THIS member as soon as it has caught
+// up with whatever group exists — which on a fleet booting together is two of
+// three. The provision that follows then asks the leader to place a stream at
+// `replicas`, and the leader answers from the peer set IT knows, which can
+// already include a member whose routes have not converged here. Placement
+// succeeds, the stream is created, and its own raft group never commits:
+// nats-server reports `NO quorum, stalled` per stream and every publish into
+// it blocks for ever.
+//
+// That is not a hypothetical either. It is exactly what three engines starting
+// at once produce, and the symptom is the worst kind — a cluster that formed,
+// reported itself ready, created every stream, and cannot write to any of
+// them.
+//
+// So the wait is on the number the WRITE actually needs: a stream of R
+// replicas needs R members, which is this one plus R-1 routed peers. Derived
+// from the replica factor rather than from the peer LIST, because a peer list
+// is a seed set — it may name this member, it may name a subset, and neither
+// shape says how many members a stream needs.
 //
 // A no-op for a solo member and for an external URL: solo has no metadata
 // group to join, and an external cluster is somebody else's to have made
 // ready before pointing an engine at it.
-func (e *embeddedServer) awaitClusterReady(ctx context.Context) error {
+func (e *embeddedServer) awaitClusterReady(ctx context.Context, replicas int) error {
 	if e == nil || !e.clustered {
 		return nil
 	}
+	// A member of a cluster still writes R=1 streams sometimes, and one
+	// replica needs no peer at all — so the floor is zero rather than a
+	// negative that would read as "wait for nobody" by accident.
+	wantPeers := max(replicas-1, 0)
+	ready := func() bool {
+		return e.ns.JetStreamIsCurrent() && len(e.routePeers()) >= wantPeers
+	}
 	deadline := time.Now().Add(clusterReadyTimeout)
 	for time.Now().Before(deadline) {
-		if e.ns.JetStreamIsCurrent() {
+		if ready() {
 			return nil
 		}
 		select {
@@ -437,11 +476,18 @@ func (e *embeddedServer) awaitClusterReady(ctx context.Context) error {
 		case <-time.After(clusterReadyPoll):
 		}
 	}
-	if e.ns.JetStreamIsCurrent() {
+	if ready() {
 		return nil
 	}
-	return fmt.Errorf("embedded nats server %q joined no jetstream cluster within %s",
-		e.ns.Name(), clusterReadyTimeout)
+	// THE TWO HALVES ARE NAMED SEPARATELY, because they have different
+	// remedies: a member that never became current is one whose metadata
+	// group could not form, and a member that is current with too few
+	// peers is a routing problem — a firewall, a wrong advertise address,
+	// a peer that never started.
+	return fmt.Errorf("embedded nats server %q is not ready to serve a "+
+		"%d-replica stream within %s: jetstream current=%t, routed to %v "+
+		"(want %d peers)", e.ns.Name(), replicas, clusterReadyTimeout,
+		e.ns.JetStreamIsCurrent(), e.routePeers(), wantPeers)
 }
 
 func (e *embeddedServer) connect() (*nats.Conn, error) {

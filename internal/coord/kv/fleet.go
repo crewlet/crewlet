@@ -17,6 +17,146 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
+// A BUCKET IS A STREAM, and provisioning a replicated one has the two hazards
+// [internal/queue/jetstream] documents for the stream side. This is the same
+// fix, because it is the same call underneath.
+//
+// # The deadline
+//
+// nats.go applies a FIVE-SECOND default API timeout to a context with no
+// deadline of its own. That is right for an ordinary request and wrong for the
+// one that creates a replicated stream: the caller has already waited for the
+// metadata group precisely because that group is slow, and then gives the call
+// depending on it five seconds. On a fleet booting together the symptom is a
+// node that fails with `open crewlet_rate: context deadline exceeded` — a
+// message that names neither the deadline that expired nor the cluster it was
+// waiting for.
+//
+// # The placement retry
+//
+// `No suitable peers` means the metadata leader has not yet seen enough members
+// to place a replicated bucket. It is transient and self-clearing during
+// formation, and it is the one condition worth waiting out — every other error
+// (a bad TTL, a conflicting replica count, an auth failure) clears by nobody
+// waiting, so retrying it would turn a config mistake into a two-minute hang
+// with the same message at the end.
+const (
+	// bucketProvisionTimeout bounds one bucket create. The same size as
+	// the stream side's, and for the same reason: a replicated create is
+	// a raft round trip plus file-store setup, fast on a quiet cluster and
+	// seconds under load, so thirty is well past any healthy case and
+	// still fails a genuinely wedged one rather than hanging a boot.
+	bucketProvisionTimeout = 30 * time.Second
+
+	// bucketPlacementRetry is how often a forming cluster is re-asked.
+	bucketPlacementRetry = 250 * time.Millisecond
+
+	// jsErrCodeNoPeers is JetStream's "no suitable peers for placement".
+	// A NUMBER rather than a string match, so it survives the server
+	// rewording the message.
+	jsErrCodeNoPeers jetstream.ErrorCode = 10005
+)
+
+// openBucket creates one bucket when it is absent and OBSERVES it when it is
+// present, waiting out a cluster that is still forming.
+//
+// # Why not CreateOrUpdate
+//
+// Every node of a fleet opens every bucket at boot, so on a fleet starting
+// together N nodes issue the same call for the same bucket at the same moment.
+// `CreateOrUpdate` makes each of those a WRITE — the update half runs whenever
+// the bucket exists — so the losers of the create race go on to rewrite a
+// configuration they agree with, against a metadata group that is still
+// electing. Measured on three members: the request never returns, and the boot
+// fails after its whole deadline with `context deadline exceeded` naming a
+// bucket rather than a cluster.
+//
+// Create-else-observe is the shape [internal/queue/jetstream] already uses for
+// a stream, and the reasoning transfers whole: the create races, the loser
+// gets "bucket exists", and that is not an error but the other node having
+// won. A booting peer then READS what the winner made instead of writing over
+// it — which is also the honest ownership rule, since a bucket's TTL is a
+// deployment-wide fact and not something each node should re-assert.
+func openBucket(ctx context.Context, js jetstream.JetStream,
+	cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error) {
+
+	// WithTimeout only ever shortens against the parent, so a caller that
+	// already set a tighter deadline keeps it.
+	ctx, cancel := context.WithTimeout(ctx, bucketProvisionTimeout)
+	defer cancel()
+
+	for {
+		bucket, err := createOrObserveBucket(ctx, js, cfg)
+		if err == nil || !unplaceableBucket(err) {
+			return bucket, err
+		}
+		select {
+		case <-ctx.Done():
+			// THE ORIGINAL ERROR, not the context's: "no suitable
+			// peers" says what is wrong and "deadline exceeded"
+			// does not.
+			return nil, err
+		case <-time.After(bucketPlacementRetry):
+		}
+	}
+}
+
+// createOrObserveBucket is one attempt at that.
+func createOrObserveBucket(ctx context.Context, js jetstream.JetStream,
+	cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error) {
+
+	switch bucket, err := js.KeyValue(ctx, cfg.Bucket); {
+	case err == nil:
+		return bucket, nil
+	case !errors.Is(err, jetstream.ErrBucketNotFound):
+		return nil, err
+	}
+	bucket, createErr := js.CreateKeyValue(ctx, cfg)
+	if createErr == nil {
+		return bucket, nil
+	}
+	if unplaceableBucket(createErr) {
+		// STILL FORMING, which is the caller's loop to wait out rather
+		// than a race to read back.
+		return nil, createErr
+	}
+	// A PEER MAY HAVE WON THE RACE between the read above and this
+	// create, and it says so in two shapes.
+	//
+	// The tidy one is [jetstream.ErrBucketExists]. The other is a
+	// TIMEOUT, and it is the one a fleet booting together produces: two
+	// members create the same bucket in the same instant, the server
+	// commits one and holds the other while the metadata group settles,
+	// and the held request outlives the deadline. The bucket is there —
+	// the loser never heard so, and reporting that as a failure is a node
+	// refusing to boot because a peer beat it.
+	//
+	// So the question is re-asked rather than assumed. The read gets its
+	// OWN context, because the one above may be the deadline that just
+	// expired.
+	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bucketReadBack)
+	defer cancel()
+	bucket, err := js.KeyValue(readCtx, cfg.Bucket)
+	if err != nil {
+		// THE CREATE'S ERROR IS WHAT IS REPORTED, with the read-back's
+		// beside it: the first says what went wrong and the second only
+		// confirms the create really did fail.
+		return nil, fmt.Errorf("%w (and it is not there: %w)", createErr, err)
+	}
+	return bucket, nil
+}
+
+// bucketReadBack bounds the one read that asks whether a peer won the race.
+// Short for [streamReadBack]'s reason: an ordinary metadata read against a
+// group that has just proven it works.
+const bucketReadBack = 5 * time.Second
+
+// unplaceableBucket reports the transient "the cluster is still forming" error.
+func unplaceableBucket(err error) bool {
+	var apiErr *jetstream.APIError
+	return errors.As(err, &apiErr) && apiErr.ErrorCode == jsErrCodeNoPeers
+}
+
 // The fleet-shared state on JetStream KV.
 //
 // # Why FOURTEEN buckets and not one
@@ -240,7 +380,7 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 
 	open := func(suffix, describe string, ttl time.Duration) (jetstream.KeyValue, error) {
 		name := cfg.BucketPrefix + suffix
-		bucket, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
+		bucket, err := openBucket(ctx, js, jetstream.KeyValueConfig{
 			Bucket: name, Description: describe, TTL: ttl, Replicas: cfg.Replicas,
 		})
 		if err != nil {
