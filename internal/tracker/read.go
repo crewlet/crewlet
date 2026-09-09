@@ -844,7 +844,16 @@ func readCheckpoint(ctx context.Context, tx *sql.Tx) (position, applied uint64, 
 // be missing, rows that should have left may still be present, and values on
 // the rows returned may be behind.
 func coverage(ctx context.Context, tx *sql.Tx, q Query) (*Incomplete, error) {
-	scope := ReadScope(q)
+	return coverageOf(ctx, tx, ReadScope(q))
+}
+
+// coverageOf is the same probe over a scope the caller built.
+//
+// SPLIT FROM THE QUERY, because a detail read's scope is one OBJECT and a
+// board's is a container — and running a board's probe for a single task
+// would put a permanent warning on every task in a company holding one
+// undecodable record about one other task.
+func coverageOf(ctx context.Context, tx *sql.Tx, scope statelog.ScopeSet) (*Incomplete, error) {
 	closure := scope.Closure()
 	roots := scope.Roots()
 	if len(closure) == 0 {

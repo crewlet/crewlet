@@ -198,14 +198,29 @@ func (r *roundTrip) apply(from, last uint64) {
 				store.EncodeTime(storedAt)); err != nil {
 				return err
 			}
-			_, err = tx.ExecContext(r.t.Context(), `
+			if _, err := tx.ExecContext(r.t.Context(), `
 				INSERT INTO statelog_anchor (stream, subject, anchor)
 				VALUES (?,?,?)
 				ON CONFLICT (stream, subject) DO UPDATE SET
 					anchor = MAX(anchor, excluded.anchor)`,
 				record.Position.Stream,
 				tracker.Domain{}.Stream().SubjectPrefix+"."+env.Subject.String(),
-				record.Position.Packed())
+				record.Position.Packed()); err != nil {
+				return err
+			}
+			// AND THE CHECKPOINT, in the same transaction, which is the
+			// contract this harness claims to be exercising. Without it
+			// every read answers position zero — so a case asserting how
+			// far behind an answer may be would be asserting against a
+			// number the harness never wrote.
+			_, err = tx.ExecContext(r.t.Context(), `
+				INSERT INTO statelog_cursor
+					(stream, generation, seq, stream_created_at, updated_at)
+				VALUES (?,?,?,0,0)
+				ON CONFLICT (stream) DO UPDATE SET
+					generation = excluded.generation, seq = excluded.seq`,
+				record.Position.Stream, int64(record.Position.Generation),
+				int64(record.Position.Seq))
 			return err
 		}); err != nil {
 			r.t.Fatalf("apply record %d: %v", seq, err)
