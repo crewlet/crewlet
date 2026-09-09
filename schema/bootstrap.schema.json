@@ -266,6 +266,14 @@
     "StreamCluster": {
       "additionalProperties": false,
       "properties": {
+        "advertise": {
+          "description": "host:port peers should dial for this member, when it differs from what it binds.",
+          "type": "string"
+        },
+        "host": {
+          "description": "Interface the route listener binds. Empty binds every interface.",
+          "type": "string"
+        },
         "name": {
           "description": "Cluster name shared by every member.",
           "type": "string"

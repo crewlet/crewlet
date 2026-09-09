@@ -2,11 +2,13 @@ package config
 
 import (
 	"encoding/base64"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -582,11 +584,31 @@ type StreamCluster struct {
 	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"Route port for cluster traffic."`
 	// Peers are the other members' route URLs.
 	Peers []string `yaml:"peers,omitempty" json:"peers,omitempty" desc:"Route URLs of the other members."`
+
+	// Host is the interface the route listener binds. Empty binds every
+	// one of them, which on a host with a public interface publishes
+	// UNAUTHENTICATED CLUSTER ACCESS: a route port is how a member joins,
+	// and joining is how it reads and writes every stream. Set it to the
+	// private address the peers reach.
+	Host string `yaml:"host,omitempty" json:"host,omitempty" desc:"Interface the route listener binds. Empty binds every interface."`
+
+	// Advertise is the address peers should dial for this member when it
+	// differs from what the member binds — a mapped container port, a NAT,
+	// a member behind a load balancer.
+	//
+	// It matters because a member's address TRAVELS: peers learn about
+	// each other from the members they are already connected to, and dial
+	// what they are told. Unset, that address is derived from the
+	// connection's own remote address, which on a NAT'd host is either
+	// unreachable or somebody else's. Host and port, or a bare host to
+	// keep this member's own route port.
+	Advertise string `yaml:"advertise,omitempty" json:"advertise,omitempty" desc:"host:port peers should dial for this member, when it differs from what it binds."`
 }
 
 // IsZero lets an unset cluster block drop out of a JSON round trip.
 func (c StreamCluster) IsZero() bool {
-	return c.Name == "" && c.Port == 0 && len(c.Peers) == 0
+	return c.Name == "" && c.Port == 0 && len(c.Peers) == 0 &&
+		c.Host == "" && c.Advertise == ""
 }
 
 func (s *Stream) validate(path string) error {
@@ -622,8 +644,42 @@ func (s *Stream) validate(path string) error {
 	if s.Cluster.Port < 0 || s.Cluster.Port > 65535 {
 		p.add(at(path, "cluster.port"), ErrOutOfRange, "must be 0..65535, got %d", s.Cluster.Port)
 	}
+	// Refused here rather than at the broker. nats-server validates an
+	// advertise address while STARTING, logs it and shuts the server down
+	// — which surfaces as a node that boots, fails and leaves the operator
+	// reading broker logs for a typo in their own config file.
+	if adv := strings.TrimSpace(s.Cluster.Advertise); adv != "" {
+		if err := validateAdvertise(adv); err != nil {
+			p.add(at(path, "cluster.advertise"), ErrShape, "%v", err)
+		}
+	}
 	p.wrap(s.TLS.validate(at(path, "tls")))
 	return p.err()
+}
+
+// validateAdvertise checks a cluster advertise address: a host, optionally
+// with a port. A bare host keeps this member's own route port, which is the
+// common case behind a NAT that maps the port through unchanged.
+func validateAdvertise(adv string) error {
+	host, port, err := net.SplitHostPort(adv)
+	if err != nil {
+		// No port at all is legitimate; anything else is not. An address
+		// with a colon in it and no port is a bracket the operator left
+		// off an IPv6 literal, and reporting that as "no port" would send
+		// them looking in the wrong place.
+		if strings.Contains(adv, ":") {
+			return fmt.Errorf("%q is not a host or host:port: %w", adv, err)
+		}
+		return nil
+	}
+	if host == "" {
+		return fmt.Errorf("%q names a port with no host: peers have nothing to dial", adv)
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return fmt.Errorf("%q: port must be 1..65535", adv)
+	}
+	return nil
 }
 
 // EventRetention is the retention window as a duration; zero means the

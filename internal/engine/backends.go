@@ -268,16 +268,18 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 		return nil, fmt.Errorf("engine: stream: %w", err)
 	}
 	cfg := jetstream.Config{
-		URL:         b.Stream.URL,
-		StoreDir:    b.Stream.StoreDir,
-		ClusterName: b.Stream.Cluster.Name,
-		ClusterURLs: b.Stream.Cluster.Peers,
-		ClusterPort: b.Stream.Cluster.Port,
-		ServerName:  nodeID,
-		Replicas:    b.Stream.Replicas,
-		Credentials: b.Stream.Credentials,
-		Token:       b.Stream.Token,
-		TLS:         streamTLS(b.Stream.TLS),
+		URL:              b.Stream.URL,
+		StoreDir:         b.Stream.StoreDir,
+		ClusterName:      b.Stream.Cluster.Name,
+		ClusterURLs:      b.Stream.Cluster.Peers,
+		ClusterPort:      b.Stream.Cluster.Port,
+		ClusterHost:      b.Stream.Cluster.Host,
+		ClusterAdvertise: b.Stream.Cluster.Advertise,
+		ServerName:       nodeID,
+		Replicas:         b.Stream.Replicas,
+		Credentials:      b.Stream.Credentials,
+		Token:            b.Stream.Token,
+		TLS:              streamTLS(b.Stream.TLS),
 
 		// Through the accessors for the same reason EventRetention goes
 		// through one: the field is a STRING with two meanings, and a
