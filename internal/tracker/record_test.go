@@ -392,3 +392,72 @@ func TestTheBarrierRecordIsItsMeasuredLiteral(t *testing.T) {
 		t.Error("a barrier carries an operation id")
 	}
 }
+
+// A RECORD FROM A NEWER BUILD ROUND-TRIPS LOSSLESSLY.
+//
+// # The failure this exists to catch
+//
+// The decoder kept a newer build's unknown fields in Extra and the encoder
+// dropped them: `json:"-"` on the field and `json.Marshal(r)` on the struct.
+// So a record relayed by an older node lost everything the writer wrote that
+// the relay had no field for — which is the exact contract that makes a
+// rolling upgrade possible, and it was false in the one direction that
+// matters. The change feed is where it showed: a parser on a newer node reads
+// a record an older node relayed and sees only the half its relay understood.
+func TestARecordFromANewerBuildReEncodesWithItsUnknownFields(t *testing.T) {
+	t.Parallel()
+	original := tracker.MutationRecord{
+		RecordEnvelope: tracker.RecordEnvelope{
+			V: tracker.RecordVersion, OpID: "op-1",
+			Subject: tracker.TaskSubject("t-1"), Op: tracker.OpPatch,
+			CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Writer: "node-a",
+			Scope: tracker.ScopeSet{Subject: true, Container: "ENG"},
+		},
+		Mutation: json.RawMessage(`{}`), Actor: "ana",
+		ActorKind: tracker.AuthorHuman,
+	}
+	body, err := original.Encode()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	raw["a_field_from_the_future"] = json.RawMessage(`{"deep":[1,2,3]}`)
+	newer, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("re-encode: %v", err)
+	}
+
+	relayed, err := tracker.Decode(newer)
+	if err != nil {
+		t.Fatalf("decode the newer record: %v", err)
+	}
+	again, err := relayed.Encode()
+	if err != nil {
+		t.Fatalf("re-encode the relayed record: %v", err)
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(again, &got); err != nil {
+		t.Fatalf("decode the re-encoded record: %v", err)
+	}
+	if string(got["a_field_from_the_future"]) != `{"deep":[1,2,3]}` {
+		t.Fatalf("the relayed record re-encoded as %s — a build that drops "+
+			"what it does not understand makes every rolling upgrade a lossy "+
+			"relay, and nothing anywhere says so", again)
+	}
+
+	// AND A RECORD THIS BUILD WROTE IS BYTE-IDENTICAL TO ITS STRUCT'S OWN
+	// ENCODING. The merge path costs a map round trip and reorders the
+	// keys, and the barrier's literal — whose size the read index's whole
+	// cost model rests on — must not move because a relay path exists.
+	same, err := original.Encode()
+	if err != nil {
+		t.Fatalf("re-encode the original: %v", err)
+	}
+	if string(same) != string(body) {
+		t.Fatalf("a record with nothing unknown in it encoded two different "+
+			"ways:\n%s\n%s", body, same)
+	}
+}
