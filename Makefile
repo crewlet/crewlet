@@ -48,7 +48,24 @@ BIN := crewlet
 # parallelism and CI runs the WHOLE suite under the detector, so a `make test`
 # without it would pass where CI fails. `make test-norace` is the escape
 # hatch, and says what it costs.
-GOTEST := $(GO) test -race -count=1
+#
+# -timeout IS NOT A BUDGET, it is a HANG DETECTOR, and it has to be stated
+# because go's own default is 10 minutes PER PACKAGE and internal/e2e does not
+# fit in it: that package starts a real engine, a real broker and the real API
+# per test, and measured 776s here under -race. Left at the default the gate
+# does not merely flap — it cannot pass on a machine this speed, and the
+# failure reads as a hung test rather than as a budget nobody set.
+#
+# Thirty minutes is 2.3x the measured run, which is enough for a runner half
+# this fast, and still kills a real deadlock twelve times sooner than the CI
+# job's own limit. It applies to every package because the flag is per test
+# BINARY: a unit package that hangs now dies in thirty minutes rather than ten,
+# which is the cost of having a gate that can pass at all.
+GOTEST := $(GO) test -race -count=1 -timeout $(TEST_TIMEOUT)
+
+# TEST_TIMEOUT is ci.yml's value, and the two must not drift: the Makefile is
+# the same command CI runs or it is a lie.
+TEST_TIMEOUT := 30m
 
 # The release targets, cross-compiled. Nothing else builds for anything but
 # the machine you are on, so a build tag or a platform-gated file that only
@@ -261,7 +278,7 @@ test: require-node ## the full suite under the race detector (ci: test (race))
 # The suite without the detector. It is roughly twice as fast and it is NOT
 # what CI runs: a data race it cannot see is a data race that lands.
 test-norace: require-node ## the full suite without -race (faster; not a gate)
-	$(GO) test -count=1 ./...
+	$(GO) test -count=1 -timeout $(TEST_TIMEOUT) ./...
 
 # Every target reports in one run rather than stopping at the first failure —
 # ci.yml sets `fail-fast: false` on this matrix for the same reason: when a
