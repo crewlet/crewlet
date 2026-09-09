@@ -744,14 +744,20 @@ CREATE INDEX tracker_notifications_swept_idx ON tracker_notifications (created_a
 -- file.
 -- ---------------------------------------------------------------------------
 
+-- THE SHAPE OF ALL THREE IS THE FRAMEWORK'S, not this domain's: the framework
+-- writes them, and it writes the same statements for every domain it carries.
+-- The migration that landed the framework documents the shape a domain's own
+-- two tables must have, and this file is written from it — a column named
+-- differently here is a statement that fails at runtime on the one path
+-- nothing else exercises.
+
 CREATE TABLE tracker_ops (
-    op_id          TEXT    NOT NULL PRIMARY KEY,
-    subject_kind   TEXT    NOT NULL,
-    subject_id     TEXT    NOT NULL,
-    log_seq        INTEGER NOT NULL,
-    log_stream     TEXT    NOT NULL,
-    log_generation INTEGER NOT NULL DEFAULT 0,
-    applied_at     INTEGER NOT NULL
+    op_id      TEXT    NOT NULL PRIMARY KEY,
+    subject    TEXT    NOT NULL,
+    -- The COMPOSED (generation << 40) | sequence, so a position from before a
+    -- reanchor is comparable and safely stale rather than plausible.
+    position   INTEGER NOT NULL,
+    applied_at INTEGER NOT NULL
 );
 -- The sweep is a range delete over the age, and a range delete ships its index:
 -- without it a node returning from a month away scans the whole table on every
@@ -759,35 +765,42 @@ CREATE TABLE tracker_ops (
 CREATE INDEX tracker_ops_swept_idx ON tracker_ops (applied_at);                                               -- the ops retention sweep
 
 CREATE TABLE tracker_log_deferred (
-    log_stream     TEXT    NOT NULL,
-    log_generation INTEGER NOT NULL DEFAULT 0,
-    log_seq        INTEGER NOT NULL,
-    record_id      TEXT    NOT NULL DEFAULT '',
-    kind           TEXT    NOT NULL DEFAULT '',
-    subject_kind   TEXT    NOT NULL DEFAULT '',
-    subject_id     TEXT    NOT NULL DEFAULT '',
-    v              INTEGER NOT NULL,
+    position     INTEGER NOT NULL PRIMARY KEY,
+    subject      TEXT    NOT NULL,
+    subject_kind TEXT    NOT NULL,
+    subject_id   TEXT    NOT NULL,
+    -- The record version this build could not decode, which is the number an
+    -- operator needs to pick a build.
+    version      INTEGER NOT NULL,
     -- THE WHOLE MESSAGE, BYTE FOR BYTE. Lossless means the bytes: a build that
-    -- can read this record must get exactly what its writer published.
-    document       BLOB    NOT NULL,
-    reason         TEXT    NOT NULL DEFAULT '',
-    -- A record reprocessed after an upgrade must contribute the instant it was
-    -- COMMITTED, not the instant it was reprocessed.
-    broker_at      INTEGER NOT NULL DEFAULT 0,
-    first_seen_at  INTEGER NOT NULL,
-    PRIMARY KEY (log_stream, log_generation, log_seq)
+    -- can read this record must get exactly what its writer published, not
+    -- what an intermediate build understood of it.
+    payload      BLOB    NOT NULL,
+    -- The broker's own instant, because a record reprocessed after an upgrade
+    -- must contribute the instant it was COMMITTED rather than the instant it
+    -- was reprocessed — and this row is the only other durable copy of it.
+    stored_at    INTEGER NOT NULL
 );
-CREATE INDEX tracker_log_deferred_version_idx
-    ON tracker_log_deferred (v, log_stream, log_generation, log_seq);                                         -- "what would an upgrade to version N let this node apply"
 -- subject_id LEADS, because the spend probe reads it ALONE: a turn commit and
 -- its task's create share an id, and the dependency is on the OBJECT rather
 -- than on the kind.
 CREATE INDEX tracker_log_deferred_subject_idx ON tracker_log_deferred (subject_id, subject_kind);             -- the applier's own per-object deferral probe
 
--- One row per scope TUPLE of the deferred record — each coordinate concrete or
--- empty for ANY — written in the SAME transaction as its parent and the
--- checkpoint advance, so there is no window in which the position moved and the
--- scope is unindexed.
+-- One row per scope PATH of the deferred record, written in the SAME
+-- transaction as its parent and the checkpoint advance — so there is no window
+-- in which the position moved and the scope is unindexed.
+--
+-- A PATH RATHER THAN A TUPLE OF COORDINATES, because the framework's
+-- containment model is a path hierarchy: it knows one thing about a scope, that
+-- levels are separated left to right, and it computes coverage from that alone.
+-- A tuple with an empty coordinate meaning ANY is a second containment model,
+-- and the probe would have to translate between them on every read — which is
+-- itself the likeliest place for the rule to be wrong, and one no test of
+-- either model would catch.
+--
+-- The probe is two clauses over this column and neither finds the other's case:
+-- a stored path IN the query's closure is one that CONTAINS what the query is
+-- about, and a stored path UNDER one of its roots is one INSIDE it.
 --
 -- A PLAIN ROWID TABLE: `WITHOUT ROWID` is refused by the pinned driver as an
 -- experimental feature (measured), so a migration carrying it would fail on
@@ -796,16 +809,11 @@ CREATE INDEX tracker_log_deferred_subject_idx ON tracker_log_deferred (subject_i
 -- NO FOREIGN KEY: the parent's own delete removes these rows in the same
 -- statement list, because a cascade is a delete nobody committed.
 CREATE TABLE tracker_log_deferred_scope (
-    log_stream     TEXT    NOT NULL,
-    log_generation INTEGER NOT NULL DEFAULT 0,
-    log_seq        INTEGER NOT NULL,
-    family         TEXT    NOT NULL,
-    container      TEXT    NOT NULL,
-    ident          TEXT    NOT NULL,
-    PRIMARY KEY (log_stream, log_generation, log_seq, family, container, ident)
+    position INTEGER NOT NULL,
+    path     TEXT    NOT NULL,
+    PRIMARY KEY (position, path)
 );
-CREATE INDEX tracker_log_deferred_scope_idx
-    ON tracker_log_deferred_scope (log_stream, log_generation, family, container, log_seq);                   -- the read barrier's coverage probe and the writer's step 0
+CREATE INDEX tracker_log_deferred_scope_idx ON tracker_log_deferred_scope (path, position);                   -- the read barrier's coverage probe and the writer's step 0
 
 -- ---------------------------------------------------------------------------
 -- Three object tables that are the fleet's own record rather than a person's.
