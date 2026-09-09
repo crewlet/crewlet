@@ -30,6 +30,7 @@ subcommand below is served by it.
 | `crewlet secrets unset <NAME>` | Remove a stored secret |
 | `crewlet secrets get <NAME> -reveal` | Print one stored value to stdout — break-glass, audited, CLI-only |
 | `crewlet secrets rekey [-dry-run]` | Re-encrypt stored secrets under the active keyring key |
+| `crewlet search eval [-store PATH]` | Measure the two-stage semantic search against the exact scan, on the vectors a store file actually holds. Ground truth is the exact scan's own top-K, so nobody authors a judgement; exits non-zero below the floor for that corpus size |
 | `crewlet llm list` | Every `cli-agent` provider the company declares, with its CLI, model and login state |
 | `crewlet llm doctor [KEY]` | Verify a subscription backend end to end — the CLI is installed, the login answers, a real completion returns, the CLI's own shell is refused and its web tool reaches the network (`-no-smoke` stops before all three real calls) |
 | `crewlet llm login <KEY>` | Establish the vendor's own login for a provider: brokered interactively, `-from-host` to adopt one this machine already has, `-capture-token` to mint a headless token into the [secret store](../concepts/secret-store.md) (add `-print-token` to send it to stdout and store nothing), `-token-stdin` for one you already hold |
@@ -567,6 +568,75 @@ name: "Acme AI"
 ```
 
 See [Authoring with an AI assistant](../getting-started/ai-authoring.md).
+
+---
+
+## `crewlet search eval`
+
+```
+crewlet search eval [-store PATH] [-config crewlet.yaml] [flags]
+```
+
+Measures the semantic half of knowledge search — the two-stage 1-bit retrieval
+described in [Knowledge System](../concepts/knowledge-system.md) — against the
+exact scan it approximates, **on your own vectors**.
+
+There is no other number that answers this. The engine's own quality gate
+measures the arithmetic on a seeded fixture and deliberately makes no claim
+about recall on a particular company's documents: a 1-bit code keeps only each
+vector's orthant, and how much that says about ranking is a property of your
+corpus's distribution. Over a family of embedding-shaped generators the same
+arithmetic spans 0.29 to 0.98 recall.
+
+**Ground truth is the exact scan's own top-K**, so nobody authors a judgement —
+which is the step that otherwise makes an evaluation stop being run. The
+queries are held-out documents from the corpus itself, spread deterministically
+across it so two runs are comparable.
+
+**It reads a file, not a running node.** The replicated estate is exclusively
+owned by the running engine, so pass the copy inside a
+[backup](../guides/backup.md) — which needs nothing stopped and measures the
+same rows — or the node's own file with the engine stopped. With neither
+`-store` nor a reachable Tier A file it has nothing to open.
+
+```console
+$ crewlet search eval -store /var/backups/crewlet/2026-09-01/store-replicated.db
+corpus       118432 sources, text-embedding-3-large at 3072 dimensions
+measured     25 queries at depth 150 from 1200 candidates
+recall       0.9761  (floor 0.9312 for this corpus size)
+worst query  0.9467
+head misses  0  (documents dropped from the exact top ten)
+verdict      the two-stage search recovers the exact ranking at the shipped depth
+```
+
+| Flag | Default | What it does |
+|---|---|---|
+| `-store PATH` | from `-config` | The replicated database to measure. Overrides the Tier A file |
+| `-config PATH` | `./crewlet.yaml` | Tier A, read only for the replicated store's path |
+| `-queries N` | `25` | How many held-out documents to measure over. Each one is a full exact scan, which is what bounds the run |
+| `-limit N` | `150` | The depth recall is measured at — the shipped returned depth |
+| `-candidates N` | `1200` | The stage-1 candidate depth — the shipped pair |
+| `-model NAME` | most populated | The embedding model to measure |
+| `-dimensions N` | the model's | The width to measure |
+| `-fit` | off | Also print the corpus's own mean pairwise cosine, which is the parameter the engine's seeded fixture is fitted from |
+| `-metrics` | off | Print one `key value` line per metric instead of a report, for a collector or a shell |
+
+**It exits non-zero** when the recall is below the floor for that corpus size,
+or when any document was dropped from the exact top ten — so it can go in a
+schedule. Both conditions matter: an aggregate of 0.98 is compatible with
+losing exactly the documents that mattered, and a semantic-only document the
+first stage drops leaves the fused answer entirely.
+
+Run it **monthly, and after any change to `providers.embeddings.model` or
+`providers.embeddings.dimensions`** — those are the two inputs that move the
+answer. A report naming more than one embedding space is a refill in progress:
+until it finishes, documents still on the old model are not in the candidate
+pool at all, because the scan filters on the model/width pair.
+
+Below the floor, the remedy is decided in advance and in this order: raise the
+quantization over-fetch (measured free in latency — stage one is a full scan
+whose cost does not depend on how many candidates it keeps), then an 8-bit
+first stage, which ships in the same release that moves the model default.
 
 ---
 

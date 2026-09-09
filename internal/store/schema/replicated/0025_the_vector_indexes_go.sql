@@ -1,0 +1,65 @@
+-- Two of the vector domain's three indexes are DELETED, because measurement
+-- says each one makes the query it was written for slower.
+--
+-- 0024 created them a week ago and they were never right. They are removed by
+-- a new migration rather than by editing that file, because schema_migrations
+-- keys on the FILENAME: a change there silently never runs on a database that
+-- already applied it, and every one of those keeps the old shape while this
+-- code assumes the new one.
+--
+-- MEASURED at the pin, 20 000 sources at 3 072 dimensions, the shipped depths
+-- (1 200 candidates, 150 returned), warm:
+--
+--   the two-stage search WITH both indexes      1 min 44 s
+--   the two-stage search WITHOUT them                50 ms
+--   the exact f32 scan it replaces                  259 ms
+--
+-- Two thousand times, and both halves of it are the same mistake: an index on
+-- a table whose rows are all being read is a second copy of the row order plus
+-- a random access per row.
+--
+-- ---- kb_vectors_scope_idx (source, container) --------------------------- --
+--
+-- THE ONE THAT COST THE HUNDRED SECONDS, and it is worth being precise about
+-- how. The second stage joins 1 200 candidates to `kb_vectors` on its PRIMARY
+-- KEY, which is an indexed seek per candidate. The planner instead chose this
+-- index, which leads on `source` alone — a value with two distinct settings in
+-- the whole company — so every candidate scanned half the table looking for
+-- its `source_id`, through rows 12 KB wide. The primary key's own automatic
+-- index does the seek correctly, and it is what the planner reaches for the
+-- moment this one is not there.
+--
+-- It also had no reader. It was created for "the container prune, which is
+-- every scoped search's own predicate" — and a scoped search filters the
+-- NARROW table, which is the only place a container filter shrinks anything.
+--
+-- ---- kb_vectors_bin_scope_idx (model, dim, source, container) ----------- --
+--
+-- It does not cover `bits`, which is the column the scan exists to read, so
+-- using it is a full index scan PLUS a row lookup per row — 69 ms against 29 ms
+-- for the plain scan on the same query, and 27 ms against 20 ms with a
+-- container filter matching a third of the corpus. There is no predicate here
+-- an index can help with: the whole design's cost model is `N x c_row over a
+-- NARROW table`, and every row matches `model` and `dim` in a company that has
+-- not just changed model.
+--
+-- WHAT IS KEPT, and why it is not the same mistake: `kb_vectors_model_idx
+-- (model, dim)` COVERS its only reader — the `GROUP BY model, dim` that names
+-- every embedding space the corpus holds, which is how an operator sees a
+-- refill in progress. A covering index scan of two narrow columns against a
+-- full scan of 12 KB rows is the case an index is actually for.
+--
+-- The guard against this returning is `TestEveryIndexServesARegisteredQuery`
+-- in internal/search, which runs EXPLAIN QUERY PLAN over the statements this
+-- package issues and fails on an index no query reaches — the same idiom, and
+-- for the same reason, as the tracker's own index inventory.
+DROP INDEX kb_vectors_scope_idx;
+DROP INDEX kb_vectors_bin_scope_idx;
+
+-- A CONTROL FOR THE GUARD ABOVE, and the reason it is here rather than in a
+-- test fixture: `TestEveryIndexServesARegisteredQuery` asserts that every
+-- index the schema declares appears in some registered plan, and an assertion
+-- over an empty set passes for the wrong reason. `kb_vectors_model_idx`
+-- survives 0024 and is what that half of the check actually reads — a covering
+-- index whose only reader is the `GROUP BY model, dim` an operator runs to see
+-- a refill in progress.

@@ -151,6 +151,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runBackup(rest, stdout, stderr)
 	case "llm":
 		return runLLM(rest, stdout, stderr)
+	case "search":
+		return runSearch(rest, stdout, stderr)
 	case "gitlab", "github", "jira", "slack", "confluence", "mattermost":
 		return runIntegration(cmd, rest, stdout, stderr)
 	default:
@@ -174,6 +176,8 @@ Usage:
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet llm <cmd>           Log in, verify and export the subscription CLI backends
+  crewlet search eval         Measure the semantic search against the exact scan,
+                              on the vectors a store file actually holds
   crewlet gitlab <cmd>        Reconcile the company's seats into a GitLab instance
   crewlet github <cmd>        Report a GitHub deployment's seat accounts and hook it
   crewlet jira <cmd>          Report a Jira instance's seat accounts and projects
