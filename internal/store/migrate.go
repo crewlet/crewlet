@@ -171,6 +171,22 @@ func (d *DB) appliedVersions(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
+// SchemaFile returns one embedded migration's bytes.
+//
+// EXPORTED FOR THE ONE ASSERTION THAT IS ABOUT THE SOURCE rather than about
+// what the driver created: an index's trailing comment naming the query it
+// serves is not part of the schema the database keeps, so a test that read the
+// schema back could never see it. Every other schema assertion in the tree
+// reads sqlite_master instead, deliberately — a clause a file carries and the
+// driver silently ignored would pass a text scan and fail in production.
+func SchemaFile(estate Estate, name string) ([]byte, error) {
+	body, err := schemaFS.ReadFile(path.Join("schema", string(estate), name))
+	if err != nil {
+		return nil, fmt.Errorf("store: read the %s estate's %s: %w", estate, name, err)
+	}
+	return body, nil
+}
+
 // schemaVersions lists one estate's embedded schema files in application
 // order, which is filename order — the numeric prefix is the ordering, and
 // there is no second source of truth for it.
