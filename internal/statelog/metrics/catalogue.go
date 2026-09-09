@@ -109,10 +109,12 @@ func Catalogue() []Instrument {
 		{
 			Name: "crewlet.statelog.publish.outcomes", Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain", "outcome"},
-			Shows: "The three-valued write outcome, counted. `unknown` is the " +
-				"one that matters most and had no counter at all: a broker " +
-				"flapping into ambiguity was visible only to the model that " +
-				"received the answer.",
+			Shows: "The three-valued write outcome, counted, and only the " +
+				"three — a refusal is on `publish.refusals` instead, because " +
+				"it says the write never happened at all. `unknown` is the " +
+				"one that matters most and had no counter: a broker flapping " +
+				"into ambiguity was visible only to the model that received " +
+				"the answer.",
 		},
 		{
 			Name: "crewlet.statelog.publish.rejections", Kind: KindCounter, Unit: UnitCount,
@@ -120,6 +122,16 @@ func Catalogue() []Instrument {
 			Shows: "How often a write loses a race, per kind of subject. It is " +
 				"what says whether a counter, a rank order or an ordinary " +
 				"object is the contended one.",
+		},
+		{
+			Name: "crewlet.statelog.publish.refusals", Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"domain", "reason"},
+			Shows: "Writes refused before or instead of an append, by reason — " +
+				"an evicted node, a deferred record covering the object, a " +
+				"caller waiting on its own previous write, a full log. A " +
+				"refusal is not one of the three outcomes: it says the write " +
+				"never happened, and each reason has a different remedy, so " +
+				"one counter with an outcome dimension would hide all four.",
 		},
 		{
 			Name: "crewlet.statelog.write.session_wait", Kind: KindHistogram, Unit: UnitMilliseconds,
