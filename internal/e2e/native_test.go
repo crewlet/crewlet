@@ -134,8 +134,11 @@ func TestAnItemWrittenToTheFleetLandsOnTheBoard(t *testing.T) {
 	// AND THE BOARD FINDS IT, which is a different query from the detail
 	// read: a board filters, and a filter that reached no rows would draw
 	// an empty board over a company that has work.
+	// SESSION, which is the level a seat's own tools read at: this case is
+	// about a node finding work IT just filed, and that is precisely the
+	// read-your-own-writes guarantee.
 	answer, err := n.engine.Tracker().Tasks(t.Context(), tracker.Query{
-		Scope: tracker.Scope{Project: "ENG"},
+		Scope: tracker.Scope{Project: "ENG"}, Level: statelog.ReadSession,
 	}, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("list: %v", err)

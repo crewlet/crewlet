@@ -37,9 +37,14 @@ func PageWrites() []string {
 }
 
 // PageReader is what these tools need from the knowledge base's read side.
+//
+// THE LEVEL IS PART OF THE CALL, because a seat's own read is not the same
+// question a dashboard poll asks. A seat reads at `session`: it must see its
+// own writes, which is what stops a turn that just created a page from
+// concluding the page does not exist and creating it again.
 type PageReader interface {
-	List(ctx context.Context, f pages.Filter) ([]pages.Summary, error)
-	Get(ctx context.Context, ref string) (pages.Detail, error)
+	List(ctx context.Context, f pages.Filter, level statelog.ReadLevel) (pages.Listing, error)
+	Get(ctx context.Context, ref string, level statelog.ReadLevel) (pages.Detail, error)
 }
 
 // PageWriter is what these tools need from the write side.
@@ -196,14 +201,21 @@ func (t *listPages) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 		Label:     strings.TrimSpace(argString(args, "label")),
 		Status:    []pages.Status{pages.StatusPublished},
 		Limit:     argInt(args, "limit", 0),
-	})
+	}, statelog.ReadSession)
 	if err != nil {
 		return failed(readFailure(ListPagesTool, err)), nil
 	}
-	if len(got) == 0 {
+	if len(got.Pages) == 0 {
 		return tools.Result{Output: "No pages match that filter."}, nil
 	}
-	return jsonResult(map[string]any{"count": len(got), "pages": got})
+	out := map[string]any{"count": len(got.Pages), "pages": got.Pages}
+	// AND WHAT THE ANSWER COULD NOT ACCOUNT FOR. A listing served over a
+	// deferred scope may be missing pages, and a model that reads a short
+	// list as the whole truth writes the duplicate.
+	if !got.Complete {
+		out["complete"] = false
+	}
+	return jsonResult(out)
 }
 
 // ---- get_page ---------------------------------------------------------- //
@@ -251,7 +263,7 @@ func (t *getPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[
 	if ref == "" {
 		return failed("get_page needs a `page` — an id, or \"CONTAINER/Title\"."), nil
 	}
-	detail, err := t.deps.Reader.Get(ctx, ref)
+	detail, err := t.deps.Reader.Get(ctx, ref, statelog.ReadSession)
 	switch {
 	case errors.Is(err, pages.ErrNotFound):
 		return failed(fmt.Sprintf("There is no page %q. Check the container and "+
@@ -431,7 +443,7 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 			"get_page and pass its `version` back, so an edit somebody else " +
 			"made in the meantime is a refusal rather than a silent overwrite."), nil
 	}
-	detail, err := t.deps.Reader.Get(ctx, ref)
+	detail, err := t.deps.Reader.Get(ctx, ref, statelog.ReadSession)
 	switch {
 	case errors.Is(err, pages.ErrNotFound):
 		return failed(fmt.Sprintf("There is no page %q.", clip(ref))), nil
@@ -549,7 +561,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	case body == "":
 		return failed("comment_on_page needs a `body`."), nil
 	}
-	detail, err := t.deps.Reader.Get(ctx, ref)
+	detail, err := t.deps.Reader.Get(ctx, ref, statelog.ReadSession)
 	switch {
 	case errors.Is(err, pages.ErrNotFound):
 		return failed(fmt.Sprintf("There is no page %q.", clip(ref))), nil

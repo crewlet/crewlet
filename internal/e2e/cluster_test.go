@@ -789,11 +789,18 @@ func TestAFleetAgreesAboutOneCompany(t *testing.T) {
 
 	// (3) AND THE KNOWLEDGE BASE, which reached the log after the tracker
 	// did and is the domain a half-finished adoption would strand.
+	//
+	// LINEARIZABLE, on the same terms as the tracker arm above: pages is a
+	// registered domain with its own barrier subject and its own read
+	// index, and a fleet that agreed about work while its wiki answered
+	// from whatever each node happened to hold would be exactly the
+	// half-adopted domain this arm exists to catch.
 	for i, n := range c.nodes {
 		if err := n.engine.WaitCommitted(t.Context(), page.Outcome.Position); err != nil {
 			t.Fatalf("member %d never applied the page: %v", i, err)
 		}
-		got, err := n.engine.Pages().Get(t.Context(), page.Page.ID)
+		got, err := n.engine.Pages().Get(t.Context(), page.Page.ID,
+			statelog.ReadLinearizable)
 		if err != nil {
 			t.Fatalf("member %d cannot read a page member 0 wrote: %v", i, err)
 		}

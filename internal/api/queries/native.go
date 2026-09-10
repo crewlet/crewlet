@@ -53,9 +53,9 @@ type WorkReader interface {
 
 // PageReader is the knowledge read side this surface calls.
 type PageReader interface {
-	List(ctx context.Context, f pages.Filter) ([]pages.Summary, error)
-	Get(ctx context.Context, ref string) (pages.Detail, error)
-	Containers(ctx context.Context) ([]pages.Container, error)
+	List(ctx context.Context, f pages.Filter, level statelog.ReadLevel) (pages.Listing, error)
+	Get(ctx context.Context, ref string, level statelog.ReadLevel) (pages.Detail, error)
+	Containers(ctx context.Context, level statelog.ReadLevel) ([]pages.Container, error)
 }
 
 // ---- work -------------------------------------------------------------- //
@@ -161,11 +161,18 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 	}
 	f.Onboarding = p.Bool("onboarding", false)
 
-	list, err := s.Pages.List(ctx, f)
+	// STALE, like every other dashboard poll: a screen that redraws every
+	// twenty seconds and took a quorum round trip to do it would put the
+	// fleet's whole read rate on the log. See [Sources.workItems].
+	list, err := s.Pages.List(ctx, f, statelog.ReadStale)
 	if err != nil {
 		return nil, unavailableIfBehind(err)
 	}
-	return map[string]any{"pages": list, "limit": f.Limit, "offset": f.Offset}, nil
+	return map[string]any{
+		"pages": list.Pages, "limit": f.Limit, "offset": f.Offset,
+		"read_level": list.Level, "complete": list.Complete,
+		"position": list.Position, "log_lag": list.LogLag,
+	}, nil
 }
 
 func (s Sources) page(ctx context.Context, p Params) (any, error) {
@@ -173,7 +180,7 @@ func (s Sources) page(ctx context.Context, p Params) (any, error) {
 	if ref == "" {
 		return nil, badParams("id", "", nil)
 	}
-	detail, err := s.Pages.Get(ctx, ref)
+	detail, err := s.Pages.Get(ctx, ref, statelog.ReadStale)
 	switch {
 	case errors.Is(err, pages.ErrNotFound):
 		return nil, ErrNotFound
@@ -184,7 +191,7 @@ func (s Sources) page(ctx context.Context, p Params) (any, error) {
 }
 
 func (s Sources) containers(ctx context.Context, _ Params) (any, error) {
-	list, err := s.Pages.Containers(ctx)
+	list, err := s.Pages.Containers(ctx, statelog.ReadStale)
 	if err != nil {
 		return nil, unavailableIfBehind(err)
 	}
