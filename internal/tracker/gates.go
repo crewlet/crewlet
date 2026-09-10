@@ -50,7 +50,7 @@ import (
 
 // Fence refuses a write this node must not make.
 //
-// # Why it reads THREE sources and not one
+// # Why it asks THIS NODE'S OWN ROWS and not coordination
 //
 // An eviction is permitted only while the target's presence lease has LAPSED —
 // at least forty-five seconds of coordination silence — so by construction the
@@ -58,20 +58,25 @@ import (
 // that asked coordination would be asking the one source the situation has
 // already broken.
 //
-// So it asks, cheapest first: a cached answer from the loop that reads the
-// tombstones, then coordination itself, then THIS NODE'S OWN APPLIED EVICTION
-// ROWS — which are written by its own applier from its own log and are the only
-// source still fresh when everything else is wedged. Being wrong here is not a
-// refused write: it is a stream of records every node drops while this one
-// collects acknowledgements for them.
+// So it asks this node's own APPLIED EVICTION ROWS, which its own applier
+// wrote from its own log and which are the only source still fresh when
+// everything else is wedged. Being wrong here is not a refused write: it is a
+// stream of records every node drops while this one collects acknowledgements
+// for them.
+//
+// There WAS a cache in front of that read — "the coordination-derived answer,
+// refreshed on the same loop that reads the tombstones", declared as an
+// optimisation that "can be stale, because the durable row below is what makes
+// staleness safe". Nothing ever assigned it, in this package or any other, and
+// the safety argument does not survive being written out: the lookup returned
+// the cached answer in BOTH directions, so a stale `false` is precisely an
+// evicted node going on publishing — the one failure this type exists to
+// prevent, bought to save an indexed single-row read. It was removed rather
+// than wired, and [pages.Fence] never had one, so the two fences now answer the
+// same question the same way.
 type Fence struct {
 	db     *store.DB
 	nodeID string
-
-	// Cached is the coordination-derived answer, refreshed on the same
-	// loop that reads the tombstones. It is an OPTIMISATION: it can be
-	// stale, and the durable row below is what makes staleness safe.
-	Cached func() (bool, bool)
 
 	// Floor is the published trim floor, and Cursor this node's own
 	// committed position. Both are needed by the one check that costs a
@@ -88,15 +93,11 @@ func NewFence(db *store.DB, nodeID string) *Fence {
 // Evicted reports this node's own eviction.
 //
 // ON EVERY APPEND, and therefore answered from what this node already knows:
-// the cached answer when it has one, and otherwise the durable row its own
-// applier wrote. A coordination round trip here would put one on the hot path
-// of every write in the company.
+// the durable row its own applier wrote, which is one indexed single-row read
+// of a table this node owns. A coordination round trip here would put a
+// NETWORK call on the hot path of every write in the company, and it would be
+// a call to the estate an eviction has already established is silent.
 func (f *Fence) Evicted(ctx context.Context) (bool, error) {
-	if f.Cached != nil {
-		if evicted, known := f.Cached(); known {
-			return evicted, nil
-		}
-	}
 	var from, readmitted sql.NullInt64
 	err := f.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `

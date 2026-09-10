@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/schedule"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE assertion whose absence was the bug. Every one of these tables ships a
@@ -56,6 +57,16 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// naming it was the only place that showed.
 		"counterparty_profiles",
 		"events",
+		// EVERY REGISTERED DOMAIN'S OPERATION LEDGER, and they are on
+		// this list for exactly the reason the list exists: each
+		// `<domain>_ops` migration says the table is swept and ships
+		// `<domain>_ops_swept_idx` for the range delete, and nothing
+		// swept any of them — a row per applied record, kept for ever,
+		// on every node. They are also the list's first PER-NODE jobs:
+		// the rows record what THIS applier wrote, so under the fleet
+		// singleton they would be tidied on one node and grow for ever
+		// on the others.
+		"pages_ops",
 		// NEITHER NATIVE BACKEND SWEEPS ANY MORE, and the absence of
 		// their entries is the point. The knowledge base had three —
 		// a change retention, a revision prune and an orphan collector
@@ -76,8 +87,10 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// runs and a board that stays wrong.
 		"tracker_abandoned_merges",
 		"tracker_duplicate_ranks",
+		"tracker_ops",
 		"tracker_respread",
 		"tracker_unblocked",
+		"vectors_ops",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("swept tables:\n got %v\nwant %v", got, want)
@@ -101,12 +114,19 @@ func TestEveryRetentionOutlastsTheSweepInterval(t *testing.T) {
 		"a2a_channels_idle":     maintenance.ChannelIdleTimeout,
 		"chat_thread_follows":   maintenance.FollowRetention,
 		"counterparty_profiles": maintenance.CounterpartyRetention,
-		// NEITHER NATIVE BACKEND HAS AN ENTRY ANY MORE, and the absence
-		// is the point rather than an omission. Both are state-log
-		// domains: their records are a log the retention gate trims, and
-		// their durable rows are written by an applier — so there is no
-		// per-node sweep to give a horizon to, and a delete on one
-		// node's own authority is what the identity claim forbids.
+		// NEITHER NATIVE BACKEND HAS A ROW-SWEEP ENTRY, and the
+		// absence is the point rather than an omission. Both are
+		// state-log domains: their records are a log the retention gate
+		// trims, and their durable rows are written by an applier — so
+		// there is no per-node sweep of ROWS to give a horizon to, and
+		// a delete on one node's own authority is what the identity
+		// claim forbids.
+		//
+		// Their OPERATION LEDGERS are the exception, and they are here
+		// under one entry because every domain takes the same horizon:
+		// the ledger is framework bookkeeping about what THIS applier
+		// wrote, not a durable row any peer reads.
+		"<domain>_ops": statelog.OpsRetention,
 	} {
 		if horizon <= maintenance.Interval {
 			t.Errorf("%s retention (%v) is not longer than the %v tick",

@@ -310,6 +310,32 @@ func (r *Runner) Anchor(ctx context.Context, subject string) (Position, error) {
 	return p, err
 }
 
+// OpsRetention is how long a node keeps its record of which operations it
+// applied.
+//
+// THIRTY DAYS, and it is derived from the client that actually retries rather
+// than from the machine one. The longest MACHINE retry is sixteen rounds
+// inside a two-second wait; but a SEAT is told to carry an op id forward and
+// re-ask, and it does that on its next wake — hours later, and after a weekend
+// for a seat that only runs on a schedule. An op id that outlives its row
+// resolves `unknown` rather than `applied`, which sends a turn to re-decide
+// work it already did.
+//
+// It costs about 29 MB steady at the census rate (6 518 commits a day, ~150
+// bytes a row) against 357 MB a year kept for ever — and "for ever" is what
+// this table had before the sweep existed, on a schema whose own migration
+// says it is swept and ships the index for it.
+const OpsRetention = 30 * 24 * time.Hour
+
+// PurgeOps deletes this node's operation rows applied before cutoff.
+//
+// PER NODE, because the table is one this node owns a copy of: it records
+// which operations THIS applier wrote, so a fleet-singleton sweep would leave
+// every other node's rows growing for ever while reporting that it had swept.
+func (r *Runner) PurgeOps(ctx context.Context, cutoff time.Time) (int64, error) {
+	return r.tables.purgeOps(ctx, r.db, cutoff)
+}
+
 // Op answers where an operation was applied on this node.
 func (r *Runner) Op(ctx context.Context, opID string) (Position, bool, error) {
 	var p Position

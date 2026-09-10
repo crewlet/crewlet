@@ -191,6 +191,32 @@ func (t tables) writeOp(ctx context.Context, tx *sql.Tx, opID, subject string, p
 	return nil
 }
 
+// purgeOps deletes operation rows applied before cutoff, reporting how many
+// went.
+//
+// A RANGE DELETE OVER THE AGE, which is the shape the ops table's own index
+// was shipped for: without `<domain>_ops_swept_idx` a node returning from a
+// month away scans the whole table on every tick.
+func (t tables) purgeOps(ctx context.Context, db *store.DB, cutoff time.Time) (int64, error) {
+	if t.ops == "" {
+		return 0, nil
+	}
+	var deleted int64
+	err := db.Tx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx,
+			`DELETE FROM `+t.ops+` WHERE applied_at < ?`, store.EncodeTime(cutoff))
+		if err != nil {
+			return err
+		}
+		deleted, err = res.RowsAffected()
+		return err
+	})
+	if err != nil {
+		return 0, fmt.Errorf("statelog: sweep %s: %w", t.ops, err)
+	}
+	return deleted, nil
+}
+
 // op answers where an operation was applied on this node.
 func (t tables) op(ctx context.Context, tx *sql.Tx, opID string) (Position, bool, error) {
 	if t.ops == "" {

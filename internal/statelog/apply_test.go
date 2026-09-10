@@ -954,6 +954,70 @@ func TestApplyIsStrictlyBySequenceAcrossTransactionBoundaries(t *testing.T) {
 	}
 }
 
+// THE OPERATION LEDGER IS SWEPT, and nothing swept it.
+//
+// Every `<domain>_ops` migration says the table is swept and ships
+// `<domain>_ops_swept_idx` for the range delete, and no code anywhere deleted
+// a row: one per applied record, kept for ever, on every node. What makes it
+// invisible rather than loud is that the table's only reader asks "did my
+// operation land", which nobody asks about a month-old op id — so the answers
+// stay correct while the file grows.
+//
+// The horizon is the CLIENT'S rather than the machine's: a seat carries an op
+// id forward and re-asks on its next wake, hours or a weekend later, and an op
+// id that outlives its row resolves `unknown` rather than `applied` — which
+// sends a turn to re-decide work it already did.
+func TestTheOperationLedgerIsSwept(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	for seq := uint64(1); seq <= 6; seq++ {
+		h.fetch.offer(seq, env(seq, "edit", fmt.Sprintf("o%d", seq),
+			fmt.Sprintf("op-%d", seq), 1))
+	}
+	if err := h.run(6); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if _, held, err := h.runner.Op(t.Context(), "op-3"); err != nil || !held {
+		t.Fatalf("op-3 is not in the ledger after applying it (held=%v, %v)",
+			held, err)
+	}
+
+	// A CUTOFF IN THE FUTURE sweeps everything, which is the arithmetic
+	// rather than the horizon: what is under test is that the delete
+	// happens and reports what it did.
+	swept, err := h.runner.PurgeOps(t.Context(), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("PurgeOps: %v", err)
+	}
+	if swept != 6 {
+		t.Errorf("the sweep deleted %d of 6 operation rows", swept)
+	}
+	if _, held, err := h.runner.Op(t.Context(), "op-3"); err != nil || held {
+		t.Errorf("op-3 survived a sweep past its own instant (held=%v, %v)",
+			held, err)
+	}
+
+	// AND THE CONTROL, because a sweep that deletes everything is not a
+	// sweep — it is a truncate with a cutoff argument. A row inside the
+	// horizon stays.
+	h.fetch.offer(7, env(7, "edit", "o7", "op-7", 1))
+	if err := h.run(7); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	swept, err = h.runner.PurgeOps(t.Context(), time.Now().Add(-statelog.OpsRetention))
+	if err != nil {
+		t.Fatalf("PurgeOps: %v", err)
+	}
+	if swept != 0 {
+		t.Errorf("a sweep at the real horizon deleted %d row(s) written "+
+			"moments ago", swept)
+	}
+	if _, held, err := h.runner.Op(t.Context(), "op-7"); err != nil || !held {
+		t.Errorf("op-7 was swept inside its own retention (held=%v, %v)",
+			held, err)
+	}
+}
+
 // TestTheApplierMeasuresItsOwnDrain is the input three answers divide a record
 // backlog by to state a TIME: a bounded stale read's "am I inside the caller's
 // staleness", a refusal's `retry_after_seconds`, and the apply-lag alarm.

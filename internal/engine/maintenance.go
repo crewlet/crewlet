@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -81,6 +82,17 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 					DB: e.backends.Store, Writer: e.native.writer,
 					NodeID: e.native.nodeID,
 				})...)
+			}
+			// AND THE STATE LOG'S OWN OPERATION LEDGERS, one per
+			// registered domain. Every `<domain>_ops` migration says
+			// the table is swept and ships the index a range delete
+			// needs, and nothing swept them: a row per applied record,
+			// kept for ever, on every node. PER NODE rather than under
+			// the singleton, because each node owns its own copy —
+			// see [maintenance.StatelogJobs].
+			if e.native.log != nil {
+				jobs = append(jobs, maintenance.StatelogJobs(
+					e.native.log.opsLedgers(), statelog.OpsRetention)...)
 			}
 			// THE KNOWLEDGE BASE HAS NO SWEEP ANY MORE, and its
 			// absence is a consequence rather than an omission. Its

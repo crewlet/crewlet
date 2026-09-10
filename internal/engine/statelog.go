@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
@@ -1721,4 +1722,23 @@ func (s *stateLog) domainOf(stream string) string {
 		}
 	}
 	return ""
+}
+
+// opsLedgers is every registered domain's operation ledger, keyed by domain.
+//
+// THE REGISTERED SET RATHER THAN A HAND-WRITTEN LIST, which is the whole point
+// of building it here: a domain added to [statelogDomains] and forgotten in a
+// sweep list is a table that grows for ever with nothing to notice, and that
+// is exactly how these two came to be unswept.
+func (s *stateLog) opsLedgers() map[string]maintenance.OpsLedger {
+	if s == nil {
+		return nil
+	}
+	out := make(map[string]maintenance.OpsLedger, len(s.domains))
+	for name, running := range s.domains {
+		if running != nil && running.runner != nil {
+			out[name] = running.runner
+		}
+	}
+	return out
 }
