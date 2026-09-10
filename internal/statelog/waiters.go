@@ -35,6 +35,55 @@ type waiters struct {
 	mu    sync.Mutex
 	items waiterHeap
 	next  uint64
+
+	// arrived is closed when a waiter registers on an EMPTY heap, and
+	// replaced when the heap empties again.
+	//
+	// # Why an idle applier has to be interruptible at all
+	//
+	// The fetch an idle applier parks in asks the broker for a whole batch
+	// and waits [FetchWait] for it to fill. One record arriving does not
+	// end that wait — the batch closes when it is FULL or the wait
+	// expires — so a barrier appended onto an idle log sits in a batch
+	// nobody has finished collecting for five seconds, against a two
+	// second read budget. Measured on the three-node e2e the moment the
+	// read path was first wired: every linearizable read on an idle
+	// company refused `behind`.
+	//
+	// [Runner.nextRun] already yields a PARTIAL RUN the instant somebody
+	// is waiting, for exactly this reason. This is the same yield for the
+	// case that has no run in hand yet, and it has to be a signal rather
+	// than a check because the applier is blocked inside the broker call
+	// by the time the waiter appears.
+	arrived chan struct{}
+}
+
+// waking is the channel closed when a waiter arrives on an idle applier.
+//
+// A NEW CHANNEL IS MINTED LAZILY and closed exactly once per arrival, so a
+// caller that takes it and then sees a waiter register is woken rather than
+// left holding a channel nothing will ever close.
+//
+// IT FIRES ON ARRIVAL, NEVER WHILE ONE IS OUTSTANDING. Reporting "somebody is
+// waiting" for as long as a waiter exists cancels every fetch the instant it
+// starts, so the applier spins on empty batches and never collects the record
+// the waiter is waiting for — which is slower than the wait it replaced.
+// [Runner.nextRun] shortens its wait instead while one is outstanding.
+func (w *waiters) waking() <-chan struct{} {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.arrived == nil {
+		w.arrived = make(chan struct{})
+	}
+	return w.arrived
+}
+
+// signalArrival wakes an idle fetch. Callers hold the lock.
+func (w *waiters) signalArrival() {
+	if w.arrived != nil {
+		close(w.arrived)
+		w.arrived = nil
+	}
 }
 
 // waiter is one blocked caller.
@@ -70,6 +119,10 @@ func (w *waiters) wait(target Position) (<-chan struct{}, func()) {
 	item := &waiter{target: target, done: make(chan struct{}), seq: w.next}
 	w.next++
 	heap.Push(&w.items, item)
+	// AND THE IDLE FETCH IS TOLD, so a barrier appended onto a quiet log
+	// is collected now rather than when the batch it landed in finishes
+	// filling. See [waiters.arrived].
+	w.signalArrival()
 	return item.done, func() { w.drop(item) }
 }
 

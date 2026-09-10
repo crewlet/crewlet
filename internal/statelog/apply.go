@@ -406,6 +406,14 @@ func (r *Runner) nextRun(ctx context.Context, tail []Record, buffer *reorderBuff
 			}
 		}
 		wait := FetchWait
+		if len(run) == 0 && r.waiters.len() > 0 {
+			// SOMEBODY IS ALREADY WAITING, so collect what is there
+			// rather than holding the batch open for records that may
+			// never come. The batch closes when it is FULL or after
+			// this wait, so a long one on a quiet log is the whole
+			// latency a linearizable read pays.
+			wait = ApplyLinger
+		}
 		if len(run) > 0 {
 			// A PARTIAL RUN LINGERS, and gives it up the instant
 			// somebody is waiting: a caller that appended a barrier
@@ -419,7 +427,19 @@ func (r *Runner) nextRun(ctx context.Context, tail []Record, buffer *reorderBuff
 				return run, nil
 			}
 		}
-		batch, err := r.fetch.Fetch(ctx, FetchMessages, FetchBytes, wait)
+		// AN IDLE FETCH IS INTERRUPTIBLE, and the partial-run linger
+		// above is why it has to be. That yield gives up a run already
+		// in hand the moment somebody is waiting; this is the same
+		// promise for the case with nothing in hand yet, and it cannot
+		// be a check because by the time the waiter appears this
+		// goroutine is blocked inside the broker call.
+		//
+		// The batch closes when it is FULL or after `wait` — one record
+		// arriving does not end it — so without this a barrier appended
+		// onto a quiet log waits out FetchWait: five seconds against a
+		// two second read budget, so every linearizable read on an idle
+		// company refused `behind`.
+		batch, err := r.fetchInterruptibly(ctx, wait, len(run) == 0)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
@@ -439,6 +459,40 @@ func (r *Runner) nextRun(ctx context.Context, tail []Record, buffer *reorderBuff
 			return nil, nil
 		}
 	}
+}
+
+// fetchInterruptibly fetches, giving up the wait when a waiter arrives.
+//
+// Only when this applier holds NOTHING. With a run in hand the linger yield in
+// [Runner.nextRun] already covers it, and cancelling there would throw away a
+// batch the broker had begun to fill.
+//
+// AN INTERRUPTED FETCH IS NOT A FAILED ONE. The cancellation is this process
+// deciding it has waited long enough, so it returns whatever the batch had
+// collected and no error — the caller goes round and asks again, which is what
+// turns a five-second batch wait into one round trip.
+func (r *Runner) fetchInterruptibly(ctx context.Context, wait time.Duration,
+	idle bool) ([]Message, error) {
+
+	if !idle {
+		return r.fetch.Fetch(ctx, FetchMessages, FetchBytes, wait)
+	}
+	fetchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		select {
+		case <-r.waiters.waking():
+			cancel()
+		case <-stop:
+		}
+	}()
+	batch, err := r.fetch.Fetch(fetchCtx, FetchMessages, FetchBytes, wait)
+	if err != nil && ctx.Err() == nil && fetchCtx.Err() != nil {
+		return batch, nil
+	}
+	return batch, err
 }
 
 // have reports whether this run already carries the position somebody is
