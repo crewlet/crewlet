@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -255,6 +256,40 @@ func (c *Client) TeamByName(ctx context.Context, name string) (Team, bool, error
 		return Team{}, false, err
 	}
 	return out, true, nil
+}
+
+// TeamMember reports whether an account is already in a team.
+//
+// THE READ THAT MAKES THE JOIN CONDITIONAL, and it exists because
+// [Client.AddTeamMember] tolerating a duplicate made an unconditional POST
+// look free. It is not free: this pass is what the reconcile loop runs every
+// few minutes for the life of the deployment, so an unconditional join is a
+// membership write to somebody's instance for ever, on a company that needs
+// nothing. The tolerance below stays exactly where it belongs — the backstop
+// between this read and that write, for the window between them and for two
+// writers racing.
+//
+// A SINGLE OBJECT rather than [Client.Teams]: Mattermost answers 404 when the
+// account is not a member, so the answer is one row whatever the account's
+// team count, where the listing grows with it.
+func (c *Client) TeamMember(ctx context.Context, teamID, userID string) (bool, error) {
+	if teamID == "" || userID == "" {
+		return false, fmt.Errorf(
+			"mattermost: a team membership lookup needs a team and a user")
+	}
+	var out struct {
+		TeamID string `json:"team_id"`
+		UserID string `json:"user_id"`
+	}
+	_, err := c.request(ctx, http.MethodGet, "/teams/"+url.PathEscape(teamID)+
+		"/members/"+url.PathEscape(userID), nil, &out, true)
+	if isStatus(err, http.StatusNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // AddTeamMember adds an account to a team.

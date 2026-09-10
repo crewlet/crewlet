@@ -105,8 +105,38 @@ type Options struct {
 // works is not replaced. See [Options.Rotate] for why the last of those is
 // the default rather than the flag.
 func Reconcile(ctx context.Context, opts Options) (*Result, error) {
+	// A CANCELLED PASS HAS OBSERVED NOTHING, and it has to say so BEFORE
+	// the two returns below that answer without looking: an empty plan
+	// and a node with no keyring are both decided from the arguments
+	// alone, so a cancelled pass took either branch and reported a
+	// converged surface it never read. The reconcile loop treats "no
+	// findings, no error" as ready and trusts it for a full settled
+	// interval, so a node shutting down mid-pass recorded every
+	// integration as healthy on its way out and the next node to hold
+	// the duty believed it.
+	//
+	// An empty plan is not a rare shape either: a company that enables
+	// the mattermost block before any seat carries a whole ${VAR} bot
+	// token has one on every pass.
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("mattermost: %w", err)
+	}
 	if opts.Client == nil {
 		return nil, errors.New("mattermost: no client")
+	}
+	// REFUSED RATHER THAN DEREFERENCED. Both are read without a nil check
+	// further down — the team off the config, the seat's own channel off
+	// the org — and a panic in a pass is not the same failure as an
+	// error: the reconcile worker is a fleet singleton, so a nil here
+	// takes the node down where an error is a fault the loop retries and
+	// reports.
+	if opts.Config == nil {
+		return nil, errors.New("mattermost: no company mattermost block")
+	}
+	if opts.Org == nil {
+		return nil, errors.New(
+			"mattermost: no organization — a bot is joined to the channel its " +
+				"own seat names, so the company is not optional here")
 	}
 	if opts.Sink == nil {
 		// THE COMMAND LINE'S CASE, and it stays a refusal: a run with
@@ -215,25 +245,61 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			}
 			user = User{ID: bot.UserID, Username: bot.Username}
 			res.Created = append(res.Created, seat.Handle)
-		} else if want := BotDisplayName(opts.Config.Provisioning, seat.Role); want != "" &&
-			managed[strings.ToLower(username)].DisplayName != want {
+		} else if want := BotDisplayName(opts.Config.Provisioning, seat.Role); want != "" {
 			// A RENAMED ROLE REACHES THE BOT. Provisioning is a reconcile,
 			// and a create-only display name means the roster in Mattermost
 			// drifts from the org chart it mirrors, with no way back but
 			// editing every bot by hand.
-			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			if err := opts.Client.PatchBot(ctx, user.ID, want); err != nil {
-				res.Notes = append(res.Notes, fmt.Sprintf(
-					"%s: could not update the bot's display name to %q: %v",
-					seat.Handle, want, err))
-			} else {
-				res.Renamed = append(res.Renamed, seat.Handle)
+			//
+			// COMPARED ONLY AGAINST A LISTING THAT ANSWERED, which is what
+			// `known` is for. The bot record is the only thing carrying the
+			// current display name, so a listing that failed does not know
+			// the name is already right — and as a plain map lookup, which
+			// is what this was, a missing entry reads as an EMPTY display
+			// name. An unreachable /bots therefore became a PUT on every
+			// seat on every pass, rewriting names that were already correct,
+			// from the same run whose note says display names are not
+			// checked this time.
+			if current, known := managed[strings.ToLower(username)]; known &&
+				current.DisplayName != want {
+				//nolint:govet // shadow: scoped to this block; see .golangci.yml
+				if err := opts.Client.PatchBot(ctx, user.ID, want); err != nil {
+					res.Notes = append(res.Notes, fmt.Sprintf(
+						"%s: could not update the bot's display name to %q: %v",
+						seat.Handle, want, err))
+				} else {
+					res.Renamed = append(res.Renamed, seat.Handle)
+				}
 			}
 		}
 
-		if err = opts.Client.AddTeamMember(ctx, team.ID, user.ID); err != nil {
-			return nil, rollback(ctx, opts, minted,
-				fmt.Errorf("mattermost: %s: join team: %w", seat.Handle, err))
+		// READ BEFORE JOINING, and the same rule governs the channels
+		// below. AddTeamMember tolerates a duplicate, and that tolerance
+		// made an unconditional POST look free — it is not. This pass is
+		// what the reconcile loop runs every few minutes for the life of
+		// the deployment, so an unconditional join is a membership write
+		// to somebody's instance for ever on a company that needs
+		// nothing.
+		//
+		// A MEMBERSHIP THIS RUN CANNOT READ IS JOINED ANYWAY, which is
+		// the opposite of how the token check treats "cannot tell" and
+		// deliberately so: re-minting a credential destroys one that
+		// works, where a duplicate join is a no-op the server itself
+		// absorbs. The cost of the wrong guess is asymmetric here, and a
+		// seat left out of the team is an agent that sees no channel at
+		// all.
+		inTeam, err := opts.Client.TeamMember(ctx, team.ID, user.ID)
+		if err != nil {
+			opts.Plan.Note("%s: could not read whether the bot is already in "+
+				"team %q, so it was joined again rather than left out: %v",
+				seat.Handle, opts.Config.Team, err)
+			inTeam = false
+		}
+		if !inTeam {
+			if err = opts.Client.AddTeamMember(ctx, team.ID, user.ID); err != nil {
+				return nil, rollback(ctx, opts, minted,
+					fmt.Errorf("mattermost: %s: join team: %w", seat.Handle, err))
+			}
 		}
 		joined, err := joinChannels(ctx, opts, team.ID, user.ID, seat.Handle)
 		if err != nil {
@@ -333,7 +399,12 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		res.Notes = append(res.Notes, notes...)
 	}
 
-	res.Notes = append(notesOf(opts.Plan), append(preflight, res.Notes...)...)
+	// CONCAT rather than append: notesOf hands back the PLAN's own slice,
+	// and appending to it writes into the plan's spare capacity — so the
+	// Result a caller is holding shares a backing array with a plan that
+	// is still being written to. The next Plan.Note then overwrites a
+	// note in a report somebody has already been given.
+	res.Notes = slices.Concat(notesOf(opts.Plan), preflight, res.Notes)
 	return res, nil
 }
 
@@ -402,8 +473,16 @@ func decommission(ctx context.Context, opts Options, managed map[string]Bot) ([]
 		keep[strings.ToLower(BotUsername(opts.Config.Provisioning, seat.Handle))] = true
 	}
 	var disabled, notes []string
-	for _, bot := range managed {
-		username := strings.ToLower(bot.Username)
+	// SORTED, because managed is a MAP and this loop's output is read
+	// twice: Result.Decommissioned is what the command line prints, and
+	// [Result.Findings] turns that same slice straight into one finding
+	// per departed seat. Ranged over the map, two passes over one
+	// unchanged company produced finding lists that were not equal, so
+	// the loop saw the surface change on every pass — which resets the
+	// attempt counter and re-reads an integration that needs nothing at
+	// the shortest interval the schedule has.
+	for _, username := range slices.Sorted(maps.Keys(managed)) {
+		bot := managed[username]
 		if !strings.HasPrefix(username, prefix) || keep[username] {
 			continue
 		}
@@ -529,11 +608,48 @@ func joinChannels(ctx context.Context, opts Options, teamID, userID, handle stri
 
 	names := slices.Sorted(maps.Keys(wanted))
 
+	// WHAT THIS BOT IS ALREADY IN, read ONCE for the whole seat.
+	//
+	// AddChannelMember tolerates a duplicate, which made an unconditional
+	// join per wanted channel look free. It is not: this pass is what the
+	// reconcile loop runs every few minutes for the life of the
+	// deployment, so on a company that needs nothing every one of those
+	// requests is a write to somebody's instance. The tolerance stays as
+	// the backstop it should always have been — the window between this
+	// read and the join below, and two writers racing.
+	//
+	// One listing also replaces a name lookup AND a join per channel, so
+	// the steady state is strictly fewer requests rather than merely
+	// fewer writes.
+	//
+	// A LISTING THAT FAILS IS AN EMPTY SET, not a failure: every name
+	// then takes the resolve-and-join path below, which is exactly what
+	// this pass did before the read existed. A duplicate join is a no-op
+	// the server absorbs; a channel left unjoined is an agent that never
+	// wakes.
+	member := map[string]struct{}{}
+	if channels, err := opts.Client.Channels(ctx, userID, teamID); err != nil {
+		opts.Plan.Note("%s: could not read which channels the bot is already "+
+			"in, so each one was joined again rather than skipped: %v", handle, err)
+	} else {
+		for _, channel := range channels {
+			member[channel.Name] = struct{}{}
+		}
+	}
+
 	var joined []string
 	for _, name := range names {
+		if _, in := member[name]; in {
+			// ALREADY IN IT IS STILL JOINED. Joined is what an operator
+			// reads to see which channels a seat can hear — not a list of
+			// what this run changed — so a converged company must not
+			// report a fleet of bots joined to nothing.
+			joined = append(joined, name)
+			continue
+		}
 		channel, err := opts.Client.ChannelByName(ctx, teamID, name)
 		if err != nil {
-			if isStatus(err, 404) {
+			if isStatus(err, http.StatusNotFound) {
 				opts.noteMissingChannel(handle, name)
 				continue
 			}
