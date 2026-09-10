@@ -92,6 +92,32 @@ type retentionReport struct {
 	Snapshots []retentionSnapshot `json:"snapshots"`
 	Replica   retentionReplicaRow `json:"replica"`
 	Alarms    []retentionAlarm    `json:"alarms"`
+
+	// Maintenance is the capacity operation holding the fleet, absent
+	// when there is none. A POINTER because absent and zeroed are
+	// different answers: a zeroed block claims an operation in phase ""
+	// with nobody outstanding.
+	Maintenance *maintenanceRow `json:"maintenance"`
+}
+
+// maintenanceRow is one open capacity operation, as `retention status`
+// renders it.
+//
+// NOT NAMED `retentionMaintenance`, which is the VERB `crewlet retention
+// maintenance` in capacity.go — a type and a command with one name in one
+// package is a compile error today and would have been a reader's error every
+// day after.
+type maintenanceRow struct {
+	Stream              string    `json:"stream"`
+	OperationID         string    `json:"operation_id"`
+	Phase               string    `json:"phase"`
+	Attempt             int       `json:"attempt"`
+	TargetMaxBytes      uint64    `json:"target_max_bytes"`
+	OriginalMaxBytes    uint64    `json:"original_max_bytes"`
+	Since               time.Time `json:"since"`
+	By                  string    `json:"by"`
+	ParticipantsMissing []string  `json:"participants_missing"`
+	Blocked             string    `json:"blocked"`
 }
 
 // retentionDomain is one registered domain's row.
@@ -195,6 +221,36 @@ func retentionStatus(args []string, stdout, stderr io.Writer) error {
 	var report retentionReport
 	if err := client.get(context.Background(), "/query/retention", &report); err != nil {
 		return err
+	}
+
+	// MAINTENANCE ABOVE EVERYTHING, because while it is open every number
+	// below it describes a fleet in which nothing is running: no seats, no
+	// duties, no scheduler and no write routes. An operator reading a
+	// blocked trim without knowing that goes looking for the wrong thing.
+	if m := report.Maintenance; m != nil {
+		fmt.Fprintf(stdout, "MAINTENANCE IS OPEN on %s — no publisher is running "+
+			"anywhere in this fleet.\n", m.Stream)
+		fmt.Fprintf(stdout, "  phase %s, attempt %d, open since %s",
+			m.Phase, m.Attempt, m.Since.UTC().Format(time.RFC3339))
+		if m.By != "" {
+			fmt.Fprintf(stdout, ", run by %s", m.By)
+		}
+		fmt.Fprintln(stdout, ".")
+		if m.Blocked != "" {
+			fmt.Fprintf(stdout, "  BLOCKED: %s — this needs a person, not time.\n",
+				m.Blocked)
+		}
+		if len(m.ParticipantsMissing) > 0 {
+			fmt.Fprintf(stdout, "  waiting on %s.\n",
+				strings.Join(m.ParticipantsMissing, ", "))
+		} else {
+			// NOBODY OUTSTANDING IS NOT PROGRESS: it is the
+			// operation waiting on whoever ran the verb, and
+			// printing nothing here reads as "nearly done".
+			fmt.Fprintln(stdout, "  no acknowledgement is outstanding — this "+
+				"operation is waiting on its operator.")
+		}
+		fmt.Fprintln(stdout)
 	}
 
 	// THE BLOCKING TERM FIRST AND IN PROSE, because it is the answer to

@@ -85,6 +85,54 @@ type Report struct {
 	// Alarms is every condition currently true on this node, evaluated
 	// once here. The CLI's exit code is derived from THIS field.
 	Alarms []Alarm `json:"alarms"`
+
+	// Maintenance is the capacity operation currently holding the fleet,
+	// and nil when there is none.
+	//
+	// ABSENT RATHER THAN ZEROED, because a zeroed block is a claim that an
+	// operation exists in phase "" with nobody outstanding — and the whole
+	// point of this field is that maintenance is otherwise visible on NO
+	// screen. It stops every publisher on every node: no seats, no duties,
+	// no scheduler, no write routes. An hour of that is an outage nobody
+	// is watching, which is what `maintenance_open` alarms on and what
+	// this renders while it is happening rather than after.
+	Maintenance *MaintenanceReport `json:"maintenance,omitempty"`
+}
+
+// MaintenanceReport is one open capacity operation, as a reader sees it.
+type MaintenanceReport struct {
+	// Stream is which log's configuration this is about, and OperationID
+	// the identity every attempt of it reuses.
+	Stream      string `json:"stream"`
+	OperationID string `json:"operation_id"`
+
+	// Phase is where the operation stands and Attempt which write-then-
+	// seal cycle it is on. Both, because a second attempt in the same
+	// phase is the shape a retry has and one number cannot show it.
+	Phase   string `json:"phase"`
+	Attempt int    `json:"attempt"`
+
+	// TargetMaxBytes is the ceiling being written and OriginalMaxBytes
+	// what it was, so a reader can see the direction without consulting
+	// the stream.
+	TargetMaxBytes   uint64 `json:"target_max_bytes"`
+	OriginalMaxBytes uint64 `json:"original_max_bytes"`
+
+	// Since is when the exclusion was taken and By which operator ran the
+	// verb — the two things somebody finding this at an inconvenient hour
+	// needs before anything else.
+	Since time.Time `json:"since"`
+	By    string    `json:"by,omitempty"`
+
+	// ParticipantsMissing names the nodes whose acknowledgement the seal
+	// is still waiting for. EMPTY IS NOT THE SAME AS UNKNOWN: an
+	// operation with nobody outstanding is one waiting on its operator,
+	// and that is the state an operator most needs to be able to see.
+	ParticipantsMissing []string `json:"participants_missing,omitempty"`
+
+	// Blocked names why the operation cannot proceed without a person,
+	// empty while it can.
+	Blocked string `json:"blocked,omitempty"`
 }
 
 // DomainReport is one registered domain's row.
@@ -321,6 +369,9 @@ type ReportInputs struct {
 	Tombstones []Tombstone
 
 	Replica ReplicaReport
+
+	// Maintenance is the open capacity operation, or nil.
+	Maintenance *MaintenanceReport
 }
 
 // NewReport assembles the answer.
@@ -339,6 +390,7 @@ func NewReport(in ReportInputs) Report {
 	rep.Nodes = in.nodes()
 	rep.Snapshots = in.snapshots()
 	rep.Alarms = in.alarms(rep.Domains)
+	rep.Maintenance = in.Maintenance
 	return rep
 }
 

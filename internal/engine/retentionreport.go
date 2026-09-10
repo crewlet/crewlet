@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -104,7 +105,82 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 	}
 
 	in.Reading = r.reading(ctx, now, newest, haveBackup)
+	in.Maintenance = r.openMaintenance(ctx)
 	return statelog.NewReport(in)
+}
+
+// openMaintenance is the capacity operation currently holding the fleet, or
+// nil.
+//
+// THE OLDEST OF THEM, for the reason the alarm takes the oldest: maintenance
+// stops every publisher on every node, and two open operations do not stop it
+// twice — what a reader needs is the one that has been holding longest.
+//
+// Read from the register rather than from whatever this node's own coordinator
+// remembers, because an operation is opened by whichever node ran the verb and
+// every other node is merely a PARTICIPANT — which is what makes maintenance
+// an outage rather than an inconvenience, and what makes a per-node memory of
+// it useless.
+func (r *retention) openMaintenance(ctx context.Context) *statelog.MaintenanceReport {
+	if r.fleet == nil {
+		return nil
+	}
+	var oldest *statelog.MaintenanceReport
+	for _, name := range r.state.order {
+		running := r.state.domains[name]
+		if running == nil {
+			continue
+		}
+		op, open, err := r.fleet.Maintenance(ctx, running.domain.Stream().Name)
+		if err != nil || !open {
+			continue
+		}
+		row := &statelog.MaintenanceReport{
+			Stream: op.Stream, OperationID: op.OperationID,
+			Phase: string(op.Phase), Attempt: op.Attempt,
+			TargetMaxBytes: op.TargetMaxBytes, OriginalMaxBytes: op.OriginalMaxBytes,
+			Since: op.EnteredAt.UTC(), By: op.By,
+			ParticipantsMissing: outstanding(ctx, r.fleet, op),
+			Blocked:             op.Blocked,
+		}
+		if oldest == nil || row.Since.Before(oldest.Since) {
+			oldest = row
+		}
+	}
+	return oldest
+}
+
+// outstanding names the participants whose acknowledgement the seal is still
+// waiting for.
+//
+// AN UNREADABLE ACK REGISTER YIELDS THE WHOLE PARTICIPANT SET rather than an
+// empty one: "nobody is outstanding" is the state that says the operation is
+// waiting on its operator, and reporting it because a read failed would send
+// somebody to finish an operation that is still waiting on four nodes.
+func outstanding(ctx context.Context, fleet coord.Fleet,
+	op coord.MaintenanceOperation) []string {
+
+	excluded := map[string]bool{}
+	for _, node := range op.Excluded {
+		excluded[node] = true
+	}
+	acked := map[string]bool{}
+	acks, err := fleet.MaintenanceAcks(ctx)
+	if err == nil {
+		for _, ack := range acks {
+			if ack.OperationID == op.OperationID && ack.Attempt == op.Attempt {
+				acked[ack.NodeID] = true
+			}
+		}
+	}
+	var missing []string
+	for _, node := range op.Participants {
+		if !excluded[node] && !acked[node] {
+			missing = append(missing, node)
+		}
+	}
+	sort.Strings(missing)
+	return missing
 }
 
 // decisionOf turns a published floor back into the decision that wrote it.

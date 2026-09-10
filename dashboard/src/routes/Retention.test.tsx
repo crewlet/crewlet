@@ -14,7 +14,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { GateOutcome } from "./GateDialog.tsx";
-import { NodePositions, Terms } from "./Retention.tsx";
+import { MaintenanceBanner, NodePositions, Terms } from "./Retention.tsx";
 import type { RetentionNode, RetentionTerm } from "~/protocol/index.ts";
 
 afterEach(cleanup);
@@ -151,4 +151,52 @@ test("an unknown gate renders as the failure and names the op id", () => {
   );
   expect(screen.getByRole("alert").className).toContain("critical");
   expect(screen.getByText("op-7")).toBeTruthy();
+});
+
+// --- maintenance, which was visible on no screen at all -------------------
+
+// MAINTENANCE STOPS EVERY PUBLISHER ON EVERY NODE, and an operator watching a
+// company go completely quiet had nothing to look at that said why. The alarm
+// that names it only fires after an hour.
+test("an open capacity operation is rendered as an outage in progress", () => {
+  render(
+    <MaintenanceBanner
+      op={{
+        stream: "CREWLET_TRACKER",
+        operation_id: "op-1",
+        phase: "observe",
+        attempt: 2,
+        target_max_bytes: 2_000_000_000,
+        original_max_bytes: 1_000_000_000,
+        since: new Date(Date.now() - 3_600_000).toISOString(),
+        by: "sre@example.com",
+        participants_missing: ["node-b", "node-c"],
+      }}
+      now={Date.now()}
+    />,
+  );
+  expect(screen.getByRole("alert").className).toContain("critical");
+  expect(screen.getByText(/Waiting on node-b, node-c/)).toBeTruthy();
+});
+
+// NOBODY OUTSTANDING IS NOT PROGRESS — it is the operation waiting on whoever
+// ran the verb. An empty list rendered as a list reads as "nearly done", which
+// is the one reading that stops somebody finishing it.
+test("an operation with nobody outstanding says it is waiting on its operator", () => {
+  render(
+    <MaintenanceBanner
+      op={{
+        stream: "CREWLET_TRACKER",
+        operation_id: "op-1",
+        phase: "sealed",
+        attempt: 1,
+        target_max_bytes: 2_000_000_000,
+        original_max_bytes: 1_000_000_000,
+        since: new Date(Date.now() - 60_000).toISOString(),
+      }}
+      now={Date.now()}
+    />,
+  );
+  expect(screen.getByText(/waiting on its operator/)).toBeTruthy();
+  expect(screen.queryByText(/Waiting on/)).toBeNull();
 });
