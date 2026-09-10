@@ -229,3 +229,98 @@ func TestNoTwoInstrumentsShareAName(t *testing.T) {
 		flat[key] = name
 	}
 }
+
+// AN ALARM MUST BE ABLE TO GO OUT, and against a cumulative counter it cannot.
+//
+// This is the defect the window was written for and then never wired to.
+// `search_degraded` fires on a fraction being above zero; computed from
+// [Recorder.Read]'s monotone totals, one degraded search after boot lights it
+// for the life of the process, because the numerator can only grow. Computed
+// from [Recorder.ReadWindow] it clears once the hour holding it rolls out.
+//
+// `crewlet retention status` derives its exit code from these alarms, so an
+// alarm that cannot clear is a cron that fires for ever.
+func TestAWindowedCounterFallsBackToZeroAndACumulativeOneNever(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return at }
+	r, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	r = r.WithClock(clock)
+
+	total := func(read func() []Snapshot) uint64 {
+		for _, s := range read() {
+			if s.Name == StatelogReadRefusals {
+				return s.Total
+			}
+		}
+		return 0
+	}
+
+	r.Add(StatelogReadRefusals, 1, Attrs{"domain": "tracker", "code": "stalled"})
+	if got := total(r.ReadWindow); got != 1 {
+		t.Fatalf("windowed total right after the event = %d, want 1", got)
+	}
+	if got := total(r.Read); got != 1 {
+		t.Fatalf("cumulative total right after the event = %d, want 1", got)
+	}
+
+	// A DAY LATER, WITH NOTHING SINCE. The window has rolled the hour that
+	// held it out; the cumulative series never will.
+	at = at.Add(Buckets*time.Hour + time.Hour)
+	if got := total(r.ReadWindow); got != 0 {
+		t.Errorf("windowed total a day later = %d, want 0 — an alarm built on "+
+			"this can never go out", got)
+	}
+	if got := total(r.Read); got != 1 {
+		t.Errorf("cumulative total a day later = %d, want 1 — the counter an "+
+			"exporter diffs must keep growing", got)
+	}
+}
+
+// A WINDOWED QUANTILE IS A QUANTILE, not the window's maximum.
+//
+// The p95 alarms compare against a budget, and a maximum is above the p95 by
+// construction — so substituting one would fire every such alarm on the single
+// worst observation in the window rather than on a distribution that moved.
+func TestTheWindowKeepsADistributionRatherThanAPeak(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	r, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	r = r.WithClock(func() time.Time { return at })
+
+	// Ninety-nine fast barriers and one very slow one.
+	for range 99 {
+		r.Observe(StatelogBarrierDuration, time.Millisecond, Attrs{"domain": "tracker"})
+	}
+	r.Observe(StatelogBarrierDuration, 30*time.Second, Attrs{"domain": "tracker"})
+
+	var windowed Snapshot
+	for _, s := range r.ReadWindow() {
+		if s.Name == StatelogBarrierDuration {
+			windowed = s
+		}
+	}
+	if windowed.Count != 100 {
+		t.Fatalf("windowed count = %d, want 100 — the bins did not reach the reading",
+			windowed.Count)
+	}
+	p95 := windowed.Quantile(0.95)
+	peak := r.Window().Peak(seriesKey(StatelogBarrierDuration,
+		[]string{"domain"}, Attrs{"domain": "tracker"}))
+	if p95 >= peak {
+		t.Errorf("windowed p95 = %v and peak = %v — a p95 at or above the peak "+
+			"means the reading is a maximum wearing a quantile's name", p95, peak)
+	}
+	if p95 > 16 {
+		t.Errorf("windowed p95 = %v ms, want the fast bucket: ninety-nine "+
+			"observations at 1 ms and one at 30 s has a p95 near 1 ms", p95)
+	}
+}
