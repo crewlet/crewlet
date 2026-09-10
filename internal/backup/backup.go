@@ -96,6 +96,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/version"
 )
@@ -246,6 +247,11 @@ type Options struct {
 	// behind it — the most confusing shape this gate has.
 	Backups coord.BackupRegister
 
+	// Metrics is where the copy's duration is recorded. Nil records
+	// nothing, which is a legal deployment and leaves the `backup_taken`
+	// log line as the only account of how long it took.
+	Metrics *metrics.Recorder
+
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
 }
@@ -257,6 +263,7 @@ type Service struct {
 	holds   coord.HoldRegister
 	backups coord.BackupRegister
 	nodeID  string
+	metrics *metrics.Recorder
 	now     func() time.Time
 }
 
@@ -289,7 +296,8 @@ func New(opts Options) *Service {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &Service{store: opts.Store, conn: opts.Conn, holds: opts.Holds,
-		backups: opts.Backups, nodeID: opts.NodeID, now: now}
+		backups: opts.Backups, nodeID: opts.NodeID, metrics: opts.Metrics,
+		now: now}
 }
 
 // Take writes a complete backup into dir and returns its manifest.
@@ -434,6 +442,16 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 	manifest.FinishedAt = s.now()
 	if err := writeManifest(dir, manifest); err != nil {
 		return Manifest{}, err
+	}
+	// AFTER THE MANIFEST AND ONLY ON SUCCESS. What this measures is how
+	// long the trim hold covered and how much I/O the copy spent competing
+	// with the applier's own commits — both of which are properties of a
+	// backup that FINISHED. A failed run's partial duration would be
+	// mixed into the same distribution and would make the p95 an operator
+	// sizes a maintenance window against shorter than any real copy.
+	if s.metrics != nil {
+		s.metrics.Observe(metrics.BackupDuration,
+			manifest.FinishedAt.Sub(started), nil)
 	}
 	// AFTER THE MANIFEST, because the manifest is the claim: a point
 	// announced before it would name an artefact a crash could leave as
