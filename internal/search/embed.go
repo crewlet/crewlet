@@ -58,6 +58,23 @@ const (
 	// the tick's wall clock dominated by the provider rather than by us.
 	EmbedBatchesPerTick = 8
 
+	// EmbedInterval is how often the duty ticks.
+	//
+	// ONE MINUTE, which is the tick the whole arithmetic above is written
+	// against: 8 batches x 128 sources is 1 024 sources a tick, so a cold
+	// fill of 110 000 sources is about 108 minutes and a steady company's
+	// backlog is emptied within a minute of the write that created it. It
+	// is also what bounds the WRITE rate this duty puts on the vector
+	// log — 1 024 records x (4*D + envelope) per minute is about 283 KB/s
+	// at a width of 3 072, a factor of five under the pace the walk paths
+	// are held to.
+	//
+	// Faster would not embed anything sooner on a company that is caught
+	// up (a tick with no stale source costs one indexed count and stops),
+	// and on one that is behind it would raise the publish rate without
+	// raising the provider's, which is the half that is actually slow.
+	EmbedInterval = time.Minute
+
 	// EmbedInputBytes caps what ONE source contributes to a request.
 	//
 	// 8 KiB. Past it the text is CUT rather than refused, and that is the
@@ -79,15 +96,16 @@ const (
 	EmbedStallWindow = 30 * time.Minute
 )
 
-// # The page corpus lands with the pages domain, and the seam is why
+// # Two corpora, and the seam is why there was ever one
 //
-// [Corpus] has one implementation here — the tracker's tasks — because
+// [Corpus] had one implementation — the tracker's tasks — because
 // `tracker_tasks` and `kb_vectors` are both in the replicated estate and the
-// selection is one anti-join. Pages are still this node's own projection, in
-// the OTHER file, and no statement may name a table in both: a page arm today
-// would be a bounded cursor sweep whose whole shape exists to work around an
-// estate boundary that the pages domain removes. It lands there, as one more
-// Corpus, with the duty untouched — which is what this seam is for.
+// selection is one anti-join, while pages were this node's own projection and
+// no statement may name a table in both. A page arm then would have been a
+// bounded cursor sweep whose whole shape existed to work around that boundary.
+// The pages domain removed it: `pages_heads` is written by an applier into the
+// replicated estate, so [PageCorpus] is the same single anti-join and the duty
+// itself did not change by a line — which is what this seam was for.
 
 // Corpus is where the sources this duty embeds come from.
 //
@@ -106,6 +124,51 @@ type Corpus interface {
 	// sources whose vectors must be FORGOTTEN because the document is
 	// gone.
 	Stale(ctx context.Context, model string, dim, limit int) (stale []Document, gone []string, err error)
+
+	// Coverage is how many of this corpus's sources carry a CURRENT
+	// vector, and how many sources there are.
+	//
+	// THE SAME PREDICATE AS [Corpus.Stale], COUNTED RATHER THAN SELECTED,
+	// and that is the whole requirement: a coverage number derived from a
+	// second idea of what "current" means would disagree with the backlog
+	// the duty is working through, and the alarm would fire against a
+	// denominator nothing was ever going to fill.
+	Coverage(ctx context.Context, model string, dim int) (current, total int, err error)
+}
+
+// Coverage is the fraction of every corpus's sources carrying a current
+// vector, and whether there was anything to measure.
+//
+// FALSE RATHER THAN ZERO ON AN EMPTY CORPUS. A company that has written
+// nothing down has no coverage, which is not the same fact as a company whose
+// embeddings have stopped — and zero is the value the alarm fires on, so
+// collapsing the two would page every fleet on its first day.
+//
+// IT SUMS ACROSS THE CORPORA rather than reporting the worst, because what the
+// alarm is about is how much of what a search can reach is reachable by
+// MEANING: a company whose tasks are fully embedded and whose pages are not is
+// one whose searches are half-degraded, and the worst-of reading would call it
+// wholly degraded while the average of two fractions would weight a
+// twelve-page wiki equally with a hundred thousand tasks.
+func Coverage(ctx context.Context, corpora []Corpus, model string, dim int) (float64, bool, error) {
+	var current, total int
+	for _, corpus := range corpora {
+		have, all, err := corpus.Coverage(ctx, model, dim)
+		if err != nil {
+			return 0, false, err
+		}
+		current += have
+		total += all
+	}
+	if total <= 0 {
+		return 0, false, nil
+	}
+	// NEVER ABOVE ONE. The two counts come from one statement here, but a
+	// corpus is free to answer from two — and a vector whose source was
+	// removed between them would otherwise report a company as better than
+	// completely covered, which reads as a broken gauge rather than as the
+	// rounding it is.
+	return min(float64(current)/float64(total), 1), true, nil
 }
 
 // Document is one source as the duty embeds it.
@@ -540,4 +603,35 @@ func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 		return nil, nil, err
 	}
 	return stale, gone, nil
+}
+
+// Coverage implements [Corpus].
+//
+// ONE STATEMENT, so the numerator and the denominator describe the same
+// instant. Two counts would let a write land between them and report a
+// coverage this corpus never had — which on a company writing tasks steadily
+// is not a rare race but the ordinary case.
+//
+// THE PREDICATE IS [TaskCorpus.Stale]'s, INVERTED. A source is covered when it
+// has a vector at this model and width whose `source_rev` still matches the
+// task's version; every other row is exactly what the duty would select next.
+func (c TaskCorpus) Coverage(ctx context.Context, model string, dim int) (int, int, error) {
+	var current, total int
+	err := c.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `
+			SELECT COUNT(*),
+			       COUNT(CASE WHEN v.source_id IS NOT NULL
+			                   AND v.source_rev = t.version
+			                   AND v.model = ? AND v.dim = ?
+			                  THEN 1 END)
+			FROM tracker_tasks t
+			LEFT JOIN kb_vectors v
+			  ON v.source = 'task' AND v.source_id = t.id
+			WHERE t.removed_at IS NULL`, model, dim).Scan(&total, &current)
+	})
+	if err != nil {
+		return 0, 0, fmt.Errorf("search: count the task corpus's vector "+
+			"coverage: %w", err)
+	}
+	return current, total, nil
 }

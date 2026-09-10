@@ -303,6 +303,14 @@ type Engine struct {
 	// two loops publishing one fleet's floor.
 	retention *retention
 
+	// embedding is the vector domain's one writer: the fleet singleton
+	// that turns sources whose text has moved into vector records. On the
+	// ENGINE for the reason the trim is — it is a loop this process runs,
+	// and rebuilding it on an apply would leave two loops holding one
+	// company's provider budget. It reads the current epoch's embedder per
+	// tick instead, so a model change lands without a restart.
+	embedding *embedDuty
+
 	// scheduler is the role/unit cron tick. On the ENGINE rather than on an
 	// epoch for the same reason maintenance is: it is a loop this process
 	// runs, and rebuilding it on an apply would leave two loops racing for
@@ -724,6 +732,11 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// where appends are refused.
 	if e.native != nil {
 		e.startRetention(ctx, opts.Bootstrap, e.native.log)
+		// AND THE VECTOR DOMAIN'S ONE WRITER. Without it every other
+		// half of semantic search is present and correct over an empty
+		// corpus — which reports as a healthy domain rather than as a
+		// missing one.
+		e.startEmbedding(ctx, e.native.log)
 	}
 	// Beside the sweep, and a fleet singleton on the same terms: two nodes
 	// reconciling one third-party app at the same moment can each create an identity
@@ -912,6 +925,7 @@ func (e *Engine) Stop(ctx context.Context) {
 	e.stopNotifications(ctx)
 	e.stopMaintenance()
 	e.stopRetention()
+	e.stopEmbedding()
 	// AFTER THE DRAIN AND AFTER EVERY LOOP, which is what the admission
 	// says: the key means "this process may be publishing", so withdrawing
 	// it while a seat was still finishing a turn would tell a coordinator
