@@ -152,6 +152,20 @@ type Runner struct {
 	// mean over batches lets the figure follow a genuine slowdown while
 	// ignoring the shape of any one fetch.
 	drain float64
+
+	// commits is the same measurement over TRANSACTIONS rather than
+	// records, smoothed identically.
+	//
+	// A SECOND RATE BECAUSE IT IS A SECOND RESOURCE. Rows per second is
+	// what a backlog is divided by; commits per second is the FSYNC rate,
+	// and under `synchronous = FULL` that is the number a device's write
+	// budget is actually spent by. The two move independently by design —
+	// [Runner.nextRun] fills a run toward the transaction budget precisely
+	// so that a barrier-heavy stream commits once per two dozen records
+	// rather than once per record — so a node whose rows/s is healthy and
+	// whose commits/s has doubled is a node whose disk is doing twice the
+	// work for the same progress, which neither number alone can say.
+	commits float64
 }
 
 // DrainSmoothing is how much of a new batch's rate enters the measurement.
@@ -514,7 +528,25 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 	var boundBy string
 	started := r.now()
 
+	// THE ABORTS ARE COUNTED HERE, and this is the only place that can.
+	//
+	// `crewlet.statelog.apply.tx.aborts` was declared and catalogued and
+	// never written, so the series was permanently absent and the gauge
+	// documented as "measured on the operator's own hardware rather than on
+	// a benchmark's" read as no-data for ever. What it answers is whether
+	// this driver's transaction conflicts are row-scoped or
+	// database-scoped, which is the assumption fourteen of this design's
+	// throughput figures rest on.
+	//
+	// It cannot be counted in the store: [store.retryStale] is where the
+	// abort happens, and internal/store may not import a metrics package
+	// the whole engine sits above. But the store RE-RUNS the body, so this
+	// closure's own invocation count is the same number — attempts minus
+	// the one that committed — read from the layer that owns the
+	// instrument.
+	attempts := 0
 	err := w.Tx(ctx, func(tx *sql.Tx) error {
+		attempts++
 		// RESET ON EVERY ATTEMPT. The store re-runs a conflicted
 		// transaction's body, so a counter accumulated across attempts
 		// counts the abandoned one too — and the metrics would report
@@ -660,6 +692,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 	r.ack(ctx, consumed)
 
 	r.measureDrain(started, len(consumed))
+	r.countAborts(attempts)
 	r.observe(started, rows, boundBy, tally, consumed[len(consumed)-1])
 	return consumed, nil
 }
@@ -675,6 +708,10 @@ func (r *Runner) measureDrain(started time.Time, records int) {
 		return
 	}
 	rate := float64(records) / elapsed.Seconds()
+	// ONE COMMIT PER RUN, which is what [Runner.applyRun] is: the whole
+	// batch lands in a single transaction, so this batch's contribution to
+	// the commit rate is one over the same elapsed time.
+	commits := 1 / elapsed.Seconds()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.drain == 0 {
@@ -683,10 +720,11 @@ func (r *Runner) measureDrain(started time.Time, records int) {
 		// first several batches — which is exactly the window after a
 		// restart, when the backlog is longest and the figure matters
 		// most.
-		r.drain = rate
+		r.drain, r.commits = rate, commits
 		return
 	}
 	r.drain += DrainSmoothing * (rate - r.drain)
+	r.commits += DrainSmoothing * (commits - r.commits)
 }
 
 // Drain is this loop's measured records per second, and 0 before it has
@@ -700,6 +738,18 @@ func (r *Runner) Drain() float64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.drain
+}
+
+// Commits is this loop's measured transactions per second, and 0 before it
+// has applied anything.
+//
+// ZERO MEANS UNMEASURED, exactly as [Runner.Drain]'s does. Nothing divides by
+// this one — it is published rather than consumed, because what an operator
+// does with it is compare it against the device's own committed write rate.
+func (r *Runner) Commits() float64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.commits
 }
 
 // applyOne runs the domain's state machine for one record, unless a gate says
@@ -829,6 +879,19 @@ type results struct {
 	retained int
 	gated    int
 	skipped  int
+}
+
+// countAborts records the transactions the store rolled back under this apply.
+//
+// ATTEMPTS MINUS ONE, because the last one is the one that committed. Zero on
+// the ordinary path, which is why it is a counter rather than a gauge: what an
+// operator watches is whether it moves at all.
+func (r *Runner) countAborts(attempts int) {
+	if r.metrics == nil || attempts <= 1 {
+		return
+	}
+	r.metrics.Add(metrics.StatelogApplyTxAborts, uint64(attempts-1),
+		metrics.Attrs{"domain": r.domain.Name()})
 }
 
 func (r *Runner) observe(started time.Time, rows int, boundBy string, tally results, last Record) {
