@@ -74,11 +74,10 @@ jobs:
   # is written at its top.
   signoff:
     name: sign-off
-    # `pull_request` only. A push to main is the squash of a branch this job
-    # has already judged, and a push event's own range is unusable anyway:
-    # `github.event.before` is all-zeros on a branch's first push and points
-    # at a discarded history after a force-push. A second answer that is
-    # wrong more often than right is worse than no answer.
+    # The PULL REQUEST half. It is the gate that matters — it is the only one
+    # that can stop an unsigned commit rather than report it — but it is not
+    # the whole job, because the commit a pull request lands is not always a
+    # commit this job ever saw. `sign-off (main)` below is the other half.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
@@ -99,6 +98,85 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: scripts/check-signoff.sh "$BASE_SHA" "$HEAD_SHA"
+      # The gate's own suite. It is bash reading git history, so nothing in the
+      # Go suite reaches it, and it regresses SILENTLY in both directions: a
+      # gate that stops failing reports a certification nobody made, and one
+      # that starts failing wedges every pull request. Both happened while it
+      # was being written.
+      - run: scripts/check-signoff_test.sh
+
+  # THE OTHER HALF, and the reason it exists is written in this repository's
+  # own history rather than argued from first principles.
+  #
+  # The job above judges a pull request's commits. It cannot judge the commit
+  # the merge button WRITES, because that commit does not exist yet: GitHub
+  # composes its message at merge time, from a text box, after every check has
+  # reported. Under "Default to pull request title and commit details" it
+  # concatenates the branch's messages and the trailers survive — which is why
+  # 22 of the 24 merge-button commits on main carry one. The other two do not:
+  #
+  #   074e3a1  Merge pull request #63 from crewlet/docs/diagram-semantic-colour
+  #   7d0e29e  Merge pull request #46 from crewlet/claude/go-mod-tidy-ci-check-cim0l1
+  #
+  # Both are single-parent commits committed by `GitHub <noreply@github.com>`
+  # whose whole message is a subject template plus the pull request title. The
+  # branch commits they replaced WERE signed. So the trailer was not lost by a
+  # contributor forgetting `-s`; it was dropped between a green check and main,
+  # where no `pull_request` job can ever look. That is two of the 61.
+  #
+  # This job is a DETECTOR, not a preventer — it runs after the merge and
+  # cannot undo it. The prevention is the repository's squash/merge commit
+  # message setting, which lives in Settings and which nothing in this tree can
+  # assert. That is exactly why the detector has to exist: a setting nobody can
+  # see from a checkout, that silently stops carrying trailers, has no other
+  # symptom.
+  signoff-main:
+    name: sign-off (main)
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Not shallow, and for a sharper reason than the job above: the range
+          # STARTS at main's previous tip, which a depth-limited fetch does not
+          # contain at all. It is also what keeps `--no-merges` honest — git
+          # rewrites a graft boundary to have no parents, so a truncated merge
+          # commit reads as an ordinary one and gets failed for lacking a
+          # trailer it is never allowed to carry.
+          fetch-depth: 0
+      - name: what landed on main carries a Signed-off-by trailer
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          # `before` is main's previous tip, so `before..after` is exactly what
+          # this push added — every commit already on main is excluded by
+          # construction, the 61 unsigned ones included. Replayed over main's
+          # last 50 first-parent steps this reds 7 historical pushes and greens
+          # 42, and the most recent push is green: adding it does not put main
+          # into a state it cannot leave.
+          #
+          # ONE precondition, and it covers every shape that would break that:
+          # a `before` that is all-zeros (ref created), absent from the object
+          # store, or no longer an ancestor (main was force-pushed). Only in
+          # that last case would the range reach backwards into the unsigned
+          # history and red main permanently. Fail rather than skip — a
+          # force-push to the protected default branch is an incident, and this
+          # repository's rule is that a skip is not a pass.
+          if ! git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null ||
+            ! git merge-base --is-ancestor "$BEFORE_SHA" "$AFTER_SHA"; then
+            echo "::error::cannot judge this push: ${BEFORE_SHA} is not an ancestor of ${AFTER_SHA}."
+            echo "main was force-pushed, created, or rewritten. That is the incident to look at;"
+            echo "this job is refusing to answer rather than judging a range it cannot bound."
+            exit 1
+          fi
+          if ! scripts/check-signoff.sh "$BEFORE_SHA" "$AFTER_SHA"; then
+            echo "::error::an unsigned commit reached main. Do NOT rewrite main to fix it."
+            echo "Reland the change with a signed commit, and check the repository's squash and"
+            echo "merge commit-message settings: the merge button composes the landing commit's"
+            echo "message itself and can drop the branch's trailers (see 074e3a1 and 7d0e29e)."
+            exit 1
+          fi
 
   # The dashboard is a React + TypeScript application built by Vite. Its own
   # ~200 assertions run here — the wire protocol, the router's history rules,
