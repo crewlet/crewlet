@@ -196,3 +196,78 @@ func TestHealthCarriesEveryFieldItsContractsCite(t *testing.T) {
 		}
 	}
 }
+
+// EVERY FIELD Refusal AND Healthy READ MUST HAVE A PRODUCER, and nothing said
+// so until this test.
+//
+// Four of [statelog.Health]'s thirteen fields — Err, Stalled, Evicted and
+// Floor — were read by both decision functions and assigned by nothing. The
+// consequences were silent in exactly the way a zero value is: every arm of
+// [Health.Refusal] was unreachable, so an evicted node, a node below the trim
+// floor and a node whose applier had STOPPED all went on serving reads as
+// though current; and [Health.Healthy] could never go false, so the shed the
+// `deferred_old` alarm promises an operator never happened.
+//
+// A STRUCTURAL TEST rather than a behavioural one, because the defect is
+// structural: each arm has a behavioural test above that passes a Health
+// built BY HAND, and a hand-built value proves the function and says nothing
+// about whether the engine fills the field. This asserts the decision
+// functions actually turn on each field, so a field that stopped being read
+// is caught here and a field that stopped being WRITTEN is caught by
+// TestEveryHealthInputIsPopulated in internal/engine.
+func TestEveryFieldTheDecisionsReadCanChangeTheAnswer(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	serving := func() statelog.Health {
+		return statelog.Health{
+			CaughtUp: true,
+			Floor:    statelog.Floor{State: statelog.FloorOK, ReadAt: now},
+		}
+	}
+
+	if code := serving().Refusal(now); code != "" {
+		t.Fatalf("the control refuses with %q, so every case below is vacuous", code)
+	}
+	if !serving().Healthy(now, statelog.DeferredSince{}) {
+		t.Fatal("the control is unhealthy, so every case below is vacuous")
+	}
+
+	for _, tc := range []struct {
+		field string
+		mutil func(*statelog.Health)
+		want  statelog.ReadRefusal
+	}{
+		{"Evicted", func(h *statelog.Health) { h.Evicted = true }, statelog.RefuseEvicted},
+		{"Err", func(h *statelog.Health) { h.Err = "halted at 41" }, statelog.RefuseStalled},
+		{"Stalled", func(h *statelog.Health) { h.Stalled = true }, statelog.RefuseStalled},
+		{"Floor(below)", func(h *statelog.Health) { h.Floor.State = statelog.FloorBelow },
+			statelog.RefuseBelowFloor},
+		{"Floor(unread)", func(h *statelog.Health) { h.Floor = statelog.Floor{} },
+			statelog.RefuseFloorUnknown},
+	} {
+		h := serving()
+		tc.mutil(&h)
+		if got := h.Refusal(now); got != tc.want {
+			t.Errorf("%s set: Refusal = %q, want %q — this field cannot change "+
+				"the answer, so nothing needs to produce it", tc.field, got, tc.want)
+		}
+		if h.Healthy(now, statelog.DeferredSince{}) {
+			t.Errorf("%s set: still Healthy, so a node in this state keeps its seats",
+				tc.field)
+		}
+	}
+
+	// The deferral shed is the one condition that needs a SERIES, so it is
+	// the one whose input is a second argument rather than a field.
+	held := serving()
+	held.Deferred = 1
+	if !held.Healthy(now, statelog.DeferredSince{Since: now.Add(-time.Minute), Held: true}) {
+		t.Error("a deferral inside the grace shed the seats, which would move a " +
+			"company's work on every rolling upgrade")
+	}
+	if held.Healthy(now, statelog.DeferredSince{
+		Since: now.Add(-statelog.DeferralGrace - time.Second), Held: true}) {
+		t.Error("a deferral past the grace kept the seats, which is what the " +
+			"deferred_old alarm already tells an operator has stopped")
+	}
+}

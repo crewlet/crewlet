@@ -94,6 +94,35 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 	}
 
 	draining := h.Draining()
+
+	// THE UNSERVICEABLE SHED, BEFORE the capacity one. A node whose rows
+	// are wrong gives back EVERY seat, so there is no share left to
+	// converge on and the capacity pass below has nothing to divide.
+	//
+	// It is a separate question from the readiness gate lower down because
+	// the two have opposite directions: readiness withholds CLAIMS and
+	// deliberately keeps what is held, and this gives back what is held
+	// whether or not anything is claimable. See [Config.Serviceable].
+	unfit, unfitReason := false, ""
+	if !draining {
+		if unfit, unfitReason = h.unserviceable(ctx); unfit {
+			for _, handle := range h.Held() {
+				if h.Release(ctx, handle, ReasonUnserviceable) {
+					released = append(released, handle)
+				}
+			}
+			// EVERY PASS while it holds, at WARN: this is a node running
+			// no work at all, and an operator looking at an idle node
+			// needs the reason on the node rather than in a fleet-wide
+			// alarm they have to go and correlate.
+			log.WarnContext(ctx, "seats_shed_unserviceable", "node", h.nodeID,
+				"reason", unfitReason, "released", len(released),
+				"hint", "this node's copy of the company's records is wrong "+
+					"rather than merely behind, so its seats move to a peer "+
+					"that can serve them; it reclaims them when this clears")
+		}
+	}
+
 	if !draining {
 		released = append(released, h.shedToCapacity(ctx, plan.Capacity)...)
 	}
@@ -104,7 +133,7 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 	// still give back seats it holds beyond its share, or a fleet whose
 	// newest member is mid-hydration cannot rebalance onto it and its
 	// oldest member stays over-subscribed for as long as that takes.
-	withheld := !draining && !h.admits()
+	withheld := !draining && (unfit || !h.admits())
 	if !draining && !withheld {
 		h.mu.Lock()
 		// Undead seats count against capacity: this process may still be
@@ -681,4 +710,28 @@ func (h *Host) admits() (ok bool) {
 		}
 	}()
 	return h.ready()
+}
+
+// unserviceable asks [Config.Serviceable] whether held seats may stay.
+//
+// A nil gate keeps them, and a PANICKING one keeps them too — the same rule
+// [Host.admits] states for the opposite gate, and it matters more here: a
+// status function that panicked once would otherwise tear down every seat on
+// the node, which is a far worse failure than the stale rows the gate exists
+// to stop serving.
+func (h *Host) unserviceable(ctx context.Context) (unfit bool, reason string) {
+	if h.serviceable == nil {
+		return false, ""
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			log.ErrorContext(ctx, "seat_serviceable_check_failed", "node", h.nodeID,
+				"panic", r, "stack", string(debug.Stack()),
+				"hint", "the serviceability gate panicked, so this pass kept every "+
+					"seat; a gate that cannot answer must not shed a fleet's work")
+			unfit, reason = false, ""
+		}
+	}()
+	ok, why := h.serviceable()
+	return !ok, why
 }
