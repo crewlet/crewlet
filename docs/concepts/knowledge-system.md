@@ -130,10 +130,28 @@ round trip inside its own transaction. One **fleet-singleton duty** embeds each
 source once and publishes a record; every node applies it. The company pays the
 bill once and holds the answer everywhere.
 
+The duty ticks **every minute** and spends at most **8 batched provider calls**
+per tick, 128 sources apiece — so a tick on a caught-up company is one indexed
+anti-join that returns nothing and stops, and a tick on one that is behind
+cannot monopolise either the provider budget or the singleton lease it holds.
+Both source kinds are covered: the tracker's work items and the knowledge
+base's published pages. A **rename does not re-embed a page** — the vector is
+stored against the page's own edit number rather than the log version a rename
+also stamps.
+
 A cold fill of 110 000 sources is roughly **108 minutes and 860 batched
 requests**, and those numbers do not move with the configured width — providers
 bill per input *token*, and `dimensions` is a truncation parameter the request
 already carries.
+
+**How much of the corpus is covered is published**, as
+`crewlet.tracker.vector.coverage` — the fraction of sources carrying a current
+vector, summed across both corpora rather than averaged, so a small fully
+embedded corpus cannot mask a large uncovered one. The
+[`recall_below_floor`](../reference/alarms.md) alarm fires below 95 %, which is
+how a stalled backlog is reported: it never drops a seat, and semantic recall
+answering from a corpus it does not cover has no other symptom. A company with
+no embeddings configured measures nothing rather than zero.
 
 **A model change at the same width is the case to know about.** Until the
 refill finishes, the corpus holds two incompatible embedding spaces, and a
