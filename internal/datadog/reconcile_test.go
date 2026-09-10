@@ -105,10 +105,106 @@ func TestAReadOnlyPassCreatesNoAccount(t *testing.T) {
 		t.Error("a read-only pass created an account at the vendor")
 	}
 	// And it reports the seat as missing one, which is the fact it exists
-	// to surface.
+	// to surface. Beside the webhook this pass registered no address for
+	// — these Options carry no WebhookBase — because a check that leaves
+	// out the half of the integration that carries the alerts is a check
+	// somebody would read as an all-clear.
 	findings := res.Findings()
-	if len(findings) != 1 || findings[0].Subject != "sre" {
-		t.Fatalf("findings = %+v, want the seat reported without an account", findings)
+	var seat integration.Finding
+	for _, f := range findings {
+		if f.Subject == "sre" {
+			seat = f
+		}
+	}
+	if seat.Kind != integration.FindingIdentityMissing {
+		t.Fatalf("findings = %+v, want the seat reported without an account",
+			findings)
+	}
+}
+
+// A DISABLED SERVICE ACCOUNT IS NOT A PROVISIONED SEAT.
+//
+// Disabling one is exactly how a disconnect that removes seats decommissions
+// it, and a disabled account stays in the listing — so a pass that read
+// "present in the listing" as "has an identity" reported nothing at all for a
+// seat whose every Datadog call is refused, and no later pass ever created a
+// replacement. The surface sat Ready over an agent that could not
+// authenticate, for the life of the deployment.
+func TestADisabledAccountIsReportedRatherThanReadAsProvisioned(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"u1","attributes":{
+			"email":"crewlet-sre@agents.test.invalid","service_account":true,
+			"disabled":true}}]}`))
+	}
+	created := 0
+	reg.handle["/api/v2/service_accounts"] = func(w http.ResponseWriter, _ *http.Request) {
+		created++
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+
+	s := newSink()
+	s.held["SRE_DD_KEY"] = "already-held"
+	res, err := datadog.Reconcile(context.Background(), datadog.Options{
+		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
+		Creds: pair, Sink: s,
+	})
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	// AND NO SECOND ACCOUNT ON TOP OF IT. The address is Datadog's own
+	// key for the identity, so creating one here would be refused every
+	// pass for ever.
+	if created != 0 {
+		t.Errorf("a second account was created over a disabled one %d times", created)
+	}
+	if len(res.Seats) != 1 || res.Seats[0].Err == nil {
+		t.Fatalf("seat = %+v, want the disabled account reported", res.Seats)
+	}
+	if !strings.Contains(res.Seats[0].Err.Error(), "disabled") {
+		t.Errorf("the report does not say the account is disabled: %v", res.Seats[0].Err)
+	}
+	findings := res.Findings()
+	if len(findings) == 0 || findings[len(findings)-1].Kind != integration.FindingIdentityFailed {
+		t.Fatalf("findings = %+v, want identity_failed for the seat", findings)
+	}
+}
+
+// A CANCELLED PASS RAISES RATHER THAN REPORTING A CONVERGED COMPANY.
+//
+// The two are opposite claims to the reconcile loop: an error is a fault it
+// retries, and an empty findings list is a statement that everything is fine.
+// A node shutting down would otherwise record Datadog ready on its way out,
+// and the next node to hold the duty trusts that for a full settled interval.
+// [integrationtest] drives the same clause; this pins it on its own, because
+// the ordering that makes it true — the credential probe is the FIRST thing
+// the pass does, so nothing else can answer before the context is consulted —
+// is not obvious from any one line of the pass.
+func TestACancelledPassRaisesRatherThanReportingHealth(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	noSeats(reg)
+	held := &stored{}
+	serveWebhook(reg, held)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	res, err := datadog.Reconcile(ctx, hookOptions(t, reg, base))
+	if err == nil && len(res.Findings()) == 0 {
+		t.Fatal("a cancelled pass reported a converged integration")
+	}
+	if err == nil {
+		t.Fatalf("a cancelled pass answered with findings rather than a fault: %+v",
+			res.Findings())
+	}
+	// AND IT DOES NOT ACCUSE THE OPERATOR'S KEY. A cancellation says
+	// nothing about the credential, and reporting one as refused sends
+	// somebody to rotate a pair that works.
+	if errors.Is(err, integration.ErrCredentialRejected) {
+		t.Errorf("a cancelled pass was classified as a credential rejection: %v", err)
 	}
 }
 
@@ -348,5 +444,95 @@ func TestAKeyThatCannotBeRevokedIsReportedForARealPerson(t *testing.T) {
 	}
 	if !strings.Contains(res.Seats[0].Err.Error(), "delete the key named") {
 		t.Errorf("nobody was told the key is live: %v", res.Seats[0].Err)
+	}
+}
+
+// A NODE WITH NO KEYRING CREATES NO ACCOUNT AT DATADOG.
+//
+// [provision.CanMint] exists for exactly this pass: it makes an ACCOUNT and
+// then mints a key on it, and the rollback can only revoke the key — so
+// reaching the first Record on a sink that cannot record leaves a service
+// account at Datadog that nobody asked for and that nothing can ever
+// authenticate as. The loop hands provision.ReadOnly() to a node with no
+// keyring, and this pass took it for an ordinary sink: it created every
+// seat's account, then reported each one as "could not read whether <VAR>
+// already holds a key" on every tick, and not one of those sentences named
+// the bootstrap field that fixes it.
+func TestANodeWithNoKeyringCreatesNoAccount(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}
+	created := 0
+	reg.handle["/api/v2/service_accounts"] = func(w http.ResponseWriter, _ *http.Request) {
+		created++
+		_, _ = w.Write([]byte(`{"data":{"id":"u1","attributes":{"email":"a@b","name":"SRE"}}}`))
+	}
+
+	res, err := datadog.Reconcile(context.Background(), datadog.Options{
+		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre", "oncall"),
+		Creds: pair, Sink: provision.ReadOnly(),
+	})
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if created != 0 {
+		t.Errorf("a node that cannot seal a credential created %d service "+
+			"account(s) nothing will ever authenticate as", created)
+	}
+	// ONE FINDING NAMING THE BOOTSTRAP FIELD, and NOT one per seat naming
+	// a variable none of them can do anything about. (The webhook is
+	// reported too — these Options carry no public base — which is a
+	// different fact about a different half.)
+	var keyring, perSeat int
+	for _, f := range res.Findings() {
+		switch f.Subject {
+		case "secrets.keys":
+			keyring++
+			if f.Kind != integration.FindingCredentialMissing {
+				t.Errorf("kind = %q, want credential_missing", f.Kind)
+			}
+		case "sre", "oncall":
+			perSeat++
+		}
+	}
+	if keyring != 1 {
+		t.Errorf("findings = %+v, want one naming secrets.keys", res.Findings())
+	}
+	if perSeat != 0 {
+		t.Errorf("%d seat(s) were reported individually for one bootstrap "+
+			"field nothing about a seat can fix", perSeat)
+	}
+}
+
+// AND THE INBOUND HALF STILL RUNS ON THAT NODE.
+//
+// This is the difference from every other pass that checks CanMint. The
+// webhook definition is written with the organization credentials the company
+// document already carries, so it needs no keyring at all — and it is the
+// half that carries the alerts. A check placed before it would take a
+// company's whole monitoring integration down over a bootstrap field that has
+// nothing to do with it.
+func TestANodeWithNoKeyringStillRegistersTheWebhook(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	noSeats(reg)
+	held := &stored{}
+	serveWebhook(reg, held)
+
+	opts := hookOptions(t, reg, base)
+	opts.Plan = planWith("sre")
+	opts.Sink = provision.ReadOnly()
+	if _, err := datadog.Reconcile(context.Background(), opts); err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if held.hook == nil {
+		t.Fatal("a node with no keyring left this company's alerts unrouted")
+	}
+	if got, want := held.hook.URL, base+"/webhooks/datadog"; got != want {
+		t.Errorf("url = %q, want %q", got, want)
 	}
 }

@@ -258,8 +258,8 @@ func TestAReadOnlyPassRegistersNoWebhook(t *testing.T) {
 	if held.creates != 0 {
 		t.Error("a read-only pass registered a webhook at the vendor")
 	}
-	if res.Webhook == nil || res.Webhook.Note == "" {
-		t.Errorf("result = %+v, want a note saying no definition exists yet", res.Webhook)
+	if res.Webhook == nil || res.Webhook.Blocked == nil {
+		t.Errorf("result = %+v, want it to say no definition exists yet", res.Webhook)
 	}
 }
 
@@ -281,8 +281,81 @@ func TestNoPublicBaseRegistersNothing(t *testing.T) {
 	if held.creates != 0 {
 		t.Error("a pass with no public base registered a webhook")
 	}
-	if res.Webhook == nil || !strings.Contains(res.Webhook.Note, "public base URL") {
-		t.Errorf("result = %+v, want a note naming the missing public base", res.Webhook)
+	if res.Webhook == nil || res.Webhook.Blocked == nil ||
+		!strings.Contains(res.Webhook.Blocked.Detail, "public base URL") {
+		t.Errorf("result = %+v, want it to name the missing public base", res.Webhook)
+	}
+}
+
+// AND NOBODY IS TOLD A COMPANY IS COVERED WHEN NOTHING DELIVERS.
+//
+// The missing base was carried as a bare note and [datadog.Result.Findings]
+// read only the failure beside it, so a pass that registered no webhook AT
+// ALL reported nothing: the loop classified Datadog Ready over an inbound
+// path that did not exist, which is the shape this package's own doc calls
+// strictly worse than an integration that is switched off. It is
+// FindingIngressBlocked and its subject is the field to set, because that
+// subject is what a status row offers somebody to type into.
+func TestNoPublicBaseIsReportedRatherThanNoted(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	noSeats(reg)
+	held := &stored{}
+	serveWebhook(reg, held)
+
+	res, err := datadog.Reconcile(context.Background(), hookOptions(t, reg, ""))
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	findings := res.Findings()
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want the unregistered webhook reported", findings)
+	}
+	if findings[0].Kind != integration.FindingIngressBlocked {
+		t.Errorf("kind = %q, want ingress_blocked", findings[0].Kind)
+	}
+	if findings[0].Subject != "integrations.public_base_url" {
+		t.Errorf("subject = %q, want the field an operator has to set",
+			findings[0].Subject)
+	}
+}
+
+// A WEBHOOK TOKEN THAT DID NOT RESOLVE IS A MISSING CREDENTIAL, and it says
+// so in the word the setup form joins on.
+//
+// [setup.Requirement.Blocks] on the `webhook_token` requirement declares that
+// its absence produces credential_missing, and nothing in this package ever
+// produced one — so the field that clears the fault was never offered, and
+// the fault itself was never reported: a definition carrying no token is
+// never registered, and every alert this company raises reaches nobody.
+func TestAnUnresolvedWebhookTokenIsReportedAsAMissingCredential(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	noSeats(reg)
+	held := &stored{}
+	serveWebhook(reg, held)
+
+	opts := hookOptions(t, reg, base)
+	opts.WebhookToken = "   "
+	res, err := datadog.Reconcile(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if held.creates != 0 {
+		t.Error("a definition carrying no token was registered")
+	}
+	findings := res.Findings()
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want the unresolved token reported", findings)
+	}
+	if findings[0].Kind != integration.FindingCredentialMissing {
+		t.Errorf("kind = %q, want credential_missing: that is what the "+
+			"webhook_token requirement declares it produces", findings[0].Kind)
+	}
+	if findings[0].Subject != "integrations.datadog.webhook_token" {
+		t.Errorf("subject = %q, want the field that clears it", findings[0].Subject)
 	}
 }
 

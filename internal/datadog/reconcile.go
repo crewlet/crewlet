@@ -26,6 +26,10 @@ type Options struct {
 
 	// Sink records what is minted. Nil is a DRY RUN: the pass reads what
 	// exists and creates nothing, which is what a check is.
+	//
+	// A sink that exists and cannot mint ([provision.ReadOnly], which the
+	// loop hands a node with no keyring) is a THIRD answer rather than
+	// either of those — see [sealsNothing].
 	Sink provision.TokenSink
 
 	// WebhookBase is this deployment's public base URL, or empty to skip
@@ -51,6 +55,11 @@ type Result struct {
 	// Webhook is what this pass did to the inbound definition at Datadog,
 	// nil where the pass never reached it.
 	Webhook *WebhookResult
+
+	// NoKeyring reports a node that was asked to provision identities and
+	// cannot seal what it would mint, so it created nothing. See
+	// [sealsNothing].
+	NoKeyring bool
 
 	// Notes are the caveats: a seat whose key is a literal, a role the
 	// organization does not have.
@@ -120,14 +129,39 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	// arrive, and the webhook is the only thing that makes them.
 	hook := ensureWebhook(ctx, opts)
 	res.Webhook = &hook
-	if hook.Note != "" {
-		res.Notes = append(res.Notes, hook.Note)
+	if hook.Blocked != nil {
+		res.Notes = append(res.Notes, hook.Blocked.Detail)
 	}
 
 	if opts.Plan == nil {
 		return res, nil
 	}
 	res.Notes = append(res.Notes, opts.Plan.Notes...)
+
+	// A NODE THAT CANNOT SEAL DOES NOT CREATE AN IDENTITY.
+	//
+	// [provision.CanMint]'s own doc names this shape as the hazard it
+	// exists for: a pass that creates an ACCOUNT and then mints a key on
+	// it has no rollback that can undo the first half, so reaching the
+	// first Record on a sink that cannot record leaves a service account
+	// at Datadog nobody asked for and nothing can ever authenticate as.
+	// This pass did exactly that — once per seat, because the account it
+	// made was then found by every later pass — and then reported each
+	// seat as "could not read whether <VAR> already holds a key", a
+	// sentence whose only instruction came from [provision.ErrNoSink] and
+	// told an operator to name where minted credentials should go. None of
+	// them named secrets.keys, which is the only thing that fixes it.
+	//
+	// AFTER THE WEBHOOK, which is what makes this different from the same
+	// check in gitlab, jira and mattermost. The inbound half needs no
+	// keyring at all — the definition is written with the organization
+	// credentials the company document already carries — and it is the
+	// half that carries the alerts, so a node that cannot provision
+	// identities still keeps this company's monitors reaching a seat.
+	if sealsNothing(opts.Sink) {
+		res.NoKeyring = true
+		return res, nil
+	}
 
 	// THE ROLE IS RESOLVED ONCE, not per seat: it is the same role for
 	// every account, and asking Datadog for it per seat spends a rate
@@ -168,6 +202,29 @@ func provisionSeat(
 	account, found := byEmail[seat.Email]
 
 	switch {
+	case found && account.Disabled:
+		// A DISABLED ACCOUNT AUTHENTICATES AS NOTHING, and reading it as
+		// an account is how this seat went silently dead.
+		//
+		// Disabling is exactly what [Teardown] does to decommission a
+		// seat, so an operator who removed seats and later re-enabled the
+		// block got a pass that found the account, reported nothing, and
+		// left the surface Ready while every call the agent made was
+		// refused. There was no path out of it either: a disabled account
+		// is still in the listing, so no later pass ever created a
+		// replacement.
+		//
+		// REPORTED RATHER THAN RE-ENABLED, on the same terms as an
+		// account that left the config: undoing a decommission is a
+		// decision somebody makes, and a pass that quietly reversed it
+		// would fight the operator's own gesture on every tick.
+		out.AccountID = account.ID
+		out.Err = fmt.Errorf(
+			"%s's Datadog service account (%s) is disabled, so everything it "+
+				"authenticates is refused — re-enable it at Datadog: this "+
+				"pass will not, because disabling one is how a disconnect "+
+				"that removes seats decommissions it", seat.Handle, seat.Email)
+		return out
 	case found:
 		out.AccountID = account.ID
 	case opts.Sink == nil:
@@ -300,6 +357,19 @@ func roleIDOf(ctx context.Context, opts Options, name string) (string, error) {
 			"integrations.datadog.provisioning.role", name)
 }
 
+// sealsNothing reports a sink that EXISTS and cannot record.
+//
+// DISTINCT FROM A NIL SINK, and collapsing the two would lose the more useful
+// of them. Nil is a dry run, which is a posture the caller chose: it reads and
+// reports without writing, and telling an operator which seats have no account
+// is the whole point of one. This is a node that was ASKED to provision and
+// has nowhere to put a credential, which is a fact about the deployment — the
+// only thing to report is the bootstrap field that fixes it, and reading on
+// would spend two calls per tick on an answer nothing can act on.
+func sealsNothing(sink provision.TokenSink) bool {
+	return sink != nil && !provision.CanMint(sink)
+}
+
 func emailDomainOf(cfg *config.Datadog) string {
 	if cfg != nil && cfg.Provisioning != nil && cfg.Provisioning.EmailDomain != "" {
 		return cfg.Provisioning.EmailDomain
@@ -317,16 +387,47 @@ func (r *Result) Findings() []integration.Finding {
 		return nil
 	}
 	out := []integration.Finding{}
-	if hook := r.Webhook; hook != nil && hook.Err != nil {
-		// INGRESS, NOT IDENTITY. A definition that could not be written is
-		// every alert this company has going nowhere, which is a different
-		// thing from one agent lacking an account and is owned by whoever
-		// holds the Datadog keys.
+	if r.NoKeyring {
+		// THE OPERATOR'S WORK, not a fault the engine is retrying. No
+		// pass will ever provision a seat until somebody sets
+		// secrets.keys, so reporting it as a wait leaves them watching a
+		// retry that cannot succeed. The same finding gitlab, jira and
+		// mattermost report, on the same subject, because it is one
+		// bootstrap field rather than seven third-party app problems.
 		out = append(out, integration.Finding{
-			Kind:    integration.FindingIngressBlocked,
-			Subject: hook.Name,
-			Detail:  hook.Err.Error(),
+			Kind:    integration.FindingCredentialMissing,
+			Subject: "secrets.keys",
+			Detail: "this node has no keyring, so an application key minted " +
+				"for a seat could not be sealed and no service account was " +
+				"created — set secrets.keys in the bootstrap configuration",
 		})
+	}
+	if hook := r.Webhook; hook != nil {
+		switch {
+		case hook.Err != nil:
+			// INGRESS, NOT IDENTITY. A definition that could not be
+			// written is every alert this company has going nowhere,
+			// which is a different thing from one agent lacking an
+			// account and is owned by whoever holds the Datadog keys.
+			out = append(out, integration.Finding{
+				Kind:    integration.FindingIngressBlocked,
+				Subject: hook.Name,
+				Detail:  hook.Err.Error(),
+			})
+		case hook.Blocked != nil:
+			// AND A DEFINITION THAT WAS NEVER ATTEMPTED IS THE SAME
+			// OUTAGE, reached through this deployment's own
+			// configuration rather than through Datadog refusing a
+			// write. It was a note nothing read, so a company with no
+			// public base URL or an unresolved webhook token had its
+			// Datadog surface classified Ready over an inbound path
+			// that did not exist — see [Unregistered].
+			out = append(out, integration.Finding{
+				Kind:    hook.Blocked.Kind,
+				Subject: hook.Blocked.Subject,
+				Detail:  hook.Blocked.Detail,
+			})
+		}
 	}
 	for _, seat := range r.Seats {
 		switch {

@@ -60,11 +60,47 @@ type WebhookResult struct {
 	// definition that was already right.
 	Created bool
 	Updated bool
-	// Note is why nothing was registered, for the cases that are a
-	// configuration rather than a failure.
-	Note string
+	// Blocked is why nothing of this deployment's is delivering, for the
+	// cases that are a configuration rather than a failure. Nil where a
+	// definition is in place.
+	Blocked *Unregistered
 	// Err is why the definition could not be brought into line.
 	Err error
+}
+
+// Unregistered is why a pass left NO definition of this deployment's
+// delivering at Datadog, said in the shared finding vocabulary rather than as
+// prose.
+//
+// # A NOTE WAS NOT ENOUGH, and what it cost was the whole integration
+//
+// This was a bare sentence on [WebhookResult], and [Result.Findings] reported
+// only the FAILURE case beside it. So the two configuration cases — no public
+// base URL to point a definition at, no webhook token for one to carry — left
+// a pass with nothing to report, the loop classified the surface Ready, and
+// every monitor this company has fired into an address that was never
+// registered. This package's own doc calls that shape out by name: an
+// alerting integration whose alerts reach nobody is strictly worse than one
+// that is switched off, because it looks like coverage.
+//
+// # The KIND travels with the sentence, because the two are not one finding
+//
+// [setup.Requirement.Blocks] is the join a status row picks a field from, and
+// `webhook_token`'s requirement declares that its absence produces
+// [integration.FindingCredentialMissing] — which nothing in this package
+// produced. A single kind for both cases would offer an operator the fallback
+// seat to fix a missing token, which is what that requirement's own comment
+// says the join exists to stop.
+type Unregistered struct {
+	// Kind is the finding this becomes.
+	Kind integration.FindingKind
+	// Subject is what has to change, named as the config path rather than
+	// in prose, so the field the sentence tells somebody to set and the
+	// field a status row offers them cannot drift apart.
+	Subject string
+	// Detail is the sentence, which is also what the pass carries as a
+	// note in [Result.Notes].
+	Detail string
 }
 
 // desiredWebhook is the definition this deployment wants.
@@ -122,21 +158,35 @@ func ensureWebhook(ctx context.Context, opts Options) WebhookResult {
 
 	target := WebhookTarget(opts.WebhookBase)
 	if target == "" {
-		// NOT A FAILURE. A pass runs with no public base when this
-		// deployment has none to give, and registering an address that
-		// cannot be reached is worse than registering none: Datadog would
-		// report a healthy webhook over deliveries that go nowhere.
-		out.Note = "no webhook was registered at Datadog: this deployment has " +
-			"no public base URL, so there is no address to point one at. Set " +
-			"integrations.public_base_url"
+		// NOT A FAILURE, AND NOT SILENCE EITHER. A pass runs with no
+		// public base when this deployment has none to give, and
+		// registering an address that cannot be reached is worse than
+		// registering none: Datadog would report a healthy webhook over
+		// deliveries that go nowhere. But neither is nothing to say —
+		// this company's alerts reach nobody until somebody sets the
+		// field, so it is reported as the blocked ingress it is.
+		out.Blocked = &Unregistered{
+			Kind:    integration.FindingIngressBlocked,
+			Subject: "integrations.public_base_url",
+			Detail: "no webhook was registered at Datadog: this deployment has " +
+				"no public base URL, so there is no address to point one at " +
+				"and every monitor that fires reaches nobody. Set " +
+				"integrations.public_base_url",
+		}
 		return out
 	}
 	token := strings.TrimSpace(opts.WebhookToken)
 	if token == "" {
-		out.Note = "no webhook was registered at Datadog: " +
-			"integrations.datadog.webhook_token did not resolve, and a " +
-			"definition carrying no token would have every delivery refused " +
-			"by the route it posts to"
+		// A CREDENTIAL, not an ingress block, and the difference is the
+		// field a status row offers: see [Unregistered].
+		out.Blocked = &Unregistered{
+			Kind:    integration.FindingCredentialMissing,
+			Subject: "integrations.datadog.webhook_token",
+			Detail: "no webhook was registered at Datadog: " +
+				"integrations.datadog.webhook_token did not resolve, and a " +
+				"definition carrying no token would have every delivery refused " +
+				"by the route it posts to",
+		}
 		return out
 	}
 
@@ -160,7 +210,12 @@ func ensureWebhook(ctx context.Context, opts Options) WebhookResult {
 			// the missing definition is the fact a check exists to
 			// report.
 			out.URL = ""
-			out.Note = "no webhook named " + name + " exists at Datadog yet"
+			out.Blocked = &Unregistered{
+				Kind:    integration.FindingIngressBlocked,
+				Subject: name,
+				Detail: "no webhook named " + name + " exists at Datadog yet, " +
+					"so no monitor can reach this deployment",
+			}
 			return out
 		}
 		if err := opts.Client.CreateWebhook(ctx, opts.Creds, want); err != nil {
@@ -173,8 +228,13 @@ func ensureWebhook(ctx context.Context, opts Options) WebhookResult {
 		// Already what this deployment wants, which is the ordinary
 		// answer on every tick after the first.
 	case opts.Sink == nil:
-		out.Note = "the webhook named " + name + " at Datadog points at " +
-			current.URL + " rather than " + target
+		out.Blocked = &Unregistered{
+			Kind:    integration.FindingIngressBlocked,
+			Subject: name,
+			Detail: "the webhook named " + name + " at Datadog points at " +
+				current.URL + " rather than " + target + ", so this " +
+				"deployment receives none of the alerts it names",
+		}
 	default:
 		if err := opts.Client.UpdateWebhook(ctx, opts.Creds, want); err != nil {
 			out.Err = fmt.Errorf("move the webhook named %q to %s: %w",
