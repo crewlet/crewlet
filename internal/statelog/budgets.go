@@ -65,8 +65,33 @@ const (
 	FetchMessages = 256
 	FetchBytes    = 29_360_128
 
-	// FetchWait is how long a pull waits for the first record when the
-	// stream is idle. Long enough that an idle company is not polling,
-	// short enough that a shutdown is prompt.
-	FetchWait = 5 * time.Second
+	// FetchWait is how long a pull waits when the stream is idle.
+	//
+	// # It is a CEILING ON READ LATENCY, not just on polling
+	//
+	// The vendored client's batch closes when it is FULL or when this
+	// expires — one record arriving does not end it — so a fetch of
+	// [FetchMessages] on a quiet log costs the whole wait however fast the
+	// record got there. Measured on a three-member cluster: the append
+	// acknowledges in about 500 microseconds and the fetch that collects
+	// it still takes the full wait, every time.
+	//
+	// That makes this the dominant term in how long a reader waits for a
+	// record it is waiting on, and at five seconds it was longer than
+	// [ReadBudget] — so every `linearizable` read on an idle company
+	// refused `behind`, having appended a barrier the applier would not
+	// collect for another three seconds.
+	//
+	// 500ms is chosen against ReadBudget rather than against polling cost:
+	// a reader must be able to wait out one full fetch and still be served
+	// inside its budget, which puts the ceiling at a quarter of it. An
+	// idle applier now issues two pull requests a second per domain — to a
+	// broker in this same process on the default topology, where a pull
+	// request is a subject publish and not a network round trip at all.
+	//
+	// NOT SOLVED BY CANCELLING A PARKED FETCH, which was tried: messages
+	// the server has already dispatched toward a pull request it never
+	// hears back about are pending-ack for `domainConsumerAckWait`, which
+	// is thirty seconds — six times the delay being removed.
+	FetchWait = 500 * time.Millisecond
 )
