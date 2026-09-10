@@ -61,11 +61,16 @@ BIN := crewlet
 # job's own limit. It applies to every package because the flag is per test
 # BINARY: a unit package that hangs now dies in thirty minutes rather than ten,
 # which is the cost of having a gate that can pass at all.
-GOTEST := $(GO) test -race -count=1 -timeout $(TEST_TIMEOUT)
-
+#
 # TEST_TIMEOUT is ci.yml's value, and the two must not drift: the Makefile is
-# the same command CI runs or it is a lie.
+# the same command CI runs or it is a lie. It is defined BEFORE GOTEST, and
+# that is load-bearing rather than tidy: `:=` expands immediately, so with the
+# assignment below the reference the flag was handed an EMPTY value and `go
+# test` parsed the package list as its argument — `invalid value "./..." for
+# flag -timeout`. `make test` and therefore `make check` could not run at all.
 TEST_TIMEOUT := 30m
+
+GOTEST := $(GO) test -race -count=1 -timeout $(TEST_TIMEOUT)
 
 # The release targets, cross-compiled. Nothing else builds for anything but
 # the machine you are on, so a build tag or a platform-gated file that only
