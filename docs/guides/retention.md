@@ -422,6 +422,13 @@ Three different things:
 - **Purging** removes the rows. Its report has **three groups**: what was
   purged, what could not be reached, and what is stale.
 
+A purge names **one** task, so its **children are moved, not destroyed** —
+each direct child re-parents onto the purged task's own parent, or becomes a
+root when the purged task was one, and the subtree's depths and ancestry are
+rebuilt with it. Destroying the subtree would destroy work nobody confirmed,
+and leaving it alone would leave every child pointing at an id that resolves to
+nothing.
+
 The report deliberately gives **no time guarantee**. An offline or evicted
 disk retains its copy until replay, adoption, replacement or destruction, and
 there is no duration to state. Saying "within 24 hours" would be a promise the
