@@ -24,6 +24,33 @@ func (r *Result) Findings() []integration.Finding {
 	}
 	var out []integration.Finding
 
+	// THE PASS COULD NOT OBTAIN A SIGNING SECRET, and this says so as the
+	// operator's work rather than as a fault the engine is retrying — the
+	// same shape [gitlab.Result] and [mattermost.Result] take for the same
+	// node. It was an error, so a deployment with no keyring and no
+	// JIRA_WEBHOOK_SECRET had its Jira pass fault on every tick for ever
+	// while the dashboard reported the engine working on it.
+	//
+	// INGRESS RATHER THAN CREDENTIAL, because a Jira signing secret is not
+	// how this engine authenticates AT Jira — it is what makes a delivery
+	// verifiable when it arrives here, and a route with nothing to verify
+	// with answers 503. It is also what [Requirements] declares:
+	// `webhook_secret` says Blocks: FindingIngressBlocked, and that
+	// declaration is the join the setup screen uses to offer the field
+	// that clears this finding.
+	if r.NoKeyring {
+		out = append(out, integration.Finding{
+			Kind:    integration.FindingIngressBlocked,
+			Subject: "integrations.jira.webhook_secret",
+			Detail: "no webhook was registered because this deployment has no " +
+				"secret to sign deliveries with and this node has no keyring " +
+				"to seal a fresh one into: set secrets.keys in the bootstrap " +
+				"configuration so a pass can mint it, or set the variable " +
+				"integrations.jira.webhook_secret points at and register the " +
+				"hook on the next pass",
+		})
+	}
+
 	// # WHAT IS SAID ABOUT INGRESS, and what is deliberately not
 	//
 	// [Result.Hooked] is the webhook this RUN registered, not the one the

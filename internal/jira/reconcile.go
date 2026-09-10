@@ -188,6 +188,20 @@ type Result struct {
 	// The zero value is "nothing to report", deliberately: a Result built
 	// anywhere but Reconcile must not invent an ingress problem.
 	NoIngress string
+
+	// NoKeyring is a run that had to mint a webhook signing secret and had
+	// nowhere to seal one, so it registered no hook.
+	//
+	// A STATE, not an error, and the distinction is the whole reason the
+	// field exists — the same one [gitlab.Result] and [mattermost.Result]
+	// draw. A fault reports the engine working on it and is retried for
+	// ever; this never resolves until somebody sets secrets.keys or sets
+	// the variable integrations.jira.webhook_secret points at. Reported as
+	// a fault it was exactly the permanent-fault posture
+	// [provision.ReadOnly] was introduced to remove: a node with no
+	// keyring answered [provision.ErrNoSink] from Record on every tick,
+	// for ever, over a deployment doing what it was configured to do.
+	NoKeyring bool
 }
 
 // Routing reports the seats whose inbound events can reach them.
@@ -228,19 +242,24 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	res := &Result{Deployment: opts.Client.Deployment(), Account: account}
-	res.Seats = resolveSeats(ctx, opts)
+	seats, err := resolveSeats(ctx, opts)
+	res.Seats = seats
+	if err != nil {
+		return res, err
+	}
 	projects, err := checkProjects(ctx, opts, res.Seats)
 	res.Projects = projects
 	if err != nil {
 		return res, err
 	}
 
-	hooked, notes, err := ensureWebhook(ctx, opts)
-	res.Notes = append(res.Notes, notes...)
+	in, err := ensureWebhook(ctx, opts)
+	res.Notes = append(res.Notes, in.Notes...)
 	if err != nil {
 		return res, err
 	}
-	res.Hooked = hooked
+	res.Hooked = in.Hooked
+	res.NoKeyring = in.NoKeyring
 	res.NoIngress = noIngressReason(opts, res.Deployment)
 	if opts.Sink != nil {
 		if err := opts.Sink.Flush(ctx); err != nil {
@@ -254,12 +273,28 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 //
 // CONCURRENTLY, because sequentially this is one round trip per seat against
 // an instance that may be slow, and the whole point of the command is that
-// an operator runs it and reads the answer. A seat whose lookup fails is
-// reported unresolved rather than failing the run: the finding IS the
-// report.
-func resolveSeats(ctx context.Context, opts Options) []SeatIdentity {
+// an operator runs it and reads the answer.
+//
+// # A credential the instance REFUSED is a finding; one it did not answer is
+// a fault
+//
+// The same rule checkProjects states below, applied to the half of the walk
+// that did not have it. Every lookup failure became the same empty Account,
+// which [Result.Findings] renders as `identity_failed` — "this seat has no
+// Jira account", owed by an ADMIN and never clearing on its own. That is a
+// true statement about a token the instance refused with a 401, and a
+// fabrication about an instance that did not answer at all: one blip, or one
+// node shutting down mid-pass, reported every credentialled seat as an
+// account somebody has to go and create, and reported it with the transport
+// error as the reason.
+//
+// Three-valued, therefore, as everything else in this engine is: resolved,
+// definitively not resolved, and NOT OBSERVED. The third raises, so the loop
+// records it as this surface's fault and retries it, and the seats it never
+// reached are not described at all.
+func resolveSeats(ctx context.Context, opts Options) ([]SeatIdentity, error) {
 	if opts.Org == nil {
-		return nil
+		return nil, nil
 	}
 	var seats []*org.Role
 	for seat := range opts.Org.AllRoles() {
@@ -289,6 +324,13 @@ func resolveSeats(ctx context.Context, opts Options) []SeatIdentity {
 		lookups = append(lookups, i)
 	}
 
+	// Written by INDEX from inside the fan-out, exactly as out is, so no
+	// two goroutines touch one element and the scan below reads them in
+	// seat order rather than in whatever order they finished. A pass that
+	// raised on whichever lookup lost the race would report a different
+	// seat on every run over one unchanged world.
+	refusals := make([]error, len(seats))
+
 	// BOUNDED, at the same cap as the engine's own resolvers and for the
 	// same reason — see [provision.IdentityLookups]. This path is the
 	// operator-invoked `crewlet jira provision`, so unbounded it opened
@@ -302,17 +344,36 @@ func resolveSeats(ctx context.Context, opts Options) []SeatIdentity {
 			Deployment: opts.Client.Deployment(),
 		})
 		if err != nil {
+			// THE CREDENTIAL ITSELF, not the instance: nothing was
+			// asked, so there is nothing an instance could have failed
+			// to answer. It is the document's to fix, which is what a
+			// finding says.
 			out[i].Reason = err.Error()
 			return
 		}
 		id, err := client.Me(ctx)
 		if err != nil {
 			out[i].Reason = err.Error()
+			refusals[i] = err
 			return
 		}
 		out[i].Account = id
 	})
-	return out
+
+	for _, i := range lookups {
+		// A STATUS MEANS THE INSTANCE ANSWERED, whatever the number was,
+		// and its answer about this credential is the report this command
+		// exists to make. No status means the request never got one — a
+		// dial that failed, a read that timed out, a cancelled context —
+		// and that is the engine failing to look at the world rather than
+		// anything about the seat.
+		if refusals[i] != nil && Status(refusals[i]) == 0 {
+			return out, fmt.Errorf(
+				"jira: ask the instance which account %s authenticates as: %w",
+				out[i].Handle, refusals[i])
+		}
+	}
+	return out, nil
 }
 
 // checkProjects reads every project the org declares.
@@ -395,25 +456,52 @@ func noIngressReason(opts Options, deployment Deployment) string {
 		"deployment"
 }
 
+// ingress is what one pass did about inbound delivery, and why it did not do
+// more.
+//
+// A STRUCT rather than a string, because "no hook" is three different
+// answers to an operator — this run was not given an address, this node
+// cannot hold a signing secret, or there was nothing to change — and only
+// the first two are things anybody has to act on.
+type ingress struct {
+	// Hooked is the target this run registered or converged, or empty.
+	Hooked string
+	// NoKeyring is a run that had to mint a signing secret and had
+	// nowhere to seal one. See [Result.NoKeyring].
+	NoKeyring bool
+	Notes     []string
+}
+
 // ensureWebhook registers the inbound hook, or converges the one that is
 // already there.
-func ensureWebhook(ctx context.Context, opts Options) (string, []string, error) {
+func ensureWebhook(ctx context.Context, opts Options) (ingress, error) {
 	target := webhookTarget(opts.WebhookBase)
 	if target == "" {
-		return "", []string{
+		return ingress{Notes: []string{
 			"no webhook was registered: pass the deployment's public base URL " +
 				"to register one, or add it by hand — without it the instance " +
 				"delivers nothing and the integration looks idle rather than " +
-				"unconfigured"}, nil
+				"unconfigured"}}, nil
 	}
-	secret, minted, notes, err := webhookSecret(ctx, opts, target)
+	key, err := webhookSecret(ctx, opts, target)
 	if err != nil {
-		return "", notes, err
+		return ingress{Notes: key.Notes}, err
 	}
+	if key.NoKeyring {
+		// NOTHING IS REGISTERED WITHOUT A KEY TO SIGN WITH. Jira signs a
+		// delivery with whatever string the hook was registered under, and
+		// the engine's own webhook route verifies with the value
+		// integrations.jira.webhook_secret resolves to — which is nothing
+		// here, or this run would not be minting. A hook registered
+		// anyway would make the instance deliver, the edge refuse every
+		// delivery, and both halves look busy.
+		return ingress{NoKeyring: true, Notes: key.Notes}, nil
+	}
+	secret, minted, notes := key.Secret, key.Minted, key.Notes
 
 	hooks, err := opts.Client.Webhooks(ctx)
 	if err != nil {
-		return "", notes, fmt.Errorf("jira: list webhooks: %w", err)
+		return ingress{Notes: notes}, fmt.Errorf("jira: list webhooks: %w", err)
 	}
 	// BY NAME, NOT BY ADDRESS.
 	//
@@ -441,14 +529,15 @@ func ensureWebhook(ctx context.Context, opts Options) (string, []string, error) 
 	}
 	for _, extra := range mine[min(1, len(mine)):] {
 		if err := opts.Client.DeleteWebhook(ctx, extra.ID); err != nil {
-			return "", notes, fmt.Errorf("jira: remove a duplicate webhook: %w", err)
+			return ingress{Notes: notes}, fmt.Errorf(
+				"jira: remove a duplicate webhook: %w", err)
 		}
 	}
 	if len(mine) > 0 {
 		hook := mine[0]
 		if opts.RecreateWebhook {
 			if err := opts.Client.DeleteWebhook(ctx, hook.ID); err != nil {
-				return "", notes, fmt.Errorf("jira: replace webhook: %w", err)
+				return ingress{Notes: notes}, fmt.Errorf("jira: replace webhook: %w", err)
 			}
 		} else {
 			if converged(hook, target, minted) {
@@ -458,19 +547,36 @@ func ensureWebhook(ctx context.Context, opts Options) (string, []string, error) 
 				// issuing no writes when nothing has changed, and an
 				// unconditional update was one write per pass, for ever,
 				// on a hook that needed nothing.
-				return target, notes, nil
+				return ingress{Hooked: target, Notes: notes}, nil
 			}
 			if _, err := opts.Client.UpdateWebhook(
 				ctx, hook.ID, name, target, secret); err != nil {
-				return "", notes, fmt.Errorf("jira: update webhook: %w", err)
+				return ingress{Notes: notes}, fmt.Errorf("jira: update webhook: %w", err)
 			}
-			return target, notes, nil
+			return ingress{Hooked: target, Notes: notes}, nil
 		}
 	}
 	if _, err := opts.Client.CreateWebhook(ctx, name, target, secret); err != nil {
-		return "", notes, fmt.Errorf("jira: create webhook: %w", err)
+		return ingress{Notes: notes}, fmt.Errorf("jira: create webhook: %w", err)
 	}
-	return target, notes, nil
+	return ingress{Hooked: target, Notes: notes}, nil
+}
+
+// webhookKey is what this run will have the instance sign deliveries with.
+type webhookKey struct {
+	// Secret is the value, and it is empty only where NoKeyring is set or
+	// an error was returned: a hook must never be registered unsigned.
+	Secret string
+	// Minted is whether a FRESH secret was minted on this run, and it is
+	// what lets a converged pass leave a working hook alone: Jira never
+	// gives a secret back, so "the hook already points at the right
+	// address" is only enough when this run did not change the key it
+	// must be signed with.
+	Minted bool
+	// NoKeyring is a run that had to mint and had nowhere to seal it. See
+	// [Result.NoKeyring].
+	NoKeyring bool
+	Notes     []string
 }
 
 // webhookSecret is the value the hook is registered with.
@@ -484,19 +590,32 @@ func ensureWebhook(ctx context.Context, opts Options) (string, []string, error) 
 // promise is that it is safe to re-run. So a secret that already resolves is
 // used as it is, and minting happens when there is none, or when the
 // operator asked to recreate the hook having planned the restart.
-// The bool is whether a FRESH secret was minted on this run, and it is what
-// lets a converged pass leave a working hook alone: Jira never gives a secret
-// back, so "the hook already points at the right address" is only enough when
-// this run did not change the key it must be signed with.
+//
+// # And "nothing usable" includes what this deployment already sealed
+//
+// [integration.Reconciler]'s safety contract states it outright — "check what
+// the sink recorded (provision.TokenSink.Value) and keep a working
+// credential" — and this pass was the one that did not. The resolver answers
+// from a SNAPSHOT taken at apply time, so the variable a previous pass minted
+// into resolves to nothing until something rebuilds it; every pass in that
+// window minted a second secret, sealed it over the first and re-registered
+// the hook with it. The engine's own webhook route verifies with the
+// snapshot, so each rotation moved the instance further from the value the
+// running process holds, on the reconcile loop's timer.
+//
+// So the sink is asked first, and only a name nothing holds is minted into.
+// The read is THREE-VALUED like every other in this engine: held,
+// definitively not held, and "the store could not say" — and the third
+// raises, because minting over a value that may exist is the outage above.
 func webhookSecret(
 	ctx context.Context, opts Options, target string,
-) (secret string, minted bool, notes []string, err error) {
+) (webhookKey, error) {
 	var resolved string
 	if opts.Value != nil {
 		resolved = strings.TrimSpace(opts.Value(opts.Config.WebhookSecret))
 	}
 	if resolved != "" && !opts.RecreateWebhook {
-		return resolved, false, nil, nil
+		return webhookKey{Secret: resolved}, nil
 	}
 	secretVar, ok := provision.SoleVar(opts.Config.WebhookSecret)
 	if !ok {
@@ -505,7 +624,7 @@ func webhookSecret(
 		// than theirs: it becomes State.LastError, which is written to
 		// the fleet's coordination store and served on the integrations
 		// query, so a %q of a literal signing secret publishes it.
-		return "", false, nil, fmt.Errorf(
+		return webhookKey{}, fmt.Errorf(
 			"jira: integrations.jira.webhook_secret is %s rather than a value "+
 				"this run could resolve or a whole ${VAR} reference to mint "+
 				"one into — point it at a variable, set that variable, or "+
@@ -514,11 +633,34 @@ func webhookSecret(
 			provision.Shape(opts.Config.WebhookSecret), target)
 	}
 	if opts.Sink == nil {
-		return "", false, nil, provision.ErrNoSink
+		// THE COMMAND LINE'S CASE, and it stays a refusal: a run told to
+		// mint with nowhere to put the result would leave a live signing
+		// secret at the instance and print none of it.
+		return webhookKey{}, provision.ErrNoSink
+	}
+	if !provision.CanMint(opts.Sink) {
+		// A NODE WITH NO KEYRING REPORTS, IT DOES NOT FAULT. Record
+		// answers [provision.ErrNoSink] on such a sink, so this pass
+		// raised on every tick for ever over a deployment that had simply
+		// not set secrets.keys — the exact permanent-fault posture
+		// [provision.ReadOnly] exists to remove. See [Result.NoKeyring].
+		return webhookKey{NoKeyring: true}, nil
+	}
+	if !opts.RecreateWebhook {
+		// ASKED BEFORE ANYTHING IS MINTED, and skipped only where the
+		// operator asked for a fresh key having planned the restart that
+		// rotating one costs.
+		held, ok, err := opts.Sink.Value(ctx, secretVar)
+		if err != nil {
+			return webhookKey{}, fmt.Errorf("jira: read %s: %w", secretVar, err)
+		}
+		if ok && strings.TrimSpace(held) != "" {
+			return webhookKey{Secret: strings.TrimSpace(held)}, nil
+		}
 	}
 	fresh := rand.Text()
 	if recordErr := opts.Sink.Record(ctx, secretVar, fresh); recordErr != nil {
-		return "", false, nil, fmt.Errorf("jira: record %s: %w", secretVar, recordErr)
+		return webhookKey{}, fmt.Errorf("jira: record %s: %w", secretVar, recordErr)
 	}
 	note := fmt.Sprintf(
 		"a fresh webhook secret was minted into %s — %s", secretVar,
@@ -527,7 +669,7 @@ func webhookSecret(
 		note += ". The previous secret is now invalid on every other " +
 			"deployment of this company"
 	}
-	return fresh, true, []string{note}, nil
+	return webhookKey{Secret: fresh, Minted: true, Notes: []string{note}}, nil
 }
 
 // converged reports a hook that already carries everything this run would
