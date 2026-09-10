@@ -991,4 +991,24 @@ func TestTheApplierMeasuresItsOwnDrain(t *testing.T) {
 			"a test — that is the unmeasured fallback rather than a "+
 			"measurement", drain)
 	}
+
+	// AND THE COMMIT RATE BESIDE IT, which is a different resource: rows
+	// per second is progress, commits per second is the FSYNC rate a
+	// device's write budget is spent by. They move independently by
+	// design — a run is filled toward the transaction budget precisely so
+	// a barrier-heavy stream commits once per two dozen records — so a
+	// node whose rows/s is healthy and whose commits/s has doubled is
+	// doing twice the disk work for the same progress, and neither figure
+	// alone can say it.
+	commits := h.runner.Commits()
+	if commits <= 0 {
+		t.Fatalf("after applying twenty records the commit rate is %v, so the "+
+			"gauge an operator compares against their device's committed "+
+			"write rate never appears", commits)
+	}
+	if commits > drain {
+		t.Errorf("the commit rate (%v/s) is above the record rate (%v/s), "+
+			"which cannot happen: a run is one transaction over at least one "+
+			"record", commits, drain)
+	}
 }

@@ -1619,6 +1619,7 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 		row.Domains[name] = pos
 	}
 	s.positionGauges(row)
+	s.deferralGauges(row.At)
 	if err := s.fleet.PutPositions(ctx, row); err != nil {
 		if ctx.Err() != nil {
 			return
@@ -1652,6 +1653,14 @@ func (s *stateLog) positionGauges(row coord.NodePositions) {
 			continue
 		}
 		s.metrics.Set(metrics.StatelogDrainRowsPerSecond, running.runner.Drain(), attrs)
+		// AND THE COMMIT RATE BESIDE IT, because the two are different
+		// resources: rows/s is progress and commits/s is the fsync rate
+		// a device's write budget is spent by. A node whose rows/s is
+		// healthy and whose commits/s has doubled is doing twice the
+		// disk work for the same progress, which neither figure alone
+		// can say.
+		s.metrics.Set(metrics.StatelogDrainCommitsPerSecond,
+			running.runner.Commits(), attrs)
 		health, err := s.health(context.Background(), running)
 		if err != nil || health.Lag == nil {
 			// UNREADABLE IS NOT ZERO, and a gauge has no third
@@ -1664,6 +1673,35 @@ func (s *stateLog) positionGauges(row coord.NodePositions) {
 		s.metrics.Set(metrics.StatelogApplyLagSeq, float64(*health.Lag), attrs)
 		s.metrics.Set(metrics.StatelogApplyLagSeconds,
 			applyLagOf(health, running).Seconds(), attrs)
+	}
+}
+
+// deferralGauges publishes how long this node has held what it cannot decode.
+//
+// SECONDS RATHER THAN A COUNT, and beside the count rather than instead of it:
+// one record held for an hour and sixty held for a second are the same count
+// and completely different states, and it is the AGE that decides whether this
+// node's seats have moved (D122).
+//
+// It rides the position heartbeat because that is where the deferral is
+// observed — see [progress], which is the only thing that knows when the
+// oldest one arrived, since a snapshot cannot say how long a state has held.
+func (s *stateLog) deferralGauges(now time.Time) {
+	if s.metrics == nil {
+		return
+	}
+	for _, name := range s.order {
+		running := s.domains[name]
+		if running == nil {
+			continue
+		}
+		held := running.progress.deferredSinceValue()
+		age := 0.0
+		if held.Held && !held.Since.IsZero() {
+			age = now.Sub(held.Since).Seconds()
+		}
+		s.metrics.Set(metrics.StatelogDeferredOldestAgeSeconds, age,
+			metrics.Attrs{"domain": name})
 	}
 }
 
