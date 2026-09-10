@@ -441,6 +441,14 @@ That is what makes the storage forecast a function of how much a company has
 ever done rather than of how much it is doing — and it is why the numbers below
 are worth reading before the fleet is large.
 
+The one exception is each domain's **operation ledger** — the table that
+answers "did the operation I published land here?" — which is swept per node at
+**30 days**. The horizon comes from the client that actually re-asks: a machine
+retry lives inside a two-second wait, but a seat carries an operation id
+forward and re-asks on its next wake, hours or a weekend later. An operation id
+older than that resolves `unknown` rather than `applied`, which is the honest
+answer once the row is gone.
+
 ## The storage forecast
 
 For the reference company (100 000 tasks a year, 300 000 comments, 1 000 edits

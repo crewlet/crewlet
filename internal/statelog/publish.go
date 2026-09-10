@@ -438,9 +438,17 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 	case faultFull:
 		return Result{Rounds: round}, dispDone, &Unavailable{
 			Reason: ReasonLogFull,
+			// AND WHERE THE BLOCKING TERM IS NAMED. "Unblock the trim"
+			// is a remedy an operator cannot act on without knowing
+			// which of the six terms came lowest, and that is a
+			// property of the last tick rather than of this append —
+			// so the message points at the surface that holds it
+			// instead of taking a coordination round trip on a
+			// refusal path.
 			Detail: fmt.Sprintf("the broker refused to store the record: %s — a "+
 				"full log refuses appends rather than dropping records, so raise "+
-				"the stream's byte ceiling or unblock the trim", detail),
+				"the stream's byte ceiling or unblock the trim (`crewlet "+
+				"retention status` names the term holding it)", detail),
 			OpID: req.OpID,
 		}
 
