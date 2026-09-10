@@ -429,8 +429,12 @@ func (p *Provider) probeVersion(ctx context.Context) string {
 		return ""
 	}
 	res, err := run(ctx, invocation{
-		binary:  p.profile.Binary,
-		args:    p.profile.VersionArgs,
+		binary: p.profile.Binary,
+		args:   p.profile.VersionArgs,
+		// THE SAME ALLOWLISTED ENVIRONMENT A REAL CALL GETS. Omitting it
+		// does not run the probe with no environment — it runs it with
+		// the ENGINE's, see [Provider.probeEnv].
+		env:     p.probeEnv(),
 		timeout: probeTimeout,
 	})
 	if err != nil || res.exitCode != 0 {

@@ -285,7 +285,7 @@ type Profile struct {
 	// validation error rather than a silently ignored setting.
 	ModelArgs []string `yaml:"model_args,omitempty"`
 
-	// PromptMode is stdin (the default) or argv.
+	// PromptMode is stdin (the default), argv or file.
 	PromptMode PromptMode `yaml:"prompt_mode,omitempty"`
 
 	// SystemPromptArgs carries the system prompt on its OWN channel rather
@@ -501,11 +501,16 @@ func (p *Profile) validate(name string) error {
 	if strings.TrimSpace(p.Binary) == "" {
 		add("binary is empty — set cli.overrides.binary")
 	}
-	if len(p.CompleteArgs) == 0 && p.PromptMode != PromptArgv {
+	if len(p.CompleteArgs) == 0 && p.mode() == PromptStdin {
+		// Only stdin mode can end up with NO argv at all. The other two
+		// build one from prompt_args and the prompt itself, so a CLI
+		// invoked as `mycli --prompt-file <path>` and nothing else is a
+		// legitimate shape rather than a profile that forgot to say how
+		// to run its binary.
 		add("complete_args is empty — set cli.overrides.complete_args")
 	}
 	if p.PromptMode != "" && !p.PromptMode.Valid() {
-		add("prompt_mode %q (want stdin or argv)", p.PromptMode)
+		add("prompt_mode %q (want stdin, argv or file)", p.PromptMode)
 	}
 	if p.Output != "" && !p.Output.Valid() {
 		add("output %q (want json, jsonl or text)", p.Output)

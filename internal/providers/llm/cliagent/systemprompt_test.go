@@ -141,7 +141,7 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		"opencode":     "", // 1.18.29 (`--agent` names a config persona)
 		"copilot":      "", // 1.0.83
 		"cursor-agent": "", // 2026.09.02
-		// 0.2.1: the documented flag set is model, reasoning effort, the
+		// 1.0.3: the flag set is model, reasoning effort, the
 		// permission levers, workspace and session logging, plus --json,
 		// --prompt-file and --max-model-steps for `exec`. Instructions
 		// travel through AGENTS.md / CLAUDE.md, which load only once a

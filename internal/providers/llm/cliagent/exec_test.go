@@ -67,6 +67,14 @@ func TestCLIAgentFakeCLI(t *testing.T) {
 			return
 		}
 		fmt.Printf("%s|%s", os.Getenv(os.Getenv("FAKE_READ_SYSTEM_PROMPT")), body)
+	case os.Getenv("FAKE_REPORT_ENV") != "":
+		// Reports whether one named variable reached the child, FROM
+		// INSIDE it. The parent cannot answer this: what an invocation
+		// hands os/exec is the whole question, and a nil there means the
+		// child gets the ENGINE's environment rather than none.
+		name := os.Getenv("FAKE_REPORT_ENV")
+		_, present := os.LookupEnv(name)
+		fmt.Printf("%s present=%v", name, present)
 	case os.Getenv("FAKE_PROMPT_FILE") != "":
 		// Answers the whole prompt-file question FROM INSIDE THE CHILD,
 		// which is the only place it can be answered honestly: the

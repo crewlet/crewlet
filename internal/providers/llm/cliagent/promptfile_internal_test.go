@@ -3,6 +3,7 @@ package cliagent
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -129,11 +130,10 @@ func TestFileModeWithoutAFilePlaceholderIsRefused(t *testing.T) {
 // THE MUSE PROFILE'S ARGV MUST PARSE, and only the real binary can say so.
 //
 // Two of its flags are the reason this test exists. `--disable-shell` and
-// `--disable-write` are the tool denials this backend depends on, and they
-// are absent from the vendor's own documented flag list — they are read off a
-// working adapter verified against 0.2.1. A build that dropped them stops at
-// argument parsing, and that is the failure this catches on any machine with
-// the CLI installed.
+// `--disable-write` are absent from the vendor's own published flag list and
+// were read off the installed 1.0.3 binary instead. A build that dropped them
+// stops at argument parsing, and that is the failure this catches on any
+// machine with the CLI installed.
 //
 // Skipped unless a `muse` is on PATH, and it asserts on ARGUMENT PARSING
 // alone: the CLI stops for want of a credential, which is exactly far enough
@@ -335,10 +335,10 @@ func TestTheMuseProfileReadsOneAnswerOutOfItsEventStream(t *testing.T) {
 		t.Errorf("a failed run resolved a text path (%q), which would hide the "+
 			"reason from the markers", out.text)
 	}
-	kind, _, matched := classifyMarkers(p, failed, "")
-	if !matched || kind != llm.KindRateLimit {
+	hit, matched := classifyMarkers(p, failed, "")
+	if !matched || hit.Kind != llm.KindRateLimit {
 		t.Errorf("the failure reason classified as %v (matched=%v), want a spent "+
-			"credential — a FATAL here strands the seat's fallback chain", kind, matched)
+			"credential — a FATAL here strands the seat's fallback chain", hit.Kind, matched)
 	}
 }
 
@@ -379,5 +379,190 @@ func TestTheMuseProfileIsIsolatedByXDGAlone(t *testing.T) {
 				t.Errorf("volatile_paths %q would delete the credential %q", path, credential)
 			}
 		}
+	}
+}
+
+// A BUILT-IN PROFILE IS A COPY, ALL OF IT.
+//
+// [Builtin] promises one because callers merge overrides into what they get,
+// and the table behind it is a package-level map decoded once — so a caller
+// that appends to a slice it was handed rewrites what every later provider
+// reads. Two argv fields were backed by the embedded table this way,
+// SystemPromptArgs and PromptArgs, and the reason to check the whole struct
+// rather than those two is that adding a field and forgetting to clone it is
+// the actual failure mode.
+func TestBuiltinHandsBackAnIndependentCopy(t *testing.T) {
+	for _, name := range BuiltinNames() {
+		if name == "custom" {
+			continue
+		}
+		first, _ := Builtin(name)
+		// Every []string on the struct, poisoned in place through the
+		// slice header the caller was given.
+		for _, s := range [][]string{
+			first.VersionArgs, first.CompleteArgs, first.ModelArgs,
+			first.SystemPromptArgs, first.PromptArgs, first.LoginArgs,
+			first.CaptureTokenArgs, first.StatusArgs, first.LogoutArgs,
+			first.PassthroughEnv, first.CredentialPaths, first.VolatilePaths,
+			first.HostCredentialPaths, first.TextEvents, first.EventTypePath,
+		} {
+			for i := range s {
+				s[i] = "POISONED"
+			}
+		}
+		for _, paths := range [][]Path{first.TextPaths, first.ErrorPaths} {
+			for _, path := range paths {
+				for i := range path {
+					path[i] = "POISONED"
+				}
+			}
+		}
+
+		second, _ := Builtin(name)
+		if strings.Contains(fmt.Sprintf("%+v", second), "POISONED") {
+			t.Errorf("%s: a caller's edit reached the shipped table:\n%+v", name, second)
+		}
+	}
+}
+
+// A CLASSIFIED FAILURE MUST NAME WHAT THE VENDOR SAID.
+//
+// The kind alone decides what the engine does; the MESSAGE is what the
+// operator acts on. It used to be the first non-empty line of the haystack,
+// which is the vendor's own sentence for a CLI that prints prose and the
+// FIRST EVENT of the stream for one that prints JSONL — so a muse-code rate
+// limit was reported, correctly classified, as `run.lifecycle.started`.
+func TestAClassifiedFailureNamesTheLineItMatched(t *testing.T) {
+	t.Parallel()
+	p, ok := Builtin("muse-code")
+	if !ok {
+		t.Fatal("no built-in muse-code profile")
+	}
+	reason := "API error 429 [request_id=x]: Rate limit exceeded. (rate_limit_error) (after 10 provider attempts)"
+	stream := strings.Join([]string{
+		`{"schema_version":1,"sequence":1,"payload_type":"run.lifecycle.started","payload":{"kind":"run_started"}}`,
+		`{"schema_version":1,"sequence":2,"payload_type":"run.terminal.failed","payload":{"kind":"run_terminal","terminal":"failed","reason":"` + reason + `"}}`,
+	}, "\n")
+
+	hit, ok := classifyMarkers(p, stream, "")
+	if !ok {
+		t.Fatal("the failure did not classify at all")
+	}
+	if hit.Kind != llm.KindRateLimit {
+		t.Errorf("kind = %v, want a spent credential", hit.Kind)
+	}
+	if !strings.Contains(hit.Said, reason) {
+		t.Errorf("the reported line is %q, which does not carry the vendor's reason", hit.Said)
+	}
+	if strings.Contains(hit.Said, "run.lifecycle.started") {
+		t.Error("the reported line is the stream's first event rather than the failure")
+	}
+}
+
+// A STREAMING CALLER SEES THE SAME ANSWER THE EXTRACTOR READS.
+//
+// The event filter has a second implementation on the streaming path, so a
+// regression there would push a tool's output to the caller as though the
+// model had said it while the unary completion still passed.
+func TestStreamingHonoursTheEventFilter(t *testing.T) {
+	stream := strings.Join([]string{
+		`{"schema_version":1,"sequence":1,"payload_type":"tool.result","payload":{"kind":"tool_result","call_id":"c1","text":"wrote 5 bytes"}}`,
+		`{"schema_version":1,"sequence":2,"payload_type":"run.output.delta","payload":{"kind":"run_output_delta","text":"Created"}}`,
+		`{"schema_version":1,"sequence":3,"payload_type":"run.output.delta","payload":{"kind":"run_output_delta","text":" the file."}}`,
+		`{"schema_version":1,"sequence":4,"payload_type":"run.terminal.completed","payload":{"kind":"run_terminal","terminal":"completed","text":"Created the file."}}`,
+		// A trailing newline, as a real stream has: the tee delivers
+		// COMPLETE lines only, so a final line without one reaches the
+		// extractor from the buffered copy but never the streaming caller.
+		"",
+	}, "\n")
+	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": stream}, map[string]any{
+		"output":          "jsonl",
+		"event_type_path": []any{"payload_type"},
+		"text_events":     []any{"run.terminal.completed"},
+		"text_paths":      []any{[]any{"payload", "text"}},
+	})
+
+	var deltas []string
+	if _, err := ask(t, p, llm.Request{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "hello"}},
+		OnDelta:  func(d llm.Delta) { deltas = append(deltas, d.Content) },
+	}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	joined := strings.Join(deltas, "")
+	if joined != "Created the file." {
+		t.Errorf("streamed %q, want only the terminal event's answer", joined)
+	}
+	if strings.Contains(joined, "wrote 5 bytes") {
+		t.Error("a tool's output was streamed as the model's words")
+	}
+}
+
+// THE VERSION PROBE IS A CHILD LIKE ANY OTHER.
+//
+// Passing no environment to os/exec does not run a child with none — it runs
+// it with the ENGINE's, which is the company's chat token, its database DSN
+// and every provider key. The probe was the one invocation in this package
+// that skipped [buildEnv], so `--version` ran with more access than any real
+// completion ever gets.
+func TestTheVersionProbeGetsTheAllowlistedEnvironment(t *testing.T) {
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-not-for-a-vendors-cli")
+	p := fakeProvider(t,
+		map[string]string{"FAKE_REPORT_ENV": "SLACK_BOT_TOKEN"},
+		map[string]any{
+			"version_args": []any{"-test.run=TestCLIAgentFakeCLI"},
+			"env":          map[string]any{"VENDOR_SETTING": "1"},
+		})
+
+	// THE WIRING, not the helper: this is what fails when probeVersion
+	// stops passing an environment, because os/exec then hands the child
+	// the engine's own and the fake never sees the marker that tells it to
+	// answer at all.
+	if got := p.probeVersion(t.Context()); got != "SLACK_BOT_TOKEN present=false" {
+		t.Errorf("the version probe reported %q — it must run with the same "+
+			"allowlisted environment a completion gets", got)
+	}
+
+	env := p.probeEnv()
+	joined := strings.Join(env, "\n")
+	// The VALUE, not the name: the name is legitimately in this child's
+	// environment as the marker telling the fake which variable to report on.
+	if strings.Contains(joined, "xoxb-not-for-a-vendors-cli") {
+		t.Errorf("the probe inherits the engine's own environment:\n%s", joined)
+	}
+	if !slices.Contains(env, "VENDOR_SETTING=1") {
+		t.Errorf("the profile's own env does not reach the probe, so a setting it "+
+			"depends on is not a setting:\n%s", joined)
+	}
+	// HOME is what the isolation turns on, and a probe with none would fall
+	// back to the engine user's real dotfiles.
+	if !slices.ContainsFunc(env, func(kv string) bool { return strings.HasPrefix(kv, "HOME=") }) {
+		t.Errorf("the probe has no HOME:\n%s", joined)
+	}
+}
+
+// An unknown prompt_mode must name every mode this build has, including the
+// one added last: an error that omits the answer is an error a person cannot
+// act on.
+func TestAnUnknownPromptModeNamesFileToo(t *testing.T) {
+	t.Parallel()
+	_, err := Load("custom", map[string]any{
+		"binary": "x", "complete_args": []any{"-p"}, "output": "text",
+		"prompt_mode": "files",
+	})
+	if err == nil || !strings.Contains(err.Error(), "file") {
+		t.Errorf("err = %v, want a refusal naming the file mode", err)
+	}
+}
+
+// A CLI whose whole command line IS its prompt flag is a legitimate shape:
+// file mode always contributes prompt_args, so the argv is never empty.
+func TestFileModeNeedsNoCompleteArgs(t *testing.T) {
+	t.Parallel()
+	if _, err := Load("custom", map[string]any{
+		"binary": "mycli", "complete_args": []any{}, "output": "text",
+		"prompt_mode": "file", "prompt_args": []any{"--prompt-file", "{file}"},
+	}); err != nil {
+		t.Errorf("Load: %v", err)
 	}
 }

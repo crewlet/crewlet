@@ -60,6 +60,8 @@ func (p Profile) clone() Profile {
 	out.VersionArgs = append([]string(nil), p.VersionArgs...)
 	out.CompleteArgs = append([]string(nil), p.CompleteArgs...)
 	out.ModelArgs = append([]string(nil), p.ModelArgs...)
+	out.SystemPromptArgs = append([]string(nil), p.SystemPromptArgs...)
+	out.PromptArgs = append([]string(nil), p.PromptArgs...)
 	out.LoginArgs = append([]string(nil), p.LoginArgs...)
 	out.CaptureTokenArgs = append([]string(nil), p.CaptureTokenArgs...)
 	out.StatusArgs = append([]string(nil), p.StatusArgs...)
