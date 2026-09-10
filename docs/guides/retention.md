@@ -431,6 +431,24 @@ Three different things:
 - **Purging** removes the rows. Its report has **three groups**: what was
   purged, what could not be reached, and what is stale.
 
+```
+crewlet work purge <task-id> -project KEY -reason "why" -confirm <task-key>
+```
+
+The confirmation is the task's **key**, not its id: the id is already on the
+command line, so repeating it confirms nothing, while the key has to be looked
+up — which is the point of asking. The **reason is required** because it is the
+only thing that survives: the rows are destroyed, and the deletion marker's
+reason is the entire account of what used to be at that key. A purge is an
+**operator gesture** — a person or an operator token, never an agent and never
+the engine — because nothing else can be asked to confirm it.
+
+It answers the same three-valued outcome every write here has. `pending` means
+the record is on the log and each node's rows go as it reaches them; do not run
+it again. `unknown` is the one to retry, and the printed operation id goes back
+in `-op-id` so the retry cannot append a second purge of a task the first one
+may already have destroyed.
+
 A purge names **one** task, so its **children are moved, not destroyed** —
 each direct child re-parents onto the purged task's own parent, or becomes a
 root when the purged task was one, and the subtree's depths and ancestry are
