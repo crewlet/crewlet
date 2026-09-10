@@ -3,6 +3,8 @@ package atlassian_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,11 +13,16 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/atlassian"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/provision"
 )
 
-// org is a stub of the parts of Atlassian one pass touches.
-type org struct {
+// stubOrg is a stub of the parts of Atlassian one pass touches.
+//
+// NOT NAMED org: this package's tests read the real [org.Organization] to
+// build a plan the way the engine does, and a fake shadowing that package
+// would make it unreachable from every test file here.
+type stubOrg struct {
 	mu sync.Mutex
 	// tokens is how many API tokens the account holds. A recreated account
 	// holds none, which is the state this suite is about.
@@ -23,10 +30,20 @@ type org struct {
 	// listFails makes the token read unanswerable, which is a different
 	// fact from "there are none".
 	listFails bool
-	minted    int
+	// empty is an organization holding no service account at all, which is
+	// what a company looks like before its first pass.
+	empty bool
+	// onTokenRead runs while a seat's token listing is being answered, for
+	// a test that has to make something happen PART-WAY through a pass —
+	// after the organization-wide reads, inside the per-seat work.
+	onTokenRead func()
+
+	minted  int
+	granted int
+	created int
 }
 
-func (o *org) server(t *testing.T) *httptest.Server {
+func (o *stubOrg) server(t *testing.T) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		o.mu.Lock()
@@ -37,14 +54,29 @@ func (o *org) server(t *testing.T) *httptest.Server {
 			_, _ = w.Write([]byte(`{"data":[{"id":"ari:cloud:jira::site/cloud-1","attributes":` +
 				`{"type":"JiraSoftware","hostUrl":"https://acme.atlassian.net"}}]}`))
 		case strings.HasSuffix(r.URL.Path, "/service-accounts") && r.Method == http.MethodGet:
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"items": []map[string]string{{
-					"id":          "acct-1",
-					"displayName": atlassian.AccountName("SRE Lead", "sre-lead"),
-					"email":       "acct@example.invalid",
-				}},
+			items := []map[string]string{{
+				"id":          "acct-1",
+				"displayName": atlassian.AccountName("SRE Lead", "sre-lead"),
+				"email":       "acct@example.invalid",
+			}}
+			if o.empty {
+				items = nil
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": items})
+		case strings.HasSuffix(r.URL.Path, "/service-accounts") && r.Method == http.MethodPost:
+			o.created++
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"id":          "acct-new",
+				"displayName": atlassian.AccountName("SRE Lead", "sre-lead"),
+				"email":       "acct-new@example.invalid",
 			})
+		case strings.HasSuffix(r.URL.Path, "/service-accounts/invite"):
+			o.granted++
+			_, _ = w.Write([]byte(`{}`))
 		case strings.Contains(r.URL.Path, "/manage/api-tokens") && r.Method == http.MethodGet:
+			if o.onTokenRead != nil {
+				o.onTokenRead()
+			}
 			if o.listFails {
 				w.WriteHeader(http.StatusInternalServerError)
 				_, _ = w.Write([]byte(`{"message":"unwell"}`))
@@ -59,7 +91,13 @@ func (o *org) server(t *testing.T) *httptest.Server {
 			o.minted++
 			_, _ = w.Write([]byte(`{"token":"ATSTT-fresh"}`))
 		default:
-			_, _ = w.Write([]byte(`{}`))
+			// A FAKE WITH A PERMISSIVE DEFAULT IS HOW THE INVITE POST STAYED
+			// INVISIBLE. This branch answered 200 `{}` to every route nobody
+			// had thought to match, so the one write a converged pass made
+			// looked exactly like the reads beside it. Refused now, and the
+			// pass reports it, which is what a fake is for.
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = fmt.Fprintf(w, `{"message":"no route %s %s"}`, r.Method, r.URL.Path)
 		}
 	}))
 	t.Cleanup(srv.Close)
@@ -93,18 +131,31 @@ func (s *sink) Flush(context.Context) error   { return nil }
 func (s *sink) Describe() string              { return "test" }
 func (s *sink) NextStep() string              { return "" }
 
-func run(t *testing.T, o *org, s *sink) *atlassian.Result {
+// reconcile runs one pass and hands back everything it answered, the error
+// included.
+//
+// Separate from run because several tests below are ABOUT that error, and run
+// treats one as a failed test — right for a pass that is meant to succeed, and
+// the exact thing those tests have to look at.
+func reconcile(
+	ctx context.Context, t *testing.T, o *stubOrg, s provision.TokenSink,
+) (*atlassian.Result, error) {
 	t.Helper()
 	plan := &provision.Plan{}
 	plan.Add(provision.Seat{
 		Handle: "sre-lead", Role: "SRE Lead",
 		TokenVar: "SEAT_TOKEN", EmailVar: "SEAT_EMAIL",
 	})
-	res, err := atlassian.Reconcile(context.Background(), atlassian.Options{
+	return atlassian.Reconcile(ctx, atlassian.Options{
 		Client: atlassian.NewClient(atlassian.ClientOptions{BaseURL: o.server(t).URL}),
 		OrgID:  "org-1", Key: "key", Plan: plan, Sink: s,
 		Now: func() time.Time { return time.Unix(1, 0).UTC() },
 	})
+}
+
+func run(t *testing.T, o *stubOrg, s *sink) *atlassian.Result {
+	t.Helper()
+	res, err := reconcile(context.Background(), t, o, s)
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -124,7 +175,7 @@ func run(t *testing.T, o *org, s *sink) *atlassian.Result {
 // finished with is in that state, and every freshly created one is.
 func TestATokenForAnAccountThatNoLongerExistsIsMintedOver(t *testing.T) {
 	t.Parallel()
-	o := &org{tokens: 0}
+	o := &stubOrg{tokens: 0}
 	s := &sink{held: "ATSTT-for-the-deleted-account"}
 
 	res := run(t, o, s)
@@ -146,7 +197,7 @@ func TestATokenForAnAccountThatNoLongerExistsIsMintedOver(t *testing.T) {
 // authenticating with, on the loop's timer.
 func TestAWorkingCredentialIsNotRotatedOnEveryPass(t *testing.T) {
 	t.Parallel()
-	o := &org{tokens: 1}
+	o := &stubOrg{tokens: 1}
 	s := &sink{held: "ATSTT-live"}
 
 	run(t, o, s)
@@ -164,12 +215,173 @@ func TestAWorkingCredentialIsNotRotatedOnEveryPass(t *testing.T) {
 // everywhere else in this engine.
 func TestAnUnreadableAccountDoesNotCostTheSeatItsCredential(t *testing.T) {
 	t.Parallel()
-	o := &org{listFails: true}
+	o := &stubOrg{listFails: true}
 	s := &sink{held: "ATSTT-live"}
 
 	run(t, o, s)
 
 	if o.minted != 0 {
 		t.Errorf("minted %d times on an answer the vendor never gave", o.minted)
+	}
+}
+
+// A CONVERGED SEAT IS NOT RE-GRANTED, ONCE PER PASS, FOR EVER.
+//
+// The product-access invite is a write at Atlassian, and it used to be sent on
+// every pass for every seat that had an account — deliberately, because a
+// grant that failed on the pass that created the account would otherwise never
+// be retried. The retry is still needed and the unconditional write was not:
+// the reconcile loop runs this every few minutes for the life of the
+// deployment, so what looked like a harmless idempotent call was an
+// organization mutated on a timer, and the conformance suite's load-bearing
+// clause was false for as long as it stood.
+func TestAConvergedSeatIsNotGrantedProductAccessAgainOnEveryPass(t *testing.T) {
+	t.Parallel()
+	o := &stubOrg{tokens: 1}
+	s := &sink{held: "ATSTT-live"}
+
+	run(t, o, s)
+
+	if o.granted != 0 {
+		t.Errorf("sent the product-access invite %d time(s) to an account that "+
+			"has been holding a token since an earlier pass", o.granted)
+	}
+}
+
+// BUT "CANNOT TELL" GRANTS, WHICH IS THE OPPOSITE DIRECTION FROM THE MINT.
+//
+// The evidence that an account was ever granted is that it holds an API token:
+// the grant strictly precedes the mint, so nothing else could have issued one.
+// When Atlassian cannot answer how many tokens an account holds, that evidence
+// is absent rather than negative — and the two writes waiting on it take
+// opposite directions, each the safe one for itself. Granting again costs one
+// idempotent request; minting again revokes the credential every running seat
+// is authenticating with. An account left ungranted, meanwhile, is refused by
+// the product API with a 401 that reads exactly like a bad credential, which
+// is the failure nobody can diagnose.
+func TestAnAccountWhoseGrantCannotBeEstablishedIsGrantedRatherThanAssumedReady(t *testing.T) {
+	t.Parallel()
+	o := &stubOrg{listFails: true}
+	s := &sink{held: "ATSTT-live"}
+
+	run(t, o, s)
+
+	if o.granted != 1 {
+		t.Errorf("granted %d time(s) over an account Atlassian would not describe; "+
+			"an ungranted account can reach nothing and says so as a 401", o.granted)
+	}
+	if o.minted != 0 {
+		t.Errorf("minted %d time(s) on the same unreadable answer, which rotates a "+
+			"live credential every time Atlassian is briefly unwell", o.minted)
+	}
+}
+
+// A CANCELLED PASS RAISES, AND DOES NOT BLAME THE CREDENTIAL.
+//
+// Two claims are wrong here and only one of them is obvious. A pass that has
+// observed nothing must not answer with findings at all, because the loop
+// reads an empty findings list as "this integration is ready" and trusts it
+// for a full settled interval — so a node draining would record Atlassian as
+// converged on its way out. The second is quieter: the first call a pass makes
+// is the site discovery, and its failure is wrapped in a sentence naming
+// integrations.atlassian.api_key as the credential that could not be verified.
+// Left to that wrapping, every drain writes a false accusation about a working
+// key into the fleet's status, which is the same claim [integration.Refusal]
+// exists to stop one level down.
+func TestACancelledPassRaisesRatherThanBlamingTheOrganizationCredential(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	res, err := reconcile(ctx, t, &stubOrg{tokens: 1}, &sink{held: "ATSTT-live"})
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Reconcile over a cancelled context = (%+v, %v), want the "+
+			"cancellation raised", res, err)
+	}
+	if strings.Contains(err.Error(), "api_key") {
+		t.Errorf("a cancelled pass accused the organization credential: %v", err)
+	}
+}
+
+// AND SO DOES ONE CANCELLED PART-WAY THROUGH, which the check at the top
+// cannot catch.
+//
+// Every failure inside a seat is caught and reported as that seat's, so a
+// context that dies after the account listing turns into an identity_failed
+// finding per seat carrying "context canceled" in its detail — a statement
+// that the operator's agents are broken, written to the fleet's status by a
+// node that was merely shutting down, and believed by the next node to hold
+// the duty. It is the SECOND half of the cancellation contract and it is the
+// half a top-of-function guard silently leaves open.
+func TestAPassCancelledPartWayThroughRaisesRatherThanReportingBrokenSeats(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancelled INSIDE the per-seat work — while this seat's token listing
+	// is being answered — rather than during an organization-wide read.
+	// Cancelling earlier proves nothing: the listing's own response read
+	// fails, Reconcile raises that, and the test passes with the guard below
+	// removed. It was written that way first and the mutation caught it.
+	o := &stubOrg{tokens: 1, onTokenRead: cancel}
+
+	res, err := reconcile(ctx, t, o, &sink{held: "ATSTT-live"})
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Reconcile cancelled mid-pass = (%+v, %v), want the cancellation "+
+			"raised rather than reported as the seats' own failure", res, err)
+	}
+	if res != nil {
+		t.Errorf("a cancelled pass still answered with a result: %+v", res)
+	}
+}
+
+// A NODE WITH NO KEYRING CREATES NOTHING, AND SAYS SO AS THE OPERATOR'S WORK.
+//
+// The reconcile loop hands a node that cannot seal a credential
+// [provision.ReadOnly], which is NOT NIL — and on the nil check this pass used
+// to make, such a node created a service account at Atlassian, granted it
+// product access, and only then discovered at the first Record that it had
+// nowhere to put the token. Every seat was reported as a failure over a
+// perfectly converged company, once per tick for ever, and each pass left
+// behind one more identity nobody had asked for and nothing had a credential
+// for.
+//
+// Reported rather than raised, because no retry can fix it: it resolves when
+// somebody sets secrets.keys and never before.
+func TestANodeWithNoKeyringCreatesNoAccountAndNamesTheSetting(t *testing.T) {
+	t.Parallel()
+	o := &stubOrg{empty: true}
+
+	res, err := reconcile(context.Background(), t, o, provision.ReadOnly())
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if o.created != 0 || o.granted != 0 || o.minted != 0 {
+		t.Errorf("a node that cannot seal anything created %d account(s), granted "+
+			"%d and minted %d", o.created, o.granted, o.minted)
+	}
+	var named bool
+	for _, f := range res.Findings() {
+		if f.Kind == integration.FindingCredentialMissing && f.Subject == "secrets.keys" {
+			named = true
+		}
+		if f.Kind == integration.FindingIdentityFailed {
+			t.Errorf("reported the seat as failed over a company that is fine: %+v", f)
+		}
+	}
+	if !named {
+		t.Errorf("nothing in %+v tells the operator to set secrets.keys", res.Findings())
+	}
+
+	// AND THE CONTROL: the same organization, with somewhere to seal. Without
+	// this the assertions above would hold just as well over a pass that had
+	// stopped creating accounts entirely.
+	sealing := &stubOrg{empty: true}
+	if _, err := reconcile(context.Background(), t, sealing, &sink{}); err != nil {
+		t.Fatalf("Reconcile with a sink that can seal: %v", err)
+	}
+	if sealing.created != 1 || sealing.granted != 1 || sealing.minted != 1 {
+		t.Errorf("a node that CAN seal created %d account(s), granted %d and minted "+
+			"%d, want one of each", sealing.created, sealing.granted, sealing.minted)
 	}
 }
