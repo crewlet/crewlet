@@ -325,6 +325,15 @@ baselined incarnation against what it acknowledged as, which acknowledgements
 are missing, any unresolved write attempt, and any admission still blocking
 activation.
 
+**You do not have to go looking for it.** While an operation is open, both
+`crewlet retention status` and the Fleet screen lead with it — the stream, the
+phase, the attempt, how long it has been open, who ran the verb, and who is
+still outstanding — because every number underneath describes a fleet in which
+nothing is running, and a blocked trim read without knowing that sends you
+after the wrong thing. **No acknowledgement outstanding is not progress**: it
+means the operation is waiting on its operator, and both surfaces say so
+rather than printing an empty list.
+
 Two gestures act on what it shows:
 
 | | |

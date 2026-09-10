@@ -168,6 +168,77 @@ func TestRetentionStatusExitsNonZeroOnAnAlarm(t *testing.T) {
 	}
 }
 
+// MAINTENANCE IS PRINTED ABOVE EVERYTHING, because while it is open every
+// number below it describes a fleet in which nothing is running: no seats, no
+// duties, no scheduler, no write routes. It was visible on no surface at all —
+// an operator watching a company go completely quiet had nothing to read that
+// said why, and the alarm that names it only fires after an hour of it.
+func TestRetentionStatusLeadsWithAnOpenMaintenanceWindow(t *testing.T) {
+	node := newFakeRetentionNode(t)
+	report := blockedReport()
+	report["maintenance"] = map[string]any{
+		"stream": "CREWLET_TRACKER_LOG", "operation_id": "op-9",
+		"phase": "observe", "attempt": 2,
+		"target_max_bytes": 2000000000, "original_max_bytes": 1000000000,
+		"since": "2031-04-02T02:00:00Z", "by": "sre@example.com",
+		"participants_missing": []string{"node-4", "node-7"},
+	}
+	node.report = report
+
+	stdout, _, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
+	if err != nil {
+		t.Fatalf("retention status: %v", err)
+	}
+	first := strings.SplitN(strings.TrimSpace(stdout), "\n", 2)[0]
+	if !strings.Contains(first, "MAINTENANCE IS OPEN") {
+		t.Errorf("the first line is %q — a blocked trim read without knowing "+
+			"nothing is running sends an operator after the wrong thing", first)
+	}
+	for _, want := range []string{"observe", "attempt 2", "sre@example.com",
+		"node-4, node-7"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the report never mentions %q:\n%s", want, stdout)
+		}
+	}
+}
+
+// NOBODY OUTSTANDING IS NOT PROGRESS. It is the operation waiting on whoever
+// ran the verb, and printing nothing there reads as "nearly done" — which is
+// the one reading that stops somebody finishing it.
+func TestAnOperationWithNobodyOutstandingSaysWhoItIsWaitingFor(t *testing.T) {
+	node := newFakeRetentionNode(t)
+	report := blockedReport()
+	report["maintenance"] = map[string]any{
+		"stream": "CREWLET_TRACKER_LOG", "operation_id": "op-9",
+		"phase": "sealed", "attempt": 1,
+		"since": "2031-04-02T02:00:00Z",
+	}
+	node.report = report
+
+	stdout, _, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
+	if err != nil {
+		t.Fatalf("retention status: %v", err)
+	}
+	if !strings.Contains(stdout, "waiting on its operator") {
+		t.Errorf("an operation with nobody outstanding printed no reason:\n%s",
+			stdout)
+	}
+}
+
+// AND A FLEET WITH NO OPERATION SAYS NOTHING ABOUT ONE, or the banner above
+// would be a line every operator learns to skip.
+func TestAHealthyFleetPrintsNoMaintenanceBanner(t *testing.T) {
+	node := newFakeRetentionNode(t)
+	stdout, _, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
+	if err != nil {
+		t.Fatalf("retention status: %v", err)
+	}
+	if strings.Contains(stdout, "MAINTENANCE") {
+		t.Errorf("a fleet with no open operation printed a maintenance "+
+			"banner:\n%s", stdout)
+	}
+}
+
 // TestRetentionStatusIsSilentAndZeroOnAHealthyFleet is the other half: an
 // alarm that fires on a fleet doing exactly what it was asked to do is one
 // nobody believes the second time.

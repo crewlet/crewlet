@@ -45,6 +45,7 @@ import { useNow } from "~/lib/clock.ts";
 import { apiToken } from "~/protocol/authToken.ts";
 import type {
   RetentionDomain,
+  RetentionMaintenance,
   RetentionNode,
   RetentionSnapshot,
   RetentionTerm,
@@ -104,6 +105,8 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
           </span>
         </Banner>
       ))}
+
+      {data?.maintenance && <MaintenanceBanner op={data.maintenance} now={now} />}
 
       {data?.register_readable === false && (
         <Banner tone="caution" icon="alert">
@@ -334,6 +337,53 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
 }
 
 /** firstDomain is any one of a node's domains, for a sort key. */
+/**
+ * MaintenanceBanner is the one thing on this screen that describes an outage
+ * in progress rather than a property of the fleet.
+ *
+ * A capacity operation stops every publisher on every node — no seats, no
+ * duties, no scheduler, no write routes — and it was visible on NO screen: an
+ * operator watching a company go completely quiet had nothing to look at that
+ * said why, and the alarm that names it only fires after an hour of it.
+ *
+ * So it is a banner rather than a panel, above everything, and it carries the
+ * three things somebody finding it at an inconvenient hour needs first: how
+ * long it has been open, who opened it, and WHO IS STILL OUTSTANDING — because
+ * an operation with nobody outstanding is one waiting on its operator, and
+ * that is the state that otherwise looks identical to one waiting on a node.
+ */
+export function MaintenanceBanner({ op, now }: { op: RetentionMaintenance; now: number }) {
+  const missing = op.participants_missing ?? [];
+  return (
+    <Banner tone="critical" icon="alert">
+      <span className="col" style={{ gap: 6 }}>
+        <span>
+          <strong>Maintenance is open on {op.stream}</strong> — no publisher is running anywhere in
+          this fleet. Phase <code className="inline">{op.phase}</code>, attempt {op.attempt}, since{" "}
+          {relTime(op.since, now)}
+          {op.by && <> ({op.by})</>}. Resizing from {fmtBytes(op.original_max_bytes)} to{" "}
+          {fmtBytes(op.target_max_bytes)}.
+        </span>
+        {op.blocked && (
+          <span>
+            <strong>Blocked:</strong> {op.blocked} — this needs a person, not time.
+          </span>
+        )}
+        <span className="t-caption faint">
+          {missing.length > 0 ? (
+            <>Waiting on {missing.join(", ")}.</>
+          ) : (
+            // NOBODY OUTSTANDING IS NOT PROGRESS. It is the operation
+            // waiting on whoever ran the verb, and rendering it as an
+            // empty list would read as "nearly done".
+            <>No acknowledgement is outstanding — this operation is waiting on its operator.</>
+          )}
+        </span>
+      </span>
+    </Banner>
+  );
+}
+
 function firstDomain(n: RetentionNode) {
   const domains = Object.values(n.domains ?? {});
   return domains.length ? domains[0] : undefined;

@@ -520,6 +520,35 @@ export interface RetentionReport {
   snapshots: RetentionSnapshot[];
   replica: RetentionReplica;
   alarms: RetentionAlarm[];
+  /**
+   * The capacity operation currently holding the fleet, ABSENT when there is
+   * none. Maintenance stops every publisher on every node — no seats, no
+   * duties, no scheduler, no write routes — and it was visible on no screen
+   * at all: an operator watching a company go quiet had nothing to look at
+   * that said why.
+   */
+  maintenance?: RetentionMaintenance;
+}
+
+/** One open capacity operation. */
+export interface RetentionMaintenance {
+  stream: string;
+  operation_id: string;
+  /** Where it stands, and which write-then-seal cycle it is on. */
+  phase: string;
+  attempt: number;
+  target_max_bytes: number;
+  original_max_bytes: number;
+  since: string;
+  by?: string;
+  /**
+   * The nodes whose acknowledgement the seal is still waiting for. EMPTY IS
+   * NOT UNKNOWN: an operation with nobody outstanding is one waiting on its
+   * operator, which is the state somebody finding this most needs to see.
+   */
+  participants_missing?: string[];
+  /** Why it cannot proceed without a person, empty while it can. */
+  blocked?: string;
 }
 
 /** One registered domain's row. */
