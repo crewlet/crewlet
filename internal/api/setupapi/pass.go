@@ -53,10 +53,12 @@ type Status interface {
 }
 
 // provisionRequest is what the dashboard sends.
+//
+// It carried `seats` and `dry_run` and neither reached anything: no pass read
+// either field, so a caller asking for a dry run got a real one that created
+// accounts and minted tokens. See [setup.PassInput] for why they are gone
+// rather than stubbed.
 type provisionRequest struct {
-	Seats []string `json:"seats"`
-	// DryRun plans and validates without writing at the third-party app.
-	DryRun bool `json:"dry_run"`
 	// Recreate re-registers hooks with a fresh secret. DESTRUCTIVE across
 	// deployments, so the dashboard gates it behind a typed confirmation
 	// and this route names that in its own answer.
@@ -137,7 +139,7 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 	}
 
 	in := setup.PassInput{
-		Seats: req.Seats, DryRun: req.DryRun, Recreate: req.Recreate,
+		Recreate: req.Recreate,
 		Operator: req.OperatorCredential,
 	}
 	if !readOnly {

@@ -138,11 +138,21 @@ type PassInput struct {
 	// pass read-only.
 	WebhookBase string
 
-	// Seats narrows the run to these handles, empty meaning every seat.
-	Seats []string
-
-	// DryRun plans and validates without writing at the third-party app.
-	DryRun bool
+	// There is deliberately no DryRun and no Seats here.
+	//
+	// Both existed, both were forwarded straight from the HTTP request, and
+	// NO pass read either — so `{"dry_run": true}` ran a full pass that
+	// created accounts and minted live tokens, and a seat-scoped run touched
+	// every seat. A field that means "do not write" while writing is worse
+	// than no field: it is an operator acting on a promise the code never
+	// made.
+	//
+	// Removed rather than stubbed, because no tag has ever shipped this
+	// surface, so there is nobody on the other side of a compatibility path.
+	// Honouring them is a real feature — every one of the seven passes has to
+	// implement plan-without-write, and a partial answer is the same lie in a
+	// smaller font — so it goes back when somebody builds it, with the passes
+	// that read it.
 
 	// Recreate re-registers hooks with a fresh secret. DESTRUCTIVE across
 	// deployments: the previous secret stops working everywhere else this
