@@ -125,7 +125,7 @@ const (
 	KindSearchScoped     Kind = "search_scoped"
 	KindRecallBelowFloor Kind = "recall_below_floor"
 	KindRecordsGated     Kind = "records_gated"
-	KindFeedDeadLetters  Kind = "feed_dead_letters"
+	KindFeedUnreadable   Kind = "feed_unreadable"
 	KindMaintenanceOpen  Kind = "maintenance_open"
 	KindVolumeLow        Kind = "volume_low"
 	KindWALLarge         Kind = "wal_large"
@@ -199,10 +199,11 @@ type Reading struct {
 	// alarm rather than the absence.
 	SemanticCoverage *float64
 
-	// RecordsGated and FeedDeadLetters are counts over the last day. Any
+	// RecordsGated and FeedUnreadable are counts over the last day. Any
 	// value above zero is an alarm: a gated record is recoverable by
-	// nothing, and a dead-lettered wake reached nobody.
-	RecordsGated, FeedDeadLetters int
+	// nothing, and a change record no build could translate is a wake
+	// circling for ever behind everything queued after it.
+	RecordsGated, FeedUnreadable int
 
 	// MaintenanceOpenFor is how long a maintenance operation has been in
 	// flight, with the phase it is stuck in.
@@ -425,13 +426,23 @@ var table = []rule{
 			"gate, the operator and the position; this is worth reading today.",
 	},
 	{
-		kind: KindFeedDeadLetters,
+		// NOT `feed_dead_letters`, WHICH NAMED A PATH THIS ENGINE DOES
+		// NOT HAVE. Both domain consumers set `MaxDeliver: -1`
+		// deliberately — a record nobody can handle yet is a retry
+		// rather than a poison message, and a delivery budget that ran
+		// out would drop a wake silently — so nothing ever reaches a
+		// dead letter and an alarm counting them could never fire. What
+		// an operator actually has to know about is the state that
+		// decision creates: a record circling for ever, at the head of a
+		// consumer, with everything behind it waiting.
+		kind: KindFeedUnreadable,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("%d wake(s) reached the dead-letter path in the last "+
-				"day", r.FeedDeadLetters), r.FeedDeadLetters > 0
+			return fmt.Sprintf("%d change record(s) could not be translated in the "+
+				"last day", r.FeedUnreadable), r.FeedUnreadable > 0
 		},
-		remedy: "A record no node could translate. Somebody was not told something " +
-			"they were meant to be told.",
+		remedy: "A record no build on this node can read. It redelivers for ever " +
+			"rather than being dropped, so the wakes behind it are waiting too — " +
+			"upgrade the node past it, or the feed stops moving.",
 	},
 	{
 		kind: KindMaintenanceOpen,

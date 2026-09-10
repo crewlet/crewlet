@@ -556,6 +556,7 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 		feed, err := changefeed.New(changefeed.Options{
 			Opener: src.opener, Publisher: e.backends.Queue,
 			Claims: e.backends.Fleet, Translator: translator,
+			Metrics: e.metrics,
 		})
 		if err != nil {
 			log.ErrorContext(ctx, "changefeed_unavailable",

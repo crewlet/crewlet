@@ -97,10 +97,10 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.Reading{RecordsGated: 1},
 			"apply gate",
 		},
-		"a dead-lettered wake": {
-			statelog.KindFeedDeadLetters,
-			statelog.Reading{FeedDeadLetters: 3},
-			"dead-letter",
+		"a change record no build can read": {
+			statelog.KindFeedUnreadable,
+			statelog.Reading{FeedUnreadable: 3},
+			"could not be translated",
 		},
 		"maintenance nobody finished": {
 			statelog.KindMaintenanceOpen,
