@@ -226,11 +226,25 @@ func (r *retention) observed(out *statelog.Reading) {
 	if r.metrics == nil {
 		return
 	}
+	// EVERY READING HERE IS WINDOWED, and none may come from
+	// [metrics.Recorder.Read]'s cumulative series.
+	//
+	// The alarms below apply a threshold, and a threshold against a counter
+	// that only grows LATCHES: `search_degraded` fires on a fraction being
+	// above zero, so one degraded search after boot lights it for the life
+	// of the process and it can never go out; `search_slow` and
+	// `barrier_slow` take a maximum, so one slow observation ever is
+	// permanent. `crewlet retention status` derives its exit code from
+	// these, so a cron watching it then fires for ever too. That is what
+	// [metrics.Window] was written for, and reading Read() here is what
+	// left it with no caller at all.
+	reading := r.metrics.ReadWindow()
+
 	// THE ANSWER COUNTERS FIRST, because two alarms are FRACTIONS of them
 	// and a fraction needs its denominator before either numerator means
 	// anything.
 	var answers, scoped, degraded uint64
-	for _, snapshot := range r.metrics.Read() {
+	for _, snapshot := range reading {
 		if snapshot.Name != metrics.TrackerSearchAnswers {
 			continue
 		}
@@ -247,7 +261,7 @@ func (r *retention) observed(out *statelog.Reading) {
 		out.SearchDegradedFraction = float64(degraded) / float64(answers)
 	}
 
-	for _, snapshot := range r.metrics.Read() {
+	for _, snapshot := range reading {
 		switch snapshot.Name {
 		case metrics.StatelogBarrierDuration:
 			out.BarrierP95 = max(out.BarrierP95, quantileDuration(snapshot, 0.95))

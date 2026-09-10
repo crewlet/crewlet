@@ -502,3 +502,74 @@ func TestTheSearchRosterIsWhoIsAliveRatherThanWhoHeldTheLogBack(t *testing.T) {
 			search.SearchShards)
 	}
 }
+
+// AN ALARM THAT CANNOT GO OUT IS AN ALARM AN OPERATOR LEARNS TO IGNORE.
+//
+// Every reading here is a THRESHOLD, and a threshold against a counter that
+// only grows latches. `search_degraded` fires on a fraction being above zero,
+// so computed from [metrics.Recorder.Read]'s cumulative totals one degraded
+// search after boot lights it for the life of the process; `search_slow` and
+// `barrier_slow` take a maximum, so one slow observation ever is permanent.
+// [metrics.Window] exists for precisely this and had no caller at all.
+//
+// `crewlet retention status` derives its exit code from these, so an alarm
+// that cannot clear is a cron that fires for ever.
+//
+// THE ASSERTION IS THAT TIME PASSING CLEARS IT. That is the property the
+// window buys and the one no snapshot test can express, which is why the
+// clock is injected rather than waited out.
+func TestAnAlarmClearsOnceItsHourRollsOutOfTheWindow(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	recorder, err := metrics.New()
+	if err != nil {
+		t.Fatalf("recorder: %v", err)
+	}
+	recorder = recorder.WithClock(func() time.Time { return at })
+	e := &Engine{metrics: recorder}
+	r := &retention{metrics: recorder}
+
+	// One degraded search, and three good ones, all in one hour.
+	e.reportSearch(search.Answer{BucketsAnswered: 64, SemanticSkipped: true},
+		11*time.Millisecond)
+	for range 3 {
+		e.reportSearch(search.Answer{BucketsAnswered: 64}, 10*time.Millisecond)
+	}
+
+	var lit statelog.Reading
+	r.observed(&lit)
+	if lit.SearchDegradedFraction <= 0 {
+		t.Fatal("a degraded search left the fraction at zero, so this case " +
+			"proves nothing about clearing")
+	}
+	if !firedKind(statelog.Evaluate(lit), statelog.KindSearchDegraded) {
+		t.Fatal("search_degraded did not fire on a degraded search")
+	}
+
+	// A DAY LATER WITH NOTHING SINCE. The hour that held it has rolled out.
+	at = at.Add(metrics.Buckets*time.Hour + time.Hour)
+	var cleared statelog.Reading
+	r.observed(&cleared)
+	if cleared.SearchDegradedFraction != 0 {
+		t.Errorf("SearchDegradedFraction = %.3f a day after the last degraded "+
+			"search, so the alarm is reading a cumulative counter and can "+
+			"never go out", cleared.SearchDegradedFraction)
+	}
+	if firedKind(statelog.Evaluate(cleared), statelog.KindSearchDegraded) {
+		t.Error("search_degraded is still lit a day after the search that lit it")
+	}
+	if cleared.SearchP95 != 0 {
+		t.Errorf("SearchP95 = %v a day after the last search, so `search_slow` "+
+			"is reading a maximum with no window", cleared.SearchP95)
+	}
+}
+
+// firedKind reports whether an evaluation raised one alarm.
+func firedKind(alarms []statelog.Alarm, want statelog.Kind) bool {
+	for _, a := range alarms {
+		if a.Kind == want {
+			return true
+		}
+	}
+	return false
+}

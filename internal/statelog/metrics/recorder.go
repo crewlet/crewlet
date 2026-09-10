@@ -67,6 +67,19 @@ type Recorder struct {
 	// Nil until an exporter binds one, which is the ordinary state of a
 	// deployment with no collector: the recorder's own copy still answers.
 	sinks map[string]func(float64, map[string]string)
+
+	// window is the ROLLING 24-hour view the operator record reads, fed
+	// from the same one write path as the cumulative series beside it.
+	//
+	// TWO VIEWS OF ONE MEASUREMENT, and both are needed. `series` is
+	// cumulative since this process started, which is what an exporter
+	// scrapes and diffs. The alarms cannot use it: `search_degraded` fires
+	// on a fraction being above zero, so against a monotone counter one
+	// degraded search after boot lights it for the life of the process and
+	// it can never go out — and `search_slow` and `barrier_slow` take a
+	// maximum, so one slow observation ever is permanent. That is the
+	// defect this window was written for and then never wired to.
+	window *Window
 }
 
 // series is one instrument at one attribute set.
@@ -94,7 +107,21 @@ func New() (*Recorder, error) {
 		series: map[string]*series{},
 		byName: byName,
 		sinks:  map[string]func(float64, map[string]string){},
+		window: NewWindow(nil),
 	}, nil
+}
+
+// Window is the rolling 24-hour view of everything recorded here.
+//
+// EVERY ALARM WITH A `_24h` IN ITS NAME READS THIS, and none may read the
+// cumulative series beside it. A threshold applied to a counter that only
+// ever grows is a threshold that latches: it fires at the first observation
+// past it and stays lit until the process restarts, which is an alarm an
+// operator learns to ignore rather than one they act on.
+func (r *Recorder) Window() *Window {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.window
 }
 
 // BindHistogram attaches an exporter's instrument to a histogram.
@@ -121,6 +148,9 @@ func (r *Recorder) WithClock(now func() time.Time) *Recorder {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.now = now
+	// THE WINDOW TAKES IT TOO, or the clock is injectable for everything
+	// except the one thing whose expiry it exists to test.
+	r.window = NewWindow(now)
 	return r
 }
 
@@ -179,12 +209,16 @@ func (r *Recorder) record(name string, kind Kind, v float64, attrs Attrs) {
 		return
 	}
 	s := r.seriesFor(inst, attrs)
+	key := seriesKey(inst.Name, inst.Attributes, attrs)
 	switch kind {
 	case KindCounter:
 		s.total += uint64(v)
+		r.window.Add(key, uint64(v))
 	case KindGauge:
 		s.value = v
+		r.window.Max(key, v)
 	case KindHistogram:
+		r.window.Observe(key, v)
 		s.counts[binFor(v)]++
 		s.sum += v
 		s.n++
@@ -286,6 +320,43 @@ func (s Snapshot) Quantile(q float64) float64 {
 	return math.Inf(1)
 }
 
+// ReadWindow returns every series as the ROLLING WINDOW holds it, in the same
+// shape and order as [Recorder.Read].
+//
+// The two differ in exactly one way and it is the whole point: `Total`,
+// `Count`, `Sum` and the bins here cover the last [Buckets] hours, where
+// Read's cover every hour since this process started. An alarm reads this one;
+// an exporter, which diffs successive scrapes itself, reads the other.
+func (r *Recorder) ReadWindow() []Snapshot {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]Snapshot, 0, len(r.series))
+	for key, s := range r.series {
+		snap := Snapshot{
+			Name: s.inst.Name, Kind: s.inst.Kind, Unit: s.inst.Unit,
+			Attrs: cloneAttrs(s.attrs),
+			Total: r.window.Total(key),
+			Count: r.window.Count(key),
+		}
+		switch s.inst.Kind {
+		case KindGauge:
+			// A GAUGE'S WINDOW IS ITS PEAK. A gauge has no total to sum
+			// and its current value is not a fact about the window, so
+			// the honest windowed reading is the highest it reached.
+			snap.Value = r.window.Peak(key)
+		case KindHistogram:
+			// THE BINS, so [Snapshot.Quantile] computes a WINDOWED p95
+			// with no second implementation. A max substituted here
+			// would fire every p95 alarm on the single worst
+			// observation in the window.
+			snap.Counts, snap.Count, snap.Sum = r.window.Bins(key)
+		}
+		out = append(out, snap)
+	}
+	sortSnapshots(out)
+	return out
+}
+
 // Read returns every series, in name and attribute order so two captures are
 // diffable.
 func (r *Recorder) Read() []Snapshot {
@@ -300,13 +371,19 @@ func (r *Recorder) Read() []Snapshot {
 			Count: s.n, Sum: s.sum, Counts: append([]uint64(nil), s.counts...),
 		})
 	}
+	sortSnapshots(out)
+	return out
+}
+
+// sortSnapshots puts a reading in name and attribute order, so two captures
+// are diffable and the two readers cannot disagree about the order.
+func sortSnapshots(out []Snapshot) {
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Name != out[j].Name {
 			return out[i].Name < out[j].Name
 		}
 		return attrString(out[i].Attrs) < attrString(out[j].Attrs)
 	})
-	return out
 }
 
 func cloneAttrs(in map[string]string) map[string]string {
