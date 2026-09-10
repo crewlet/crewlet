@@ -494,6 +494,145 @@ export interface FleetNode {
   posture?: string;
 }
 
+/**
+ * The state log's retention document, as `crewlet retention status --json` and
+ * `GET /work/retention` both serve it.
+ *
+ * MIRRORS `statelog.Report` FIELD FOR FIELD, deliberately. It is one wire
+ * contract with three readers — a CLI, a script and this screen — and a shape
+ * restated loosely here would be a fourth idea of what the answer is.
+ */
+export interface RetentionReport {
+  v: number;
+  node_id: string;
+  at: string;
+  backup_owner?: string;
+  domains: RetentionDomain[];
+  nodes: RetentionNode[];
+  /**
+   * False means the node block is what could be READ of the fleet rather than
+   * the fleet. An empty list is otherwise two different answers — "this fleet
+   * has no nodes", which cannot happen, and "coordination could not be
+   * listed", which happens during exactly the outage somebody is reading this
+   * during.
+   */
+  register_readable: boolean;
+  snapshots: RetentionSnapshot[];
+  replica: RetentionReplica;
+  alarms: RetentionAlarm[];
+}
+
+/** One registered domain's row. */
+export interface RetentionDomain {
+  domain: string;
+  stream: string;
+  generation: number;
+  replay: string;
+  first_seq: number;
+  last_seq: number;
+  bytes: number;
+  max_bytes?: number;
+  /** ABSENT when the broker could not be asked — which is not zero headroom. */
+  headroom_fraction?: number;
+  /** What has actually been removed, and what THIS tick concluded may be. */
+  trim_floor: number;
+  trim_to: number;
+  terms: RetentionTerm[];
+  blocked_by?: string;
+  blocked_since?: string;
+  /** The sentence a blocked trim leads with. */
+  prose?: string;
+  /** The snapshot loop's OWN skip reason — a different problem from a blocked
+   *  trim, with a different remedy, which is why it is its own field. */
+  snapshot_blocked_by?: string;
+}
+
+/** A term's third value made explicit: read, unreadable, or not applicable. */
+export type RetentionTermState = "ok" | "unknown" | "n/a";
+
+export interface RetentionTerm {
+  name: string;
+  state: RetentionTermState;
+  /** Meaningless unless `state` is "ok". */
+  seq?: number;
+  detail?: string;
+  /** On EVERY term rather than the blocking one: an operator watching a term
+   *  approach is the case this surface exists for. */
+  remedy: string;
+}
+
+export interface RetentionNode {
+  node_id: string;
+  /** Counted means the trim waits for it; live means it holds a lease right
+   *  now. INDEPENDENT: counted-and-not-live is the node pinning the log, and
+   *  live-and-not-counted is one inside its eviction fence window. */
+  counted: boolean;
+  live: boolean;
+  /** ABSENT for a node that is live and has never reported, which renders as
+   *  "counted, no position yet" rather than as a node at position zero. */
+  at?: string;
+  domains?: Record<string, RetentionNodeDomain>;
+  evicted?: RetentionEviction;
+}
+
+export interface RetentionNodeDomain {
+  generation: number;
+  seq: number;
+  /** BESIDE seq, never instead of it: a node applying nothing while its
+   *  position advances looks identical to a caught-up one from either alone. */
+  applied_through: number;
+  /** ABSENT rather than zero when the stream could not be read. */
+  lag?: number;
+  deferred?: number;
+}
+
+export interface RetentionEviction {
+  by: string;
+  at: string;
+  /** When the trim stops counting the node — one fence window after the
+   *  gesture. Printed because the gesture is NOT immediate, and an operator
+   *  who does not know that reads the unchanged watermark as a failure. */
+  effective_at: string;
+  effective: boolean;
+}
+
+export interface RetentionSnapshot {
+  node_id: string;
+  /** Absent when the node holds none, in which case `skip` says why. */
+  domains?: Record<string, number>;
+  at?: string;
+  bytes?: number;
+  /** The loop's own reason for holding none, which is what turns "node-4
+   *  none" into an answer. */
+  skip?: string;
+}
+
+export interface RetentionReplica {
+  store_bytes: number;
+  projected_join_seconds: number;
+  rejoin_window_seconds: number;
+}
+
+export interface RetentionAlarm {
+  kind: string;
+  detail: string;
+  remedy: string;
+}
+
+/** What a retention gate answered. The outcome is three-valued (D134). */
+export interface RetentionGateResult {
+  node: string;
+  evicted: boolean;
+  /**
+   * `applied` is durable AND in this node's rows; `pending` is durable at the
+   * position and unapplied HERE, so what it produced is unresolved rather
+   * than failed; `unknown` is the only one where retrying is correct.
+   */
+  outcome: "applied" | "pending" | "unknown";
+  position?: { stream?: string; generation?: number; seq?: number };
+  op_id?: string;
+}
+
 export interface FleetSeatLease {
   handle: string;
   /** The node holding it. `owner` beside it is the fencing token, not an id. */
@@ -1412,6 +1551,7 @@ export interface QueryMap {
   schedules: SchedulesAnswer;
   integrations: IntegrationsAnswer;
   sandbox_runs: { runs: SandboxRun[] };
+  retention: RetentionReport;
   work_items: WorkItemsAnswer;
   work_item: WorkItemDetail;
   pages: PagesAnswer;
