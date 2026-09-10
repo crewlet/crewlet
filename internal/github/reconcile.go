@@ -76,20 +76,94 @@ type Options struct {
 	RecreateWebhooks bool
 }
 
+// IdentityOutcome is what one run learned about a seat's own code-host
+// credential, and it has THREE values because two of them are an empty Login
+// and they lead to opposite conclusions.
+//
+// A seat that NAMES a credential which does not authenticate has a fault
+// somebody can fix: every call its tools make is refused, and an operator has
+// a variable to set or a token to reissue. A seat that names NONE has not
+// asked for one — identity on this host is each agent's OWN GitHub App, which
+// [ReconcileSeatApps] is the authority on and which this run cannot see from
+// the org chart it was handed.
+//
+// Reported as one state, they were both "Login is empty, Reason says why",
+// and every agent seat on the current per-seat-app shape — where by design no
+// `mcp_env.github` token exists anywhere — became one
+// [integration.FindingIdentityFailed]. A healthy company sat in
+// [integration.PhaseDegraded] for ever, retried on the admin backoff, over a
+// credential the design had deliberately removed: the permanent note on a
+// card with nothing wrong with it that [Result.Findings] refuses one
+// paragraph up, arrived at from the other direction.
+//
+// A value rather than a convention on Reason, for the reason [HookOutcome]
+// is one: an empty Login is what a caller sees, and no amount of prose in
+// Reason changes what [Result.Findings] does with it.
+type IdentityOutcome string
+
+// The three outcomes.
+const (
+	// IdentityResolved is a seat whose credential named an account.
+	IdentityResolved IdentityOutcome = "resolved"
+
+	// IdentityRefused is a seat that names a credential this run could
+	// not turn into an account. THE ONE THAT BECOMES A FINDING.
+	IdentityRefused IdentityOutcome = "refused"
+
+	// IdentityUnclaimed is a seat that names no code-host credential at
+	// all. Not a fault, and not a finding: the reason travels in Reason
+	// for a person reading the run.
+	IdentityUnclaimed IdentityOutcome = "unclaimed"
+)
+
+// Valid reports an outcome this build knows, so one off the wire is a value
+// rather than a panic.
+func (o IdentityOutcome) Valid() bool {
+	switch o {
+	case IdentityResolved, IdentityRefused, IdentityUnclaimed:
+		return true
+	default:
+		return false
+	}
+}
+
 // SeatIdentity is one seat's code-host account, or why there is none.
 type SeatIdentity struct {
 	Handle string
 	// Login is the account the seat's own credential authenticates as.
-	// Empty means this seat receives NO GitHub events at all — which is
-	// the one finding this command exists to surface.
+	// Empty means this run resolved none, which [SeatIdentity.Outcome]
+	// says whether to act on.
 	Login string
+
+	// Outcome is what this run learned. THE ZERO VALUE READS AS REFUSED,
+	// deliberately and by way of [SeatIdentity.Refused] rather than by
+	// naming the empty string: every path that gives up on a seat sets
+	// only Reason, so the honest default for "this walk returned without
+	// saying otherwise" is the reporting one, and a new early return is
+	// surfaced rather than silently swallowed. It is [HookState.Outcome]'s
+	// rule, for [HookState.Outcome]'s reason.
+	Outcome IdentityOutcome
+
 	// Reason says why an empty Login is empty, in terms an operator can
 	// act on.
 	Reason string
 }
 
-// Routes reports a seat whose inbound events can reach it.
+// Routes reports a seat whose inbound events can reach it on a credential
+// this run resolved.
 func (s SeatIdentity) Routes() bool { return s.Login != "" }
+
+// Refused reports a seat that named a credential this run could not turn
+// into an account — the only case [Result.Findings] reports.
+//
+// Stated as what was NOT established rather than as an equality, so that a
+// seat nothing positively concluded about is reported: silence is the answer
+// a forgotten branch gives, and on a walk whose whole output is "which seats
+// are broken" the forgiving reading of silence is the one that loses a
+// finding.
+func (s SeatIdentity) Refused() bool {
+	return !s.Routes() && s.Outcome != IdentityUnclaimed
+}
 
 // HookOutcome is what happened at one webhook target, and it has THREE
 // values because two of them were indistinguishable and led to opposite
@@ -211,6 +285,19 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	if opts.Config == nil {
 		return nil, errors.New("github: no github config")
 	}
+	// A PASS THAT WAS NEVER RUN REPORTS NOTHING.
+	//
+	// The arm below is the only way out of this function that touches no
+	// network, so it is the only one a dead context cannot fail on its
+	// own — and it is a supported configuration rather than an edge, since
+	// `integrations.github.token` is optional and the engine hands a nil
+	// client for an empty one. A node draining therefore answered "no org
+	// credential resolved" with no findings and no error, which the loop
+	// reads as a converged integration and trusts for a full settled
+	// interval.
+	if err := interrupted(ctx); err != nil {
+		return nil, err
+	}
 	if opts.Client == nil {
 		// NO ORG CREDENTIAL IS A FINDING, NOT A FAULT. The token is
 		// optional on this host and its absence is a documented
@@ -223,9 +310,21 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		// Nothing else can be read without one. Seat identities are API
 		// lookups and a hook is an API write, so the honest result is a
 		// run that says only what it knows.
-		return &Result{Notes: []string{
-			"no org credential resolved, so this run read nothing at GitHub",
-		}}, nil
+		//
+		// THE ADDRESS IS STILL REPORTED, because it is a fact about the
+		// company document rather than about GitHub and needs no
+		// credential to establish. Without it nothing at GitHub — not an
+		// org hook, not a repository hook, not the webhook in each
+		// agent's own app manifest — has anywhere to deliver to, and
+		// leaving [Result.NoIngress] empty here reported a company that
+		// receives nothing as Ready for exactly the companies most likely
+		// to have no org token.
+		return &Result{
+			Notes: []string{
+				"no org credential resolved, so this run read nothing at GitHub",
+			},
+			NoIngress: noIngressReason(opts),
+		}, nil
 	}
 	login, err := opts.Client.Me(ctx)
 	if err != nil {
@@ -250,7 +349,42 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			return res, fmt.Errorf("github: %w", err)
 		}
 	}
+	// AND AGAIN AT THE END, because a pass cancelled halfway does not stop
+	// halfway: every read between here and the probe reports its own
+	// failure as a FINDING rather than raising — a seat whose lookup failed
+	// becomes identity_failed, a repository whose hook listing failed
+	// becomes ingress_blocked — so a node draining mid-pass would record a
+	// page of sentences about the operator's credentials, every one of them
+	// actually about this engine shutting down.
+	if err := interrupted(ctx); err != nil {
+		return res, err
+	}
 	return res, nil
+}
+
+// interrupted reports a pass whose context is done, as the error the caller
+// must raise instead of answering.
+//
+// THE CONTEXT, NEVER THE ERROR A CALL CAME BACK WITH. `errors.Is(err,
+// context.DeadlineExceeded)` looks like the same question and is not: net/http
+// gives a Client.Timeout that very sentinel — measured, not assumed: a request
+// that outruns [ClientTimeout] under a perfectly live parent context satisfies
+// it — so testing the error would read a slow GitHub as a torn-down pass and
+// raise on exactly the case this package deliberately leaves the world alone
+// for. What is being asked is whether THIS PASS is still running, and only
+// ctx.Err answers that.
+//
+// Wrapped with %w, so a caller can still tell a cancellation from a deadline
+// and the loop's own backoff sees the sentinel it expects.
+func interrupted(ctx context.Context) error {
+	err := ctx.Err()
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf(
+		"github: this pass was interrupted before it finished reading the "+
+			"deployment, so it has nothing to report about it — an engine "+
+			"shutting down must not leave GitHub recorded as ready: %w", err)
 }
 
 // resolveSeats asks each seat's own credential who it is.
@@ -277,14 +411,35 @@ func resolveSeats(ctx context.Context, opts Options) []SeatIdentity {
 	tokens := make([]string, len(seats))
 	var lookups []int
 	for i, seat := range seats {
-		out[i] = SeatIdentity{Handle: seat.Handle()}
+		out[i] = SeatIdentity{Handle: seat.Handle(), Outcome: IdentityRefused}
 		tokens[i] = CredentialOf(seat, opts.Value)
-		if tokens[i] == "" {
-			out[i].Reason = "no credential under mcp_env." + SeatEnv +
-				" — this seat receives no GitHub events at all"
+		if tokens[i] != "" {
+			lookups = append(lookups, i)
 			continue
 		}
-		lookups = append(lookups, i)
+		if key, declared := credentialSlot(seat); declared {
+			// NAMED AND EMPTY IS A FAULT. The operator wrote this seat a
+			// credential slot and nothing came out of it, so its tools
+			// authenticate as nobody — and the field to edit is the one
+			// thing they need told.
+			//
+			// THE KEY, NEVER THE VALUE, for the reason [webhookSecret]
+			// does not quote its own: the slot normally holds a `${VAR}`
+			// and printing it would be helpful, but one way to reach
+			// this line is a LITERAL somebody pasted, and then the thing
+			// it would print is the credential.
+			out[i].Reason = "mcp_env." + SeatEnv + "." + key + " resolved to " +
+				"nothing — set the variable it names, or drop the entry if this " +
+				"seat acts through its own GitHub App instead"
+			continue
+		}
+		// NAMED NOTHING IS NOT A FAULT — see [IdentityOutcome]. This
+		// seat's identity is its own GitHub App, which this run cannot
+		// see and [ReconcileSeatApps] reports on.
+		out[i].Outcome = IdentityUnclaimed
+		out[i].Reason = "no credential under mcp_env." + SeatEnv +
+			", so this seat acts through its own GitHub App rather than a " +
+			"personal access token"
 	}
 
 	// BOUNDED, at the same cap as the engine's own resolvers and for the
@@ -307,7 +462,7 @@ func resolveSeats(ctx context.Context, opts Options) []SeatIdentity {
 			out[i].Reason = err.Error()
 			return
 		}
-		out[i].Login = login
+		out[i].Login, out[i].Outcome = login, IdentityResolved
 	})
 	return out
 }

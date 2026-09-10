@@ -36,6 +36,18 @@ import (
 // could not be reached the seat is left exactly as it was, because reporting
 // "no installation" on a timeout would tell an operator to redo a click that
 // was never undone.
+//
+// # A cancelled pass is not a failed read
+//
+// That rule is right for a timeout and a 5xx — GitHub was asked and could not
+// say — and it is wrong for a cancellation, which means this pass never asked
+// at all. Left alone under the same arm, a seat that is genuinely fine
+// produced no finding and no error, and this pass could not report a fault if
+// it wanted to: it returned nil unconditionally. So a node draining recorded
+// every seat as ready on its way out, and the next node to hold the duty
+// trusted that for a full settled interval. A pass whose context is done
+// RAISES, and the caller decides — which for the loop means retrying rather
+// than believing.
 
 // SeatApp is one agent's own app, as the company document holds it.
 type SeatApp struct {
@@ -120,6 +132,11 @@ type SeatAppResult struct {
 }
 
 // ReconcileSeatApps brings every agent's own app in line.
+//
+// The result is returned WITH an error rather than instead of it: the seats
+// already walked are what this pass established, and a caller printing a
+// partial report is better served by them than by nil. The loop discards them
+// and retries, which is what a fault means there.
 func ReconcileSeatApps(ctx context.Context, opts SeatAppOptions) (*SeatAppResult, error) {
 	build := opts.Client
 	if build == nil {
@@ -129,15 +146,29 @@ func ReconcileSeatApps(ctx context.Context, opts SeatAppOptions) (*SeatAppResult
 	}
 	out := &SeatAppResult{Findings: []integration.Finding{}}
 	for _, seat := range opts.Seats {
-		out.reconcileSeat(ctx, opts, seat, build)
+		// CHECKED BEFORE THE SEAT, not only after its read. The two arms
+		// below that conclude before any call — no app, no key — read the
+		// DOCUMENT rather than GitHub, so a pass torn down between seats
+		// would keep walking the roster and answer confidently about a
+		// GitHub it had stopped talking to.
+		if err := interrupted(ctx); err != nil {
+			return out, err
+		}
+		if err := out.reconcileSeat(ctx, opts, seat, build); err != nil {
+			return out, err
+		}
 	}
 	return out, nil
 }
 
+// reconcileSeat reports one seat, and returns an error only for a fault that
+// invalidates the whole pass rather than one seat's own state — which today
+// is exactly one thing: a context that is done. Everything a seat can be
+// wrong about is a finding, because that is what an operator acts on.
 func (r *SeatAppResult) reconcileSeat(
 	ctx context.Context, opts SeatAppOptions, seat SeatApp,
 	build func(int64, string, string) (*AppClient, error),
-) {
+) error {
 	switch {
 	case seat.AppID == 0:
 		// A STEP, NOT A FAULT, and the wording says so: nobody has done
@@ -157,7 +188,7 @@ func (r *SeatAppResult) reconcileSeat(
 			Detail: seat.Handle + " has no GitHub App of its own, so nothing it " +
 				"does on GitHub is its own: create one from the Integrations screen",
 		})
-		return
+		return nil
 
 	case strings.TrimSpace(seat.Key) == "":
 		// THE KEY IS GONE AND CANNOT BE REISSUED. GitHub hands it over
@@ -169,7 +200,7 @@ func (r *SeatAppResult) reconcileSeat(
 			Detail: "the private key for " + seat.Handle + "'s app did not resolve, " +
 				"and GitHub issues it once: delete the app at GitHub and create it again",
 		})
-		return
+		return nil
 	}
 
 	client, err := build(seat.AppID, seat.Key, opts.APIBase)
@@ -179,7 +210,7 @@ func (r *SeatAppResult) reconcileSeat(
 			Subject: seat.Handle,
 			Detail:  "the app key for " + seat.Handle + " could not be read: " + err.Error(),
 		})
-		return
+		return nil
 	}
 
 	installation, adopted, err := r.installationFor(ctx, opts, seat, client)
@@ -196,12 +227,25 @@ func (r *SeatAppResult) reconcileSeat(
 	if notFound(err) || (err == nil && installation == nil) {
 		if exists, existsErr := client.Exists(ctx); existsErr == nil && !exists {
 			r.forget(ctx, opts, seat)
-			return
+			return nil
 		}
 	}
 
 	var notRecorded *errNotRecorded
 	switch {
+	case ctx.Err() != nil:
+		// FIRST, AND AHEAD OF EVERY OTHER READING OF err, because this one
+		// is not about the seat at all: the pass is being torn down, so
+		// nothing below it is a statement about the operator's world. It
+		// is checked on a SUCCESSFUL read too — the walk is abandoned
+		// either way, and a last seat marked Ready out of a roster that
+		// was never finished is the same false "converged" in miniature.
+		//
+		// [interrupted] says why the CONTEXT is the test rather than the
+		// error: net/http gives a client timeout context.DeadlineExceeded
+		// as well, and a timeout is precisely the case the arm below
+		// exists to leave alone.
+		return interrupted(ctx)
 	case errors.As(err, &notRecorded):
 		// FOUND AND NOT WRITTEN DOWN. The click has been made; what
 		// failed is this engine's own write, so nothing an operator does
@@ -215,13 +259,19 @@ func (r *SeatAppResult) reconcileSeat(
 			Subject: seat.Handle,
 			Detail:  notRecorded.detail(seat.Handle),
 		})
-		return
+		return nil
 	case err != nil && seat.InstallationID != 0:
 		// LEFT ALONE, and only where the document already claims an
 		// installation. See the package note: a failed read is not
 		// evidence that anything was undone, and saying otherwise sends
 		// an operator to redo a click nobody reversed.
-		return
+		//
+		// A CANCELLATION NEVER REACHES HERE — the arm above takes it —
+		// because "GitHub could not say" and "this pass never asked" are
+		// opposite facts that used to share this branch, and the second
+		// one leaving no finding and no error is how a draining node
+		// reported a whole roster as ready.
+		return nil
 	case err != nil, installation == nil:
 		// NOT INSTALLED IS A FACT THE DOCUMENT HOLDS, not one GitHub has
 		// to confirm. A seat with no installation recorded has a click
@@ -235,7 +285,7 @@ func (r *SeatAppResult) reconcileSeat(
 			Detail: seat.Handle + "'s app exists and nothing has installed it, so it " +
 				"sees no repository: install it on " + orgLabel(opts.Org),
 		})
-		return
+		return nil
 	}
 	if adopted {
 		r.Adopted = append(r.Adopted, seat.Handle)
@@ -249,7 +299,7 @@ func (r *SeatAppResult) reconcileSeat(
 			Detail: seat.Handle + "'s installation is suspended, so every token it " +
 				"mints is refused: unsuspend it at GitHub",
 		})
-		return
+		return nil
 	}
 
 	// WHAT IT HOLDS, against what the tier asks for. The manifest asked
@@ -274,9 +324,10 @@ func (r *SeatAppResult) reconcileSeat(
 				"lacks " + strings.Join(short, ", ") + ", so those calls are refused " +
 				"at the call site with nothing naming the tier",
 		})
-		return
+		return nil
 	}
 	r.Ready = append(r.Ready, seat.Handle)
+	return nil
 }
 
 // forget reports an app GitHub no longer has, and clears the record naming it.

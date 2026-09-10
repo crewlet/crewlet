@@ -77,15 +77,32 @@ func (r *Result) Findings() []integration.Finding {
 		})
 	}
 
+	// AND A SEAT WHOSE OWN CREDENTIAL DOES NOT AUTHENTICATE.
+	//
+	// ONLY THAT SEAT. A seat with no login used to be one finding whether
+	// or not it had ever asked for a credential, and on the shape this
+	// integration actually ships — each agent acting as its OWN GitHub App,
+	// with no `mcp_env.github` token anywhere by design — that was every
+	// agent seat, for ever, in [integration.PhaseDegraded], saying "no
+	// review request or mention reaches it" about seats whose mentions
+	// resolve perfectly well through their app's slug ([SeatLookup] and
+	// the identity registration that reads [BotLogin]).
+	//
+	// The sentence changed with it. What a personal access token actually
+	// buys a seat is that its TOOLS act as somebody, so that is what a
+	// refused one costs — claiming the seat is unreachable was a second
+	// false statement, true only of a seat with no app either, which this
+	// run cannot see and [ReconcileSeatApps] reports on.
 	for _, seat := range r.Seats {
-		if seat.Routes() {
+		if !seat.Refused() {
 			continue
 		}
 		out = append(out, integration.Finding{
 			Kind:    integration.FindingIdentityFailed,
 			Subject: seat.Handle,
-			Detail: fmt.Sprintf("%s has no GitHub login, so no review request or "+
-				"mention reaches it: %s",
+			Detail: fmt.Sprintf("%s's own GitHub credential does not authenticate, "+
+				"so every call its tools make is refused and anything routed on "+
+				"that account reaches nobody: %s",
 				seat.Handle, detailOr(seat.Reason, "its credential resolved to nothing")),
 		})
 	}
