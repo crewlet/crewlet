@@ -13,13 +13,15 @@
 //
 // # Why the estate is a seam and not a family
 //
-// This package once spoke the coordination estate's own vocabulary: a
-// [coord.Family], a bucket key class, a [coord.Change]. A durable record does
-// not have to live in a bucket — a state machine's LOG is the other shape,
-// and a log delivery has no family, no key class and no change. Manufacturing
-// a family for one would be worse than the vocabulary it fixed: a family is
-// also what starts a projector, so the engine would stand one up over a
-// bucket that does not exist.
+// This package once spoke the coordination estate's own vocabulary — a
+// document family, a bucket key class, a change record — and those types are
+// gone with the last projector, so the names below are history rather than
+// links. A durable record does not have to live in a bucket: a state
+// machine's LOG is the other shape, and a log delivery has no family, no key
+// class and no change. Manufacturing a family for one would have been worse
+// than the vocabulary it fixed, because a family was also what started a
+// projector — the engine would have stood one up over a bucket that did not
+// exist.
 //
 // So the seam is one level up. A [Source] names the estate as a STRING, an
 // [Opener] opens one durable consumer over it, and a [Record] is one delivered

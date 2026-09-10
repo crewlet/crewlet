@@ -20,6 +20,13 @@ It is not a throughput lever on its own: `node.max_concurrent` is per process,
 so N nodes is N × that ceiling whether you wanted it or not. Size it per
 node.
 
+**One thing does divide by itself.** Above 10 000 indexed documents a fleet
+splits the knowledge search's 64 buckets between its live nodes, so each scans
+a share of the corpus rather than all of it. Nothing is configured and nothing
+is rebuilt — adding a node divides the buckets again on the next search, and an
+answer a node did not come back for is labelled partial rather than silently
+short. See [Search](search.md).
+
 ## What a fleet needs
 
 **Shared coordination.** Seat leases live in the `coordination` slot.

@@ -232,3 +232,60 @@ func TestTheBoardCarriesItsOwnTotalAndReadLevel(t *testing.T) {
 		t.Errorf("the board carried complete=%v", payload["complete"])
 	}
 }
+
+// A NODE THAT IS BEHIND ANSWERS "COME BACK", NOT "THE SERVER BROKE".
+//
+// This is a difference a client acts on: a 503 with a hint refreshes the
+// screen in a few seconds, where a 500 tells it to give up on a screen that
+// would have worked. The API reference has documented the 503 since the
+// surface existed, and nothing produced it — every read refusal reached the
+// caller as a plain failure once the tracker moved onto the log.
+func TestAReadThisNodeCannotServeYetIsUnavailableRatherThanFailed(t *testing.T) {
+	t.Parallel()
+	work := &stubWork{err: &statelog.Refused{
+		Code: statelog.RefuseBehind, Level: statelog.ReadSession,
+		Detail: "this node is 40 000 records behind", RetryAfter: 12 * time.Second,
+	}}
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{Work: work})
+
+	_, err := r.Answer(t.Context(), "work_items", map[string]any{}, "")
+	if !errors.Is(err, queries.ErrUnavailable) {
+		t.Fatalf("a node that is behind answered %v — a read refusal that "+
+			"reaches a client as a plain failure is rendered as a broken "+
+			"server on a screen that would have worked in a few seconds", err)
+	}
+	// AND THE HINT IS THE REFUSAL'S OWN, derived from how far behind this
+	// node is over how fast it is draining. A flat five seconds is wrong
+	// in both directions on one fleet.
+	if got := queries.RetryAfter(err); got != 12*time.Second {
+		t.Errorf("the retry hint is %s, want the refusal's own 12s", got)
+	}
+}
+
+// AND A REFUSAL WAITING CANNOT CLEAR IS STILL A FAILURE.
+//
+// A node holding a record it cannot decode will not catch up however long the
+// caller waits, so a Retry-After there sends a client round a loop that cannot
+// terminate. The classification is the state log's own rather than a second
+// list on this side.
+func TestARefusalWaitingCannotClearIsNotAnInvitationToRetry(t *testing.T) {
+	t.Parallel()
+	work := &stubWork{err: &statelog.Refused{
+		Code:   statelog.RefuseDeferred,
+		Level:  statelog.ReadSession,
+		Detail: "this node holds a record at a version it cannot decode",
+	}}
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{Work: work})
+
+	_, err := r.Answer(t.Context(), "work_items", map[string]any{}, "")
+	if err == nil {
+		t.Fatal("a refused read answered successfully")
+	}
+	if errors.Is(err, queries.ErrUnavailable) {
+		t.Fatalf("a refusal waiting cannot clear was reported as %v — a client "+
+			"told to come back goes round a loop that cannot terminate",
+			queries.ErrUnavailable)
+	}
+}

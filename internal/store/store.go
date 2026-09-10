@@ -234,7 +234,13 @@ type DB struct {
 	// brings both up and one Close takes both down, because a process
 	// holding one file's lock and not the other's is a state no caller
 	// asked for and none could recover from.
-	replicated *DB
+	//
+	// ATOMIC for the reason [DB.dim] is, and it is the same shape: an
+	// adoption CLOSES the peer, renames the file underneath it and opens
+	// it again, all while this node's own readers are running — so the
+	// pointer is written while it is being read, which a plain field makes
+	// a data race on every join.
+	replicated atomic.Pointer[DB]
 
 	// dim is [Options.EmbeddingDim], re-stated by every config apply. ATOMIC
 	// because the applying goroutine writes it while turns are reading it to
@@ -278,6 +284,17 @@ var log = logging.Get("store")
 // appliers write beside the audit log.
 var ErrOneFile = errors.New("store: the node and replicated estates cannot be the same file")
 
+// ErrNoEstate is a read or write issued through a handle that is not open.
+//
+// IT IS A STATE, NOT A BUG IN THE CALLER. [DB.Replicated] answers nil while an
+// adoption holds the peer closed between its rename and its reopen, and again
+// after [DB.Close] — both documented and deliberate — so a goroutine that was
+// already in flight when one of those happened reaches here legitimately. What
+// it must NOT reach is a nil dereference: a maintenance tick racing a shutdown
+// panicked the engine, where every other late read in the same shutdown logged
+// "sql: database is closed" and moved on.
+var ErrNoEstate = errors.New("store: this estate is not open")
+
 // Open opens (creating if absent) a node's TWO databases, applies any pending
 // schema to each, and probes the driver's capabilities.
 //
@@ -318,7 +335,7 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 	// same question of the same code and pays a binary search of prepared
 	// statements to hear the same answer.
 	replicated.caps = db.caps
-	db.replicated = replicated
+	db.replicated.Store(replicated)
 	db.opened = opts
 	return db, nil
 }
@@ -510,9 +527,8 @@ func (d *DB) Close() error {
 	// fails: a node that closed half its estates and returned the other
 	// half's error would leave a lock held with nothing naming it.
 	var peer error
-	if d.replicated != nil {
-		peer = d.replicated.Close()
-		d.replicated = nil
+	if peerDB := d.replicated.Swap(nil); peerDB != nil {
+		peer = peerDB.Close()
 	}
 	err := d.sql.Close()
 	d.lock.release()
@@ -529,7 +545,7 @@ func (d *DB) Replicated() *DB {
 	if d == nil {
 		return nil
 	}
-	return d.replicated
+	return d.replicated.Load()
 }
 
 // Estate names which of a node's two databases this handle is on.
@@ -553,8 +569,8 @@ func (d *DB) ReplicatedPath() string {
 	if d.estate == EstateReplicated {
 		return d.path
 	}
-	if d.replicated != nil {
-		return d.replicated.path
+	if peer := d.Replicated(); peer != nil {
+		return peer.path
 	}
 	return ""
 }
@@ -598,15 +614,20 @@ func (d *DB) LearnEmbeddingDim(width int) {
 	// rather than the width — so a handle that knew and a peer that did not
 	// would leave the dimension guard on for one and off for the other,
 	// which is the two-widths state this method exists to prevent.
-	if d.replicated != nil {
-		d.replicated.LearnEmbeddingDim(width)
+	if peer := d.Replicated(); peer != nil {
+		peer.LearnEmbeddingDim(width)
 	}
 }
 
 // SQL exposes the pooled handle for store implementations built on this
 // database. Application code goes through a typed store instead — a caller
 // that reaches for raw SQL is writing a query nobody can find later.
-func (d *DB) SQL() *sql.DB { return d.sql }
+func (d *DB) SQL() *sql.DB {
+	if d == nil {
+		return nil
+	}
+	return d.sql
+}
 
 // openPool builds a pool whose every connection has the session state this
 // package depends on already applied.
@@ -841,7 +862,18 @@ func sleepFor(ctx context.Context, d time.Duration) {
 }
 
 // tx runs one attempt.
+//
+// A NIL HANDLE IS AN ERROR, NOT A CRASH, and it is a state a caller can
+// legitimately be holding: [DB.Replicated] answers nil while an adoption has
+// the peer closed between its rename and its reopen, and again after [DB.Close].
+// Both are documented and deliberate — so the honest answer to a read issued
+// through one is the same shape every other late read already gets ("this
+// estate is not open"), rather than a segfault that takes the process with it.
+// Measured: a maintenance tick racing a shutdown panicked the whole engine.
 func (d *DB) tx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
+	if d == nil || d.sql == nil {
+		return ErrNoEstate
+	}
 	tx, err := d.sql.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)

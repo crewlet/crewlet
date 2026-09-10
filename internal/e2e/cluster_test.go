@@ -21,7 +21,9 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/observe"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -243,6 +245,7 @@ func buildMember(t *testing.T, relays *jetstreamtest.Relays, i, n int) (
 	stops = append(stops, srv.Close)
 	return &node{
 		engine: e, app: app, server: srv, model: model,
+		id:          boot.Node.ID,
 		snapshotDir: boot.Store.SnapshotDirFor(),
 	}, stops, nil
 }
@@ -504,9 +507,9 @@ func TestAFleetTakesAndOffersSnapshots(t *testing.T) {
 		t.Fatalf("collect offers: %v", err)
 	}
 	if len(offers) == 0 {
-		t.Fatal("a fleet of three offered a joining node nothing — the donor " +
-			"half is not running, so a node below the log's floor could never " +
-			"adopt and would come up on the history it has for ever")
+		t.Fatalf("a fleet of %d offered a joining node nothing — the donor "+
+			"half is not running, so a node below the log's floor could never "+
+			"adopt and would come up on the history it has for ever", fleetSize)
 	}
 }
 
@@ -549,4 +552,265 @@ func newestSnapshotIn(dir string) (statelog.Manifest, bool) {
 		}
 	}
 	return newest, found
+}
+
+// nodeIDs is what the members call themselves, which is their name in a
+// search fan-out's assignment table and on their own presence leases.
+func (c *cluster) nodeIDs() []string {
+	out := make([]string, 0, len(c.nodes))
+	for _, n := range c.nodes {
+		out = append(out, n.id)
+	}
+	return out
+}
+
+// THE FLEET ANSWERS ONE SEARCH BETWEEN ITS MEMBERS.
+//
+// # What this adds over the coordinator's own suite
+//
+// [internal/search]'s cases drive the fan-out over fixtures: they prove the
+// merge, the coverage arithmetic and the wire format. What none of them proves
+// is that two REAL engines — each with its own broker, its own store, its own
+// index and its own registration — answer each other's slice requests. This is
+// the only place the subject, the answerer, the assignment table and two
+// independently built indexes are all live at once, and it is exactly the arm
+// a single-node suite passes vacuously.
+//
+// # Why the assertion is on the COVERAGE and not only on the hits
+//
+// Both members hold the whole corpus, so neither NEEDS the other to answer. A
+// fan-out that silently fell back to the local scan would return the same
+// documents in the same order — what separates the two is which buckets each
+// answer came from, which is what this reads.
+//
+// # And why the table is explicit rather than derived from the corpus size
+//
+// A search below [search.FanOutFloor] is answered by the asking node alone, by
+// design, and writing ten thousand pages through the real write path to cross
+// that floor would measure the applier rather than the fan-out. The floor's own
+// decision is [search]'s to test; what a fleet can see is the network, so this
+// case hands out the table the floor would have produced.
+func TestTheFleetAnswersOneSearchBetweenItsMembers(t *testing.T) {
+	noParallel(t)
+	c := startCluster(t, fleetSize)
+	c.hydrated(t)
+
+	// ENOUGH PAGES THAT EVERY MEMBER'S RANGE HOLDS SOME, and no more.
+	// Each page is a real write through a quorum cluster and then an index
+	// sweep, measured at a few seconds apiece here, so the count is chosen
+	// against the probability it is there for: with 24 documents hashed
+	// into 64 buckets, the chance that either contiguous half of the range
+	// holds none of them is 2 x 2^-24 — about one run in four million.
+	writer := c.nodes[0].engine.PagesStore()
+	var last statelog.Position
+	for i := range 24 {
+		written, err := writer.Create(t.Context(), pageOperator(), pages.NewPage{
+			Container: "ENG",
+			Title:     fmt.Sprintf("Runbook %02d", i),
+			Body:      "when a deploy hangs on rollback, drain the node before retrying",
+		})
+		if err != nil {
+			t.Fatalf("create page %d: %v", i, err)
+		}
+		last = written.Outcome.Position
+	}
+	for i, n := range c.nodes {
+		if err := n.engine.WaitCommitted(t.Context(), last); err != nil {
+			t.Fatalf("member %d never applied the corpus: %v", i, err)
+		}
+		searcher := n.engine.NativeSearcher()
+		if searcher == nil {
+			t.Fatalf("member %d runs no native searcher", i)
+		}
+		waitFor(t, fmt.Sprintf("member %d's index to catch up", i), func() bool {
+			return !searcher.Building(t.Context())
+		})
+	}
+
+	table := search.Divide(c.nodeIDs())
+	if len(table) != fleetSize {
+		t.Fatalf("a fleet of %d divided into %d assignments", fleetSize, len(table))
+	}
+
+	// EVERY MEMBER ASKS, because a coordinator is whichever node the
+	// search happened to reach — there is no leader here, and a fan-out
+	// that only worked from member 0 would be a fleet with one search node
+	// and no way to tell.
+	for i, n := range c.nodes {
+		self := n.id
+		var peers []search.Assigned
+		var mine search.Assignment
+		for _, a := range table {
+			if a.Node == self {
+				mine = a.Shards
+				continue
+			}
+			peers = append(peers, a)
+		}
+
+		deadline, cancel := context.WithTimeout(t.Context(), clusterSettle)
+		answers, err := search.Broker{Queue: n.engine.Backends().Queue}.Scatter(
+			deadline, search.FanQuery{
+				Text: "rollback drain node", Sources: []string{"page"},
+			}, peers)
+		cancel()
+		if err != nil {
+			t.Fatalf("member %d could not scatter: %v", i, err)
+		}
+		if len(answers) != len(peers) {
+			t.Fatalf("member %d asked %d peers and %d answered — a peer that "+
+				"holds the whole corpus did not answer the range it was given",
+				i, len(peers), len(answers))
+		}
+		for _, slice := range answers {
+			if slice.Node == self {
+				t.Errorf("member %d answered its own scatter, so its range is "+
+					"scanned twice and its documents merged against themselves", i)
+			}
+			if len(slice.Lexical) == 0 {
+				t.Errorf("member %d's peer %s returned nothing for buckets "+
+					"[%d,%d) over a corpus of 24 pages that all match",
+					i, slice.Node, slice.Shards.From, slice.Shards.To)
+			}
+		}
+
+		// AND THE ANSWERS PARTITION THE CORPUS. A document two peers both
+		// returned is counted twice by the merge and ranked above where it
+		// belongs; one in the asker's own range that a peer also returned
+		// is the same failure from the other side.
+		seen := map[string]int{}
+		for _, slice := range answers {
+			for _, hit := range slice.Lexical {
+				seen[hit.Key]++
+			}
+		}
+		for key, times := range seen {
+			if times != 1 {
+				t.Errorf("member %d: %s was returned by %d peers", i, key, times)
+			}
+			source, id, _ := strings.Cut(key, ":")
+			if shard := search.ShardOf(source, id); mine.Contains(shard) {
+				t.Errorf("member %d holds bucket %d and a peer returned %s "+
+					"from it", i, shard, key)
+			}
+		}
+	}
+}
+
+// WHAT A FLEET GUARANTEES A READER, AND THAT ITS MEMBERS AGREE.
+//
+// Three claims that only a fleet can make, in one case because they need one
+// fleet: standing three of these up costs three embedded brokers and six
+// databases, and the arms do not interfere.
+//
+//  1. A LINEARIZABLE READ ON ANOTHER MEMBER SEES AN ACKNOWLEDGED WRITE, with
+//     no wait loop. That is what the barrier append buys and the one thing
+//     [TestARecordOneNodeWritesReachesEveryNodesRows] deliberately does not
+//     assert — it polls at session level, because its subject is that the
+//     record arrives at all rather than when.
+//  2. THE MEMBERS ARE TWINS. Every domain is N identical SQL copies, so two
+//     members answering differently about one company is the failure the whole
+//     framework exists to make impossible — and from either screen it looks
+//     exactly like the other node being idle.
+//  3. THE KNOWLEDGE BASE IS ONE OF THOSE DOMAINS TOO. Pages arrived on the log
+//     later than the tracker did, and the arm that would have caught a
+//     half-adopted domain is this one.
+func TestAFleetAgreesAboutOneCompany(t *testing.T) {
+	noParallel(t)
+	c := startCluster(t, fleetSize)
+	c.hydrated(t)
+
+	written, err := operator(t, c.nodes[0]).CreateTask(t.Context(),
+		"fleet-agrees-1", newTask("ENG", "the linearizable one"), nil)
+	if err != nil {
+		t.Fatalf("create on member 0: %v", err)
+	}
+	if written.Outcome == statelog.OutcomeUnknown {
+		t.Fatalf("the create resolved to %q on the node that made it",
+			written.Outcome)
+	}
+	page, err := c.nodes[0].engine.PagesStore().Create(t.Context(), pageOperator(),
+		pages.NewPage{
+			Container: "ENG", Title: "Fleet rollback runbook",
+			Body: "when a deploy hangs on rollback, drain the node before retrying",
+		})
+	if err != nil {
+		t.Fatalf("create a page on member 0: %v", err)
+	}
+
+	// (1) NO WAIT LOOP ANYWHERE BELOW. A linearizable read is defined as
+	// "no answer from before this read arrived", so a poll would turn the
+	// assertion into one about timing and this case would pass on a build
+	// with no barrier at all.
+	for i, n := range c.nodes {
+		detail, err := n.engine.Tracker().Task(t.Context(), written.Key,
+			tracker.DetailWants{}, statelog.ReadLinearizable)
+		if err != nil {
+			t.Fatalf("member %d refused a linearizable read of %s: %v — a read "+
+				"level that cannot be served on a healthy fleet is a promise "+
+				"the engine does not keep", i, written.Key, err)
+		}
+		if detail.Task.Title != "the linearizable one" {
+			t.Errorf("member %d answered %q for %s", i, detail.Task.Title,
+				written.Key)
+		}
+	}
+
+	// (2) AND THE TWO MEMBERS' ROWS ARE THE SAME ROWS. Read at
+	// linearizable so the comparison is of settled state rather than of
+	// two moments.
+	var reference []string
+	for i, n := range c.nodes {
+		answer, err := n.engine.Tracker().Tasks(t.Context(), tracker.Query{
+			Scope: tracker.Scope{Workspace: true},
+			Level: statelog.ReadLinearizable, Limit: 200,
+		}, time.Now())
+		if err != nil {
+			t.Fatalf("member %d could not list the board: %v", i, err)
+		}
+		// THE LEVEL SERVED, not the level asked for. A read level never
+		// silently downgrades — the two can only differ by a refusal —
+		// so a member answering `session` to a linearizable question has
+		// answered a different question and said nothing about it.
+		if answer.Level != statelog.ReadLinearizable {
+			t.Errorf("member %d asked for a %s read and was served %s",
+				i, statelog.ReadLinearizable, answer.Level)
+		}
+		keys := make([]string, 0, len(answer.Rows))
+		for _, row := range answer.Rows {
+			keys = append(keys, row.Key+"@"+row.Title)
+		}
+		slices.Sort(keys)
+		if reference == nil {
+			reference = keys
+			if len(keys) == 0 {
+				t.Fatal("member 0's board is empty after a create, so the " +
+					"comparison below would hold between two empty boards")
+			}
+			continue
+		}
+		if !slices.Equal(keys, reference) {
+			t.Errorf("member %d's board is\n  %v\nand member 0's is\n  %v\n\n"+
+				"Two members answering differently about one company is what N "+
+				"identical copies exist to make impossible, and from either "+
+				"screen it looks exactly like the other node being idle",
+				i, keys, reference)
+		}
+	}
+
+	// (3) AND THE KNOWLEDGE BASE, which reached the log after the tracker
+	// did and is the domain a half-finished adoption would strand.
+	for i, n := range c.nodes {
+		if err := n.engine.WaitCommitted(t.Context(), page.Outcome.Position); err != nil {
+			t.Fatalf("member %d never applied the page: %v", i, err)
+		}
+		got, err := n.engine.Pages().Get(t.Context(), page.Page.ID)
+		if err != nil {
+			t.Fatalf("member %d cannot read a page member 0 wrote: %v", i, err)
+		}
+		if got.Page.Title != "Fleet rollback runbook" {
+			t.Errorf("member %d holds %q for the page member 0 titled %q",
+				i, got.Page.Title, "Fleet rollback runbook")
+		}
+	}
 }
