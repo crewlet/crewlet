@@ -1,17 +1,22 @@
 package confluence_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/provision"
 )
 
 // cloudSite is a Confluence Cloud webhook administration endpoint behaving
@@ -171,6 +176,11 @@ func itoa(n int) string {
 type recordingSink struct {
 	mu   sync.Mutex
 	vals map[string]string
+	// flushes counts completions. It is what a value being VISIBLE to a
+	// running engine costs: the sink the engine hands in rebuilds the
+	// resolver's snapshot inside Flush and nowhere else, so a minted value
+	// that was never flushed is sealed and unreadable.
+	flushes int
 }
 
 func newSink() *recordingSink { return &recordingSink{vals: map[string]string{}} }
@@ -182,7 +192,18 @@ func (s *recordingSink) Record(_ context.Context, name, value string) error {
 	return nil
 }
 func (s *recordingSink) Discard(context.Context) error { return nil }
-func (s *recordingSink) Flush(context.Context) error   { return nil }
+func (s *recordingSink) Flush(context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.flushes++
+	return nil
+}
+
+func (s *recordingSink) flushed() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.flushes
+}
 func (s *recordingSink) Value(_ context.Context, name string) (string, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -646,5 +667,269 @@ func TestADataCenterHookStoredWithATrailingSlashIsConverged(t *testing.T) {
 	if got := site.mutations(); got != before {
 		t.Errorf("a hook stored with a trailing slash was rewritten (%d write(s))",
 			got-before)
+	}
+}
+
+// cuttingTransport delivers the instance's answers and then CANCELS the
+// pass's own context, which is what a node shutting down — or the lease
+// deadline the loop bounds a pass with — does to a pass mid-walk.
+//
+// THE RESPONSE IS BUFFERED BEFORE THE CANCELLATION. A cancellation reaches an
+// in-flight body read, so cutting the context before the caller has read the
+// listing would fail the READ, and the scenario worth standing up is the
+// opposite one: the pass got its answer, and everything it does afterwards is
+// on a context that is already dead.
+type cuttingTransport struct {
+	base      http.RoundTripper
+	remaining atomic.Int64
+	cancel    context.CancelFunc
+	// inFlight cuts the context as the request goes OUT rather than once
+	// it has been answered, which is the other half of what a deadline
+	// does: it expires wherever the pass happens to be, and half the time
+	// that is inside a registration rather than between two of them.
+	inFlight bool
+	// attempts counts every request the pass STARTED, including the ones a
+	// dead context refuses before they reach the instance. The site itself
+	// cannot see those, and they are the whole evidence of a walk carrying
+	// on past the point where it could do anything.
+	attempts atomic.Int64
+}
+
+func (c *cuttingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	c.attempts.Add(1)
+	if c.inFlight && c.remaining.Add(-1) == 0 {
+		c.cancel()
+	}
+	resp, err := c.base.RoundTrip(req)
+	if err != nil {
+		return resp, err
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	if !c.inFlight && c.remaining.Add(-1) == 0 {
+		c.cancel()
+	}
+	return resp, nil
+}
+
+// cut says WHEN the pass's context dies: once the instance has answered
+// `after` requests, or — with inFlight — as the `after`th request goes out.
+//
+// Both happen, and they are different code paths through the walk: one is
+// noticed before an event is looked at, the other comes back as that event's
+// own write failing.
+type cut struct {
+	after    int
+	inFlight bool
+}
+
+// cancellableSink refuses to complete on a context that has already been
+// cancelled, exactly as a store write does.
+//
+// It is the only way to tell a flush that happened from one that happened on
+// a context which could not carry it: [recordingSink] takes no notice of the
+// context at all, so without this a pass could "flush" a minted value into a
+// call that a real sealed store would have refused.
+type cancellableSink struct{ *recordingSink }
+
+func (s *cancellableSink) Flush(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return errors.New("the sink was flushed on a context that had already been cancelled")
+	}
+	return s.recordingSink.Flush(ctx)
+}
+
+// cuttingClient talks to the site through the transport that ends the pass.
+func cuttingClient(
+	t *testing.T, site *cloudSite, deployment confluence.Deployment,
+	transport *cuttingTransport,
+) *confluence.Client {
+	t.Helper()
+	base, email := site.URL, ""
+	if deployment == confluence.Cloud {
+		base, email = site.URL+"/wiki", "org@example.com"
+	}
+	c, err := confluence.NewClient(confluence.ClientOptions{
+		URL: base, Email: email, Token: "org-token", Deployment: deployment,
+		HTTP: &http.Client{Transport: transport},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// cutPass runs one pass whose context dies where `when` says, and returns
+// what that pass reported — which is exactly what the engine's own adapter
+// hands the loop — together with the transport that counted its requests.
+func cutPass(
+	t *testing.T, site *cloudSite, sink provision.TokenSink,
+	deployment confluence.Deployment, when cut,
+) (*confluence.Result, *cuttingTransport, error) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	transport := &cuttingTransport{
+		base: site.Client().Transport, cancel: cancel, inFlight: when.inFlight,
+	}
+	transport.remaining.Store(int64(when.after))
+
+	cfg := &config.Confluence{
+		URL: site.URL, Token: "t", WebhookSecret: "${CONFLUENCE_WEBHOOK_SECRET}",
+	}
+	variable := "CONFLUENCE_WEBHOOK_SECRET"
+	if deployment == confluence.Cloud {
+		cfg = &config.Confluence{
+			URL: site.URL + "/wiki", Token: "t",
+			WebhookToken: "${CONFLUENCE_WEBHOOK_TOKEN}",
+		}
+		variable = "CONFLUENCE_WEBHOOK_TOKEN"
+	}
+	res, err := confluence.Reconcile(ctx, confluence.Options{
+		Client: cuttingClient(t, site, deployment, transport),
+		Config: cfg,
+		Value: func(v string) string {
+			if v != "${"+variable+"}" {
+				return v
+			}
+			held, _, _ := sink.Value(context.Background(), variable)
+			return held
+		},
+		Sink:        sink,
+		WebhookBase: "https://engine.example.com",
+	})
+	return res, transport, err
+}
+
+// A CLOUD PASS CUT SHORT REPORTS A FAULT, NOT A CONVERGED SITE.
+//
+// This is the failure that hides behind the steady state. Over a converged
+// site the walk makes no request at all, so a context that died after the
+// listing produced no error and no findings — and those two together are the
+// loop's word for "this integration is ready". A node shutting down recorded
+// every Confluence as healthy on its way out, and the next node to hold the
+// duty trusted that for a full settled interval.
+func TestACancelledCloudPassOverAConvergedSiteReportsAFaultRatherThanHealth(t *testing.T) {
+	t.Parallel()
+	site := newCloudSite(t)
+	sink := newSink()
+	run(t, site, sink, nil)
+
+	// Cut after the identity probe and the listing, which is every request
+	// a converged pass makes.
+	res, _, err := cutPass(t, site, sink, confluence.Cloud, cut{after: 2})
+	if err == nil && len(res.Findings()) == 0 {
+		t.Fatal("a pass whose context died after the listing reported a converged " +
+			"site it had stopped reading; the loop records that as ready")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("the fault does not name the cancellation behind it: %v", err)
+	}
+}
+
+// AND IT DOES NOT BLAME THE INSTANCE FOR ITS OWN CANCELLATION.
+//
+// A per-event refusal is recorded and the walk carries on, which is right
+// when Confluence refused that registration. A dead context refuses all eight
+// identically, and recording it eight times reports FindingIngressBlocked —
+// degraded, owed by an ADMINISTRATOR — so a node shutting down sent somebody
+// to grant a permission that was never missing.
+func TestACancelledCloudPassDoesNotBlameTheInstance(t *testing.T) {
+	t.Parallel()
+	for _, when := range []struct {
+		name string
+		cut  cut
+		// requests is every request the pass may start: the identity
+		// probe, the listing, and — where the cut lands inside one — the
+		// registration that carried it.
+		requests int64
+	}{
+		{"between two events", cut{after: 2}, 2},
+		{"while a registration is in flight", cut{after: 3, inFlight: true}, 3},
+	} {
+		t.Run(when.name, func(t *testing.T) {
+			t.Parallel()
+			site := newCloudSite(t)
+			sink := newSink()
+
+			// Nothing is registered yet, so every one of the eight
+			// events is a write this pass will not get to make.
+			res, transport, err := cutPass(t, site, sink, confluence.Cloud, when.cut)
+			if err == nil {
+				t.Fatalf("a pass whose context died before it could register "+
+					"anything returned no error; it reported %+v", res.Findings())
+			}
+			for _, finding := range res.Findings() {
+				if finding.Kind == integration.FindingIngressBlocked {
+					t.Errorf("the cancellation was reported as the instance "+
+						"blocking %q: %s", finding.Subject, finding.Detail)
+				}
+			}
+			// AND IT STOPPED WORKING, rather than walking the remaining
+			// events into a context that refuses every one of them.
+			if extra := transport.attempts.Load() - when.requests; extra > 0 {
+				t.Errorf("the pass started %d more request(s) after its context died",
+					extra)
+			}
+		})
+	}
+}
+
+// THE DATA CENTER HALF OF THE SAME CLAUSE, which is its own code: the branch
+// answers a converged instance by returning from inside the listing walk, so
+// nothing below it could have noticed the context either.
+func TestACancelledDataCenterPassOverAConvergedInstanceReportsAFault(t *testing.T) {
+	t.Parallel()
+	site := newCloudSite(t)
+	sink := newSink()
+	runDataCenter(t, site, sink, "https://engine.example.com")
+
+	res, _, err := cutPass(t, site, sink, confluence.DataCenter, cut{after: 2})
+	if err == nil && len(res.Findings()) == 0 {
+		t.Fatal("a pass whose context died after the listing reported a converged " +
+			"instance it had stopped reading; the loop records that as ready")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("the fault does not name the cancellation behind it: %v", err)
+	}
+}
+
+// A VALUE THIS PASS MINTED IS FLUSHED EVEN WHEN THE PASS THEN FAILS.
+//
+// The token is sealed BEFORE the hooks that carry it are registered, and the
+// sink the engine hands in rebuilds the resolver's snapshot only inside
+// Flush. Returning from the failure without one left the value sealed and
+// INVISIBLE: the next pass resolved nothing, minted a second value, failed at
+// the same place, and did that for as long as the failure lasted — which is
+// the exact runaway the refreshing sink exists to prevent.
+//
+// And flushed on a context that can carry it, because the failure being
+// cleaned up after is often the cancellation itself.
+func TestAValueMintedBeforeAFailureIsStillFlushed(t *testing.T) {
+	t.Parallel()
+	site := newCloudSite(t)
+	sink := &cancellableSink{recordingSink: newSink()}
+
+	// Cut after the identity probe: the pass mints, and then the listing
+	// it needs before it can register anything fails.
+	_, _, err := cutPass(t, site, sink, confluence.Cloud, cut{after: 1})
+	if err == nil {
+		t.Fatal("the pass did not fail, so there is no failure path here to test")
+	}
+	token, ok, _ := sink.Value(context.Background(), "CONFLUENCE_WEBHOOK_TOKEN")
+	if !ok || token == "" {
+		t.Fatal("nothing was minted, so this is not the mint-then-fail path")
+	}
+	if sink.flushed() == 0 {
+		t.Error("a minted token was left sealed and unflushed, so the running " +
+			"engine still holds the snapshot from before it and the next pass " +
+			"mints another one")
+	}
+	if strings.Contains(err.Error(), "already been cancelled") {
+		t.Errorf("the sink was flushed on the pass's own dead context: %v", err)
 	}
 }

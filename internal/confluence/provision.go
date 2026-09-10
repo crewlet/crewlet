@@ -122,21 +122,82 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	default:
 		err = reconcileDataCenter(ctx, opts, base, res)
 	}
+	if err == nil {
+		// A PASS THAT WAS CUT SHORT HAS NOT SEEN THE WORLD IT IS ABOUT TO
+		// REPORT ON, and on a converged instance that is invisible from
+		// everything above: the walk finds each hook already correct, makes
+		// no request at all, and answers with no findings — which is the
+		// loop's word for "this integration is ready". So a pass whose
+		// context died after the listing reported a healthy Confluence it
+		// had stopped reading, and the next node to hold the duty trusted
+		// that for a full settled interval.
+		//
+		// It is not only a shutdown. The context a pass runs on is bounded
+		// by the lease that protects it, so an instance slow enough to eat
+		// that deadline mid-walk produces the same answer on a node that is
+		// otherwise perfectly healthy.
+		err = cutShort(ctx)
+	}
 	if err != nil {
+		// THE SINK IS FLUSHED ON THE WAY OUT, whichever way that is.
+		//
+		// mintInto seals a fresh value BEFORE the hooks that carry it are
+		// registered, and the sink the engine hands in rebuilds the
+		// resolver's snapshot only inside Flush. Returning here without one
+		// left a minted value sealed and INVISIBLE: the next pass resolved
+		// nothing, minted a second value, failed at the same place, and did
+		// that for as long as the failure lasted — the exact runaway the
+		// refreshing sink exists to prevent.
+		if flushErr := flushSink(context.WithoutCancel(ctx), opts); flushErr != nil {
+			return res, errors.Join(err, flushErr)
+		}
 		return res, err
 	}
-	if opts.Sink != nil {
-		if err := opts.Sink.Flush(ctx); err != nil {
-			return res, fmt.Errorf("confluence: %w", err)
-		}
+	if err := flushSink(ctx, opts); err != nil {
+		return res, err
 	}
 	return res, nil
 }
 
+// flushSink completes the run's sink, where there is one.
+//
+// The context is the CALLER'S on the success path and an uncancellable copy
+// of it on the failure path, which is the rule every rollback in this tree
+// follows: the failure being cleaned up after is often the cancellation
+// itself, and a flush that inherits a dead context does nothing at all. The
+// success path keeps the deadline, because there a flush that hangs is a pass
+// that never returns.
+func flushSink(ctx context.Context, opts Options) error {
+	if opts.Sink == nil {
+		return nil
+	}
+	if err := opts.Sink.Flush(ctx); err != nil {
+		return fmt.Errorf("confluence: %w", err)
+	}
+	return nil
+}
+
+// cutShort reports the pass's own failure when its context has died, and nil
+// while the pass may honestly carry on.
+//
+// THE TWO ANSWERS ARE OPPOSITE TO THE LOOP, which is the whole of
+// integrationtest's seventh clause: an error is a fault it retries, and a
+// findings list — empty most of all — is a statement about the operator's
+// world. A pass that kept walking on a dead context can only produce the
+// second, because every event it never reached records nothing.
+func cutShort(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf(
+			"confluence: this pass stopped before it had finished converging the "+
+				"instance's hooks, so what it observed is partial rather than "+
+				"a healthy integration: %w", err)
+	}
+	return nil
+}
+
 // reconcileCloud converges one token-bearing hook per event.
 func reconcileCloud(ctx context.Context, opts Options, base string, res *Result) error {
-	token, notes, err := cloudToken(ctx, opts)
-	res.Notes = append(res.Notes, notes...)
+	token, err := cloudToken(ctx, opts, res)
 	if err != nil {
 		return err
 	}
@@ -168,6 +229,14 @@ func reconcileCloud(ctx context.Context, opts Options, base string, res *Result)
 	// what the sibling github.ensureRepoWebhook does and what this file's
 	// own field doc already promised.
 	for _, event := range WebhookEvents {
+		// STOP WORKING ON A DEAD CONTEXT rather than firing seven more
+		// doomed registrations at the instance and recording each refusal
+		// as this event's own. The walk below is the one place a single
+		// pass makes eight decisions, so it is the one place a context that
+		// died halfway through turns into a report about Confluence.
+		if err := cutShort(ctx); err != nil {
+			return err
+		}
 		name := HookName(event)
 		target := CloudWebhookTarget(base, token, event)
 		state := HookState{Event: event}
@@ -176,7 +245,9 @@ func reconcileCloud(ctx context.Context, opts Options, base string, res *Result)
 		switch {
 		case found && opts.Recreate:
 			if err := opts.Client.DeleteWebhook(ctx, current.ID); err != nil {
-				state.Detail = refusal(err)
+				if stop := blame(ctx, &state, err); stop != nil {
+					return stop
+				}
 				res.Hooks = append(res.Hooks, state)
 				continue
 			}
@@ -194,7 +265,9 @@ func reconcileCloud(ctx context.Context, opts Options, base string, res *Result)
 		case found:
 			if _, err := opts.Client.UpdateWebhook(ctx, current.ID, name, target,
 				[]string{event}, ""); err != nil {
-				state.Detail = refusal(err)
+				if stop := blame(ctx, &state, err); stop != nil {
+					return stop
+				}
 				res.Hooks = append(res.Hooks, state)
 				continue
 			}
@@ -203,7 +276,9 @@ func reconcileCloud(ctx context.Context, opts Options, base string, res *Result)
 			continue
 		}
 		if _, err := opts.Client.CreateWebhook(ctx, name, target, []string{event}, ""); err != nil {
-			state.Detail = refusal(err)
+			if stop := blame(ctx, &state, err); stop != nil {
+				return stop
+			}
 			res.Hooks = append(res.Hooks, state)
 			continue
 		}
@@ -239,10 +314,31 @@ func refusal(err error) string {
 	return integration.Reject(err, Status(err)).Error()
 }
 
+// blame decides WHOSE failure a per-event write is, and it is not always the
+// event's.
+//
+// Confluence refusing one registration is that event's: it is recorded on the
+// state, the walk carries on, and the seven that worked are still registered
+// — which is what the comment above this file's loop argues for. A context
+// that has been cancelled or has run out of time refuses all eight
+// identically, and recording it eight times says the instance blocked eight
+// event classes. FindingIngressBlocked is degraded and owed by an
+// ADMINISTRATOR, so that answer sends somebody to grant a permission that was
+// never missing, over a node that was merely shutting down.
+//
+// So a dead context stops the walk and becomes the pass's error, and only a
+// refusal the instance actually made is written onto the state.
+func blame(ctx context.Context, state *HookState, err error) error {
+	if stop := cutShort(ctx); stop != nil {
+		return stop
+	}
+	state.Detail = refusal(err)
+	return nil
+}
+
 // reconcileDataCenter converges the single signed hook Data Center wants.
 func reconcileDataCenter(ctx context.Context, opts Options, base string, res *Result) error {
-	secret, notes, err := dataCenterSecret(ctx, opts)
-	res.Notes = append(res.Notes, notes...)
+	secret, err := dataCenterSecret(ctx, opts, res)
 	if err != nil {
 		return err
 	}
@@ -313,14 +409,14 @@ func sameEventSet(have, want []string) bool {
 
 // cloudToken is the value the Cloud hooks carry, minted only where nothing
 // usable resolves.
-func cloudToken(ctx context.Context, opts Options) (string, []string, error) {
-	return mintInto(ctx, opts, opts.Config.WebhookToken, "webhook_token",
+func cloudToken(ctx context.Context, opts Options, res *Result) (string, error) {
+	return mintInto(ctx, opts, res, opts.Config.WebhookToken, "webhook_token",
 		"the token every Cloud hook carries in its URL")
 }
 
 // dataCenterSecret is the HMAC key the Data Center hook is signed with.
-func dataCenterSecret(ctx context.Context, opts Options) (string, []string, error) {
-	return mintInto(ctx, opts, opts.Config.WebhookSecret, "webhook_secret",
+func dataCenterSecret(ctx context.Context, opts Options, res *Result) (string, error) {
+	return mintInto(ctx, opts, res, opts.Config.WebhookSecret, "webhook_secret",
 		"the key the instance signs every delivery with")
 }
 
@@ -332,13 +428,15 @@ func dataCenterSecret(ctx context.Context, opts Options) (string, []string, erro
 // delivery fail verification at the edge. So a value that already resolves is
 // used as it is, and minting happens when there is none or when the operator
 // asked to recreate the hooks having planned the restart.
-func mintInto(ctx context.Context, opts Options, ref, field, role string) (string, []string, error) {
+func mintInto(
+	ctx context.Context, opts Options, res *Result, ref, field, role string,
+) (string, error) {
 	var resolved string
 	if opts.Value != nil {
 		resolved = strings.TrimSpace(opts.Value(ref))
 	}
 	if resolved != "" && !opts.Recreate {
-		return resolved, nil, nil
+		return resolved, nil
 	}
 	variable, ok := provision.SoleVar(ref)
 	if !ok {
@@ -346,7 +444,7 @@ func mintInto(ctx context.Context, opts Options, ref, field, role string) (strin
 		// becomes State.LastError, which the fleet stores and the
 		// integrations query serves, so a %q of a literal webhook token
 		// publishes the one credential that route authenticates with.
-		return "", nil, fmt.Errorf(
+		return "", fmt.Errorf(
 			"confluence: integrations.confluence.%s is %s rather than a value "+
 				"this run could resolve or a whole ${VAR} reference to mint "+
 				"one into; point it at a variable and set that variable, "+
@@ -354,18 +452,25 @@ func mintInto(ctx context.Context, opts Options, ref, field, role string) (strin
 			field, provision.Shape(ref))
 	}
 	if opts.Sink == nil {
-		return "", nil, provision.ErrNoSink
+		return "", provision.ErrNoSink
 	}
 	value := rand.Text()
 	if err := opts.Sink.Record(ctx, variable, value); err != nil {
-		return "", nil, fmt.Errorf("confluence: record %s: %w", variable, err)
+		return "", fmt.Errorf("confluence: record %s: %w", variable, err)
 	}
+	// COUNTED WHERE IT IS SEALED, which is the only frame that knows one
+	// happened. [Result.Recorded] promised this number and nothing had ever
+	// assigned it, so a run that minted reported having written nothing to
+	// the sink — a field whose zero value is indistinguishable from the
+	// truth, waiting for the first reader to believe it.
+	res.Recorded++
 	note := fmt.Sprintf("a fresh value was minted into %s (%s), and %s",
 		variable, role, opts.Sink.NextStep())
 	if opts.Recreate {
 		note += ". The previous value is now invalid on every other deployment of this company"
 	}
-	return value, []string{note}, nil
+	res.Notes = append(res.Notes, note)
+	return value, nil
 }
 
 // sameEvents reports whether a hook subscribes to exactly one event.
