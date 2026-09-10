@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -540,11 +541,20 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": stream.CodeNotFound})
 	case errors.Is(err, queries.ErrUnavailable):
 		// 503 AND RETRY-AFTER, because this is the one failure here that
-		// is expected to pass: a node's boot reconcile is O(keys) and
-		// finishes. A 500 would tell a client to give up on a screen
+		// is expected to pass: this node is behind the log and is
+		// draining. A 500 would tell a client to give up on a screen
 		// that will work in a few seconds, and an empty 200 would tell a
 		// person the company has no work.
-		w.Header().Set("Retry-After", "5")
+		//
+		// THE HINT IS THE REFUSAL'S OWN where it has one — derived from
+		// how far behind this node is over how fast it is actually
+		// draining — and five seconds otherwise. A flat hint is wrong in
+		// both directions on one fleet.
+		after := 5
+		if hint := queries.RetryAfter(err); hint > 0 {
+			after = max(1, int(hint.Round(time.Second)/time.Second))
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(after))
 		writeJSON(w, http.StatusServiceUnavailable,
 			map[string]string{"error": stream.CodeUnavailable})
 	default:

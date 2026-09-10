@@ -162,15 +162,14 @@ func (d *DB) CloseReplicated() error {
 		return fmt.Errorf("store: a %s handle has no replicated peer — the "+
 			"bracket is the node handle's, because that is the one every "+
 			"caller reaches the replicated estate through", d.estate)
-	case d.replicated == nil:
+	case d.Replicated() == nil:
 		// ALREADY CLOSED IS NOT AN ERROR: a join that failed between
 		// the close and the rename unwinds by reopening, and an unwind
 		// that had to know how far it got would be a second state
 		// machine beside the phase the adoption row already records.
 		return nil
 	}
-	err := d.replicated.Close()
-	d.replicated = nil
+	err := d.replicated.Swap(nil).Close()
 	if err != nil {
 		return fmt.Errorf("store: close the replicated estate: %w", err)
 	}
@@ -193,7 +192,7 @@ func (d *DB) ReopenReplicated(ctx context.Context) error {
 	case d.estate != EstateNode:
 		return fmt.Errorf("store: a %s handle has no replicated peer to reopen",
 			d.estate)
-	case d.replicated != nil:
+	case d.Replicated() != nil:
 		return nil
 	}
 	path := ReplicatedPath(d.path, d.opened.ReplicatedPath)
@@ -206,6 +205,6 @@ func (d *DB) ReopenReplicated(ctx context.Context) error {
 	// question about the driver compiled into this process, and a file
 	// arriving from a peer did not change which driver that is.
 	replicated.caps = d.caps
-	d.replicated = replicated
+	d.replicated.Store(replicated)
 	return nil
 }

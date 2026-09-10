@@ -265,22 +265,43 @@ func (s *suite) runScatter(t *testing.T) {
 			t.Parallel()
 			q := s.start(ctx, t)
 			peer := startQueue(ctx, t, s.caps.Peer(t, q))
-			subject := ns(t) + ".ask"
-			serve(ctx, t, peer, subject, echo("peer"))
 
-			deadline, cancel := context.WithTimeout(ctx, 5*time.Second)
-			defer cancel()
-			replies, err := q.Ask(deadline, subject, []byte("q"), 1)
-			if err != nil {
-				t.Fatalf("ask: %v", err)
-			}
-			if got := replyTexts(replies); !sameSet(got, []string{"peer:q"}) {
-				t.Fatalf("an ask on one node reached %v — a fan-out that never "+
-					"leaves the node it started on divides nothing", got)
+			// ASKED THE INSTANT Serve RETURNS, and repeatedly on fresh
+			// subjects. A backend whose Serve returns before the broker
+			// knows about the subscription loses this race sometimes
+			// rather than always — which is the worst shape a missing
+			// registration has, because it certifies clean on a warm
+			// broker and fails in CI. Repeating narrows the window this
+			// can hide in; it does not close it, and that is stated
+			// rather than hoped.
+			for round := range scatterPeerRounds {
+				subject := ns(t) + ".ask"
+				serve(ctx, t, peer, subject, echo("peer"))
+
+				deadline, cancel := context.WithTimeout(ctx, 5*time.Second)
+				replies, err := q.Ask(deadline, subject, []byte("q"), 1)
+				cancel()
+				if err != nil {
+					t.Fatalf("round %d: ask: %v", round, err)
+				}
+				if got := replyTexts(replies); !sameSet(got, []string{"peer:q"}) {
+					t.Fatalf("round %d: an ask on one node reached %v — either "+
+						"a fan-out never leaves the node it started on, or "+
+						"Serve returned before the broker had registered the "+
+						"answerer and the asker raced past it", round, got)
+				}
 			}
 		})
 	}
 }
+
+// scatterPeerRounds is how many times the peer arm asks.
+//
+// TWENTY. Each round is one publish and one reply on a warm in-process broker
+// — microseconds — so the arm stays cheap, and twenty independent chances is
+// what turns a registration race that loses occasionally into one this suite
+// is likely to see.
+const scatterPeerRounds = 20
 
 // serve registers an answerer and unregisters it at the end of the test.
 func serve(ctx context.Context, t *testing.T, q queue.EventQueue, subject string, h queue.AnswerFunc) {

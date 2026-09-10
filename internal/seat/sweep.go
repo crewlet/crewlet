@@ -125,8 +125,17 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 		// minutes on a large company, and an operator asking why a fresh
 		// node is holding nothing needs one line that says so rather
 		// than a healthy-looking sweep with an empty claim list.
+		//
+		// UNDER THE LOCK, like every other read of this map. It is only a
+		// log field, which is exactly why it was easy to write without
+		// one — and `len` on a map is a read the detector counts: a
+		// release running concurrently deletes from it, and the two
+		// raced in CI.
+		h.mu.Lock()
+		holding := len(h.held)
+		h.mu.Unlock()
 		log.DebugContext(ctx, "seat_claims_withheld", "node", h.nodeID,
-			"held", len(h.held), "capacity", plan.Capacity,
+			"held", holding, "capacity", plan.Capacity,
 			"hint", "this node is not ready to run new seats yet; it keeps what "+
 				"it holds and claims nothing until it is")
 	}

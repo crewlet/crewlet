@@ -68,7 +68,7 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	}
 	answer, err := s.Work.Tasks(ctx, q, now)
 	if err != nil {
-		return nil, err
+		return nil, unavailableIfBehind(err)
 	}
 	out := map[string]any{
 		"items": answer.Rows,
@@ -119,7 +119,7 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 	case errors.Is(err, tracker.ErrNoTask):
 		return nil, ErrNotFound
 	case err != nil:
-		return nil, err
+		return nil, unavailableIfBehind(err)
 	}
 	return detail, nil
 }
@@ -154,7 +154,7 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 
 	list, err := s.Pages.List(ctx, f)
 	if err != nil {
-		return nil, err
+		return nil, unavailableIfBehind(err)
 	}
 	return map[string]any{"pages": list, "limit": f.Limit, "offset": f.Offset}, nil
 }
@@ -169,7 +169,7 @@ func (s Sources) page(ctx context.Context, p Params) (any, error) {
 	case errors.Is(err, pages.ErrNotFound):
 		return nil, ErrNotFound
 	case err != nil:
-		return nil, err
+		return nil, unavailableIfBehind(err)
 	}
 	return detail, nil
 }
@@ -177,7 +177,7 @@ func (s Sources) page(ctx context.Context, p Params) (any, error) {
 func (s Sources) containers(ctx context.Context, _ Params) (any, error) {
 	list, err := s.Pages.Containers(ctx)
 	if err != nil {
-		return nil, err
+		return nil, unavailableIfBehind(err)
 	}
 	return map[string]any{"containers": list}, nil
 }
@@ -224,4 +224,42 @@ func badParams(field, got string, allowed []string) error {
 	}
 	return fmt.Errorf("%w: %s=%q (want one of %s)",
 		ErrBadParams, field, got, strings.Join(allowed, ", "))
+}
+
+// unavailableIfBehind turns a read this node could not serve YET into
+// [ErrUnavailable], leaving every other failure alone.
+//
+// THE CLASSIFICATION IS THE STATE LOG'S OWN — [statelog.ReadRefusal.Retryable]
+// — rather than a second list here. It is exactly the question the two differ
+// on: a node that is behind will catch up, and a node holding a record it
+// cannot decode will not, however long a caller waits.
+//
+// Without this every refusal reached the surface as a plain failure and was
+// rendered as `query_failed` / 500 — telling a client to give up on a screen
+// that would have worked in a few seconds, which is the one thing the 503 and
+// its Retry-After exist to avoid. The reference documented the 503 the whole
+// time; nothing produced it.
+func unavailableIfBehind(err error) error {
+	var refused *statelog.Refused
+	if !errors.As(err, &refused) || !refused.Code.Retryable() {
+		return err
+	}
+	// WRAPPED, NOT REPLACED, so the refusal's own code, detail and derived
+	// hint survive for [RetryAfter] and for the log.
+	return fmt.Errorf("%w: %w", ErrUnavailable, err)
+}
+
+// RetryAfter is how long a caller should wait before asking again, or zero
+// when nothing here can say.
+//
+// DERIVED FROM THE REFUSAL rather than a constant, because the refusal derives
+// it from the observed drain: a flat hint sends a caller back too early on a
+// node grinding through a bulk apply and holds one waiting on a node that
+// caught up in milliseconds.
+func RetryAfter(err error) time.Duration {
+	var refused *statelog.Refused
+	if errors.As(err, &refused) {
+		return refused.RetryAfter
+	}
+	return 0
 }

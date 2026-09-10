@@ -84,6 +84,13 @@ type node struct {
 	server *httptest.Server
 	model  *scriptedModel
 
+	// id is what this node calls itself — its name in a search fan-out's
+	// assignment table and on its own presence lease. Held because a case
+	// that addresses one member by name has to use the SAME string the
+	// engine registered under, and deriving it a second time from the
+	// index would be a second place to decide what a member is called.
+	id string
+
 	// snapshotDir is where this node writes its own snapshots of the
 	// replicated estate. Held because a case that asserts a node TOOK one
 	// has to read the directory, and deriving it a second time from the
@@ -152,7 +159,7 @@ func startWith(t *testing.T, amend func(doc string) string) *node {
 	srv := httptest.NewServer(app)
 	t.Cleanup(srv.Close)
 
-	return &node{engine: e, app: app, server: srv, model: model}
+	return &node{engine: e, app: app, server: srv, model: model, id: boot.Node.ID}
 }
 
 // scriptedModel is an Anthropic Messages endpoint that answers by PHASE.

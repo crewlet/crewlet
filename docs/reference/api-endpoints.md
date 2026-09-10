@@ -1370,13 +1370,19 @@ then found a blank Crewlet board would reasonably conclude their integration
 was broken. There is no native record for this node to have a copy of, and an
 empty board would claim otherwise.
 
-**A projection that has not caught up refuses.** Every one of these answers
-`unavailable` (`503` with `Retry-After: 5`) while this node's boot reconcile is
-still running, rather than returning an empty list. "This company has no work"
-is an answer a person acts on — they file the duplicate, they conclude the
-migration failed — so a node that has not finished reading what the fleet holds
-must not be able to say it. The reconcile is `O(keys)` and finishes; the screen
-fills in on its own.
+**A node that has not caught up refuses.** Every one of these answers
+`unavailable` (`503`, with a `Retry-After`) while this node is behind the log,
+rather than returning an empty list. "This company has no work" is an answer a
+person acts on — they file the duplicate, they conclude the migration failed —
+so a node that has not applied what the fleet holds must not be able to say it.
+
+The hint is **derived, not fixed**: how far behind this node is over how fast
+it is actually draining, so a node grinding through a bulk apply asks for
+longer than one that caught up in milliseconds. A refusal that waiting cannot
+clear — a node holding a record its build cannot decode — is **not** a `503`,
+because a client told to come back would go round a loop that cannot
+terminate; those are ordinary failures and the log names them. See
+[Read Consistency](../guides/consistency.md).
 
 **The item surface is read-only.** There is no `POST /work`. An item is filed
 and moved by a seat's own tools, or by an operator through the

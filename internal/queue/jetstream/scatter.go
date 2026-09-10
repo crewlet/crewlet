@@ -90,6 +90,19 @@ func (q *Queue) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (
 		retire()
 		return nil, fmt.Errorf("serve %s: %w", subject, err)
 	}
+	// FLUSHED BEFORE RETURNING, and it is a correctness requirement rather
+	// than tidiness. A core NATS subscription is registered when the
+	// interest reaches the SERVER, not when Subscribe returns — so an
+	// asker that scattered immediately after this call could publish
+	// before this answerer existed, and would count a running node as one
+	// that did not answer. Measured: the conformance suite's peer arm
+	// failed exactly that way under load, intermittently, which is the
+	// worst shape a missing flush has.
+	if err := q.nc.Flush(); err != nil {
+		retire()
+		_ = sub.Unsubscribe()
+		return nil, fmt.Errorf("serve %s: register the subscription: %w", subject, err)
+	}
 	q.log.Debug("scatter_server_added", "subject", subject)
 
 	return func(context.Context) error {

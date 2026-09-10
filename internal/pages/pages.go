@@ -5,9 +5,11 @@
 //
 // A company running Crewlet needs somewhere to write things down, and until
 // now that somewhere had to be Confluence. This is the first-party
-// alternative, on exactly the terms [internal/tracker] is the tracker's: the
-// record here is the only copy, held in [coord.FamilyPages], projected into
-// every node for reading, and refused by the config beside an
+// alternative, on exactly the terms [internal/tracker] is the tracker's: every
+// change is ONE RECORD on an ordered stream, arbitrated at the broker on the
+// subject of the object it changes and applied into N identical SQL copies
+// with the checkpoint in the same transaction as the rows. It is the state
+// log's THIRD domain, and it is refused by the config beside an
 // `integrations.confluence` block — pages in two places with nothing keeping
 // them in step is the cache-with-no-invalidation the whole design is against.
 //
@@ -22,8 +24,8 @@
 //     a save must state the version it edited — the same rule Confluence's
 //     version+1 and this repo's own /config 409 enforce, because a wiki's
 //     worst failure is silently overwriting somebody's paragraph.
-//   - A PAGE IS SEARCHED, not filtered. The projection feeds
-//     [projection.Indexer], and a published page is what an agent's
+//   - A PAGE IS SEARCHED, not filtered. The applied rows feed the lexical
+//     index in [internal/search], and a published page is what an agent's
 //     "what do we already know about this" reads.
 //
 // # The reserved containers
@@ -38,19 +40,20 @@
 //
 // # The two-key sequences
 //
-// As in the tracker, and for the same reason — coordination has no multi-key
-// transaction — each states its order and what a crash between the halves
-// leaves:
+// A page's identity is TWO subjects — its title claim and the page itself —
+// and no append spans two subjects, so a create and a rename are each a pair
+// of records with a window between them. Each states its order and what a
+// crash between the halves leaves:
 //
-//	Create a page   title claim Create, page Create, change Create
+//	Create a page   title claim, page, change
 //	                a crash leaves an ORPHAN CLAIM, overwritten by the grace
 //	                rule below and swept after an hour
-//	Save a body     revision Create, head CAS, change Create
+//	Save a body     head at the version it edited, revision, change
 //	                a crash leaves an ORPHAN REVISION above the page's
 //	                version; the next writer treats a refusal older than the
 //	                grace as an orphan and overwrites it, so a crash never
 //	                locks a page until the sweep
-//	Rename          new claim Create, head CAS, old claim Purge, change Create
+//	Rename          new claim, head, old claim released, change
 //	                a crash leaves the old claim held, which blocks only a
 //	                third page taking that name until the sweep
 package pages

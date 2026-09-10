@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -444,5 +445,60 @@ func TestASearchWithNoSemanticHalfAskedForIsNotDegraded(t *testing.T) {
 	if reading.SearchDegradedFraction != 0 {
 		t.Fatalf("a company running lexical search by choice reports %.2f of "+
 			"its answers degraded", reading.SearchDegradedFraction)
+	}
+}
+
+// THE SEARCH ROSTER IS WHO IS ALIVE, NOT WHO HELD THE LOG BACK.
+//
+// The two registers a fleet keeps differ in exactly the way that matters here:
+// a position row is held by every node the trim has to wait for, INCLUDING one
+// that has been gone for hours, while a presence lease expires. A dead node on
+// the roster is handed a bucket range nobody scans, so every search on this
+// node reports a partial answer for as long as that row survives — and an
+// operator chasing a phantom missing slice is worse off than one with no
+// report at all.
+func TestTheSearchRosterIsWhoIsAliveRatherThanWhoHeldTheLogBack(t *testing.T) {
+	t.Parallel()
+	backend := coordmem.New()
+	e := &Engine{backends: &Backends{Coord: backend}}
+
+	for _, id := range []string{"node-b", "node-a"} {
+		if _, err := backend.TryAcquire(t.Context(), coord.NodeResource(id),
+			coord.AcquireOptions{
+				Owner: id + ":1", TTL: time.Minute,
+				Meta: map[string]any{"roles": []string{"seats"}},
+			}); err != nil {
+			t.Fatalf("register %s: %v", id, err)
+		}
+	}
+	// AND ONE THAT IS GONE. Its lease has expired, so it is not a
+	// participant — where the positions register would still name it.
+	if _, err := backend.TryAcquire(t.Context(), coord.NodeResource("node-dead"),
+		coord.AcquireOptions{
+			Owner: "node-dead:1", TTL: time.Nanosecond,
+			Meta: map[string]any{"roles": []string{"seats"}},
+		}); err != nil {
+		t.Fatalf("register the dead node: %v", err)
+	}
+
+	roster, err := e.searchRoster(t.Context())
+	if err != nil {
+		t.Fatalf("roster: %v", err)
+	}
+	slices.Sort(roster)
+	if want := []string{"node-a", "node-b"}; !slices.Equal(roster, want) {
+		t.Fatalf("the roster is %v, want %v — a node on it that cannot answer "+
+			"costs every search a bucket range nobody scans", roster, want)
+	}
+
+	// AND THE DIVISION OVER IT COVERS THE CORPUS EXACTLY ONCE, which is
+	// what makes the roster the input rather than a display value.
+	covered := 0
+	for _, a := range search.Divide(roster) {
+		covered += a.Shards.Width()
+	}
+	if covered != search.SearchShards {
+		t.Fatalf("the roster divides into %d buckets, not %d", covered,
+			search.SearchShards)
 	}
 }
