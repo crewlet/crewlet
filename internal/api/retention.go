@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -60,6 +61,23 @@ type retentionWriter interface {
 type NodeGate interface {
 	EvictNode(ctx context.Context, opID, nodeID string) (tracker.WriteResult, error)
 	ReadmitNode(ctx context.Context, opID, nodeID string) (tracker.WriteResult, error)
+}
+
+// TaskPurger is the purge half, and it is a SEPARATE seam rather than a third
+// method on [NodeGate].
+//
+// Every other write on that surface is the FLEET's — an eviction is a decision
+// about a machine, and the process's own writer is the right author. A purge
+// destroys a company's data, and the record has to carry the PERSON who asked
+// for it, so the identity is an argument rather than a property of the writer
+// this process happens to hold. Keeping it apart is also what lets this route
+// be exercised without a broker: the alternative signature hands back a
+// concrete `*tracker.Writer`, which no test can supply without a publisher, a
+// store and a log.
+type TaskPurger interface {
+	// PurgeAs destroys a task as the named operator, reporting the same
+	// three-valued outcome every other write has.
+	PurgeAs(ctx context.Context, operator, opID, id, project, reason string) (tracker.WriteResult, error)
 }
 
 // serveRetentionAck answers POST /work/retention/ack.
@@ -179,6 +197,118 @@ func (a *App) mountRetention(mux *http.ServeMux) {
 	mux.Handle("POST /work/retention/ack", http.HandlerFunc(a.serveRetentionAck))
 	mux.Handle("POST /work/retention/evict/{node}", a.gate(true))
 	mux.Handle("POST /work/retention/readmit/{node}", a.gate(false))
+	// THE PURGE, and it lives beside the eviction because they are the
+	// two gestures on this engine that DESTROY rather than change: one
+	// stops a machine's records applying, the other removes a task and
+	// every row it produced. Both are guarded, both echo their subject
+	// back as a confirmation, and both answer the three-valued write
+	// outcome whole.
+	if a.purger != nil {
+		mux.Handle("POST /work/{id}/purge", http.HandlerFunc(a.servePurge))
+	}
+}
+
+// servePurge answers POST /work/{id}/purge.
+//
+// # Why this route exists at all
+//
+// `tracker.Writer.PurgeTask` is the one operation in this engine with no
+// inverse, restricted in the write path to a person or an operator token — and
+// nothing anywhere called it. No CLI verb, no route, no tool. So a company
+// could not destroy a task under any circumstances: an erasure request had no
+// mechanism, and a credential pasted into a task body stayed in the durable
+// rows of every node for ever, where `remove` only hides it and `delete` only
+// stops later records about it.
+//
+// # The confirmation is the task's KEY, not its id
+//
+// An id is a uuid nobody reads; the key is what a person sees on the board and
+// in the ticket they were asked to act on. Echoing the id back would be a
+// value copied from the same URL that carries it, which confirms nothing —
+// where the key has to be looked up, which is the point of asking.
+func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
+	if a.purger == nil {
+		writeJSON(w, http.StatusServiceUnavailable,
+			map[string]string{"error": "no_tracker"})
+		return
+	}
+	id := r.PathValue("id")
+	key := strings.TrimSpace(r.URL.Query().Get("confirm"))
+	project := strings.TrimSpace(r.URL.Query().Get("project"))
+	reason := strings.TrimSpace(r.URL.Query().Get("reason"))
+	switch {
+	case id == "" || key == "":
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "confirm_required",
+			"detail": "repeat the task's KEY in ?confirm= — a purge removes the " +
+				"task and every row it produced on every node, and there is " +
+				"nothing that undoes it",
+		})
+		return
+	case project == "":
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "project_required",
+			"detail": "name the task's project in ?project= — it is the " +
+				"container the record arbitrates under, and a purge filed " +
+				"under the wrong one blocks writes to a project it is not about",
+		})
+		return
+	case reason == "":
+		// A REASON IS REQUIRED, unlike every other gesture here. It is
+		// the only thing that survives: the rows are gone, and the
+		// deletion marker's reason is what a person reads a year later
+		// when they ask what used to be at this key.
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "reason_required",
+			"detail": "state why in ?reason= — the rows are destroyed and the " +
+				"marker's reason is the only account of them that survives",
+		})
+		return
+	}
+	operator, ok := auth.OperatorFrom(r.Context())
+	if !ok || operator == "" {
+		// THE GUARD ALREADY REFUSED AN UNAUTHENTICATED CALLER, so this
+		// is the build with no operator identity on the context at all.
+		// The write path refuses it too, and refusing here names the
+		// reason rather than surfacing the writer's own.
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": "operator_required",
+			"detail": "a purge is an operator gesture and this request carries " +
+				"no operator identity",
+		})
+		return
+	}
+
+	// THE CALLER MAY BRING ITS OWN OPERATION ID, and this is the one
+	// route where that matters. A purge that answers `unknown` has no
+	// acknowledgement and no position — it may have landed and it may
+	// not — so the only correct response is to retry, and a retry with a
+	// FRESH id would append a second purge of a task the first one may
+	// already have destroyed. A fresh id per press is right for the
+	// eviction beside this (two operators evicting one node are two
+	// decisions worth recording); it is wrong here.
+	opID := strings.TrimSpace(r.URL.Query().Get("op_id"))
+	if opID == "" {
+		opID = uuid.NewString()
+	}
+	result, err := a.purger.PurgeAs(r.Context(), operator, opID, id, project, reason)
+	if err != nil {
+		log.Warn("api_purge_failed", "task", id, "operator", operator,
+			"error", err)
+		writeJSON(w, http.StatusInternalServerError,
+			map[string]string{"error": "purge_failed", "detail": err.Error()})
+		return
+	}
+	// LOGGED AT INFO WITH THE REASON, because this is the one gesture
+	// whose subject no longer exists to be inspected afterwards.
+	log.Info("task_purged", "task", id, "key", key, "project", project,
+		"operator", operator, "reason", reason, "outcome", result.Outcome)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"task": id, "key": key, "project": project,
+		"outcome":  result.Outcome,
+		"position": result.Position,
+		"op_id":    result.OpID,
+	})
 }
 
 // gate answers the eviction and readmission routes.

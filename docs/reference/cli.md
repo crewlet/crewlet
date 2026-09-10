@@ -24,6 +24,7 @@ subcommand below is served by it.
 | `crewlet retention maintenance status\|abandon\|exclude -stream NAME` | Where that window stands, who has not acknowledged, and the two gestures that act on it |
 | `crewlet retention reanchor -stream NAME -confirm <created_at>` | Adopt a recreated stream: declare every position below the next generation comparable and safely stale |
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
+| `crewlet work purge <task-id> -project KEY -reason TEXT -confirm <task-key>` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a person or an operator token. Its children move onto its own parent rather than being destroyed with it |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load Tier B YAML, activate as a new `company_config` revision |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
@@ -542,6 +543,55 @@ See [Backups & Restore](../guides/backup.md) for what the directory contains,
 what the copy is a copy *of*, and how a restore uses it.
 
 ---
+
+## `crewlet work`
+
+```
+crewlet work purge <task-id> -project KEY -reason TEXT -confirm <task-key>
+    [-op-id ID] [<config.yaml>] [-url URL] [-token TOKEN]
+```
+
+The gestures on work items that belong to a **person** rather than to a seat.
+Everything else a company does to its tasks is done by seats through their own
+tools, and that is the design — an engine whose operator edits work by hand is
+one whose org chart is decoration. The exception is the operation no seat may
+perform.
+
+### `crewlet work purge`
+
+Destroys a task and every row it produced: its own row, its comments, its body
+revisions, its checklist, its field values, its watchers, its relations, its
+dependencies, its status spans, its sprint memberships, and every inbound
+reference and key alias that made it resolvable. A marker is written in their
+place, and every later record about that task is dropped for ever — which is
+what stops a redelivery months afterwards resurrecting any of it.
+
+`remove` hides a task and `delete` stops later records about it. Neither takes
+the body out of a single database, which is why this verb exists: an erasure
+request and a credential pasted into a task description both need the rows
+gone.
+
+**The confirmation is the task's key**, not its id. The id is on the command
+line already, so repeating it confirms nothing; the key has to be looked up.
+**The reason is required** because it is the only thing that survives — the
+marker's reason is the entire account of what used to be at that key for
+whoever reads it a year later.
+
+**Its children are moved, not destroyed.** Each direct child re-parents onto
+the purged task's own parent, or becomes a root when the purged task was one.
+Destroying the subtree would destroy work nobody confirmed; leaving it would
+leave every child pointing at an id that resolves to nothing.
+
+The outcome is three-valued, like every write here. `applied` means the rows
+are gone on this node and the record is durable. `pending` means the record is
+durable and this node has not applied it yet — **do not run it again**, because
+a second gesture appends a second purge. `unknown` is the one to retry, and the
+operation id it prints goes back in `-op-id` so the retry cannot append a
+second record.
+
+What it does **not** reach: a node that is offline or evicted keeps its copy
+until it replays, adopts a snapshot, is replaced or is destroyed. There is no
+duration to state, and `crewlet retention status` names which nodes those are.
 
 ## `crewlet retention`
 

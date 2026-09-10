@@ -153,6 +153,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runBackup(rest, stdout, stderr)
 	case "retention":
 		return runRetention(rest, stdout, stderr)
+	case "work":
+		return runWork(rest, stdout, stderr)
 	case "llm":
 		return runLLM(rest, stdout, stderr)
 	case "search":
@@ -179,6 +181,9 @@ Usage:
                               the running engine, to a path on ITS host
   crewlet retention <cmd>     What the state log is holding, why it is not
                               shrinking, and the gestures that change it
+  crewlet work <cmd>          The gestures on work items that belong to a person:
+                              purge, which destroys a task and every row it
+                              produced and which nothing undoes
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet llm <cmd>           Log in, verify and export the subscription CLI backends
@@ -1382,6 +1387,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// the difference between an operator reading a procedure and an
 		// operator looking for a version mismatch.
 		Capacity: e,
+		// THE ONE OPERATION NOTHING UNDOES, and it had no caller at
+		// all until this line: no verb, no route, no tool. A company
+		// could not destroy a task under any circumstances.
+		Purger: nativePurger(e),
 		// Both estates a node holds, reachable only from inside it: the
 		// store is locked to this process and the broker binds no
 		// socket. See internal/backup.
@@ -1961,6 +1970,32 @@ func nativeNodes(e *engine.Engine) api.NodeGate {
 		return w
 	}
 	return nil
+}
+
+// nativePurger is the purge route's writer, or nil.
+//
+// AN ADAPTER RATHER THAN THE WRITER ITSELF, because the API's seam takes the
+// operator as an argument: every other write on that surface is the fleet's
+// and the process's own writer is the right author, while a purge destroys a
+// company's data and the record has to carry the person who asked for it.
+// `As` is where that identity is bound, and it is a tracker concept the API
+// package deliberately does not import a concrete type for.
+func nativePurger(e *engine.Engine) api.TaskPurger {
+	w := e.TrackerWriter()
+	if w == nil {
+		return nil
+	}
+	return purgeAdapter{writer: w}
+}
+
+type purgeAdapter struct{ writer *tracker.Writer }
+
+func (p purgeAdapter) PurgeAs(ctx context.Context, operator, opID, id, project,
+	reason string) (tracker.WriteResult, error) {
+
+	return p.writer.As(operator, tracker.AuthorOperator,
+		tracker.Provenance{OperatorID: operator}).
+		PurgeTask(ctx, opID, id, project, reason)
 }
 
 func nativePages(e *engine.Engine) queries.PageReader {

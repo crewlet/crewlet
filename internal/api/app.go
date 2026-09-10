@@ -64,6 +64,13 @@ type App struct {
 	// seam from the one above. Nil on a process with no native tracker.
 	nodes NodeGate
 
+	// purger destroys a task, as the operator on the request. Its own
+	// field rather than a third method on the seam above, because it is
+	// the one write here attributed to a PERSON — see [TaskPurger]. Nil
+	// leaves the route absent, which is honest on a build that cannot
+	// serve it: an operator who cannot purge must not be told they can.
+	purger TaskPurger
+
 	// capacity drives a stream's byte ceiling through the maintenance
 	// window. Nil on a process with no state log — and on one that is
 	// publishing, the verb refuses rather than the route being absent,
@@ -176,6 +183,10 @@ type Options struct {
 	// readmit routes answering 503.
 	Nodes NodeGate
 
+	// Purger destroys a task as the operator who asked. Nil leaves the
+	// purge route unmounted.
+	Purger TaskPurger
+
 	// Capacity drives a stream's byte ceiling. Nil leaves the maintenance
 	// routes answering 503.
 	Capacity capacityRunner
@@ -278,7 +289,7 @@ func New(opts Options) *App {
 	queries.Register(a.queries, sources)
 	a.budgets = opts.Budgets
 	a.backup = opts.Backup
-	a.retention, a.nodes = opts.Retention, opts.Nodes
+	a.retention, a.nodes, a.purger = opts.Retention, opts.Nodes, opts.Purger
 	a.capacity = opts.Capacity
 
 	mux := http.NewServeMux()
