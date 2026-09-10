@@ -101,6 +101,20 @@ const (
 	// ceiling, its trim cadence and its join model are all functions of
 	// that number, so at 2× they are describing a different company.
 	CensusDriftFactor = 2.0
+
+	// LinearizableReadsPerDay is the read rate this engine's log sizing was
+	// derived from.
+	//
+	// TWELVE AND A HALF THOUSAND, the census input every capacity decision
+	// under the log rests on: a `linearizable` read appends a barrier
+	// record, so this number is a term in the log's byte ceiling, in how
+	// often the trim has to run to stay under it, and in how long a
+	// rejoining node's replay takes. It is a DECLARED expectation rather
+	// than a measurement, which is exactly why it needs an alarm — nothing
+	// else notices when a company outgrows the assumptions its deployment
+	// was sized against, and the symptom arrives as a full log rather than
+	// as a slow one.
+	LinearizableReadsPerDay = 12_500
 )
 
 // Kind names one alarm.

@@ -70,6 +70,13 @@ type Engine struct {
 	// metrics is the process's one recorder, from [Options.Metrics].
 	metrics *metrics.Recorder
 
+	// searching is how many knowledge scans this node is running right
+	// now — the gauge behind `crewlet.tracker.search.concurrency`. On the
+	// ENGINE rather than on the searcher because the searcher is rebuilt
+	// per epoch and a counter rebuilt underneath an in-flight scan would
+	// decrement a fresh zero to minus one.
+	searching atomic.Int64
+
 	// mode is what this node started for, and incarnation is this
 	// PROCESS's identity — the two facts the capacity window's handshake
 	// and its barrier are written in terms of.

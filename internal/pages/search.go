@@ -80,6 +80,10 @@ type SearcherOptions struct {
 	// gets.
 	Report func(search.Answer, time.Duration)
 
+	// Enter is called when a search begins and its return when it ends,
+	// so scans in flight can be counted. Nil counts nothing.
+	Enter func() func()
+
 	// SkillsContainer names the reserved tool-skills container, excluded
 	// from every result. A FUNCTION because the value is live config; nil,
 	// or one returning empty, excludes nothing — which is the company that
@@ -98,6 +102,7 @@ func NewSearcher(opts SearcherOptions) *Searcher {
 			Roster: opts.Roster,
 			Corpus: opts.Index.Corpus,
 			Report: opts.Report,
+			Enter:  opts.Enter,
 		}
 	}
 	return s

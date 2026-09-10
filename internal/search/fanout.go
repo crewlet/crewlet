@@ -195,6 +195,19 @@ type FanOut struct {
 	// nobody counts is an alarm that is permanently silent and looks
 	// exactly like a system with nothing wrong.
 	Report func(Answer, time.Duration)
+
+	// Enter is called when a search BEGINS, and the function it returns
+	// when that search ends.
+	//
+	// A SECOND SEAM RATHER THAN A FIELD ON THE REPORT, because the two
+	// answer different questions and only one of them can be answered at
+	// the end. [FanOut.Report] says what an answer covered and what it
+	// cost, which is knowable once. How many scans are IN FLIGHT is a
+	// LEVEL, and a level has to be sampled while they are running — it is
+	// the row of the supported-corpus table this node is actually on,
+	// where every published scan figure was measured with one reader on an
+	// idle node. Nil counts nothing.
+	Enter func() func()
 }
 
 // Answer is one fused result and what it is missing.
@@ -224,6 +237,11 @@ func (a Answer) Partial() bool { return a.BucketsMissing > 0 }
 // Search runs one query across the fleet and fuses what comes back.
 func (f *FanOut) Search(ctx context.Context, q FanQuery) (Answer, error) {
 	started := time.Now()
+	if f.Enter != nil {
+		// BEFORE THE PLAN, because the plan is a coordination read and
+		// a search waiting on one is a search this node is running.
+		defer f.Enter()()
+	}
 	table, err := f.plan(ctx)
 	if err != nil {
 		return Answer{}, err

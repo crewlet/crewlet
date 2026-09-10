@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -93,8 +94,54 @@ type retention struct {
 	// condition reads as "nothing to report".
 	metrics *metrics.Recorder
 
+	// alarms turns each evaluation into the two surfaces that are not a
+	// screen — the `crewlet.alarm.active{kind}` gauge a collector scrapes,
+	// and one WARN on entry and one on exit.
+	//
+	// WITHOUT IT THE TABLE HAD ONE SURFACE OF THREE: `work_retention`
+	// rendered the alarms to whoever asked, and nothing at all reached a
+	// collector or a log. An alarm nobody is looking at a dashboard for is
+	// an alarm that fires into an empty room, which is indistinguishable
+	// from a fleet with nothing wrong.
+	alarms *statelog.Tracker
+
+	// coverage is the fraction of this node's sources carrying a current
+	// vector, or false when this company has no embeddings configured.
+	// Nil on a node that cannot measure it, which reads as "nothing to
+	// report" rather than as no coverage.
+	coverage func(context.Context) (float64, bool, error)
+
+	// mu guards the coverage cache below. The tick and every API request
+	// assemble a report, on different goroutines.
+	mu sync.Mutex
+
+	// coverAt, coverFraction and coverKnown are the last coverage
+	// measurement and when it was taken.
+	//
+	// CACHED FOR ONE TICK, because the measurement is a scan of the whole
+	// source corpus and a report is assembled on every operator request
+	// and every dashboard poll — where the trim's own inputs are read once
+	// per tick by construction. One [RetentionInterval] is also the
+	// resolution every other alarm input here has, so a fresher coverage
+	// number would be the only one on the reading that could disagree with
+	// its neighbours about which tick it describes.
+	coverAt       time.Time
+	coverFraction float64
+	coverKnown    bool
+
+	// pooled is the last `sql.DBStats` wait counters seen per store file,
+	// so the histogram is fed the DELTA rather than the process's
+	// cumulative total. Keyed on the file, which is the attribute.
+	pooled map[string]poolCounters
+
 	stop context.CancelFunc
 	done chan struct{}
+}
+
+// poolCounters is one store file's cumulative connection-wait counters.
+type poolCounters struct {
+	count  int64
+	waited time.Duration
 }
 
 // startRetention arms the trim.
@@ -117,6 +164,9 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		metrics:     e.metrics,
 		claim:       schedule.DutyFunc(e.workerDuty(retentionDutyName, retentionDutyTTL)),
 		nodeID:      s.nodeID,
+		alarms:      statelog.NewTracker(e.metrics, nil),
+		coverage:    e.vectorCoverage,
+		pooled:      map[string]poolCounters{},
 		done:        make(chan struct{}),
 	}
 	// DETACHED from the caller's context, for the reason every other
@@ -180,6 +230,16 @@ func (r *retention) run(ctx context.Context) {
 
 // tick evaluates every domain once, if this node holds the duty.
 func (r *retention) tick(ctx context.Context) {
+	// FIRST, AND ON EVERY NODE — before the duty claim, deliberately.
+	//
+	// The trim is a fleet singleton because two nodes purging one log is
+	// waste; the ALARMS are the opposite. [statelog.Reading] describes ONE
+	// node — its own applier's lag, its own disk, its own refusals — so a
+	// table evaluated only where the duty happens to sit would report the
+	// duty holder's health as the fleet's, and the wedged node would be the
+	// one nobody hears from. It is also what makes this loop useful on a
+	// node that never wins the lease at all.
+	r.evaluate(ctx)
 	if r.claim != nil {
 		mine, err := r.claim(ctx)
 		if err != nil {
@@ -207,6 +267,20 @@ func (r *retention) tick(ctx context.Context) {
 			log.WarnContext(ctx, "retention_trim_failed", "domain", name, "err", err)
 		}
 	}
+}
+
+// evaluate observes this node's alarms and records what one tick can measure
+// about its own hardware.
+//
+// THE MEASUREMENT COMES FIRST, because the reading the table is evaluated
+// against reads three of these back: a tick that observed before it measured
+// would evaluate the previous tick's disk against this tick's log.
+func (r *retention) evaluate(ctx context.Context) {
+	r.capacity(ctx)
+	if r.alarms == nil {
+		return
+	}
+	r.alarms.Observe(ctx, r.Report(ctx).Alarms)
 }
 
 // fleetInputs is what one tick reads once and every domain shares.
