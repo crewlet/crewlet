@@ -191,30 +191,60 @@ func (t tables) writeOp(ctx context.Context, tx *sql.Tx, opID, subject string, p
 	return nil
 }
 
+// OpsPurgeBatch bounds how many rows one sweep statement deletes.
+//
+// THE APPLIER'S CONNECTION IS PINNED AND ITS COMMITS ARE THE SAME FILE'S, so a
+// statement that deleted a whole backlog would hold the writer for as long as
+// it took — and the backlog case is exactly the one that matters: a node
+// returning from a month away has a month of rows to shed on its first tick.
+// Two thousand rows of a five-column table with a TEXT primary key is a few
+// hundred KB of pages, single-digit milliseconds of writer hold, while a
+// month's overhang still clears in a few hundred statements inside one
+// maintenance tick. It is the same shape and the same reasoning as
+// [store.EventPurgeBatch], at a larger batch because these rows are a
+// hundredth the size.
+const OpsPurgeBatch = 2000
+
 // purgeOps deletes operation rows applied before cutoff, reporting how many
 // went.
 //
 // A RANGE DELETE OVER THE AGE, which is the shape the ops table's own index
 // was shipped for: without `<domain>_ops_swept_idx` a node returning from a
 // month away scans the whole table on every tick.
+//
+// BATCHED, AND EACH BATCH ITS OWN TRANSACTION. One transaction over the whole
+// backlog would hold the writer the applier is queued behind for the length of
+// it, which on a first tick after a long absence is the whole month.
 func (t tables) purgeOps(ctx context.Context, db *store.DB, cutoff time.Time) (int64, error) {
 	if t.ops == "" {
 		return 0, nil
 	}
-	var deleted int64
-	err := db.Tx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx,
-			`DELETE FROM `+t.ops+` WHERE applied_at < ?`, store.EncodeTime(cutoff))
-		if err != nil {
+	var total int64
+	for {
+		var deleted int64
+		err := db.Tx(ctx, func(tx *sql.Tx) error {
+			res, err := tx.ExecContext(ctx, `
+				DELETE FROM `+t.ops+` WHERE rowid IN (
+					SELECT rowid FROM `+t.ops+` WHERE applied_at < ? LIMIT ?)`,
+				store.EncodeTime(cutoff), OpsPurgeBatch)
+			if err != nil {
+				return err
+			}
+			deleted, err = res.RowsAffected()
 			return err
+		})
+		if err != nil {
+			return total, fmt.Errorf("statelog: sweep %s: %w", t.ops, err)
 		}
-		deleted, err = res.RowsAffected()
-		return err
-	})
-	if err != nil {
-		return 0, fmt.Errorf("statelog: sweep %s: %w", t.ops, err)
+		total += deleted
+		if deleted < OpsPurgeBatch {
+			// A SHORT BATCH IS THE END, and the loop stops on it
+			// rather than on a zero: a final batch that exactly
+			// filled the limit costs one more empty statement, and a
+			// loop that only stopped at zero would run one anyway.
+			return total, nil
+		}
 	}
-	return deleted, nil
 }
 
 // op answers where an operation was applied on this node.
