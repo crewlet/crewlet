@@ -224,8 +224,10 @@ the same disk. That is a real cost nobody quotes, so the shipped guidance is
 
 Twenty copies rather than fifty-six — **≈ 875 GB** at the same year-five
 estate, for a recovery point that is worse by nothing anybody has ever
-needed. `snapshot.duration` is what measures the copy's own cost against your
-hardware; start from the table and move it once you have that number.
+needed. [`crewlet.backup.duration`](../reference/metrics.md) is what measures
+the copy's own cost against your hardware — the window the trim hold covers and
+the I/O the copy spends competing with the applier's own commits; start from the
+table and move it once you have that number.
 
 **How stale is too stale is a separate setting.** `retention.backup_max_age`
 is what the trim reads, and it is deliberately not derived from the schedule:
@@ -234,7 +236,13 @@ has to know what "recent enough" means to *you* rather than inferring it from
 how often a cron happened to fire. The age itself is read from the newest
 complete **manifest** on disk rather than from a counter the engine keeps —
 a counter records that a process believed it took a backup, and the disk
-records that one exists. They differ in exactly the cases the alarm is for.
+records that one exists. They differ in exactly the cases the alarm is for — a
+copy taken and then deleted, a volume never mounted, a schedule pointing at a
+path nobody ships from — and in every one of them the counter says the fleet is
+protected. It is published as `crewlet.backup.age`, by the node that holds the
+artefact, because that is the only process whose disk the manifests are on; a
+node that has never taken one publishes nothing rather than a zero, since zero
+is the freshest backup imaginable.
 
 **The backup interval IS the recovery point for history below the trim
 floor.** Above that floor the log holds every record on R replicas and every
@@ -253,6 +261,13 @@ fleet with a working nightly schedule whose log grows for ever, so a failure to
 announce is logged rather than silent — and it is bounded and self-correcting:
 the log keeps a longer window than it needed to, and the next backup announces
 again.
+
+**A pin that outlives its owner is visible.** A backup takes a trim hold before
+the first byte is copied and releases it when the copy ends; `crewlet.backup.holds`
+is how many the fleet is carrying, and a count that does not return to zero is a
+backup that crashed mid-copy. Until the stale bound expires that pin the trim
+does not advance, which has no other symptom at all until the log walks into its
+ceiling.
 
 **Name the owner.** `retention.backup_owner` is free text — a person, a team, a
 scheduler's name — and `crewlet backup` records it in the manifest, which is
