@@ -105,6 +105,16 @@ type runningDomain struct {
 	// [progress] for why it lives beside the runner rather than inside
 	// [statelog.Health].
 	progress progress
+
+	// reader is this domain's READ authority — the four levels, the
+	// refusal ladder, the coverage probe and the barrier wait — and it is
+	// what a domain's own reader answers through.
+	//
+	// Nil for a domain that declares no barrier encoder, which is the
+	// honest state for one whose reads make no freshness claim: the
+	// vectors are DERIVED and compacted, so "as of a position" is not a
+	// question that has an answer about them.
+	reader *statelog.Reader
 }
 
 // stateLog is this node's whole state-log runtime.
@@ -333,6 +343,12 @@ func (s *stateLog) start(ctx context.Context, host domainHost, domain statelog.D
 		log: appendTo, consumer: consumer, createdAt: created,
 		evicted: evicted,
 	}
+	// AFTER the struct exists, because the health closure the reader
+	// holds reads through it — a reader built first would capture a
+	// half-assembled domain and report its progress as never observed.
+	if running.reader, err = s.readerFor(domain, appendTo, runner, running); err != nil {
+		return nil, err
+	}
 	s.done.Add(1)
 	go func() {
 		defer s.done.Done()
@@ -417,6 +433,73 @@ func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.Doma
 		return nil, nil, fmt.Errorf("engine: build %s's write authority: %w", domain.Name(), err)
 	}
 	return publisher, evicted, nil
+}
+
+// readerFor builds a domain's READ authority: the four levels, the refusal
+// ladder, the coverage probe and the quorum-committed barrier a linearizable
+// read waits through.
+//
+// # Why the barrier encoder is a switch and not a method on Domain
+//
+// A barrier is the framework's append and the DOMAIN's record — the read
+// index decides when one goes out and what its acknowledgement proves, and
+// the domain decides what a record on its log looks like. A domain that has
+// no barrier encoder gets no read index and therefore no `linearizable`,
+// which is the correct answer for one whose reads make no freshness claim
+// rather than a gap: the vectors are derived and compacted, so "as of a
+// position" is not a question about them.
+//
+// Until this existed [statelog.NewReader] and [statelog.NewReadIndex] were
+// constructed only by their own tests. Every domain reader read its rows
+// straight out of the replicated estate and ECHOED the level back in the
+// answer — `tracker.Reader.Tasks` assigning `answer.Level = q.Level`, and
+// `Task` taking a level argument whose only use in the file was
+// `out.Level = level`. So a seat tool asking for `session` got whatever this
+// node happened to hold, a dashboard's `max_lag_seconds` bounded nothing, and
+// `linearizable` appended no barrier at all.
+func (s *stateLog) readerFor(domain statelog.Domain, appendTo *jetstream.DomainLog,
+	runner *statelog.Runner, running *runningDomain) (*statelog.Reader, error) {
+
+	var encode func(statelog.Envelope) ([]byte, error)
+	switch domain.Name() {
+	case tracker.Domain{}.Name():
+		encode = tracker.EncodeBarrier
+	}
+
+	deps := statelog.ReaderDeps{
+		Domain: domain,
+		DB:     s.db.Replicated(),
+		Waiter: runner,
+		// READ FRESH ON EVERY READ, because every one of its terms can
+		// change between two of them — and because a captured value
+		// would freeze the very refusals this seam exists to deliver.
+		Health: func() statelog.Health {
+			h, err := s.health(context.Background(), running)
+			if err != nil {
+				// AN UNREADABLE TERM REFUSES rather than serving. The
+				// health read reaches the broker and coordination, and
+				// a read certified against a health nobody could
+				// establish is certified against nothing.
+				return statelog.Health{Err: err.Error()}
+			}
+			return h
+		},
+		Drain:   runner.Drain,
+		Metrics: s.metrics,
+	}
+	if encode != nil {
+		index, err := statelog.NewReadIndex(domain, appendTo, encode,
+			func() uint32 { return runner.Committed().Generation }, s.metrics)
+		if err != nil {
+			return nil, fmt.Errorf("engine: build %s's read index: %w", domain.Name(), err)
+		}
+		deps.Index = index
+	}
+	reader, err := statelog.NewReader(deps)
+	if err != nil {
+		return nil, fmt.Errorf("engine: build %s's read authority: %w", domain.Name(), err)
+	}
+	return reader, nil
 }
 
 // trimFloor is the published floor for one domain, as the write fence reads
@@ -552,7 +635,15 @@ func (s *stateLog) health(ctx context.Context, running *runningDomain) (statelog
 	// missing and no read over them can be certified — which is what
 	// [statelog.Health.Refusal]'s `stalled` arm exists to say, and it could
 	// never fire while nothing assigned this field.
-	if err := running.runner.Stopped(); err != nil {
+	//
+	// A STOP THIS PROCESS ASKED FOR IS NOT A FAULT. Every applier returns
+	// its run context's error on shutdown, and reading that as a halt makes
+	// a node declare itself broken on the way out — refusing the reads it
+	// is still serving and shedding seats a drain is already handing back
+	// in order. The distinction is the cause, not the state: a cancelled
+	// context is this node stopping, and anything else is the applier
+	// stopping underneath it.
+	if err := running.runner.Stopped(); err != nil && !errors.Is(err, context.Canceled) {
 		health.Err = err.Error()
 	}
 	health.Stalled = running.progress.stalled(now)

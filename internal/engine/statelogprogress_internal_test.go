@@ -1,6 +1,9 @@
 package engine
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -153,5 +156,38 @@ func TestTheDeferralClockStartsOnceAndClearsAtOnce(t *testing.T) {
 	if got := p.deferredSinceValue(); got.Held {
 		t.Errorf("deferredSince = %+v after the record applied, so an upgraded "+
 			"node stays shed", got)
+	}
+}
+
+// A STOP THIS PROCESS ASKED FOR IS NOT A FAULT.
+//
+// Every applier returns its run context's error when the node shuts down, and
+// reading that as a halt makes a node declare itself broken on the way out:
+// `Health.Err` set means `Refusal` returns `stalled`, so it refuses the reads
+// it is still serving, and `Healthy` goes false, so the serviceability gate
+// sheds seats a drain is already handing back in order.
+//
+// Measured on the three-node e2e the moment `Err` was first populated: six
+// `statelog_applier_stopped` at `context canceled` and four
+// `seats_shed_unserviceable` behind them, all during teardown.
+func TestACancelledApplierIsNotAHaltedOne(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"the node shutting down", context.Canceled, false},
+		{"wrapped by the applier", fmt.Errorf("apply loop: %w", context.Canceled), false},
+		{"a record it cannot decode", errors.New("record at version 3"), true},
+		{"a deadline, which is a real stall", context.DeadlineExceeded, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := tc.err != nil && !errors.Is(tc.err, context.Canceled)
+			if got != tc.want {
+				t.Errorf("halted = %v, want %v for %v", got, tc.want, tc.err)
+			}
+		})
 	}
 }
