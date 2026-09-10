@@ -2,6 +2,8 @@ package e2e
 
 import (
 	"context"
+	"crypto/sha256"
+	"database/sql"
 	"errors"
 	"fmt"
 	"maps"
@@ -738,10 +740,18 @@ func TestAFleetAgreesAboutOneCompany(t *testing.T) {
 		t.Fatalf("create a page on member 0: %v", err)
 	}
 
+	// THE PREMISE IS ESTABLISHED ON THE WRITER, and only there. A write
+	// this node has not applied yet is not an acknowledged one, and the
+	// arm below is about what a PEER can see of a write that HAS been —
+	// so the wait belongs here rather than around the reads.
+	if err := c.nodes[0].engine.WaitCommitted(t.Context(), written.Position); err != nil {
+		t.Fatalf("member 0 never applied its own create: %v", err)
+	}
+
 	// (1) NO WAIT LOOP ANYWHERE BELOW. A linearizable read is defined as
-	// "no answer from before this read arrived", so a poll would turn the
-	// assertion into one about timing and this case would pass on a build
-	// with no barrier at all.
+	// "no answer from before this read arrived", so a poll around THESE
+	// reads would turn the assertion into one about timing, and the case
+	// would pass on a build with no barrier at all.
 	for i, n := range c.nodes {
 		detail, err := n.engine.Tracker().Task(t.Context(), written.Key,
 			tracker.DetailWants{}, statelog.ReadLinearizable)
@@ -756,10 +766,10 @@ func TestAFleetAgreesAboutOneCompany(t *testing.T) {
 		}
 	}
 
-	// (2) AND THE TWO MEMBERS' ROWS ARE THE SAME ROWS. Read at
-	// linearizable so the comparison is of settled state rather than of
-	// two moments.
-	var reference []string
+	// (2) AND THE LEVEL SERVED IS THE LEVEL ASKED FOR. A read level never
+	// silently downgrades — the two can only differ by a refusal — so a
+	// member answering `session` to a linearizable question has answered a
+	// different question and said nothing about it.
 	for i, n := range c.nodes {
 		answer, err := n.engine.Tracker().Tasks(t.Context(), tracker.Query{
 			Scope: tracker.Scope{Workspace: true},
@@ -768,33 +778,12 @@ func TestAFleetAgreesAboutOneCompany(t *testing.T) {
 		if err != nil {
 			t.Fatalf("member %d could not list the board: %v", i, err)
 		}
-		// THE LEVEL SERVED, not the level asked for. A read level never
-		// silently downgrades — the two can only differ by a refusal —
-		// so a member answering `session` to a linearizable question has
-		// answered a different question and said nothing about it.
 		if answer.Level != statelog.ReadLinearizable {
 			t.Errorf("member %d asked for a %s read and was served %s",
 				i, statelog.ReadLinearizable, answer.Level)
 		}
-		keys := make([]string, 0, len(answer.Rows))
-		for _, row := range answer.Rows {
-			keys = append(keys, row.Key+"@"+row.Title)
-		}
-		slices.Sort(keys)
-		if reference == nil {
-			reference = keys
-			if len(keys) == 0 {
-				t.Fatal("member 0's board is empty after a create, so the " +
-					"comparison below would hold between two empty boards")
-			}
-			continue
-		}
-		if !slices.Equal(keys, reference) {
-			t.Errorf("member %d's board is\n  %v\nand member 0's is\n  %v\n\n"+
-				"Two members answering differently about one company is what N "+
-				"identical copies exist to make impossible, and from either "+
-				"screen it looks exactly like the other node being idle",
-				i, keys, reference)
+		if len(answer.Rows) == 0 {
+			t.Fatalf("member %d's board is empty after a create", i)
 		}
 	}
 
@@ -813,4 +802,138 @@ func TestAFleetAgreesAboutOneCompany(t *testing.T) {
 				i, got.Page.Title, "Fleet rollback runbook")
 		}
 	}
+
+	// THE DIGEST TELLS DIFFERENT ROWS APART, checked before it is trusted
+	// to say two members agree. It is the same shape as every other
+	// control in this repository: a comparison that always matches
+	// certifies a fleet whatever its rows are.
+	if digestRows([]string{"a", "b"}) == digestRows([]string{"a", "c"}) {
+		t.Fatal("two different row sets digest alike, so the comparison below " +
+			"would report every member a twin of every other whatever they hold")
+	}
+	if digestRows([]string{"a", "b"}) != digestRows([]string{"b", "a"}) {
+		t.Fatal("one row set in two orders digests differently — the digest is " +
+			"a property of the SET, and an applier free to write two rows in " +
+			"either order would fail this comparison on a healthy fleet")
+	}
+
+	// (4) AND THE MEMBERS ARE TWINS, ROW FOR ROW — LAST, because it can
+	// only mean anything once both members have applied everything above.
+	// The board listing was one query's answer; this is every REPLICATED
+	// table of every registered domain, compared as a digest.
+	//
+	// The class is what makes the comparison meaningful rather than
+	// merely strict: `Divergent` tables are written by an apply and still
+	// legitimately differ (a node records what IT deferred), and `Local`
+	// ones are this node's own — so comparing every table would fail on a
+	// healthy fleet, and comparing only the board would pass on one whose
+	// domains had quietly diverged underneath it.
+	twins := map[string]string{}
+	for i, n := range c.nodes {
+		digest := replicatedDigest(t, n)
+		if len(digest) == 0 {
+			t.Fatalf("member %d reported no replicated tables — the comparison "+
+				"below would hold between two empty maps", i)
+		}
+		if i == 0 {
+			twins = digest
+			continue
+		}
+		for table, want := range twins {
+			if got := digest[table]; got != want {
+				t.Errorf("member %d's %s digests %s and member 0's digests %s "+
+					"— N identical copies is what the whole framework is for, "+
+					"and two members disagreeing about one company looks from "+
+					"either screen exactly like the other node being idle",
+					i, table, got, want)
+			}
+		}
+		for table := range digest {
+			if _, both := twins[table]; !both {
+				t.Errorf("member %d holds replicated table %s and member 0 "+
+					"does not", i, table)
+			}
+		}
+	}
+}
+
+// replicatedDigest is one member's REPLICATED rows, per table, as a digest.
+//
+// # Why a digest rather than the rows
+//
+// A failure has to name WHICH table disagrees, and a diff of two hundred rows
+// names nothing a reader can act on. The digest is over the rows in a declared
+// order, so it is the same on both members whenever the rows are — and the
+// table name beside it is what sends somebody to the right applier.
+//
+// The domain list comes from the ENGINE rather than from a copy here, because
+// a second list is how a fourth domain is silently left uncompared.
+func replicatedDigest(t *testing.T, n *node) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for _, domain := range n.engine.Domains() {
+		for table, class := range domain.Tables() {
+			if class != statelog.Replicated {
+				continue
+			}
+			out[table] = digestTable(t, n, table)
+		}
+	}
+	return out
+}
+
+// digestTable hashes one table's rows in a stable order.
+//
+// EVERY COLUMN, read as text through the driver's own rendering and separated
+// by a byte no column value can contain, so two different splits of one row
+// cannot hash alike. The order is the table's own columns and a sort over the
+// rendered row, which is what makes the digest a property of the SET of rows
+// rather than of the order an applier happened to write them in.
+func digestTable(t *testing.T, n *node, table string) string {
+	t.Helper()
+	var rendered []string
+	if err := n.engine.Backends().Store.Replicated().Read(t.Context(),
+		func(tx *sql.Tx) error {
+			rows, err := tx.QueryContext(t.Context(), `SELECT * FROM `+table)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = rows.Close() }()
+			columns, err := rows.Columns()
+			if err != nil {
+				return err
+			}
+			for rows.Next() {
+				cells := make([]any, len(columns))
+				into := make([]any, len(columns))
+				for i := range cells {
+					into[i] = &cells[i]
+				}
+				if err := rows.Scan(into...); err != nil {
+					return err
+				}
+				parts := make([]string, 0, len(cells))
+				for _, cell := range cells {
+					parts = append(parts, fmt.Sprintf("%v", cell))
+				}
+				rendered = append(rendered, strings.Join(parts, "\x1f"))
+			}
+			return rows.Err()
+		}); err != nil {
+		t.Fatalf("digest %s: %v", table, err)
+	}
+	return digestRows(rendered)
+}
+
+// digestRows hashes rendered rows in a stable order.
+//
+// SPLIT OUT SO IT CAN BE EXERCISED DIRECTLY. A digest that ignored its input
+// would make every table on every member agree, and the comparison above would
+// certify a fleet whatever its rows were — an absence assertion passes
+// identically when the thing is absent and when the check has gone inert.
+func digestRows(rendered []string) string {
+	ordered := slices.Clone(rendered)
+	slices.Sort(ordered)
+	sum := sha256.Sum256([]byte(strings.Join(ordered, "\x1e")))
+	return fmt.Sprintf("%x (%d rows)", sum[:8], len(ordered))
 }
