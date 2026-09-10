@@ -244,12 +244,18 @@ func Catalogue() []Instrument {
 				"committing to tables the applier never touches, so a " +
 				"non-zero count means the retry budget is being spent rather " +
 				"than held in reserve.",
-		},
-		{
-			Name: StatelogApplyRetries, Kind: KindCounter, Unit: UnitCount,
-			Attributes: []string{"domain"},
-			Shows: "Transient apply failures retried in place, which are " +
-				"otherwise a silent backoff inside the loop.",
+			// AND IT IS THE ONLY RETRY THE APPLIER HAS. A catalogued
+			// `apply.retries` sat beside this one, declared as
+			// "transient apply failures retried in place" — a
+			// mechanism that does not exist: [statelog.Runner.Run]
+			// returns on any error and the applier stays stopped
+			// until a build that can read the record runs. The
+			// transaction abort above IS the retry in place, so two
+			// instruments named one phenomenon and nothing recorded
+			// the vaguer of them. It was removed rather than given a
+			// call site, because inventing a second count for one
+			// event is the drift the single catalogue exists to
+			// prevent.
 		},
 		{
 			Name: StatelogRecordsGated, Kind: KindCounter, Unit: UnitCount,
@@ -423,6 +429,17 @@ func Catalogue() []Instrument {
 			Shows: "The fraction of sources carrying a current vector. It is " +
 				"how a stalled embedding backlog is reported, since it never " +
 				"drops a seat.",
+		},
+
+		// ---- the change feed ------------------------------------------
+		{
+			Name: TrackerFeedUnreadable, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"source"},
+			Shows: "Change records this build could not translate into a " +
+				"wake. Both domain consumers are deliberately uncapped, so " +
+				"such a record is never dropped — it redelivers for ever at " +
+				"the head of the consumer with every wake behind it " +
+				"waiting, which has no other symptom at all.",
 		},
 
 		// ---- bulk -----------------------------------------------------

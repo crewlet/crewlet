@@ -61,8 +61,8 @@ var alarmMeaning = map[Kind]string{
 		"semantic recall claims to cover.",
 	KindRecordsGated: "An apply gate dropped a record. A gated record is " +
 		"recoverable by nothing.",
-	KindFeedDeadLetters: "A wake reached the dead-letter path, so somebody " +
-		"was not told something they were meant to be told.",
+	KindFeedUnreadable: "A change record no build on this node can read. It " +
+		"redelivers for ever, so every wake behind it is waiting too.",
 	KindMaintenanceOpen: "A maintenance operation has been open for an hour. " +
 		"Maintenance stops every publisher on every node.",
 	KindVolumeLow: "The volume has less free space than the next restore, " +

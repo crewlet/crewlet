@@ -65,6 +65,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 var log = logging.Get("changefeed")
@@ -258,6 +259,11 @@ type Feed struct {
 	claims     Claims
 	translator Translator
 	now        func() time.Time
+
+	// metrics is the process's one recorder. Nil records nothing, which
+	// is a legal deployment — an embedded engine and every test — and
+	// leaves the log line as the only surface, which is where it was.
+	metrics *metrics.Recorder
 }
 
 // Options configure a feed.
@@ -266,6 +272,9 @@ type Options struct {
 	Publisher  Publisher
 	Claims     Claims
 	Translator Translator
+
+	// Metrics is where an untranslatable record is counted. Optional.
+	Metrics *metrics.Recorder
 
 	// Now is the clock the claim is taken on. Nil takes the wall clock.
 	Now func() time.Time
@@ -293,6 +302,7 @@ func New(opts Options) (*Feed, error) {
 	f := &Feed{
 		opener: opts.Opener, publisher: opts.Publisher,
 		claims: opts.Claims, translator: opts.Translator, now: opts.Now,
+		metrics: opts.Metrics,
 	}
 	if f.now == nil {
 		f.now = func() time.Time { return time.Now().UTC() }
@@ -335,14 +345,23 @@ func (f *Feed) handle(ctx context.Context, msg *Message) {
 	if err != nil {
 		// A translation failure is a RECORD THIS BUILD CANNOT READ, and a
 		// redelivery will not make it readable. It is naked all the same,
-		// because the consumer's own redelivery cap is what ends it — and
-		// the alternative (acking) would drop a wake permanently on a
-		// build that is about to be upgraded past the problem.
+		// because the alternative — acking — would drop a wake permanently
+		// on a build that is about to be upgraded past the problem.
+		//
+		// AND NOTHING ENDS IT. Both domain consumers set `MaxDeliver: -1`
+		// deliberately (see [jetstream] — a budget that ran out would drop
+		// a wake silently), so this record circles at the head of the
+		// consumer with every wake behind it waiting. That is the right
+		// trade and it has NO OTHER SYMPTOM: the feed simply stops moving,
+		// on a fleet whose every other surface is healthy. So it is
+		// counted, and the count is what `feed_unreadable` fires on.
+		f.count(metrics.TrackerFeedUnreadable)
 		log.WarnContext(ctx, "changefeed_untranslatable", "key", msg.Key,
 			"position", msg.Position, "stream", msg.Stream, "generation", msg.Gen,
 			"error", err.Error(),
-			"detail", "returned for redelivery; the consumer's own cap ends it "+
-				"if no node can read it")
+			"detail", "returned for redelivery, and nothing ends it: the domain "+
+				"consumers are deliberately uncapped, so every wake behind this "+
+				"record is waiting until a build that can read it runs here")
 		f.nak(ctx, msg)
 		return
 	}
@@ -438,6 +457,17 @@ func (f *Feed) ack(ctx context.Context, msg *Message) {
 			"error", err.Error(),
 			"detail", "the change will be redelivered; the claim collapses it")
 	}
+}
+
+// count records one event against this feed's own source.
+//
+// THE SOURCE IS THE ATTRIBUTE, because a company runs one feed per estate and
+// "the change feed is stuck" is not actionable without knowing which.
+func (f *Feed) count(name string) {
+	if f.metrics == nil {
+		return
+	}
+	f.metrics.Add(name, 1, metrics.Attrs{"source": f.translator.Source().Name})
 }
 
 func (f *Feed) nak(ctx context.Context, msg *Message) {
