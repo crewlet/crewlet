@@ -254,6 +254,27 @@ type Query struct {
 
 	Level statelog.ReadLevel
 
+	// MaxLag is the bound a `stale` read declares it will accept, and zero
+	// accepts anything.
+	//
+	// CARRIED RATHER THAN MERELY VALIDATED. `max_lag_seconds` was checked
+	// against the level and then dropped on the floor, so a dashboard tile
+	// polling every twenty seconds and declaring a twenty-second bound was
+	// served an answer of any age at all — and rendered it as a live tile,
+	// because the answer came back at the level it asked for.
+	MaxLag time.Duration
+
+	// Session is the caller's own high-water mark on this domain's log,
+	// which is what a `session` read waits through. Zero is a caller that
+	// has written nothing, for whom every level below linearizable is the
+	// same answer.
+	Session statelog.Position
+
+	// MinPosition is an explicit floor a caller may name — the position a
+	// wake carried, or one its own previous write returned. The documented
+	// override rather than the mechanism.
+	MinPosition statelog.Position
+
 	Limit  int
 	Cursor string
 }
@@ -767,6 +788,18 @@ func (q *Query) parseLevel(p Params) error {
 					"all", key, level)
 			}
 		}
+		return nil
+	}
+	// AND THE BOUND IS CARRIED, not just checked. A bound refused when it
+	// is inconsistent and dropped when it is not is a bound that never
+	// bounded anything.
+	if p.Has("max_lag_seconds") {
+		secs := p.Int("max_lag_seconds", 0)
+		if secs < 0 {
+			return fmt.Errorf("tracker: max_lag_seconds is how many seconds "+
+				"behind an answer may be, and %d is not a duration", secs)
+		}
+		q.MaxLag = time.Duration(secs) * time.Second
 	}
 	return nil
 }

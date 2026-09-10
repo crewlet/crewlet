@@ -199,7 +199,17 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			return fmt.Errorf("engine: tracker writer: %w", err)
 		}
 		n.writer = writer
-		n.trackerReader = tracker.NewReader(e.backends.Store)
+		// THROUGH THE DOMAIN'S OWN READ AUTHORITY, so a level asked for
+		// is a level served: the refusal ladder, the coverage probe and
+		// the barrier a linearizable read waits through. Built beside
+		// the runner rather than here, because the health it refuses on
+		// is the same one seat admission reads.
+		if n.trackerReader, err = tracker.NewReader(
+			e.backends.Store, running.reader); err != nil {
+			sl.Stop()
+			cancel()
+			return fmt.Errorf("engine: tracker reader: %w", err)
+		}
 	}
 	if wiki {
 		running := sl.Domain(pages.Domain{}.Name())

@@ -130,11 +130,45 @@ const (
 	PageMax     = 500
 )
 
-// Reader answers queries from this node's own tables.
-type Reader struct{ db *store.DB }
+// Reader answers queries from this node's own tables, AT THE LEVEL THEY ASK
+// FOR.
+//
+// # The level is honoured here or it is honoured nowhere
+//
+// Every read goes through [statelog.Reader], which is what turns the level
+// from a word in the answer into a property of it: the refusal ladder first
+// (an evicted node, one below the trim floor, one whose applier has stopped
+// serves nothing), then the coverage probe, then the freshness target — a
+// quorum-committed barrier for `linearizable`, the caller's own high-water
+// mark for `session`, a declared bound for `stale` — and only then one read
+// transaction whose first statement is the coverage probe again.
+//
+// This reader USED TO OPEN ITS OWN TRANSACTION and set `answer.Level` from the
+// query, which made the level a label rather than a guarantee: a seat tool
+// asking for `session` got whatever this node happened to hold, and
+// `max_lag_seconds` bounded nothing at all.
+type Reader struct {
+	db  *store.DB
+	log *statelog.Reader
+}
 
 // NewReader builds the read surface over a node's replicated estate.
-func NewReader(db *store.DB) *Reader { return &Reader{db: db} }
+//
+// The framework reader is REQUIRED rather than optional. A nil one would mean
+// a build where every level silently degrades to whatever the local rows say,
+// which is the state this type is being moved out of — and a degradation that
+// is invisible in the answer is worse than a refusal.
+func NewReader(db *store.DB, log *statelog.Reader) (*Reader, error) {
+	if db == nil {
+		return nil, fmt.Errorf("tracker: a reader needs a store")
+	}
+	if log == nil {
+		return nil, fmt.Errorf("tracker: a reader needs its domain's read " +
+			"authority — without it every read level is a label rather than a " +
+			"guarantee, which is silent at every surface that renders one")
+	}
+	return &Reader{db: db, log: log}, nil
+}
 
 // Tasks answers one query.
 //
@@ -156,8 +190,33 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 	}
 	terms := sortTerms(q)
 
-	answer := Answer{Level: q.Level, Complete: true}
-	err = r.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if q.Level == "" {
+		// ABSENT IS NOT A FOURTH STATE and it is not a default either —
+		// it resolves to the SURFACE's own, which is what makes the
+		// default a property of the surface rather than of whichever
+		// caller happened to omit the key. So an unset level is a
+		// PROGRAMMING error here rather than a quietly-degraded read:
+		// both surfaces reached this function with one unset, and the
+		// answer they got carried the empty string as its level.
+		return Answer{}, fmt.Errorf("tracker: this read names no level — a " +
+			"surface resolves an absent read_level to its own default (a seat " +
+			"tool session, a dashboard poll stale) before it reads")
+	}
+
+	var answer Answer
+	// A SET READ, and that word decides what a deferred scope does to it.
+	// A point read refuses, because the one object it is about may be
+	// stale; a set read cannot enumerate what would have ENTERED the set —
+	// a deferred create is an absence with no local row — so it is served
+	// at the level asked for and makes no completeness claim.
+	served, err := r.log.Read(ctx, statelog.Query{
+		Level:       q.Level,
+		Scope:       ReadScope(q),
+		Session:     q.Session,
+		MinPosition: q.MinPosition,
+		MaxLag:      q.MaxLag,
+		Set:         true,
+	}, func(tx *sql.Tx) error {
 		rows, cursor, err := readTasks(ctx, tx, where, args, terms, limit)
 		if err != nil {
 			return err
@@ -175,20 +234,34 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 			return err
 		}
 		answer.LogSeq, answer.AppliedThrough = position, applied
-
-		incomplete, err := coverage(ctx, tx, q)
-		if err != nil {
-			return err
-		}
-		if incomplete != nil {
-			answer.Complete, answer.Incomplete = false, incomplete
-		}
 		return nil
 	})
 	if err != nil {
 		return Answer{}, err
 	}
+	// THE FRAMEWORK'S OWN VERDICT, never the query's. `Level` here is what
+	// the read was SERVED at, which is the level asked for or a refusal —
+	// and assigning the request's level to it, which is what this function
+	// did, is exactly how a level becomes a label.
+	answer.Level = served.Level
+	answer.Complete = served.Complete
+	answer.LogLag = served.Lag
+	if served.Incomplete != nil {
+		answer.Incomplete = incompleteFrom(served.Incomplete)
+	}
 	return answer, nil
+}
+
+// incompleteFrom renders the framework's coverage gap in this domain's own
+// shape, which is what the answer's JSON has always carried.
+func incompleteFrom(in *statelog.Incomplete) *Incomplete {
+	if in == nil {
+		return nil
+	}
+	return &Incomplete{
+		Records: int(in.Records), From: in.From,
+		Scope: in.Scope.Closure(),
+	}
 }
 
 // compile turns a parsed query into a predicate and its arguments.

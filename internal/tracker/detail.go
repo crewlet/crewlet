@@ -146,7 +146,21 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 		return TaskDetail{}, fmt.Errorf("tracker: name a task by id or by key")
 	}
 	var out TaskDetail
-	err := r.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	// A POINT READ, and that is what makes a deferred scope a REFUSAL here
+	// where the listing continues: this answer is about one object, and a
+	// record this node cannot decode covering it means the rows it is
+	// about to read may already be wrong.
+	//
+	// THE SCOPE IS THE TASK ITSELF and cannot be formed until the id is
+	// resolved, which happens inside the transaction — so the framework
+	// read is given the object's own term once, from the reference, and
+	// the coverage probe inside the transaction is what catches an alias.
+	served, err := r.log.Read(ctx, statelog.Query{
+		Level: level,
+		Scope: statelog.ScopeSet{Paths: []string{ScopeTerm{
+			Kind: TermObject, ID: idOrKey,
+		}.Path()}}.Normalised(),
+	}, func(tx *sql.Tx) error {
 		id, err := resolveTaskID(ctx, tx, idOrKey)
 		if err != nil {
 			return err
@@ -210,7 +224,14 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 	if err != nil {
 		return TaskDetail{}, err
 	}
-	out.Level = level
+	// THE LEVEL SERVED, never the level asked for. Assigning the argument
+	// here — which is the only thing this function used to do with it —
+	// is what made the level a label: a read that refused and one that
+	// went through a quorum-committed barrier reported the same word.
+	out.Level = served.Level
+	if !served.Complete {
+		out.Complete = false
+	}
 	return out, nil
 }
 
