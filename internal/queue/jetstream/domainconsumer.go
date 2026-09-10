@@ -155,8 +155,36 @@ func (c *DomainConsumer) Fetch(ctx context.Context, maxMessages, maxBytes int,
 		return nil, fmt.Errorf("jetstream: fetch from %s: %w", c.name, err)
 	}
 
+	// THE CONTEXT ENDS THE DRAIN, and until it did this function took a
+	// context and used it for nothing but its own return value.
+	//
+	// A batch closes when it is FULL or when `wait` expires — one record
+	// arriving does not end it — so a caller that wanted the records
+	// already in hand had no way to say so and paid the whole wait. The
+	// applier's [statelog.Runner] is exactly that caller: a barrier
+	// appended onto a quiet log sat in a batch nobody had finished
+	// collecting for five seconds, against a two second read budget, so
+	// every linearizable read on an idle company refused `behind`.
+	//
+	// WHAT IS COLLECTED IS RETURNED. A cancelled drain is this caller
+	// deciding it has waited long enough, not a failure — the messages
+	// already taken are real, and the ones still in the batch are
+	// redelivered because they were never acknowledged.
 	var out []statelog.Message
-	for msg := range batch.Messages() {
+	msgs := batch.Messages()
+	for {
+		var msg jetstream.Msg
+		var open bool
+		select {
+		case msg, open = <-msgs:
+			if !open {
+				msg = nil
+			}
+		case <-ctx.Done():
+		}
+		if msg == nil {
+			break
+		}
 		meta, err := msg.Metadata()
 		if err != nil {
 			// NOT ACKNOWLEDGED. A message whose metadata is
