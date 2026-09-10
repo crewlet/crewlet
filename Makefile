@@ -69,7 +69,7 @@ COMPANY ?=
 
 .PHONY: help build crewlet install fmt tidy schema \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
-        check fmt-check tidy-check vet lint test test-norace test-cross test-e2e \
+        check fmt-check tidy-check signoff-check signoff-test vet lint test test-norace test-cross test-e2e \
         require-npm \
         mattermost-up mattermost-down \
         gitlab-up gitlab-down \
@@ -153,7 +153,7 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard is not what dash
 
 ##@ Gates — `make check` is all of them
 
-check: fmt-check tidy-check vet lint build test test-cross dashboard-check dashboard-test ## every gate CI runs on a PR
+check: fmt-check tidy-check signoff-check signoff-test vet lint build test test-cross dashboard-check dashboard-test ## every gate CI runs on a PR
 	@echo
 	@echo "All local gates passed. One thing this did NOT cover, because it"
 	@echo "needs a service CI starts for itself:"
@@ -187,6 +187,26 @@ tidy-check: ## fail if go.mod / go.sum are not tidy (ci: build + vet)
 	    echo "run: make tidy"; } >&2; \
 	  exit 1; \
 	}
+
+# The DCO gate: every commit carries a Signed-off-by trailer (CONTRIBUTING.md,
+# "Sign your work"). This is the only gate here whose subject is git history
+# rather than the working tree, and that is why it runs locally at all rather
+# than only in CI: a missing trailer is not repaired by editing a file, it is
+# repaired by REWRITING the commits (`git rebase --signoff`), which costs
+# nothing before a push and forces a force-push once a review has started.
+#
+# The range is origin/main..HEAD here; ci.yml passes the pull request's own
+# base and head instead, because a fork's origin is the fork.
+signoff-check: ## fail if a commit on this branch is not signed off (ci: sign-off)
+	@scripts/check-signoff.sh
+
+# The sign-off gate's OWN suite. It is bash reading git history, so no Go test
+# reaches it, and it regresses silently in both directions -- a gate that stops
+# failing reports a DCO certification nobody made, and one that starts failing
+# wedges every pull request. Both happened while it was being written, which is
+# why the suite exists and why it mutation-tests its own assertions.
+signoff-test: ## run the sign-off gate's own suite (ci: sign-off)
+	@scripts/check-signoff_test.sh
 
 vet: ## run go vet (ci: build + vet)
 	$(GO) vet ./...

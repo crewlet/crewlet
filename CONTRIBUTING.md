@@ -63,6 +63,8 @@ its `ci.yml` step together, and read both. `make check` is:
 ```bash
 gofmt -l .               # formatting — prints the files that need it
 go mod tidy -diff        # go.mod / go.sum are already what tidy would write
+scripts/check-signoff.sh # every commit the branch adds is signed off
+scripts/check-signoff_test.sh  # ... and that gate's own suite
 go vet ./...
 golangci-lint run        # what CI's lint job runs
 go build ./...
@@ -523,6 +525,63 @@ fixed in passing, or a tuning value you corrected while doing something else,
 belongs in its own commit — that keeps it reviewable, and revertable, on its
 own.
 
+### Sign your work
+
+**Every commit needs a `Signed-off-by` trailer.** `-s` writes it for you:
+
+```bash
+git commit -s -m "fix(queue): nak a redelivery the handler already deferred"
+```
+
+which adds a line naming the `user.name` and `user.email` git is configured
+with:
+
+```
+Signed-off-by: Jane Developer <jane@example.com>
+```
+
+That line is not decoration and it is not an authorship credit. It is your
+certification of the [Developer Certificate of Origin](DCO) — the file at the
+root of this repository — over that commit: that you wrote the change, or that
+it came from work you have the right to submit under the MIT licence this
+project ships under, and that you understand the commit and your sign-off are
+published permanently. Read it once; it is 34 lines.
+
+Because the DCO covers relayed work as well as your own (clauses (b) and (c)),
+a commit may carry more than one sign-off and the trailer need not name the
+commit's author — a forwarded patch keeps the original signer's line and gains
+yours. So what is required is *a* well-formed trailer on every commit, not one
+that matches the author.
+
+**This one is enforced**, unlike the subject conventions above.
+`scripts/check-signoff.sh` judges the commits a branch adds relative to its
+merge base with the base branch, and it runs in three places: `make check`
+locally, CI's `sign-off` job over the pull request, and CI's `sign-off (main)`
+job over what each push actually adds to `main`. A commit without a trailer
+fails the build.
+
+The third one is not redundant. The pull request job cannot see the commit the
+merge button *writes* — GitHub composes that message at merge time, after every
+check has reported, and it does not always carry the branch's trailers.
+`074e3a1` and `7d0e29e` on `main` are two commits that reached it this way,
+from branches whose own commits were properly signed.
+
+Forgot on one you have already made? The repair rewrites the commits, which is
+free before a push and a force-push after:
+
+```bash
+git commit --amend -s --no-edit          # just the last one
+git rebase --signoff origin/main         # every commit on the branch
+```
+
+If you are working in a fork whose `main` has gone stale, rebase onto the
+merge base the gate prints rather than onto a ref — `git rebase --signoff
+origin/main` against a stale `main` restamps commits you never wrote under
+your own sign-off.
+
+Merge commits are exempt — `git merge` and GitHub's merge button author one
+with no chance to sign it, and it carries no change of its own to certify.
+
 ### Examples
 
 ```
@@ -535,21 +594,26 @@ ci(docs-publish): rebuild the docs site when a release ships
 build(deps): bump golangci-lint-action to v9
 ```
 
-Nothing enforces any of this — there is no commit-message hook and CI does not
-check subjects. Git history is permanent and public, so the convention holds
-only because contributors apply it.
+Nothing enforces any of *this* — there is no commit-message hook and CI does
+not check subjects, types or scopes. Git history is permanent and public, so
+the convention holds only because contributors apply it. The sign-off trailer
+is the exception, and the section above says what checks it.
 
-**This applies to pull request titles too.** A pull request lands on `main` as a
-single squashed commit whose subject is the pull request title, so the title
-takes the same `type(scope): summary` form — and everything after the colon is
+**This applies to pull request titles too.** A pull request lands on `main`
+either as a single squashed commit whose subject is the pull request title, or
+as a merge commit over the branch's own commits — `main` carries both shapes
+today. Under a squash the title *is* the subject; under a merge it is what the
+release notes are generated from. Either way the title takes the same
+`type(scope): summary` form — and everything after the colon is
 what readers see in the generated release notes. See below.
 
 ## Pull requests
 
 1. Fork and create a feature branch.
 2. Make your change, including tests and doc updates.
-3. Run `make check`.
-4. Open a PR with a clear description of what changed and why. **The title
+3. Commit it with `git commit -s` — see [Sign your work](#sign-your-work).
+4. Run `make check`.
+5. Open a PR with a clear description of what changed and why. **The title
    matters more than anywhere else**: GitHub generates each release's notes from
    the titles of the pull requests merged since the previous tag, and those
    notes are the *only* record of what a release contains. Yours is read by

@@ -322,11 +322,14 @@ dev setup, conventions, and the checks CI runs:
 
 ```bash
 make build    # go build ./...
-make check    # every gate CI runs: gofmt, go mod tidy -diff, vet,
-              #   golangci-lint, build, the race suite, and a
-              #   cross-compile of every release target
+make check    # every gate CI runs: gofmt, go mod tidy -diff, the DCO
+              #   sign-off, vet, golangci-lint, build, the race suite,
+              #   and a cross-compile of every release target
 make help     # everything else
 ```
+
+Commits are signed off (`git commit -s`), which certifies the
+[DCO](DCO) over them — CI checks it.
 
 Releases are cut by pushing a `v*` tag — see [RELEASING.md](RELEASING.md).
 
