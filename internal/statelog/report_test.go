@@ -2,6 +2,8 @@ package statelog_test
 
 import (
 	"encoding/json"
+	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -402,5 +404,68 @@ func TestAnUnreadableRegisterIsNotAnEmptyFleet(t *testing.T) {
 	if !strings.Contains(string(body), `"register_readable":false`) {
 		t.Errorf("the flag does not survive encoding, so the one surface that "+
 			"renders it cannot see it: %s", body)
+	}
+}
+
+// THE WHOLE DOCUMENT IS ONE WIRE CONTRACT, so every field in it is spelled
+// the same way.
+//
+// `GET /work/retention` and `crewlet retention status --json` hand this
+// document to a script and to a dashboard, and both address fields by name.
+// [Alarm] shipped untagged, so the alarms array alone came back as
+// `Kind`/`Detail`/`Remedy` beside siblings spelling themselves `node_id` and
+// `first_seq`. Nothing reported it, and the reason is worth writing down: the
+// only consumer at the time was `crewlet retention status`, and Go's decoder
+// matches field names case-INSENSITIVELY, so the one reader that could have
+// noticed was the one reader that could not. Every case-sensitive reader —
+// the dashboard, `jq`, anything not written in Go — reads the field as absent
+// rather than as an error.
+//
+// A REFLECTION WALK rather than a golden document: a golden one is edited to
+// match whatever the code emits the day a field is added, which is precisely
+// how the untagged struct survived. This fails on the field.
+func TestEveryFieldOfTheRetentionDocumentIsSnakeCase(t *testing.T) {
+	t.Parallel()
+
+	snake := regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+	seen := map[reflect.Type]bool{}
+
+	var walk func(t reflect.Type, path string)
+	walk = func(rt reflect.Type, path string) {
+		for rt.Kind() == reflect.Pointer || rt.Kind() == reflect.Slice || rt.Kind() == reflect.Map {
+			rt = rt.Elem()
+		}
+		if rt.Kind() != reflect.Struct || seen[rt] {
+			return
+		}
+		seen[rt] = true
+		for i := range rt.NumField() {
+			f := rt.Field(i)
+			if !f.IsExported() {
+				continue
+			}
+			name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+			switch {
+			case name == "-":
+				continue
+			case name == "":
+				t.Errorf("%s.%s carries no json tag, so it goes on the wire as %q "+
+					"while its siblings are snake_case", path, f.Name, f.Name)
+			case !snake.MatchString(name):
+				t.Errorf("%s.%s is tagged %q, which is not snake_case", path, f.Name, name)
+			}
+			walk(f.Type, path+"."+f.Name)
+		}
+	}
+	walk(reflect.TypeOf(statelog.Report{}), "Report")
+
+	// The counterfactual: the walk reaches the nested types rather than
+	// stopping at Report's own fields. Without this a tagless field on
+	// any child would pass.
+	for _, want := range []any{statelog.Alarm{}, statelog.DomainReport{}, statelog.TermReport{}, statelog.NodeReport{},
+		statelog.NodeDomainReport{}, statelog.EvictionReport{}, statelog.SnapshotReport{}, statelog.ReplicaReport{}} {
+		if !seen[reflect.TypeOf(want)] {
+			t.Errorf("the walk never reached %T, so its fields are unchecked", want)
+		}
 	}
 }
