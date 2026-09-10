@@ -137,9 +137,17 @@ func (emptyWork) Task(context.Context, string, tracker.DetailWants,
 
 type emptyPages struct{}
 
-func (emptyPages) List(context.Context, pages.Filter) ([]pages.Summary, error) { return nil, nil }
-func (emptyPages) Get(context.Context, string) (pages.Detail, error)           { return pages.Detail{}, nil }
-func (emptyPages) Containers(context.Context) ([]pages.Container, error)       { return nil, nil }
+func (emptyPages) List(context.Context, pages.Filter, statelog.ReadLevel) (pages.Listing, error) {
+	return pages.Listing{}, nil
+}
+
+func (emptyPages) Get(context.Context, string, statelog.ReadLevel) (pages.Detail, error) {
+	return pages.Detail{}, nil
+}
+
+func (emptyPages) Containers(context.Context, statelog.ReadLevel) ([]pages.Container, error) {
+	return nil, nil
+}
 
 // fakeChannels is an A2A channel reader with nothing in it: this sweep is
 // about which names exist, not what they answer.

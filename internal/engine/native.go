@@ -227,7 +227,8 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			return fmt.Errorf("engine: pages store: %w", err)
 		}
 		if n.pageReader, err = pages.NewReader(pages.ReaderOptions{
-			DB: e.backends.Store, Committed: running.runner.Committed,
+			DB: e.backends.Store, Log: running.reader,
+			Committed: running.runner.Committed,
 		}); err != nil {
 			cancel()
 			return fmt.Errorf("engine: pages reader: %w", err)
@@ -1158,7 +1159,11 @@ func (e *Engine) syncNativeSkills(ctx context.Context) {
 	}
 	reader := e.native.pageReader
 	e.syncSkillsFrom(ctx, c, func(ctx context.Context, container string) ([]skills.Page, error) {
-		found, err := reader.SkillPages(ctx, container)
+		// SESSION, because this walk is what a skill EDIT resolves to:
+		// the applier's own nudge fires it, so a walk that read older
+		// rows than the record that woke it would rebuild the registry
+		// without the change that asked for the rebuild.
+		found, err := reader.SkillPages(ctx, container, statelog.ReadSession)
 		if err != nil {
 			return nil, err
 		}

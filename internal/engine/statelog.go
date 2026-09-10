@@ -464,6 +464,8 @@ func (s *stateLog) readerFor(domain statelog.Domain, appendTo *jetstream.DomainL
 	switch domain.Name() {
 	case tracker.Domain{}.Name():
 		encode = tracker.EncodeBarrier
+	case pages.Domain{}.Name():
+		encode = pages.EncodeBarrier
 	}
 
 	deps := statelog.ReaderDeps{

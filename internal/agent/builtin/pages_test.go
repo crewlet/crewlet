@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -25,6 +26,11 @@ type fakeKB struct {
 
 	readErr  error
 	writeErr error
+
+	// levels is every read level these tools asked for, so a tool that
+	// stopped naming one — or named the wrong one — is visible. A seat
+	// reads at `session` because it must see its own writes.
+	levels []statelog.ReadLevel
 }
 
 func newFakeKB() *fakeKB {
@@ -34,14 +40,24 @@ func newFakeKB() *fakeKB {
 	}}
 }
 
-func (f *fakeKB) List(context.Context, pages.Filter) ([]pages.Summary, error) {
+func (f *fakeKB) List(_ context.Context, _ pages.Filter,
+	level statelog.ReadLevel) (pages.Listing, error) {
+
+	f.levels = append(f.levels, level)
 	if f.readErr != nil {
-		return nil, f.readErr
+		return pages.Listing{}, f.readErr
 	}
-	return []pages.Summary{{ID: f.page.Page.ID, Title: f.page.Page.Title}}, nil
+	return pages.Listing{
+		Pages:    []pages.Summary{{ID: f.page.Page.ID, Title: f.page.Page.Title}},
+		Level:    level,
+		Complete: true,
+	}, nil
 }
 
-func (f *fakeKB) Get(_ context.Context, ref string) (pages.Detail, error) {
+func (f *fakeKB) Get(_ context.Context, ref string,
+	level statelog.ReadLevel) (pages.Detail, error) {
+
+	f.levels = append(f.levels, level)
 	if f.readErr != nil {
 		return pages.Detail{}, f.readErr
 	}
@@ -250,12 +266,15 @@ func TestListingReturnsOnlyPublishedPages(t *testing.T) {
 
 type listRecorder struct{ filters []pages.Filter }
 
-func (l *listRecorder) List(_ context.Context, f pages.Filter) ([]pages.Summary, error) {
+func (l *listRecorder) List(_ context.Context, f pages.Filter,
+	_ statelog.ReadLevel) (pages.Listing, error) {
 	l.filters = append(l.filters, f)
-	return nil, nil
+	return pages.Listing{}, nil
 }
 
-func (l *listRecorder) Get(context.Context, string) (pages.Detail, error) {
+func (l *listRecorder) Get(context.Context, string,
+	statelog.ReadLevel,
+) (pages.Detail, error) {
 	return pages.Detail{}, pages.ErrNotFound
 }
 
@@ -373,4 +392,91 @@ func TestCommentOnPageStillPostsWithoutAnEditID(t *testing.T) {
 	if len(kb.comments) != 1 || len(kb.edits) != 0 {
 		t.Errorf("%d comments and %d edits, want 1 and 0", len(kb.comments), len(kb.edits))
 	}
+}
+
+// EVERY PAGE READ A SEAT MAKES NAMES ITS LEVEL, and it is `session`.
+//
+// A seat must see its own writes. A turn that created a page and then read the
+// container back at whatever this node happened to hold would find the page
+// missing and create it again — which is the duplicate the whole read contract
+// exists to prevent, arriving through the tool surface rather than the API.
+//
+// Until the level reached the reader at all, every one of these calls was
+// served from local rows and reported back at the level the caller had asked
+// for, so the degradation was invisible in the answer.
+func TestEveryPageToolReadsAtSession(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{builtin.ListPagesTool, map[string]any{"container": "ENG"}},
+		{builtin.GetPageTool, map[string]any{"page": "p1"}},
+	} {
+		t.Run(tc.tool, func(t *testing.T) {
+			t.Parallel()
+			kb := newFakeKB()
+			reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
+			if got := callWork(t, reg, tc.tool, tc.args); got.Failed {
+				t.Fatalf("%s: %s", tc.tool, got.Output)
+			}
+			if len(kb.levels) == 0 {
+				t.Fatalf("%s made no read, so this case proves nothing", tc.tool)
+			}
+			for _, got := range kb.levels {
+				if got != statelog.ReadSession {
+					t.Errorf("%s read at %q, want %q — a seat that cannot see "+
+						"its own writes files the duplicate",
+						tc.tool, got, statelog.ReadSession)
+				}
+			}
+		})
+	}
+}
+
+// A LISTING THAT COULD NOT ACCOUNT FOR EVERYTHING SAYS SO TO THE MODEL.
+//
+// `complete: false` is the coverage answer, and it is a different fact from
+// staleness: the rows may be missing pages a deferred record would have
+// created. A model that reads a short list as the whole truth writes the
+// duplicate, which is the same failure the level prevents through the other
+// door.
+func TestAnIncompleteListingTellsTheModel(t *testing.T) {
+	t.Parallel()
+	kb := &partialKB{}
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: newFakeKB()})
+	res := callWork(t, reg, builtin.ListPagesTool, map[string]any{"container": "ENG"})
+	if res.Failed {
+		t.Fatalf("list_pages: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, `"complete"`) {
+		t.Errorf("an incomplete listing rendered as a complete one:\n%s", res.Output)
+	}
+
+	// THE CONTROL: a complete listing does NOT carry the flag, or the
+	// assertion above would pass on a tool that always renders it.
+	full := newFakeKB()
+	regFull := kbRegistry(t, builtin.PageDeps{Reader: full, Writer: full})
+	resFull := callWork(t, regFull, builtin.ListPagesTool,
+		map[string]any{"container": "ENG"})
+	if resFull.Failed {
+		t.Fatalf("list_pages (complete): %s", resFull.Output)
+	}
+	if strings.Contains(resFull.Output, `"complete"`) {
+		t.Errorf("a complete listing carried the incompleteness flag:\n%s",
+			resFull.Output)
+	}
+}
+
+// partialKB answers a listing it could not account for.
+type partialKB struct{ fakeKB }
+
+func (p *partialKB) List(_ context.Context, _ pages.Filter,
+	level statelog.ReadLevel,
+) (pages.Listing, error) {
+	return pages.Listing{
+		Pages:    []pages.Summary{{ID: "p1", Title: "Deploy Runbook"}},
+		Level:    level,
+		Complete: false,
+	}, nil
 }

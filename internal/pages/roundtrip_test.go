@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/pages"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -99,8 +100,17 @@ func newRoundTrip(t *testing.T) *roundTrip {
 	if err != nil {
 		t.Fatalf("build the store: %v", err)
 	}
+	// THROUGH THE FRAMEWORK, like production. A harness that handed the
+	// reader its own transaction would exercise the SQL and none of the
+	// contract the rows are served under — which is the shape that let the
+	// level be a label for as long as it was.
+	authority, err := statelogtest.LocalReader(pages.Domain{}, db.Replicated(),
+		waiter.Committed())
+	if err != nil {
+		t.Fatalf("build the read authority: %v", err)
+	}
 	reader, err := pages.NewReader(pages.ReaderOptions{
-		DB: db, Committed: waiter.Committed,
+		DB: db, Log: authority, Committed: waiter.Committed,
 	})
 	if err != nil {
 		t.Fatalf("build the reader: %v", err)
@@ -217,7 +227,7 @@ func (r *roundTrip) write(actor pages.Actor, in pages.NewPage) pages.Written {
 // get reads one page back.
 func (r *roundTrip) get(ref string) pages.Detail {
 	r.t.Helper()
-	detail, err := r.reader.Get(r.t.Context(), ref)
+	detail, err := r.reader.Get(r.t.Context(), ref, statelog.ReadSession)
 	if err != nil {
 		r.t.Fatalf("get %q: %v", ref, err)
 	}

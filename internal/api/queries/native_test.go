@@ -39,18 +39,31 @@ type stubPages struct {
 	filter pages.Filter
 	list   []pages.Summary
 	err    error
+
+	// level is what the surface asked for, so a route that stopped naming
+	// one is visible: an unset level is what made every page read on this
+	// surface a label rather than a guarantee.
+	level statelog.ReadLevel
 }
 
-func (s *stubPages) List(_ context.Context, f pages.Filter) ([]pages.Summary, error) {
-	s.filter = f
-	return s.list, s.err
+func (s *stubPages) List(_ context.Context, f pages.Filter,
+	level statelog.ReadLevel,
+) (pages.Listing, error) {
+	s.filter, s.level = f, level
+	return pages.Listing{Pages: s.list, Level: level, Complete: true}, s.err
 }
 
-func (s *stubPages) Get(context.Context, string) (pages.Detail, error) {
+func (s *stubPages) Get(_ context.Context, _ string,
+	level statelog.ReadLevel,
+) (pages.Detail, error) {
+	s.level = level
 	return pages.Detail{}, s.err
 }
 
-func (s *stubPages) Containers(context.Context) ([]pages.Container, error) {
+func (s *stubPages) Containers(_ context.Context,
+	level statelog.ReadLevel,
+) ([]pages.Container, error) {
+	s.level = level
 	return nil, s.err
 }
 

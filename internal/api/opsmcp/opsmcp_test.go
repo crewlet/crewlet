@@ -187,11 +187,13 @@ func (stubWorkWriterT) UpdateTask(context.Context, string, string, string, uint6
 
 type stubPageReader struct{}
 
-func (stubPageReader) List(context.Context, pages.Filter) ([]pages.Summary, error) {
-	return nil, nil
+func (stubPageReader) List(context.Context, pages.Filter,
+	statelog.ReadLevel) (pages.Listing, error) {
+	return pages.Listing{}, nil
 }
 
-func (stubPageReader) Get(context.Context, string) (pages.Detail, error) {
+func (stubPageReader) Get(context.Context, string,
+	statelog.ReadLevel) (pages.Detail, error) {
 	return pages.Detail{}, pages.ErrNotFound
 }
 

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE TYPED PAYLOADS, one per (kind, op).
@@ -240,4 +242,47 @@ func decodePayload[T any](rec MutationRecord) (T, error) {
 			rec.Op, rec.Subject, err)
 	}
 	return out, nil
+}
+
+// EncodeBarrier renders the read index's payload-free append.
+//
+// # Why the framework cannot write this itself
+//
+// The read index owns WHEN a barrier goes out and what its acknowledgement
+// proves — a quorum-committed position, which is the only client-visible fact
+// this broker offers that the responder confirmed its own authority for. The
+// DOMAIN owns what a record on its log looks like: this one's envelope, its
+// version gate, its subject grammar and the scope alphabet its applier files
+// deferrals under. Neither can write the other's half, and this function is
+// where they meet.
+//
+// Every other part of a barrier was already here — [KindBarrier], [OpBarrier],
+// [BarrierSubject], the applier's case, the empty [BarrierTables] and the
+// scope sentinel — and the encoder was the one piece missing, which is why the
+// index could not be built and every `linearizable` read on this domain
+// refused for want of one.
+//
+// AN OP ID IS REFUSED, and that is a correctness rule rather than tidiness. An
+// op id becomes the Nats-Msg-Id; a repeat inside the duplicate window is
+// answered from the dedupe cache with no quorum round trip at all, and the
+// sequence it returns is then a position nothing confirmed — which is exactly
+// the claim a barrier exists to make and the one it must never fake.
+func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
+	if env.Kind != statelog.BarrierKind {
+		return nil, fmt.Errorf("pages: %q is not a barrier envelope", env.Kind)
+	}
+	if env.OpID != "" {
+		return nil, fmt.Errorf("pages: a barrier carries no op id and this one " +
+			"has one — an op id becomes a message id, and a duplicate ack is " +
+			"served with no quorum round trip at all")
+	}
+	return Encode(MutationRecord{
+		RecordEnvelope: RecordEnvelope{
+			V:       RecordVersion,
+			Subject: BarrierSubject(),
+			Op:      OpBarrier,
+			Scope:   ScopeSet{Subject: true},
+			Gen:     env.Gen,
+		},
+	})
 }
