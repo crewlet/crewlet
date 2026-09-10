@@ -222,20 +222,34 @@ type Reading struct {
 }
 
 // Alarm is one condition currently true on this node.
+//
+// TAGGED, like every other struct in [Report], and the tags are load-bearing
+// for a reader this package does not have yet.
+//
+// This is reached through `GET /work/retention`, so its field names are a wire
+// contract. Untagged it was the ONE struct in that document emitting
+// `Kind`/`Detail`/`Remedy` beside siblings emitting `node_id` and `first_seq`
+// — which `crewlet retention status` survived only because Go's own decoder
+// matches field names case-INSENSITIVELY, so the CLI kept printing the alarm
+// correctly and nothing reported the drift. Every other reader is case
+// sensitive: `alarm.kind` in the dashboard, `.alarms[].kind` in `jq`, a key
+// lookup in Python. Each of those reads the alarm as absent rather than as an
+// error, which is the failure this document exists to prevent an operator
+// from having.
 type Alarm struct {
 	// Kind is which alarm.
-	Kind Kind
+	Kind Kind `json:"kind"`
 
 	// Detail says what was measured, in the operator's units. It is the
 	// half of an alarm that makes it actionable: "apply_lag" is a name,
 	// and "this node is 4m12s behind" is a fact.
-	Detail string
+	Detail string `json:"detail"`
 
 	// Remedy is what to do about it. Carried on the alarm rather than
 	// looked up beside it, because every surface renders the same alarm
 	// and a remedy that lived on one of them would be missing from the
 	// other two.
-	Remedy string
+	Remedy string `json:"remedy"`
 }
 
 // rule is one row of the table.
