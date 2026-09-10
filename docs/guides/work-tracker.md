@@ -174,6 +174,18 @@ Three different gestures, and the difference matters:
 - **Purge** removes the rows. Its report comes back in **three groups**: what
   was purged, what could not be reached, and what is stale.
 
+Only the first two are a seat's. A purge is an **operator gesture** — a person
+or an operator token, never an agent and never the engine — because it is the
+one operation with no inverse and nothing else can be asked to confirm it:
+
+```
+crewlet work purge <task-id> -project KEY -reason "why" -confirm <task-key>
+```
+
+Its **children move rather than being destroyed**: each direct child
+re-parents onto the purged task's own parent, or becomes a root when the purged
+task was one. Destroying the subtree would destroy work nobody confirmed.
+
 The purge report gives no time guarantee, and that is honest rather than
 evasive: an offline or evicted disk keeps its copy until it replays, adopts a
 snapshot, is replaced, or is destroyed. There is no duration to state. See
