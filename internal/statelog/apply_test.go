@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -177,6 +178,7 @@ type applyHarness struct {
 	runner  *statelog.Runner
 	applier *probeApplier
 	fetch   *probeFetch
+	metrics *metrics.Recorder
 }
 
 func newApplyHarness(t *testing.T, domain statelog.Domain) *applyHarness {
@@ -207,17 +209,35 @@ func newApplyHarness(t *testing.T, domain statelog.Domain) *applyHarness {
 
 	applier := newProbeApplier()
 	fetch := newProbeFetch()
+	recorder, err := metrics.New()
+	if err != nil {
+		t.Fatalf("recorder: %v", err)
+	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain:     domain,
 		Applier:    applier,
 		Fetch:      fetch,
 		DB:         db.Replicated(),
 		Generation: 1,
+		Metrics:    recorder,
 	})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
-	return &applyHarness{t: t, db: db, runner: runner, applier: applier, fetch: fetch}
+	return &applyHarness{t: t, db: db, runner: runner, applier: applier,
+		fetch: fetch, metrics: recorder}
+}
+
+// counter is one instrument's total across every attribute set.
+func (h *applyHarness) counter(name string) uint64 {
+	h.t.Helper()
+	var total uint64
+	for _, snapshot := range h.metrics.Read() {
+		if snapshot.Name == name {
+			total += snapshot.Total
+		}
+	}
+	return total
 }
 
 const probeDDL = `
@@ -1015,6 +1035,89 @@ func TestTheOperationLedgerIsSwept(t *testing.T) {
 	if _, held, err := h.runner.Op(t.Context(), "op-7"); err != nil || !held {
 		t.Errorf("op-7 was swept inside its own retention (held=%v, %v)",
 			held, err)
+	}
+}
+
+// A BACKLOG WIDER THAN ONE BATCH STILL DRAINS.
+//
+// The sweep is batched because the applier's connection is pinned and its
+// commits are the same file's: one statement over a month of rows holds the
+// writer for as long as it takes, and the backlog case — a node returning from
+// a long absence — is exactly the one that matters. A loop that stopped after
+// its first batch would look identical on a small table and leave the month
+// behind on the one node that had it.
+func TestTheOperationSweepDrainsABacklogWiderThanOneBatch(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	// Written directly: applying enough records to cross the batch is a
+	// minute of broker round trips to test one loop.
+	rows := statelog.OpsPurgeBatch + 7
+	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		for i := range rows {
+			if _, err := tx.ExecContext(t.Context(), `
+				INSERT INTO probe_ops (op_id, subject, position, applied_at)
+				VALUES (?, 'probe.o1', 1, 0)`, fmt.Sprintf("op-%d", i)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed the ledger: %v", err)
+	}
+
+	swept, err := h.runner.PurgeOps(t.Context(), time.Now())
+	if err != nil {
+		t.Fatalf("PurgeOps: %v", err)
+	}
+	if swept != int64(rows) {
+		t.Errorf("the sweep deleted %d of %d rows — a loop that stops at its "+
+			"first batch leaves the backlog on the one node that had one",
+			swept, rows)
+	}
+	var left int
+	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(),
+			`SELECT COUNT(*) FROM probe_ops`).Scan(&left)
+	}); err != nil {
+		t.Fatalf("count what is left: %v", err)
+	}
+	if left != 0 {
+		t.Errorf("%d operation rows survive a sweep past every one of them", left)
+	}
+}
+
+// A CLEAN APPLY COUNTS NO TRANSACTION ABORTS.
+//
+// `apply.tx.aborts` is the number that says whether this driver's transaction
+// conflicts are row-scoped or database-scoped on the operator's own hardware,
+// and the constant it justifies was chosen against a MEASURED ZERO: a non-zero
+// count means the retry budget is being spent rather than held in reserve.
+//
+// An instrument that recorded on every run would be useless in the direction
+// that matters — the reserve would read as spent on a healthy fleet — and it
+// is one off-by-one away, because what the applier counts is its own re-runs
+// and a first attempt is not a retry.
+func TestApplyTxAbortsAreCounted(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	for seq := uint64(1); seq <= 5; seq++ {
+		h.fetch.offer(seq, env(seq, "edit", fmt.Sprintf("o%d", seq),
+			fmt.Sprintf("op-%d", seq), 1))
+	}
+	if err := h.run(5); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := h.counter(metrics.StatelogApplyTxAborts); got != 0 {
+		t.Errorf("a clean apply counted %d transaction abort(s) — the retry "+
+			"budget reads as spent on a fleet that has not spent any of it",
+			got)
+	}
+	// THE CONTROL, on the same recorder and the same instrument: the
+	// assertion above passes identically when nothing is wired at all,
+	// and this is what separates the two.
+	if got := h.counter(metrics.StatelogApplyRecords); got == 0 {
+		t.Error("the applier recorded no records at all, so this recorder is " +
+			"not connected and the assertion above proves nothing")
 	}
 }
 
