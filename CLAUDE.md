@@ -329,7 +329,7 @@ The implementation must follow the architecture docs in `docs/concepts/`. Key su
 7. **Communication** — external chat (Mattermost, Slack) + ephemeral A2A channels. The eight surfaces this build serves are Mattermost, Slack, GitLab, GitHub, Jira, Confluence, Datadog and Atlassian (`integration.Kinds`); every one routes end to end, and no integration block is refused any more
 8. **Notification Service** — queue-based spine, vendors on top
 9. **Provider Layer** — pluggable LLM and embeddings, with a credential pool and a fallback chain around them
-10. **Store** — the node's own embedded database (Turso, the only driver); coordination lives in the KV layer instead, never here
+10. **Store** — the node's own embedded databases (Turso, the only driver): TWO files brought up by one `Open` — the NODE estate and the REPLICATED estate beside it — because a snapshot is a copy of ONE of them and a single file would put the audit log's pages in every artefact. Coordination lives in the KV layer instead, never here
 11. **Coordination** — TTL leases with a fencing epoch, plus the fleet's shared counters, ledgers and the company's sealed credentials
 12. **Seat Ownership** — which node runs which seat, and how a fleet converges without a coordinator
 13. **Tool Registry** — builtins + MCP tools + A2A tools, each recording its origin
