@@ -385,6 +385,15 @@ func (e *Engine) NativeStatus(ctx context.Context) []ReplicationStatus {
 	return out
 }
 
+// Domains is every state-log domain this build runs, in the fixed order
+// [registeredDomains] declares.
+//
+// EXPOSED SO A CALLER DOES NOT WRITE THE LIST AGAIN. A second copy is what
+// makes a fourth domain silently absent from whatever walks it — the shape
+// that keeps a fleet comparison, an operator listing or a report certifying
+// two domains after somebody added a third.
+func (e *Engine) Domains() []statelog.Domain { return registeredDomains() }
+
 // Tracker is this node's tracker read side, or nil.
 func (e *Engine) Tracker() *tracker.Reader {
 	if e.native == nil {

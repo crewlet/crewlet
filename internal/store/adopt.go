@@ -50,29 +50,73 @@ import (
 // path, not the inode, so an open handle would be writing into a file that is
 // no longer at that name.
 func AdoptFile(ctx context.Context, live, prepared string) error {
-	if err := checkpointAndClose(ctx, prepared); err != nil {
-		return fmt.Errorf("store: adopt: prepare %s: %w", prepared, err)
-	}
-	if err := removeSidecars(prepared); err != nil {
-		return fmt.Errorf("store: adopt: %w", err)
-	}
-	// The live file may not exist — a node adopting before it ever opened
-	// a store of its own — and that is an ordinary adoption rather than an
-	// error, so both steps below tolerate its absence.
-	if _, err := os.Stat(live); err == nil {
-		if err := checkpointAndClose(ctx, live); err != nil {
-			return fmt.Errorf("store: adopt: quiesce %s: %w", live, err)
+	for _, step := range adoptSteps(live, prepared) {
+		if err := step.run(ctx); err != nil {
+			return err
 		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("store: adopt: stat %s: %w", live, err)
-	}
-	if err := removeSidecars(live); err != nil {
-		return fmt.Errorf("store: adopt: %w", err)
-	}
-	if err := os.Rename(prepared, live); err != nil {
-		return fmt.Errorf("store: adopt: rename %s over %s: %w", prepared, live, err)
 	}
 	return nil
+}
+
+// adoptStep is one step of the install, with the name the doc above gives it.
+type adoptStep struct {
+	name string
+	run  func(ctx context.Context) error
+}
+
+// adoptSteps is the order, AS A VALUE.
+//
+// The order IS the crash matrix — every one of the five steps exists because
+// the state a crash after it leaves is one the next open can make sense of,
+// and no other arrangement has that property. A straight line of five calls
+// says so only in a comment; a table is something a test can walk, cut at each
+// step, and check the invariant against. See TestTheAdoptsStepsRunInTheOrder
+// ItsCrashMatrixAssumes and TestAnInterruptedAdoptionLeavesOneDatabaseOrThe
+// Other.
+func adoptSteps(live, prepared string) []adoptStep {
+	return []adoptStep{
+		{"checkpoint the prepared file", func(ctx context.Context) error {
+			if err := checkpointAndClose(ctx, prepared); err != nil {
+				return fmt.Errorf("store: adopt: prepare %s: %w", prepared, err)
+			}
+			return nil
+		}},
+		{"remove the prepared file's sidecars", func(context.Context) error {
+			if err := removeSidecars(prepared); err != nil {
+				return fmt.Errorf("store: adopt: %w", err)
+			}
+			return nil
+		}},
+		{"checkpoint the live file", func(ctx context.Context) error {
+			// The live file may not exist — a node adopting before it
+			// ever opened a store of its own — and that is an ordinary
+			// adoption rather than an error, so this step and the next
+			// tolerate its absence.
+			if _, err := os.Stat(live); err != nil {
+				if os.IsNotExist(err) {
+					return nil
+				}
+				return fmt.Errorf("store: adopt: stat %s: %w", live, err)
+			}
+			if err := checkpointAndClose(ctx, live); err != nil {
+				return fmt.Errorf("store: adopt: quiesce %s: %w", live, err)
+			}
+			return nil
+		}},
+		{"remove the live file's sidecars", func(context.Context) error {
+			if err := removeSidecars(live); err != nil {
+				return fmt.Errorf("store: adopt: %w", err)
+			}
+			return nil
+		}},
+		{"rename prepared over live", func(context.Context) error {
+			if err := os.Rename(prepared, live); err != nil {
+				return fmt.Errorf("store: adopt: rename %s over %s: %w",
+					prepared, live, err)
+			}
+			return nil
+		}},
+	}
 }
 
 // QuiesceCopy makes a COPY of a database self-contained again: it folds the

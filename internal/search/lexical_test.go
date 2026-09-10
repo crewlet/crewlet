@@ -2,6 +2,7 @@ package search_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // page writes an applied page row, which is the indexer's input.
@@ -387,4 +389,106 @@ func waitFor(t *testing.T, want func() bool, why string) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	t.Fatal(why)
+}
+
+// A RESULT SET THAT FAILS PART WAY THROUGH IS AN ERROR, NEVER A SHORT ANSWER.
+//
+// # The branch, and why nothing else reaches it
+//
+// A read has two failure paths and they are not the same. The query failing
+// outright is the one every technique reaches — close the database and it
+// happens. The other is the result set failing DURING ITERATION, after the
+// query succeeded and some rows have already been scanned. That path decides
+// whether a caller gets "nothing is known" or a silent PARTIAL answer, and
+// only [storetest.FailReadsAfter] arms it.
+//
+// It matters most here. [Indexer.Search] RAISES rather than answering empty —
+// the adapter above it is what turns a failure into the empty block a turn
+// tolerates — so a missing rows.Err() check does not surface as an error at
+// all. It surfaces as a shorter list of hits, which is indistinguishable from
+// a company that has written less down, and a seat acts on it by writing a
+// page that already exists.
+func TestAReadThatFailsPartWayThroughIsNotAShortAnswer(t *testing.T) {
+	t.Parallel()
+	fault := storetest.FailReadsAfter(2, errors.New("the result set gave up"))
+	db, err := store.Open(t.Context(),
+		filepath.Join(t.TempDir(), "node.db"),
+		store.Options{WrapDriver: fault.Wrap})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	x := search.NewIndexer(db)
+	for i := range 12 {
+		page(t, db, fmt.Sprintf("p.%02d", i), "ENG", fmt.Sprintf("Doc %02d", i),
+			"the migration plan is here", 1)
+	}
+	indexAll(t, x)
+
+	// THE CONTROL, on a healthy store and the same handle. Without it, an
+	// assertion that a failed read answers nothing also passes for a store
+	// that never found anything.
+	healthy, err := x.Search(t.Context(), search.SearchQuery{
+		Text: "migration plan", Limit: 50,
+	})
+	if err != nil {
+		t.Fatalf("the control search failed: %v", err)
+	}
+	if len(healthy) != 12 {
+		t.Fatalf("the control found %d of 12 documents, so the assertion below "+
+			"would hold for a corpus this test never wrote", len(healthy))
+	}
+
+	fault.Arm()
+	broken, err := x.Search(t.Context(), search.SearchQuery{
+		Text: "migration plan", Limit: 50,
+	})
+	if err == nil {
+		t.Fatalf("a result set that failed after 2 rows returned %d hits and no "+
+			"error — a partial answer here is indistinguishable from a company "+
+			"that has written less down, and a seat acts on it by writing a "+
+			"page that already exists", len(broken))
+	}
+	if len(broken) != 0 {
+		t.Errorf("a failed read returned %d hits beside its error", len(broken))
+	}
+	// AND IT NAMES THE READ THAT FAILED — the posting scan, which is the
+	// first result set of this query wide enough to fail during
+	// iteration. Without this the case would hold while any ONE of the
+	// checks downstream survived, and would only go red when the last of
+	// them went: measured, dropping both this scan's rows.Err() and the
+	// hydration's returns 2 hits and no error at all.
+	if !strings.Contains(err.Error(), "read postings") {
+		t.Errorf("the failure is reported as %q — the posting scan is the read "+
+			"that failed, and an error naming a later one means this scan "+
+			"returned a short list somebody downstream tripped over", err)
+	}
+
+	// AND THE HYDRATION IS ITS OWN READ, reached directly because it
+	// cannot be reached through Search: the posting scan is always the
+	// wider result set, so any fault that fails the hydration has already
+	// failed the scan above it. The fan-out calls this one on its own —
+	// it fuses keys and reads the rows here — so a dropped rows.Err()
+	// would turn a partial answer into a short list of hits with no error
+	// anywhere.
+	if _, err := x.Hydrate(t.Context(), []string{
+		"page:p.00", "page:p.01", "page:p.02", "page:p.03", "page:p.04",
+	}, "migration plan"); err == nil {
+		t.Error("hydrating five keys through a result set that fails after 2 " +
+			"rows returned no error — the fused answer would be silently short")
+	}
+
+	// AND THE SAME HANDLE RECOVERS, so the failure was the fault rather
+	// than a database this test broke.
+	fault.Disarm()
+	again, err := x.Search(t.Context(), search.SearchQuery{
+		Text: "migration plan", Limit: 50,
+	})
+	if err != nil {
+		t.Fatalf("the store did not recover once the fault was disarmed: %v", err)
+	}
+	if len(again) != 12 {
+		t.Errorf("after recovery the search found %d of 12", len(again))
+	}
 }

@@ -339,3 +339,47 @@ func TestADonorsScrubClaimIsCheckedRatherThanTrusted(t *testing.T) {
 		t.Errorf("the refusal does not say why the claim matters: %v", err)
 	}
 }
+
+// THE FETCHED ARTEFACT LANDS BESIDE THE LIVE FILE, NOT IN A TEMPORARY
+// DIRECTORY.
+//
+// The install is a rename, and a rename is atomic only WITHIN one filesystem.
+// An artefact fetched to /tmp on a host whose data volume is a separate mount
+// would have to be copied across at the end — and that copy is the one moment
+// an interrupted adoption can leave a mixture, which is the single thing this
+// whole sequence is arranged to make impossible.
+//
+// It is asserted rather than left structural because the failure has no
+// symptom on a developer's machine, where /tmp and the working tree are the
+// same filesystem and the rename succeeds every time.
+//
+// The observation is taken at step 7's re-check, which is the one moment the
+// artefact is on disk under its own name: before it the transfer has not
+// finished, and after it the install has moved or removed it.
+func TestTheFetchedArtefactLandsBesideTheLiveFile(t *testing.T) {
+	t.Parallel()
+	h := newJoinHarness(t)
+
+	var whereItLanded string
+	h.stillUsable = func(context.Context, statelog.Manifest) error {
+		part := h.joinPath + statelog.AdoptPartSuffix
+		if _, err := os.Stat(part); err == nil {
+			whereItLanded = part
+		}
+		return nil
+	}
+	if _, err := h.adopter(t).Join(t.Context()); err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+
+	if whereItLanded == "" {
+		t.Fatal("no artefact was on disk when the install was about to run, so " +
+			"this case is asserting nothing about where a transfer lands")
+	}
+	if got, want := filepath.Dir(whereItLanded), filepath.Dir(h.joinPath); got != want {
+		t.Fatalf("the artefact was fetched to %s and the live database is in "+
+			"%s — the install is a rename, and across a filesystem boundary "+
+			"that becomes a copy: the one moment an interrupted adoption can "+
+			"leave a mixture", got, want)
+	}
+}
