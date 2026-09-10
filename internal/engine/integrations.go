@@ -169,7 +169,7 @@ func (e *Engine) startIntegrations(ctx context.Context) {
 				// during a boot.
 				return true
 			}
-			return company.Config.Integrations.Declares(kind.String())
+			return company.Config.DeclaresIntegration(kind.String())
 		},
 	})
 	if err != nil {
@@ -283,6 +283,22 @@ type passConverger struct {
 func (c *passConverger) Kind() integration.Kind { return c.pass.Kind() }
 
 func (c *passConverger) Reconcile(ctx context.Context) ([]integration.Finding, error) {
+	// A CANCELLED PASS IS A FAULT, AND THIS CHECK COMES FIRST FOR A REASON.
+	//
+	// Every arm below can answer without touching the network, and two of them
+	// answer in ways a dead context makes actively destructive: an empty
+	// finding list is read by the loop as "this integration is ready" and
+	// trusted for a full settled interval, and ErrNotConfigured makes it
+	// FORGET the surface's status row. A node draining during shutdown would
+	// walk its surfaces and delete the fleet's whole integration status on the
+	// way out.
+	//
+	// Guarded here rather than in each of the seven passes because this is the
+	// one frame every one of them reaches the loop through — the passes still
+	// carry their own, for the harnesses that drive them directly.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	company := c.engine.Company()
 	if company == nil {
 		// NO COMPANY, NOTHING TO CONVERGE. A node runs with no active

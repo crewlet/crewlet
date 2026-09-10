@@ -34,20 +34,25 @@ func (p *convergedPass) Run(ctx context.Context, _ setup.PassInput) ([]integrati
 	return nil, nil
 }
 
-// THE CONTRACT IS CERTIFIED AGAINST THE THING THAT IMPLEMENTS IT.
+// THE ADAPTER'S OWN HALF OF THE CONTRACT, and only that half.
 //
-// integrationtest states what every [integration.Reconciler] must do, and its
-// package doc calls the write-counting hook required because that clause is
-// "the one most likely to be wrong". It had no callers at all: the suite was
-// written, tested against its own fakes, and never pointed at anything the
-// engine runs.
+// This used to claim to be where integrationtest's contract binds, on the
+// reasoning that passConverger is the one implementation in the tree and every
+// surface reaches the loop through it. That reasoning is true and the
+// conclusion was wrong: the pass it was pointed at is the stub below, whose
+// Run returns (nil, nil), so "a converged pass writes nothing" — the clause the
+// whole suite exists for — was true because nothing happened. Seven real
+// reconcilers went uncertified while a green test said otherwise, which is the
+// worst state a suite can be in.
 //
-// passConverger is the only implementation in the tree — every surface reaches
-// the loop through it — so this is where the contract binds. What the suite
-// then certifies is the shared half of every vendor's pass: the kind it
-// reports, its stability across passes, that a converged world is left alone,
-// that two passes agree, and that a cancelled one is a fault.
-func TestTheLoopsReconcilerMeetsTheContract(t *testing.T) {
+// The contract binds in each third-party app's own package now, where a world
+// can be stood up converged and its writes counted. What is left here is worth
+// keeping and is worth being honest about: the ADAPTER is on the path of every
+// pass, so its own behaviour — the kind it reports, that the kind does not move
+// across passes, that it adds no writes of its own, that it does not turn a
+// cancelled context into a clean report — is a contract too, and one no vendor
+// harness exercises.
+func TestTheAdapterMeetsTheContract(t *testing.T) {
 	t.Parallel()
 	var pass *convergedPass
 	integrationtest.Run(t, integrationtest.Reconciler{
@@ -67,4 +72,37 @@ providers:
 		},
 		Mutations: func() int { return pass.writes },
 	})
+}
+
+// EVERY SURFACE THE LOOP KNOWS HAS AN ANSWER IN THE DOCUMENT TEST.
+//
+// [config.Company.DeclaresIntegration] is keyed on the surface's own string so
+// the config tier does not import integration, which means nothing in either
+// package can notice a [integration.Kind] added there and forgotten here. This
+// is where both are in scope, so this is where it is checked.
+//
+// The empty company is what makes it work. An unknown surface deliberately
+// answers TRUE — the caller deletes a status row on false, and an older node in
+// a rolling upgrade must not erase a newer node's — so a kind that fell through
+// to that default would look configured in a company that configures nothing.
+// A kind nobody handled therefore fails here rather than quietly keeping a row
+// alive for ever.
+func TestEverySurfaceHasADocumentTest(t *testing.T) {
+	t.Parallel()
+	empty := companyFor(t, `
+name: Acme
+providers:
+  llm:
+    gateway:
+      type: openai
+      model: gpt-4o
+      api_keys: ["${OPENAI_API_KEY}"]
+`)
+	for _, kind := range integration.Kinds {
+		if empty.Config.DeclaresIntegration(kind.String()) {
+			t.Errorf("a company that configures nothing declares %s, so it fell "+
+				"through to the unknown-surface default: add it to "+
+				"config.Company.DeclaresIntegration", kind)
+		}
+	}
 }

@@ -447,6 +447,80 @@ func (c *Company) validateProviderKeys() error {
 	return p.err()
 }
 
+// DeclaresIntegration reports whether this company still uses the named
+// external surface at all.
+//
+// # Why it lives on the whole document rather than on Integrations
+//
+// For seven of the eight it IS a question about the `integrations:` block, and
+// putting it there would be tidier. For Slack it is not: every agent carries
+// its own app under `role.integrations.slack`, and the company-level `slack:`
+// block holds working-indicator settings that a company using Slack heavily
+// may never write. Asked of the block alone, a company with seven working
+// Slack apps answers "no".
+//
+// That answer is not academic. Its one caller deletes a surface's fleet status
+// row on false, and Slack's row is the only place the engine records the public
+// base its Request URLs were set against — the single warning an operator ever
+// gets that a moved address has stranded every agent's Slack app, since Slack
+// serves no way to read that URL back. So the wrong answer here silently
+// removes the warning from exactly the surface that cannot self-heal.
+//
+// # Keyed on the surface's own string, not on its type
+//
+// The names are integration.Kind's values, and this takes a plain string so the
+// config tier does not import the package that defines them. An exhaustiveness
+// test over integration.Kinds lives where both are already in scope, so a
+// surface added there and forgotten here fails a suite rather than answering
+// false for ever.
+//
+// # What it must NOT be used for
+//
+// A surface that has a reconcile pass. This asks about the DOCUMENT; a pass
+// asks a richer question about the integration, and every one of them reads
+// `enabled: false` as not configured where this sees a block and says yes. Two
+// authorities that disagree on a paused integration is a status row flapping
+// between them, which is why the reconcile loop asks this only about the
+// surfaces that have no pass.
+func (c *Company) DeclaresIntegration(surface string) bool {
+	if c == nil {
+		return false
+	}
+	in := c.Integrations
+	switch surface {
+	case "jira":
+		return in.Jira != nil
+	case "confluence":
+		return in.Confluence != nil
+	case "mattermost":
+		return in.Mattermost != nil
+	case "github":
+		return in.GitHub != nil
+	case "gitlab":
+		return in.GitLab != nil
+	case "datadog":
+		return in.Datadog != nil
+	case "atlassian":
+		return in.Atlassian != nil
+	case "slack":
+		if in.Slack != nil {
+			return true
+		}
+		for role := range c.EachRole() {
+			if role.Integrations.Slack != nil {
+				return true
+			}
+		}
+		return false
+	default:
+		// A SURFACE THIS BUILD DOES NOT KNOW, which on a rolling upgrade is
+		// a peer's. True rather than false, because the only caller deletes
+		// on false and an older node must not erase a newer one's row — the
+		// same rule integration.Kind.Valid states for the loop itself.
+		return true
+	}
+}
+
 // EachRole yields EVERY seat in the company, with the path an operator typed:
 // the top-level `roles:` and every seat inside `units:`, to any depth.
 //

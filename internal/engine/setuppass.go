@@ -123,7 +123,7 @@ func (p *atlassianPass) Run(ctx context.Context, in setup.PassInput) ([]integrat
 		return nil, fmt.Errorf("engine: atlassian pass: %w", err)
 	}
 	findings := res.Findings()
-	if note := p.recordSite(ctx, company, res.Site, in.Sink != nil); note != "" {
+	if note := p.recordSite(ctx, company, res.Site, provision.CanMint(in.Sink)); note != "" {
 		findings = append(findings, integration.Finding{
 			Kind: integration.FindingGrantShort, Detail: note,
 		})
@@ -138,6 +138,12 @@ func (p *atlassianPass) Run(ctx context.Context, in setup.PassInput) ([]integrat
 // the products and their host, so asking an operator for a site address, a
 // cloud id and a link address is asking them to copy three values out of a
 // console this engine is already reading.
+//
+// WHAT "writing" MEANS HERE IS provision.CanMint, not "a sink was supplied".
+// The test was `in.Sink != nil`, and the reconcile loop hands every pass a
+// non-nil READ-ONLY sink — so a node explicitly told it cannot seal anything
+// still advanced the company's config epoch, from a timer, on every pass until
+// the field happened to stick.
 //
 // The CLOUD ID is the load-bearing one: a provisioned service account's token
 // is refused by the site host and accepted only at the API gateway, so a

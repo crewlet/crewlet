@@ -552,3 +552,54 @@ func TestTheCoalescingCeilingsAreTheOnesTheContractEnforces(t *testing.T) {
 		}
 	}
 }
+
+// A COMPANY USING SLACK PER SEAT STILL DECLARES SLACK.
+//
+// Every agent carries its own Slack app under `role.integrations.slack`, and
+// the company-level `slack:` block is working-indicator settings a company may
+// never write. Asked of the block alone the answer is "no" — and the one
+// caller of this deletes the surface's fleet status row on "no", which is where
+// the engine records the public base Slack's Request URLs were set against.
+// Slack serves no way to read that URL back, so that row is the only warning an
+// operator ever gets that a moved address has stranded every agent's app.
+func TestSlackIsDeclaredByASeatWithNoCompanyBlock(t *testing.T) {
+	t.Parallel()
+	company := &Company{
+		Name: "Acme",
+		Roles: []Role{{
+			Name: "SRE Lead",
+			Integrations: RoleIntegrations{Slack: &RoleSlack{
+				BotToken:      "${SLACK_BOT_TOKEN}",
+				SigningSecret: "${SLACK_SIGNING_SECRET}",
+			}},
+		}},
+	}
+	if !company.DeclaresIntegration("slack") {
+		t.Fatal("a company whose seats hold Slack apps was reported as not " +
+			"declaring Slack, which deletes the only record of the address " +
+			"those apps deliver to")
+	}
+}
+
+// AND A COMPANY USING IT NOWHERE DOES NOT, or the row would never be cleaned
+// up and a later reconnect would inherit an address from the company before it.
+func TestSlackIsNotDeclaredWithoutABlockOrASeat(t *testing.T) {
+	t.Parallel()
+	company := &Company{Name: "Acme", Roles: []Role{{Name: "SRE Lead"}}}
+	if company.DeclaresIntegration("slack") {
+		t.Fatal("a company using Slack nowhere was reported as declaring it")
+	}
+}
+
+// A SURFACE THIS BUILD DOES NOT KNOW IS DECLARED, because the only caller
+// deletes on false and a rolling upgrade puts a newer node's surface in front
+// of an older reader. Erasing a peer's status row every tick, and watching it
+// written back on every pass of theirs, is the failure this direction avoids.
+func TestAnUnknownSurfaceIsTreatedAsDeclared(t *testing.T) {
+	t.Parallel()
+	company := &Company{Name: "Acme"}
+	if !company.DeclaresIntegration("a-surface-from-a-newer-build") {
+		t.Fatal("an unknown surface answered false, so an older node would " +
+			"delete a newer node's status row")
+	}
+}
