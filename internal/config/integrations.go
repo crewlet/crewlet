@@ -69,6 +69,56 @@ type Integrations struct {
 	PublicBaseURL string `yaml:"public_base_url,omitempty" json:"public_base_url,omitempty" desc:"HTTPS base a vendor reaches this deployment on, e.g. https://crewlet.example.com. Empty means no inbound address."`
 }
 
+// Declares reports whether this document has a block for the named surface.
+//
+// # Keyed on the surface's own string, not on its type
+//
+// The names are integration.Kind's values, and this takes a plain string so
+// the config tier does not have to import the package that defines them.
+// Nothing is lost: an exhaustiveness test over integration.Kinds lives where
+// both packages are already in scope, so a surface added there and forgotten
+// here fails the build's own suite rather than answering false for ever.
+//
+// # What it is for, and the one thing it must not be used for
+//
+// The reconcile loop asks it about TEARDOWN-ONLY surfaces — the ones with no
+// pass of their own to report integration.ErrNotConfigured, which today is
+// Slack alone — so a row the setup form stamped an address on is removed when
+// its block leaves the document instead of outliving it for the life of the
+// deployment.
+//
+// It must NOT be used for a surface that has a pass. This answers a question
+// about the DOCUMENT, and a pass answers a richer one about the integration:
+// every one of them reads `enabled: false` as not configured, where this sees
+// a block and says yes. Two authorities that disagree on a paused integration
+// is a row flapping between them.
+func (i Integrations) Declares(surface string) bool {
+	switch surface {
+	case "jira":
+		return i.Jira != nil
+	case "confluence":
+		return i.Confluence != nil
+	case "slack":
+		return i.Slack != nil
+	case "mattermost":
+		return i.Mattermost != nil
+	case "github":
+		return i.GitHub != nil
+	case "gitlab":
+		return i.GitLab != nil
+	case "datadog":
+		return i.Datadog != nil
+	case "atlassian":
+		return i.Atlassian != nil
+	default:
+		// A SURFACE THIS BUILD DOES NOT KNOW, which on a rolling upgrade is
+		// a peer's. True rather than false, because the only caller deletes
+		// on false and an older node must not erase a newer one's row — the
+		// same rule integration.Kind.Valid states for the loop itself.
+		return true
+	}
+}
+
 // WebhookBase is the base every inbound path is built on, without a trailing
 // slash, or empty when this deployment has no inbound address THIS PROCESS
 // CAN READ.

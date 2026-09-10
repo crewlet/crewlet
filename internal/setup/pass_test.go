@@ -53,6 +53,30 @@ func newGate(kind integration.Kind) *gatePass {
 
 var pinnedNow = func() time.Time { return time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC) }
 
+// runPass mirrors exactly what every caller of this package does: take the
+// surface's guard, run the pass on the context it hands back, and give the
+// guard back only once the outcome has been recorded.
+//
+// A HELPER RATHER THAN A METHOD, deliberately. It used to be [Runner.Start],
+// which took the guard and released it the instant the pass returned — and
+// that put the caller's status write outside the lease, which is the lost
+// update the whole guard exists to prevent. Making the caller hold is what
+// fixed it, so a test that wants a pass has to do what a caller does.
+func runPass(
+	t *testing.T, r *Runner, kind integration.Kind, in PassInput, id string,
+) (*Run, error) {
+	t.Helper()
+	ctx, release, held, err := r.Hold(context.Background(), kind)
+	switch {
+	case err != nil:
+		return nil, err
+	case !held:
+		return nil, ErrPassInFlight
+	}
+	defer release()
+	return r.Execute(ctx, kind, in, id)
+}
+
 // TWO OPERATORS MUST NOT MINT AT ONE VENDOR AT ONCE, and the in-process half
 // of that guard is this one: the fleet lease stops two NODES, and nothing
 // about it stops two goroutines on the same node racing each other.
@@ -62,12 +86,12 @@ func TestASecondPassForOneVendorIsRefusedWhileTheFirstRuns(t *testing.T) {
 
 	first := make(chan error, 1)
 	go func() {
-		_, err := r.Start(context.Background(), integration.KindGitHub, PassInput{}, "run-1")
+		_, err := runPass(t, r, integration.KindGitHub, PassInput{}, "run-1")
 		first <- err
 	}()
 	<-pass.entered
 
-	if _, err := r.Start(context.Background(), integration.KindGitHub, PassInput{}, "run-2"); !errors.Is(err, ErrPassInFlight) {
+	if _, err := runPass(t, r, integration.KindGitHub, PassInput{}, "run-2"); !errors.Is(err, ErrPassInFlight) {
 		t.Fatalf("second Start returned %v, want ErrPassInFlight", err)
 	}
 	if got := pass.count(); got != 1 {
@@ -85,10 +109,10 @@ func TestASecondPassForOneVendorIsRefusedWhileTheFirstRuns(t *testing.T) {
 	done := newGate(integration.KindGitHub)
 	close(done.release)
 	r2 := NewRunner([]Pass{done}, nil, pinnedNow)
-	if _, err := r2.Start(context.Background(), integration.KindGitHub, PassInput{}, "a"); err != nil {
+	if _, err := runPass(t, r2, integration.KindGitHub, PassInput{}, "a"); err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	if _, err := r2.Start(context.Background(), integration.KindGitHub, PassInput{}, "b"); err != nil {
+	if _, err := runPass(t, r2, integration.KindGitHub, PassInput{}, "b"); err != nil {
 		t.Fatalf("a second pass after the first finished was refused: %v", err)
 	}
 }
@@ -105,7 +129,7 @@ func TestALeaseThatCannotBeReadIsNotReportedAsInFlight(t *testing.T) {
 		return func(context.Context) (func(), bool, error) { return nil, false, blip }
 	}, pinnedNow)
 
-	_, err := r.Start(context.Background(), integration.KindGitHub, PassInput{}, "run-1")
+	_, err := runPass(t, r, integration.KindGitHub, PassInput{}, "run-1")
 	if errors.Is(err, ErrPassInFlight) {
 		t.Fatal("an unreadable lease was reported as a pass already running")
 	}
@@ -126,7 +150,7 @@ func TestALeaseHeldElsewhereIsInFlight(t *testing.T) {
 		return func(context.Context) (func(), bool, error) { return nil, false, nil }
 	}, pinnedNow)
 
-	if _, err := r.Start(context.Background(), integration.KindGitHub, PassInput{}, "run-1"); !errors.Is(err, ErrPassInFlight) {
+	if _, err := runPass(t, r, integration.KindGitHub, PassInput{}, "run-1"); !errors.Is(err, ErrPassInFlight) {
 		t.Fatalf("err = %v, want ErrPassInFlight", err)
 	}
 	if got := pass.count(); got != 0 {
@@ -138,7 +162,7 @@ func TestALeaseHeldElsewhereIsInFlight(t *testing.T) {
 // than reported as a pass that did nothing.
 func TestAVendorWithNoPassIsRefused(t *testing.T) {
 	r := NewRunner(nil, nil, pinnedNow)
-	if _, err := r.Start(context.Background(), integration.KindSlack, PassInput{}, "run-1"); !errors.Is(err, ErrNoPass) {
+	if _, err := runPass(t, r, integration.KindSlack, PassInput{}, "run-1"); !errors.Is(err, ErrNoPass) {
 		t.Fatalf("err = %v, want ErrNoPass", err)
 	}
 	if r.Serves(integration.KindSlack) {
@@ -153,7 +177,7 @@ func TestAFailedPassIsRecordedRatherThanForgotten(t *testing.T) {
 	pass := &gatePass{kind: integration.KindGitHub, err: boom}
 	r := NewRunner([]Pass{pass}, nil, pinnedNow)
 
-	run, err := r.Start(context.Background(), integration.KindGitHub, PassInput{}, "run-1")
+	run, err := runPass(t, r, integration.KindGitHub, PassInput{}, "run-1")
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want the third-party app's own failure", err)
 	}
@@ -211,7 +235,7 @@ func TestTheProvisioningLeaseIsGivenBack(t *testing.T) {
 	lease := new(countingDuty)
 	r := NewRunner([]Pass{pass}, lease.duty, pinnedNow)
 
-	if _, err := r.Start(context.Background(), integration.KindGitHub, PassInput{}, "run-1"); err != nil {
+	if _, err := runPass(t, r, integration.KindGitHub, PassInput{}, "run-1"); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	if held, released := lease.counts(); held != 1 || released != 1 {
@@ -228,7 +252,7 @@ func TestAFailedPassStillGivesTheLeaseBack(t *testing.T) {
 	lease := new(countingDuty)
 	r := NewRunner([]Pass{pass}, lease.duty, pinnedNow)
 
-	if _, err := r.Start(context.Background(), integration.KindGitHub, PassInput{}, "run-1"); err == nil {
+	if _, err := runPass(t, r, integration.KindGitHub, PassInput{}, "run-1"); err == nil {
 		t.Fatal("a failing pass reported success")
 	}
 	if _, released := lease.counts(); released != 1 {
@@ -244,7 +268,7 @@ func TestAHoldGivesTheLeaseBack(t *testing.T) {
 	lease := new(countingDuty)
 	r := NewRunner([]Pass{newGate(integration.KindGitHub)}, lease.duty, pinnedNow)
 
-	release, held, err := r.Hold(context.Background(), integration.KindGitHub)
+	_, release, held, err := r.Hold(context.Background(), integration.KindGitHub)
 	if err != nil || !held {
 		t.Fatalf("Hold = (%v, %v), want held", held, err)
 	}
@@ -269,13 +293,13 @@ func TestAHoldIsRefusedWhileAPassRunsOnThisNode(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		close(started)
-		_, err := r.Start(context.Background(), integration.KindGitHub, PassInput{}, "run-1")
+		_, err := runPass(t, r, integration.KindGitHub, PassInput{}, "run-1")
 		done <- err
 	}()
 	<-started
 	<-pass.entered
 
-	release, held, err := r.Hold(context.Background(), integration.KindGitHub)
+	_, release, held, err := r.Hold(context.Background(), integration.KindGitHub)
 	switch {
 	case err != nil:
 		t.Fatalf("Hold reported a fault rather than a busy surface: %v", err)
@@ -290,7 +314,7 @@ func TestAHoldIsRefusedWhileAPassRunsOnThisNode(t *testing.T) {
 	}
 	// AND THE SURFACE IS FREE AGAIN once the pass ends, or the refusal
 	// above would be a deadlock rather than a guard.
-	release, held, err = r.Hold(context.Background(), integration.KindGitHub)
+	_, release, held, err = r.Hold(context.Background(), integration.KindGitHub)
 	if err != nil || !held {
 		t.Fatalf("Hold after the pass ended = (%v, %v), want held", held, err)
 	}
@@ -307,7 +331,7 @@ func TestARefusedHoldTakesNoLease(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := r.Start(context.Background(), integration.KindGitHub, PassInput{}, "run-1")
+		_, err := runPass(t, r, integration.KindGitHub, PassInput{}, "run-1")
 		done <- err
 	}()
 	<-pass.entered
@@ -315,7 +339,7 @@ func TestARefusedHoldTakesNoLease(t *testing.T) {
 	// The live pass holds one, so the assertion is that the refused hold
 	// took NONE — not that nothing is held at all.
 	beforeHeld, beforeReleased := lease.counts()
-	if _, held, _ := r.Hold(context.Background(), integration.KindGitHub); held {
+	if _, _, held, _ := r.Hold(context.Background(), integration.KindGitHub); held {
 		t.Fatal("a hold was granted while a pass was writing at the same surface")
 	}
 	afterHeld, afterReleased := lease.counts()
@@ -328,5 +352,98 @@ func TestARefusedHoldTakesNoLease(t *testing.T) {
 	close(pass.release)
 	if err := <-done; err != nil {
 		t.Fatalf("Start: %v", err)
+	}
+}
+
+// THE PASS MUST FINISH INSIDE THE LEASE THAT PROTECTS IT.
+//
+// The lease is taken once and never renewed, so a pass allowed to outlive it
+// would go on creating accounts at a third-party app with nothing left
+// excluding a peer — two nodes creating an identity for one seat, which no
+// later pass can detect or repair. That is the entire argument for a deadline,
+// and it holds only while these two numbers stand in this relationship.
+//
+// Pinned rather than remembered: they were in two packages, one of which did
+// not apply a deadline at all, and nothing anywhere compared them.
+func TestThePassDeadlineFitsInsideTheLease(t *testing.T) {
+	t.Parallel()
+	if PassDeadline >= LeaseTTL {
+		t.Fatalf("PassDeadline is %s against a LeaseTTL of %s, so a pass that "+
+			"runs to its deadline is writing at a third-party app with no lease "+
+			"left to exclude a peer", PassDeadline, LeaseTTL)
+	}
+	if RecordDeadline <= 0 {
+		t.Fatalf("RecordDeadline is %s, so the write that records a pass has no "+
+			"room inside the lease the pass ran under", RecordDeadline)
+	}
+}
+
+// AND THE HOLD IS WHAT APPLIES IT, so no caller can forget.
+//
+// The deadline used to be the caller's to remember, and one of the two callers
+// did not: every reconcile-loop pass ran unbounded against a lease it could
+// outlive, while the dashboard's identical pass had been bounded for exactly
+// this reason since the day it was written.
+func TestAHoldBoundsTheWorkItAdmits(t *testing.T) {
+	t.Parallel()
+	r := NewRunner([]Pass{&gatePass{kind: integration.KindGitHub}}, nil, nil)
+
+	ctx, release, held, err := r.Hold(context.Background(), integration.KindGitHub)
+	if err != nil || !held {
+		t.Fatalf("Hold: held=%v err=%v", held, err)
+	}
+	defer release()
+
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("the context a hold returns carries no deadline, so a pass can " +
+			"outlive the lease protecting it")
+	}
+	if left := time.Until(deadline); left > PassDeadline {
+		t.Fatalf("the deadline is %s away, which is more than PassDeadline (%s)",
+			left, PassDeadline)
+	}
+}
+
+// A HOLD DERIVES FROM THE CALLER'S CONTEXT rather than replacing it.
+//
+// Detaching here instead would look like a tidier place for it and break two
+// things at once: the shared certification suite drives a pass with an
+// already-cancelled context and requires a fault rather than a clean report,
+// and the reconcile loop's Stop would no longer reach a pass in flight.
+func TestAHoldStillCarriesTheCallersCancellation(t *testing.T) {
+	t.Parallel()
+	r := NewRunner([]Pass{&gatePass{kind: integration.KindGitHub}}, nil, nil)
+
+	parent, cancel := context.WithCancel(context.Background())
+	ctx, release, held, err := r.Hold(parent, integration.KindGitHub)
+	if err != nil || !held {
+		t.Fatalf("Hold: held=%v err=%v", held, err)
+	}
+	defer release()
+
+	cancel()
+	if ctx.Err() == nil {
+		t.Fatal("cancelling the caller's context did not reach the pass, so a " +
+			"stopping worker cannot stop the work it started")
+	}
+}
+
+// A NODE WITH NO RUNNER IS STILL BOUNDED. It has no keyring, so it mints
+// nothing and holds no lease — but it still reads a third-party app, and a read
+// that never returns wedges the loop just as thoroughly as one that outlived a
+// lease would.
+func TestANilRunnerStillBoundsThePass(t *testing.T) {
+	t.Parallel()
+	var r *Runner
+
+	ctx, release, held, err := r.Hold(context.Background(), integration.KindGitHub)
+	if err != nil || !held {
+		t.Fatalf("Hold on a nil runner: held=%v err=%v", held, err)
+	}
+	defer release()
+
+	if _, ok := ctx.Deadline(); !ok {
+		t.Fatal("a node with no runner runs its passes unbounded")
 	}
 }

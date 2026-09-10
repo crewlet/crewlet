@@ -53,15 +53,6 @@ import (
 
 var log = logging.Get("api.setup")
 
-// PassDeadline bounds one provisioning pass.
-//
-// Just inside the fleet lease a pass holds (internal/engine's
-// setupLeaseTTL, 5 minutes), because the lease is what stops two operators
-// minting at the same third-party app at once and it is not renewed mid-pass. A pass
-// that outlived it would still be writing at the third-party app with nothing left
-// holding anyone else off.
-const PassDeadline = 4 * time.Minute
-
 // MaxBody bounds one submission.
 //
 // Small on purpose: the largest thing a submission carries is a third-party app API
@@ -1615,12 +1606,15 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	// FORCED, so whatever the third-party app still holds is now the operator's to
 	// remove. The status row goes with the block: leaving one would report
 	// a surface that is no longer configured.
+	//
+	// UNDER THE SURFACE'S OWN GUARD, like every other write about a row. This
+	// was the last writer that took none, and it is the most destructive of
+	// them: a reconcile tick that ran its pass against the block a moment
+	// before this deleted it writes the row straight back, so the surface a
+	// person has just forced away reappears on the screen, reported healthy,
+	// with no block behind it and nothing to remove it again.
 	if s.status != nil {
-		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := s.status.ForgetIntegration(r.Context(), kind); err != nil {
-			log.WarnContext(r.Context(), "setup_status_not_forgotten",
-				"integration", kind, "error", err)
-		}
+		s.forgetUnderGuard(r.Context(), kind)
 	}
 	// WHAT IS ACTUALLY ORPHANED, which is only what was actually stored.
 	// This walked every secret REQUIREMENT, so an integration with
@@ -1762,7 +1756,7 @@ func (s *Service) markDisconnecting(
 	// the row a moment earlier would put its own back over the top — losing
 	// a disconnect an operator asked for, with the screen still reporting
 	// the integration connected. See [setup.Runner.Hold].
-	release, held, err := s.passes.Hold(ctx, kind)
+	_, release, held, err := s.passes.Hold(ctx, kind)
 	if err != nil {
 		return fmt.Errorf(
 			"setupapi: this node could not take %s to record the disconnect: %w",
@@ -1794,6 +1788,32 @@ func (s *Service) markDisconnecting(
 	state.NextAttemptAt = time.Time{}
 	state.Attempts = 0
 	return s.status.SaveIntegration(ctx, state)
+}
+
+// forgetUnderGuard removes a surface's status row with every other writer at
+// that surface excluded.
+//
+// A FAILED GUARD IS NOT A FAILED DISCONNECT. The block is already gone by the
+// time this runs — the config apply is what the operator asked for and it has
+// landed — so a row that could not be removed is a stale row rather than a
+// half-done disconnect, and the loop's own sweep removes it on a later tick
+// once the document no longer declares the surface. Refusing the request over
+// it would report a failure for work that succeeded.
+func (s *Service) forgetUnderGuard(ctx context.Context, kind integration.Kind) {
+	_, release, held, err := s.passes.Hold(ctx, kind)
+	if err != nil || !held {
+		log.WarnContext(ctx, "setup_status_not_forgotten",
+			"integration", kind, "error", errorOrBusy(err),
+			"detail", "another writer holds this surface, so its row is left "+
+				"for the reconcile loop to sweep once the block is gone")
+		return
+	}
+	defer release()
+
+	if err := s.status.ForgetIntegration(ctx, kind); err != nil {
+		log.WarnContext(ctx, "setup_status_not_forgotten",
+			"integration", kind, "error", err)
+	}
 }
 
 // githubOrgOf is the organization an agent's app is managed under.

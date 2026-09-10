@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"strings"
 
@@ -233,24 +232,33 @@ func (e *Engine) newSetupRunner() *setup.Runner {
 	return setup.NewRunner(e.setupPasses(), e.setupDuty, nil)
 }
 
-// holdSurface takes the one guard every writer at a surface passes through.
+// holdSurface takes the one guard every writer at a surface passes through,
+// and hands back the context the work must run on.
 //
-// The loop's tick and a disconnect's teardown reach a third-party app without
-// going through [setup.Runner.Start], so they take the guard here instead —
-// the same in-process claim and the same fleet lease an operator's pass takes,
-// which is what makes the three mutually exclusive rather than merely
-// serialized in pairs.
+// The reconcile loop's worker takes it around a whole visit — the row re-read,
+// the pass and the status write that records it — and a disconnect's teardown
+// takes it around its own. Both reach a third-party app without going through
+// [setup.Runner.Execute], so they take the guard here instead: the same
+// in-process claim and the same fleet lease an operator's pass takes, which is
+// what makes the three mutually exclusive rather than merely serialized in
+// pairs.
+//
+// THE CONTEXT IS THE POINT OF THE RETURN VALUE. The lease is never renewed
+// mid-pass, so work that outlived it would be writing at a third-party app with
+// nothing left excluding a peer. The returned context carries
+// [setup.PassDeadline], which is strictly inside [setup.LeaseTTL], so that
+// cannot happen by construction rather than by measurement.
 //
 // A node with no runner has no keyring to mint into and therefore nothing to
-// serialize: it reads and reports. held is true there, and release is a no-op.
+// serialize: it reads and reports. held is true there, the deadline still
+// applies, and release is the cancel.
 func (e *Engine) holdSurface(
 	ctx context.Context, kind integration.Kind,
-) (func(), bool, error) {
-	runner := e.SetupRunner()
-	if runner == nil {
-		return func() {}, true, nil
-	}
-	return runner.Hold(ctx, kind)
+) (context.Context, func(), bool, error) {
+	// A nil runner goes through [setup.Runner.Hold]'s own nil-receiver branch
+	// rather than a second copy of that decision here: there is one rule for
+	// what an unguarded hold means and it lives with the guard.
+	return e.SetupRunner().Hold(ctx, kind)
 }
 
 // setupDutyName is the ONE name a surface's provisioning is serialized under.
@@ -276,20 +284,12 @@ func setupDutyName(kind integration.Kind) string {
 // pass because it is a BACKSTOP for a node that died mid-run rather than a
 // deadline for the work: the lease is given back when the work ends.
 func (e *Engine) setupDuty(kind integration.Kind) setup.Duty {
-	hold := e.workerHold(setupDutyName(kind), setupLeaseTTL)
+	hold := e.workerHold(setupDutyName(kind), setup.LeaseTTL)
 	if hold == nil {
 		return nil
 	}
 	return setup.Duty(hold)
 }
-
-// setupLeaseTTL bounds how long one pass may hold its third-party app.
-//
-// Five minutes against passes measured in seconds: the value is a backstop
-// for a node that died mid-run, not a deadline for the work. Shorter would
-// risk a live pass losing its lease; much longer would leave a third-party app locked
-// out after a crash for no benefit.
-const setupLeaseTTL = 5 * time.Minute
 
 // Teardown removes the webhooks this pass registered, at both the
 // organization and the repository level.

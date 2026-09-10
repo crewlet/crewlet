@@ -137,21 +137,75 @@ var ErrCredentialRejected = errors.New("integration: the third-party app refused
 // disconnect that is simply early.
 var ErrDisconnectUnavailable = errors.New("integration: this node cannot complete a disconnect yet")
 
-// ErrReconcileUnavailable reports a surface this tick may not touch RIGHT NOW,
-// as distinct from one that failed.
+// Guard is the ONE claim every writer at one surface passes through, and the
+// bound on the work it admits.
 //
-// [ErrDisconnectUnavailable]'s twin for the other half of the tick, and it
-// exists for the same reason: the answer is about THIS MOMENT, not about the
-// integration. Today it means somebody else is already writing at the surface
-// — an operator's pass from the dashboard holds the provisioning lease this
-// tick would otherwise have taken — and the honest response is to come back,
-// not to record anything.
+// # Why the worker takes it rather than the reconciler
 //
-// Recording would be wrong twice over. An attempt backs the cadence off for a
-// pass that never ran, and a fault puts an error on the screen describing a
-// surface that is at that moment being provisioned successfully by somebody
-// else.
-var ErrReconcileUnavailable = errors.New("integration: this surface is busy, so this tick did not reconcile it")
+// Three callers write at a third-party app and none can see the others: a pass
+// an operator ran from the dashboard, a tick of this loop, and a disconnect's
+// teardown. Two at once is one creating the account another is deleting.
+//
+// The loop used to take this INSIDE its reconciler and give it back the moment
+// the pass returned — which left the write that RECORDS the pass outside it.
+// That is a lost update with a name: an operator's disconnect, written under
+// the guard on the node serving the API, silently overwritten by a tick
+// folding a row it had read before the pass began. The card flipped back to
+// connected and they pressed the button again. So the guard is taken out here,
+// where it can span the re-read, the pass and the status write alike.
+//
+// # Three-valued, because the third value is the whole point
+//
+// held false is knowledge: somebody else is writing at this surface. An error
+// is a failure to look, and a coordination store that could not answer has NOT
+// said the surface is idle — acting on that guess is what creates the
+// duplicate the guard exists to prevent. Collapsing them into a bool would put
+// this back where CLAUDE.md's three-valued rule says never to be.
+//
+// # It BOUNDS the work
+//
+// The returned context carries the caller's own pass deadline, so a pass
+// cannot outlive the lease protecting it. It must DERIVE from ctx rather than
+// replace it: a worker stopping mid-pass, and the shared certification suite
+// handing in a cancelled context, both have to reach the reconciler.
+//
+// release is non-nil exactly when held is true, and calling it is what lets the
+// next writer in. Nil Guard is an unguarded worker — the shape a test builds
+// and the shape a node with no keyring runs, where there is no lease to take
+// and nothing to serialize against.
+type Guard func(ctx context.Context, kind Kind) (
+	bounded context.Context, release func(), held bool, err error)
+
+// AdmitsFunc reports whether this node's configuration is current enough to
+// converge a third-party app.
+//
+// # Why the loop asks at all
+//
+// Every reconciler reads the LIVE company document on each pass, and on a node
+// whose posture is shed or stuck that document is the epoch the fleet has
+// already replaced. Converging a third-party app to it undoes what the current
+// revision asked for: an account a removed seat should no longer have is kept,
+// a webhook is re-registered at the previous address, and the status row says
+// ready. The node least able to answer for the company is the one with the
+// fewest other duties competing for the lease, so it is if anything MORE likely
+// to be holding this one.
+//
+// # Asked here rather than folded into the duty claim
+//
+// [schedule.Scheduler] already spells this rule for its own tick, for the same
+// reason and in the same shape, and folding it into the shared worker-duty
+// helper instead would gate every fleet singleton at once. That is not a
+// bigger version of this fix, it is a different and worse one: a node's roles
+// and its posture are decided by different subsystems that do not consult each
+// other, so an ingress-only peer counts as healthy in the shed decision while
+// refusing every duty on roles — and an ingress+workers fleet whose worker node
+// fails one apply ends with NO node running any singleton, /ready green and
+// nothing logged. Gated here, a shedding node declines this one duty, says so,
+// and a worker-capable peer takes it.
+//
+// Nil admits, which is the single-node case and the case before a control
+// plane exists.
+type AdmitsFunc func() bool
 
 // Reject marks err as a credential refusal when the third-party app answered with an
 // authentication or authorization status, and returns it untouched otherwise.
@@ -265,6 +319,38 @@ type Options struct {
 	// ClaimDuty gates each tick on holding the fleet's reconcile duty.
 	ClaimDuty DutyFunc
 
+	// Guard serializes every writer at one surface and bounds the pass. See
+	// [Guard]; nil runs the loop unguarded.
+	Guard Guard
+
+	// Admits gates the tick on this node's config posture, BEFORE the duty
+	// is claimed so a shedding node's lease lapses and a peer can take it.
+	// See [AdmitsFunc]; nil admits.
+	Admits AdmitsFunc
+
+	// Configured reports whether the company document still declares a
+	// surface, and is consulted for TEARDOWN-ONLY kinds alone.
+	//
+	// # Why only those, when the question sounds general
+	//
+	// A surface with a reconciler already answers it, better: the pass reads
+	// the live document and returns [ErrNotConfigured], which [Observe] turns
+	// into a forget. That answer knows things this one cannot — every pass
+	// treats `enabled: false` as not configured, where a document-shaped test
+	// sees a block and says yes — so consulting both would give one surface
+	// two authorities that disagree, and a paused integration would flap
+	// between them.
+	//
+	// A teardown-only kind has no pass to ask, and today that is Slack alone.
+	// Its row is written by the setup form (an endpoint, so a moved Request
+	// URL can be reported) and nothing has ever been able to remove it: the
+	// row outlived the `slack:` block for the life of the deployment, and a
+	// later reconnect inherited a stale address. This is the answer for that
+	// one class and no other.
+	//
+	// Nil means this node cannot say, and nothing is forgotten on a guess.
+	Configured func(Kind) bool
+
 	// Interval overrides [Interval]. Zero takes it.
 	Interval time.Duration
 
@@ -325,6 +411,9 @@ type Worker struct {
 	store        Store
 	schedule     Schedule
 	claim        DutyFunc
+	guard        Guard
+	admits       AdmitsFunc
+	configured   func(Kind) bool
 	endpoint     func() string
 	registration func(Kind) string
 	interval     time.Duration
@@ -346,6 +435,14 @@ type Worker struct {
 	// from has been replaced, so the next tick reconsiders every surface
 	// whatever its cadence says. See [Worker.MarkStale].
 	stale atomic.Bool
+
+	// shed remembers that the last tick was declined on posture, so the
+	// refusal is logged on the TRANSITION rather than every fifteen seconds
+	// for as long as a node stays behind. A silent refusal is what makes a
+	// stalled loop indistinguishable from a converged one, which is the
+	// failure this whole subsystem exists to remove — so it is logged once
+	// going in and once coming out, and never in between.
+	shed atomic.Bool
 }
 
 // MarkStale says the company configuration has changed, so what the loop last
@@ -455,6 +552,9 @@ func New(opts Options) (*Worker, error) {
 	return &Worker{
 		byKind: byKind, order: order, store: opts.Store,
 		schedule: opts.Schedule.WithDefaults(), claim: opts.ClaimDuty,
+		guard:        opts.Guard,
+		admits:       opts.Admits,
+		configured:   opts.Configured,
 		endpoint:     opts.Endpoint,
 		registration: opts.Registration,
 		interval:     interval, settle: settle, now: now, spread: spread,
@@ -556,6 +656,25 @@ func (w *Worker) settleWake(ctx context.Context) bool {
 // explicit "reconcile now", without either having to wait out an interval or
 // start a goroutine.
 func (w *Worker) Tick(ctx context.Context) {
+	// POSTURE FIRST, BEFORE THE CLAIM. A node whose configuration the fleet
+	// has already replaced must not converge a third-party app to it — see
+	// [AdmitsFunc]. Asked ahead of the duty deliberately: declining without
+	// claiming lets this node's lease lapse, so a worker-capable peer takes
+	// the loop over rather than waiting behind a holder that does nothing.
+	if w.admits != nil && !w.admits() {
+		if !w.shed.Swap(true) {
+			log.WarnContext(ctx, "integration_reconcile_shed",
+				"detail", "this node's configuration is behind the fleet's, so it "+
+					"is not converging any integration; a peer holding the current "+
+					"revision takes the duty when this node's lease lapses")
+		}
+		return
+	}
+	if w.shed.Swap(false) {
+		log.InfoContext(ctx, "integration_reconcile_resumed",
+			"detail", "this node's configuration is current again")
+	}
+
 	if w.claim != nil {
 		held, err := w.claim(ctx)
 		if err != nil {
@@ -598,14 +717,18 @@ func (w *Worker) Tick(ctx context.Context) {
 			// the zero value already means.
 			state = State{Kind: kind}
 		}
+		// A CHEAP FILTER ON A ROW THAT MAY BE SECONDS OLD, which is all this
+		// has to be: it decides whether taking the guard is worth a round
+		// trip. The row the WORK is decided on is re-read inside — see
+		// [Worker.visit].
 		if !stale && !state.Due(now) {
 			continue
 		}
 		// STILL OURS? The duty was claimed once, before this loop, and its
-		// TTL is a small multiple of the tick interval — while the loop
-		// below makes network calls to every configured surface in turn. A
-		// sweep across eight vendors outlives that TTL easily, and a duty
-		// that lapsed mid-tick is a second node already sweeping the
+		// TTL is derived from the deadline one pass may take — while the
+		// loop below makes network calls to every configured surface in
+		// turn. A sweep across eight vendors outlives that TTL easily, and
+		// a duty that lapsed mid-tick is a second node already sweeping the
 		// surfaces this one has not reached.
 		//
 		// RE-CLAIMED HERE, past the not-due check, so the cost lands only
@@ -616,25 +739,104 @@ func (w *Worker) Tick(ctx context.Context) {
 		if !w.stillHoldsDuty(ctx) {
 			return
 		}
-		// A SURFACE BEING TAKEN AWAY IS NOT RECONCILED. Its block is
-		// still in the document for the whole teardown — it carries the
-		// credential the teardown authenticates with — so a reconcile
-		// here would find it configured, converge it, and report it
-		// healthy while somebody was waiting for it to go.
-		if state.TearingDown() {
-			w.tearDown(ctx, kind, state, now)
-			continue
-		}
-		if w.byKind[kind].Reconciler == nil {
-			// TEARDOWN-ONLY. There is nothing to converge here and a
-			// row exists only while a disconnect is in flight, so a due
-			// surface with no intent has nothing for this tick to do.
-			continue
-		}
-		w.reconcile(ctx, kind, state, now)
+		w.visit(ctx, kind, stale, now)
 	}
 
 	w.forgetDeparted(ctx, states)
+}
+
+// visit takes the surface's guard and does whatever the row then says.
+//
+// # Everything that decides the work happens INSIDE the guard
+//
+// The row is re-read here, and the routing decision — converge, tear down, or
+// nothing — is made from THAT row rather than from the snapshot [Worker.Tick]
+// filtered on. Both halves are load-bearing and both were bugs:
+//
+//   - Folding a pass's outcome into a row read before the pass began loses
+//     whatever landed in between. An operator's disconnect is written under
+//     this same guard on whichever node served the request, and the tick put
+//     its own copy back over the top.
+//   - Routing on the stale row is the same race one step earlier: a
+//     disconnect that lands between the load and the guard would be answered
+//     by a CONVERGE pass, which finds the block still in the document (it has
+//     to be — it carries the credential the teardown authenticates with),
+//     converges the surface, and reports it healthy while somebody waits for
+//     it to go.
+//
+// The due check is repeated for the same reason, and pays for itself: a
+// dashboard pass that ran while this tick was working through the surfaces
+// ahead of this one has already moved NextAttemptAt, and re-reading is what
+// lets the loop notice rather than spend a third-party app's rate limit
+// re-asking what somebody just asked.
+func (w *Worker) visit(ctx context.Context, kind Kind, stale bool, now time.Time) {
+	bounded, release, held, err := w.hold(ctx, kind)
+	switch {
+	case err != nil:
+		// UNKNOWN IS NOT FREE. A coordination store that could not answer
+		// has not said the surface is idle, and acting on that guess is
+		// what creates the duplicate. Nothing is recorded: an attempt
+		// counted here would back off a cadence for a pass that never ran.
+		log.WarnContext(ctx, "integration_surface_unknown",
+			"integration", kind.String(), "error", err,
+			"detail", "this tick could not learn whether another writer holds "+
+				"this surface, so it did not touch it")
+		return
+	case !held:
+		// SOMEBODY IS ALREADY DOING THIS — an operator's pass, or a
+		// teardown. Nothing is recorded, for the reason above and one
+		// more: a fault written here would describe as broken a surface
+		// that is at this moment being provisioned successfully.
+		log.InfoContext(ctx, "integration_reconcile_deferred",
+			"integration", kind.String(),
+			"detail", "another writer holds this surface; the next tick tries again")
+		return
+	}
+	defer release()
+
+	state, found, err := w.store.LoadIntegration(ctx, kind)
+	if err != nil {
+		log.WarnContext(ctx, "integration_state_unreadable",
+			"integration", kind.String(), "error", err,
+			"detail", "this surface is not reconciled this tick; nothing is "+
+				"written over a row this node could not read")
+		return
+	}
+	if !found {
+		state = State{Kind: kind}
+	}
+	if !stale && !state.Due(now) {
+		return
+	}
+	if state.TearingDown() {
+		w.tearDown(ctx, bounded, kind, state, now)
+		return
+	}
+	if w.byKind[kind].Reconciler == nil {
+		// TEARDOWN-ONLY. There is nothing to converge here, so a due
+		// surface with no disconnect in flight has nothing for this tick
+		// to do. Its row is not necessarily empty — the setup form stamps
+		// an address on exactly this class of surface — but only
+		// [Worker.forgetDeparted] has anything to say about that.
+		return
+	}
+	w.reconcile(ctx, bounded, kind, state, now)
+}
+
+// hold takes the surface's guard, or waves the tick through where there is
+// none.
+//
+// A nil Guard is a worker with no lease to take: a test's, and a node with no
+// keyring, where there is no second writer in the process to serialize
+// against. The context is handed back unchanged there, because the deadline
+// belongs to the guard that would have been protecting the pass.
+func (w *Worker) hold(ctx context.Context, kind Kind) (
+	context.Context, func(), bool, error,
+) {
+	if w.guard == nil {
+		return ctx, func() {}, true, nil
+	}
+	return w.guard(ctx, kind)
 }
 
 // stillHoldsDuty re-claims the singleton before a unit of work.
@@ -703,7 +905,9 @@ func (w *Worker) load(ctx context.Context) (map[Kind]State, error) {
 // disconnect, and it folds through [ObserveTeardown] for the same reason
 // reconcile folds through [Observe]: what a status row says must not depend
 // on which path produced it.
-func (w *Worker) tearDown(ctx context.Context, kind Kind, state State, now time.Time) {
+func (w *Worker) tearDown(
+	ctx, bounded context.Context, kind Kind, state State, now time.Time,
+) {
 	reg := w.byKind[kind]
 	if reg.Disconnector == nil {
 		// THIS NODE CANNOT, which is not a failure of the disconnect. A
@@ -717,7 +921,12 @@ func (w *Worker) tearDown(ctx context.Context, kind Kind, state State, now time.
 		return
 	}
 
-	err := reg.Disconnector.Disconnect(ctx, state.RemoveSeats)
+	// THE THIRD-PARTY APP ON THE BOUNDED CONTEXT, the record on the tick's.
+	// They are different deadlines on purpose: the pass runs inside the lease
+	// that protects it, and the write that records the pass runs in the margin
+	// the lease deliberately keeps behind it. Recording on the bounded one
+	// would lose the record of every teardown that used its whole budget.
+	err := reg.Disconnector.Disconnect(bounded, state.RemoveSeats)
 	if errors.Is(err, ErrDisconnectUnavailable) {
 		// NOT YET, which is not the same as failed. Nothing is written,
 		// for the reason the nil-disconnector case above states: an
@@ -771,22 +980,19 @@ func (w *Worker) currentRegistration(kind Kind) string {
 }
 
 // reconcile runs one surface and records what it found.
-func (w *Worker) reconcile(ctx context.Context, kind Kind, state State, now time.Time) {
+//
+// Both halves run under the guard [Worker.visit] holds, which is what makes
+// the status write safe: coord.Integrations is last-write-wins with no
+// compare-and-set, and the lease held across the read, the pass and the write
+// is the whole of why no second writer can lose an update here.
+func (w *Worker) reconcile(
+	ctx, bounded context.Context, kind Kind, state State, now time.Time,
+) {
 	reg := w.byKind[kind]
-	findings, err := reg.Reconciler.Reconcile(ctx)
-
-	// NOT NOW, WHICH IS NOT A RESULT. Somebody else is writing at this
-	// surface — an operator's pass holding the provisioning lease — so this
-	// tick observed nothing and must record nothing. The mirror of the
-	// [ErrDisconnectUnavailable] arm in [Worker.tearDown], and for the same
-	// reason: an attempt counted here backs off a cadence for a pass that
-	// never ran, and a fault written here describes as broken a surface that
-	// is at this moment being provisioned successfully.
-	if errors.Is(err, ErrReconcileUnavailable) {
-		log.InfoContext(ctx, "integration_reconcile_deferred",
-			"integration", kind.String(), "detail", err.Error())
-		return
-	}
+	// THE PASS ON THE BOUNDED CONTEXT, so it cannot outlive the lease
+	// protecting it; the record below on the tick's, so the margin the lease
+	// keeps behind that deadline is what the write actually gets to use.
+	findings, err := reg.Reconciler.Reconcile(bounded)
 
 	// WHAT THE REGISTRATION IS HELD UNDER, taken BEFORE the fold because
 	// the orphan a rename leaves behind is a finding like any other and has
@@ -900,32 +1106,87 @@ func StampRegistration(state *State, current string) []Finding {
 	}}
 }
 
-// forgetDeparted drops state for a surface the company document no longer
-// declares.
+// forgetDeparted drops the row of a TEARDOWN-ONLY surface the company
+// document no longer declares.
 //
-// A row nothing reconciles would otherwise sit in the fleet's status forever,
-// reporting whatever it last found about an integration that is gone. It
-// removes the RECORD and nothing else: see [Store.ForgetIntegration].
+// # Why this is so much narrower than its name used to be
+//
+// It used to claim to forget any departed surface and forgot nothing at all:
+// the liveness test was the REGISTRATION set, and the engine registers every
+// kind in [Kinds] — a pass for the seven it converges, a teardown-only entry
+// for the one it does not — so every valid kind was live and every invalid one
+// was skipped. Unreachable code that a reader would have trusted.
+//
+// Reviving it as a general answer would have been worse than leaving it dead,
+// because a general answer already exists and is better: a surface with a
+// reconciler is forgotten when its own pass reports [ErrNotConfigured], read
+// off the live document by the code that knows what configured MEANS for that
+// third-party app — `enabled: false` included, which a block-shaped test reads
+// as configured. Two authorities on one question is a paused integration
+// flapping between them.
+//
+// So this answers for the one class that has no pass to ask, which is Slack
+// alone today. Its row is written by the setup form — an endpoint, so a moved
+// Request URL can be reported — and until now nothing could ever remove it: it
+// outlived the `slack:` block for the life of the deployment, and a later
+// reconnect through the config file inherited an address from the company
+// before it.
+//
+// Three things are deliberately never forgotten here:
+//
+//   - A surface with a reconciler, per the above.
+//   - A surface being torn down. A teardown that failed leaves the row in
+//     [PhaseDisconnecting] on purpose and the block may already be gone, so
+//     forgetting it here would abandon an unfinished disconnect — the third-party
+//     app's webhooks still live, the card gone from the screen, silently.
+//   - A kind this build does not know. The loop walks its own canonical order,
+//     so a row a newer peer wrote is never even considered: an older node in a
+//     rolling upgrade must not erase a status it cannot read, which it would
+//     then watch the newer node write back on every pass.
 func (w *Worker) forgetDeparted(ctx context.Context, states map[Kind]State) {
-	for kind := range states {
-		if _, live := w.byKind[kind]; live {
-			continue
-		}
-		if !kind.Valid() {
-			// A PEER'S SURFACE, NOT A DEPARTED ONE, and this build cannot
-			// tell the difference by looking at its own registrations —
-			// every kind it does not know is missing from byKind either
-			// way. [Kind.Valid] already promises what happens here: "an
-			// unknown kind is SKIPPED by the worker and rendered as-is by
-			// the API", because the store holds state written by whichever
-			// build ran the last pass. Deleting it made an older node in a
-			// rolling upgrade erase the newer node's status on every tick,
-			// and the newer node write it back on every pass of its own.
-			continue
-		}
-		if err := w.store.ForgetIntegration(ctx, kind); err != nil {
-			log.WarnContext(ctx, "integration_status_not_forgotten",
-				"integration", kind.String(), "error", err)
-		}
+	if w.configured == nil {
+		// This node cannot say what the document declares, and a guess
+		// here deletes the one warning an operator gets about a moved
+		// address.
+		return
 	}
+	for _, kind := range w.order {
+		state, recorded := states[kind]
+		switch {
+		case !recorded, w.byKind[kind].Reconciler != nil,
+			state.TearingDown(), w.configured(kind):
+			continue
+		}
+		w.forget(ctx, kind)
+	}
+}
+
+// forget removes one departed surface's row, under the surface's own guard.
+//
+// GUARDED AND RE-READ like every other write about a surface: the row is
+// deleted only if it still says what the tick's snapshot said. Between the two,
+// somebody may have pressed Disconnect — which writes an intent under this same
+// guard — and deleting over the top of that is the abandoned teardown above.
+func (w *Worker) forget(ctx context.Context, kind Kind) {
+	_, release, held, err := w.hold(ctx, kind)
+	if err != nil || !held {
+		// Nothing is written on "somebody else is here" or on "the store
+		// could not say". The row has waited this long; it waits a tick.
+		return
+	}
+	defer release()
+
+	state, found, err := w.store.LoadIntegration(ctx, kind)
+	switch {
+	case err != nil, !found, state.TearingDown():
+		return
+	}
+	if err := w.store.ForgetIntegration(ctx, kind); err != nil {
+		log.WarnContext(ctx, "integration_status_not_forgotten",
+			"integration", kind.String(), "error", err)
+		return
+	}
+	log.InfoContext(ctx, "integration_status_forgotten",
+		"integration", kind.String(),
+		"detail", "this surface has left the company document")
 }

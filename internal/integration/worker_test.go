@@ -17,13 +17,20 @@ type fakeReconciler struct {
 	findings []Finding
 	err      error
 
+	// observe sees the context the pass was actually handed, for the case
+	// whose subject is which context that is.
+	observe func(context.Context)
+
 	mu     sync.Mutex
 	passes int
 }
 
 func (f *fakeReconciler) Kind() Kind { return f.kind }
 
-func (f *fakeReconciler) Reconcile(context.Context) ([]Finding, error) {
+func (f *fakeReconciler) Reconcile(ctx context.Context) ([]Finding, error) {
+	if f.observe != nil {
+		f.observe(ctx)
+	}
 	f.mu.Lock()
 	f.passes++
 	f.mu.Unlock()
@@ -65,6 +72,16 @@ func (s *fakeStore) LoadIntegrations(context.Context) ([]State, error) {
 		out = append(out, row)
 	}
 	return out, nil
+}
+
+func (s *fakeStore) LoadIntegration(_ context.Context, kind Kind) (State, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.loadErr != nil {
+		return State{}, false, s.loadErr
+	}
+	row, ok := s.rows[kind]
+	return row, ok, nil
 }
 
 func (s *fakeStore) SaveIntegration(_ context.Context, state State) error {
@@ -116,6 +133,41 @@ func at(t *testing.T, now time.Time, store Store, claim DutyFunc, regs ...Regist
 		Now: func() time.Time { return now },
 		// PINNED, so a case can assert an exact instant. What the real
 		// spread does is asserted on its own, below.
+		Spread: func(d time.Duration) time.Duration { return d },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return w
+}
+
+// configuredAt is [at] with a document test installed, for the cases whose
+// subject is what the loop forgets.
+func configuredAt(
+	t *testing.T, now time.Time, store Store, configured func(Kind) bool,
+	regs ...Registration,
+) *Worker {
+	t.Helper()
+	w, err := New(Options{
+		Registrations: regs, Store: store, Configured: configured,
+		Now:    func() time.Time { return now },
+		Spread: func(d time.Duration) time.Duration { return d },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return w
+}
+
+// guardedAt is [at] with a guard installed, for the cases whose subject is the
+// guard itself.
+func guardedAt(
+	t *testing.T, now time.Time, store Store, reg Registration, guard Guard,
+) *Worker {
+	t.Helper()
+	w, err := New(Options{
+		Registrations: []Registration{reg}, Store: store, Guard: guard,
+		Now:    func() time.Time { return now },
 		Spread: func(d time.Duration) time.Duration { return d },
 	})
 	if err != nil {
@@ -367,18 +419,21 @@ func TestAnAdvisorySettles(t *testing.T) {
 	}
 }
 
-// A surface the company document no longer declares is forgotten, so its last
-// status does not sit in the fleet's view forever describing an integration
-// that is gone.
-func TestDepartedSurfaceIsForgotten(t *testing.T) {
+// A TEARDOWN-ONLY surface the company document no longer declares is
+// forgotten, so its last row does not sit in the fleet's view describing an
+// integration that is gone — and, because that row carries an ADDRESS, so a
+// later reconnect does not inherit the one from the company before it.
+//
+// Slack is the class and today the only member: no pass converges it, so
+// nothing can ever return ErrNotConfigured for it, and until this existed its
+// row outlived the block for the life of the deployment.
+func TestADepartedTeardownOnlySurfaceIsForgotten(t *testing.T) {
 	now := time.Now().UTC()
-	live := &fakeReconciler{kind: KindGitLab}
-	store := newStore(
-		State{Kind: KindGitLab},
-		State{Kind: KindSlack, Report: Ready()},
-	)
+	store := newStore(State{Kind: KindSlack, Endpoint: "https://old.example.com"})
 
-	at(t, now, store, nil, Registration{Reconciler: live}).Tick(context.Background())
+	w := configuredAt(t, now, store, func(Kind) bool { return false },
+		Registration{Only: KindSlack, Disconnector: &fakeDisconnector{}})
+	w.Tick(context.Background())
 
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -386,10 +441,77 @@ func TestDepartedSurfaceIsForgotten(t *testing.T) {
 		t.Fatalf("slack was not forgotten; forgot %v", store.forgot)
 	}
 	if _, still := store.rows[KindSlack]; still {
-		t.Fatal("slack's state survived being forgotten")
+		t.Fatal("slack's row survived being forgotten")
 	}
-	if _, gone := store.rows[KindGitLab]; !gone {
-		t.Fatal("the live surface was forgotten too")
+}
+
+// AND ONE THE DOCUMENT STILL DECLARES IS KEPT, which is the whole difference
+// and the direction that fails silently: deleting it takes away the one
+// warning an operator ever gets that a moved public base has stranded Slack's
+// Request URL.
+func TestAConfiguredTeardownOnlySurfaceKeepsItsRow(t *testing.T) {
+	now := time.Now().UTC()
+	store := newStore(State{Kind: KindSlack, Endpoint: "https://now.example.com"})
+
+	w := configuredAt(t, now, store, func(Kind) bool { return true },
+		Registration{Only: KindSlack, Disconnector: &fakeDisconnector{}})
+	w.Tick(context.Background())
+
+	if !store.has(KindSlack) {
+		t.Fatal("a surface the document still declares was forgotten")
+	}
+}
+
+// A SURFACE WITH A RECONCILER IS NEVER FORGOTTEN BY THIS PATH, however the
+// document-shaped test answers. Its own pass owns the question and answers it
+// better — every pass reads `enabled: false` as not configured, where a block
+// test sees a block and says yes — so two authorities here would make a paused
+// integration flap between them.
+func TestAReconciledSurfaceIsNotForgottenByTheDocumentTest(t *testing.T) {
+	now := time.Now().UTC()
+	store := newStore(State{Kind: KindGitLab, Report: Ready()})
+
+	w := configuredAt(t, now, store, func(Kind) bool { return false },
+		Registration{Reconciler: &fakeReconciler{kind: KindGitLab}})
+	w.Tick(context.Background())
+
+	if !store.has(KindGitLab) {
+		t.Fatal("the document test forgot a surface whose own pass owns that answer")
+	}
+}
+
+// AND A TEARDOWN IN FLIGHT IS NEVER FORGOTTEN, even once the block is gone.
+//
+// A disconnect removes the block BEFORE its last retry can succeed, and a
+// teardown that failed leaves the row disconnecting on purpose. Forgetting it
+// here abandons an unfinished teardown: the third-party app's webhooks stay
+// live, the card disappears from the screen, and nothing says so.
+func TestATeardownInFlightIsNotForgotten(t *testing.T) {
+	now := time.Now().UTC()
+	store := newStore(State{Kind: KindSlack, Disconnecting: true})
+
+	w := configuredAt(t, now, store, func(Kind) bool { return false },
+		Registration{Only: KindSlack, Disconnector: &fakeDisconnector{
+			err: errors.New("slack refused the delete"),
+		}})
+	w.Tick(context.Background())
+
+	if !store.has(KindSlack) {
+		t.Fatal("an unfinished teardown's row was deleted, abandoning the disconnect")
+	}
+}
+
+// A NODE THAT CANNOT SAY WHAT THE DOCUMENT DECLARES FORGETS NOTHING, because
+// every wrong answer here deletes a row somebody needs.
+func TestNothingIsForgottenWithoutADocumentTest(t *testing.T) {
+	now := time.Now().UTC()
+	store := newStore(State{Kind: KindSlack, Endpoint: "https://old.example.com"})
+
+	at(t, now, store, nil, Registration{Only: KindSlack, Disconnector: &fakeDisconnector{}}).
+		Tick(context.Background())
+
+	if !store.has(KindSlack) {
+		t.Fatal("a node with no document test deleted a row on a guess")
 	}
 }
 
@@ -753,26 +875,31 @@ func TestOnlyAnEngineRegisteredAddressIsStampedByAPass(t *testing.T) {
 	}
 }
 
-// A SURFACE SOMEBODY ELSE IS WRITING AT LEAVES NO TRACE.
+// A SURFACE SOMEBODY ELSE IS WRITING AT IS NOT EVEN READ.
 //
-// The provisioning lease is shared with the pass an operator runs from the
-// dashboard, so a tick can find it held. That is not a result: nothing was
-// observed, so nothing may be recorded. An attempt counted here would back the
-// cadence off for a pass that never ran, and a fault written here would
-// describe as broken a surface that is at that moment being provisioned
-// successfully by somebody else.
+// The provisioning guard is shared with the pass an operator runs from the
+// dashboard and with a disconnect's teardown, so a tick can find it held. That
+// is not a result: nothing was observed, so nothing may be recorded. An attempt
+// counted here would back the cadence off for a pass that never ran, and a
+// fault written here would describe as broken a surface that is at that moment
+// being provisioned successfully by somebody else.
 //
-// The mirror of the ErrDisconnectUnavailable arm in tearDown, which is where
-// this shape already existed for the other half of the tick.
-func TestABusySurfaceRecordsNothing(t *testing.T) {
+// The reconciler must not RUN either, which is the half a sentinel returned
+// out of the pass could never give: by the time a pass can say "somebody else
+// holds this", it has already reached the third-party app.
+func TestABusySurfaceIsNotTouchedAtAll(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
-	r := &fakeReconciler{kind: KindGitLab, err: ErrReconcileUnavailable}
+	r := &fakeReconciler{kind: KindGitLab}
 	store := newStore()
 
-	at(t, now, store, nil, Registration{Reconciler: r}).Tick(context.Background())
+	w := guardedAt(t, now, store, Registration{Reconciler: r},
+		func(context.Context, Kind) (context.Context, func(), bool, error) {
+			return nil, nil, false, nil
+		})
+	w.Tick(context.Background())
 
-	if r.count() != 1 {
-		t.Fatalf("the reconciler ran %d times, want 1", r.count())
+	if r.count() != 0 {
+		t.Fatalf("the reconciler ran %d times behind a held guard, want 0", r.count())
 	}
 	if store.has(KindGitLab) {
 		t.Errorf("a tick that reconciled nothing wrote a status row: %+v",
@@ -780,22 +907,47 @@ func TestABusySurfaceRecordsNothing(t *testing.T) {
 	}
 }
 
-// AND A WRAPPED ONE TOO, because the converger wraps the store's own failure
-// around it: an unreadable lease is "not now" for the same reason a held one
-// is — neither is evidence the surface is idle.
-func TestABusySurfaceRecordsNothingWhenTheReasonIsWrapped(t *testing.T) {
+// AND A GUARD THAT COULD NOT ANSWER IS THE SAME OUTCOME, for the opposite
+// reason: a coordination store that failed has not said the surface is idle,
+// and acting on that guess is what creates the duplicate account the guard
+// exists to prevent. Three-valued, and the third value must not collapse into
+// either of the other two.
+func TestAnUnreadableGuardTouchesNothing(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
-	r := &fakeReconciler{
-		kind: KindGitLab,
-		err: fmt.Errorf("%w: %w", ErrReconcileUnavailable,
-			errors.New("coordination store unreachable")),
-	}
+	r := &fakeReconciler{kind: KindGitLab}
 	store := newStore()
 
-	at(t, now, store, nil, Registration{Reconciler: r}).Tick(context.Background())
+	w := guardedAt(t, now, store, Registration{Reconciler: r},
+		func(context.Context, Kind) (context.Context, func(), bool, error) {
+			return nil, nil, false, errors.New("coordination store unreachable")
+		})
+	w.Tick(context.Background())
 
+	if r.count() != 0 {
+		t.Fatalf("the reconciler ran %d times on an unreadable guard, want 0", r.count())
+	}
 	if store.has(KindGitLab) {
-		t.Errorf("a deferred tick wrote a status row: %+v", store.get(t, KindGitLab))
+		t.Errorf("an unreadable guard wrote a status row: %+v", store.get(t, KindGitLab))
+	}
+}
+
+// THE GUARD IS GIVEN BACK however the pass went, or the first surface to fail
+// would lock every later writer out for the whole lease TTL.
+func TestTheGuardIsReleasedAfterAFailedPass(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	r := &fakeReconciler{kind: KindGitLab, err: errors.New("vendor unreachable")}
+	store := newStore()
+
+	var taken, released int
+	w := guardedAt(t, now, store, Registration{Reconciler: r},
+		func(ctx context.Context, _ Kind) (context.Context, func(), bool, error) {
+			taken++
+			return ctx, func() { released++ }, true, nil
+		})
+	w.Tick(context.Background())
+
+	if taken != 1 || released != 1 {
+		t.Fatalf("guard taken %d and released %d times, want 1 and 1", taken, released)
 	}
 }
 
@@ -868,24 +1020,24 @@ func TestStampEndpointFollowsTheSurfacesIngress(t *testing.T) {
 // departed one by looking at its own registrations — both are simply absent.
 // So an older node erased the newer node's status on every tick and the newer
 // node wrote it back on every pass, for the length of the upgrade.
+//
+// The sweep now walks this build's own canonical order rather than the rows it
+// found, so a kind it has never heard of is not merely spared but never
+// considered — which is the same promise made structurally instead of by a
+// guard somebody could drop.
 func TestAKindThisBuildDoesNotKnowIsLeftAlone(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	peer := Kind("a-surface-from-a-newer-build")
-	store := newStore(
-		State{Kind: peer, Endpoint: "https://engine.example.com"},
-		State{Kind: KindJira},
-	)
+	store := newStore(State{Kind: peer, Endpoint: "https://engine.example.com"})
 
-	// Neither is registered here: the peer's kind because this build has
-	// never heard of it, jira because this company stopped declaring it.
-	at(t, now, store, nil, Registration{Reconciler: &fakeReconciler{kind: KindGitLab}}).
-		Tick(context.Background())
+	w := configuredAt(t, now, store,
+		// The harshest answer available: this document declares NOTHING.
+		func(Kind) bool { return false },
+		Registration{Reconciler: &fakeReconciler{kind: KindGitLab}})
+	w.Tick(context.Background())
 
 	if !store.has(peer) {
 		t.Error("a surface only a newer build knows was deleted from the fleet's status")
-	}
-	if store.has(KindJira) {
-		t.Error("a departed surface this build DOES know was not forgotten")
 	}
 }
 
@@ -1047,5 +1199,158 @@ func TestARenamedRegistrationReachesTheStatusRow(t *testing.T) {
 	// company carrying an orphan is connected with a note.
 	if row.Report.Phase != PhaseReady {
 		t.Errorf("phase = %s; an orphan is an advisory, not a fault", row.Report.Phase)
+	}
+}
+
+// THE LOST DISCONNECT — the regression this whole guard exists for.
+//
+// A tick reads every row once to decide what is due. An operator pressing
+// Disconnect writes the intent under the surface's own guard, on whichever
+// node served the request, and that write can land after this tick's bulk read
+// and before it reaches this surface. Folding the pass's outcome into the row
+// it read FIRST puts a connected integration back over the top: the card flips
+// from Disconnecting to connected and the operator presses the button again.
+//
+// coord.Integrations says this cannot happen because "every writer takes the
+// surface's own provisioning lease first". Every writer did — and the loop then
+// released it and wrote afterwards, from a snapshot taken before the pass. The
+// fix is not a lock that was missing, it is holding the one that was already
+// there across the read, the pass and the write alike.
+//
+// The disconnect is landed from inside the guard callback, which is exactly
+// where a real one can land: markDisconnecting must wait for this guard, so the
+// last instant it can get in is just before the loop takes it.
+func TestADisconnectLandingBeforeTheGuardIsNotOverwritten(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	store := newStore(State{Kind: KindGitLab, Report: Ready()})
+	r := &fakeReconciler{kind: KindGitLab}
+
+	w := guardedAt(t, now, store, Registration{Reconciler: r},
+		func(ctx context.Context, kind Kind) (context.Context, func(), bool, error) {
+			// The operator got in first, under this same guard.
+			if err := store.SaveIntegration(ctx, State{
+				Kind: kind, Report: Ready(), Disconnecting: true, RemoveSeats: true,
+			}); err != nil {
+				t.Fatalf("stage the disconnect: %v", err)
+			}
+			return ctx, func() {}, true, nil
+		})
+	w.Tick(context.Background())
+
+	row := store.get(t, KindGitLab)
+	if !row.Disconnecting {
+		t.Fatalf("the tick overwrote an operator's disconnect: %+v", row)
+	}
+	if r.count() != 0 {
+		t.Fatalf("a surface being taken away was converged %d times, want 0 — a "+
+			"reconcile here finds the block still in the document, converges it, "+
+			"and reports it healthy while somebody waits for it to go", r.count())
+	}
+}
+
+// A NODE WHOSE CONFIGURATION IS BEHIND THE FLEET'S CONVERGES NOTHING.
+//
+// Every reconciler reads the live company document, so on a shedding node a
+// pass converges a third-party app to the epoch the fleet has already replaced:
+// an account a removed seat should no longer have is kept, a webhook is
+// re-registered at the previous address, and the row says ready.
+//
+// ASKED BEFORE THE DUTY IS CLAIMED, which is the half that matters for the
+// fleet: declining without claiming lets this node's lease lapse so a peer
+// holding the current revision takes the loop over. Claiming and then doing
+// nothing would hold the duty hostage on the node least able to do it.
+func TestASheddingNodeNeitherClaimsNorConverges(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	r := &fakeReconciler{kind: KindGitLab}
+	store := newStore()
+
+	var claims int
+	w, err := New(Options{
+		Registrations: []Registration{{Reconciler: r}},
+		Store:         store,
+		Admits:        func() bool { return false },
+		ClaimDuty: func(context.Context) (bool, error) {
+			claims++
+			return true, nil
+		},
+		Now:    func() time.Time { return now },
+		Spread: func(d time.Duration) time.Duration { return d },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	w.Tick(context.Background())
+
+	if claims != 0 {
+		t.Errorf("a shedding node claimed the duty %d times; its lease has to "+
+			"lapse so a current peer can take the loop over", claims)
+	}
+	if r.count() != 0 {
+		t.Errorf("a shedding node ran %d passes against a stale company", r.count())
+	}
+	if store.has(KindGitLab) {
+		t.Errorf("a shedding node wrote a status row: %+v", store.get(t, KindGitLab))
+	}
+}
+
+// AND IT RESUMES ON ITS OWN once the node is current again, because the gate is
+// read per tick rather than sampled when the loop was wired. Sampling it at
+// construction is the shape that looks right and is permanently wrong: the
+// control plane that answers this is built after the engine, so at wiring time
+// the answer is always "admit".
+func TestANodeThatCatchesUpResumes(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	r := &fakeReconciler{kind: KindGitLab}
+	store := newStore()
+
+	current := false
+	w, err := New(Options{
+		Registrations: []Registration{{Reconciler: r}},
+		Store:         store,
+		Admits:        func() bool { return current },
+		Now:           func() time.Time { return now },
+		Spread:        func(d time.Duration) time.Duration { return d },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	w.Tick(context.Background())
+	if r.count() != 0 {
+		t.Fatalf("a shedding node ran %d passes", r.count())
+	}
+
+	current = true
+	w.Tick(context.Background())
+	if r.count() != 1 {
+		t.Fatalf("a node that caught up ran %d passes, want 1", r.count())
+	}
+}
+
+// THE PASS RUNS ON THE CONTEXT THE GUARD BOUNDED, not on the tick's own.
+//
+// The lease is taken once and never renewed, so the deadline carried by that
+// context is the only thing making "the lease protects this pass" true rather
+// than hoped for. A worker that passed its own context through would leave the
+// reconcile loop's passes unbounded — which is where they were, while the
+// dashboard's identical pass had been bounded for exactly this reason.
+func TestThePassRunsOnTheGuardsContext(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	store := newStore()
+
+	type key struct{}
+	var sawMark bool
+	r := &fakeReconciler{kind: KindGitLab}
+	r.observe = func(ctx context.Context) { sawMark = ctx.Value(key{}) == "bounded" }
+
+	w := guardedAt(t, now, store, Registration{Reconciler: r},
+		func(ctx context.Context, _ Kind) (context.Context, func(), bool, error) {
+			return context.WithValue(ctx, key{}, "bounded"), func() {}, true, nil
+		})
+	w.Tick(context.Background())
+
+	if !sawMark {
+		t.Fatal("the pass ran on the tick's context rather than the one the " +
+			"guard bounded, so nothing stops it outliving its own lease")
 	}
 }

@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -19,11 +18,21 @@ const integrationDutyName = "integration-reconcile"
 
 // integrationDutyTTL is how long the duty survives without a re-claim.
 //
-// Three ticks, matching the retention sweep's and the sandbox waiter's ratio.
-// The reason here is the sharper one: two nodes reconciling one surface at
-// the same moment can both create an identity for one seat, so a single
-// missed tick must not hand the duty to a peer.
-const integrationDutyTTL = 3 * integration.Interval
+// DERIVED FROM THE LONGEST PASS IT ADMITS, plus a tick to renew in. It was
+// three ticks — 45 seconds — chosen to match the retention sweep's ratio, and
+// that number cannot be right beside a pass allowed [setup.PassDeadline]: one
+// surface's pass blows a 45-second TTL five times over, so the duty lapses
+// mid-sweep, a peer claims it, and both nodes sweep the surfaces the other has
+// not reached. Nothing UNSAFE follows from that — the surface's own lease is
+// what stops two writers at one third-party app — but the sweep stops being
+// deterministic and `integration_duty_lost` becomes routine noise on a healthy
+// fleet.
+//
+// The cost is on the other side and is worth naming: a node that dies holding
+// the duty leaves it unclaimable for this long instead of 45 seconds. Against a
+// settled cadence of ten minutes that delays a reconcile by less than half an
+// interval, which is the cheaper of the two.
+const integrationDutyTTL = setup.PassDeadline + 2*integration.Interval
 
 // startIntegrations arms the reconcile loop.
 //
@@ -138,6 +147,30 @@ func (e *Engine) startIntegrations(ctx context.Context) {
 		},
 		ClaimDuty: integration.DutyFunc(
 			e.workerDuty(integrationDutyName, integrationDutyTTL)),
+		// THE ONE GUARD EVERY WRITER AT A SURFACE TAKES, held by the worker
+		// across the row re-read, the pass and the status write alike. See
+		// [Engine.holdSurface], and the note in `passConverger.Reconcile` for
+		// why the pass no longer takes it itself.
+		Guard: integration.Guard(e.holdSurface),
+		// AND THE POSTURE GATE. Every reconciler reads the live company
+		// document, so a node the fleet has already moved past would converge
+		// third-party apps to a revision that has been replaced. Asked before
+		// the duty is claimed, so a shedding node's lease lapses and a peer
+		// holding the current revision takes the loop over.
+		Admits: integration.AdmitsFunc(e.admits),
+		// WHAT THE DOCUMENT STILL DECLARES, for the teardown-only surfaces
+		// that have no pass to answer it. See [integration.Options].Configured.
+		Configured: func(kind integration.Kind) bool {
+			company := e.Company()
+			if company == nil {
+				// No active revision is not "the document declares
+				// nothing" — it is a node that cannot say, and forgetting
+				// every row on that would delete the whole fleet's status
+				// during a boot.
+				return true
+			}
+			return company.Config.Integrations.Declares(kind.String())
+		},
 	})
 	if err != nil {
 		// NOT FATAL. A company whose reconcile loop could not be built
@@ -279,36 +312,27 @@ func (c *passConverger) Reconcile(ctx context.Context) ([]integration.Finding, e
 			"detail", "this pass reads and reports; it will mint nothing")
 		sink = provision.ReadOnly()
 	}
-	// UNDER THE SURFACE'S OWN GUARD, the same one an operator's pass takes.
+	// NO GUARD IS TAKEN HERE, and that is the fix rather than an omission.
 	//
-	// This tick and that button run THE SAME [setup.Pass] with the same sink
-	// and the same webhook base, so they create the same accounts, mint the
-	// same tokens and register the same hooks. Two of them at once is the
-	// collision the worker's own singleton exists to rule out — both read a
-	// surface with no account for a seat, both create one — and it is
-	// reachable between the loop and the dashboard ON ONE NODE, which is
-	// why the fleet lease alone does not close it. [setup.Runner.Hold] is
-	// both halves.
+	// It used to be taken at this line and released the moment this function
+	// returned — which put the write that RECORDS the pass outside it. The
+	// loop then folded the outcome into a row it had read before the pass
+	// began, and an operator's disconnect landing in that window was silently
+	// overwritten: the card went from Disconnecting back to connected and they
+	// pressed the button again. coord.Integrations says that cannot happen
+	// because every writer takes the lease first; every writer did, and then
+	// gave it back too early.
 	//
-	// The loop's own `integration-reconcile` duty covers neither: that one
-	// answers "which node runs the loop", which is a different question
-	// from "who is writing at this surface", and a lease keyed on a
-	// different name excludes nobody.
-	release, held, err := c.engine.holdSurface(ctx, c.pass.Kind())
-	switch {
-	case err != nil:
-		// UNKNOWN IS NOT FREE. A coordination store that could not
-		// answer has not said the surface is idle, and the whole point
-		// of the guard is that acting on that guess is what creates the
-		// duplicate.
-		return nil, fmt.Errorf("%w: %w", integration.ErrReconcileUnavailable, err)
-	case !held:
-		// SOMEBODY IS ALREADY DOING THIS. Nothing is recorded and no
-		// attempt is counted — see [integration.ErrReconcileUnavailable].
-		return nil, integration.ErrReconcileUnavailable
-	}
-	defer release()
-
+	// So [integration.Worker] takes it around the whole visit — the row
+	// re-read, this pass, and the status write — through the Guard wired in
+	// `startIntegrations`. Taking it again here would not merely be redundant:
+	// [setup.Runner]'s in-process claim is NOT reentrant, so this would answer
+	// not-held on every tick, for ever, deterministically. The coord lease IS
+	// reentrant for the same owner, which is exactly what makes that mistake
+	// easy to reason your way into.
+	//
+	// ctx is already the guard's: bounded by [setup.PassDeadline], strictly
+	// inside the lease the worker is holding.
 	return c.pass.Run(ctx, setup.PassInput{
 		Sink:        sink,
 		WebhookBase: company.Config.Integrations.WebhookBase(c.engine.resolver().LookupOK),

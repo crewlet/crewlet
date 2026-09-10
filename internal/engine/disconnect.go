@@ -131,23 +131,15 @@ func (e *Engine) dropBlock(
 		return fmt.Errorf("%w: no config surface is wired on this node",
 			integration.ErrDisconnectUnavailable)
 	}
-	// AND NOT WHILE SOMETHING ELSE IS WRITING AT THIS SURFACE. A teardown
-	// and a provisioning pass are the two operations that write at the
-	// third-party app, and letting them overlap is how a disconnect deletes
-	// the webhook the pass beside it is registering. [setup.Runner.Hold] is
-	// the one guard all three writers take, so a teardown reached through
-	// the Disconnector takes it here rather than inventing a second one.
-	release, held, err := e.holdSurface(ctx, kind)
-	switch {
-	case err != nil:
-		return fmt.Errorf("%w: this node could not check whether %s is "+
-			"being provisioned right now: %w",
-			integration.ErrDisconnectUnavailable, kind, err)
-	case !held:
-		return fmt.Errorf("%w: a provisioning pass for %s is running",
-			integration.ErrDisconnectUnavailable, kind)
-	}
-	defer release()
+	// NO GUARD IS TAKEN HERE. The loop's worker holds it around the whole
+	// teardown — this call and the status write that records how far it got —
+	// through the Guard wired in `startIntegrations`, so ctx is already the
+	// guard's and is bounded by [setup.PassDeadline].
+	//
+	// Taking it again would deadlock rather than double-lock: [setup.Runner]'s
+	// in-process claim is not reentrant, so this node would answer
+	// ErrDisconnectUnavailable on every tick and the disconnect would never
+	// finish. See the same note in `passConverger.Reconcile`.
 	if err := vendor(ctx); err != nil {
 		return fmt.Errorf("engine: %s teardown: %w", kind, err)
 	}

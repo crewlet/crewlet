@@ -165,7 +165,7 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 		in.Sink = sink
 	}
 
-	// DETACHED FROM THE REQUEST, and bounded on its own.
+	// DETACHED FROM THE REQUEST, then guarded, then bounded — in that order.
 	//
 	// A pass WRITES AT THE VENDOR: it creates accounts, mints tokens and
 	// registers webhooks. Run on the request's own context, a browser tab
@@ -175,30 +175,21 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 	// The next pass then either duplicates the account or reports a
 	// half-finished integration nobody asked for. Nothing about the
 	// operator's connection should decide that.
+	detached := context.WithoutCancel(r.Context())
+
+	// THE GUARD IS TAKEN HERE AND HELD PAST THE RECORD, which is the whole
+	// change: [setup.Runner.Execute] used to take it and give it back the
+	// moment the pass returned, leaving `s.record` below — the write carrying
+	// the phase, the findings and the attempts — outside the lease that is
+	// supposed to make these rows safe to write. A reconcile tick folding a
+	// row it read a moment earlier then put its own copy back over the top.
 	//
-	// The deadline is the LEASE's, not a guess: the fleet lease that stops
-	// two operators minting at once is not renewed mid-pass, so a pass
-	// outliving it would be running unprotected. Timing out just inside it
-	// keeps the two facts in step.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), PassDeadline)
-	defer cancel()
-	run, err := s.passes.Start(ctx, kind, in, uuid.NewString())
-	// THE TRANSIENT CREDENTIAL IS DROPPED THE MOMENT THE PASS RETURNS.
-	// It can create accounts at the third-party app, and the difference between a
-	// one-time grant and a standing power is exactly how long it is held.
-	in.Operator = ""
-	req.OperatorCredential = ""
+	// The context it returns carries [setup.PassDeadline], measured from the
+	// moment the lease was actually acquired rather than from here, so the
+	// margin inside [setup.LeaseTTL] is the whole minute.
+	ctx, release, held, err := s.passes.Hold(detached, kind)
 	switch {
-	case errors.Is(err, setup.ErrPassInFlight):
-		httpjson.FailWith(w, http.StatusConflict, codePassInFlight, map[string]string{
-			"hint": "another pass for this integration is running; wait for it " +
-				"rather than minting twice",
-		})
-		return
-	case errors.Is(err, setup.ErrNoPass):
-		httpjson.Fail(w, http.StatusConflict, codeNotProvisionable)
-		return
-	case run == nil:
+	case err != nil:
 		// The pass never started: the lease could not be read, which is
 		// three-valued and is NOT evidence that somebody else is minting.
 		// There is nothing to record, because nothing was observed.
@@ -210,13 +201,41 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 					"is already provisioning this integration; try again",
 			})
 		return
+	case !held:
+		httpjson.FailWith(w, http.StatusConflict, codePassInFlight, map[string]string{
+			"hint": "another pass for this integration is running; wait for it " +
+				"rather than minting twice",
+		})
+		return
+	}
+	defer release()
+
+	run, err := s.passes.Execute(ctx, kind, in, uuid.NewString())
+	// THE TRANSIENT CREDENTIAL IS DROPPED THE MOMENT THE PASS RETURNS.
+	// It can create accounts at the third-party app, and the difference between a
+	// one-time grant and a standing power is exactly how long it is held.
+	in.Operator = ""
+	req.OperatorCredential = ""
+	if errors.Is(err, setup.ErrNoPass) {
+		httpjson.Fail(w, http.StatusConflict, codeNotProvisionable)
+		return
 	}
 
 	// THE STATUS IS WRITTEN WHETHER OR NOT THE PASS SUCCEEDED, through the
 	// fold the loop uses. A pass that failed is a fact about the
 	// integration, and hiding it here would leave the screen showing the
 	// last good answer under a fresh timestamp.
-	s.record(r.Context(), kind, run, err)
+	//
+	// ON THE DETACHED CONTEXT, not the request's. The pass was detached so a
+	// closing tab could not cancel a vendor write, and recording it on the
+	// request undid exactly half of that: the vendor work landed and was
+	// durable, and the record of it was cancelled with the connection.
+	// Bounded by [setup.RecordDeadline], which is the margin this lease
+	// deliberately keeps behind the pass — detaching removed the only
+	// cancellation this write had.
+	recordCtx, cancelRecord := context.WithTimeout(detached, setup.RecordDeadline)
+	defer cancelRecord()
+	s.record(recordCtx, kind, run, err)
 
 	if err != nil {
 		log.ErrorContext(r.Context(), "setup_pass_failed",
@@ -250,7 +269,7 @@ func (s *Service) recordEndpoint(ctx context.Context, kind integration.Kind, bas
 	if s.status == nil || base == "" {
 		return
 	}
-	release, held, err := s.passes.Hold(ctx, kind)
+	_, release, held, err := s.passes.Hold(ctx, kind)
 	if err != nil || !held {
 		log.WarnContext(ctx, "setup_endpoint_unrecorded",
 			"integration", kind, "error", errorOrBusy(err),

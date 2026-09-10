@@ -230,6 +230,23 @@ type Store interface {
 	// anything about a company it cannot see.
 	LoadIntegrations(ctx context.Context) ([]State, error)
 
+	// LoadIntegration reads ONE surface's state, reporting whether there is
+	// one to read.
+	//
+	// Separate from the plural read because the two are asked at different
+	// moments and only one of them may be stale. [Worker.Tick] reads every
+	// row once to decide what is DUE, which is a cheap filter and tolerates
+	// being a few seconds old. What it must not tolerate is folding a pass's
+	// outcome into a row it read before the pass began: an operator's
+	// disconnect landing in that window is silently overwritten. So the row
+	// the fold is built on is re-read here, under the surface's own guard,
+	// with every other writer excluded.
+	//
+	// found is false for a surface nobody has recorded anything about, which
+	// is an ordinary answer and not an error: it is what every surface looks
+	// like before its first pass.
+	LoadIntegration(ctx context.Context, kind Kind) (state State, found bool, err error)
+
 	// SaveIntegration records one integration's state.
 	SaveIntegration(ctx context.Context, state State) error
 

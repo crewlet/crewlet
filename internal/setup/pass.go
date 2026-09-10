@@ -3,7 +3,6 @@ package setup
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"time"
 
@@ -193,6 +192,64 @@ type Run struct {
 	Report *integration.Report `json:"report,omitempty"`
 }
 
+// LeaseTTL is how long one writer may hold a surface before the fleet
+// assumes it died.
+//
+// A BACKSTOP, NOT A DEADLINE FOR THE WORK. The lease is given back when the
+// work ends ([Runner.Hold]'s release), so this value is only reached by a node
+// that stopped existing mid-pass. Shorter would lock a surface out for less
+// time after a crash and risk nothing, because nothing runs this long on
+// purpose; much longer would leave a third-party app unwritable for the whole
+// window after one.
+const LeaseTTL = 5 * time.Minute
+
+// PassDeadline bounds the work that lease admits — every pass, whatever
+// started it.
+//
+// # Why a pass has a deadline at all
+//
+// The lease is taken once and NEVER RENEWED mid-pass, so a pass that outlived
+// it would go on writing at a third-party app with nothing left excluding a
+// peer: two nodes creating an account for one seat, which no later pass can
+// detect or repair. Bounding the work strictly inside the lease is what makes
+// "the lease protects this pass" true by construction rather than by
+// measurement.
+//
+// # Why it is one minute, and why the minute is not slack for its own sake
+//
+// The status write that RECORDS the pass runs under the same lease — see
+// [Runner.Hold] — so the margin is what that write has to complete in. A
+// coordination round trip is milliseconds; a minute is that with room for a
+// broker having a bad afternoon.
+//
+// The margin is real rather than nominal because the clock starts AFTER the
+// lease is acquired ([Runner.hold]). It used to start at the caller, before
+// the claim, so however long the claim took came out of the minute.
+//
+// # It is one value, and the loop's duty is derived from it
+//
+// A second, shorter deadline for the reconcile loop's own passes was the
+// obvious alternative and is worse: two numbers that have to stay in a
+// relationship nothing checks. Instead the loop's singleton TTL is derived
+// from this one — see `integrationDutyTTL` in internal/engine — so a pass
+// cannot outlive the duty that scheduled it either.
+const PassDeadline = 4 * time.Minute
+
+// RecordDeadline bounds the write that RECORDS a pass, and is the margin
+// [PassDeadline] deliberately leaves behind inside [LeaseTTL].
+//
+// DERIVED, never chosen. The whole reason the pass stops a minute early is that
+// the status write runs under the same lease and needs somewhere to run; a
+// second hand-written number here could drift out of that relationship with
+// nothing checking, so the relationship IS the definition.
+//
+// What it protects against is narrow and real: the caller that most needs it
+// has detached from an HTTP request on purpose, so a browser tab closing cannot
+// cancel a third-party app write half-way. That detachment removes the only
+// cancellation the write had, and an unbounded write into a coordination store
+// having a bad afternoon leaks the goroutine that was serving the request.
+const RecordDeadline = LeaseTTL - PassDeadline
+
 // Duty is the fleet lease a pass holds WHILE IT RUNS, and gives back when it
 // is done.
 //
@@ -267,30 +324,31 @@ func (r *Runner) Needs(kind integration.Kind) *Requirement {
 	return pass.Needs()
 }
 
-// Start runs a pass, blocking until it finishes.
+// Execute runs a pass, blocking until it finishes.
 //
-// BLOCKING, deliberately, and the caller decides what to do with that. A
-// GitHub pass is a handful of API calls; the third-party apps whose passes
-// take minutes are not on this surface yet, and giving every one of them an
-// asynchronous shape today would be building the machinery for a case that
-// does not exist while making the one that does harder to reason about.
-func (r *Runner) Start(ctx context.Context, kind integration.Kind, in PassInput, id string) (*Run, error) {
+// # THE CALLER MUST ALREADY HOLD THE SURFACE
+//
+// ctx is the bounded context [Runner.Hold] returned, and the caller keeps the
+// hold until it has written what the pass found. This method used to take the
+// guard itself and give it back the moment the pass returned, which put the
+// write that RECORDS the pass outside it — and a status row written outside
+// the lease is exactly the lost update coord.Integrations forbids: a loop tick
+// holding a row it read a moment earlier puts its own copy back over an
+// operator's disconnect, the card flips from Disconnecting to connected, and
+// they press the button again.
+//
+// So the guard spans the pass AND its record, and the caller owns it because
+// only the caller knows when it has finished writing. Both callers take it the
+// same way — the reconcile loop through the Guard its worker holds, the
+// dashboard through [Runner.Hold] directly.
+//
+// BLOCKING, deliberately. What bounds it is [PassDeadline], carried by ctx,
+// rather than anything here.
+func (r *Runner) Execute(ctx context.Context, kind integration.Kind, in PassInput, id string) (*Run, error) {
 	pass, ok := r.passes[kind]
 	if !ok {
 		return nil, ErrNoPass
 	}
-	release, held, err := r.hold(ctx, kind, id)
-	if err != nil {
-		// UNKNOWN IS NOT REFUSED-AND-NOT-HELD. A coordination store that
-		// could not answer is not evidence that somebody else is minting,
-		// and treating it as such would make a two-second blip look like
-		// a conflict.
-		return nil, fmt.Errorf("setup: could not claim the provisioning lease: %w", err)
-	}
-	if !held {
-		return nil, ErrPassInFlight
-	}
-	defer release()
 
 	run := &Run{ID: id, Kind: kind, State: RunRunning, StartedAt: r.now()}
 	r.remember(run)
@@ -336,13 +394,30 @@ func (r *Runner) Start(ctx context.Context, kind integration.Kind, in PassInput,
 // the request, so it takes this same hold, and a caller that cannot take it
 // does not write.
 //
-// held is false when somebody already has it; release is non-nil exactly when
-// held is true, and calling it is what lets the next writer in. The error is
-// the third value: a store that could not answer has not said the surface is
-// idle.
-func (r *Runner) Hold(ctx context.Context, kind integration.Kind) (func(), bool, error) {
+// # It also BOUNDS the work it admits
+//
+// The lease is taken once and never renewed, so the returned context carries
+// [PassDeadline] and the work must run on it. That is what makes "the lease
+// protects this pass" true by construction: a pass cannot outlive its own
+// protection, because the context it was handed dies first. The bound derives
+// from the CALLER's context rather than replacing it, so cancellation still
+// reaches the pass — a worker stopping, or a suite handing in a dead context,
+// must still stop the work.
+//
+// held is false when somebody already has it; the context and release are
+// non-nil exactly when held is true, and calling release is what lets the next
+// writer in. The error is the third value: a store that could not answer has
+// not said the surface is idle.
+func (r *Runner) Hold(
+	ctx context.Context, kind integration.Kind,
+) (context.Context, func(), bool, error) {
 	if r == nil {
-		return func() {}, true, nil
+		// NO RUNNER, SO NO LEASE — and the deadline still applies. What it
+		// bounds here is not a lease but the pass: a node with no keyring
+		// reads and reports, and a read that never returns wedges the loop
+		// just as thoroughly as one that outlived a lease would.
+		bounded, cancel := context.WithTimeout(ctx, PassDeadline)
+		return bounded, cancel, true, nil
 	}
 	return r.hold(ctx, kind, holdID)
 }
@@ -354,37 +429,48 @@ func (r *Runner) Hold(ctx context.Context, kind integration.Kind) (func(), bool,
 // because that one is worth seeing.
 const holdID = "hold"
 
-// hold takes the in-process claim and then the fleet lease, and hands back the
-// release for both.
+// hold takes the in-process claim, then the fleet lease, then the deadline,
+// and hands back one release for all three.
 //
-// IN THAT ORDER, and it matters on the failing path: the local claim is what
-// the release below gives back, so taking the remote one first would leave a
-// lease held for its full TTL whenever a second goroutine on this node lost
-// the local race.
+// IN THAT ORDER, and every step of it matters on a failing path:
+//
+//   - The local claim first, because the release below is what gives it back:
+//     taking the remote one first would leave a lease held for its full
+//     [LeaseTTL] whenever a second goroutine on this node lost the local race.
+//   - The lease on the CALLER's context, never on the bounded one built after
+//     it. The release closes over whatever context it was given, and
+//     schedule.HoldNamedDuty already wraps that in context.WithoutCancel so a
+//     cancelled pass still gives its lease back. Build it from a context that
+//     has hit [PassDeadline] and every release after a timeout is a no-op —
+//     locking the surface out for the rest of [LeaseTTL] at exactly the moment
+//     it most needs releasing.
+//   - The deadline last, so its margin inside [LeaseTTL] is the whole of
+//     [PassDeadline]'s minute rather than a minute minus however long the
+//     claim took.
 func (r *Runner) hold(
 	ctx context.Context, kind integration.Kind, id string,
-) (func(), bool, error) {
+) (context.Context, func(), bool, error) {
 	if !r.claim(kind, id) {
 		// A pass is already running HERE. Definitively not held rather
 		// than an error: this is knowledge, not a failure to look.
-		return nil, false, nil
+		return nil, nil, false, nil
 	}
-	if r.duty == nil {
-		return func() { r.release(kind) }, true, nil
+	release := func() { r.release(kind) }
+	if r.duty != nil {
+		// A nil Duty for this kind is no coordination store: a single node
+		// with nobody to be a singleton among, still guarded against itself
+		// by the claim above.
+		if duty := r.duty(kind); duty != nil {
+			leaseRelease, held, err := duty(ctx)
+			if err != nil || !held {
+				r.release(kind)
+				return nil, nil, false, err
+			}
+			release = func() { leaseRelease(); r.release(kind) }
+		}
 	}
-	duty := r.duty(kind)
-	if duty == nil {
-		// No coordination store: a single node with nobody to be a
-		// singleton among, still guarded against itself by the claim
-		// above.
-		return func() { r.release(kind) }, true, nil
-	}
-	release, held, err := duty(ctx)
-	if err != nil || !held {
-		r.release(kind)
-		return nil, false, err
-	}
-	return func() { release(); r.release(kind) }, true, nil
+	bounded, cancel := context.WithTimeout(ctx, PassDeadline)
+	return bounded, func() { cancel(); release() }, true, nil
 }
 
 // Get is one run by id.
