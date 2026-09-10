@@ -312,6 +312,81 @@ func TestAPurgedTaskStaysPurged(t *testing.T) {
 	}
 }
 
+// A PURGE DESTROYS ONE TASK, NOT A SUBTREE — AND LEAVES NO DANGLING PARENT.
+//
+// The purge deleted the row and everything naming it and left each child's
+// `parent_id` pointing at an id that resolves to nothing. No reader can tell
+// that from a parent merely held on another node, and the next edit to such a
+// child derives its depth and root from a chain that stops at nothing.
+//
+// Destroying the children instead would be worse: a purge has no inverse, and
+// "it was under the thing you purged" is not a confirmation anybody gave. So
+// each direct child moves onto the purged task's OWN parent.
+func TestAPurgeReParentsItsChildrenRatherThanOrphaningThem(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	at := time.Unix(1_700_000_100, 0).UTC()
+	for _, id := range []string{"grandparent", "parent", "child"} {
+		if _, err := h.apply(taskRecord(id, tracker.OpCreate, newTask(id), nil), at); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+	}
+	for _, move := range []struct{ id, parent string }{
+		{"parent", "grandparent"}, {"child", "parent"},
+	} {
+		parent := move.parent
+		if _, err := h.apply(taskRecord(move.id, tracker.OpPatch,
+			tracker.TaskPatch{Parent: &parent}, nil), at); err != nil {
+			t.Fatalf("re-parent %s: %v", move.id, err)
+		}
+	}
+	if got := h.value(`SELECT depth FROM tracker_tasks WHERE id = 'child'`); got != 2 {
+		t.Fatalf("the fixture's child is at depth %d, so this case is not the "+
+			"shape it names", got)
+	}
+
+	purge := taskRecord("parent", tracker.OpPurge,
+		map[string]any{"reason": "a duplicate import"}, nil)
+	if _, err := h.apply(purge, time.Unix(1_700_000_200, 0).UTC()); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+
+	// THE CHILD SURVIVES, which is the half a cascading delete would fail.
+	if got := h.count("tracker_tasks"); got != 2 {
+		t.Fatalf("%d task rows survive the purge of one task", got)
+	}
+	// AND ITS PARENT RESOLVES. A dangling pointer here is invisible to
+	// every reader and is what the whole case is about.
+	var parent sql.NullString
+	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(),
+			`SELECT p.id FROM tracker_tasks c
+			 LEFT JOIN tracker_tasks p ON p.id = c.parent_id
+			 WHERE c.id = 'child'`).Scan(&parent)
+	}); err != nil {
+		t.Fatalf("read the child's parent: %v", err)
+	}
+	if !parent.Valid || parent.String != "grandparent" {
+		t.Errorf("the child's parent is %q (resolves=%v); it should have moved "+
+			"onto the purged task's own parent", parent.String, parent.Valid)
+	}
+	// AND THE DERIVED COLUMNS FOLLOWED. Re-parenting the pointer and
+	// leaving the closure behind is the same dangling reference one join
+	// further away.
+	if got := h.value(`SELECT depth FROM tracker_tasks WHERE id = 'child'`); got != 1 {
+		t.Errorf("the moved child is at depth %d rather than 1", got)
+	}
+	if got := h.value(
+		`SELECT distance FROM tracker_task_closure
+		 WHERE ancestor_id = 'grandparent' AND descendant_id = 'child'`); got != 1 {
+		t.Errorf("the closure puts the moved child %d from its new parent", got)
+	}
+	if got := h.count("tracker_task_closure"); got != 3 {
+		t.Errorf("%d closure rows survive; two self-rows and one edge is the "+
+			"whole tree after the purge", got)
+	}
+}
+
 // THE EFFECTIVE INSTANT IS A MAX OVER A SET, so a late record RAISES its
 // successors and never lowers them.
 //

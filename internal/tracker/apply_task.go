@@ -769,12 +769,39 @@ func bucketOf(task Task) string {
 // reference to a key nothing resolves is a dangling link a reader cannot tell
 // from a typo. All in one transaction, and the marker it writes is what stops
 // a redelivery months later resurrecting any of it.
+//
+// # Its CHILDREN are re-parented, not destroyed and not orphaned
+//
+// A purge names ONE task. Destroying the subtree under it would destroy work
+// nobody asked about — a purge has no inverse, so "it was under the thing you
+// purged" is not a confirmation anybody gave. Leaving the children alone is
+// worse: each one's `parent_id` would name a row that no longer exists, which
+// no reader can distinguish from a task whose parent is merely on another
+// node, and the next edit to such a child would derive its depth and root from
+// a chain that stops at nothing.
+//
+// So each direct child is moved onto the purged task's OWN parent — the
+// grandparent, or the root when the purged task was one — and its subtree's
+// ancestry is rebuilt. Depth can only fall, so no cap is crossed by the move.
+//
+// AND IT IS DONE IN THE APPLIER RATHER THAN REFUSED AT THE WRITER, because a
+// refusal cannot close the race: a child is created by a write to the CHILD's
+// subject, which does not contend with a write to this one, so a purge decided
+// against a childless snapshot can still land after a child arrives. The
+// applier sees the rows as they are at this position, and every node sees the
+// same ones.
 func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
 	id := c.subject().ID
 	// The row is read BEFORE it is deleted, because the marker records
 	// what the task WAS: a deletion whose key and project are empty is a
 	// marker nobody can resolve back to anything.
 	task, _, err := readTask(ctx, tx, id)
+	if err != nil {
+		return 0, err
+	}
+	// AND SO ARE ITS CHILDREN, for the same reason: after the deletes
+	// below there is nothing left to ask.
+	children, err := childrenOf(ctx, tx, id)
 	if err != nil {
 		return 0, err
 	}
@@ -826,11 +853,66 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
+	moved, err := a.reparent(ctx, tx, children, task.Parent)
+	if err != nil {
+		return 0, err
+	}
 	history, err := a.writeHistory(ctx, tx, c, task.Project)
 	if err != nil {
 		return 0, err
 	}
-	return written + marker + history, nil
+	return written + marker + moved + history, nil
+}
+
+// reparent moves each child onto parent and rebuilds its subtree's ancestry.
+//
+// AFTER THE DELETES, deliberately: [Applier.maintainClosure] walks the parent
+// chain, and run before them it would walk through the row this purge is
+// removing and write an ancestry naming it.
+func (a *Applier) reparent(ctx context.Context, tx *sql.Tx, children []string,
+	parent *string) (int, error) {
+
+	written := 0
+	for _, child := range children {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE tracker_tasks SET parent_id = ? WHERE id = ?`,
+			parent, child); err != nil {
+			return 0, fmt.Errorf("tracker: re-parent %s: %w", child, err)
+		}
+		written++
+		n, err := a.maintainClosure(ctx, tx, Task{ID: child, Parent: parent})
+		if err != nil {
+			return 0, err
+		}
+		written += n
+	}
+	return written, nil
+}
+
+// childrenOf reads a task's DIRECT children.
+//
+// From the parent pointers rather than the closure, because what this needs is
+// the tasks whose own `parent_id` would dangle — and the closure holds every
+// descendant, whose pointers name their own parents and are unaffected.
+func childrenOf(ctx context.Context, tx *sql.Tx, id string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id FROM tracker_tasks WHERE parent_id = ? ORDER BY id`, id)
+	if err != nil {
+		return nil, fmt.Errorf("tracker: read the children of %s: %w", id, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var child string
+		if err := rows.Scan(&child); err != nil {
+			return nil, fmt.Errorf("tracker: scan a child of %s: %w", id, err)
+		}
+		out = append(out, child)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tracker: read the children of %s: %w", id, err)
+	}
+	return out, nil
 }
 
 // purgeReason reads the operator's stated reason out of the payload, which is
