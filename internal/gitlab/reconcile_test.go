@@ -42,11 +42,24 @@ const (
 type adminInstance struct {
 	mu sync.Mutex
 
-	users      map[string]int          // username -> id
-	people     map[string]bool         // usernames the instance treats as humans
-	tokens     map[int][]*gitlab.Token // user id -> its token rows
-	members    map[string]int          // "group:7" / "proj:a/b" -> access level
-	hooks      []gitlab.Hook
+	users  map[string]int          // username -> id
+	people map[string]bool         // usernames the instance treats as humans
+	tokens map[int][]*gitlab.Token // user id -> its token rows
+
+	// groupMembers is the group's ROSTER — user id -> access level — and
+	// it is not the same thing as `users`.
+	//
+	// It used to be, near enough: the members route served every account
+	// on the instance. That makes a fake that cannot fail the test that
+	// matters, because a seat whose account exists and was never added to
+	// the group reads back as already a member, so a pass comparing the
+	// roster against its plan would skip exactly the write it owes.
+	groupMembers map[int]int
+	// projectMembers is the same per project path, and there was no route
+	// for it at all.
+	projectMembers map[string]map[int]int
+
+	hooks      []hookRow
 	hookBodies []map[string]any
 	// signsNothing models a GitLab older than 19.1: it ACCEPTS the
 	// signing_token attribute, ignores it, and answers 200 — so the write
@@ -69,7 +82,7 @@ type adminInstance struct {
 	hookStatus int
 	// projectHooks is what the per-project route holds, keyed by project
 	// path.
-	projectHooks map[string][]gitlab.Hook
+	projectHooks map[string][]hookRow
 	// missingProjects answer the existence probe with a 404, the way a
 	// renamed or not-yet-created repository does.
 	missingProjects map[string]bool
@@ -134,11 +147,113 @@ const adminToken = "admin-token"
 func newAdminInstance() *adminInstance {
 	return &adminInstance{
 		users: map[string]int{}, tokens: map[int][]*gitlab.Token{},
-		people:        map[string]bool{},
-		instanceOwned: map[string]bool{},
-		members:       map[string]int{}, nextID: 100, nextToken: 1,
+		people:         map[string]bool{},
+		instanceOwned:  map[string]bool{},
+		groupMembers:   map[int]int{},
+		projectMembers: map[string]map[int]int{},
+		nextID:         100, nextToken: 1,
 		now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
+}
+
+// hookRow is one webhook as the instance HOLDS it: every attribute it was
+// created or updated with, which is what GitLab serves back on a listing.
+//
+// The fixture used to keep an id and a url and nothing else, so every seeded
+// hook read back as one that had never been configured. A reconcile
+// comparing what it wants against what is there could not have told a
+// converged hook from an empty one, and a fake like that certifies an
+// unconditional re-write as correct.
+type hookRow struct {
+	id    int
+	attrs map[string]any
+	// signed is what `signing_token_present` reports: a token was sent AND
+	// this instance is new enough to honour it. GitLab never returns the
+	// token itself, so this is the only thing a listing says about it.
+	signed bool
+}
+
+// render is the JSON GitLab serves for a hook.
+//
+// NEITHER SECRET COMES BACK. `signing_token` is write-only by design and
+// `token` is not returned either, so a reconcile can never read which key a
+// hook holds — which is the whole reason the pass has to be told separately
+// whether it minted one this run.
+func (h hookRow) render() map[string]any {
+	out := make(map[string]any, len(h.attrs)+2)
+	for name, value := range h.attrs {
+		if name == "signing_token" || name == "token" {
+			continue
+		}
+		out[name] = value
+	}
+	out["id"] = h.id
+	out["signing_token_present"] = h.signed
+	return out
+}
+
+// legacyHook is the hook an older Crewlet registered: the right URL, the
+// signing key in GitLab's plaintext `token` attribute, and no signing token
+// at all — which is the state a current pass has to repair.
+func legacyHook(id int, target string) hookRow {
+	return hookRow{id: id, attrs: map[string]any{
+		"url": target, "token": testSigningSecret,
+	}}
+}
+
+// foreignHook is somebody else's registration on the same instance, which a
+// pass must never re-point.
+func foreignHook(id int, target string) hookRow {
+	return hookRow{id: id, attrs: map[string]any{"url": target}}
+}
+
+// renderHooks is one listing.
+func renderHooks(rows []hookRow) []map[string]any {
+	out := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.render())
+	}
+	return out
+}
+
+// held copies a request body into the attributes the instance keeps.
+//
+// A COPY, because the same decoded map is also appended to hookBodies as the
+// record of what was SENT — and a later update merging into a shared map
+// would rewrite that record, so a test asserting what the create carried
+// would be reading the update instead.
+func held(body map[string]any) map[string]any {
+	out := make(map[string]any, len(body))
+	for name, value := range body {
+		out[name] = value
+	}
+	return out
+}
+
+// writeHook applies a create-or-update body the way GitLab does: the
+// attributes named are set and everything else is left as it was.
+func (f *adminInstance) writeHook(rows []hookRow, id int, body map[string]any) []hookRow {
+	for i := range rows {
+		if rows[i].id != id {
+			continue
+		}
+		for name, value := range body {
+			rows[i].attrs[name] = value
+		}
+		rows[i].signed = f.signs(body)
+		return rows
+	}
+	return rows
+}
+
+// join seeds an account that is ALREADY IN THE GROUP.
+//
+// The instance's account list and the group's roster are different things —
+// an account can exist and be a member of nothing — so a fixture that seeded
+// only `users` was asking a scan to find something the group does not hold.
+func (f *adminInstance) join(username string, id, level int) {
+	f.users[username] = id
+	f.groupMembers[id] = level
 }
 
 func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
@@ -178,14 +293,69 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"message":"401 Unauthorized"}`))
 
 	case r.Method == http.MethodGet && path == "/groups/7/members":
-		out := make([]map[string]any, 0, len(f.users))
+		// THE ROSTER, not the account list. An account that exists on
+		// this instance and was never added to the group is not here,
+		// which is what makes a pass that skips a membership it owes
+		// visible rather than invisible.
+		out := make([]map[string]any, 0, len(f.groupMembers))
 		for name, id := range f.users {
-			out = append(out, map[string]any{"id": id, "username": name})
+			level, member := f.groupMembers[id]
+			if !member {
+				continue
+			}
+			out = append(out, map[string]any{
+				"id": id, "username": name, "access_level": level,
+			})
 		}
 		sortByUsername(out)
 		// PAGED, because a fake that served everything on page 1 makes a
 		// caller that never asks for page 2 look correct.
 		json.NewEncoder(w).Encode(pageOf(out, r.URL.Query()))
+
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/projects/") &&
+		strings.HasSuffix(path, "/members"):
+		project := strings.TrimSuffix(strings.TrimPrefix(path, "/projects/"), "/members")
+		out := make([]map[string]any, 0, len(f.projectMembers[project]))
+		for name, id := range f.users {
+			level, member := f.projectMembers[project][id]
+			if !member {
+				continue
+			}
+			out = append(out, map[string]any{
+				"id": id, "username": name, "access_level": level,
+			})
+		}
+		sortByUsername(out)
+		json.NewEncoder(w).Encode(pageOf(out, r.URL.Query()))
+
+	// THE EDIT, which is the route an access-level change goes down.
+	// GitLab 404s it for an account with no DIRECT membership, so a
+	// caller that guessed instead of reading the roster first would be
+	// refused on exactly the seat it had never added.
+	case r.Method == http.MethodPut && strings.HasPrefix(path, "/groups/7/members/"):
+		id := atoi(strings.TrimPrefix(path, "/groups/7/members/"))
+		if _, member := f.groupMembers[id]; !member {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"message":"404 Not found"}`))
+			return
+		}
+		var body map[string]int
+		json.NewDecoder(r.Body).Decode(&body)
+		f.groupMembers[id] = body["access_level"]
+
+	case r.Method == http.MethodPut && strings.HasPrefix(path, "/projects/") &&
+		strings.Contains(path, "/members/"):
+		at := strings.LastIndex(path, "/members/")
+		project := strings.TrimPrefix(path[:at], "/projects/")
+		id := atoi(path[at+len("/members/"):])
+		if _, member := f.projectMembers[project][id]; !member {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"message":"404 Not found"}`))
+			return
+		}
+		var body map[string]int
+		json.NewDecoder(r.Body).Decode(&body)
+		f.projectMembers[project][id] = body["access_level"]
 
 	// THE ACCOUNT ITSELF, and not a token on it: the group's token routes
 	// live under this same prefix, so a prefix match alone deleted the
@@ -304,20 +474,33 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && path == "/groups/7/members":
 		var body map[string]int
 		json.NewDecoder(r.Body).Decode(&body)
-		key := fmt.Sprintf("group:%d", body["user_id"])
-		if _, already := f.members[key]; already {
-			// A REAL INSTANCE 409s a second add. The reconcile has to
-			// treat that as success or a second run fails on what the
-			// first one did.
+		if _, already := f.groupMembers[body["user_id"]]; already {
+			// A REAL INSTANCE 409s a second add AND CHANGES NOTHING,
+			// which is the half that made the level drift invisible: a
+			// pass that only ever added could not move a membership it
+			// already had.
 			w.WriteHeader(http.StatusConflict)
 			return
 		}
-		f.members[key] = body["access_level"]
+		f.groupMembers[body["user_id"]] = body["access_level"]
 
-	case r.Method == http.MethodPost && strings.HasSuffix(path, "/members"):
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/projects/") &&
+		strings.HasSuffix(path, "/members"):
+		project := strings.TrimSuffix(strings.TrimPrefix(path, "/projects/"), "/members")
 		var body map[string]int
 		json.NewDecoder(r.Body).Decode(&body)
-		f.members[path+fmt.Sprint(body["user_id"])] = body["access_level"]
+		if _, already := f.projectMembers[project][body["user_id"]]; already {
+			// THE SAME 409 THE GROUP ROUTE GIVES. This arm answered 200
+			// and quietly overwrote the level, which let the pass look
+			// idempotent on a project where a real instance would have
+			// refused it.
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		if f.projectMembers[project] == nil {
+			f.projectMembers[project] = map[int]int{}
+		}
+		f.projectMembers[project][body["user_id"]] = body["access_level"]
 
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/personal_access_tokens"):
 		// TWO ROUTES, AND GITLAB.COM ALLOWS ONE OF THEM.
@@ -445,7 +628,7 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(path, "/hooks") && strings.HasPrefix(path, "/projects/"):
 		project := strings.TrimSuffix(strings.TrimPrefix(path, "/projects/"), "/hooks")
 		if r.Method == http.MethodGet {
-			json.NewEncoder(w).Encode(f.projectHooks[project])
+			json.NewEncoder(w).Encode(renderHooks(f.projectHooks[project]))
 			return
 		}
 		var body map[string]any
@@ -457,15 +640,14 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 				"message": "signing_token must be whsec_<base64> over 32 bytes"})
 			return
 		}
-		hook := gitlab.Hook{
-			ID: len(f.projectHooks[project]) + 1, URL: body["url"].(string),
-			SigningTokenPresent: f.signs(body),
+		hook := hookRow{
+			id: len(f.projectHooks[project]) + 1, attrs: held(body), signed: f.signs(body),
 		}
 		if f.projectHooks == nil {
-			f.projectHooks = map[string][]gitlab.Hook{}
+			f.projectHooks = map[string][]hookRow{}
 		}
 		f.projectHooks[project] = append(f.projectHooks[project], hook)
-		json.NewEncoder(w).Encode(hook)
+		json.NewEncoder(w).Encode(hook.render())
 
 	case strings.HasPrefix(path, "/groups/7/hooks") && f.hookStatus != 0:
 		w.WriteHeader(f.hookStatus)
@@ -478,7 +660,7 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"message": "404 Not Found"})
 
 	case r.Method == http.MethodGet && path == "/groups/7/hooks":
-		json.NewEncoder(w).Encode(f.hooks)
+		json.NewEncoder(w).Encode(renderHooks(f.hooks))
 
 	case r.Method == http.MethodPost && path == "/groups/7/hooks":
 		var body map[string]any
@@ -490,12 +672,9 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 				"message": "signing_token must be whsec_<base64> over 32 bytes"})
 			return
 		}
-		hook := gitlab.Hook{
-			ID: len(f.hooks) + 1, URL: body["url"].(string),
-			SigningTokenPresent: f.signs(body),
-		}
+		hook := hookRow{id: len(f.hooks) + 1, attrs: held(body), signed: f.signs(body)}
 		f.hooks = append(f.hooks, hook)
-		json.NewEncoder(w).Encode(hook)
+		json.NewEncoder(w).Encode(hook.render())
 
 	case r.Method == http.MethodPut && strings.Contains(path, "/hooks/"):
 		var body map[string]any
@@ -508,21 +687,18 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.updatedHooks = append(f.updatedHooks, path)
-		// A PUT that carries a signing token makes the hook report one on
-		// the next GET, exactly as GitLab does.
-		target, _ := body["url"].(string)
-		for i := range f.hooks {
-			if f.hooks[i].URL == target {
-				f.hooks[i].SigningTokenPresent = f.signs(body)
-			}
+		// ADDRESSED BY ID, the way the request is. Matching on the url in
+		// the BODY meant a fixture could not hold two hooks the pass
+		// might address separately, and it made the fake agree with a
+		// caller that re-pointed the wrong one.
+		at := strings.LastIndex(path, "/hooks/")
+		id := atoi(path[at+len("/hooks/"):])
+		if strings.HasPrefix(path, "/groups/") {
+			f.hooks = f.writeHook(f.hooks, id, body)
+			return
 		}
-		for project := range f.projectHooks {
-			for i := range f.projectHooks[project] {
-				if f.projectHooks[project][i].URL == target {
-					f.projectHooks[project][i].SigningTokenPresent = f.signs(body)
-				}
-			}
-		}
+		project := strings.TrimPrefix(path[:at], "/projects/")
+		f.projectHooks[project] = f.writeHook(f.projectHooks[project], id, body)
 
 	default:
 		w.WriteHeader(http.StatusNotFound)
@@ -624,14 +800,79 @@ func (f *adminInstance) addPerson(username string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.nextID++
-	f.users[username] = f.nextID
+	f.join(username, f.nextID, gitlabDeveloperLevel)
 	f.people[username] = true
 }
+
+// mutations counts the requests this instance received that CHANGE it.
+//
+// # Counted by ROUTE, not by method
+//
+// [integrationtest]'s converged clause asks how many writes a third-party
+// app took, and the tempting implementation is "everything that is not a
+// GET". That is the wrong rule to write down even where it gives the right
+// answer: some vendors model a listing as a POST, and a method counter would
+// call that a write — which makes the clause impossible to satisfy and
+// pushes the fix towards weakening the suite instead of fixing the pass.
+//
+// So the READ routes are named and everything else counts. GitLab serves
+// every query on this surface as a GET with query parameters, so here the
+// two rules pick out the same requests; the route is the one stated because
+// it stays correct if that ever stops being true.
+//
+// UNRECOGNISED IS A MUTATION, deliberately. A route added to this fixture
+// and forgotten here fails the converged clause loudly, where the opposite
+// default would quietly stop counting a write the pass had begun making.
+//
+// A REFUSED write still counts. The pass POSTs a membership that already
+// exists and GitLab answers 409; the instance received the request and had
+// to answer it, and the clause is about traffic and standing authority
+// rather than net effect.
+func (f *adminInstance) mutations() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, call := range f.calls {
+		if mutatingRoute(call) {
+			n++
+		}
+	}
+	return n
+}
+
+// mutatingRoute classifies one recorded "METHOD /path".
+func mutatingRoute(call string) bool {
+	method, path, _ := strings.Cut(call, " ")
+	if method != http.MethodGet {
+		return true
+	}
+	switch {
+	case path == "/user", // who does this credential authenticate as
+		path == "/users",            // the account lookup
+		path == "/groups/nimbus",    // the group, and the tier it is on
+		path == "/service_accounts", // the instance's own account listing
+		path == "/personal_access_tokens",
+		strings.HasSuffix(path, "/personal_access_tokens"),
+		strings.HasSuffix(path, "/members"),
+		strings.HasSuffix(path, "/hooks"),
+		strings.HasPrefix(path, "/projects/"): // the existence probe
+		return false
+	}
+	return true
+}
+
+// The access levels GitLab takes as integers, mirrored here because a
+// fixture asserting a level has to say which one it means.
+const (
+	gitlabDeveloperLevel  = 30
+	gitlabMaintainerLevel = 40
+)
 
 func (f *adminInstance) forget() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.revokes, f.mintBodies, f.calls = 0, nil, nil
+	f.updatedHooks, f.hookBodies = nil, nil
 }
 
 func (f *adminInstance) revoked() int {
@@ -900,9 +1141,9 @@ func TestAFailedRollbackNamesWhatIsStillLive(t *testing.T) {
 func TestAnExistingHookIsUpdatedRatherThanDuplicated(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
-	f.hooks = []gitlab.Hook{
-		{ID: 9, URL: "https://someone-else.example.com/hook"},
-		{ID: 10, URL: "https://crewlet.example.com/webhooks/gitlab"},
+	f.hooks = []hookRow{
+		foreignHook(9, "https://someone-else.example.com/hook"),
+		legacyHook(10, "https://crewlet.example.com/webhooks/gitlab"),
 	}
 	if _, err := reconcileAgainst(t, f, newRecordingSink(),
 		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
@@ -1467,8 +1708,8 @@ func TestDecommissionRemovesManagedAccountsWithNoSeat(t *testing.T) {
 		t.Fatalf("first run: %v", err)
 	}
 	f.mu.Lock()
-	f.users["crewlet-qa"] = 500 // a seat that used to exist
-	f.users["ci-runner"] = 501  // somebody else's account in the group
+	f.join("crewlet-qa", 500, gitlabDeveloperLevel) // a seat that used to exist
+	f.join("ci-runner", 501, gitlabDeveloperLevel)  // somebody else's account
 	f.mu.Unlock()
 
 	res, err := reconcileWith(t, f, newRecordingSink(), seats,
@@ -1496,7 +1737,7 @@ func TestDecommissionReportsAnAccountTheInstanceWillNotDelete(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
 	f.mu.Lock()
-	f.users["crewlet-person"] = 600
+	f.join("crewlet-person", 600, gitlabDeveloperLevel)
 	f.people["crewlet-person"] = true
 	f.mu.Unlock()
 
@@ -1740,8 +1981,8 @@ func TestAnExistingProjectHookIsUpdated(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
 	f.noGroupHooks = true
-	f.projectHooks = map[string][]gitlab.Hook{
-		"nimbus/api": {{ID: 4, URL: "https://crewlet.example.com/webhooks/gitlab"}},
+	f.projectHooks = map[string][]hookRow{
+		"nimbus/api": {legacyHook(4, "https://crewlet.example.com/webhooks/gitlab")},
 	}
 	if _, err := reconcileAgainst(t, f, newRecordingSink(),
 		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
@@ -1782,17 +2023,12 @@ func TestAMissingProjectIsSkippedRatherThanFatal(t *testing.T) {
 	if sink.value("GITLAB_TOKEN_SWE") == "" {
 		t.Error("the run rolled back and revoked what it had minted")
 	}
-	joined := false
-	for key := range f.members {
-		if strings.HasPrefix(key, "/projects/nimbus/api/members") {
-			joined = true
-		}
-		if strings.HasPrefix(key, "/projects/nimbus/gone/") {
-			t.Errorf("the seat was added to a project that does not exist: %s", key)
-		}
+	if len(f.projectMembers["nimbus/api"]) != 1 {
+		t.Errorf("the seat did not join the project that exists: %v", f.projectMembers)
 	}
-	if !joined {
-		t.Errorf("the seat did not join the project that exists: %v", f.members)
+	if len(f.projectMembers["nimbus/gone"]) != 0 {
+		t.Errorf("the seat was added to a project that does not exist: %v",
+			f.projectMembers["nimbus/gone"])
 	}
 	// AND IT SAID WHAT IT SKIPPED, with the fix: an operator who is not
 	// told cannot know why an agent never sees that repository.
@@ -2053,7 +2289,7 @@ func TestTheLegacyPlaintextTokenIsCleared(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
 	// A hook from before the fix: same URL, so the reconcile updates it.
-	f.hooks = []gitlab.Hook{{ID: 4, URL: "https://crewlet.example.com/webhooks/gitlab"}}
+	f.hooks = []hookRow{legacyHook(4, "https://crewlet.example.com/webhooks/gitlab")}
 
 	if _, err := reconcileAgainst(t, f, newRecordingSink(),
 		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
@@ -2504,5 +2740,500 @@ func TestAnInstanceThatNamesNoPlanKeepsTheGroupHook(t *testing.T) {
 	}
 	if got := res.HookedOn; len(got) != 1 || got[0] != "group" {
 		t.Errorf("HookedOn = %v, want the group", got)
+	}
+}
+
+// --- reading before writing ----------------------------------------------- //
+
+// A CONVERGED PASS SENDS NO MEMBERSHIP WRITE AT ALL.
+//
+// It used to send one POST per seat to the group and one per seat per project
+// on every pass, for ever, and GitLab answered every one of them with a 409
+// the client read as success. That is the shape [integration.Reconciler]'s
+// contract forbids: the loop runs this every few minutes for the life of the
+// deployment, so a write here is a third-party-app mutation on a timer.
+func TestASecondPassSendsNoMembershipItAlreadyRead(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	sink := newRecordingSink()
+	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE", "cto": "GITLAB_TOKEN_CTO"}
+	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	f.forget()
+
+	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	for _, unwanted := range []string{
+		"POST /groups/7/members", "POST /projects/nimbus/api/members",
+	} {
+		if f.called(unwanted) {
+			t.Errorf("a converged pass sent %s", unwanted)
+		}
+	}
+	// AND IT READ INSTEAD. The point is not that the write vanished but
+	// that the pass now knows what the instance holds.
+	for _, wanted := range []string{
+		"GET /groups/7/members", "GET /projects/nimbus/api/members",
+	} {
+		if !f.called(wanted) {
+			t.Errorf("the pass never read %s, so it cannot know what to write", wanted)
+		}
+	}
+}
+
+// A CHANGED ACCESS LEVEL REACHES A MEMBERSHIP THAT ALREADY EXISTS.
+//
+// This is the bug the swallowed 409 was hiding. Adding was the only thing the
+// pass could do and GitLab answers a second add with a conflict and changes
+// nothing, so editing provisioning.access_level did NOTHING for a seat that
+// already had a membership: the company document said maintainer, the
+// instance kept developer, and every pass reported converged for the life of
+// the deployment.
+func TestAChangedAccessLevelReachesAnExistingMembership(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	sink := newRecordingSink()
+	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
+	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	f.mu.Lock()
+	id := f.users["crewlet-swe"]
+	if got := f.groupMembers[id]; got != gitlabDeveloperLevel {
+		f.mu.Unlock()
+		t.Fatalf("the first run joined at %d, want the default developer level", got)
+	}
+	f.mu.Unlock()
+
+	if _, err := reconcileWith(t, f, sink, seats, func(o *gitlab.Options) {
+		o.Config.Provisioning.AccessLevel = config.GitLabMaintainer
+	}); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if got := f.groupMembers[id]; got != gitlabMaintainerLevel {
+		t.Errorf("the group membership is at %d after the config said maintainer; "+
+			"the instance keeps the old level and every pass reports converged", got)
+	}
+	if got := f.projectMembers["nimbus/api"][id]; got != gitlabMaintainerLevel {
+		t.Errorf("the project membership is at %d, want maintainer", got)
+	}
+}
+
+// AND A PER-HANDLE OVERRIDE DOES TOO, which is the same drift reached from
+// the other config field.
+func TestAPerHandleAccessOverrideReachesAnExistingMembership(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	sink := newRecordingSink()
+	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE", "cto": "GITLAB_TOKEN_CTO"}
+	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if _, err := reconcileWith(t, f, sink, seats, func(o *gitlab.Options) {
+		o.Config.Provisioning.AccessLevels = map[string]config.GitLabAccessLevel{
+			"cto": config.GitLabMaintainer,
+		}
+	}); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if got := f.groupMembers[f.users["crewlet-cto"]]; got != gitlabMaintainerLevel {
+		t.Errorf("the overridden seat is at %d, want maintainer", got)
+	}
+	// AND ONLY THAT SEAT. An override that moved everybody would be the
+	// opposite failure and just as silent.
+	if got := f.groupMembers[f.users["crewlet-swe"]]; got != gitlabDeveloperLevel {
+		t.Errorf("a seat with no override moved to %d", got)
+	}
+}
+
+// A SEAT THE ROSTER DOES NOT CARRY IS STILL ADDED. Reading first must not
+// turn into reading instead: an account somebody removed from the group by
+// hand is exactly what a reconcile is for.
+func TestAMembershipTheGroupLostIsPutBack(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	sink := newRecordingSink()
+	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
+	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	f.mu.Lock()
+	id := f.users["crewlet-swe"]
+	delete(f.groupMembers, id)
+	delete(f.projectMembers["nimbus/api"], id)
+	f.mu.Unlock()
+	f.forget()
+
+	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, member := f.groupMembers[id]; !member {
+		t.Error("the seat was left out of the group it had been removed from")
+	}
+	if _, member := f.projectMembers["nimbus/api"][id]; !member {
+		t.Error("the seat was left out of the project it had been removed from")
+	}
+}
+
+// A PROJECT'S MEMBERSHIP IS WALKED TO EXHAUSTION.
+//
+// The group listing already had this correction; the project one arrived with
+// it. A single-page read makes every member past the first hundred invisible,
+// and invisible here means the pass re-adds a seat that is already there — on
+// every pass, for ever, which is the clause it must not break.
+func TestAProjectMembershipPastTheFirstPageIsSeen(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	sink := newRecordingSink()
+	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
+	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	// 128 members whose usernames SORT BEFORE the managed account, so the
+	// seat lands on page two — the only arrangement that tells a paged
+	// walk from a single-page one.
+	f.mu.Lock()
+	for i := range 128 {
+		f.nextID++
+		f.projectMembers["nimbus/api"][f.nextID] = gitlabDeveloperLevel
+		f.users[fmt.Sprintf("aaa-person-%03d", i)] = f.nextID
+	}
+	f.mu.Unlock()
+	f.forget()
+
+	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if f.called("POST /projects/nimbus/api/members") {
+		t.Error("the seat was re-added to a project it is already in, so the " +
+			"membership read stopped at the first page")
+	}
+}
+
+// --- the hook, written only on a difference -------------------------------- //
+
+// A CONVERGED HOOK IS LEFT ENTIRELY ALONE.
+//
+// It used to be re-written unconditionally, on the reasoning that the signing
+// secret may have rotated. It may — and the run knows whether it did, so that
+// reasoning justifies a write on the pass that rotates and nothing on the
+// hundreds that do not. What the unconditional PUT cost was the steady state:
+// the identical body, all nineteen event flags of it, every few minutes for
+// the life of the deployment.
+func TestAConvergedGroupHookIsNotRewritten(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	sink := newRecordingSink()
+	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
+	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	f.forget()
+
+	res, err := reconcileAgainst(t, f, sink, seats)
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.hookBodies) != 0 {
+		t.Errorf("a converged pass wrote the hook again: %v", f.hookBodies)
+	}
+	// AND ONE LISTING, not two. confirmSigned re-read the hook after every
+	// write to prove the instance honoured the signing token; with nothing
+	// written there is nothing to confirm, and the listing the pass already
+	// took is what said the token is there.
+	reads := 0
+	for _, call := range f.calls {
+		if call == "GET /groups/7/hooks" {
+			reads++
+		}
+	}
+	if reads != 1 {
+		t.Errorf("the hook was listed %d times on a pass that wrote nothing", reads)
+	}
+	// AND IT STILL REPORTS THE HOOK. Skipping the write must not turn into
+	// reporting no webhook, which Findings reads as a blocked ingress.
+	if got := res.HookedOn; len(got) != 1 || got[0] != "group" {
+		t.Errorf("HookedOn = %v, want the group it is still registered on", got)
+	}
+}
+
+// THE SAME SKIP ON THE PER-PROJECT PATH, where the cost was multiplied by the
+// project count.
+func TestAConvergedProjectHookIsNotRewritten(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.plan = "free"
+	sink := newRecordingSink()
+	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
+	if _, err := reconcileWith(t, f, sink, seats, func(o *gitlab.Options) {
+		o.Config.Provisioning.Projects = []string{"nimbus/api", "nimbus/web"}
+	}); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	f.forget()
+
+	res, err := reconcileWith(t, f, sink, seats, func(o *gitlab.Options) {
+		o.Config.Provisioning.Projects = []string{"nimbus/api", "nimbus/web"}
+	})
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.hookBodies) != 0 {
+		t.Errorf("a converged pass rewrote %d project hook(s)", len(f.hookBodies))
+	}
+	if len(res.HookedOn) != 2 {
+		t.Errorf("HookedOn = %v, want both projects it is still registered on",
+			res.HookedOn)
+	}
+}
+
+// A SECRET THIS RUN MINTED IS WRITTEN TO THE HOOK EVEN THOUGH THE HOOK SAYS
+// IT HAS ONE.
+//
+// GitLab never returns a signing token, so `signing_token_present` says a
+// hook holds SOME key and nothing says which. A run that rotated the key
+// therefore cannot read its way to the answer — it has to carry its own
+// decision to the hook, or the instance goes on signing with the value the
+// engine has just replaced and every delivery is refused.
+func TestARotatedSigningSecretIsWrittenToAHookThatLooksConverged(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	sink := newRecordingSink()
+	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
+	if _, err := reconcileWith(t, f, sink, seats, func(o *gitlab.Options) {
+		o.SigningSecret = ""
+		o.SigningSecretVar = "GITLAB_SIGNING_SECRET"
+	}); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	minted := sink.value("GITLAB_SIGNING_SECRET")
+	f.forget()
+
+	if _, err := reconcileWith(t, f, sink, seats, func(o *gitlab.Options) {
+		o.SigningSecret = minted
+		o.SigningSecretVar = "GITLAB_SIGNING_SECRET"
+		o.Rotate = true
+	}); err != nil {
+		t.Fatalf("rotating run: %v", err)
+	}
+	rotated := sink.value("GITLAB_SIGNING_SECRET")
+	if rotated == minted {
+		t.Fatal("-rotate did not replace the signing secret")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.hookBodies) != 1 {
+		t.Fatalf("%d hook writes on a run that replaced the key, want one",
+			len(f.hookBodies))
+	}
+	if got := f.hookBodies[0]["signing_token"]; got != rotated {
+		t.Errorf("the hook carries %q, not the key this run recorded", got)
+	}
+}
+
+// A HOOK THAT LOST A ROUTED EVENT IS PUT BACK.
+//
+// The whole point of comparing rather than re-writing is that the comparison
+// has to be able to say no. Somebody unticking `issues_events` in the
+// settings page is the ordinary way a hook drifts, and a pass that only
+// checked the signing token would call that converged and leave the engine
+// deaf to every issue in the group.
+func TestAHookThatLostARoutedEventIsPutBack(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	sink := newRecordingSink()
+	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
+	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	f.mu.Lock()
+	f.hooks[0].attrs["issues_events"] = false
+	f.mu.Unlock()
+	f.forget()
+
+	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.hookBodies) != 1 {
+		t.Fatalf("%d hook writes, want the one that re-subscribes it", len(f.hookBodies))
+	}
+	if f.hooks[0].attrs["issues_events"] != true {
+		t.Error("the hook is still unsubscribed from issues")
+	}
+}
+
+// AND ONE SUBSCRIBED TO SOMETHING NOTHING ROUTES IS PUT BACK TOO. A hook
+// somebody ticked `push_events` on delivers every push in the group to an
+// engine that answers 200 and drops it, which looks healthy from both ends.
+func TestAHookSubscribedToWhatNothingRoutesIsPutBack(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	sink := newRecordingSink()
+	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
+	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	f.mu.Lock()
+	f.hooks[0].attrs["push_events"] = true
+	f.mu.Unlock()
+	f.forget()
+
+	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.hookBodies) != 1 {
+		t.Fatalf("%d hook writes, want the one that unsubscribes it", len(f.hookBodies))
+	}
+	if f.hooks[0].attrs["push_events"] != false {
+		t.Error("the hook is still subscribed to every push in the group")
+	}
+}
+
+// AND ONE WITH TLS VERIFICATION TURNED OFF IS PUT BACK. It carries a signing
+// secret, so a delivery that skips certificate checking hands the payload —
+// and the header proving it is ours — to whoever answered.
+func TestAHookWithTLSVerificationOffIsPutBack(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	sink := newRecordingSink()
+	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
+	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	f.mu.Lock()
+	f.hooks[0].attrs["enable_ssl_verification"] = false
+	f.mu.Unlock()
+	f.forget()
+
+	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.hookBodies) != 1 {
+		t.Fatalf("%d hook writes, want the one that turns verification back on",
+			len(f.hookBodies))
+	}
+	if f.hooks[0].attrs["enable_ssl_verification"] != true {
+		t.Error("the hook still delivers a signed payload without checking the " +
+			"certificate")
+	}
+}
+
+// A HOOK THAT REPORTS NO SIGNING TOKEN IS ALWAYS WRITTEN, whatever else about
+// it matches. That is the state a GitLab older than 19.1 leaves behind and
+// the state an older Crewlet's hook is in, and it is the difference between
+// an integration that works and one that has been silently unauthenticated
+// since it was created.
+func TestAHookWithNoSigningTokenIsAlwaysWritten(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	sink := newRecordingSink()
+	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
+	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	// Everything else exactly as the pass left it — only the signing
+	// token is gone, the way an instance that never honoured it reports.
+	f.mu.Lock()
+	f.hooks[0].signed = false
+	f.mu.Unlock()
+	f.forget()
+
+	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.hookBodies) != 1 {
+		t.Fatalf("%d hook writes, want the one that sets the signing token",
+			len(f.hookBodies))
+	}
+}
+
+// --- a cancelled pass is a fault ------------------------------------------ //
+
+// A CANCELLED PASS RAISES RATHER THAN REPORTING A CONVERGED INSTANCE, EVEN
+// WITH NOTHING TO DO.
+//
+// An empty plan is reachable in production: [gitlab.PlanFor] skips every seat
+// whose mcp_env.gitlab token is a literal rather than a ${VAR}, so a company
+// managing its GitLab credentials by hand plans nothing. That return handed
+// back a Result with no findings without touching the context or making one
+// request — and to the loop an error and an empty findings list are opposite
+// claims. A node shutting down would record GitLab as ready on its way out,
+// and the next node to hold the duty trusts that for a full settled interval.
+func TestACancelledPassWithNothingToDoIsStillAFault(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	srv := httptest.NewServer(http.HandlerFunc(f.serve))
+	t.Cleanup(srv.Close)
+	client, err := gitlab.NewClient(gitlab.ClientOptions{
+		URL: srv.URL, Token: adminToken, HTTP: srv.Client(),
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	res, err := gitlab.Reconcile(ctx, gitlab.Options{
+		Client: client, Config: enabledGitLab(), Plan: &provision.Plan{},
+		Sink: newRecordingSink(),
+	})
+	if err == nil {
+		t.Fatalf("a cancelled pass answered %+v, which the loop reads as a "+
+			"converged integration and trusts for a full settled interval", res)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("the fault does not name the cancellation: %v", err)
+	}
+}
+
+// AND SO DOES ONE WITH SEATS, which is the same claim reached the other way:
+// the guard is at the top of the pass rather than beside the one early return
+// that happened to have the hole.
+func TestACancelledPassWithSeatsMakesNoRequest(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	srv := httptest.NewServer(http.HandlerFunc(f.serve))
+	t.Cleanup(srv.Close)
+	client, err := gitlab.NewClient(gitlab.ClientOptions{
+		URL: srv.URL, Token: adminToken, HTTP: srv.Client(),
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	plan := &provision.Plan{}
+	plan.Add(provision.Seat{Handle: "swe", Role: "SWE", TokenVar: "GITLAB_TOKEN_SWE"})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := gitlab.Reconcile(ctx, gitlab.Options{
+		Client: client, Config: enabledGitLab(), Plan: plan,
+		Sink: newRecordingSink(),
+	}); err == nil {
+		t.Fatal("a cancelled pass with work outstanding reported success")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.calls) != 0 {
+		t.Errorf("a cancelled pass still talked to the instance: %v", f.calls)
 	}
 }

@@ -150,7 +150,7 @@ type Options struct {
 	// SigningSecret is the value the hook is registered with, resolved.
 	//
 	// Empty means the config's ${VAR} answered nothing, and the run MINTS
-	// one — see [mintSigningSecret]. GitLab's signing token is
+	// one — see [signingSecret]. GitLab's signing token is
 	// caller-supplied and write-only: it is never returned, so a hook
 	// registered with an empty one verifies nothing and there is no way
 	// to read back what it should have been.
@@ -199,6 +199,21 @@ type Options struct {
 
 // Reconcile runs one pass.
 func Reconcile(ctx context.Context, opts Options) (*Result, error) {
+	// A CANCELLED PASS HAS OBSERVED NOTHING, so it must RAISE rather than
+	// answer with a Result.
+	//
+	// Checked here, at the top, because every early return below hands back
+	// a Result — and the loop reads a Result with no findings as "this
+	// integration is ready" and trusts it for a full settled interval. The
+	// reachable shape was an empty plan: [PlanFor] skips every seat whose
+	// mcp_env.gitlab token is a literal rather than a ${VAR}, so a company
+	// that manages its GitLab credentials by hand plans nothing, and the
+	// empty-plan return below never touched ctx at all. A node shutting
+	// down would then record GitLab as converged on its way out, having
+	// made not one request.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if opts.Client == nil {
 		return nil, errors.New("gitlab: no client")
 	}
@@ -261,6 +276,15 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	}
 	res.Notes = append(res.Notes, notes...)
 
+	// AND THE MEMBERSHIPS ARE READ BEFORE ANY OF THEM IS WRITTEN — see
+	// [readMemberships]. One listing for the group and one per surviving
+	// project, whatever the seat count, replacing a POST per seat and a
+	// POST per seat per project on every pass for ever.
+	have, err := readMemberships(ctx, opts.Client, group.ID, projects)
+	if err != nil {
+		return nil, err
+	}
+
 	// MINTED IDS ARE TRACKED so a failure can revoke them. Held here
 	// rather than looked up on the way out, because the account whose
 	// token needs revoking may be one this run just created.
@@ -276,12 +300,12 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			res.Created = append(res.Created, seat.Handle)
 		}
 		level := accessLevel(p, seat.Handle)
-		if err = opts.Client.AddGroupMember(ctx, group.ID, user.ID, level); err != nil {
+		if err = have.ensureGroup(ctx, opts.Client, group.ID, user.ID, level); err != nil {
 			return nil, rollback(ctx, opts, minted,
 				fmt.Errorf("gitlab: %s: group membership: %w", seat.Handle, err))
 		}
 		for _, project := range projects {
-			if err = opts.Client.AddProjectMember(ctx, project, user.ID, level); err != nil {
+			if err = have.ensureProject(ctx, opts.Client, project, user.ID, level); err != nil {
 				return nil, rollback(ctx, opts, minted,
 					fmt.Errorf("gitlab: %s: membership of %s: %w",
 						seat.Handle, project, err))
@@ -373,7 +397,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	if opts.Decommission {
-		removed, notes, err := decommission(ctx, opts, group.ID)
+		removed, notes, err := decommission(ctx, opts, group.ID, have.group)
 		if err != nil {
 			return nil, rollback(ctx, opts, minted, err)
 		}
@@ -382,18 +406,24 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	if target := webhookTarget(opts.WebhookBase); target != "" {
-		secret, note, recorded, err := signingSecret(ctx, opts)
+		// freshSecret says a NEW signing secret exists as of this run,
+		// which is the one fact the hook listing cannot supply: GitLab
+		// never returns a signing token, so a hook that reports one may
+		// be carrying the value this run just replaced. It drives both
+		// the Recorded count and the forced re-write below, because they
+		// are the same event seen from two sides.
+		secret, note, freshSecret, err := signingSecret(ctx, opts)
 		if err != nil {
 			return nil, rollback(ctx, opts, minted, err)
 		}
 		if note != "" {
 			res.Notes = append(res.Notes, note)
 		}
-		if recorded {
+		if freshSecret {
 			res.Recorded++
 		}
 		opts.SigningSecret = secret
-		hooked, notes, err := ensureHooks(ctx, opts, group, projects, target)
+		hooked, notes, err := ensureHooks(ctx, opts, group, projects, target, freshSecret)
 		if err != nil {
 			return nil, rollback(ctx, opts, minted, err)
 		}
@@ -411,6 +441,124 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		return nil, rollback(ctx, opts, minted, err)
 	}
 	return res, nil
+}
+
+// memberships is what the instance already has, read once per pass.
+//
+// # Why the pass reads before it writes
+//
+// It did not. Every seat got a POST to the group's members and a POST to
+// every project's, on every pass, and GitLab answers a second one with a 409
+// that [Client.AddGroupMember] treats as success. The loop runs every few
+// minutes for the life of the deployment, so a converged company of ten seats
+// and four projects sent fifty writes to somebody's GitLab for ever — and the
+// contract this pass is certified against ([integration.Reconciler]) says a
+// converged pass writes nothing, because that is what makes the loop safe to
+// leave switched on.
+//
+// It was also the whole of the access-level bug. Adding was the only thing
+// the pass could do and 409 was read as done, so editing
+// provisioning.access_level or an access_levels override changed nothing for
+// a seat that already had a membership: the company document said maintainer,
+// the instance kept developer, and every pass reported converged. Reading
+// first is what makes the difference visible, and [Client.SetGroupMember] is
+// what acts on it — which is why this is the root-cause fix rather than the
+// cheap way to make a write counter read zero.
+type memberships struct {
+	// group is the company's top-level group's roster, IN THE INSTANCE'S
+	// OWN ORDER, because a decommission sweep reports in that order and a
+	// map's iteration would make one pass's report differ from the next's
+	// over an unchanged group.
+	group []Member
+	// groupLevel indexes that roster by user id, which is the question the
+	// seat loop asks: at what level, if at all, is this account a member.
+	groupLevel map[int]int
+	// projectLevel is the same index per `provisioning.projects` entry.
+	// No roster beside it: nothing decommissions a project membership.
+	projectLevel map[string]map[int]int
+}
+
+// readMemberships lists the group's members and each project's, once.
+//
+// A FAILURE IS FATAL, unlike a missing project. [resolveProjects] drops a
+// project the instance does not have because a config naming a repository
+// that was renamed is an ordinary state; a listing that is REFUSED is the
+// pass being unable to see what it is about to change, and guessing from
+// there is what produced the fifty-writes-a-pass behaviour this replaces.
+func readMemberships(ctx context.Context, c *Client, groupID int, projects []string) (*memberships, error) {
+	members, err := c.GroupMembers(ctx, groupID)
+	if err != nil {
+		return nil, fmt.Errorf("gitlab: list group members: %w", err)
+	}
+	have := &memberships{
+		group:        members,
+		groupLevel:   make(map[int]int, len(members)),
+		projectLevel: make(map[string]map[int]int, len(projects)),
+	}
+	for _, member := range members {
+		have.groupLevel[member.ID] = member.AccessLevel
+	}
+	for _, project := range projects {
+		members, err := c.ProjectMembers(ctx, project)
+		if err != nil {
+			return nil, fmt.Errorf("gitlab: list %s's members: %w", project, err)
+		}
+		levels := make(map[int]int, len(members))
+		for _, member := range members {
+			levels[member.ID] = member.AccessLevel
+		}
+		have.projectLevel[project] = levels
+	}
+	return have, nil
+}
+
+// ensureGroup brings one seat's group membership to the configured level.
+//
+// THREE OUTCOMES, and only two of them write: absent is added, present at
+// another level is moved, present at the right level is left entirely alone.
+// The third is the steady state and it is the one the loop spends its life
+// in.
+func (m *memberships) ensureGroup(ctx context.Context, c *Client, groupID, userID, level int) error {
+	switch current, member := m.groupLevel[userID]; {
+	case !member:
+		if err := c.AddGroupMember(ctx, groupID, userID, level); err != nil {
+			return err
+		}
+	case current != level:
+		if err := c.SetGroupMember(ctx, groupID, userID, level); err != nil {
+			return err
+		}
+	default:
+		return nil
+	}
+	// RECORDED SO THE PICTURE STAYS IN STEP with the instance for the rest
+	// of the pass. Nothing here reads it twice today; a second reader that
+	// appeared and did not see this run's own writes would repeat them.
+	m.groupLevel[userID] = level
+	return nil
+}
+
+// ensureProject is the same decision for one project.
+func (m *memberships) ensureProject(ctx context.Context, c *Client, project string, userID, level int) error {
+	levels := m.projectLevel[project]
+	switch current, member := levels[userID]; {
+	case !member:
+		if err := c.AddProjectMember(ctx, project, userID, level); err != nil {
+			return err
+		}
+	case current != level:
+		if err := c.SetProjectMember(ctx, project, userID, level); err != nil {
+			return err
+		}
+	default:
+		return nil
+	}
+	if levels == nil {
+		levels = map[int]int{}
+		m.projectLevel[project] = levels
+	}
+	levels[userID] = level
+	return nil
 }
 
 // mintedToken is one credential this run created, as its rollback needs it.
@@ -680,13 +828,18 @@ func modeError(mode Mode, err error) error {
 // shared username prefix would then sweep. The only account the group scan
 // misses is one somebody removed from the group by hand, and leaving that
 // alone is the right answer. Only the DELETE route differs by mode.
-func decommission(ctx context.Context, opts Options, groupID int) ([]string, []string, error) {
+//
+// # It scans the roster the pass already read
+//
+// members comes from [readMemberships], taken BEFORE the seat loop, so the
+// whole pass acts on ONE picture of the group's membership rather than two
+// that can disagree — and a decommission costs no second walk of a group that
+// may run to thousands of rows. It cannot miss a candidate: nothing between
+// the two points removes a member, and the only additions are this run's own
+// seats, every one of which is in the plan and therefore in `keep`.
+func decommission(ctx context.Context, opts Options, groupID int, members []Member) ([]string, []string, error) {
 	p := opts.Config.Provisioning
 	prefix := strings.ToLower(Username(p, ""))
-	members, err := opts.Client.GroupMembers(ctx, groupID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("gitlab: list group members: %w", err)
-	}
 	keep := make(map[string]bool, len(opts.Plan.Seats))
 	for _, seat := range opts.Plan.Seats {
 		keep[strings.ToLower(Username(p, seat.Handle))] = true
@@ -732,7 +885,12 @@ func decommission(ctx context.Context, opts Options, groupID int) ([]string, []s
 // the variable the config's ${VAR} names, the same mint-into-${VAR} contract
 // the seat tokens follow — or refused, because a literal has nowhere to
 // record it and half-configuring is the failure above.
-func signingSecret(ctx context.Context, opts Options) (string, string, bool, error) {
+// The third result says a NEW secret exists as of this run — minted or
+// rotated. It counts towards [Result.Recorded] AND it is what tells
+// [ensureHooks] to write a hook that already reports a signing token, because
+// GitLab never says WHICH key a hook holds, so the run's own record is the
+// only thing that can.
+func signingSecret(ctx context.Context, opts Options) (secret, note string, fresh bool, err error) {
 	plan := PlanSigningSecret(opts.SigningSecret, opts.SigningSecretVar, opts.Rotate, true)
 	switch plan.Action {
 	case SigningReuse:
@@ -740,7 +898,7 @@ func signingSecret(ctx context.Context, opts Options) (string, string, bool, err
 	case SigningBlocked:
 		return "", "", false, errors.New("gitlab: " + plan.Note)
 	}
-	secret, err := whsec.Mint()
+	secret, err = whsec.Mint()
 	if err != nil {
 		return "", "", false, err
 	}
@@ -902,7 +1060,20 @@ func MintSigningSecret() (string, error) { return whsec.Mint() }
 // Modes come from provisioning.group_webhook — auto (default) tries the
 // group and falls back, true demands the group, false goes straight to the
 // projects.
-func ensureHooks(ctx context.Context, opts Options, group Group, projects []string, target string) ([]string, []string, error) {
+//
+// # freshSecret, and why it is passed in rather than worked out here
+//
+// A hook that already carries the right subscription is left alone
+// ([Hook.Converged]) — but "the right subscription" is everything GitLab will
+// show and the signing token is the one thing it will not. So the caller
+// hands down the only fact that settles it: whether THIS RUN minted or
+// rotated the secret, which is [PlanSigningSecret]'s decision and is already
+// made by the time the hooks are touched. Re-deriving it here would be a
+// second implementation of the most consequential judgement a run makes,
+// free to disagree with the one that recorded the value.
+func ensureHooks(ctx context.Context, opts Options, group Group, projects []string,
+	target string, freshSecret bool,
+) ([]string, []string, error) {
 	mode := config.ContainerWebhookAuto
 	if pv := opts.Config.Provisioning; pv != nil && pv.GroupWebhook != "" {
 		mode = pv.GroupWebhook
@@ -923,7 +1094,7 @@ func ensureHooks(ctx context.Context, opts Options, group Group, projects []stri
 	// silence as "cannot tell": a self-managed instance keeps the behaviour
 	// it has, and the one case caught is a group that says it is free.
 	if mode == config.ContainerWebhookAuto && !group.PaidPlan() {
-		hooked, err := ensureProjectHooks(ctx, opts.Client, projects, target, secret)
+		hooked, err := ensureProjectHooks(ctx, opts.Client, projects, target, secret, freshSecret)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -936,7 +1107,7 @@ func ensureHooks(ctx context.Context, opts Options, group Group, projects []stri
 	}
 
 	if mode != config.ContainerWebhookNever {
-		err := ensureGroupHook(ctx, opts.Client, group.ID, target, secret)
+		err := ensureGroupHook(ctx, opts.Client, group.ID, target, secret, freshSecret)
 		switch {
 		case err == nil:
 			return []string{"group"}, nil, nil
@@ -953,7 +1124,7 @@ func ensureHooks(ctx context.Context, opts Options, group Group, projects []stri
 		// so — an operator who expected one group hook and got four
 		// project hooks should learn it here rather than from the
 		// instance's settings pages.
-		hooked, err := ensureProjectHooks(ctx, opts.Client, projects, target, secret)
+		hooked, err := ensureProjectHooks(ctx, opts.Client, projects, target, secret, freshSecret)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -965,7 +1136,7 @@ func ensureHooks(ctx context.Context, opts Options, group Group, projects []stri
 		}, nil
 	}
 
-	hooked, err := ensureProjectHooks(ctx, opts.Client, projects, target, secret)
+	hooked, err := ensureProjectHooks(ctx, opts.Client, projects, target, secret, freshSecret)
 	return hooked, nil, err
 }
 
@@ -1018,23 +1189,43 @@ func resolveProjects(ctx context.Context, c *Client, declared []string) ([]strin
 // MATCHED ON THE URL, because that is what identifies "our" hook: an
 // instance may carry hooks somebody else registered, and a run that replaced
 // the first one it found would take down an unrelated integration.
-func ensureGroupHook(ctx context.Context, c *Client, groupID int, target, secret string) error {
+func ensureGroupHook(ctx context.Context, c *Client, groupID int, target, secret string,
+	freshSecret bool,
+) error {
 	hooks, err := c.GroupHooks(ctx, groupID)
 	if err != nil {
 		return fmt.Errorf("gitlab: list group hooks: %w", err)
 	}
 	for _, hook := range hooks {
-		if hook.URL == target {
-			// UPDATED RATHER THAN SKIPPED: the signing secret may have
-			// rotated, and a hook still carrying the old one delivers
-			// events the engine then refuses.
-			if err := c.UpdateGroupHook(ctx, groupID, hook.ID, target, secret); err != nil {
-				return fmt.Errorf("gitlab: update group hook: %w", err)
-			}
-			return confirmSigned("group hook", func() ([]Hook, error) {
-				return c.GroupHooks(ctx, groupID)
-			}, target)
+		if hook.URL != target {
+			continue
 		}
+		if hook.Converged() && !freshSecret {
+			// NOTHING TO WRITE, and the listing above is also the
+			// confirmation.
+			//
+			// This used to PUT unconditionally, on the reasoning that
+			// the signing secret may have rotated — true, and now
+			// answered by freshSecret, which is the run's own record of
+			// whether it did. What the unconditional write cost was the
+			// steady state: the loop re-sent this identical body, all
+			// nineteen event flags of it, every few minutes for the life
+			// of the deployment.
+			//
+			// No re-read either. [confirmSigned] exists because a GitLab
+			// older than 19.1 takes a signing token, ignores it and
+			// answers 200 — a claim about a WRITE. Nothing was written,
+			// and [Hook.Converged] already required the instance to
+			// report a signing token on this very listing, which is the
+			// same fact confirmSigned would go back for.
+			return nil
+		}
+		if err := c.UpdateGroupHook(ctx, groupID, hook.ID, target, secret); err != nil {
+			return fmt.Errorf("gitlab: update group hook: %w", err)
+		}
+		return confirmSigned("group hook", func() ([]Hook, error) {
+			return c.GroupHooks(ctx, groupID)
+		}, target)
 	}
 	if _, err := c.CreateGroupHook(ctx, groupID, target, secret); err != nil {
 		return fmt.Errorf("gitlab: create group hook: %w", err)
@@ -1085,7 +1276,9 @@ func confirmSigned(what string, list func() ([]Hook, error), target string) erro
 // quietly hooked no project leaves the instance reporting a healthy
 // integration that delivers to nobody, which is the exact failure the
 // skipped-rather-than-guessed rule above exists to prevent.
-func ensureProjectHooks(ctx context.Context, c *Client, projects []string, target, secret string) ([]string, error) {
+func ensureProjectHooks(ctx context.Context, c *Client, projects []string, target, secret string,
+	freshSecret bool,
+) ([]string, error) {
 	if len(projects) == 0 {
 		return nil, errors.New(
 			"gitlab: per-project webhooks need provisioning.projects, and none " +
@@ -1094,7 +1287,7 @@ func ensureProjectHooks(ctx context.Context, c *Client, projects []string, targe
 	}
 	hooked := make([]string, 0, len(projects))
 	for _, project := range projects {
-		if err := ensureProjectHook(ctx, c, project, target, secret); err != nil {
+		if err := ensureProjectHook(ctx, c, project, target, secret, freshSecret); err != nil {
 			return nil, err
 		}
 		hooked = append(hooked, project)
@@ -1102,20 +1295,30 @@ func ensureProjectHooks(ctx context.Context, c *Client, projects []string, targe
 	return hooked, nil
 }
 
-func ensureProjectHook(ctx context.Context, c *Client, project, target, secret string) error {
+func ensureProjectHook(ctx context.Context, c *Client, project, target, secret string,
+	freshSecret bool,
+) error {
 	hooks, err := c.ProjectHooks(ctx, project)
 	if err != nil {
 		return fmt.Errorf("gitlab: list hooks on %s: %w", project, err)
 	}
 	for _, hook := range hooks {
-		if hook.URL == target {
-			if err := c.UpdateProjectHook(ctx, project, hook.ID, target, secret); err != nil {
-				return fmt.Errorf("gitlab: update hook on %s: %w", project, err)
-			}
-			return confirmSigned("hook on "+project, func() ([]Hook, error) {
-				return c.ProjectHooks(ctx, project)
-			}, target)
+		if hook.URL != target {
+			continue
 		}
+		// THE SAME SKIP THE GROUP PATH TAKES, and it has to be here too:
+		// this branch runs once per declared project, so an unconditional
+		// re-write cost one write per project per pass rather than one.
+		// See [ensureGroupHook] for the whole reasoning.
+		if hook.Converged() && !freshSecret {
+			return nil
+		}
+		if err := c.UpdateProjectHook(ctx, project, hook.ID, target, secret); err != nil {
+			return fmt.Errorf("gitlab: update hook on %s: %w", project, err)
+		}
+		return confirmSigned("hook on "+project, func() ([]Hook, error) {
+			return c.ProjectHooks(ctx, project)
+		}, target)
 	}
 	if _, err := c.CreateProjectHook(ctx, project, target, secret); err != nil {
 		return fmt.Errorf("gitlab: create hook on %s: %w", project, err)

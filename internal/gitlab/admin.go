@@ -267,6 +267,12 @@ func (c *Client) GroupByPath(ctx context.Context, path string) (Group, bool, err
 }
 
 // AddGroupMember adds an account to a group at an access level.
+//
+// A LAST RESORT RATHER THAN THE PASS'S FIRST MOVE. The reconcile reads
+// [Client.GroupMembers] before the seat loop and only calls this for an
+// account the group does not have — see [ensureGroupMember]. The 409 arm
+// below is what remains: two nodes reconciling one surface can both find the
+// membership absent, and the loser must not fail on what the winner did.
 func (c *Client) AddGroupMember(ctx context.Context, groupID, userID, accessLevel int) error {
 	err := c.send(ctx, http.MethodPost, "/groups/"+strconv.Itoa(groupID)+"/members",
 		map[string]int{"user_id": userID, "access_level": accessLevel}, nil)
@@ -279,6 +285,9 @@ func (c *Client) AddGroupMember(ctx context.Context, groupID, userID, accessLeve
 }
 
 // AddProjectMember adds an account to a project at an access level.
+//
+// The same race guard as [Client.AddGroupMember], reached the same way: only
+// for an account [Client.ProjectMembers] did not report.
 func (c *Client) AddProjectMember(ctx context.Context, project string, userID, accessLevel int) error {
 	err := c.send(ctx, http.MethodPost,
 		"/projects/"+url.PathEscape(project)+"/members",
@@ -287,6 +296,37 @@ func (c *Client) AddProjectMember(ctx context.Context, project string, userID, a
 		return nil
 	}
 	return err
+}
+
+// SetGroupMember moves an existing membership to an access level.
+//
+// # The half of "reconcile the memberships" that was missing entirely
+//
+// GitLab answers a second POST to /members with a 409 and changes nothing,
+// and the add above treats that as success — so for as long as adding was the
+// only thing this client could do, editing provisioning.access_level or an
+// access_levels override had NO effect on a seat that already had a
+// membership. The company document said maintainer, the instance kept
+// developer, and every pass reported converged. The only way to notice was to
+// read the group's member list by hand.
+//
+// PUT rather than POST is the route GitLab serves for an edit, and it 404s
+// for a user with no DIRECT membership — which is why the caller decides from
+// the listing rather than trying this first and falling back.
+func (c *Client) SetGroupMember(ctx context.Context, groupID, userID, accessLevel int) error {
+	return c.send(ctx, http.MethodPut,
+		"/groups/"+strconv.Itoa(groupID)+"/members/"+strconv.Itoa(userID),
+		map[string]int{"access_level": accessLevel}, nil)
+}
+
+// SetProjectMember moves an existing project membership to an access level.
+//
+// The project counterpart of [Client.SetGroupMember], and it carried the same
+// silent drift for the same reason.
+func (c *Client) SetProjectMember(ctx context.Context, project string, userID, accessLevel int) error {
+	return c.send(ctx, http.MethodPut,
+		"/projects/"+url.PathEscape(project)+"/members/"+strconv.Itoa(userID),
+		map[string]int{"access_level": accessLevel}, nil)
 }
 
 // ProjectExists reports whether a project path resolves on this instance.
@@ -477,22 +517,70 @@ func (c *Client) RevokeTokens(ctx context.Context, groupID, userID int) error {
 	return nil
 }
 
+// Member is an account's membership of a group or a project.
+//
+// # The access level is the field, and it is why this is not a [User]
+//
+// A membership is not an account: the same account holds different levels in
+// different places, and "at what level" is the only question a reconcile can
+// ask that tells a converged membership from one that has drifted. Decoding
+// only the account left this package able to see THAT a seat was a member and
+// never AT WHAT, so the pass had nothing to compare against and re-added
+// every seat on every run for ever.
+type Member struct {
+	User
+	// AccessLevel is GitLab's numeric role — see [gitlabDeveloper] and
+	// [gitlabMaintainer]. Zero means the listing did not say, which no
+	// GitLab version does; it compares unequal to every configured level,
+	// so the safe direction is a write.
+	AccessLevel int `json:"access_level"`
+}
+
 // GroupMembers lists a group's members.
 //
 // The enumeration decommission targets from: an account is "managed" only
 // if it is in the group this company provisions into, so a service account
-// somebody else made elsewhere on the instance is never a candidate.
+// somebody else made elsewhere on the instance is never a candidate. It is
+// ALSO what the seat loop compares against before it adds anybody.
+//
+// DIRECT MEMBERS, not `/members/all`. What the pass writes is a direct
+// membership and what it can edit is a direct membership — GitLab refuses a
+// PUT for an account whose only membership is inherited from a parent group —
+// so reading the inherited listing would report a seat as converged at a
+// level this pass has no way to change.
 //
 // PAGED TO EXHAUSTION. It asked for one page of 100 and took whatever came
 // back, which is silent truncation on the one listing a destructive decision
 // is made from: on a group with more members than that, every managed
 // account past the first page was invisible to a decommission sweep and
 // stayed live for ever, with the run reporting success.
-func (c *Client) GroupMembers(ctx context.Context, groupID int) ([]User, error) {
-	var out []User
+func (c *Client) GroupMembers(ctx context.Context, groupID int) ([]Member, error) {
+	return c.members(ctx, "/groups/"+strconv.Itoa(groupID)+"/members",
+		fmt.Sprintf("group %d", groupID))
+}
+
+// ProjectMembers lists a project's members.
+//
+// The counterpart of [Client.GroupMembers] and read for the same reason: it
+// is what the seat loop compares against before it adds anybody to a
+// `provisioning.projects` entry. Direct members only, for the reason stated
+// there — and it matters more here, because every seat is a member of the
+// group that contains these projects and the inherited listing would
+// therefore report every one of them as already converged.
+func (c *Client) ProjectMembers(ctx context.Context, project string) ([]Member, error) {
+	return c.members(ctx, "/projects/"+url.PathEscape(project)+"/members", project)
+}
+
+// members walks one membership listing to exhaustion.
+//
+// ONE WALK for both surfaces rather than two copies of the paging: the
+// truncation bug the group listing carried is exactly the one a second
+// hand-written loop would reintroduce, and the two differ only in the path.
+func (c *Client) members(ctx context.Context, path, subject string) ([]Member, error) {
+	var out []Member
 	for page := 1; ; page++ {
-		var batch []User
-		err := c.get(ctx, "/groups/"+strconv.Itoa(groupID)+"/members", url.Values{
+		var batch []Member
+		err := c.get(ctx, path, url.Values{
 			"per_page": {strconv.Itoa(userPageSize)},
 			"page":     {strconv.Itoa(page)},
 		}, &batch)
@@ -505,10 +593,19 @@ func (c *Client) GroupMembers(ctx context.Context, groupID int) ([]User, error) 
 		}
 		if len(out) >= userWalkCeiling {
 			return nil, fmt.Errorf(
-				"gitlab: group %d has more than %d members, which is not a "+
-					"group Crewlet provisions into", groupID, userWalkCeiling)
+				"gitlab: %s has more than %d members, which is not a "+
+					"%s Crewlet provisions into", subject, userWalkCeiling,
+				kindOfMembership(path))
 		}
 	}
+}
+
+// kindOfMembership names what a walk gave up on, for its own error.
+func kindOfMembership(path string) string {
+	if strings.HasPrefix(path, "/groups/") {
+		return "group"
+	}
+	return "project"
 }
 
 // DeleteServiceAccount removes a group service account.
@@ -527,7 +624,13 @@ func (c *Client) DeleteServiceAccount(ctx context.Context, groupID, userID int) 
 	return err
 }
 
-// Hook is a registered webhook.
+// Hook is a registered webhook, as GitLab's listing serves it.
+//
+// DECODE-ONLY, and deliberately: [Events] is assembled from the flat event
+// booleans GitLab sends rather than from a nested object, so this type does
+// not round-trip through [encoding/json.Marshal] and nothing here marshals
+// one. What goes the other way is [hookBody], which is the single statement
+// of what a crewlet hook should be.
 type Hook struct {
 	ID  int    `json:"id"`
 	URL string `json:"url"`
@@ -543,6 +646,96 @@ type Hook struct {
 	// direction: setting a token that was already right costs a write,
 	// while skipping one that was missing costs every delivery.
 	SigningTokenPresent bool `json:"signing_token_present"`
+
+	// EnableSSLVerification is whether GitLab checks this deployment's
+	// certificate before delivering. Read back because it is part of what
+	// [hookBody] asserts, and a hook somebody turned it off on carries a
+	// signing secret over a connection nothing authenticates.
+	EnableSSLVerification bool `json:"enable_ssl_verification"`
+
+	// Events is which subscriptions the hook actually holds, keyed by the
+	// names in [hookEvents].
+	//
+	// A MAP RATHER THAN NINETEEN FIELDS, so the list of event names exists
+	// once — beside the body that writes them — and a version that adds a
+	// twentieth is one line in [hookEvents] rather than two places to keep
+	// in step. A name this hook's GitLab did not send is absent and reads
+	// as off, which is the safe direction on both sides: an event the
+	// engine routes then compares unequal and the hook is re-written,
+	// while one it does not route compares equal and nothing is.
+	Events map[string]bool
+}
+
+// UnmarshalJSON reads a hook, folding GitLab's flat event booleans into
+// [Hook.Events].
+//
+// Two passes over the same bytes rather than a struct with nineteen tagged
+// fields: the second pass is keyed on [hookEvents], which is the same list
+// [hookBody] writes from, so the two cannot drift into a reconcile that
+// writes a subscription it then cannot see.
+func (h *Hook) UnmarshalJSON(raw []byte) error {
+	// An alias to borrow the field tags without recursing into this method.
+	type hook Hook
+	var row hook
+	if err := json.Unmarshal(raw, &row); err != nil {
+		return err
+	}
+	var flags map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &flags); err != nil {
+		return err
+	}
+	*h = Hook(row)
+	h.Events = nil
+	for _, event := range hookEvents {
+		encoded, present := flags[event]
+		if !present {
+			continue
+		}
+		var on bool
+		if err := json.Unmarshal(encoded, &on); err != nil {
+			// NOT A FAILURE OF THE WHOLE LISTING. A version that answers
+			// something other than a bool here leaves the flag absent,
+			// which reads as off — and off against a routed event is a
+			// difference, so the hook is re-written rather than trusted.
+			continue
+		}
+		if h.Events == nil {
+			h.Events = make(map[string]bool, len(hookEvents))
+		}
+		h.Events[event] = on
+	}
+	return nil
+}
+
+// Converged reports a hook that already carries what [hookBody] would write,
+// so writing it again would change nothing at the instance.
+//
+// # What it can and cannot compare, and why that is enough
+//
+// GitLab never returns a hook's `signing_token` or its legacy plaintext
+// `token`, so this cannot prove the hook holds THIS deployment's secret — it
+// can only see that it holds one. That is the strongest honest test, and the
+// caller supplies the missing half: a run that MINTED or ROTATED the secret
+// knows the hook cannot be carrying it and writes regardless (see
+// [ensureHooks]).
+//
+// The legacy plaintext token is covered by the same reasoning rather than
+// left out of it. A hook an older Crewlet created holds the signing key in
+// `token` and has NO signing token, so [Hook.SigningTokenPresent] is false,
+// so it is never converged and the first pass after the upgrade re-writes it
+// — which is what clears the plaintext field. There is no state where a hook
+// both reports a signing token and still carries the old cleartext one,
+// because the write that produced the first also cleared the second.
+func (h Hook) Converged() bool {
+	if !h.SigningTokenPresent || !h.EnableSSLVerification {
+		return false
+	}
+	for _, event := range hookEvents {
+		if h.Events[event] != routedEvents[event] {
+			return false
+		}
+	}
+	return true
 }
 
 // GroupHooks lists a group's webhooks.
