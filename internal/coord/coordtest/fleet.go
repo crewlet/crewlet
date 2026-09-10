@@ -1902,8 +1902,13 @@ var integrationCases = []fleetCase{
 	}},
 
 	{"the last write wins", func(h *fleetHarness) {
-		// No compare-and-set, deliberately: the worker duty makes one
-		// node the only writer, so there is no second writer to race.
+		// No compare-and-set, deliberately — but NOT because the worker
+		// duty makes one node the only writer, which is the reason this
+		// used to give and is not true: the dashboard records a pass's
+		// outcome, stamps an endpoint and marks a disconnect on whichever
+		// node served the request. What makes last-write-wins safe is the
+		// SURFACE's own provisioning lease, held by every writer across
+		// the read, the work and the write alike. See [coord.Integrations].
 		h.putIntegration("gitlab", `{"attempts":1}`)
 		h.putIntegration("gitlab", `{"attempts":2}`)
 		if got := string(h.integrations()["gitlab"]); got != `{"attempts":2}` {

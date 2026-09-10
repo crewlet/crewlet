@@ -162,6 +162,10 @@ The topic pause a shed applies is **reason-scoped** (`reason="config"`), so it c
 
 The **scheduler** is gated too, and differently: a tick on a shedding node is skipped whole rather than fired. A schedule's fire identity is org-derived — its name, cron and target seat — so a stale node would fire the previous company's schedules, and unlike a delivery there is no queued copy to fall back on. The skipped window stays open, so the missed-tick catchup evaluates it once the node converges; anything a peer already fired is absorbed by the fleet's at-most-once fire claim.
 
+The **integration reconcile loop** is gated the same way and for the same reason, and it is the one where the stale document reaches *outside* the deployment. Every reconciler reads the live company config on each pass, so a shedding node would converge a third-party app to the revision the fleet has already replaced: an account a removed seat should no longer hold is kept, a webhook is re-registered at the previous public base, and the status row says `ready`. It declines **before claiming the duty**, so its lease lapses and a peer holding the current revision takes the loop over rather than waiting behind a holder that does nothing, and it logs `integration_reconcile_shed` going in and `integration_reconcile_resumed` coming out.
+
+The gate stops there rather than being folded into every worker duty, and that is a decision rather than an omission. Posture and `node.roles` are decided by subsystems that do not consult each other — the shed rule counts any peer with a fresh `ok` row as somewhere the work can go, including an ingress-only node that will never claim a singleton. Applied to all of them, an `ingress` + `seats,workers` fleet whose worker node fails a single apply would end with nobody running the scheduler, the retention sweep, the sandbox waiter or the curator, `/ready` green on the node that is fine, and not one log line to say so.
+
 ---
 
 ## Rotation

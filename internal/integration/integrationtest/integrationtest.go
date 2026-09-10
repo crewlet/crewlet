@@ -26,6 +26,20 @@
 // it would certify everything except the thing worth certifying. A third-party app
 // harness that genuinely cannot count writes has to grow the ability rather
 // than be waived: a skip is not a pass.
+//
+// # What counts as a write, and what does not
+//
+// Anything a PERSON WOULD HAVE TO UNDO. That is wider than "a request to the
+// third-party app": a pass that re-seals a seat's credential through the
+// fleet's sealed store on every converged run is writing just as surely, and
+// the harness has to see it.
+//
+// It is also NARROWER than "a non-GET request", and getting that wrong pushes
+// in the dangerous direction. Some vendors model a listing as a POST —
+// Atlassian's workspace discovery is one — so a counter keyed on HTTP method
+// makes the clause impossible to satisfy, and a clause that cannot be
+// satisfied is one somebody eventually weakens. Count by ROUTE, and say in the
+// harness which routes those are and why.
 package integrationtest
 
 import (
@@ -86,9 +100,11 @@ type Reconciler struct {
 	// credential rotated every ten minutes for ever.
 	New func(t TB) integration.Reconciler
 
-	// Mutations counts every write the third-party app has received since New.
+	// Mutations counts every write the pass has made since New — at the
+	// third-party app, and into this deployment's own sealed store.
 	//
-	// Required. See the package doc.
+	// Required, and the package doc says what a write is: anything a person
+	// would have to undo, counted by ROUTE rather than by HTTP method.
 	Mutations func() int
 }
 
