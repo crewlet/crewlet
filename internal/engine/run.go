@@ -1000,6 +1000,14 @@ func (e *Engine) Node() *node.Node { return e.node }
 // one process, so a second open is contention with itself.
 func (e *Engine) Backends() *Backends { return e.backends }
 
+// Recorder is the process's one metrics recorder, or nil.
+//
+// EXPOSED for the same reason [Engine.Backends] is: a subsystem the CLI
+// composes beside the engine — the backup service is the one — measures
+// something the catalogue declares, and a second recorder would be a second
+// set of series for one process. Nil is legal and records nothing.
+func (e *Engine) Recorder() *metrics.Recorder { return e.metrics }
+
 // Dispatch delivers one inbox partition to a seat.
 //
 // This is the node's TurnFunc, exported because it is also the entry point for

@@ -1399,6 +1399,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// still never trim its log.
 			Backups: e.Backends().Fleet,
 			NodeID:  boot.Node.ID,
+			// THE PROCESS'S OWN RECORDER, never a second one: the
+			// copy's duration is a catalogued instrument, and two
+			// recorders in one process would be two sets of series
+			// for one fleet.
+			Metrics: e.Recorder(),
 		}),
 		Config:  configSurface,
 		Secrets: secretSurface,
