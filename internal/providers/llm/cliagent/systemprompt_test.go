@@ -117,10 +117,11 @@ const envChannel = "{env}"
 
 func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing.T) {
 	t.Parallel()
-	// Checked against each CLI's own --help at the version named in
-	// docs/concepts/subscription-llm-backends.md. Six of the eight have no
-	// such flag at all, and an empty entry here is that fact rather than an
-	// omission.
+	// Checked against each CLI's own --help — or, where the vendor
+	// documents its flags rather than printing them all, against that — at
+	// the version named in docs/concepts/subscription-llm-backends.md.
+	// Seven of the nine have no such flag at all, and an empty entry here
+	// is that fact rather than an omission.
 	want := map[string]string{
 		"claude-code": "{file}", // 2.1.263: --system-prompt-file
 		// 1.0.13, xAI's OWN CLI from x.ai/cli:
@@ -140,6 +141,27 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		"opencode":     "", // 1.18.29 (`--agent` names a config persona)
 		"copilot":      "", // 1.0.83
 		"cursor-agent": "", // 2026.09.02
+		// 1.0.3: the flag set is model, reasoning effort, the
+		// permission levers, workspace and session logging, plus --json,
+		// --prompt-file and --max-model-steps for `exec`. Instructions
+		// travel through AGENTS.md / CLAUDE.md, which load only once a
+		// workspace is TRUSTED — and the per-call directory never is.
+		"muse-code": "",
+	}
+	// THE TABLE IS THE SHIPPED SET. Without this, a profile added later is
+	// simply absent from the map and covered by nothing — the failure is
+	// that adopting a system-prompt flag for a new CLI never has to state
+	// the argv trade here, which is the whole reason the table exists.
+	for _, name := range cliagent.BuiltinNames() {
+		if name == "custom" {
+			// Ships nothing on purpose; an operator declares its
+			// channel, and there is no built-in claim to check.
+			continue
+		}
+		if _, ok := want[name]; !ok {
+			t.Errorf("the %q profile ships but this table does not say which "+
+				"system-prompt channel its CLI has", name)
+		}
 	}
 	for name, placeholder := range want {
 		profile, ok := cliagent.Builtin(name)

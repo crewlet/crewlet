@@ -3,6 +3,7 @@ package cliagent
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"unicode"
 )
@@ -12,16 +13,31 @@ type PromptMode string
 
 const (
 	// PromptStdin writes the prompt to the child's stdin. The default, and
-	// the only mode with no length ceiling.
+	// one of the two modes with no length ceiling.
 	PromptStdin PromptMode = "stdin"
 	// PromptArgv appends the prompt as the last argument. Bounded by
 	// ARG_MAX — around 2 MB on Linux, 256 KB on macOS — so a long
 	// transcript on such a CLI fails at exec rather than at the model.
 	PromptArgv PromptMode = "argv"
+	// PromptFile writes the prompt to a private file in the per-call
+	// working directory and passes the PATH, through the `{file}`
+	// placeholder in [Profile.PromptArgs].
+	//
+	// The same trade this package already makes for the system prompt, for
+	// the same two reasons: argv is bounded by ARG_MAX, and
+	// /proc/<pid>/cmdline makes it readable by every account on the
+	// machine. A rendered prompt is the whole flattened transcript — the
+	// seat's identity, the tool catalogue, the conversation and its tool
+	// results — so it is the LARGEST and the most sensitive thing this
+	// backend hands a CLI. Prefer this over argv wherever a vendor offers
+	// a prompt-file flag; `muse exec --prompt-file` is the first that does.
+	PromptFile PromptMode = "file"
 )
 
 // Valid reports whether m is a mode this package knows.
-func (m PromptMode) Valid() bool { return m == PromptStdin || m == PromptArgv }
+func (m PromptMode) Valid() bool {
+	return m == PromptStdin || m == PromptArgv || m == PromptFile
+}
 
 // OutputMode is how a CLI's answer is encoded on stdout.
 type OutputMode string
@@ -232,8 +248,15 @@ type Profile struct {
 	// Binary is the executable, resolved on PATH unless it is a path.
 	Binary string `yaml:"binary,omitempty"`
 
-	// Vendor is the model FAMILY this CLI addresses — anthropic, openai or
-	// google.
+	// Vendor is the model FAMILY this CLI addresses — anthropic, openai,
+	// google or meta.
+	//
+	// An OPEN set, not a closed one: it names whatever family the CLI's
+	// models belong to, and a coding-agent catalogue that does not know a
+	// family falls back to its own default rather than refusing. Writing
+	// `openai` for a vendor that merely speaks OpenAI's wire protocol
+	// would make the field say something false to buy nothing, since the
+	// fallback lands in the same place.
 	//
 	// Needed because every cli-agent entry shares one providers.llm type,
 	// so a coding agent that resolves "<family>/<model>" against a
@@ -262,7 +285,7 @@ type Profile struct {
 	// validation error rather than a silently ignored setting.
 	ModelArgs []string `yaml:"model_args,omitempty"`
 
-	// PromptMode is stdin (the default) or argv.
+	// PromptMode is stdin (the default), argv or file.
 	PromptMode PromptMode `yaml:"prompt_mode,omitempty"`
 
 	// SystemPromptArgs carries the system prompt on its OWN channel rather
@@ -313,6 +336,11 @@ type Profile struct {
 	// as a FLAG'S VALUE rather than as a positional argument. Empty appends
 	// the prompt bare, which is what every other argv profile wants.
 	//
+	// In [PromptFile] mode it carries the flag AND its `{file}`
+	// placeholder — `["--prompt-file", "{file}"]` — and is required, since
+	// a file-mode profile with nothing to substitute the path into would
+	// hand the CLI no prompt at all.
+	//
 	// It exists because xAI's grok breaks the assumption the rest of this
 	// format is built on. Its only headless trigger is `-p <PROMPT>`, and a
 	// value is REQUIRED — so with `-p` sitting in complete_args, the model
@@ -332,6 +360,30 @@ type Profile struct {
 	// for jsonl every match is concatenated in stream order, which is how
 	// an event stream spells one answer.
 	TextPaths []Path `yaml:"text_paths,omitempty"`
+
+	// EventTypePath locates the DISCRIMINATOR in one line of a `jsonl`
+	// stream — the field naming what kind of event the line is. Empty
+	// means the stream has none, or that every line's text counts.
+	//
+	// It exists because an ENVELOPED stream cannot be read by paths alone.
+	// Muse Code wraps every event in one envelope shape and puts the kind
+	// in `payload_type`, so `payload.text` is the assistant's text on a
+	// `run.output.delta`, a tool's output on a `tool.result`, and the whole
+	// answer AGAIN on `run.terminal.completed`. A path walk cannot tell the
+	// three apart: it would splice tool output into the reply and then
+	// repeat the reply. Naming the discriminator once is what makes the
+	// stream readable.
+	EventTypePath Path `yaml:"event_type_path,omitempty"`
+
+	// TextEvents restricts TEXT extraction to lines whose discriminator is
+	// one of these. Empty takes every line, which is what a stream with no
+	// envelope wants.
+	//
+	// Text only, deliberately: usage and error paths are scanned across the
+	// whole stream either way, because a stream reports those wherever it
+	// likes and the last value wins. What must not be spliced together is
+	// the ANSWER.
+	TextEvents []string `yaml:"text_events,omitempty"`
 
 	// ErrorPaths locates a boolean the CLI sets when it failed despite
 	// exiting zero.
@@ -449,11 +501,16 @@ func (p *Profile) validate(name string) error {
 	if strings.TrimSpace(p.Binary) == "" {
 		add("binary is empty — set cli.overrides.binary")
 	}
-	if len(p.CompleteArgs) == 0 && p.PromptMode != PromptArgv {
+	if len(p.CompleteArgs) == 0 && p.mode() == PromptStdin {
+		// Only stdin mode can end up with NO argv at all. The other two
+		// build one from prompt_args and the prompt itself, so a CLI
+		// invoked as `mycli --prompt-file <path>` and nothing else is a
+		// legitimate shape rather than a profile that forgot to say how
+		// to run its binary.
 		add("complete_args is empty — set cli.overrides.complete_args")
 	}
 	if p.PromptMode != "" && !p.PromptMode.Valid() {
-		add("prompt_mode %q (want stdin or argv)", p.PromptMode)
+		add("prompt_mode %q (want stdin, argv or file)", p.PromptMode)
 	}
 	if p.Output != "" && !p.Output.Valid() {
 		add("output %q (want json, jsonl or text)", p.Output)
@@ -477,9 +534,34 @@ func (p *Profile) validate(name string) error {
 			add("config_env may not name HOME — it is set from the seat home already")
 		}
 	}
-	if len(p.PromptArgs) > 0 && p.PromptMode != PromptArgv {
+	if len(p.PromptArgs) > 0 && p.mode() != PromptArgv && p.mode() != PromptFile {
 		add("prompt_args is set but prompt_mode is %q — the flag introduces a prompt "+
-			"on argv and there is none to introduce", p.PromptMode)
+			"on argv and there is none to introduce", p.mode())
+	}
+	if p.mode() == PromptFile && !slices.ContainsFunc(p.PromptArgs, func(arg string) bool {
+		return strings.Contains(arg, "{file}")
+	}) {
+		// Refused rather than defaulted to a bare append: a file-mode
+		// profile whose argv never carries the path runs the CLI with no
+		// prompt, which a vendor answers by opening an interactive
+		// session or by printing usage — neither of which looks like the
+		// configuration error it is.
+		add("prompt_mode is file but no prompt_args entry contains {file} — set " +
+			`cli.overrides.prompt_args, e.g. ["--prompt-file", "{file}"]`)
+	}
+	switch {
+	case len(p.EventTypePath) > 0 && len(p.TextEvents) == 0:
+		add("event_type_path is set but text_events is empty — naming where the " +
+			"event kind lives says nothing about which kinds carry the answer")
+	case len(p.EventTypePath) == 0 && len(p.TextEvents) > 0:
+		add("text_events is set but event_type_path is empty — there is nothing to " +
+			"compare the event names against")
+	case len(p.EventTypePath) > 0 && p.output() != OutputJSONL:
+		// Refused rather than ignored: an operator who wrote it meant the
+		// answer to be picked out of an event stream, and a filter that
+		// silently did nothing is a debugging session.
+		add("event_type_path is set but output is %q — an event discriminator "+
+			"only exists in a jsonl stream", p.output())
 	}
 	if len(p.SystemPromptArgs) > 0 && p.SystemPromptEnv != "" {
 		// One channel or the other. Both would hand the CLI the same

@@ -148,6 +148,36 @@ func applyAuth(env map[string]string, p Profile, auth Auth) {
 	}
 }
 
+// probeEnv is the child environment for an invocation that belongs to no seat
+// — today the version probe `crewlet llm doctor` runs.
+//
+// IT EXISTS BECAUSE A MISSING ENV IS NOT AN EMPTY ONE. [run] assigns whatever
+// it is given to exec.Cmd.Env, and a nil there does not mean "no environment":
+// os/exec then hands the child the ENGINE's own, which is the company's chat
+// token, its database DSN and every provider key — precisely what the
+// allowlist in [buildEnv] exists to keep out of a vendor's CLI. The probe was
+// the one call in this package that skipped it, so `--version` ran with more
+// access than any real completion ever gets.
+//
+// It also makes the profile's own env apply, which the muse-code profile
+// depends on: its binary is a LAUNCHER that checks for an update every hour
+// and forks the download, and MUSE_NO_AUTO_UPDATE=1 is only a setting if the
+// child that would act on it receives it.
+//
+// A home of its own, beside the login home rather than inside a seat's: a
+// seat home is pruned between calls, and a probe has no seat.
+func (p *Provider) probeEnv() []string {
+	home := filepath.Join(p.ws.Root(), "probe-home")
+	cache := filepath.Join(p.ws.Root(), "probe-cache")
+	for _, dir := range []string{home, cache} {
+		// Best effort: a CLI that cannot write its config still prints
+		// its version, and a probe that refused to run over a mkdir
+		// would report the drift it exists to detect as an absence.
+		_ = os.MkdirAll(dir, 0o700)
+	}
+	return buildEnv(p.profile, &Checkout{Home: home, Cache: cache}, p.env, p.auth)
+}
+
 // TokenVarName is the environment variable a profile's headless token lives
 // in, for the messages `crewlet llm login` and `doctor` print.
 func TokenVarName(p Profile) (string, error) {

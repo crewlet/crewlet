@@ -509,6 +509,214 @@ grok:
   auth_markers:
     - sentinel: "invalid api key"
 
+muse-code:
+  binary: muse
+  # Meta's own family, and the field is an open set for exactly this case:
+  # writing `openai` because Meta's Model API also speaks chat-completions
+  # would make the profile say something false about the model to buy nothing
+  # — an unknown family already falls back to the same catalogue default.
+  vendor: meta
+  written_for: "Muse Code 1.0.3 (`muse --version` prints `1.0.3-R2198.1`)"
+  version_args: ["--version"]
+  # `muse exec`, the vendor's own headless surface: one prompt, run to
+  # completion, the run's events on stdout. Its startup preamble goes to
+  # STDERR, so stdout is JSONL and nothing has to be stripped.
+  #
+  # THE BINARY ON PATH IS A LAUNCHER SHELL SCRIPT, not the agent — see the
+  # MUSE_NO_AUTO_UPDATE note under env below, which is why that variable is
+  # part of the profile rather than an operator's problem.
+  #
+  # --json IS NOT OPTIONAL HERE, and the reason is the failure classification
+  # rather than the answer. THIS CLI PRINTS NO FAILURE CAUSE ON STDERR: a
+  # failed run writes the fixed string "run ended with Failed" there and
+  # nothing else, and the real reason exists only in the `run.terminal.failed`
+  # event's `payload.reason`. Without --json a spent plan and a dead login
+  # reach this backend as a bare exit 1, no marker can fire, and the seat's
+  # fallback chain never carries it onto a metered key — the exact silent
+  # failure limit_markers exist to prevent.
+  #
+  # --no-session-log is this CLI's isolation flag and the counterpart of
+  # claude-code's --no-session-persistence: no retained session event log, so
+  # nothing on disk carries one turn's conversation into the next. It is
+  # refused ALONGSIDE --session-id ("a session id needs retained logging"),
+  # which is why no session id is passed — every call here is one-shot and a
+  # resumable session is precisely what this backend must not have.
+  #
+  # --disable-approval is what the vendor's own headless guidance asks for:
+  # "A non-interactive run has no one to answer an approval prompt, so choose
+  # a posture in advance." Skipping the prompt keeps the OS sandbox on and is
+  # the only posture that cannot wedge — a held approval in a headless run
+  # stays unresolved, and the CLI then sits on the seat's concurrency slot
+  # until the wall-clock cap fires. Same reason opencode's seeded policy has
+  # no `ask` in it and denies the tool that asks a person.
+  #
+  # --disable-shell and --disable-write are DEFENCE IN DEPTH AND NOTHING MORE.
+  # Measured against 1.0.3: with both set, `bash`, `bash_input`, `write_file`
+  # and `edit_file` are still advertised to the model, byte-identical to the
+  # baseline surface. They are call-time refusals, not a denial of the tool.
+  # What actually removes them is run.toolset in the seeded settings file
+  # below; these two are here so that a build whose settings file failed to
+  # apply still refuses the call rather than running it.
+  #
+  # NOT --sandbox-network: it governs the OS sandbox around SHELL commands,
+  # and the seeded toolset leaves no shell to sandbox. Not --trust-workspace
+  # either — the per-call working directory is created empty, and trusting it
+  # is what would admit an AGENTS.md, a rule or a skill from a checkout the
+  # engine does not control. Not --max-model-steps: breaching it exits 1, so
+  # a cap would DISCARD a finished answer, and cli.timeout_seconds already
+  # bounds the call from the outside without throwing the work away.
+  complete_args:
+    - "exec"
+    - "--json"
+    - "--no-session-log"
+    - "--disable-approval"
+    - "--disable-shell"
+    - "--disable-write"
+  # Denied by REPLACING THE TOOL SURFACE, which is the only thing on this CLI
+  # that does: `run.toolset` is an allowlist of exact tool names, validated
+  # against the real registry at startup, and it is what makes bash,
+  # bash_input, read_file, write_file, edit_file, the memory, goal, cron and
+  # subagent families disappear from the model's view. There is no
+  # --allowed-tools, no --deny-tool and no project-level settings file.
+  #
+  # `web_search` is the one name kept, because web is the one local tool this
+  # backend never denies. (`web_fetch` is registered but gated off by a remote
+  # rollout in 1.0.3 — naming it admits nothing, so it is not named.) Three
+  # engine-owned tools survive any toolset and cannot be removed: read_skill,
+  # snooze_reminder and write_todos. None of them reaches the filesystem, the
+  # shell or the network.
+  #
+  # "schema_version": 1 is MANDATORY: a settings file without it fails every
+  # command at startup with `malformed settings file`.
+  local_tools: denied
+  seed_files:
+    - path: .config/muse/settings.json
+      content: '{"schema_version":1,"run":{"toolset":["web_search"]}}'
+  model_args: ["--model", "{model}"]
+  # NO SYSTEM-PROMPT CHANNEL. The flags common to both surfaces are model,
+  # reasoning effort, the permission levers, workspace and session logging,
+  # and the headless-only three are --json, --prompt-file and
+  # --max-model-steps. Project instructions travel through AGENTS.md /
+  # CLAUDE.md, which load only after a workspace is TRUSTED — so on the
+  # untrusted per-call directory this backend hands it, nothing of the sort is
+  # admitted either. The seat's identity therefore rides the transcript, as it
+  # does for codex, opencode, copilot and cursor-agent.
+  #
+  # --prompt-file IS the reason this profile is prompt_mode: file. The prompt
+  # a phase renders is the whole flattened transcript — the seat's identity,
+  # the tool catalogue, the conversation and every tool result in it — and on
+  # argv that is readable through /proc/<pid>/cmdline by every account on the
+  # machine and bounded by ARG_MAX (256 KB on macOS). This CLI is the first
+  # built-in profile whose vendor offers a path instead, so it takes it.
+  prompt_mode: file
+  prompt_args: ["--prompt-file", "{file}"]
+  output: jsonl
+  # AN ENVELOPED STREAM, so the event kind decides which `payload.text` is the
+  # answer. Every line is one envelope and `payload.text` carries three
+  # different things: a token FRAGMENT of the reply on `run.output.delta`, a
+  # tool's output on `tool.result`, and the assembled reply on
+  # `run.terminal.completed`. Reading the path alone would splice tool output
+  # into the answer and then repeat the answer — which is why this profile
+  # names the discriminator and takes the terminal event only.
+  #
+  # The terminal event and not the deltas, although the deltas are what a
+  # human watches: they are fragments ("Created", " `notes.txt` containing"),
+  # and a stream's text hits are joined with a newline here, which would
+  # shred every sentence the model wrote. The cost is that a STREAMING caller
+  # gets the answer in one delta at the end rather than incrementally.
+  event_type_path: ["payload_type"]
+  text_events: ["run.terminal.completed"]
+  text_paths: [["payload", "text"]]
+  # NO USAGE PATHS, because the exec stream carries no token counts at all —
+  # not under any key, on any event. The counts are estimated here and
+  # `crewlet llm doctor` says so. They do exist on the session log this
+  # profile deliberately switches off, and on `muse serve`'s MSP protocol,
+  # which is a different transport this backend does not speak.
+  #
+  # The `muse` on PATH is the LAUNCHER, and left alone it checks for a new
+  # release every hour and forks a background download that outlives the call.
+  # Three reasons that is wrong under an engine: it swaps the binary under a
+  # running fleet with nothing to say so (which is what written_for exists to
+  # make visible), it writes its check stamp next to the binary — outside the
+  # seat home, so outside the isolation — and the download is a child this
+  # backend's process-group teardown can kill mid-write. Upgrades are the
+  # operator's, on their schedule.
+  env:
+    MUSE_NO_AUTO_UPDATE: "1"
+  # No config_env: this CLI is XDG-native and has no relocation variable of
+  # its own. buildEnv already points XDG_CONFIG_HOME and XDG_DATA_HOME inside
+  # the seat's home, and the binary honours both. (MUSE_AUTH_PATH looks like
+  # the variable for this and is NOT: it is the LAUNCHER's, absent from the
+  # agent binary entirely, so a profile relocating credentials with it would
+  # silently get the default path.)
+  credential_paths: [".config/muse/auth.json"]
+  # THE WHOLE DATA DIRECTORY, not a list of children. .local/share/muse holds
+  # the session logs (sessions/YYYY/MM/DD/<id>/session.jsonl) and the personal
+  # project memory the vendor documents as living "on your machine outside the
+  # repo" without saying where. Nothing durable is in here — the credential
+  # and the settings are under .config — so pruning the directory is both
+  # complete and safe, where naming children would leave whatever this build
+  # adds next. .local/state/muse goes with it for the same reason.
+  #
+  # And two files inside the config directory, which is otherwise left alone
+  # because the credential lives there: trust.json accumulates one workspace
+  # trust record per call directory, none of which will ever exist again, and
+  # .auth.json.lock is what a killed CLI leaves held — the same half-prune the
+  # claude-code profile's .claude.json.lock note records.
+  volatile_paths:
+    - ".local/share/muse"
+    - ".local/state/muse"
+    - ".config/muse/trust.json"
+    - ".config/muse/.auth.json.lock"
+  host_credential_paths: [".config/muse/auth.json"]
+  # A Meta Model API key, so it is the METERED credential: reached through
+  # auth.mode api-key or inherit-env, never forwarded silently. It takes
+  # priority over every stored credential inside the CLI itself, which is
+  # exactly why applyAuth deletes it on a subscription call — a stray key
+  # would bill pay-as-you-go while the subscription sat unused.
+  #
+  # There is no token_env and no capture_token_args: this CLI mints no
+  # headless token of its own. `muse login` does mint an API key server-side,
+  # but it stores it in the credential file rather than printing it, so a
+  # subscription seat authenticates from that file — which is why an
+  # agent-mode run on a REMOTE cell is refused for this CLI.
+  api_key_env: "META_API_KEY"
+  # `muse login` brokers the browser sign-in; `muse logout` removes the stored
+  # credential and leaves an exported META_API_KEY alone. Both are real
+  # subcommands, which matters because `muse` takes a bare argument as a
+  # PROMPT — the trap `claude /login` used to be.
+  login_args: ["login"]
+  logout_args: ["logout"]
+  # No status_args: this CLI has no status subcommand. `muse auth` takes
+  # exactly one subcommand, `set` (and `muse auth set --api-key-stdin` reads a
+  # key from stdin), while the credential status panel is the TUI's `/status`
+  # slash command, which a headless run cannot reach.
+  #
+  # THE AUTH SENTINELS ARE THE CLI'S OWN SENTENCES, and they share a clause:
+  # four of the five auth failures this build reports — a rejected saved key,
+  # no login to refresh from, an unauthorised token refresh, a login that is
+  # no longer saved — all end in "run `muse login`". The fifth is the
+  # environment key being rejected, which names META_API_KEY instead. Neither
+  # is a phrase a model writes by accident.
+  #
+  # THE LIMIT SENTINELS ARE THE MODEL API'S ERROR **TYPE**, which is the token
+  # a muse failure reason actually carries: a real out-of-credits run surfaced
+  # `API error 402 [request_id=…]: Billing verification failed … (billing_error)`,
+  # so the parenthesised type is the template. `billing_error` is that
+  # captured case — an account that can no longer pay, which is a spent
+  # credential and belongs on the fallback chain. `rate_limit_error` is the
+  # published type for 429; no 429 from this CLI has been captured, so if your
+  # plan's wording differs, put it in cli.overrides.limit_markers rather than
+  # letting a spent plan classify FATAL and strand the chain. The error CODES
+  # (`rate_limit_exceeded`, `invalid_api_key`) are deliberately not used: the
+  # observed template carries the type, not the code.
+  limit_markers:
+    - sentinel: "rate_limit_error"
+    - sentinel: "billing_error"
+  auth_markers:
+    - sentinel: "run `muse login`"
+    - sentinel: "META_API_KEY was rejected"
+
 # `custom` ships NOTHING on purpose. An operator pointing at their own wrapper
 # or a self-hosted gateway declares every field under cli.overrides, and the
 # profile validation then names whichever one they left out — which is a far

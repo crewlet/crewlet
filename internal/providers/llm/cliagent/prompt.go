@@ -190,6 +190,48 @@ func EstimateTokens(text string) int {
 // context for it to discover.
 const systemPromptFile = "crewlet-system-prompt.txt"
 
+// promptFileName is what [PromptFile] mode writes, beside the system prompt
+// and for the same reasons — see [systemPromptFile].
+//
+// A SEPARATE FILE rather than the same one under a general name: a phase that
+// has both writes both, and one path serving two arguments would hand the CLI
+// its system prompt as the user turn.
+const promptFileName = "crewlet-prompt.txt"
+
+// promptArgs renders a file-mode profile's prompt argv, writing the text to a
+// private file in the per-call working directory.
+//
+// 0600, and on disk rather than on argv, because a rendered prompt is the
+// whole flattened transcript: the seat's identity, its tool catalogue, the
+// conversation and every tool result in it. See [PromptFile].
+func promptArgs(template []string, prompt, dir string) ([]string, error) {
+	var path string
+	out := make([]string, 0, len(template))
+	for _, arg := range template {
+		if strings.Contains(arg, "{file}") {
+			if path == "" {
+				var err error
+				if path, err = writePromptFile(prompt, dir); err != nil {
+					return nil, err
+				}
+			}
+			arg = strings.ReplaceAll(arg, "{file}", path)
+		}
+		out = append(out, arg)
+	}
+	return out, nil
+}
+
+// writePromptFile puts the rendered prompt in the per-call working directory,
+// 0600.
+func writePromptFile(prompt, dir string) (string, error) {
+	path := filepath.Join(dir, promptFileName)
+	if err := os.WriteFile(path, []byte(prompt), 0o600); err != nil {
+		return "", fmt.Errorf("cli-agent: writing the prompt: %w", err)
+	}
+	return path, nil
+}
+
 // systemArgs renders a profile's system-prompt argv, writing the text to a
 // private file where the profile asked for a path.
 //

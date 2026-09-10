@@ -1,9 +1,9 @@
 # Subscription LLM Backends
 
 Run agents on a **coding CLI you already pay a subscription for** —
-Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Cursor, Copilot or
-Grok — instead of a metered API key. [Supported CLIs](#supported-clis)
-below is the full list.
+Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Cursor, Copilot,
+Grok or Muse Code — instead of a metered API key.
+[Supported CLIs](#supported-clis) below is the full list.
 
 The `cli-agent` provider type drives the vendor's own command-line tool
 as a headless text model. The CLI holds the operator's OAuth login;
@@ -324,6 +324,7 @@ from vendor documentation, which lags:
 | `opencode` | 1.18.29 | none (`--agent` names a persona from its own config, not a per-call prompt) | — |
 | `copilot` | 1.0.83 | none (`--no-custom-instructions` only disables its own) | — |
 | `cursor-agent` | 2026.09.02 | none | — |
+| `muse-code` | 1.0.3 | none (`AGENTS.md` / `CLAUDE.md` only, and only in a **trusted** workspace) | — |
 
 **There are two channels, and `--help` only shows one of them.** A CLI may
 take the prompt as an *argument* (`system_prompt_args`, with `{file}`
@@ -344,6 +345,14 @@ variable for exactly that reason. `grok` has only the string form, but its
 there; on a shared host, `cli.overrides.system_prompt_args: []` puts the
 prompt back in the transcript.
 
+**A vendor's project file is not a system-prompt channel.** `muse-code`
+reads `AGENTS.md` and `CLAUDE.md`, but only once a workspace has been
+*trusted* — and Crewlet runs it in a per-call directory created empty and
+never trusted, precisely so that no rule, skill or hook from a checkout the
+engine does not control is admitted. Writing the seat's identity there
+would mean trusting that directory, which trades the whole guard for a
+channel the transcript already provides.
+
 **Check the CLI you actually have.** `grok` is the trap: xAI's own CLI
 (`x.ai/cli`, [xai-org/grok-build](https://github.com/xai-org/grok-build))
 and a same-named community package on npm both put a `grok` on PATH, and
@@ -356,9 +365,44 @@ variable (`QWEN_SYSTEM_MD`, and this build reads neither the other's) and
 added two flags its parent does not have, so "same shape as `gemini-cli`" no
 longer holds here.
 
-For the four with no channel at all, `cli.overrides.system_prompt_args` and
+For the five with no channel at all, `cli.overrides.system_prompt_args` and
 `cli.overrides.system_prompt_env` are how you adopt one the day its vendor
 ships it — no engine release needed.
+
+---
+
+## How the prompt itself travels
+
+The rendered prompt is the *largest* thing this backend hands a CLI and,
+after the system prompt, the most sensitive: the flattened transcript, the
+tool catalogue, the conversation and every tool result in it. `prompt_mode`
+says which channel carries it, and the three are not equivalent:
+
+| `prompt_mode` | How | Ceiling | On `/proc/<pid>/cmdline`? |
+|---|---|---|---|
+| `stdin` (default) | written to the child's stdin | none | no |
+| `file` | written `0600` into the per-call working directory; `prompt_args` carries the **path** through `{file}` | none | no — only the path |
+| `argv` | appended as the last argument (or as `prompt_args`' value) | `ARG_MAX` — ~2 MB on Linux, 256 KB on macOS | **yes, in full** |
+
+`argv` is a last resort, taken only where a vendor offers nothing else —
+`copilot` and `grok` today. It has both failure modes: a long transcript
+fails at `exec` rather than at the model, and every account on the machine
+can read the conversation out of the process table while the call runs.
+
+`file` is the same trade this backend already makes for the system prompt,
+in the same directory, at the same mode, and for the same reasons. It needs
+a vendor flag that takes a path; `muse-code` is the first built-in profile
+whose CLI has one (`muse exec --prompt-file`), and its profile is
+
+```yaml
+prompt_mode: file
+prompt_args: ["--prompt-file", "{file}"]
+```
+
+A `file` profile whose `prompt_args` contains no `{file}` is refused at
+load: without it the CLI is run with no prompt at all, which a vendor
+answers by opening an interactive session or printing usage — neither of
+which looks like the configuration error it is.
 
 ---
 
@@ -376,7 +420,7 @@ vendor offers a way to, and each says how: a flag on the command line
 `--disallowed-tools`, Codex's read-only sandbox) or a settings file the
 engine writes into the seat's own home or the per-call working directory
 before every call (Gemini's `settings.json`, OpenCode's `opencode.json`,
-Cursor's `.cursor/cli.json`). The shell is the one that matters: the
+Cursor's `.cursor/cli.json`, Muse Code's `run.toolset`). The shell is the one that matters: the
 seat's home and environment are isolated, but the filesystem is not, and
 a CLI with a shell on the engine host reads whatever the engine user can
 read. A vendor with no such switch is declared as
@@ -393,6 +437,32 @@ always applies and only warns about the entry that matched nothing. So a
 name this profile gets wrong costs one tool on a deny list and costs
 everything on an allow list — and a vendor renaming a tool is exactly the
 drift these profiles are built to expect.
+
+**A refusal and a removal are not the same guard, and only one of them
+is a denial.** `muse-code` is the profile that makes the difference
+concrete. Its `--disable-shell` and `--disable-write` flags read like tool
+denials and are not: measured against 1.0.3, `bash`, `bash_input`,
+`write_file` and `edit_file` are still *advertised to the model*,
+byte-identical to the baseline surface — the flags refuse the call when it
+comes. A model that can see a shell will try to use it, and every such
+attempt is a wasted round inside a CLI whose tool log the engine never
+sees. What actually removes them is `run.toolset` in the seeded
+`settings.json`: an allowlist of exact tool names, validated against the
+CLI's own registry at startup, which replaces the surface outright. The
+profile ships both — the allowlist because it is the denial, the flags
+because a settings file that failed to apply should still refuse the call.
+`codex` sits at the other end of the same distinction: its `--sandbox
+read-only` contains the shell rather than removing it, and reads stay.
+That residual is why `local_tools: denied` is a claim `crewlet llm doctor`
+**measures** rather than one you take on trust.
+
+**An approval prompt is a wedge in a headless run.** A CLI that stops to
+ask sits on the seat's concurrency slot until `timeout_seconds` fires,
+because there is nobody to answer. Every profile therefore removes the
+asking rather than the guard: OpenCode's seeded policy is all `allow` and
+`deny` and denies the tool that asks a person, and `muse-code` passes
+`--disable-approval`, which is the posture its own vendor's headless
+guidance asks for — approval prompts off, the OS sandbox still on.
 
 **Web is the one local tool that stays on.** A subscription seat must
 not have less reach than the same CLI at a terminal, and a fetch is a
@@ -448,6 +518,31 @@ profile: `text` takes the whole of stdout, `json` reads one document and
 order. `text_paths` is a **list** so a vendor that moved the field
 between releases needs no override — the first path that resolves to a
 non-empty string wins, and an empty one falls through to the next.
+
+**An enveloped stream needs one more thing than paths.** Muse Code wraps
+every event in a single envelope shape and puts the kind in
+`payload_type`, so `payload.text` is a *token fragment* of the reply on a
+`run.output.delta`, a *tool's output* on a `tool.result`, and the
+assembled reply on `run.terminal.completed`. A path walk cannot tell the
+three apart: it would splice the tool output into the answer and then
+repeat the answer. `event_type_path` names where the kind lives and
+`text_events` says which kinds carry the reply:
+
+```yaml
+output: jsonl
+event_type_path: ["payload_type"]
+text_events: ["run.terminal.completed"]
+text_paths: [["payload", "text"]]
+```
+
+Both or neither — one without the other configures nothing and is refused
+at load, as is either on a profile that is not `jsonl`. They scope **text
+only**: usage and error paths are still read across the whole stream,
+because a stream reports those wherever it likes and the last value wins.
+A profile that names an event filter also *streams* through it, so a
+`jsonl` profile taking its answer from one terminal event delivers that
+answer in a single delta at the end rather than pushing a tool's output
+through as though the model had said it.
 
 Four outcomes, kept apart on purpose, because three of them used to be
 one — and only two of them are failures:
@@ -708,6 +803,7 @@ entirely.
 | `cursor-agent` | `cursor-agent` | Cursor seat | `cursor-agent login`. |
 | `copilot` | `copilot` | GitHub Copilot seat | Prompt goes on argv, so very long transcripts are bounded by `ARG_MAX`. Authenticates with a GitHub token, so `GITHUB_TOKEN` is its `api_key_env` — reached via `auth.mode: api-key` or `inherit-env`, never forwarded silently. |
 | `grok` | `grok` | xAI | **xAI's own CLI** from [x.ai/cli](https://x.ai/cli), not the same-named npm package. Accepts `XAI_API_KEY` (the variable its own signed-out message names) through `auth.mode: api-key`. |
+| `muse-code` | `muse` | Muse Code subscription (Everyday / High / Power Usage), or pay-as-you-go | `muse login` / `muse logout`; the browser sign-in stores `~/.config/muse/auth.json`, which `-from-host` adopts. **No status command** — this CLI has none. Mints no headless token: `META_API_KEY` is a *metered* Model API key, reached through `auth.mode: api-key`. Runs `muse exec --json`, denies its tools through a seeded `run.toolset`, and puts the prompt in a **file** rather than on argv. Reports no token counts anywhere on its stream, so they are estimated. |
 | `custom` | — | — | Ships nothing; declare everything under `overrides`. |
 
 ### CLI flags drift — and that's a config edit, not a release
@@ -758,6 +854,16 @@ cli:
 Take the sentinel from what your CLI actually prints, not from what it used
 to print.
 
+**And check where it prints it.** A sentinel can only match what the CLI
+puts on stdout or stderr, and one vendor puts the failure *nowhere a
+plain run would show it*: `muse exec` writes the fixed string `run ended
+with Failed` to stderr and carries the real reason only in its
+`run.terminal.failed` event. That is why the `muse-code` profile runs
+with `--json` even though the event stream buys it no token counts — the
+answer would read fine without it, and a spent plan would arrive as a
+bare exit 1 that no marker could classify, so the seat would never fall
+through to its metered key.
+
 ---
 
 ## Configuration reference
@@ -769,7 +875,8 @@ providers:
       type: cli-agent
       model: sonnet                    # passed to the CLI's --model
       cli:
-        agent: claude-code             # or codex | gemini-cli | opencode | …
+        agent: claude-code             # or codex | gemini-cli | opencode
+                                       #    | muse-code | …
         mode: text                     # text (default) | agent — see above
         run_in: ""                     # agent mode only: direct | container | e2b
 
