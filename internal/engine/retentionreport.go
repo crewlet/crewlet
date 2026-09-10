@@ -199,8 +199,39 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 			out.FloorUnknownFor = max(out.FloorUnknownFor, statelog.FloorCacheStale)
 		}
 	}
+	out.SemanticCoverage = r.semanticCoverage(ctx, now)
+	r.space(&out)
+	r.maintenance(ctx, now, &out)
 	r.observed(&out)
 	return out
+}
+
+// maintenance is the oldest open capacity operation on any of this node's
+// domains.
+//
+// THE OLDEST, because the alarm is about how long publishing has been stopped
+// and two open operations do not stop it twice. Read from the register rather
+// than from whatever this node's own coordinator remembers: an operation is
+// opened by whichever node ran the verb, and a node that is merely a
+// PARTICIPANT — which is every node, and is what makes maintenance an outage
+// rather than an inconvenience — holds nothing about it in memory at all.
+func (r *retention) maintenance(ctx context.Context, now time.Time, out *statelog.Reading) {
+	if r.fleet == nil {
+		return
+	}
+	for _, name := range r.state.order {
+		running := r.state.domains[name]
+		if running == nil {
+			continue
+		}
+		op, open, err := r.fleet.Maintenance(ctx, running.domain.Stream().Name)
+		if err != nil || !open || op.EnteredAt.IsZero() {
+			continue
+		}
+		if since := now.Sub(op.EnteredAt); since > out.MaintenanceOpenFor {
+			out.MaintenanceOpenFor, out.MaintenancePhase = since, string(op.Phase)
+		}
+	}
 }
 
 // applyLagOf converts a health's record backlog into the time the alarm table
@@ -261,12 +292,33 @@ func (r *retention) observed(out *statelog.Reading) {
 		out.SearchDegradedFraction = float64(degraded) / float64(answers)
 	}
 
+	// THE DECLARED RATE, beside the observed one below. It is a constant
+	// rather than a configured value because it is a term in the log's own
+	// sizing: an operator who could set it would be silencing the alarm
+	// rather than resizing the deployment it is about.
+	out.LinearizableReadsExpected = statelog.LinearizableReadsPerDay
+
 	for _, snapshot := range reading {
 		switch snapshot.Name {
 		case metrics.StatelogBarrierDuration:
 			out.BarrierP95 = max(out.BarrierP95, quantileDuration(snapshot, 0.95))
 		case metrics.TrackerSearchScanDuration:
 			out.SearchP95 = max(out.SearchP95, quantileDuration(snapshot, 0.95))
+		case metrics.StorePoolWait:
+			// THE WORST FILE, not the sum of them. A caller queues on
+			// ONE pool, and two estates each half-starved is not the
+			// same node as one estate fully starved.
+			out.PoolWaitP95 = max(out.PoolWaitP95, quantileDuration(snapshot, 0.95))
+		case metrics.StatelogRecordsGated:
+			out.RecordsGated += int(snapshot.Total)
+		case metrics.TrackerFeedUnreadable:
+			out.FeedUnreadable += int(snapshot.Total)
+		case metrics.StatelogBarrierAppends:
+			// THE BARRIER APPEND IS THE LINEARIZABLE READ. One is
+			// appended per read that asks for the level, so the
+			// counter and the census input are the same quantity —
+			// which is exactly why the drift is checkable at all.
+			out.LinearizableReads += int(snapshot.Total)
 		case metrics.StatelogReadRefusals:
 			// ANY REFUSAL AT ALL IS ONE, and the alarm's own
 			// condition is a DURATION rather than a count — so what

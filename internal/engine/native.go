@@ -244,6 +244,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			Peers:  e.searchPeers(),
 			Roster: e.searchRoster,
 			Report: e.reportSearch,
+			Enter:  e.enterSearch,
 		})
 		// AND THIS NODE ANSWERS FOR ITS PEERS. Registered here rather
 		// than beside the coordinator because they are different jobs
@@ -1247,4 +1248,28 @@ func (e *Engine) reportSearch(answer search.Answer, took time.Duration) {
 	}
 	e.metrics.Add(metrics.TrackerSearchAnswers, 1,
 		metrics.Attrs{"coverage": coverage, "semantic": semantic})
+}
+
+// enterSearch counts one scan in, and its return counts it out.
+//
+// THE LEVEL NOTHING ELSE CAN SAMPLE. Every scan figure this engine publishes —
+// the budget the prefetch is held to, the interactive target, the whole
+// supported-corpus table — was measured with ONE reader on an idle node, and a
+// node answering nine at once is on a different row of that table. A duration
+// histogram cannot say which row: it records what the scans cost without
+// recording how many were competing for the disk while they did.
+//
+// SET RATHER THAN ADDED, on both edges, because it is a gauge: the value is
+// the count in flight at the moment a collector reads it, and the rolling
+// window's peak over a day is the busiest this node got.
+func (e *Engine) enterSearch() func() {
+	if e.metrics == nil {
+		return func() {}
+	}
+	e.metrics.Set(metrics.TrackerSearchConcurrency,
+		float64(e.searching.Add(1)), nil)
+	return func() {
+		e.metrics.Set(metrics.TrackerSearchConcurrency,
+			float64(e.searching.Add(-1)), nil)
+	}
 }
