@@ -324,6 +324,35 @@ func (e *Engine) NativeHydrated() bool {
 	return ok
 }
 
+// SeatsServiceable reports whether this node may KEEP the seats it holds.
+//
+// THE OPPOSITE DIRECTION FROM [Engine.NativeHydrated], and they fire on
+// different classes of fault. Hydration is about a copy that is BEHIND: it
+// catches up, so withholding claims is the whole remedy and dropping work in
+// hand would be pure loss. This is about a copy that is WRONG — an applier
+// halted at a record it cannot decode, an eviction whose peers are dropping
+// everything this node writes, rows below a trim floor with a hole nothing
+// will fill, or a record held past [statelog.DeferralGrace]. A seat left
+// running on any of those answers its own tools out of a copy the fleet has
+// already abandoned, and D122 is the rule that says it must not.
+//
+// A node with no native backend is trivially serviceable, which is what a
+// company on Jira and Confluence has.
+func (e *Engine) SeatsServiceable() (bool, string) {
+	if e.native == nil {
+		return true, ""
+	}
+	ok, domain := e.native.log.Healthy(e.native.run)
+	if !ok {
+		log.WarnContext(e.native.run, "seats_unserviceable",
+			"domain", domain,
+			"hint", "this node's copy of that domain is wrong rather than "+
+				"behind; its seats move to a peer until it recovers")
+		return false, domain
+	}
+	return true, ""
+}
+
 // ReplicationStatus is one of this node's replication loops, as the fleet view
 // counts them.
 //

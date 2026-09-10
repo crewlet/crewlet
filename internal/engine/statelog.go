@@ -89,6 +89,22 @@ type runningDomain struct {
 	// createdAt is the broker's own creation instant for the stream, which
 	// is what DETECTS a recreated one — the generation is the response.
 	createdAt time.Time
+
+	// evicted is this domain's own eviction gate, taken from the write
+	// fence so readiness reads the row the write path reads.
+	//
+	// THE SAME SOURCE ON BOTH PATHS, deliberately: an evicted node whose
+	// writes are dropped by every peer while its reads answer normally is
+	// the split D109 (b) calls the worst shape a node can be in, and two
+	// sources for one fact is how it arises. Nil for a domain with no
+	// eviction gate, which answers "not evicted" rather than refusing.
+	evicted func(ctx context.Context) (bool, error)
+
+	// progress is what a snapshot cannot see — whether the applied prefix
+	// is moving, and how long an undecodable record has been held. See
+	// [progress] for why it lives beside the runner rather than inside
+	// [statelog.Health].
+	progress progress
 }
 
 // stateLog is this node's whole state-log runtime.
@@ -307,7 +323,7 @@ func (s *stateLog) start(ctx context.Context, host domainHost, domain statelog.D
 		return nil, fmt.Errorf("engine: build %s's applier: %w", domain.Name(), err)
 	}
 
-	publisher, err := s.publisherFor(domain, appendTo, runner)
+	publisher, evicted, err := s.publisherFor(domain, appendTo, runner)
 	if err != nil {
 		return nil, err
 	}
@@ -315,6 +331,7 @@ func (s *stateLog) start(ctx context.Context, host domainHost, domain statelog.D
 	running := &runningDomain{
 		domain: domain, runner: runner, publisher: publisher,
 		log: appendTo, consumer: consumer, createdAt: created,
+		evicted: evicted,
 	}
 	s.done.Add(1)
 	go func() {
@@ -343,8 +360,12 @@ func (s *stateLog) start(ctx context.Context, host domainHost, domain statelog.D
 // declares both OPEN — a derived value the next duty tick recomputes has no
 // history for a fence to protect, and what actually stops an evicted node
 // writing there is the fleet singleton's lease.
+// It also hands back the domain's EVICTION READER, because the fence it is
+// built from is the one place that knows how to ask — and readiness must ask
+// the same question the write path asks, from the same row. Two readers of
+// one tombstone is how a node comes to refuse its writes and answer its reads.
 func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.DomainLog,
-	runner *statelog.Runner) (*statelog.Publisher, error) {
+	runner *statelog.Runner) (*statelog.Publisher, func(context.Context) (bool, error), error) {
 
 	deps := statelog.Deps{
 		Domain: domain, Log: appendTo, Waiter: runner, NodeID: s.nodeID,
@@ -354,41 +375,48 @@ func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.Doma
 		// as safely stale.
 		Generation: func() uint32 { return runner.Committed().Generation },
 	}
+	var evicted func(context.Context) (bool, error)
 	switch domain.Name() {
 	case tracker.Domain{}.Name():
 		rows, err := tracker.NewRows(s.db)
 		if err != nil {
-			return nil, fmt.Errorf("engine: build %s's read seam: %w", domain.Name(), err)
+			return nil, nil, fmt.Errorf("engine: build %s's read seam: %w", domain.Name(), err)
 		}
 		fence := tracker.NewFence(s.db, s.nodeID)
 		fence.Cursor = runner.Committed
 		fence.Floor = s.trimFloor(domain.Name())
 		deps.Rows, deps.Fence, deps.Gates = rows, fence, tracker.NewGates(s.db)
+		evicted = fence.Evicted
 	case search.Domain{}.Name():
 		rows, err := search.NewRows(s.db)
 		if err != nil {
-			return nil, fmt.Errorf("engine: build %s's read seam: %w", domain.Name(), err)
+			return nil, nil, fmt.Errorf("engine: build %s's read seam: %w", domain.Name(), err)
 		}
+		// NO EVICTION READER, and that is the domain rather than an
+		// omission: the vectors are DERIVED and compacted, so there is no
+		// tombstone table to read and nothing an evicted node could serve
+		// that a re-embed would not replace.
 		deps.Rows, deps.Fence, deps.Gates = rows, search.NewFence(), search.NewGates()
 	case pages.Domain{}.Name():
 		rows, err := pages.NewRows(s.db)
 		if err != nil {
-			return nil, fmt.Errorf("engine: build %s's read seam: %w", domain.Name(), err)
+			return nil, nil, fmt.Errorf("engine: build %s's read seam: %w", domain.Name(), err)
 		}
 		fence := pages.NewFence(s.db, s.nodeID)
 		fence.Cursor = runner.Committed
 		fence.Floor = s.trimFloor(domain.Name())
 		deps.Rows, deps.Fence, deps.Gates = rows, fence, pages.NewGates(s.db)
+		evicted = fence.Evicted
 	default:
-		return nil, fmt.Errorf("engine: domain %q is registered and has no "+
+		return nil, nil, fmt.Errorf("engine: domain %q is registered and has no "+
 			"write authority, so nothing could ever append to its log",
 			domain.Name())
 	}
 	publisher, err := statelog.NewPublisher(deps)
 	if err != nil {
-		return nil, fmt.Errorf("engine: build %s's write authority: %w", domain.Name(), err)
+		return nil, nil, fmt.Errorf("engine: build %s's write authority: %w", domain.Name(), err)
 	}
-	return publisher, nil
+	return publisher, evicted, nil
 }
 
 // trimFloor is the published floor for one domain, as the write fence reads
@@ -459,18 +487,93 @@ func (s *stateLog) Established(ctx context.Context, strict bool) (bool, statelog
 	return true, ""
 }
 
+// Healthy reports whether every registered domain permits this node to KEEP
+// the seats it holds, and names the first that does not.
+//
+// # This is a different question from Established, and the difference is what
+// # separates withholding work from giving it back
+//
+// [stateLog.Established] gates ADMISSION: a node mid-hydration keeps what it
+// holds and claims nothing new, which is right, because its rows are merely
+// incomplete and its seats' work would only wait. This one gates HOLDING, and
+// the states it fires on are ones where the seats' work would be WRONG:
+//
+//   - the applier has STOPPED, so its rows are frozen at the record that
+//     halted it and every later object is missing its consequences;
+//   - the node is EVICTED, so its peers drop every record it publishes and
+//     its rows have already stopped being the fleet's;
+//   - the node is BELOW THE TRIM FLOOR, so records it never applied have been
+//     deleted and its rows have a hole nothing will fill;
+//   - it has held a record it CANNOT DECODE past [statelog.DeferralGrace],
+//     which is D122: under the grace nothing changes, because that covers
+//     every rolling upgrade; past it the honest reading is "this node cannot
+//     run this company's records" rather than "this node is briefly behind".
+//
+// Until this had a caller the `deferred_old` alarm told an operator "its seats
+// move at 30m0s" and its remedy said "its seats have already moved", and
+// neither was true — [seat.Host] sheds only on a lost lease, a drain and a
+// rebalance, and its own log line says a node that is not ready "keeps what it
+// holds". The alarm was reporting a mitigation the engine did not perform.
+//
+// A DOMAIN WHOSE HEALTH CANNOT BE READ DOES NOT SHED. An unreachable broker is
+// the outage during which a company most needs its seats to keep running, and
+// tearing them down on an unread number is the failure mode `unknown` exists
+// throughout this package to prevent.
+func (s *stateLog) Healthy(ctx context.Context) (bool, string) {
+	if s == nil {
+		return true, ""
+	}
+	now := time.Now()
+	for _, name := range s.order {
+		running := s.domains[name]
+		if !running.domain.ReadinessInput() {
+			continue
+		}
+		health, err := s.health(ctx, running)
+		if err != nil {
+			continue
+		}
+		if !health.Healthy(now, running.progress.deferredSinceValue()) {
+			return false, name
+		}
+	}
+	return true, ""
+}
+
 // health assembles one domain's readiness from the four places it lives: this
 // node's own checkpoint, its consumer's backlog, the stream's own bounds, and
 // the fleet's published floor.
 func (s *stateLog) health(ctx context.Context, running *runningDomain) (statelog.Health, error) {
+	now := time.Now()
 	at := running.runner.Committed()
 	health := statelog.Health{Position: at, AppliedThrough: at.Seq}
+	// THE APPLIER'S OWN STOP, FIRST. A halted applier's rows are frozen at
+	// the record that stopped it, so every later record's consequences are
+	// missing and no read over them can be certified — which is what
+	// [statelog.Health.Refusal]'s `stalled` arm exists to say, and it could
+	// never fire while nothing assigned this field.
+	if err := running.runner.Stopped(); err != nil {
+		health.Err = err.Error()
+	}
+	health.Stalled = running.progress.stalled(now)
 	if deferral, ok := running.runner.Deferred(); ok {
 		health.Deferred = 1
 		health.DeferredFrom = deferral.Position.Seq
 		if deferral.Position.Seq > 0 {
 			health.AppliedThrough = deferral.Position.Seq - 1
 		}
+	}
+	// THE EVICTION ROW, from the write fence's own reader. An evicted node
+	// must stop answering as well as stop writing: its peers drop every
+	// record it publishes, so its rows stop advancing while its position
+	// keeps being published, and a read served from them is served from a
+	// copy the fleet has already abandoned.
+	if running.evicted != nil {
+		evicted, err := running.evicted(ctx)
+		if err != nil {
+			return health, err
+		}
+		health.Evicted = evicted
 	}
 	first, end, err := running.log.Bounds(ctx)
 	if err != nil {
@@ -493,6 +596,24 @@ func (s *stateLog) health(ctx context.Context, running *runningDomain) (statelog
 		return health, err
 	}
 	health.TrimFloor = &floor
+	// THE THREE-VALUED FLOOR, stamped with the instant it was read. Both
+	// halves are load-bearing and the field carries them together for the
+	// reason its own doc gives: a state whose age nobody carries ages
+	// silently into an assertion, and this one decides whether a node is
+	// serving rows the fleet has already trimmed out from under it.
+	//
+	// FirstSeq may only RAISE it — it arrives on the same stream info from
+	// a possibly-non-authoritative member, and a stale one is LOWER than
+	// the truth, so trusting it downward is how a node below the real
+	// floor keeps serving.
+	health.Floor = statelog.Floor{State: statelog.FloorOK, ReadAt: now}
+	below := at.Seq < floor
+	if health.FirstSeq != nil && at.Seq < *health.FirstSeq {
+		below = true
+	}
+	if below {
+		health.Floor.State = statelog.FloorBelow
+	}
 	return health, nil
 }
 
@@ -1380,12 +1501,28 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 		// two numbers are what tell a lagging node from a stalled one:
 		// a position that advances while nothing is applied is exactly
 		// what a retained record produces.
-		if deferral, held := running.runner.Deferred(); held {
+		deferral, held := running.runner.Deferred()
+		if held {
 			pos.Deferred = 1
 			if deferral.Position.Seq > 0 {
 				pos.AppliedThrough = deferral.Position.Seq - 1
 			}
 		}
+		// THE OBSERVATION RIDES THIS LOOP, because "has not moved" needs a
+		// previous look and this is the one place that already takes one
+		// every interval. See [progress]: it is what makes `Stalled` and
+		// the deferral shed derivable at all, and doing it here rather
+		// than on a health read is what keeps a health read pure.
+		//
+		// BEHIND IS READ FROM THE BROKER'S OWN LAST SEQUENCE rather than
+		// from the consumer's backlog: an idle node's applied prefix does
+		// not move because there is nothing to move it, and a stall is
+		// only a stall when there is work it owes.
+		behind := false
+		if _, end, err := running.log.Bounds(ctx); err == nil {
+			behind = end > at.Seq
+		}
+		running.progress.observe(row.At, pos.AppliedThrough, behind, held)
 		row.Domains[name] = pos
 	}
 	s.positionGauges(row)

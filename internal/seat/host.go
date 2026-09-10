@@ -157,6 +157,31 @@ type Config struct {
 	// query a store.
 	Ready func() bool
 
+	// Serviceable reports whether this node may KEEP the seats it holds,
+	// and names what stopped it when the answer is no.
+	//
+	// # A DIFFERENT QUESTION FROM Ready, and the difference is the whole
+	// # reason there are two
+	//
+	// Ready is about work this node has not taken yet: a copy that is
+	// merely BEHIND catches up, so withholding claims is the whole remedy
+	// and dropping work in hand would be pure loss. This one is about work
+	// already in hand, and it fires only where that work would be WRONG —
+	// an applier halted at a record it cannot decode, an eviction whose
+	// peers are dropping everything this node writes, rows below a trim
+	// floor with a hole nothing will fill. A seat left running on any of
+	// those answers its own tools out of a copy the fleet has abandoned.
+	//
+	// VOLUNTARY, not fenced: the lease is still held and still renewed, so
+	// the in-flight turn finishes and the seat leaves when it goes idle.
+	// The node has bad ROWS, not a lost lease, and abandoning a turn
+	// mid-flight would cost more than the stale answer it is racing.
+	//
+	// Nil keeps every seat, which is the single-node case and the case
+	// before a state log exists. It runs on the sweep path and, like
+	// Ready, must not block.
+	Serviceable func() (bool, string)
+
 	TTL               time.Duration
 	HeartbeatInterval time.Duration
 	SweepInterval     time.Duration
@@ -179,16 +204,18 @@ type Config struct {
 
 // Host claims, holds and releases the seats this node runs.
 type Host struct {
-	backend  coord.Backend
-	owner    string
-	nodeID   string
-	seats    func() []placement.Seat
-	ready    func() bool
-	profile  placement.NodeProfile
-	status   func(context.Context) coord.NodeStatus
-	hooks    Hooks
-	clock    func() time.Time
-	protocol int
+	backend coord.Backend
+	owner   string
+	nodeID  string
+	seats   func() []placement.Seat
+	ready   func() bool
+	// serviceable is Config.Serviceable — whether held seats may stay.
+	serviceable func() (bool, string)
+	profile     placement.NodeProfile
+	status      func(context.Context) coord.NodeStatus
+	hooks       Hooks
+	clock       func() time.Time
+	protocol    int
 
 	ttl            time.Duration
 	heartbeat      time.Duration
@@ -263,6 +290,7 @@ func New(cfg Config) (*Host, error) {
 		nodeID:       cfg.NodeID,
 		seats:        cfg.Seats,
 		ready:        cfg.Ready,
+		serviceable:  cfg.Serviceable,
 		profile:      profile,
 		status:       cfg.Status,
 		hooks:        cfg.Hooks,

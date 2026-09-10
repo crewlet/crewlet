@@ -627,7 +627,12 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// Trivially true on a company running the vendor backends, which
 		// have no projection to wait for.
 		SeatsAdmitted: e.NativeHydrated,
-		Profile:       e.profile,
+		// AND THE OTHER DIRECTION. Admission withholds new work from a
+		// node that is merely behind; this gives back work already held
+		// by a node whose rows are wrong. Two gates because the remedies
+		// differ: one is waiting, the other is a peer taking over.
+		SeatsServiceable: e.SeatsServiceable,
+		Profile:          e.profile,
 		// WHAT THIS NODE IS DOING, advertised to peers on every
 		// heartbeat. Only the node running a seat knows its in-flight
 		// count and its drain state, and /health answers about whichever
