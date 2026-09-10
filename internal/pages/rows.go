@@ -126,9 +126,17 @@ func (f *Fence) Evicted(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 	var from, readmitted sql.NullInt64
-	err := f.db.Replicated().SQL().QueryRowContext(ctx, `
+	// THROUGH THE HANDLE, NOT ITS POOL. `DB.SQL()` answers a NIL pool on a
+	// replicated estate that is not open — a legitimate, documented state
+	// of that peer, since an adoption closes it between its rename and its
+	// reopen — and a statement issued on it panics inside database/sql.
+	// [store.DB.Read] answers [store.ErrNoEstate], which the refusal below
+	// already handles as the honest "unreadable is not not-evicted".
+	err := f.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `
 		SELECT from_position, readmitted_position
 		FROM pages_evictions WHERE node_id = ?`, f.nodeID).Scan(&from, &readmitted)
+	})
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return false, nil
@@ -199,12 +207,19 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 	if g == nil || g.db == nil {
 		return "", false, nil
 	}
-	db := g.db.Replicated().SQL()
+	// ONE TRANSACTION FOR BOTH GATES, and through the HANDLE rather than
+	// its pool — see [Fence.Evicted] for why a nil pool is reachable here.
+	// One transaction rather than two statements is the same rule every
+	// multi-statement answer in this package follows: the two gates would
+	// otherwise be read at two instants, and a record could be reported
+	// ungated by an eviction that had landed between them.
 	if writer != "" {
 		var from, readmitted sql.NullInt64
-		err := db.QueryRowContext(ctx, `
+		err := g.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+			return tx.QueryRowContext(ctx, `
 			SELECT from_position, readmitted_position
 			FROM pages_evictions WHERE node_id = ?`, writer).Scan(&from, &readmitted)
+		})
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 		case err != nil:
@@ -223,9 +238,11 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 		return "", false, nil
 	}
 	var author sql.NullString
-	err := db.QueryRowContext(ctx,
-		`SELECT purge_record_id FROM pages_deletions WHERE page_id = ?`,
-		subj.ID).Scan(&author)
+	err := g.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx,
+			`SELECT purge_record_id FROM pages_deletions WHERE page_id = ?`,
+			subj.ID).Scan(&author)
+	})
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return "", false, nil

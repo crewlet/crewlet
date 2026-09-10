@@ -51,32 +51,46 @@ type EvictionRow struct {
 // SCOPED TO THE STREAM, because that is how the table is keyed and because a
 // position from another stream names a dead number space. A caller passing the
 // wrong stream gets no rows rather than another log's evictions.
-func Evictions(ctx context.Context, db *sql.DB, stream string) ([]EvictionRow, error) {
-	rows, err := db.QueryContext(ctx, `
-		SELECT node_id, at, by, from_position, readmitted_position
-		FROM tracker_evictions WHERE log_stream = ?
-		ORDER BY node_id`, stream)
-	if err != nil {
-		return nil, fmt.Errorf("tracker: read the evictions on %s: %w", stream, err)
-	}
-	defer func() { _ = rows.Close() }()
-
+//
+// THROUGH THE STORE HANDLE AND NOT A `*sql.DB`, and that is a correctness
+// property rather than a style. `DB.SQL()` answers a NIL pool on a handle that
+// is not open, and nil is a legitimate, documented state of the replicated
+// peer — an adoption closes it between its rename and its reopen, and `Close`
+// leaves it nil. A statement issued on that pool panics inside database/sql,
+// which is what this did: the trim's own tick raced a shutdown and took the
+// process down with a nil-pointer dereference three frames inside the standard
+// library. [store.DB.Read] answers [store.ErrNoEstate] instead, so a caller in
+// flight reaches a closed estate honestly.
+func Evictions(ctx context.Context, db *store.DB, stream string) ([]EvictionRow, error) {
 	var out []EvictionRow
-	for rows.Next() {
-		var (
-			e          EvictionRow
-			at         int64
-			readmitted sql.NullInt64
-		)
-		if err := rows.Scan(&e.NodeID, &at, &e.By, &e.From, &readmitted); err != nil {
-			return nil, fmt.Errorf("tracker: read an eviction on %s: %w", stream, err)
+	err := db.Read(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `
+			SELECT node_id, at, by, from_position, readmitted_position
+			FROM tracker_evictions WHERE log_stream = ?
+			ORDER BY node_id`, stream)
+		if err != nil {
+			return err
 		}
-		e.Stream = stream
-		e.At = store.DecodeTime(at)
-		e.Readmitted, e.IsBack = uint64(readmitted.Int64), readmitted.Valid
-		out = append(out, e)
-	}
-	if err := rows.Err(); err != nil {
+		defer func() { _ = rows.Close() }()
+
+		out = nil
+		for rows.Next() {
+			var (
+				e          EvictionRow
+				at         int64
+				readmitted sql.NullInt64
+			)
+			if err := rows.Scan(&e.NodeID, &at, &e.By, &e.From, &readmitted); err != nil {
+				return err
+			}
+			e.Stream = stream
+			e.At = store.DecodeTime(at)
+			e.Readmitted, e.IsBack = uint64(readmitted.Int64), readmitted.Valid
+			out = append(out, e)
+		}
+		return rows.Err()
+	})
+	if err != nil {
 		return nil, fmt.Errorf("tracker: read the evictions on %s: %w", stream, err)
 	}
 	return out, nil

@@ -264,28 +264,38 @@ func (x *Indexer) Stale(ctx context.Context, limit int) ([]Doc, error) {
 // index row that drifted for any reason at all is rebuilt on the next pass,
 // where a watermark over versions would only ever notice a source that moved.
 func (x *Indexer) sources(ctx context.Context, limit int) ([]Doc, error) {
-	rows, err := x.db.Replicated().SQL().QueryContext(ctx, `
+	var out []Doc
+	// THROUGH THE HANDLE, NOT ITS POOL. `DB.SQL()` answers a NIL pool on a
+	// replicated estate that is not open — which is a legitimate,
+	// documented state of that peer, not a fault — and a statement issued
+	// on it panics inside database/sql. [store.DB.Read] answers
+	// [store.ErrNoEstate] instead, which every caller here already reads
+	// as an empty index pass.
+	err := x.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `
 		SELECT id, container, title, body, MAX(version, scoped_through)
 		  FROM pages_heads
 		 WHERE status = 'published' AND id > ?
 		 ORDER BY id
 		 LIMIT ?`, x.cursor, limit)
-	if err != nil {
-		return nil, fmt.Errorf("search: read the next documents to index: %w", err)
-	}
-	defer rows.Close()
-	var out []Doc
-	for rows.Next() {
-		doc := Doc{Source: "page"}
-		var version int64
-		if err := rows.Scan(&doc.ID, &doc.Container, &doc.Title, &doc.Body,
-			&version); err != nil {
-			return nil, fmt.Errorf("search: scan a document to index: %w", err)
+		if err != nil {
+			return err
 		}
-		doc.Version = uint64(version)
-		out = append(out, doc)
-	}
-	if err := rows.Err(); err != nil {
+		defer rows.Close()
+		out = nil
+		for rows.Next() {
+			doc := Doc{Source: "page"}
+			var version int64
+			if err := rows.Scan(&doc.ID, &doc.Container, &doc.Title, &doc.Body,
+				&version); err != nil {
+				return err
+			}
+			doc.Version = uint64(version)
+			out = append(out, doc)
+		}
+		return rows.Err()
+	})
+	if err != nil {
 		return nil, fmt.Errorf("search: read the next documents to index: %w", err)
 	}
 	return out, nil
@@ -359,23 +369,28 @@ func (x *Indexer) Orphans(ctx context.Context, limit int) ([]string, error) {
 	for _, id := range candidates {
 		ids = append(ids, id)
 	}
-	live, err := x.db.Replicated().SQL().QueryContext(ctx,
-		`SELECT id FROM pages_heads
-		  WHERE status = 'published' AND id IN (`+binds(len(ids))+`)`, ids...)
-	if err != nil {
-		return nil, fmt.Errorf("search: check which indexed pages still "+
-			"exist: %w", err)
-	}
-	defer live.Close()
 	published := map[string]bool{}
-	for live.Next() {
-		var id string
-		if err := live.Scan(&id); err != nil {
-			return nil, fmt.Errorf("search: scan a live page id: %w", err)
+	// THROUGH THE HANDLE, for [Indexer.sources]' reason: a nil pool from a
+	// closed replicated estate panics where the handle answers
+	// [store.ErrNoEstate].
+	if err := x.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		live, err := tx.QueryContext(ctx,
+			`SELECT id FROM pages_heads
+		  WHERE status = 'published' AND id IN (`+binds(len(ids))+`)`, ids...)
+		if err != nil {
+			return err
 		}
-		published[id] = true
-	}
-	if err := live.Err(); err != nil {
+		defer live.Close()
+		clear(published)
+		for live.Next() {
+			var id string
+			if err := live.Scan(&id); err != nil {
+				return err
+			}
+			published[id] = true
+		}
+		return live.Err()
+	}); err != nil {
 		return nil, fmt.Errorf("search: check which indexed pages still "+
 			"exist: %w", err)
 	}
@@ -397,9 +412,12 @@ func (x *Indexer) Orphans(ctx context.Context, limit int) ([]string, error) {
 // all is a page a search reports as not existing.
 func (x *Indexer) Pending(ctx context.Context) (int, error) {
 	var published, indexed int
-	if err := x.db.Replicated().SQL().QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM pages_heads WHERE status = 'published'`).
-		Scan(&published); err != nil {
+	// THROUGH THE HANDLE, for [Indexer.sources]' reason.
+	if err := x.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM pages_heads WHERE status = 'published'`).
+			Scan(&published)
+	}); err != nil {
 		return 0, fmt.Errorf("search: count the published pages: %w", err)
 	}
 	if err := x.db.SQL().QueryRowContext(ctx,

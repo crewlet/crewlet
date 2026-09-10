@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -574,8 +575,16 @@ func (r *retention) tombstones(ctx context.Context, running *runningDomain,
 		// domain's table under this one's stream name.
 		return nil
 	}
-	rows, err := tracker.Evictions(ctx, r.db.Replicated().SQL(), running.domain.Stream().Name)
-	if err != nil {
+	rows, err := tracker.Evictions(ctx, r.db.Replicated(), running.domain.Stream().Name)
+	switch {
+	case errors.Is(err, store.ErrNoEstate) || errors.Is(err, context.Canceled):
+		// A STOP THIS PROCESS ASKED FOR IS NOT AN UNREADABLE TABLE. The
+		// replicated estate closes during shutdown and during an
+		// adoption's rename, and a tick already in flight reaches it —
+		// which is the honest answer rather than a fault, and logging
+		// it at WARN would put a line in every clean shutdown.
+		return nil
+	case err != nil:
 		log.WarnContext(ctx, "retention_evictions_unreadable", "err", err)
 		return nil
 	}
