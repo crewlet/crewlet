@@ -11,6 +11,7 @@ import (
 
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -122,10 +123,23 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 	if err != nil {
 		t.Fatalf("build the writer: %v", err)
 	}
+	// THE READ AUTHORITY IS LOCAL HERE, because this harness drives the
+	// applier itself rather than running a framework loop: what it is
+	// about is one record's journey from writer to row, and the barrier
+	// belongs to the cases that have a quorum to commit against.
+	logReader, err := statelogtest.LocalReader(tracker.Domain{}, db.Replicated(),
+		statelog.Position{Stream: tracker.Domain{}.Stream().Name, Generation: 1})
+	if err != nil {
+		t.Fatalf("local read authority: %v", err)
+	}
+	reader, err := tracker.NewReader(db, logReader)
+	if err != nil {
+		t.Fatalf("tracker reader: %v", err)
+	}
 	r := &roundTrip{
 		t: t, db: db, log: log, writer: writer,
 		applier: tracker.NewApplier("node-a"),
-		reader:  tracker.NewReader(db), waiter: waiter,
+		reader:  reader, waiter: waiter,
 	}
 	return r
 }
@@ -243,6 +257,12 @@ func (r *roundTrip) ask(kv map[string]any) tracker.Answer {
 	q, err := tracker.ParseQuery(tracker.MapParams(kv), wednesday, berlin)
 	if err != nil {
 		r.t.Fatalf("ParseQuery: %v", err)
+	}
+	// A HARNESS IS A SURFACE TOO, and an absent level resolves to the
+	// surface's own default rather than to a fourth state — so this one
+	// names its choice exactly as the API and the seat tools do.
+	if q.Level == "" {
+		q.Level = statelog.ReadStale
 	}
 	answer, err := r.reader.Tasks(r.t.Context(), q, wednesday)
 	if err != nil {

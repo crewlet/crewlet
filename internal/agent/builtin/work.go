@@ -353,6 +353,13 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	if err != nil {
 		return failed(fmt.Sprintf("That filter is not one the tracker accepts: %v", err)), nil
 	}
+	// THIS SURFACE'S OWN DEFAULT, and it matches the detail read beside
+	// it: a seat reads its own writes, so `session` is what stops a turn
+	// filing a duplicate of the item it just created. A model that names a
+	// level explicitly keeps it.
+	if q.Level == "" {
+		q.Level = statelog.ReadSession
+	}
 	answer, err := t.deps.Reader.Tasks(ctx, q, t.deps.now())
 	if err != nil {
 		return failed(readFailure(ListWorkItemsTool, err)), nil

@@ -1019,3 +1019,38 @@ type InboxDelta struct {
 	ReadAdd    []string `json:"read_add,omitempty"`
 	UnreadDrop []string `json:"unread_drop,omitempty"`
 }
+
+// EncodeBarrier renders a read index's barrier as a record this domain's
+// applier decodes.
+//
+// The read index owns WHEN a barrier is appended and what it proves; the
+// domain owns what a record on its log LOOKS like, and the two meet here.
+// Without it [statelog.NewReadIndex] cannot be built for this domain at all,
+// which is why the barrier — and with it every `linearizable` read — had no
+// production caller: the level was parsed, validated, echoed back in the
+// answer and never honoured.
+//
+// NO OP ID, carried through from the envelope and asserted rather than
+// assumed. An op id becomes the Nats-Msg-Id, a repeat inside the duplicate
+// window is served out of that window with no quorum round trip, and the
+// acknowledgement's sequence is then a position nothing confirmed — which is
+// the entire proof a linearizable read rests on.
+func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
+	if env.Kind != statelog.BarrierKind {
+		return nil, fmt.Errorf("tracker: %q is not a barrier envelope", env.Kind)
+	}
+	if env.OpID != "" {
+		return nil, fmt.Errorf("tracker: a barrier carries no op id and this one " +
+			"has one — an op id becomes a message id, and a duplicate ack is " +
+			"served with no quorum round trip at all")
+	}
+	return MutationRecord{
+		RecordEnvelope: RecordEnvelope{
+			V:       RecordVersion,
+			Subject: BarrierSubject(),
+			Op:      OpBarrier,
+			Scope:   ScopeSet{Subject: true},
+			Gen:     env.Gen,
+		},
+	}.Encode()
+}

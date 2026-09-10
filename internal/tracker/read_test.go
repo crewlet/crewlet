@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -17,7 +19,20 @@ type readHarness struct {
 func newReadHarness(t *testing.T) *readHarness {
 	t.Helper()
 	h := newApplyHarness(t)
-	return &readHarness{applyHarness: h, reader: tracker.NewReader(h.db)}
+	// THROUGH THE FRAMEWORK, exactly as production does. A harness that
+	// read the rows directly would be testing a path nothing takes — and
+	// it is how `read_level` came to be a word in the answer rather than a
+	// property of it.
+	log, err := statelogtest.LocalReader(tracker.Domain{}, h.db.Replicated(),
+		statelog.Position{Stream: tracker.Domain{}.Stream().Name, Generation: 1, Seq: h.seq})
+	if err != nil {
+		t.Fatalf("local read authority: %v", err)
+	}
+	reader, err := tracker.NewReader(h.db, log)
+	if err != nil {
+		t.Fatalf("tracker reader: %v", err)
+	}
+	return &readHarness{applyHarness: h, reader: reader}
 }
 
 // seed applies one task with the fields a case varies.
@@ -39,6 +54,11 @@ func (h *readHarness) ask(kv map[string]any) tracker.Answer {
 	q, err := tracker.ParseQuery(tracker.MapParams(kv), wednesday, berlin)
 	if err != nil {
 		h.t.Fatalf("ParseQuery(%v): %v", kv, err)
+	}
+	// A HARNESS IS A SURFACE TOO, and an absent level resolves to the
+	// surface's own default rather than to a fourth state.
+	if q.Level == "" {
+		q.Level = statelog.ReadStale
 	}
 	answer, err := h.reader.Tasks(h.t.Context(), q, wednesday)
 	if err != nil {

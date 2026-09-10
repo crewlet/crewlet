@@ -66,6 +66,15 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrBadParams, err)
 	}
+	// THIS SURFACE'S OWN DEFAULT, applied where an absent level resolves.
+	// A dashboard tile polls, and a poll that took a quorum round trip
+	// would put the fleet's read rate on the raft log to remove a
+	// staleness the screen redraws through anyway — see the arithmetic in
+	// the dashboard section of the design: ten tabs at seven polls a
+	// minute is a 9x increase in barrier appends.
+	if q.Level == "" {
+		q.Level = statelog.ReadStale
+	}
 	answer, err := s.Work.Tasks(ctx, q, now)
 	if err != nil {
 		return nil, unavailableIfBehind(err)
