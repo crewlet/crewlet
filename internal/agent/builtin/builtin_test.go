@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 const companyDoc = `
@@ -167,6 +168,24 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		builtin.RefreshMemoryTool:   false,
 		builtin.LoadToolSkillTool:   false,
 		builtin.SearchKnowledgeTool: false,
+
+		// The tracker's and the knowledge base's own reads.
+		builtin.ListWorkItemsTool:    false,
+		builtin.GetWorkItemTool:      false,
+		tracker.GetWorkCatalogueTool: false,
+		builtin.ListPagesTool:        false,
+		builtin.GetPageTool:          false,
+
+		// And their writes, every one of which a colleague reads: an
+		// item, a comment, a page and a page comment are all surfaces a
+		// human opens, so a worker acting under its parent's name is
+		// kept away from all of them.
+		builtin.CreateWorkItemTool: true,
+		builtin.UpdateWorkItemTool: true,
+		builtin.CommentOnWorkTool:  true,
+		builtin.WritePageTool:      true,
+		builtin.SavePageTool:       true,
+		builtin.CommentOnPageTool:  true,
 	}
 
 	reg := tools.NewRegistry()
@@ -738,5 +757,14 @@ func fullDeps(t *testing.T) builtin.Deps {
 		// is asking about the whole set rather than the subset this
 		// helper happened to wire.
 		Sandbox: &launchSpy{}, ToolSkills: toolSkills{}, Knowledge: searcher{},
+		// THE TRACKER AND THE KNOWLEDGE BASE INCLUDED. Left out, the
+		// classification table below was silently about eleven builtins
+		// rather than the whole registry — which is how
+		// get_work_catalogue was registered with no annotation arm at
+		// all, defaulted to a public write, and denied to every worker
+		// its parent granted it while list_work_items beside it was
+		// admitted.
+		Work:  builtin.WorkDeps{Reader: newFakeTracker(), Writer: newFakeTracker().as},
+		Pages: builtin.PageDeps{Reader: &fakeKB{}, Writer: &fakeKB{}},
 	}
 }
