@@ -198,9 +198,16 @@ func (e *Engine) startGitLab(ctx context.Context, c *Company, cfg *config.GitLab
 		// difference is what the request buys: verifying this one buys
 		// nothing, while resolving those is the entire integration.
 	} else {
-		log.WarnContext(ctx, "gitlab_has_no_engine_token",
+		// NAMING THE FIELD, because the warning is only useful if the
+		// reader can act on it. It said what was lost and not where the
+		// value goes, and the setup form declared no input for it at all
+		// — so an operator was told a credential was missing with nothing
+		// anywhere saying how to supply one.
+		log.WarnContext(ctx, "gitlab_has_no_routing_token",
+			"field", "integrations.gitlab.token",
 			"detail", "thread activity reaches the payload's assignees "+
-				"rather than everyone taking part")
+				"rather than everyone taking part; set a read_api token "+
+				"on the GitLab card to reach everyone taking part")
 	}
 
 	e.notify.gitlab.resolve(ctx, url, gitlabSeatTokens(c, env))

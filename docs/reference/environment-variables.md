@@ -120,7 +120,7 @@ Conventions used by the [GitLab integration](../integrations/gitlab.md). Apart f
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
 | `GITLAB_ADMIN_TOKEN` | Read directly by `crewlet gitlab provision` as the operator credential fallback (group Owner / admin PAT with `api` scope; `-admin-token` overrides) | GitLab > Access tokens |
-| `GITLAB_ENGINE_TOKEN` | Engine read token (`integrations.gitlab.token`) | GitLab service account, or minted by provisioning |
+| `GITLAB_ROUTING_TOKEN` | Read-only routing token (`integrations.gitlab.token`), optional — without it, thread activity reaches only the people a payload names | A PAT with the `read_api` scope. **Nothing mints it**: the GitLab card asks for it, or set the variable yourself |
 | `GITLAB_SIGNING_SECRET` | The hook's **signing token** (`integrations.gitlab.signing_secret`) — the HMAC key every delivery is verified against, and the route's only credential. Must be `whsec_` over standard base64 of a 32-byte key. | `crewlet gitlab provision` mints one into this variable; GitLab's own **Generate signing token** button produces the same shape |
 | `GITLAB_TOKEN_<SEAT>` | Per-agent service-account PAT (each role's `mcp_env.gitlab.GITLAB_TOKEN`, also referenced from `role.sandbox.env`, e.g. `GITLAB_TOKEN_SWE`) | Minted by `crewlet gitlab provision` |
 
@@ -135,7 +135,7 @@ Unlike GitLab, **nothing here is minted for you**: GitHub issues no credential o
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
 | `GITHUB_WEBHOOK_SECRET` | HMAC secret every inbound delivery is verified against (`integrations.github.webhook_secret`), and the route's only credential. A route with nothing to check against answers **503** rather than accepting a delivery. | `crewlet github provision` mints one into this variable when it is empty, or GitHub > repository/org > Webhooks |
-| `GITHUB_ENGINE_TOKEN` | Org read token for participant fan-out (`integrations.github.token`). **Optional**, and its absence is a documented degradation rather than a failure: without it an event reaches whoever the payload names, and only people merely watching a thread go unheard. | A PAT or GitHub App installation token |
+| `GITHUB_ENGINE_TOKEN` | The credential `crewlet github provision` registers webhooks with (`integrations.github.token`), where it is **required** — there is no degraded form of registering a hook. The **engine** does not read it: participant fan-out goes through each agent's own App, scoped to what that agent may see rather than to whatever the person who minted a token could reach, which is why the connect form asks for no personal access token at all. | A PAT with repository and organization webhook access |
 | `GITHUB_TOKEN_<SEAT>` | Per-agent token (each role's `mcp_env.github`, e.g. `GITHUB_TOKEN_SENIOR`). This is what makes a seat a real GitHub identity: a seat with none receives no review request, assignment or mention at all, which is the one finding `crewlet github provision` exists to surface. | A PAT on that agent's own GitHub account |
 
 ---

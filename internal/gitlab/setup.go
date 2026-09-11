@@ -19,10 +19,10 @@ import (
 
 // Requirements says what this company still needs for GitLab.
 func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setup.Requirement {
-	var url, signing, group string
+	var url, signing, group, routing string
 	var enabled bool
 	if in != nil {
-		enabled, url, signing = in.Enabled, in.URL, in.SigningSecret
+		enabled, url, signing, routing = in.Enabled, in.URL, in.SigningSecret, in.Token
 		if p := in.Provisioning; p != nil {
 			group = p.Group
 		}
@@ -90,12 +90,38 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 				"Each Crewlet agent becomes a service account inside it.",
 			Blocks: integration.FindingIngressBlocked,
 		},
+		{
+			Field:      "token",
+			Label:      "Read-only routing token",
+			Kind:       setup.KindSecret,
+			ConfigPath: "integrations.gitlab.token",
+			SecretName: "GITLAB_ROUTING_TOKEN",
+			// OPTIONAL, AND ITS ABSENCE IS A DOCUMENTED DEGRADATION
+			// rather than a fault: without it a comment reaches whoever
+			// the payload named — the assignees — instead of everyone
+			// taking part. Directed events are untouched.
+			Required: false,
+			// AND NOTHING MINTS IT, which is why it has to be asked for
+			// here. The engine warns `gitlab_has_no_routing_token` when it
+			// does not resolve, and this form declared no field for it at
+			// all — so an operator was told a credential was missing,
+			// with no way to supply one and nothing anywhere naming which
+			// variable to set. The docs claimed a pass provisioned a
+			// `crewlet-engine` account and minted a read_api token into
+			// it; `integrations.gitlab.token` is read by no reconcile
+			// path in this package, and no such account is ever created.
+			Help: "A read-only [personal access token](https://gitlab.com/-/user_settings/personal_access_tokens) " +
+				"with the `read_api` scope. Without it, thread activity " +
+				"reaches only the people a payload names.",
+			Format: "glpat-…",
+		},
 	}
 
 	reqs[0].Present, reqs[0].Resolved, reqs[0].Stored = setup.Toggle(enabled)
 	reqs[1].Present, reqs[1].Resolved, reqs[1].Stored = setup.Plain(url)
 	reqs[2].Present, reqs[2].Resolved, reqs[2].Stored = setup.Held(signing, resolve)
 	reqs[3].Present, reqs[3].Resolved, reqs[3].Stored = setup.Plain(group)
+	reqs[4].Present, reqs[4].Resolved, reqs[4].Stored = setup.Held(routing, resolve)
 	// The administrator credential, appended rather than declared inline
 	// with the rest because it is the one whose value this function has to
 	// resolve through the same seam every other secret uses.
