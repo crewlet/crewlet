@@ -171,3 +171,77 @@ test("an integration with nothing to hand over renders no roster", () => {
   fireEvent.click(screen.getByRole("checkbox"));
   expect(screen.queryByText("Link to delete")).toBeNull();
 });
+
+/**
+ * Names a response carries, so a test can drive the list this dialog was
+ * throwing away.
+ */
+function stubFetchWithOrphans(sent: Sent[], byKind: Record<string, string[]>) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://engine.test").pathname;
+      sent.push({
+        method: init?.method ?? "GET",
+        path,
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      });
+      const kind = path.split("/").pop() ?? "";
+      return new Response(
+        JSON.stringify({ key: kind, disconnecting: true, orphaned_secrets: byKind[kind] ?? [] }),
+        { status: 202 },
+      );
+    }),
+  );
+}
+
+// THE CREDENTIALS LEFT BEHIND ARE SHOWN, which is the whole point of naming
+// them rather than deleting them.
+//
+// The engine does not remove a company's sealed values on a disconnect — one
+// an operator shares with another deployment is not something a button decides
+// about — and it has always returned the list saying which survived. This
+// dialog discarded every response and closed, so nobody ever saw one. Seven
+// credentials survived a real disconnect and not one was named on screen.
+test("the credentials left in the store are named on screen", async () => {
+  const sent: Sent[] = [];
+  stubFetchWithOrphans(sent, {
+    jira: ["SRE_ATLASSIAN"],
+    atlassian: ["ORG_KEY", "SRE_EMAIL", "SRE_ATLASSIAN"],
+  });
+  const closed = vi.fn();
+  render(
+    <DisconnectDialog
+      name="Atlassian"
+      kinds={["jira", "atlassian"]}
+      onClose={closed}
+      onDone={() => {}}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+
+  // UNIONED ACROSS THE SURFACES, and deduplicated: one card is several
+  // requests, and a seat's token is named by every product that reads it.
+  await waitFor(() => expect(screen.getByText("ORG_KEY")).toBeTruthy());
+  expect(screen.getAllByText("SRE_ATLASSIAN")).toHaveLength(1);
+  expect(screen.getByText("SRE_EMAIL")).toBeTruthy();
+  // AND THE GESTURE THAT REMOVES THEM, because a list nobody can act on is
+  // not better than no list.
+  expect(screen.getByText(/crewlet secrets unset/)).toBeTruthy();
+  // HELD OPEN. Closing is what lost this in the first place.
+  expect(closed).not.toHaveBeenCalled();
+});
+
+// AND A DISCONNECT THAT LEAVES NOTHING JUST CLOSES, rather than showing an
+// empty list over a company with nothing left to do.
+test("a disconnect that leaves nothing behind closes", async () => {
+  const sent: Sent[] = [];
+  stubFetchWithOrphans(sent, {});
+  const closed = vi.fn();
+  render(<DisconnectDialog name="GitHub" kinds={["github"]} onClose={closed} onDone={() => {}} />);
+
+  fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+
+  await waitFor(() => expect(closed).toHaveBeenCalled());
+});

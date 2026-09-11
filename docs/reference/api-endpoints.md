@@ -594,6 +594,16 @@ Either way the sealed credentials are **named, not deleted**, in
 not something a disconnect decides about on its own. `crewlet secrets unset`
 is the deliberate path.
 
+> **"Either way" is newly true.** The list was built only on the `force` path —
+> the ordinary `202` returned no `orphaned_secrets` field at all — and it walked
+> the company-level requirements only, so no seat's own credential was ever
+> named on either path: not the token a pass minted under the name that seat's
+> `mcp_env` points at, not Atlassian's address slot beside it, not Slack's
+> per-seat bot token and signing secret. It is computed once now, before the
+> request splits, which is the only moment it can be: every name is derived from
+> a `${VAR}` in the company document, and both paths end with that block gone.
+> The dashboard shows the list rather than discarding the response and closing.
+
 Refusals: `503 no_status_store` on a node with no coordination, which has
 nowhere to record the intent. Retry against a node that has one, or force it.
 

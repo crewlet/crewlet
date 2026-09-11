@@ -75,6 +75,15 @@ export function DisconnectDialog({
   const [removeSeats, setRemoveSeats] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(stuck ?? null);
+  /**
+   * The credentials the engine has left in the store, once it has answered.
+   *
+   * NAMED, NOT DELETED, deliberately: one an operator may be sharing with
+   * another deployment is not something a Disconnect button decides about.
+   * The API has always said so and has always returned the list — and this
+   * dialog threw every response away and closed, so nobody ever saw it.
+   */
+  const [orphans, setOrphans] = useState<string[] | null>(null);
 
   async function submit(force: boolean) {
     setBusy(true);
@@ -86,11 +95,23 @@ export function DisconnectDialog({
       // reached with their own credentials and the organization's is what
       // removes the accounts: taking it first would strand whatever the
       // products still hold.
+      const left = new Set<string>();
       for (const kind of kinds) {
-        await rest.del(`/setup/integrations/${kind}`, { remove_seats: removeSeats, force });
+        const answer = (await rest.del(`/setup/integrations/${kind}`, {
+          remove_seats: removeSeats,
+          force,
+        })) as { orphaned_secrets?: string[] } | undefined;
+        for (const name of answer?.orphaned_secrets ?? []) left.add(name);
       }
       onDone();
-      onClose();
+      if (left.size === 0) {
+        onClose();
+        return;
+      }
+      // HELD OPEN, because closing is what lost the list. The disconnect has
+      // already been asked for — onDone has run — so what is left on screen
+      // is the part the operator still has to do.
+      setOrphans([...left].sort());
     } catch (err) {
       // `message` rather than `detail || code`: those two are both empty on
       // a refusal that carried neither, and an empty string is falsy, so the
@@ -100,6 +121,43 @@ export function DisconnectDialog({
     } finally {
       setBusy(false);
     }
+  }
+
+  // WHAT IS LEFT TO DO, once the disconnect has been asked for. The engine
+  // does not delete a company's credentials and never has; this is the half
+  // of that promise nobody could see.
+  if (orphans) {
+    return (
+      <Dialog
+        title={`${name} disconnected`}
+        icon="plug"
+        onClose={onClose}
+        width={520}
+        footer={
+          <Button variant="primary" onClick={onClose}>
+            Done
+          </Button>
+        }
+      >
+        <div className="col gap-3">
+          <p className="t-body secondary" style={{ margin: 0 }}>
+            These credentials are still in your secret store. They are named rather than deleted:
+            one you share with another deployment is not something this button decides about.
+          </p>
+          <ul className="col gap-1" style={{ margin: 0, paddingLeft: "1.1rem" }}>
+            {orphans.map((name) => (
+              <li key={name}>
+                <code className="inline">{name}</code>
+              </li>
+            ))}
+          </ul>
+          <p className="t-body secondary" style={{ margin: 0 }}>
+            Revoke each one at the app, then remove it with{" "}
+            <code className="inline">crewlet secrets unset &lt;name&gt;</code>.
+          </p>
+        </div>
+      </Dialog>
+    );
   }
 
   return (

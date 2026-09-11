@@ -354,6 +354,50 @@ func Observe(state State, kind Kind, findings []Finding, err error, now time.Tim
 	return state, false
 }
 
+// AskTeardown records that an operator asked for this surface to be taken
+// away, before any pass has run.
+//
+// A NAMED FOLD, beside [Observe] and [ObserveTeardown], because this package
+// owns every transition of a row — so that a row cannot mean one thing when a
+// tick wrote it and another when a button did. This transition was the one
+// still written inline, at the API, and it set three fields and forgot three.
+//
+// IT CLEARS WHAT THE LAST RECONCILE OBSERVED, which is the half that was
+// missing. A surface being dismantled reports what the teardown is doing and
+// nothing else: the findings are statements about a world the operator is
+// taking apart, and an actor is not owed a step in it. Measured: pressing
+// Disconnect on Datadog left the card carrying that pass's "re-enable it at
+// Datadog: this pass will not" underneath the word Disconnecting, so the one
+// thing on the screen said the operator had work to do at a third-party app
+// they had just asked to be let go of.
+//
+// [ObserveTeardown] already erases them on every pass after the first, so
+// leaving them on the first was the divergence rather than a policy.
+//
+// NOTHING IS LOST BY CLEARING THEM. Nothing anywhere sets Disconnecting back
+// to false — a disconnecting row only ever ends by being forgotten — so there
+// is no path on which these findings become relevant again.
+//
+// DUE NOW. The zero NextAttemptAt is already in the past, but a row that has
+// been reconciled carries a future one, and inheriting it would leave the
+// disconnect waiting out a backoff nobody asked it to serve.
+func AskTeardown(state State, kind Kind, removeSeats bool) State {
+	state.Kind = kind
+	state.Disconnecting = true
+	state.RemoveSeats = removeSeats
+	state.NextAttemptAt = time.Time{}
+	state.Attempts = 0
+
+	state.Findings = nil
+	state.LastError = ""
+	state.Report = Report{
+		Phase: PhaseDisconnecting, Actor: ActorEngine,
+		Detail: "the engine is removing what this integration holds",
+	}
+	state.Outcome = state.Report.Outcome()
+	return state
+}
+
 // ObserveTeardown records what a TEARDOWN pass concluded, and reports whether
 // the surface is finished with.
 //

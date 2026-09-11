@@ -368,6 +368,16 @@ type SeatState struct {
 	// being swallowed.
 	ManifestNote string `json:"manifest_note,omitempty"`
 
+	// Secrets names the variables this seat's OWN credentials for the app
+	// live in, sorted.
+	//
+	// NAMES, NEVER VALUES, exactly as [setup.Requirement.SecretName] is
+	// already exposed on this surface. It is what a disconnect leaves
+	// behind: the orphan list walked the company-level requirements only,
+	// so a seat's own token — the one the pass minted, under the name the
+	// seat's mcp_env points at — was never named at all, on either path.
+	Secrets []string `json:"secrets,omitempty"`
+
 	// Present is whether this seat has STARTED: something is written down
 	// for it, whether or not it works.
 	//
@@ -789,6 +799,7 @@ func credentialSeats(company *config.Company, resolve func(string) (string, bool
 		}
 		stored, where := at.Find(role)
 		state.Present = stored != ""
+		state.Secrets = seatSecretNames(at, role, stored)
 		switch {
 		case stored == "":
 			// WHAT HAPPENS NEXT, not just what is absent, and the two apps
@@ -885,6 +896,16 @@ type seatCredentialAt struct {
 	// address they edit rather than one a value was found at.
 	Address string
 
+	// Vars names EVERY variable this seat's credentials for the app live
+	// in, which is not always the one [seatCredentialAt.Find] returns:
+	// Atlassian seals a seat's address beside its token, because its
+	// products authenticate base64(address:token) and it assigns the
+	// address itself.
+	//
+	// Nil derives the list from Find, which is right for every app that
+	// seals one value per seat.
+	Vars func(role *config.Role) []string
+
 	// Identity is who this agent IS at the app, in the app's own words:
 	// the service account, the bot, the app registration. Empty where
 	// nothing here can say.
@@ -912,6 +933,70 @@ func mcpEnvAt(envs, keys []string) seatCredentialAt {
 	}
 }
 
+// orphanedSecrets is every credential this company would still hold in its
+// secret store after this integration is disconnected.
+//
+// NAMED, NEVER DELETED here, and that is the documented posture: the store is
+// the company's, and a value an operator may be sharing with another
+// deployment is not something a Disconnect button gets to remove. What it owes
+// them is the list.
+//
+// IT WAS THE COMPANY-LEVEL REQUIREMENTS ONLY, and that is two omissions in
+// one. It walked `state.Requirements`, so no SEAT's own credential was ever
+// named — not the token a pass minted under the name that seat's mcp_env
+// points at, not Atlassian's address slot beside it, not Slack's per-seat bot
+// token and signing secret. And it ran only on the FORCE path, so the
+// dashboard's own disconnect returned no list at all. Measured: seven
+// credentials survived a disconnect and not one of them was named.
+//
+// WHAT IS ACTUALLY STORED, which is the rule the original had right and is
+// kept: a requirement nobody ever set names nothing, because telling an
+// operator to unset a value that does not exist is a list they cannot act on.
+func orphanedSecrets(kind integration.Kind, state ToolState) []string {
+	out := []string{}
+	add := func(reqs []setup.Requirement) {
+		for _, req := range reqs {
+			if req.Kind != setup.KindSecret || !req.Present {
+				continue
+			}
+			if name, _, err := setup.PointerFor(kind, req, req.Stored); err == nil {
+				out = append(out, name)
+			}
+		}
+	}
+	add(state.Requirements)
+	for _, seat := range state.Seats {
+		// A PER-SEAT FORM'S FIELDS — Slack's, where each agent has its own
+		// app — and the mcp_env slots every other app seals into.
+		add(seat.Requirements)
+		out = append(out, seat.Secrets...)
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// seatSecretNames is the variables one seat's credentials for an app live in.
+//
+// THROUGH provision.SoleVar, so a slot holding a literal rather than a whole
+// `${VAR}` names nothing: there is no row in the store for it, and an orphan
+// list has to be a list of things that are there.
+func seatSecretNames(at seatCredentialAt, role *config.Role, stored string) []string {
+	var raw []string
+	if at.Vars != nil {
+		raw = at.Vars(role)
+	} else {
+		raw = []string{stored}
+	}
+	var out []string
+	for _, value := range raw {
+		if name, ok := provision.SoleVar(value); ok {
+			out = append(out, name)
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
 // atlassianAt reads a seat's Atlassian credential through the ONE reader all
 // three surfaces share.
 //
@@ -936,6 +1021,13 @@ func atlassianAt(product atlassian.Product) seatCredentialAt {
 		// provisioned seat's credential lands there, and the two
 		// product-specific blocks exist only where somebody chose one.
 		Address: "mcp_env.atlassian",
+		// TWO SLOTS PER SEAT. Atlassian assigns the account's address at
+		// creation and its products authenticate base64(address:token), so
+		// the pass seals both and a disconnect orphans both.
+		Vars: func(role *config.Role) []string {
+			cred, _ := atlassian.CredentialAt(product, role.MCPEnv, verbatim)
+			return []string{cred.Token, atlassian.SeatEmail(role.MCPEnv)}
+		},
 	}
 }
 
@@ -1585,6 +1677,13 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// COMPUTED HERE, ABOVE THE SPLIT, AND THIS IS THE ONLY MOMENT IT CAN BE.
+	// Every name below is derived from a `${VAR}` in the company document,
+	// and both paths end with that block gone — the force path within this
+	// request, the 202 path minutes later when the teardown finishes. See
+	// [Service.orphanedSecrets].
+	orphaned := orphanedSecrets(kind, state)
+
 	// ASKED FOR, NOT DONE HERE. The block stays in the document until the
 	// third-party app teardown has run, because that block carries the credential
 	// the teardown authenticates with: removing it now would strand every
@@ -1619,6 +1718,11 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 			"remove_seats": req.RemoveSeats,
 			"detail": "the engine is removing what this integration holds at the " +
 				"third-party app; the block is dropped when that finishes",
+			// NAMED ON THIS PATH TOO, which is the one the dashboard uses.
+			// It returned no list at all, so the credentials an operator was
+			// documented as being told about were named only on the force
+			// path nobody presses.
+			"orphaned_secrets": orphaned,
 		})
 		return
 	}
@@ -1646,20 +1750,6 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	// with no block behind it and nothing to remove it again.
 	if s.status != nil {
 		s.forgetUnderGuard(r.Context(), kind)
-	}
-	// WHAT IS ACTUALLY ORPHANED, which is only what was actually stored.
-	// This walked every secret REQUIREMENT, so an integration with
-	// optional credentials named ones nobody had ever set and told an
-	// operator to unset something that does not exist. A list to act on
-	// has to be a list of things that are there.
-	orphaned := []string{}
-	for _, req := range state.Requirements {
-		if req.Kind != setup.KindSecret || !req.Present {
-			continue
-		}
-		if name, _, err := setup.PointerFor(kind, req, req.Stored); err == nil {
-			orphaned = append(orphaned, name)
-		}
 	}
 	log.InfoContext(r.Context(), "setup_disconnected",
 		"kind", kind, "revision", applied.RevisionID, "operator", operatorOf(r))
@@ -1810,15 +1900,11 @@ func (s *Service) markDisconnecting(
 			"setupapi: the fleet's record of %s could not be read, so the "+
 				"disconnect was not started: %w", kind, err)
 	}
-	state.Kind = kind
-	state.Disconnecting = true
-	state.RemoveSeats = removeSeats
-	// DUE NOW. The zero value is already in the past, but a row that has
-	// been reconciled carries a future one, and inheriting it would leave
-	// the disconnect waiting out a backoff nobody asked it to serve.
-	state.NextAttemptAt = time.Time{}
-	state.Attempts = 0
-	return s.status.SaveIntegration(ctx, state)
+	// THROUGH THE PACKAGE THAT OWNS THE ROW. These five assignments were
+	// written here, which is how they came to be three fields short of what
+	// the transition means: a card went on showing the last pass's findings
+	// under the word Disconnecting. See [integration.AskTeardown].
+	return s.status.SaveIntegration(ctx, integration.AskTeardown(state, kind, removeSeats))
 }
 
 // forgetUnderGuard removes a surface's status row with every other writer at
