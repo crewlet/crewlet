@@ -88,7 +88,14 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 		q.Level = statelog.ReadStale
 	}
 	answer, err := s.Work.Tasks(ctx, q, now)
-	if err != nil {
+	switch {
+	case errors.Is(err, tracker.ErrTooBroad):
+		// A REFUSAL ABOUT THE REQUEST, so it is [ErrBadParams] and not
+		// [ErrUnavailable]: the caller narrows and asks again, where
+		// "unavailable" tells a polling screen to send the identical
+		// query back every few seconds for ever.
+		return nil, fmt.Errorf("%w: %s", ErrBadParams, err)
+	case err != nil:
 		return nil, unavailableIfBehind(err)
 	}
 	out := map[string]any{

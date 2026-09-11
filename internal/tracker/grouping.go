@@ -3,6 +3,7 @@ package tracker
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -369,6 +370,71 @@ type grouped struct {
 	Overlap bool
 }
 
+// ErrTooBroad refuses a read whose input is wider than the answer can be
+// built from.
+//
+// ITS OWN SENTINEL, because it is the one query refusal a caller repairs by
+// NARROWING rather than by correcting what they typed: a surface maps it to
+// "add a filter" and a retry with the same keys is pointless, where a
+// malformed key is a mistake in the request itself.
+var ErrTooBroad = errors.New("tracker: this query selects more rows than the answer can be built from")
+
+// checkGroupBreadth refuses a grouping whose input is wider than the working
+// set that draws it.
+//
+// # A BOUNDED COUNT, never a test for the presence of a filter key
+//
+// The gate this replaces refused a workspace grouping "without a narrowing
+// filter — a status_group, an assignee, a sprint, a unit or a date bound", and
+// `status_group=not_started,active` satisfies that while narrowing nothing:
+// every open task is already in it. A gate that tests a NAME is one a caller
+// learns to satisfy in a single attempt without making the query any cheaper.
+//
+// So the gate is on CARDINALITY. [readGroups] runs one paged statement per
+// column over this same predicate, and past [GroupByRowCeiling] that sorting
+// working set crosses the page cache and spills — the count is what decides,
+// so the count is what is measured.
+//
+// # Why it does not run at project scope
+//
+// `t.project_key = ?` drives `tracker_tasks_board_idx`, so the input is an
+// index range whose width is one project's own size rather than the company's.
+// The exemption is therefore about the PLAN rather than about the spelling of
+// the container key — which is why what it tests is an absent project and not
+// the literal `container=workspace`: an omitted container adds no predicate
+// either (see [compile]) and scans exactly the same rows.
+//
+// # And why the refusal says "more than" rather than a number
+//
+// The count carries `LIMIT ceiling + 1`, so a company ten times past the bound
+// pays for twenty thousand rows and not for its corpus. That bound is the
+// whole point of the gate being cheap, and it means the honest thing to report
+// is the ceiling that was crossed rather than a total nobody counted.
+func checkGroupBreadth(ctx context.Context, tx *sql.Tx, q Query,
+	where string, args []any) error {
+
+	if q.Scope.Project != "" {
+		return nil
+	}
+	query := `SELECT COUNT(*) FROM (SELECT 1 FROM tracker_tasks t WHERE ` +
+		where + ` LIMIT ?)`
+	var n int
+	bound := append(append([]any{}, args...), GroupByRowCeiling+1)
+	if err := tx.QueryRowContext(ctx, query, bound...).Scan(&n); err != nil {
+		return fmt.Errorf("tracker: count what group_by=%s would sort: %w",
+			q.GroupBy, err)
+	}
+	if n <= GroupByRowCeiling {
+		return nil
+	}
+	return fmt.Errorf("tracker: group_by=%s over the whole company matches more "+
+		"than %d tasks, and a board is drawn by sorting every one of them — "+
+		"scope it with container=project:<key>, or add a filter that actually "+
+		"excludes rows (assignee=, sprint=, updated=, a date bound) rather "+
+		"than one every open task already satisfies: %w",
+		q.GroupBy, GroupByRowCeiling, ErrTooBroad)
+}
+
 // readGroups assembles the columns one query asked for.
 //
 // TWO STATEMENTS PER AXIS rather than one windowed query: the counts are a
@@ -380,6 +446,12 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 	fields map[string]resolvedField, where string, args []any,
 	terms []sortTerm) (grouped, error) {
 
+	// THE GATE BEFORE THE WORK, and before the axis is even compiled: what
+	// it refuses is the cost of the statements below, so paying any part of
+	// that cost first would be paying exactly what it exists to avoid.
+	if err := checkGroupBreadth(ctx, tx, q, where, args); err != nil {
+		return grouped{}, err
+	}
 	axis, err := compileGroup(q.GroupBy, fields)
 	if err != nil {
 		return grouped{}, err

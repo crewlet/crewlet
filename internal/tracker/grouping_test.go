@@ -1,7 +1,9 @@
 package tracker_test
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -461,5 +463,106 @@ func TestAColumnHeadingIsTheSameOnEveryRequest(t *testing.T) {
 	if want != "High" {
 		t.Fatalf("the heading is %q, want the option's NAME — a slug is what "+
 			"somebody types and a name is what they read", want)
+	}
+}
+
+// bulkTasks files n minimal rows straight into the replicated estate.
+//
+// DIRECTLY RATHER THAN THROUGH THE WRITER, because what the gate below is
+// about is a corpus of twenty thousand and a broker round trip per task is a
+// test nobody would ever run. The rows carry exactly the columns the gate's
+// own count reads — it counts and never decodes — so `document` is empty and
+// the rows are deliberately not readable as tasks.
+func bulkTasks(t *testing.T, r *roundTrip, n int, project string) {
+	t.Helper()
+	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
+			WITH RECURSIVE n(i) AS (
+				SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?
+			)
+			INSERT INTO tracker_tasks
+				(id, key, project_key, root_id, type, title, status,
+				 status_group, rank, created_at, updated_at, version, document)
+			SELECT 'bulk-' || i, ? || '-' || (100000 + i), ?, 'bulk-' || i,
+			       'task', 'bulk ' || i, 'todo', 'not_started', 'a0',
+			       1, 1, 1, x''
+			FROM n`, n, project, project)
+		return err
+	}); err != nil {
+		t.Fatalf("file %d rows: %v", n, err)
+	}
+}
+
+// A GROUPING IS REFUSED ON WHAT IT WOULD SORT, never on which keys are present.
+//
+// The gate this replaces asked for "a narrowing filter — a status_group, an
+// assignee, a sprint, a unit or a date bound", and `status_group=not_started`
+// satisfies it while narrowing nothing: every open task is already in it. So
+// the case files one row past the ceiling, asks WITH that filter, and expects
+// the refusal anyway — which is the whole difference between a gate on a name
+// and a gate on a count.
+func TestAGroupingIsRefusedOnTheRowsItWouldSortRatherThanOnAKey(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	bulkTasks(t, r, tracker.GroupByRowCeiling+1, "ENG")
+
+	err := r.askErr(map[string]any{
+		"container": "workspace", "group_by": "status",
+		"status_group": "not_started",
+	})
+	if !errors.Is(err, tracker.ErrTooBroad) {
+		t.Fatalf("a workspace grouping over %d rows answered %v, want "+
+			"ErrTooBroad: a filter every open task satisfies narrows nothing, "+
+			"and a gate that accepted it is a gate a caller clears in one "+
+			"attempt without making the query any cheaper",
+			tracker.GroupByRowCeiling+1, err)
+	}
+	if !strings.Contains(err.Error(), itoa(tracker.GroupByRowCeiling)) {
+		t.Fatalf("the refusal is %q and names no ceiling — a caller cannot "+
+			"tell how much narrowing is enough", err)
+	}
+
+	// AN ABSENT CONTAINER IS NOT A NARROWER ONE. It adds no predicate at
+	// all, so it scans exactly what `workspace` scans, and a gate spelled
+	// against the literal key would let the identical query straight
+	// through.
+	if err := r.askErr(map[string]any{"group_by": "status"}); !errors.Is(err, tracker.ErrTooBroad) {
+		t.Fatalf("a grouping with NO container answered %v, want ErrTooBroad: "+
+			"an omitted container adds no predicate and scans the same rows "+
+			"as container=workspace", err)
+	}
+}
+
+// AND THE GATE DOES NOT RUN AT PROJECT SCOPE, because there the input is an
+// index range on `(project_key, status, rank)` whose width is one project's
+// own size rather than the company's.
+func TestAProjectScopedGroupingIsNotGated(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	bulkTasks(t, r, tracker.GroupByRowCeiling+1, "ENG")
+	seedBoard(t, r)
+
+	answer := r.ask(map[string]any{
+		"container": "project:ENG", "group_by": "status", "show_closed": "true",
+	})
+	if len(answer.Groups) == 0 {
+		t.Fatalf("a project-scoped grouping over the same rows drew no columns")
+	}
+}
+
+// AND A COMPANY UNDER THE CEILING IS SERVED AT WORKSPACE SCOPE, which is what
+// stops the case above from passing against a gate that simply refuses every
+// grouping that names no project.
+func TestAWorkspaceGroupingUnderTheCeilingIsServed(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	seedBoard(t, r)
+
+	answer := r.ask(map[string]any{
+		"container": "workspace", "group_by": "status", "show_closed": "true",
+	})
+	if len(answer.Groups) == 0 {
+		t.Fatalf("a workspace grouping over five tasks drew no columns — the " +
+			"breadth gate is refusing on scope rather than on the row count")
 	}
 }

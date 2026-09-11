@@ -425,7 +425,14 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		q.Level = statelog.ReadSession
 	}
 	answer, err := t.deps.Reader.Tasks(ctx, q, t.deps.now())
-	if err != nil {
+	switch {
+	case errors.Is(err, tracker.ErrTooBroad):
+		// NOT [readFailure], whose entire advice is "try again": this
+		// refusal is about the QUERY rather than about the node, and the
+		// same keys refuse again for ever. What the model needs is the
+		// refusal's own sentence, which names what would narrow it.
+		return failed(fmt.Sprintf("%s: %v", ListWorkItemsTool, err)), nil
+	case err != nil:
 		return failed(readFailure(ListWorkItemsTool, err)), nil
 	}
 	// A GROUPED ANSWER HAS NO FLAT ROWS BY CONSTRUCTION, so the empty
