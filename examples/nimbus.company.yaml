@@ -458,10 +458,10 @@ integrations:
   # participants-based routing (comments + state changes reach everyone
   # participating in an issue/MR, GitLab's own notification reach) — the
   # provisioner mints a dedicated read-only ``crewlet-engine`` account for
-  # it.  The ``provisioning`` sub-block is read ONLY by
-  # ``crewlet gitlab provision`` (which creates one service account per
-  # engineering seat, memberships, per-agent PATs, and project webhooks);
-  # the engine never looks at it.  See docs/integrations/gitlab.md.
+  # it.  The ``provisioning`` sub-block is read by the engine's own
+  # reconcile loop AND by ``crewlet gitlab provision`` — both create one
+  # service account per engineering seat, memberships, per-agent PATs and
+  # project webhooks from it.  See docs/integrations/gitlab.md.
   gitlab:
     enabled: true
     url: "https://gitlab.com"

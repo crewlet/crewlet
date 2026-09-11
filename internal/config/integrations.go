@@ -731,9 +731,12 @@ type Mattermost struct {
 	// no text this backend accepts would ever be rendered.
 	TypingStatus WorkingStatus `yaml:"typing_status,omitempty" json:"typing_status,omitempty" js:"enum=always|addressed" desc:"When to show the typing indicator (default always); it costs a request every few seconds per thinking seat."`
 
-	// Provisioning is read ONLY by the provisioning CLI. The engine never
-	// looks at it; it is here so a provisioning-ready config validates.
-	Provisioning *MattermostProvisioning `yaml:"provisioning,omitempty" json:"provisioning,omitempty" desc:"Inputs for the provisioning CLI; ignored by the engine."`
+	// Provisioning is read by the engine's own reconcile loop AND by the
+	// provisioning CLI, which is a reversal this field's doc outlived: it
+	// said the engine "never looks at it", and it was true until the loop
+	// started provisioning. A reader who believed it would put a value here
+	// expecting nothing to act on it.
+	Provisioning *MattermostProvisioning `yaml:"provisioning,omitempty" json:"provisioning,omitempty" desc:"Inputs the reconcile loop and the provisioning CLI both read."`
 }
 
 // Status is the indicator mode, applying the always default.
@@ -916,7 +919,10 @@ type GitHub struct {
 	// unaffected.
 	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"Read token for participant fan-out; empty degrades thread routing."`
 
-	Provisioning *GitHubProvisioning `yaml:"provisioning,omitempty" json:"provisioning,omitempty" desc:"Inputs for the provisioning CLI; ignored by the engine."`
+	// Provisioning is read by the engine's own reconcile loop as well as by
+	// the provisioning CLI — see [Mattermost.Provisioning], whose doc made
+	// the same claim about the same reversal.
+	Provisioning *GitHubProvisioning `yaml:"provisioning,omitempty" json:"provisioning,omitempty" desc:"Inputs the reconcile loop and the provisioning CLI both read."`
 }
 
 // githubAPIHost is github.com's API, which is a different host from its web
@@ -1089,7 +1095,10 @@ type GitLab struct {
 	// and on Datadog for the same reason.
 	WebhookName string `yaml:"webhook_name,omitempty" json:"webhook_name,omitempty" desc:"Name every hook the engine registers on this instance carries; give two deployments watching one instance two names (default crewlet)."`
 
-	Provisioning *GitLabProvisioning `yaml:"provisioning,omitempty" json:"provisioning,omitempty" desc:"Inputs for the provisioning CLI; ignored by the engine."`
+	// Provisioning is read by the engine's own reconcile loop as well as by
+	// the provisioning CLI — see [Mattermost.Provisioning]. [GitLabMode] is
+	// what that reversal cost while this said otherwise.
+	Provisioning *GitLabProvisioning `yaml:"provisioning,omitempty" json:"provisioning,omitempty" desc:"Inputs the reconcile loop and the provisioning CLI both read."`
 }
 
 // WebhookNameOrDefault is the name this engine's hooks carry at GitLab.
@@ -1149,8 +1158,74 @@ type GitLabProvisioning struct {
 
 	GroupWebhook ContainerWebhookMode `yaml:"group_webhook,omitempty" json:"group_webhook,omitempty" js:"enum=auto|true|false" desc:"auto (one group hook if the plan allows), true, or false."`
 
+	// Mode is WHERE A SERVICE ACCOUNT IS OWNED, and therefore which route
+	// creates one, mints its tokens and deletes it.
+	//
+	// # Why it is in the document rather than only on the command line
+	//
+	// It was `-mode` on `crewlet gitlab provision` and nowhere else, which
+	// made it a fact only the person who typed it knew — and the engine
+	// provisions now. Its passes read no flag, so they assumed "group" for
+	// every company: against accounts created with `-mode instance` the
+	// engine minted through the group route and was refused, and its
+	// DISCONNECT deleted through the group route, which answers 404 for an
+	// account that route has never heard of — read as success, so every one
+	// of those accounts was reported removed and stayed live with every
+	// credential it held.
+	//
+	// Empty is [GitLabModeGroup], which is the only shape GitLab.com has.
+	// The flag is still there and still overrides, for one invocation, the
+	// way `-public-url` overrides `integrations.public_base_url`.
+	Mode GitLabMode `yaml:"mode,omitempty" json:"mode,omitempty" js:"enum=group|instance" desc:"Where service accounts are owned: group (default, and all GitLab.com offers) or instance (self-managed only; needs an instance-administrator token)."`
+
 	// TokenScopes are minted on each service-account token.
 	TokenScopes []string `yaml:"token_scopes,omitempty" json:"token_scopes,omitempty" desc:"Scopes minted on each service-account token."`
+}
+
+// GitLabMode is where this company's GitLab service accounts are owned.
+//
+// Restated here rather than imported from internal/gitlab for the reason
+// [Datadog.HandleTagOrDefault] gives — config is the leaf the vendor packages
+// depend on — and asserted equal to gitlab.Modes() by a test.
+type GitLabMode string
+
+const (
+	// GitLabModeGroup owns service accounts from provisioning.group, which
+	// is the only shape GitLab.com offers.
+	GitLabModeGroup GitLabMode = "group"
+	// GitLabModeInstance owns them from the instance itself. Self-managed
+	// only, and it needs an instance-administrator token.
+	GitLabModeInstance GitLabMode = "instance"
+)
+
+// GitLabModes is every mode, for an error that has to name them.
+func GitLabModes() []string {
+	return []string{string(GitLabModeGroup), string(GitLabModeInstance)}
+}
+
+// Valid reports a mode this build serves. Empty is [GitLabModeGroup].
+func (m GitLabMode) Valid() bool {
+	switch m {
+	case "", GitLabModeGroup, GitLabModeInstance:
+		return true
+	}
+	return false
+}
+
+// Or resolves the empty value.
+func (m GitLabMode) Or() GitLabMode {
+	if m == "" {
+		return GitLabModeGroup
+	}
+	return m
+}
+
+// ModeOrDefault is where this company's service accounts are owned.
+func (p *GitLabProvisioning) ModeOrDefault() GitLabMode {
+	if p == nil {
+		return GitLabModeGroup
+	}
+	return p.Mode.Or()
 }
 
 func (g *GitHub) validate(path string) error {
@@ -1246,6 +1321,15 @@ func (g *GitLab) validate(path string) error {
 	}
 	pv := g.Provisioning
 	pp := at(path, "provisioning")
+	// REFUSED HERE rather than discovered from a 404 half way through a run.
+	// This one input decides which endpoint every account is created on,
+	// which tokens are minted through and which a disconnect deletes down —
+	// and the delete route answers 404 as success, so a typo here is an
+	// account reported removed and still live.
+	if !pv.Mode.Valid() {
+		p.add(at(pp, "mode"), ErrUnknownValue, "%q is not one of %s",
+			pv.Mode, strings.Join(GitLabModes(), ", "))
+	}
 	if pv.AccessLevel != "" && !slices.Contains(GitLabAccessLevels, pv.AccessLevel) {
 		p.add(at(pp, "access_level"), ErrUnknownValue, "%q (want %s)",
 			pv.AccessLevel, names(GitLabAccessLevels))

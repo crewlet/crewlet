@@ -574,3 +574,33 @@ func TestTheMissingPublicBaseRefusalNamesTheRightThing(t *testing.T) {
 		}
 	})
 }
+
+// THE DOCUMENT DECIDES WHERE ACCOUNTS ARE OWNED, and the flag overrides it
+// for one invocation.
+//
+// `-mode` used to be the only source, which made it a fact only the person
+// who typed it knew. The engine provisions the same company from the same
+// document and reads no flags, so a company whose accounts are
+// instance-owned had the command line doing one thing and the loop another —
+// minting through a group that does not own the account, and deleting down a
+// route that answers 404 as success.
+func TestTheServiceAccountModeComesFromTheDocumentUnlessTheFlagSaysOtherwise(t *testing.T) {
+	t.Parallel()
+	instance := &config.GitLab{Provisioning: &config.GitLabProvisioning{
+		Group: "nimbus", Mode: config.GitLabModeInstance,
+	}}
+	plain := &config.GitLab{Provisioning: &config.GitLabProvisioning{Group: "nimbus"}}
+
+	if got := accountMode(instance, false, ""); got != gitlab.ModeInstance {
+		t.Errorf("an untyped flag over an instance-owned company chose %q", got)
+	}
+	if got := accountMode(instance, true, string(gitlab.ModeGroup)); got != gitlab.ModeGroup {
+		t.Errorf("-mode group over an instance-owned company chose %q", got)
+	}
+	if got := accountMode(plain, false, ""); got != gitlab.ModeGroup {
+		t.Errorf("a company that says nothing chose %q, want the group route", got)
+	}
+	if got := accountMode(nil, false, ""); got != gitlab.ModeGroup {
+		t.Errorf("no gitlab block at all chose %q, want the group route", got)
+	}
+}

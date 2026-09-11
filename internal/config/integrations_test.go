@@ -1,11 +1,13 @@
 package config_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/integration"
 )
 
@@ -181,5 +183,41 @@ func TestConfigAndTheLoopAgreeAboutTheDefaultCheckInterval(t *testing.T) {
 	if config.DefaultCheckInterval != integration.DefaultSchedule.Settled {
 		t.Errorf("config says %s, the loop says %s",
 			config.DefaultCheckInterval, integration.DefaultSchedule.Settled)
+	}
+}
+
+// THE SERVICE-ACCOUNT MODE IS ONE CLOSED SET AND TWO PACKAGES READ IT.
+//
+// config is the leaf every vendor package depends on, so it restates the set
+// rather than importing it. A value one side accepted and the other did not
+// would decide which endpoint every account is created on — and the delete
+// route answers 404 as success, so a mismatch is an account reported removed
+// and still live.
+func TestConfigAndGitLabAgreeAboutTheServiceAccountModes(t *testing.T) {
+	t.Parallel()
+	if got, want := config.GitLabModes(), gitlab.Modes(); !slices.Equal(got, want) {
+		t.Errorf("config says %v, gitlab says %v", got, want)
+	}
+	if got := (*config.GitLabProvisioning)(nil).ModeOrDefault(); string(got) != string(gitlab.ModeGroup) {
+		t.Errorf("an unset mode is %q, want %q", got, gitlab.ModeGroup)
+	}
+}
+
+// AND A MODE THIS BUILD DOES NOT SERVE IS REFUSED AT VALIDATION, not
+// discovered from a 404 half way through a run that has already created some
+// of the accounts.
+func TestAnUnknownGitLabModeIsRefused(t *testing.T) {
+	t.Parallel()
+	err := validateIntegrationDoc(t, "gitlab", `    enabled: true
+    url: https://gitlab.example.com
+    signing_secret: "${GITLAB_SIGNING_SECRET}"
+    provisioning:
+      group: nimbus
+      mode: cluster`)
+	if err == nil {
+		t.Fatal("mode: cluster was accepted")
+	}
+	if !strings.Contains(err.Error(), "mode") {
+		t.Errorf("error %q does not name the field", err)
 	}
 }

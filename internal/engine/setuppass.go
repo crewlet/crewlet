@@ -912,6 +912,11 @@ func (p *gitlabPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 		// left the config cannot be told apart from a company mid-edit.
 		// Both stay deliberate gestures on the command line.
 		Rotate: in.Recreate,
+		// WHERE THE ACCOUNTS ARE OWNED, from the company document. It was
+		// absent, so every pass this engine ran assumed the group route —
+		// and against a company provisioned with `-mode instance` it minted
+		// through a group that does not own the account and was refused.
+		Mode: gitlab.Mode(cfg.Provisioning.ModeOrDefault()),
 	})
 	// A NAME GITLAB HAS NOT RELEASED YET IS WORK IN PROGRESS, not a failure
 	// to read the integration.
@@ -968,6 +973,12 @@ func (p *gitlabPass) Teardown(ctx context.Context, in setup.TeardownInput) (prov
 	return gitlab.Teardown(ctx, gitlab.TeardownOptions{
 		Client: client, Config: cfg, Plan: plan,
 		RemoveSeats: in.RemoveSeats,
+		// AND DOWN THE ROUTE THAT OWNS THEM. The group delete answers 404
+		// as success — "unknown or already removed; both are the state the
+		// caller asked for" — so an instance-owned account sent down it
+		// reported itself deleted and stayed live with every credential it
+		// held.
+		Mode: gitlab.Mode(cfg.Provisioning.ModeOrDefault()),
 	})
 }
 

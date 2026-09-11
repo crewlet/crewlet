@@ -449,7 +449,7 @@
         },
         "provisioning": {
           "$ref": "#/$defs/GitHubProvisioning",
-          "description": "Inputs for the provisioning CLI; ignored by the engine."
+          "description": "Inputs the reconcile loop and the provisioning CLI both read."
         },
         "token": {
           "description": "Read token for participant fan-out; empty degrades thread routing.",
@@ -501,7 +501,7 @@
         },
         "provisioning": {
           "$ref": "#/$defs/GitLabProvisioning",
-          "description": "Inputs for the provisioning CLI; ignored by the engine."
+          "description": "Inputs the reconcile loop and the provisioning CLI both read."
         },
         "signing_secret": {
           "description": "Standard-Webhooks signing token; required when enabled.",
@@ -554,6 +554,14 @@
             "auto",
             "true",
             "false"
+          ],
+          "type": "string"
+        },
+        "mode": {
+          "description": "Where service accounts are owned: group (default, and all GitLab.com offers) or instance (self-managed only; needs an instance-administrator token).",
+          "enum": [
+            "group",
+            "instance"
           ],
           "type": "string"
         },
@@ -973,7 +981,7 @@
         },
         "provisioning": {
           "$ref": "#/$defs/MattermostProvisioning",
-          "description": "Inputs for the provisioning CLI; ignored by the engine."
+          "description": "Inputs the reconcile loop and the provisioning CLI both read."
         },
         "team": {
           "description": "Team slug the agent bots belong to.",

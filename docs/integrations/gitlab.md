@@ -50,7 +50,7 @@ integrations:
     signing_secret: "${GITLAB_SIGNING_SECRET}"  # whsec_<base64 of 32 bytes>, the hook's signing token, REQUIRED
     token: "${GITLAB_ROUTING_TOKEN}"             # optional read credential → participants-based routing
     webhook_name: crewlet                       # which hooks on the instance are this deployment's
-    provisioning:                # consumed ONLY by `crewlet gitlab provision`, ignored by the engine
+    provisioning:                # read by the engine's reconcile loop AND by `crewlet gitlab provision`
       group: nimbus-hq           # top-level group the agent service accounts join
       access_level: developer    # default group membership (developer | maintainer)
       access_levels:             # per-handle overrides
@@ -58,6 +58,7 @@ integrations:
       username_prefix: ""        # e.g. "agent-" when the group namespace is shared with humans
       projects: []               # extra projects to add each account to (+ hooks only when group_webhook: false / falls back)
       group_webhook: auto        # auto (group hook, else per-project) | true (group only) | false (per-project only)
+      mode: group                # where accounts are OWNED: group (default) | instance (self-managed only)
       token_scopes: [api]        # scopes minted on each service-account PAT
 ```
 
@@ -68,7 +69,9 @@ Four fields differ from the [hosted code host's](github.md) block beside it:
 - **`webhook_name` says which hooks on the instance are this deployment's.** The reconcile converges the hooks carrying that name whatever address they currently point at, which is what stops a change of public base leaving live orphans behind — one group hook and one per project per change, all enabled, all signed, all delivering somewhere that no longer answers. Measured on a deployment behind a restarted tunnel: a group hook and two project hooks, invisible to every pass. A hook that shares the name but points at anything other than a `/webhooks/gitlab` path was not registered by this engine and is left alone, and a hook with **no name** — which is every hook a Crewlet older than this one registered — is adopted and renamed rather than stranded. It defaults to `crewlet`, and **two deployments watching one instance must set two names**: staging and production of one company share this document, so with a single name each pass would repoint the other's hooks and only the last to run would receive anything. Disconnecting removes the hooks by the same name, so the two halves cannot disagree about which hooks are yours.
 - **`token` (optional)** enables **participants-based routing**: comments and state changes fan out to everyone participating in the issue/MR — GitLab's own notification reach — instead of only assignees and mentioned users. Webhook payloads don't carry the participants list, so this costs one `GET …/participants` REST call per comment/state-change event, made with this credential (any group member's PAT with `read_api`, which **you supply** — nothing provisions it). Without it, routing degrades to payload-derived targets — directed events are unaffected. This mirrors `integrations.jira`'s admin token, which exists for the same reason (watcher lookups). See [Event routing](#event-routing).
 
-The `provisioning:` sub-block is read **only by the provisioning CLI** — the engine never looks at it. Its fields drive the reconcile described under [Provisioning](#provisioning).
+The `provisioning:` sub-block drives the reconcile described under [Provisioning](#provisioning), and both the CLI and the engine's own reconcile loop read it.
+
+**`mode` says where a service account is owned, and it is not only the CLI's business.** It decides which endpoint creates an account, which one mints its tokens, and which one deletes it — and the group delete answers `404` as success ("unknown or already removed; both are the state the caller asked for"), so an instance-owned account sent down the group route reports itself deleted and stays live with every credential it holds. It used to be `-mode` on the command line and nowhere else, so the engine assumed `group` for every company: against accounts created with `-mode instance` its passes minted through a group that does not own them and its disconnect removed none of them. `crewlet gitlab provision -mode …` still overrides it for one invocation, the way `-public-url` overrides `integrations.public_base_url`.
 
 ---
 
@@ -194,7 +197,7 @@ GITLAB_ADMIN_TOKEN="$GITLAB_ADMIN_TOKEN" crewlet gitlab provision company.yaml \
 | `-config PATH` | Tier A config naming this node's store and secret keyring (default `crewlet.yaml`). Only `-secret-store` reads it |
 | `-rotate` | Mint a fresh token for **every** seat, including seats whose current one still works. Not the default, and not what a re-run does: GitLab returns a token's value once, so minting every run would revoke the credential every agent is currently authenticating with — an operator adding a tenth seat would take the other nine down. **Restart the engine after** |
 | `-decommission` | Delete managed service accounts whose seats have left the config. Off by default: it is the one destructive direction, and a company mid-edit looks exactly like a company that removed a seat |
-| `-mode group\|instance` | Where service accounts are **owned**. `group` (the default) creates them under `provisioning.group`; `instance` creates them on the instance itself. Self-managed only — GitLab.com does not serve the instance route, and a run that asks for it there is refused naming this flag. An unknown value is refused before the config is even loaded: it decides which endpoint every account is created on, and discovering a typo from a `404` half way through leaves an operator working out which seats landed |
+| `-mode group\|instance` | Where service accounts are **owned**, for this run only. It defaults to **`integrations.gitlab.provisioning.mode`**, which is where the answer lives: the engine provisions the same company from the same document and reads no flags, so a mode that existed only on the command line had the CLI creating accounts one way and the loop minting and deleting them the other. `group` creates them under `provisioning.group`; `instance` creates them on the instance itself. Self-managed only — GitLab.com does not serve the instance route, and a run that asks for it there is refused naming this flag. An unknown value is refused before the config is even loaded |
 | `-token-expiry-days N` | Lifetime minted onto each token. `0` sends no expiry and lets the instance policy decide |
 | `-dry-run` | Print what the run would do and touch nothing |
 

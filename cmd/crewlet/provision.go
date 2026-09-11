@@ -200,10 +200,11 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 			"one still works (the engine has to be restarted after)")
 	decommission := fs.Bool("decommission", false,
 		"delete managed service accounts whose seats have left the config")
-	mode := fs.String("mode", string(gitlab.ModeGroup),
+	mode := fs.String("mode", "",
 		"where service accounts are owned: group (the default, and all "+
 			"GitLab.com offers) or instance (self-managed only; needs an "+
-			"instance-administrator token)")
+			"instance-administrator token). Defaults to "+
+			"integrations.gitlab.provisioning.mode")
 	expiryDays := fs.Int("token-expiry-days", 0,
 		"lifetime for minted tokens; 0 sends none and lets the instance "+
 			"policy decide")
@@ -215,9 +216,19 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 	// PASSED ONLY WHEN THE OPERATOR TYPED IT, so the flag's default
 	// cannot be told from a deliberate zero.
 	var expiry *int
+	// AND THE MODE ONLY WHEN THEY TYPED IT, so the flag can be told from the
+	// document's own answer. The document is where this lives now — the
+	// engine's own passes read it and cannot read a flag — and a flag that
+	// silently defaulted to "group" would put the command line back in
+	// disagreement with the loop on the one input that decides which route
+	// creates, mints for and deletes every account.
+	var modeGiven bool
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "token-expiry-days" {
+		switch f.Name {
+		case "token-expiry-days":
 			expiry = expiryDays
+		case "mode":
+			modeGiven = true
 		}
 	})
 	companyPath, given := onePositional(fs, companyPath)
@@ -236,7 +247,7 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 	// input that decides which endpoint every account is created on, and
 	// discovering it from a 404 half way through a run leaves an operator
 	// working out which seats landed.
-	if !gitlab.Mode(*mode).Valid() {
+	if modeGiven && !gitlab.Mode(*mode).Valid() {
 		return fmt.Errorf("-mode %q is not one of %s",
 			*mode, strings.Join(gitlab.Modes(), ", "))
 	}
@@ -325,7 +336,7 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 		SigningSecret:    env.Value(cfg.SigningSecret),
 		SigningSecretVar: signingVar,
 		Rotate:           *rotate, Decommission: *decommission, ExpiryDays: expiry,
-		Mode: gitlab.Mode(*mode),
+		Mode: accountMode(cfg, modeGiven, *mode),
 	})
 	if err != nil {
 		return err
@@ -831,4 +842,22 @@ func webhookBase(flagValue string, in *config.Integrations, resolve func(string)
 		return ""
 	}
 	return in.WebhookBase(resolve)
+}
+
+// accountMode is where this run owns the accounts it creates.
+//
+// THE DOCUMENT IS THE DEFAULT and the flag is a one-invocation override, the
+// way `-public-url` overrides `integrations.public_base_url`. The flag used to
+// be the only source, which made this a fact only the person who typed it
+// knew — and the engine provisions the same company from the same document
+// with no flag to read, so the two disagreed on the one input that decides
+// which route creates an account, mints its tokens and deletes it.
+func accountMode(cfg *config.GitLab, given bool, flagged string) gitlab.Mode {
+	if given {
+		return gitlab.Mode(flagged)
+	}
+	if cfg == nil {
+		return gitlab.ModeGroup
+	}
+	return gitlab.Mode(cfg.Provisioning.ModeOrDefault())
 }
