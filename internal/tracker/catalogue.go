@@ -57,6 +57,14 @@ var builtinTypes = []TaskType{
 		Description: "Upkeep nobody asked for and everybody needs."},
 }
 
+// DefaultTaskType is what a create that names none files under.
+//
+// EVERY COMPANY HAS IT, because it is a builtin and a catalogue adds to the
+// builtins rather than replacing them — so this default can never name a type
+// the company does not declare. `create_work_item` has always told a model
+// "`task` if you are unsure", and this is where that is true.
+const DefaultTaskType = "task"
+
 // BuiltinTypes is what this build ships, copied so a caller cannot edit it.
 func BuiltinTypes() []TaskType {
 	return append([]TaskType(nil), builtinTypes...)

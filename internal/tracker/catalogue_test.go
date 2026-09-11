@@ -122,6 +122,28 @@ func TestATaskCannotInventItsOwnType(t *testing.T) {
 	if _, err := r.writer.CreateTask(t.Context(), "op-ok", newTask("t-ok"), nil); err != nil {
 		t.Fatalf("a builtin type was refused: %v", err)
 	}
+	r.drain()
+
+	// AND SO DOES NAMING NONE. `create_work_item` has always told a model
+	// "`task` if you are unsure", so a create that names no type files
+	// under it rather than being refused for a type it did not choose.
+	bare := newTask("t-bare")
+	bare.Type = ""
+	result, err := r.writer.CreateTask(t.Context(), "op-bare", bare, nil)
+	if err != nil {
+		t.Fatalf("a create naming no type was refused: %v", err)
+	}
+	r.drain()
+	detail, err := r.reader.Task(t.Context(), result.Key, tracker.DetailWants{},
+		statelog.ReadStale)
+	if err != nil {
+		t.Fatalf("read it back: %v", err)
+	}
+	if detail.Task.Type != tracker.DefaultTaskType {
+		t.Fatalf("a create naming no type stored %q, want %s — an empty type "+
+			"on the row is a task no filter and no board can group",
+			detail.Task.Type, tracker.DefaultTaskType)
+	}
 
 	// AND AN ARCHIVED TYPE TAKES NO NEW WORK, which is what archiving one
 	// is for — the tasks already under it keep it.

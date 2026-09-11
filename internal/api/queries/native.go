@@ -52,6 +52,7 @@ type WorkReader interface {
 	Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error)
 	Goals(ctx context.Context, q tracker.GoalQuery) (tracker.GoalListing, error)
 	Catalogue(ctx context.Context, q tracker.CatalogueQuery) (tracker.CatalogueAnswer, error)
+	Person(ctx context.Context, q tracker.PersonQuery, now time.Time) (tracker.PersonState, error)
 }
 
 // PageReader is the knowledge read side this surface calls.
@@ -257,6 +258,29 @@ func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
 		return nil, unavailableIfBehind(err)
 	}
 	return answer, nil
+}
+
+// workPerson answers one human's own state — their inbox, their queue and
+// their pins.
+//
+// THE HANDLE IS A PARAMETER for the reason [Sources.workViews]' viewer is: this
+// whole surface is guarded, so the caller already holds the company's own
+// credential. What the parameter selects is whose day to render, and the
+// engine's own write side is where the authority lives — a read here can no
+// more mark somebody's work read than a screen can.
+func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
+	handle := strings.TrimSpace(p.String("handle"))
+	if handle == "" {
+		return nil, badParams("handle", "", nil)
+	}
+	state, err := s.Work.Person(ctx, tracker.PersonQuery{
+		Handle: handle,
+		Level:  statelog.ReadStale,
+	}, time.Now().UTC())
+	if err != nil {
+		return nil, unavailableIfBehind(err)
+	}
+	return state, nil
 }
 
 // ---- pages ------------------------------------------------------------- //

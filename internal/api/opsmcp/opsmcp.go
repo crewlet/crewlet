@@ -77,6 +77,11 @@ type Options struct {
 	// Knowledge is the company's ranked search, or nil.
 	Knowledge builtin.KnowledgeSearcher
 
+	// Leads answers whether one handle leads another — the one authority
+	// over a person's record that reaches across people. Nil degrades to
+	// "your own only" rather than to a hole.
+	Leads builtin.Leads
+
 	// Company names the company in the server's own title, so an operator
 	// with two of these connected can tell which is which.
 	Company string
@@ -96,6 +101,7 @@ type Server struct {
 func New(opts Options) *Server {
 	catalogue := builtin.OperatorTools(builtin.OperatorDeps{
 		Work: opts.Work, Pages: opts.Pages, Knowledge: opts.Knowledge,
+		Leads: opts.Leads,
 	})
 	if len(catalogue) == 0 {
 		return nil

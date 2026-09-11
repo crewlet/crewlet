@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // Reading an object's stored state INSIDE a write's own snapshot.
@@ -131,16 +133,18 @@ func readTagSet(ctx context.Context, tx *sql.Tx, project string) (TagSet, bool, 
 func readPerson(ctx context.Context, tx *sql.Tx, handle string) (Person, bool, error) {
 	var person Person
 	var seenSeq int64
+	var setAt int64
 	var version int64
 	var read, unread, snoozed, reasons, priorities, pins, favorites []byte
 	switch err := tx.QueryRowContext(ctx, `
 		SELECT generation, seen_through, seen_through_stream, read_json,
 		       unread_json, snoozed_json, primary_reasons_json, priorities_json,
-		       pinned_views_json, favorites_json, version
+		       pinned_views_json, favorites_json, priorities_set_by,
+		       priorities_set_at, version
 		FROM tracker_persons WHERE handle = ?`, handle).
 		Scan(&person.Generation, &seenSeq, &person.SeenThrough.Stream, &read,
 			&unread, &snoozed, &reasons, &priorities, &pins, &favorites,
-			&version); {
+			&person.PrioritiesSetBy, &setAt, &version); {
 	case errors.Is(err, sql.ErrNoRows):
 		return Person{V: DocumentVersion, Handle: handle}, false, nil
 	case err != nil:
@@ -150,6 +154,12 @@ func readPerson(ctx context.Context, tx *sql.Tx, handle string) (Person, bool, e
 	person.V, person.Handle = DocumentVersion, handle
 	person.Version = uint64(version)
 	person.SeenThrough.Seq = uint64(seenSeq)
+	if setAt != 0 {
+		// ZERO IS UNSET, not the epoch: the ordinary state is a
+		// person's own list, and decoding a zero into 1970 would put a
+		// date on every screen that renders one.
+		person.PrioritiesSetAt = store.DecodeTime(setAt)
+	}
 	for _, part := range []struct {
 		body []byte
 		into any

@@ -318,6 +318,7 @@ func Register(r *Registry, s Sources) {
 		r.Register("work_views", s.workViews)
 		r.Register("work_goals", s.workGoals)
 		r.Register("work_catalogue", s.workCatalogue)
+		r.Register("work_person", s.workPerson)
 	}
 	if s.Pages != nil {
 		r.Register("pages", s.pageList)

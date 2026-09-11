@@ -46,6 +46,15 @@ const (
 	// own create succeed is a seat editing the rules it is judged by, and
 	// the refusal it was working around is the signal a person needs.
 	WriteWorkCatalogueTool = "write_work_catalogue"
+
+	// The PERSON tools. A person's inbox, queue and pins are written on
+	// behalf of the person whose they are, and the operator surface is the
+	// one place a person acts through their own credential — a seat's
+	// registry has a SEAT, which is not a human and has no inbox.
+	GetPersonTool     = "get_person"
+	SetPrioritiesTool = "set_priorities"
+	SetPinsTool       = "set_pins"
+	MarkInboxTool     = "mark_inbox"
 )
 
 // GetWorkCatalogueTool is the one catalogue verb a SEAT does hold.
@@ -62,6 +71,7 @@ func OperatorOnlyTools() []string {
 		ListWorkViewsTool, SaveWorkViewTool,
 		ListWorkGoalsTool, WriteWorkGoalTool,
 		WriteWorkCatalogueTool,
+		GetPersonTool, SetPrioritiesTool, SetPinsTool, MarkInboxTool,
 	}
 }
 

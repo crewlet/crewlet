@@ -57,6 +57,7 @@ type WorkReader interface {
 	Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error)
 	Goals(ctx context.Context, q tracker.GoalQuery) (tracker.GoalListing, error)
 	Catalogue(ctx context.Context, q tracker.CatalogueQuery) (tracker.CatalogueAnswer, error)
+	Person(ctx context.Context, q tracker.PersonQuery, now time.Time) (tracker.PersonState, error)
 }
 
 // WorkWriter is what these tools need from the tracker's write side.
@@ -103,6 +104,12 @@ type WorkDeps struct {
 	// CatalogueWriter resolves the workspace catalogue write side, and is
 	// the operator surface's alone for the reason the two above are.
 	CatalogueWriter func(actor Actor) CatalogueWriter
+
+	// PersonWriter resolves the person write side for one actor. The
+	// operator surface's alone, because a seat is not a human: it has a
+	// mailbox rather than an inbox, and nothing on a person's record
+	// describes one.
+	PersonWriter func(actor Actor) PersonWriter
 
 	// Mentions resolves the handles a comment names, so a mention wakes
 	// the person the author meant. Nil resolves nothing, which degrades to

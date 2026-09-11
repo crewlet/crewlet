@@ -93,6 +93,10 @@ func (f *fakeTracker) Catalogue(context.Context, tracker.CatalogueQuery) (tracke
 	return tracker.CatalogueAnswer{}, nil
 }
 
+func (f *fakeTracker) Person(context.Context, tracker.PersonQuery, time.Time) (tracker.PersonState, error) {
+	return tracker.PersonState{}, nil
+}
+
 // as records the actor and hands back a writer bound to it, which is the
 // tracker's own rule: a writer acts as exactly one party.
 func (f *fakeTracker) as(actor builtin.Actor) builtin.WorkWriter {
@@ -553,6 +557,71 @@ func TestEveryListArgumentReachesTheGrammar(t *testing.T) {
 		if trk.query.StatusGroups[i] != group {
 			t.Fatalf("open_only reached the grammar as %v, want %v",
 				trk.query.StatusGroups, want)
+		}
+	}
+}
+
+// NO SEAT HOLDS AN OPERATOR-ONLY TOOL.
+//
+// Each of them is a decision a PERSON makes about how the company runs: what
+// its vocabulary is, what a goal is, how a tab strip is arranged, what
+// somebody's queue and inbox are. A seat given any of them is a seat editing
+// the rules it is judged by — and the two that would matter most are the
+// catalogue (a create refused for an undeclared type is a signal a person
+// needs to see, not one the seat should widen away) and the person record (a
+// seat is not a human; it has a mailbox rather than an inbox).
+//
+// The guard is STRUCTURAL rather than a list kept here, because a list beside
+// the registry is the thing that stops matching it.
+func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	// EVERY WRITE SIDE WIRED, so a tool missing from the seat's registry
+	// is missing because the registry does not offer it rather than
+	// because its dependency was nil.
+	reg := workRegistry(t, builtin.WorkDeps{
+		Reader: trk, Writer: trk.as,
+		ViewWriter:      func(builtin.Actor) builtin.ViewWriter { return nil },
+		GoalWriter:      func(builtin.Actor) builtin.GoalWriter { return nil },
+		CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
+		PersonWriter:    func(builtin.Actor) builtin.PersonWriter { return nil },
+	})
+	for _, name := range tracker.OperatorOnlyTools() {
+		if _, held := reg.Lookup(name); held {
+			t.Errorf("a seat holds %s, which is a decision a person makes "+
+				"about how the company runs", name)
+		}
+	}
+
+	// AND THE OPERATOR SURFACE HOLDS EVERY ONE, or the split would be a
+	// rule that removed a tool rather than one that placed it.
+	operator := map[string]bool{}
+	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
+		Work: builtin.WorkDeps{
+			Reader: trk, Writer: trk.as,
+			ViewWriter:      func(builtin.Actor) builtin.ViewWriter { return nil },
+			GoalWriter:      func(builtin.Actor) builtin.GoalWriter { return nil },
+			CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
+			PersonWriter:    func(builtin.Actor) builtin.PersonWriter { return nil },
+			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
+				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
+			},
+		},
+	}) {
+		operator[tool.Name()] = true
+	}
+	for _, name := range tracker.OperatorOnlyTools() {
+		if !operator[name] {
+			t.Errorf("%s is operator-only and the operator surface does not "+
+				"serve it, so nothing serves it at all", name)
+		}
+	}
+	// AND THE SEAT'S OWN SIX ARE THERE TOO: the operator surface is the
+	// same tools with one field different, not a second catalogue.
+	for _, name := range tracker.Tools() {
+		if !operator[name] {
+			t.Errorf("the operator surface does not serve %s, which every "+
+				"seat holds", name)
 		}
 	}
 }
