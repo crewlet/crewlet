@@ -168,7 +168,10 @@ and forth, which is the failure mode that actually happens.
 
 Three different gestures, and the difference matters:
 
-- **Remove** hides a task. Its rows stay and a restore brings it back.
+- **Remove** hides a task. Its rows stay and a restore brings it back — and
+  `removed=true` is how you find one to restore: every other query excludes
+  removed work, which is what a board means, so the trash is a filter rather
+  than a screen.
 - **Delete** writes a marker. Every node drops every record about that task for
   ever, which is what stops a redelivery months later resurrecting it.
 - **Purge** removes the rows. Its report comes back in **three groups**: what

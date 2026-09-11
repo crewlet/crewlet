@@ -201,6 +201,22 @@ type Query struct {
 	Root     string
 	Subtasks SubtaskMode
 
+	// Keys narrows to the task keys a caller already holds — what
+	// somebody pasted into chat, what a report linked. A LIST rather than
+	// one key, because resolving eight pasted keys as eight reads is
+	// eight round trips for one question.
+	Keys []string
+
+	// Removed is the TRASH, and it is three-valued for the reason every
+	// other tombstone filter here is: absent excludes removed work (what
+	// every board means), `true` asks for ONLY it (the restore surface),
+	// and `false` is the same exclusion said out loud.
+	//
+	// Without it there is no way to list what a removal hid, so nothing
+	// could reach [OpRestore] — `tracker_tasks_removed_idx` names
+	// `work_trash` as its reader and the reader did not exist.
+	Removed *bool
+
 	// Dates are keyed by the column they filter, so a compiler walks them
 	// rather than switching on eight named fields.
 	Dates map[string]DateFilter
@@ -312,7 +328,65 @@ type Params interface {
 	Keys() []string
 }
 
+// QueryKeys is every parameter this grammar reads, sorted.
+//
+// IT EXISTS SO AN UNKNOWN KEY CAN BE REFUSED, which is what [Params.Keys] is
+// for and what a caller is entitled to: a filter nobody parsed is a board
+// showing more than the person asked for, silently, and the person has no way
+// to tell. Ignoring `open=true` renders every closed task beside the open
+// ones and looks exactly like a project where nothing is finished.
+//
+// It is a LIST rather than a check per parser because the refusal has to run
+// before any of them: a key misspelled into a neighbour's territory must be
+// named as unknown rather than swallowed by whichever helper reached it first.
+// The one shape not in it is a custom field, `f.<ref>`, whose refs are a
+// company's own and cannot be enumerated here — see [Query.parseFields].
+var QueryKeys = []string{
+	"any", "archived", "asked_by", "asked_of", "assignee", "batch",
+	"blocked", "blocking", "checklist_assignee", "closed", "collaborator",
+	"columns", "container", "created", "cursor", "done", "due", "estimate",
+	"finished", "flag", "goal", "group", "group_by", "group_by2",
+	"group_limit", "has_children", "has_dependencies", "has_open_asks",
+	"has_parent", "include", "key", "limit", "linked_page",
+	"max_lag_seconds", "max_lag_seq", "mode", "parent", "points", "preset",
+	"priority", "q", "read_level", "references", "removed", "reporter",
+	"root", "routing_unit", "show_closed", "sort", "span", "span_field",
+	"spend", "sprint", "start", "status", "status_entered", "status_group",
+	"subgroup", "subtasks", "tag", "totals", "type", "unit", "updated",
+	"view", "watcher",
+}
+
+// FieldKeyPrefix is what makes a parameter a custom-field filter.
+const FieldKeyPrefix = "f."
+
+// checkKeys refuses a parameter nothing in this grammar reads.
+func checkKeys(p Params) error {
+	for _, key := range p.Keys() {
+		if ref, ok := strings.CutPrefix(key, FieldKeyPrefix); ok && ref != "" {
+			continue
+		}
+		if slices.Contains(QueryKeys, key) {
+			continue
+		}
+		// THE REFUSAL NAMES THE KEY AND NOTHING ELSE. Listing sixty-odd
+		// parameters at a caller who typed one wrong is a wall nobody
+		// reads; the schema and the docs are where the set is written
+		// down, and `f.` is named because it is the one shape a reader
+		// cannot find in either.
+		return fmt.Errorf("tracker: %q is not a query parameter — a filter "+
+			"nothing parses would silently widen this answer, so it is "+
+			"refused rather than ignored; a custom field is %s<ref>",
+			key, FieldKeyPrefix)
+	}
+	return nil
+}
+
 func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
+	// FIRST, so a misspelling is named as unknown rather than reported by
+	// whichever parser its neighbour belongs to.
+	if err := checkKeys(p); err != nil {
+		return Query{}, err
+	}
 	q := Query{
 		Subtasks:   SubtasksCollapsed,
 		Archived:   ArchivedExclude,
@@ -353,6 +427,17 @@ func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
 	q.Flags = csv(p.String("flag"))
 	q.Columns = csv(p.String("columns"))
 	q.Include = csv(p.String("include"))
+	// KEYS ARE UPPERCASED, because a key is what somebody pasted and
+	// `eng-7` is the same task as `ENG-7`. The project half is minted
+	// upper-case, so lowering the column instead would defeat
+	// `tracker_tasks_key_idx`.
+	for _, key := range csv(p.String("key")) {
+		q.Keys = append(q.Keys, strings.ToUpper(key))
+	}
+	if p.Has("removed") {
+		removed := p.Bool("removed", true)
+		q.Removed = &removed
+	}
 
 	if err := q.parseTags(p); err != nil {
 		return Query{}, err
@@ -595,7 +680,7 @@ func parseNumFilter(value string) (NumFilter, error) {
 // be parsed without I/O cannot be parsed inside a transaction.
 func (q *Query) parseFields(p Params) {
 	for _, key := range p.Keys() {
-		ref, ok := strings.CutPrefix(key, "f.")
+		ref, ok := strings.CutPrefix(key, FieldKeyPrefix)
 		if !ok || ref == "" {
 			continue
 		}

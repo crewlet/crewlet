@@ -132,6 +132,7 @@ func registeredQueries() map[string]map[string]any {
 		"the attention set": {"container": "project:P01", "flag": "cycle"},
 		"unarchived":        {"container": "project:P01", "archived": "false"},
 		"one key":           {"key": "ENG-1"},
+		"several keys":      {"key": "ENG-1,ENG-7"},
 		"tagged":            {"container": "project:P01", "tag": "urgent"},
 		"blocked":           {"container": "project:P01", "blocked": "true"},
 		"a field value":     {"container": "project:P01", "f.impact": "high"},

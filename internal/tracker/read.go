@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -285,11 +286,25 @@ func compile(q Query, now time.Time) (string, []any, error) {
 		// The Everything level, and it is explicit: no predicate.
 	}
 
-	// EVERY QUERY EXCLUDES A REMOVED TASK except the two that are about
+	// EVERY QUERY EXCLUDES A REMOVED TASK except the ones that are about
 	// them. ONE predicate for a removed task's whole life, at any age —
 	// which is what makes a restore at any age answer exactly what it
 	// answered before.
-	add("t.removed_at IS NULL")
+	//
+	// `removed=true` is the OTHER side of it and the only way to reach the
+	// trash: a removal hides a task, and a restore is a gesture somebody
+	// makes about a task they can see. It is `IS NOT NULL` rather than a
+	// date bound so `tracker_tasks_removed_idx`, which is partial on
+	// exactly that, is the plan.
+	if q.Removed != nil && *q.Removed {
+		add("t.removed_at IS NOT NULL")
+	} else {
+		add("t.removed_at IS NULL")
+	}
+
+	if len(q.Keys) > 0 {
+		add("t.key IN ("+placeholders(len(q.Keys))+")", anyOf(q.Keys)...)
+	}
 
 	if len(q.Status) > 0 {
 		add("t.status IN ("+placeholders(len(q.Status))+")", anyOf(q.Status)...)
@@ -400,6 +415,54 @@ func compile(q Query, now time.Time) (string, []any, error) {
 			clause = "NOT " + clause
 		}
 		add(clause)
+	}
+	// THE TWO ENDS OF AN OPEN ASK, and they are different questions: what
+	// is waiting on me, and what I am waiting for. Both narrow the same
+	// predicate [Query.HasOpenAsks] uses, because an ask that is resolved
+	// or answered is nobody's queue.
+	if q.AskedOf != "" {
+		add("EXISTS (SELECT 1 FROM tracker_comments m WHERE m.task_id = t.id "+
+			"AND m.ask = ? AND m.resolved = 0 AND m.answered_by IS NULL "+
+			"AND m.removed = 0)", q.AskedOf)
+	}
+	if q.AskedBy != "" {
+		add("EXISTS (SELECT 1 FROM tracker_comments m WHERE m.task_id = t.id "+
+			"AND m.ask <> '' AND m.author = ? AND m.resolved = 0 "+
+			"AND m.answered_by IS NULL AND m.removed = 0)", q.AskedBy)
+	}
+	// BLOCKING IS THE OTHER END OF BLOCKED, not its negation: "this task
+	// is holding something up" reads the dependency table by BLOCKER_ID
+	// where blocked reads it by task_id, and a task can be both.
+	if q.Blocking != nil {
+		clause := "EXISTS (SELECT 1 FROM tracker_task_deps d " +
+			"WHERE d.blocker_id = t.id AND d.blocker_open = 1)"
+		if !*q.Blocking {
+			clause = "NOT " + clause
+		}
+		add(clause)
+	}
+	if q.HasDependencies != nil {
+		clause := "EXISTS (SELECT 1 FROM tracker_task_deps d WHERE d.task_id = t.id)"
+		if !*q.HasDependencies {
+			clause = "NOT " + clause
+		}
+		add(clause)
+	}
+	if len(q.Sprint) > 0 {
+		// A TASK CAN BE IN MORE THAN ONE SPRINT — that is what a
+		// carry-over IS — so membership is an EXISTS over the stay
+		// table rather than a column on the task.
+		numbers := make([]any, 0, len(q.Sprint))
+		for _, value := range q.Sprint {
+			number, err := strconv.Atoi(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("tracker: %q is not a sprint "+
+					"number — sprints are numbered per project", value)
+			}
+			numbers = append(numbers, number)
+		}
+		add("EXISTS (SELECT 1 FROM tracker_task_sprints s WHERE s.task_id = t.id "+
+			"AND s.sprint IN ("+placeholders(len(numbers))+"))", numbers...)
 	}
 	for column, filter := range q.Dates {
 		clause, values, err := dateClause(column, filter)
