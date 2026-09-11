@@ -178,10 +178,6 @@ func NewReader(db *store.DB, log *statelog.Reader) (*Reader, error) {
 // counts, and stops a completeness claim being made against state the rows
 // were not read from.
 func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, error) {
-	where, args, err := compile(q, now)
-	if err != nil {
-		return Answer{}, err
-	}
 	limit := q.Limit
 	if limit <= 0 {
 		limit = PageDefault
@@ -218,6 +214,18 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 		MaxLag:      q.MaxLag,
 		Set:         true,
 	}, func(tx *sql.Tx) error {
+		// THE DECLARATIONS FIRST, and inside this transaction: an
+		// `f.<ref>` filter resolves against the catalogue, and a
+		// resolution read outside the read's own snapshot could answer
+		// from a catalogue the rows below were never filtered against.
+		fields, err := resolveFields(ctx, tx, q)
+		if err != nil {
+			return err
+		}
+		where, args, err := compile(q, now, fields)
+		if err != nil {
+			return err
+		}
 		rows, cursor, err := readTasks(ctx, tx, where, args, terms, limit)
 		if err != nil {
 			return err
@@ -271,7 +279,7 @@ func incompleteFrom(in *statelog.Incomplete) *Incomplete {
 // composes into SQL is its own column and operator names, from closed sets
 // declared in the grammar. A filter's value reaching a statement as text is
 // how a saved view becomes a way to run a query nobody wrote.
-func compile(q Query, now time.Time) (string, []any, error) {
+func compile(q Query, now time.Time, fields map[string]resolvedField) (string, []any, error) {
 	var where []string
 	var args []any
 	add := func(clause string, values ...any) {
@@ -448,6 +456,42 @@ func compile(q Query, now time.Time) (string, []any, error) {
 		}
 		add(clause)
 	}
+	if q.Text != "" {
+		// THE FIND, and it is a substring of a KEY or a TITLE — what
+		// the tool that carries it promises, and the only thing this
+		// grammar can honestly do: ranked search over the company's
+		// prose is `search_knowledge`'s, and nothing has ever put a task
+		// in the inverted list.
+		//
+		// THE KEY MATCHES FROM THE FRONT and the title anywhere. A key
+		// is `PROJECT-N`, so it is only ever typed from its start —
+		// while unanchored, every bare number in a find becomes a key
+		// match: `2` would hand back ENG-2, ENG-12 and ENG-20 beside
+		// whatever the person actually meant. A title is prose, where
+		// the useful match is in the middle.
+		pattern := likeEscape(q.Text)
+		add(`(t.key LIKE ? ESCAPE '\' OR t.title LIKE ? ESCAPE '\')`,
+			pattern+"%", "%"+pattern+"%")
+	}
+
+	for _, filter := range q.Fields {
+		field, held := fields[filter.Ref]
+		if !held {
+			// UNREACHABLE THROUGH [Reader.Tasks], which refuses an
+			// unresolved ref before it reaches here — and a refusal
+			// rather than a skip anyway, because a filter nobody
+			// resolved is a board showing more than the person asked
+			// for, silently.
+			return "", nil, fmt.Errorf("tracker: f.%s was never resolved, so "+
+				"this answer would be wider than the caller asked for",
+				filter.Ref)
+		}
+		clause, values, err := fieldClause(filter, field)
+		if err != nil {
+			return "", nil, err
+		}
+		add(clause, values...)
+	}
 	if len(q.Sprint) > 0 {
 		// A TASK CAN BE IN MORE THAN ONE SPRINT — that is what a
 		// carry-over IS — so membership is an EXISTS over the stay
@@ -533,7 +577,7 @@ func compile(q Query, now time.Time) (string, []any, error) {
 	if len(q.Any) > 0 {
 		var branches []string
 		for _, branch := range q.Any {
-			clause, values, err := compile(branch, now)
+			clause, values, err := compile(branch, now, fields)
 			if err != nil {
 				return "", nil, err
 			}
