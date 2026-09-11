@@ -463,8 +463,15 @@ func compile(q Query, now time.Time, fields map[string]resolvedField) (string, [
 			"AND x.kind = ? AND x.other_id = ?)", string(RelationPage), q.LinkedPage)
 	}
 	if q.Goal != "" {
+		// BOTH REFERENCE KINDS, because a target names TASKS AND
+		// PROJECTS and the goal's own progress counts a task reached
+		// either way (see [targetTasks]). Matching task refs alone made
+		// `goal=<id>` answer nothing for a goal whose target is a
+		// project while that same goal scored over every task in it —
+		// two readings of one row set, disagreeing silently.
 		add("EXISTS (SELECT 1 FROM tracker_goal_target_refs g "+
-			"WHERE g.goal_id = ? AND g.kind = 'task' AND g.ref = t.id)", q.Goal)
+			"WHERE g.goal_id = ? AND ((g.kind = 'task' AND g.ref = t.id) "+
+			"OR (g.kind = 'project' AND g.ref = t.project_key)))", q.Goal)
 	}
 	if q.Blocked != nil {
 		clause := "EXISTS (SELECT 1 FROM tracker_task_deps d " +

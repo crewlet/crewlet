@@ -302,20 +302,22 @@ func scoreTarget(ctx context.Context, tx *sql.Tx, goalID string,
 func targetTasks(ctx context.Context, tx *sql.Tx, goalID, targetID string) (
 	finished, total int, err error) {
 
-	// THE FINISHED GROUPS ARE DERIVED, not typed: `done` and `cancelled`
-	// both stamp a task finished and the GROUP decides, so a literal here
-	// would be a third copy of [StatusGroup.Finished] and the one that
-	// stopped matching when a group was added.
-	// THE ORDER IS THE STATEMENT'S, and the finished groups come first
-	// because their placeholders are in the SELECT rather than the WHERE.
-	groups := finishedGroups()
-	args := append(append([]any{}, groups...),
+	// DELIVERED, NOT FINISHED, and the difference is the whole measurement:
+	// `cancelled` is a FINISHED group and is not delivery, so counting the
+	// finished groups scored a team that cancelled its remaining work at a
+	// hundred per cent. [Delivered]'s own doc names a goal's task targets
+	// as one of its readers — this is that reader, and it is the clause
+	// rather than a second spelling of it.
+	// THE ORDER IS THE STATEMENT'S, and the delivery clause's arguments
+	// come first because its placeholders are in the SELECT rather than
+	// the WHERE.
+	delivered, deliveredArgs := deliveredClause("t.status_group", "t.status")
+	args := append(append([]any{}, deliveredArgs...),
 		goalID, targetID, goalID, targetID)
 	err = tx.QueryRowContext(ctx, `
 		SELECT
 			COUNT(*),
-			COALESCE(SUM(CASE WHEN t.status_group IN (`+placeholders(len(groups))+`)
-				THEN 1 ELSE 0 END), 0)
+			COALESCE(SUM(CASE WHEN `+delivered+` THEN 1 ELSE 0 END), 0)
 		FROM tracker_tasks t
 		WHERE t.removed_at IS NULL AND (
 			EXISTS (SELECT 1 FROM tracker_goal_target_refs r
@@ -376,4 +378,22 @@ func finishedGroups() []any {
 		}
 	}
 	return out
+}
+
+// deliveredClause is [Delivered] as SQL, over a row's two status columns.
+//
+// ONE SPELLING, because the Go predicate and a hand-written SQL copy are two
+// answers to "did this land" and the copy is the one that stops matching — it
+// already had: a goal's task targets counted `status_group IN (finished)` and
+// scored a CANCELLED task as delivered, so a team that cancelled its remaining
+// work drove its goal to a hundred per cent.
+//
+// The groups are DERIVED rather than typed for the same reason [Delivered] is
+// derived: a group added to [StatusGroups] must reach every reader, and a
+// literal list is the reader it would not reach.
+func deliveredClause(statusGroup, status string) (string, []any) {
+	groups := finishedGroups()
+	args := append(append([]any{}, groups...), string(StatusCancelled))
+	return statusGroup + " IN (" + placeholders(len(groups)) + ") AND " +
+		status + " <> ?", args
 }
