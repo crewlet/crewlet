@@ -19,7 +19,7 @@ A pass produces **findings**, and a finding is one observation that is not "fine
 | `ingress_pending` | The delivery path is not established yet; the next pass tries again. |
 | `identity_missing` | A seat has no account at the third-party app yet. |
 | `identity_failed` | A seat's account could not be created or its credential was refused. |
-| `grant_pending` | The third-party app accepted access and has not applied it yet. |
+| `grant_pending` | The third-party app accepted access and has not applied it yet. Atlassian's directory is the case to picture: an invitation is accepted immediately and the account appears in the organization's directory some time later, so the grant this engine just made reads back as *no such user*. That is a wait, not a failure — reported as one, it sent operators looking for a broken organization key while the invite was in flight. |
 | `unknown_tier` | The company document names something the third-party app does not have. |
 | `grant_short` | A seat holds less access than its role asks for. |
 | `grant_excess` | A seat holds **more** access than its role asks for. |

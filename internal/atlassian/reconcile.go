@@ -78,6 +78,24 @@ type SeatResult struct {
 	Created bool
 	// TokenMinted reports a credential this pass issued.
 	TokenMinted bool
+
+	// NotReady is a seat whose account exists and which Atlassian will not
+	// grant product access to YET, because it has only just been created.
+	//
+	// A STATE, NOT AN ERROR, and the distinction is the whole reason this
+	// field exists. It used to travel in Err, with a sentence saying exactly
+	// what it is — "waiting for Atlassian to make its new account grantable"
+	// — and [Result.Findings] turns any Err into an identity_failed, which
+	// classifies as DEGRADED and owed by an ADMIN. So the card said "Action
+	// required" and "you, at the third-party app" about a seat nobody could
+	// do anything for, on the brisk admin cadence, over a condition the very
+	// next pass clears on its own.
+	//
+	// Carried as a value so the classification cannot be lost again: an error
+	// string is a sentence a reader has to interpret, and every path that
+	// produces one here is a failure except this.
+	NotReady bool
+
 	// Err is why this seat could not be provisioned, if it could not.
 	Err error
 }
@@ -314,9 +332,10 @@ func reconcileSeat(
 		case err == nil:
 		case errors.Is(err, ErrAccountNotReady):
 			// The next pass grants it. Reported as a seat still coming up
-			// rather than a failure, because that is what it is.
-			out.Err = fmt.Errorf(
-				"%s is waiting for Atlassian to make its new account grantable", seat.Handle)
+			// rather than a failure, because that is what it is — and now
+			// carried as [SeatResult.NotReady] rather than as an Err, which
+			// is what made that sentence come out as "Action required".
+			out.NotReady = true
 			return out
 		default:
 			out.Err = fmt.Errorf("atlassian: grant %s product access: %w", seat.Handle, err)
@@ -513,6 +532,17 @@ func (r *Result) Findings() []integration.Finding {
 	}
 	for _, seat := range r.Seats {
 		switch {
+		case seat.NotReady:
+			// NOBODY HAS TO ACT. Atlassian has the account and has not
+			// finished making it grantable; the next pass grants it. This
+			// is [integration.FindingGrantPending]'s exact case, and until
+			// now that kind had no producer anywhere in the tree while this
+			// condition was reported as a failed identity.
+			out = append(out, integration.Finding{
+				Kind: integration.FindingGrantPending, Subject: seat.Handle,
+				Detail: seat.Handle + " has its Atlassian account and is waiting " +
+					"for Atlassian to make it grantable, which the next pass does",
+			})
 		case seat.Err != nil:
 			out = append(out, integration.Finding{
 				Kind: integration.FindingIdentityFailed, Subject: seat.Handle,

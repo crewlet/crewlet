@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -37,6 +38,10 @@ type stubOrg struct {
 	// a test that has to make something happen PART-WAY through a pass —
 	// after the organization-wide reads, inside the per-seat work.
 	onTokenRead func()
+	// inviteNotReady makes the product-access invite answer the way
+	// Atlassian answers for an account it has only just created: a 404
+	// whose message says the account is not in the directory.
+	inviteNotReady bool
 
 	minted  int
 	granted int
@@ -72,6 +77,12 @@ func (o *stubOrg) server(t *testing.T) *httptest.Server {
 			})
 		case strings.HasSuffix(r.URL.Path, "/service-accounts/invite"):
 			o.granted++
+			if o.inviteNotReady {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(
+					`{"detail":"the account was not found in the directory"}`))
+				return
+			}
 			_, _ = w.Write([]byte(`{}`))
 		case strings.Contains(r.URL.Path, "/manage/api-tokens") && r.Method == http.MethodGet:
 			if o.onTokenRead != nil {
@@ -561,5 +572,49 @@ func TestACheckWithNoSinkHasNothingToComplete(t *testing.T) {
 	}
 	if len(res.Seats) != 1 || res.Seats[0].AccountID != "" {
 		t.Errorf("a check reported an account it did not create: %+v", res.Seats)
+	}
+}
+
+// A SEAT ATLASSIAN HAS NOT FINISHED CREATING IS NOT A FAILED IDENTITY.
+//
+// Atlassian will not grant product access to an account it has only just made,
+// and answers the invite with a 404 saying the account is not in the
+// directory. The next pass grants it; nobody has to do anything.
+//
+// It was reported as identity_failed, which classifies DEGRADED and owed by an
+// ADMIN — so the card read "Action required" and "you, at the third-party app"
+// about a seat no person could help, on the brisk admin cadence, over a
+// condition that clears itself within a minute. The sentence under it even
+// said what was really happening: "waiting for Atlassian to make its new
+// account grantable".
+//
+// grant_pending is the kind for exactly this, and until now nothing in the
+// tree produced it.
+func TestASeatAtlassianCannotGrantYetIsPendingRatherThanFailed(t *testing.T) {
+	t.Parallel()
+	o := &stubOrg{empty: true, inviteNotReady: true}
+	s := &sink{}
+
+	res := run(t, o, s)
+
+	var kinds []integration.FindingKind
+	for _, f := range res.Findings() {
+		kinds = append(kinds, f.Kind)
+	}
+	if !slices.Contains(kinds, integration.FindingGrantPending) {
+		t.Fatalf("a seat waiting on Atlassian reported %v, want a grant_pending", kinds)
+	}
+	if slices.Contains(kinds, integration.FindingIdentityFailed) {
+		t.Errorf("a seat waiting on Atlassian was reported as a failed identity: %v", kinds)
+	}
+
+	// AND THE VERDICT IS WHAT THE CARD READS, which is the half that made
+	// this worth a finding kind of its own.
+	phase, actor := integration.FindingGrantPending.Verdict()
+	if phase != integration.PhaseActivating || actor != integration.ActorProvider {
+		t.Fatalf("grant_pending is %s/%s, want activating and the provider", phase, actor)
+	}
+	if actor.WaitsOnAPerson() {
+		t.Error("a seat waiting on Atlassian was reported as owed by a person")
 	}
 }
