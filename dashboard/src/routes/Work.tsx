@@ -49,7 +49,13 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { fmtDateTime, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import type { WorkIncomplete, WorkStatus, WorkSummary, WorkView } from "~/protocol/index.ts";
+import type {
+  WorkGroup,
+  WorkIncomplete,
+  WorkStatus,
+  WorkSummary,
+  WorkView,
+} from "~/protocol/index.ts";
 
 /** The board's own vocabulary, rendered. A closed set, so a status the engine
  *  adds later shows as itself rather than vanishing from the filter. */
@@ -159,6 +165,8 @@ export function Work() {
     [data],
   );
 
+  const shown = useMemo(() => shownRows(rows, groups), [groups, rows]);
+
   // FROM THE ROWS ALONE. The board used to take the project list from a
   // minted-counter map the bucket carried; a task's counter is now arbitrated
   // on its project's own subject and no listing carries it, so the filter
@@ -166,20 +174,20 @@ export function Work() {
   // built from a page can honestly offer.
   const projects = useMemo(() => {
     const keys = new Set<string>();
-    for (const item of rows) keys.add(item.project);
+    for (const item of shown) keys.add(item.project);
     return [...keys].sort();
-  }, [rows]);
+  }, [shown]);
 
   const byStatus = useMemo(() => {
     const counts: Record<string, number> = {};
-    for (const item of rows) counts[item.status] = (counts[item.status] ?? 0) + 1;
+    for (const item of shown) counts[item.status] = (counts[item.status] ?? 0) + 1;
     return counts;
-  }, [rows]);
+  }, [shown]);
 
   // BLOCKED IS COUNTED FROM THE FLAG, not from a status: a task is blocked
   // AND in progress, so counting it as a status would have hidden it in
   // whichever of the two the row happened to carry.
-  const blocked = useMemo(() => rows.filter((r) => r.blocked).length, [rows]);
+  const blocked = useMemo(() => shown.filter((r) => r.blocked).length, [shown]);
 
   const seatName = (handle: string) => index.byHandle.get(handle)?.name ?? handle;
 
@@ -197,8 +205,8 @@ export function Work() {
         <StatRow cols={4}>
           <Stat
             label="Shown"
-            value={rows.length}
-            sub={totalHint(data?.total_hint ?? 0, rows.length)}
+            value={shown.length}
+            sub={totalHint(data?.total_hint ?? 0, shown.length)}
           />
           <Stat label="In progress" value={byStatus.in_progress ?? 0} />
           <Stat label="Blocked" value={blocked} icon={blocked ? "alert" : undefined} />
@@ -302,14 +310,14 @@ export function Work() {
         <>
           {data?.groups_overlap && (
             <Banner tone="info">
-              One item can be on several of these columns, so the counts add up
-              to more than the total.
+              One item can be on several of these columns, so the counts add up to more than the
+              total.
             </Banner>
           )}
           {data?.groups_dropped ? (
             <Banner tone="caution">
-              {data.groups_dropped} more column{data.groups_dropped === 1 ? "" : "s"}{" "}
-              did not fit and are not shown.
+              {data.groups_dropped} more column{data.groups_dropped === 1 ? "" : "s"} did not fit
+              and are not shown.
             </Banner>
           ) : null}
           <div className="board">
@@ -355,97 +363,99 @@ export function Work() {
       >
         <Coverage answer={data} />
         {groups.length === 0 && (
-        <Panel>
-          <DataTable
-            rows={rows}
-            rowKey={(r) => r.id}
-            defaultSort={{ key: "updated", dir: "desc" }}
-            columns={[
-              {
-                key: "key",
-                header: "Key",
-                shrink: true,
-                sortValue: (r) => r.key,
-                cell: (r) => (
-                  <a className="mono" href={href(["work", r.key])}>
-                    {r.key}
-                  </a>
-                ),
-              },
-              {
-                key: "title",
-                header: "Title",
-                sortValue: (r) => r.title,
-                cell: (r) => (
-                  <a href={href(["work", r.key])} className="truncate">
-                    {r.title}
-                  </a>
-                ),
-              },
-              {
-                key: "status",
-                header: "Status",
-                shrink: true,
-                sortValue: (r) => r.status,
-                cell: (r) => (
-                  <>
-                    <Badge tone={STATUS_TONE[r.status] ?? "neutral"} dot>
-                      {STATUSES.find((s) => s.value === r.status)?.label ?? r.status}
-                    </Badge>
-                    {/* BESIDE the status rather than instead of it, which is
+          <Panel>
+            <DataTable
+              rows={rows}
+              rowKey={(r) => r.id}
+              defaultSort={{ key: "updated", dir: "desc" }}
+              columns={[
+                {
+                  key: "key",
+                  header: "Key",
+                  shrink: true,
+                  sortValue: (r) => r.key,
+                  cell: (r) => (
+                    <a className="mono" href={href(["work", r.key])}>
+                      {r.key}
+                    </a>
+                  ),
+                },
+                {
+                  key: "title",
+                  header: "Title",
+                  sortValue: (r) => r.title,
+                  cell: (r) => (
+                    <a href={href(["work", r.key])} className="truncate">
+                      {r.title}
+                    </a>
+                  ),
+                },
+                {
+                  key: "status",
+                  header: "Status",
+                  shrink: true,
+                  sortValue: (r) => r.status,
+                  cell: (r) => (
+                    <>
+                      <Badge tone={STATUS_TONE[r.status] ?? "neutral"} dot>
+                        {STATUSES.find((s) => s.value === r.status)?.label ?? r.status}
+                      </Badge>
+                      {/* BESIDE the status rather than instead of it, which is
                         the whole reason it is its own field: a task in
                         progress with an open blocker is both, and a column
                         that showed one would hide the other. */}
-                    {r.blocked && (
-                      <Badge tone="critical" outline>
-                        Blocked
-                      </Badge>
-                    )}
-                  </>
-                ),
-              },
-              {
-                key: "priority",
-                header: "Priority",
-                shrink: true,
-                sortValue: (r) => r.priority ?? "",
-                cell: (r) =>
-                  r.priority && r.priority !== "normal" ? (
-                    <Badge tone={PRIORITY_TONE[r.priority] ?? "neutral"}>{r.priority}</Badge>
-                  ) : (
-                    <span className="dim">—</span>
+                      {r.blocked && (
+                        <Badge tone="critical" outline>
+                          Blocked
+                        </Badge>
+                      )}
+                    </>
                   ),
-              },
-              {
-                key: "assignee",
-                header: "Assignee",
-                shrink: true,
-                sortValue: (r) => r.assignee ?? "",
-                cell: (r) =>
-                  r.assignee ? (
-                    <SeatChip name={seatName(r.assignee)} handle={r.assignee} />
-                  ) : (
-                    // NOBODY IS A STATE, and the one worth seeing: an
-                    // unassigned item routes to the project's lead, and a
-                    // project with no lead routes to nobody at all.
-                    <span className="dim">Unassigned</span>
+                },
+                {
+                  key: "priority",
+                  header: "Priority",
+                  shrink: true,
+                  sortValue: (r) => r.priority ?? "",
+                  cell: (r) =>
+                    r.priority && r.priority !== "normal" ? (
+                      <Badge tone={PRIORITY_TONE[r.priority] ?? "neutral"}>{r.priority}</Badge>
+                    ) : (
+                      <span className="dim">—</span>
+                    ),
+                },
+                {
+                  key: "assignee",
+                  header: "Assignee",
+                  shrink: true,
+                  sortValue: (r) => r.assignee ?? "",
+                  cell: (r) =>
+                    r.assignee ? (
+                      <SeatChip name={seatName(r.assignee)} handle={r.assignee} />
+                    ) : (
+                      // NOBODY IS A STATE, and the one worth seeing: an
+                      // unassigned item routes to the project's lead, and a
+                      // project with no lead routes to nobody at all.
+                      <span className="dim">Unassigned</span>
+                    ),
+                },
+                {
+                  key: "updated",
+                  header: "Updated",
+                  shrink: true,
+                  align: "right",
+                  sortValue: (r) => tsKey(r.updated),
+                  cell: (r) => (
+                    <span title={fmtDateTime(r.updated)}>{relTime(r.updated, now)}</span>
                   ),
-              },
-              {
-                key: "updated",
-                header: "Updated",
-                shrink: true,
-                align: "right",
-                sortValue: (r) => tsKey(r.updated),
-                cell: (r) => <span title={fmtDateTime(r.updated)}>{relTime(r.updated, now)}</span>,
-              },
-            ]}
-          />
-        </Panel>
+                },
+              ]}
+            />
+          </Panel>
         )}
       </QueryState>
 
-      {!loading && !error && projects.length === 0 && rows.length === 0 && (
+      {!loading && !error && projects.length === 0 && shown.length === 0 && (
         <Empty
           icon="inbox"
           title="No work has been filed yet"
@@ -457,6 +467,25 @@ export function Work() {
 }
 
 /** One item: its description, its thread and everything that moved it. */
+/**
+ * EVERY ROW ON SCREEN, grouped or flat.
+ *
+ * A grouped answer carries NO flat `items` by construction — `groups` replaces
+ * them, because returning both would be the same rows twice — so everything
+ * derived from `items` alone reported a fully populated board as empty: the
+ * header read 0 shown, 0 in progress, 0 blocked, and the panel at the foot of
+ * the screen drew "No work has been filed yet" underneath the board's own
+ * columns.
+ *
+ * The top-level rows are enough and subgroup rows are deliberately NOT added:
+ * a subgroup's rows are a slice of its own column's, so folding them in would
+ * count the same task twice.
+ */
+export function shownRows(items: WorkSummary[], groups: WorkGroup[]): WorkSummary[] {
+  if (groups.length === 0) return items;
+  return groups.flatMap((group) => group.rows);
+}
+
 export function WorkItem({ id }: { id: string }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
@@ -481,7 +510,7 @@ export function WorkItem({ id }: { id: string }) {
               <Badge tone={STATUS_TONE[item.status] ?? "neutral"} dot>
                 {STATUSES.find((s) => s.value === item.status)?.label ?? item.status}
               </Badge>
-              {item.blocked && (
+              {data?.blocked && (
                 <Badge tone="critical" outline>
                   Blocked
                 </Badge>
@@ -668,8 +697,8 @@ function Coverage({ answer }: { answer?: CoverageFacts | null }) {
               ? ` — ${answer.incomplete.records} record(s) this build cannot read`
               : ""}
           </strong>{" "}
-          Rows may be missing, rows that should have gone may still be here, and the
-          counts were computed over what is shown.
+          Rows may be missing, rows that should have gone may still be here, and the counts were
+          computed over what is shown.
           {answer.incomplete?.scope?.length
             ? ` Affected: ${answer.incomplete.scope.join(", ")}.`
             : ""}

@@ -1314,19 +1314,47 @@ export interface WorkLink {
  *  `estimate_minutes` on a task. Inheriting them made the compiler promise
  *  fields the server never sends — which is how a Blocked badge that renders
  *  on the board silently never renders on the item it links to. */
-export interface WorkItem extends WorkSummary {
+export interface WorkItem {
+  id: string;
+  key: string;
+  project: string;
+  /** The unit this was FILED into, immutable and a record of what was true;
+   *  routing_unit is the mutable half — whose lead hears about it now. */
+  filed_unit?: string;
+  routing_unit?: string;
+  sprint?: number;
+  parent?: string;
+  depth?: number;
   type?: WorkType;
+  title: string;
   body?: string;
+  body_version?: number;
+  status: WorkStatus;
+  status_group?: WorkStatusGroup;
+  priority?: WorkPriority;
+  rank?: string;
   reporter?: string;
+  assignee?: string;
   collaborators?: string[];
+  /** The set, and `muted` the subtraction: "not a watcher" and "watching but
+   *  muted" are different facts and both travel. */
   watchers?: string[];
+  muted?: string[];
   tags?: string[];
+  start_at?: string;
+  due_at?: string;
+  due_all_day?: boolean;
+  estimate_minutes?: number;
+  points?: number;
+  archived?: boolean;
   /** The item's own hand-off budget, spent by an agent reassigning it and
    *  reset by any human touch. Past its cap the engine refuses the next
    *  hand-off rather than letting the item circle. */
   reassignments?: number;
   created_at?: string;
   updated_at?: string;
+  /** The composed log position this task was last written at. */
+  version: number;
 }
 
 export interface WorkItemDetail {
@@ -1334,6 +1362,12 @@ export interface WorkItemDetail {
   comments?: WorkComment[];
   history?: WorkChange[];
   links?: WorkLink[];
+  /** The SAME predicate WorkSummary.blocked carries — an open dependency edge
+   *  — computed by the server in the same transaction as the task, so the
+   *  badge here and the badge on the board row cannot disagree. It is on the
+   *  ANSWER rather than on the task because it is derived rather than stored:
+   *  `links` say what the relations are, not whether any blocker is open. */
+  blocked?: boolean;
   read_level?: ReadLevel;
   log_seq?: number;
   applied_through?: number;
