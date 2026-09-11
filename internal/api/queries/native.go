@@ -50,6 +50,7 @@ type WorkReader interface {
 	Task(ctx context.Context, idOrKey string, want tracker.DetailWants,
 		level statelog.ReadLevel) (tracker.TaskDetail, error)
 	Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error)
+	Goals(ctx context.Context, q tracker.GoalQuery) (tracker.GoalListing, error)
 }
 
 // PageReader is the knowledge read side this surface calls.
@@ -205,6 +206,39 @@ func viewContainer(p Params) (tracker.Container, error) {
 		id = strings.ToUpper(id)
 	}
 	return tracker.Container{Kind: kind, ID: id}, nil
+}
+
+// workGoals answers the company's goals, each with what its targets say.
+//
+// THE PROGRESS IS COMPUTED, never stored — see [tracker.Reader.Goals]. A
+// stored percentage is a second answer to a question that already has one, and
+// the two drift the moment a task in a target closes without anybody editing
+// the goal.
+func (s Sources) workGoals(ctx context.Context, p Params) (any, error) {
+	listing, err := s.Work.Goals(ctx, tracker.GoalQuery{
+		ID:       strings.TrimSpace(p.String("id")),
+		Owner:    strings.TrimSpace(p.String("owner")),
+		Group:    strings.TrimSpace(p.String("group")),
+		Archived: p.Bool("archived", false),
+		// STALE, like every other dashboard poll — see
+		// [Sources.workItems] for the arithmetic.
+		Level: statelog.ReadStale,
+	})
+	if err != nil {
+		return nil, unavailableIfBehind(err)
+	}
+	out := map[string]any{
+		"goals": listing.Goals, "read_level": listing.Level,
+		"log_seq": listing.LogSeq, "applied_through": listing.AppliedThrough,
+		"complete": listing.Complete,
+	}
+	if listing.LogLag != nil {
+		out["log_lag"] = *listing.LogLag
+	}
+	if listing.Incomplete != nil {
+		out["incomplete"] = listing.Incomplete
+	}
+	return out, nil
 }
 
 // ---- pages ------------------------------------------------------------- //

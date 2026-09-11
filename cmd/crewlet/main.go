@@ -2039,6 +2039,13 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 				return writer.As(actor.Handle, actor.Kind,
 					tracker.Provenance{OperatorID: actor.OperatorID})
 			},
+			// AND THE GOAL WRITER, for the same reason: a goal is an
+			// outcome a person commits the company to, so no seat is
+			// given the tool that sets one.
+			GoalWriter: func(actor builtin.Actor) builtin.GoalWriter {
+				return writer.As(actor.Handle, actor.Kind,
+					tracker.Provenance{OperatorID: actor.OperatorID})
+			},
 			Actor: opsmcp.WorkActor,
 			Await: e.WaitCommitted,
 		}

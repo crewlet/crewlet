@@ -99,6 +99,7 @@ A body that does not arrive inside its deadline fails the read like any other tr
 | `GET` | `/work/retention/reanchor` | The live stream's own `created_at`, which a reanchor's confirmation has to echo |
 | `POST` | `/work/retention/reanchor` | Adopt a recreated stream at the next generation |
 | `GET` | `/work/views` | One container's **view strip**: the three every container has without anybody saving one, the two more a sprinting project adds, and whatever was saved beyond them. `?container=` takes the query grammar's own spelling (`workspace`, `project:ENG`, `unit:engineering`, `person:ana`) and `?viewer=` is whose personal views and pins order the strip |
+| `GET` | `/work/goals` | The company's **goals**, each with what its targets say. `?owner=` narrows to the goals a handle owns **or** contributes to, `?group=` to the free-text label they are filed under, and `?archived=true` includes the archived ones. Every percentage in the answer is computed from the work at read time and stored nowhere |
 | `GET` | `/work/{id}` | One item with its description, thread, history and links. `{id}` is either the key (`ENG-42`) or the id — a person holds the first and every internal link the second |
 | `GET` | `/pages` | The company's own knowledge base: a filtered listing. Served only where `knowledge.backend` is `native` |
 | `GET` | `/pages/{id}` | One page with its body, comments, revision metadata, children and ancestor breadcrumb. `{id}` is the id, or `CONTAINER/Title` — the title matches the way the fleet CLAIMED it, so case and runs of whitespace are ignored and `ENG/deploy runbook` reaches a page called "Deploy  Runbook" |
@@ -1216,6 +1217,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `integrations` | — | `GET /integrations` |
 | `work_items` | `{container, status, status_group, assignee, reporter, watcher, collaborator, tag, type, priority, sprint, parent, root, q, cursor, limit, …}` | `GET /work`. `container` is the scope — `workspace`, or `project:ENG` (a bare `ENG` works too, and the key is upper-cased because the column is) — and an ABSENT container is neither: the engine refuses to default it, because an omitted key would otherwise be the most expensive query in the system. Every list key is comma-separated, because a socket frame's JSON object cannot carry a repeated key and a filter only one transport can express is exactly the divergence this channel exists to prevent; `status` also takes `!` negation. There is no `open` flag — open and closed are STATUS GROUPS (`not_started`, `active`, `done`, `closed`), which is the level every rule in the tracker is written at. `key=ENG-1,ENG-7` narrows to keys a caller already holds, and `removed=true` is the TRASH — the only way to list what a removal hid, which is what a restore is a gesture about. A parameter this grammar does not read is REFUSED naming it, never ignored: a filter nobody parsed is a board showing more than the person asked for, silently. An unknown status or group is refused naming the closed set rather than matching nothing. The answer carries `total_hint` (capped — an exact total over an unbounded set turns a poll into a scan), `next_cursor`, and the coverage half below |
 | `work_item` | `{id}` | `GET /work/{id}` — key or id. Answers `{task, comments, history, links}` plus the same coverage half |
+| `work_goals` | `{id, owner, group, archived}` | `GET /work/goals`. `id` asks for exactly one. Each goal carries its targets, and each target its own `progress` — a fraction from 0 to 1, or ABSENT when the target measures nothing: a `tasks` target whose tasks were all purged, a numeric one that starts where it ends. The goal's own `progress` is the unweighted mean of the targets that do measure something, and is likewise absent when none do — "nothing has happened" and "there is nothing to measure" are different facts. A `tasks` target also carries `finished_tasks` and `total_tasks`, because "7 of 12" is the number a person acts on |
 | `work_views` | `{container, viewer}` | `GET /work/views`. `container` is the strip's own — `workspace`, `project:ENG`, `unit:engineering`, `person:ana` — and it is REQUIRED, because a strip belongs to exactly one. `viewer` is whose personal views appear and whose pins come first; absent is the shared strip. Every row carries `builtin`, which is what tells the three (five, on a sprinting project) nobody saved from the ones somebody did: a builtin row has no `id`, so there is nothing to rename, protect, rank or pin. `params` is the saved query in `work_items`' own parameter names, so a caller runs a view by handing them straight back |
 
 **Every tracker answer carries how far this node had got, and both halves
@@ -1308,11 +1310,13 @@ The **same tools a seat holds**, not a parallel implementation: `list_work_items
 refusal are each written once — two copies of "file an item" drift on exactly
 the parts nobody looks at, and only one of the two is ever tested.
 
-Plus **two no seat is given**: `list_work_views` and `save_work_view`. A view is
-furniture — a name, a shape and a filter, arranged so a person finds the same
-question tomorrow — and a seat's job is the work rather than the furniture
-around it. A seat that could rearrange a shared board would be one more thing a
-founder has to supervise, for no delivery.
+Plus **four no seat is given**: `list_work_views`, `save_work_view`,
+`list_work_goals` and `write_work_goal`. A view is furniture — a name, a shape
+and a filter, arranged so a person finds the same question tomorrow — and a
+seat's job is the work rather than the furniture around it. A goal is an
+outcome a *person* commits the company to, with owners who report on it; a seat
+setting its own goals is a seat marking its own homework. `write_work_goal`
+takes no progress argument at all, because there is nowhere to put one.
 
 Each tool appears only where its half of the company is native: a company on
 `tracker.backend: jira` gets the page tools and not the work tools, and one on

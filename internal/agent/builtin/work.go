@@ -55,6 +55,7 @@ type WorkReader interface {
 	Task(ctx context.Context, idOrKey string, want tracker.DetailWants,
 		level statelog.ReadLevel) (tracker.TaskDetail, error)
 	Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error)
+	Goals(ctx context.Context, q tracker.GoalQuery) (tracker.GoalListing, error)
 }
 
 // WorkWriter is what these tools need from the tracker's write side.
@@ -93,6 +94,10 @@ type WorkDeps struct {
 	// the verb into one interface would make a seat's registration
 	// implement a method nothing there may call.
 	ViewWriter func(actor Actor) ViewWriter
+
+	// GoalWriter resolves the goal write side for one actor, and is the
+	// operator surface's alone for the same reason ViewWriter is.
+	GoalWriter func(actor Actor) GoalWriter
 
 	// Mentions resolves the handles a comment names, so a mention wakes
 	// the person the author meant. Nil resolves nothing, which degrades to

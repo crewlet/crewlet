@@ -110,6 +110,26 @@ func argBool(args map[string]any, key string) bool {
 	return value
 }
 
+// argFloat reads a numeric argument, zero when absent or not one.
+//
+// ZERO RATHER THAN A REFUSAL, because every caller of this one has a field
+// whose zero IS its default — a target that starts at zero, a current nobody
+// has moved. A field where zero were a distinct setting would take a pointer,
+// which is the rule the config models follow for the same reason.
+func argFloat(args map[string]any, key string) float64 {
+	switch v := args[key].(type) {
+	case float64:
+		return v
+	case int:
+		return float64(v)
+	case string:
+		if n, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+			return n
+		}
+	}
+	return 0
+}
+
 // argStringMap reads an object argument whose values are strings.
 //
 // A NON-STRING VALUE IS RENDERED rather than dropped, because a model writing

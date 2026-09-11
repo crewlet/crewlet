@@ -84,6 +84,13 @@ export const NAV: NavGroup[] = [
         hint: "Every item on the company's own tracker, and what moved it",
       },
       {
+        key: "goals",
+        label: "Goals",
+        icon: "target",
+        path: ["goals"],
+        hint: "The tier above projects, and what its targets say right now",
+      },
+      {
         key: "runs",
         label: "Coding runs",
         icon: "terminal",

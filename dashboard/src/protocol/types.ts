@@ -1059,6 +1059,62 @@ export interface WorkViewsAnswer {
   incomplete?: WorkIncomplete;
 }
 
+/** One measurable outcome under a goal. */
+export interface WorkGoalTarget {
+  id: string;
+  name: string;
+  type: "tasks" | "number" | "percent" | "binary";
+  start?: number;
+  goal?: number;
+  current?: number;
+  unit?: string;
+  tasks?: string[];
+  projects?: string[];
+  done?: boolean;
+  /** 0..1, ABSENT when the target measures nothing — a `tasks` target whose
+   *  tasks were all purged, or a numeric one that starts where it ends.
+   *  Rendering that as 0% is a goal somebody escalates. */
+  progress?: number;
+  finished_tasks?: number;
+  total_tasks?: number;
+}
+
+/** A goal, with what its targets say.
+ *
+ *  THE PROGRESS IS COMPUTED ON EVERY READ and stored nowhere. A goal is at
+ *  what its targets are at; a stored number would be a second answer that
+ *  drifts the moment a task closes without anybody editing the goal. */
+export interface WorkGoal {
+  id: string;
+  name: string;
+  description?: string;
+  owners: string[];
+  members?: string[];
+  group?: string;
+  health?: "on_track" | "at_risk" | "off_track" | "done" | "";
+  start_at?: string;
+  due_at?: string;
+  archived?: boolean;
+  targets?: WorkGoalTarget[];
+  /** ABSENT when the goal has no targets — "nothing has happened" and "there
+   *  is nothing to measure" are different facts. */
+  progress?: number;
+  version: number;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkGoalsAnswer {
+  goals: WorkGoal[];
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
 export interface WorkComment {
   id: string;
   task: string;
@@ -1620,6 +1676,7 @@ export interface QueryMap {
   work_items: WorkItemsAnswer;
   work_item: WorkItemDetail;
   work_views: WorkViewsAnswer;
+  work_goals: WorkGoalsAnswer;
   pages: PagesAnswer;
   page: PageDetail;
   containers: { containers: PageContainer[] };

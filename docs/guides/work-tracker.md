@@ -71,9 +71,37 @@ reconstruction.
 
 **Goals** are the tier above projects: a name, owners, dates, a health value
 and a free-text group label. A goal has **targets**, and a target references
-work — a project, a set of tasks, a query. Goals deliberately have no
-percentage: what a goal is at is what its targets say, and a stored number
-would be a second answer that drifts.
+work — a project, a set of tasks, a number somebody moves by hand. Goals
+deliberately have no *stored* percentage: what a goal is at is what its targets
+say, and a stored number would be a second answer that drifts the moment a task
+in a target closes without anybody editing the goal.
+
+So the number is **computed on every read**, from the rows the read already
+holds:
+
+| Target type | What it is at |
+|---|---|
+| `tasks` | the fraction of the tasks it reaches that are **finished** — `done` and `cancelled` alike, because the status *group* decides. A removed task is not counted on either side, so tidying up never moves a goal backwards. |
+| `number`, `percent` | the fraction of the distance from its start to its goal, **clamped** to 0–100%: a target routinely overshoots, and a progress bar at 130% is a rendering bug in every screen that draws one. The raw number is on the target. |
+| `binary` | one or zero. |
+
+A goal's own progress is the **unweighted mean** of its targets. Weighting
+would be a second set of numbers somebody has to maintain and nobody would, and
+an unweighted mean is wrong *visibly* rather than quietly: two targets, one
+enormous and one trivial, read as half done when the trivial one lands, and the
+reader can see exactly which it was.
+
+A goal with **no targets has no progress at all** — not zero. "Nothing has
+happened" and "there is nothing to measure" are different facts, and a goal
+rendered at 0% because nobody set a target is one somebody escalates.
+
+**Health is not inferred.** The targets say what has moved; only an owner knows
+whether the movement is on track. A goal at 90% with a week left and one at 90%
+with a day left are different situations, and no arithmetic separates them.
+
+Goals are read at `GET /work/goals` and on the dashboard's Goals screen, and
+written through the operator MCP with `write_work_goal` — not by a seat. A
+seat setting its own goals is a seat marking its own homework.
 
 ## Views
 

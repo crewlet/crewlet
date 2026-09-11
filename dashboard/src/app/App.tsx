@@ -12,6 +12,7 @@ import { Shell } from "./Shell.tsx";
 import { ToastProvider } from "~/ui/Toast.tsx";
 import { useRoute } from "./router.tsx";
 import { Overview } from "~/routes/Overview.tsx";
+import { Goals } from "~/routes/Goals.tsx";
 import { People } from "~/routes/People.tsx";
 import { SeatScreen } from "~/routes/Seat.tsx";
 import { OrgScreen } from "~/routes/Org.tsx";
@@ -54,6 +55,8 @@ function Screen() {
     // not have to know which it was handed.
     case "work":
       return id ? <WorkItem id={id} /> : <Work />;
+    case "goals":
+      return <Goals />;
     case "pages":
       return id ? <PageView id={id} /> : <Pages />;
     case "conversations":

@@ -62,6 +62,8 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		// workviews.go for why a seat is not given them.
 		{&listWorkViews{deps: work}, work.Reader != nil},
 		{&saveWorkView{deps: work}, work.ViewWriter != nil},
+		{&listWorkGoals{deps: work}, work.Reader != nil},
+		{&writeWorkGoal{deps: work}, work.GoalWriter != nil},
 		{&listPages{deps: pages}, pages.Reader != nil},
 		{&getPage{deps: pages}, pages.Reader != nil},
 		{&writePage{deps: pages}, pages.Writer != nil},

@@ -32,11 +32,22 @@ const (
 const (
 	ListWorkViewsTool = "list_work_views"
 	SaveWorkViewTool  = "save_work_view"
+
+	// The GOAL tools, and the same rule puts them here: a goal is an
+	// outcome a PERSON commits the company to, with owners who report on
+	// it. A seat setting its own goals is a seat marking its own homework,
+	// and the delegation this engine is built on already gives a founder a
+	// better lever — the work itself.
+	ListWorkGoalsTool = "list_work_goals"
+	WriteWorkGoalTool = "write_work_goal"
 )
 
 // OperatorOnlyTools are the ones the operator surface adds to [Tools].
 func OperatorOnlyTools() []string {
-	return []string{ListWorkViewsTool, SaveWorkViewTool}
+	return []string{
+		ListWorkViewsTool, SaveWorkViewTool,
+		ListWorkGoalsTool, WriteWorkGoalTool,
+	}
 }
 
 // Tools are the five, so a caller registering them names one thing.
