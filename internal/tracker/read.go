@@ -96,6 +96,11 @@ type Answer struct {
 	TotalHint  int    `json:"total_hint"`
 	NextCursor string `json:"next_cursor,omitempty"`
 
+	// Totals are the aggregates the query asked for, over the WHOLE
+	// matched set rather than over this page — a number on a header that
+	// changed as somebody scrolled would be the one thing it must not do.
+	Totals []Total `json:"totals,omitempty"`
+
 	// Level is the level ACTUALLY served, set from the statement that
 	// satisfied the barrier — never the level asked for. A level never
 	// silently downgrades, so the two can only differ by a refusal.
@@ -185,8 +190,6 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 	if limit > PageMax {
 		limit = PageMax
 	}
-	terms := sortTerms(q)
-
 	if q.Level == "" {
 		// ABSENT IS NOT A FOURTH STATE and it is not a default either —
 		// it resolves to the SURFACE's own, which is what makes the
@@ -226,6 +229,10 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 		if err != nil {
 			return err
 		}
+		// THE ORDER IS COMPILED AFTER THE RESOLUTION TOO, because a
+		// `sort=f.<slug>` term is a JOIN onto the field's own values and
+		// the field is only known once the catalogue has been read.
+		terms := sortTerms(q, fields)
 		rows, cursor, err := readTasks(ctx, tx, where, args, terms, limit)
 		if err != nil {
 			return err
@@ -237,6 +244,17 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 			return err
 		}
 		answer.TotalHint = hint
+
+		// THE SAME PREDICATE AND THE SAME TRANSACTION as the rows, so a
+		// total and the page it sits above describe one instant.
+		totals, exprs, totalArgs, err := compileTotals(q.Totals, fields)
+		if err != nil {
+			return err
+		}
+		answer.Totals, err = readTotals(ctx, tx, where, args, totals, exprs, totalArgs)
+		if err != nil {
+			return err
+		}
 
 		position, applied, err := readCheckpoint(ctx, tx)
 		if err != nil {
@@ -590,7 +608,7 @@ func compile(q Query, now time.Time, fields map[string]resolvedField) (string, [
 	}
 
 	if q.Cursor != "" {
-		clause, values, err := cursorClause(q)
+		clause, values, err := cursorClause(q, fields)
 		if err != nil {
 			return "", nil, err
 		}
@@ -748,6 +766,16 @@ func flagColumn(flag string) (string, bool) {
 type sortTerm struct {
 	Column     string
 	Descending bool
+
+	// Join is the LEFT JOIN a custom-field sort needs, empty for a plain
+	// column. LEFT because a field the task never set must still appear:
+	// an inner join would silently drop every task with no value, which
+	// is a sort that also filters.
+	Join string
+
+	// JoinArgs are the join's bound values, which ride AHEAD of the
+	// predicate's: a join is written before the WHERE.
+	JoinArgs []any
 }
 
 // sortColumns is what a caller may order by.
@@ -764,9 +792,35 @@ var sortColumns = map[string]string{
 // one update instant, would otherwise come back in whatever order the storage
 // felt like, and a page boundary between them would drop one and repeat the
 // other on every poll.
-func sortTerms(q Query) []sortTerm {
+func sortTerms(q Query, fields map[string]resolvedField) []sortTerm {
 	var terms []sortTerm
-	for _, sort := range q.Sort {
+	for i, sort := range q.Sort {
+		if ref, ok := strings.CutPrefix(sort.Key, FieldKeyPrefix); ok && ref != "" {
+			field, held := fields[ref]
+			if !held {
+				continue
+			}
+			// ONE ALIAS PER TERM, numbered, because two field sorts
+			// in one order are two joins and a shared alias would
+			// make the second silently re-use the first's field.
+			//
+			// AND `seq = 0` PINS IT TO ONE ROW: a labels field has
+			// several, and a join that matched them all would
+			// multiply every task by its own value count — a sort
+			// that duplicates rows.
+			alias := "fs" + strconv.Itoa(i)
+			terms = append(terms, sortTerm{
+				Column:     alias + "." + FieldValueColumn(field.Type),
+				Descending: sort.Descending,
+				Join: " LEFT JOIN tracker_field_values " + alias +
+					" ON " + alias + ".task_id = t.id AND " + alias +
+					".field_id = ? AND " + alias + ".hidden = 0 AND " +
+					alias + ".kind <> '" + FieldValueForeign + "' AND " +
+					alias + ".seq = 0",
+				JoinArgs: []any{field.ID},
+			})
+			continue
+		}
 		column, known := sortColumns[sort.Key]
 		if !known {
 			continue
@@ -787,7 +841,23 @@ func sortTerms(q Query) []sortTerm {
 }
 
 // orderBy renders a query's sort as SQL.
-func orderBy(q Query) string { return renderOrder(sortTerms(q)) }
+func orderBy(q Query, fields map[string]resolvedField) string {
+	return renderOrder(sortTerms(q, fields))
+}
+
+// sortJoins is the join clause and arguments a compiled order needs.
+func sortJoins(terms []sortTerm) (string, []any) {
+	var clause strings.Builder
+	var args []any
+	for _, term := range terms {
+		if term.Join == "" {
+			continue
+		}
+		clause.WriteString(term.Join)
+		args = append(args, term.JoinArgs...)
+	}
+	return clause.String(), args
+}
 
 // renderOrder renders compiled sort terms as SQL.
 func renderOrder(terms []sortTerm) string {
@@ -829,7 +899,7 @@ type page struct {
 // id ASC` it is `a > ? OR (a = ? AND (b < ? OR (b = ? AND id > ?)))`. The
 // nesting is the definition of "later in this order" and nothing shorter is
 // correct for a mixed-direction sort.
-func cursorClause(q Query) (string, []any, error) {
+func cursorClause(q Query, fields map[string]resolvedField) (string, []any, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(q.Cursor)
 	if err != nil {
 		return "", nil, fmt.Errorf("tracker: the cursor is not one this surface "+
@@ -840,7 +910,7 @@ func cursorClause(q Query) (string, []any, error) {
 		return "", nil, fmt.Errorf("tracker: the cursor names no row to resume " +
 			"after")
 	}
-	terms := sortTerms(q)
+	terms := sortTerms(q, fields)
 	if len(resume.Keys) != len(terms) {
 		// A CURSOR FROM A DIFFERENT ORDER IS REFUSED, never applied to
 		// this one: resuming a rank-ordered page inside an
@@ -899,6 +969,10 @@ func readTasks(ctx context.Context, tx *sql.Tx, where string, args []any,
 
 	// ONE MORE THAN THE PAGE, which is how the answer knows whether there
 	// is another page without a second count.
+	// THE JOINS COME FIRST IN THE STATEMENT AND SO DO THEIR ARGUMENTS: a
+	// custom-field sort is a LEFT JOIN written before the WHERE, and a
+	// placeholder is bound in statement order rather than by name.
+	joins, joinArgs := sortJoins(terms)
 	query := `SELECT t.id, t.key, t.title, t.status, t.status_group, t.priority,
 	                 t.assignee, t.project_key, t.sprint_number, t.parent_id,
 	                 t.depth, t.start_at, t.due_at, t.estimate_min, t.points,
@@ -906,11 +980,12 @@ func readTasks(ctx context.Context, tx *sql.Tx, where string, args []any,
 	                 EXISTS (SELECT 1 FROM tracker_task_deps d
 	                         WHERE d.task_id = t.id AND d.blocker_open = 1), ` +
 		strings.Join(keys, ", ") + `
-	          FROM tracker_tasks t
+	          FROM tracker_tasks t` + joins + `
 	          WHERE ` + where + `
 	          ORDER BY ` + renderOrder(terms) + `
 	          LIMIT ?`
-	rows, err := tx.QueryContext(ctx, query, append(append([]any{}, args...), limit+1)...)
+	bound := append(append([]any{}, joinArgs...), args...)
+	rows, err := tx.QueryContext(ctx, query, append(bound, limit+1)...)
 	if err != nil {
 		return nil, "", fmt.Errorf("tracker: read tasks: %w", err)
 	}

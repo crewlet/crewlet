@@ -835,6 +835,10 @@ func (q *Query) parseTotals(p Params) error {
 				"no operation", entry)
 		}
 	}
+	// THE COLUMN AND THE OP ARE CHECKED AT COMPILE, not here, for the
+	// reason a custom-field filter is: `f.<slug>:sum` needs the catalogue
+	// to know whether the field is summable at all, and a parser that read
+	// one could fail on a store.
 	return nil
 }
 

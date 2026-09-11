@@ -157,6 +157,25 @@ func collectFieldRefs(q Query, into map[string]bool) {
 	if ref, ok := strings.CutPrefix(q.GroupBy2, FieldKeyPrefix); ok && ref != "" {
 		into[ref] = true
 	}
+	// AND THE SORT, because `sort=f.<slug>` names one too — and a sort
+	// term nothing resolved is silently dropped by [sortTerms], which
+	// answers in the DEFAULT order with nothing anywhere saying the
+	// caller's own ordering was ignored.
+	for _, sort := range q.Sort {
+		if ref, ok := strings.CutPrefix(sort.Key, FieldKeyPrefix); ok && ref != "" {
+			into[ref] = true
+		}
+	}
+	// AND THE TOTALS, because `f.<slug>:sum` names a field exactly as a
+	// filter does — and a total whose field never resolved is a header
+	// that reads as zero.
+	for _, entry := range q.Totals {
+		column, _, _ := strings.Cut(entry, ":")
+		if ref, ok := strings.CutPrefix(strings.TrimSpace(column),
+			FieldKeyPrefix); ok && ref != "" {
+			into[ref] = true
+		}
+	}
 	for _, branch := range q.Any {
 		collectFieldRefs(branch, into)
 	}
@@ -173,8 +192,9 @@ func fieldClause(filter FieldFilter, field resolvedField) (string, []any, error)
 	column := "v." + FieldValueColumn(field.Type)
 	inner := func(predicate string, args ...any) (string, []any, error) {
 		return "EXISTS (SELECT 1 FROM tracker_field_values v " +
-			"WHERE v.task_id = t.id AND v.field_id = ? AND v.hidden = 0 AND " +
-			predicate + ")", append([]any{field.ID}, args...), nil
+				"WHERE v.task_id = t.id AND v.field_id = ? AND " +
+				liveFieldValue + " AND " + predicate + ")",
+			append([]any{field.ID}, args...), nil
 	}
 	switch filter.Op {
 	case FieldOpNull:

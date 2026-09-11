@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"database/sql"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -275,5 +276,100 @@ func assertIDs(t *testing.T, got, want []string) {
 		if !containsString(got, id) {
 			t.Fatalf("got %v, want %v", got, want)
 		}
+	}
+}
+
+// A SORT ON A CUSTOM FIELD ORDERS BY IT, and it never did.
+//
+// `parseSort` accepts `f.<slug>` and `sortTerms` silently dropped it, so a
+// caller's own ordering was answered in the DEFAULT order with nothing
+// anywhere saying it had been ignored — the same silence an unparsed filter
+// has, one step further along.
+func TestASortOnACustomFieldOrdersByIt(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	seedFields(t, r)
+
+	// TEN AND NINE AGAIN, so a lexical sort and a numeric one disagree.
+	seedWithFields(t, r, "t-ten", map[string]any{"f-effort": 10})
+	seedWithFields(t, r, "t-nine", map[string]any{"f-effort": 9})
+	seedWithFields(t, r, "t-one", map[string]any{"f-effort": 1})
+
+	got := ids(r.ask(map[string]any{
+		"container": "project:ENG", "sort": "f.effort",
+	}))
+	want := []string{"t-one", "t-nine", "t-ten"}
+	for i, id := range want {
+		if i >= len(got) || got[i] != id {
+			t.Fatalf("the order is %v, want %v — a field sort that fell back "+
+				"to the default would be in creation order", got, want)
+		}
+	}
+
+	// AND DESCENDING IS THE OTHER WAY, or the direction was dropped too.
+	if got := ids(r.ask(map[string]any{
+		"container": "project:ENG", "sort": "-f.effort",
+	})); len(got) == 0 || got[0] != "t-ten" {
+		t.Fatalf("the descending order is %v, want the largest first", got)
+	}
+
+	// A TASK THAT SET NOTHING STILL APPEARS: the join is LEFT, because an
+	// inner one would make a sort silently filter.
+	seedWithFields(t, r, "t-none", nil)
+	if got := ids(r.ask(map[string]any{
+		"container": "project:ENG", "sort": "f.effort",
+	})); !containsString(got, "t-none") {
+		t.Fatalf("the order is %v and drops the task with no value — a sort "+
+			"that also filters is two things the caller asked for once", got)
+	}
+}
+
+// A FOREIGN VALUE IS STORED AND NEVER FILTERED ON.
+//
+// The DDL says so in its own head comment: "every filter and total adds
+// `hidden = 0 AND kind <> 'foreign'`". A value mirrored in from a tracker a
+// company runs beside this one is there to render, and it is out of every
+// predicate because the native operators are defined against the native
+// catalogue's declared types.
+func TestAForeignValueIsOutOfEveryPredicate(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	seedFields(t, r)
+	seedWithFields(t, r, "t-1", map[string]any{"f-effort": 8})
+	// A REAL TASK carrying no native value of its own, so the only thing
+	// that could put it in the answer is the foreign row planted below.
+	seedWithFields(t, r, "t-mirrored", nil)
+
+	// The engine has no foreign writer yet, so the row is planted the way
+	// a mirror would write it — which is what this case is about: the
+	// PREDICATE, not the writer.
+	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
+			INSERT INTO tracker_field_values
+				(task_id, field_id, seq, kind, hidden, num)
+			VALUES ('t-mirrored', 'f-effort', 0, ?, 0, 8)`,
+			tracker.FieldValueForeign)
+		return err
+	}); err != nil {
+		t.Fatalf("plant a foreign value: %v", err)
+	}
+
+	if got := ids(r.ask(map[string]any{
+		"container": "project:ENG", "f.effort": "8",
+	})); containsString(got, "t-mirrored") {
+		t.Fatalf("a foreign value matched a native filter: %v", got)
+	}
+	// AND IT IS NOT "SET" EITHER, or `not_null` would be a way back in.
+	if got := ids(r.ask(map[string]any{
+		"container": "project:ENG", "f.effort": "not_null",
+	})); containsString(got, "t-mirrored") {
+		t.Fatalf("a foreign value counted as the field being set: %v", got)
+	}
+	total := totalOf(t, r.ask(map[string]any{
+		"container": "project:ENG", "totals": "f.effort:sum",
+	}), "f.effort:sum")
+	if total.Value == nil || *total.Value != 8 {
+		t.Fatalf("the total is %v, want 8 — a foreign value was added into a "+
+			"native sum", total.Value)
 	}
 }
