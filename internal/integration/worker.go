@@ -26,9 +26,9 @@ var log = logging.Get("integration")
 //
 // It is also what the control plane's own reconcile poll ticks at, and the
 // two cost about the same: a tick with nothing due is one duty claim and one
-// read of a coordination bucket holding at most seven keys, on a connection
-// the process already holds. Nothing is fetched from a third-party app unless
-// one is due.
+// read of a coordination bucket holding at most one key per surface in
+// [Kinds], on a connection the process already holds. Nothing is fetched from
+// a third-party app unless one is due.
 const Interval = 15 * time.Second
 
 // WakeSettle is how long a config apply waits before the tick it brings
@@ -67,6 +67,7 @@ const WakeSettle = 750 * time.Millisecond
 //
 //   - MUST be idempotent. Every pass does the same work, and only what the
 //     third-party app already has separates a repair from a no-op.
+//
 //   - MUST NOT rotate a credential that still works. A third-party app serves a token
 //     once, so the tempting reading of "reconcile" is to mint every pass, and
 //     that is an outage on a timer: the engine is authenticating with the old
@@ -74,13 +75,23 @@ const WakeSettle = 750 * time.Millisecond
 //     what the sink recorded (provision.TokenSink.Value) and keep a working
 //     credential. Rotation is an operator gesture on the integration subcommand,
 //     where somebody typed the flag.
+//
 //   - MUST NOT delete anything a seat's departure implies. Decommissioning is
 //     the other flag on that subcommand, for the same reason.
-//   - SHOULD cost nothing when nothing has changed. A converged company is
-//     the steady state and it is the state this loop spends most of its life
-//     in, so a pass that re-reads every seat from the third-party app every ten
-//     minutes is the one design that makes the feature too expensive to leave
-//     switched on.
+//
+//   - MUST NOT WRITE when nothing has changed, and this stopped being a
+//     SHOULD the day every reconciler was pointed at integrationtest: its
+//     "a converged pass writes nothing" case is a hard failure, so this clause
+//     is now checked rather than believed. It was believed for a while and
+//     three vendors did not keep it — GitLab re-POSTed every membership and
+//     re-PUT every hook, Mattermost re-joined every team and channel, and
+//     Atlassian re-invited every seat, on every pass, for ever.
+//
+//     Reading is a different budget. A pass has to read enough to KNOW
+//     nothing has changed, which is what replaced those writes, so the cost of
+//     a converged pass is a read per seat and per project rather than nothing
+//     at all. That is what the settled interval is sized against — see
+//     [DefaultSchedule].
 type Reconciler interface {
 	// Kind names the surface this converges.
 	Kind() Kind
