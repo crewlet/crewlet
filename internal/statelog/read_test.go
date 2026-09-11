@@ -482,6 +482,26 @@ func TestAStaleReadRefusesPastTheBoundItAsksFor(t *testing.T) {
 		t.Fatalf("Read = %v, want a too_stale refusal", err)
 	}
 
+	// AND THE SAME BOUND IN RECORDS, which is the reading the broker
+	// actually gives: the duration above is DERIVED from it through this
+	// node's drain rate, and a bound stated in records that was validated
+	// and then ignored is a bound that never bounded anything.
+	byRecords := pointQuery(statelog.ReadStale)
+	byRecords.MaxLagPositions = 100
+	_, err = r.Read(t.Context(), byRecords, func(*sql.Tx) error { return nil })
+	if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseTooStale {
+		t.Fatalf("a stale read accepting 100 records behind, on a node 60000 "+
+			"behind, = %v, want a too_stale refusal", err)
+	}
+	// AND A NODE INSIDE THAT BOUND IS SERVED, so the case above is not
+	// passing against a reader that refuses every record bound it is given.
+	within := pointQuery(statelog.ReadStale)
+	within.MaxLagPositions = 60_000
+	if _, err := r.Read(t.Context(), within, func(*sql.Tx) error { return nil }); err != nil {
+		t.Fatalf("a stale read accepting 60000 records behind, on a node "+
+			"exactly 60000 behind, = %v, want it served", err)
+	}
+
 	// AND AN UNREADABLE LAG REFUSES RATHER THAN SERVING UNBOUNDED. A
 	// zero-because-unknown lag answers "not behind at all" to a read that
 	// asked exactly that question.

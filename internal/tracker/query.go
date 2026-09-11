@@ -267,6 +267,19 @@ type Query struct {
 	// because the answer came back at the level it asked for.
 	MaxLag time.Duration
 
+	// MaxLagSeq is the same bound counted in RECORDS, and it was the other
+	// half of exactly the defect above: `max_lag_seq` was refused at every
+	// level that is not a staleness bound and then IGNORED at the one
+	// level it means something on — the shape the comment beside it says
+	// was fixed, left standing for the second key.
+	//
+	// A record count is what the broker actually answers and a duration is
+	// derived from it through this node's own drain rate, so a caller that
+	// can say "at most this many records behind" is naming the measured
+	// quantity rather than an estimate made from it. Both may be set and
+	// the read refuses past whichever is reached first.
+	MaxLagSeq uint64
+
 	// Session is the caller's own high-water mark on this domain's log,
 	// which is what a `session` read waits through. Zero is a caller that
 	// has written nothing, for whom every level below linearizable is the
@@ -907,6 +920,14 @@ func (q *Query) parseLevel(p Params) error {
 				"behind an answer may be, and %d is not a duration", secs)
 		}
 		q.MaxLag = time.Duration(secs) * time.Second
+	}
+	if p.Has("max_lag_seq") {
+		records := p.Int("max_lag_seq", 0)
+		if records < 0 {
+			return fmt.Errorf("tracker: max_lag_seq is how many records behind "+
+				"an answer may be, and %d is not a count", records)
+		}
+		q.MaxLagSeq = uint64(records)
 	}
 	return nil
 }

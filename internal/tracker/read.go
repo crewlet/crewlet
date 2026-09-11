@@ -239,12 +239,13 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 	// a deferred create is an absence with no local row — so it is served
 	// at the level asked for and makes no completeness claim.
 	served, err := r.log.Read(ctx, statelog.Query{
-		Level:       q.Level,
-		Scope:       ReadScope(q),
-		Session:     q.Session,
-		MinPosition: q.MinPosition,
-		MaxLag:      q.MaxLag,
-		Set:         true,
+		Level:           q.Level,
+		Scope:           ReadScope(q),
+		Session:         q.Session,
+		MinPosition:     q.MinPosition,
+		MaxLag:          q.MaxLag,
+		MaxLagPositions: q.MaxLagSeq,
+		Set:             true,
 	}, func(tx *sql.Tx) error {
 		// THE DECLARATIONS FIRST, and inside this transaction: an
 		// `f.<ref>` filter resolves against the catalogue, and a

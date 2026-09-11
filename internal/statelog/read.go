@@ -226,6 +226,18 @@ type Query struct {
 	// accepts anything.
 	MaxLag time.Duration
 
+	// MaxLagPositions is the same bound counted in RECORDS, and it is the
+	// one the broker actually answers: [Health.Lag] is a record count, and
+	// the duration above is derived from it through this node's own drain
+	// rate. A caller that knows how many records it can tolerate — a
+	// screen redrawing on the next wake — says so here rather than
+	// translating through a rate it cannot see.
+	//
+	// Both may be set, and the read refuses on WHICHEVER IS REACHED FIRST:
+	// they are two readings of one distance rather than two distances, so
+	// an answer past either is past the caller's bound.
+	MaxLagPositions uint64
+
 	// Set reports a read whose answer is a SET rather than one object.
 	//
 	// It changes what a deferred scope does: a point read refuses,
@@ -542,7 +554,7 @@ func (r *Reader) target(ctx context.Context, q Query, h Health) (Position, error
 		return target, nil
 
 	case ReadStale, ReadConsistentPrefix:
-		if q.MaxLag > 0 {
+		if q.MaxLag > 0 || q.MaxLagPositions > 0 {
 			if h.Lag == nil {
 				return Position{}, &Refused{
 					Code: RefuseBrokerUnreachable, Level: q.Level,
@@ -550,8 +562,20 @@ func (r *Reader) target(ctx context.Context, q Query, h Health) (Position, error
 						"not say how far behind this node is",
 				}
 			}
+			// THE RECORD COUNT FIRST, because it is the reading the
+			// broker gave: the duration below is derived from it
+			// through this node's own drain rate, so a bound stated in
+			// records is checked against the number itself rather than
+			// against an estimate made from it.
+			if q.MaxLagPositions > 0 && *h.Lag > q.MaxLagPositions {
+				return Position{}, &Refused{
+					Code: RefuseTooStale, Level: q.Level,
+					Detail: fmt.Sprintf("this node is %d records behind and this "+
+						"read accepts %d", *h.Lag, q.MaxLagPositions),
+				}
+			}
 			behind := time.Duration(*h.Lag) * time.Second / time.Duration(max(int64(r.drain()), 1))
-			if behind > q.MaxLag {
+			if q.MaxLag > 0 && behind > q.MaxLag {
 				return Position{}, &Refused{
 					Code: RefuseTooStale, Level: q.Level,
 					Detail: fmt.Sprintf("this node is about %s behind and this read "+

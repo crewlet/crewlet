@@ -232,6 +232,34 @@ func TestAStalenessBoundBelongsToTheStaleLevelAlone(t *testing.T) {
 	}
 }
 
+// AND THE BOUND IS CARRIED, IN BOTH OF ITS UNITS.
+//
+// A bound refused where it is inconsistent and dropped where it is not is a
+// bound that never bounded anything — the defect `max_lag_seconds` was fixed
+// for and `max_lag_seq` was left in: it was validated against the level above
+// and then read by nothing at all, so a caller declaring how many records
+// behind it would accept was served an answer of any distance and told it came
+// back at the level asked for.
+func TestBothStalenessBoundsReachTheRead(t *testing.T) {
+	t.Parallel()
+	q := mustParse(t, map[string]any{
+		"read_level": "stale", "max_lag_seconds": "30", "max_lag_seq": "250",
+	})
+	if q.MaxLag != 30*time.Second {
+		t.Errorf("max_lag_seconds=30 parsed as %s", q.MaxLag)
+	}
+	if q.MaxLagSeq != 250 {
+		t.Errorf("max_lag_seq=250 parsed as %d — a bound the reader never "+
+			"sees is one that never bounded anything", q.MaxLagSeq)
+	}
+	if _, err := parse(t, map[string]any{
+		"read_level": "stale", "max_lag_seq": "-1",
+	}); err == nil {
+		t.Error("max_lag_seq=-1 was accepted — a negative record count is not " +
+			"a distance, and unsigned it would be the widest bound there is")
+	}
+}
+
 // ABSENT IS NOT A FOURTH READ LEVEL.
 //
 // It resolves to the SURFACE's own default — a seat tool linearizable, a
