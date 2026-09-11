@@ -119,11 +119,12 @@ func TestAGoalsProgressIsItsTargets(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 
-	// Four tasks in ENG, two of them finished — ONE DONE AND ONE
-	// CANCELLED, because the GROUP is what decides and a fixture where
-	// every finished task is `done` leaves the other half of the rule
-	// unasserted. A cancelled task is finished work that produced
-	// nothing, which is the same fact for anything counting.
+	// Four tasks in ENG, two of them FINISHED and only one of them
+	// DELIVERED — one `done` and one `cancelled`, because those are two
+	// different facts and a fixture where every finished task is `done`
+	// cannot tell them apart. Cancelling work is how this design spells
+	// "abandoned" ([Delivered]), so a goal that counted it would be driven
+	// to a hundred per cent by a team giving up.
 	for i, status := range []tracker.Status{
 		tracker.StatusDone, tracker.StatusCancelled, "", "",
 	} {
@@ -153,11 +154,13 @@ func TestAGoalsProgressIsItsTargets(t *testing.T) {
 		t.Fatalf("the goal has %d targets, want 1", len(goal.Targets))
 	}
 	target := goal.Targets[0]
-	if target.Finished != 2 || target.Total != 4 {
-		t.Fatalf("the target is at %d of %d, want 2 of 4", target.Finished, target.Total)
+	if target.Finished != 1 || target.Total != 4 {
+		t.Fatalf("the target is at %d of %d, want 1 of 4: two tasks are "+
+			"finished and one of those is cancelled, which is abandoned work "+
+			"rather than delivered work", target.Finished, target.Total)
 	}
-	if goal.Progress == nil || *goal.Progress != 0.5 {
-		t.Fatalf("the goal is at %v, want 0.5", goal.Progress)
+	if goal.Progress == nil || *goal.Progress != 0.25 {
+		t.Fatalf("the goal is at %v, want 0.25", goal.Progress)
 	}
 
 	// AND IT MOVES WHEN THE WORK DOES, with nobody editing the goal —
@@ -169,9 +172,27 @@ func TestAGoalsProgressIsItsTargets(t *testing.T) {
 	}
 	r.drain()
 	after := r.goals(tracker.GoalQuery{ID: "g-1"}).Goals[0]
-	if after.Progress == nil || *after.Progress != 0.75 {
-		t.Fatalf("the goal is at %v after a third task finished, want 0.75",
+	if after.Progress == nil || *after.Progress != 0.5 {
+		t.Fatalf("the goal is at %v after a second task was DELIVERED, want 0.5",
 			after.Progress)
+	}
+
+	// AND CANCELLING THE REST DOES NOT FINISH THE GOAL. This is the shape
+	// the count was wrong in: `cancelled` is a FINISHED group, so a target
+	// counting finished groups reported a team that gave up as having met
+	// its goal.
+	cancelled := tracker.StatusCancelled
+	if _, err := r.writer.UpdateTask(t.Context(), "op-abandon", "gt-3", "ENG", 0,
+		tracker.TaskPatch{Status: &cancelled}, nil); err != nil {
+		t.Fatalf("cancel the last open task: %v", err)
+	}
+	r.drain()
+	abandoned := r.goals(tracker.GoalQuery{ID: "g-1"}).Goals[0]
+	if abandoned.Progress == nil || *abandoned.Progress != 0.5 {
+		t.Fatalf("the goal is at %v after the remaining work was CANCELLED, "+
+			"want 0.5 — cancelling is how this design spells abandoned, and a "+
+			"goal a team can complete by giving up measures nothing",
+			abandoned.Progress)
 	}
 	if after.Version != goal.Version {
 		t.Fatalf("the goal's own version moved from %d to %d for a task's "+
@@ -351,4 +372,41 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(out)
+}
+
+// A GOAL'S FILTER AND ITS PROGRESS READ THE SAME ROWS.
+//
+// A target names TASKS AND PROJECTS, and the goal's own progress counts a task
+// reached either way. `goal=<id>` matched task refs alone, so a goal whose
+// target is a project scored over every task in it and listed none of them —
+// two readings of one row set, disagreeing with nobody to notice.
+func TestTheGoalFilterReachesEverythingTheGoalCounts(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	for i := range 2 {
+		task := newTask("gf-" + itoa(i))
+		task.Key = "ENG-" + itoa(i)
+		if _, err := r.writer.CreateTask(t.Context(), "op-gf-"+itoa(i), task, nil); err != nil {
+			t.Fatalf("seed a task: %v", err)
+		}
+		r.drain()
+	}
+	// THE FIXTURE'S TARGET IS A PROJECT — `Projects: ["ENG"]` — which is
+	// exactly the half the filter could not see.
+	if _, err := r.writer.WriteGoal(t.Context(), "op-goal", aGoal("g-f", nil)); err != nil {
+		t.Fatalf("save the goal: %v", err)
+	}
+	r.drain()
+
+	counted := r.goals(tracker.GoalQuery{ID: "g-f"}).Goals[0].Targets[0].Total
+	if counted != 2 {
+		t.Fatalf("the target counts %d tasks, want the 2 in ENG", counted)
+	}
+	answer := r.ask(map[string]any{"container": "project:ENG", "goal": "g-f"})
+	if len(answer.Rows) != counted {
+		t.Fatalf("goal=g-f lists %d tasks while the same goal's target counts "+
+			"%d of them — the filter and the progress read one row set two "+
+			"different ways", len(answer.Rows), counted)
+	}
 }
