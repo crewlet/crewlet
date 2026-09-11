@@ -1006,14 +1006,60 @@ test("disconnect takes every configured surface, provisioner last", () => {
     { key: "confluence", configured: true },
   );
   const sections = [
+    // can_provision IS TRUE ON ALL THREE, because the engine registers a
+    // pass for each. Saying false for the products is the fixture that let
+    // this function ship ordering by a field that cannot discriminate.
     { name: "Organization", tool: toolState({ key: "atlassian", can_provision: true }) },
-    { name: "Jira", tool: toolState({ key: "jira", can_provision: false }) },
-    { name: "Confluence", tool: toolState({ key: "confluence", can_provision: false }) },
+    { name: "Jira", tool: toolState({ key: "jira", can_provision: true }) },
+    { name: "Confluence", tool: toolState({ key: "confluence", can_provision: true }) },
   ];
-  // The products in the catalogue's own order, and the organization after
-  // both of them. What this asserts is the LAST position; the two products
-  // are peers and either order between them takes the same things away.
-  expect(disconnectOrder(atlassian, rows, sections)).toEqual(["confluence", "jira", "atlassian"]);
+  // The catalogue's dependency order reversed. What this asserts is the LAST
+  // position; the two products are peers and either order between them takes
+  // the same things away.
+  expect(disconnectOrder(atlassian, sections)).toEqual(["jira", "confluence", "atlassian"]);
+});
+
+// THE FORGE RELAY IS NOT A SURFACE ANYTHING CAN DISCONNECT, and it used to be
+// the first one this asked to.
+//
+// It is an ingress PATH for Jira and Confluence Cloud rather than a kind:
+// `integration.Kinds` does not contain it, so `DELETE /setup/integrations/forge`
+// answers 404 — and the setup payload, built from the same set, offers it no
+// tool state at all. This function also admitted anything with a TRAFFIC row,
+// and the relay has one on every Cloud company. So `forge` sorted ahead of the
+// three real surfaces (nothing gave it a section, so it fell in the
+// non-provisioning half) and the dialog aborted on its very first request,
+// having touched nothing.
+test("disconnect leaves out the relay, which is not a kind anything can delete", () => {
+  const sections = [
+    { name: "Organization", tool: toolState({ key: "atlassian", can_provision: true }) },
+    { name: "Confluence", tool: toolState({ key: "confluence", can_provision: true }) },
+    { name: "Jira", tool: toolState({ key: "jira", can_provision: true }) },
+    // NO SECTION FOR forge, which is what the engine actually serves: the
+    // setup payload is built from integration.Kinds and the relay is not one.
+  ];
+  const order = disconnectOrder(atlassian, sections);
+  expect(order).not.toContain("forge");
+  expect(order).toEqual(["jira", "confluence", "atlassian"]);
+});
+
+// THE ORGANIZATION GOES LAST EVEN THOUGH EVERY SURFACE PROVISIONS, which is
+// the production shape and the one the old fixtures denied.
+//
+// `can_provision` says a surface has a reconcile pass. The engine registers one
+// for Atlassian, Jira and Confluence alike, so partitioning on it put all three
+// in the same half and shipped the catalogue's own order — organization FIRST,
+// the exact order its doc forbade. The order is the declared dependency
+// reversed instead, which cannot collapse.
+test("disconnect puts the account-creating surface last however many provision", () => {
+  const sections = [
+    { name: "Organization", tool: toolState({ key: "atlassian", can_provision: true }) },
+    { name: "Confluence", tool: toolState({ key: "confluence", can_provision: true }) },
+    { name: "Jira", tool: toolState({ key: "jira", can_provision: true }) },
+  ];
+  const order = disconnectOrder(atlassian, sections);
+  expect(order[order.length - 1]).toBe("atlassian");
+  expect(order).toHaveLength(3);
 });
 
 // AND A SURFACE NOBODY CONFIGURED IS NOT DELETED. A card lists what a tool
@@ -1022,7 +1068,7 @@ test("disconnect takes every configured surface, provisioner last", () => {
 test("disconnect skips the surfaces this company does not have", () => {
   const rows = rowsOf({ key: "jira", configured: true });
   const sections = [{ name: "Jira", tool: toolState({ key: "jira" }) }];
-  expect(disconnectOrder(atlassian, rows, sections)).toEqual(["jira"]);
+  expect(disconnectOrder(atlassian, sections)).toEqual(["jira"]);
 });
 
 // A DROP IS A PROBLEM, so it survives the counters being removed.
@@ -1168,10 +1214,10 @@ test("disconnect includes a configured surface that has no traffic row", () => {
   const rows = rowsOf({ key: "jira", configured: true }, { key: "confluence", configured: true });
   const sections = [
     { name: "Organization", tool: toolState({ key: "atlassian", can_provision: true }) },
-    { name: "Confluence", tool: toolState({ key: "confluence", can_provision: false }) },
-    { name: "Jira", tool: toolState({ key: "jira", can_provision: false }) },
+    { name: "Confluence", tool: toolState({ key: "confluence", can_provision: true }) },
+    { name: "Jira", tool: toolState({ key: "jira", can_provision: true }) },
   ];
-  const order = disconnectOrder(atlassian, rows, sections);
+  const order = disconnectOrder(atlassian, sections);
   expect(order).toContain("atlassian");
   // AND STILL LAST: the organization's credential is what removes the
   // accounts, so taking it first would strand them.
@@ -1183,11 +1229,11 @@ test("disconnect includes a configured surface that has no traffic row", () => {
 test("disconnect skips a surface this company never configured", () => {
   const rows = rowsOf({ key: "jira", configured: true });
   const sections = [
-    { name: "Jira", tool: toolState({ key: "jira", can_provision: false }) },
+    { name: "Jira", tool: toolState({ key: "jira", can_provision: true }) },
     // Declared by the catalogue, never configured by this company.
     { name: "Forge relay", tool: toolState({ key: "forge", configured: false }) },
   ];
-  expect(disconnectOrder(atlassian, rows, sections)).toEqual(["jira"]);
+  expect(disconnectOrder(atlassian, sections)).toEqual(["jira"]);
 });
 
 // A CARD CANNOT BE CONNECTED AND OFFER TO CONNECT.

@@ -573,39 +573,46 @@ export function byConfiguredThenName(
 /**
  * The surfaces a card's Disconnect takes away, in the order it takes them.
  *
- * THE PROVISIONING SURFACE LAST. On Atlassian the two products are reached
- * with their own credentials and the ORGANIZATION's is what removes the
- * accounts, so taking the organization first would strand every account the
- * products' teardown still has to account for, and leave nothing able to
- * remove them.
+ * A TEARDOWN IS A CONVERGE RUN BACKWARDS. A card's `surfaces` are declared in
+ * DEPENDENCY order — Atlassian lists the Organization first because that is
+ * where an agent's account is created, and the two products are what that
+ * account then works in. Removing is the other direction: the products stop
+ * using the accounts, and only then does the surface whose credential can
+ * delete them go. Taking the organization first strands every account the
+ * products still hold and leaves nothing able to remove them.
+ *
+ * So the order is the declared one reversed, and there is exactly ONE list to
+ * keep right. The engine states the same dependency for the same reason and
+ * in the same direction — see `integration.ConvergeOrder`.
+ *
+ * IT USED TO PARTITION ON `can_provision`, meaning to express "the
+ * provisioning surface last". That field says whether a surface has a
+ * reconcile PASS, which was never the question: the engine registers one for
+ * Atlassian, Jira AND Confluence, so every Atlassian surface answers true, both
+ * halves of the partition hold the same set, and the declared order shipped
+ * unchanged — organization first, which is precisely the order the doc forbade.
+ * The tests agreed only because their fixtures said `can_provision: false` for
+ * the two products, which production never does.
+ *
+ * ONLY WHAT CAN ACTUALLY BE DISCONNECTED, which is what has a tool state. Those
+ * come from `integration.Kinds`, the same set `DELETE /setup/integrations/{kind}`
+ * accepts. This also asked the TRAFFIC rows — and the Forge relay has a traffic
+ * row and is not a kind, so every Atlassian Cloud company put `forge` first in
+ * the list and the dialog aborted on a 404 before touching anything at all.
  *
  * Only surfaces this company actually has: a card lists what a tool can be
  * made of, and a delete against a surface nobody configured is a request with
  * nothing behind it.
- *
- * CONFIGURED, NOT TRAFFICKED, and that distinction is the whole of this
- * function's history. It asked the traffic rows, which answer "does this
- * surface have an inbound route" — and Atlassian's organization has none: it
- * receives no deliveries, it is where accounts are made. So the one surface
- * whose teardown deletes the service accounts was filtered out of every
- * disconnect, and "remove the accounts Crewlet created" removed nothing while
- * reporting success. The sections know what is configured; the rows only know
- * what has been delivered to.
  */
 export function disconnectOrder(
   entry: Entry,
-  rows: Map<string, IntegrationRow>,
   sections: { name: string; tool: SetupToolState }[],
 ): string[] {
-  const provisions = new Set(sections.filter((s) => s.tool.can_provision).map((s) => s.tool.key));
   const configured = new Set(sections.filter((s) => s.tool.configured).map((s) => s.tool.key));
-  const present = entry.surfaces
+  return entry.surfaces
     .map((s) => s.key)
-    .filter((key) => configured.has(key) || rows.has(key));
-  return [
-    ...present.filter((key) => !provisions.has(key)),
-    ...present.filter((key) => provisions.has(key)),
-  ];
+    .filter((key) => configured.has(key))
+    .reverse();
 }
 
 /**
@@ -1613,7 +1620,7 @@ export function Integrations() {
                     // removed, and the card still read Connected because
                     // Jira and Confluence were untouched. A person pressing
                     // Disconnect on a card means the card.
-                    kinds: disconnectOrder(entry, rows, sectionsFor(entry, setup.byKey)),
+                    kinds: disconnectOrder(entry, sectionsFor(entry, setup.byKey)),
                     stuck: stuckDisconnecting(entry, rows),
                     // WHAT THE ENGINE CANNOT DELETE ITSELF. A seat carries a
                     // manage link only where what it holds has to be removed
