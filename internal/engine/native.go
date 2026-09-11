@@ -992,6 +992,29 @@ func reservedContainers(cfg *config.Company) []string {
 // nobody can deliver.
 type seatMentions struct{ org *org.Organization }
 
+// LiveMentions resolves @-mentions against the chart CURRENT when the comment
+// is written, rather than the one that built the caller.
+//
+// The seat path captures its org deliberately — a seat's tools are cloned into
+// its lease and rebuilt on an apply — but a surface built once at startup has
+// no such rebuild, so it reads the engine per call. It is exported because the
+// OPERATOR MCP needs the same rule and there must not be a second copy of it:
+// built without one, that surface wrote comments whose @-mentions resolved to
+// nothing and woke nobody, while its own tool description promised otherwise.
+func LiveMentions(e *Engine) builtin.MentionResolver {
+	return liveMentions{engine: e}
+}
+
+type liveMentions struct{ engine *Engine }
+
+func (m liveMentions) Mentions(text string) []string {
+	c := m.engine.Company()
+	if c == nil {
+		return nil
+	}
+	return seatMentions{org: c.Org}.Mentions(text)
+}
+
 // Mentions returns the handles this text addresses that are seats here.
 func (m seatMentions) Mentions(text string) []string {
 	if m.org == nil {

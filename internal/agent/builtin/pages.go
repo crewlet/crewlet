@@ -184,7 +184,10 @@ func (t *listPages) Call(ctx context.Context, args map[string]any) (tools.Result
 }
 
 func (t *listPages) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
-	if _, err := turn.RequireSeat(); err != nil {
+	// [PageDeps.actor] rather than the turn: a seat with no turn still
+	// refuses, and the operator surface, which supplies its own actor, is
+	// answered rather than told it is not in a turn.
+	if _, err := t.deps.actor(ctx, turn); err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the model reads.
 		return notInATurn(ListPagesTool), nil
 	}
@@ -252,7 +255,8 @@ func (t *getPage) Call(ctx context.Context, args map[string]any) (tools.Result, 
 }
 
 func (t *getPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
-	if _, err := turn.RequireSeat(); err != nil {
+	// [PageDeps.actor] rather than the turn — see [listPages.CallForTurn].
+	if _, err := t.deps.actor(ctx, turn); err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the model reads.
 		return notInATurn(GetPageTool), nil
 	}
