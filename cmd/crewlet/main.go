@@ -2060,6 +2060,15 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 				return writer.As(actor.Handle, actor.Kind,
 					tracker.Provenance{OperatorID: actor.OperatorID})
 			},
+			// AND THE TRASH. A removal takes an item off every board in
+			// the company and a restore puts it back at any age; neither
+			// destroys anything, which is what separates both from the
+			// purge the CLI guards with a typed confirmation. No seat
+			// holds either — see internal/agent/builtin/worktrash.go.
+			TrashWriter: func(actor builtin.Actor) builtin.TrashWriter {
+				return writer.As(actor.Handle, actor.Kind,
+					tracker.Provenance{OperatorID: actor.OperatorID})
+			},
 			Actor: opsmcp.WorkActor,
 			// THE MENTION RESOLVER, which this surface went without: a
 			// comment's @-mention is turned into a wake by the tracker's

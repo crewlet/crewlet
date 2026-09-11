@@ -1338,9 +1338,10 @@ worked. A comment's `@handle` is resolved here too, against the company chart
 current when the comment is written, so mentioning somebody from your own
 assistant wakes them exactly as it does from a seat.
 
-Plus **nine no seat is given**: `list_work_views`, `save_work_view`,
+Plus **eleven no seat is given**: `list_work_views`, `save_work_view`,
 `list_work_goals`, `write_work_goal`, `write_work_catalogue`, `get_person`,
-`mark_inbox`, `set_pins` and `set_priorities`. A view is furniture — a name, a shape
+`mark_inbox`, `set_pins`, `set_priorities`, `remove_work_item` and
+`restore_work_item`. A view is furniture — a name, a shape
 and a filter, arranged so a person finds the same question tomorrow — and a
 seat's job is the work rather than the furniture around it. A goal is an
 outcome a *person* commits the company to, with owners who report on it; a seat
@@ -1352,6 +1353,11 @@ was working around is the signal a person needs to see — which is why reading
 the catalogue *is* a seat's and writing it is not. And a person's record is a
 HUMAN's: a seat has a mailbox — the durable subscription the engine attaches
 when it acquires the seat — and nothing on a person's record describes one.
+The trash is the last of them: a removal takes an item off every board in the
+company, and a seat that could hide work it did not want to do would be marking
+its own homework in the one way that leaves no trace. Neither destroys
+anything — a removal is reversible at any age, and `crewlet work purge` is the
+one that is not.
 
 Each tool appears only where its half of the company is native: a company on
 `tracker.backend: jira` gets the page tools and not the work tools, and one on

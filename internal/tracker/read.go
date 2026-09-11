@@ -735,7 +735,19 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 		// THE ARGUMENTS ARE UNCHANGED: every placeholder built so far
 		// moves INTO the subquery, and the two clauses that replace them
 		// out here bind nothing.
-		where = []string{"t.removed_at IS NULL", rooted}
+		//
+		// AND THE ROW'S OWN TOMBSTONE IS THE QUERY'S OWN, not a constant.
+		// A removed subtask must not ride along on a live root, which is
+		// what this clause is for — but spelled `IS NULL` unconditionally
+		// it also excluded every row from the TRASH, whose whole
+		// predicate is the opposite one. `removed=true` in the default
+		// subtask mode therefore answered nothing at all, which is the
+		// one query that has to work for a removal to be reversible.
+		tomb := "t.removed_at IS NULL"
+		if q.Removed != nil && *q.Removed {
+			tomb = "t.removed_at IS NOT NULL"
+		}
+		where = []string{tomb, rooted}
 	}
 
 	if q.Group != "" && !branch {

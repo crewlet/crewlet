@@ -236,10 +236,10 @@ func readAlias(ctx context.Context, tx *sql.Tx, key string) (string, bool, error
 func readSubtree(ctx context.Context, tx *sql.Tx, root string) ([]Task, error) {
 	rows, err := tx.QueryContext(ctx, `
 		WITH RECURSIVE descendants(id, depth) AS (
-			SELECT id, 0 FROM tracker_tasks WHERE parent = ?
+			SELECT id, 0 FROM tracker_tasks WHERE parent_id = ?
 			UNION ALL
 			SELECT t.id, d.depth + 1
-			FROM tracker_tasks t JOIN descendants d ON t.parent = d.id
+			FROM tracker_tasks t JOIN descendants d ON t.parent_id = d.id
 		)
 		SELECT t.document, t.version, d.depth
 		FROM descendants d JOIN tracker_tasks t ON t.id = d.id
