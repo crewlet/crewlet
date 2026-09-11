@@ -21,6 +21,10 @@ import (
 // ---- the fakes -------------------------------------------------------- //
 
 type fakeTracker struct {
+	// query is the last one the list tool built, so a case can assert
+	// what a model's ARGUMENTS became — which is the half of this tool
+	// nothing looked at while it dropped a filter and refused a flag.
+	query tracker.Query
 	tasks map[string]tracker.TaskDetail
 
 	created  []tracker.Task
@@ -47,7 +51,8 @@ func newFakeTracker() *fakeTracker {
 	}}
 }
 
-func (f *fakeTracker) Tasks(context.Context, tracker.Query, time.Time) (tracker.Answer, error) {
+func (f *fakeTracker) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tracker.Answer, error) {
+	f.query = q
 	if f.readErr != nil {
 		return tracker.Answer{}, f.readErr
 	}
@@ -481,5 +486,65 @@ func TestTheTrackerWritesAreClassifiedAsSharedWrites(t *testing.T) {
 	if entry.Annotations.Destructive != mcp.Yes {
 		t.Error("update_work_item is not marked destructive, though it replaces " +
 			"somebody's description with no undo outside the change record")
+	}
+}
+
+// EVERY ARGUMENT A MODEL SENDS REACHES THE GRAMMAR, under the grammar's own
+// name.
+//
+// The tool's arguments are the MODEL's vocabulary and the query keys are the
+// transport's, so the two are translated — and a translation nothing checks is
+// one that silently stops translating. Both halves of this tool's table were
+// wrong at once: `text` was copied through under its own name, which the
+// grammar does not read, so every text search returned an unfiltered list; and
+// `open_only` named two "status groups" that do not exist, so the parser
+// refused the whole call and the commonest filter a model reaches for failed
+// every time.
+func TestEveryListArgumentReachesTheGrammar(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	got := callWork(t, reg, builtin.ListWorkItemsTool, map[string]any{
+		"project": "eng", "assignee": "swe", "label": "urgent",
+		"status": []any{"todo"}, "text": "deploy", "limit": 5,
+	})
+	if got.Failed {
+		t.Fatalf("the list refused a filter it offers: %s", got.Output)
+	}
+	q := trk.query
+	switch {
+	case q.Scope.Project != "ENG":
+		t.Errorf("project reached the grammar as %q", q.Scope.Project)
+	case len(q.Assignee) != 1 || q.Assignee[0] != "swe":
+		t.Errorf("assignee reached the grammar as %v", q.Assignee)
+	case len(q.Tags.Tags) != 1 || q.Tags.Tags[0] != "urgent":
+		t.Errorf("label reached the grammar as %v", q.Tags.Tags)
+	case len(q.Status) != 1 || q.Status[0] != tracker.StatusTodo:
+		t.Errorf("status reached the grammar as %v", q.Status)
+	case q.Text != "deploy":
+		t.Errorf("text reached the grammar as %q — a model's search term was "+
+			"dropped and the answer widened to everything", q.Text)
+	case q.Limit != 5:
+		t.Errorf("limit reached the grammar as %d", q.Limit)
+	}
+
+	// OPEN_ONLY IS THE TWO OPEN GROUPS, and there are exactly four groups.
+	got = callWork(t, reg, builtin.ListWorkItemsTool, map[string]any{
+		"open_only": true,
+	})
+	if got.Failed {
+		t.Fatalf("open_only failed the whole call: %s", got.Output)
+	}
+	want := []tracker.StatusGroup{tracker.GroupNotStarted, tracker.GroupActive}
+	if len(trk.query.StatusGroups) != len(want) {
+		t.Fatalf("open_only reached the grammar as %v, want %v",
+			trk.query.StatusGroups, want)
+	}
+	for i, group := range want {
+		if trk.query.StatusGroups[i] != group {
+			t.Fatalf("open_only reached the grammar as %v, want %v",
+				trk.query.StatusGroups, want)
+		}
 	}
 }

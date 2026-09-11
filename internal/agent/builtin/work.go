@@ -344,10 +344,19 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	if v := strings.TrimSpace(argString(args, "project")); v != "" {
 		params["container"] = "project:" + strings.ToUpper(v)
 	}
-	for _, key := range []string{"assignee", "text", "limit"} {
+	for _, key := range []string{"assignee", "limit"} {
 		if v, held := args[key]; held {
 			params[key] = v
 		}
+	}
+	// THE GRAMMAR'S TEXT KEY IS `q`, and the tool's argument is `text`
+	// because that is the word a model reaches for. The two are translated
+	// here rather than renamed at either end: the argument is the model's
+	// vocabulary and `q` is the query string's, and copying `text` through
+	// under its own name is how this tool spent its early life returning
+	// an unfiltered list to every model that asked for one.
+	if v := strings.TrimSpace(argString(args, "text")); v != "" {
+		params["q"] = v
 	}
 	if v := strings.TrimSpace(argString(args, "label")); v != "" {
 		params["tag"] = v
@@ -356,7 +365,12 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		params["status"] = strings.Join(names, ",")
 	}
 	if open, held := args["open_only"].(bool); held && open {
-		params["status_group"] = "not_started,in_progress,blocked"
+		// THE TWO OPEN GROUPS, named from the constants rather than
+		// typed: there are FOUR status groups and neither `in_progress`
+		// nor `blocked` is one of them, so a literal naming either is a
+		// filter the parser refuses — which made `open_only` fail the
+		// whole call rather than narrow it.
+		params["status_group"] = strings.Join(openGroups(), ",")
 	}
 
 	q, err := tracker.ParseQuery(queries.FromMap(params), t.deps.now(), t.deps.zone())
@@ -1115,6 +1129,22 @@ func (d WorkDeps) zone() *time.Location {
 
 func statusList() string   { return joinValues(tracker.Statuses) }
 func priorityList() string { return joinValues(tracker.Priorities) }
+
+// openGroups is the status groups where work has not finished, DERIVED from
+// the closed set rather than listed.
+//
+// A literal here is a filter that goes on parsing after somebody adds a fifth
+// group and stops meaning what it says — and, before that, it is how
+// `open_only` came to name two groups that do not exist.
+func openGroups() []string {
+	out := make([]string, 0, len(tracker.StatusGroups))
+	for _, group := range tracker.StatusGroups {
+		if group.Open() {
+			out = append(out, string(group))
+		}
+	}
+	return out
+}
 
 // joinValues renders a closed set for a tool description.
 func joinValues[T ~string](values []T) string {
