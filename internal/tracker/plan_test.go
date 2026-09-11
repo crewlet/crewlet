@@ -151,11 +151,17 @@ func registeredQueries() map[string]map[string]any {
 		// already narrows to a thirtieth of the corpus and the residual
 		// predicate rides along, so an index for that predicate is only
 		// ever earned out here.
-		"overdue everywhere":      {"due": "lt:today"},
-		"starting everywhere":     {"start": "gt:today"},
-		"finished everywhere":     {"show_closed": "recent:168h"},
-		"flagged everywhere":      {"flag": "cycle"},
-		"one sprint everywhere":   {"sprint": "3"},
+		"overdue everywhere":  {"due": "lt:today"},
+		"starting everywhere": {"start": "gt:today"},
+		"finished everywhere": {"show_closed": "recent:168h"},
+		"flagged everywhere":  {"flag": "cycle"},
+		// NO WORKSPACE-SCOPE SPRINT CASE. A sprint is numbered and named
+		// per project, so naming one across the company names a
+		// different sprint in each — refused rather than answered, which
+		// is what makes the project-scoped case above the only one there
+		// is. `sprint=none` is the exception and is registered below,
+		// because the backlog means the same thing everywhere.
+		"the backlog everywhere":  {"sprint": "none"},
 		"one status everywhere":   {"status": "in_progress"},
 		"unarchived everywhere":   {"archived": "false"},
 		"by estimate everywhere":  {"estimate": "gt:30"},

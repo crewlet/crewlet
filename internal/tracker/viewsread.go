@@ -219,13 +219,15 @@ func implicitViews(ctx context.Context, tx *sql.Tx, container Container) ([]View
 			Params: map[string]string{"sprint": "active"}},
 		ViewRow{Key: ViewKeyBacklog, Name: "Backlog", Type: ViewList,
 			Container: container, Builtin: true,
-			// THE BACKLOG IS WHAT IS NOT FINISHED, ordered by the
-			// board's own arrangement — never "not in a sprint",
-			// which is a filter the grammar has no spelling for and
-			// which would hide a carry-over from the person planning
-			// the next one.
+			// THE BACKLOG IS UNFINISHED WORK IN NO SPRINT, ordered by
+			// the board's own arrangement. `sprint=none` is an absence
+			// of an OPEN stay rather than of every stay, which is what
+			// keeps a carry-over out of it: a task pulled forward into
+			// the next sprint is in that sprint, not back in the pile
+			// somebody is planning from.
 			Params: map[string]string{
 				"status_group": string(GroupNotStarted) + "," + string(GroupActive),
+				"sprint":       "none",
 				"sort":         "rank",
 			}},
 	), nil

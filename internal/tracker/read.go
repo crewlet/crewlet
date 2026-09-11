@@ -603,20 +603,11 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 		add(clause, values...)
 	}
 	if len(q.Sprint) > 0 {
-		// A TASK CAN BE IN MORE THAN ONE SPRINT — that is what a
-		// carry-over IS — so membership is an EXISTS over the stay
-		// table rather than a column on the task.
-		numbers := make([]any, 0, len(q.Sprint))
-		for _, value := range q.Sprint {
-			number, err := strconv.Atoi(value)
-			if err != nil {
-				return "", nil, fmt.Errorf("tracker: %q is not a sprint "+
-					"number — sprints are numbered per project", value)
-			}
-			numbers = append(numbers, number)
+		clause, values, err := sprintClause(q)
+		if err != nil {
+			return "", nil, err
 		}
-		add("EXISTS (SELECT 1 FROM tracker_task_sprints s WHERE s.task_id = t.id "+
-			"AND s.sprint IN ("+placeholders(len(numbers))+"))", numbers...)
+		add(clause, values...)
 	}
 	for column, filter := range q.Dates {
 		clause, values, err := dateClause(column, filter)
@@ -883,6 +874,127 @@ func dateClause(key string, filter DateFilter) (string, []any, error) {
 			[]any{from, store.EncodeTime(filter.To.At)}, nil
 	}
 	return "", nil, fmt.Errorf("tracker: %q is not a date comparison", filter.Op)
+}
+
+// sprintClause compiles `sprint=` — the one filter whose values are words as
+// often as numbers.
+//
+// # A TASK CAN BE IN MORE THAN ONE SPRINT
+//
+// That is what a carry-over IS, so membership is an EXISTS over the STAY table
+// rather than a column on the task: a column could name only the sprint a task
+// is in now, and every sprint report is about the ones it was in.
+//
+// # The words, and why a number alone was not a grammar
+//
+// `active`, `future` and `closed` are STATES, resolved against the project's
+// own sprint rows; `next` is the earliest future one, which is a different
+// question from "any future one" and the one a person means. A bare number or
+// a sprint NAME names one sprint. `none` is the BACKLOG — not in any sprint —
+// and it is the value that had no spelling at all, which is why the implicit
+// Backlog view could not be expressed and carried a comment saying so. Values
+// are ORed, because that is what a csv filter means here and what "this sprint
+// or the next" asks for.
+//
+// # Why a sprint needs a project
+//
+// "active" is a fact about ONE project's sprints, and at workspace scope there
+// are as many active sprints as there are projects. A NUMBER is the same: they
+// are minted per project, so `sprint=4` across a company names several. Both
+// are refused there naming the key that fixes it, rather than silently
+// answering about every project at once. `none` is the exception and needs no
+// project, because "in no sprint" means the same thing everywhere.
+func sprintClause(q Query) (string, []any, error) {
+	project := q.Scope.Project
+	var states, numbers, names []any
+	backlog := false
+	for _, value := range q.Sprint {
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "none", "backlog":
+			backlog = true
+		case string(SprintActive), string(SprintFuture), string(SprintClosed), "next":
+			states = append(states, strings.ToLower(strings.TrimSpace(value)))
+		default:
+			if number, err := strconv.Atoi(value); err == nil {
+				numbers = append(numbers, number)
+				continue
+			}
+			names = append(names, value)
+		}
+	}
+	if project == "" && len(states)+len(numbers)+len(names) > 0 {
+		return "", nil, fmt.Errorf("tracker: sprint=%s names a sprint, and "+
+			"sprints are numbered and named PER PROJECT — so at company scope "+
+			"it names one in each. Scope the query with container=project:<key>, "+
+			"or ask for sprint=none, which is the backlog everywhere",
+			strings.Join(q.Sprint, ","))
+	}
+
+	// THE PROJECT IS ON THE STAY ROW, and naming it is what puts the
+	// query on `tracker_task_sprints_sprint_idx` — `(project_key, sprint,
+	// task_id)`, which the DDL ships for exactly this. Without it the
+	// EXISTS drives on `task_id` and takes the primary key, so a sprint
+	// filter walked one row per task rather than seeking the sprint.
+	member := "EXISTS (SELECT 1 FROM tracker_task_sprints s " +
+		"WHERE s.task_id = t.id"
+	var scoped []any
+	if project != "" {
+		member += " AND s.project_key = ?"
+		scoped = []any{project}
+	}
+	var branches []string
+	var args []any
+	if len(numbers) > 0 {
+		branches = append(branches,
+			member+" AND s.sprint IN ("+placeholders(len(numbers))+"))")
+		args = append(args, scoped...)
+		args = append(args, numbers...)
+	}
+	for _, state := range states {
+		clause, values := sprintStateClause(member, state.(string), project)
+		branches = append(branches, clause)
+		args = append(args, scoped...)
+		args = append(args, values...)
+	}
+	if len(names) > 0 {
+		branches = append(branches, member+
+			" AND EXISTS (SELECT 1 FROM tracker_sprints p "+
+			"WHERE p.project_key = ? AND p.number = s.sprint "+
+			"AND p.name IN ("+placeholders(len(names))+")))")
+		args = append(args, scoped...)
+		args = append(args, project)
+		args = append(args, names...)
+	}
+	if backlog {
+		// THE BACKLOG IS AN ABSENCE OF AN OPEN STAY, not an absence of
+		// every stay: a task pulled back out of sprint 4 is in the
+		// backlog again, and its closed stay is history rather than
+		// membership.
+		branches = append(branches, "NOT "+member+" AND s.to_at IS NULL)")
+		args = append(args, scoped...)
+	}
+	return "(" + strings.Join(branches, " OR ") + ")", args, nil
+}
+
+// sprintStateClause is one sprint STATE as a predicate on the stay table.
+//
+// The state lives on the SPRINT row and membership on the stay, so every one
+// of these is a join between the two — which is what makes `sprint=active`
+// keep meaning "the sprint that is active now" as sprints open and close,
+// rather than freezing whichever number was active when somebody saved a view.
+func sprintStateClause(member, state, project string) (string, []any) {
+	if state == "next" {
+		// THE EARLIEST FUTURE SPRINT, by number: they are minted in
+		// order, so the smallest future number is the one after this.
+		// An archived one is excluded — it is a sprint nobody will run.
+		return member + " AND s.sprint = (SELECT MIN(p.number) " +
+				"FROM tracker_sprints p WHERE p.project_key = ? " +
+				"AND p.state = ? AND p.archived = 0))",
+			[]any{project, string(SprintFuture)}
+	}
+	return member + " AND EXISTS (SELECT 1 FROM tracker_sprints p " +
+			"WHERE p.project_key = ? AND p.number = s.sprint AND p.state = ?))",
+		[]any{project, state}
 }
 
 func numClause(column string, filter NumFilter) (string, []any) {
