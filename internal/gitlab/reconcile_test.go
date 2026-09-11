@@ -68,6 +68,7 @@ type adminInstance struct {
 	// that reproduces it.
 	signsNothing bool
 	updatedHooks []string
+	deletedHooks []string
 
 	// noGroupHooks makes the GROUP hooks API answer 404, the way GitLab
 	// hides an endpoint the instance's tier does not serve.
@@ -236,6 +237,25 @@ func legacyHook(id int, target string) hookRow {
 // pass must never re-point.
 func foreignHook(id int, target string) hookRow {
 	return hookRow{id: id, attrs: map[string]any{"url": target}}
+}
+
+// namedHook is a hook carrying a name, which is how a current build of this
+// engine — or another deployment of it — leaves one.
+func namedHook(id int, name, target string) hookRow {
+	return hookRow{id: id, signed: true, attrs: map[string]any{
+		"url": target, "name": name, "enable_ssl_verification": true,
+	}}
+}
+
+// dropHook removes one hook by id, the way a DELETE does.
+func dropHook(rows []hookRow, id int) []hookRow {
+	out := make([]hookRow, 0, len(rows))
+	for _, row := range rows {
+		if row.id != id {
+			out = append(out, row)
+		}
+	}
+	return out
 }
 
 // renderHooks is one listing.
@@ -733,6 +753,17 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 		project := strings.TrimPrefix(path[:at], "/projects/")
 		f.projectHooks[project] = f.writeHook(f.projectHooks[project], id, body)
 
+	case r.Method == http.MethodDelete && strings.Contains(path, "/hooks/"):
+		f.deletedHooks = append(f.deletedHooks, path)
+		at := strings.LastIndex(path, "/hooks/")
+		id := atoi(path[at+len("/hooks/"):])
+		if strings.HasPrefix(path, "/groups/") {
+			f.hooks = dropHook(f.hooks, id)
+			return
+		}
+		project := strings.TrimPrefix(path[:at], "/projects/")
+		f.projectHooks[project] = dropHook(f.projectHooks[project], id)
+
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte(`{"message":"404 Not Found"}`))
@@ -905,7 +936,7 @@ func (f *adminInstance) forget() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.revokes, f.mintBodies, f.calls = 0, nil, nil
-	f.updatedHooks, f.hookBodies = nil, nil
+	f.updatedHooks, f.deletedHooks, f.hookBodies = nil, nil, nil
 }
 
 func (f *adminInstance) revoked() int {
@@ -1288,9 +1319,11 @@ func TestAFailedRollbackNamesWhatIsStillLive(t *testing.T) {
 	}
 }
 
-// A HOOK IS MATCHED ON ITS URL and updated rather than duplicated, because
-// the signing secret may have rotated — and an instance may carry hooks
-// somebody else registered, which a run must not replace.
+// A HOOK IS UPDATED RATHER THAN DUPLICATED, because the signing secret may
+// have rotated — and an instance may carry hooks somebody else registered,
+// which a run must not replace. The delivery path is what separates the two:
+// see [gitlab.ours], where the name does the selecting and the path is the
+// guard.
 func TestAnExistingHookIsUpdatedRatherThanDuplicated(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
@@ -3746,4 +3779,295 @@ func (f *adminInstance) creates() []map[string]any {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.createBodies)
+}
+
+// A HOOK THIS ENGINE LEFT AT AN ADDRESS IT NO LONGER USES IS REMOVED.
+//
+// The reported failure, measured on a real deployment behind a tunnel: the
+// public base moved twice, the pass matched hooks on the URL so it could not
+// see either of the two it had already registered, and it created a third.
+// All three stayed enabled, all three stayed signed, and two of them
+// delivered to addresses that no longer answered — with nothing anywhere to
+// say they existed.
+func TestTheHooksLeftAtAMovedAddressAreRemoved(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.hooks = []hookRow{
+		namedHook(1, "crewlet", "https://old-tunnel.example.com/webhooks/gitlab"),
+		namedHook(2, "crewlet", "https://older-tunnel.example.com/webhooks/gitlab"),
+	}
+	if _, err := reconcileAgainst(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.hooks) != 1 {
+		t.Fatalf("hooks = %+v, want exactly one", f.hooks)
+	}
+	if got := f.hooks[0].attrs["url"]; got != "https://crewlet.example.com/webhooks/gitlab" {
+		t.Errorf("the surviving hook points at %v, want the address in force", got)
+	}
+	if len(f.deletedHooks) != 1 {
+		t.Errorf("deleted %v, want the one hook the first was not re-pointed onto",
+			f.deletedHooks)
+	}
+}
+
+// THE SAME AT THE PROJECT LEVEL, which is the half a group-only fix would
+// have left behind: a company on a tier with no group hooks carries one
+// registration per project, so a moved base orphans one per project rather
+// than one in total.
+func TestTheProjectHooksLeftAtAMovedAddressAreRemoved(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.noGroupHooks = true
+	f.projectHooks = map[string][]hookRow{
+		"nimbus/api": {
+			namedHook(1, "crewlet", "https://old-tunnel.example.com/webhooks/gitlab"),
+			namedHook(2, "crewlet", "https://older-tunnel.example.com/webhooks/gitlab"),
+		},
+	}
+	if _, err := reconcileAgainst(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	held := f.projectHooks["nimbus/api"]
+	if len(held) != 1 {
+		t.Fatalf("hooks on nimbus/api = %+v, want exactly one", held)
+	}
+	if got := held[0].attrs["url"]; got != "https://crewlet.example.com/webhooks/gitlab" {
+		t.Errorf("the surviving hook points at %v, want the address in force", got)
+	}
+}
+
+// ANOTHER DEPLOYMENT'S HOOK IS NOT TOUCHED, which is the whole reason the
+// name is a config field rather than a constant. Staging and production of
+// one company share this document and watch one instance; with one name each
+// pass would repoint the other's hook and only the last to run would receive
+// anything.
+func TestAHookNamedByAnotherDeploymentIsLeftAlone(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.hooks = []hookRow{
+		namedHook(1, "crewlet-staging", "https://staging.example.com/webhooks/gitlab"),
+	}
+	if _, err := reconcileAgainst(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.deletedHooks) != 0 {
+		t.Errorf("deleted %v, want another deployment's hook left alone", f.deletedHooks)
+	}
+	if len(f.hooks) != 2 {
+		t.Fatalf("hooks = %+v, want the staging hook plus this deployment's own", f.hooks)
+	}
+}
+
+// AND NEITHER IS A HOOK THAT MERELY SHARES THE NAME. The delivery path is
+// what says a hook is this engine's at all: matching on the name alone would
+// adopt — and then re-point — an unrelated integration that happened to be
+// called crewlet.
+func TestAHookSharingTheNameButNotThePathIsLeftAlone(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.hooks = []hookRow{
+		namedHook(1, "crewlet", "https://someone-else.example.com/ci-trigger"),
+	}
+	if _, err := reconcileAgainst(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.updatedHooks) != 0 || len(f.deletedHooks) != 0 {
+		t.Errorf("updated %v and deleted %v, want somebody else's hook untouched",
+			f.updatedHooks, f.deletedHooks)
+	}
+}
+
+// EVERY HOOK CARRIES THE NAME, because the name is what the next pass finds
+// it by. A create that omitted it would leave a registration this engine
+// could identify only by the address it was about to move away from.
+func TestEveryHookIsRegisteredUnderTheConfiguredName(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	if _, err := reconcileAgainst(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.hookBodies) != 1 {
+		t.Fatalf("%d hook writes, want one create", len(f.hookBodies))
+	}
+	if got := f.hookBodies[0]["name"]; got != gitlab.DefaultWebhookName {
+		t.Errorf("the hook was registered as %v, want %q", got, gitlab.DefaultWebhookName)
+	}
+}
+
+// A GROUP HOOK IS SWEPT UP WHEN THE COMPANY MOVES TO PROJECT HOOKS.
+//
+// `group_webhook` is a live config field and the `auto` answer depends on the
+// group's PLAN, so the level this engine writes at MOVES. Nothing looked at
+// the level it had stopped writing, so the group hook went on delivering
+// every event the project hooks already deliver, for ever, with no pass that
+// had any reason to mention it.
+func TestTheGroupHookGoesWhenTheCompanyMovesToProjectHooks(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.hooks = []hookRow{
+		namedHook(1, "crewlet", "https://crewlet.example.com/webhooks/gitlab"),
+	}
+	if _, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
+		func(o *gitlab.Options) {
+			o.Config.Provisioning.GroupWebhook = config.ContainerWebhookNever
+		}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.hooks) != 0 {
+		t.Errorf("group hooks = %+v, want the one this engine left removed", f.hooks)
+	}
+	if len(f.projectHooks["nimbus/api"]) != 1 {
+		t.Errorf("project hooks = %+v, want one", f.projectHooks["nimbus/api"])
+	}
+}
+
+// A NAMELESS HOOK IS ADOPTED RATHER THAN STRANDED.
+//
+// GitLab has taken a name on a hook since 17.1 and this engine never sent
+// one, so every hook it has ever registered is nameless — the orphans this
+// change exists to sweep up included. A name match that refused to touch them
+// would leave exactly those behind for ever.
+func TestANamelessHookThisEngineLeftIsAdopted(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.hooks = []hookRow{
+		legacyHook(9, "https://old-tunnel.example.com/webhooks/gitlab"),
+	}
+	if _, err := reconcileAgainst(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.hooks) != 1 {
+		t.Fatalf("hooks = %+v, want the nameless one re-pointed rather than a second", f.hooks)
+	}
+	if len(f.updatedHooks) != 1 || !strings.HasSuffix(f.updatedHooks[0], "/hooks/9") {
+		t.Fatalf("updated %v, want hook 9 adopted", f.updatedHooks)
+	}
+	if got := f.hooks[0].attrs["name"]; got != gitlab.DefaultWebhookName {
+		t.Errorf("the adopted hook is named %v, want %q — it has to be findable "+
+			"by the next pass", got, gitlab.DefaultWebhookName)
+	}
+}
+
+// THE NAME IS ONE VALUE AND TWO PACKAGES READ IT.
+//
+// config is the leaf every vendor package depends on, so it cannot import
+// this one and restates the default instead. Two spellings of it would make
+// a company that set no name have its hooks registered under one and swept
+// under the other — which is every hook orphaned on the first pass.
+func TestConfigAndGitLabAgreeAboutTheDefaultWebhookName(t *testing.T) {
+	t.Parallel()
+	if got := (&config.GitLab{}).WebhookNameOrDefault(); got != gitlab.DefaultWebhookName {
+		t.Errorf("config says %q, gitlab says %q", got, gitlab.DefaultWebhookName)
+	}
+}
+
+// A MOVED PUBLIC BASE RE-POINTS THE HOOK, and leaves exactly one.
+//
+// The end-to-end shape of the reported failure, run against the hook this
+// engine's own pass registered rather than a fixture's idea of one: the first
+// pass creates it, the base moves, and the second pass has to find the hook
+// it made — which nothing about the address can tell it any more.
+func TestAMovedPublicBaseRepointsTheHookRatherThanAddingOne(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	if _, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
+		func(o *gitlab.Options) { o.WebhookBase = "https://first.example.com" }); err != nil {
+		t.Fatalf("first Reconcile: %v", err)
+	}
+	f.forget()
+	if _, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
+		func(o *gitlab.Options) { o.WebhookBase = "https://second.example.com" }); err != nil {
+		t.Fatalf("second Reconcile: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.hooks) != 1 {
+		t.Fatalf("hooks = %+v, want the first one re-pointed rather than a second", f.hooks)
+	}
+	if got := f.hooks[0].attrs["url"]; got != "https://second.example.com/webhooks/gitlab" {
+		t.Errorf("the hook points at %v, want the address now in force — a "+
+			"converged check that cannot see the address leaves it where it was", got)
+	}
+	if len(f.updatedHooks) != 1 {
+		t.Errorf("updated %v, want the existing hook written once", f.updatedHooks)
+	}
+}
+
+// AND THE PROJECT HOOKS GO WHEN THE COMPANY MOVES UP TO A GROUP HOOK.
+//
+// The other direction of the same defect, and this one was written into the
+// documentation as permanent: "the reconcile does not remove the old
+// per-project hooks — you would get double delivery until you delete them.
+// Deleting a redundant project hook is a manual step." A group hook fires for
+// every event in every project of the group, so each of those hooks delivers
+// a second copy of everything, and this engine registered both.
+func TestTheProjectHooksGoWhenTheCompanyMovesUpToAGroupHook(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.projectHooks = map[string][]hookRow{
+		"nimbus/api": {namedHook(1, "crewlet", "https://crewlet.example.com/webhooks/gitlab")},
+	}
+	res, err := reconcileAgainst(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if res.Hooked != "https://crewlet.example.com/webhooks/gitlab" {
+		t.Fatalf("Hooked = %q, want the group hook registered", res.Hooked)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.hooks) != 1 {
+		t.Fatalf("group hooks = %+v, want one", f.hooks)
+	}
+	if len(f.projectHooks["nimbus/api"]) != 0 {
+		t.Errorf("project hooks = %+v, want the redundant one removed — a group "+
+			"hook already delivers every event it does",
+			f.projectHooks["nimbus/api"])
+	}
+}
+
+// AND ONLY THIS ENGINE'S. A project carries hooks other integrations
+// registered, and the sweep that removes a redundant registration must not
+// take one of those with it.
+func TestTheProjectSweepLeavesSomebodyElsesHookAlone(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.projectHooks = map[string][]hookRow{
+		"nimbus/api": {foreignHook(1, "https://someone-else.example.com/hook")},
+	}
+	if _, err := reconcileAgainst(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.projectHooks["nimbus/api"]) != 1 {
+		t.Errorf("project hooks = %+v, want somebody else's left alone",
+			f.projectHooks["nimbus/api"])
+	}
 }

@@ -1161,6 +1161,7 @@ func ensureHooks(ctx context.Context, opts Options, group Group, projects []stri
 		mode = pv.GroupWebhook
 	}
 	secret := opts.SigningSecret
+	name := opts.Config.WebhookNameOrDefault()
 
 	// A FREE GROUP TAKES THE REGISTRATION AND NEVER DELIVERS, which no
 	// error can tell you.
@@ -1176,8 +1177,11 @@ func ensureHooks(ctx context.Context, opts Options, group Group, projects []stri
 	// silence as "cannot tell": a self-managed instance keeps the behaviour
 	// it has, and the one case caught is a group that says it is free.
 	if mode == config.ContainerWebhookAuto && !group.PaidPlan() {
-		hooked, err := ensureProjectHooks(ctx, opts.Client, projects, target, secret, freshSecret)
+		hooked, err := ensureProjectHooks(ctx, opts.Client, projects, name, target, secret, freshSecret)
 		if err != nil {
+			return nil, nil, err
+		}
+		if err := sweepGroupHooks(ctx, opts.Client, group.ID, name); err != nil {
 			return nil, nil, err
 		}
 		return hooked, []string{
@@ -1189,10 +1193,10 @@ func ensureHooks(ctx context.Context, opts Options, group Group, projects []stri
 	}
 
 	if mode != config.ContainerWebhookNever {
-		err := ensureGroupHook(ctx, opts.Client, group.ID, target, secret, freshSecret)
+		err := ensureGroupHook(ctx, opts.Client, group.ID, name, target, secret, freshSecret)
 		switch {
 		case err == nil:
-			return []string{"group"}, nil, nil
+			return []string{"group"}, nil, sweepProjectHooks(ctx, opts.Client, projects, name)
 		case mode == config.ContainerWebhookRequire:
 			return nil, nil, fmt.Errorf(
 				"%w\n\ngroup_webhook is \"true\", so no per-project fallback was "+
@@ -1206,7 +1210,7 @@ func ensureHooks(ctx context.Context, opts Options, group Group, projects []stri
 		// so — an operator who expected one group hook and got four
 		// project hooks should learn it here rather than from the
 		// instance's settings pages.
-		hooked, err := ensureProjectHooks(ctx, opts.Client, projects, target, secret, freshSecret)
+		hooked, err := ensureProjectHooks(ctx, opts.Client, projects, name, target, secret, freshSecret)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1218,8 +1222,81 @@ func ensureHooks(ctx context.Context, opts Options, group Group, projects []stri
 		}, nil
 	}
 
-	hooked, err := ensureProjectHooks(ctx, opts.Client, projects, target, secret, freshSecret)
-	return hooked, nil, err
+	hooked, err := ensureProjectHooks(ctx, opts.Client, projects, name, target, secret, freshSecret)
+	if err != nil {
+		return nil, nil, err
+	}
+	return hooked, nil, sweepGroupHooks(ctx, opts.Client, group.ID, name)
+}
+
+// sweepProjectHooks removes the per-project hooks this engine left behind
+// when the company moved UP to a group hook.
+//
+// THE OTHER HALF OF [sweepGroupHooks], and the direction that was written
+// down as permanent: "if a prior run created per-project hooks and a later run
+// establishes a group hook, the reconcile does not remove the old per-project
+// hooks — you would get double delivery until you delete them. Deleting a
+// redundant project hook is a manual step." It is not manual now. A group
+// hook fires for every event in every project of the group, so a project hook
+// beside it delivers each one twice, and this engine registered both.
+//
+// The declared projects only, which is every project this engine has ever
+// hooked: [ensureProjectHooks] refuses to run at all without
+// `provisioning.projects`, so there is no project outside the list carrying a
+// registration of ours. A project dropped from the list keeps its hook, which
+// is the same answer [resolveProjects] gives about membership and for the
+// same reason — a company mid-edit looks exactly like one that removed a
+// project.
+func sweepProjectHooks(ctx context.Context, c *Client, projects []string, name string) error {
+	for _, project := range projects {
+		hooks, err := c.ProjectHooks(ctx, project)
+		if err != nil {
+			return fmt.Errorf("gitlab: list %s's hooks to remove ours: %w", project, err)
+		}
+		for _, hook := range mine(hooks, name) {
+			if err := c.DeleteProjectHook(ctx, project, hook.ID); err != nil {
+				return fmt.Errorf(
+					"gitlab: remove the hook this engine left on %s at %s, which "+
+						"delivers everything the group hook already does: %w",
+					project, hook.URL, err)
+			}
+		}
+	}
+	return nil
+}
+
+// sweepGroupHooks removes the group hook this engine left behind when the
+// company moved to per-project hooks.
+//
+// THE LEVEL IS A CHOICE THAT MOVES. `group_webhook` is a live config field
+// and the `auto` answer depends on the group's PLAN, so a company that flips
+// the field — or whose paid group lapses — has the engine register per
+// project from then on and never look at the level it stopped writing. The
+// group hook goes on delivering every one of those events a second time, for
+// ever, and no pass has any reason to mention it: [Teardown] sweeps both
+// levels for exactly this reason and the reconcile did not.
+//
+// A TIER GATE IS NOT A FAILURE. Group hooks are a Premium feature and the
+// endpoint 404s where the tier does not serve it — which is most of the
+// instances that take this path at all — so that answer means there is
+// nothing to sweep rather than that the sweep failed. See [gatedByTier].
+func sweepGroupHooks(ctx context.Context, c *Client, groupID int, name string) error {
+	hooks, err := c.GroupHooks(ctx, groupID)
+	if err != nil {
+		if gatedByTier(err) {
+			return nil
+		}
+		return fmt.Errorf("gitlab: list group hooks to remove ours: %w", err)
+	}
+	for _, hook := range mine(hooks, name) {
+		if err := c.DeleteGroupHook(ctx, groupID, hook.ID); err != nil {
+			return fmt.Errorf(
+				"gitlab: remove the group hook this engine left at %s, which "+
+					"delivers everything the project hooks already do: %w",
+				hook.URL, err)
+		}
+	}
+	return nil
 }
 
 // resolveProjects keeps the declared projects this instance actually has.
@@ -1266,23 +1343,96 @@ func resolveProjects(ctx context.Context, c *Client, declared []string) ([]strin
 		strings.Join(missing, ", "))}, nil
 }
 
+// webhookPath is where every GitLab delivery arrives, whatever base carries
+// it.
+const webhookPath = "/webhooks/gitlab"
+
+// DefaultWebhookName is the name this engine's hooks carry when the company
+// document does not choose one.
+//
+// Restated by [config.GitLab.WebhookNameOrDefault], which is where the rest
+// of the engine reads it from — config is the leaf every vendor package
+// depends on, so the constant cannot live only here. A test asserts the two
+// agree.
+const DefaultWebhookName = "crewlet"
+
+// ours reports a hook this deployment registered.
+//
+// THE NAME IS THE IDENTITY, because it is the only field that survives a
+// change of public base. Matching on the URL instead meant a deployment that
+// moved created a second hook and left the first: one live orphan per change,
+// at every level — the group hook and one per project — each still enabled,
+// each still signed, each delivering to an address that no longer answers.
+// Measured on a real deployment behind a tunnel: a group hook and two project
+// hooks, all pointing at dead addresses, none of which any pass could see.
+//
+// THE DELIVERY PATH IS THE GUARD that the old comment's concern deserves. It
+// said the URL was matched "because an instance may carry hooks somebody else
+// registered", which is a real risk and the wrong answer to it: every hook
+// this engine registers ends in /webhooks/gitlab whatever base it was
+// registered against, so a hook that merely shares the name and points
+// somewhere else is not this engine's and is left alone. That is the whole of
+// what the URL match was protecting, kept without the orphans.
+//
+// A HOOK WITH NO NAME IS ADOPTED, and that is the one arm worth arguing.
+// GitLab has taken a name since 17.1 and this engine never sent one, so every
+// hook it has ever registered is nameless — including the orphans this change
+// exists to sweep up. Refusing to touch them would leave exactly those behind
+// for ever, which is the bug rather than the fix. What it costs is the case
+// the name is there to settle: two deployments of one company on one instance,
+// BOTH still nameless, where the first pass after this change adopts whatever
+// it finds, keeps one and removes the rest. That resolves itself on the
+// following pass — the survivor now carries a name, the other deployment
+// re-creates its own under its own name, and from then on neither can see the
+// other's. One flap, once, against orphans that otherwise accumulate for ever.
+//
+// Two DEPLOYMENTS watching one instance is what the name settles from then
+// on, because they share this document: they set
+// `integrations.gitlab.webhook_name` to two values, exactly as they would
+// Jira's or Datadog's.
+func ours(hook Hook, name string) bool {
+	if !strings.HasSuffix(hook.URL, webhookPath) {
+		return false
+	}
+	return hook.Name == name || hook.Name == ""
+}
+
+// mine is every hook at one container that this deployment registered, in the
+// order the instance listed them.
+func mine(hooks []Hook, name string) []Hook {
+	out := make([]Hook, 0, len(hooks))
+	for _, hook := range hooks {
+		if ours(hook, name) {
+			out = append(out, hook)
+		}
+	}
+	return out
+}
+
 // ensureGroupHook registers the one group webhook, or re-points it.
 //
-// MATCHED ON THE URL, because that is what identifies "our" hook: an
-// instance may carry hooks somebody else registered, and a run that replaced
-// the first one it found would take down an unrelated integration.
-func ensureGroupHook(ctx context.Context, c *Client, groupID int, target, secret string,
+// MATCHED ON THE NAME — see [ours] — and converged to ONE. Converging the
+// first match and stopping still leaves every hook a previous address
+// created: this engine's own registrations, live, two of them delivering
+// somewhere that no longer answers. What "converged" has to mean is one.
+func ensureGroupHook(ctx context.Context, c *Client, groupID int, name, target, secret string,
 	freshSecret bool,
 ) error {
 	hooks, err := c.GroupHooks(ctx, groupID)
 	if err != nil {
 		return fmt.Errorf("gitlab: list group hooks: %w", err)
 	}
-	for _, hook := range hooks {
-		if hook.URL != target {
-			continue
+	held := mine(hooks, name)
+	for _, extra := range held[min(1, len(held)):] {
+		if err := c.DeleteGroupHook(ctx, groupID, extra.ID); err != nil {
+			return fmt.Errorf(
+				"gitlab: remove the group hook this engine left at %s: %w",
+				extra.URL, err)
 		}
-		if hook.Converged() && !freshSecret {
+	}
+	if len(held) > 0 {
+		hook := held[0]
+		if hook.Converged(name, target) && !freshSecret {
 			// NOTHING TO WRITE, and the listing above is also the
 			// confirmation.
 			//
@@ -1302,14 +1452,14 @@ func ensureGroupHook(ctx context.Context, c *Client, groupID int, target, secret
 			// same fact confirmSigned would go back for.
 			return nil
 		}
-		if err := c.UpdateGroupHook(ctx, groupID, hook.ID, target, secret); err != nil {
+		if err := c.UpdateGroupHook(ctx, groupID, hook.ID, name, target, secret); err != nil {
 			return fmt.Errorf("gitlab: update group hook: %w", err)
 		}
 		return confirmSigned("group hook", func() ([]Hook, error) {
 			return c.GroupHooks(ctx, groupID)
 		}, target)
 	}
-	if _, err := c.CreateGroupHook(ctx, groupID, target, secret); err != nil {
+	if _, err := c.CreateGroupHook(ctx, groupID, name, target, secret); err != nil {
 		return fmt.Errorf("gitlab: create group hook: %w", err)
 	}
 	return confirmSigned("group hook", func() ([]Hook, error) {
@@ -1358,8 +1508,8 @@ func confirmSigned(what string, list func() ([]Hook, error), target string) erro
 // quietly hooked no project leaves the instance reporting a healthy
 // integration that delivers to nobody, which is the exact failure the
 // skipped-rather-than-guessed rule above exists to prevent.
-func ensureProjectHooks(ctx context.Context, c *Client, projects []string, target, secret string,
-	freshSecret bool,
+func ensureProjectHooks(ctx context.Context, c *Client, projects []string,
+	name, target, secret string, freshSecret bool,
 ) ([]string, error) {
 	if len(projects) == 0 {
 		return nil, errors.New(
@@ -1369,7 +1519,7 @@ func ensureProjectHooks(ctx context.Context, c *Client, projects []string, targe
 	}
 	hooked := make([]string, 0, len(projects))
 	for _, project := range projects {
-		if err := ensureProjectHook(ctx, c, project, target, secret, freshSecret); err != nil {
+		if err := ensureProjectHook(ctx, c, project, name, target, secret, freshSecret); err != nil {
 			return nil, err
 		}
 		hooked = append(hooked, project)
@@ -1377,32 +1527,38 @@ func ensureProjectHooks(ctx context.Context, c *Client, projects []string, targe
 	return hooked, nil
 }
 
-func ensureProjectHook(ctx context.Context, c *Client, project, target, secret string,
+func ensureProjectHook(ctx context.Context, c *Client, project, name, target, secret string,
 	freshSecret bool,
 ) error {
 	hooks, err := c.ProjectHooks(ctx, project)
 	if err != nil {
 		return fmt.Errorf("gitlab: list hooks on %s: %w", project, err)
 	}
-	for _, hook := range hooks {
-		if hook.URL != target {
-			continue
+	held := mine(hooks, name)
+	for _, extra := range held[min(1, len(held)):] {
+		if err := c.DeleteProjectHook(ctx, project, extra.ID); err != nil {
+			return fmt.Errorf(
+				"gitlab: remove the hook this engine left on %s at %s: %w",
+				project, extra.URL, err)
 		}
+	}
+	if len(held) > 0 {
+		hook := held[0]
 		// THE SAME SKIP THE GROUP PATH TAKES, and it has to be here too:
 		// this branch runs once per declared project, so an unconditional
 		// re-write cost one write per project per pass rather than one.
 		// See [ensureGroupHook] for the whole reasoning.
-		if hook.Converged() && !freshSecret {
+		if hook.Converged(name, target) && !freshSecret {
 			return nil
 		}
-		if err := c.UpdateProjectHook(ctx, project, hook.ID, target, secret); err != nil {
+		if err := c.UpdateProjectHook(ctx, project, hook.ID, name, target, secret); err != nil {
 			return fmt.Errorf("gitlab: update hook on %s: %w", project, err)
 		}
 		return confirmSigned("hook on "+project, func() ([]Hook, error) {
 			return c.ProjectHooks(ctx, project)
 		}, target)
 	}
-	if _, err := c.CreateProjectHook(ctx, project, target, secret); err != nil {
+	if _, err := c.CreateProjectHook(ctx, project, name, target, secret); err != nil {
 		return fmt.Errorf("gitlab: create hook on %s: %w", project, err)
 	}
 	return confirmSigned("hook on "+project, func() ([]Hook, error) {

@@ -514,6 +514,10 @@
         "url": {
           "description": "Instance base URL, e.g. https://gitlab.com.",
           "type": "string"
+        },
+        "webhook_name": {
+          "description": "Name every hook the engine registers on this instance carries; give two deployments watching one instance two names (default crewlet).",
+          "type": "string"
         }
       },
       "type": "object"

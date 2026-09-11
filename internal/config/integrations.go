@@ -999,7 +999,36 @@ type GitLab struct {
 	// payload-derived targets; directed events are unaffected.
 	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"Read PAT for participants-based routing; empty degrades routing."`
 
+	// WebhookName is the name every hook this engine registers carries,
+	// and therefore WHICH HOOKS ON THIS INSTANCE ARE THIS DEPLOYMENT'S.
+	//
+	// The reconcile converges the hooks carrying this name whatever
+	// address they currently point at, which is what stops a change of
+	// public base leaving live orphans behind — one group hook and one
+	// per project per change, all enabled, all delivering to somewhere
+	// that no longer answers. Measured on a real deployment behind a
+	// tunnel: three.
+	//
+	// So it has to differ between two deployments watching ONE instance:
+	// staging and production of the same company share this document, and
+	// with one name each pass would repoint the other's hooks and only the
+	// last one to run would receive anything. The same knob exists on Jira
+	// and on Datadog for the same reason.
+	WebhookName string `yaml:"webhook_name,omitempty" json:"webhook_name,omitempty" desc:"Name every hook the engine registers on this instance carries; give two deployments watching one instance two names (default crewlet)."`
+
 	Provisioning *GitLabProvisioning `yaml:"provisioning,omitempty" json:"provisioning,omitempty" desc:"Inputs for the provisioning CLI; ignored by the engine."`
+}
+
+// WebhookNameOrDefault is the name this engine's hooks carry at GitLab.
+//
+// Restated here rather than imported from internal/gitlab for the reason
+// [Datadog.HandleTagOrDefault] gives — config is the leaf the vendor packages
+// depend on — and asserted equal by a test.
+func (g *GitLab) WebhookNameOrDefault() string {
+	if name := strings.TrimSpace(g.WebhookName); name != "" {
+		return name
+	}
+	return "crewlet"
 }
 
 // APIBase is the REST base derived from URL.

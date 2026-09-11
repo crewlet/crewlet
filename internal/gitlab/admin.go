@@ -682,6 +682,21 @@ type Hook struct {
 	ID  int    `json:"id"`
 	URL string `json:"url"`
 
+	// Name is what says a hook is THIS deployment's, and it is the only
+	// field that survives a change of public base.
+	//
+	// GitLab has taken a name on a group or project hook since 17.1, which
+	// every instance this engine can talk to already exceeds: a signing
+	// token needs 19.1 (see [Hook.SigningTokenPresent]), so there is no
+	// version that can serve this integration and not store this.
+	//
+	// EMPTY IS A REAL ANSWER and it is not "somebody else's". GitLab sends
+	// `null` for a hook registered without one, which decodes to the zero
+	// string — and every hook an earlier build of this engine made is in
+	// exactly that state. See [ours], which adopts one rather than
+	// stranding it.
+	Name string `json:"name"`
+
 	// SigningTokenPresent is the ONLY thing GitLab will say about a hook's
 	// signing token: the token itself is never returned, by design. It is
 	// what lets a reconcile tell a hook that can verify from one that
@@ -757,6 +772,12 @@ func (h *Hook) UnmarshalJSON(raw []byte) error {
 // Converged reports a hook that already carries what [hookBody] would write,
 // so writing it again would change nothing at the instance.
 //
+// THE NAME AND THE ADDRESS ARE PART OF IT, because [hookBody] writes both.
+// They used to be the caller's business, which worked only while the caller
+// SELECTED on the address: now that [ours] selects on the name, a hook this
+// pass has to re-point — or a nameless one it has just adopted — would
+// otherwise answer "converged" and be left exactly as it was found.
+//
 // # What it can and cannot compare, and why that is enough
 //
 // GitLab never returns a hook's `signing_token` or its legacy plaintext
@@ -773,7 +794,10 @@ func (h *Hook) UnmarshalJSON(raw []byte) error {
 // — which is what clears the plaintext field. There is no state where a hook
 // both reports a signing token and still carries the old cleartext one,
 // because the write that produced the first also cleared the second.
-func (h Hook) Converged() bool {
+func (h Hook) Converged(name, target string) bool {
+	if h.Name != name || h.URL != target {
+		return false
+	}
 	if !h.SigningTokenPresent || !h.EnableSSLVerification {
 		return false
 	}
@@ -797,19 +821,19 @@ func (c *Client) GroupHooks(ctx context.Context, groupID int) ([]Hook, error) {
 // EVERY EVENT THE PARSER UNDERSTANDS, and no more: a hook subscribed to
 // something nothing routes is delivery this engine answers with a 200 and
 // drops, which looks from the instance's side like a healthy integration.
-func (c *Client) CreateGroupHook(ctx context.Context, groupID int, target, secret string) (Hook, error) {
+func (c *Client) CreateGroupHook(ctx context.Context, groupID int, name, target, secret string) (Hook, error) {
 	var out Hook
 	err := c.send(ctx, http.MethodPost, "/groups/"+strconv.Itoa(groupID)+"/hooks",
-		hookBody(target, secret), &out)
+		hookBody(name, target, secret), &out)
 	return out, err
 }
 
 // UpdateGroupHook re-points an existing hook, which is what a rotation of the
 // signing secret needs.
-func (c *Client) UpdateGroupHook(ctx context.Context, groupID, hookID int, target, secret string) error {
+func (c *Client) UpdateGroupHook(ctx context.Context, groupID, hookID int, name, target, secret string) error {
 	return c.send(ctx, http.MethodPut,
 		"/groups/"+strconv.Itoa(groupID)+"/hooks/"+strconv.Itoa(hookID),
-		hookBody(target, secret), nil)
+		hookBody(name, target, secret), nil)
 }
 
 // DeleteGroupHook removes a group hook, which is what a disconnect does with
@@ -831,10 +855,10 @@ func (c *Client) ProjectHooks(ctx context.Context, project string) ([]Hook, erro
 // The path for an instance whose tier has no group hooks — Premium on
 // gitlab.com, absent from Community Edition — where this is the only way a
 // hook exists at all. See [config.ContainerWebhookMode].
-func (c *Client) CreateProjectHook(ctx context.Context, project, target, secret string) (Hook, error) {
+func (c *Client) CreateProjectHook(ctx context.Context, project, name, target, secret string) (Hook, error) {
 	var out Hook
 	err := c.send(ctx, http.MethodPost, "/projects/"+url.PathEscape(project)+"/hooks",
-		hookBody(target, secret), &out)
+		hookBody(name, target, secret), &out)
 	return out, err
 }
 
@@ -845,10 +869,12 @@ func (c *Client) DeleteProjectHook(ctx context.Context, project string, hookID i
 }
 
 // UpdateProjectHook re-points an existing project hook.
-func (c *Client) UpdateProjectHook(ctx context.Context, project string, hookID int, target, secret string) error {
+func (c *Client) UpdateProjectHook(
+	ctx context.Context, project string, hookID int, name, target, secret string,
+) error {
 	return c.send(ctx, http.MethodPut,
 		"/projects/"+url.PathEscape(project)+"/hooks/"+strconv.Itoa(hookID),
-		hookBody(target, secret), nil)
+		hookBody(name, target, secret), nil)
 }
 
 // hookBody is the subscription every crewlet hook carries.
@@ -864,9 +890,14 @@ func (c *Client) UpdateProjectHook(ctx context.Context, project string, hookID i
 // So the list below is exhaustive over what GitLab's hook API accepts, and a
 // future version that flips a default cannot quietly sign this deployment up
 // for traffic nothing reads.
-func hookBody(target, secret string) map[string]any {
+func hookBody(name, target, secret string) map[string]any {
 	body := map[string]any{
 		"url": target,
+		// THE NAME IS THE IDENTITY, and it is what a moved public base
+		// leaves intact. See [Hook.Name] and [ours]: matching on the URL
+		// alone made every change of address create a hook and abandon the
+		// one before it.
+		"name": name,
 		// THE SIGNING TOKEN, and the field name is the whole feature.
 		//
 		// GitLab takes two different secrets on a hook and they are not

@@ -17,9 +17,7 @@ type TeardownOptions struct {
 	// Plan names the seats, the same way [Options] does, so a teardown
 	// removes exactly what a pass created.
 	Plan *provision.Plan
-	// WebhookBase is the address the hooks point at, which is how they
-	// are identified. Empty means none were ever registered.
-	WebhookBase string
+
 	// RemoveSeats deletes the service accounts this engine created.
 	RemoveSeats bool
 
@@ -110,15 +108,21 @@ func groupIDOf(ctx context.Context, c *Client, path string) (int, bool, error) {
 	return group.ID, true, nil
 }
 
-// removeHooks withdraws the group hook and every project hook, matched on the
-// delivery URL — the same rule the reconcile uses, because an instance
-// carries hooks other integrations registered and taking the first one found
-// would delete somebody else's.
+// removeHooks withdraws the group hook and every project hook, matched by
+// [ours] — the same rule the reconcile uses, because an instance carries
+// hooks other integrations registered and taking the first one found would
+// delete somebody else's.
+//
+// BY NAME RATHER THAN BY THE CURRENT ADDRESS, which is what makes a
+// disconnect finish the job. This compared each hook against
+// `webhookTarget(WebhookBase)` and removed only an exact match, so every hook
+// a PREVIOUS public base had left behind survived the disconnect that was
+// supposed to remove it — and a deployment whose base had moved, or which had
+// no base left to compute a target from, removed nothing at all and said it
+// was done. Measured: a group hook and two project hooks still live after the
+// integration was disconnected.
 func removeHooks(ctx context.Context, opts TeardownOptions, groupID int) []error {
-	target := webhookTarget(opts.WebhookBase)
-	if target == "" {
-		return nil
-	}
+	name := opts.Config.WebhookNameOrDefault()
 	var failures []error
 
 	// BOTH LEVELS, whatever the configured mode says today. A group hook
@@ -127,14 +131,15 @@ func removeHooks(ctx context.Context, opts TeardownOptions, groupID int) []error
 	// current mode would have written leaves every hook the other branch
 	// ever made.
 	if hooks, err := opts.Client.GroupHooks(ctx, groupID); err != nil {
-		failures = append(failures, fmt.Errorf("gitlab: list group hooks to remove them: %w", err))
+		if !gatedByTier(err) {
+			failures = append(failures,
+				fmt.Errorf("gitlab: list group hooks to remove them: %w", err))
+		}
 	} else {
-		for _, hook := range hooks {
-			if hook.URL != target {
-				continue
-			}
+		for _, hook := range mine(hooks, name) {
 			if err := opts.Client.DeleteGroupHook(ctx, groupID, hook.ID); err != nil {
-				failures = append(failures, fmt.Errorf("gitlab: remove group hook: %w", err))
+				failures = append(failures, fmt.Errorf(
+					"gitlab: remove the group hook at %s: %w", hook.URL, err))
 			}
 		}
 	}
@@ -146,13 +151,10 @@ func removeHooks(ctx context.Context, opts TeardownOptions, groupID int) []error
 				"gitlab: list %s's hooks to remove them: %w", project, err))
 			continue
 		}
-		for _, hook := range hooks {
-			if hook.URL != target {
-				continue
-			}
+		for _, hook := range mine(hooks, name) {
 			if err := opts.Client.DeleteProjectHook(ctx, project, hook.ID); err != nil {
 				failures = append(failures, fmt.Errorf(
-					"gitlab: remove %s's hook: %w", project, err))
+					"gitlab: remove %s's hook at %s: %w", project, hook.URL, err))
 			}
 		}
 	}

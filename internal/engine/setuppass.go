@@ -967,7 +967,6 @@ func (p *gitlabPass) Teardown(ctx context.Context, in setup.TeardownInput) (prov
 	}
 	return gitlab.Teardown(ctx, gitlab.TeardownOptions{
 		Client: client, Config: cfg, Plan: plan,
-		WebhookBase: company.Config.Integrations.WebhookBase(env.LookupOK),
 		RemoveSeats: in.RemoveSeats,
 	})
 }

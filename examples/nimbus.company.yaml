@@ -458,6 +458,7 @@ integrations:
     url: "https://gitlab.com"
     signing_secret: "${GITLAB_SIGNING_SECRET}"       # the hook's signing_token; a delivery without a valid signature is refused
     token: "${GITLAB_ROUTING_TOKEN}"                  # read PAT → participants-based routing
+    # webhook_name: crewlet                          # which hooks on the instance are this deployment's; two deployments need two names
     provisioning:
       group: nimbus-hq                               # top-level group the agent service accounts join
       # Maintainer, not Developer: GitLab's default protected branch (main)
