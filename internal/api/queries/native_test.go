@@ -18,10 +18,17 @@ import (
 // almost entirely about turning a query string into a Filter, and a test that
 // only checked the rows would pass with every filter dropped.
 type stubWork struct {
-	query  tracker.Query
-	answer tracker.Answer
-	detail tracker.TaskDetail
-	err    error
+	query   tracker.Query
+	answer  tracker.Answer
+	detail  tracker.TaskDetail
+	views   tracker.ViewQuery
+	listing tracker.ViewListing
+	err     error
+}
+
+func (s *stubWork) Views(_ context.Context, q tracker.ViewQuery) (tracker.ViewListing, error) {
+	s.views = q
+	return s.listing, s.err
 }
 
 func (s *stubWork) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tracker.Answer, error) {
@@ -300,5 +307,50 @@ func TestARefusalWaitingCannotClearIsNotAnInvitationToRetry(t *testing.T) {
 		t.Fatalf("a refusal waiting cannot clear was reported as %v — a client "+
 			"told to come back goes round a loop that cannot terminate",
 			queries.ErrUnavailable)
+	}
+}
+
+// A VIEW STRIP'S CONTAINER IS THE QUERY GRAMMAR'S OWN SPELLING.
+//
+// A screen reaches the strip and then the tasks in it; two spellings of one
+// container would make the tab it lands on belong to a different project from
+// the rows beneath it.
+func TestAViewStripTakesTheContainerTheBoardTakes(t *testing.T) {
+	for _, tc := range []struct {
+		raw      string
+		kind, id string
+	}{
+		{"workspace", tracker.ContainerWorkspace, ""},
+		{"project:eng", tracker.ContainerProject, "ENG"},
+		{"project:ENG", tracker.ContainerProject, "ENG"},
+		{"unit:engineering", tracker.ContainerUnit, "engineering"},
+		{"person:ana", tracker.ContainerPerson, "ana"},
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			w := &stubWork{}
+			if _, err := askNative(t, queries.Sources{Work: w}, "work_views",
+				map[string]any{"container": tc.raw, "viewer": "ana"}); err != nil {
+				t.Fatalf("work_views: %v", err)
+			}
+			if w.views.Container.Kind != tc.kind || w.views.Container.ID != tc.id {
+				t.Fatalf("%q reached the reader as %s %q, want %s %q", tc.raw,
+					w.views.Container.Kind, w.views.Container.ID, tc.kind, tc.id)
+			}
+			if w.views.Viewer != "ana" {
+				t.Fatalf("the viewer reached the reader as %q", w.views.Viewer)
+			}
+		})
+	}
+
+	// AND A CONTAINER THE TRACKER COULD NOT HOLD IS A BAD PARAMETER, not
+	// an empty strip: a screen rendering nothing cannot tell a container
+	// with no views from one that does not exist.
+	for _, raw := range []string{"", "team:eng", "project:", "ENG"} {
+		w := &stubWork{}
+		_, err := askNative(t, queries.Sources{Work: w}, "work_views",
+			map[string]any{"container": raw})
+		if !errors.Is(err, queries.ErrBadParams) {
+			t.Errorf("container=%q answered %v, want a bad-parameter refusal", raw, err)
+		}
 	}
 }

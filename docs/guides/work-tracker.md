@@ -86,10 +86,29 @@ A **view** is a saved query with a shape. Three shapes:
 - **`calendar`** — by date, which is what you want when the question is "what
   is due".
 
-Views belong to a **container** — a project, a unit, a person — and a personal
-view is private to its owner. One per container can be the default. A
-protected view cannot be edited by anyone but its owner, which is what stops a
-shared board being rearranged under everybody.
+Views belong to a **container** — the workspace, a project, a unit, a person —
+and a personal view is private to its owner. One per container can be the
+default, and the applier settles that in the same transaction as the write, so
+two views can never both claim it. A protected view cannot be edited by anyone
+but its owner, which is what stops a shared board being rearranged under
+everybody.
+
+**Three of them exist without anybody saving one.** Every container has a list,
+a board and a calendar, and none of the three is an object: a fresh project
+needs no setup gesture, a container can never be left without a way to look at
+it, and nothing has to guard against somebody deleting the last view. A project
+running sprints has two more — a sprint board and a backlog — because those are
+the two questions a sprint creates and neither is expressible as a default.
+
+**A saved view's query is parsed when it is saved**, not when it is opened. A
+view that cannot be run is otherwise discovered by whoever opens it, weeks
+later, with no way to tell a typo from a grammar change — so a save runs the
+parameters through the same grammar `list_work_items` uses and refuses what
+does not parse, naming the key.
+
+Views are read at `GET /work/views?container=project:ENG`, and written through
+the operator MCP surface with `save_work_view` — **not** by a seat. A view is
+furniture, and a seat's job is the work rather than the furniture around it.
 
 ### Manual order
 
@@ -142,16 +161,17 @@ queries a seat's tools use, against this node's own copy. Every answer says how
 far behind that copy is.
 
 **Your own AI assistant** can reach the same tracker over MCP, at
-`/operator/mcp`. It serves the same five work tools above, the five page tools
-beside them and knowledge search — the seat's own implementations, with one
+`/operator/mcp`. It serves the same five work tools above, two more no seat is
+given — `list_work_views` and `save_work_view` — the five page tools beside
+them and knowledge search — the seat's own implementations, with one
 field different: a write carries the **token's** own name as its author and the
 author kind `operator`. There is deliberately no way for the caller to name a seat to act
 as — a tracker whose author field is chosen by the writer is not an audit
 trail.
 
-**The REST API** serves the read side at `/work` and `/work/{id}`. Writes go
-through a seat's tools or the operator MCP, both of which are attributed to
-somebody.
+**The REST API** serves the read side at `/work`, `/work/{id}` and
+`/work/views`. Writes go through a seat's tools or the operator MCP, both of
+which are attributed to somebody.
 
 ## Hand-offs are bounded on the task
 

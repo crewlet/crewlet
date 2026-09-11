@@ -1023,6 +1023,42 @@ export interface WorkItemsAnswer {
   incomplete?: WorkIncomplete;
 }
 
+/** One entry in a container's view strip.
+ *
+ *  A BUILTIN ROW HAS NO ID. Every container has a list, a board and a calendar
+ *  without anybody saving one — they are not objects, so there is nothing to
+ *  rename, protect, rank or pin — and a screen renders them from `key`. */
+export interface WorkView {
+  id?: string;
+  key: string;
+  name: string;
+  type: "list" | "board" | "calendar";
+  container: { kind: string; id: string };
+  builtin: boolean;
+  /** Empty is a SHARED view; a handle makes it personal to that person. */
+  owner?: string;
+  protected?: boolean;
+  /** The container's landing tab, and at most one row carries it. */
+  default?: boolean;
+  /** THIS VIEWER's, never the row's: the same view is pinned for one reader
+   *  and not for another. */
+  pinned?: boolean;
+  rank?: string;
+  icon?: string;
+  /** The saved query, in `work_items`' own parameter names. */
+  params?: Record<string, string>;
+}
+
+export interface WorkViewsAnswer {
+  views: WorkView[];
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
 export interface WorkComment {
   id: string;
   task: string;
@@ -1583,6 +1619,7 @@ export interface QueryMap {
   retention: RetentionReport;
   work_items: WorkItemsAnswer;
   work_item: WorkItemDetail;
+  work_views: WorkViewsAnswer;
   pages: PagesAnswer;
   page: PageDetail;
   containers: { containers: PageContainer[] };

@@ -2032,6 +2032,13 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 				return writer.As(actor.Handle, actor.Kind,
 					tracker.Provenance{OperatorID: actor.OperatorID})
 			},
+			// THE SAVED-VIEW WRITER, which only this surface has: a
+			// view is furniture a person arranges, and no seat is
+			// given the tools that reach it.
+			ViewWriter: func(actor builtin.Actor) builtin.ViewWriter {
+				return writer.As(actor.Handle, actor.Kind,
+					tracker.Provenance{OperatorID: actor.OperatorID})
+			},
 			Actor: opsmcp.WorkActor,
 			Await: e.WaitCommitted,
 		}

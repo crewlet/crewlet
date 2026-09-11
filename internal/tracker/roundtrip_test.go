@@ -252,6 +252,28 @@ func (r *roundTrip) apply(from, last uint64) {
 	}
 }
 
+// scopeOfLastRecord is the resolved scope of the newest record on the log.
+//
+// FROM THE WIRE, never from the writer's own value: what a deferral is filed
+// under is what the RECORD carries, and a case reading the writer's struct
+// would pass for a scope that never reached the broker.
+func (r *roundTrip) scopeOfLastRecord() statelog.ScopeSet {
+	r.t.Helper()
+	last, err := r.log.End(r.t.Context())
+	if err != nil {
+		r.t.Fatalf("read the log's end: %v", err)
+	}
+	_, payload, _, ok, err := r.log.At(r.t.Context(), last)
+	if err != nil || !ok {
+		r.t.Fatalf("read record %d: %v", last, err)
+	}
+	env, err := tracker.DecodeEnvelope(payload)
+	if err != nil {
+		r.t.Fatalf("decode record %d: %v", last, err)
+	}
+	return env.Scope.Resolve(env.Subject)
+}
+
 func (r *roundTrip) ask(kv map[string]any) tracker.Answer {
 	r.t.Helper()
 	q, err := tracker.ParseQuery(tracker.MapParams(kv), wednesday, berlin)

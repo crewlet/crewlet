@@ -54,6 +54,7 @@ type WorkReader interface {
 	Tasks(ctx context.Context, q tracker.Query, now time.Time) (tracker.Answer, error)
 	Task(ctx context.Context, idOrKey string, want tracker.DetailWants,
 		level statelog.ReadLevel) (tracker.TaskDetail, error)
+	Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error)
 }
 
 // WorkWriter is what these tools need from the tracker's write side.
@@ -83,6 +84,15 @@ type WorkDeps struct {
 	// immutable identity: the seat bound into the turn context here, and
 	// the credential on the request in the operator's surface.
 	Writer func(actor Actor) WorkWriter
+
+	// ViewWriter resolves the saved-view write side for one actor, in the
+	// same shape and for the same reason [WorkDeps.Writer] is a function.
+	//
+	// SEPARATE from Writer because the surfaces differ: every surface has
+	// a task writer and only the OPERATOR's has a view writer, so folding
+	// the verb into one interface would make a seat's registration
+	// implement a method nothing there may call.
+	ViewWriter func(actor Actor) ViewWriter
 
 	// Mentions resolves the handles a comment names, so a mention wakes
 	// the person the author meant. Nil resolves nothing, which degrades to
