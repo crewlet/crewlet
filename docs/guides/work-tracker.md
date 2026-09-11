@@ -254,6 +254,22 @@ Six tools, and they are deliberately few:
 | `comment_on_work_item` | add to the thread |
 | `get_work_catalogue` | the types a task may be and the fields it may carry |
 
+An operator holds two more that no seat does: `remove_work_item` puts an item
+in the **trash** and `restore_work_item` takes it out again, at any age. A
+removal hides an item from every list and board and destroys nothing — its
+history is untouched and `list_work_items` with `removed: true` is the only
+thing that shows it. No seat holds either, because a seat that could hide work
+it did not want to do would be marking its own homework in the one way that
+leaves no trace: the board simply has one fewer item on it. Removing an item
+with `subtree: true` takes its children with it, and each child's tombstone
+names the removal that took it — so restoring the parent brings back exactly
+what that gesture removed, and never a child that was already in the trash for
+its own reasons.
+
+Neither is `purge`, which destroys every row on every node and has no inverse.
+That one is `crewlet work purge`, with a typed confirmation and a required
+reason, and it is deliberately not a tool at all.
+
 Three of those count as a **delivery**: create, update and comment. A turn
 woken by an assignment answers by moving the task, commenting on it, or filing
 the follow-up — and the delivery gate knows that, so such a turn is not

@@ -112,6 +112,13 @@ type WorkDeps struct {
 	// describes one.
 	PersonWriter func(actor Actor) PersonWriter
 
+	// TrashWriter resolves the removal and restore side for one actor, and
+	// is the operator surface's alone: a removal hides a task from every
+	// list in the company, and a seat that could hide work it did not want
+	// to do would be marking its own homework in the one way that leaves
+	// no trace — the board simply has one fewer item on it.
+	TrashWriter func(actor Actor) TrashWriter
+
 	// Mentions resolves the handles a comment names, so a mention wakes
 	// the person the author meant. Nil resolves nothing, which degrades to
 	// a comment that notifies only the ordinary watchers.
@@ -334,6 +341,21 @@ func (t *listWorkItems) Parameters() map[string]any {
 					"Any other argument you pass overrides the preset's own.",
 			},
 			"label": map[string]any{"type": "string", "description": "One label to filter on."},
+			"sprint": map[string]any{
+				"type": "string",
+				"description": "A sprint number, a sprint name, or one of " +
+					"`active`, `next`, `future`, `closed` — or `none` for the " +
+					"backlog, which is unfinished work in no sprint. Comma " +
+					"separate to ask for several. Everything but `none` names " +
+					"a sprint of ONE project, so pass `project` with it.",
+			},
+			"removed": map[string]any{
+				"type": "boolean",
+				"description": "True lists the TRASH — items somebody removed " +
+					"— and nothing else. This is the only way to see them: a " +
+					"removed item is out of every other list. They are not " +
+					"destroyed and an operator can restore one at any age.",
+			},
 			"text": map[string]any{
 				"type": "string",
 				"description": "Substring of the key or title. For finding an " +
@@ -377,7 +399,7 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	if v := strings.TrimSpace(argString(args, "project")); v != "" {
 		params["container"] = "project:" + strings.ToUpper(v)
 	}
-	for _, key := range []string{"assignee", "limit"} {
+	for _, key := range []string{"assignee", "limit", "sprint", "removed"} {
 		if v, held := args[key]; held {
 			params[key] = v
 		}

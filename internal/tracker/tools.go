@@ -55,6 +55,17 @@ const (
 	SetPrioritiesTool = "set_priorities"
 	SetPinsTool       = "set_pins"
 	MarkInboxTool     = "mark_inbox"
+
+	// The TRASH tools. A removal hides a task from every list in the
+	// company, and a seat that could hide work it did not want to do would
+	// be marking its own homework in the one way nobody notices — the
+	// board simply has one fewer item on it. A restore is its inverse and
+	// is an operator's for the same reason, which is also why neither is a
+	// facet of `update_work_item`: that verb refuses a removed task
+	// outright, and a freeze somebody can lift with an ordinary field
+	// write is not a freeze.
+	RemoveWorkItemTool  = "remove_work_item"
+	RestoreWorkItemTool = "restore_work_item"
 )
 
 // GetWorkCatalogueTool is the one catalogue verb a SEAT does hold.
@@ -72,6 +83,7 @@ func OperatorOnlyTools() []string {
 		ListWorkGoalsTool, WriteWorkGoalTool,
 		WriteWorkCatalogueTool,
 		GetPersonTool, SetPrioritiesTool, SetPinsTool, MarkInboxTool,
+		RemoveWorkItemTool, RestoreWorkItemTool,
 	}
 }
 

@@ -598,6 +598,7 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 		GoalWriter:      func(builtin.Actor) builtin.GoalWriter { return nil },
 		CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
 		PersonWriter:    func(builtin.Actor) builtin.PersonWriter { return nil },
+		TrashWriter:     func(builtin.Actor) builtin.TrashWriter { return nil },
 	})
 	for _, name := range tracker.OperatorOnlyTools() {
 		if _, held := reg.Lookup(name); held {
@@ -616,6 +617,7 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 			GoalWriter:      func(builtin.Actor) builtin.GoalWriter { return nil },
 			CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
 			PersonWriter:    func(builtin.Actor) builtin.PersonWriter { return nil },
+			TrashWriter:     func(builtin.Actor) builtin.TrashWriter { return nil },
 			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
 				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
 			},
@@ -689,6 +691,7 @@ func TestEveryOperatorToolAnswersOutsideATurn(t *testing.T) {
 		GoalWriter:      func(builtin.Actor) builtin.GoalWriter { return nil },
 		CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
 		PersonWriter:    func(builtin.Actor) builtin.PersonWriter { return nil },
+		TrashWriter:     func(builtin.Actor) builtin.TrashWriter { return nil },
 		Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
 			return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
 		},

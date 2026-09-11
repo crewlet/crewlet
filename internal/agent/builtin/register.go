@@ -267,6 +267,20 @@ func annotationsFor(name string) tools.Annotations {
 		// lookup was refused it as a write to a surface a human reads
 		// while list_work_items beside it was admitted.
 		return tools.Annotations{ReadOnly: mcp.Yes, Idempotent: mcp.Yes}
+	case tracker.RemoveWorkItemTool, tracker.RestoreWorkItemTool:
+		// WRITES EVERYBODY SEES — a removal takes an item off every board
+		// in the company — so OpenWorld is Yes and
+		// [mcp.WritesToSharedSurface] reads true, which keeps them away
+		// from a sub-agent acting under its parent's name. Not
+		// destructive: a removal is reversible at any age and destroys
+		// nothing, which is exactly what separates it from a purge. And
+		// each is IDEMPOTENT: a task already in the trash is left there
+		// and reported as success, because a half-finished subtree
+		// removal has to be able to be re-run.
+		return tools.Annotations{
+			ReadOnly: mcp.No, Destructive: mcp.No,
+			Idempotent: mcp.Yes, OpenWorld: mcp.Yes,
+		}
 	case CreateWorkItemTool:
 		// A write everybody in the company sees, so OpenWorld is Yes and
 		// [mcp.WritesToSharedSurface] reads true — which keeps it away

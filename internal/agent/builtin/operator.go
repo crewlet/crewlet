@@ -84,6 +84,8 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		{&setPriorities{deps: work, leads: deps.Leads}, work.PersonWriter != nil},
 		{&setPins{deps: work}, work.PersonWriter != nil},
 		{&markInbox{deps: work}, work.PersonWriter != nil},
+		{&removeWorkItem{deps: work}, work.TrashWriter != nil && work.Reader != nil},
+		{&restoreWorkItem{deps: work}, work.TrashWriter != nil && work.Reader != nil},
 		{&listPages{deps: pages}, pages.Reader != nil},
 		{&getPage{deps: pages}, pages.Reader != nil},
 		{&writePage{deps: pages}, pages.Writer != nil},
