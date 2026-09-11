@@ -194,6 +194,10 @@ type Engine struct {
 	// outer would have dereferenced nil.
 	env atomic.Pointer[config.Resolver]
 
+	// republish coalesces the re-activations a provisioning pass asks for
+	// when it seals a credential. See republish.go.
+	republish republisher
+
 	// cipher is the keyring this node seals and opens secret rows with,
 	// nil on a node that has none. Held rather than rebuilt because ONE
 	// cipher per process is what keeps a row this node wrote a row it can
@@ -749,6 +753,10 @@ func (e *Engine) Stop(ctx context.Context) {
 	e.stopNotifications(ctx)
 	e.stopMaintenance()
 	e.stopIntegrations()
+	// AFTER the integration loop, which is what runs the passes that ask
+	// for a re-activation: disarming first would leave a window in which a
+	// pass could arm one more on a node that is shutting down.
+	e.republish.stop()
 	// AFTER the drain, which released every seat and flushed each one's
 	// memory on the way out. Stopping it before the drain would leave the
 	// releases to the flush alone, which is the bounded path rather than

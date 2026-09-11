@@ -573,7 +573,7 @@ func (s *refreshingSink) Flush(ctx context.Context) error {
 	if s.sealed && !s.flushed {
 		s.flushed = true
 		s.engine.refreshSecrets(ctx)
-		s.engine.rebuildForSealedSecrets(ctx, s.operator)
+		s.engine.republish.request(s.operator, s.engine.rebuildForSealedSecrets)
 	}
 	return err
 }
@@ -612,15 +612,28 @@ func (s *refreshingSink) Flush(ctx context.Context) error {
 // control plane's credential-rotation gesture, and the pointer is append-only
 // precisely so that this operation rebuilds rather than deduplicating.
 //
-// # Why this cannot spin
+// # Why this is rate-bounded, and why believing it could not spin was wrong
 //
 // An apply marks the reconcile loop stale, which brings a pass forward, which
-// could seal again. It does not, and the reason is a promise that is now
-// checked rather than believed: every reconciler is certified against
-// integrationtest's "a converged pass writes nothing", and `sealed` is set
-// only by an actual Record. A converged pass seals nothing, so it reloads
-// nothing. Before that certification existed three vendors wrote on every
-// pass, and this would have been an apply storm.
+// can seal again. This used to argue that it would not, because every
+// reconciler is certified against integrationtest's "a converged pass writes
+// nothing" and `sealed` is set only by an actual Record.
+//
+// That argument holds over a CONVERGED world and says nothing about any other,
+// which is the half that matters: a pass that can never converge writes on
+// every tick by construction. One did. GitLab minted a token for an account
+// whose address could not be confirmed, GitLab refused it, the next pass read
+// the refusal as a stale credential and minted another — and before this
+// rebuild existed that loop ran at the reconcile cadence, while afterwards it
+// ran as fast as an apply could complete. Measured: every five seconds, 144
+// live year-long `api`-scoped tokens from a single connect. The vendor fault is
+// fixed where it lives, but the amplification was this function's.
+//
+// So requests are COALESCED rather than performed inline — see
+// [republisher]. A burst of seals becomes one apply, which is what an
+// operator connecting a third-party app produces anyway (the setup dialog
+// writes one request per surface), and the rebuild rate is bounded by
+// something other than a promise about somebody else's code.
 func (e *Engine) rebuildForSealedSecrets(ctx context.Context, operator string) {
 	writer := e.configWriterOrNil()
 	if writer == nil {
