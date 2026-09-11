@@ -61,7 +61,7 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 			// WHERE clause alone would explain a query nobody
 			// issues — and the ORDER BY is half of what decides
 			// which index the planner reaches for.
-			order := orderBy(q)
+			order := orderBy(q, planFields(q))
 			plan := explain(t, db, `
 				SELECT t.id, t.rank, t.updated_at FROM tracker_tasks t
 				WHERE `+where+` ORDER BY `+order+` LIMIT 51`, args)
@@ -442,9 +442,11 @@ func indexesOn(t *testing.T, db *store.DB, tables []string) []string {
 // different columns. The fixture declares the type it means.
 func planFields(q Query) map[string]resolvedField {
 	out := map[string]resolvedField{}
-	for _, filter := range q.Fields {
-		out[filter.Ref] = resolvedField{
-			ID: "field-" + filter.Ref, Slug: filter.Ref, Type: FieldText,
+	refs := map[string]bool{}
+	collectFieldRefs(q, refs)
+	for ref := range refs {
+		out[ref] = resolvedField{
+			ID: "field-" + ref, Slug: ref, Type: FieldText,
 		}
 	}
 	return out

@@ -44,6 +44,32 @@ import (
 // see [FieldDef.Archived]. `hidden = 1` is that state, and every index is
 // partial on `hidden = 0`.
 
+// The value KINDS, which are not the field's type.
+//
+// The DDL's own head comment on `tracker_field_values` says what this column
+// is for: "`hidden` and `kind` carry the two non-live states: every filter and
+// total adds `hidden = 0 AND kind <> 'foreign'`". So `hidden` is the archived
+// DECLARATION and `kind` is the value's PROVENANCE — a value this engine's
+// write path produced, or one mirrored in from a tracker a company runs
+// beside it.
+//
+// A FOREIGN VALUE IS STORED AND NOT FILTERED ON. It is there so a renderer can
+// show what the other system holds, and it is out of every predicate because
+// the native grammar's operators are defined against the native catalogue's
+// declared types — comparing them against a foreign system's own would answer
+// a question nobody asked with a number nobody can check.
+const (
+	FieldValueNative  = "native"
+	FieldValueForeign = "foreign"
+)
+
+// liveFieldValue is the predicate every filter and every total adds.
+//
+// ONE STRING, because the DDL states the rule once and three call sites read
+// it — the filter, the aggregate and the group — and a fourth spelling is how
+// one of them stops matching the other three.
+const liveFieldValue = `v.hidden = 0 AND v.kind <> '` + FieldValueForeign + `'`
+
 // MaxFieldValueSeq bounds how many entries one multi-valued field contributes.
 //
 // A LABELS OR PEOPLE FIELD IS A SET, and each member is its own row so an
@@ -144,7 +170,7 @@ func writeFieldValue(ctx context.Context, tx *sql.Tx, taskID string,
 			INSERT INTO tracker_field_values
 				(task_id, field_id, seq, kind, hidden, num, text, at, ref)
 			VALUES (?,?,?,?,?,?,?,?,?)`,
-			taskID, field.ID, seq, string(field.Type), boolInt(field.Archived),
+			taskID, field.ID, seq, FieldValueNative, boolInt(field.Archived),
 			value.Num, value.Text, value.At, value.Ref)
 		if err != nil {
 			return 0, fmt.Errorf("tracker: write %s's value for field %s: %w",
