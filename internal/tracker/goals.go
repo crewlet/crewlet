@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -107,7 +108,16 @@ func (w *Writer) WriteGoal(ctx context.Context, opID string, goal Goal) (WriteRe
 		return WriteResult{}, err
 	}
 	subject := GoalSubject(goal.ID)
-	scope, err := goalScope(subject, goal)
+	// THE PROJECTS IT ALREADY COUNTS, so a target that DROPS one still
+	// names it. The scope is what an apply may write, and this apply
+	// rewrites every target reference the goal had — so a save that
+	// removed project ENG from a target wrote ENG's rows out while naming
+	// only the projects it kept, and a deferral covering ENG never saw it.
+	was, err := w.goalProjects(ctx, goal.ID)
+	if err != nil {
+		return WriteResult{}, err
+	}
+	scope, err := goalScope(subject, goal, was)
 	if err != nil {
 		return WriteResult{}, err
 	}
@@ -124,6 +134,23 @@ func (w *Writer) WriteGoal(ctx context.Context, opID string, goal Goal) (WriteRe
 			if err != nil {
 				return statelog.Decision{}, err
 			}
+			// AND THE SCOPE'S OWN PRE-READ IS VERIFIED HERE, inside
+			// the snapshot it was taken outside of: a project this
+			// goal counted at that moment and no longer counts now
+			// would be a project the record fails to name. Refused
+			// rather than published under-declared — the caller's
+			// retry re-reads.
+			if held {
+				for _, project := range goalProjectsOf(current) {
+					if !slices.Contains(was, project) {
+						return statelog.Decision{}, fmt.Errorf("tracker: goal "+
+							"%s started counting %s while this save was being "+
+							"prepared, so the record would not name it — read "+
+							"the goal again and save: %w",
+							goal.ID, project, statelog.ErrConflict)
+					}
+				}
+			}
 			post := goal
 			post.V = DocumentVersion
 			if !held {
@@ -137,6 +164,59 @@ func (w *Writer) WriteGoal(ctx context.Context, opID string, goal Goal) (WriteRe
 			return w.decide(subject, OpPatch, scope, opID, post, nil, at)
 		},
 	})
+}
+
+// goalProjects is the projects a stored goal's targets already count.
+//
+// A SCOPE, NEVER AN EXPECTATION — [Writer.db]'s own rule. It only WIDENS the
+// declared scope, and it is verified inside the decide snapshot all the same,
+// because a scope formed from a stale read and never checked is an
+// under-declaration waiting for a race.
+//
+// SORTED, so two nodes preparing the same save declare the same terms in the
+// same order and the record is identical wherever it was written.
+func (w *Writer) goalProjects(ctx context.Context, id string) ([]string, error) {
+	if w.db == nil {
+		return nil, nil
+	}
+	var out []string
+	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx,
+			`SELECT DISTINCT ref FROM tracker_goal_target_refs
+			 WHERE goal_id = ? AND kind = 'project' ORDER BY ref`, id)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var project string
+			if err := rows.Scan(&project); err != nil {
+				return err
+			}
+			out = append(out, project)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("tracker: read the projects goal %s counts: %w", id, err)
+	}
+	return out, nil
+}
+
+// goalProjectsOf is the same list read off a decoded goal, sorted.
+func goalProjectsOf(goal Goal) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, target := range goal.Targets {
+		for _, project := range target.Projects {
+			if !seen[project] {
+				seen[project] = true
+				out = append(out, project)
+			}
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // checkGoal refuses a goal that could not be rendered or could not be counted.
@@ -256,7 +336,7 @@ func validTargetType(kind string) bool {
 // read waits for a deferred goal record that would change its answer. A target
 // naming bare task ids resolves to the DOMAIN, because "a task somewhere" has
 // no narrower honest term.
-func goalScope(subject Subject, goal Goal) (ScopeSet, error) {
+func goalScope(subject Subject, goal Goal, was []string) (ScopeSet, error) {
 	containers := map[string]bool{}
 	bare := false
 	for _, target := range goal.Targets {
@@ -266,6 +346,13 @@ func goalScope(subject Subject, goal Goal) (ScopeSet, error) {
 		if len(target.Tasks) > 0 {
 			bare = true
 		}
+	}
+	// AND THE PROJECTS IT COUNTED BEFORE. The apply rewrites every target
+	// reference this goal has, so one it is DROPPING has its rows written
+	// out by this record too — and a scope naming only what remains is an
+	// under-declaration of exactly the same shape a project move makes.
+	for _, project := range was {
+		containers[project] = true
 	}
 	switch {
 	case bare:

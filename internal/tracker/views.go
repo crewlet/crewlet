@@ -3,6 +3,7 @@ package tracker
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -66,13 +67,33 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View) (WriteRe
 	}
 	subject := ViewSubject(view.ID)
 	home := containerScope(view.Container)
+	// WHERE THE VIEW LIVES NOW, so a MOVE states both ends. A save may
+	// change the container, and then the apply writes a row OUT of one
+	// strip and INTO another — a scope naming only the destination would
+	// let a write into the strip it left slip past a deferral that covers
+	// it, which is [Writer.UpdateTask]'s own rule for a project move said
+	// about a view.
+	from, moved, err := w.viewHome(ctx, view.ID, home)
+	if err != nil {
+		return WriteResult{}, err
+	}
 	scope := ScopeSet{Subject: true, Container: home}
-	if view.Default {
+	switch {
+	case view.Default:
 		// A DEFAULT-SETTING APPLY CLEARS THE CONTAINER'S OTHERS, so it
 		// states the container — see the file's head. Every sibling's
 		// own path nests under this term by construction, because they
 		// share a container and therefore share [containerScope].
-		scope = ScopeSet{Terms: []ScopeTerm{{Kind: TermContainer, ID: home}}}
+		terms := []ScopeTerm{{Kind: TermContainer, ID: home}}
+		if moved {
+			terms = append(terms, ScopeTerm{Kind: TermContainer, ID: from})
+		}
+		scope = ScopeSet{Terms: terms}
+	case moved:
+		scope = ScopeSet{Terms: []ScopeTerm{
+			{Kind: TermObject, Container: home, ID: subject.ID},
+			{Kind: TermObject, Container: from, ID: subject.ID},
+		}}
 	}
 	at := w.Now()
 	view.UpdatedAt = at
@@ -100,6 +121,21 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View) (WriteRe
 					post.Rank = rank
 				}
 			default:
+				// AND THE SCOPE'S OWN PRE-READ IS VERIFIED HERE, in
+				// the snapshot: it was taken outside one, so a view
+				// that moved under this write would have been scoped
+				// against a container it no longer lives in. Refused
+				// rather than published, because an UNDER-declared
+				// scope is the one thing a record may never carry —
+				// and the caller's retry re-reads.
+				if stored := containerScope(current.Container); stored != home &&
+					(!moved || stored != from) {
+					return statelog.Decision{}, fmt.Errorf("tracker: view %s "+
+						"moved to %s while this save was being prepared, so "+
+						"the record would not name the strip it is leaving — "+
+						"read it again and save: %w",
+						view.ID, stored, statelog.ErrConflict)
+				}
 				// A PROTECTED VIEW IS ITS OWNER'S, and that is the
 				// whole of what "protected" means here: it stops a
 				// shared board being rearranged under everybody,
@@ -126,6 +162,38 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View) (WriteRe
 			return w.decide(subject, OpPatch, scope, opID, post, nil, at)
 		},
 	})
+}
+
+// viewHome is the container a saved view lives in NOW, and whether that is a
+// different one from where this save would put it.
+//
+// A SCOPE, NEVER AN EXPECTATION — [Writer.db]'s own rule. Nothing decided from
+// this read is paired with a broker expectation: it only WIDENS the declared
+// scope, and an over-declared scope is always safe where an under-declared one
+// is the single claim a record may not make. It is verified inside the decide
+// snapshot all the same, because a scope formed from a stale read and never
+// checked is an under-declaration waiting for a race.
+//
+// A view this node does not hold reports no move: there is no strip for it to
+// be leaving.
+func (w *Writer) viewHome(ctx context.Context, id, home string) (string, bool, error) {
+	if w.db == nil {
+		return "", false, nil
+	}
+	var kind, container string
+	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		row := tx.QueryRowContext(ctx,
+			`SELECT container_kind, container_id FROM tracker_views WHERE id = ?`, id)
+		return row.Scan(&kind, &container)
+	})
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", false, nil
+	case err != nil:
+		return "", false, fmt.Errorf("tracker: read where view %s lives: %w", id, err)
+	}
+	from := containerScope(Container{Kind: kind, ID: container})
+	return from, from != home, nil
 }
 
 // checkView refuses a view that could not be rendered or could not be run.
