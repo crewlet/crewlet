@@ -101,6 +101,23 @@ type Answer struct {
 	// changed as somebody scrolled would be the one thing it must not do.
 	Totals []Total `json:"totals,omitempty"`
 
+	// Groups is the board's columns, and [Answer.Rows] is EMPTY whenever
+	// it is set: returning both would be the same rows twice, and a
+	// caller rendering the flat half would draw a board with no columns
+	// and nothing to say so. Each group's own count is over the whole set
+	// rather than over the rows it carries.
+	Groups []Group `json:"groups,omitempty"`
+
+	// GroupsDropped is how many columns did not fit [MaxGroups]. A board
+	// that drew sixty-four of two hundred and said nothing would look
+	// like a company with sixty-four assignees.
+	GroupsDropped int `json:"groups_dropped,omitempty"`
+
+	// GroupsOverlap marks an axis on which one task is on several columns
+	// — a label board — so a reader knows the counts do not sum to
+	// [Answer.TotalHint] rather than concluding the answer is wrong.
+	GroupsOverlap bool `json:"groups_overlap,omitempty"`
+
 	// Level is the level ACTUALLY served, set from the statement that
 	// satisfied the barrier — never the level asked for. A level never
 	// silently downgrades, so the two can only differ by a refusal.
@@ -233,11 +250,23 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 		// `sort=f.<slug>` term is a JOIN onto the field's own values and
 		// the field is only known once the catalogue has been read.
 		terms := sortTerms(q, fields)
-		rows, cursor, err := readTasks(ctx, tx, where, args, terms, limit)
-		if err != nil {
-			return err
+		if q.GroupBy != "" {
+			// A GROUPED ANSWER IS A DIFFERENT SHAPE, and the flat
+			// rows stay empty — see [Answer.Groups].
+			groups, err := readGroups(ctx, tx, q, fields, where, args, terms)
+			if err != nil {
+				return err
+			}
+			answer.Groups = groups.Groups
+			answer.GroupsDropped = groups.Dropped
+			answer.GroupsOverlap = groups.Overlap
+		} else {
+			rows, cursor, err := readTasks(ctx, tx, where, args, terms, limit)
+			if err != nil {
+				return err
+			}
+			answer.Rows, answer.NextCursor = rows, cursor
 		}
-		answer.Rows, answer.NextCursor = rows, cursor
 
 		hint, err := countHint(ctx, tx, where, args)
 		if err != nil {
@@ -607,6 +636,20 @@ func compile(q Query, now time.Time, fields map[string]resolvedField) (string, [
 		where = append(where, "("+strings.Join(branches, " OR ")+")")
 	}
 
+	if q.Group != "" {
+		// A COLUMN FILTER IS A PREDICATE OF THE WHOLE QUERY, in its
+		// JOIN-FREE form: the count hint and the totals share this
+		// predicate and carry no join, so an axis expressed only as one
+		// would leave a header adding up the whole board while the rows
+		// showed a single column of it.
+		axis, err := compileGroup(q.GroupBy, fields)
+		if err != nil {
+			return "", nil, err
+		}
+		clause, values := axis.filter(q.Group)
+		add(clause, values...)
+	}
+
 	if q.Cursor != "" {
 		clause, values, err := cursorClause(q, fields)
 		if err != nil {
@@ -956,6 +999,19 @@ func mintCursor(keys []any) string {
 func readTasks(ctx context.Context, tx *sql.Tx, where string, args []any,
 	terms []sortTerm, limit int) ([]TaskRow, string, error) {
 
+	return readTasksJoined(ctx, tx, "", nil, where, args, terms, limit)
+}
+
+// readTasksJoined is the same with one more join in front.
+//
+// A GROUPED ANSWER'S COLUMN IS THE ORDINARY STATEMENT narrowed to one value,
+// so it takes the same sort, the same row shape and the same cursor mint —
+// with the grouping axis's own join, which the predicate that selects the
+// column refers to.
+func readTasksJoined(ctx context.Context, tx *sql.Tx, extraJoin string,
+	extraArgs []any, where string, args []any, terms []sortTerm, limit int) (
+	[]TaskRow, string, error) {
+
 	// THE SORT COLUMNS ARE SELECTED TOO, because the page cursor is their
 	// values: a keyset resume compares exactly the columns the order sorts
 	// by, and a row whose sort value was never read cannot be resumed
@@ -973,6 +1029,11 @@ func readTasks(ctx context.Context, tx *sql.Tx, where string, args []any,
 	// custom-field sort is a LEFT JOIN written before the WHERE, and a
 	// placeholder is bound in statement order rather than by name.
 	joins, joinArgs := sortJoins(terms)
+	// THE EXTRA JOIN COMES FIRST, with its arguments, because the
+	// predicate below may refer to it and a placeholder binds in
+	// statement order.
+	joins = extraJoin + joins
+	joinArgs = append(append([]any{}, extraArgs...), joinArgs...)
 	query := `SELECT t.id, t.key, t.title, t.status, t.status_group, t.priority,
 	                 t.assignee, t.project_key, t.sprint_number, t.parent_id,
 	                 t.depth, t.start_at, t.due_at, t.estimate_min, t.points,
