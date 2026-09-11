@@ -129,6 +129,14 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	if answer.Totals != nil {
 		out["totals"] = answer.Totals
 	}
+	// WHAT THIS ANSWER WAS EXPANDED FROM, so a payload that arrives
+	// detached from its request can still say which saved view it is.
+	if answer.View != "" {
+		out["view"] = answer.View
+	}
+	if answer.Preset != "" {
+		out["preset"] = answer.Preset
+	}
 	if answer.Incomplete != nil {
 		// WHAT THE ANSWER COULD NOT ACCOUNT FOR, rendered rather than
 		// dropped: "this company has no work" is a thing a person acts

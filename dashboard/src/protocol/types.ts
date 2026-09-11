@@ -1040,6 +1040,10 @@ export interface WorkItemsAnswer {
    *  so a reader knows the counts do not sum to `total_hint`. */
   groups_overlap?: boolean;
   totals?: WorkTotal[];
+  /** What this answer was expanded from, echoed so a payload that arrives
+   *  detached from its request can still say which saved view it is. */
+  view?: string;
+  preset?: string;
   /** Capped by construction: an exact total over an unbounded set is the one
    *  query in this grammar that turns a poll into a scan. */
   total_hint: number;
