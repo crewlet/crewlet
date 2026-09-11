@@ -72,6 +72,17 @@ type TaskDetail struct {
 	// which.
 	Links []DetailLink `json:"links,omitempty"`
 
+	// Blocked is the SAME predicate [TaskRow.Blocked] carries — an open
+	// dependency edge — computed here rather than derived from Links,
+	// which say what the relations ARE and not whether any blocker is
+	// still open.
+	//
+	// It is on the answer because a renderer that showed the badge on a
+	// board row and could not show it on the item itself is one that
+	// contradicts its own list a click later, and because deriving it in
+	// the browser would be a second definition of blocked.
+	Blocked bool `json:"blocked,omitempty"`
+
 	// The coverage half, identical in meaning to a board's — see [Answer].
 	Level          statelog.ReadLevel `json:"read_level"`
 	LogSeq         uint64             `json:"log_seq"`
@@ -188,6 +199,15 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 			if out.Links, err = readLinks(ctx, tx, id); err != nil {
 				return err
 			}
+		}
+		// THE SAME EXISTS THE BOARD ROW USES, in this same transaction,
+		// so the badge on the item and the badge on its row cannot
+		// disagree about one task at one instant.
+		if err := tx.QueryRowContext(ctx,
+			`SELECT EXISTS (SELECT 1 FROM tracker_task_deps d
+			 WHERE d.task_id = ? AND d.blocker_open = 1)`,
+			id).Scan(&out.Blocked); err != nil {
+			return fmt.Errorf("tracker: read %s's open blockers: %w", id, err)
 		}
 
 		// THE COVERAGE, IN THE SAME TRANSACTION as the rows. A detail
