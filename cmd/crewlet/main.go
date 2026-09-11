@@ -1727,6 +1727,13 @@ func (w engineConfigWriter) Apply(ctx context.Context, patch []byte, summary, op
 	return err
 }
 
+// Reload re-activates the current document, which is how a pass that sealed a
+// credential gets everything built at apply time rebuilt against it.
+func (w engineConfigWriter) Reload(ctx context.Context, summary, operator string) error {
+	_, err := w.surface.Reload(ctx, summary, operator)
+	return err
+}
+
 // Seat and SetSeat are the per-seat write, through the entity route: a seat
 // is addressed by its handle, because a merge patch cannot reach one element
 // of a list without replacing the list.

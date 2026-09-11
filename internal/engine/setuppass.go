@@ -510,11 +510,18 @@ func (e *Engine) SetupSink(operator string) (provision.TokenSink, error) {
 	return &refreshingSink{
 		TokenSink: provision.NewSecretStoreSink(
 			fleetsecrets.New(e.backends.Fleet, e.cipher), operator),
-		engine: e,
+		engine:   e,
+		operator: operator,
 	}, nil
 }
 
-// refreshingSink rebuilds the resolver's snapshot after a run seals anything.
+// refreshingSink republishes what a run sealed, so the credentials it minted
+// are the ones this company runs on.
+//
+// TWO STEPS, AND THE SECOND ONE IS THE ONE THAT WAS MISSING. Refreshing the
+// snapshot makes the new value RESOLVABLE; re-activating the revision makes
+// everything that already resolved the old one resolve again. See
+// [Engine.rebuildForSealedSecrets].
 //
 // # A SECRET NOBODY CAN SEE IS A PASS THAT DID NOTHING
 //
@@ -533,7 +540,19 @@ func (e *Engine) SetupSink(operator string) (provision.TokenSink, error) {
 // previous snapshot standing, which is the same posture an apply takes.
 type refreshingSink struct {
 	provision.TokenSink
-	engine  *Engine
+	engine *Engine
+
+	// operator is who this run is for, and it reaches the REVISION the
+	// rebuild writes. [configapi.Service.Reload] writes a new revision
+	// rather than re-pointing the old one precisely so "the credentials
+	// were reloaded at 04:12" is a fact somebody can find later, and a
+	// revision attributed to a constant answers half of that: an operator
+	// who connected an integration from the dashboard saw the resulting
+	// revision credited to the reconcile loop. The sink already stamps this
+	// name on every secret record it writes; spending it here costs
+	// nothing and is the same name.
+	operator string
+
 	sealed  bool
 	flushed bool
 }
@@ -554,8 +573,88 @@ func (s *refreshingSink) Flush(ctx context.Context) error {
 	if s.sealed && !s.flushed {
 		s.flushed = true
 		s.engine.refreshSecrets(ctx)
+		s.engine.rebuildForSealedSecrets(ctx, s.operator)
 	}
 	return err
+}
+
+// rebuildForSealedSecrets re-activates the current revision so that everything
+// built at apply time is rebuilt against the credentials a pass just sealed.
+//
+// # Refreshing the snapshot is not enough, and the gap is invisible
+//
+// `${VAR}` resolves from a snapshot, and [Engine.refreshSecrets] replaces it —
+// so anything that resolves a pointer FROM NOW ON sees the new value. What it
+// cannot touch is everything that already resolved one: the seat identities,
+// parsers, transports, provider clients and MCP children are built during an
+// apply, out of values read at that moment, and they are not rebuilt by a
+// snapshot swap. Every one of the seven vendor reconcilers is called from one
+// place, the apply in `epoch.go`, and nothing else calls them at all.
+//
+// Measured, on a fresh single-node install: connecting Atlassian created the
+// agent's service account and sealed its API token, the Jira reconcile then
+// reported the surface READY from its own independent check, and Jira's live
+// routing held `seat_identities=0` — resolved minutes earlier against the
+// token that did not exist yet, and refused with a 401. Every Jira event
+// naming that agent fell through to the project lead, indefinitely, while the
+// card said the integration was fine. `POST /config/reload` fixed it, which is
+// what this does automatically.
+//
+// # Why re-activating, rather than calling the reconcilers again
+//
+// Calling them here would fix this node and no other. A credential is sealed
+// in the FLEET's store, and every peer built its own parsers at its own apply
+// out of its own snapshot — so a local rebuild leaves every other node exactly
+// as wrong, with nothing to say so. Re-activating moves the activation
+// pointer, which is the one thing every node already watches.
+//
+// It is also not a new mechanism: re-activating an unchanged revision IS the
+// control plane's credential-rotation gesture, and the pointer is append-only
+// precisely so that this operation rebuilds rather than deduplicating.
+//
+// # Why this cannot spin
+//
+// An apply marks the reconcile loop stale, which brings a pass forward, which
+// could seal again. It does not, and the reason is a promise that is now
+// checked rather than believed: every reconciler is certified against
+// integrationtest's "a converged pass writes nothing", and `sealed` is set
+// only by an actual Record. A converged pass seals nothing, so it reloads
+// nothing. Before that certification existed three vendors wrote on every
+// pass, and this would have been an apply storm.
+func (e *Engine) rebuildForSealedSecrets(ctx context.Context, operator string) {
+	writer := e.configWriterOrNil()
+	if writer == nil {
+		// A node with no config surface — a worker-only one, or the few
+		// hundred milliseconds before the API is wired. The snapshot is
+		// refreshed and the values are durable; what is missing is the
+		// rebuild, and the next apply from anywhere performs it.
+		log.WarnContext(ctx, "sealed_credentials_not_republished",
+			"detail", "this node cannot re-activate the revision, so anything "+
+				"built at the last apply keeps the credential it resolved then; "+
+				"POST /config/reload once a node with the config surface is up")
+		return
+	}
+	// DETACHED AND BOUNDED. This runs at the tail of a pass, on a context
+	// carrying that pass's deadline — which may be all but spent, and which
+	// is cancelled the moment the pass ends. The credentials are already
+	// durable; abandoning the rebuild because the work that produced it
+	// finished is how the stale wiring survives.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), setup.RecordDeadline)
+	defer cancel()
+	if operator == "" {
+		operator = reconcileOperator
+	}
+	if err := writer.Reload(ctx,
+		"reload after provisioning sealed a credential", operator); err != nil {
+		log.ErrorContext(ctx, "sealed_credentials_not_republished", "error", err,
+			"detail", "the credentials are sealed and resolvable, but the seat "+
+				"identities, parsers and tool children built at the last apply "+
+				"still hold what they resolved then; POST /config/reload")
+		return
+	}
+	log.InfoContext(ctx, "sealed_credentials_republished",
+		"detail", "the revision was re-activated so every node rebuilds against "+
+			"the credentials this pass sealed")
 }
 
 // jiraPass adapts jira.Reconcile to the pass contract.

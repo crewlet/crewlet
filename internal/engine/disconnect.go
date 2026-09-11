@@ -33,6 +33,16 @@ type ConfigWriter interface {
 	// installation and records it against that one seat.
 	Seat(ctx context.Context, handle string) ([]byte, error)
 	SetSeat(ctx context.Context, handle string, body []byte, summary, operator string) error
+
+	// Reload re-activates the CURRENT document unchanged, which advances the
+	// epoch and makes every node apply again.
+	//
+	// The control plane's documented credential-rotation gesture, and the
+	// reason its activation pointer is append-only rather than keyed on a
+	// revision id: a pointer that deduplicated would rebuild nothing on
+	// precisely this operation. See [Engine.rebuildForSealedSecrets] for why
+	// a provisioning pass needs it.
+	Reload(ctx context.Context, summary, operator string) error
 }
 
 // UseConfigWriter installs the surface a disconnect removes a block through.

@@ -41,6 +41,7 @@ func (noopWriter) Seat(context.Context, string) ([]byte, error)        { return 
 func (noopWriter) SetSeat(context.Context, string, []byte, string, string) error {
 	return nil
 }
+func (noopWriter) Reload(context.Context, string, string) error { return nil }
 
 // A NODE WITH NO ACTIVE REVISION DOES NOT DIE ON A DISCONNECT IT CANNOT DO.
 //
