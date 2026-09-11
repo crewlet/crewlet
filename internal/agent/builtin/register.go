@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // Deps are the node-level things the builtins act through.
@@ -256,9 +257,15 @@ func annotationsFor(name string) tools.Annotations {
 		// nowhere near idempotent: a second call is a second run, a second
 		// box, and a second set of commits.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
-	case ListWorkItemsTool, GetWorkItemTool, ListPagesTool, GetPageTool:
+	case ListWorkItemsTool, GetWorkItemTool, ListPagesTool, GetPageTool,
+		tracker.GetWorkCatalogueTool:
 		// Reads, and idempotent: asking twice costs a round and changes
-		// nothing.
+		// nothing. The catalogue lookup belongs here with the rest — left
+		// out, it fell to the default arm, whose ReadOnly=No with
+		// OpenWorld unset is the combination [mcp.WritesToSharedSurface]
+		// reads as TRUE, so a worker granted a read-only vocabulary
+		// lookup was refused it as a write to a surface a human reads
+		// while list_work_items beside it was admitted.
 		return tools.Annotations{ReadOnly: mcp.Yes, Idempotent: mcp.Yes}
 	case CreateWorkItemTool:
 		// A write everybody in the company sees, so OpenWorld is Yes and
