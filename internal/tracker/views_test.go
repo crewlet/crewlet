@@ -518,3 +518,47 @@ func containsString(list []string, want string) bool {
 	}
 	return false
 }
+
+// A VIEW THAT MOVES NAMES THE STRIP IT LEAVES.
+//
+// A save may change a view's container, and then the apply writes the row OUT
+// of one strip and INTO another. A scope naming only the destination let a
+// write into the strip it left slip past a deferral that covers it — the rule
+// Writer.UpdateTask states verbatim for a project move, said about a view.
+func TestAViewThatMovesNamesBothStrips(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	view := aView("v-move", nil)
+	view.Container = tracker.Container{Kind: tracker.ContainerProject, ID: "ENG"}
+	if _, err := r.writer.WriteView(t.Context(), "op-here", view); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	r.drain()
+
+	view.Container = tracker.Container{Kind: tracker.ContainerProject, ID: "OPS"}
+	if _, err := r.writer.WriteView(t.Context(), "op-there", view); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+	r.drain()
+
+	scope := r.scopeOfLastRecord()
+	for _, want := range []string{"ENG", "OPS"} {
+		term := tracker.ScopeTerm{Kind: tracker.TermContainer, ID: want}.Path()
+		// THE CONTAINER COVERS THE TERM, not the other way round: the
+		// record names the OBJECT inside each strip, which is the
+		// narrowest honest term, and a read scoped to the strip
+		// intersects it because the object's path nests under it.
+		var found bool
+		for _, path := range scope.Paths {
+			if statelog.Covers(term, path) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("the move carries the scope %v, none of which sits under "+
+				"%s — a read of that strip would never wait for this record",
+				scope.Paths, term)
+		}
+	}
+}

@@ -410,3 +410,45 @@ func TestTheGoalFilterReachesEverythingTheGoalCounts(t *testing.T) {
 			"different ways", len(answer.Rows), counted)
 	}
 }
+
+// AND A SAVE THAT DROPS A PROJECT STILL NAMES IT.
+//
+// The apply rewrites every target reference the goal has, so a project it is
+// LEAVING has its rows written out by this same record. A scope derived from
+// the NEW targets alone named only what remained — the under-declaration a
+// project move makes, from the other side — and a read scoped to the dropped
+// project never waited for the record that emptied it.
+func TestAGoalSaveNamesTheProjectItStopsCounting(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	if _, err := r.writer.WriteGoal(t.Context(), "op-both", aGoal("g-move",
+		func(g *tracker.Goal) {
+			g.Targets[0].Projects = []string{"ENG", "OPS"}
+		})); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	r.drain()
+
+	if _, err := r.writer.WriteGoal(t.Context(), "op-drop", aGoal("g-move",
+		func(g *tracker.Goal) {
+			g.Targets[0].Projects = []string{"ENG"}
+		})); err != nil {
+		t.Fatalf("drop OPS: %v", err)
+	}
+	r.drain()
+
+	scope := r.scopeOfLastRecord()
+	ops := tracker.ScopeTerm{Kind: tracker.TermContainer, ID: "OPS"}.Path()
+	var found bool
+	for _, path := range scope.Paths {
+		if statelog.Covers(path, ops) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the save that dropped OPS carries the scope %v, none of "+
+			"which covers %s — the record wrote OPS's target rows out and "+
+			"named every project but that one", scope.Paths, ops)
+	}
+}
