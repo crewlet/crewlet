@@ -64,8 +64,13 @@ export function GateDialog({
     setBusy(true);
     setError(null);
     try {
+      // THE TYPED CONFIRMATION TRAVELS. The server refuses unless
+      // `?confirm=` repeats the node id — checking it only in the
+      // browser made the gesture unreachable from this dashboard for
+      // every node, since the request it sent was always a 400.
+      const id = encodeURIComponent(node);
       const answer = (await rest.post(
-        `/work/retention/${evict ? "evict" : "readmit"}/${encodeURIComponent(node)}`,
+        `/work/retention/${evict ? "evict" : "readmit"}/${id}?confirm=${id}`,
       )) as RetentionGateResult;
       setResult(answer);
     } catch (err) {
@@ -172,9 +177,8 @@ export function GateOutcome({ result, evict }: { result: RetentionGateResult; ev
         <div className="banner positive" role="status">
           <Icon name="check" size="sm" />
           <span>
-            <code className="inline">{result.node}</code> is{" "}
-            {evict ? "evicted" : "readmitted"}, durable{at != null && <> at sequence {at}</>} and in
-            this node&apos;s own rows.
+            <code className="inline">{result.node}</code> is {evict ? "evicted" : "readmitted"},
+            durable{at != null && <> at sequence {at}</>} and in this node&apos;s own rows.
           </span>
         </div>
       );
@@ -185,9 +189,9 @@ export function GateOutcome({ result, evict }: { result: RetentionGateResult; ev
           <span className="col" style={{ gap: 6 }}>
             <span>
               <strong>Durable, not yet applied here.</strong> The record is on the log
-              {at != null && <> at sequence {at}</>} and nothing about it needs retrying — this
-              node has simply not caught up to it. The panel behind this dialog clears the chip
-              when it has.
+              {at != null && <> at sequence {at}</>} and nothing about it needs retrying — this node
+              has simply not caught up to it. The panel behind this dialog clears the chip when it
+              has.
             </span>
             <span className="t-caption faint">
               Retrying would append a second record for a gesture that already landed.

@@ -11,9 +11,9 @@
  * durable-versus-applied split exists to prevent.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
-import { GateOutcome } from "./GateDialog.tsx";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, expect, test, vi } from "vitest";
+import { GateDialog, GateOutcome } from "./GateDialog.tsx";
 import { MaintenanceBanner, NodePositions, Terms } from "./Retention.tsx";
 import type { RetentionNode, RetentionTerm } from "~/protocol/index.ts";
 
@@ -199,4 +199,36 @@ test("an operation with nobody outstanding says it is waiting on its operator", 
   );
   expect(screen.getByText(/waiting on its operator/)).toBeTruthy();
   expect(screen.queryByText(/Waiting on/)).toBeNull();
+});
+
+// THE TYPED CONFIRMATION HAS TO REACH THE SERVER.
+//
+// The server refuses an eviction unless `?confirm=` repeats the node id — the
+// same shape the destructive CLI gestures use. Checking it only in the browser
+// made the gesture unreachable from this dashboard for every node: the request
+// it sent carried no query at all, so every press was a 400 and the dialog
+// rendered the error banner.
+test("the evict gesture repeats the node id in the query the server checks", async () => {
+  const sent: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), "http://engine.test");
+      sent.push(url.pathname + url.search);
+      return new Response(JSON.stringify({ node_id: "node-2", outcome: "applied" }), {
+        status: 200,
+      });
+    }),
+  );
+  localStorage.setItem("crewlet_api_token", "t");
+
+  render(<GateDialog node="node-2" evict={true} onClose={() => {}} />);
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "node-2" } });
+  fireEvent.click(screen.getByRole("button", { name: "Evict" }));
+  await waitFor(() => expect(sent.length).toBe(1));
+
+  expect(sent[0]).toBe("/work/retention/evict/node-2?confirm=node-2");
+
+  vi.unstubAllGlobals();
+  localStorage.clear();
 });
