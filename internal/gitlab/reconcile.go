@@ -83,6 +83,19 @@ type Result struct {
 	// See [provision.CanMint].
 	NoKeyring bool
 
+	// Unusable names the seats whose ACCOUNT GitLab will not let
+	// authenticate — a token minted seconds earlier was refused.
+	//
+	// SEPARATE FROM A FAILED RUN, because nothing is wrong with the pass and
+	// a retry changes nothing: the account needs a person at GitLab. Reported
+	// as [integration.FindingIdentityFailed], which is that exact sentence in
+	// the neutral vocabulary — "a seat's account could not be created or its
+	// credential was refused".
+	//
+	// It is also the one state in which this pass deliberately leaves a seat
+	// with NO credential at all. The alternative is the loop it replaced.
+	Unusable []string
+
 	// Notes carries the plan's notes plus anything the run itself found.
 	Notes []string
 
@@ -381,6 +394,52 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			groupID: mintGroup(opts, group.ID),
 			userID:  user.ID, tokenID: token.ID, createdAccount: created,
 		}
+
+		// A TOKEN THIS PASS JUST MINTED IS CHECKED BEFORE IT IS KEPT, and
+		// a refusal here means something a rotation can never fix.
+		//
+		// The mint above is reached because the PREVIOUS credential was
+		// refused, and the whole design reads that as "the token is
+		// stale" — which is right, except when the account itself cannot
+		// authenticate at all. Then the new token is refused for the same
+		// reason the old one was, the next pass reads that as stale
+		// again, and the run mints for ever: 144 live `api`-scoped tokens
+		// over one connect, none of which ever worked. The account's
+		// address was unconfirmable (see provision.go), but the loop is
+		// not specific to that cause and neither is this guard — any
+		// account GitLab will not let authenticate produces it.
+		//
+		// So the fresh token is the probe. It is a credential that is
+		// AS NEW AS ONE CAN BE: if GitLab refuses it, the seat's problem
+		// is its account, nothing this pass can do will change that, and
+		// minting another is the loop rather than the recovery.
+		if verdict := opts.Client.verify(ctx, token.Value, user.ID); verdict == provision.VerdictRejected {
+			// SWEPT, NOT LEFT. keep is 0, which no token id ever is, so
+			// this retires the one just minted along with every earlier
+			// one this tool owns — exactly the pile a previous build of
+			// this loop left behind. An administrator's own tokens are
+			// named differently and are never touched.
+			swept, rerr := retirePrevious(ctx, opts,
+				mintGroup(opts, group.ID), user.ID, seat, 0)
+			delete(minted, seat.Handle)
+			if rerr != nil {
+				// A LIVE CREDENTIAL IS LOOSE and the operator has to be
+				// told in the strongest terms this pass has.
+				return nil, rollback(ctx, opts, minted, fmt.Errorf(
+					"gitlab: %s: this account cannot authenticate, and the "+
+						"token just minted for it could not be revoked — "+
+						"revoke tokens named %q on user %d at GitLab: %w",
+					seat.Handle, TokenName(seat.Handle), user.ID, rerr))
+			}
+			res.Unusable = append(res.Unusable, seat.Handle)
+			res.Notes = append(res.Notes, fmt.Sprintf(
+				"%s: GitLab refused a token minted seconds earlier, so the "+
+					"account itself cannot authenticate — %d token(s) this "+
+					"tool had minted for it were revoked and none was kept",
+				seat.Handle, swept))
+			continue
+		}
+
 		// RECORDED IMMEDIATELY. The value above is the only copy there
 		// will ever be.
 		if err = opts.Sink.Record(ctx, seat.TokenVar, token.Value); err != nil {
@@ -735,11 +794,9 @@ func ensureAccount(ctx context.Context, opts Options, groupID int,
 		return user, false, nil
 	}
 	if opts.Mode.Or() == ModeInstance {
-		user, err = opts.Client.CreateInstanceServiceAccount(
-			ctx, seat.Role, username, seat.Email)
+		user, err = opts.Client.CreateInstanceServiceAccount(ctx, seat.Role, username)
 	} else {
-		user, err = opts.Client.CreateServiceAccount(
-			ctx, groupID, seat.Role, username, seat.Email)
+		user, err = opts.Client.CreateServiceAccount(ctx, groupID, seat.Role, username)
 	}
 	if err != nil {
 		return User{}, false, modeError(opts.Mode, err)

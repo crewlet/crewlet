@@ -161,22 +161,36 @@ func TestThePlanIsOrderedByHandle(t *testing.T) {
 	}
 }
 
-// AN ACCOUNT ADDRESS IS UNDELIVERABLE ON PURPOSE. The account is a robot,
-// and one that looked deliverable would eventually have somebody's
-// notification sent to it.
-func TestServiceAccountAddressesAreUndeliverable(t *testing.T) {
+// A SEAT PLAN NAMES NO ACCOUNT ADDRESS, AND THAT IS THE FIX.
+//
+// This asserted the opposite: that the address was derived, named the seat,
+// and sat in a reserved undeliverable domain — because the account is a robot
+// and one with a deliverable address would eventually be sent somebody's
+// notification. Every clause was true and the conclusion was an outage.
+//
+// GitLab's service-account routes take `email` as OPTIONAL, and its
+// documentation carries the sentence this missed: "custom email addresses
+// require confirmation before the account is active". `.invalid` is reserved
+// (RFC 2606), so the confirmation mail can never be delivered and the domain
+// can never be verified — every account created this way was permanently
+// inactive, and GitLab refused each of its tokens with `403 Your primary email
+// address is not confirmed`. The pass read that as a stale token and minted
+// another: 144 live `api`-scoped tokens over a single connect.
+//
+// Omitting the field has GitLab generate `service_account_group_…@noreply.
+// <instance>`, which keeps the robot promise on a domain the instance
+// controls.
+func TestASeatPlanNamesNoAccountAddress(t *testing.T) {
 	t.Parallel()
 	o := provisioningOrg(t, agentSeat("SWE", map[string]string{"GITLAB_TOKEN": "${T}"}))
 	plan, err := gitlab.PlanFor(o, enabledGitLab())
 	if err != nil {
 		t.Fatalf("PlanFor: %v", err)
 	}
-	email := plan.Seats[0].Email
-	if !strings.Contains(email, "swe") {
-		t.Errorf("email %q does not name the seat", email)
-	}
-	if !strings.HasSuffix(email, ".invalid") {
-		t.Errorf("email %q is not in a reserved undeliverable domain", email)
+	if email := plan.Seats[0].Email; email != "" {
+		t.Errorf("the plan carries the address %q; GitLab must name it, "+
+			"because any address this tool derives needs a confirmation "+
+			"that can never arrive", email)
 	}
 }
 

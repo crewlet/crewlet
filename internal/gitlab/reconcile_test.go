@@ -128,6 +128,17 @@ type adminInstance struct {
 	// identityFails makes the identity route answer 500 for a SEAT's
 	// token, which is "cannot tell" rather than "this token is bad".
 	identityFails bool
+	// unusable names accounts that cannot authenticate AT ALL: every
+	// token they hold is refused, however new, which is how GitLab
+	// answers for an account whose address was never confirmed
+	// (`403 Your primary email address is not confirmed`). Keyed on the
+	// user id, filled by the test once the account exists.
+	unusable map[int]bool
+
+	// createBodies are the service-account creation payloads, so a test
+	// can assert what was SENT — an absent `email` key is the whole of
+	// one fix and is invisible in anything the fake chose to remember.
+	createBodies []map[string]any
 
 	// now is the instant token expiry is judged against, so a test can
 	// age a token without waiting.
@@ -141,6 +152,25 @@ type adminInstance struct {
 	calls      []string
 }
 
+// str reads a JSON string field, or "" where it is absent or not one.
+func str(v any) string { sv, _ := v.(string); return sv }
+
+// tokenRows is one account's tokens as the instance serves them.
+//
+// ONE BUILDER for the group listing and the admin one: they are the same rows
+// down two routes, and the pair had already been written out twice.
+func (f *adminInstance) tokenRows(userID int) []map[string]any {
+	out := make([]map[string]any, 0, len(f.tokens[userID]))
+	for _, t := range f.tokens[userID] {
+		row := map[string]any{"id": t.ID, "name": t.Name, "revoked": t.Revoked}
+		if !t.ExpiresAt.IsZero() {
+			row["expires_at"] = t.ExpiresAt.Format(time.DateOnly)
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
 // adminToken is the operator credential the fixture's client presents.
 const adminToken = "admin-token"
 
@@ -148,6 +178,7 @@ func newAdminInstance() *adminInstance {
 	return &adminInstance{
 		users: map[string]int{}, tokens: map[int][]*gitlab.Token{},
 		people:         map[string]bool{},
+		unusable:       map[int]bool{},
 		instanceOwned:  map[string]bool{},
 		groupMembers:   map[int]int{},
 		projectMembers: map[string]map[int]int{},
@@ -283,10 +314,21 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 			for _, token := range tokens {
 				live := !token.Revoked &&
 					(token.ExpiresAt.IsZero() || token.ExpiresAt.After(f.now))
-				if token.Value == presented && live {
-					json.NewEncoder(w).Encode(map[string]any{"id": id})
+				if token.Value != presented || !live {
+					continue
+				}
+				if f.unusable[id] {
+					// THE ACCOUNT, NOT THE TOKEN. GitLab issues a token
+					// on an unconfirmed account perfectly happily and
+					// then refuses every request it makes, with a 403
+					// naming the address rather than the credential.
+					w.WriteHeader(http.StatusForbidden)
+					w.Write([]byte(
+						`{"message":"403 Forbidden - Your primary email address is not confirmed"}`))
 					return
 				}
+				json.NewEncoder(w).Encode(map[string]any{"id": id})
+				return
 			}
 		}
 		w.WriteHeader(http.StatusUnauthorized)
@@ -425,10 +467,11 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(`{"message":"403 Forbidden"}`))
 			return
 		}
-		var body map[string]string
+		var body map[string]any
 		json.NewDecoder(r.Body).Decode(&body)
+		f.createBodies = append(f.createBodies, body)
 		f.nextID++
-		f.users[body["username"]] = f.nextID
+		f.users[str(body["username"])] = f.nextID
 		json.NewEncoder(w).Encode(map[string]any{
 			"id": f.nextID, "username": body["username"],
 		})
@@ -444,11 +487,12 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(`{"message":"403 Forbidden"}`))
 			return
 		}
-		var body map[string]string
+		var body map[string]any
 		json.NewDecoder(r.Body).Decode(&body)
+		f.createBodies = append(f.createBodies, body)
 		f.nextID++
-		f.users[body["username"]] = f.nextID
-		f.instanceOwned[body["username"]] = true
+		f.users[str(body["username"])] = f.nextID
+		f.instanceOwned[str(body["username"])] = true
 		json.NewEncoder(w).Encode(map[string]any{
 			"id": f.nextID, "username": body["username"],
 		})
@@ -553,15 +597,12 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && strings.HasSuffix(path, "/personal_access_tokens") &&
 		strings.Contains(path, "/service_accounts/"):
 		id, _ := mintTarget(path)
-		out := make([]map[string]any, 0, len(f.tokens[atoi(id)]))
-		for _, t := range f.tokens[atoi(id)] {
-			row := map[string]any{"id": t.ID, "name": t.Name, "revoked": t.Revoked}
-			if !t.ExpiresAt.IsZero() {
-				row["expires_at"] = t.ExpiresAt.Format(time.DateOnly)
-			}
-			out = append(out, row)
-		}
-		json.NewEncoder(w).Encode(out)
+		// PAGED, for the reason the membership listing above says and
+		// this one did not: a fake that served everything on page 1 makes
+		// a caller that never asks for page 2 look correct. It did, and
+		// the caller didn't, and the account that exposed it held 164
+		// tokens of which this code could see the oldest 20.
+		json.NewEncoder(w).Encode(pageOf(f.tokenRows(atoi(id)), r.URL.Query()))
 
 	case r.Method == http.MethodGet && path == "/personal_access_tokens":
 		if !f.instanceAdmin {
@@ -570,15 +611,7 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		id := atoi(r.URL.Query().Get("user_id"))
-		out := make([]map[string]any, 0, len(f.tokens[id]))
-		for _, t := range f.tokens[id] {
-			row := map[string]any{"id": t.ID, "name": t.Name, "revoked": t.Revoked}
-			if !t.ExpiresAt.IsZero() {
-				row["expires_at"] = t.ExpiresAt.Format(time.DateOnly)
-			}
-			out = append(out, row)
-		}
-		json.NewEncoder(w).Encode(out)
+		json.NewEncoder(w).Encode(pageOf(f.tokenRows(id), r.URL.Query()))
 
 	// AND THE GROUP'S OWN REVOKE, the third of the three routes a group
 	// Owner may call. Rewritten onto the admin shape so one handler serves
@@ -1048,8 +1081,7 @@ func reconcileWith(t *testing.T, f *adminInstance, sink provision.TokenSink,
 	plan := &provision.Plan{}
 	for handle, tokenVar := range seats {
 		plan.Add(provision.Seat{
-			Handle: handle, Role: strings.ToUpper(handle),
-			TokenVar: tokenVar, Email: handle + "@noreply.crewlet.invalid",
+			Handle: handle, Role: strings.ToUpper(handle), TokenVar: tokenVar,
 		})
 	}
 	opts := gitlab.Options{
@@ -3431,4 +3463,272 @@ func TestACancelledPassWithSeatsMakesNoRequest(t *testing.T) {
 	if len(f.calls) != 0 {
 		t.Errorf("a cancelled pass still talked to the instance: %v", f.calls)
 	}
+}
+
+// AN ACCOUNT THAT CANNOT AUTHENTICATE IS REPORTED, NOT MINTED AT — AND THE
+// TOKENS ALREADY MINTED FOR IT ARE SWEPT.
+//
+// This is the loop, and it needs three things to be true at once, which is
+// why it is one case rather than three.
+//
+// A pass mints because the seat's STORED token was refused, and reads that
+// refusal as "the credential is stale" — which is right, except when it is
+// the account GitLab is refusing rather than the credential. Then the new
+// token is refused for the same reason, the next pass reads it as stale
+// again, and the run mints for ever. Measured against gitlab.com: 144 live
+// `api`-scoped tokens on one service account, valid for a year, none of which
+// had ever worked, plus twenty more from a slower build of the same loop.
+//
+// Nothing retired them, because [gitlab.Client.Tokens] read one unpaged page
+// — the oldest twenty, every one already revoked — so `retirePrevious`
+// revoked nothing and reported success.
+//
+// So: mint at most once, prove it, and if a token this pass created seconds
+// ago is itself refused, sweep every token this tool owns on that account and
+// say what is wrong. A seat is left with NO credential, deliberately: the
+// alternative is the pile above.
+func TestAnAccountThatCannotAuthenticateIsSweptRatherThanMintedAt(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	sink := newRecordingSink()
+
+	// PASS ONE creates the account and mints its first token. Nothing is
+	// wrong yet — this is the healthy connect.
+	if _, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "T_SWE"}); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	userID := f.userID(t, "crewlet-swe")
+	sealed := sink.values["T_SWE"]
+	if sealed == "" {
+		t.Fatal("precondition: the first pass sealed no token")
+	}
+
+	// AND THEN THE ACCOUNT GOES BAD — or, in the field, was never good:
+	// GitLab refuses everything it presents, however new.
+	f.setUnusable(userID)
+
+	// Three passes, which is what a reconcile loop does in half a minute.
+	for pass := 2; pass <= 4; pass++ {
+		res, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "T_SWE"})
+		if err != nil {
+			t.Fatalf("pass %d: %v", pass, err)
+		}
+		if !slices.Contains(res.Unusable, "swe") {
+			t.Fatalf("pass %d reported Unusable = %v, want swe", pass, res.Unusable)
+		}
+		if len(res.Rotated) != 0 {
+			t.Errorf("pass %d rotated %v: a token that was refused on sight "+
+				"must not be reported as this seat's credential", pass, res.Rotated)
+		}
+	}
+
+	// THE INVARIANT THE INCIDENT BROKE: nothing accumulates. Every token
+	// this tool minted on the account is revoked, including the one the
+	// last pass made a moment ago.
+	if live := f.liveTokensOf(userID); live != 0 {
+		t.Errorf("the account holds %d live token(s) after three refused "+
+			"passes, want 0 — this is the pile that reached 144", live)
+	}
+
+	// AND NO REFUSED TOKEN IS EVER SEALED. The variable still holds what
+	// the healthy pass put there — which is stale, and says so through the
+	// finding below rather than by being overwritten with something that
+	// works no better. Recording a refused token would both hand the engine
+	// a credential that cannot authenticate and, because sealing
+	// re-activates the revision, wake the pass that seals the next one.
+	if got := sink.values["T_SWE"]; got != sealed {
+		t.Errorf("T_SWE moved from %q to %q: a token GitLab refused on sight "+
+			"was sealed as this seat's credential", sealed, got)
+	}
+
+	// THE OPERATOR IS TOLD, as a seat's identity failing rather than as a
+	// surface fault: no retry fixes this and the engine is not working on it.
+	res, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "T_SWE"})
+	if err != nil {
+		t.Fatalf("final pass: %v", err)
+	}
+	var kinds []integration.FindingKind
+	for _, finding := range res.Findings() {
+		kinds = append(kinds, finding.Kind)
+	}
+	if !slices.Contains(kinds, integration.FindingIdentityFailed) {
+		t.Fatalf("findings = %v, want an identity_failed naming the seat", kinds)
+	}
+	phase, actor := integration.FindingIdentityFailed.Verdict()
+	if !actor.WaitsOnAPerson() {
+		t.Errorf("identity_failed is %s/%s, which does not ask anybody to act "+
+			"— nothing in this engine can fix an account GitLab refuses",
+			phase, actor)
+	}
+}
+
+// A SERVICE ACCOUNT IS CREATED WITH NO ADDRESS, and the absent key is the
+// whole of it.
+//
+// GitLab's service-account routes take `email` as optional and generate one
+// under the instance's own noreply domain when it is omitted. A CUSTOM address
+// "requires confirmation before the account is active" — and every address
+// this tool could derive is undeliverable by construction, so confirmation
+// never arrives and the account is permanently inactive. See the case above
+// for what that cost.
+func TestAServiceAccountIsCreatedWithNoAddress(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []struct {
+		name  string
+		route string
+		tune  func(*gitlab.Options)
+	}{
+		{"group", "POST /groups/7/service_accounts", func(*gitlab.Options) {}},
+		{"instance", "POST /service_accounts", func(o *gitlab.Options) {
+			o.Mode = gitlab.ModeInstance
+		}},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			t.Parallel()
+			f := newAdminInstance()
+			f.instanceAdmin = mode.name == "instance"
+			if _, err := reconcileWith(t, f, newRecordingSink(),
+				map[string]string{"swe": "T_SWE"}, mode.tune); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			if !f.called(mode.route) {
+				t.Fatalf("no account was created down %s", mode.route)
+			}
+			for _, body := range f.creates() {
+				if _, sent := body["email"]; sent {
+					t.Errorf("the create sent email=%v; GitLab must name the "+
+						"address, because one this tool derives needs a "+
+						"confirmation that can never arrive", body["email"])
+				}
+				if body["username"] != "crewlet-swe" {
+					t.Errorf("the create sent username=%v", body["username"])
+				}
+			}
+		})
+	}
+}
+
+// THE TOKEN LIST IS PAGED TO EXHAUSTION, because a destructive decision is
+// made from it.
+//
+// It read one default page — TWENTY rows — and both callers treat what comes
+// back as the whole truth: `retirePrevious` revokes this tool's earlier
+// tokens, and the decommission sweep empties an account it is deleting. A
+// truncated read is not a slow report there; it is a live `api`-scoped
+// credential left behind by a run that said it cleaned up.
+func TestTheTokenListIsPagedToExhaustion(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	sink := newRecordingSink()
+
+	if _, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "T_SWE"}); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	userID := f.userID(t, "crewlet-swe")
+
+	// A PILE LIKE THE ONE THE FIELD FOUND, well past one page and past
+	// two, so a loop that stopped after the first is caught and so is one
+	// that stopped after any fixed number.
+	f.pileTokens(userID, gitlab.TokenName("swe"), 150)
+	if live := f.liveTokensOf(userID); live != 151 {
+		t.Fatalf("precondition: %d live tokens, want 151", live)
+	}
+
+	// A ROTATION, which is the gesture that retires what came before.
+	if _, err := reconcileWith(t, f, sink, map[string]string{"swe": "T_SWE"},
+		func(o *gitlab.Options) { o.Rotate = true }); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+
+	// EXACTLY THE NEW ONE SURVIVES. Unpaged, 131 of these stayed live and
+	// the run reported a successful rotation.
+	if live := f.liveTokensOf(userID); live != 1 {
+		t.Errorf("%d live tokens after a rotation, want 1: every token this "+
+			"tool minted earlier should have been revoked", live)
+	}
+}
+
+// AN ADMINISTRATOR'S OWN TOKEN SURVIVES THE SWEEP, which is what keeps the
+// two cases above from being a licence to empty an account.
+//
+// The name is the only thing separating a token this tool minted from one a
+// person created by hand, and revoking the second breaks whatever is using it
+// — silently, since nothing here knows what that is.
+func TestTheSweepLeavesTokensThisToolDidNotMint(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	sink := newRecordingSink()
+	if _, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "T_SWE"}); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	userID := f.userID(t, "crewlet-swe")
+	f.pileTokens(userID, "deploy-key-do-not-touch", 3)
+	f.setUnusable(userID)
+
+	if _, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "T_SWE"}); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+
+	// The three are all that is left: this tool's own are gone, and the
+	// sweep for an unusable account is the most destructive path there is.
+	if live := f.liveTokensOf(userID); live != 3 {
+		t.Errorf("%d live tokens, want the 3 this tool never minted", live)
+	}
+}
+
+// userID is an account's id, failed loudly rather than returned as zero:
+// every caller below uses it to address tokens, and zero addresses nobody.
+func (f *adminInstance) userID(t *testing.T, username string) int {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	id, ok := f.users[username]
+	if !ok {
+		t.Fatalf("no account %q was created", username)
+	}
+	return id
+}
+
+// setUnusable makes every token this account holds be refused, however new,
+// which is how GitLab answers for an account whose address was never
+// confirmed.
+func (f *adminInstance) setUnusable(userID int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.unusable[userID] = true
+}
+
+// liveTokensOf counts what ONE account could still authenticate with,
+// where [adminInstance.liveTokens] counts the whole instance's.
+func (f *adminInstance) liveTokensOf(userID int) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	live := 0
+	for _, token := range f.tokens[userID] {
+		if !token.Revoked && (token.ExpiresAt.IsZero() || token.ExpiresAt.After(f.now)) {
+			live++
+		}
+	}
+	return live
+}
+
+// pileTokens seeds n live tokens under one name, which is the state a run
+// that minted without retiring leaves behind.
+func (f *adminInstance) pileTokens(userID int, name string, n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for range n {
+		f.nextToken++
+		f.tokens[userID] = append(f.tokens[userID], &gitlab.Token{
+			ID: f.nextToken, Name: name,
+			Value: fmt.Sprintf("glpat-piled-%d", f.nextToken),
+		})
+	}
+}
+
+// creates are the service-account creation payloads this instance received.
+func (f *adminInstance) creates() []map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.createBodies)
 }

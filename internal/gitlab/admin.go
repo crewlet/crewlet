@@ -155,11 +155,14 @@ func (c *Client) UserByUsername(ctx context.Context, username string) (User, boo
 // in, and is owned by the group rather than by a person — which is what
 // makes it removable when a seat is decommissioned without touching
 // anybody's real account.
-func (c *Client) CreateServiceAccount(ctx context.Context, groupID int, name, username, email string) (User, error) {
+// NO EMAIL IS SENT, and the field is not a parameter: see the note in
+// provision.go. A custom address is refused until it is confirmed, and every
+// address this tool could derive is undeliverable by construction.
+func (c *Client) CreateServiceAccount(ctx context.Context, groupID int, name, username string) (User, error) {
 	var out User
 	err := c.send(ctx, http.MethodPost,
 		"/groups/"+strconv.Itoa(groupID)+"/service_accounts",
-		map[string]string{"name": name, "username": username, "email": email}, &out)
+		map[string]string{"name": name, "username": username}, &out)
 	return out, err
 }
 
@@ -173,10 +176,12 @@ func (c *Client) CreateServiceAccount(ctx context.Context, groupID int, name, us
 // group route is satisfied by a group Owner — and that nothing scopes a
 // decommission sweep except the username prefix and the fact that the
 // instance service-account listing holds no people.
-func (c *Client) CreateInstanceServiceAccount(ctx context.Context, name, username, email string) (User, error) {
+// It sends no email either, for the reason [Client.CreateServiceAccount]
+// gives: the confirmation rule is the account's, not the route's.
+func (c *Client) CreateInstanceServiceAccount(ctx context.Context, name, username string) (User, error) {
 	var out User
 	err := c.send(ctx, http.MethodPost, "/service_accounts",
-		map[string]string{"name": name, "username": username, "email": email}, &out)
+		map[string]string{"name": name, "username": username}, &out)
 	return out, err
 }
 
@@ -428,16 +433,58 @@ func tokenPath(groupID, userID int) string {
 // THROUGH THE GROUP where one owns the account: `/personal_access_tokens` is
 // an admin listing, and asking it as a group Owner answers 401. See
 // [tokenPath].
+//
+// PAGED TO EXHAUSTION, which is the same lesson [Client.members] and
+// [Client.InstanceServiceAccounts] already carry and this listing did not: it
+// took whatever one default page held, which is TWENTY rows. Both callers make
+// a destructive decision from it — [retirePrevious] revokes this tool's
+// earlier tokens and [Client.RevokeTokens] empties an account being
+// decommissioned — so a truncated read is not a slow report but a credential
+// left live while the run says it cleaned up.
+//
+// Measured: an account had accumulated 164 tokens, of which the oldest 20 were
+// already revoked. Every pass read exactly those 20, retired nothing, minted
+// another, and reported a successful rotation. The 144 live `api`-scoped
+// tokens behind page one were invisible to the only code that could have
+// removed them.
+//
+// The ceiling is a runaway guard rather than a policy limit, which is why it
+// is generous and why it is an error rather than a truncation: a service
+// account Crewlet manages holds one token, a badly broken one holds hundreds,
+// and a server answering a full page for ever is not something to keep asking.
 func (c *Client) Tokens(ctx context.Context, groupID, userID int) ([]Token, error) {
-	var tokens []Token
+	path, params := "/personal_access_tokens", url.Values{"user_id": {strconv.Itoa(userID)}}
 	if groupID != 0 {
-		err := c.get(ctx, tokenPath(groupID, userID), nil, &tokens)
-		return tokens, err
+		path, params = tokenPath(groupID, userID), url.Values{}
 	}
-	err := c.get(ctx, "/personal_access_tokens",
-		url.Values{"user_id": {strconv.Itoa(userID)}}, &tokens)
-	return tokens, err
+	var out []Token
+	for page := 1; ; page++ {
+		params.Set("per_page", strconv.Itoa(userPageSize))
+		params.Set("page", strconv.Itoa(page))
+		var batch []Token
+		if err := c.get(ctx, path, params, &batch); err != nil {
+			return nil, err
+		}
+		out = append(out, batch...)
+		if len(batch) < userPageSize {
+			return out, nil
+		}
+		if len(out) >= tokenWalkCeiling {
+			return nil, fmt.Errorf(
+				"gitlab: user %d holds more than %d access tokens, which is not "+
+					"an account Crewlet can reason about — revoke them at GitLab",
+				userID, tokenWalkCeiling)
+		}
+	}
 }
+
+// tokenWalkCeiling bounds a token walk at twenty pages.
+//
+// NOT A LIMIT ANYONE SHOULD REACH: an account this tool manages holds one
+// token, and the worst real account seen held 164. It is here so that a server
+// answering a full page for ever — a paging parameter it ignores, a proxy
+// replaying one response — ends the walk instead of the process.
+const tokenWalkCeiling = 2000
 
 // CreateToken mints a personal access token for a service account.
 //

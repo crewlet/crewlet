@@ -68,5 +68,24 @@ func (r *Result) Findings() []integration.Finding {
 			Detail:  r.NoIngress,
 		})
 	}
+
+	// A SEAT WHOSE ACCOUNT CANNOT AUTHENTICATE, which is the third state
+	// this pass can leave and the one it used to express by minting another
+	// token every few seconds instead of saying anything.
+	//
+	// identity_failed is the kind, because that is literally its definition —
+	// "a seat's account could not be created or its credential was refused" —
+	// and because the verdict it carries is the true one: DEGRADED, owed by
+	// an ADMIN at GitLab. Nobody here can fix it and no retry will.
+	for _, handle := range r.Unusable {
+		out = append(out, integration.Finding{
+			Kind: integration.FindingIdentityFailed, Subject: handle,
+			Detail: handle + " has a GitLab account that cannot authenticate: a " +
+				"token minted for it seconds earlier was refused, so it holds " +
+				"no credential and receives no code-host work. Check the " +
+				"account at GitLab — an unconfirmed address is the usual " +
+				"cause — or delete it and let the next pass recreate it",
+		})
+	}
 	return out
 }
