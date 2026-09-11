@@ -595,7 +595,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		// through Forge keeps working, and it is the fallback if Atlassian
 		// ever retires the admin API. What goes is asking every operator to
 		// install an app they do not need.
-		at := mcpEnvAt(jira.SeatEnvs, jira.CredentialKeys)
+		at := atlassianAt(atlassian.ProductJira)
 		at.Identity = atlassianIdentity(s.resolve)
 		seats = credentialSeats(company, s.resolve, at, "Jira", false)
 		// THE ATLASSIAN BLOCKS HAVE NO `enabled` FIELD. Their presence IS
@@ -607,7 +607,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		block := company.Integrations.Confluence
 		summary = confluence.Summary()
 		reqs = confluence.Requirements(block, company.Integrations.Atlassian.IsCloud(), s.resolve)
-		at := mcpEnvAt(confluence.SeatEnvs, confluence.CredentialKeys)
+		at := atlassianAt(atlassian.ProductConfluence)
 		at.Identity = atlassianIdentity(s.resolve)
 		seats = credentialSeats(company, s.resolve, at, "Confluence", false)
 		configured, enabled = block != nil, block != nil
@@ -615,7 +615,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		block := company.Integrations.Atlassian
 		summary = atlassian.Summary()
 		reqs = atlassian.Requirements(block, s.resolve)
-		at := mcpEnvAt(atlassian.SeatEnvs, atlassian.CredentialKeys)
+		at := atlassianAt(atlassian.ProductAny)
 		at.Identity = atlassianIdentity(s.resolve)
 		seats = credentialSeats(company, s.resolve, at, "Atlassian",
 			s.passes.Serves(kind))
@@ -911,6 +911,37 @@ func mcpEnvAt(envs, keys []string) seatCredentialAt {
 		Address: "mcp_env." + envs[0],
 	}
 }
+
+// atlassianAt reads a seat's Atlassian credential through the ONE reader all
+// three surfaces share.
+//
+// It used to build a scan per surface out of that surface's own SeatEnvs and
+// CredentialKeys — three lists for one account, which had drifted: a seat
+// holding `mcp_env.atlassian.JIRA_API_TOKEN` read as configured under Jira and
+// as having no credential at all under Confluence. See [atlassian.CredentialAt].
+//
+// UNRESOLVED, which is what this surface wants: the roster reports where a
+// credential is declared and then resolves it separately, so the identity
+// function here passes values through rather than expanding them.
+func atlassianAt(product atlassian.Product) seatCredentialAt {
+	return seatCredentialAt{
+		Find: func(role *config.Role) (stored, where string) {
+			cred, at := atlassian.CredentialAt(product, role.MCPEnv, verbatim)
+			if at == "" {
+				return "", ""
+			}
+			return cred.Token, "mcp_env." + at
+		},
+		// THE SHARED BLOCK is what a form tells an operator to write: a
+		// provisioned seat's credential lands there, and the two
+		// product-specific blocks exist only where somebody chose one.
+		Address: "mcp_env.atlassian",
+	}
+}
+
+// verbatim is the resolver [atlassian.CredentialAt] takes when the caller
+// wants the reference rather than the value.
+func verbatim(v string) string { return v }
 
 // atlassianIdentity is the account an Atlassian seat authenticates as.
 //

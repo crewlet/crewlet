@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
@@ -360,18 +361,17 @@ func resolveSeats(ctx context.Context, opts Options) ([]SeatIdentity, error) {
 	// The credentials are read first so the fan-out below runs over the
 	// seats that actually have one: a seat with no credential needs no
 	// lookup, and letting it occupy a slot would idle part of the bound.
-	creds := make([]Credential, len(seats))
+	creds := make([]atlassian.Credential, len(seats))
 	var lookups []int
 	for i, seat := range seats {
 		out[i] = SeatIdentity{
 			Handle:  seat.Handle(),
 			Project: org.NormalizeScope(seat.JiraProject),
 		}
-		creds[i] = CredentialOf(seat, opts.Value)
+		creds[i] = atlassian.CredentialOf(atlassian.ProductJira, seat, opts.Value)
 		if !creds[i].Held() {
-			out[i].Reason = "no credential under mcp_env." +
-				strings.Join(SeatEnvs, " or mcp_env.") +
-				" — this seat receives no Jira events at all"
+			out[i].Reason = "no Atlassian credential under mcp_env.jira or " +
+				"mcp_env.atlassian — this seat receives no Jira events at all"
 			continue
 		}
 		lookups = append(lookups, i)

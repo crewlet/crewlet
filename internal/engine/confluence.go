@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/skills"
+	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -200,31 +201,18 @@ func seatConfluenceClient(env *config.Resolver, base string) confluence.SeatClie
 		if seat == nil || seat.IsHuman() {
 			return nil, false
 		}
-		var token, email string
-		for _, name := range confluence.SeatEnvs {
-			block := seat.MCPEnv[name]
-			for _, key := range confluence.CredentialKeys {
-				if value := strings.TrimSpace(env.Value(block[key])); value != "" {
-					token = value
-					break
-				}
-			}
-			if token == "" {
-				continue
-			}
-			for _, key := range confluence.EmailKeys {
-				if value := strings.TrimSpace(env.Value(block[key])); value != "" {
-					email = value
-					break
-				}
-			}
-			break
-		}
-		if token == "" {
+		// THROUGH THE ONE READER BOTH PRODUCTS SHARE. This walked a
+		// confluence-only list of servers and key spellings, which is how a
+		// seat holding `mcp_env.atlassian.JIRA_API_TOKEN` — the spelling
+		// atlassian.PlanFor's own note tells operators to write — searched
+		// Confluence as the ORG account while Jira reported it ready. See
+		// [atlassian.CredentialAt].
+		cred := atlassian.CredentialOf(atlassian.ProductConfluence, seat, env.Value)
+		if !cred.Held() {
 			return nil, false
 		}
 		client, err := confluence.NewClient(confluence.ClientOptions{
-			URL: base, Email: email, Token: token,
+			URL: base, Email: cred.Email, Token: cred.Token,
 		})
 		if err != nil {
 			log.Warn("confluence_seat_client_failed", "seat", seat.Handle(),

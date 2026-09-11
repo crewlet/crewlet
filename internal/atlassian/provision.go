@@ -8,28 +8,6 @@ import (
 	"github.com/crewlet/crewlet/internal/provision"
 )
 
-// SeatEnvs are the mcp_env servers an agent's Atlassian credential lives
-// under, in the order they are tried.
-//
-// The same two the tracker and the knowledge base read, because it is one
-// Atlassian identity and the community MCP server covers both products under
-// one entry.
-//
-//nolint:gochecknoglobals // an immutable list, not state
-var SeatEnvs = []string{"atlassian", "jira", "confluence"}
-
-// CredentialKeys are the spellings a seat's token arrives under.
-//
-// A LIST rather than one name, for the reason every other app's is: a company
-// writes its own mcp_env, and refusing to find a credential because it was
-// spelled the other obvious way is a silent no-op nobody can debug.
-//
-//nolint:gochecknoglobals // an immutable list, not state
-var CredentialKeys = []string{
-	"JIRA_API_TOKEN", "CONFLUENCE_API_TOKEN", "ATLASSIAN_API_TOKEN",
-	"JIRA_PERSONAL_TOKEN", "CONFLUENCE_PERSONAL_TOKEN",
-}
-
 // AccountName is the display name one seat's account carries.
 //
 // IT CARRIES THE HANDLE, and that is what makes the pass idempotent.
@@ -123,57 +101,4 @@ func PlanFor(o *org.Organization) (*provision.Plan, error) {
 		plan.Add(entry)
 	}
 	return plan, nil
-}
-
-// EmailKeys are the spellings a seat's account address arrives under.
-//
-//nolint:gochecknoglobals // an immutable list, not state
-var EmailKeys = []string{
-	"JIRA_USERNAME", "CONFLUENCE_USERNAME", "ATLASSIAN_EMAIL",
-	"JIRA_EMAIL", "CONFLUENCE_EMAIL",
-}
-
-// SeatEmail is the Atlassian account one seat authenticates as, or empty.
-//
-// THE ACCOUNT, NOT THE SLOT. Atlassian assigns the address when it creates a
-// service account and the pass records it on the seat, so this is the agent's
-// identity at the app rather than a note about where a value is kept.
-//
-// The value is returned AS WRITTEN, which may be a whole `${VAR}`: this
-// package holds no resolver, and the caller that displays it does.
-func SeatEmail(env map[string]map[string]string) string {
-	_, value := seatEmail(env)
-	return value
-}
-
-// seatEmail finds a seat's address slot, and says where.
-func seatEmail(env map[string]map[string]string) (where, value string) {
-	for _, server := range SeatEnvs {
-		block := env[server]
-		if len(block) == 0 {
-			continue
-		}
-		for _, key := range EmailKeys {
-			if v := strings.TrimSpace(block[key]); v != "" {
-				return fmt.Sprintf("%s.%s", server, key), v
-			}
-		}
-	}
-	return "", ""
-}
-
-// seatCredential finds a seat's Atlassian credential slot, and says where.
-func seatCredential(env map[string]map[string]string) (where, value string) {
-	for _, server := range SeatEnvs {
-		block := env[server]
-		if len(block) == 0 {
-			continue
-		}
-		for _, key := range CredentialKeys {
-			if v := strings.TrimSpace(block[key]); v != "" {
-				return fmt.Sprintf("%s.%s", server, key), v
-			}
-		}
-	}
-	return "", ""
 }

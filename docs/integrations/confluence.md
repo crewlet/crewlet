@@ -234,7 +234,9 @@ The query-time search authenticates **as the agent's own Atlassian user**, reusi
 - **Cloud** — `CONFLUENCE_USERNAME` + `CONFLUENCE_API_TOKEN`.
 - **Data Center** — `CONFLUENCE_PERSONAL_TOKEN`.
 
-The credential is read from `mcp_env.atlassian` or `mcp_env.confluence` — Atlassian's own MCP server covers both products, so the documented entry is named `atlassian`.
+The credential is read from `mcp_env.confluence` if a seat has one, otherwise from the shared `mcp_env.atlassian` — Atlassian's own MCP server covers both products, so the documented entry is named `atlassian` and a product-specific block exists only where somebody deliberately made one.
+
+> **One account, one answer, and it used to be three.** Jira, Confluence and the Atlassian provisioner each derived "does this seat have an Atlassian credential" from its own list of server names and key spellings, and those lists had drifted. A seat holding `mcp_env.atlassian.JIRA_API_TOKEN` — the spelling the provisioner's own advice tells you to write — read as *ready* to Jira and as *no Confluence credential yet* to Confluence, on the same account, in the same block, permanently. There is one reader now, and in the **shared** block each product will also accept the other's `*_API_TOKEN`: on Cloud one API token belongs to the account and authenticates both. A `*_PERSONAL_TOKEN` never crosses, because a Data Center PAT is issued by one product and refused by the other — the spelling already carries the distinction. `Authorization: Bearer …` is accepted here too, which Confluence never read before.
 
 Roles without a per-agent Confluence token fall back to the **org token** (`integrations.confluence.token`), which sees whatever that account sees. That fallback is exactly why an unscoped search is then **refused** rather than run: searching the whole instance on a shared credential is how one seat reads a page its own account never could.
 

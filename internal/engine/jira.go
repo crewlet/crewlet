@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -48,7 +49,7 @@ import (
 // different credential and may well resolve to a different account.
 type jiraIdentities struct {
 	mu     sync.Mutex
-	byCred map[jira.Credential]string
+	byCred map[atlassian.Credential]string
 }
 
 // resolve fills in the accounts behind any credentials not already known.
@@ -61,12 +62,12 @@ type jiraIdentities struct {
 // the instance may be briefly down, and the next apply retries. What that
 // costs is that seat's inbound routing until then, which is the honest
 // consequence and is reported per seat.
-func (j *jiraIdentities) resolve(ctx context.Context, url string, deploy jira.Deployment, creds []jira.Credential) {
+func (j *jiraIdentities) resolve(ctx context.Context, url string, deploy jira.Deployment, creds []atlassian.Credential) {
 	j.mu.Lock()
 	if j.byCred == nil {
-		j.byCred = map[jira.Credential]string{}
+		j.byCred = map[atlassian.Credential]string{}
 	}
-	var missing []jira.Credential
+	var missing []atlassian.Credential
 	for _, cred := range creds {
 		if _, known := j.byCred[cred]; !known {
 			missing = append(missing, cred)
@@ -118,7 +119,7 @@ func (j *jiraIdentities) register(reg *notify.Registry, c *Company, env *config.
 
 	var registered int
 	for seat := range c.Org.AllRoles() {
-		cred := jira.CredentialOf(seat, env.Value)
+		cred := atlassian.CredentialOf(atlassian.ProductJira, seat, env.Value)
 		if !cred.Held() {
 			continue
 		}
@@ -289,16 +290,16 @@ func jiraShareableURL(cfg *config.Jira, env *config.Resolver) string {
 // mid-migration, or one that has not provisioned per-seat accounts yet — and
 // resolving the same credential once per seat would spend N requests to
 // learn one answer.
-func jiraSeatCredentials(c *Company, env *config.Resolver) []jira.Credential {
-	held := map[jira.Credential]bool{}
+func jiraSeatCredentials(c *Company, env *config.Resolver) []atlassian.Credential {
+	held := map[atlassian.Credential]bool{}
 	for seat := range c.Org.AllRoles() {
-		if cred := jira.CredentialOf(seat, env.Value); cred.Held() {
+		if cred := atlassian.CredentialOf(atlassian.ProductJira, seat, env.Value); cred.Held() {
 			held[cred] = true
 		}
 	}
 	// Sorted so a boot's log lines are diffable against the next one's.
 	creds := slices.Collect(maps.Keys(held))
-	slices.SortFunc(creds, func(a, b jira.Credential) int {
+	slices.SortFunc(creds, func(a, b atlassian.Credential) int {
 		if a.Token != b.Token {
 			return strings.Compare(a.Token, b.Token)
 		}
@@ -325,7 +326,7 @@ func (j *jiraIdentities) unresolved(c *Company, env *config.Resolver) []string {
 
 	var out []string
 	for seat := range c.Org.AllRoles() {
-		cred := jira.CredentialOf(seat, env.Value)
+		cred := atlassian.CredentialOf(atlassian.ProductJira, seat, env.Value)
 		if cred.Held() && known[cred] == "" {
 			out = append(out, seat.Handle())
 		}
