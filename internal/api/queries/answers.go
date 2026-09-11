@@ -312,6 +312,10 @@ func Register(r *Registry, s Sources) {
 	if s.Work != nil {
 		r.Register("work_items", s.workItems)
 		r.Register("work_item", s.workItem)
+		// A SEPARATE QUESTION from `work_items`, for the reason
+		// `containers` is separate from `pages`: a screen draws the tab
+		// strip once and the rows in it on every filter change.
+		r.Register("work_views", s.workViews)
 	}
 	if s.Pages != nil {
 		r.Register("pages", s.pageList)

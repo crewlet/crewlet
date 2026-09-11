@@ -55,10 +55,13 @@ func documentSelect(s Subject) (query string, args []any, err error) {
 	case "tracker_views", "tracker_goals":
 		return `SELECT document, version FROM ` + table + ` WHERE id = ?`,
 			[]any{key}, nil
-	case "tracker_persons":
-		return `SELECT document, version FROM tracker_persons WHERE handle = ?`,
-			[]any{key}, nil
 	}
+	// NOT tracker_persons, and its absence here is the point: that table
+	// stores no `document` column at all — a person's record is exploded
+	// into columns and nothing keeps the blob — so this statement would
+	// have failed with "no such column: document" the first time anything
+	// read one. [readPerson] reassembles it from the columns instead, for
+	// the reason [readCounter] gives for the same shape.
 	return "", nil, fmt.Errorf("tracker: %s has no document read", s.Kind)
 }
 
@@ -107,6 +110,62 @@ func readSprint(ctx context.Context, tx *sql.Tx, project string, number int) (Sp
 func readTagSet(ctx context.Context, tx *sql.Tx, project string) (TagSet, bool, error) {
 	return readDocument(ctx, tx, TagsSubject(project),
 		func(t *TagSet, v uint64) { t.Version = v })
+}
+
+// readPerson reads one person's own state.
+//
+// ITS OWN STATEMENT rather than [readDocument], because a person is not a
+// whole-document object: `tracker_persons` carries no `document` column — the
+// applier explodes the record into columns and keeps no blob — so the generic
+// read would have failed on a column that has never existed. The counter is
+// the other table of this shape and says the same thing.
+//
+// AN ABSENT PERSON IS NOT AN ERROR. Everyone starts without a row: the first
+// thing that writes one is that person's first gesture, so "no row" is the
+// ordinary state of every human on their first day and every seat for ever.
+func readPerson(ctx context.Context, tx *sql.Tx, handle string) (Person, bool, error) {
+	var person Person
+	var seenSeq int64
+	var version int64
+	var read, unread, snoozed, reasons, priorities, pins, favorites []byte
+	switch err := tx.QueryRowContext(ctx, `
+		SELECT generation, seen_through, seen_through_stream, read_json,
+		       unread_json, snoozed_json, primary_reasons_json, priorities_json,
+		       pinned_views_json, favorites_json, version
+		FROM tracker_persons WHERE handle = ?`, handle).
+		Scan(&person.Generation, &seenSeq, &person.SeenThrough.Stream, &read,
+			&unread, &snoozed, &reasons, &priorities, &pins, &favorites,
+			&version); {
+	case errors.Is(err, sql.ErrNoRows):
+		return Person{V: DocumentVersion, Handle: handle}, false, nil
+	case err != nil:
+		return Person{}, false, fmt.Errorf("tracker: read %s's own state: %w",
+			handle, err)
+	}
+	person.V, person.Handle = DocumentVersion, handle
+	person.Version = uint64(version)
+	person.SeenThrough.Seq = uint64(seenSeq)
+	for _, part := range []struct {
+		body []byte
+		into any
+		what string
+	}{
+		{read, &person.Read, "read"}, {unread, &person.Unread, "unread"},
+		{snoozed, &person.Snoozed, "snoozed"},
+		{reasons, &person.PrimaryReasons, "primary reasons"},
+		{priorities, &person.Priorities, "priorities"},
+		{pins, &person.PinnedViews, "pinned views"},
+		{favorites, &person.Favorites, "favourites"},
+	} {
+		if len(part.body) == 0 {
+			continue
+		}
+		if err := json.Unmarshal(part.body, part.into); err != nil {
+			return Person{}, false, fmt.Errorf("tracker: decode %s's %s: %w",
+				handle, part.what, err)
+		}
+	}
+	return person, true, nil
 }
 
 // readCounter reads a project's key sequence.

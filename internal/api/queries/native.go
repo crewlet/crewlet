@@ -49,6 +49,7 @@ type WorkReader interface {
 	Tasks(ctx context.Context, q tracker.Query, now time.Time) (tracker.Answer, error)
 	Task(ctx context.Context, idOrKey string, want tracker.DetailWants,
 		level statelog.ReadLevel) (tracker.TaskDetail, error)
+	Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error)
 }
 
 // PageReader is the knowledge read side this surface calls.
@@ -131,6 +132,79 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 		return nil, unavailableIfBehind(err)
 	}
 	return detail, nil
+}
+
+// workViews answers one container's view strip.
+//
+// # Why `viewer` is a parameter here and not the caller's own identity
+//
+// A personal view is private to its OWNER, and the reader enforces that in
+// SQL. What `viewer=` selects is which person's strip to render — their
+// personal views and their pins — and it is safe to let a caller name one
+// because this whole surface is guarded: the caller already holds the
+// company's own credential and can read every task, comment and page in it.
+// The privacy a personal view has is from other COMPANY MEMBERS reading
+// through their own seats, which is a boundary the seat tools enforce and this
+// route is on the other side of.
+//
+// Absent is the SHARED strip: no pins and no personal views but the shared
+// ones, which is what a screen draws before it knows who is looking.
+func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
+	container, err := viewContainer(p)
+	if err != nil {
+		return nil, err
+	}
+	listing, err := s.Work.Views(ctx, tracker.ViewQuery{
+		Container: container,
+		Viewer:    strings.TrimSpace(p.String("viewer")),
+		// STALE, like every other dashboard poll — see
+		// [Sources.workItems] for the arithmetic.
+		Level: statelog.ReadStale,
+	})
+	if err != nil {
+		return nil, unavailableIfBehind(err)
+	}
+	out := map[string]any{
+		"views": listing.Views, "read_level": listing.Level,
+		"log_seq": listing.LogSeq, "applied_through": listing.AppliedThrough,
+		"complete": listing.Complete,
+	}
+	if listing.LogLag != nil {
+		out["log_lag"] = *listing.LogLag
+	}
+	if listing.Incomplete != nil {
+		out["incomplete"] = listing.Incomplete
+	}
+	return out, nil
+}
+
+// viewContainer reads the container a strip belongs to.
+//
+// ONE PARAMETER IN THE QUERY GRAMMAR'S OWN SPELLING — `container=project:ENG`,
+// `container=workspace` — because a screen that reaches a strip and then the
+// tasks in it must not have to write the same container two ways.
+func viewContainer(p Params) (tracker.Container, error) {
+	raw := strings.TrimSpace(p.String("container"))
+	if raw == "" {
+		return tracker.Container{}, badParams("container", "",
+			[]string{"workspace", "project:<KEY>", "unit:<name>", "person:<handle>"})
+	}
+	if raw == tracker.ContainerWorkspace {
+		return tracker.Container{Kind: tracker.ContainerWorkspace}, nil
+	}
+	kind, id, found := strings.Cut(raw, ":")
+	if !found || !tracker.ValidContainerKind(kind) || id == "" {
+		return tracker.Container{}, badParams("container", raw,
+			[]string{"workspace", "project:<KEY>", "unit:<name>", "person:<handle>"})
+	}
+	if kind == tracker.ContainerProject {
+		// A PROJECT KEY IS UPPER-CASE wherever it is minted, and the
+		// tracker's own scope parser upper-cases it for the same reason:
+		// a strip asked for as `project:eng` must be the strip a task
+		// query scoped to `project:ENG` belongs to.
+		id = strings.ToUpper(id)
+	}
+	return tracker.Container{Kind: kind, ID: id}, nil
 }
 
 // ---- pages ------------------------------------------------------------- //

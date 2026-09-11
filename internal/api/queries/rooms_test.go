@@ -140,6 +140,10 @@ func (emptyWork) Task(context.Context, string, tracker.DetailWants,
 	return tracker.TaskDetail{}, nil
 }
 
+func (emptyWork) Views(context.Context, tracker.ViewQuery) (tracker.ViewListing, error) {
+	return tracker.ViewListing{}, nil
+}
+
 type emptyPages struct{}
 
 func (emptyPages) List(context.Context, pages.Filter, statelog.ReadLevel) (pages.Listing, error) {

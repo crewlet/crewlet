@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/tools"
@@ -91,6 +92,50 @@ func cleanStrings(in []string) []string {
 		}
 		seen[v] = true
 		out = append(out, v)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// argBool reads a boolean argument, false when absent or not one.
+//
+// ABSENT AND FALSE ARE THE SAME ANSWER here, unlike in the query grammar,
+// because every caller of this one is a flag a tool sets rather than a filter
+// with three states: "do not protect this view" and "say nothing about
+// protecting it" are the same instruction.
+func argBool(args map[string]any, key string) bool {
+	value, _ := args[key].(bool)
+	return value
+}
+
+// argStringMap reads an object argument whose values are strings.
+//
+// A NON-STRING VALUE IS RENDERED rather than dropped, because a model writing
+// `{"limit": 10}` means the same thing as `{"limit": "10"}` and the grammar
+// these maps feed reads both identically — see [queries.Params]. Dropping it
+// would save a saved view with a filter the caller believes is in it.
+func argStringMap(args map[string]any, key string) map[string]string {
+	raw, ok := args[key].(map[string]any)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(raw))
+	for k, v := range raw {
+		if k = strings.TrimSpace(k); k == "" || v == nil {
+			continue
+		}
+		switch typed := v.(type) {
+		case string:
+			out[k] = typed
+		case bool:
+			out[k] = strconv.FormatBool(typed)
+		case float64:
+			out[k] = strconv.FormatFloat(typed, 'f', -1, 64)
+		default:
+			out[k] = fmt.Sprint(v)
+		}
 	}
 	if len(out) == 0 {
 		return nil

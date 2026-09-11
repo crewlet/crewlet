@@ -35,9 +35,23 @@ func (a *Applier) applyDocument(ctx context.Context, tx *sql.Tx, c applyContext)
 	if err != nil {
 		return 0, err
 	}
-	extra, err := a.explode(ctx, tx, subject, c)
-	if err != nil {
-		return 0, err
+	// THE CHILDREN FOLLOW THE DOCUMENT'S OWN VERSION GUARD.
+	//
+	// Every upsert above carries `WHERE excluded.version > <table>.version`
+	// and SKIPS a record it is not newer than — which is ordinary traffic:
+	// a redelivery, or a record this build retained and reprocessed at its
+	// original position after a newer one had already applied. The explode
+	// below DELETES and re-inserts, and until this guard existed it did so
+	// unconditionally: a stale reprocess left the goal's document saying
+	// one thing and its targets saying another, with nothing to notice.
+	//
+	// Zero rows affected is exactly "this record did not write the
+	// document", because an upsert that runs always affects one.
+	extra := 0
+	if rows > 0 {
+		if extra, err = a.explode(ctx, tx, subject, c); err != nil {
+			return 0, err
+		}
 	}
 	history, err := a.writeHistory(ctx, tx, c, "")
 	if err != nil {

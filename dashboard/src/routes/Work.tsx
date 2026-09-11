@@ -49,7 +49,7 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { fmtDateTime, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import type { WorkIncomplete, WorkStatus, WorkSummary } from "~/protocol/index.ts";
+import type { WorkIncomplete, WorkStatus, WorkSummary, WorkView } from "~/protocol/index.ts";
 
 /** The board's own vocabulary, rendered. A closed set, so a status the engine
  *  adds later shows as itself rather than vanishing from the filter. */
@@ -98,6 +98,7 @@ export function Work() {
   // `open` is THREE-STATED on the wire and here: an absent filter asks for
   // everything, and reading it as false would show only finished work.
   const [scope, setScope] = useParam("scope", "open");
+  const [view, setView] = useParam("view", "");
 
   const params: Record<string, unknown> = {};
   // THE CONTAINER IS THE SCOPE, and an absent one is NEITHER the workspace
@@ -119,6 +120,24 @@ export function Work() {
   // Twenty seconds: a board is read, not watched, and a tracker's own pace is
   // a person typing a comment.
   const { data, loading, error } = useQuery("work_items", params, { pollMs: 20_000 });
+
+  // THE STRIP IS A SEPARATE QUESTION from the rows, for the reason
+  // `containers` is separate from `pages`: it is drawn once per container and
+  // the rows are redrawn on every filter change. Its poll is slower for the
+  // same reason — a saved view is arranged by a person, not by the work.
+  const strip = useQuery("work_views", { container: params.container }, { pollMs: 120_000 });
+  const views = strip.data?.views ?? [];
+  // THE VIEW IS A SET OF DEFAULTS, never a lock: picking one puts its
+  // parameters on the URL, where every explicit control still overrides them.
+  // Storing the view's id instead would make the filters lie about what is on
+  // screen the moment somebody touched one.
+  const applyView = (v: WorkView) => {
+    setStatus(v.params?.status ?? "");
+    setAssignee(v.params?.assignee ?? "");
+    setQ(v.params?.q ?? "");
+    setScope(scopeOf(v.params?.status_group));
+    setView(v.key);
+  };
 
   const rows = useMemo(
     () => [...(data?.items ?? [])].sort((a, b) => tsKey(b.updated) - tsKey(a.updated)),
@@ -170,6 +189,32 @@ export function Work() {
           <Stat label="Blocked" value={blocked} icon={blocked ? "alert" : undefined} />
           <Stat label="In review" value={byStatus.in_review ?? 0} />
         </StatRow>
+      )}
+
+      {/* THE TAB STRIP. Every container has three of these without anybody
+          saving one, so it is never empty and never needs a setup gesture —
+          which is also why a failure to read it leaves the board alone
+          rather than blocking it: the filters below are the real control,
+          and a strip is a shortcut to a set of them. */}
+      {views.length > 0 && (
+        <div className="toolbar" role="tablist" aria-label="Saved views">
+          {views.map((v) => (
+            <Chip
+              key={v.key}
+              on={view === v.key}
+              onClick={() => applyView(v)}
+              title={v.builtin ? `The built-in ${v.type}` : viewTitle(v)}
+            >
+              {v.pinned ? "★ " : ""}
+              {v.name}
+            </Chip>
+          ))}
+          {view && (
+            <Chip onClick={() => setView("")} title="Stop following a view">
+              Clear
+            </Chip>
+          )}
+        </div>
       )}
 
       <div className="toolbar">
@@ -582,4 +627,26 @@ function totalHint(hint: number, shown: number): string {
   if (hint >= 10_000) return "of 10000+ matching";
   if (hint <= shown) return `of ${hint} matching`;
   return `of ${hint} matching — page through for the rest`;
+}
+
+/** scopeOf maps a view's status_group back onto the board's three segments.
+ *
+ *  THE SEGMENTS ARE A SHORTHAND for the two groups each names, so a view
+ *  carrying exactly those groups lands on the segment rather than on "All"
+ *  with an invisible filter. Anything else is "All": a view filtering to one
+ *  group is not one of the three questions the control asks. */
+function scopeOf(group: string | undefined): string {
+  if (group === "not_started,active") return "open";
+  if (group === "done,closed") return "closed";
+  return "";
+}
+
+/** viewTitle says whose a saved view is, which is the one thing its name
+ *  cannot: two people's "My work" are two different views. */
+function viewTitle(v: WorkView): string {
+  const parts: string[] = [];
+  if (v.owner) parts.push(`${v.owner}'s`);
+  parts.push(v.type);
+  if (v.protected) parts.push("— only its owner may change it");
+  return parts.join(" ");
 }

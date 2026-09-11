@@ -637,9 +637,13 @@ const (
 	MaxGoalUpdates    = 100
 	MaxTasksPerTarget = 64
 
-	// MaxViewParamsBytes and MaxViewParamKeys bound a saved view.
+	// MaxViewParamsBytes and MaxViewParamKeys bound a saved view's query;
+	// MaxViewName bounds its tab label at half a task's title, because a
+	// name that does not fit its strip is one nobody can tell from its
+	// neighbour.
 	MaxViewParamsBytes = 32 << 10
 	MaxViewParamKeys   = 32
+	MaxViewName        = 128
 
 	// MaxInboxEntries bounds each of a person's three lists. Entries at or
 	// below the seen-through position are pruned on every write, which is
@@ -937,6 +941,28 @@ const (
 type Container struct {
 	Kind string `json:"kind"`
 	ID   string `json:"id"`
+}
+
+// The container kinds a view or a goal may belong to.
+//
+// A CLOSED SET, named so a fourth cannot appear by typo — which is the same
+// reason [CatalogueTypes] and [CatalogueFields] are named. The workspace is
+// the top of the company and carries an empty id, exactly as
+// [WorkspaceContainer] does in the scope grammar.
+const (
+	ContainerWorkspace = "workspace"
+	ContainerProject   = "project"
+	ContainerUnit      = "unit"
+	ContainerPerson    = "person"
+)
+
+// ValidContainerKind reports whether a view or goal names a real container.
+func ValidContainerKind(kind string) bool {
+	switch kind {
+	case ContainerWorkspace, ContainerProject, ContainerUnit, ContainerPerson:
+		return true
+	}
+	return false
 }
 
 // View is a saved query.

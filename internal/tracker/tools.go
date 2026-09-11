@@ -23,6 +23,22 @@ const (
 	CommentOnWorkTool  = "comment_on_work_item"
 )
 
+// The OPERATOR-ONLY tools, which no seat is given.
+//
+// A saved view is a person arranging their own tab strip, and the five above
+// are deliberately few because an agent's job is the WORK rather than the
+// furniture around it: a seat that could rearrange a shared board would be one
+// more thing a founder has to supervise, for no delivery.
+const (
+	ListWorkViewsTool = "list_work_views"
+	SaveWorkViewTool  = "save_work_view"
+)
+
+// OperatorOnlyTools are the ones the operator surface adds to [Tools].
+func OperatorOnlyTools() []string {
+	return []string{ListWorkViewsTool, SaveWorkViewTool}
+}
+
 // Tools are the five, so a caller registering them names one thing.
 func Tools() []string {
 	return []string{ListWorkItemsTool, GetWorkItemTool, CreateWorkItemTool,

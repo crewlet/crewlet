@@ -1033,8 +1033,51 @@ func (a *Applier) explode(ctx context.Context, tx *sql.Tx, subject Subject,
 		return a.explodeCatalogue(ctx, tx, subject.ID, c)
 	case KindGoal:
 		return a.explodeGoal(ctx, tx, subject.ID, c)
+	case KindView:
+		return a.settleDefaultView(ctx, tx, subject.ID, c)
 	}
 	return 0, nil
+}
+
+// settleDefaultView makes "one per container can be the default" TRUE.
+//
+// # Why this is the applier's and not the writer's
+//
+// The rule is about the ROWS rather than about any one write. A writer that
+// cleared the previous default with a companion append would leave a window in
+// which two rows claim it, and a reader would then need a tie-break rule
+// nobody wrote down — where the nearest surface, a tab strip, would just draw
+// two active tabs.
+//
+// Here it is one transaction with the view's own row: either the container has
+// exactly one default afterwards or the record did not apply. The fan-out is
+// every OTHER view in the container, which is unbounded in principle — and
+// that is precisely why the record's scope names the CONTAINER rather than
+// enumerating the views, which is [MaxScopeTerms]'s own rule.
+//
+// A view that is NOT the default clears nothing: withdrawing a default is
+// saving that view with the flag off, and doing it by writing some other view
+// as the default is a second gesture the person did not make.
+func (a *Applier) settleDefaultView(ctx context.Context, tx *sql.Tx, id string,
+	c applyContext) (int, error) {
+
+	var view View
+	if err := decodePayload(c.record.Mutation, &view); err != nil {
+		return 0, err
+	}
+	if !view.Default {
+		return 0, nil
+	}
+	res, err := tx.ExecContext(ctx, `
+		UPDATE tracker_views SET is_default = 0
+		WHERE container_kind = ? AND container_id = ? AND id <> ?
+		  AND is_default = 1`,
+		view.Container.Kind, view.Container.ID, id)
+	if err != nil {
+		return 0, fmt.Errorf("tracker: clear the other defaults in %s %s: %w",
+			view.Container.Kind, view.Container.ID, err)
+	}
+	return affected(res)
 }
 
 // explodeCatalogue writes the type or field rows a catalogue produces.
