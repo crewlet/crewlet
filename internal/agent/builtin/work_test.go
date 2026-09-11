@@ -668,3 +668,48 @@ func TestAGroupedAnswerIsNotReportedAsEmpty(t *testing.T) {
 		t.Fatalf("the grouped half never reached the model: %s", got.Output)
 	}
 }
+
+// EVERY OPERATOR TOOL ANSWERS WITHOUT A TURN.
+//
+// The operator surface calls through Callable.Call, which passes a nil turn,
+// and supplies its own Actor because there is no seat to derive one from. Four
+// reads opened with `turn.RequireSeat()` BEFORE consulting that Actor, so the
+// whole read half of /operator/mcp refused every call while the writes beside
+// them worked — and a catalogue whose reads all fail is one an assistant stops
+// trusting entirely.
+//
+// The guard is structural: it calls EVERY tool the surface serves, so a tool
+// added later with the same prelude fails here rather than in production.
+func TestEveryOperatorToolAnswersOutsideATurn(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	work := builtin.WorkDeps{
+		Reader: trk, Writer: trk.as,
+		ViewWriter:      func(builtin.Actor) builtin.ViewWriter { return nil },
+		GoalWriter:      func(builtin.Actor) builtin.GoalWriter { return nil },
+		CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
+		PersonWriter:    func(builtin.Actor) builtin.PersonWriter { return nil },
+		Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
+			return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
+		},
+	}
+	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{Work: work}) {
+		// THE READS ONLY. A write called with no arguments refuses on
+		// its own missing arguments, which is correct and says nothing
+		// about the turn; what this case is about is the prelude that
+		// refuses BEFORE any argument is read.
+		if !strings.HasPrefix(tool.Name(), "list_") &&
+			!strings.HasPrefix(tool.Name(), "get_") {
+			continue
+		}
+		result, err := tool.Call(t.Context(), map[string]any{})
+		if err != nil {
+			t.Fatalf("%s: %v", tool.Name(), err)
+		}
+		if strings.Contains(result.Output, "can only be called during a turn") {
+			t.Errorf("%s refuses outside a turn even though the surface "+
+				"supplies its own actor — the identity check must be "+
+				"WorkDeps.actor, not turn.RequireSeat", tool.Name())
+		}
+	}
+}

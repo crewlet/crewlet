@@ -47,6 +47,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -77,6 +78,12 @@ type Options struct {
 	// Knowledge is the company's ranked search, or nil.
 	Knowledge builtin.KnowledgeSearcher
 
+	// Org is the company chart, resolved per call because a config apply
+	// replaces it. Search needs it and an operator has no turn to carry
+	// it: without this the search tool is registered and refuses every
+	// call, so it is registered only when both are present.
+	Org func() *org.Organization
+
 	// Leads answers whether one handle leads another — the one authority
 	// over a person's record that reaches across people. Nil degrades to
 	// "your own only" rather than to a hole.
@@ -101,7 +108,7 @@ type Server struct {
 func New(opts Options) *Server {
 	catalogue := builtin.OperatorTools(builtin.OperatorDeps{
 		Work: opts.Work, Pages: opts.Pages, Knowledge: opts.Knowledge,
-		Leads: opts.Leads,
+		Org: opts.Org, Leads: opts.Leads,
 	})
 	if len(catalogue) == 0 {
 		return nil

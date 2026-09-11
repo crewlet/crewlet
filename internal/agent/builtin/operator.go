@@ -2,6 +2,8 @@ package builtin
 
 import (
 	"github.com/crewlet/crewlet/internal/tools"
+
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // The OPERATOR catalogue: the same tools a seat holds, offered to a person's
@@ -35,6 +37,12 @@ type OperatorDeps struct {
 	Work      WorkDeps
 	Pages     PageDeps
 	Knowledge KnowledgeSearcher
+
+	// Org is the company this surface is about, resolved per call because
+	// a config apply replaces it. An operator has no turn and therefore no
+	// org to read from one, so search_knowledge takes it from here — and
+	// with it nil that tool refuses every call it is registered for.
+	Org func() *org.Organization
 
 	// Leads answers whether one handle leads another, which is the one
 	// authority over a person's record that reaches across people. Nil
@@ -81,7 +89,8 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		{&writePage{deps: pages}, pages.Writer != nil},
 		{&savePage{deps: pages}, pages.Writer != nil && pages.Reader != nil},
 		{&commentOnPage{deps: pages}, pages.Writer != nil && pages.Reader != nil},
-		{&searchKnowledge{search: deps.Knowledge}, deps.Knowledge != nil},
+		{&searchKnowledge{search: deps.Knowledge, org: deps.Org},
+			deps.Knowledge != nil && deps.Org != nil},
 	}
 	var out []tools.Callable
 	for _, c := range candidates {

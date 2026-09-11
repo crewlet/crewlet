@@ -353,17 +353,19 @@ func (t *listWorkItems) Call(ctx context.Context, args map[string]any) (tools.Re
 }
 
 func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
-	if _, err := turn.RequireSeat(); err != nil {
-		//nolint:nilerr // A tool failure is a RESULT the model reads, not a Go error.
-		return notInATurn(ListWorkItemsTool), nil
-	}
-	if t.deps.Reader == nil {
-		return unconfigured(ListWorkItemsTool), nil
-	}
+	// THE IDENTITY CHECK IS [WorkDeps.actor]'s, never turn.RequireSeat()
+	// directly. A seat with no turn still refuses — the nil-Actor fallback
+	// requires the seat itself — and the OPERATOR surface, which has no
+	// turn and supplies its own actor, is answered rather than told it is
+	// not in one. Asking the turn first made every read on /operator/mcp
+	// refuse while the writes beside them worked.
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the model reads.
 		return notInATurn(ListWorkItemsTool), nil
+	}
+	if t.deps.Reader == nil {
+		return unconfigured(ListWorkItemsTool), nil
 	}
 
 	// THE TOOL'S ARGUMENTS ARE THE QUERY GRAMMAR'S OWN KEYS, translated
@@ -517,7 +519,8 @@ func (t *getWorkItem) Call(ctx context.Context, args map[string]any) (tools.Resu
 }
 
 func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
-	if _, err := turn.RequireSeat(); err != nil {
+	// [WorkDeps.actor] rather than the turn — see [listWorkItems.CallForTurn].
+	if _, err := t.deps.actor(ctx, turn); err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the model reads.
 		return notInATurn(GetWorkItemTool), nil
 	}

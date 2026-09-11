@@ -2061,13 +2061,21 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 					tracker.Provenance{OperatorID: actor.OperatorID})
 			},
 			Actor: opsmcp.WorkActor,
-			Await: e.WaitCommitted,
+			// THE MENTION RESOLVER, which this surface went without: a
+			// comment's @-mention is turned into a wake by the tracker's
+			// recipients only when the writer resolved it, so an
+			// operator writing "@alice can you take this" reached her
+			// watchers and never her — while the tool's own description,
+			// which their assistant reads, promised it would.
+			Mentions: engine.LiveMentions(e),
+			Await:    e.WaitCommitted,
 		}
 	}
 	if reader, writer := e.Pages(), e.PagesStore(); reader != nil && writer != nil {
 		opts.Pages = builtin.PageDeps{
 			Reader: reader, Writer: writer,
 			Actor:    opsmcp.PageActor,
+			Mentions: engine.LiveMentions(e),
 			Reserved: reservedFor(e),
 			Await:    e.WaitCommitted,
 		}
@@ -2077,6 +2085,16 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 	// wiki is exactly as useful to an operator's assistant on Confluence.
 	if e.Knowledge() != nil {
 		opts.Knowledge = operatorKnowledge{engine: e}
+		// AND THE CHART BESIDE IT. An operator has no turn, so the org
+		// the search is scoped against comes from here; resolved per
+		// call, because a config apply replaces it.
+		opts.Org = func() *org.Organization {
+			c := e.Company()
+			if c == nil {
+				return nil
+			}
+			return c.Org
+		}
 	}
 	// THE LEAD RELATION, which the tracker deliberately does not derive:
 	// it holds no org chart, and one it derived would be a second opinion
