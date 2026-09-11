@@ -173,6 +173,10 @@ func (stubWorkReader) Views(context.Context, tracker.ViewQuery) (tracker.ViewLis
 	return tracker.ViewListing{}, nil
 }
 
+func (stubWorkReader) Goals(context.Context, tracker.GoalQuery) (tracker.GoalListing, error) {
+	return tracker.GoalListing{}, nil
+}
+
 type stubWorkWriterT struct{}
 
 func stubWorkWriter(builtin.Actor) builtin.WorkWriter { return stubWorkWriterT{} }

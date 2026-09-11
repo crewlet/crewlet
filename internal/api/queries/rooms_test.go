@@ -144,6 +144,10 @@ func (emptyWork) Views(context.Context, tracker.ViewQuery) (tracker.ViewListing,
 	return tracker.ViewListing{}, nil
 }
 
+func (emptyWork) Goals(context.Context, tracker.GoalQuery) (tracker.GoalListing, error) {
+	return tracker.GoalListing{}, nil
+}
+
 type emptyPages struct{}
 
 func (emptyPages) List(context.Context, pages.Filter, statelog.ReadLevel) (pages.Listing, error) {
