@@ -553,6 +553,23 @@ type TaskPatch struct {
 	// counter two nodes can disagree about.
 	Reassignments *int `json:"reassignments,omitempty"`
 
+	// Watch is a MEMBERSHIP gesture rather than a collection write —
+	// "add me" or "take me off" — resolved by the WRITER inside its own
+	// snapshot into the whole Watchers and Muted sets below, exactly as
+	// Reassignments is settled there (see [Writer.chargeHandOff]).
+	//
+	// It exists because a caller CANNOT form those sets: the collections
+	// are carried whole, and a tool spelling "watch this" as
+	// `watchers: [me]` replaced everybody already watching — and, because
+	// the change kind is [ChangeWatchers], announced their removal in the
+	// wake it sent. Deciding it anywhere but the decide snapshot means
+	// reading the set in one transaction and writing it in another.
+	//
+	// NEVER ON THE WIRE. The record an applier sees carries the resolved
+	// collections, so a replay writes rows rather than re-deriving a set
+	// from whatever it had applied by then.
+	Watch *WatchIntent `json:"-"`
+
 	// The collections, carried WHOLE when touched.
 	Collaborators *[]string                   `json:"collaborators,omitempty"`
 	Watchers      *[]string                   `json:"watchers,omitempty"`
@@ -570,6 +587,16 @@ type TaskPatch struct {
 	Comment *Comment `json:"comment,omitempty"`
 
 	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// WatchIntent is one person's membership gesture on a task's watcher set.
+//
+// A HANDLE AND A DIRECTION, never a list: what a person can say about watching
+// is whether THEY watch, and the set as a whole belongs to whoever is looking
+// at all of it. [settleWatch] turns it into that set.
+type WatchIntent struct {
+	Handle string
+	Watch  bool
 }
 
 // FieldType is a custom field's type.

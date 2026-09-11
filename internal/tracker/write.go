@@ -306,6 +306,10 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			if err != nil {
 				return statelog.Decision{}, err
 			}
+			charged, err = settleWatch(current, charged)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
 			decision, err := w.decide(subject, OpPatch, scope, opID, charged, notify, at)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -318,6 +322,64 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 		result.Warnings = bodyWarnings(*patch.Body)
 	}
 	return result, err
+}
+
+// settleWatch resolves a membership gesture into the whole watcher sets.
+//
+// INSIDE THE DECIDE SNAPSHOT, exactly where [Writer.chargeHandOff] settles the
+// hand-off counter and for the same reason this file's own head gives: "add me
+// to the watchers" is a decision about the task's CURRENT set, and the decide
+// closure is the one place this engine guarantees a single consistent read of
+// it. A caller that read the set in one transaction and wrote it in another
+// would drop everybody who arrived in between.
+//
+// BOTH SETS MOVE TOGETHER, because [Task.Watchers] is the set and [Task.Muted]
+// the subtraction: watching is "in watchers, not in muted" and un-watching is
+// the mirror. Writing one without the other leaves a person who cannot be told
+// apart from somebody who never watched, which is the distinction those two
+// fields exist to keep.
+//
+// And it returns a COPY rather than writing through the patch it was given:
+// Decide runs again on a retry, and a resolution folded into the captured
+// patch would compound across attempts.
+func settleWatch(current Task, patch TaskPatch) (TaskPatch, error) {
+	if patch.Watch == nil {
+		return patch, nil
+	}
+	if patch.Watchers != nil || patch.Muted != nil {
+		// BOTH SPELLINGS AT ONCE IS A PROGRAMMING ERROR, refused rather
+		// than resolved in some order: one of them is a gesture about
+		// one person and the other is the whole set, and whichever won
+		// would silently discard the other.
+		return patch, fmt.Errorf("tracker: this patch carries both a watch "+
+			"gesture for %s and a whole watcher set — a caller states one or "+
+			"the other", patch.Watch.Handle)
+	}
+	handle := patch.Watch.Handle
+	if handle == "" {
+		return patch, fmt.Errorf("tracker: a watch gesture names no handle")
+	}
+	watchers := without(current.Watchers, []string{handle})
+	muted := without(current.Muted, []string{handle})
+	if patch.Watch.Watch {
+		watchers = append(watchers, handle)
+	} else {
+		muted = append(muted, handle)
+	}
+	if len(watchers) > MaxWatchers {
+		// THE ROUTING CAP, enforced at the one place a watcher set grows
+		// by one. Past it an item is a broadcast rather than a thing
+		// people follow, and the wake it sends is the company's whole
+		// inbox — which is what [MaxWatchers] was declared to bound and,
+		// until this gesture existed, nothing in this package did.
+		return patch, fmt.Errorf("tracker: task %s already has %d watchers and "+
+			"the maximum is %d — an item this many people follow is an "+
+			"announcement, and a comment on it wakes all of them",
+			current.ID, len(current.Watchers), MaxWatchers)
+	}
+	patch.Watch = nil
+	patch.Watchers, patch.Muted = &watchers, &muted
+	return patch, nil
 }
 
 // chargeHandOff settles the reassignment counter this patch leaves behind, or

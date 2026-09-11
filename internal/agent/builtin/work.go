@@ -923,16 +923,14 @@ func patchFromArgs(args map[string]any, actor Actor,
 		}
 	}
 	if watch, held := args["watch"].(bool); held {
-		// WATCHING IS A COLLECTION WRITE, carried whole: the mute travels
-		// with it, because a replay that saw only the watcher list could
-		// not tell "not a watcher" from "watching but muted" and would
-		// silently re-add every unwatched person on the next mention.
-		patch.Watchers = &[]string{actor.Handle}
-		patch.Muted = &[]string{}
-		if !watch {
-			patch.Watchers = &[]string{}
-			patch.Muted = &[]string{actor.Handle}
-		}
+		// A GESTURE ABOUT ONE PERSON, never the set. This tool cannot
+		// form the watcher list: [tracker.TaskPatch]'s collections are
+		// carried whole, so writing `watchers: [me]` here removed
+		// everybody else — and, the change kind being ChangeWatchers,
+		// announced their removal in the wake. The writer resolves it
+		// against the task's current sets inside its own snapshot, which
+		// is the only place a single consistent read of them exists.
+		patch.Watch = &tracker.WatchIntent{Handle: actor.Handle, Watch: watch}
 		if kind == tracker.ChangeFields {
 			kind = tracker.ChangeWatchers
 		}
@@ -955,6 +953,25 @@ func patchFromArgs(args map[string]any, actor Actor,
 // state this change produces and the change has not landed yet — a read after
 // the write would race every other writer, and on a lagging node would return
 // the state before it.
+// remove is a handle set minus one handle, order preserved.
+func remove(all []string, handle string) []string {
+	out := make([]string, 0, len(all))
+	for _, one := range all {
+		if one != handle {
+			out = append(out, one)
+		}
+	}
+	return out
+}
+
+// appendMissing adds the handle when `add`, and otherwise leaves the set.
+func appendMissing(all []string, handle string, add bool) []string {
+	if !add {
+		return all
+	}
+	return append(all, handle)
+}
+
 func patched(task tracker.Task, patch tracker.TaskPatch) tracker.Task {
 	if patch.Title != nil {
 		task.Title = *patch.Title
@@ -980,6 +997,19 @@ func patched(task tracker.Task, patch tracker.TaskPatch) tracker.Task {
 	}
 	if patch.Muted != nil {
 		task.Muted = *patch.Muted
+	}
+	if patch.Watch != nil {
+		// THE GESTURE APPLIED TO THE SNAPSHOT THIS TOOL READ. The
+		// durable sets are the WRITER's, settled inside its own
+		// transaction, and this is only the wake's recipient list — so
+		// it is the best answer the tool has rather than the authority.
+		// Leaving it out would be worse than approximating it: a person
+		// who just started watching would be absent from the very wake
+		// announcing that they did.
+		task.Watchers = appendMissing(remove(task.Watchers, patch.Watch.Handle),
+			patch.Watch.Handle, patch.Watch.Watch)
+		task.Muted = appendMissing(remove(task.Muted, patch.Watch.Handle),
+			patch.Watch.Handle, !patch.Watch.Watch)
 	}
 	return task
 }

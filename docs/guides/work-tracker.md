@@ -213,7 +213,7 @@ Six tools, and they are deliberately few:
 | `list_work_items` | the query surface above, filtered any way a view can be — including `preset=my_queue`, which is the seat's own open work |
 | `get_work_item` | one task with its thread, history and links |
 | `create_work_item` | file a task or a subtask |
-| `update_work_item` | change any field, with an optional `if_match` |
+| `update_work_item` | change any field, with an optional `if_match`. `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it |
 | `comment_on_work_item` | add to the thread |
 | `get_work_catalogue` | the types a task may be and the fields it may carry |
 
@@ -236,6 +236,13 @@ refusal carries the current version, so the caller can re-read and decide.
 
 The body is different: a save must state the version it edited, always. There
 is no per-field merge that makes overwriting prose safe.
+
+Watching is not a field a caller sets either. The watcher list is a set, and a
+tool that could write it whole would have to know every name already on it —
+so `watch: true` says only "add me" and the engine resolves it against the
+task's current watchers in the same transaction that writes them. An item with
+more than 64 watchers refuses the next one: past that it is an announcement
+rather than something people follow, and a comment on it wakes the company.
 
 ## What a person can do
 
