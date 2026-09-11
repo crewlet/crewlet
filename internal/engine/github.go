@@ -225,13 +225,8 @@ func (e *Engine) startGitHub(ctx context.Context, c *Company, cfg *config.GitHub
 	// company runs on without its code host. That is the honest outcome,
 	// because the integration IS unavailable — the alternative is one that
 	// reports itself enabled and is inert.
-	if strings.TrimSpace(env.Value(cfg.WebhookSecret)) == "" {
-		// NAMES ONLY, never the value: this line goes to a log file.
-		return nil, fmt.Errorf(
-			"engine: github: webhook_secret resolved empty (%q) — nothing "+
-				"would verify an inbound delivery, so every webhook GitHub "+
-				"sends would be refused; set that variable in the environment "+
-				"or this node's secret store", cfg.WebhookSecret)
+	if err := githubWirable(cfg, env); err != nil {
+		return nil, err
 	}
 
 	// WHO ELSE IS TAKING PART, read through the agents' OWN apps.
@@ -362,6 +357,24 @@ func (e *Engine) githubSeatApps(company *Company, env *config.Resolver) []github
 // githubPrompt is the hosted code host's trigger builder. A value, held by
 // nothing.
 func githubPrompt() notify.Prompt { return github.Prompt{} }
+
+// githubWirable reports whether this revision's code host can be wired at all.
+//
+// ONE IMPLEMENTATION for the two callers, on the terms [gitlabWirable] states:
+// the boot and apply wiring, and the reconcile loop's identity retry. A retry
+// that skipped it would resolve seat identities behind a route answering 503
+// to every delivery, and report the agents as wired.
+func githubWirable(cfg *config.GitHub, env *config.Resolver) error {
+	if strings.TrimSpace(env.Value(cfg.WebhookSecret)) == "" {
+		// NAMES ONLY, never the value: this line goes to a log file.
+		return fmt.Errorf(
+			"engine: github: webhook_secret resolved empty (%q) — nothing "+
+				"would verify an inbound delivery, so every webhook GitHub "+
+				"sends would be refused; set that variable in the environment "+
+				"or this node's secret store", cfg.WebhookSecret)
+	}
+	return nil
+}
 
 // unresolved names the seats holding a code-host credential that resolves to
 // no account.

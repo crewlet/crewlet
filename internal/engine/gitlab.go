@@ -172,22 +172,8 @@ func (e *Engine) startGitLab(ctx context.Context, c *Company, cfg *config.GitLab
 	// code host. That is the honest outcome, because the integration IS
 	// unavailable — the alternative is one that reports itself enabled and
 	// is inert.
-	secret := env.Value(cfg.SigningSecret)
-	if secret == "" {
-		return nil, fmt.Errorf(
-			"engine: gitlab: signing_secret resolved empty (%q) — nothing "+
-				"would verify an inbound delivery, so every webhook this "+
-				"instance sends would be refused; set that variable in the "+
-				"environment or this node's secret store", cfg.SigningSecret)
-	}
-	if !whsec.Valid(secret) {
-		// NAMES ONLY, never the value: this line goes to a log file.
-		return nil, fmt.Errorf(
-			"engine: gitlab: signing_secret (%q) resolved to a value that is "+
-				"not %s followed by standard base64 over a %d-byte key, which "+
-				"is the only shape GitLab signs with — it cannot be the HMAC "+
-				"key for any delivery",
-			cfg.SigningSecret, whsec.Prefix, whsec.KeyBytes)
+	if err := gitlabWirable(cfg, env); err != nil {
+		return nil, err
 	}
 
 	// THE ENGINE CREDENTIAL IS OPTIONAL and its absence is a documented
@@ -280,6 +266,50 @@ func (e *Engine) reconcileGitLab(ctx context.Context, c *Company) {
 		return
 	}
 	log.InfoContext(ctx, "gitlab_reconciled", "company", c.Config.Name)
+}
+
+// gitlabWirable reports whether this revision's code host can be wired at all.
+//
+// ONE IMPLEMENTATION, because there are now two callers and they must never
+// disagree: the boot and apply wiring in [Engine.startGitLab], and the
+// reconcile loop's identity retry in [Engine.rewireGitLab]. The retry was
+// written without it and resolved seat identities on a config the start path
+// refuses — an integration reporting agents wired behind a route that answers
+// 503 to every delivery, which is precisely the state the refusal exists to
+// prevent.
+//
+// THE SIGNING SECRET IS NOT OPTIONAL, and it is checked here rather than left
+// to the first delivery. Config already refuses an enabled GitLab whose
+// signing_secret is missing or is a literal the third-party app could never
+// have produced, so reaching this with an unusable value means a ${VAR} that
+// did not resolve, or resolved to something else. Neither is visible from
+// anywhere: the route answers 503 to every delivery, GitLab's own settings
+// page shows a healthy hook that keeps failing, and no log line anywhere names
+// the variable.
+//
+// It is not a boot refusal: the caller logs gitlab_unavailable and the company
+// runs on without its code host. That is the honest outcome, because the
+// integration IS unavailable — the alternative is one that reports itself
+// enabled and is inert.
+func gitlabWirable(cfg *config.GitLab, env *config.Resolver) error {
+	secret := env.Value(cfg.SigningSecret)
+	if secret == "" {
+		return fmt.Errorf(
+			"engine: gitlab: signing_secret resolved empty (%q) — nothing "+
+				"would verify an inbound delivery, so every webhook this "+
+				"instance sends would be refused; set that variable in the "+
+				"environment or this node's secret store", cfg.SigningSecret)
+	}
+	if !whsec.Valid(secret) {
+		// NAMES ONLY, never the value: this line goes to a log file.
+		return fmt.Errorf(
+			"engine: gitlab: signing_secret (%q) resolved to a value that is "+
+				"not %s followed by standard base64 over a %d-byte key, which "+
+				"is the only shape GitLab signs with — it cannot be the HMAC "+
+				"key for any delivery",
+			cfg.SigningSecret, whsec.Prefix, whsec.KeyBytes)
+	}
+	return nil
 }
 
 // gitlabSeatTokens are the distinct credentials the company's agent seats

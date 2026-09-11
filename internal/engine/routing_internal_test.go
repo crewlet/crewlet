@@ -226,3 +226,77 @@ func TestTheLoopTickCarriesTheEnginesOwnRoutingFindings(t *testing.T) {
 			"reads as a healthy surface", found)
 	}
 }
+
+// THE RETRY MAKES THE SAME REFUSAL THE START PATH MAKES, and asks nobody
+// anything when it does.
+//
+// A code host whose signing secret does not resolve cannot verify a single
+// delivery: its route answers 503 to everything, the vendor's own settings
+// page shows a hook whose deliveries keep failing, and no log line names the
+// variable. [Engine.startGitLab] refuses to wire it at all for that reason.
+//
+// The retry was written without that check and resolved seat identities
+// anyway, which reports agents wired behind a route that receives nothing —
+// exactly the state the refusal exists to prevent, arriving by a second door.
+// Both now go through one function; two copies of a guard is a hole rather
+// than a duplication.
+func TestTheRetryWillNotWireASurfaceTheStartPathRefuses(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Errorf("the retry asked %s about a code host it cannot verify a "+
+			"delivery for", r.URL.Path)
+	}))
+	t.Cleanup(srv.Close)
+
+	// BOTH THROUGH A ${VAR}, because config itself refuses an unusable
+	// LITERAL — which is why reaching the engine with one means a reference
+	// that did not resolve, or resolved to something else.
+	for _, bad := range []struct{ name, value string }{
+		{"a reference nothing answers", ""},
+		{"a value the vendor could not have produced", "not-a-whsec-value"},
+	} {
+		t.Run(bad.name, func(t *testing.T) {
+			if bad.value != "" {
+				t.Setenv("GITLAB_SIGNING_FOR_THIS_CASE", bad.value)
+			}
+			e := &Engine{}
+			cfg, err := config.ParseCompany([]byte(`
+name: Acme
+providers:
+  llm:
+    zulu:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["sk-ant-fake-zulu-key"]
+integrations:
+  gitlab:
+    enabled: true
+    url: ` + srv.URL + `
+    signing_secret: "${GITLAB_SIGNING_FOR_THIS_CASE}"
+roles:
+  - name: CEO
+    handle: ceo
+    llm: zulu
+    mcp_env:
+      gitlab: {GITLAB_TOKEN: "seat-token"}
+`))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			company, err := NewCompanyWith(cfg, e.resolver())
+			if err != nil {
+				t.Fatalf("company: %v", err)
+			}
+			e.epoch.current.Store(company)
+			e.refreshParties(company)
+
+			if found := e.resolveRouting(t.Context(), integration.KindGitLab); len(found) != 0 {
+				t.Errorf("findings = %+v; the surface's own pass reports the "+
+					"unusable secret, and one finding per seat here buries it", found)
+			}
+			if _, ok := e.Registry().ByExternalID("gitlab", "anyone"); ok {
+				t.Error("an identity was registered for a surface that can " +
+					"verify no delivery")
+			}
+		})
+	}
+}

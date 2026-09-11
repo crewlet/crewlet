@@ -113,7 +113,13 @@ func (e *Engine) rewireGitLab(ctx context.Context, c *Company) []string {
 	}
 	env := e.resolver()
 	url := env.Value(cfg.URL)
-	if url == "" {
+	// THE SAME REFUSAL THE START PATH MAKES, through the same function.
+	// Written without it, this resolved seat identities on a config that
+	// can verify no delivery at all — reporting agents wired behind a route
+	// answering 503 to everything, which is the state the refusal exists to
+	// prevent. The surface's own pass reports the unusable secret; a second
+	// finding per seat here would bury it.
+	if url == "" || gitlabWirable(cfg, env) != nil {
 		return nil
 	}
 	e.notify.gitlab.resolve(ctx, url, gitlabSeatTokens(c, env))
@@ -134,7 +140,7 @@ func (e *Engine) rewireGitHub(ctx context.Context, c *Company) []string {
 	resolved := *cfg
 	resolved.URL = strings.TrimSpace(env.Value(cfg.URL))
 	api, web := resolved.APIBase(), resolved.WebURL()
-	if api == "" {
+	if api == "" || githubWirable(cfg, env) != nil {
 		return nil
 	}
 	e.notify.github.resolve(ctx, api, web, github.SeatCredentials(c.Org, env.Value))
