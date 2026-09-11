@@ -46,6 +46,18 @@ type Params struct{ values map[string]any }
 // FromMap reads a socket frame's params.
 func FromMap(m map[string]any) Params { return Params{values: m} }
 
+// Values is the bag itself, for the one caller that needs to hand it on
+// rather than read it: the tracker's own `view=`/`preset=` expansion merges a
+// saved set UNDER the caller's own keys, which it can only do with the map.
+//
+// A COPY, because Params is passed by value and the caller must not be able to
+// edit the request it was handed.
+func (p Params) Values() map[string]any {
+	out := make(map[string]any, len(p.values))
+	maps.Copy(out, p.values)
+	return out
+}
+
 // FromQuery reads a REST call's query string.
 //
 // Repeated keys take the FIRST value. A query string can carry a key twice and

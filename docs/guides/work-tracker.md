@@ -175,6 +175,13 @@ it, and nothing has to guard against somebody deleting the last view. A project
 running sprints has two more — a sprint board and a backlog — because those are
 the two questions a sprint creates and neither is expressible as a default.
 
+**A view is a set of defaults, never a lock.** Opening one loads its
+parameters and every key you then set overrides them, so picking a different
+assignee on a saved board gives you that board with one key changed. A
+**preset** is the same mechanism for a question the engine's own indexes are
+named after — `my_queue`, `blocked`, `overdue` — and a view beats a preset,
+because somebody saved the view.
+
 **A saved view's query is parsed when it is saved**, not when it is opened. A
 view that cannot be run is otherwise discovered by whoever opens it, weeks
 later, with no way to tell a typo from a grammar change — so a save runs the
@@ -203,7 +210,7 @@ Six tools, and they are deliberately few:
 
 | Tool | What it does |
 |---|---|
-| `list_work_items` | the query surface above, filtered any way a view can be |
+| `list_work_items` | the query surface above, filtered any way a view can be — including `preset=my_queue`, which is the seat's own open work |
 | `get_work_item` | one task with its thread, history and links |
 | `create_work_item` | file a task or a subtask |
 | `update_work_item` | change any field, with an optional `if_match` |

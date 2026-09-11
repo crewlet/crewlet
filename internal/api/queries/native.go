@@ -50,6 +50,8 @@ type WorkReader interface {
 	Task(ctx context.Context, idOrKey string, want tracker.DetailWants,
 		level statelog.ReadLevel) (tracker.TaskDetail, error)
 	Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error)
+	ExpandedQuery(ctx context.Context, params map[string]any, viewer string,
+		now time.Time, loc *time.Location) (tracker.Query, error)
 	Goals(ctx context.Context, q tracker.GoalQuery) (tracker.GoalListing, error)
 	Catalogue(ctx context.Context, q tracker.CatalogueQuery) (tracker.CatalogueAnswer, error)
 	Person(ctx context.Context, q tracker.PersonQuery, now time.Time) (tracker.PersonState, error)
@@ -66,7 +68,13 @@ type PageReader interface {
 
 func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	now := time.Now().UTC()
-	q, err := tracker.ParseQuery(p, now, time.UTC)
+	// THROUGH THE EXPANSION, so a `view=` or a `preset=` is the set of
+	// defaults it stands for rather than a key nothing reads. The viewer
+	// is a parameter here for the reason it is on the view strip: this
+	// surface is guarded, so the caller already holds the company's own
+	// credential, and what it selects is whose queue to render.
+	q, err := s.Work.ExpandedQuery(ctx, p.Values(),
+		strings.TrimSpace(p.String("viewer")), now, time.UTC)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrBadParams, err)
 	}

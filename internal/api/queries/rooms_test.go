@@ -144,6 +144,12 @@ func (emptyWork) Views(context.Context, tracker.ViewQuery) (tracker.ViewListing,
 	return tracker.ViewListing{}, nil
 }
 
+func (emptyWork) ExpandedQuery(_ context.Context, params map[string]any,
+	_ string, now time.Time, loc *time.Location) (tracker.Query, error) {
+
+	return tracker.ParseQuery(tracker.MapParams(params), now, loc)
+}
+
 func (emptyWork) Goals(context.Context, tracker.GoalQuery) (tracker.GoalListing, error) {
 	return tracker.GoalListing{}, nil
 }

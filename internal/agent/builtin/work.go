@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -55,6 +54,8 @@ type WorkReader interface {
 	Task(ctx context.Context, idOrKey string, want tracker.DetailWants,
 		level statelog.ReadLevel) (tracker.TaskDetail, error)
 	Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error)
+	ExpandedQuery(ctx context.Context, params map[string]any, viewer string,
+		now time.Time, loc *time.Location) (tracker.Query, error)
 	Goals(ctx context.Context, q tracker.GoalQuery) (tracker.GoalListing, error)
 	Catalogue(ctx context.Context, q tracker.CatalogueQuery) (tracker.CatalogueAnswer, error)
 	Person(ctx context.Context, q tracker.PersonQuery, now time.Time) (tracker.PersonState, error)
@@ -324,6 +325,14 @@ func (t *listWorkItems) Parameters() map[string]any {
 				"description": "True lists only items that are not done or " +
 					"cancelled. Default false, which lists everything.",
 			},
+			"preset": map[string]any{
+				"type": "string",
+				"enum": tracker.Presets,
+				"description": "A saved question. `my_queue` is YOUR open " +
+					"work, most important first; `blocked` is open work that " +
+					"cannot move; `overdue` is open work past its due date. " +
+					"Any other argument you pass overrides the preset's own.",
+			},
 			"label": map[string]any{"type": "string", "description": "One label to filter on."},
 			"text": map[string]any{
 				"type": "string",
@@ -350,6 +359,11 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	}
 	if t.deps.Reader == nil {
 		return unconfigured(ListWorkItemsTool), nil
+	}
+	actor, err := t.deps.actor(ctx, turn)
+	if err != nil {
+		//nolint:nilerr // A tool failure is a RESULT the model reads.
+		return notInATurn(ListWorkItemsTool), nil
 	}
 
 	// THE TOOL'S ARGUMENTS ARE THE QUERY GRAMMAR'S OWN KEYS, translated
@@ -381,6 +395,9 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	if names := argStrings(args, "status"); len(names) > 0 {
 		params["status"] = strings.Join(names, ",")
 	}
+	if v := strings.TrimSpace(argString(args, "preset")); v != "" {
+		params["preset"] = v
+	}
 	if open, held := args["open_only"].(bool); held && open {
 		// THE TWO OPEN GROUPS, named from the constants rather than
 		// typed: there are FOUR status groups and neither `in_progress`
@@ -390,7 +407,13 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		params["status_group"] = strings.Join(openGroups(), ",")
 	}
 
-	q, err := tracker.ParseQuery(queries.FromMap(params), t.deps.now(), t.deps.zone())
+	// THROUGH THE EXPANSION, with the SEAT as the viewer — which is what
+	// makes `preset=my_queue` mean this seat's own queue and not a queue
+	// it could name. The seat comes from the immutable turn context for
+	// the same reason every write here does: a model that could name its
+	// own viewer could read as anybody.
+	q, err := t.deps.Reader.ExpandedQuery(ctx, params, actor.Handle,
+		t.deps.now(), t.deps.zone())
 	if err != nil {
 		return failed(fmt.Sprintf("That filter is not one the tracker accepts: %v", err)), nil
 	}
