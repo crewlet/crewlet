@@ -603,3 +603,119 @@ func TestAnUnknownSurfaceIsTreatedAsDeclared(t *testing.T) {
 			"delete a newer node's status row")
 	}
 }
+
+// AN INSTANCE NOBODY HAS NAMED IS NOT A DATA CENTER INSTANCE.
+//
+// A block with neither `url` nor `cloud_id` has an unknown deployment, and the
+// problem that says so is the only one outstanding. The signing-secret rule
+// fired on it anyway, because "not Cloud" was tested as `cloud == "" &&
+// !IsAtlassianCloud(url)` and an empty url is not a Cloud url.
+//
+// What that produced is worse than a redundant line. An operator connecting
+// Atlassian — having chosen Atlassian Cloud in the dialog, which is exempt
+// from signing secrets on both of its routes — was told a secret was
+// "required for a Data Center instance", naming a deployment they had not
+// picked and a field the form does not offer. Two of the four problems on
+// that screen were consequences of the other two, and they pointed the wrong
+// way.
+func TestAnUnidentifiedAtlassianInstanceAsksOnlyToBeNamed(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		in   Integrations
+		path string
+	}{
+		{"jira", Integrations{Jira: &Jira{Token: "${JIRA_TOKEN}"}}, "integrations.jira"},
+		{
+			"confluence",
+			Integrations{Confluence: &Confluence{Token: "${CONFLUENCE_TOKEN}"}},
+			"integrations.confluence",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var err error
+			if tc.in.Jira != nil {
+				err = tc.in.Jira.validate(tc.path, false)
+			} else {
+				err = tc.in.Confluence.validate(tc.path, false)
+			}
+			if err == nil {
+				t.Fatal("a block naming no instance was accepted")
+			}
+			got := err.Error()
+			if !strings.Contains(got, "nowhere to search") &&
+				!strings.Contains(got, "url or cloud_id") &&
+				!strings.Contains(got, "give url") {
+				t.Fatalf("the refusal does not ask for the instance: %s", got)
+			}
+			if strings.Contains(got, "required for a Data Center instance") {
+				t.Fatalf("a block whose deployment is unknown was told a signing "+
+					"secret is required for a DATA CENTER instance, which is a "+
+					"deployment nobody has named and which Cloud is exempt from: %s", got)
+			}
+		})
+	}
+}
+
+// AND A DATA CENTER INSTANCE STILL HAS TO HAVE ONE, or the guard above would
+// be a way to lose the rule entirely: that route verifies a delivery with
+// nothing else and answers 503 to every one without it.
+func TestANamedDataCentreInstanceStillNeedsASigningSecret(t *testing.T) {
+	t.Parallel()
+	jira := &Jira{URL: "https://jira.example.com", Token: "${JIRA_TOKEN}"}
+	err := jira.validate("integrations.jira", false)
+	if err == nil || !strings.Contains(err.Error(), "required for a Data Center instance") {
+		t.Fatalf("a Data Center instance was not asked for a signing secret: %v", err)
+	}
+}
+
+// AND A CLOUD SITE IS STILL EXEMPT, on the route that names it by host.
+func TestACloudSiteIsNotAskedForASigningSecret(t *testing.T) {
+	t.Parallel()
+	jira := &Jira{URL: "https://acme.atlassian.net", Token: "${JIRA_TOKEN}"}
+	if err := jira.validate("integrations.jira", false); err != nil {
+		t.Fatalf("a Cloud site was refused: %v", err)
+	}
+}
+
+// CONNECTING ATLASSIAN ON CLOUD IS NOT REFUSED FOR THE SITE IT IS ABOUT TO
+// DISCOVER.
+//
+// This is the whole Connect Atlassian flow, and it could not succeed. The
+// setup form asks for neither the site url nor the cloud id on Cloud — both
+// are declared Hidden, because the organization key reads every site this
+// company has — and validation demanded one of them anyway. So the write was
+// refused, and the pass that would have discovered and recorded the site never
+// ran, because the write is what starts it. The operator was told to fill in a
+// field that is not on the screen.
+func TestConnectingAtlassianOnCloudIsNotRefusedForAnUndiscoveredSite(t *testing.T) {
+	t.Parallel()
+	in := Integrations{
+		Atlassian: &Atlassian{
+			OrgID:  "f1240761-c455-41b5-a7f5-4a64f9c6e729",
+			APIKey: "${ATLASSIAN_API_KEY}",
+		},
+		Jira:       &Jira{Email: "ops@example.com", Token: "${ATLASSIAN_TOKEN}"},
+		Confluence: &Confluence{Email: "ops@example.com", Token: "${ATLASSIAN_TOKEN}"},
+	}
+	if err := in.validate("integrations"); err != nil {
+		t.Fatalf("connecting Atlassian on Cloud was refused: %v", err)
+	}
+}
+
+// AND WITHOUT AN ORGANIZATION TO DISCOVER IT, THE SITE IS STILL REQUIRED.
+//
+// Atlassian.IsCloud answers true for an absent block, which is right for
+// "which deployment is this" and wrong for "will anything supply the address":
+// a company with no organization block has nothing to discover a site WITH.
+func TestAConfluenceBlockWithNoOrganizationStillNeedsASite(t *testing.T) {
+	t.Parallel()
+	in := Integrations{
+		Confluence: &Confluence{Email: "ops@example.com", Token: "${CONFLUENCE_TOKEN}"},
+	}
+	err := in.validate("integrations")
+	if err == nil || !strings.Contains(err.Error(), "nowhere to search") {
+		t.Fatalf("a Confluence block nothing can locate was accepted: %v", err)
+	}
+}

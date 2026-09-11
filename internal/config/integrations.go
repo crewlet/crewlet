@@ -149,13 +149,13 @@ func (i *Integrations) validate(path string) error {
 		}
 	}
 	if i.Jira != nil {
-		p.wrap(i.Jira.validate(at(path, "jira")))
+		p.wrap(i.Jira.validate(at(path, "jira"), i.DiscoversAtlassianSite()))
 	}
 	if i.Datadog != nil {
 		p.wrap(i.Datadog.validate(at(path, "datadog")))
 	}
 	if i.Confluence != nil {
-		p.wrap(i.Confluence.validate(at(path, "confluence")))
+		p.wrap(i.Confluence.validate(at(path, "confluence"), i.DiscoversAtlassianSite()))
 	}
 	if i.Mattermost != nil {
 		p.wrap(i.Mattermost.validate(at(path, "mattermost")))
@@ -267,7 +267,7 @@ func (j *Jira) ShareableBaseURL() string {
 // moved from Data Center to Cloud and left the old url behind would keep
 // looking correct while every read went to the new place and every link to
 // the old one.
-func (j *Jira) validate(path string) error {
+func (j *Jira) validate(path string, discovers bool) error {
 	var probs problems
 	noSpaces(&probs, at(path, "url"), j.URL)
 	noSpaces(&probs, at(path, "cloud_id"), j.CloudID)
@@ -275,6 +275,13 @@ func (j *Jira) validate(path string) error {
 	noSpaces(&probs, at(path, "email"), j.Email)
 	url, cloud := strings.TrimSpace(j.URL), strings.TrimSpace(j.CloudID)
 	switch {
+	case url == "" && cloud == "" && discovers:
+		// NOTHING OUTSTANDING. The Atlassian organization supplies the site
+		// and its cloud id on the first pass, which is why the form does not
+		// ask — see [Integrations.DiscoversAtlassianSite]. Until it has, the
+		// surface reports itself unconverged through the reconcile status,
+		// which is where a state that fixes itself belongs. Refusing the
+		// document instead blocked the write that starts the pass.
 	case url == "" && cloud == "":
 		probs.add(path, ErrMissing,
 			"give url (a Data Center instance or a Cloud site) or cloud_id "+
@@ -298,7 +305,17 @@ func (j *Jira) validate(path string) error {
 			"required: the org account is what reads an issue's watchers, "+
 				"which is the one routing input a Jira webhook never carries")
 	}
-	if strings.TrimSpace(j.WebhookSecret) == "" && cloud == "" && !IsAtlassianCloud(url) {
+	// AN UNIDENTIFIED INSTANCE IS NOT A DATA CENTER ONE, which is what the
+	// missing `url != ""` used to make it. With neither url nor cloud_id the
+	// deployment is unknown — the problem above says exactly that — and this
+	// fired anyway, telling an operator who had just chosen Atlassian Cloud in
+	// the connect dialog that a signing secret was "required for a Data Center
+	// instance". Two problems where there is one, and the second one asking
+	// for a field Cloud is explicitly exempt from, on a form that offers
+	// neither. Naming the deployment is the only thing outstanding until it is
+	// named.
+	if strings.TrimSpace(j.WebhookSecret) == "" && url != "" && cloud == "" &&
+		!IsAtlassianCloud(url) {
 		// CLOUD IS EXEMPT, and stays exempt now that it can register an
 		// admin webhook of its own. The reason changed rather than
 		// disappearing: a Cloud company may take EITHER route, and one
@@ -427,7 +444,7 @@ func DefaultSkillsSpaceFor(c *Confluence) string {
 // ambiguity silently would let a company that moved from Data Center to
 // Cloud keep looking correct while every read went to one place and every
 // link to the other.
-func (c *Confluence) validate(path string) error {
+func (c *Confluence) validate(path string, discovers bool) error {
 	var probs problems
 	noSpaces(&probs, at(path, "url"), c.URL)
 	noSpaces(&probs, at(path, "cloud_id"), c.CloudID)
@@ -435,6 +452,8 @@ func (c *Confluence) validate(path string) error {
 	noSpaces(&probs, at(path, "email"), c.Email)
 	url, cloud := strings.TrimSpace(c.URL), strings.TrimSpace(c.CloudID)
 	switch {
+	case url == "" && cloud == "" && discovers:
+		// NOTHING OUTSTANDING — see the same arm on [Jira.validate].
 	case url == "" && cloud == "":
 		probs.add(path, ErrMissing,
 			"give url (a Data Center instance or a Cloud site) or cloud_id "+
@@ -460,7 +479,10 @@ func (c *Confluence) validate(path string) error {
 				"tool-skill walk reads with")
 	}
 	sharedToken(&probs, at(path, "webhook_token"), c.WebhookToken)
-	if strings.TrimSpace(c.WebhookSecret) == "" && cloud == "" && !IsAtlassianCloud(url) {
+	// AN UNIDENTIFIED INSTANCE IS NOT A DATA CENTER ONE — see the same guard
+	// on [Jira.validate], which had the same bug for the same reason.
+	if strings.TrimSpace(c.WebhookSecret) == "" && url != "" && cloud == "" &&
+		!IsAtlassianCloud(url) {
 		// CLOUD IS EXEMPT, on either of its routes. The Forge relay is
 		// verified by the app's invocation token and the token-bearing
 		// hook by webhook_token, and neither carries an HMAC, so requiring
@@ -1175,6 +1197,33 @@ func (a *Atlassian) DeploymentOrDefault() string {
 
 // IsCloud reports the deployment this engine can provision.
 func (a *Atlassian) IsCloud() bool { return a.DeploymentOrDefault() == AtlassianCloud }
+
+// DiscoversAtlassianSite reports whether this company's Atlassian organization
+// will supply the Jira and Confluence site addresses, so nobody has to give one.
+//
+// THE PREDICATE THE SETUP FORM ALREADY ACTS ON, written down so validation can
+// act on the same one. `cloud_id` is declared Hidden on both products —
+// "DISCOVERED, NOT ASKED", because the organization key reads every site this
+// company has along with its cloud id — and on Cloud the site `url` is hidden
+// beside it, since an address typed there is used INSTEAD of the gateway and a
+// provisioned account's token authenticates only at the gateway.
+//
+// Validation did not know that and demanded one of them anyway, so connecting
+// Atlassian on Cloud could not succeed: the form deliberately asks for neither,
+// the write is refused for both, and the pass that would have discovered them
+// never runs because the write is what starts it. The operator is told to fill
+// in a field that is not on the screen.
+//
+// NIL IS NOT CLOUD HERE, although [Atlassian.IsCloud] answers true for it. That
+// answer is right for "which deployment is this" and wrong for this question: a
+// company with no organization block has nothing to discover a site WITH, so it
+// must still name one. Via the dashboard that shape does not arise — Atlassian
+// is one card covering the organization and both products, so connecting it
+// always writes the organization — and a hand-written document that omits it is
+// asked for a url, correctly.
+func (i Integrations) DiscoversAtlassianSite() bool {
+	return i.Atlassian != nil && i.Atlassian.IsCloud()
+}
 
 // DatadogIgnore is the route_to value that means "wake nobody".
 //
