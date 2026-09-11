@@ -36,7 +36,7 @@ what people paste into chat, so it can never be ambiguous.
 | **assignee** | one seat or person. |
 | **reporter** | who filed it. |
 | **collaborators**, **watchers** | who is on the thread and who is listening. |
-| **parent**, **subtasks** | a tree, with a depth cap. |
+| **parent**, **subtasks** | a tree, with a depth cap. A query filters ROOTS by default and lets their subtrees ride along; `subtasks=separate` filters every task on its own. |
 | **start / due**, **estimate**, **points** | scheduling and sizing. |
 | **tags** | from a per-project tag set. |
 | **custom fields** | declared per project and at the workspace, typed, with option lists — see [the catalogue](#the-catalogue). Filter on one with `f.<slug>`. |

@@ -1002,8 +1002,44 @@ export interface WorkIncomplete {
   version: number;
 }
 
+/** One aggregate over an answer's whole matched set. */
+export interface WorkTotal {
+  key: string;
+  column: string;
+  op: string;
+  /** ABSENT when no row contributed — which is not zero: "nothing is
+   *  estimated" and "everything is estimated at nothing" are different
+   *  facts. */
+  value?: number;
+  /** The instant, for a min or a max over a date column. */
+  at?: string;
+}
+
+/** One column of a grouped answer.
+ *
+ *  `count` is over the WHOLE set, never over `rows`: a column of four hundred
+ *  tasks says four hundred and carries twenty. */
+export interface WorkGroup {
+  key: string;
+  label?: string;
+  count: number;
+  rows: WorkSummary[];
+  subgroups?: WorkGroup[];
+}
+
 export interface WorkItemsAnswer {
   items: WorkSummary[];
+  /** The board's columns. `items` is EMPTY whenever this is set — returning
+   *  both would be the same rows twice. */
+  groups?: WorkGroup[];
+  /** Columns that did not fit the cap. A board that drew sixty-four of two
+   *  hundred and said nothing would look like a company with sixty-four
+   *  assignees. */
+  groups_dropped?: number;
+  /** True on an axis where one task is on several columns — a label board —
+   *  so a reader knows the counts do not sum to `total_hint`. */
+  groups_overlap?: boolean;
+  totals?: WorkTotal[];
   /** Capped by construction: an exact total over an unbounded set is the one
    *  query in this grammar that turns a poll into a scan. */
   total_hint: number;

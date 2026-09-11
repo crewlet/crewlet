@@ -245,3 +245,88 @@ func TestACustomFieldsTotalAddsUpItsValues(t *testing.T) {
 		}
 	}
 }
+
+// A TOTAL DOES NOT MOVE AS SOMEBODY PAGES.
+//
+// The cursor says where this PAGE starts, and it was folded into the predicate
+// the totals and the hint share — so page two's header reported the sum of page
+// two ONWARDS. A number that changes as somebody pages is the same failure as
+// one that changes as they scroll.
+func TestATotalDoesNotMoveAsSomebodyPages(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	for i, points := range []float64{1, 2, 3, 5, 8} {
+		task := newTask("t-" + itoa(i))
+		task.Points = points
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+itoa(i), task, nil); err != nil {
+			t.Fatalf("CreateTask: %v", err)
+		}
+		r.drain()
+	}
+
+	first := r.ask(map[string]any{
+		"container": "project:ENG", "limit": 2, "totals": "points:sum",
+		"subtasks": "separate",
+	})
+	if first.NextCursor == "" {
+		t.Fatal("a 2-row page of 5 minted no cursor")
+	}
+	second := r.ask(map[string]any{
+		"container": "project:ENG", "limit": 2, "totals": "points:sum",
+		"cursor": first.NextCursor, "subtasks": "separate",
+	})
+	for name, answer := range map[string]tracker.Answer{
+		"page one": first, "page two": second,
+	} {
+		got := totalOf(t, answer, "points:sum")
+		if got.Value == nil || *got.Value != 19 {
+			t.Fatalf("%s's total is %v, want 19 — a total is over the whole "+
+				"set, and one that moves as somebody pages is a number nobody "+
+				"can act on", name, got.Value)
+		}
+		if answer.TotalHint != 5 {
+			t.Fatalf("%s's hint is %d, want 5", name, answer.TotalHint)
+		}
+	}
+	// AND THE ROWS DID MOVE, or the cursor was ignored rather than kept
+	// out of the shared predicate.
+	if len(second.Rows) == 0 || second.Rows[0].ID == first.Rows[0].ID {
+		t.Fatalf("page two starts at %v, same as page one", second.Rows)
+	}
+}
+
+// PAGE TWO OF A CUSTOM-FIELD SORT IS REACHABLE.
+//
+// A `sort=f.<slug>` cursor compares the sort join's own alias, and the hint
+// and the totals carry no join — so a cursor in the shared predicate made page
+// two of every such query a hard error rather than a second page.
+func TestPageTwoOfACustomFieldSortIsReachable(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	seedFields(t, r)
+
+	for i, effort := range []float64{1, 2, 3, 5} {
+		seedWithFields(t, r, "t-"+itoa(i), map[string]any{"f-effort": effort})
+	}
+
+	first := r.ask(map[string]any{
+		"container": "project:ENG", "sort": "f.effort", "limit": 2,
+		"totals": "f.effort:sum", "subtasks": "separate",
+	})
+	if first.NextCursor == "" {
+		t.Fatal("a 2-row page of 4 minted no cursor")
+	}
+	second := r.ask(map[string]any{
+		"container": "project:ENG", "sort": "f.effort", "limit": 2,
+		"totals": "f.effort:sum", "cursor": first.NextCursor,
+		"subtasks": "separate",
+	})
+	if len(second.Rows) != 2 {
+		t.Fatalf("page two of a field-sorted query has %d rows, want 2",
+			len(second.Rows))
+	}
+	if got := totalOf(t, second, "f.effort:sum"); got.Value == nil || *got.Value != 11 {
+		t.Fatalf("page two's field total is %v, want 11", got.Value)
+	}
+}

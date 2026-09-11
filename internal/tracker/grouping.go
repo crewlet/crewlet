@@ -99,6 +99,14 @@ type groupAxis struct {
 	// is assigned" is a column a board draws rather than a row it hides.
 	Unset string
 
+	// Order is the axis's own DECLARED order, when it has one. A closed
+	// set has a meaning in its sequence — todo before in_progress before
+	// done — and ordering those columns by size would re-shuffle a board
+	// every time work moved between them, which is a board nobody can
+	// learn the shape of. An open set (an assignee, a tag, an option) has
+	// no such order and falls back to the largest column first.
+	Order []string
+
 	// Exists is the JOIN-FREE form of this axis as a predicate, used when
 	// `group=<value>` narrows the whole query. It has to be join-free
 	// because the narrowed predicate is shared with the count hint and
@@ -132,18 +140,32 @@ func compileGroup(key string, fields map[string]resolvedField) (groupAxis, error
 		// column it holds a value for, which is a labels board — and
 		// this axis is the field's own first value.
 		column := FieldValueColumn(field.Type)
+		// A MULTI-VALUED FIELD IS A LABEL BOARD, exactly as `tag` is: the
+		// join is unpinned so a task with three values is on three
+		// columns, and the axis declares the overlap so the counts do
+		// not read as an answer that fails to add up. Pinning `seq = 0`
+		// on one of these would show every task under its FIRST value
+		// and say nothing — which is a board that is quietly wrong
+		// rather than one that is differently shaped.
+		pin := " AND gv.seq = 0"
+		if field.Multi {
+			pin = ""
+		}
 		return groupAxis{
 			Expr: "gv." + column,
 			Join: " LEFT JOIN tracker_field_values gv ON gv.task_id = t.id" +
 				" AND gv.field_id = ? AND " +
-				strings.ReplaceAll(liveFieldValue, "v.", "gv.") +
-				" AND gv.seq = 0",
+				strings.ReplaceAll(liveFieldValue, "v.", "gv.") + pin,
 			Args:  []any{field.ID},
+			Multi: field.Multi,
 			Unset: "(not set)",
 			Exists: func(key string) (string, []any) {
 				inner := "SELECT 1 FROM tracker_field_values v " +
 					"WHERE v.task_id = t.id AND v.field_id = ? AND " +
-					liveFieldValue + " AND v.seq = 0"
+					liveFieldValue
+				if !field.Multi {
+					inner += " AND v.seq = 0"
+				}
 				if key == "" {
 					return "NOT EXISTS (" + inner + " AND v." + column +
 						" IS NOT NULL)", []any{field.ID}
@@ -155,13 +177,15 @@ func compileGroup(key string, fields map[string]resolvedField) (groupAxis, error
 	}
 	switch key {
 	case "status":
-		return groupAxis{Expr: "t.status"}, nil
+		return groupAxis{Expr: "t.status", Order: declaredOrder(Statuses)}, nil
 	case "status_group":
-		return groupAxis{Expr: "t.status_group"}, nil
+		return groupAxis{
+			Expr: "t.status_group", Order: declaredOrder(StatusGroups),
+		}, nil
 	case "assignee":
 		return groupAxis{Expr: "t.assignee", Unset: "(unassigned)"}, nil
 	case "priority":
-		return groupAxis{Expr: "t.priority"}, nil
+		return groupAxis{Expr: "t.priority", Order: declaredOrder(Priorities)}, nil
 	case "type":
 		return groupAxis{Expr: "t.type"}, nil
 	case "project":
@@ -221,11 +245,25 @@ func weekBucket(column string) string {
 func groupCounts(ctx context.Context, tx *sql.Tx, axis groupAxis,
 	where string, args []any, limit int) ([]Group, int, error) {
 
+	// THE DECLARED ORDER WHERE THERE IS ONE, and the largest column first
+	// where there is not — see [groupAxis.Order]. The CASE is built from
+	// the closed set's own sequence, so nothing here composes a caller's
+	// value into SQL.
+	order := "n DESC, g"
+	if len(axis.Order) > 0 {
+		var arms strings.Builder
+		arms.WriteString("CASE g")
+		for i, value := range axis.Order {
+			fmt.Fprintf(&arms, " WHEN '%s' THEN %d", value, i)
+		}
+		fmt.Fprintf(&arms, " ELSE %d END, g", len(axis.Order))
+		order = arms.String()
+	}
 	query := `SELECT ` + axis.Expr + ` AS g, COUNT(*) AS n
 	          FROM tracker_tasks t` + axis.Join + `
 	          WHERE ` + where + `
 	          GROUP BY g
-	          ORDER BY n DESC, g
+	          ORDER BY ` + order + `
 	          LIMIT ?`
 	bound := append(append([]any{}, axis.Args...), args...)
 	rows, err := tx.QueryContext(ctx, query, append(bound, limit+1)...)
@@ -301,18 +339,16 @@ func groupLabels(groups []Group, key string, fields map[string]resolvedField) {
 		return
 	}
 	field, held := fields[ref]
-	if !held || len(field.Options) == 0 {
+	if !held || len(field.Labels) == 0 {
 		return
 	}
-	byID := make(map[string]string, len(field.Options))
-	for word, id := range field.Options {
-		if _, seen := byID[id]; !seen {
-			byID[id] = word
-		}
-	}
+	// FROM THE LABEL MAP, never by inverting [resolvedField.Options]:
+	// that one holds two keys per option, so an inversion picks the slug
+	// or the name by Go's randomised map iteration and a column heading
+	// would differ between two requests to one node.
 	for i := range groups {
 		if groups[i].Label == "" {
-			groups[i].Label = byID[groups[i].Key]
+			groups[i].Label = field.Labels[groups[i].Key]
 		}
 	}
 }
@@ -430,4 +466,18 @@ func readSubgroups(ctx context.Context, tx *sql.Tx, q Query,
 		counts[i].Rows = rows
 	}
 	return counts, nil
+}
+
+// declaredOrder renders a closed set's own sequence as plain strings.
+//
+// FROM THE SET ITSELF, never a list written again here: `Statuses`,
+// `StatusGroups` and `Priorities` are each declared in the order they MEAN —
+// todo before in_progress before done — and a second copy of that order is one
+// that stops matching.
+func declaredOrder[T ~string](values []T) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, string(value))
+	}
+	return out
 }

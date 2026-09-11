@@ -45,6 +45,19 @@ type resolvedField struct {
 	// Options maps an option's slug and its case-folded name to its ID,
 	// because a stored value holds the ID and a caller types the word.
 	Options map[string]string
+
+	// Labels is the other direction — the ID to the option's own NAME —
+	// and it is a second map rather than an inversion of the first for a
+	// reason that is not tidiness: [resolvedField.Options] holds two keys
+	// per option, so inverting it picks the slug or the name by Go's
+	// randomised map iteration, and a board's column heading would differ
+	// between two requests to one node.
+	Labels map[string]string
+
+	// Multi marks a field a task can hold several values of, so a board
+	// grouped on one puts that task on every column it chose — as a tag
+	// board does — rather than on the first value alone.
+	Multi bool
 }
 
 // The field-filter operators.
@@ -131,14 +144,19 @@ func resolveOneField(ref string, byID map[string]FieldDef,
 		field := resolvedField{
 			ID: candidate.ID, Slug: candidate.Slug, Type: candidate.Type,
 		}
+		field.Multi = MultiValued(candidate.Type)
 		if FieldValueColumn(candidate.Type) == "ref" {
 			field.Options = make(map[string]string, len(candidate.Config.Options)*2)
+			field.Labels = make(map[string]string, len(candidate.Config.Options))
 			for _, option := range candidate.Config.Options {
 				if option.Archived {
 					continue
 				}
 				field.Options[strings.ToLower(option.Slug)] = option.ID
 				field.Options[strings.ToLower(option.Name)] = option.ID
+				// THE NAME, ALWAYS: a heading is what a person reads,
+				// and the slug is what they type.
+				field.Labels[option.ID] = option.Name
 			}
 		}
 		return field, true
@@ -183,18 +201,29 @@ func collectFieldRefs(q Query, into map[string]bool) {
 
 // fieldClause compiles one custom-field filter.
 //
-// AN EXISTS OVER THE VALUE TABLE, which is what the four partial indexes are
-// for: each is `(field_id, <column>) WHERE hidden = 0`, so a filter that names
-// the field and compares its own column is a seek. A clause that compared the
-// wrong column would be an index the planner cannot use AND a predicate that
-// matches nothing — see [FieldValueColumn].
+// # Why this is an IN and not a correlated EXISTS
+//
+// The two are the same answer and a different PLAN. A correlated
+// `EXISTS (… WHERE v.task_id = t.id AND v.field_id = ?)` leads with `task_id`,
+// which is the value table's own primary key — so the planner takes the key,
+// probes once per task, and the four partial indexes the DDL declares for this
+// filter are read by nothing. Measured on the plan fixture it picked
+// `sqlite_autoindex_tracker_field_values_1` every time.
+//
+// Written as `t.id IN (SELECT task_id … WHERE v.field_id = ? AND <column> …)`
+// the subquery stands alone, so `(field_id, <column>) WHERE hidden = 0` is a
+// seek the planner can drive on — and it is still free to drive on the tasks
+// instead when the container is the more selective side. The IN gives it both;
+// the EXISTS gave it one.
+//
+// A clause that compared the WRONG column would be an index the planner cannot
+// use AND a predicate that matches nothing — see [FieldValueColumn].
 func fieldClause(filter FieldFilter, field resolvedField) (string, []any, error) {
 	column := "v." + FieldValueColumn(field.Type)
 	inner := func(predicate string, args ...any) (string, []any, error) {
-		return "EXISTS (SELECT 1 FROM tracker_field_values v " +
-				"WHERE v.task_id = t.id AND v.field_id = ? AND " +
-				liveFieldValue + " AND " + predicate + ")",
-			append([]any{field.ID}, args...), nil
+		return "t.id IN (SELECT v.task_id FROM tracker_field_values v " +
+			"WHERE v.field_id = ? AND " + liveFieldValue + " AND " +
+			predicate + ")", append([]any{field.ID}, args...), nil
 	}
 	switch filter.Op {
 	case FieldOpNull:
@@ -202,7 +231,10 @@ func fieldClause(filter FieldFilter, field resolvedField) (string, []any, error)
 		// apply writes no row for a value that decoded to nothing, so
 		// "this field is not set" is exactly "no row".
 		clause, args, err := inner(column + " IS NOT NULL")
-		return "NOT " + clause, args, err
+		// NOT IN IS SAFE HERE because `task_id` is NOT NULL: one NULL
+		// in the subquery would make the whole comparison NULL and the
+		// predicate would match nothing at all.
+		return negated(clause), args, err
 	case FieldOpNotNull:
 		return inner(column + " IS NOT NULL")
 	}
@@ -219,7 +251,7 @@ func fieldClause(filter FieldFilter, field resolvedField) (string, []any, error)
 		// a labels field with two members would satisfy the second for
 		// every value it holds beside the one excluded.
 		clause, args, err := inner(column+" = ?", value)
-		return "NOT " + clause, args, err
+		return negated(clause), args, err
 	case FieldOpLt:
 		return inner(column+" < ?", value)
 	case FieldOpLte:
@@ -301,4 +333,13 @@ func likeEscape(value string) string {
 // clipValue is a caller's own value, echoed back flattened.
 func clipValue(value string) string {
 	return strings.Join(strings.Fields(value), " ")
+}
+
+// negated turns an `IN` membership into its complement.
+//
+// TEXTUAL, on the one form [fieldClause] emits, rather than a wrapping `NOT
+// (…)` — the two are the same to SQLite and only this one reads as what it is
+// where it is called.
+func negated(clause string) string {
+	return strings.Replace(clause, "t.id IN (", "t.id NOT IN (", 1)
 }

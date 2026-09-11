@@ -378,3 +378,36 @@ func TestAViewStripTakesTheContainerTheBoardTakes(t *testing.T) {
 		}
 	}
 }
+
+// A GROUPED ANSWER REACHES THE CALLER.
+//
+// The payload was built by hand from `items` alone, and a grouped answer has
+// NO flat rows by construction — so a populated board arrived as `items: []`
+// and a screen rendered a company with no work.
+func TestAGroupedAnswerReachesTheCaller(t *testing.T) {
+	w := &stubWork{answer: tracker.Answer{
+		Groups: []tracker.Group{{
+			Key: "todo", Count: 12,
+			Rows: []tracker.TaskRow{{ID: "t-1", Key: "ENG-1"}},
+		}},
+		GroupsDropped: 3, GroupsOverlap: true,
+		Totals:   []tracker.Total{{Key: "points:sum", Column: "points", Op: "sum"}},
+		Complete: true,
+	}}
+	got, err := askNative(t, queries.Sources{Work: w}, "work_items",
+		map[string]any{"container": "project:eng", "group_by": "status"})
+	if err != nil {
+		t.Fatalf("work_items: %v", err)
+	}
+	payload, ok := got.(map[string]any)
+	if !ok {
+		t.Fatalf("the answer is %T", got)
+	}
+	for _, key := range []string{"groups", "groups_dropped", "groups_overlap",
+		"totals"} {
+		if _, held := payload[key]; !held {
+			t.Errorf("the payload carries no %q, so a board built from it "+
+				"renders a company with no work", key)
+		}
+	}
+}

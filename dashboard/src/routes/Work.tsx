@@ -100,6 +100,7 @@ export function Work() {
   const [scope, setScope] = useParam("scope", "open");
   const [view, setView] = useParam("view", "");
   const [type, setType] = useParam("type", "");
+  const [groupBy, setGroupBy] = useParam("group_by", "");
 
   const params: Record<string, unknown> = {};
   // THE CONTAINER IS THE SCOPE, and an absent one is NEITHER the workspace
@@ -109,6 +110,9 @@ export function Work() {
   params.container = project ? `project:${project}` : "workspace";
   if (status) params.status = status;
   if (type) params.type = type;
+  // A GROUPED ANSWER IS A DIFFERENT SHAPE: `groups` replaces `items`, and each
+  // column's count is over the whole set rather than over the rows it carries.
+  if (groupBy) params.group_by = groupBy;
   if (assignee) params.assignee = assignee;
   if (q) params.q = q;
   // OPEN AND CLOSED ARE STATUS GROUPS, not a boolean: the four groups are
@@ -149,6 +153,7 @@ export function Work() {
     setView(v.key);
   };
 
+  const groups = data?.groups ?? [];
   const rows = useMemo(
     () => [...(data?.items ?? [])].sort((a, b) => tsKey(b.updated) - tsKey(a.updated)),
     [data],
@@ -259,6 +264,13 @@ export function Work() {
             options={types.map((t) => t.slug)}
           />
         )}
+        <Select
+          value={groupBy}
+          onChange={setGroupBy}
+          ariaLabel="Group by"
+          anyLabel="No grouping"
+          options={["status", "status_group", "assignee", "priority", "type", "tag"]}
+        />
         {/* THREE SEGMENTS, not a checkbox: "open", "closed" and "everything"
             are three real questions, and a two-state control would make the
             third unreachable — which is how a board that can never show a
@@ -282,11 +294,58 @@ export function Work() {
 
       {loading && <Skeleton rows={6} />}
 
+      {/* THE BOARD, when one was asked for. Each column reports its own
+          count over the WHOLE set beside the rows it carries — so a column
+          of four hundred says four hundred and hands back twenty, and the
+          header never becomes a property of the page. */}
+      {!loading && !error && groups.length > 0 && (
+        <>
+          {data?.groups_overlap && (
+            <Banner tone="info">
+              One item can be on several of these columns, so the counts add up
+              to more than the total.
+            </Banner>
+          )}
+          {data?.groups_dropped ? (
+            <Banner tone="caution">
+              {data.groups_dropped} more column{data.groups_dropped === 1 ? "" : "s"}{" "}
+              did not fit and are not shown.
+            </Banner>
+          ) : null}
+          <div className="board">
+            {groups.map((group) => (
+              <Panel
+                key={group.key}
+                title={group.label || group.key || "—"}
+                count={group.count}
+                padding="tight"
+              >
+                {group.rows.map((item) => (
+                  <div key={item.id} className="row gap-sm">
+                    <a className="mono" href={href(["work", item.key])}>
+                      {item.key}
+                    </a>
+                    <a href={href(["work", item.key])} className="truncate">
+                      {item.title}
+                    </a>
+                  </div>
+                ))}
+                {group.count > group.rows.length && (
+                  <p className="t-caption faint">
+                    {group.count - group.rows.length} more in this column
+                  </p>
+                )}
+              </Panel>
+            ))}
+          </div>
+        </>
+      )}
+
       <QueryState
         error={error}
         loading={loading}
         empty={
-          rows.length
+          rows.length || groups.length
             ? undefined
             : {
                 title: "Nothing matches",
@@ -295,6 +354,7 @@ export function Work() {
         }
       >
         <Coverage answer={data} />
+        {groups.length === 0 && (
         <Panel>
           <DataTable
             rows={rows}
@@ -382,6 +442,7 @@ export function Work() {
             ]}
           />
         </Panel>
+        )}
       </QueryState>
 
       {!loading && !error && projects.length === 0 && rows.length === 0 && (

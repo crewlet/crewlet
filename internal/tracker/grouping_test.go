@@ -334,3 +334,132 @@ func TestAColumnFilterOnAJoinedAxisNarrowsTheTotals(t *testing.T) {
 		t.Fatalf("the total over one tag column is %v, want 8", got.Value)
 	}
 }
+
+// A CLOSED SET'S COLUMNS ARE IN ITS DECLARED ORDER, not by size.
+//
+// A status board whose columns re-shuffled every time work moved between them
+// is a board nobody can learn the shape of — and, worse, one where the cap
+// would drop whichever column happened to be smallest that minute.
+func TestAClosedSetsColumnsAreInItsDeclaredOrder(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	// MORE in_progress THAN todo, so a size ordering and a declared one
+	// disagree.
+	for i, status := range []tracker.Status{
+		tracker.StatusTodo,
+		tracker.StatusInProgress, tracker.StatusInProgress,
+		tracker.StatusInProgress,
+	} {
+		task := newTask("t-" + itoa(i))
+		task.Status, task.StatusGroup = status, status.Group()
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+itoa(i), task, nil); err != nil {
+			t.Fatalf("CreateTask: %v", err)
+		}
+		r.drain()
+	}
+
+	answer := r.ask(map[string]any{
+		"container": "project:ENG", "group_by": "status", "show_closed": "true",
+	})
+	if len(answer.Groups) != 2 {
+		t.Fatalf("the board has %d columns, want 2", len(answer.Groups))
+	}
+	if answer.Groups[0].Key != string(tracker.StatusTodo) {
+		t.Fatalf("the first column is %q, want todo — the columns are in the "+
+			"order the status set DECLARES, not the order the counts happen "+
+			"to fall in", answer.Groups[0].Key)
+	}
+
+	// AND A PRIORITY BOARD TOO, whose order is the one a person reads it
+	// in rather than the one this week's work produced.
+	for i := range 3 {
+		task := newTask("p-" + itoa(i))
+		task.Priority = tracker.PriorityLow
+		if _, err := r.writer.CreateTask(t.Context(), "op-p-"+itoa(i), task, nil); err != nil {
+			t.Fatalf("CreateTask: %v", err)
+		}
+		r.drain()
+	}
+	byPriority := r.ask(map[string]any{
+		"container": "project:ENG", "group_by": "priority", "show_closed": "true",
+	})
+	var order []string
+	for _, group := range byPriority.Groups {
+		order = append(order, group.Key)
+	}
+	// LOW BEFORE NORMAL, which is the declared order — and the OPPOSITE
+	// of the size order, since four tasks are normal and three are low.
+	want := []string{string(tracker.PriorityLow), string(tracker.PriorityNormal)}
+	if len(order) != len(want) {
+		t.Fatalf("the priority columns are %v, want %v", order, want)
+	}
+	for i, key := range want {
+		if order[i] != key {
+			t.Fatalf("the priority columns are %v, want %v — the declared "+
+				"order, not the one this week's work produced", order, want)
+		}
+	}
+}
+
+// A MULTI-VALUED CUSTOM FIELD IS A LABEL BOARD, and says so.
+//
+// Pinned to its first value it would show every task under one column and
+// declare no overlap — a board that is quietly wrong rather than one that is
+// differently shaped.
+func TestAMultiValuedFieldBoardPutsATaskOnEveryColumnItChose(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	seedFields(t, r)
+	seedWithFields(t, r, "t-both", map[string]any{"f-areas": []string{"o-api", "o-ui"}})
+	seedWithFields(t, r, "t-one", map[string]any{"f-areas": []string{"o-ui"}})
+
+	answer := r.ask(map[string]any{
+		"container": "project:ENG", "group_by": "f.areas",
+	})
+	if !answer.GroupsOverlap {
+		t.Fatal("a labels board did not declare its columns overlap")
+	}
+	if len(answer.Groups) != 2 {
+		t.Fatalf("a labels board has %d columns, want 2", len(answer.Groups))
+	}
+	byKey := map[string]int{}
+	for _, group := range answer.Groups {
+		byKey[group.Key] = group.Count
+	}
+	if byKey["o-api"] != 1 || byKey["o-ui"] != 2 {
+		t.Fatalf("the columns count %v, want api 1 and ui 2 — a task with two "+
+			"values belongs on both", byKey)
+	}
+}
+
+// A COLUMN HEADING IS THE OPTION'S NAME, every time.
+//
+// Inverting the two-key option map picked the slug or the name by Go's
+// randomised iteration, so one node answered two requests with two headings.
+func TestAColumnHeadingIsTheSameOnEveryRequest(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	seedFields(t, r)
+	seedWithFields(t, r, "t-1", map[string]any{"f-impact": "o-high"})
+
+	want := ""
+	for i := range 12 {
+		answer := r.ask(map[string]any{
+			"container": "project:ENG", "group_by": "f.impact",
+		})
+		got := groupOf(t, answer, "o-high").Label
+		if i == 0 {
+			want = got
+			continue
+		}
+		if got != want {
+			t.Fatalf("the heading was %q and is now %q — a board's column "+
+				"heading must not depend on map iteration", want, got)
+		}
+	}
+	if want != "High" {
+		t.Fatalf("the heading is %q, want the option's NAME — a slug is what "+
+			"somebody types and a name is what they read", want)
+	}
+}
