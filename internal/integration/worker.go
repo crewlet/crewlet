@@ -398,6 +398,23 @@ type Options struct {
 	// such name, and nil leaves every row's field empty.
 	Registration func(Kind) string
 
+	// SettledInterval is how long a CONVERGED surface is trusted before it
+	// is read back, as the applied revision holds it right now.
+	//
+	// READ FRESH ON EVERY PASS rather than folded into [Options.Schedule],
+	// for the reason [Options.Endpoint] is: it is a field of the company
+	// document, the document is edited live, and a value captured when this
+	// worker was built would leave an operator who shortened the interval
+	// waiting out the one they had replaced — for as long as the OLD
+	// interval had left to run, which is precisely the wait they were trying
+	// to shorten.
+	//
+	// It overrides [Schedule.Settled] and nothing else: the other three
+	// waits are retries of something already known to be wrong, and their
+	// cost does not scale with the company. Nil, or any value that is not
+	// positive, takes the Schedule's own.
+	SettledInterval func() time.Duration
+
 	// Now is the clock, for tests. Nil is time.Now.
 	Now func() time.Time
 
@@ -428,6 +445,7 @@ type Worker struct {
 	configured   func(Kind) bool
 	endpoint     func() string
 	registration func(Kind) string
+	settled      func() time.Duration
 	interval     time.Duration
 	spread       func(time.Duration) time.Duration
 	settle       time.Duration
@@ -575,6 +593,7 @@ func New(opts Options) (*Worker, error) {
 		configured:   opts.Configured,
 		endpoint:     opts.Endpoint,
 		registration: opts.Registration,
+		settled:      opts.SettledInterval,
 		interval:     interval, settle: settle, now: now, spread: spread,
 		wake: make(chan struct{}, 1),
 	}, nil
@@ -975,7 +994,7 @@ func (w *Worker) tearDown(
 
 	log.WarnContext(ctx, "integration_teardown_failed",
 		"integration", kind.String(), "attempts", state.Attempts, "error", err)
-	state.NextAttemptAt = now.Add(w.spread(w.schedule.Next(state.Report, state.Attempts)))
+	state.NextAttemptAt = now.Add(w.spread(w.scheduleNow().Next(state.Report, state.Attempts)))
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := w.store.SaveIntegration(ctx, state); err != nil {
 		// The third-party app work that DID land is durable; what is lost is the
@@ -1049,7 +1068,7 @@ func (w *Worker) reconcile(
 			"integration", kind.String(), "attempts", state.Attempts, "error", err)
 	}
 
-	state.NextAttemptAt = now.Add(w.spread(w.schedule.Next(state.Report, state.Attempts)))
+	state.NextAttemptAt = now.Add(w.spread(w.scheduleNow().Next(state.Report, state.Attempts)))
 
 	if err := w.store.SaveIntegration(ctx, state); err != nil {
 		// The pass still happened, and its work at the third-party app is durable.
@@ -1058,6 +1077,23 @@ func (w *Worker) reconcile(
 		log.WarnContext(ctx, "integration_status_unrecorded",
 			"integration", kind.String(), "error", err)
 	}
+}
+
+// scheduleNow is the cadence as the applied revision holds it.
+//
+// A COPY WITH ONE FIELD SUBSTITUTED, because [Schedule] is a value and
+// [Schedule.Next] reads Settled only on the settled branch. Nothing is stored
+// back: the next pass asks again, which is what makes an operator's edit take
+// effect on the pass after it rather than after the interval they replaced.
+func (w *Worker) scheduleNow() Schedule {
+	schedule := w.schedule
+	if w.settled == nil {
+		return schedule
+	}
+	if d := w.settled(); d > 0 {
+		schedule.Settled = d
+	}
+	return schedule
 }
 
 // StampEndpoint records the address a pass ran against, where that pass is

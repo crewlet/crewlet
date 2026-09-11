@@ -1377,3 +1377,94 @@ func TestThePassRunsOnTheGuardsContext(t *testing.T) {
 			"guard bounded, so nothing stops it outliving its own lease")
 	}
 }
+
+// THE COMPANY'S OWN CHECK INTERVAL IS WHAT A SETTLED SURFACE WAITS.
+//
+// The settled cadence is the ONLY thing that finds access somebody revoked by
+// hand at the third-party app — nothing tells this engine — so how long it is
+// decides how long a card claims Connected over an agent that has been cut
+// off. Measured: eight minutes, on a deployment that would have been happy to
+// spend a read per seat every minute.
+func TestASettledSurfaceWaitsTheCompanysOwnCheckInterval(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	store := newStore()
+	w, err := New(Options{
+		Registrations:   []Registration{{Reconciler: &fakeReconciler{kind: KindGitLab}}},
+		Store:           store,
+		Now:             func() time.Time { return now },
+		Spread:          func(d time.Duration) time.Duration { return d },
+		SettledInterval: func() time.Duration { return time.Minute },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	w.Tick(context.Background())
+
+	row := store.get(t, KindGitLab)
+	if !row.NextAttemptAt.Equal(now.Add(time.Minute)) {
+		t.Fatalf("the next attempt is %s, want the company's own interval at %s",
+			row.NextAttemptAt, now.Add(time.Minute))
+	}
+}
+
+// AND ONLY THE SETTLED ONE. The other three waits are retries of something
+// already known to be wrong, and their cost does not scale with the company —
+// substituting this into them would turn a company that shortened its check
+// interval into one that also hammers a third-party app it is waiting on.
+func TestTheCheckIntervalDoesNotChangeTheOtherWaits(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	store := newStore()
+	w, err := New(Options{
+		Registrations: []Registration{{Reconciler: &fakeReconciler{
+			kind: KindGitLab,
+			findings: []Finding{{
+				Kind: FindingApprovalRequired, Subject: "nimbus",
+			}},
+		}}},
+		Store:           store,
+		Now:             func() time.Time { return now },
+		Spread:          func(d time.Duration) time.Duration { return d },
+		SettledInterval: func() time.Duration { return time.Minute },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	w.Tick(context.Background())
+
+	row := store.get(t, KindGitLab)
+	if row.Report.Phase == PhaseReady {
+		t.Fatalf("the fixture settled, so this case asserts nothing: %+v", row.Report)
+	}
+	if !row.NextAttemptAt.Equal(now.Add(DefaultSchedule.AdminBase)) {
+		t.Fatalf("the next attempt is %s, want the admin cadence at %s",
+			row.NextAttemptAt, now.Add(DefaultSchedule.AdminBase))
+	}
+}
+
+// AND AN UNSET ONE IS THE DEFAULT, never zero. A settled surface that came
+// due immediately would reconcile every tick, which is the one design that
+// makes this loop too expensive to leave switched on.
+func TestAnUnsetCheckIntervalTakesTheDefault(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	store := newStore()
+	w, err := New(Options{
+		Registrations:   []Registration{{Reconciler: &fakeReconciler{kind: KindGitLab}}},
+		Store:           store,
+		Now:             func() time.Time { return now },
+		Spread:          func(d time.Duration) time.Duration { return d },
+		SettledInterval: func() time.Duration { return 0 },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	w.Tick(context.Background())
+
+	row := store.get(t, KindGitLab)
+	if !row.NextAttemptAt.Equal(now.Add(DefaultSchedule.Settled)) {
+		t.Fatalf("the next attempt is %s, want the default settled cadence",
+			row.NextAttemptAt)
+	}
+}

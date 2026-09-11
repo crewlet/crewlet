@@ -606,6 +606,10 @@
           "$ref": "#/$defs/Atlassian",
           "description": "Atlassian organization and its unscoped API key, used to create one service account per agent. Absent = accounts are made by hand."
         },
+        "check_interval_seconds": {
+          "description": "How often a converged integration is read back, in seconds. 0 takes the default of 600; the floor is 60.",
+          "type": "integer"
+        },
         "confluence": {
           "$ref": "#/$defs/Confluence",
           "description": "Confluence instance or Cloud site, org read account and webhook secret. Absent = disabled."

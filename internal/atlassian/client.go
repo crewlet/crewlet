@@ -350,12 +350,15 @@ func (c *Client) MintToken(
 // CountTokens is how many API tokens an account currently holds.
 //
 // It answers the one question a held credential cannot answer about itself:
-// whether it still belongs to the account this seat now has. A disconnect
-// that removes accounts deletes them at Atlassian and leaves the minted token
-// in the sealed store, so a later reconnect creates a NEW account and finds a
-// credential already held for the seat. The value is a token for an account
-// that no longer exists, and every call with it is refused with a 401 that
-// names nothing.
+// whether there is still a live token behind it. A disconnect that removes
+// accounts deletes them at Atlassian and leaves the minted token in the
+// sealed store, so a later reconnect creates a NEW account and finds a
+// credential already held for the seat — the value is then a token for an
+// account that is gone. An administrator revoking the token by hand leaves
+// the SAME account holding none, which reads identically here and is the
+// commoner of the two. Either way every call with the sealed value is refused
+// with a 401 that names nothing, so the pass mints a replacement; see
+// [orphaned], which is careful to claim only what this count establishes.
 //
 // A COUNT rather than a comparison, because Atlassian shows a token's value
 // once: nothing can check that the stored string is one of these. What it can

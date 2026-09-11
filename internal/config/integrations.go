@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -67,6 +68,62 @@ type Integrations struct {
 	// pointing at the wrong host is worse than no hook, and a subcommand's
 	// `-public-url` still overrides it for a one-off run.
 	PublicBaseURL string `yaml:"public_base_url,omitempty" json:"public_base_url,omitempty" desc:"HTTPS base a vendor reaches this deployment on, e.g. https://crewlet.example.com. Empty means no inbound address."`
+
+	// CheckIntervalSeconds is how long a CONVERGED integration is trusted
+	// before the loop reads it back, and therefore how long access somebody
+	// revoked by hand at the third-party app goes unnoticed.
+	//
+	// # Why this is a company's choice rather than one number for everybody
+	//
+	// It is the only thing that finds a revoked credential at all — nothing
+	// tells this engine, and every other cadence in the loop is a retry of
+	// something already known to be wrong. So it is a straight trade against
+	// what a converged pass COSTS at the vendor, and that cost is the
+	// company's own size: a pass asks each seat's credential who it is and
+	// reads the memberships and hooks per seat and per project, so it is
+	// O(seats x projects) requests per surface per interval — tens for a
+	// small company, a few hundred for a large one on GitLab or Mattermost.
+	//
+	// Ten minutes is the default because it is affordable at the large end.
+	// At the small end it is simply slow, and measured as such: an operator
+	// who deleted an agent's token by hand watched the card say Connected
+	// for eight minutes. A five-seat company can afford one minute; a
+	// two-hundred-seat one should probably lengthen it.
+	//
+	// # Zero is the default, not "never"
+	//
+	// A settled surface that is never read back is one this engine would
+	// report healthy for the life of the deployment, which is the state the
+	// whole subsystem exists to refuse — so there is no "off". Zero takes
+	// the default and anything below [MinCheckInterval] is refused naming
+	// the field, rather than silently clamped: a value typed in seconds when
+	// the writer meant minutes should say so.
+	CheckIntervalSeconds int `yaml:"check_interval_seconds,omitempty" json:"check_interval_seconds,omitempty" desc:"How often a converged integration is read back, in seconds. 0 takes the default of 600; the floor is 60."`
+}
+
+// MinCheckInterval is the floor under [Integrations.CheckIntervalSeconds].
+//
+// One minute, which is four of the loop's own ticks — below that the interval
+// stops being a schedule and becomes the tick rate, and a converged company
+// would spend O(seats x projects) requests a minute at every vendor for ever
+// to shorten a detection window nobody is watching.
+const MinCheckInterval = time.Minute
+
+// DefaultCheckInterval is what an unset [Integrations.CheckIntervalSeconds]
+// means.
+//
+// Restated here rather than imported from internal/integration for the reason
+// [Datadog.HandleTagOrDefault] gives — config is the leaf every other package
+// depends on — and asserted equal to integration.DefaultSchedule.Settled by a
+// test.
+const DefaultCheckInterval = 10 * time.Minute
+
+// CheckInterval is how long a converged integration is trusted.
+func (i *Integrations) CheckInterval() time.Duration {
+	if i == nil || i.CheckIntervalSeconds <= 0 {
+		return DefaultCheckInterval
+	}
+	return time.Duration(i.CheckIntervalSeconds) * time.Second
 }
 
 // WebhookBase is the base every inbound path is built on, without a trailing
@@ -124,6 +181,22 @@ func (i *Integrations) validate(path string) error {
 			"%q must start with http:// or https://: it is the base every "+
 				"webhook URL is built on, so a value without a scheme yields "+
 				"an address the third-party app accepts and never reaches", i.PublicBaseURL)
+	}
+
+	// A CHECK INTERVAL BELOW THE FLOOR IS REFUSED RATHER THAN CLAMPED.
+	// Silently raising it would leave a document saying one thing and a loop
+	// doing another, and the likeliest way to get here is a value typed in
+	// seconds by somebody who meant minutes — which a clamp hides and this
+	// says out loud. Zero is not a value: it is the field being unset.
+	if secs := i.CheckIntervalSeconds; secs != 0 {
+		if d := time.Duration(secs) * time.Second; d < MinCheckInterval {
+			p.add(at(path, "check_interval_seconds"), ErrUnknownValue,
+				"%d is below the floor of %d: a converged pass costs one read "+
+					"per seat and per project at every vendor, so an interval "+
+					"this short spends that every minute for ever. Leave it "+
+					"unset for the default of %d",
+				secs, int(MinCheckInterval.Seconds()), int(DefaultCheckInterval.Seconds()))
+		}
 	}
 
 	// THE ORGANIZATION HAS NO BLOCK VALIDATOR of its own: it is two fields,

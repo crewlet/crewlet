@@ -355,6 +355,15 @@ scheduling:
 # are the ``mcp_servers`` entries below.  This block is the inbound mirror of
 # ``mcp_servers`` (outbound tool actions).
 integrations:
+  # How often a CONVERGED integration is read back, in seconds.  This is the
+  # only thing that ever finds access somebody revoked by hand at a vendor —
+  # nothing tells the engine — so it decides how long a card can say
+  # Connected over an agent that has already been cut off.  Unset takes ten
+  # minutes; the floor is 60.  A converged pass costs one read per seat and
+  # per project at every vendor, so a small company can afford a minute and a
+  # large one should lengthen it.
+  # check_interval_seconds: 600
+
   # Jira — the work-item tracker.  ``token`` is an ADMIN/service account
   # used for the org-wide reads routing needs (who is watching this
   # issue); every agent acts through its OWN Atlassian credential in

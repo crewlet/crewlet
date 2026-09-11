@@ -47,7 +47,7 @@ Not what failed. A third-party app applying a grant it already accepted finishes
 
 | The report says | Next pass |
 |---|---|
-| `ready` | 10 minutes |
+| `ready` | 10 minutes, or `integrations.check_interval_seconds` |
 | the `engine` or the `provider` is working | 30 seconds, doubling to 5 minutes |
 | an `admin` must act at the third-party app | 15 seconds, doubling to 10 minutes |
 | the `operator` must edit config | 1 hour, flat |
@@ -58,7 +58,9 @@ The brisk admin cadence is the point of the whole design: install the app, and p
 
 **Slack is not on this cadence, because it is not reconciled at all.** Its apps are created from the command line — one per agent, from a manifest — so there is nothing here to converge: it is registered teardown-only, which gives a disconnect somewhere to run without giving the loop a pass to run. It carries no reconcile report, and its row holds only the address its setup form was saved against (below) — a row that now *ends* when the `slack:` block leaves the document. It used to outlive it for the life of the deployment, because the only thing that forgets a departed surface is a pass reporting `ErrNotConfigured` and Slack has no pass; a company that removed and later re-added the block inherited an address from before. Slack is the one surface the loop asks the document about directly, precisely because it is the one with nothing to ask.
 
-A surface *can* be given a settled interval of its own, for a third-party app whose reads are rate limited hard enough that the shared ten minutes would be spent waiting. No surface in this build sets one.
+**The settled interval is the company's to choose, because its cost is the company's own size.** It is the only thing that ever finds access somebody revoked by hand at the third-party app — nothing tells this engine — so it decides how long a card can say *Connected* over an agent that has already been cut off. Measured on a live deployment: an operator deleted an agent's token and the card stayed green for eight minutes. Against that sits what a converged pass costs, which scales with the company: a pass asks each seat's own credential who it is and reads the memberships and hooks per seat and per project, so it is O(seats × projects) requests per surface per interval — tens for a small company, a few hundred for a large one on GitLab or Mattermost. Ten minutes is the default because it is affordable at the large end; a five-seat company can set `integrations.check_interval_seconds: 60` and be told within the minute, and a two-hundred-seat one should probably lengthen it. The floor is 60 seconds, and a shorter value is **refused naming the field** rather than clamped — the likeliest way to type one is meaning minutes and writing seconds, which a clamp hides. Zero is the field being unset, never "off": a settled surface nothing ever reads back is one this engine would report healthy for the life of the deployment. It is read fresh on every pass, so shortening it takes effect on the pass after the edit rather than after the interval it replaced.
+
+A surface *can* be given a settled interval of its own, for a third-party app whose reads are rate limited hard enough that the shared one would be spent waiting. No surface in this build sets one.
 
 ---
 
@@ -66,7 +68,9 @@ A surface *can* be given a settled interval of its own, for a third-party app wh
 
 Every registration a third-party app holds points at `integrations.public_base_url` as it was when the registration was made, and that value moves: a tunnel restarts, a deployment is renamed, a proxy goes in front.
 
-Where a pass registers the hook, the next tick registers it again at the new address and the surface heals itself. Jira and Confluence match their own hook **by name**, so the address is a field they rewrite; GitLab and GitHub match **by delivery URL**, so they create one at the new address and leave the old one behind, which is debris rather than an outage.
+Where a pass registers the hook, the next tick registers it again at the new address and the surface heals itself. Jira, Confluence and GitLab match their own hooks **by name** — `webhook_name` on each block, defaulting to `crewlet` — so the address is a field they rewrite, and a hook this engine left at an address it no longer uses is removed rather than abandoned. GitLab sweeps both levels while it is there: a run that establishes a group hook removes this engine's project hooks and a run that registers project hooks removes its group hook, because the level a pass writes at moves with the group's plan and a hook at the level nobody writes any more delivers everything twice.
+
+GitHub is the exception, and it is the vendor's: a GitHub webhook has **no name**, only its delivery URL, so a hook this engine registered at a previous address is indistinguishable from one a second deployment of the same company registered at its own. It is therefore neither removed nor reported — a claim that a live hook is orphaned would send somebody to delete another deployment's working registration. A GitHub hook left at a moved address is debris to remove by hand, and GitHub disables one after repeated delivery failures.
 
 Where nothing registers the hook, nothing heals. Slack's request URL lives in each agent's app at Slack and can only be read back with an app-configuration token an operator may not have, so the engine cannot see that it is stale, cannot fix it, and the app goes on delivering to an address that no longer answers. And nothing reconciles Slack at all, so the surface reports **no phase** — the dashboard draws that as *Connecting*, which is what it means for a configured block the loop has not reported on — and the first symptom is an agent that stopped replying.
 

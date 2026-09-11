@@ -3,8 +3,10 @@ package config_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/integration"
 )
 
 // A MISTYPED typing_status IS REFUSED ON BOTH CHAT BLOCKS.
@@ -118,4 +120,66 @@ roles:
 		return err
 	}
 	return c.Validate()
+}
+
+// A CHECK INTERVAL BELOW THE FLOOR IS REFUSED, NOT CLAMPED.
+//
+// A converged pass costs one read per seat and per project at every vendor, so
+// an interval of a few seconds spends that for ever. The likeliest way to type
+// one is meaning minutes and writing seconds, which a silent clamp hides — and
+// hides in the direction that makes the document say one thing while the loop
+// does another.
+func TestACheckIntervalBelowTheFloorIsRefused(t *testing.T) {
+	t.Parallel()
+	err := validateIntegrationDoc(t, "slack", "    typing_status: always\n"+
+		"  check_interval_seconds: 5")
+	if err == nil {
+		t.Fatal("a five-second check interval was accepted")
+	}
+	if !strings.Contains(err.Error(), "check_interval_seconds") {
+		t.Errorf("error %q does not name the field", err)
+	}
+}
+
+// AND AN INTERVAL AT OR ABOVE IT IS THE COMPANY'S CHOICE. The default is
+// tuned for a large company; a small one can afford to be told sooner.
+func TestACheckIntervalAtTheFloorIsAccepted(t *testing.T) {
+	t.Parallel()
+	if err := validateIntegrationDoc(t, "slack", "    typing_status: always\n"+
+		"  check_interval_seconds: 60"); err != nil {
+		t.Fatalf("a one-minute check interval was refused: %v", err)
+	}
+}
+
+// AND UNSET IS THE DEFAULT RATHER THAN NEVER. A settled surface nothing ever
+// reads back is one this engine would report healthy for the life of the
+// deployment, which is the state the reconcile loop exists to refuse — so
+// there is no "off" and zero cannot mean one.
+func TestAnUnsetCheckIntervalIsTheDefault(t *testing.T) {
+	t.Parallel()
+	var none *config.Integrations
+	if got := none.CheckInterval(); got != config.DefaultCheckInterval {
+		t.Errorf("a nil block reports %s, want %s", got, config.DefaultCheckInterval)
+	}
+	if got := (&config.Integrations{}).CheckInterval(); got != config.DefaultCheckInterval {
+		t.Errorf("an unset field reports %s, want %s", got, config.DefaultCheckInterval)
+	}
+	if got := (&config.Integrations{CheckIntervalSeconds: 90}).CheckInterval(); got != 90*time.Second {
+		t.Errorf("90 seconds reports %s", got)
+	}
+}
+
+// THE DEFAULT IS ONE VALUE AND TWO PACKAGES READ IT.
+//
+// config is the leaf every other package depends on, so it cannot import the
+// reconcile loop and restates the default instead. Two spellings would make an
+// unset field mean one interval to the document and another to the loop, and
+// the difference is invisible until somebody measures how long a revoked
+// credential goes unnoticed.
+func TestConfigAndTheLoopAgreeAboutTheDefaultCheckInterval(t *testing.T) {
+	t.Parallel()
+	if config.DefaultCheckInterval != integration.DefaultSchedule.Settled {
+		t.Errorf("config says %s, the loop says %s",
+			config.DefaultCheckInterval, integration.DefaultSchedule.Settled)
+	}
 }

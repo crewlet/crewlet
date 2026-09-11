@@ -471,26 +471,36 @@ func recorded(ctx context.Context, opts Options, name, value string) bool {
 	return err == nil && held && current == value
 }
 
-// orphaned reports a held credential that cannot belong to this seat's
-// account, so the pass mints over it.
+// orphaned reports a held credential with no live token behind it, so the
+// pass mints over it.
 //
 // # Why a held credential is not necessarily a working one
 //
-// Disconnecting with "remove accounts" deletes them at Atlassian and leaves
-// the minted tokens in the sealed store: the store is the company's, and a
-// teardown that emptied it would take values an operator may have put there
-// by hand. A later reconnect then creates a NEW account and finds a
-// credential already held for the seat, so it mints nothing, and every call
-// the seat makes is refused with a 401 naming nothing. The dashboard reports
-// "has no Jira account" while the account plainly exists, and the only cure
-// was deleting the secret by hand.
+// TWO THINGS PUT A SEAT HERE and the observable is identical, which is why
+// this says neither of them and the old message said the wrong one.
+//
+// One is a reconnect. Disconnecting with "remove accounts" deletes them at
+// Atlassian and leaves the minted tokens in the sealed store: the store is
+// the company's, and a teardown that emptied it would take values an operator
+// may have put there by hand. A later reconnect then creates a NEW account
+// and finds a credential already held for the seat, so it mints nothing, and
+// every call the seat makes is refused with a 401 naming nothing. The
+// dashboard reports "has no Jira account" while the account plainly exists,
+// and the only cure was deleting the secret by hand.
+//
+// The other is somebody revoking the token at Atlassian — the ordinary
+// administrative gesture this engine's settled cadence exists to notice. The
+// ACCOUNT is untouched there, and the log line said it "no longer exists",
+// which sent an operator who had deleted one token looking for a deleted
+// account. Measured: exactly that, on a live deployment.
 //
 // # It asks the vendor, not the credential
 //
 // Atlassian shows a token's value once, so nothing can check that the stored
 // string is one of the account's. What it can check is that the account has
 // NO tokens at all, which is true of an account this engine has just created
-// and false of every one it has finished with. That is the whole test.
+// and false of every one it has finished with. That is the whole test — and
+// it is the whole of what the message may claim.
 //
 // # "Cannot tell" leaves it alone
 //
@@ -502,9 +512,12 @@ func orphaned(tokens tokenCount, handle string) bool {
 	if !tokens.none() {
 		return false
 	}
-	log.Info("atlassian_token_orphaned", "seat", handle,
-		"detail", "the account holds no API token, so the credential in the "+
-			"store belongs to an account that no longer exists; minting a new one")
+	log.Info("atlassian_seat_token_replaced", "seat", handle,
+		"detail", "this seat's Atlassian account holds no API token, so the "+
+			"credential sealed for it cannot authenticate — either the token "+
+			"was revoked at Atlassian, or the account was recreated after a "+
+			"disconnect and the sealed value belongs to the old one. Minting a "+
+			"replacement; nothing has to be done by hand")
 	return true
 }
 

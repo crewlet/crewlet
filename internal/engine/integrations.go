@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/datadog"
@@ -144,6 +145,19 @@ func (e *Engine) startIntegrations(ctx context.Context) {
 				return ""
 			}
 			return datadog.WebhookNameOf(cfg)
+		},
+		// AND HOW LONG A CONVERGED SURFACE IS TRUSTED, which is the only
+		// thing that ever finds access somebody revoked by hand at the
+		// third-party app. A company's own field, read fresh on every pass
+		// for the reason the endpoint is: it is edited live, and a value
+		// captured here would make an operator who shortened the interval
+		// wait out the one they had just replaced.
+		SettledInterval: func() time.Duration {
+			company := e.Company()
+			if company == nil {
+				return 0
+			}
+			return company.Config.Integrations.CheckInterval()
 		},
 		ClaimDuty: integration.DutyFunc(
 			e.workerDuty(integrationDutyName, integrationDutyTTL)),
