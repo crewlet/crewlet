@@ -1115,6 +1115,54 @@ export interface WorkGoalsAnswer {
   incomplete?: WorkIncomplete;
 }
 
+/** One task type a company may file under — the DECLARATION, where
+ *  [WorkType] is the slug a task carries. */
+export interface WorkTypeDef {
+  slug: string;
+  name: string;
+  plural?: string;
+  icon?: string;
+  description?: string;
+  /** True for a slug this build ships. It survives a company renaming the
+   *  type, because what it says is that the ENGINE knows the slug. */
+  builtin?: boolean;
+  archived?: boolean;
+}
+
+/** One custom-field declaration. */
+export interface WorkFieldDef {
+  id: string;
+  slug: string;
+  name: string;
+  description?: string;
+  type: string;
+  applies_to?: string[];
+  required?: boolean;
+  required_in_subtasks?: boolean;
+  /** ONE-WAY: the values left the value table, so restoring means a new
+   *  field with a new id. */
+  archived?: boolean;
+  pinned?: boolean;
+  hide_from_agents?: boolean;
+}
+
+export interface WorkCatalogueAnswer {
+  /** The EFFECTIVE set: what this build ships plus what the company declared,
+   *  a declaration replacing a builtin of the same slug. */
+  types: WorkTypeDef[];
+  /** The WORKSPACE's declarations. A project declares its own beside them. */
+  fields: WorkFieldDef[];
+  policy_version: number;
+  types_version: number;
+  fields_version: number;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
 export interface WorkComment {
   id: string;
   task: string;
@@ -1677,6 +1725,7 @@ export interface QueryMap {
   work_item: WorkItemDetail;
   work_views: WorkViewsAnswer;
   work_goals: WorkGoalsAnswer;
+  work_catalogue: WorkCatalogueAnswer;
   pages: PagesAnswer;
   page: PageDetail;
   containers: { containers: PageContainer[] };

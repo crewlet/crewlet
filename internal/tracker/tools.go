@@ -40,20 +40,35 @@ const (
 	// better lever — the work itself.
 	ListWorkGoalsTool = "list_work_goals"
 	WriteWorkGoalTool = "write_work_goal"
+
+	// WriteWorkCatalogueTool is the company's own VOCABULARY — what a
+	// task may be and what it may carry. A seat adding a type to make its
+	// own create succeed is a seat editing the rules it is judged by, and
+	// the refusal it was working around is the signal a person needs.
+	WriteWorkCatalogueTool = "write_work_catalogue"
 )
+
+// GetWorkCatalogueTool is the one catalogue verb a SEAT does hold.
+//
+// Reading is not writing, and a model that cannot read the catalogue can only
+// guess at a type — which is exactly how `Bug`, `bugfix` and `BUG` come to sit
+// beside `bug`. Telling the model what exists is cheaper than refusing it
+// repeatedly, so this one is in [Tools].
+const GetWorkCatalogueTool = "get_work_catalogue"
 
 // OperatorOnlyTools are the ones the operator surface adds to [Tools].
 func OperatorOnlyTools() []string {
 	return []string{
 		ListWorkViewsTool, SaveWorkViewTool,
 		ListWorkGoalsTool, WriteWorkGoalTool,
+		WriteWorkCatalogueTool,
 	}
 }
 
-// Tools are the five, so a caller registering them names one thing.
+// Tools are the six a seat holds, so a caller registering them names one thing.
 func Tools() []string {
 	return []string{ListWorkItemsTool, GetWorkItemTool, CreateWorkItemTool,
-		UpdateWorkItemTool, CommentOnWorkTool}
+		UpdateWorkItemTool, CommentOnWorkTool, GetWorkCatalogueTool}
 }
 
 // WriteTools are the three that count as a DELIVERY.

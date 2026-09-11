@@ -45,10 +45,15 @@ func documentSelect(s Subject) (query string, args []any, err error) {
 		return `SELECT document, version FROM tracker_sprints
 			WHERE project_key = ? AND number = ?`, []any{project, number}, nil
 	case "tracker_projects", "tracker_tagsets", "tracker_catalogues":
+		// THE COLUMN IS THE WRITE'S OWN. Each of these tables keys on
+		// the word its subject means — a project on its `key`, a tag set
+		// on the project it belongs to, a catalogue on its `name` — and
+		// the catalogue's was spelled `id` here against a table that has
+		// no such column, so the first read of one failed at runtime.
 		column := map[string]string{
 			"tracker_projects":   "key",
 			"tracker_tagsets":    "project_key",
-			"tracker_catalogues": "id",
+			"tracker_catalogues": "name",
 		}[table]
 		return `SELECT document, version FROM ` + table +
 			` WHERE ` + column + ` = ?`, []any{key}, nil

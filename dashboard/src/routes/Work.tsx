@@ -99,6 +99,7 @@ export function Work() {
   // everything, and reading it as false would show only finished work.
   const [scope, setScope] = useParam("scope", "open");
   const [view, setView] = useParam("view", "");
+  const [type, setType] = useParam("type", "");
 
   const params: Record<string, unknown> = {};
   // THE CONTAINER IS THE SCOPE, and an absent one is NEITHER the workspace
@@ -107,6 +108,7 @@ export function Work() {
   // a person's, so the default is everything and it says so.
   params.container = project ? `project:${project}` : "workspace";
   if (status) params.status = status;
+  if (type) params.type = type;
   if (assignee) params.assignee = assignee;
   if (q) params.q = q;
   // OPEN AND CLOSED ARE STATUS GROUPS, not a boolean: the four groups are
@@ -126,6 +128,13 @@ export function Work() {
   // the rows are redrawn on every filter change. Its poll is slower for the
   // same reason — a saved view is arranged by a person, not by the work.
   const strip = useQuery("work_views", { container: params.container }, { pollMs: 120_000 });
+  // THE TYPES COME FROM THE CATALOGUE, never from the rows: a filter built
+  // from the page can only offer the types that happen to be on it, so a
+  // board showing no bugs would offer no way to ask for one. The catalogue
+  // is the company's own vocabulary and changes about once a quarter, which
+  // is why this poll is the slowest on the screen.
+  const catalogue = useQuery("work_catalogue", undefined, { pollMs: 300_000 });
+  const types = catalogue.data?.types ?? [];
   const views = strip.data?.views ?? [];
   // THE VIEW IS A SET OF DEFAULTS, never a lock: picking one puts its
   // parameters on the URL, where every explicit control still overrides them.
@@ -136,6 +145,7 @@ export function Work() {
     setAssignee(v.params?.assignee ?? "");
     setQ(v.params?.q ?? "");
     setScope(scopeOf(v.params?.status_group));
+    setType(v.params?.type ?? "");
     setView(v.key);
   };
 
@@ -240,6 +250,15 @@ export function Work() {
           anyLabel="Any status"
           options={STATUSES.map((s) => s.value)}
         />
+        {types.length > 0 && (
+          <Select
+            value={type}
+            onChange={setType}
+            ariaLabel="Type"
+            anyLabel="Any type"
+            options={types.map((t) => t.slug)}
+          />
+        )}
         {/* THREE SEGMENTS, not a checkbox: "open", "closed" and "everything"
             are three real questions, and a two-state control would make the
             third unreachable — which is how a board that can never show a

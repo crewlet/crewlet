@@ -327,7 +327,47 @@ func refuseCreate(ctx context.Context, tx *sql.Tx, task Task) error {
 		return fmt.Errorf("tracker: project %s is archived, so it takes no new "+
 			"work; unarchive it first", task.Project)
 	}
+	if err := declaredType(ctx, tx, task); err != nil {
+		return err
+	}
 	return requiredFields(project, task)
+}
+
+// declaredType refuses a task naming a type the company has not declared.
+//
+// THE TOOL HAS ALWAYS SAID SO — `create_work_item` asks for "a task type from
+// your workspace's own catalogue" — and nothing checked it, so any string a
+// model invented became a type: `Bug`, `bugfix` and `BUG` filed three
+// different types beside `bug`, and every board grouped and filtered on them
+// as if they were real.
+//
+// AN ARCHIVED TYPE IS REFUSED FOR NEW WORK and left alone on old, which is
+// what archiving a type is FOR: the tasks already filed under it still render
+// as what they are.
+func declaredType(ctx context.Context, tx *sql.Tx, task Task) error {
+	catalogue, _, err := readTypeCatalogue(ctx, tx)
+	if err != nil {
+		return err
+	}
+	var live []string
+	for _, t := range EffectiveTypes(catalogue.Types) {
+		if t.Archived {
+			if t.Slug == task.Type {
+				return fmt.Errorf("tracker: task type %q is archived, so no new "+
+					"work is filed under it — the tasks already under it keep "+
+					"it", task.Type)
+			}
+			continue
+		}
+		if t.Slug == task.Type {
+			return nil
+		}
+		live = append(live, t.Slug)
+	}
+	sort.Strings(live)
+	return fmt.Errorf("tracker: %q is not a task type this company declares — "+
+		"the types are %v, and a new one is declared in the workspace "+
+		"catalogue rather than invented at the create", task.Type, live)
 }
 
 // requiredFields refuses a task missing a field its project declares.

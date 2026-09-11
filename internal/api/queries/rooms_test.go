@@ -148,6 +148,10 @@ func (emptyWork) Goals(context.Context, tracker.GoalQuery) (tracker.GoalListing,
 	return tracker.GoalListing{}, nil
 }
 
+func (emptyWork) Catalogue(context.Context, tracker.CatalogueQuery) (tracker.CatalogueAnswer, error) {
+	return tracker.CatalogueAnswer{}, nil
+}
+
 type emptyPages struct{}
 
 func (emptyPages) List(context.Context, pages.Filter, statelog.ReadLevel) (pages.Listing, error) {

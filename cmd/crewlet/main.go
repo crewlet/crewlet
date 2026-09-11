@@ -2046,6 +2046,13 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 				return writer.As(actor.Handle, actor.Kind,
 					tracker.Provenance{OperatorID: actor.OperatorID})
 			},
+			// AND THE CATALOGUE WRITER: the company's own vocabulary is
+			// a person's to set, never a seat's to widen so its own
+			// create succeeds.
+			CatalogueWriter: func(actor builtin.Actor) builtin.CatalogueWriter {
+				return writer.As(actor.Handle, actor.Kind,
+					tracker.Provenance{OperatorID: actor.OperatorID})
+			},
 			Actor: opsmcp.WorkActor,
 			Await: e.WaitCommitted,
 		}
