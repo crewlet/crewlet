@@ -373,3 +373,128 @@ func TestAForeignValueIsOutOfEveryPredicate(t *testing.T) {
 			"native sum", total.Value)
 	}
 }
+
+// A FIELD THAT DOES NOT APPLY TO A TASK'S TYPE IS HIDDEN ON IT.
+//
+// `AppliesTo` is a declaration about which TYPES carry a field, and a value
+// left behind by a re-type is the case it exists for: a `severity` set while
+// the task was a bug is still on the document after somebody re-types it to a
+// task, and reading only `Archived` left that value filterable, groupable and
+// totalled — a live value of a field that is not on the task at all.
+func TestAValueOfAFieldThatDoesNotApplyIsHidden(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.writer.WriteFields(t.Context(), "op-fields", []tracker.FieldDef{
+		{ID: "f-sev", Slug: "severity", Name: "Severity", Type: tracker.FieldNumber,
+			AppliesTo: []string{"bug"}},
+	}); err != nil {
+		t.Fatalf("WriteFields: %v", err)
+	}
+	r.drain()
+
+	bug := newTask("t-bug")
+	bug.Type = "bug"
+	bug.Fields = map[string]json.RawMessage{"f-sev": json.RawMessage(`3`)}
+	if _, err := r.writer.CreateTask(t.Context(), "op-bug", bug, nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+
+	plain := newTask("t-plain")
+	plain.Type = "task"
+	plain.Fields = map[string]json.RawMessage{"f-sev": json.RawMessage(`9`)}
+	if _, err := r.writer.CreateTask(t.Context(), "op-plain", plain, nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+
+	answer := r.ask(map[string]any{
+		"container": "project:ENG", "f.severity": "gte:1",
+	})
+	if len(answer.Rows) != 1 || answer.Rows[0].ID != "t-bug" {
+		t.Fatalf("f.severity>=1 matched %d rows (%v), want only the bug: a "+
+			"value of a field the task's type does not carry is not a live "+
+			"value of that field", len(answer.Rows), ids(answer))
+	}
+
+	// AND A DECLARATION THAT ADDS THE TYPE BRINGS IT BACK, because
+	// AppliesTo is not one-way: the settle pass has to move the column in
+	// both directions or a widened declaration would never reach the rows
+	// written under the narrow one.
+	if _, err := r.writer.WriteFields(t.Context(), "op-widen", []tracker.FieldDef{
+		{ID: "f-sev", Slug: "severity", Name: "Severity", Type: tracker.FieldNumber,
+			AppliesTo: []string{"bug", "task"}},
+	}); err != nil {
+		t.Fatalf("WriteFields: %v", err)
+	}
+	r.drain()
+	widened := r.ask(map[string]any{
+		"container": "project:ENG", "f.severity": "gte:1",
+	})
+	if len(widened.Rows) != 2 {
+		t.Fatalf("f.severity>=1 matched %d rows after the declaration added "+
+			"`task`, want 2", len(widened.Rows))
+	}
+
+	// AND NARROWING IT AGAIN TAKES THE VALUE BACK OUT. This is the half a
+	// settle pass that only mirrors `Archived` cannot do: nothing rewrites
+	// those tasks, so if the catalogue write does not compute the type
+	// comparison itself the rows stay live under a declaration that no
+	// longer covers them.
+	if _, err := r.writer.WriteFields(t.Context(), "op-narrow", []tracker.FieldDef{
+		{ID: "f-sev", Slug: "severity", Name: "Severity", Type: tracker.FieldNumber,
+			AppliesTo: []string{"bug"}},
+	}); err != nil {
+		t.Fatalf("WriteFields: %v", err)
+	}
+	r.drain()
+	narrowed := r.ask(map[string]any{
+		"container": "project:ENG", "f.severity": "gte:1",
+	})
+	if len(narrowed.Rows) != 1 || narrowed.Rows[0].ID != "t-bug" {
+		t.Fatalf("f.severity>=1 matched %d rows (%v) after the declaration "+
+			"dropped `task`, want only the bug", len(narrowed.Rows), ids(narrowed))
+	}
+}
+
+// A VALUE FOR A FIELD NOBODY DECLARES IS RECORDED AS FOREIGN, not dropped.
+//
+// A cross-project move orphans values, and a task that still holds them must
+// not read as one that lost them. With no declaration there is no type and so
+// no column, which is why the row carries the value's own JSON and is excluded
+// from every filter, total and grouping by its kind rather than by its shape.
+func TestAValueForAnUndeclaredFieldIsRecordedAsForeign(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	seedFields(t, r)
+	seedWithFields(t, r, "t-orphan", map[string]any{
+		"f-effort": 5, "f-gone": "whatever it was",
+	})
+
+	var kind, text string
+	var hidden int
+	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(),
+			`SELECT kind, hidden, text FROM tracker_field_values
+			 WHERE task_id = 't-orphan' AND field_id = 'f-gone'`).
+			Scan(&kind, &hidden, &text)
+	}); err != nil {
+		t.Fatalf("read the orphaned value: %v — a value whose field nobody "+
+			"declares reached no row at all, so nothing can render what the "+
+			"task still holds", err)
+	}
+	if kind != tracker.FieldValueForeign || hidden != 1 {
+		t.Fatalf("the orphaned value is kind=%q hidden=%d, want %q and 1",
+			kind, hidden, tracker.FieldValueForeign)
+	}
+	if !strings.Contains(text, "whatever it was") {
+		t.Fatalf("the orphaned value's row carries %q, which is not the value "+
+			"the document holds", text)
+	}
+	// AND IT IS NOT A ROW ANY FILTER CAN REACH: `liveFieldValue` excludes
+	// it by kind, so the declared field beside it still answers alone.
+	answer := r.ask(map[string]any{"container": "project:ENG", "f.effort": "gte:1"})
+	if len(answer.Rows) != 1 {
+		t.Fatalf("f.effort>=1 matched %d rows, want 1", len(answer.Rows))
+	}
+}

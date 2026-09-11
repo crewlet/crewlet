@@ -1173,28 +1173,71 @@ func (a *Applier) explodeCatalogue(ctx context.Context, tx *sql.Tx, name string,
 	// that did not carry what it claimed. The filter is shielded anyway,
 	// because an archived field does not RESOLVE, but a row that lies
 	// about its own state is a trap for the next reader of it.
-	swept, err := a.settleFieldArchives(ctx, tx, catalogue.Fields)
+	swept, err := a.settleFieldVisibility(ctx, tx, catalogue.Fields)
 	if err != nil {
 		return 0, err
 	}
 	return written + swept, nil
 }
 
-// settleFieldArchives makes every value row agree with its declaration.
+// settleFieldVisibility makes every value row agree with its declaration.
 //
-// BOTH DIRECTIONS, because an archive is one-way for the DECLARATION and this
-// column merely mirrors it: a field that was never archived must not have
-// hidden rows either, or a value written while a stale declaration was in
-// force would stay out of every filter for ever.
-func (a *Applier) settleFieldArchives(ctx context.Context, tx *sql.Tx,
+// BOTH DIRECTIONS, because neither fact this column carries is one-way FOR THE
+// COLUMN. An archive is one-way for the DECLARATION and this merely mirrors
+// it, so a field that was never archived must not have hidden rows either, or
+// a value written while a stale declaration was in force would stay out of
+// every filter for ever. `AppliesTo` is not one-way at all: a declaration that
+// adds a type has to bring those tasks' values back into the filterable set.
+//
+// TWO FACTS IN ONE COLUMN, and the statement computes both — a value is hidden
+// when its field is ARCHIVED or when the field's `AppliesTo` excludes the TYPE
+// of the task holding it. The type comparison is case-folded because
+// [appliesTo] decides the same thing at explode time and folds too, and the
+// two disagreeing would make a row's visibility depend on which write happened
+// last.
+//
+// FOREIGN ROWS ARE UNTOUCHED. They are hidden by what they ARE rather than by
+// any declaration, and a declaration arriving for one re-explodes it as native
+// on the task's next write rather than flipping a column here.
+func (a *Applier) settleFieldVisibility(ctx context.Context, tx *sql.Tx,
 	fields []FieldDef) (int, error) {
 
 	written := 0
 	for _, field := range fields {
-		res, err := tx.ExecContext(ctx, `
-			UPDATE tracker_field_values SET hidden = ?
-			WHERE field_id = ? AND hidden <> ?`,
-			boolInt(field.Archived), field.ID, boolInt(field.Archived))
+		var res sql.Result
+		var err error
+		switch {
+		case field.Archived || len(field.AppliesTo) == 0:
+			// ONE ANSWER FOR EVERY ROW: an archived field hides all
+			// of its values and an unrestricted one hides none, and
+			// neither needs to know which task a row sits on.
+			want := boolInt(field.Archived)
+			res, err = tx.ExecContext(ctx, `
+				UPDATE tracker_field_values SET hidden = ?
+				WHERE field_id = ? AND kind = ? AND hidden <> ?`,
+				want, field.ID, FieldValueNative, want)
+		default:
+			types := make([]any, 0, len(field.AppliesTo))
+			for _, name := range field.AppliesTo {
+				types = append(types, strings.ToLower(name))
+			}
+			// A ROW WHOSE TASK IS GONE IS HIDDEN, which is what the
+			// COALESCE says: the column is NOT NULL, and a value with
+			// no task to be about cannot be shown to belong to one.
+			expr := `COALESCE((SELECT CASE WHEN LOWER(t.type) IN (` +
+				placeholders(len(types)) + `) THEN 0 ELSE 1 END ` +
+				`FROM tracker_tasks t ` +
+				`WHERE t.id = tracker_field_values.task_id), 1)`
+			// THE SET CLAUSE'S ARGUMENTS BIND FIRST, then the
+			// WHERE's, then the same expression's again: a
+			// placeholder binds in statement order and this
+			// expression appears twice.
+			bound := append(append([]any{}, types...), field.ID, FieldValueNative)
+			bound = append(bound, types...)
+			res, err = tx.ExecContext(ctx, `
+				UPDATE tracker_field_values SET hidden = `+expr+`
+				WHERE field_id = ? AND kind = ? AND hidden <> `+expr, bound...)
+		}
 		if err != nil {
 			return 0, fmt.Errorf("tracker: settle %s's value rows against its "+
 				"declaration: %w", field.Slug, err)
