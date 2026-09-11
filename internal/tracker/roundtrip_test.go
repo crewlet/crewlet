@@ -274,6 +274,24 @@ func (r *roundTrip) scopeOfLastRecord() statelog.ScopeSet {
 	return env.Scope.Resolve(env.Subject)
 }
 
+// askErr is [roundTrip.ask] for a read that is expected to REFUSE.
+//
+// It parses exactly as ask does, so a case using it is testing the reader's
+// own gate rather than the grammar's — a refusal that moved into [ParseQuery]
+// would fail here with a parse error rather than quietly still passing.
+func (r *roundTrip) askErr(kv map[string]any) error {
+	r.t.Helper()
+	q, err := tracker.ParseQuery(tracker.MapParams(kv), wednesday, berlin)
+	if err != nil {
+		r.t.Fatalf("ParseQuery: %v", err)
+	}
+	if q.Level == "" {
+		q.Level = statelog.ReadStale
+	}
+	_, err = r.reader.Tasks(r.t.Context(), q, wednesday)
+	return err
+}
+
 func (r *roundTrip) ask(kv map[string]any) tracker.Answer {
 	r.t.Helper()
 	q, err := tracker.ParseQuery(tracker.MapParams(kv), wednesday, berlin)
