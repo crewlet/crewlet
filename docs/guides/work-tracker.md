@@ -112,6 +112,29 @@ more than one — which is what a carry-over is — and the sprint's own record
 carries what it started with, so a burn-down is a fact rather than a
 reconstruction.
 
+Membership is a **stay**: the pair of instants a task was in one sprint for,
+recorded by the engine rather than carried by whoever moved it. That is what
+lets `sprint=` mean more than a number. It takes:
+
+| Value | What it selects |
+|---|---|
+| `4` | that sprint, by number |
+| `Kickoff` | that sprint, by name |
+| `active` / `future` / `closed` | every sprint of the project in that state — resolved when the query runs, so a saved board keeps meaning "the sprint that is active now" |
+| `next` | the earliest future sprint, which is a different question from "any future one" |
+| `none` | the **backlog**: unfinished work in no sprint |
+
+Values are comma-separated and OR together, so `sprint=active,next` is what
+somebody planning asks for. Every one of them but `none` names a sprint of one
+project — they are numbered and named per project — so all of them are refused
+at company scope naming the container key that fixes it. `none` means the same
+thing everywhere and is accepted there.
+
+`none` is an absence of an **open** stay rather than of every stay, which is
+what keeps a carry-over out of the backlog: a task pulled forward into the next
+sprint is in that sprint, while one pulled back out of every sprint is
+unplanned work again.
+
 **Goals** are the tier above projects: a name, owners, dates, a health value
 and a free-text group label. A goal has **targets**, and a target references
 work — a project, a set of tasks, a number somebody moves by hand. Goals

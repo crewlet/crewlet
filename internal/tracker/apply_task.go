@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -60,6 +61,13 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	// whose finish instant is null clears nothing and every dependent
 	// waits for ever on work that is done.
 	if err := stampFinish(&next, c); err != nil {
+		return 0, err
+	}
+
+	// AND THE SPRINT HISTORY IS THE APPLIER'S TOO, for the same reason:
+	// a stay is a pair of instants, and instants this engine derives come
+	// from the broker rather than from whoever wrote the record.
+	if err := stampSprintStay(&next, current, held, c); err != nil {
 		return 0, err
 	}
 
@@ -182,6 +190,111 @@ func stampFinish(task *Task, c applyContext) error {
 		task.DoneAt, task.ClosedAt = nil, nil
 	}
 	return nil
+}
+
+// stampSprintStay records a task entering or leaving a sprint.
+//
+// # Why the applier derives it and no writer carries it
+//
+// `tracker_task_sprints` is ONE ROW PER STAY, and a stay is what every sprint
+// report is derived from: committed, added, removed, remaining and velocity
+// are all read off the from/to pair rather than off the task's current sprint
+// number, because a task that carried over is in TWO sprints and a column
+// could only say one. The pair is two INSTANTS, and an instant this engine
+// derives comes from the broker (see [effectiveOf]) — a writer-supplied one
+// would be one node's clock deciding which sprint a piece of work landed in.
+//
+// It is also why nothing published a stay before: a writer cannot form one. It
+// would have to read the task's current sprint in one transaction and write
+// the boundary in another, and two writers moving one task between sprints
+// would then each close a stay the other had already closed.
+//
+// # The shape
+//
+// A stay OPENS when the task's sprint becomes non-nil and CLOSES when it stops
+// being that number — a move from 4 to 5 does both, in that order, so the
+// history reads as a carry-over rather than as two unrelated memberships. A
+// task that was never in a sprint and still is not produces nothing at all,
+// which is the common case and costs one comparison.
+//
+// THE CAP DROPS THE OLDEST CLOSED STAY and keeps the count, so a report can
+// say how many it is not showing rather than quietly showing fewer. An OPEN
+// stay is never dropped: it is the one the task is in now.
+func stampSprintStay(next *Task, current Task, held bool, c applyContext) error {
+	was := current.Sprint
+	if !held {
+		was = nil
+	}
+	now := next.Sprint
+	if sameSprint(was, now) {
+		return nil
+	}
+	at, err := effectiveOf(c)
+	if err != nil {
+		return err
+	}
+	stays := slices.Clone(next.SprintHistory)
+	if was != nil {
+		// CLOSE THE OPEN STAY ON THE SPRINT IT IS LEAVING, and only that
+		// one: a task re-added to a sprint it already left has two stays
+		// on that number, which is what the primary key's `from_at`
+		// component is for.
+		for i := range stays {
+			if stays[i].Sprint == *was && stays[i].To == nil {
+				stays[i].To = &at
+				if now != nil {
+					// A CARRY-OVER SAYS WHERE IT WENT, so a report
+					// can tell work that rolled forward from work
+					// that was dropped.
+					rolled := *now
+					stays[i].RolledTo = &rolled
+				}
+			}
+		}
+	}
+	if now != nil {
+		stays = append(stays, SprintStay{Sprint: *now, From: at})
+	}
+	next.SprintHistory, next.SprintStaysDropped = capStays(stays,
+		next.SprintStaysDropped)
+	return nil
+}
+
+// sameSprint compares two optional sprint numbers.
+func sameSprint(a, b *int) bool {
+	switch {
+	case a == nil && b == nil:
+		return true
+	case a == nil || b == nil:
+		return false
+	}
+	return *a == *b
+}
+
+// capStays drops the oldest CLOSED stays past [MaxSprintStays], counting them.
+//
+// Closed only, because an open stay is where the task is now — dropping it
+// would make the task's own sprint unreadable from its history. Order is
+// preserved, so the history stays oldest-first and a reader can page it.
+func capStays(stays []SprintStay, dropped int) ([]SprintStay, int) {
+	for len(stays) > MaxSprintStays {
+		cut := -1
+		for i := range stays {
+			if stays[i].To != nil {
+				cut = i
+				break
+			}
+		}
+		if cut < 0 {
+			// EVERY STAY IS OPEN, which a task in sixteen concurrent
+			// sprints would be and nothing else is. Nothing is dropped:
+			// the cap bounds history, not the present.
+			break
+		}
+		stays = append(stays[:cut], stays[cut+1:]...)
+		dropped++
+	}
+	return stays, dropped
 }
 
 // effectiveOf is the instant a stamp derived from this record takes.
@@ -501,6 +614,26 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx, task Task,
 				 VALUES (?,?,?)
 				 ON CONFLICT (task_id, slug) DO NOTHING`,
 				task.Tags, func(s string) []any { return []any{task.ID, task.Project, s} })
+		}},
+		{"tracker_task_sprints", func() (int, error) {
+			// ONE ROW PER STAY, which is what every sprint report is
+			// derived from — and what made `sprint=` answer zero for
+			// every task until something wrote one. The rows are
+			// rebuilt from the document on every apply, like every
+			// other collection here, so a reprocess converges rather
+			// than accumulating.
+			return insertMany(ctx, tx, `
+				INSERT INTO tracker_task_sprints
+					(task_id, sprint, project_key, from_at, to_at, rolled_to)
+				VALUES (?,?,?,?,?,?)
+				ON CONFLICT (task_id, sprint, from_at) DO UPDATE SET
+					to_at = excluded.to_at,
+					rolled_to = excluded.rolled_to`,
+				task.SprintHistory, func(v SprintStay) []any {
+					return []any{task.ID, v.Sprint, task.Project,
+						store.EncodeTime(v.From), nullableTime(v.To),
+						nullableInt(v.RolledTo)}
+				})
 		}},
 		{"tracker_relations", func() (int, error) {
 			return insertMany(ctx, tx, `
