@@ -3,6 +3,7 @@ package datadog_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -472,5 +473,118 @@ func TestADisconnectWithNoPublicBaseWithdrawsNothing(t *testing.T) {
 	}
 	if held.hook == nil {
 		t.Error("a webhook was deleted by a node that could not name its own address")
+	}
+}
+
+// A DISCONNECT AND A RECONNECT COMPLETE A CYCLE.
+//
+// Disconnecting disables each account, which is the reversible form deletion
+// is deliberately not: an account that merely stops working keeps the monitors
+// and notebooks it authored, where deleting it makes them lose their author.
+// The cost was that nothing could turn one back on — the pass refused, on the
+// reasoning that undoing a decommission is somebody's decision — so every
+// cycle ended in manual work or left another dead account. About thirty-seven
+// accumulated in one deployment.
+//
+// The teardown records that it is the one disabling the account, in the one
+// place that survives the disconnect: the account itself. The surface's status
+// row is forgotten the moment the disconnect succeeds.
+func TestADisconnectedAccountCanBeConnectedAgain(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+
+	// The instance holds one live account this engine made.
+	account := struct {
+		disabled bool
+		title    string
+	}{}
+	var patches int
+	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, `{"data":[{"id":"u1","attributes":{
+			"email":"crewlet-sre@agents.test.invalid","service_account":true,
+			"disabled":%t,"title":%q}}]}`, account.disabled, account.title)
+	}
+	reg.handle["/api/v2/users/u1"] = func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodDelete:
+			account.disabled = true
+		case http.MethodPatch:
+			patches++
+			var body struct {
+				Data struct{ Attributes map[string]any } `json:"data"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if title, set := body.Data.Attributes["title"].(string); set {
+				account.title = title
+			}
+			if off, set := body.Data.Attributes["disabled"].(bool); set {
+				account.disabled = off
+			}
+		}
+		_, _ = w.Write([]byte(`{"data":{"id":"u1"}}`))
+	}
+	// THE ACCOUNT HOLDS THE KEY THIS ENGINE MINTED FOR IT, which is the
+	// value sealed in the seat's variable.
+	keys := []string{"k1"}
+	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(w http.ResponseWriter, _ *http.Request) {
+		rows := make([]string, 0, len(keys))
+		for _, id := range keys {
+			rows = append(rows, fmt.Sprintf(`{"id":%q,"attributes":{"name":"crewlet"}}`, id))
+		}
+		fmt.Fprintf(w, `{"data":[%s]}`, strings.Join(rows, ","))
+	}
+	reg.handle["/api/v2/service_accounts/u1/application_keys/k1"] = func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			keys = nil
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+
+	if _, err := datadog.Teardown(context.Background(), datadog.TeardownOptions{
+		Client: reg.client(t), Config: cfgWith(), Creds: pair,
+		Plan: planWith("sre"), RemoveSeats: true,
+	}); err != nil {
+		t.Fatalf("teardown: %v", err)
+	}
+	if !account.disabled {
+		t.Fatal("the disconnect left the account enabled")
+	}
+	// MARKED BEFORE IT WAS DISABLED, so a run interrupted between the two
+	// leaves a marked live account rather than a disabled unmarked one —
+	// the state nothing can ever undo on its own.
+	if account.title != datadog.DisconnectedTitle {
+		t.Fatalf("title = %q, so nothing records that this engine disabled it", account.title)
+	}
+	// AND THE APPLICATION KEY IS GONE. A live key on a disabled account is
+	// a credential that works again the moment anybody re-enables it —
+	// which this engine now does, so that moment is one button press away
+	// rather than hypothetical. mattermost's teardown states the same rule
+	// about its own bots.
+	if len(keys) != 0 {
+		t.Errorf("the account still holds %v after a disconnect: re-enabling it "+
+			"restores a working credential to a company that disconnected", keys)
+	}
+
+	// AND NOW CONNECTING GETS IT BACK.
+	s := newSink()
+	s.held["SRE_DD_KEY"] = "already-held"
+	res, err := datadog.Reconcile(context.Background(), datadog.Options{
+		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
+		Creds: pair, Sink: s,
+	})
+	if err != nil {
+		t.Fatalf("reconnect: %v", err)
+	}
+	if account.disabled {
+		t.Error("the reconnect left the account disabled, so the cycle still " +
+			"ends in manual work or another dead account")
+	}
+	if account.title != "" {
+		t.Errorf("title = %q after the reconnect: a live account still marked "+
+			"disconnected would be re-enabled again on every pass", account.title)
+	}
+	if len(res.Seats) != 1 || res.Seats[0].Err != nil {
+		t.Fatalf("seat = %+v, want it recovered", res.Seats)
 	}
 }

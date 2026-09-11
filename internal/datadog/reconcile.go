@@ -75,6 +75,10 @@ type SeatResult struct {
 	Created bool
 	// KeyMinted reports an application key this pass minted.
 	KeyMinted bool
+	// Enabled reports an account this pass turned back on, having
+	// established that a previous disconnect of this engine's is what
+	// disabled it. See [DisconnectedTitle].
+	Enabled bool
 	// Err is why this seat could not be provisioned, if it could not.
 	Err error
 }
@@ -239,28 +243,56 @@ func provisionSeat(
 	account, found := byEmail[seat.Email]
 
 	switch {
+	case found && account.Disabled && account.Title == DisconnectedTitle:
+		// THIS ENGINE DISABLED IT, and connecting is the operator asking
+		// for it back.
+		//
+		// Re-enabling used to be refused outright, on the reasoning that
+		// undoing a decommission is somebody's decision and a pass that
+		// quietly reversed it would fight that gesture on every tick. The
+		// reasoning holds for an account a PERSON disabled at Datadog and
+		// not for one this engine's own teardown turned off — and with
+		// nothing recording which was which, both were the same
+		// ambiguous bit and both were refused.
+		//
+		// What that cost: a disconnect-then-reconnect cycle could not
+		// complete. The pass found the account it had disabled, reported
+		// "re-enable it at Datadog: this pass will not", and the operator
+		// either did it by hand or left another dead account behind.
+		// About thirty-seven accumulated in one deployment.
+		//
+		// See [DisconnectedTitle] for why the provenance lives on the
+		// account rather than on the surface's status row.
+		if opts.Sink == nil {
+			// A CHECK CHANGES NOTHING, which is the whole of what
+			// distinguishes it from a pass.
+			out.AccountID = account.ID
+			return out
+		}
+		if err := opts.Client.EnableUser(ctx, opts.Creds, account.ID); err != nil {
+			out.AccountID = account.ID
+			out.Err = fmt.Errorf(
+				"re-enable %s's Datadog service account (%s), which a previous "+
+					"disconnect disabled: %w",
+				seat.Handle, seat.Email, integration.Reject(err, Status(err)))
+			return out
+		}
+		out.AccountID, out.Enabled = account.ID, true
 	case found && account.Disabled:
 		// A DISABLED ACCOUNT AUTHENTICATES AS NOTHING, and reading it as
 		// an account is how this seat went silently dead.
 		//
-		// Disabling is exactly what [Teardown] does to decommission a
-		// seat, so an operator who removed seats and later re-enabled the
-		// block got a pass that found the account, reported nothing, and
-		// left the surface Ready while every call the agent made was
-		// refused. There was no path out of it either: a disabled account
-		// is still in the listing, so no later pass ever created a
-		// replacement.
-		//
-		// REPORTED RATHER THAN RE-ENABLED, on the same terms as an
-		// account that left the config: undoing a decommission is a
-		// decision somebody makes, and a pass that quietly reversed it
-		// would fight the operator's own gesture on every tick.
+		// SOMEBODY ELSE DISABLED THIS ONE — it carries no marker of this
+		// engine's — so it is reported rather than re-enabled, on the same
+		// terms as an account that left the config: that was a deliberate
+		// act at Datadog, and a pass that reversed it would fight the
+		// gesture on every tick.
 		out.AccountID = account.ID
 		out.Err = fmt.Errorf(
-			"%s's Datadog service account (%s) is disabled, so everything it "+
-				"authenticates is refused — re-enable it at Datadog: this "+
-				"pass will not, because disabling one is how a disconnect "+
-				"that removes seats decommissions it", seat.Handle, seat.Email)
+			"%s's Datadog service account (%s) is disabled and was not disabled "+
+				"by this engine, so everything it authenticates is refused — "+
+				"re-enable it at Datadog if that was not deliberate",
+			seat.Handle, seat.Email)
 		return out
 	case found:
 		out.AccountID = account.ID

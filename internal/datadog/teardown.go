@@ -133,6 +133,20 @@ func Teardown(ctx context.Context, opts TeardownOptions) (provision.Removed, err
 			continue
 		}
 		if !account.Disabled {
+			// MARKED BEFORE IT IS DISABLED. Re-enabling is a decision this
+			// engine may only make about an account IT turned off, and the
+			// surface's own status row — the obvious place to record that
+			// — is forgotten the moment this disconnect succeeds. The
+			// marker lives on the account instead. Written first so an
+			// interrupted run leaves a marked, live account rather than a
+			// disabled one with no provenance, which is the state nothing
+			// can ever undo on its own.
+			if err := opts.Client.MarkDisconnected(ctx, opts.Creds, account.ID); err != nil {
+				failures = append(failures, fmt.Errorf(
+					"datadog: record that this engine is disabling %s: %w",
+					seat.Handle, integration.Reject(err, Status(err))))
+				continue
+			}
 			if err := opts.Client.DisableUser(ctx, opts.Creds, account.ID); err != nil {
 				failures = append(failures, fmt.Errorf("datadog: disable %s: %w",
 					seat.Handle, integration.Reject(err, Status(err))))

@@ -277,7 +277,32 @@ type User struct {
 	Email    string
 	Name     string
 	Disabled bool
+
+	// Title is Datadog's job-title field, which this engine uses as the
+	// one durable place to record that IT disabled an account.
+	//
+	// AT THE VENDOR, BESIDE THE THING IT DESCRIBES. The obvious home is
+	// the surface's own status row, and that row is FORGOTTEN the moment
+	// the disconnect succeeds — destroyed on the success path of the very
+	// operation that would write it. A field on the account survives the
+	// disconnect, a fleet losing its coordination store, and a restore
+	// from backup, and it cannot drift from the account it is about.
+	//
+	// The title rather than the name: matching reads the name and the
+	// email, and a marker in either would be a second meaning loaded onto
+	// a field that already has one. Nothing else sets a job title on a
+	// service account.
+	Title string
 }
+
+// DisconnectedTitle marks an account this engine disabled during a teardown.
+//
+// IT IS WHAT LETS A CONNECT UNDO A DISCONNECT. Re-enabling is otherwise a
+// decision this pass may not make — an account a PERSON disabled at Datadog
+// was disabled for a reason, and a pass that quietly reversed it would fight
+// that gesture on every tick. With provenance the two cases are different
+// facts rather than one ambiguous bit.
+const DisconnectedTitle = "crewlet:disconnected"
 
 // ListServiceAccounts reads the service accounts whose email matches query.
 //
@@ -308,6 +333,7 @@ func (c *Client) ListServiceAccounts(
 			out = append(out, User{
 				ID: row.ID, Email: row.Attributes.Email,
 				Name: row.Attributes.Name, Disabled: row.Attributes.Disabled,
+				Title: row.Attributes.Title,
 			})
 		}
 	})
@@ -325,6 +351,7 @@ type usersPage struct {
 		Attributes struct {
 			Email      string `json:"email"`
 			Name       string `json:"name"`
+			Title      string `json:"title"`
 			Disabled   bool   `json:"disabled"`
 			ServiceAcc bool   `json:"service_account"`
 		} `json:"attributes"`
@@ -560,6 +587,37 @@ func (c *Client) ListAppKeys(ctx context.Context, creds Credentials, accountID s
 // made and can do nothing more, which is what decommissioning one means.
 func (c *Client) DisableUser(ctx context.Context, creds Credentials, userID string) error {
 	return c.do(ctx, http.MethodDelete, "/api/v2/users/"+url.PathEscape(userID), creds, nil, nil)
+}
+
+// MarkDisconnected records that THIS engine is the one disabling an account.
+//
+// Written BEFORE the disable, so a run interrupted between the two leaves a
+// marked account that is still enabled — harmless, and the next teardown
+// finishes it — rather than a disabled one with no provenance, which is the
+// state that can never be undone automatically.
+func (c *Client) MarkDisconnected(ctx context.Context, creds Credentials, userID string) error {
+	return c.updateUser(ctx, creds, userID, map[string]any{"title": DisconnectedTitle})
+}
+
+// EnableUser undoes a disable and clears the marker in one request.
+//
+// ONE REQUEST, because two would have a window in which the account is live
+// and still marked — and a teardown running in that window would read the
+// marker, skip its own mark, and disable an account it had not recorded.
+func (c *Client) EnableUser(ctx context.Context, creds Credentials, userID string) error {
+	return c.updateUser(ctx, creds, userID,
+		map[string]any{"disabled": false, "title": ""})
+}
+
+// updateUser patches one account's attributes.
+func (c *Client) updateUser(
+	ctx context.Context, creds Credentials, userID string, attributes map[string]any,
+) error {
+	payload := map[string]any{"data": map[string]any{
+		"type": "users", "id": userID, "attributes": attributes,
+	}}
+	return c.do(ctx, http.MethodPatch,
+		"/api/v2/users/"+url.PathEscape(userID), creds, payload, nil)
 }
 
 // webhookPath is the Webhooks integration's configuration collection.

@@ -657,3 +657,92 @@ func TestANodeWithNoKeyringStillRegistersTheWebhook(t *testing.T) {
 		t.Errorf("url = %q, want %q", got, want)
 	}
 }
+
+// CONNECTING RE-ENABLES AN ACCOUNT THIS ENGINE'S OWN DISCONNECT DISABLED.
+//
+// Re-enabling used to be refused outright, on the reasoning that undoing a
+// decommission is somebody's decision and a pass that reversed it would fight
+// that gesture on every tick. That holds for an account a PERSON disabled and
+// not for one this engine turned off — and with nothing recording which was
+// which, both were the same ambiguous bit and both were refused.
+//
+// So a disconnect-then-reconnect cycle could not complete: the pass found the
+// account it had itself disabled, said "re-enable it at Datadog: this pass will
+// not", and the operator either did it by hand or left another dead account
+// behind. About thirty-seven accumulated in one deployment.
+func TestConnectingReEnablesAnAccountThisEngineDisabled(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	enabled := 0
+	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"u1","attributes":{
+			"email":"crewlet-sre@agents.test.invalid","service_account":true,
+			"disabled":true,"title":"crewlet:disconnected"}}]}`))
+	}
+	reg.handle["/api/v2/users/u1"] = func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		enabled++
+		_, _ = w.Write([]byte(`{"data":{"id":"u1"}}`))
+	}
+
+	s := newSink()
+	s.held["SRE_DD_KEY"] = "already-held"
+	res, err := datadog.Reconcile(context.Background(), datadog.Options{
+		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
+		Creds: pair, Sink: s,
+	})
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if enabled != 1 {
+		t.Errorf("the account was re-enabled %d times, want once", enabled)
+	}
+	if len(res.Seats) != 1 || res.Seats[0].Err != nil {
+		t.Fatalf("seat = %+v, want it reported as recovered rather than failed", res.Seats)
+	}
+	if !res.Seats[0].Enabled {
+		t.Error("the pass did not report turning the account back on")
+	}
+}
+
+// AND AN ACCOUNT SOMEBODY ELSE DISABLED IS STILL LEFT ALONE.
+//
+// That was a deliberate act at Datadog. A pass that reversed it would fight
+// the operator's own gesture on every tick, which is why the refusal exists
+// and why it survives — what changed is that the two cases are now different
+// facts rather than one bit.
+func TestAnAccountDisabledByHandIsStillReportedRatherThanReEnabled(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
+		// NO MARKER: this engine did not disable it.
+		_, _ = w.Write([]byte(`{"data":[{"id":"u1","attributes":{
+			"email":"crewlet-sre@agents.test.invalid","service_account":true,
+			"disabled":true}}]}`))
+	}
+	reg.handle["/api/v2/users/u1"] = func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("an account this engine did not disable was re-enabled")
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+
+	s := newSink()
+	s.held["SRE_DD_KEY"] = "already-held"
+	res, err := datadog.Reconcile(context.Background(), datadog.Options{
+		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
+		Creds: pair, Sink: s,
+	})
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(res.Seats) != 1 || res.Seats[0].Err == nil {
+		t.Fatalf("seat = %+v, want the disabled account reported", res.Seats)
+	}
+	if !strings.Contains(res.Seats[0].Err.Error(), "not disabled by this engine") {
+		t.Errorf("the report does not say who disabled it: %v", res.Seats[0].Err)
+	}
+}

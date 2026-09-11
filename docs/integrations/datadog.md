@@ -87,6 +87,30 @@ Disconnecting **disables** these accounts when you tick "also remove the
 accounts Crewlet created". Disabled rather than deleted, because deleting a
 Datadog user detaches it from everything it authored.
 
+It also **deletes each account's application keys** — the value sealed in that
+seat's `${VAR}` — before disabling it, and records that *this engine* is the one
+disabling it, in Datadog's own `title` field on the account. Both matter:
+
+- A live key on a disabled account is a credential that **works again the moment
+  anybody re-enables the account**, and the engine now does exactly that (below),
+  so that moment is one button press away rather than hypothetical.
+- **Connecting again re-enables an account this engine disabled**, and only one
+  it disabled. Re-enabling used to be refused outright: undoing a decommission is
+  somebody's decision, and a pass that quietly reversed it would fight that
+  gesture on every tick. That reasoning holds for an account a *person* disabled
+  and not for one Crewlet's own teardown turned off — and with nothing recording
+  which was which, both were the same ambiguous bit and both were refused, so a
+  disconnect-and-reconnect cycle could never complete without manual work. One
+  deployment accumulated about thirty-seven dead accounts that way. An account
+  with no marker is still reported and never touched.
+
+> The marker lives on the **account** rather than on the surface's status row,
+> because that row is forgotten the moment the disconnect succeeds — destroyed on
+> the success path of the very operation that would write it. A field on the
+> account survives the disconnect, a fleet losing its coordination store, and a
+> restore from backup. Accounts disabled before this shipped carry no marker and
+> stay manual.
+
 
 ## Configuration
 
@@ -201,7 +225,8 @@ each one leaving the surface reporting `ready` while alerts went nowhere:
 |---|---|---|
 | No webhook was registered because this deployment has no inbound address | `ingress_blocked` | set `integrations.public_base_url` |
 | No webhook was registered because `webhook_token` resolved to nothing, or because this node has no keyring to seal one with | `credential_missing` | set `integrations.datadog.webhook_token`, or install `secrets.keys` |
-| A seat's service account exists but is **disabled** | `identity_failed` | re-enable it in Datadog |
+| A seat's service account exists but is **disabled**, with no Crewlet marker | `identity_failed` | re-enable it in Datadog — it was not disabled by this engine |
+| A seat's service account is disabled **by a Crewlet disconnect** | — | the next pass re-enables it |
 
 The last is the one worth knowing about. Disabling an account is exactly how a
 disconnect with account removal decommissions one, so a company that had run
