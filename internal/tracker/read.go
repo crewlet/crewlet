@@ -118,6 +118,18 @@ type Answer struct {
 	// [Answer.TotalHint] rather than concluding the answer is wrong.
 	GroupsOverlap bool `json:"groups_overlap,omitempty"`
 
+	// View and Preset are what this answer was EXPANDED FROM, echoed so
+	// the answer describes itself the way every other field here does.
+	//
+	// A request knows what it sent; an ANSWER does not otherwise, and this
+	// domain's answers travel detached from their requests — a socket
+	// frame, a cached payload, a screen restored from a URL. Without the
+	// echo a board cannot say which saved view it is showing, and a
+	// caller cannot tell an expansion that resolved from one that was
+	// quietly dropped.
+	View   string `json:"view,omitempty"`
+	Preset string `json:"preset,omitempty"`
+
 	// Level is the level ACTUALLY served, set from the statement that
 	// satisfied the barrier — never the level asked for. A level never
 	// silently downgrades, so the two can only differ by a refusal.
@@ -220,7 +232,7 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 			"tool session, a dashboard poll stale) before it reads")
 	}
 
-	var answer Answer
+	answer := Answer{View: q.View, Preset: q.Preset}
 	// A SET READ, and that word decides what a deferred scope does to it.
 	// A point read refuses, because the one object it is about may be
 	// stale; a set read cannot enumerate what would have ENTERED the set —

@@ -213,3 +213,53 @@ func TestAMissingViewIsRefusedRatherThanIgnored(t *testing.T) {
 		t.Fatalf("the refusal %q does not say what happened", err)
 	}
 }
+
+// AN ANSWER SAYS WHAT IT WAS EXPANDED FROM.
+//
+// A request knows what it sent; an answer does not otherwise, and these travel
+// detached from their requests — a socket frame, a cached payload, a screen
+// restored from a URL. Without the echo a board cannot say which saved view it
+// is showing, and a caller cannot tell an expansion that resolved from one
+// that was quietly dropped.
+func TestAnAnswerSaysWhatItWasExpandedFrom(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	if _, err := r.writer.WriteView(t.Context(), "op-view", tracker.View{
+		ID:        "v-1",
+		Name:      "Open work",
+		Type:      tracker.ViewList,
+		Container: tracker.Container{Kind: tracker.ContainerProject, ID: "ENG"},
+		Params:    map[string]string{"status": "todo"},
+	}); err != nil {
+		t.Fatalf("WriteView: %v", err)
+	}
+	r.drain()
+
+	q, err := r.reader.ExpandedQuery(t.Context(), map[string]any{
+		"container": "project:ENG", "view": "v-1", "preset": "blocked",
+	}, "ana", wednesday, berlin)
+	if err != nil {
+		t.Fatalf("ExpandedQuery: %v", err)
+	}
+	q.Level = "stale"
+	answer, err := r.reader.Tasks(t.Context(), q, wednesday)
+	if err != nil {
+		t.Fatalf("Tasks: %v", err)
+	}
+	if answer.View != "v-1" {
+		t.Fatalf("the answer says it came from view %q, want v-1", answer.View)
+	}
+	if answer.Preset != "blocked" {
+		t.Fatalf("the answer says it came from preset %q, want blocked",
+			answer.Preset)
+	}
+
+	// AND AN ORDINARY QUERY CLAIMS NEITHER, or every board would report a
+	// view it was never opened from.
+	plain := r.ask(map[string]any{"container": "project:ENG"})
+	if plain.View != "" || plain.Preset != "" {
+		t.Fatalf("an ordinary answer claims view %q and preset %q",
+			plain.View, plain.Preset)
+	}
+}
