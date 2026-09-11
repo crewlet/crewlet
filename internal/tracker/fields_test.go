@@ -498,3 +498,105 @@ func TestAValueForAnUndeclaredFieldIsRecordedAsForeign(t *testing.T) {
 		t.Fatalf("f.effort>=1 matched %d rows, want 1", len(answer.Rows))
 	}
 }
+
+// A REQUIRED FIELD IS REQUIRED OF THE TASKS IT APPLIES TO, and of no others.
+//
+// `AppliesTo` names the types a field is carried by. A field required only of
+// bugs was enforced on every task in the project, so a plain task filed into a
+// project that requires `severity` of its bugs was refused for not setting a
+// field that would have been HIDDEN the moment it was set.
+func TestARequiredFieldIsRequiredOnlyOfTheTypesItAppliesTo(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.writer.WriteFields(t.Context(), "op-fields", []tracker.FieldDef{
+		{ID: "f-sev", Slug: "severity", Name: "Severity", Type: tracker.FieldNumber,
+			Required: true, AppliesTo: []string{"bug"}},
+	}); err != nil {
+		t.Fatalf("WriteFields: %v", err)
+	}
+	r.drain()
+
+	plain := newTask("t-plain")
+	plain.Type = "task"
+	if _, err := r.writer.CreateTask(t.Context(), "op-plain", plain, nil); err != nil {
+		t.Fatalf("a plain task was refused for a field required only of bugs: %v", err)
+	}
+	r.drain()
+
+	// AND IT IS STILL REQUIRED OF A BUG, or this case would pass against a
+	// rule that stopped enforcing anything.
+	bug := newTask("t-bug")
+	bug.Key, bug.Type = "ENG-2", "bug"
+	if _, err := r.writer.CreateTask(t.Context(), "op-bug", bug, nil); err == nil {
+		t.Fatal("a bug with no severity was accepted, and severity is required of bugs")
+	}
+}
+
+// AND A FIELD REQUIRED AT THE WORKSPACE IS REQUIRED IN EVERY PROJECT.
+//
+// Fields are declared in two places and the check read only the project's
+// half, so a rule an operator set at the company level was applied to no task
+// anywhere — and nothing said it was not being applied.
+func TestAWorkspaceRequiredFieldIsEnforced(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.writer.WriteFields(t.Context(), "op-fields", []tracker.FieldDef{
+		{ID: "f-team", Slug: "owning_team", Name: "Owning team",
+			Type: tracker.FieldText, Required: true},
+	}); err != nil {
+		t.Fatalf("WriteFields: %v", err)
+	}
+	r.drain()
+
+	if _, err := r.writer.CreateTask(t.Context(), "op-bare", newTask("t-bare"), nil); err == nil {
+		t.Fatal("a task with no owning_team was accepted, and the workspace " +
+			"catalogue requires it of every task in every project")
+	}
+
+	withIt := newTask("t-set")
+	withIt.Key = "ENG-2"
+	withIt.Fields = map[string]json.RawMessage{"f-team": json.RawMessage(`"platform"`)}
+	if _, err := r.writer.CreateTask(t.Context(), "op-set", withIt, nil); err != nil {
+		t.Fatalf("a task that sets the required field was refused: %v", err)
+	}
+}
+
+// A VALUE WRITTEN AS AN OPTION'S SLUG IS THE SAME VALUE AS ITS ID.
+//
+// The query resolved a caller's word to the option's id before comparing and
+// the write stored whatever text it was handed, so a task set to `"high"` —
+// the slug a person types and the query accepts — stored "high" where every
+// filter looked for "o-high". The task was invisible to every filter, grouping
+// and total on the field it had just set, with nothing anywhere saying so.
+func TestAnOptionResolvesToItsIDOnTheWriteAsWellAsTheRead(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	seedFields(t, r)
+
+	// THREE SPELLINGS OF ONE OPTION: its id, its slug and its name. All
+	// three are what a caller may write, and all three must land on the
+	// same row.
+	seedWithFields(t, r, "by-id", map[string]any{"f-impact": "o-high"})
+	seedWithFields(t, r, "by-slug", map[string]any{"f-impact": "high"})
+	seedWithFields(t, r, "by-name", map[string]any{"f-impact": "High"})
+
+	got := ids(r.ask(map[string]any{
+		"container": "project:ENG", "f.impact": "high",
+	}))
+	if len(got) != 3 {
+		t.Fatalf("f.impact=high answers %v, want all three — one written by "+
+			"id, one by slug and one by name are one value", got)
+	}
+
+	// AND A MULTI-VALUED FIELD RESOLVES EVERY MEMBER, not just the first.
+	seedWithFields(t, r, "areas", map[string]any{
+		"f-areas": []string{"api", "o-ui"},
+	})
+	for _, value := range []string{"api", "ui"} {
+		if found := ids(r.ask(map[string]any{
+			"container": "project:ENG", "f.areas": value,
+		})); len(found) != 1 {
+			t.Errorf("f.areas=%s answers %v, want the task that set it", value, found)
+		}
+	}
+}

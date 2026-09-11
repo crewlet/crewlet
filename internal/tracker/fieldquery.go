@@ -146,22 +146,51 @@ func resolveOneField(ref string, byID map[string]FieldDef,
 		}
 		field.Multi = MultiValued(candidate.Type)
 		if FieldValueColumn(candidate.Type) == "ref" {
-			field.Options = make(map[string]string, len(candidate.Config.Options)*2)
+			field.Options = OptionIDs(candidate.Config.Options)
 			field.Labels = make(map[string]string, len(candidate.Config.Options))
 			for _, option := range candidate.Config.Options {
-				if option.Archived {
-					continue
-				}
-				field.Options[strings.ToLower(option.Slug)] = option.ID
-				field.Options[strings.ToLower(option.Name)] = option.ID
 				// THE NAME, ALWAYS: a heading is what a person reads,
-				// and the slug is what they type.
+				// and the slug is what they type. An ARCHIVED option is
+				// labelled too, for the reason [OptionIDs] resolves one:
+				// its values are still on their tasks, so a board can
+				// still draw a column for it — and one headed by a raw
+				// id is a column nobody can read.
 				field.Labels[option.ID] = option.Name
 			}
 		}
 		return field, true
 	}
 	return resolvedField{}, false
+}
+
+// OptionIDs maps every spelling of an option onto its ID — its own id, its
+// slug and its name, case-folded.
+//
+// ONE SPELLING OF THE RULE, because BOTH SIDES need it and they disagreed. The
+// read resolved a caller's word to the option's id before comparing; the write
+// stored whatever text it was handed. So a task written as `{region: "eu"}` —
+// the option SLUG, which is what a person types and what the read accepts —
+// stored "eu" where the filter looked for "o-eu", and that task was invisible
+// to every filter, grouping and total on the field it had set.
+//
+// An ARCHIVED option still resolves. Its values stay on their tasks and a
+// filter naming it must still find them; what archiving stops is CHOOSING it,
+// which is a rule about a write's validity rather than about lookup.
+func OptionIDs(options []Option) map[string]string {
+	out := make(map[string]string, len(options)*3)
+	for _, option := range options {
+		if option.ID == "" {
+			continue
+		}
+		out[strings.ToLower(option.ID)] = option.ID
+		if option.Slug != "" {
+			out[strings.ToLower(option.Slug)] = option.ID
+		}
+		if option.Name != "" {
+			out[strings.ToLower(option.Name)] = option.ID
+		}
+	}
+	return out
 }
 
 // collectFieldRefs gathers every ref a query and its branches name.
