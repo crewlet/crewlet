@@ -19,6 +19,8 @@ written into the config, so it does not ask you to copy values out of a
 console it is already reading. It also creates one service account per agent
 seat and mints that seat's token.
 
+**A brand-new account takes about a minute to start working, and the card says so.** Atlassian accepts the product-access grant immediately and applies it over the next minute or so, and until it has, Jira refuses the credential the engine just minted with its own `401 Client must be authenticated to access this resource`. That is reported as `grant_pending` — *the provider is working on it* — rather than as an agent somebody has to fix, on the Atlassian surface for the seat it just granted and on the Jira surface for a credential sealed within the last five minutes. Outside that window a refusal is what it looks like and is owed by an admin. This window is hit on **every** reconnect, because disconnecting with *Also remove the accounts* means the next connect creates new ones.
+
 An address typed here would be worse than redundant. The config uses a site
 address *instead of* the API gateway, and a service account's token
 authenticates only at the gateway, so naming a site is what stops the seats

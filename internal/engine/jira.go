@@ -91,8 +91,9 @@ func (j *jiraIdentities) resolve(ctx context.Context, url string, deploy jira.De
 		account, err := client.Me(ctx)
 		if err != nil {
 			log.WarnContext(ctx, "jira_seat_identity_unresolved", "error", err.Error(),
-				"detail", "this seat receives no tracker events until "+
-					"the next apply re-resolves it")
+				"detail", "this seat receives no tracker events until a lookup "+
+					"succeeds; the reconcile loop retries it on this surface's "+
+					"own pass, so nothing has to be applied")
 			return
 		}
 		found[i] = account

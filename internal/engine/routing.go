@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"strings"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -51,7 +52,9 @@ import (
 // the last apply. A seat that resolves here is registered into the LIVE
 // registry and starts receiving work immediately, with no config change and
 // nothing for an operator to press.
-func (e *Engine) resolveRouting(ctx context.Context, kind integration.Kind) []integration.Finding {
+func (e *Engine) resolveRouting(
+	ctx context.Context, kind integration.Kind, reported map[string]bool,
+) []integration.Finding {
 	company := e.Company()
 	if company == nil {
 		return nil
@@ -74,6 +77,14 @@ func (e *Engine) resolveRouting(ctx context.Context, kind integration.Kind) []in
 
 	out := make([]integration.Finding, 0, len(unresolved))
 	for _, handle := range unresolved {
+		// UNLESS THE SURFACE'S OWN PASS ALREADY SAID SO. The two resolve the
+		// same seats with the same credentials against the same instance, so
+		// a seat the pass has reported on does not need a second finding
+		// here — and the second one contradicted the first about who has to
+		// act. See `reported` in integrations.go.
+		if reported[handle] {
+			continue
+		}
 		out = append(out, integration.Finding{
 			Kind: integration.FindingIdentityMissing, Subject: handle,
 			Detail: handle + " holds a credential for this surface and no " +
@@ -101,8 +112,67 @@ func (e *Engine) rewireJira(ctx context.Context, c *Company) []string {
 		return nil
 	}
 	e.notify.jira.resolve(ctx, base, jira.DeploymentOf(base), jiraSeatCredentials(c, env))
-	e.notify.jira.register(e.Registry(), c, env)
-	return e.notify.jira.unresolved(c, env)
+	registered := e.notify.jira.register(e.Registry(), c, env)
+	unresolved := e.notify.jira.unresolved(c, env)
+	e.logRewired(ctx, integration.KindJira, registered, unresolved)
+	return unresolved
+}
+
+// logRewired records a retry that CHANGED something, which is the half the
+// warnings above could never say.
+//
+// A LOOKUP THAT SUCCEEDS USED TO LOG NOTHING AT ALL. The last word in the log
+// was the apply's own `*_wired seat_identities=0` beside
+// `*_has_no_seat_identities` — "every tracker webhook will name a stranger" —
+// and routing then recovered on a later pass in complete silence. Measured:
+// the card read Connected and correct about seventy seconds after the connect,
+// and anyone reading the log concluded the seat was still unrouted, because
+// every line in it said so.
+//
+// ON THE TRANSITION ONLY. This runs on every pass of three surfaces for the
+// life of the deployment, so a line per pass would be the log saying nothing
+// changed, several times a minute, for ever — which is how the lines that DO
+// matter stop being read. The count is what the transition is measured on:
+// the retry exists to move it.
+func (e *Engine) logRewired(
+	ctx context.Context, kind integration.Kind, registered int, unresolved []string,
+) {
+	if !e.rewired.changed(kind, registered) {
+		return
+	}
+	log.InfoContext(ctx, kind.String()+"_seat_identities_resolved",
+		"seat_identities", registered, "still_unresolved", len(unresolved))
+}
+
+// rewireLog remembers what the last retry resolved, so only a change is
+// logged. The zero value is ready.
+//
+// IN MEMORY AND PER NODE, deliberately: it decides what this process prints,
+// and a node that has just started has printed nothing — so its first pass
+// SHOULD say what it found. A count shared through coordination would make a
+// restarted node silent about the state it came up in, which is the one
+// moment somebody is reading the log.
+type rewireLog struct {
+	mu   sync.Mutex
+	last map[integration.Kind]int
+}
+
+// changed reports a count this surface has not already logged.
+func (r *rewireLog) changed(kind integration.Kind, registered int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if was, seen := r.last[kind]; seen && was == registered {
+		return false
+	}
+	if r.last == nil {
+		r.last = map[integration.Kind]int{}
+	}
+	r.last[kind] = registered
+	// NOTHING RESOLVED IS NOT NEWS. The surface's own pass already reports
+	// an unresolved seat as a finding, and the `*_has_no_seat_identities`
+	// warning is what says it loudly; a line here saying zero again would
+	// only ever repeat them.
+	return registered > 0
 }
 
 // rewireGitLab is the code host's half, on identical terms.
@@ -123,8 +193,10 @@ func (e *Engine) rewireGitLab(ctx context.Context, c *Company) []string {
 		return nil
 	}
 	e.notify.gitlab.resolve(ctx, url, gitlabSeatTokens(c, env))
-	e.notify.gitlab.register(e.Registry(), c, env)
-	return e.notify.gitlab.unresolved(c, env)
+	registered := e.notify.gitlab.register(e.Registry(), c, env)
+	unresolved := e.notify.gitlab.unresolved(c, env)
+	e.logRewired(ctx, integration.KindGitLab, registered, unresolved)
+	return unresolved
 }
 
 // rewireGitHub is the hosted code host's, and differs in one way that matters:
@@ -144,6 +216,8 @@ func (e *Engine) rewireGitHub(ctx context.Context, c *Company) []string {
 		return nil
 	}
 	e.notify.github.resolve(ctx, api, web, github.SeatCredentials(c.Org, env.Value))
-	e.notify.github.register(e.Registry(), c, env)
-	return e.notify.github.unresolved(c, env)
+	registered := e.notify.github.register(e.Registry(), c, env)
+	unresolved := e.notify.github.unresolved(c, env)
+	e.logRewired(ctx, integration.KindGitHub, registered, unresolved)
+	return unresolved
 }

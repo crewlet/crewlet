@@ -33,7 +33,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { SetupDialog } from "./SetupDialog.tsx";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
 import { onTokenChanged, requestToken, rest, RestError } from "~/protocol/index.ts";
-import type { IntegrationRow, ReconcileStatus } from "~/protocol/types.ts";
+import type { IntegrationRow, ReconcileFinding, ReconcileStatus } from "~/protocol/types.ts";
 import type { SetupListing, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
 
 type Tone = "positive" | "caution" | "critical" | "info" | "neutral";
@@ -1064,6 +1064,17 @@ export function EntryRow({
   // about the account rather than about a credential slot. Where no surface
   // provisions, the first roster with anything in it is as good as any: they
   // are reading the same seat's mcp_env.
+  // WHAT THE LOOP IS SAYING ABOUT EACH AGENT, across every surface on this
+  // card.
+  //
+  // The roster and the reconcile rows come from two endpoints and meet here,
+  // which is why this is the only place the contradiction could be resolved.
+  // The roster's `satisfied` means "a credential is sealed where this app
+  // looks for it" — a real fact, and not the one a reader takes from a green
+  // badge marked ready. Measured: the card said an agent had no Jira account
+  // and that Atlassian was still setting it up, with the same agent's row
+  // underneath badged ready, because the ${VAR} resolved.
+  const seatNotes = seatFindings(present);
   const rosters = tools.filter((t) => (t.seats ?? []).length > 0);
   const roster =
     rosters.find((t) => t.seats_required) ?? rosters.find((t) => t.can_provision) ?? rosters[0];
@@ -1259,6 +1270,11 @@ export function EntryRow({
                       which of their apps this one is. The engine's sentence
                       wins; the path is the fallback for a node too old to
                       send one. */}
+                  {/* THE ROW KEEPS ITS OWN SENTENCE, which is who this agent
+                      IS at the app. The loop's reason for the badge beside it
+                      is in the surface's own band above, once — printed here
+                      as well it was the same sentence twice on one card, which
+                      is the shape this whole screen is being cured of. */}
                   <span className="int-row-detail">
                     {seat.detail ? (
                       seat.detail
@@ -1270,9 +1286,7 @@ export function EntryRow({
                   </span>
                 </div>
                 <div className="int-row-badges">
-                  <Badge tone={seat.satisfied ? "positive" : "neutral"} outline={!seat.satisfied}>
-                    {seat.satisfied ? "ready" : "not set up"}
-                  </Badge>
+                  <SeatBadge satisfied={seat.satisfied} finding={seatNotes.get(seat.handle)} />
                 </div>
                 {/* THE STEP'S OWN CONTROL, outside the badges so a refusal can
                     take the full width of the row the way a finding does. */}
@@ -1283,6 +1297,60 @@ export function EntryRow({
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * The findings the loop has about individual agents, keyed by handle.
+ *
+ * ACROSS EVERY SURFACE ON THE CARD, because one agent's account is one thing
+ * and the card's surfaces are three views of it: Atlassian creates the
+ * account, Jira and Confluence are what it then works in, and any of the
+ * three can be the one that knows this agent cannot work yet.
+ *
+ * THE FIRST ONE WINS and the order is the card's own surface order, which
+ * puts the provisioning surface first — the one whose answer is about the
+ * account rather than about a product refusing it.
+ */
+function seatFindings(present: Present[]): Map<string, ReconcileFinding> {
+  const out = new Map<string, ReconcileFinding>();
+  for (const p of present) {
+    for (const f of p.row.reconcile?.findings ?? []) {
+      if (f.subject && !out.has(f.subject)) out.set(f.subject, f);
+    }
+  }
+  return out;
+}
+
+/**
+ * One agent's badge, from what is sealed AND what the loop found.
+ *
+ * THREE STATES, NOT TWO. `satisfied` answers "is a credential sealed where
+ * this app looks for it", which is not the same question as "can this agent
+ * work" — and rendering it as **ready** made the card contradict itself, with
+ * a green agent under a surface reporting that the same agent had no account.
+ *
+ * A FINDING THAT NAMES THE AGENT WINS, whatever it is: the loop looked, and
+ * the roster did not. Whether it is a wait or a fault is the finding's own
+ * verdict, which the surface's own band above already renders — so this says
+ * only that the agent is not there yet, in the tone the phase carries.
+ */
+function SeatBadge({ satisfied, finding }: { satisfied: boolean; finding?: ReconcileFinding }) {
+  if (finding) {
+    // AMBER FOR A WAIT, and amber for a fault too: the badge is a state, and
+    // the band beside it is where the difference and the remedy are written.
+    // A red agent under a surface saying "nothing has to be done" would be
+    // the same contradiction in the other direction.
+    return (
+      <Badge tone="caution" outline>
+        not ready
+      </Badge>
+    );
+  }
+  return (
+    <Badge tone={satisfied ? "positive" : "neutral"} outline={!satisfied}>
+      {satisfied ? "ready" : "not set up"}
+    </Badge>
   );
 }
 

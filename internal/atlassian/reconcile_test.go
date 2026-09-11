@@ -628,3 +628,52 @@ func TestASeatAtlassianCannotGrantYetIsPendingRatherThanFailed(t *testing.T) {
 		t.Error("a seat waiting on Atlassian was reported as owed by a person")
 	}
 }
+
+// A SEAT THIS PASS GRANTED IS NOT A FINISHED SEAT.
+//
+// Atlassian accepts a product-access invite immediately and applies it over
+// about a minute. For that minute its gateway takes the token this pass then
+// minted and Jira refuses it with its own 401 — so a pass that reported the
+// seat done was telling an operator the agent was working while every call it
+// made was refused. Measured on a live site, on every reconnect, because a
+// reconnect creates a new account.
+func TestASeatThisPassGrantedIsReportedAsStillComingUp(t *testing.T) {
+	t.Parallel()
+	o := &stubOrg{tokens: 0}
+	s := &sink{}
+
+	res := run(t, o, s)
+
+	if o.granted != 1 {
+		t.Fatalf("granted %d time(s), so this case asserts nothing", o.granted)
+	}
+	findings := res.Findings()
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want the one seat reported as coming up", findings)
+	}
+	if findings[0].Kind != integration.FindingGrantPending {
+		t.Errorf("kind = %q, want %q — a grant that has not landed is the "+
+			"PROVIDER's wait, and anything else sends somebody to act on an "+
+			"account that works a minute later",
+			findings[0].Kind, integration.FindingGrantPending)
+	}
+}
+
+// AND THE PASS AFTER IT IS SILENT. The wait is about the grant this pass
+// made; a seat whose account was granted by an earlier pass has nothing
+// outstanding, and reporting one would park a converged company on the
+// provider cadence for ever.
+func TestASeatGrantedByAnEarlierPassIsNotReportedAgain(t *testing.T) {
+	t.Parallel()
+	o := &stubOrg{tokens: 1}
+	s := &sink{held: "ATSTT-live"}
+
+	res := run(t, o, s)
+
+	if o.granted != 0 {
+		t.Fatalf("granted %d time(s), so this case asserts nothing", o.granted)
+	}
+	if findings := res.Findings(); len(findings) != 0 {
+		t.Errorf("findings = %+v, want none over a converged seat", findings)
+	}
+}

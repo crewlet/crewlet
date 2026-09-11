@@ -90,8 +90,9 @@ func (g *githubIdentities) resolve(ctx context.Context, api, web string, tokens 
 		login, err := client.Me(ctx)
 		if err != nil {
 			log.WarnContext(ctx, "github_seat_identity_unresolved", "error", err.Error(),
-				"detail", "this seat receives no code-host events until "+
-					"the next apply re-resolves it")
+				"detail", "this seat receives no code-host events until a lookup "+
+					"succeeds; the reconcile loop retries it on this surface's "+
+					"own pass, so nothing has to be applied")
 			return
 		}
 		found[i] = login

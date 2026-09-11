@@ -272,6 +272,12 @@ type Engine struct {
 	maintenance  *maintenance.Worker
 	integrations *integration.Worker
 
+	// rewired remembers what the last seat-identity retry resolved on each
+	// surface, so the recovery is logged on the TRANSITION rather than on
+	// every pass of every surface for the life of the deployment. See
+	// [rewireLog].
+	rewired rewireLog
+
 	// scheduler is the role/unit cron tick. On the ENGINE rather than on an
 	// epoch for the same reason maintenance is: it is a loop this process
 	// runs, and rebuilding it on an apply would leave two loops racing for

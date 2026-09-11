@@ -96,6 +96,24 @@ type SeatResult struct {
 	// produces one here is a failure except this.
 	NotReady bool
 
+	// Granted reports product access this pass gave the account, which is
+	// NOT the same as product access that works.
+	//
+	// A GRANT IS ACCEPTED IMMEDIATELY AND APPLIED OVER THE NEXT MINUTE. The
+	// invite POST answers success, the token this pass then mints is
+	// accepted by Atlassian's gateway, and Jira itself refuses it with its
+	// own 401 ("Client must be authenticated to access this resource") until
+	// the grant has propagated. Measured on a live site: about seventy
+	// seconds, every time — a reconnect creates a new account, so this
+	// window is hit on every reconnect rather than occasionally.
+	//
+	// Reported as a seat still coming up for the same reason [NotReady] is,
+	// and the failure it prevents is the same one: without it this pass
+	// declared the seat done, the products said 401, and the card told an
+	// operator an ADMIN had to act on an account that was working a minute
+	// later. See [Result.Findings].
+	Granted bool
+
 	// Err is why this seat could not be provisioned, if it could not.
 	Err error
 }
@@ -330,6 +348,8 @@ func reconcileSeat(
 			ctx, opts.Key, opts.OrgID, out.AccountID, GrantsFor(site),
 		); {
 		case err == nil:
+			// ACCEPTED, NOT YET IN FORCE. See [SeatResult.Granted].
+			out.Granted = true
 		case errors.Is(err, ErrAccountNotReady):
 			// The next pass grants it. Reported as a seat still coming up
 			// rather than a failure, because that is what it is — and now
@@ -392,6 +412,29 @@ func reconcileSeat(
 	out.TokenMinted = true
 	return out
 }
+
+// GrantPropagation is how long Atlassian takes to make a new service
+// account's product access actually work.
+//
+// # Why a window rather than a read
+//
+// Atlassian exposes no read of a service account's product access at all —
+// see the grant block in [reconcileSeat] for the routes that were tried — so
+// nothing can ask whether a grant is in force. What CAN be observed is the
+// product refusing the account's credential, and that observation means two
+// different things depending only on how long ago the credential was sealed:
+// inside this window it is the grant still landing, and outside it, it is
+// something a person has to look at.
+//
+// MEASURED, not chosen: on a live Cloud site the gateway accepted a
+// seconds-old token and Jira answered its own 401 ("Client must be
+// authenticated to access this resource") for about seventy seconds, twice in
+// a row, then worked. Five minutes is a four-times margin over that, which is
+// the honest shape for a provider's internal propagation with no published
+// bound — and it is short enough that a grant which is NOT landing becomes
+// somebody's work inside one settled interval rather than waiting for ever
+// under "the provider is working on it".
+const GrantPropagation = 5 * time.Minute
 
 // tokenCount is how many API tokens one account holds, or the fact that
 // Atlassian could not say.
@@ -545,6 +588,24 @@ func (r *Result) Findings() []integration.Finding {
 	}
 	for _, seat := range r.Seats {
 		switch {
+		case seat.Granted:
+			// THE GRANT LANDED AND ATLASSIAN HAS NOT APPLIED IT YET, which
+			// is a provider's wait and not a finished seat.
+			//
+			// This pass used to report nothing here, so a seat whose
+			// account it had created seconds earlier was reported done —
+			// and the products it had just been granted refused its brand
+			// new credential for the next minute or so. Jira said the seat
+			// had no account, this card said the surface was ready, and the
+			// roster said the seat was ready: three answers, one transient
+			// cause, none of them anything anybody could act on.
+			out = append(out, integration.Finding{
+				Kind: integration.FindingGrantPending, Subject: seat.Handle,
+				Detail: "Atlassian has accepted " + seat.Handle + "'s product " +
+					"access and is still applying it, so Jira and Confluence " +
+					"refuse this account's credential for about a minute. " +
+					"Nothing has to be done; the next pass checks again",
+			})
 		case seat.NotReady:
 			// NOBODY HAS TO ACT. Atlassian has the account and has not
 			// finished making it grantable; the next pass grants it. This

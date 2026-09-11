@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
@@ -740,6 +741,11 @@ func (p *jiraPass) Run(ctx context.Context, in setup.PassInput) ([]integration.F
 	res, err := jira.Reconcile(ctx, jira.Options{
 		Client: client, Config: cfg, Org: company.Org, Value: env.Value,
 		Sink: in.Sink, WebhookBase: in.WebhookBase,
+		// AND WHEN EACH SEAT'S ATLASSIAN CREDENTIAL WAS SEALED, which is
+		// the only thing that separates "Atlassian has not finished
+		// granting this brand new account" from "this credential is
+		// wrong". Both are a 401 from the instance, byte for byte.
+		CredentialSealed: p.engine.atlassianCredentialSealed(company),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: jira pass: %w", err)
@@ -1184,4 +1190,58 @@ func mattermostAdminToken(cfg *config.Mattermost, env *config.Resolver, override
 		return ""
 	}
 	return strings.TrimSpace(env.Value(cfg.Provisioning.AdminToken))
+}
+
+// atlassianCredentialSealed answers when a seat's Atlassian credential was
+// written into this company's secret store.
+//
+// # Why the tracker is handed this rather than looking it up
+//
+// A product refusing a seat's credential means one of two opposite things,
+// and the only fact that separates them is the credential's AGE — see
+// [atlassian.GrantPropagation]. That fact is in the fleet's secret store,
+// which internal/jira must not import: it would put the tracker in the
+// coordination layer's graph to answer a question about Atlassian.
+//
+// NIL WHERE NOTHING CAN SAY, which is what a node with no keyring is, and
+// the tracker then reports a refusal as the failure it may well be. The
+// alternative — guessing "still propagating" — would tell an operator not to
+// act on every genuinely broken seat, for ever.
+//
+// THE VARIABLE COMES FROM THE SAME PLAN THE PROVISIONING USES, so the name
+// read here is the name the token was sealed under. A second derivation
+// would be a second spelling, and a seat whose name did not match would read
+// as one whose credential was never sealed — which is the safe direction
+// only by accident.
+func (e *Engine) atlassianCredentialSealed(
+	company *Company,
+) func(context.Context, string) (time.Time, bool) {
+	if e.cipher == nil || e.backends == nil || e.backends.Fleet == nil {
+		return nil
+	}
+	plan, err := atlassian.PlanFor(company.Org)
+	if err != nil {
+		return nil
+	}
+	vars := make(map[string]string, len(plan.Seats))
+	for _, seat := range plan.Seats {
+		if seat.TokenVar != "" {
+			vars[seat.Handle] = seat.TokenVar
+		}
+	}
+	store := fleetsecrets.New(e.backends.Fleet, e.cipher)
+	return func(ctx context.Context, handle string) (time.Time, bool) {
+		name, planned := vars[handle]
+		if !planned {
+			// NOT A SEAT THIS ENGINE PROVISIONS. Its credential was put
+			// there by a person, so there is no grant of this engine's to
+			// be waiting on and a refusal is exactly what it looks like.
+			return time.Time{}, false
+		}
+		rec, found, err := store.Describe(ctx, name)
+		if err != nil || !found {
+			return time.Time{}, false
+		}
+		return rec.UpdatedAt, true
+	}
 }

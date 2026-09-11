@@ -1728,3 +1728,98 @@ test("a phaseless row does not become an empty tag", () => {
   expect(state.tag).toBe("Action needed");
   expect(state.tone).toBe("caution");
 });
+
+// AN AGENT THE LOOP HAS A FINDING ABOUT IS NOT BADGED READY.
+//
+// The roster and the reconcile rows come from two endpoints and meet on this
+// card, so this is the only place the contradiction could be resolved.
+// `satisfied` answers "a credential is sealed where this app looks for it",
+// which stays true of a seat the app is refusing — and the card said an agent
+// had no Jira account, that Atlassian was still setting it up, and that the
+// same agent was **ready**, all at once.
+test("an agent a surface reports on is not badged ready", () => {
+  render(
+    <EntryRow
+      entry={atlassian}
+      rows={rowsOf(
+        { key: "atlassian", configured: true },
+        {
+          key: "jira",
+          configured: true,
+          reconcile: {
+            phase: "activating",
+            actor: "provider",
+            findings: [
+              {
+                kind: "grant_pending",
+                subject: "sre-lead",
+                detail: "Atlassian is still giving SRE Lead's new account access to Jira",
+              },
+            ],
+          },
+        },
+      )}
+      sections={sectionsFor(
+        atlassian,
+        new Map([
+          [
+            "jira",
+            toolState({
+              key: "jira",
+              configured: true,
+              requirements: [],
+              can_provision: true,
+              seats: [
+                {
+                  handle: "sre-lead",
+                  name: "SRE Lead",
+                  requirements: [],
+                  satisfied: true,
+                  detail: "sre-lead-...@serviceaccount.atlassian.com",
+                },
+              ],
+            }),
+          ],
+        ]),
+      )}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Show Atlassian details/ }));
+  expect(screen.queryByText("ready")).toBeNull();
+  expect(screen.getByText("not ready")).toBeTruthy();
+  // AND THE REASON IS PRINTED ONCE. The surface's own band carries it; the
+  // row keeps who this agent is at the app, which is the question the roster
+  // exists to answer and stays true of a seat the app is refusing.
+  expect(screen.getAllByText(/still giving SRE Lead's new account access/).length).toBe(1);
+  expect(screen.getByText(/serviceaccount\.atlassian\.com/)).toBeTruthy();
+});
+
+// AND AN AGENT NOBODY HAS A FINDING ABOUT KEEPS ITS BADGE, so this does not
+// turn every roster amber.
+test("an agent no surface reports on is still badged ready", () => {
+  render(
+    <EntryRow
+      entry={atlassian}
+      rows={rowsOf({ key: "atlassian", configured: true }, { key: "jira", configured: true })}
+      sections={sectionsFor(
+        atlassian,
+        new Map([
+          [
+            "jira",
+            toolState({
+              key: "jira",
+              configured: true,
+              requirements: [],
+              can_provision: true,
+              seats: [
+                { handle: "sre-lead", name: "SRE Lead", requirements: [], satisfied: true },
+              ],
+            }),
+          ],
+        ]),
+      )}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Show Atlassian details/ }));
+  expect(screen.getByText("ready")).toBeTruthy();
+});

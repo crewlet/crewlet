@@ -1359,3 +1359,118 @@ func TestTheDefaultHookNameMatchesTheConfigModel(t *testing.T) {
 		t.Errorf("config says %q, jira says %q", got, jira.DefaultWebhookName)
 	}
 }
+
+// A REFUSAL INSIDE THE GRANT WINDOW IS THE ORGANIZATION STILL WORKING, NOT AN
+// AGENT SOMEBODY HAS TO FIX.
+//
+// Atlassian applies a new service account's product access over about a
+// minute, and for that minute the instance answers 401 for a credential this
+// engine minted seconds earlier — byte for byte what a wrong credential looks
+// like. Reported as one, the card said "Action required, you, at the
+// third-party app" about a seat that worked a minute later, and said it on
+// every reconnect because a reconnect creates a new account.
+func TestASeatRefusedInsideTheGrantWindowIsTheProvidersWait(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	inst.accounts["Bearer lead-token"] = acctLead
+	// swe-token is refused; its credential was sealed moments ago.
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	res, err := run(t, inst, func(o *jira.Options) {
+		o.Now = func() time.Time { return now }
+		o.CredentialSealed = func(context.Context, string) (time.Time, bool) {
+			return now.Add(-10 * time.Second), true
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := findingFor(t, res, "swe")
+	if got.Kind != integration.FindingGrantPending {
+		t.Errorf("swe is reported as %q, want %q — the grant is the provider's "+
+			"to finish and nobody else has anything to do",
+			got.Kind, integration.FindingGrantPending)
+	}
+}
+
+// AND OUTSIDE IT, IT IS THE FAILURE IT LOOKS LIKE. A credential sealed an
+// hour ago and still refused is not a grant landing; calling it one would
+// tell an operator to wait for something that already finished, for ever,
+// under the provider's own cadence.
+func TestASeatRefusedOutsideTheGrantWindowIsStillAFailure(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	inst.accounts["Bearer lead-token"] = acctLead
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	res, err := run(t, inst, func(o *jira.Options) {
+		o.Now = func() time.Time { return now }
+		o.CredentialSealed = func(context.Context, string) (time.Time, bool) {
+			return now.Add(-time.Hour), true
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findingFor(t, res, "swe"); got.Kind != integration.FindingIdentityFailed {
+		t.Errorf("swe is reported as %q, want %q", got.Kind, integration.FindingIdentityFailed)
+	}
+}
+
+// AND WITH NOTHING TO ASK, IT IS THE FAILURE TOO. "Cannot say" must not
+// become "still propagating": that would report every genuinely broken seat
+// as a wait nobody should act on, which is the state this whole distinction
+// exists to leave.
+//
+// BOTH SHAPES OF "CANNOT SAY", because they arrive by different routes and
+// only one of them is a node with no keyring: a seat this engine does not
+// provision — its credential was pasted in by a person — has no grant of ours
+// to be waiting on, and the seam answers false for it while answering for
+// every other seat.
+func TestASeatRefusedWithNoSealTimeIsStillAFailure(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		sealed func(context.Context, string) (time.Time, bool)
+	}{
+		{"nothing can say at all", nil},
+		{"this seat is not one we provision", func(context.Context, string) (time.Time, bool) {
+			return time.Time{}, false
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			inst := newInstance(t)
+			inst.accounts["Bearer org-token"] = "acct-org"
+			inst.accounts["Bearer lead-token"] = acctLead
+
+			res, err := run(t, inst, func(o *jira.Options) { o.CredentialSealed = tc.sealed })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := findingFor(t, res, "swe"); got.Kind != integration.FindingIdentityFailed {
+				t.Errorf("swe is reported as %q, want %q",
+					got.Kind, integration.FindingIdentityFailed)
+			}
+		})
+	}
+}
+
+// findingFor is the one finding about a seat, failing when there is not
+// exactly one: two findings about one seat is the contradiction this change
+// removed, so a test that took the first would stop noticing it came back.
+func findingFor(t *testing.T, res *jira.Result, handle string) integration.Finding {
+	t.Helper()
+	var found []integration.Finding
+	for _, f := range res.Findings() {
+		if f.Subject == handle {
+			found = append(found, f)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("%d finding(s) about %s, want exactly one: %+v", len(found), handle, found)
+	}
+	return found[0]
+}

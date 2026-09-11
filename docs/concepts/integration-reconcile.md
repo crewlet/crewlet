@@ -19,7 +19,7 @@ A pass produces **findings**, and a finding is one observation that is not "fine
 | `ingress_pending` | The delivery path is not established yet; the next pass tries again. |
 | `identity_missing` | A seat has no account at the third-party app yet. |
 | `identity_failed` | A seat's account could not be created or its credential was refused. |
-| `grant_pending` | The third-party app accepted access and has not applied it yet. Atlassian's directory is the case to picture: an invitation is accepted immediately and the account appears in the organization's directory some time later, so the grant this engine just made reads back as *no such user*. That is a wait, not a failure — reported as one, it sent operators looking for a broken organization key while the invite was in flight. |
+| `grant_pending` | The third-party app accepted access and has not applied it yet. Atlassian is the case to picture, twice: an invitation is accepted immediately and the account appears in the organization's directory some time later, so the grant this engine just made reads back as *no such user*; and once the account **is** granted, Jira and Confluence go on refusing its brand-new credential for about a minute with a 401 that is byte for byte what a wrong credential looks like. Both are a wait, not a failure — reported as one, the first sent operators looking for a broken organization key while the invite was in flight, and the second told them an admin had to act on an agent that worked a minute later. See [When a new account is still coming up](#when-a-new-account-is-still-coming-up). |
 | `unknown_tier` | The company document names something the third-party app does not have. |
 | `grant_short` | A seat holds less access than its role asks for. |
 | `grant_excess` | A seat holds **more** access than its role asks for. |
@@ -77,6 +77,24 @@ Where nothing registers the hook, nothing heals. Slack's request URL lives in ea
 So the address is **recorded and compared**. Every pass stamps the base it ran against onto the surface's status row, and a surface no pass converges is stamped when its setup form is saved. A row whose recorded address is not the one in force is an **ingress fault**: the card reads *Action needed*, the surface carries an `address moved` badge, and the note names both addresses, because the fix is to replace one with the other at the third-party app and a badge cannot say that.
 
 It clears itself where it should. A surface with a pass is re-stamped on the next tick, so the warning appears only where a person really does have to act. A surface nothing has recorded an address for reports `null` rather than `false`: "nothing here can say" is not the claim "the address moved", and a fresh company must not open with a warning on every card.
+
+---
+
+## When a new account is still coming up
+
+Atlassian creates an agent's service account, grants it access to Jira and Confluence, and mints its credential — and for about a minute after that the products refuse the credential. **Measured on a live Cloud site: about seventy seconds, twice in a row.** The gateway accepts the token; Jira answers its own `401 Client must be authenticated to access this resource`. Nothing is wrong, nobody can do anything, and a reconnect hits this window **every time**, because a disconnect that removes accounts means the next connect creates new ones.
+
+Three things used to say three different things about that one minute:
+
+- The **tracker** reported the seat as `identity_failed` — *degraded*, owed by an **admin**, "sre-lead has no Jira account". A person was told to act at Atlassian on an account that was working sixty seconds later.
+- The **engine's own wiring** reported the same seat as `identity_missing` — *provisioning*, owed by the **engine**. Two findings about one fact, and the engine's outranks the admin's, so the card put "the engine is working on it" in the headline and "a person must act at the third-party app" directly underneath it.
+- The **roster** badged the same agent **ready**, because a credential was sealed where the app looks for one.
+
+Now there is one answer. The organization surface reports `grant_pending` for a seat it has just granted, because a grant that has been accepted is not a grant that is in force. The tracker reports `grant_pending` too — but only for a credential **sealed within the last five minutes**, which is the only thing that separates a grant still landing from a credential that is simply wrong; outside that window a refusal is the failure it looks like and is owed by an admin, as it always was. And the engine's wiring no longer adds a second finding about a seat the surface's own pass has already reported: both halves resolve the same seats with the same credentials against the same instance, so the pass's answer — the one with the vendor's own words in it — is the one that stands.
+
+The roster's badge follows. `satisfied` answers "is a credential sealed where this app looks for it", which stays true of a seat the app is refusing, so an agent any of the card's surfaces has a finding about is shown as **not ready** rather than ready. The reason is printed once, in the surface's own band.
+
+The five-minute window is a four-times margin over the measured propagation. It is deliberately not longer: a grant that is genuinely *not* landing has to become somebody's work inside one settled interval rather than waiting for ever under "the provider is working on it".
 
 ---
 

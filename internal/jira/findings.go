@@ -85,11 +85,39 @@ func (r *Result) Findings() []integration.Finding {
 		if seat.Routes() {
 			continue
 		}
-		// A seat with no account receives NO Jira events at all, which is
-		// the one finding this command exists to surface. It is the
-		// ENGINE's own work only in the sense that a credential is
-		// missing; nothing here can create an Atlassian account, so the
-		// reason carries what a person has to do.
+		// THE ORGANIZATION'S GRANT STILL LANDING IS NOT A BROKEN SEAT.
+		//
+		// Atlassian accepts a grant immediately and applies it over about a
+		// minute, and for that minute Jira answers its own 401 for the
+		// credential this engine has just minted — which is exactly what a
+		// wrong credential looks like. Reported as one, the card said
+		// "Action required, you, at the third-party app" about a seat that
+		// was working a minute later, and said it on EVERY reconnect,
+		// because a reconnect creates a new account. See
+		// [SeatIdentity.Activating] and [atlassian.GrantPropagation].
+		if seat.Activating {
+			out = append(out, integration.Finding{
+				Kind:    integration.FindingGrantPending,
+				Subject: seat.Handle,
+				Detail: fmt.Sprintf(
+					"Atlassian is still giving %s's new account access to Jira, "+
+						"so the instance refuses its credential for about a "+
+						"minute. Nothing has to be done; the next pass checks again",
+					seat.Handle),
+			})
+			continue
+		}
+		// A seat with no usable account receives NO Jira events at all,
+		// which is the one finding this command exists to surface.
+		//
+		// AN ADMIN'S, and that is still right for everything that reaches
+		// here: a credential the instance refuses outside the grant window
+		// is one somebody has to look at, and a seat with no credential on
+		// a company whose Atlassian organization is not provisioning is a
+		// person's to supply. (This used to say "nothing here can create an
+		// Atlassian account", which internal/atlassian has done since the
+		// loop started provisioning — and [integration.ConvergeOrder] runs
+		// it FIRST precisely so it can.)
 		out = append(out, integration.Finding{
 			Kind:    integration.FindingIdentityFailed,
 			Subject: seat.Handle,

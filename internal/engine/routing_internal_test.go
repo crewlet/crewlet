@@ -71,7 +71,7 @@ func TestASeatIdentityThatFailedIsRetriedOnTheNextPass(t *testing.T) {
 
 	// A PASS, which is what the reconcile loop does on its own cadence and
 	// what nothing did before: no config changed, nobody pressed anything.
-	found := e.resolveRouting(t.Context(), integration.KindJira)
+	found := e.resolveRouting(t.Context(), integration.KindJira, nil)
 
 	if lookups.Load() <= before {
 		t.Error("the pass did not ask again, so a lookup that fails once " +
@@ -90,7 +90,7 @@ func TestASeatIdentityThatFailedIsRetriedOnTheNextPass(t *testing.T) {
 	// AND WHEN THE INSTANCE COMES GOOD, the next pass wires it — into the
 	// LIVE registry, with no apply between.
 	refuse.Store(false)
-	if found := e.resolveRouting(t.Context(), integration.KindJira); len(found) != 0 {
+	if found := e.resolveRouting(t.Context(), integration.KindJira, nil); len(found) != 0 {
 		t.Errorf("findings = %+v after the instance answered, want none", found)
 	}
 	party, ok := e.Registry().ByExternalID(jira.Backend, "agent-ceo")
@@ -127,7 +127,7 @@ func TestASeatWithNoCredentialIsNotReportedAsUnresolved(t *testing.T) {
 	e.epoch.current.Store(rebuilt)
 	e.refreshParties(rebuilt)
 
-	if found := e.resolveRouting(t.Context(), integration.KindJira); len(found) != 0 {
+	if found := e.resolveRouting(t.Context(), integration.KindJira, nil); len(found) != 0 {
 		t.Errorf("findings = %+v, want none: no seat here claims a tracker "+
 			"identity, so none of them is missing one", found)
 	}
@@ -149,7 +149,7 @@ func TestOnlyTheSurfacesThatLookUpAnAccountReportRouting(t *testing.T) {
 		case integration.KindJira, integration.KindGitLab, integration.KindGitHub:
 			continue
 		}
-		if found := e.resolveRouting(t.Context(), kind); len(found) != 0 {
+		if found := e.resolveRouting(t.Context(), kind, nil); len(found) != 0 {
 			t.Errorf("%s reported %+v; it resolves a seat from the document "+
 				"and has no lookup to have failed", kind, found)
 		}
@@ -289,7 +289,7 @@ roles:
 			e.epoch.current.Store(company)
 			e.refreshParties(company)
 
-			if found := e.resolveRouting(t.Context(), integration.KindGitLab); len(found) != 0 {
+			if found := e.resolveRouting(t.Context(), integration.KindGitLab, nil); len(found) != 0 {
 				t.Errorf("findings = %+v; the surface's own pass reports the "+
 					"unusable secret, and one finding per seat here buries it", found)
 			}
@@ -298,5 +298,65 @@ roles:
 					"verify no delivery")
 			}
 		})
+	}
+}
+
+// ONE CAUSE IS ONE FINDING, EVEN THOUGH TWO THINGS OBSERVE IT.
+//
+// The surface's own pass and this node's wiring resolve the SAME seats with
+// the SAME credentials against the SAME instance, so a seat whose lookup fails
+// produced two findings about one fact — and they disagreed about who has to
+// act. Measured on a live card: "the engine is working on it" as the headline
+// and "a person must act at Atlassian" one line below it, about one agent,
+// over a condition that cleared itself in seventy seconds.
+func TestASeatTheSurfacesOwnPassReportedIsNotReportedTwice(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not grantable yet", http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+	e, company := routingEngine(t, srv.URL)
+	e.refreshParties(company)
+
+	if found := e.resolveRouting(t.Context(), integration.KindJira,
+		map[string]bool{"ceo": true}); len(found) != 0 {
+		t.Fatalf("findings = %+v, want none: the pass already reported ceo", found)
+	}
+	// AND A SEAT IT SAID NOTHING ABOUT STILL GETS ONE. What the wiring adds
+	// is exactly the seats no pass reports on, which is both code hosts.
+	if found := e.resolveRouting(t.Context(), integration.KindJira,
+		map[string]bool{"someone-else": true}); len(found) != 1 {
+		t.Fatalf("findings = %+v, want the unresolved seat reported", found)
+	}
+}
+
+// THE RECOVERY IS LOGGED ONCE, NOT ON EVERY PASS.
+//
+// A lookup that succeeded logged nothing at all, so the last word in the log
+// stayed `jira_wired seat_identities=0` and `jira_has_no_seat_identities`
+// ("every tracker webhook will name a stranger") long after routing had
+// recovered — anyone reading the log concluded the seat was still unrouted.
+// A line per pass would be the opposite failure: three surfaces saying nothing
+// changed, several times a minute, for the life of the deployment.
+func TestTheSeatIdentityRecoveryIsLoggedOnTheTransition(t *testing.T) {
+	t.Parallel()
+	var r rewireLog
+	if !r.changed(integration.KindJira, 1) {
+		t.Fatal("the first pass that resolved a seat said nothing")
+	}
+	if r.changed(integration.KindJira, 1) {
+		t.Error("an unchanged count logged again, which is the loop narrating " +
+			"its own schedule several times a minute")
+	}
+	if !r.changed(integration.KindJira, 2) {
+		t.Error("a seat that newly resolved said nothing")
+	}
+	// NOTHING RESOLVED IS NOT NEWS: the surface's own finding and the
+	// has-no-seat-identities warning already say it, loudly.
+	if r.changed(integration.KindGitLab, 0) {
+		t.Error("a surface that resolved nothing logged a recovery")
+	}
+	// AND THE SURFACES DO NOT SHARE A COUNT.
+	if !r.changed(integration.KindGitLab, 1) {
+		t.Error("gitlab was silenced by jira's count")
 	}
 }

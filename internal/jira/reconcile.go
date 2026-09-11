@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/config"
@@ -103,6 +104,32 @@ type Options struct {
 	// instance whose secret is already set has nothing to record.
 	Sink provision.TokenSink
 
+	// CredentialSealed says when this seat's Atlassian credential was
+	// written into the company's store, and whether anything knows.
+	//
+	// # What it is for, and why it is a seam rather than a lookup
+	//
+	// An account Atlassian has only just granted is refused by Jira for
+	// about a minute with its own 401, which is byte-for-byte what a wrong
+	// credential looks like. The only thing that separates them is how long
+	// ago this engine sealed the credential, and that is in the fleet's
+	// secret store — which this package must not reach into: it would put
+	// the tracker in the coordination layer's import graph to answer a
+	// question about Atlassian.
+	//
+	// CONSULTED ONLY FOR A SEAT THE INSTANCE REFUSED, which in a working
+	// company is none, so the steady-state cost is zero reads.
+	//
+	// Nil, or a false second return, is "nothing here can say" — and the
+	// refusal is then reported as the failure it may well be. Guessing the
+	// other way would report every genuinely broken seat as a provider's
+	// wait, for ever, under a sentence telling an operator not to act.
+	CredentialSealed func(ctx context.Context, handle string) (time.Time, bool)
+
+	// Now is the clock the propagation window is measured against. Nil is
+	// time.Now.
+	Now func() time.Time
+
 	// WebhookBase is this deployment's public base URL, or empty to skip
 	// webhook registration.
 	//
@@ -130,6 +157,30 @@ type SeatIdentity struct {
 	// Reason says why an empty Account is empty, in terms an operator can
 	// act on.
 	Reason string
+
+	// Activating reports a refusal that is the ORGANIZATION's grant still
+	// landing rather than anything wrong.
+	//
+	// Set only for a [SeatIdentity.Refused] seat whose Atlassian credential
+	// was sealed within [atlassian.GrantPropagation] — which is a fact this
+	// package cannot observe and the caller supplies, through
+	// [Options.CredentialSealed]. Without that the two are
+	// indistinguishable here, and this pass reported both as the second.
+	Activating bool
+
+	// Refused reports a credential this seat HELD that the instance
+	// answered about — with a status, whatever it was — rather than one it
+	// does not have.
+	//
+	// THE TWO ARE DIFFERENT PEOPLE'S WORK and were reported as one. A seat
+	// with no credential is waiting for something to create one, and on a
+	// company whose Atlassian organization provisions accounts that
+	// something is this engine. A seat whose credential the instance
+	// REFUSED is either an account Atlassian has not finished granting —
+	// which clears itself in about a minute and is nobody's work — or a
+	// credential that really is wrong. See [Result.Findings], which is
+	// where the distinction is spent.
+	Refused bool
 }
 
 // Routes reports a seat whose inbound events can reach it.
@@ -408,10 +459,24 @@ func resolveSeats(ctx context.Context, opts Options) ([]SeatIdentity, error) {
 		if err != nil {
 			out[i].Reason = err.Error()
 			refusals[i] = err
+			// AN ANSWER IS A REFUSAL; SILENCE IS NOT. A status means the
+			// instance considered this credential and said no, which is a
+			// fact about the credential. No status at all is a dial that
+			// failed or a read that timed out — the engine failing to look
+			// — and the scan below raises on exactly that.
+			out[i].Refused = Status(err) != 0
 			return
 		}
 		out[i].Account = id
 	})
+
+	// AND WHICH REFUSALS ARE THE ORGANIZATION'S GRANT STILL LANDING.
+	//
+	// After the fan-out rather than inside it: this reads the fleet's secret
+	// store, and doing it per seat inside a bounded concurrency group whose
+	// bound was sized for HTTP would spend that budget on something else.
+	// In a working company the loop below runs zero times.
+	markActivating(ctx, opts, out)
 
 	for _, i := range lookups {
 		// A STATUS MEANS THE INSTANCE ANSWERED, whatever the number was,
@@ -766,4 +831,30 @@ func webhookTarget(base string) string {
 func notFound(err error) bool {
 	var apiErr *APIError
 	return errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound
+}
+
+// markActivating flags the refusals that are Atlassian still applying a grant.
+//
+// THE CREDENTIAL'S AGE IS THE WHOLE TEST, for the reason
+// [atlassian.GrantPropagation] gives: Atlassian serves no read of a service
+// account's product access, and a product refusing a seconds-old credential is
+// the grant landing while a product refusing a day-old one is not.
+func markActivating(ctx context.Context, opts Options, seats []SeatIdentity) {
+	if opts.CredentialSealed == nil {
+		return
+	}
+	now := time.Now
+	if opts.Now != nil {
+		now = opts.Now
+	}
+	for i := range seats {
+		if !seats[i].Refused {
+			continue
+		}
+		sealed, known := opts.CredentialSealed(ctx, seats[i].Handle)
+		if !known {
+			continue
+		}
+		seats[i].Activating = now().Sub(sealed) < atlassian.GrantPropagation
+	}
 }

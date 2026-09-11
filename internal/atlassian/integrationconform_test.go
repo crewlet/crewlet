@@ -517,9 +517,31 @@ func convergedAtlassian(
 	w := standUp(t, tb, vendor, tune, true)
 	plan := w.opts.Plan
 
-	findings, err := w.Reconcile(context.Background())
-	if err != nil {
-		tb.Fatalf("the pass that converges the world failed: %v", err)
+	// MORE THAN ONE PASS, because this vendor genuinely takes more than one.
+	//
+	// Granting product access is accepted immediately and applied over the
+	// next minute, so the pass that MAKES the grant reports a wait rather
+	// than a finished seat ([atlassian.SeatResult.Granted]) — and it is
+	// right to: for that minute the products refuse the credential it just
+	// minted. A single pass therefore does not converge this world, and this
+	// helper's own doc used to say it did.
+	//
+	// BOUNDED AND SILENT ON SUCCESS. Looping until nothing changes would
+	// hide a vendor that never settles, which is the one thing this whole
+	// suite is for, so the bound is small and the assertion below is what
+	// reports a world still moving when it runs out.
+	var findings []integration.Finding
+	for range 3 {
+		var err error
+		findings, err = w.Reconcile(context.Background())
+		if err != nil {
+			tb.Fatalf("the pass that converges the world failed: %v", err)
+		}
+		if !slices.ContainsFunc(findings, func(f integration.Finding) bool {
+			return f.Kind != integration.FindingGrantShort
+		}) {
+			break
+		}
 	}
 	for _, f := range findings {
 		// A NOTE ABOUT A SEAT THE COMPANY PROVISIONS BY HAND SURVIVES

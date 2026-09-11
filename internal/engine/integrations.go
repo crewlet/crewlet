@@ -385,7 +385,35 @@ func (c *passConverger) Reconcile(ctx context.Context) ([]integration.Finding, e
 	// [Engine.resolveRouting] — this visit is the retry, and the finding is
 	// what keeps the visits coming and stops the card reading ready over a
 	// seat that receives nothing.
-	return append(findings, c.engine.resolveRouting(ctx, c.pass.Kind())...), nil
+	return append(findings,
+		c.engine.resolveRouting(ctx, c.pass.Kind(), reported(findings))...), nil
+}
+
+// reported is the set of seats the surface's own pass has already said
+// something about.
+//
+// ONE CAUSE, ONE FINDING. Both halves resolve the SAME seats with the SAME
+// credential against the SAME instance — the pass through its own
+// resolveSeats, this node's wiring through its registry — so a seat whose
+// lookup fails produces two findings about one fact, and they do not even
+// agree about who has to act: the tracker's classifies as degraded and owed
+// by an ADMIN, the wiring's as provisioning and owed by the ENGINE. The
+// engine's outranks the admin's, so the card put "the engine is working on
+// it" in the headline and "a person must act at Atlassian" underneath it,
+// about one seat, for one transient reason.
+//
+// THE PASS'S ANSWER WINS because it is the one with the vendor's own words in
+// it. What the wiring adds is the seats the pass said NOTHING about — every
+// seat on a surface whose pass reports no per-seat identity at all, which is
+// both code hosts — and that is exactly what is kept.
+func reported(findings []integration.Finding) map[string]bool {
+	seen := make(map[string]bool, len(findings))
+	for _, f := range findings {
+		if f.Subject != "" {
+			seen[f.Subject] = true
+		}
+	}
+	return seen
 }
 
 // reconcileOperator is who the loop's writes are attributed to, so an audit
