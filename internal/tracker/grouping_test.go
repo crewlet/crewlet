@@ -566,3 +566,47 @@ func TestAWorkspaceGroupingUnderTheCeilingIsServed(t *testing.T) {
 			"breadth gate is refusing on scope rather than on the row count")
 	}
 }
+
+// A SECOND AXIS IS BOUNDED BY CELLS, not by either axis alone.
+//
+// One axis is 1 + G statements; a second repeats that pattern inside every
+// column, so it is 1 + G × (2 + S). At MaxGroups on both that is 4 225 ordered
+// statements with two joins each, inside one read transaction, for one board
+// poll — and checkGroupBreadth cannot see it, because that gate measures the
+// row count of a single pass and does not run at project scope, which is
+// exactly where a swimlane board is opened.
+func TestASwimlaneBoardIsBoundedByItsCells(t *testing.T) {
+	t.Parallel()
+	if tracker.MaxGroupsWithSubgroups*tracker.MaxSubgroups > 256 {
+		t.Fatalf("a swimlane board may draw %d cells, which is past the "+
+			"budget the caps were derived from",
+			tracker.MaxGroupsWithSubgroups*tracker.MaxSubgroups)
+	}
+	r := newRoundTrip(t)
+	seedBoard(t, r)
+
+	// THE COLUMN CAP DROPS when a second axis is asked for, so a board
+	// with lanes draws fewer columns than the same board without them.
+	// The fixture is small, so what this asserts is that the answer still
+	// carries both axes and reports its own overflow rather than that the
+	// cap bit here.
+	answer := r.ask(map[string]any{
+		"container": "project:ENG", "group_by": "status",
+		"group_by2": "assignee", "show_closed": "true",
+	})
+	if len(answer.Groups) == 0 {
+		t.Fatal("a two-axis board drew no columns")
+	}
+	var lanes int
+	for _, group := range answer.Groups {
+		lanes += len(group.Subgroups)
+		if group.SubgroupsDropped < 0 {
+			t.Errorf("column %s reports %d dropped lanes",
+				group.Key, group.SubgroupsDropped)
+		}
+	}
+	if lanes == 0 {
+		t.Fatal("a two-axis board drew no lanes, so the cap assertion above " +
+			"is about a shape this reader does not produce")
+	}
+}

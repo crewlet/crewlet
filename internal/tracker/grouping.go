@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Grouping: the board's columns, and why a grouped answer is a different shape
@@ -51,6 +52,35 @@ import (
 // out is on the answer rather than silently dropped.
 const MaxGroups = 64
 
+// MaxGroupsWithSubgroups and MaxSubgroups bound a SWIMLANE board, which costs
+// a different shape entirely.
+//
+// # The arithmetic, which the single-axis cap was never sized for
+//
+// One axis is `1 + G` statements: a count over the predicate and one paged
+// read per column. A SECOND axis repeats that pattern inside every column, so
+// it is `1 + G × (2 + S)` — at [MaxGroups] on both, 1 + 64 × 66 = 4 225
+// ordered statements, each with two joins, inside one read transaction, for
+// ONE board poll. Nothing else in this grammar multiplies like that, and
+// [checkGroupBreadth] cannot see it: that gate measures the ROW count of a
+// single pass and is exempt at project scope, where a swimlane board is
+// exactly what somebody opens.
+//
+// # So the bound is on the CELLS, not on either axis alone
+//
+// Sixteen by sixteen is 256 cells, which is already more than a person reads
+// at once — a board wide enough to need scrolling in both directions is a
+// board nobody is using as a board. The first axis is therefore capped LOWER
+// when a second one is asked for, and the count that did not fit is reported
+// exactly as it is for a single axis ([grouped.Dropped] and
+// [Group.SubgroupsDropped]) rather than silently cut.
+//
+// 1 + 16 × 18 = 289 statements, down from 4 225.
+const (
+	MaxGroupsWithSubgroups = 16
+	MaxSubgroups           = 16
+)
+
 // GroupRowsDefault and GroupRowsMax bound how many rows one column carries.
 //
 // TWENTY is what a column shows before somebody scrolls it, and a board draws
@@ -78,6 +108,12 @@ type Group struct {
 
 	// Subgroups is the second axis, when one was asked for.
 	Subgroups []Group `json:"subgroups,omitempty"`
+
+	// SubgroupsDropped is how many lanes this column has beyond
+	// [MaxSubgroups]. Said rather than silently cut, on the same rule the
+	// column overflow follows: a board that drew sixteen of two hundred
+	// lanes and reported nothing looks like a company with sixteen.
+	SubgroupsDropped int `json:"subgroups_dropped,omitempty"`
 }
 
 // groupAxis is one grouping axis compiled into SQL.
@@ -318,7 +354,8 @@ func groupCounts(ctx context.Context, tx *sql.Tx, axis groupAxis,
 // statement: a column's rows are the answer's rows narrowed to one value, so
 // the same sort, the same joins and the same row shape serve both.
 func groupRows(ctx context.Context, tx *sql.Tx, axis groupAxis, key string,
-	where string, args []any, terms []sortTerm, limit int) ([]TaskRow, error) {
+	where string, args []any, terms []sortTerm, limit int,
+	dayStart time.Time) ([]TaskRow, error) {
 
 	// THE JOINED FORM HERE, not the join-free one: this statement already
 	// carries the axis's join for the GROUP BY's sake, so comparing the
@@ -326,7 +363,7 @@ func groupRows(ctx context.Context, tx *sql.Tx, axis groupAxis, key string,
 	clause, values := axis.joinedFilter(key)
 	rows, _, err := readTasksJoined(ctx, tx, axis.Join, axis.Args,
 		"("+where+") AND "+clause,
-		append(append([]any{}, args...), values...), terms, limit)
+		append(append([]any{}, args...), values...), terms, limit, dayStart)
 	return rows, err
 }
 
@@ -468,7 +505,14 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 		rowsPer = GroupRowsMax
 	}
 
-	groups, dropped, err := groupCounts(ctx, tx, axis, where, args, MaxGroups)
+	// THE COLUMN CAP IS LOWER WHEN THERE ARE LANES — see
+	// [MaxGroupsWithSubgroups]: the statement count is the PRODUCT of the
+	// two axes, so bounding one alone bounds nothing.
+	columns := MaxGroups
+	if q.GroupBy2 != "" {
+		columns = MaxGroupsWithSubgroups
+	}
+	groups, dropped, err := groupCounts(ctx, tx, axis, where, args, columns)
 	if err != nil {
 		return grouped{}, err
 	}
@@ -476,7 +520,7 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 
 	for i := range groups {
 		rows, err := groupRows(ctx, tx, axis, groups[i].Key, where, args,
-			terms, rowsPer)
+			terms, rowsPer, q.DayStart)
 		if err != nil {
 			return grouped{}, err
 		}
@@ -487,12 +531,13 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 		// THE SECOND AXIS IS THE FIRST ONE AGAIN, inside this column.
 		// One level and no more: a third would be a tree, and a board
 		// draws columns and swimlanes rather than a hierarchy.
-		inner, err := readSubgroups(ctx, tx, q, fields, axis,
+		inner, innerDropped, err := readSubgroups(ctx, tx, q, fields, axis,
 			groups[i].Key, where, args, terms, rowsPer)
 		if err != nil {
 			return grouped{}, err
 		}
 		groups[i].Subgroups = inner
+		groups[i].SubgroupsDropped = innerDropped
 	}
 	return grouped{Groups: groups, Dropped: dropped, Overlap: axis.Multi}, nil
 }
@@ -500,11 +545,11 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 // readSubgroups is the second axis within one column.
 func readSubgroups(ctx context.Context, tx *sql.Tx, q Query,
 	fields map[string]resolvedField, outer groupAxis, key string,
-	where string, args []any, terms []sortTerm, rowsPer int) ([]Group, error) {
+	where string, args []any, terms []sortTerm, rowsPer int) ([]Group, int, error) {
 
 	inner, err := compileGroup(q.GroupBy2, fields)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	// THE OUTER COLUMN NARROWS THE INNER QUERY, and the outer axis's own
 	// join rides with it — a subgroup of a tag column is still inside that
@@ -527,20 +572,20 @@ func readSubgroups(ctx context.Context, tx *sql.Tx, q Query,
 		scoped += " AND " + innerClause
 		bound = append(append([]any{}, bound...), innerArgs...)
 	}
-	counts, _, err := groupCounts(ctx, tx, joined, scoped, bound, MaxGroups)
+	counts, dropped, err := groupCounts(ctx, tx, joined, scoped, bound, MaxSubgroups)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	groupLabels(counts, q.GroupBy2, fields)
 	for i := range counts {
 		rows, err := groupRows(ctx, tx, joined, counts[i].Key, scoped, bound,
-			terms, rowsPer)
+			terms, rowsPer, q.DayStart)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		counts[i].Rows = rows
 	}
-	return counts, nil
+	return counts, dropped, nil
 }
 
 // declaredOrder renders a closed set's own sequence as plain strings.

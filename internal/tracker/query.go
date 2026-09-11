@@ -255,6 +255,16 @@ type Query struct {
 
 	Totals []string
 
+	// DayStart is midnight today in the COMPANY's zone, resolved once by
+	// [ParseQuery] and carried so that every answer about "today" agrees.
+	//
+	// The row's `overdue` flag is derived from it, and so is the
+	// `due=overdue` filter — the field exists precisely so a renderer
+	// never re-derives the predicate differently, and deriving it from
+	// the reader's own `time.Now()` made the row and the filter two
+	// different questions on two different clocks.
+	DayStart time.Time
+
 	Level statelog.ReadLevel
 
 	// MaxLag is the bound a `stale` read declares it will accept, and zero
@@ -387,9 +397,23 @@ func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
 	if err := checkKeys(p); err != nil {
 		return Query{}, err
 	}
+	// THE DAY BOUNDARY THIS QUERY IS ABOUT, resolved once and carried.
+	//
+	// It is what `due=overdue` and `preset=overdue` compile against, and
+	// the row's own `overdue` flag is derived from the SAME value rather
+	// than from a clock the reader happens to have — which is what the
+	// field's own doc promises. Derived in the browser, or from
+	// time.Now() in the reader, the two disagreed by up to a day: a task
+	// due at 09:00 today was `overdue: true` on every row from 09:01 and
+	// absent from `?due=overdue` all day.
+	dayStart, err := ResolveDate("today", now, loc)
+	if err != nil {
+		return Query{}, err
+	}
 	q := Query{
 		Subtasks:   SubtasksCollapsed,
 		Archived:   ArchivedExclude,
+		DayStart:   dayStart.At,
 		Dates:      map[string]DateFilter{},
 		View:       p.String("view"),
 		Preset:     p.String("preset"),
@@ -397,7 +421,14 @@ func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
 		Subgroup:   p.String("subgroup"),
 		Cursor:     p.String("cursor"),
 		LinkedPage: p.String("linked_page"),
-		References: p.String("references"),
+		// UPPERCASED FOR THE SAME REASON `key` IS, and it is the same
+		// value: `references=` names a task KEY, compared exactly
+		// against `tracker_task_keys.key`, which is minted upper-case.
+		// Read raw, `references=eng-7` answered an empty list with no
+		// error while `key=eng-7` beside it resolved — one spelling
+		// answering two ways depending on which parameter it was
+		// pasted into.
+		References: strings.ToUpper(strings.TrimSpace(p.String("references"))),
 		Goal:       p.String("goal"),
 		Batch:      p.String("batch"),
 		AskedOf:    p.String("asked_of"),
@@ -953,9 +984,18 @@ func (q *Query) parseAny(p Params, now time.Time, loc *time.Location) error {
 			"worst", len(branches), MaxAnyBranches)
 	}
 	for i, branch := range branches {
+		// THE ANSWER-SHAPE KEYS TOO, not only the paging ones. `removed`,
+		// `archived`, `show_closed` and `subtasks` decide which tasks the
+		// ANSWER is about — they are the same decision at every branch or
+		// they are incoherent — and a branch carrying one ANDs it inside
+		// the OR, so it narrows what the caller asked for at the top
+		// level rather than widening it. The freshness keys are the
+		// caller's own for the reason [expansionRefused] gives.
 		for _, forbidden := range []string{
 			"any", "limit", "cursor", "group_by", "group_by2", "group",
 			"subgroup", "group_limit", "sort", "view", "preset", "totals",
+			"removed", "archived", "show_closed", "subtasks",
+			"read_level", "max_lag_seconds", "max_lag_seq",
 		} {
 			if _, present := branch[forbidden]; present {
 				return fmt.Errorf("tracker: any branch %d carries %q, which is "+
