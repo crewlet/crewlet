@@ -53,7 +53,7 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseQuery: %v", err)
 			}
-			where, args, err := compile(q, planNow)
+			where, args, err := compile(q, planNow, planFields(q))
 			if err != nil {
 				t.Fatalf("compile: %v", err)
 			}
@@ -432,4 +432,20 @@ func indexesOn(t *testing.T, db *store.DB, tables []string) []string {
 			"test is measuring its own reader")
 	}
 	return found
+}
+
+// planFields resolves this test's own field refs without a catalogue.
+//
+// THE PLAN IS ABOUT THE STATEMENT, not about the declarations: what is under
+// test is which index the planner reaches for, and a filter on a text field
+// and one on a number field produce the same SHAPE of clause against two
+// different columns. The fixture declares the type it means.
+func planFields(q Query) map[string]resolvedField {
+	out := map[string]resolvedField{}
+	for _, filter := range q.Fields {
+		out[filter.Ref] = resolvedField{
+			ID: "field-" + filter.Ref, Slug: filter.Ref, Type: FieldText,
+		}
+	}
+	return out
 }

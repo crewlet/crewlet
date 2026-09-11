@@ -39,7 +39,7 @@ what people paste into chat, so it can never be ambiguous.
 | **parent**, **subtasks** | a tree, with a depth cap. |
 | **start / due**, **estimate**, **points** | scheduling and sizing. |
 | **tags** | from a per-project tag set. |
-| **custom fields** | declared per project, typed, with option lists. |
+| **custom fields** | declared per project and at the workspace, typed, with option lists — see [the catalogue](#the-catalogue). Filter on one with `f.<slug>`. |
 | **checklist** | items with their own assignees. |
 | **relations**, **dependencies** | links between tasks, and blocking edges. |
 | **linked pages**, **references** | into the knowledge base and out to third-party systems. |
@@ -85,9 +85,16 @@ task's effective set is the union. A value is keyed by the field's **id**, not
 its slug, which is what lets a field move between the two keeping every stored
 value.
 
-Archiving a field is **one-way**. Its values leave the value table, so a field
-that came back under its old id would silently re-admit values validated
-against a definition nobody has seen for a year. Bringing one back means
+**A field's values are filterable.** Each one is a row keyed on the field's id,
+in the column its declared **type** says — a number in the numeric column, an
+instant in the date one, a choice's *id* in the reference one — which is what
+makes `f.effort=gt:9` a numeric comparison rather than a lexical one, and what
+keeps every task that chose an option when somebody renames it. A multi-valued
+field is one row per member, so `f.areas=api` is a seek rather than a scan.
+
+Archiving a field is **one-way**. Its values leave the *filterable* set and stay on
+the task, so a field that came back under its old id would silently re-admit
+them against a definition nobody has seen for a year. Bringing one back means
 declaring a **new** field — a new id, and the same slug, because the slug is
 the word the company uses.
 

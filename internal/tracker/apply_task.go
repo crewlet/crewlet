@@ -534,6 +534,21 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx, task Task,
 		written += n
 	}
 
+	// THE FIELD VALUES ARE THEIR OWN COLLECTION, and they are not in the
+	// loop above because the delete-then-insert there is keyed on task_id
+	// alone while this one needs the DECLARATIONS to decide which typed
+	// column each value goes in — a read the loop's shape has no room for.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM tracker_field_values WHERE task_id = ?`, task.ID); err != nil {
+		return 0, fmt.Errorf("tracker: clear tracker_field_values for %s: %w",
+			task.ID, err)
+	}
+	values, err := a.explodeFieldValues(ctx, tx, task)
+	if err != nil {
+		return 0, err
+	}
+	written += values
+
 	deps, err := a.maintainDeps(ctx, tx, task)
 	if err != nil {
 		return 0, err

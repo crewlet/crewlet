@@ -142,20 +142,27 @@ func TestCustomFieldsAreCollectedInAStableOrder(t *testing.T) {
 //
 // Ignoring it answers an unfiltered list, which reads as a search that matched
 // everything — the one wrong answer a caller cannot tell from a right one.
-func TestASearchModeWithoutTextIsRefused(t *testing.T) {
+// THERE IS NO SEARCH MODE ON THIS GRAMMAR, and `mode` is refused as the
+// unknown key it now is.
+//
+// `q` here is a substring of a key or a title — the item somebody half
+// remembers. Ranked search over the company's prose is `search_knowledge`'s,
+// behind the knowledge seam, which is where the analyzer, the inverted list
+// and the vectors are; `kb_docs` and `kb_postings` index PAGES and nothing has
+// ever put a task in them. Three modes over one behaviour is a knob whose
+// values cannot differ, and a caller that asked for `semantic` and got a
+// substring match was answered by a name rather than by a search.
+func TestThereIsNoSearchModeOnTheTaskGrammar(t *testing.T) {
 	t.Parallel()
-	_, err := parse(t, map[string]any{"mode": "semantic"})
+	_, err := parse(t, map[string]any{"q": "auth", "mode": "semantic"})
 	if err == nil {
-		t.Fatal("a search mode with nothing to search was accepted")
+		t.Fatal("a search mode was accepted on a grammar with no ranker")
 	}
-	if !strings.Contains(err.Error(), "q") {
-		t.Fatalf("the refusal is %q and does not name the missing key", err)
+	if !strings.Contains(err.Error(), "not a query parameter") {
+		t.Fatalf("the refusal is %q and does not say the key is unknown", err)
 	}
-	if got := mustParse(t, map[string]any{"q": "auth", "mode": "keyword"}); got.TextMode != tracker.TextKeyword {
-		t.Errorf("mode parsed as %q", got.TextMode)
-	}
-	if got := mustParse(t, map[string]any{"q": "auth"}); got.TextMode != tracker.TextHybrid {
-		t.Errorf("the default mode is %q, want hybrid", got.TextMode)
+	if got := mustParse(t, map[string]any{"q": "auth"}); got.Text != "auth" {
+		t.Errorf("the find text parsed as %q", got.Text)
 	}
 }
 

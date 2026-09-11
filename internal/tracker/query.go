@@ -150,15 +150,6 @@ const (
 	ArchivedOnly    ArchivedMode = "only"
 )
 
-// TextMode is which half of the search runs.
-type TextMode string
-
-const (
-	TextKeyword  TextMode = "keyword"
-	TextSemantic TextMode = "semantic"
-	TextHybrid   TextMode = "hybrid"
-)
-
 // Sort is one ordering term.
 type Sort struct {
 	Key        string
@@ -246,8 +237,9 @@ type Query struct {
 	// Any is one level of disjunction, ANDed with the top-level keys.
 	Any []Query
 
-	Text     string
-	TextMode TextMode
+	// Text is a substring of a key or a title — the FIND, not a search.
+	// See [Query.parseText] for why there is no mode beside it.
+	Text string
 
 	ShowClosed ShowClosed
 	Archived   ArchivedMode
@@ -261,12 +253,7 @@ type Query struct {
 
 	Sort []Sort
 
-	Span      string
-	SpanField string
-
-	Columns []string
-	Include []string
-	Totals  []string
+	Totals []string
 
 	Level statelog.ReadLevel
 
@@ -344,16 +331,16 @@ type Params interface {
 var QueryKeys = []string{
 	"any", "archived", "asked_by", "asked_of", "assignee", "batch",
 	"blocked", "blocking", "checklist_assignee", "closed", "collaborator",
-	"columns", "container", "created", "cursor", "done", "due", "estimate",
+	"container", "created", "cursor", "done", "due", "estimate",
 	"finished", "flag", "goal", "group", "group_by", "group_by2",
 	"group_limit", "has_children", "has_dependencies", "has_open_asks",
-	"has_parent", "include", "key", "limit", "linked_page",
-	"max_lag_seconds", "max_lag_seq", "mode", "parent", "points", "preset",
+	"has_parent", "key", "limit", "linked_page",
+	"max_lag_seconds", "max_lag_seq", "parent", "points", "preset",
 	"priority", "q", "read_level", "references", "removed", "reporter",
-	"root", "routing_unit", "show_closed", "sort", "span", "span_field",
-	"spend", "sprint", "start", "status", "status_entered", "status_group",
-	"subgroup", "subtasks", "tag", "totals", "type", "unit", "updated",
-	"view", "watcher",
+	"root", "routing_unit", "show_closed", "sort", "spend", "sprint",
+	"start", "status", "status_entered", "status_group", "subgroup",
+	"subtasks", "tag", "totals", "type", "unit", "updated", "view",
+	"watcher",
 }
 
 // FieldKeyPrefix is what makes a parameter a custom-field filter.
@@ -390,15 +377,12 @@ func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
 	q := Query{
 		Subtasks:   SubtasksCollapsed,
 		Archived:   ArchivedExclude,
-		TextMode:   TextHybrid,
 		Dates:      map[string]DateFilter{},
 		View:       p.String("view"),
 		Preset:     p.String("preset"),
 		Group:      p.String("group"),
 		Subgroup:   p.String("subgroup"),
 		Cursor:     p.String("cursor"),
-		Span:       p.String("span"),
-		SpanField:  p.String("span_field"),
 		LinkedPage: p.String("linked_page"),
 		References: p.String("references"),
 		Goal:       p.String("goal"),
@@ -425,8 +409,6 @@ func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
 	q.Types = csv(p.String("type"))
 	q.Sprint = csv(p.String("sprint"))
 	q.Flags = csv(p.String("flag"))
-	q.Columns = csv(p.String("columns"))
-	q.Include = csv(p.String("include"))
 	// KEYS ARE UPPERCASED, because a key is what somebody pasted and
 	// `eng-7` is the same task as `ENG-7`. The project half is minted
 	// upper-case, so lowering the column instead would defeat
@@ -684,10 +666,22 @@ func (q *Query) parseFields(p Params) {
 		if !ok || ref == "" {
 			continue
 		}
-		value := p.String(key)
+		value := strings.TrimSpace(p.String(key))
+		// `null` AND `not_null` ARE THE WHOLE VALUE, exactly as they are
+		// in a numeric filter beside this one: they take no operand, so
+		// a caller writes `f.effort=not_null` rather than a colon and
+		// nothing. Read as an `eq` against the text "not_null" they
+		// would be compared as a VALUE — against a number column, which
+		// refuses it, and against a text one, which silently matches the
+		// tasks whose field literally says "not_null".
+		switch value {
+		case FieldOpNull, FieldOpNotNull:
+			q.Fields = append(q.Fields, FieldFilter{Ref: ref, Op: value})
+			continue
+		}
 		op, rest, found := strings.Cut(value, ":")
 		if !found {
-			op, rest = "eq", value
+			op, rest = FieldOpEq, value
 		}
 		q.Fields = append(q.Fields, FieldFilter{Ref: ref, Op: op, Value: rest})
 	}
@@ -714,32 +708,26 @@ func (q *Query) parseBools(p Params) {
 	}
 }
 
+// parseText reads the FIND, which is not a search.
+//
+// `q` here is a substring of a key or a title — "the item I half remember" —
+// and that is the whole of it. RANKED SEARCH OVER THE COMPANY'S PROSE IS
+// `search_knowledge`'s, behind the [knowledge] seam, which is where the
+// analyzer, the inverted list and the vectors are. This grammar has none of
+// them: `kb_docs` and `kb_postings` index PAGES, and nothing has ever put a
+// task in them.
+//
+// So there is no `mode`. Three modes over one behaviour is a knob whose values
+// cannot differ, which is worse than no knob: a caller that asked for
+// `semantic` and got a substring match has been answered by a name rather than
+// by a search.
 func (q *Query) parseText(p Params) error {
 	q.Text = strings.TrimSpace(p.String("q"))
 	if len(q.Text) > MaxQueryText {
-		return fmt.Errorf("tracker: the text query is %d bytes and the bound is "+
-			"%d — a longer one buys nothing, because the ranker caps its own "+
-			"posting scan", len(q.Text), MaxQueryText)
-	}
-	mode := strings.TrimSpace(p.String("mode"))
-	if mode == "" {
-		return nil
-	}
-	switch TextMode(mode) {
-	case TextKeyword, TextSemantic, TextHybrid:
-		q.TextMode = TextMode(mode)
-	default:
-		return fmt.Errorf("tracker: %q is not a search mode — the three are "+
-			"keyword, semantic and hybrid", mode)
-	}
-	// A MODE WITHOUT TEXT IS REFUSED NAMING THE MISSING KEY, because it is
-	// almost always a caller that meant to pass one: silently ignoring it
-	// answers an unfiltered list and looks like a search that found
-	// everything.
-	if q.Text == "" {
-		return fmt.Errorf("tracker: mode=%s was passed without q — a search "+
-			"mode with nothing to search answers an unfiltered list, which "+
-			"reads as a search that matched everything", mode)
+		return fmt.Errorf("tracker: the find text is %d bytes and the bound is "+
+			"%d — this is a substring of a key or a title, and a longer one "+
+			"matches nothing; ask search_knowledge a question this long",
+			len(q.Text), MaxQueryText)
 	}
 	return nil
 }
