@@ -782,6 +782,9 @@ func (s *chatServer) liveTokens() int {
 }
 
 type chatSink struct {
+	// forgotten is what a teardown asked this sink to delete.
+	forgotten []string
+
 	mu     sync.Mutex
 	values map[string]string
 	failOn string
@@ -810,6 +813,15 @@ func (s *chatSink) Record(_ context.Context, name, value string) error {
 	}
 	s.writes++
 	s.values[name] = value
+	return nil
+}
+
+// Forget implements [provision.TokenSink]: it records what a teardown
+// asked to be deleted, so a case can assert the deletion happened.
+func (s *chatSink) Forget(_ context.Context, names ...string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.forgotten = append(s.forgotten, names...)
 	return nil
 }
 

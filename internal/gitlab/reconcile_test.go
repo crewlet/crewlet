@@ -944,6 +944,9 @@ func atoi(s string) int {
 
 // recordingSink is a sink that can be made to fail, to reach the rollback.
 type recordingSink struct {
+	// forgotten is what a teardown asked this sink to delete.
+	forgotten []string
+
 	mu     sync.Mutex
 	values map[string]string
 	failOn string
@@ -1002,6 +1005,15 @@ func (s *recordingSink) records() int {
 // that swept the lot agreed with a rollback that took a working company's
 // tokens down with it, and disagreed with the real sink about the one case
 // a rollback is for.
+// Forget implements [provision.TokenSink]: it records what a teardown
+// asked to be deleted, so a case can assert the deletion happened.
+func (s *recordingSink) Forget(_ context.Context, names ...string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.forgotten = append(s.forgotten, names...)
+	return nil
+}
+
 func (s *recordingSink) Discard(context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1491,6 +1503,9 @@ func (s *cancellingSink) Record(context.Context, string, string) error {
 	s.cancel()
 	return context.Canceled
 }
+
+// Forget implements [provision.TokenSink].
+func (s *cancellingSink) Forget(context.Context, ...string) error { return nil }
 
 func (s *cancellingSink) Discard(ctx context.Context) error {
 	// A rollback that inherited the cancelled context would fail here

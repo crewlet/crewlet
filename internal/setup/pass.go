@@ -101,7 +101,28 @@ type Teardowner interface {
 	// An error holds the surface in [integration.PhaseDisconnecting] and
 	// the loop tries again, so a partial teardown must be safe to repeat:
 	// every step is "remove this if it is there".
-	Teardown(ctx context.Context, in TeardownInput) error
+	//
+	// # It reports what it removed, and that is an END STATE
+	//
+	// A teardown knows which seats' accounts went — it walks its own plan,
+	// and each [provision.Seat] carries the `${VAR}` names its credentials
+	// live in. That knowledge used to die at an error-only return, and
+	// nothing downstream could delete the values those accounts left
+	// sealed. See [provision.Removed].
+	//
+	// The result names the state this teardown ESTABLISHED, not the delta
+	// this call performed. Every step is already "remove this if it is
+	// there" and the whole thing is retried on failure — so if the result
+	// were a delta, a retry after a failed secret deletion would find the
+	// accounts already gone, report nothing removed, and let the block drop
+	// with the credentials still in the store. "Already absent" counts as
+	// removed.
+	//
+	// AND ONLY WHAT IS GENUINELY DEAD. A merely DISABLED account does not
+	// belong here: a token on one works again the moment anybody re-enables
+	// it, so naming it would delete a company's only record of a live
+	// credential.
+	Teardown(ctx context.Context, in TeardownInput) (provision.Removed, error)
 }
 
 // TeardownInput is what a teardown pass is told.

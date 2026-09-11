@@ -281,6 +281,9 @@ func itoa(n int) string {
 
 // recordingSink remembers what a run minted.
 type recordingSink struct {
+	// forgotten is what a teardown asked this sink to delete.
+	forgotten []string
+
 	mu   sync.Mutex
 	vals map[string]string
 	// flushes counts completions. It is what a value being VISIBLE to a
@@ -299,6 +302,13 @@ func (s *recordingSink) Record(_ context.Context, name, value string) error {
 	return nil
 }
 func (s *recordingSink) Discard(context.Context) error { return nil }
+
+// Forget implements [provision.TokenSink]: it records what a teardown
+// asked to be deleted, so a case can assert the deletion happened.
+func (s *recordingSink) Forget(_ context.Context, names ...string) error {
+	s.forgotten = append(s.forgotten, names...)
+	return nil
+}
 func (s *recordingSink) Flush(context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/provision"
 )
 
 var log = logging.Get("integration")
@@ -286,7 +287,7 @@ type Disconnector interface {
 	//
 	// An error leaves everything in place and the surface disconnecting,
 	// so it is retried. Every step must be safe to repeat.
-	Disconnect(ctx context.Context, removeSeats bool) error
+	Disconnect(ctx context.Context, removeSeats bool) (provision.Removed, error)
 }
 
 // Registration is one reconciler and what is specific to its cadence.
@@ -943,7 +944,7 @@ func (w *Worker) tearDown(
 	// that protects it, and the write that records the pass runs in the margin
 	// the lease deliberately keeps behind it. Recording on the bounded one
 	// would lose the record of every teardown that used its whole budget.
-	err := reg.Disconnector.Disconnect(bounded, state.RemoveSeats)
+	removed, err := reg.Disconnector.Disconnect(bounded, state.RemoveSeats)
 	if errors.Is(err, ErrDisconnectUnavailable) {
 		// NOT YET, which is not the same as failed. Nothing is written,
 		// for the reason the nil-disconnector case above states: an
@@ -959,8 +960,16 @@ func (w *Worker) tearDown(
 			log.WarnContext(ctx, "integration_status_not_forgotten",
 				"integration", kind.String(), "error", err)
 		}
+		// THE ONLY RECORD A DESTRUCTIVE ACT LEAVES. This line carried the
+		// kind and a bool, so "we deleted eleven service accounts and
+		// deleted the credentials they held" and "we removed a webhook"
+		// were the same sentence in an operator's log.
+		//
+		// NAMES, NEVER VALUES: the secrets are the variable names whose
+		// rows this disconnect deleted.
 		log.InfoContext(ctx, "integration_disconnected",
-			"integration", kind.String(), "removed_seats", state.RemoveSeats)
+			"integration", kind.String(), "removed_seats", state.RemoveSeats,
+			"accounts", removed.Handles(), "secrets", removed.Secrets())
 		return
 	}
 

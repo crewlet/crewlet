@@ -1527,3 +1527,13 @@ func TestACredentialFindingIsClearedByACredentialField(t *testing.T) {
 		})
 	}
 }
+
+// forget drops values, which is what a teardown does to the credentials of an
+// account it removed.
+func (v *vault) forget(names ...string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	for _, name := range names {
+		delete(v.values, name)
+	}
+}

@@ -850,6 +850,9 @@ func TestALiteralSecretWithNoValueIsRefused(t *testing.T) {
 
 // sink is the reconcile's recorder.
 type sink struct {
+	// forgotten is what a teardown asked this sink to delete.
+	forgotten []string
+
 	mu     sync.Mutex
 	values map[string]string
 	// sealed counts the Records this sink has taken, which is the OTHER
@@ -894,6 +897,13 @@ func (s *sink) records() int {
 }
 
 func (s *sink) Discard(context.Context) error { return nil }
+
+// Forget implements [provision.TokenSink]: it records what a teardown
+// asked to be deleted, so a case can assert the deletion happened.
+func (s *sink) Forget(_ context.Context, names ...string) error {
+	s.forgotten = append(s.forgotten, names...)
+	return nil
+}
 
 func (s *sink) Flush(ctx context.Context) error {
 	s.mu.Lock()

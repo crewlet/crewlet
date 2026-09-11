@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
@@ -72,7 +73,7 @@ func TestADisconnectOnANodeWithNoCompanyIsDeferredRatherThanFatal(t *testing.T) 
 				t.Fatal("precondition: a zero engine must have no active revision")
 			}
 
-			err := e.disconnectors()[kind].Disconnect(t.Context(), true)
+			_, err := e.disconnectors()[kind].Disconnect(t.Context(), true)
 
 			if !errors.Is(err, integration.ErrDisconnectUnavailable) {
 				t.Errorf("Disconnect = %v, want %v", err,
@@ -125,7 +126,7 @@ roles:
 	e.epoch.current.Store(company)
 
 	pass := &atlassianPass{engine: e}
-	err = pass.Teardown(t.Context(), setup.TeardownInput{RemoveSeats: true})
+	_, err = pass.Teardown(t.Context(), setup.TeardownInput{RemoveSeats: true})
 	if err == nil {
 		t.Fatal("the teardown reported success with no key to remove an " +
 			"account with; dropBlock then takes the key's own pointer away " +
@@ -141,7 +142,168 @@ roles:
 	// AND WITHOUT remove_seats THERE IS GENUINELY NOTHING TO DO: Atlassian
 	// holds no webhook this engine registered, so a disconnect that leaves
 	// the accounts alone needs no key at all.
-	if err := pass.Teardown(t.Context(), setup.TeardownInput{}); err != nil {
+	if _, err := pass.Teardown(t.Context(), setup.TeardownInput{}); err != nil {
 		t.Errorf("a teardown that keeps the accounts refused: %v", err)
+	}
+}
+
+// THE CREDENTIALS AN ACCOUNT HELD GO WITH THE ACCOUNT.
+//
+// No teardown or decommission path anywhere deleted a secret: a vendor
+// package's only write seam is [provision.TokenSink], and until Forget existed
+// it had no verb for removing a value this run did not write. So disconnecting
+// Atlassian with "remove accounts" deleted every agent's service account and
+// left every agent's credential sealed and resolving.
+//
+// The consequence was measured on the reconnect: the tracker mapped the seat to
+// the account that no longer existed — its identity cache is keyed on the
+// CREDENTIAL, and the credential had not changed — and reported a 401 as the
+// operator's problem, at a third-party app, for about thirty-five seconds.
+func TestTheCredentialsOfARemovedAccountAreDeleted(t *testing.T) {
+	e, _ := sealingEngine(t, "https://jira.example.com")
+	sink, err := e.SetupSink("test-operator")
+	if err != nil {
+		t.Fatalf("SetupSink: %v", err)
+	}
+	for _, name := range []string{"SRE_ATLASSIAN_TOKEN", "SRE_ATLASSIAN_EMAIL", "SHARED_ADMIN"} {
+		if err := sink.Record(t.Context(), name, "sealed-"+name); err != nil {
+			t.Fatalf("Record %s: %v", name, err)
+		}
+	}
+	if err := sink.Flush(t.Context()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if got := e.Resolve("${SRE_ATLASSIAN_TOKEN}"); got == "" {
+		t.Fatal("precondition: the seat's token was never sealed")
+	}
+
+	err = e.forgetRemoved(t.Context(), integration.KindAtlassian, provision.Removed{
+		Accounts: []provision.Removal{{
+			Handle:  "sre-lead",
+			Secrets: []string{"SRE_ATLASSIAN_TOKEN", "SRE_ATLASSIAN_EMAIL"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("forgetRemoved: %v", err)
+	}
+
+	e.refreshSecrets(t.Context())
+	for _, gone := range []string{"SRE_ATLASSIAN_TOKEN", "SRE_ATLASSIAN_EMAIL"} {
+		if got := e.Resolve("${" + gone + "}"); got != "" {
+			t.Errorf("%s still resolves to %q after its account was removed", gone, got)
+		}
+	}
+	// AND ONLY THE SEAT'S OWN. A company-level credential survives a
+	// disconnect by design — it may be shared with another deployment — and
+	// is reported to the operator instead.
+	if got := e.Resolve("${SHARED_ADMIN}"); got == "" {
+		t.Error("a credential no removed account held was deleted too")
+	}
+}
+
+// A TEARDOWN THAT REMOVED NO ACCOUNT DELETES NOTHING, which is what keeps a
+// disconnect that only withdrew a webhook from touching the store at all.
+func TestATeardownThatRemovedNothingDeletesNothing(t *testing.T) {
+	e, _ := sealingEngine(t, "https://jira.example.com")
+	sink, err := e.SetupSink("test-operator")
+	if err != nil {
+		t.Fatalf("SetupSink: %v", err)
+	}
+	if err := sink.Record(t.Context(), "KEEP_ME", "value"); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if err := sink.Flush(t.Context()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	if err := e.forgetRemoved(t.Context(), integration.KindJira, provision.Removed{}); err != nil {
+		t.Fatalf("forgetRemoved: %v", err)
+	}
+
+	e.refreshSecrets(t.Context())
+	if got := e.Resolve("${KEEP_ME}"); got != "value" {
+		t.Errorf("KEEP_ME = %q over a teardown that removed no account", got)
+	}
+}
+
+// A NODE WITH NO KEYRING SAYS SO RATHER THAN CLAIMING IT CLEANED UP.
+//
+// It cannot open a sealed row at all. Failing the disconnect would hold a
+// surface in PhaseDisconnecting for ever on a node that will never be able to
+// finish; claiming success would report a completeness it did not achieve. It
+// logs the names and lets the block drop.
+func TestANodeWithNoKeyringReportsTheCredentialsItCannotDelete(t *testing.T) {
+	t.Parallel()
+	e := &Engine{}
+	if _, err := e.SetupSink("test"); err == nil {
+		t.Fatal("precondition: a node with no keyring must refuse a sink")
+	}
+
+	err := e.forgetRemoved(t.Context(), integration.KindAtlassian, provision.Removed{
+		Accounts: []provision.Removal{{Handle: "sre-lead", Secrets: []string{"SRE_TOKEN"}}},
+	})
+	if err != nil {
+		t.Errorf("forgetRemoved = %v: a node that cannot open a sealed row would "+
+			"hold the surface disconnecting for ever", err)
+	}
+}
+
+// removingPass is a teardown that reports accounts it removed.
+type removingPass struct {
+	setup.Pass
+	removed provision.Removed
+	err     error
+}
+
+func (*removingPass) Kind() integration.Kind { return integration.KindAtlassian }
+
+func (p *removingPass) Teardown(context.Context, setup.TeardownInput) (provision.Removed, error) {
+	return p.removed, p.err
+}
+
+// A DISCONNECT DELETES THE CREDENTIALS ITS TEARDOWN STRANDED, END TO END.
+//
+// The pieces each work and the question is whether they are joined: the vendor
+// step reports what it removed, and the engine deletes those values BEFORE the
+// block is dropped, inside the same closure. Asserted through the real
+// [vendorDisconnect] rather than through the deletion alone, because "the
+// teardown reports it" and "the engine acts on it" are two facts and only the
+// second one ends the defect.
+func TestADisconnectDeletesWhatItsTeardownStranded(t *testing.T) {
+	e, company := sealingEngine(t, "https://jira.example.com")
+	e.epoch.current.Store(company)
+	e.UseConfigWriter(noopWriter{})
+
+	sink, err := e.SetupSink("test-operator")
+	if err != nil {
+		t.Fatalf("SetupSink: %v", err)
+	}
+	if err := sink.Record(t.Context(), "SRE_ATLASSIAN_TOKEN", "sealed"); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if err := sink.Flush(t.Context()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if e.Resolve("${SRE_ATLASSIAN_TOKEN}") == "" {
+		t.Fatal("precondition: nothing was sealed")
+	}
+
+	d := vendorDisconnect{engine: e, kind: integration.KindAtlassian, pass: &removingPass{
+		removed: provision.Removed{Accounts: []provision.Removal{{
+			Handle: "sre-lead", Secrets: []string{"SRE_ATLASSIAN_TOKEN"},
+		}}},
+	}}
+	removed, err := d.Disconnect(t.Context(), true)
+	if err != nil {
+		t.Fatalf("Disconnect: %v", err)
+	}
+	if got := removed.Handles(); len(got) != 1 || got[0] != "sre-lead" {
+		t.Errorf("handles = %v, want the removed seat reported to the loop", got)
+	}
+
+	e.refreshSecrets(t.Context())
+	if got := e.Resolve("${SRE_ATLASSIAN_TOKEN}"); got != "" {
+		t.Errorf("SRE_ATLASSIAN_TOKEN = %q after its account was removed: the "+
+			"seat still maps to an account that no longer exists", got)
 	}
 }

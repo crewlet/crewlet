@@ -117,6 +117,9 @@ func (o *stubOrg) server(t *testing.T) *httptest.Server {
 
 // sink is a store that already holds a credential for the seat.
 type sink struct {
+	// forgotten is what a teardown asked this sink to delete.
+	forgotten []string
+
 	held  string
 	wrote map[string]string
 
@@ -159,6 +162,13 @@ func (s *sink) Value(_ context.Context, name string) (string, bool, error) {
 	return "", false, nil
 }
 func (s *sink) Discard(context.Context) error { return nil }
+
+// Forget implements [provision.TokenSink]: it records what a teardown
+// asked to be deleted, so a case can assert the deletion happened.
+func (s *sink) Forget(_ context.Context, names ...string) error {
+	s.forgotten = append(s.forgotten, names...)
+	return nil
+}
 func (s *sink) Flush(ctx context.Context) error {
 	s.flushes++
 	s.flushLive = ctx.Err() == nil

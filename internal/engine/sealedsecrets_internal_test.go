@@ -368,6 +368,9 @@ func (s *failingFlushSink) Value(_ context.Context, name string) (string, bool, 
 }
 
 func (*failingFlushSink) Discard(context.Context) error { return nil }
+
+// Forget implements [provision.TokenSink].
+func (*failingFlushSink) Forget(context.Context, ...string) error { return nil }
 func (*failingFlushSink) Flush(context.Context) error {
 	return fmt.Errorf("the run could not be completed")
 }

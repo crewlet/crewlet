@@ -54,17 +54,34 @@ type TeardownOptions struct {
 // errors are joined: one account a credential cannot touch must not strand
 // the rest, and an operator reading a stuck teardown should see everything
 // blocking it at once.
-func Teardown(ctx context.Context, opts TeardownOptions) error {
+// # The application key goes with the account, and that is new
+//
+// This disabled the account and left its APPLICATION KEY — the value sealed in
+// the seat's variable — live. Mattermost's teardown states exactly why that is
+// wrong, about its own bots: "a live token on a disabled bot is a credential
+// that works again the moment anybody re-enables the account". Re-enabling a
+// Datadog user restores a working key held by a company that has disconnected,
+// and this engine now re-enables accounts it disabled, so that moment is one
+// button press away rather than hypothetical.
+//
+// # What it reports
+//
+// A seat whose account is absent, or is disabled AND holds no key this engine
+// minted. Both halves are required: a seat whose key could not be deleted is
+// NOT reported, because deleting the variable would destroy the company's only
+// record of a credential that is still live.
+func Teardown(ctx context.Context, opts TeardownOptions) (provision.Removed, error) {
+	var removed provision.Removed
 	if opts.Client == nil {
-		return errors.New("datadog: no client")
+		return removed, errors.New("datadog: no client")
 	}
 	if opts.Config == nil || opts.Config.Provisioning == nil {
 		// Nothing was ever registered or provisioned, so there is nothing
 		// to remove and the disconnect finishes.
-		return nil
+		return removed, nil
 	}
 	if opts.Creds.APIKey == "" || opts.Creds.AppKey == "" {
-		return errors.New(
+		return removed, errors.New(
 			"datadog: both keys are needed to withdraw the webhook this engine " +
 				"registered and to disable the accounts it created; force the " +
 				"disconnect to drop the block and remove them at Datadog by hand")
@@ -75,16 +92,16 @@ func Teardown(ctx context.Context, opts TeardownOptions) error {
 	// definition that does posts every alert to a route that will refuse
 	// it.
 	if err := withdrawWebhook(ctx, opts); err != nil {
-		return err
+		return removed, err
 	}
 
 	if !opts.RemoveSeats || opts.Plan == nil {
-		return nil
+		return removed, nil
 	}
 
 	existing, err := opts.Client.ListServiceAccounts(ctx, opts.Creds, emailDomainOf(opts.Config))
 	if err != nil {
-		return fmt.Errorf("datadog: list the accounts to disable them: %w",
+		return removed, fmt.Errorf("datadog: list the accounts to disable them: %w",
 			integration.Reject(err, Status(err)))
 	}
 	byEmail := make(map[string]User, len(existing))
@@ -95,17 +112,66 @@ func Teardown(ctx context.Context, opts TeardownOptions) error {
 	var failures []error
 	for _, seat := range opts.Plan.Seats {
 		account, found := byEmail[seat.Email]
-		if !found || account.Disabled {
-			// Already in the state a disconnect wants, which is why this
-			// is safe to repeat after a partial failure.
+		if !found {
+			// The account is gone entirely, so its key went with it.
+			removed.Add(removalFor(seat, seat.Email))
 			continue
 		}
-		if err := opts.Client.DisableUser(ctx, opts.Creds, account.ID); err != nil {
-			failures = append(failures, fmt.Errorf("datadog: disable %s: %w",
+		// THE KEY FIRST, THEN THE ACCOUNT, which is the order mattermost's
+		// teardown argues for: a revoked key on a live account is an agent
+		// that can do nothing, and a live key on a disabled account is a
+		// credential that works again the moment anybody re-enables it.
+		// The first is the safer thing to be interrupted at.
+		if err := revokeAppKeys(ctx, opts, account.ID); err != nil {
+			failures = append(failures, fmt.Errorf(
+				"datadog: revoke %s's application keys before disabling it: %w",
 				seat.Handle, integration.Reject(err, Status(err))))
+			// AND THE ACCOUNT STAYS AS IT IS, so the state is the one an
+			// operator can see: an account still listed with a credential
+			// nobody could withdraw, rather than a disabled one quietly
+			// holding a working key.
+			continue
+		}
+		if !account.Disabled {
+			if err := opts.Client.DisableUser(ctx, opts.Creds, account.ID); err != nil {
+				failures = append(failures, fmt.Errorf("datadog: disable %s: %w",
+					seat.Handle, integration.Reject(err, Status(err))))
+				continue
+			}
+		}
+		removed.Add(removalFor(seat, account.Email))
+	}
+	return removed, errors.Join(failures...)
+}
+
+// revokeAppKeys deletes every application key on one account.
+//
+// ALL OF THEM, not only the one this run can name: a key's VALUE is returned
+// once and never again, so there is nothing to match a stored value against,
+// and the account exists solely because this engine created it. An
+// administrator has no reason to have put a key of their own on an agent's
+// service account, and leaving one would leave exactly the live credential
+// this deletion exists to remove.
+func revokeAppKeys(ctx context.Context, opts TeardownOptions, accountID string) error {
+	keys, err := opts.Client.ListAppKeys(ctx, opts.Creds, accountID)
+	if err != nil {
+		return err
+	}
+	for _, key := range keys {
+		if err := opts.Client.DeleteAppKey(ctx, opts.Creds, accountID, key.ID); err != nil {
+			return err
 		}
 	}
-	return errors.Join(failures...)
+	return nil
+}
+
+// removalFor is one seat's removal, naming the variable its key lives in.
+func removalFor(seat provision.Seat, account string) provision.Removal {
+	out := provision.Removal{Handle: seat.Handle, Role: seat.Role, Account: account}
+	if seat.TokenVar != "" {
+		out.Secrets = append(out.Secrets, seat.TokenVar)
+	}
+	return out
 }
 
 // withdrawWebhook removes the definition this deployment registered, and only

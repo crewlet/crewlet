@@ -15,6 +15,9 @@ import (
 
 // sink records what a pass mints, and can refuse a read or a write.
 type sink struct {
+	// forgotten is what a teardown asked this sink to delete.
+	forgotten []string
+
 	held    map[string]string
 	readErr error
 	// recordErr refuses every write; recordErrFor refuses ONE name, so a
@@ -62,6 +65,13 @@ func (s *sink) Flush(context.Context) error {
 
 func (s *sink) Describe() string { return "a test sink" }
 func (s *sink) NextStep() string { return "a test next step" }
+
+// Forget implements [provision.TokenSink]: it records what a teardown
+// asked to be deleted, so a case can assert the deletion happened.
+func (s *sink) Forget(_ context.Context, names ...string) error {
+	s.forgotten = append(s.forgotten, names...)
+	return nil
+}
 
 func (s *sink) Discard(context.Context) error {
 	clear(s.held)

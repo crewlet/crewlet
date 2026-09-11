@@ -56,15 +56,24 @@ type TeardownOptions struct {
 //
 // SAFE TO REPEAT: a bot already gone, already disabled, or holding no token
 // of ours, is not an error.
-func Teardown(ctx context.Context, opts TeardownOptions) error {
+// # What it reports
+//
+// A seat whose bot is gone, or whose minted tokens were revoked AND whose bot
+// was then disabled. NOT one whose revoke failed: that branch deliberately
+// leaves the bot enabled, so the stored token is still live, and naming it
+// would delete the company's only record of a working credential — which is
+// the failure the paragraph above is written to avoid, arriving through the
+// report instead of through the teardown.
+func Teardown(ctx context.Context, opts TeardownOptions) (provision.Removed, error) {
+	var removed provision.Removed
 	if opts.Client == nil {
-		return errors.New("mattermost: no client")
+		return removed, errors.New("mattermost: no client")
 	}
 	if !opts.RemoveSeats || opts.Config == nil || opts.Config.Provisioning == nil {
-		return nil
+		return removed, nil
 	}
 	if opts.Plan == nil {
-		return nil
+		return removed, nil
 	}
 
 	var failures []error
@@ -77,6 +86,11 @@ func Teardown(ctx context.Context, opts TeardownOptions) error {
 			continue
 		}
 		if !found {
+			// ALREADY GONE, and the token sealed for it is dead.
+			removed.Add(provision.Removal{
+				Handle: seat.Handle, Role: seat.Role, Account: username,
+				Secrets: secretsOf(seat),
+			})
 			continue
 		}
 		// THE CREDENTIAL FIRST, THEN THE ACCOUNT. Either order leaves
@@ -100,7 +114,26 @@ func Teardown(ctx context.Context, opts TeardownOptions) error {
 		if err := opts.Client.DisableBot(ctx, bot.ID); err != nil {
 			failures = append(failures, fmt.Errorf(
 				"mattermost: disable %s: %w", username, err))
+			continue
+		}
+		// BOTH HALVES DONE: the token is revoked and the bot is disabled,
+		// so the value sealed for this seat authenticates as nothing and
+		// cannot start working again.
+		removed.Add(provision.Removal{
+			Handle: seat.Handle, Role: seat.Role, Account: username,
+			Secrets: secretsOf(seat),
+		})
+	}
+	return removed, errors.Join(failures...)
+}
+
+// secretsOf is the variables one seat's credentials live in.
+func secretsOf(seat provision.Seat) []string {
+	var out []string
+	for _, name := range []string{seat.TokenVar, seat.EmailVar} {
+		if name != "" {
+			out = append(out, name)
 		}
 	}
-	return errors.Join(failures...)
+	return out
 }

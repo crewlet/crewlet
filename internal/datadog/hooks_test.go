@@ -402,7 +402,7 @@ func TestADisconnectWithdrawsTheWebhookEvenWhenAccountsStay(t *testing.T) {
 		context.Background(), hookOptions(t, reg, base)); err != nil {
 		t.Fatalf("pass: %v", err)
 	}
-	if err := datadog.Teardown(context.Background(), datadog.TeardownOptions{
+	if _, err := datadog.Teardown(context.Background(), datadog.TeardownOptions{
 		Client: reg.client(t), Config: cfgWith(), Creds: pair,
 		RemoveSeats: false, WebhookBase: base,
 	}); err != nil {
@@ -414,7 +414,7 @@ func TestADisconnectWithdrawsTheWebhookEvenWhenAccountsStay(t *testing.T) {
 	// AND IT IS SAFE TO REPEAT. A teardown is re-run after a partial
 	// failure, and refusing the second attempt would leave a disconnect
 	// stuck on work that is already done.
-	if err := datadog.Teardown(context.Background(), datadog.TeardownOptions{
+	if _, err := datadog.Teardown(context.Background(), datadog.TeardownOptions{
 		Client: reg.client(t), Config: cfgWith(), Creds: pair, WebhookBase: base,
 	}); err != nil {
 		t.Fatalf("second teardown: %v", err)
@@ -438,7 +438,7 @@ func TestADisconnectLeavesSomebodyElsesWebhookAlone(t *testing.T) {
 	}}
 	serveWebhook(reg, held)
 
-	err := datadog.Teardown(context.Background(), datadog.TeardownOptions{
+	_, err := datadog.Teardown(context.Background(), datadog.TeardownOptions{
 		Client: reg.client(t), Config: cfgWith(), Creds: pair, WebhookBase: base,
 	})
 	if err == nil {
@@ -465,7 +465,7 @@ func TestADisconnectWithNoPublicBaseWithdrawsNothing(t *testing.T) {
 	held := &stored{hook: &datadog.Webhook{Name: "crewlet", URL: base + "/webhooks/datadog"}}
 	serveWebhook(reg, held)
 
-	if err := datadog.Teardown(context.Background(), datadog.TeardownOptions{
+	if _, err := datadog.Teardown(context.Background(), datadog.TeardownOptions{
 		Client: reg.client(t), Config: cfgWith(), Creds: pair,
 	}); err != nil {
 		t.Fatalf("teardown: %v", err)

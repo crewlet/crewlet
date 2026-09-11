@@ -22,6 +22,19 @@ type TeardownOptions struct {
 	WebhookBase string
 	// RemoveSeats deletes the service accounts this engine created.
 	RemoveSeats bool
+
+	// Mode is where those accounts are OWNED, and it decides which delete
+	// route removes one.
+	//
+	// IT WAS NOT HERE AT ALL, so removeAccounts always sent the GROUP
+	// delete — and [Client.DeleteServiceAccount] reads a 404 as success
+	// ("unknown or already removed; both are the state the caller asked
+	// for"). An instance-owned account therefore reported itself deleted
+	// down a route that had never heard of it, and stayed live with every
+	// credential it held. The reconcile path has had [deleteAccount] for
+	// exactly this, whose own doc names the failure; the teardown never got
+	// it.
+	Mode Mode
 }
 
 // Teardown removes what this engine created in a GitLab group.
@@ -44,17 +57,18 @@ type TeardownOptions struct {
 //
 // SAFE TO REPEAT: a hook or an account already gone is not an error, so the
 // pass retried after a partial failure finishes the rest.
-func Teardown(ctx context.Context, opts TeardownOptions) error {
+func Teardown(ctx context.Context, opts TeardownOptions) (provision.Removed, error) {
+	var removed provision.Removed
 	if opts.Client == nil {
-		return errors.New("gitlab: no client")
+		return removed, errors.New("gitlab: no client")
 	}
 	if opts.Config == nil || opts.Config.Provisioning == nil {
-		return nil
+		return removed, nil
 	}
 	p := opts.Config.Provisioning
 	group := strings.TrimSpace(p.Group)
 	if group == "" {
-		return nil
+		return removed, nil
 	}
 
 	var failures []error
@@ -64,16 +78,27 @@ func Teardown(ctx context.Context, opts TeardownOptions) error {
 		failures = append(failures, fmt.Errorf("gitlab: resolve group %q to remove what it holds: %w",
 			group, err))
 	case !found:
-		// The group is gone, so everything in it went with it. Nothing
-		// left to remove and nothing to report.
-		return nil
+		// The group is gone, so everything in it went with it — including
+		// every service account it owned, whose credentials are now dead.
+		// Reported as removed for that reason: the accounts really are
+		// absent, which is the end state a teardown names.
+		if opts.RemoveSeats && opts.Plan != nil {
+			for _, seat := range opts.Plan.Seats {
+				removed.Add(provision.Removal{
+					Handle: seat.Handle, Role: seat.Role,
+					Account: Username(p, seat.Handle), Secrets: secretsOf(seat),
+				})
+			}
+		}
+		return removed, nil
 	default:
 		failures = append(failures, removeHooks(ctx, opts, groupID)...)
 		if opts.RemoveSeats {
-			failures = append(failures, removeAccounts(ctx, opts, groupID)...)
+			gone, errs := removeAccounts(ctx, opts, groupID)
+			removed, failures = gone, append(failures, errs...)
 		}
 	}
-	return errors.Join(failures...)
+	return removed, errors.Join(failures...)
 }
 
 // groupIDOf resolves the group, reporting absence separately from failure.
@@ -140,9 +165,20 @@ func removeHooks(ctx context.Context, opts TeardownOptions, groupID int) []error
 // them under, so this removes exactly what it made and cannot reach an
 // account somebody else named. A seat with no account is already in the state
 // a disconnect wants.
-func removeAccounts(ctx context.Context, opts TeardownOptions, groupID int) []error {
+// # What it reports
+//
+// Every planned seat whose account is now absent from the instance, with the
+// variable that seat's token lives in. AN END STATE rather than a delta — see
+// [setup.Teardowner] — so a seat whose account was never there, or was removed
+// by an earlier attempt, counts: its sealed token is dead either way, and a
+// retry that reported only this call's own deletions would let the block drop
+// with the values still resolving.
+func removeAccounts(
+	ctx context.Context, opts TeardownOptions, groupID int,
+) (provision.Removed, []error) {
+	var removed provision.Removed
 	if opts.Plan == nil {
-		return nil
+		return removed, nil
 	}
 	var failures []error
 	for _, seat := range opts.Plan.Seats {
@@ -154,12 +190,47 @@ func removeAccounts(ctx context.Context, opts TeardownOptions, groupID int) []er
 			continue
 		}
 		if !found {
+			// ALREADY GONE, and its credential with it.
+			removed.Add(provision.Removal{
+				Handle: seat.Handle, Role: seat.Role, Account: username,
+				Secrets: secretsOf(seat),
+			})
 			continue
 		}
-		if err := opts.Client.DeleteServiceAccount(ctx, groupID, user.ID); err != nil {
+		// DOWN THE ROUTE THAT OWNS IT. This always sent the group delete,
+		// which answers 404 as success for an instance-owned account — so
+		// the teardown reported every one of them removed while they
+		// stayed live.
+		if err := removeOne(ctx, opts, groupID, user.ID); err != nil {
 			failures = append(failures, fmt.Errorf(
 				"gitlab: remove service account %s: %w", username, err))
+			continue
+		}
+		removed.Add(provision.Removal{
+			Handle: seat.Handle, Role: seat.Role, Account: username,
+			Secrets: secretsOf(seat),
+		})
+	}
+	return removed, failures
+}
+
+// removeOne deletes one account down the route its owner requires, which is
+// the split [deleteAccount] makes on the reconcile path and for the same
+// reason.
+func removeOne(ctx context.Context, opts TeardownOptions, groupID, userID int) error {
+	if opts.Mode.Or() == ModeInstance {
+		return opts.Client.DeleteInstanceServiceAccount(ctx, userID)
+	}
+	return opts.Client.DeleteServiceAccount(ctx, groupID, userID)
+}
+
+// secretsOf is the variables one seat's credentials live in.
+func secretsOf(seat provision.Seat) []string {
+	var out []string
+	for _, name := range []string{seat.TokenVar, seat.EmailVar} {
+		if name != "" {
+			out = append(out, name)
 		}
 	}
-	return failures
+	return out
 }

@@ -324,6 +324,9 @@ func accountIn(path, suffix string) string {
 // built on one would certify a pass that never ran. That posture is a world in
 // its own right here, and it is the second row's outstanding one.
 type sealedStore struct {
+	// forgotten is what a teardown asked this sink to delete.
+	forgotten []string
+
 	mu     sync.Mutex
 	values map[string]string
 	writes int
@@ -360,6 +363,13 @@ func (s *sealedStore) mutations() int {
 }
 
 func (s *sealedStore) Discard(context.Context) error { return nil }
+
+// Forget implements [provision.TokenSink]: it records what a teardown
+// asked to be deleted, so a case can assert the deletion happened.
+func (s *sealedStore) Forget(_ context.Context, names ...string) error {
+	s.forgotten = append(s.forgotten, names...)
+	return nil
+}
 
 // Flush is NOT counted. A write-through sink makes nothing newly durable
 // completing a run, and the loop's own sink rebuilds its `${VAR}` snapshot

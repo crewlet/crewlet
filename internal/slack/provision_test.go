@@ -16,6 +16,9 @@ import (
 
 // sink records what a run mints.
 type sink struct {
+	// forgotten is what a teardown asked this sink to delete.
+	forgotten []string
+
 	mu     sync.Mutex
 	values map[string]string
 	err    error
@@ -40,9 +43,16 @@ func (s *sink) Value(_ context.Context, name string) (string, bool, error) {
 }
 
 func (s *sink) Discard(context.Context) error { return nil }
-func (s *sink) Flush(context.Context) error   { return nil }
-func (s *sink) Describe() string              { return "a test sink" }
-func (s *sink) NextStep() string              { return "restart the engine" }
+
+// Forget implements [provision.TokenSink]: it records what a teardown
+// asked to be deleted, so a case can assert the deletion happened.
+func (s *sink) Forget(_ context.Context, names ...string) error {
+	s.forgotten = append(s.forgotten, names...)
+	return nil
+}
+func (s *sink) Flush(context.Context) error { return nil }
+func (s *sink) Describe() string            { return "a test sink" }
+func (s *sink) NextStep() string            { return "restart the engine" }
 
 func (s *sink) value(name string) string {
 	s.mu.Lock()

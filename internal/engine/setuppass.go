@@ -185,14 +185,18 @@ func (p *atlassianPass) recordSite(
 }
 
 // Teardown deletes the accounts this pass created, when asked.
-func (p *atlassianPass) Teardown(ctx context.Context, in setup.TeardownInput) error {
+//
+// It reports both of the variables each removed seat's credentials live in:
+// Atlassian assigns the account's address at creation and its products
+// authenticate base64(address:token), so a pass seals two values per agent.
+func (p *atlassianPass) Teardown(ctx context.Context, in setup.TeardownInput) (provision.Removed, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.Atlassian
 	if cfg == nil || !in.RemoveSeats {
 		// Atlassian holds no webhook this engine registered (Cloud events
 		// arrive through the Forge relay), so with the accounts staying
 		// there is nothing to do at all.
-		return nil
+		return provision.Removed{}, nil
 	}
 	env := p.engine.resolver()
 	key := strings.TrimSpace(env.Value(cfg.APIKey))
@@ -212,7 +216,7 @@ func (p *atlassianPass) Teardown(ctx context.Context, in setup.TeardownInput) er
 		//
 		// gitlabPass and mattermostPass both refuse here, naming the
 		// credential. Atlassian was the outlier.
-		return fmt.Errorf(
+		return provision.Removed{}, fmt.Errorf(
 			"engine: atlassian teardown: the organization key %q resolved to "+
 				"nothing, so the agents' accounts cannot be removed — set that "+
 				"variable, or disconnect without removing accounts and delete "+
@@ -220,7 +224,7 @@ func (p *atlassianPass) Teardown(ctx context.Context, in setup.TeardownInput) er
 	}
 	plan, err := atlassian.PlanFor(company.Org)
 	if err != nil {
-		return fmt.Errorf("engine: atlassian teardown: %w", err)
+		return provision.Removed{}, fmt.Errorf("engine: atlassian teardown: %w", err)
 	}
 	return atlassian.Teardown(ctx, atlassian.TeardownOptions{
 		Client: atlassian.NewClient(atlassian.ClientOptions{}),
@@ -318,25 +322,34 @@ func (e *Engine) setupDuty(kind integration.Kind) setup.Duty {
 
 // Teardown removes the webhooks this pass registered, at both the
 // organization and the repository level.
-func (p *githubPass) Teardown(ctx context.Context, in setup.TeardownInput) error {
+// It removes nothing this engine has to forget a credential for.
+//
+// IT MUST REPORT NOTHING, and this is the one that has to be argued rather
+// than assumed. It UNINSTALLS each seat's App, which revokes its access — but
+// GitHub has no API to delete an App, so the registration and the `private_key`
+// behind it stay valid and re-installable. Naming that key here would delete a
+// company's only copy of a working key for an App that still exists, which no
+// API anywhere can undo. See [Engine.ForgetGitHubApp], which states the same
+// rule for the same reason.
+func (p *githubPass) Teardown(ctx context.Context, in setup.TeardownInput) (provision.Removed, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.GitHub
 	if cfg == nil {
-		return nil
+		return provision.Removed{}, nil
 	}
 	env := p.engine.resolver()
 	client, err := githubReconcileClient(cfg, env)
 	if err != nil {
-		return fmt.Errorf("engine: github teardown: %w", err)
+		return provision.Removed{}, fmt.Errorf("engine: github teardown: %w", err)
 	}
 	if err := github.Teardown(ctx, github.Options{
 		Client: client, Config: cfg, Org: company.Org, Value: env.Value,
 		WebhookBase: company.Config.Integrations.WebhookBase(env.LookupOK),
 	}); err != nil {
-		return err
+		return provision.Removed{}, err
 	}
 	if !in.RemoveSeats {
-		return nil
+		return provision.Removed{}, nil
 	}
 
 	// UNINSTALLING IS WHAT ACTUALLY REVOKES ACCESS, and it is the half the
@@ -359,41 +372,41 @@ func (p *githubPass) Teardown(ctx context.Context, in setup.TeardownInput) error
 		}
 	}
 	if len(failures) > 0 {
-		return fmt.Errorf(
+		return provision.Removed{}, fmt.Errorf(
 			"engine: github teardown: some agents' apps are still installed and "+
 				"can still act, so the block stays until they are not: %w",
 			errors.Join(failures...))
 	}
-	return nil
+	return provision.Removed{}, nil
 }
 
 // Teardown disables the bots this pass created, when asked. Mattermost has no
 // inbound registration to withdraw, so there is nothing to do otherwise.
-func (p *mattermostPass) Teardown(ctx context.Context, in setup.TeardownInput) error {
+func (p *mattermostPass) Teardown(ctx context.Context, in setup.TeardownInput) (provision.Removed, error) {
 	if !in.RemoveSeats {
-		return nil
+		return provision.Removed{}, nil
 	}
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.Mattermost
 	if cfg == nil {
-		return nil
+		return provision.Removed{}, nil
 	}
 	env := p.engine.resolver()
 	admin := mattermostAdminToken(cfg, env, in.Operator)
 	if admin == "" {
-		return fmt.Errorf(
+		return provision.Removed{}, fmt.Errorf(
 			"engine: mattermost teardown: no admin token resolved, and the " +
 				"bots' own tokens cannot disable them")
 	}
 	plan, err := mattermost.PlanFor(company.Org, cfg)
 	if err != nil {
-		return fmt.Errorf("engine: mattermost teardown: %w", err)
+		return provision.Removed{}, fmt.Errorf("engine: mattermost teardown: %w", err)
 	}
 	client, err := mattermost.NewClient(mattermost.ClientOptions{
 		URL: env.Value(cfg.URL), Token: admin,
 	})
 	if err != nil {
-		return fmt.Errorf("engine: mattermost teardown: %w", err)
+		return provision.Removed{}, fmt.Errorf("engine: mattermost teardown: %w", err)
 	}
 	return mattermost.Teardown(ctx, mattermost.TeardownOptions{
 		Client: client, Config: cfg, Plan: plan, RemoveSeats: in.RemoveSeats,
@@ -483,23 +496,23 @@ func (p *datadogPass) Run(ctx context.Context, in setup.PassInput) ([]integratio
 }
 
 // Teardown disables the accounts this pass created, when asked.
-func (p *datadogPass) Teardown(ctx context.Context, in setup.TeardownInput) error {
+func (p *datadogPass) Teardown(ctx context.Context, in setup.TeardownInput) (provision.Removed, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.Datadog
 	if cfg == nil || cfg.Provisioning == nil {
-		return nil
+		return provision.Removed{}, nil
 	}
 	env := p.engine.resolver()
 	client, err := datadog.NewClient(datadog.ClientOptions{Site: cfg.Provisioning.Site})
 	if err != nil {
-		return fmt.Errorf("engine: datadog teardown: %w", err)
+		return provision.Removed{}, fmt.Errorf("engine: datadog teardown: %w", err)
 	}
 	// THE PLAN IS ONLY THE ACCOUNTS' HALF, so a company whose roster
 	// cannot be planned still has its webhook withdrawn: the definition is
 	// named by the config alone.
 	plan, err := datadog.PlanFor(company.Org, cfg)
 	if err != nil && in.RemoveSeats {
-		return fmt.Errorf("engine: datadog teardown: %w", err)
+		return provision.Removed{}, fmt.Errorf("engine: datadog teardown: %w", err)
 	}
 	return datadog.Teardown(ctx, datadog.TeardownOptions{
 		Client: client, Config: cfg, Plan: plan,
@@ -739,19 +752,24 @@ func (p *jiraPass) Run(ctx context.Context, in setup.PassInput) ([]integration.F
 // The third-party app function is the same one a decommission from the command line
 // would call, exactly as [jiraPass.Run] uses the same Reconcile the loop
 // does. Nothing about removal is reimplemented for the API.
-func (p *jiraPass) Teardown(ctx context.Context, in setup.TeardownInput) error {
+// It removes nothing this engine has to forget a credential for.
+//
+// The tracker creates no account and mints no seat credential — an agent
+// works in Jira as the Atlassian account that package made — so a Jira
+// teardown strands nothing and this is always empty.
+func (p *jiraPass) Teardown(ctx context.Context, in setup.TeardownInput) (provision.Removed, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.Jira
 	if cfg == nil {
 		// The block already left the document, so there is nothing to
 		// authenticate with and nothing this engine still holds.
-		return nil
+		return provision.Removed{}, nil
 	}
 	env := p.engine.resolver()
 	base := jiraBaseURL(cfg, env)
 	token := strings.TrimSpace(env.Value(cfg.Token))
 	if base == "" || token == "" {
-		return fmt.Errorf(
+		return provision.Removed{}, fmt.Errorf(
 			"engine: jira teardown: the site address or the org token did not " +
 				"resolve, so the webhook cannot be removed: fix the credential " +
 				"or force the disconnect and remove the hook by hand")
@@ -760,9 +778,9 @@ func (p *jiraPass) Teardown(ctx context.Context, in setup.TeardownInput) error {
 		URL: base, Email: env.Value(cfg.Email), Token: token,
 	})
 	if err != nil {
-		return fmt.Errorf("engine: jira teardown: %w", err)
+		return provision.Removed{}, fmt.Errorf("engine: jira teardown: %w", err)
 	}
-	return jira.Teardown(ctx, jira.Options{
+	return provision.Removed{}, jira.Teardown(ctx, jira.Options{
 		Client: client, Config: cfg,
 		WebhookBase: company.Config.Integrations.WebhookBase(env.LookupOK),
 	})
@@ -808,17 +826,22 @@ func (p *confluencePass) Run(ctx context.Context, in setup.PassInput) ([]integra
 }
 
 // Teardown removes the hooks this pass registered.
-func (p *confluencePass) Teardown(ctx context.Context, in setup.TeardownInput) error {
+// It removes nothing this engine has to forget a credential for.
+//
+// The wiki creates no account either, for the reason the tracker does not:
+// both products authenticate as the Atlassian service account, and
+// [atlassianPass.Teardown] is what removes it.
+func (p *confluencePass) Teardown(ctx context.Context, in setup.TeardownInput) (provision.Removed, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.Confluence
 	if cfg == nil {
-		return nil
+		return provision.Removed{}, nil
 	}
 	env := p.engine.resolver()
 	base := confluenceBaseURL(cfg, env)
 	token := strings.TrimSpace(env.Value(cfg.Token))
 	if base == "" || token == "" {
-		return fmt.Errorf(
+		return provision.Removed{}, fmt.Errorf(
 			"engine: confluence teardown: the site address or the org token did " +
 				"not resolve, so the hooks cannot be removed: fix the credential " +
 				"or force the disconnect and remove them by hand")
@@ -827,9 +850,9 @@ func (p *confluencePass) Teardown(ctx context.Context, in setup.TeardownInput) e
 		URL: base, Email: env.Value(cfg.Email), Token: token,
 	})
 	if err != nil {
-		return fmt.Errorf("engine: confluence teardown: %w", err)
+		return provision.Removed{}, fmt.Errorf("engine: confluence teardown: %w", err)
 	}
-	return confluence.Teardown(ctx, confluence.Options{Client: client, Config: cfg})
+	return provision.Removed{}, confluence.Teardown(ctx, confluence.Options{Client: client, Config: cfg})
 }
 
 // gitlabPass adapts gitlab.Reconcile to the pass contract.
@@ -919,28 +942,28 @@ func (p *gitlabPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 // creating it did. A teardown with none can still be attempted (the hooks
 // may come out under a weaker credential), so this refuses only when there is
 // nothing at all to authenticate with.
-func (p *gitlabPass) Teardown(ctx context.Context, in setup.TeardownInput) error {
+func (p *gitlabPass) Teardown(ctx context.Context, in setup.TeardownInput) (provision.Removed, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.GitLab
 	if cfg == nil {
-		return nil
+		return provision.Removed{}, nil
 	}
 	env := p.engine.resolver()
 	admin := gitlabAdminToken(cfg, env, in.Operator)
 	if admin == "" {
-		return fmt.Errorf(
+		return provision.Removed{}, fmt.Errorf(
 			"engine: gitlab teardown: no group Owner token resolved, and the " +
 				"seats' own tokens cannot remove what created them")
 	}
 	plan, err := gitlab.PlanFor(company.Org, cfg)
 	if err != nil {
-		return fmt.Errorf("engine: gitlab teardown: %w", err)
+		return provision.Removed{}, fmt.Errorf("engine: gitlab teardown: %w", err)
 	}
 	client, err := gitlab.NewClient(gitlab.ClientOptions{
 		URL: env.Value(cfg.URL), Token: admin,
 	})
 	if err != nil {
-		return fmt.Errorf("engine: gitlab teardown: %w", err)
+		return provision.Removed{}, fmt.Errorf("engine: gitlab teardown: %w", err)
 	}
 	return gitlab.Teardown(ctx, gitlab.TeardownOptions{
 		Client: client, Config: cfg, Plan: plan,

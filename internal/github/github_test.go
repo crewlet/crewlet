@@ -1667,6 +1667,9 @@ func TestALiteralSecretWithNoValueIsRefused(t *testing.T) {
 // call returns having done nothing, and the sealed value stays invisible to
 // the running engine while the next pass mints another one.
 type recordingSink struct {
+	// forgotten is what a teardown asked this sink to delete.
+	forgotten []string
+
 	recorded map[string]string
 	flushes  int
 
@@ -1699,6 +1702,13 @@ func (s *recordingSink) Record(_ context.Context, name, value string) error {
 func (s *recordingSink) Value(_ context.Context, name string) (string, bool, error) {
 	value, held := s.recorded[name]
 	return value, held, nil
+}
+
+// Forget implements [provision.TokenSink]: it records what a teardown
+// asked to be deleted, so a case can assert the deletion happened.
+func (s *recordingSink) Forget(_ context.Context, names ...string) error {
+	s.forgotten = append(s.forgotten, names...)
+	return nil
 }
 
 func (s *recordingSink) Discard(context.Context) error { clear(s.recorded); return nil }

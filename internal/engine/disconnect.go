@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
@@ -78,8 +79,11 @@ type vendorDisconnect struct {
 	pass setup.Teardowner
 }
 
-func (d vendorDisconnect) Disconnect(ctx context.Context, removeSeats bool) error {
-	return d.engine.dropBlock(ctx, d.kind, func(ctx context.Context) error {
+func (d vendorDisconnect) Disconnect(
+	ctx context.Context, removeSeats bool,
+) (provision.Removed, error) {
+	var removed provision.Removed
+	err := d.engine.dropBlock(ctx, d.kind, func(ctx context.Context) error {
 		if d.pass == nil {
 			// NOTHING REGISTERED AT THE VENDOR. Slack is the only
 			// surface here with no pass at all — its apps are made from
@@ -91,8 +95,67 @@ func (d vendorDisconnect) Disconnect(ctx context.Context, removeSeats bool) erro
 			// sits on the row for ever.
 			return nil
 		}
-		return d.pass.Teardown(ctx, setup.TeardownInput{RemoveSeats: removeSeats})
+		var err error
+		removed, err = d.pass.Teardown(ctx, setup.TeardownInput{RemoveSeats: removeSeats})
+		if err != nil {
+			return err
+		}
+		// THE CREDENTIALS THOSE ACCOUNTS HELD, deleted here and in no
+		// vendor package. See [Engine.forgetRemoved].
+		return d.engine.forgetRemoved(ctx, d.kind, removed)
 	})
+	return removed, err
+}
+
+// forgetRemoved deletes the sealed values whose accounts a teardown removed.
+//
+// # One writer, and it is this one
+//
+// A vendor package's only sanctioned write seam is [provision.TokenSink],
+// which deliberately has no "delete an arbitrary name" verb until now — so no
+// teardown or decommission path anywhere ever deleted a secret, and a
+// disconnect that removed every agent's service account left every agent's
+// credential sealed and resolving.
+//
+// Measured: disconnecting Atlassian with "remove accounts" deleted the service
+// accounts and left SRE_ATLASSIAN_TOKEN and SRE_ATLASSIAN_EMAIL behind. On
+// reconnect the tracker mapped the seat to the account that no longer existed
+// — its identity cache is keyed on the CREDENTIAL, and the credential had not
+// changed — and reported a 401 as the operator's problem, at a third-party
+// app, for about thirty-five seconds.
+//
+// # Inside the vendor step, before the block is dropped
+//
+// [Engine.dropBlock] runs this closure and only then removes the block, which
+// is the order this needs: every name here was derived from a `${VAR}` that is
+// still in the company document. It also means a failure holds the surface in
+// PhaseDisconnecting and the next tick tries again, which is why it returns an
+// error rather than logging one — a swallowed failure drops the block with the
+// credentials still sealed, and the retry that would have caught it never runs.
+//
+// A NODE WITH NO KEYRING CANNOT DELETE A SEALED ROW. It says so, naming the
+// values, rather than reporting a completeness it did not achieve.
+func (e *Engine) forgetRemoved(
+	ctx context.Context, kind integration.Kind, removed provision.Removed,
+) error {
+	names := removed.Secrets()
+	if len(names) == 0 {
+		return nil
+	}
+	sink, err := e.SetupSink(reconcileOperator)
+	if err != nil {
+		log.WarnContext(ctx, "removed_credentials_not_deleted",
+			"integration", kind.String(), "error", err, "secrets", names,
+			"detail", "the accounts are gone and these values are dead; this "+
+				"node has no keyring, so remove them with `crewlet secrets unset`")
+		return nil
+	}
+	if err := sink.Forget(ctx, names...); err != nil {
+		return fmt.Errorf("engine: %s teardown: %w", kind, err)
+	}
+	log.InfoContext(ctx, "removed_credentials_deleted",
+		"integration", kind.String(), "accounts", removed.Handles(), "secrets", names)
+	return nil
 }
 
 // dropBlock runs the third-party app step and then removes the block, in that order.

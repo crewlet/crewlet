@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/provision"
 )
 
 // fakeReconciler answers with whatever the test set, and counts its passes.
@@ -641,18 +643,23 @@ func TestStartAndStopAreIdempotent(t *testing.T) {
 // fakeDisconnector records what a teardown was asked to do.
 type fakeDisconnector struct {
 	err error
+	// removed is the end state this teardown reports, for the cases about
+	// what a disconnect records.
+	removed provision.Removed
 
 	mu          sync.Mutex
 	calls       int
 	removeSeats bool
 }
 
-func (f *fakeDisconnector) Disconnect(_ context.Context, removeSeats bool) error {
+func (f *fakeDisconnector) Disconnect(
+	_ context.Context, removeSeats bool,
+) (provision.Removed, error) {
 	f.mu.Lock()
 	f.calls++
 	f.removeSeats = removeSeats
 	f.mu.Unlock()
-	return f.err
+	return f.removed, f.err
 }
 
 func (f *fakeDisconnector) count() int {
