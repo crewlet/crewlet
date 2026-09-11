@@ -5,8 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-
-	"github.com/crewlet/crewlet/internal/store"
 )
 
 // Grouping: the board's columns, and why a grouped answer is a different shape
@@ -232,11 +230,22 @@ func compileGroup(key string, fields map[string]resolvedField) (groupAxis, error
 // grammar carries no zone on a grouping — so the bucket is the one every node
 // computes identically, rather than each node's local midnight, which would
 // put one task on two different days on two machines.
+//
+// The division by a million is the unit change: an instant column holds
+// MICROSECONDS, which is what store.EncodeTime writes, and SQLite's own date
+// functions take seconds.
 func dayBucket(column string) string {
 	return `COALESCE(STRFTIME('%Y-%m-%d', ` + column + ` / 1000000, 'unixepoch'), '')`
 }
 
-// weekBucket is the same at ISO week granularity, Monday-anchored.
+// weekBucket is the same at week granularity, Monday-anchored.
+//
+// `%W` NUMBERS FROM THE YEAR'S FIRST MONDAY, so the days before it fall in
+// week 00 rather than in the previous year's last ISO week. That is a heading
+// on a column rather than a date anybody computes with, and it is the
+// numbering every Turso build has — `%V` and `%G` are recent additions this
+// package cannot assume, and an unsupported format specifier renders as
+// itself rather than refusing.
 func weekBucket(column string) string {
 	return `COALESCE(STRFTIME('%Y-W%W', ` + column + ` / 1000000, 'unixepoch'), '')`
 }
@@ -352,12 +361,6 @@ func groupLabels(groups []Group, key string, fields map[string]resolvedField) {
 		}
 	}
 }
-
-// encodeInstantBucket is unused by the buckets above and exists so a reader
-// looking for the conversion finds the one that is: the grouping divides the
-// stored MICROSECONDS by a million because [store.EncodeTime] writes
-// microseconds and SQLite's own date functions take seconds.
-var _ = store.EncodeTime
 
 // grouped is a grouped answer's own half, before it reaches [Answer].
 type grouped struct {
