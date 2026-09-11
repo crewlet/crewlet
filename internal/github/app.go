@@ -323,23 +323,31 @@ func ExchangeManifest(ctx context.Context, apiBase, code string) (*CreatedApp, e
 // requested: GitHub slugifies a name and will disambiguate a collision, so
 // the app that exists may not be the one whose name was asked for.
 func InstallURL(webBase, org, slug string) string {
-	if manage := ManageURL(webBase, org, slug); manage != "" {
-		return manage + "/installations"
-	}
-	return ""
+	return appSettingsPage(webBase, org, slug, "installations")
 }
 
-// ManageURL is the app's own settings page, where a person deletes it.
+// ManageURL is the Advanced page of the app's settings, where a person
+// deletes it.
 //
 // DELETING AN APP IS NOT AN API CALL. GitHub offers no endpoint for it at
-// any permission: an app is deleted from its settings page by somebody signed
-// in as its owner. So a teardown can UNINSTALL an app, which is what revokes
+// any permission: an app is deleted from its settings by somebody signed in
+// as its owner. So a teardown can UNINSTALL an app, which is what revokes
 // its access, and then has to hand the operator a link for the rest.
+//
+// THE ADVANCED PAGE, not the settings root. The root opens on General, and
+// the delete control lives only under Advanced, so a link to the root left
+// the operator one tab away from the one thing they came to do.
+func ManageURL(webBase, org, slug string) string {
+	return appSettingsPage(webBase, org, slug, "advanced")
+}
+
+// appSettingsPage is one page of an app's settings, or "" when there is no
+// slug to address it by, because a broken link costs the trip to find out.
 //
 // The account matters here for the same reason it does at creation: an
 // organization's app is managed under the organization's settings, and a
 // link to a personal page opens somebody else's list.
-func ManageURL(webBase, org, slug string) string {
+func appSettingsPage(webBase, org, slug, page string) string {
 	base := strings.TrimRight(strings.TrimSpace(webBase), "/")
 	if base == "" {
 		base = defaultWebBase
@@ -349,18 +357,18 @@ func ManageURL(webBase, org, slug string) string {
 		return ""
 	}
 	if owner := strings.TrimSpace(org); owner != "" {
-		return base + "/organizations/" + url.PathEscape(owner) + "/settings/apps/" + url.PathEscape(name)
+		base += "/organizations/" + url.PathEscape(owner)
 	}
-	return base + "/settings/apps/" + url.PathEscape(name)
+	return base + "/settings/apps/" + url.PathEscape(name) + "/" + page
 }
 
 // ManagePath is what a person clicks once [ManageURL] has opened.
 //
-// THE LAST TWO STEPS, not the whole journey: the link lands them on the app,
-// and what is left is finding the one control that removes it, which is at
-// the bottom of a page named nothing like "delete". A screen that offered
-// only the link left an operator on a settings page hunting for it.
-func ManagePath() string { return "Advanced > Delete GitHub App" }
+// THE LAST STEP, not the whole journey: the link lands them on the app's
+// Advanced page, and what is left is the one control that removes it, which
+// sits at the bottom under a heading named nothing like "delete". A screen
+// that offered only the link left an operator hunting for it.
+func ManagePath() string { return "Delete GitHub App" }
 
 // AppJWT signs the assertion that authenticates as the app itself.
 //
