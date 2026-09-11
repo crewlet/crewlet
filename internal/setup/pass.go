@@ -359,6 +359,20 @@ func (r *Runner) Execute(ctx context.Context, kind integration.Kind, in PassInpu
 	if !ok {
 		return nil, ErrNoPass
 	}
+	// A CANCELLED PASS IS A FAULT, NEVER A CLEAN REPORT, and this is the
+	// dashboard's half of that rule — the reconcile loop's half is in
+	// engine.passConverger.
+	//
+	// The caller's context reaches here detached from the HTTP request, so
+	// what expires it is [PassDeadline] rather than a closing tab. A pass
+	// started with that already spent would run against a lease about to
+	// lapse, and every third-party app whose pass concludes from the company
+	// document before its first network call would answer with no findings
+	// and no error — which the fold records as ready, on a surface nobody
+	// looked at.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	run := &Run{ID: id, Kind: kind, State: RunRunning, StartedAt: r.now()}
 	r.remember(run)

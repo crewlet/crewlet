@@ -293,9 +293,17 @@ func (c *passConverger) Reconcile(ctx context.Context) ([]integration.Finding, e
 	// walk its surfaces and delete the fleet's whole integration status on the
 	// way out.
 	//
-	// Guarded here rather than in each of the seven passes because this is the
-	// one frame every one of them reaches the loop through — the passes still
-	// carry their own, for the harnesses that drive them directly.
+	// Guarded here rather than in each of the seven [setup.Pass]
+	// implementations because this is the one frame every one of them reaches
+	// the LOOP through. It is not the only frame they are reached through:
+	// [setup.Runner.Execute] serves the dashboard's own pass and carries the
+	// same guard for the same reason. Each third-party app's own Reconcile
+	// checks too, which is what its conformance harness drives.
+	//
+	// The passes in setuppass.go deliberately carry none. Every one of them
+	// reaches a vendor call within a few statements, and a check at each would
+	// be seven copies of a rule that has two honest homes: the frame the loop
+	// uses, and the frame the dashboard uses.
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

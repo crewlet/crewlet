@@ -447,3 +447,33 @@ func TestANilRunnerStillBoundsThePass(t *testing.T) {
 		t.Fatal("a node with no runner runs its passes unbounded")
 	}
 }
+
+// A PASS WHOSE DEADLINE IS ALREADY SPENT IS A FAULT, NOT A CLEAN REPORT.
+//
+// The dashboard's pass runs detached from the HTTP request, so what expires
+// its context is [PassDeadline] rather than a closing tab — and a pass started
+// on a spent one is running against a lease about to lapse. Worse, several
+// third-party apps conclude from the company document before their first
+// network call, so they would answer with no findings and no error, which the
+// fold records as a READY integration nobody actually looked at.
+//
+// The reconcile loop's half of this rule lives in engine.passConverger; this
+// is the dashboard's, and until it existed the loop had a guard the dashboard
+// did not.
+func TestAPassOnASpentContextIsAFault(t *testing.T) {
+	t.Parallel()
+	pass := &gatePass{kind: integration.KindGitHub}
+	r := NewRunner([]Pass{pass}, nil, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	run, err := r.Execute(ctx, integration.KindGitHub, PassInput{}, "run-1")
+	if err == nil {
+		t.Fatalf("a pass on a dead context reported %+v with no error, which "+
+			"the fold records as ready", run)
+	}
+	if pass.count() != 0 {
+		t.Fatalf("the pass ran %d times on a dead context", pass.count())
+	}
+}

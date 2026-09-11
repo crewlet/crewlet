@@ -131,19 +131,53 @@ func runGitHubProvision(args []string, stdout, stderr io.Writer) error {
 // printGitHubResult renders what the run found.
 //
 // THE SEATS COME FIRST because that is the finding an operator acts on: a
-// seat with no login receives nothing, and nothing else in the engine says
-// so — its inbound routing is simply silent.
+// seat this run could not resolve receives nothing, and nothing else in the
+// engine says so — its inbound routing is simply silent.
+//
+// THREE OUTCOMES, NOT TWO, and the third is why this was rewritten. A seat
+// that names no personal access token is not broken: on the current design it
+// acts through its OWN GitHub App, and that is the shape a new company has.
+// Printed as a binary "can / cannot receive events" it read as
+// "0 of 3 seat(s) can receive GitHub events" over three healthy agents,
+// followed by three NO ACCOUNT lines — the same false alarm that
+// [github.Result.Findings] was fixed to stop reporting, relocated to the
+// command line. The counts follow [github.SeatIdentity]'s own vocabulary now,
+// so the two cannot drift again.
 func printGitHubResult(w io.Writer, res *github.Result) {
 	fmt.Fprintf(w, "\nAuthenticated as %s.\n", res.Login)
 
-	fmt.Fprintf(w, "\n%d of %d seat(s) can receive GitHub events:\n",
+	var unclaimed, refused []github.SeatIdentity
+	for _, seat := range res.Seats {
+		switch {
+		case seat.Routes():
+		case seat.Refused():
+			refused = append(refused, seat)
+		default:
+			unclaimed = append(unclaimed, seat)
+		}
+	}
+
+	fmt.Fprintf(w, "\n%d of %d seat(s) hold a token of their own:\n",
 		res.Routing(), len(res.Seats))
 	for _, seat := range res.Seats {
 		if seat.Routes() {
 			fmt.Fprintf(w, "  %-16s %s\n", seat.Handle, seat.Login)
-			continue
 		}
-		fmt.Fprintf(w, "  %-16s NO ACCOUNT — %s\n", seat.Handle, seat.Reason)
+	}
+	if len(unclaimed) > 0 {
+		// NOT A PROBLEM, and said in those words. Each of these acts
+		// through its own app; listing them under a heading that implies
+		// a fault is what this rewrite removes.
+		fmt.Fprintf(w, "\n%d seat(s) act through their own GitHub App:\n", len(unclaimed))
+		for _, seat := range unclaimed {
+			fmt.Fprintf(w, "  %-16s no personal access token, which is expected\n", seat.Handle)
+		}
+	}
+	if len(refused) > 0 {
+		fmt.Fprintf(w, "\n%d seat(s) name a credential this run could not resolve:\n", len(refused))
+		for _, seat := range refused {
+			fmt.Fprintf(w, "  %-16s REFUSED — %s\n", seat.Handle, seat.Reason)
+		}
 	}
 
 	if len(res.Hooks) > 0 {
