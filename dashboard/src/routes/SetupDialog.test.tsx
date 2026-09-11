@@ -1929,3 +1929,136 @@ test("saving a connected app does not say it connected", async () => {
   await vi.waitFor(() => expect(screen.getByText(/Datadog settings saved/)).toBeTruthy());
   expect(screen.queryByText(/Datadog connected/)).toBeNull();
 });
+
+// A REFUSAL NEVER HIDES BEHIND THE FOLD.
+//
+// The disclosure is closed in both directions on purpose — a settings form
+// that sprang open because a field inside it was unset would differ from the
+// connect form — and it opens when a submission is refused for something
+// inside it. That was true of exactly one error code. The ordinary refusal, a
+// config validation listing the values it will not accept, went to the banner
+// with the fold shut: a Datadog operator read
+// `integrations.datadog.route_to required value missing` over a form with no
+// such input on it, because the field is real, required, and behind "More
+// settings" with nothing saying so.
+test("a refusal opens the fold hiding the field it names", async () => {
+  stubFetch(
+    () =>
+      new Response(
+        JSON.stringify({
+          error: "invalid_config",
+          detail:
+            "integrations.datadog.route_to required value missing: name the " +
+            "handle of the seat an alert should wake when no monitor tag " +
+            "names an owner",
+        }),
+        { status: 422 },
+      ),
+  );
+  const { baseElement } = render(
+    <SetupDialog
+      sections={[
+        {
+          name: "Datadog",
+          tool: {
+            ...tool,
+            requirements: [
+              req({
+                field: "site",
+                label: "Datadog region",
+                kind: "choice",
+                connect: true,
+                config_path: "integrations.datadog.site",
+              }),
+              req({
+                field: "api_key",
+                label: "API key",
+                kind: "secret",
+                connect: true,
+                config_path: "integrations.datadog.api_key",
+              }),
+              // FOLDED, because it declares no `connect`, and required. The
+              // config path is what the refusal is joined on, so it has to be
+              // the one the engine really sends.
+              req({
+                field: "route_to",
+                label: "Fallback seat",
+                kind: "handle",
+                config_path: "integrations.datadog.route_to",
+              }),
+            ],
+          },
+        },
+      ]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+
+  const more = baseElement.querySelector("details.int-form-more") as HTMLDetailsElement;
+  expect(more.open).toBe(false);
+
+  // Something to submit, which is what an operator filling the connect fields
+  // leaves behind: with nothing changed the dialog never reaches the engine.
+  fireEvent.change(screen.getByLabelText(/API key/), { target: { value: "dd-api-key" } });
+  fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
+  expect(await screen.findByText(/names an owner/)).toBeDefined();
+
+  const after = baseElement.querySelector("details.int-form-more") as HTMLDetailsElement;
+  expect(after.open).toBe(true);
+  // AND THE FIELD IT NAMES IS THE ONE NOW REACHABLE.
+  expect(after.contains(screen.getByText("Fallback seat").closest(".field"))).toBe(true);
+});
+
+// AND A REFUSAL ABOUT SOMETHING ON THE FORM LEAVES IT SHUT, or "open it
+// whenever anything is refused" would be the settings form differing from the
+// connect form again, by another route.
+test("a refusal naming a visible field leaves the fold shut", async () => {
+  stubFetch(
+    () =>
+      new Response(
+        JSON.stringify({
+          error: "invalid_config",
+          detail: "integrations.datadog.api_key required value missing: give a key",
+        }),
+        { status: 422 },
+      ),
+  );
+  const { baseElement } = render(
+    <SetupDialog
+      sections={[
+        {
+          name: "Datadog",
+          tool: {
+            ...tool,
+            requirements: [
+              req({
+                field: "api_key",
+                label: "API key",
+                kind: "secret",
+                connect: true,
+                config_path: "integrations.datadog.api_key",
+              }),
+              req({
+                field: "route_to",
+                label: "Fallback seat",
+                kind: "handle",
+                config_path: "integrations.datadog.route_to",
+              }),
+            ],
+          },
+        },
+      ]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  fireEvent.change(screen.getByLabelText(/API key/), { target: { value: "dd-api-key" } });
+  fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
+  expect(await screen.findByText(/give a key/)).toBeDefined();
+
+  const more = baseElement.querySelector("details.int-form-more") as HTMLDetailsElement;
+  expect(more.open).toBe(false);
+});

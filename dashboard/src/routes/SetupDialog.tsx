@@ -44,7 +44,7 @@ import { Badge, Button } from "~/ui/primitives.tsx";
 import { Dialog } from "~/ui/Dialog.tsx";
 import { Field, type FieldKind } from "~/ui/Field.tsx";
 import { Icon } from "~/ui/Icon.tsx";
-import { marked, Problems } from "~/ui/Problems.tsx";
+import { marked, paths, Problems } from "~/ui/Problems.tsx";
 import { useToast } from "~/ui/Toast.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import type { SetupRequirement, SetupSeatState, SetupToolState } from "~/protocol/index.ts";
@@ -570,6 +570,37 @@ export function SetupDialog({
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
+  /**
+   * Open whatever a refusal NAMES, so an error is never hidden behind a fold.
+   *
+   * The disclosure below promises exactly this — "it opens when a submission is
+   * refused for something inside it" — and kept the promise for one error code
+   * only. The ordinary one, a config refusal listing the values it will not
+   * accept, went straight to the banner with the fold left shut. What a Datadog
+   * operator saw was `integrations.datadog.route_to required value missing`
+   * over a form with no such input on it: the field is real, required, and
+   * behind "More settings", which nothing told them to open.
+   *
+   * The paths come from the same parser that renders them, so the thing this
+   * matches on is the thing the reader sees in the banner. A seat's field is
+   * matched on the suffix as well, because a refusal about one names it under
+   * that seat's own row while the requirement carries the path relative to it.
+   */
+  const revealNamedBy = useCallback(
+    (detail: string) => {
+      const refused = paths(detail);
+      if (refused.length === 0) return;
+      const named = (r: SetupRequirement) =>
+        refused.some((p) => p === r.config_path || p.endsWith("." + r.config_path));
+
+      if (folded.some(({ r }) => named(r))) setMoreOpen(true);
+      for (const g of seatGroups) {
+        if ([...g.connect, ...g.more].some(named)) setSeatOpen(sectionKey(g.section), true);
+      }
+    },
+    [folded, seatGroups, setSeatOpen],
+  );
+
   // A MINTABLE SECRET IS NOT ON THE FORM AT ALL.
   //
   // There is nothing for a person to type — the engine generates the value,
@@ -727,7 +758,11 @@ export function SetupDialog({
         );
         return;
       }
-      setError(err.detail || err.hint || err.code || "The engine refused that.");
+      {
+        const said = err.detail || err.hint || err.code || "The engine refused that.";
+        setError(said);
+        revealNamedBy(said);
+      }
     } finally {
       setBusy(false);
     }
