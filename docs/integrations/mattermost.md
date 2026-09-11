@@ -767,20 +767,25 @@ COMPANY=my_company.yaml scripts/mattermost-dev-bootstrap.sh
 The example org in [`examples/nimbus-claude-cli.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus-claude-cli.company.yaml)
 **is** the shortest way to try this. It is the same seven-seat company as
 [`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml)
-beside it — the full-stack reference, on Jira, Confluence, GitLab and a
-metered key — with everything but chat taken out.
+beside it — the full-stack reference, on GitLab and a metered key — with
+everything but chat taken out.
 
 Its only integration is Mattermost and its only model is a coding CLI you
-already subscribe to, so there is no Atlassian site to stand up, no code
-host, no metered API key, and nothing that has to reach the engine from
-outside. Its three engineering seats still run code: their executor *is* the
+already subscribe to, so there is no code host to stand up, no metered API
+key, and nothing that has to reach the engine from outside. It still has a
+work tracker and a knowledge base: both are the engine's own, so its seats
+file work and publish pages from the first turn with nothing to sign up
+for. Its three engineering seats still run code: their executor *is* the
 coding CLI's own agentic loop, in a [sandbox](../concepts/code-sandbox.md)
 box on the engine host that reuses the same CLI login — so that costs nothing
 extra to set up either, beyond one environment variable in step 5.
 
-Add a tracker, a wiki or a code host afterwards, once you have seen the loop
-work; each has its own page, `examples/nimbus.company.yaml` shows them all
-already wired, and nothing here has to be undone first.
+Add a code host afterwards, once you have seen the loop work; it has its own
+page, `examples/nimbus.company.yaml` shows it already wired, and nothing here
+has to be undone first. Moving the tracker or the wiki to Atlassian is the
+one change that is not purely additive — [Jira](jira.md) and
+[Confluence](confluence.md) REPLACE the native halves rather than joining
+them, so each means changing the matching `backend` in the same edit.
 
 Two things the config expects of you, both once:
 

@@ -15,10 +15,10 @@ vision: >
 policies:
   - "Communicate decisions in writing"
   - "Capture personal-context facts you need to recall later (delegation context, stakeholder preferences, ongoing operational state) via `reflect_and_persist` — pass `ttl_days` for facts that age out naturally (e.g. delegation context lasts the MR lifetime)"
-  - "Document team-shared knowledge (decisions, conventions, runbooks) as Confluence pages so other agents can read it — `reflect_and_persist` writes are personal-only"
-  - "Use Jira work items to manage all product backlog items — never track tasks only in memory"
-  - "Use Confluence pages to document architecture decisions, runbooks, and meeting notes — search before creating new docs"
-  - "Each engineering role owns specific projects (see the `Repo Ownership` page in the LEAD Confluence space); do not push to projects you do not own without an explicit handoff from their owner"
+  - "Document team-shared knowledge (decisions, conventions, runbooks) as pages in the company knowledge base so other agents can read it — `reflect_and_persist` writes are personal-only"
+  - "Use work items to manage all product backlog items — never track tasks only in memory"
+  - "Use pages to document architecture decisions, runbooks, and meeting notes — search before creating new docs"
+  - "Each engineering role owns specific projects (see the `Repo Ownership` page in the LEAD space); do not push to projects you do not own without an explicit handoff from their owner"
   - "The Phase-2 AI framework is developed in a dedicated project owned by AI Systems Engineering; the control plane (nimbuscore, nimbusk0s) stays focused on cluster-level primitives that the framework depends on"
 
 # Company-wide token budget — a single hard cap on total LLM tokens across
@@ -40,18 +40,19 @@ policies:
 token_budget: 10000000                          # 10M tokens, org-wide (all agents combined)
 
 # Skill variables — generic name->value facts substituted into tool-skill
-# text wherever a skill writes ${name}.  The bundled platform-mentions
-# skill references these so agents share human-clickable links of the
-# shape ${jira_base_url}/browse/ENG-42 and
-# ${confluence_base_url}/spaces/ENG/pages/{page-id}.
+# text wherever a skill writes ${name}.  NIMBUS DECLARES NONE, and that is
+# what running the engine's own tracker and wiki buys here: the one address
+# its skills need is where this deployment answers, and the engine injects
+# that itself as ${crewlet_base_url} from ``integrations.public_base_url``
+# below.  The bundled platform-mentions skill builds every shareable link
+# on it — ${crewlet_base_url}/#/work/ENG-42, ${crewlet_base_url}/#/pages/…
+# — so there is nothing for an operator to keep in step.
 #
-# THESE ARE THE BROWSER-FACING ADDRESSES, deliberately: with a cloud_id the
-# Atlassian tools return `api.atlassian.com/ex/...` gateway URLs, which a
-# colleague cannot open.  Values support ${ENV}.
+# The name is RESERVED: a company that declares ``crewlet_base_url`` itself
+# is refused, because two sources for one address is how a skill comes to
+# link at the deployment the company used to run on.  A company on a vendor
+# tracker declares that vendor's browser-facing base here instead.
 # See docs/concepts/tool-skills.md#skill-variables.
-skill_variables:
-  jira_base_url: "${JIRA_SITE_URL}"              # e.g. https://nimbus.atlassian.net
-  confluence_base_url: "${CONFLUENCE_SITE_URL}"  # e.g. https://nimbus.atlassian.net/wiki
 
 providers:
   llm:
@@ -253,8 +254,8 @@ turn_engine:
 workers:
   researcher:
     description: >-
-      reads the team's Confluence pages and reports what they actually
-      say, with the page titles it read
+      reads the team's own pages and reports what they actually say,
+      with the page titles it read
     system_prompt: |
       You research a narrow question against the team's knowledge base.
 
@@ -262,7 +263,7 @@ workers:
       the question, say so plainly rather than filling the gap — the
       agent that delegated this cannot tell your inference from what a
       page said, and will act on both.
-    tools: [confluence_search, confluence_get_page]
+    tools: [search_knowledge, get_page]
     max_turns: 10
     output:
       type: object
@@ -352,8 +353,8 @@ scheduling:
 
 # Inbound / notification integrations — the non-tool side (engine/service
 # accounts for watcher lookups + webhook routing, the Mattermost websocket
-# fleet, the GitLab / Jira / Confluence webhook + provisioning config,
-# outbound transports).  The Atlassian/Mattermost/GitLab MCP *tool* servers
+# fleet, the GitLab webhook + provisioning config,
+# outbound transports).  The Mattermost/GitLab MCP *tool* servers
 # are the ``mcp_servers`` entries below.  This block is the inbound mirror of
 # ``mcp_servers`` (outbound tool actions).
 integrations:
@@ -370,41 +371,20 @@ integrations:
   # at the literal text of a variable.
   public_base_url: "${CREWLET_PUBLIC_URL}"
 
-  # Jira — the work-item tracker.  ``token`` is an ADMIN/service account
-  # used for the org-wide reads routing needs (who is watching this
-  # issue); every agent acts through its OWN Atlassian credential in
-  # ``mcp_env.atlassian`` below, never through this one.
-  #
-  # UNLIKE GitLab AND MATTERMOST, THERE IS NOTHING TO PROVISION.  Atlassian
-  # issues no API to create user accounts or mint their tokens, so each
-  # seat's account is created by hand in the admin console and its token
-  # pasted into the ${VAR} that seat references.  ``crewlet jira provision``
-  # REPORTS which account each seat's credential turned out to be, and
-  # registers the webhook — it does not create anything.
-  # See docs/integrations/jira.md.
-  jira:
-    url: "${JIRA_URL}"                          # or cloud_id: for an Atlassian Cloud site
-    token: "${JIRA_ADMIN_TOKEN}"
-    email: "${JIRA_ADMIN_EMAIL}"                # Cloud only — switches auth to Basic
-    webhook_secret: "${JIRA_WEBHOOK_SECRET}"    # Data Center; Cloud relays through the Forge app
+  # NO TRACKER OR WIKI INTEGRATION, and that is the point of this example:
+  # Nimbus runs the engine's OWN work tracker and knowledge base, so there
+  # is no third-party account to provision, no per-seat vendor token to
+  # paste, and no webhook to register for either of them.  A company that
+  # wants Jira or Confluence instead adds ``integrations.jira`` /
+  # ``integrations.confluence`` here and names that vendor in the
+  # ``tracker`` / ``knowledge`` blocks below — the two axes are
+  # independent, so one may be native while the other is not.  Naming a
+  # vendor AND ``native`` is refused: work would be filed in two places
+  # with nothing keeping them in step.
+  # See docs/integrations/jira.md and docs/integrations/confluence.md.
 
-  # Confluence — the knowledge backend.  ``token`` is the same shape of
-  # admin credential, and it is what the tool-skill sync and skill
-  # promotion run on; the query-time ``## Relevant knowledge`` search runs
-  # as the ASKING SEAT wherever that seat carries its own token.
-  #
-  # ``knowledge.skills_container`` (below) is left unset, so tool-skill
-  # pages live in the reserved ``TS`` space — excluded from routing and
-  # from knowledge search alike, because those pages are machinery rather
-  # than knowledge.  See docs/integrations/confluence.md.
-  confluence:
-    url: "${CONFLUENCE_URL}"
-    token: "${CONFLUENCE_ADMIN_TOKEN}"
-    email: "${CONFLUENCE_ADMIN_EMAIL}"          # Cloud only — switches auth to Basic
-    webhook_secret: "${CONFLUENCE_WEBHOOK_SECRET}"
-
-  # Chat.  Nimbus runs a self-hosted code host (GitLab) and an Atlassian
-  # tracker + wiki, and its chat is Mattermost, running beside GitLab
+  # Chat.  Nimbus runs a self-hosted code host (GitLab) and the engine's
+  # own tracker and wiki, and its chat is Mattermost, running beside GitLab
   # in this repo's docker-compose.  Slack is equally supported and the
   # config shape is nearly identical; see docs/integrations/slack.md to
   # run this org on Slack instead.
@@ -491,59 +471,67 @@ integrations:
       group_webhook: auto                            # one group hook if the plan allows, else per-project
       token_scopes: [api]
 
-# Which tracker and which knowledge base this company runs.  Nimbus is an
-# Atlassian shop, so both name the vendor; a company that declares neither
-# block runs the engine's own tracker and wiki, which is what an unset
-# ``backend`` derives.  ONE OF EACH: naming ``native`` beside an
+# Which tracker and which knowledge base this company runs.  Nimbus runs
+# the engine's OWN on both axes — its work items and its pages live in the
+# fleet's own store, replicated to every node, with no third-party account
+# behind either.  ONE OF EACH: naming ``native`` beside an
 # ``integrations.jira`` or ``integrations.confluence`` block is refused,
 # because work would be filed in two places with nothing keeping them in
 # step.  The two axes are independent — a company may run a native tracker
 # against a Confluence wiki, or the reverse.
+#
+# An unset ``backend`` DERIVES the same answer from the absence of the
+# vendor block, so both fields could be dropped; they are written out here
+# because this is the reference example and a reader should see the choice
+# rather than infer it.
 tracker:
-  backend: jira
-knowledge:
-  backend: confluence
+  backend: native
 
-  # Read scope deliberately omitted (``scope`` unset): every Nimbus agent
-  # carries its own Atlassian credential (``CONFLUENCE_API_TOKEN`` in role
-  # ``mcp_env`` below), so the ``## Relevant knowledge`` search runs *as
-  # that agent* and Confluence's own space and page permissions bound what
-  # it sees — each agent searches every space its account can read (CTO
-  # browsing ENG ADRs, PM reading runbooks, etc. all just work).  A
-  # PER-SEAT CREDENTIAL IS THE PRECONDITION: a seat without one falls back
-  # to the org account, which sees the whole instance, and an unscoped
-  # search on a shared credential is refused rather than run.  Set
-  # ``scope: [...]`` to narrow reads to a curated set — and it is required
-  # if the seats share one account.  This is independent of each unit's
-  # ``space`` identity below, which is for routing + writes, not reads.
+  # The engine's own tracker's policy.  Nothing here gates a write: the
+  # weekdays shade the calendar and shape the burndown guideline, and the
+  # timezone is what a relative date ("next Friday"), an all-day due date
+  # and a sprint boundary resolve against.  It is a clock for AUTHORED
+  # instants and calendar edges only — no duration is measured against it,
+  # because a duration measured on a wall clock changes length twice a
+  # year.
+  native:
+    timezone: "Europe/Berlin"
+    non_working_weekdays: [saturday, sunday]
+    # ``inbox_retention_days`` left at its default of a year.  It is the
+    # one horizon here that deletes anything, and what it deletes is a
+    # DERIVED inbox row rather than the history it points at — that
+    # answers for ever.
+
+knowledge:
+  backend: native
+
+  # Read scope deliberately omitted (``scope`` unset), and on the native
+  # backend that is the ordinary case rather than a decision: the pages
+  # are the company's own, every seat reads them through the engine, and
+  # there is no third-party permission model underneath to mirror.  Set
+  # ``scope: [...]`` to narrow the turn-start search to a curated set of
+  # containers.  This is independent of each unit's ``space`` identity
+  # below, which is for routing + writes, not reads.
   #
   # ``skills_container`` (default ``TS``) and ``root_space`` (default
   # ``HOME``) are both left unset.  Both are reserved: excluded from search
   # and routing, and refused as a unit's own ``space``.
   # See docs/concepts/knowledge-system.md.
 
-# All tool MCP servers live here.  Atlassian, Mattermost, and GitLab are
+# All tool MCP servers live here.  Mattermost and GitLab are
 # ``shared: false`` templates — each agent gets its own stdio instance
-# with credentials from ``role.mcp_env`` env vars (the atlassian server is
-# the official mcp-atlassian, keyed on JIRA_API_TOKEN /
-# CONFLUENCE_API_TOKEN; the gitlab server is `glab mcp serve`, keyed on
-# GITLAB_TOKEN).  Tavily is a shared web-search backend the PM and DevRel
-# call (their "use web search" guideline is unenforceable without it; swap
-# for Brave/Exa if preferred).
+# with credentials from ``role.mcp_env`` env vars (the gitlab server is
+# `glab mcp serve`, keyed on GITLAB_TOKEN).  Tavily is a shared web-search
+# backend the PM and DevRel call (their "use web search" guideline is
+# unenforceable without it; swap for Brave/Exa if preferred).
+#
+# THERE IS NO TRACKER OR WIKI SERVER HERE, and nothing is missing: the
+# engine's own tracker and knowledge base are BUILTIN tools, granted to
+# every seat without a server to run, a process to supervise or a token to
+# mint.  A company on Jira and Confluence adds the official
+# ``mcp-atlassian`` server here and a per-seat credential in each role's
+# ``mcp_env``; see docs/integrations/jira.md.
 mcp_servers:
-  - name: atlassian                          # ONE server for Jira AND Confluence
-    # NAMED ``atlassian`` DELIBERATELY: the engine reads that name to enable
-    # the ``jira_users`` toolset it needs for seat-identity resolution and to
-    # scope the Confluence knowledge search.  JIRA_URL and CONFLUENCE_URL are
-    # MANDATORY here — the engine does not derive them from the
-    # ``integrations`` blocks above.  The per-agent credentials come from
-    # each role's ``mcp_env.atlassian`` below.
-    shared: false
-    command: uvx
-    args: ["mcp-atlassian"]
-    env:
-      JIRA_URL: "${JIRA_URL}"
-      CONFLUENCE_URL: "${CONFLUENCE_URL}"
   - name: mattermost                         # per-agent token from role.mcp_env.mattermost
     # How an agent SENDS. The websocket fleet is inbound-only, so without
     # this an agent receives a message, reasons about it, and then has no
@@ -561,8 +549,8 @@ mcp_servers:
     # `glab mcp serve` (stdio): the engine's MCP bridge spawns one glab
     # process PER ROLE with that role's GITLAB_TOKEN — so the per-role
     # mcp_env.gitlab below IS the per-agent identity, and there is no
-    # separate server to run/host (same shape as the `atlassian` stdio
-    # server above).  Requires the `glab` CLI on the engine host.  The
+    # separate server to run/host.  Requires the `glab` CLI on the engine
+    # host.  The
     # served surface is the full glab command tree (MR approve/diff/notes,
     # issue CRUD, CI, glab_api for anything else).  Alternative:
     # @zereight/mcp-gitlab as a shared streamable-HTTP server — see
@@ -580,8 +568,8 @@ mcp_servers:
 # Root-level seats — above all units.  The founder is a HUMAN seat at
 # the top of the chart: agents know who she is (identity prompts say
 # "Reports to: Jane Founder (human)" for the CEO), the Agent CEO
-# escalates to her via its own Mattermost/Jira tools with an @-mention,
-# and her Jira/Mattermost/GitLab activity is attributed to her by name in agent
+# escalates to her in chat or on the work item with an @-mention, and her
+# tracker/Mattermost/GitLab activity is attributed to her by name in agent
 # prompts.  She manages only the top agent — lead inheritance handles
 # the rest of the tree.  The ``contact`` IDs are how agents mention and
 # reach her; the engine never messages her as itself.
@@ -600,11 +588,6 @@ roles:
       # is the account you sign in as.  `founder` is what
       # scripts/mattermost-dev-bootstrap.sh creates.
       mattermost_user_id: founder
-      # ONE id covers Jira and Confluence.  Copy it from her Atlassian
-      # profile URL, or from the report ``crewlet jira provision`` prints.
-      # An unset ref is a validated-not-created soft note — the engine
-      # still boots, and an issue assigned to her still routes by email.
-      atlassian_account_id: "${ATLASSIAN_FOUNDER_ACCOUNT_ID}"
       gitlab_username: jane-founder
       # Binds the ``founder`` API token in nimbus.config.yaml to THIS
       # seat, so what she files from the dashboard is filed by her and
@@ -651,7 +634,7 @@ units:
               setting clear priorities, removing blockers across teams, and making fast decisions
               with incomplete information when necessary. You trust your CTO on architecture and
               your PM on backlog prioritization, but you hold final authority on what ships and
-              when. You communicate through writing, keep decisions visible in Jira, and never
+              when. You communicate through writing, keep decisions visible on the work items, and never
               let strategic context stay only in your head.
             manages: ["Agent CTO", "Agent PM"]
             responsibilities:
@@ -660,23 +643,18 @@ units:
               - "Make final go/no-go decisions on features, partnerships, and architectural bets"
               - "Review and approve high-impact epics and stories proposed by the PM"
               - "Unblock cross-team dependencies and resolve escalated disagreements between CTO and PM"
-              - "Monitor overall project health in Jira — flag stalled epics, scope creep, or misaligned priorities"
-              - "Ensure strategic decisions and rationale are documented in Jira comments or the knowledge base for team recall"
-              - "If you are distributing/assigning any unassigned story/task/work item/... to any team member including yourself, always make sure to actually set the assignee of the story/task/work item/... in Jira with the correct tool"
+              - "Monitor overall project health on the boards — flag stalled epics, scope creep, or misaligned priorities"
+              - "Ensure strategic decisions and rationale are documented in work-item comments or the knowledge base for team recall"
+              - "If you are distributing/assigning any unassigned story/task/work item/... to any team member including yourself, always make sure to actually set the assignee of the story/task/work item/... with `update_work_item`"
             behavioral_guidelines:
-              - Before making a prioritization call, review the current state of the Jira backlog and any open escalations from the CTO or PM.
-              - When setting direction or changing priorities, create or update a Jira work item with clear rationale so the team understands the "why" behind the decision.
+              - Before making a prioritization call, review the current state of the backlog and any open escalations from the CTO or PM.
+              - When setting direction or changing priorities, create or update a work item with clear rationale so the team understands the "why" behind the decision.
               - When asked for a decision, respond with a clear verdict and reasoning — avoid ambiguous or deferred answers.
               - Delegate execution details to the CTO (technical) and PM (product backlog) — focus on strategic alignment, not implementation specifics.
-              - Regularly check in on progress by reviewing the Jira boards and team updates rather than requesting ad-hoc status reports.
+              - Regularly check in on progress by reviewing the boards and team updates rather than requesting ad-hoc status reports.
               - Store strategic insights, competitive intelligence, and key decisions in your personal knowledge base for future reference.
-              - When documenting strategic decisions or company-wide announcements, publish them as Confluence pages in the LEAD space so all team members can reference them — every agent's ``## Relevant knowledge`` search runs as their own Atlassian user, so anyone with read access to the LEAD space will surface it.
+              - When documenting strategic decisions or company-wide announcements, publish them as pages in the LEAD space so all team members can reference them — the knowledge base is the company's own, so every agent's ``## Relevant knowledge`` search reaches them.
             mcp_env:
-              atlassian:
-                JIRA_USERNAME: "${ATLASSIAN_EMAIL_CEO}"
-                JIRA_API_TOKEN: "${ATLASSIAN_TOKEN_CEO}"
-                CONFLUENCE_USERNAME: "${ATLASSIAN_EMAIL_CEO}"
-                CONFLUENCE_API_TOKEN: "${ATLASSIAN_TOKEN_CEO}"
               mattermost:
                 MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_CEO}"
             integrations:
@@ -688,7 +666,7 @@ units:
               - name: morning-tracker-review
                 cron: "0 9 * * 1-5"            # 09:00 Mon–Fri, in scheduling.default_timezone
                 task: >
-                  Review overnight Jira activity across the LEAD, PROD and ENG projects:
+                  Review overnight activity across the LEAD, PROD and ENG projects:
                   stalled epics, new escalations from the CTO or PM, scope creep, and
                   high-priority unassigned work items. Flag anything that needs a decision
                   and leave a comment on the relevant work items.
@@ -728,14 +706,9 @@ units:
               - If the SWE escalates a blocker, respond promptly with a technical decision or additional context — don't let blockers sit unaddressed.
               - When making a significant architecture decision, publish an ADR page in the ENG project under the "Architecture Decisions" parent page, and link it from the relevant epic.
               - Before escalating to the CEO, make sure the question is truly strategic (budget, partnerships, major scope changes) rather than a technical call you can make yourself.
-              - Regularly review the Jira board to ensure stories are progressing, sprints are on track, and no work is falling through the cracks.
-              - When you need background on a past architecture decision, search the team's Confluence pages first before asking the team.
+              - Regularly review the board to ensure stories are progressing, sprints are on track, and no work is falling through the cracks.
+              - When you need background on a past architecture decision, search the team's pages first before asking the team.
             mcp_env:
-              atlassian:
-                JIRA_USERNAME: "${ATLASSIAN_EMAIL_CTO}"
-                JIRA_API_TOKEN: "${ATLASSIAN_TOKEN_CTO}"
-                CONFLUENCE_USERNAME: "${ATLASSIAN_EMAIL_CTO}"
-                CONFLUENCE_API_TOKEN: "${ATLASSIAN_TOKEN_CTO}"
               mattermost:
                 MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_CTO}"
             integrations:
@@ -754,7 +727,7 @@ units:
         roles:
           - name: Agent PM
             manages: ["Agent DevRel"]
-            goal: "Drive Nimbus's product strategy by researching the composable infrastructure and AI-framework markets, proposing high-impact user stories across both the control plane and the Phase-2 framework, and maintaining a prioritized Jira backlog aligned with Nimbus's two-phase vision"
+            goal: "Drive Nimbus's product strategy by researching the composable infrastructure and AI-framework markets, proposing high-impact user stories across both the control plane and the Phase-2 framework, and maintaining a prioritized backlog aligned with Nimbus's two-phase vision"
             backstory: >
               Seasoned product manager with deep expertise in Kubernetes fleet management,
               composable infrastructure platforms, and AI/ML infrastructure orchestration.
@@ -773,25 +746,20 @@ units:
               - "Analyze the incumbent enterprise Kubernetes platforms and hyperscaler-native stacks, and identify gaps Nimbus can fill"
               - "Identify big wins: GPU-aware scheduling, edge Kubernetes, Nimbus Registry expansion, FinOps/cost visibility, platform engineering / internal developer platform capabilities"
               - "Propose user stories based on customer pain points: K8s operational complexity, bare-metal-to-cloud transformation friction, AI/ML pipeline deployment overhead, multi-cloud governance sprawl"
-              - "Create Jira epics for Nimbus product themes and break them into stories"
+              - "Create epics for Nimbus product themes and break them into stories"
               - "Identify and merge or remove duplicate backlog items — keep the backlog clean and free of redundancy"
               - "Write clear acceptance criteria for every user story"
               - "Label and categorize all backlog items for easy filtering"
-              - "Scan the Jira backlog for unassigned work items. For each unassigned work item, evaluate which agent is the best fit based on the task's nature, required expertise, and each agent's current workload, then assign it accordingly via Jira."
-              - "For the Jira work items that are already assigned to others, don't be proactive to modify them unless they explicitly ask you to take action"
-              - "Publish competitive analysis findings and market research as Confluence pages in the PROD space so the team can reference them"
+              - "Scan the backlog for unassigned work items. For each unassigned work item, evaluate which agent is the best fit based on the task's nature, required expertise, and each agent's current workload, then assign it accordingly with `update_work_item`."
+              - "For the work items that are already assigned to others, don't be proactive to modify them unless they explicitly ask you to take action"
+              - "Publish competitive analysis findings and market research as pages in the PROD space so the team can reference them"
             behavioral_guidelines:
               - For the stories/tasks created by others but assigned to you, you should first check if the acceptance criteria are not empty. If they are empty, you should ask the creator to provide them. If they are not empty, you should pick it up and do the work.
-              - For every research/analysis that you want to do, you need to create a corresponding epic/story/task in Jira and assign it to yourself.
-              - You should then pick up your tasks accordingly from Jira one by one, update its status, and always update your knowledge_base accordingly after finishing the task.
+              - For every research/analysis that you want to do, you need to create a corresponding epic/story/task and assign it to yourself.
+              - You should then pick up your tasks one by one, update each one's status, and always update your knowledge_base accordingly after finishing the task.
               - For the responsibilities that require up-to-date analysis/comparison/data-gathering/benchmarking, you should use web search tools and deep search tools to get the latest information.
-              - When completing market research or competitive analysis, publish the findings as a Confluence page and link it from the work item.
+              - When completing market research or competitive analysis, publish the findings as a page and link it from the work item.
             mcp_env:
-              atlassian:
-                JIRA_USERNAME: "${ATLASSIAN_EMAIL_PM}"
-                JIRA_API_TOKEN: "${ATLASSIAN_TOKEN_PM}"
-                CONFLUENCE_USERNAME: "${ATLASSIAN_EMAIL_PM}"
-                CONFLUENCE_API_TOKEN: "${ATLASSIAN_TOKEN_PM}"
               mattermost:
                 MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_PM}"
             integrations:
@@ -832,23 +800,18 @@ units:
               - "Translate every AI Systems Engineer ADR into a developer-facing doc page; translate every Frontend SWE new page into a screenshot-driven walkthrough"
               - "Build at least three runnable examples per framework feature (``examples/hello-train``, ``examples/hello-serve``, ``examples/hello-finetune``) and keep them in CI so they never bit-rot"
               - "Publish a launch blog post on the website when v0.1 of the framework ships"
-              - "Watch GitLab Issues on every Nimbus project; turn recurring questions into FAQ pages and back-file Jira work items for the actual issues"
+              - "Watch GitLab Issues on every Nimbus project; turn recurring questions into FAQ pages and back-file work items for the actual issues"
               - "Coordinate with PM on launch messaging and positioning"
-              - "Pick up Jira work items assigned to you, transition them through the workflow, and log work time accurately"
-              - "Do not touch ``nimbuscore``, ``nimbusk0s``, ``console``, ``website``, or the framework repo's code beyond docstrings and examples — coordinate via Jira"
+              - "Pick up work items assigned to you, transition them through the workflow, and log work time accurately"
+              - "Do not touch ``nimbuscore``, ``nimbusk0s``, ``console``, ``website``, or the framework repo's code beyond docstrings and examples — coordinate on the work item"
             behavioral_guidelines:
               - Every doc page must include a runnable example; if you cannot run it locally, it is not ready to publish.
               - When the AI Systems Engineer ships a new framework feature, draft the doc page within 48 hours and ask them for technical review before merging.
               - Test every Getting Started tutorial yourself against a clean environment before declaring a doc story Done — if a step is missing, the tutorial is wrong.
-              - File a Jira work item against the owning role for every doc-blocker you hit (missing API, confusing error message, undocumented behaviour) rather than papering over it in the docs.
+              - File a work item against the owning role for every doc-blocker you hit (missing API, confusing error message, undocumented behaviour) rather than papering over it in the docs.
               - Track the most common GitLab Issues questions in a "FAQ Backlog" page in the PROD project; convert the top items into docs each sprint.
               - Use Tavily / web search to keep up with adjacent ecosystem launches (Ray releases, vLLM features, KubeRay updates) and flag relevant developments to the PM and AI Systems Engineer.
             mcp_env:
-              atlassian:
-                JIRA_USERNAME: "${ATLASSIAN_EMAIL_DEVREL}"
-                JIRA_API_TOKEN: "${ATLASSIAN_TOKEN_DEVREL}"
-                CONFLUENCE_USERNAME: "${ATLASSIAN_EMAIL_DEVREL}"
-                CONFLUENCE_API_TOKEN: "${ATLASSIAN_TOKEN_DEVREL}"
               mattermost:
                 MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_DEVREL}"
               gitlab:                        # env for the glab stdio MCP server
@@ -893,14 +856,14 @@ units:
           # ``each`` again, but for coaching: every direct member runs its own
           # weekly 1:1 with its manager (the CTO).  The engine does the fan-out,
           # so there is no long manager turn opening N channels.  A 1:1 is
-          # private, so it runs on an A2A channel (a2a_ask) — NOT chat/Jira; the
+          # private, so it runs on an A2A channel (a2a_ask) — NOT chat or a work item; the
           # post-turn learning loop persists the takeaways automatically.  See
           # the "Manager 1:1" playbook page (LEAD project) and docs/concepts/one-on-ones.md.
           - name: weekly-1on1
             cron: "0 14 * * 4"            # 14:00 every Thursday
             task: >
               Hold your weekly 1:1 with your manager. Open it on a private A2A
-              channel with a2a_ask (a 1:1 is private — do NOT use chat or Jira):
+              channel with a2a_ask (a 1:1 is private — do NOT use chat or a work item):
               use query_episodes to recall what you shipped and where you got
               stuck, and put the whole review in the one brief — what you shipped,
               where you are blocked, and the feedback you want — because your
@@ -908,7 +871,7 @@ units:
               Follow the "Manager 1:1" playbook page (LEAD project).
         roles:
           - name: Agent SWE
-            goal: "Pick up the assigned Jira work items and implement production-grade Go features for Nimbus's control plane (nimbuscore, nimbusk0s), write comprehensive tests, and ship clean, reviewable code that meets acceptance criteria — while keeping work-item status, worklogs, and comments up to date throughout the lifecycle of every task"
+            goal: "Pick up the assigned work items and implement production-grade Go features for Nimbus's control plane (nimbuscore, nimbusk0s), write comprehensive tests, and ship clean, reviewable code that meets acceptance criteria — while keeping work-item status, worklogs, and comments up to date throughout the lifecycle of every task"
             backstory: >
               Senior backend engineer with many years building cloud-native infrastructure
               control planes in Go.  Deep hands-on experience with Kubernetes internals
@@ -928,31 +891,26 @@ units:
             responsibilities:
               - "Own the ``nimbuscore`` Go control-plane service and the ``nimbusk0s`` worker image — accept stories for both, push to those projects"
               - "Extend nimbuscore APIs as the Phase-2 framework needs them (job placement, GPU reservation, dataset volumes, multi-cluster scheduling primitives) — coordinate the shape with the AI Systems Engineer before you ship"
-              - "Pick up Jira work items assigned to you, transition them through the workflow (To Do → In Progress → In Review → Done), and log work time accurately"
-              - "Read and understand acceptance criteria before writing any code — ask the assigner for clarification via Jira comments if criteria are ambiguous"
+              - "Pick up work items assigned to you, transition them through the workflow (To Do → In Progress → In Review → Done), and log work time accurately"
+              - "Read and understand acceptance criteria before writing any code — ask the assigner for clarification in a work-item comment if criteria are ambiguous"
               - "Implement features following Nimbus's architecture patterns: controller-reconciler loops for K8s resources, gRPC between control-plane services, REST for external APIs"
               - "Write unit tests for business logic, integration tests for API contracts, and end-to-end tests for critical user flows"
               - "Add structured logging, metrics, and trace spans to all new code paths"
               - "Update or create documentation (code comments, ADRs, runbooks) for any non-trivial implementation decisions"
               - "Escalate blockers to the CTO promptly with a clear description of the problem, what you've tried, and what you need"
-              - "Do not touch ``console``, ``website``, or the Phase-2 framework repo — those are owned by Frontend SWE and AI Systems Engineer respectively; coordinate via Jira rather than crossing project boundaries"
+              - "Do not touch ``console``, ``website``, or the Phase-2 framework repo — those are owned by Frontend SWE and AI Systems Engineer respectively; coordinate on the work item rather than crossing project boundaries"
               - "Store implementation learnings, architectural decisions, and debugging insights in your personal knowledge base for future reference"
-              - "When writing runbooks or implementation docs, publish them as Confluence pages and link from the work item"
+              - "When writing runbooks or implementation docs, publish them as pages and link from the work item"
             behavioral_guidelines:
-              - When you receive a task, first read the full Jira work item including description, acceptance criteria, and any linked work items or epics before starting work.
+              - When you receive a task, first read the full work item including description, acceptance criteria, and any linked work items or epics before starting work.
               - Transition the work item to "In Progress" immediately when you begin, and add a comment outlining your implementation approach.
-              - If a task is unclear or missing acceptance criteria, add a Jira comment asking the assigner (CTO or PM) for clarification before writing code.
+              - If a task is unclear or missing acceptance criteria, add a comment asking the assigner (CTO or PM) for clarification before writing code.
               - After completing work, transition the work item to "In Review", add a summary comment describing what was implemented and how to verify it, and log your work time.
-              - When you encounter a bug or edge case during implementation, file a new Jira work item for it, link it to the current story, and note it in a comment rather than silently expanding scope.
+              - When you encounter a bug or edge case during implementation, file a new work item for it, link it to the current story, and note it in a comment rather than silently expanding scope.
               - Always update your knowledge base with key decisions, patterns discovered, and lessons learned after completing each task.
-              - Search the team's Confluence pages for existing runbooks and architecture docs before implementing — avoid duplicating documented patterns.
-              - If a story you've been assigned actually belongs to the Frontend SWE (UI work) or the AI Systems Engineer (Python framework runtime work), reassign it in Jira with a comment rather than implementing outside your projects.
+              - Search the team's pages for existing runbooks and architecture docs before implementing — avoid duplicating documented patterns.
+              - If a story you've been assigned actually belongs to the Frontend SWE (UI work) or the AI Systems Engineer (Python framework runtime work), reassign it with a comment rather than implementing outside your projects.
             mcp_env:
-              atlassian:
-                JIRA_USERNAME: "${ATLASSIAN_EMAIL_SWE}"
-                JIRA_API_TOKEN: "${ATLASSIAN_TOKEN_SWE}"
-                CONFLUENCE_USERNAME: "${ATLASSIAN_EMAIL_SWE}"
-                CONFLUENCE_API_TOKEN: "${ATLASSIAN_TOKEN_SWE}"
               mattermost:
                 MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_SWE}"
               gitlab:                        # env for the glab stdio MCP server
@@ -960,7 +918,7 @@ units:
                 GITLAB_HOST: gitlab.com
             # Code-runtime sandbox: during Execute the agent calls the
             # run_sandbox tool, which launches a coding agent that
-            # implements the Jira work item in nimbuscore / nimbusk0s and
+            # implements the work item in nimbuscore / nimbusk0s and
             # opens an MR as Agent SWE's own GitLab identity (the
             # ${GITLAB_TOKEN_SWE} PAT above).  The merge-request
             # review-requested webhook then wakes this seat to review the
@@ -975,7 +933,7 @@ units:
               # `e2b`, once that backend is in the catalogue) here and
               # nothing else changes.
               mcp:                                # MCP surface inside the sandbox
-                servers: [atlassian, mattermost, tavily]   # the coding agent reads work items via Jira in-box; code-host MCP not needed — it pushes + opens the MR via git push options
+                servers: [mattermost, tavily]              # the coding agent reads work items through the engine's own builtins; code-host MCP not needed — it pushes + opens the MR via git push options
                 # Scoping is server-level only — the coding agent gets every
                 # tool the listed servers expose (there is no per-tool allowlist:
                 # OpenCode has none, and claude-code runs bypassPermissions).
@@ -1035,24 +993,19 @@ units:
               - "Own ``console`` and ``website`` — accept stories for both, push to those projects"
               - "Deliver the AI Services pages the console README already advertises: Models, Fine-tuning, Datasets, Jobs, Serving Endpoints — coordinate the API shape with the SWE first"
               - "Keep the TypeScript API client in sync with the latest nimbuscore Swagger — regenerate when the SWE ships a new endpoint"
-              - "Pick up Jira work items assigned to you, transition them through the workflow, and log work time accurately"
+              - "Pick up work items assigned to you, transition them through the workflow, and log work time accurately"
               - "Write component tests for non-trivial UI logic and at least one end-to-end smoke test per new page"
-              - "File design questions for the PM/CEO via Jira comments before implementing UX that has no precedent in the console"
+              - "File design questions for the PM/CEO in a work-item comment before implementing UX that has no precedent in the console"
               - "Escalate blockers to the CTO promptly"
-              - "Do not touch ``nimbuscore``, ``nimbusk0s``, or the Phase-2 framework repo — coordinate via Jira"
-              - "When you ship a new console page, publish a short user-facing screenshot/walkthrough as a Confluence page so DevRel can pick it up for docs"
+              - "Do not touch ``nimbuscore``, ``nimbusk0s``, or the Phase-2 framework repo — coordinate on the work item"
+              - "When you ship a new console page, publish a short user-facing screenshot/walkthrough as a page so DevRel can pick it up for docs"
             behavioral_guidelines:
-              - Read the full Jira work item before touching code; if a story needs a backend endpoint that does not exist yet, file a SWE story for it and block your own work item on that dependency rather than mocking the API.
+              - Read the full work item before touching code; if a story needs a backend endpoint that does not exist yet, file a SWE story for it and block your own work item on that dependency rather than mocking the API.
               - Transition work items through To Do → In Progress → In Review → Done with comments at each transition.
               - Reuse existing components in ``src/components`` before adding new ones; if you add a new component, document its props in a short comment block.
               - For every new page, include empty / loading / error states from the first commit — never ship a happy-path-only UI.
-              - When in doubt about visual polish (spacing, copy, iconography), file a question for the PM in Jira rather than guessing.
+              - When in doubt about visual polish (spacing, copy, iconography), file a question for the PM on the work item rather than guessing.
             mcp_env:
-              atlassian:
-                JIRA_USERNAME: "${ATLASSIAN_EMAIL_FE}"
-                JIRA_API_TOKEN: "${ATLASSIAN_TOKEN_FE}"
-                CONFLUENCE_USERNAME: "${ATLASSIAN_EMAIL_FE}"
-                CONFLUENCE_API_TOKEN: "${ATLASSIAN_TOKEN_FE}"
               mattermost:
                 MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_FE}"
               gitlab:                        # env for the glab stdio MCP server
@@ -1066,7 +1019,7 @@ units:
             sandbox:
               enabled: true
               mcp:                                # MCP surface inside the sandbox
-                servers: [atlassian, mattermost, tavily]   # the coding agent reads work items via Jira in-box; code-host MCP not needed — it pushes + opens the MR via git push options
+                servers: [mattermost, tavily]              # the coding agent reads work items through the engine's own builtins; code-host MCP not needed — it pushes + opens the MR via git push options
                 # Scoping is server-level only — the coding agent gets every
                 # tool the listed servers expose (there is no per-tool allowlist:
                 # OpenCode has none, and claude-code runs bypassPermissions).
@@ -1119,10 +1072,10 @@ units:
               - "Write ADR pages in the ENG project for every architectural choice (actor model, scheduler design, GPU scheduling strategy, dataloader pipeline, serving stack choice)"
               - "Propose new nimbuscore endpoints to the SWE as joint design docs — never bypass nimbuscore by talking to the cluster directly"
               - "Build a working end-to-end example (``examples/hello-train``, ``examples/hello-serve``) before declaring v0.1 ready, so DevRel can build docs on top"
-              - "Pick up Jira work items assigned to you, transition them through the workflow, and log work time accurately"
+              - "Pick up work items assigned to you, transition them through the workflow, and log work time accurately"
               - "Escalate to the CTO when an architecture choice has cross-team implications (control-plane API changes, console UX impact, large dependency adoption)"
-              - "Do not touch ``nimbuscore``, ``nimbusk0s``, ``console``, or ``website`` — propose the change via Jira to the owning role"
-              - "Maintain a public roadmap page in Confluence so PM and DevRel can see what's coming"
+              - "Do not touch ``nimbuscore``, ``nimbusk0s``, ``console``, or ``website`` — propose the change on a work item to the owning role"
+              - "Maintain a public roadmap page so PM and DevRel can see what's coming"
             behavioral_guidelines:
               - Before writing framework code, write the SDK example you wish existed — start from the user's first 10 lines of Python, then design backwards into the runtime.
               - For any feature that requires a new nimbuscore endpoint, file a SWE story with the endpoint shape sketched out, link it from your story, and do not start coding the framework side until the contract is agreed.
@@ -1131,11 +1084,6 @@ units:
               - For perf-sensitive code, capture a baseline benchmark in the MR description before optimising; otherwise you are guessing.
               - When you discover a missing primitive in the Nimbus platform (a cluster capability, a console page, a webhook), file a story for the owning role rather than working around it.
             mcp_env:
-              atlassian:
-                JIRA_USERNAME: "${ATLASSIAN_EMAIL_AI}"
-                JIRA_API_TOKEN: "${ATLASSIAN_TOKEN_AI}"
-                CONFLUENCE_USERNAME: "${ATLASSIAN_EMAIL_AI}"
-                CONFLUENCE_API_TOKEN: "${ATLASSIAN_TOKEN_AI}"
               mattermost:
                 MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_AI}"
               gitlab:                        # env for the glab stdio MCP server
@@ -1150,7 +1098,7 @@ units:
             sandbox:
               enabled: true
               mcp:                                # MCP surface inside the sandbox
-                servers: [atlassian, mattermost, tavily]   # the coding agent reads work items via Jira in-box; code-host MCP not needed — it pushes + opens the MR via git push options
+                servers: [mattermost, tavily]              # the coding agent reads work items through the engine's own builtins; code-host MCP not needed — it pushes + opens the MR via git push options
                 # Scoping is server-level only — the coding agent gets every
                 # tool the listed servers expose (there is no per-tool allowlist:
                 # OpenCode has none, and claude-code runs bypassPermissions).
@@ -1179,5 +1127,5 @@ units:
               - name: framework-roadmap-refresh
                 cron: "0 15 * * 1"            # 15:00 every Monday
                 task: >
-                  Refresh the public Phase-2 framework roadmap page in Confluence so PM
+                  Refresh the public Phase-2 framework roadmap page so PM
                   and DevRel can see what's landing this sprint.

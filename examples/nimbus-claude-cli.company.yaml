@@ -3,8 +3,10 @@
 #
 # A CHAT-ONLY company: Mattermost is the single integration, and a coding
 # CLI you already subscribe to is the single LLM.  Nothing else has to
-# exist — no Atlassian site, no code host, no metered API key, no public
-# URL.  Two commands stand the whole thing up:
+# exist — no code host, no metered API key, no public URL.  The work
+# tracker and the knowledge base are the ENGINE'S OWN, so this company
+# files work and writes pages from its first turn with nothing to sign up
+# for.  Two commands stand the whole thing up:
 #
 #     docker compose --profile mattermost up -d --wait
 #     COMPANY=examples/nimbus.company.yaml scripts/mattermost-dev-bootstrap.sh
@@ -25,11 +27,17 @@
 # login options.
 #
 # GROWING PAST CHAT.  Every other integration is additive and documented
-# on its own page — a work-item tracker (docs/integrations/jira.md), a
-# knowledge base (docs/integrations/confluence.md), a code host
-# (docs/integrations/gitlab.md, docs/integrations/github.md) and the code
-# sandbox that needs one (docs/concepts/code-sandbox.md).  Each page shows
-# the blocks to add here.  Nothing in this file has to be undone first.
+# on its own page — a code host (docs/integrations/gitlab.md,
+# docs/integrations/github.md) and the code sandbox that needs one
+# (docs/concepts/code-sandbox.md).  Each page shows the blocks to add
+# here.  Nothing in this file has to be undone first.
+#
+# MOVING TO A VENDOR TRACKER OR WIKI is the one change that is not purely
+# additive: Jira (docs/integrations/jira.md) and Confluence
+# (docs/integrations/confluence.md) REPLACE the native halves rather than
+# joining them, so adding either means changing the matching ``backend``
+# below. Work living in two places with nothing keeping them in step is
+# refused rather than allowed.
 name: "Nimbus"
 mission: "Turn any hardware into cloud-native infrastructure — and give AI teams one open framework to build on top of it"
 vision: >
@@ -620,14 +628,30 @@ integrations:
       channels: [town-square, engineering, product]
       display_name_suffix: " (AI)"
 
-# Knowledge read scope is not configured, and there is no knowledge
-# backend to scope: ``knowledge.confluence_spaces`` selects spaces of a
-# wiki this company does not have.  Every seat's ``## Relevant knowledge``
-# prefetch is therefore empty and ``search_knowledge`` is not registered
-# at all — a seat's own diary and its past turns are what it recalls
-# from.  Add ``integrations.confluence`` and this block together; the
-# pages that company would publish are in examples/nimbus-docs/.  See
-# docs/concepts/knowledge-system.md.
+# Which tracker and which knowledge base this company runs.  Both are the
+# engine's OWN — work items and pages held in the fleet's own store,
+# replicated to every node, with no third-party account behind either.
+# That is what makes this the SHORT path and still a complete company: the
+# seats file work, assign it, comment on it and publish pages from their
+# first turn, with nothing to sign up for and no credential to mint.
+#
+# An unset ``backend`` derives the same answer from the absence of a
+# vendor block, so both fields could be dropped; they are written out
+# because a reader should see the choice rather than infer it.
+tracker:
+  backend: native
+  native:
+    timezone: "Europe/Berlin"
+    non_working_weekdays: [saturday, sunday]
+
+knowledge:
+  backend: native
+
+  # Read scope unset, which is the ordinary case natively: the pages are
+  # the company's own and every seat reads them through the engine, so
+  # there is no third-party permission model underneath to mirror.  The
+  # pages this company starts with are in examples/nimbus-docs/.
+  # See docs/concepts/knowledge-system.md.
 
 # All tool MCP servers live here.  There is exactly ONE: without it the
 # agents receive messages, reason about a reply, and then have no tool to
@@ -673,8 +697,9 @@ roles:
       # is the account you sign in as.  `founder` is what
       # scripts/mattermost-dev-bootstrap.sh creates.  It is the only
       # contact identity this company can use: the others
-      # (atlassian_account_id, gitlab_username, github_login) name
-      # surfaces it does not connect.
+      # (gitlab_username, github_login) name surfaces it does not
+      # connect.  The tracker and the knowledge base need none: they are
+      # the engine's own, and a seat is addressed there by its handle.
       mattermost_user_id: founder
 
 # Flexible org — units can nest to any depth.
@@ -692,9 +717,18 @@ units:
         # ``channel`` is the unit's home on the company's chat surface and
         # the one thing that reaches a seat's identity prompt ("Team
         # channel: town-square").  It is inherited from Leadership above,
-        # so it is not repeated here.  In the fully-wired company this is
-        # also where a unit's tracker project and wiki space would go, as
-        # ``integrations.jira`` / ``integrations.confluence``.
+        # so it is not repeated here.
+        #
+        # ``project`` and ``space`` are the unit's tracker and knowledge
+        # identity — the project it files work in and the container it
+        # writes pages to.  Inbound activity with no better recipient
+        # (an unassigned item, a page change nobody was mentioned in)
+        # routes to the unit lead.  The keys are VENDOR-NEUTRAL: here they
+        # name a native project and container, and they would name a Jira
+        # project and a Confluence space unchanged if this company moved
+        # to those — the org chart does not change when the backend does.
+        project: "LEAD"
+        space: "LEAD"
         roles:
           - name: Agent CEO
             goal: "Define Nimbus's product vision and strategic direction, prioritize high-impact initiatives across product and engineering, make final calls on roadmap trade-offs, and keep the team aligned on building an open, composable infrastructure control plane that wins in the AI/ML and enterprise market"
@@ -797,6 +831,8 @@ units:
       - name: Product Management
         type: team
         lead: Agent PM
+        project: "PROD"                        # unit's tracker + wiki identity (routing + write home)
+        space: "PROD"
         roles:
           - name: Agent PM
             manages: ["Agent DevRel"]
@@ -842,6 +878,9 @@ units:
         # department.  Shares the ``product`` channel with Product Management:
         # PM and DevRel collaborate tightly (drafts ↔ review), so splitting
         # them across two channels would only make the handoff harder to read.
+        # It shares PROD with them for the same reason.
+        project: "PROD"
+        space: "PROD"
         roles:
           - name: Agent DevRel
             goal: "Make the Nimbus platform — both the control plane and the Phase-2 AI framework — discoverable, learnable, and adoptable. Own the developer-facing narrative: what a newcomer reads first, what the getting-started path is, and where it currently loses people"
@@ -886,6 +925,8 @@ units:
       - name: Core
         type: team
         lead: Agent CTO
+        project: "ENG"                         # unit's tracker + wiki identity (routing + write home)
+        space: "ENG"
         # Unit-scoped recurring work — one schedule per delivery mode.
         # Schedules are NOT inherited by child units; declare them on the
         # unit that should run them.  See docs/concepts/scheduling.md.

@@ -115,7 +115,7 @@ api:
   # http port, no :port suffix in URLs.  A port > 0 makes `crewlet run`
   # start the EMBEDDED API inside the engine process, and that embedded
   # server IS the webhook target the integrations register against a
-  # local engine (http://host.docker.internal:80/webhooks/jira) — one
+  # local engine (http://host.docker.internal:80/webhooks/gitlab) — one
   # process serves engine + dashboard + webhooks.  Two things to know
   # about 80 specifically: (a) on Linux a non-root process needs
   # privileged-port access — `sudo sysctl net.ipv4.ip_unprivileged_port_start=80`

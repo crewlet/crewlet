@@ -357,15 +357,16 @@ The positional config is the **Tier B company YAML** (the importer reads the bac
 
 Knowledge docs follow a **directory-based convention** — the files are pure prose, no frontmatter required:
 
-- **Container = the file's immediate parent directory name.** A file at `<root>/ENG/onboarding.md` publishes to Confluence space `ENG`.
+- **Container = the file's immediate parent directory name.** A file at `<root>/ENG/onboarding.md` publishes to the container `ENG` — a native container, or a Confluence space of that key.
 - **Title = the file's first `# H1` heading.** That H1 line is stripped from the published body (the backend shows the page title separately, so leaving it would duplicate the title on the page).
 
 `examples/nimbus-docs/` is a worked set of these — the pages the Nimbus
-example company publishes. `examples/nimbus.company.yaml` carries the
-`confluence:` block the importer reads its credentials from, so it is the
-positional argument as it ships. (The smaller
-`examples/nimbus-claude-cli.company.yaml` has no wiki at all; add a block
-per [Confluence](../integrations/confluence.md) first.)
+example company publishes. Both bundled examples run the **native**
+knowledge base, so neither is an argument to this CLI: they publish
+through the assistant path above. A company that moves to Confluence adds
+the `confluence:` block per [Confluence](../integrations/confluence.md),
+and its company YAML is then the positional argument the importer reads
+those credentials from.
 
 ```
 examples/nimbus-docs/
