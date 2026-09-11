@@ -199,7 +199,7 @@ func (c *Client) do(ctx context.Context, method, path string, params url.Values,
 		detail, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyBytes))
 		return &APIError{
 			Method: method, Path: path, Status: resp.StatusCode,
-			Detail: strings.TrimSpace(string(detail)),
+			Detail: httpx.Refusal(resp.Header.Get("Content-Type"), detail),
 		}
 	}
 	if out == nil {

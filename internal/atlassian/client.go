@@ -465,7 +465,7 @@ func (c *Client) call(ctx context.Context, key, method, path string, body, out a
 	if resp.StatusCode >= http.StatusBadRequest {
 		return &APIError{
 			Status: resp.StatusCode, Method: method, Path: path,
-			Detail: detailFrom(answer),
+			Detail: detailFrom(resp.Header.Get("Content-Type"), answer),
 		}
 	}
 	if out == nil || len(answer) == 0 {
@@ -479,10 +479,17 @@ func (c *Client) call(ctx context.Context, key, method, path string, body, out a
 
 // detailFrom pulls Atlassian's own words out of a refusal.
 //
-// Its admin APIs answer in more than one shape, so this tries each and falls
-// back to the raw body: an operator reading a refusal needs what Atlassian
-// said, and an empty string is the one answer that helps nobody.
-func detailFrom(body []byte) string {
+// Its admin APIs answer in more than one shape, so this tries each — and then
+// hands anything else to [httpx.Refusal] rather than to the caller verbatim.
+//
+// IT USED TO RETURN THE RAW BODY, on the reasoning that an operator needs what
+// Atlassian said and an empty string helps nobody. Both clauses are true and
+// the conclusion was wrong for the shape Atlassian actually sends: a 403 from
+// its admin API arrives as an HTML page, so a whole rendered document —
+// doctype, head, inline styles, script tags — reached the log around a
+// sentence nobody could find. The body is read with a megabyte cap, so it
+// reached it in full.
+func detailFrom(contentType string, body []byte) string {
 	var shaped struct {
 		Message string `json:"message"`
 		Detail  string `json:"detail"`
@@ -506,5 +513,5 @@ func detailFrom(body []byte) string {
 			}
 		}
 	}
-	return strings.TrimSpace(string(body))
+	return httpx.Refusal(contentType, body)
 }

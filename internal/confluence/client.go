@@ -263,7 +263,7 @@ func (c *Client) do(ctx context.Context, method, path string, params url.Values,
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		detail := readDetail(resp.Body)
+		detail := readDetail(resp.Header.Get("Content-Type"), resp.Body)
 		return &APIError{
 			Method: method, Path: path, Status: resp.StatusCode,
 			Detail: strings.TrimSpace(detail),
@@ -632,12 +632,18 @@ const detailLimit = 2048
 // explained itself badly" as the same string, which is the distinction the
 // reader most needs — and the read error is reported rather than dropped,
 // because a body that died mid-read is a different fact from a short one.
-func readDetail(body io.Reader) string {
+//
+// THROUGH [httpx.Refusal], which is what turns the cap above from a mitigation
+// into an answer. The comment on [detailLimit] already names the case — "past
+// that it is a third-party app serving an HTML page where an API response
+// belongs" — and what it did about it was serve two kilobytes of that page.
+func readDetail(contentType string, body io.Reader) string {
 	raw, err := io.ReadAll(io.LimitReader(body, detailLimit+1))
-	text := strings.TrimSpace(string(raw))
+	cut := len(raw) > detailLimit
+	text := httpx.Refusal(contentType, raw)
 	switch {
-	case len(raw) > detailLimit:
-		return strings.TrimSpace(string(raw[:detailLimit])) +
+	case cut && text != "":
+		return text +
 			"\n…(the rest of the response is past the 2048-byte cap this build reads)"
 	case err != nil && text == "":
 		return "(the response body could not be read: " + err.Error() + ")"

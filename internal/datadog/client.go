@@ -176,7 +176,7 @@ func (c *Client) do(
 	if res.StatusCode >= 300 {
 		return &APIError{
 			Method: method, Path: path, Status: res.StatusCode,
-			Detail: detailOf(payload),
+			Detail: detailOf(res.Header.Get("Content-Type"), payload),
 		}
 	}
 	if out == nil {
@@ -214,14 +214,18 @@ const maxDetail = 2048
 // least likely to be the JSON this expects — see [maxDetail]. Cut through
 // [textcut] rather than by slicing, so a multi-byte rune straddling the limit
 // does not become invalid UTF-8 that a JSON encoder silently substitutes.
-func detailOf(payload []byte) string {
+func detailOf(contentType string, payload []byte) string {
 	var body struct {
 		Errors []string `json:"errors"`
 	}
 	if err := json.Unmarshal(payload, &body); err == nil && len(body.Errors) > 0 {
 		return textcut.Ellipsis(strings.Join(body.Errors, "; "), maxDetail)
 	}
-	detail := strings.TrimSpace(string(payload))
+	// ANYTHING ELSE THROUGH [httpx.Refusal], rather than verbatim: a
+	// refusal that is not the JSON this expects is most often an HTML
+	// page from a gateway, and pasting one into an error puts a rendered
+	// document in a log around a sentence nobody can find.
+	detail := httpx.Refusal(contentType, payload)
 	if detail == "" {
 		return "no detail"
 	}
