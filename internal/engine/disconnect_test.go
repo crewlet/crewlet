@@ -3,9 +3,12 @@ package engine
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // EVERY SURFACE CAN BE DISCONNECTED, including the ones with nothing to
@@ -76,5 +79,69 @@ func TestADisconnectOnANodeWithNoCompanyIsDeferredRatherThanFatal(t *testing.T) 
 					integration.ErrDisconnectUnavailable)
 			}
 		})
+	}
+}
+
+// A TEARDOWN THAT CANNOT REMOVE THE ACCOUNTS MUST NOT REPORT THAT IT DID.
+//
+// [Engine.dropBlock] runs the vendor step and then removes the block — which
+// for Atlassian carries the `${VAR}` pointing at the organization key. So a
+// teardown that answers nil when that key did not resolve has the block
+// removed out from under it: every service account this engine created is
+// orphaned at Atlassian, nothing in the document can authenticate a second
+// attempt, and the operator is told remove_seats succeeded. The credential each
+// of those accounts holds is still live and still sealed.
+//
+// gitlabPass and mattermostPass both refuse here, naming the credential they
+// could not resolve. Atlassian was the outlier, and its silence was the
+// destructive direction rather than the safe one.
+func TestATeardownWithNoOrganizationKeyRefusesRatherThanClaimingSuccess(t *testing.T) {
+	t.Parallel()
+	e := &Engine{}
+	cfg, err := config.ParseCompany([]byte(`
+name: Acme
+providers:
+  llm:
+    zulu:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["sk-ant-fake-zulu-key"]
+integrations:
+  atlassian:
+    org_id: "f1240761-c455-41b5-a7f5-4a64f9c6e729"
+    api_key: "${ATLASSIAN_ORG_KEY_NOBODY_SET}"
+roles:
+  - name: CEO
+    handle: ceo
+    llm: zulu
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	company, err := NewCompanyWith(cfg, e.resolver())
+	if err != nil {
+		t.Fatalf("company: %v", err)
+	}
+	e.epoch.current.Store(company)
+
+	pass := &atlassianPass{engine: e}
+	err = pass.Teardown(t.Context(), setup.TeardownInput{RemoveSeats: true})
+	if err == nil {
+		t.Fatal("the teardown reported success with no key to remove an " +
+			"account with; dropBlock then takes the key's own pointer away " +
+			"and every agent's account is orphaned at Atlassian")
+	}
+	// THE VARIABLE IS NAMED, because that is the one thing the operator has
+	// to change and nothing else in the message can be acted on.
+	if !strings.Contains(err.Error(), "ATLASSIAN_ORG_KEY_NOBODY_SET") {
+		t.Errorf("Teardown = %v, which does not name the variable that did "+
+			"not resolve", err)
+	}
+
+	// AND WITHOUT remove_seats THERE IS GENUINELY NOTHING TO DO: Atlassian
+	// holds no webhook this engine registered, so a disconnect that leaves
+	// the accounts alone needs no key at all.
+	if err := pass.Teardown(t.Context(), setup.TeardownInput{}); err != nil {
+		t.Errorf("a teardown that keeps the accounts refused: %v", err)
 	}
 }

@@ -197,7 +197,26 @@ func (p *atlassianPass) Teardown(ctx context.Context, in setup.TeardownInput) er
 	env := p.engine.resolver()
 	key := strings.TrimSpace(env.Value(cfg.APIKey))
 	if key == "" {
-		return nil
+		// REFUSED, WHERE THIS REPORTED SUCCESS. Reaching here means the
+		// operator asked for the accounts to be removed and the
+		// organization key did not resolve — so nothing can be removed,
+		// and answering nil says it was.
+		//
+		// [Engine.dropBlock] takes that answer and removes the
+		// `integrations.atlassian` block, which carries the very ${VAR}
+		// pointing at this key. Every service account this engine created
+		// is then orphaned at Atlassian with nothing left in the document
+		// to authenticate a second attempt, while the operator is told
+		// remove_seats succeeded. The credential each of those accounts
+		// holds is still live and still sealed.
+		//
+		// gitlabPass and mattermostPass both refuse here, naming the
+		// credential. Atlassian was the outlier.
+		return fmt.Errorf(
+			"engine: atlassian teardown: the organization key %q resolved to "+
+				"nothing, so the agents' accounts cannot be removed — set that "+
+				"variable, or disconnect without removing accounts and delete "+
+				"them at Atlassian by hand", cfg.APIKey)
 	}
 	plan, err := atlassian.PlanFor(company.Org)
 	if err != nil {
