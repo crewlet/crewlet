@@ -376,15 +376,19 @@ the same network.
 
 Two bundled **Nimbus examples** model the same seven-seat company at opposite
 ends of this page. `examples/nimbus.company.yaml` + `examples/nimbus.config.yaml`
-is the **reference**: a pick from every row — Jira, Confluence, GitLab,
-Mattermost, a metered `openai-compatible` key, a sandbox its engineers push
-merge requests from. Read it to see what a full stack looks like written out.
+is the **reference**: a pick from every row — GitLab, Mattermost, a metered
+`openai-compatible` key, a sandbox its engineers push merge requests from, and
+the engine's own tracker and knowledge base rather than a vendor's. Read it to
+see what a full stack looks like written out, and
+[Jira](../integrations/jira.md) / [Confluence](../integrations/confluence.md)
+for the blocks that move those two halves to Atlassian.
 
 `examples/nimbus-claude-cli.company.yaml` + `examples/nimbus-claude-cli.config.yaml`
 is the **short path**: every pick that costs nothing extra to stand up — chat
-on **Mattermost**, the model a **coding CLI on your own subscription**, and the
-code sandbox on the **engine host** (`run_in: direct`), which reuses that same
-subscription login rather than needing an account of its own. Its three
+on **Mattermost**, the model a **coding CLI on your own subscription**, the
+tracker and knowledge base the **engine's own**, and the code sandbox on the
+**engine host** (`run_in: direct`), which reuses that same subscription login
+rather than needing an account of its own. Its three
 engineering seats run that CLI in
 [agent mode](../concepts/subscription-llm-backends.md#agent-mode), so their
 executor *is* the CLI's own agentic loop with a real shell. The rows that need
