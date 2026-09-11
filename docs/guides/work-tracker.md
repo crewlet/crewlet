@@ -226,10 +226,11 @@ queries a seat's tools use, against this node's own copy. Every answer says how
 far behind that copy is.
 
 **Your own AI assistant** can reach the same tracker over MCP, at
-`/operator/mcp`. It serves the same six work tools above, five more no seat is
+`/operator/mcp`. It serves the same six work tools above, nine more no seat is
 given — `list_work_views`, `save_work_view`, `list_work_goals`,
-`write_work_goal` and `write_work_catalogue` — the five page tools beside them
-and knowledge search — the seat's own implementations, with one
+`write_work_goal`, `write_work_catalogue`, `get_person`, `mark_inbox`,
+`set_pins` and `set_priorities` — the five page tools beside them and knowledge
+search — the seat's own implementations, with one
 field different: a write carries the **token's** own name as its author and the
 author kind `operator`. There is deliberately no way for the caller to name a seat to act
 as — a tracker whose author field is chosen by the writer is not an audit
@@ -238,6 +239,48 @@ trail.
 **The REST API** serves the read side at `/work`, `/work/{id}` and
 `/work/views`. Writes go through a seat's tools or the operator MCP, both of
 which are attributed to somebody.
+
+## A person's own state
+
+A human has a record of their own beside the work: an **inbox**, a **queue**
+and their **pins**. Three parts of one document, with three different
+authorities over them — which is why they are three separate writes.
+
+| Part | Who may write it |
+|---|---|
+| **inbox** — read, unread, snoozed, and how far you have read | only on behalf of the person whose it is |
+| **pins** — pinned views and starred things | the same |
+| **queue** — the order you mean to work in | yours, **or a lead's** for somebody in their line |
+
+Somebody else marking your work read is the one thing an inbox must never
+allow: the item is then gone from the only place you would have looked for it,
+and nothing anywhere says who removed it. A pin is the same rule for the
+plainer reason — one somebody else can set is one that moves under you.
+
+The **queue is the exception**, and deliberately: telling somebody what to do
+next is what a lead is for. A lead's write is **stamped** with who made it, so
+a person who starts the day on work they did not choose can see who chose it,
+and their own next change clears the stamp — taking your queue back is the
+gesture that says you have seen it. The lead relation is any ancestor in the
+management chain, not just the direct manager: a founder leads everybody.
+
+**An entry you have read past is pruned on the next write.** That is what keeps
+the record small without a cap that discards: an entry at or below your
+seen-through position is one no screen will ever render. The position is a
+*triple* — stream, generation and sequence — because a number from a recreated
+stream compares as current, and an inbox that read "nothing unread" for ever is
+not a bug anybody reports.
+
+**A due snooze is reported, never promoted.** Putting one back in the unread
+list is a write, and a read that performed one would change the fleet's state
+from a path with no operation id, no arbitration and no record. So a read says
+which snoozes are due and your next inbox write is what moves them.
+
+Read at `GET /work/people/{handle}`, and written through the operator MCP with
+`mark_inbox`, `set_pins` and `set_priorities` — never by a seat. A seat is not
+a human: it has a **mailbox**, which is the durable subscription the engine
+attaches when it acquires the seat, and nothing on a person's record describes
+one.
 
 ## Hand-offs are bounded on the task
 

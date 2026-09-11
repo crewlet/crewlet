@@ -101,6 +101,7 @@ A body that does not arrive inside its deadline fails the read like any other tr
 | `GET` | `/work/views` | One container's **view strip**: the three every container has without anybody saving one, the two more a sprinting project adds, and whatever was saved beyond them. `?container=` takes the query grammar's own spelling (`workspace`, `project:ENG`, `unit:engineering`, `person:ana`) and `?viewer=` is whose personal views and pins order the strip |
 | `GET` | `/work/goals` | The company's **goals**, each with what its targets say. `?owner=` narrows to the goals a handle owns **or** contributes to, `?group=` to the free-text label they are filed under, and `?archived=true` includes the archived ones. Every percentage in the answer is computed from the work at read time and stored nowhere |
 | `GET` | `/work/catalogue` | The company's **vocabulary**: the task types a create may name and the workspace's custom-field declarations. `?archived=true` also lists what was retired. The types are the EFFECTIVE set — the six this build ships plus whatever the company declared, a declaration replacing a builtin of the same slug |
+| `GET` | `/work/people/{handle}` | One human's **own state**: their inbox (unread, read, snoozed, and which snoozes are now **due**), the order they mean to work in and who set it, and their pinned views. A person nobody has written yet answers the EMPTY state with `held: false`, not a 404 — every human starts this way and the first write is what creates the record |
 | `GET` | `/work/{id}` | One item with its description, thread, history and links. `{id}` is either the key (`ENG-42`) or the id — a person holds the first and every internal link the second |
 | `GET` | `/pages` | The company's own knowledge base: a filtered listing. Served only where `knowledge.backend` is `native` |
 | `GET` | `/pages/{id}` | One page with its body, comments, revision metadata, children and ancestor breadcrumb. `{id}` is the id, or `CONTAINER/Title` — the title matches the way the fleet CLAIMED it, so case and runs of whitespace are ignored and `ENG/deploy runbook` reaches a page called "Deploy  Runbook" |
@@ -1220,6 +1221,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `work_item` | `{id}` | `GET /work/{id}` — key or id. Answers `{task, comments, history, links}` plus the same coverage half |
 | `work_goals` | `{id, owner, group, archived}` | `GET /work/goals`. `id` asks for exactly one. Each goal carries its targets, and each target its own `progress` — a fraction from 0 to 1, or ABSENT when the target measures nothing: a `tasks` target whose tasks were all purged, a numeric one that starts where it ends. The goal's own `progress` is the unweighted mean of the targets that do measure something, and is likewise absent when none do — "nothing has happened" and "there is nothing to measure" are different facts. A `tasks` target also carries `finished_tasks` and `total_tasks`, because "7 of 12" is the number a person acts on |
 | `work_catalogue` | `{archived}` | `GET /work/catalogue`. Answers `{types, fields, policy_version, types_version, fields_version}` plus the coverage half. `policy_version` moves on every *fields* edit and is what a task's policy stamp records having validated against; a *types* edit does not move it, because the two are separate objects on separate subjects so an unrelated edit never invalidates every task's stamp |
+| `work_person` | `{handle}` | `GET /work/people/{handle}`. `due` is the snoozes whose time has come, REPORTED rather than promoted: putting one back in the unread list is a write, and a read that performed one would change fleet state from a path with no operation id and no record. `priorities_set_by` is who last set the queue when it was not this person, which is how a lead's authority is made visible — every notification this domain carries is task-shaped, so one attached to a person record would render no card and reach nobody |
 | `work_views` | `{container, viewer}` | `GET /work/views`. `container` is the strip's own — `workspace`, `project:ENG`, `unit:engineering`, `person:ana` — and it is REQUIRED, because a strip belongs to exactly one. `viewer` is whose personal views appear and whose pins come first; absent is the shared strip. Every row carries `builtin`, which is what tells the three (five, on a sprinting project) nobody saved from the ones somebody did: a builtin row has no `id`, so there is nothing to rename, protect, rank or pin. `params` is the saved query in `work_items`' own parameter names, so a caller runs a view by handing them straight back |
 
 **Every tracker answer carries how far this node had got, and both halves
@@ -1313,8 +1315,9 @@ The **same tools a seat holds**, not a parallel implementation: `list_work_items
 refusal are each written once — two copies of "file an item" drift on exactly
 the parts nobody looks at, and only one of the two is ever tested.
 
-Plus **five no seat is given**: `list_work_views`, `save_work_view`,
-`list_work_goals`, `write_work_goal` and `write_work_catalogue`. A view is furniture — a name, a shape
+Plus **nine no seat is given**: `list_work_views`, `save_work_view`,
+`list_work_goals`, `write_work_goal`, `write_work_catalogue`, `get_person`,
+`mark_inbox`, `set_pins` and `set_priorities`. A view is furniture — a name, a shape
 and a filter, arranged so a person finds the same question tomorrow — and a
 seat's job is the work rather than the furniture around it. A goal is an
 outcome a *person* commits the company to, with owners who report on it; a seat
@@ -1323,7 +1326,9 @@ takes no progress argument at all, because there is nowhere to put one. And the
 catalogue is the company's own vocabulary: a seat adding a type so its own
 create succeeds is a seat editing the rules it is judged by, and the refusal it
 was working around is the signal a person needs to see — which is why reading
-the catalogue *is* a seat's and writing it is not.
+the catalogue *is* a seat's and writing it is not. And a person's record is a
+HUMAN's: a seat has a mailbox — the durable subscription the engine attaches
+when it acquires the seat — and nothing on a person's record describes one.
 
 Each tool appears only where its half of the company is native: a company on
 `tracker.backend: jira` gets the page tools and not the work tools, and one on

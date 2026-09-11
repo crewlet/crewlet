@@ -181,6 +181,10 @@ func (stubWorkReader) Catalogue(context.Context, tracker.CatalogueQuery) (tracke
 	return tracker.CatalogueAnswer{}, nil
 }
 
+func (stubWorkReader) Person(context.Context, tracker.PersonQuery, time.Time) (tracker.PersonState, error) {
+	return tracker.PersonState{}, nil
+}
+
 type stubWorkWriterT struct{}
 
 func stubWorkWriter(builtin.Actor) builtin.WorkWriter { return stubWorkWriterT{} }

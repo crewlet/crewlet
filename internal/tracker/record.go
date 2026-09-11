@@ -1057,10 +1057,17 @@ type Favorite struct {
 
 // Person is one human's own state: their inbox, their ordering and their pins.
 //
-// The inbox fields are written ONLY by the token bound to that human's seat;
-// the pins and favourites are human-only; the priorities may also be written
-// by a lead or above for another handle, and that write is the one that
-// produces a "prioritised" notification.
+// The inbox fields and the pins are written ONLY on behalf of the person whose
+// they are; the priorities may ALSO be written by a lead for somebody in their
+// line, which is the one authority here that reaches across people. See
+// person.go for why that is three verbs rather than one.
+//
+// A LEAD'S PRIORITY WRITE IS STAMPED rather than notified. Every [Notify] this
+// domain carries is task-shaped — its [Snapshot] is a key, a project and a
+// title — so a person record has no card to render and a notification attached
+// to one would reach nobody. What makes the authority visible instead is
+// [Person.PrioritiesSetBy]: a person who starts the day on work they did not
+// choose can see who chose it.
 type Person struct {
 	V       int    `json:"v"`
 	Version uint64 `json:"version"`
@@ -1086,6 +1093,14 @@ type Person struct {
 	Priorities     []string   `json:"priorities,omitempty"`
 	PinnedViews    []string   `json:"pinned_views,omitempty"`
 	Favorites      []Favorite `json:"favorites,omitempty"`
+
+	// PrioritiesSetBy is WHO last set this list when it was not the person
+	// themselves, and empty when it was. It is how a lead's authority is
+	// made visible — see the type doc — and it is cleared by the person's
+	// own next write, because taking your queue back is the gesture that
+	// says you have seen it.
+	PrioritiesSetBy string    `json:"priorities_set_by,omitempty"`
+	PrioritiesSetAt time.Time `json:"priorities_set_at,omitzero"`
 
 	UpdatedAt time.Time `json:"updated_at"`
 

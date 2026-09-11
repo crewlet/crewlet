@@ -35,6 +35,12 @@ type OperatorDeps struct {
 	Work      WorkDeps
 	Pages     PageDeps
 	Knowledge KnowledgeSearcher
+
+	// Leads answers whether one handle leads another, which is the one
+	// authority over a person's record that reaches across people. Nil
+	// resolves nothing, which degrades to "your own only" rather than to
+	// a hole — see [Leads].
+	Leads Leads
 }
 
 // OperatorTools is the catalogue for one operator surface.
@@ -66,6 +72,10 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		{&writeWorkGoal{deps: work}, work.GoalWriter != nil},
 		{&getWorkCatalogue{deps: work}, work.Reader != nil},
 		{&writeWorkCatalogue{deps: work}, work.CatalogueWriter != nil},
+		{&getPerson{deps: work}, work.Reader != nil},
+		{&setPriorities{deps: work, leads: deps.Leads}, work.PersonWriter != nil},
+		{&setPins{deps: work}, work.PersonWriter != nil},
+		{&markInbox{deps: work}, work.PersonWriter != nil},
 		{&listPages{deps: pages}, pages.Reader != nil},
 		{&getPage{deps: pages}, pages.Reader != nil},
 		{&writePage{deps: pages}, pages.Writer != nil},

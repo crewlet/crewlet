@@ -88,6 +88,14 @@ export function SeatScreen({ handle }: { handle: string }) {
     { enabled: tab === "overview" || tab === "model" },
   );
   const memory = useQuery("agent_memory", { id: handle }, { enabled: tab === "memory" });
+  // A PERSON RECORD IS A HUMAN'S. A seat has a MAILBOX — the durable
+  // subscription the engine attaches when it acquires the seat — and nothing
+  // on a person's record describes one, so this is read only for a human.
+  const person = useQuery(
+    "work_person",
+    { handle },
+    { enabled: tab === "overview" && seat?.kind === "human", pollMs: 60_000 },
+  );
   const spend = useQuery(
     "tokens",
     { agent_role: seat?.name ?? "", since_days: 7, recent_turns: 50 },
@@ -234,6 +242,43 @@ export function SeatScreen({ handle }: { handle: string }) {
           { value: "access", label: "Access", icon: "key" },
         ]}
       />
+
+      {tab === "overview" && human && person.data?.held && (
+        <Panel title="Their day" icon="check" subtitle="Read-only here: an inbox is moved on by the person whose it is, through their own assistant.">
+          <StatRow cols={3}>
+            <Stat
+              icon="inbox"
+              label="Unread"
+              value={person.data.unread?.length ?? 0}
+              sub={
+                person.data.due?.length
+                  ? `${person.data.due.length} snoozed and now due`
+                  : "nothing snoozed is due"
+              }
+            />
+            <Stat
+              icon="layers"
+              label="Queue"
+              value={person.data.priorities?.length ?? 0}
+              // WHO CHOSE IT is the one thing a queue cannot say for
+              // itself. A lead may set what somebody in their line does
+              // next, and a person who starts the day on work they did
+              // not choose should be able to tell.
+              sub={
+                person.data.priorities_set_by
+                  ? `set by ${person.data.priorities_set_by}`
+                  : "their own order"
+              }
+            />
+            <Stat
+              icon="flag"
+              label="Pinned views"
+              value={person.data.pinned_views?.length ?? 0}
+              sub={`${person.data.favorites?.length ?? 0} starred`}
+            />
+          </StatRow>
+        </Panel>
+      )}
 
       {tab === "overview" && (
         <>

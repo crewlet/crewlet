@@ -152,6 +152,10 @@ func (emptyWork) Catalogue(context.Context, tracker.CatalogueQuery) (tracker.Cat
 	return tracker.CatalogueAnswer{}, nil
 }
 
+func (emptyWork) Person(context.Context, tracker.PersonQuery, time.Time) (tracker.PersonState, error) {
+	return tracker.PersonState{}, nil
+}
+
 type emptyPages struct{}
 
 func (emptyPages) List(context.Context, pages.Filter, statelog.ReadLevel) (pages.Listing, error) {

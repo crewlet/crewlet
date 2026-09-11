@@ -173,6 +173,12 @@ func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 			"project files its deferral where no project-scoped probe looks",
 			task.ID)
 	}
+	// BEFORE THE MINT, because the catalogue check runs inside it. The
+	// other two defaults below cannot: they are applied after the key is
+	// minted and nothing validates them.
+	if task.Type == "" {
+		task.Type = DefaultTaskType
+	}
 
 	n, minted, err := w.mintKey(ctx, stepID(opID, "counter"), task.Project, 1,
 		func(tx *sql.Tx) error { return refuseCreate(ctx, tx, task) })
@@ -452,6 +458,12 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 		return WriteResult{}, fmt.Errorf("tracker: a promotion mints no subtask "+
 			"id — it is a uuid5 over item %s, which is what makes a retry "+
 			"re-derive the same subtask rather than a second one", itemID)
+	}
+	// THE SAME DEFAULT AS A PLAIN CREATE, and for the same reason: a
+	// checklist item carries no type, so a promotion that named none would
+	// be refused by the catalogue check inside the mint.
+	if subtask.Type == "" {
+		subtask.Type = DefaultTaskType
 	}
 
 	var parent Task

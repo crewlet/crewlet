@@ -18,14 +18,16 @@ import (
 // almost entirely about turning a query string into a Filter, and a test that
 // only checked the rows would pass with every filter dropped.
 type stubWork struct {
-	query     tracker.Query
-	answer    tracker.Answer
-	detail    tracker.TaskDetail
-	views     tracker.ViewQuery
-	listing   tracker.ViewListing
-	goalQuery tracker.GoalQuery
-	goals     tracker.GoalListing
-	err       error
+	query       tracker.Query
+	answer      tracker.Answer
+	detail      tracker.TaskDetail
+	views       tracker.ViewQuery
+	listing     tracker.ViewListing
+	goalQuery   tracker.GoalQuery
+	goals       tracker.GoalListing
+	personQuery tracker.PersonQuery
+	person      tracker.PersonState
+	err         error
 }
 
 func (s *stubWork) Views(_ context.Context, q tracker.ViewQuery) (tracker.ViewListing, error) {
@@ -40,6 +42,11 @@ func (s *stubWork) Goals(_ context.Context, q tracker.GoalQuery) (tracker.GoalLi
 
 func (s *stubWork) Catalogue(context.Context, tracker.CatalogueQuery) (tracker.CatalogueAnswer, error) {
 	return tracker.CatalogueAnswer{}, nil
+}
+
+func (s *stubWork) Person(_ context.Context, q tracker.PersonQuery, _ time.Time) (tracker.PersonState, error) {
+	s.personQuery = q
+	return s.person, s.err
 }
 
 func (s *stubWork) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tracker.Answer, error) {

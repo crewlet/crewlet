@@ -1163,6 +1163,46 @@ export interface WorkCatalogueAnswer {
   incomplete?: WorkIncomplete;
 }
 
+/** One entry in a person's inbox, with the log position it was at. */
+export interface WorkInboxEntry {
+  record_id: string;
+  position: number;
+  /** On a snooze, when it comes back. */
+  until?: string;
+}
+
+/** One human's own state.
+ *
+ *  `held` is false for somebody nobody has written yet, which is an EMPTY
+ *  state rather than a missing one: every human starts with no inbox, no pins
+ *  and no priorities, and the first write is what creates the record. */
+export interface WorkPersonState {
+  handle: string;
+  unread?: WorkInboxEntry[];
+  read?: WorkInboxEntry[];
+  snoozed?: WorkInboxEntry[];
+  /** Snoozes whose time has come. REPORTED, never promoted — putting one back
+   *  is a write, and a read that performed one would change fleet state. */
+  due?: WorkInboxEntry[];
+  primary_reasons?: string[];
+  priorities?: string[];
+  pinned_views?: string[];
+  favorites?: { kind: string; id: string }[];
+  /** Who last set the queue when it was not this person, and empty when it
+   *  was theirs. Their own next change clears it. */
+  priorities_set_by?: string;
+  priorities_set_at?: string;
+  seen_through?: { stream: string; generation: number; seq: number };
+  version: number;
+  held: boolean;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
 export interface WorkComment {
   id: string;
   task: string;
@@ -1726,6 +1766,7 @@ export interface QueryMap {
   work_views: WorkViewsAnswer;
   work_goals: WorkGoalsAnswer;
   work_catalogue: WorkCatalogueAnswer;
+  work_person: WorkPersonState;
   pages: PagesAnswer;
   page: PageDetail;
   containers: { containers: PageContainer[] };

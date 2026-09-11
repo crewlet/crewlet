@@ -2053,6 +2053,13 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 				return writer.As(actor.Handle, actor.Kind,
 					tracker.Provenance{OperatorID: actor.OperatorID})
 			},
+			// AND THE PERSON WRITER. Who may write what is the
+			// tracker's own rule; what this surface supplies is the
+			// identity it is judged against.
+			PersonWriter: func(actor builtin.Actor) builtin.PersonWriter {
+				return writer.As(actor.Handle, actor.Kind,
+					tracker.Provenance{OperatorID: actor.OperatorID})
+			},
 			Actor: opsmcp.WorkActor,
 			Await: e.WaitCommitted,
 		}
@@ -2071,7 +2078,40 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 	if e.Knowledge() != nil {
 		opts.Knowledge = operatorKnowledge{engine: e}
 	}
+	// THE LEAD RELATION, which the tracker deliberately does not derive:
+	// it holds no org chart, and one it derived would be a second opinion
+	// about the hierarchy.
+	opts.Leads = leadsOf(e)
 	return opsmcp.New(opts)
+}
+
+// leadsOf answers whether one handle leads another, walking the chart's own
+// management chain.
+//
+// ANY ANCESTOR, not just the direct manager: a founder leads everybody, and an
+// authority that stopped at one level would make "a lead may set what somebody
+// in their line does next" mean "a lead may, for the people directly under
+// them" — which is not what a line is.
+//
+// A HANDLE THIS BUILD CANNOT RESOLVE ANSWERS FALSE, which is the conservative
+// direction: the write is then refused unless it is the person's own.
+func leadsOf(e *engine.Engine) builtin.Leads {
+	return func(_ context.Context, actor, handle string) bool {
+		c := e.Company()
+		if c == nil || c.Org == nil || actor == "" || actor == handle {
+			return false
+		}
+		seat := c.Org.SeatByHandle(handle)
+		if seat == nil {
+			return false
+		}
+		for _, manager := range c.Org.Ancestors(seat) {
+			if manager.Handle() == actor {
+				return true
+			}
+		}
+		return false
+	}
 }
 
 // reservedFor is the containers an operator's assistant may not write to

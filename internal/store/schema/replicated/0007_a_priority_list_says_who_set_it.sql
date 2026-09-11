@@ -1,0 +1,31 @@
+-- A person's priority list records WHO set it, when that was not them.
+--
+-- # Why this needs a column at all
+--
+-- A lead may set what somebody in their line does next — the one authority
+-- over a person's record that reaches across people, and what a lead is for.
+-- A lead SILENTLY re-ordering somebody's queue is a person who starts the day
+-- on work they did not choose and cannot tell why, so the authority has to be
+-- visible on the thing they are already looking at.
+--
+-- # Why not a notification
+--
+-- Every notification this domain carries is TASK-SHAPED: its snapshot is a
+-- key, a project and a title, and the recipient derivation reads the task's
+-- own assignee, watchers and leads. A person record has none of that, so a
+-- notification attached to one renders no card and reaches nobody. The stamp
+-- is the whole mechanism.
+--
+-- # Why two columns rather than one
+--
+-- "Who" and "when" answer different questions and a person asks the second
+-- one — a list set this morning and one set six weeks ago say different things
+-- about whether it is still what the lead meant. Both are NOT NULL with
+-- defaults, because the ordinary state is a person's own list and an empty
+-- handle IS that state rather than a missing value.
+--
+-- No index: this is read only as part of the person's own row, which the
+-- primary key already reaches.
+
+ALTER TABLE tracker_persons ADD COLUMN priorities_set_by TEXT NOT NULL DEFAULT '';
+ALTER TABLE tracker_persons ADD COLUMN priorities_set_at INTEGER NOT NULL DEFAULT 0;
