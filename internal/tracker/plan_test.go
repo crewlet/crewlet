@@ -135,7 +135,16 @@ func registeredQueries() map[string]map[string]any {
 		"several keys":      {"key": "ENG-1,ENG-7"},
 		"tagged":            {"container": "project:P01", "tag": "urgent"},
 		"blocked":           {"container": "project:P01", "blocked": "true"},
-		"a field value":     {"container": "project:P01", "f.impact": "high"},
+		// ONE REGISTERED QUERY PER TYPED COLUMN, because the four
+		// partial indexes on tracker_field_values are one per column and
+		// a fixture that only ever filtered on text would leave three of
+		// them claimed by nothing. The type each ref resolves to is
+		// [planFields]' own, keyed on the ref's name.
+		"a text field value":   {"container": "project:P01", "f.owner": "platform"},
+		"a number field value": {"container": "project:P01", "f.effort": "gt:5"},
+		"a date field value":   {"container": "project:P01", "f.ship": "lt:2031-06-30"},
+		"a choice field value": {"container": "project:P01", "f.impact": "o-high"},
+		"a field is unset":     {"container": "project:P01", "f.effort": "null"},
 
 		// THE WORKSPACE-SCOPE VARIANTS, which is where a filter has to
 		// carry the whole query: inside a project the container seek
@@ -209,18 +218,6 @@ func dutyReads() map[string]struct {
 		"one tag's tasks": {
 			`SELECT task_id FROM tracker_task_tags
 			 WHERE project_key = ? AND slug = ?`, []any{"P01", "tag-1"}},
-		"a field's text values": {
-			`SELECT task_id FROM tracker_field_values
-			 WHERE hidden = 0 AND field_id = ? AND text = ?`, []any{"f-1", "high"}},
-		"a field's numeric values": {
-			`SELECT task_id FROM tracker_field_values
-			 WHERE hidden = 0 AND field_id = ? AND num > ?`, []any{"f-1", 0}},
-		"a field's date values": {
-			`SELECT task_id FROM tracker_field_values
-			 WHERE hidden = 0 AND field_id = ? AND at > ?`, []any{"f-1", 0}},
-		"a field's references": {
-			`SELECT task_id FROM tracker_field_values
-			 WHERE hidden = 0 AND field_id = ? AND ref = ?`, []any{"f-1", "x"}},
 	}
 }
 
@@ -320,11 +317,28 @@ func planStore(t *testing.T) *store.DB {
 				{`INSERT INTO tracker_task_deps
 					(blocker_id, task_id, blocker_open, cleared_at) VALUES (?,?,?,?)`,
 					[]any{fmt.Sprintf("t-%04d", (i+1)%400), id, i % 2, int64(i)}},
+				// ONE ROW PER DECLARED FIELD, under the ids
+				// [planFields] resolves to — a fixture whose only
+				// field id is one no registered query names leaves
+				// the planner nothing to seek on.
 				{`INSERT INTO tracker_field_values
-					(task_id, field_id, seq, kind, num, text, at, ref)
-					VALUES (?,?,?,?,?,?,?,?)`,
-					[]any{id, "f-1", 0, "text", float64(i % 97),
-						fmt.Sprintf("v-%d", i%211), int64(i), fmt.Sprintf("r-%d", i%59)}},
+					(task_id, field_id, seq, kind, hidden, text)
+					VALUES (?,?,?,?,0,?)`,
+					[]any{id, "field-owner", 0, FieldValueNative,
+						fmt.Sprintf("v-%d", i%211)}},
+				{`INSERT INTO tracker_field_values
+					(task_id, field_id, seq, kind, hidden, num)
+					VALUES (?,?,?,?,0,?)`,
+					[]any{id, "field-effort", 0, FieldValueNative, float64(i % 97)}},
+				{`INSERT INTO tracker_field_values
+					(task_id, field_id, seq, kind, hidden, at)
+					VALUES (?,?,?,?,0,?)`,
+					[]any{id, "field-ship", 0, FieldValueNative, int64(i)}},
+				{`INSERT INTO tracker_field_values
+					(task_id, field_id, seq, kind, hidden, ref)
+					VALUES (?,?,?,?,0,?)`,
+					[]any{id, "field-impact", 0, FieldValueNative,
+						fmt.Sprintf("r-%d", i%59)}},
 			} {
 				if _, err := tx.ExecContext(t.Context(), statement.sql, statement.args...); err != nil {
 					return err
@@ -440,14 +454,28 @@ func indexesOn(t *testing.T, db *store.DB, tables []string) []string {
 // test is which index the planner reaches for, and a filter on a text field
 // and one on a number field produce the same SHAPE of clause against two
 // different columns. The fixture declares the type it means.
+// planFieldTypes is what each ref in this fixture is declared as.
+//
+// A TYPE PER REF, because the value column a filter compares is the field's
+// DECLARED type's — so a fixture that made every field text would exercise one
+// of the four partial indexes and claim the other three by nothing.
+var planFieldTypes = map[string]FieldType{
+	"owner":  FieldText,
+	"effort": FieldNumber,
+	"ship":   FieldDate,
+	"impact": FieldDropdown,
+}
+
 func planFields(q Query) map[string]resolvedField {
 	out := map[string]resolvedField{}
 	refs := map[string]bool{}
 	collectFieldRefs(q, refs)
 	for ref := range refs {
-		out[ref] = resolvedField{
-			ID: "field-" + ref, Slug: ref, Type: FieldText,
+		kind, known := planFieldTypes[ref]
+		if !known {
+			kind = FieldText
 		}
+		out[ref] = resolvedField{ID: "field-" + ref, Slug: ref, Type: kind}
 	}
 	return out
 }

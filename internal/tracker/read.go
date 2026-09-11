@@ -250,9 +250,21 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 		// `sort=f.<slug>` term is a JOIN onto the field's own values and
 		// the field is only known once the catalogue has been read.
 		terms := sortTerms(q, fields)
+		// AND THE PAGE BOUNDARY IS THE ROW READ'S ALONE — see
+		// [pageClause]. The hint and the totals are about the whole
+		// matched set, and neither carries a sort join.
+		page, pageArgs, err := pageClause(q, fields)
+		if err != nil {
+			return err
+		}
+		rowWhere, rowArgs := andPage(where, args, page, pageArgs)
 		if q.GroupBy != "" {
 			// A GROUPED ANSWER IS A DIFFERENT SHAPE, and the flat
 			// rows stay empty — see [Answer.Groups].
+			// A GROUPED ANSWER MINTS NO CURSOR AND TAKES NONE —
+			// see [Answer.Groups] — so it reads the unpaged
+			// predicate, which is also what its per-column counts
+			// are over.
 			groups, err := readGroups(ctx, tx, q, fields, where, args, terms)
 			if err != nil {
 				return err
@@ -261,7 +273,7 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 			answer.GroupsDropped = groups.Dropped
 			answer.GroupsOverlap = groups.Overlap
 		} else {
-			rows, cursor, err := readTasks(ctx, tx, where, args, terms, limit)
+			rows, cursor, err := readTasks(ctx, tx, rowWhere, rowArgs, terms, limit)
 			if err != nil {
 				return err
 			}
@@ -636,6 +648,39 @@ func compile(q Query, now time.Time, fields map[string]resolvedField) (string, [
 		where = append(where, "("+strings.Join(branches, " OR ")+")")
 	}
 
+	// THE SUBTASK MODE, and it is a predicate on the ROOT rather than on
+	// the row.
+	//
+	// `collapsed` and `expanded` filter ROOT tasks and let their subtrees
+	// ride along unfiltered; `separate` filters every task on its own.
+	// That is [SubtaskMode]'s own contract, and the difference between the
+	// first two is a RENDER hint — both answer the same set, and the
+	// caller folds or does not.
+	//
+	// WRITTEN AS A SELF-SCOPED SUBQUERY, with the predicate built so far
+	// repeated inside it. The inner `tracker_tasks t` shadows the outer
+	// alias, so every `t.` in that predicate binds to the inner row and
+	// nothing has to be rewritten — which is what makes this possible at
+	// all without an alias-parameterised compiler.
+	//
+	// AND IT DOES NOT APPLY WHEN THE CALLER ASKED FOR A SUBTREE: `parent`
+	// and `root` are questions ABOUT subtasks, so filtering their roots
+	// would answer the parent's siblings instead.
+	if q.Subtasks != SubtasksSeparate && q.Parent == "" && q.Root == "" &&
+		len(where) > 0 {
+
+		inner := strings.Join(where, " AND ")
+		rooted := "t.root_id IN (SELECT t.id FROM tracker_tasks t WHERE " +
+			inner + ")"
+		// THE ROW'S OWN TOMBSTONE STILL APPLIES: a removed subtask must
+		// not ride along on a live root, and the predicate above tests
+		// the ROOT's.
+		// THE ARGUMENTS ARE UNCHANGED: every placeholder built so far
+		// moves INTO the subquery, and the two clauses that replace them
+		// out here bind nothing.
+		where = []string{"t.removed_at IS NULL", rooted}
+	}
+
 	if q.Group != "" {
 		// A COLUMN FILTER IS A PREDICATE OF THE WHOLE QUERY, in its
 		// JOIN-FREE form: the count hint and the totals share this
@@ -650,14 +695,36 @@ func compile(q Query, now time.Time, fields map[string]resolvedField) (string, [
 		add(clause, values...)
 	}
 
-	if q.Cursor != "" {
-		clause, values, err := cursorClause(q, fields)
-		if err != nil {
-			return "", nil, err
-		}
-		add(clause, values...)
-	}
 	return strings.Join(where, " AND "), args, nil
+}
+
+// pageClause is the keyset resume, and it is DELIBERATELY NOT PART OF
+// [compile].
+//
+// A cursor says where this PAGE starts. The count hint and the totals are
+// about the whole matched set, and they share the compiled predicate — so a
+// cursor folded into it made page two's header report the sum of page two
+// ONWARDS. A number on a header that changes as somebody pages is the same
+// failure as one that changes as they scroll, which is what the totals were
+// built to avoid.
+//
+// It is also the only clause that can name a SORT JOIN's alias: a
+// `sort=f.<slug>` cursor compares `fs0.num`, and the hint and the totals carry
+// no join at all — so a cursor in the shared predicate made page two of every
+// custom-field-sorted query a hard error.
+func pageClause(q Query, fields map[string]resolvedField) (string, []any, error) {
+	if q.Cursor == "" {
+		return "", nil, nil
+	}
+	return cursorClause(q, fields)
+}
+
+// andPage folds the page boundary into a predicate for the ROW read alone.
+func andPage(where string, args []any, clause string, values []any) (string, []any) {
+	if clause == "" {
+		return where, args
+	}
+	return where + " AND " + clause, append(append([]any{}, args...), values...)
 }
 
 // handleClause builds a handle filter, with `none` as a real value.

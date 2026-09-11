@@ -837,7 +837,15 @@ func (q *Query) parseSort(p Params) error {
 	for _, value := range csv(p.String("sort")) {
 		descending := strings.HasPrefix(value, "-")
 		key := strings.TrimPrefix(value, "-")
-		if !slices.Contains(sortKeys, key) && !strings.HasPrefix(key, "f.") {
+		// A BARE `f.` IS NOT A FIELD. It resolves to nothing, so the term
+		// would be dropped when the order was compiled and the answer
+		// would come back in the DEFAULT order with nothing saying the
+		// caller's own ordering had been ignored.
+		if ref, ok := strings.CutPrefix(key, FieldKeyPrefix); ok && ref == "" {
+			return fmt.Errorf("tracker: %q names no field to sort on — a "+
+				"custom-field sort is %s<slug>", value, FieldKeyPrefix)
+		}
+		if !slices.Contains(sortKeys, key) && !strings.HasPrefix(key, FieldKeyPrefix) {
 			return fmt.Errorf("tracker: %q is not a sort key", value)
 		}
 		q.Sort = append(q.Sort, Sort{Key: key, Descending: descending})

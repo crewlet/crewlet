@@ -81,5 +81,28 @@ func ReadScope(q Query) statelog.ScopeSet {
 	for _, branch := range q.Any {
 		paths = append(paths, ReadScope(branch).Paths...)
 	}
+	// AND SO DOES A CUSTOM FIELD, because such a query is answered from
+	// the CATALOGUE as well as from the rows: `f.<slug>` resolves against
+	// the declarations, and a node holding a catalogue record it cannot
+	// decode would resolve the slug against a stale declaration — the
+	// wrong column, the wrong option id — and report the answer complete.
+	// The declarations live under the catalogue FAMILY, which no
+	// container's closure reaches.
+	if namesAField(q) {
+		paths = append(paths,
+			ScopeTerm{Kind: TermFamily, ID: string(KindCatalogue)}.Path())
+	}
 	return statelog.ScopeSet{Paths: paths}.Normalised()
+}
+
+// namesAField reports whether a query is answered from the catalogue too.
+//
+// EVERY PLACE A REF CAN APPEAR, which is [collectFieldRefs]' own set: a filter,
+// a sort, a total and a grouping axis all resolve one, and a closure that
+// covered only the filter would leave a board grouped on a stale declaration
+// reporting itself complete.
+func namesAField(q Query) bool {
+	refs := map[string]bool{}
+	collectFieldRefs(q, refs)
+	return len(refs) > 0
 }

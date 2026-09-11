@@ -1163,6 +1163,48 @@ func (a *Applier) explodeCatalogue(ctx context.Context, tx *sql.Tx, name string,
 		}
 		written += options
 	}
+	// AND THE VALUES FOLLOW THE DECLARATION'S ARCHIVE, in this same
+	// transaction.
+	//
+	// `hidden` on a value row is the DECLARATION's archived state, and
+	// nothing else propagated it: a task untouched since the archive kept
+	// `hidden = 0` for ever, so the DDL's own rule — "every filter and
+	// total adds `hidden = 0 AND kind <> 'foreign'`" — described a column
+	// that did not carry what it claimed. The filter is shielded anyway,
+	// because an archived field does not RESOLVE, but a row that lies
+	// about its own state is a trap for the next reader of it.
+	swept, err := a.settleFieldArchives(ctx, tx, catalogue.Fields)
+	if err != nil {
+		return 0, err
+	}
+	return written + swept, nil
+}
+
+// settleFieldArchives makes every value row agree with its declaration.
+//
+// BOTH DIRECTIONS, because an archive is one-way for the DECLARATION and this
+// column merely mirrors it: a field that was never archived must not have
+// hidden rows either, or a value written while a stale declaration was in
+// force would stay out of every filter for ever.
+func (a *Applier) settleFieldArchives(ctx context.Context, tx *sql.Tx,
+	fields []FieldDef) (int, error) {
+
+	written := 0
+	for _, field := range fields {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE tracker_field_values SET hidden = ?
+			WHERE field_id = ? AND hidden <> ?`,
+			boolInt(field.Archived), field.ID, boolInt(field.Archived))
+		if err != nil {
+			return 0, fmt.Errorf("tracker: settle %s's value rows against its "+
+				"declaration: %w", field.Slug, err)
+		}
+		n, err := affected(res)
+		if err != nil {
+			return 0, err
+		}
+		written += n
+	}
 	return written, nil
 }
 

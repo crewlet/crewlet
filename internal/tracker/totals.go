@@ -32,6 +32,17 @@ import (
 // "effort") would be a second name for one column and the two would drift: the
 // index comment names the column, so the grammar does too.
 //
+// # Why a total reads EVERY value and a sort reads one
+//
+// A multi-valued field is several rows per task, and the two operations want
+// opposite things from that. A SUM of it is the sum of the values — all of
+// them, or it is not a sum — while a SORT has to pick exactly one or the join
+// multiplies every task by its own value count and the page repeats rows. So
+// the aggregate here is unpinned and [sortTerms] pins `seq = 0`, and the
+// difference is the operations' rather than an oversight. `count` is the third
+// answer again: it counts TASKS, distinct, because "how many have this set" is
+// what a header means by it.
+//
 // # And why a custom field's total reads a different table
 //
 // A declared field's values live in `tracker_field_values`, keyed by field id

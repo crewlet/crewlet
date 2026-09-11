@@ -37,6 +37,21 @@ import (
 // document and written to no row: it is a value for a field nobody can filter
 // on yet, which is exactly what it is.
 //
+// # A DECLARATION THAT ARRIVES LATER DOES NOT BACKFILL
+//
+// The rows are written when the TASK is applied, from the declarations in
+// force at that instant — so a field declared after a task was last written
+// has no value row for it, even though the task's document carries one. That
+// is deliberate rather than a gap to sweep: backfilling would mean walking
+// every task in the company on every catalogue edit, inside the apply
+// transaction that edit commits in, and a company declaring a field would
+// stall its own fleet for as long as that walk took.
+//
+// What makes it harmless is that a value for a field nobody had declared was
+// never filterable in the first place: the filter could not resolve the ref.
+// The row appears on the task's next write, which is the first moment the
+// value means anything to anybody.
+//
 // # And why `hidden` is a column rather than a delete
 //
 // An ARCHIVED field's values leave the filterable set and stay on the
@@ -191,6 +206,21 @@ type fieldValueRow struct {
 	Text any
 	At   any
 	Ref  any
+}
+
+// MultiValued reports whether one task may hold several values of this field.
+//
+// IT DECIDES TWO THINGS and they pull in opposite directions: a board grouped
+// on such a field puts a task on EVERY column it chose (a tag board), and a
+// sort on one has to pick exactly ONE value or the join multiplies every task
+// by its own value count. Naming it once is what keeps the two agreeing about
+// which fields those are.
+func MultiValued(t FieldType) bool {
+	switch t {
+	case FieldLabels, FieldPeople, FieldRelationship:
+		return true
+	}
+	return false
 }
 
 // FieldValueColumn is the column a field type's values are filtered on.

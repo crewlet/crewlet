@@ -428,10 +428,24 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	if err != nil {
 		return failed(readFailure(ListWorkItemsTool, err)), nil
 	}
-	if len(answer.Rows) == 0 && answer.Complete {
+	// A GROUPED ANSWER HAS NO FLAT ROWS BY CONSTRUCTION, so the empty
+	// message has to ask about the groups too — a board with five columns
+	// reported as "no work items match" is a seat about to file the
+	// duplicate.
+	if len(answer.Rows) == 0 && len(answer.Groups) == 0 && answer.Complete {
 		return tools.Result{Output: "No work items match that filter."}, nil
 	}
 	result := map[string]any{"count": len(answer.Rows), "items": answer.Rows}
+	if len(answer.Groups) > 0 {
+		result["groups"] = answer.Groups
+		result["groups_overlap"] = answer.GroupsOverlap
+		if answer.GroupsDropped > 0 {
+			result["groups_dropped"] = answer.GroupsDropped
+		}
+	}
+	if len(answer.Totals) > 0 {
+		result["totals"] = answer.Totals
+	}
 	if answer.TotalHint > len(answer.Rows) {
 		result["total"] = answer.TotalHint
 	}

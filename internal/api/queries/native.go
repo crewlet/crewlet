@@ -118,6 +118,17 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	if answer.NextCursor != "" {
 		out["next_cursor"] = answer.NextCursor
 	}
+	// THE GROUPED HALF, and it is not optional decoration: a grouped
+	// answer has NO flat rows by construction, so a payload that carried
+	// only `items` renders a populated board as an empty one.
+	if answer.Groups != nil {
+		out["groups"] = answer.Groups
+		out["groups_dropped"] = answer.GroupsDropped
+		out["groups_overlap"] = answer.GroupsOverlap
+	}
+	if answer.Totals != nil {
+		out["totals"] = answer.Totals
+	}
 	if answer.Incomplete != nil {
 		// WHAT THE ANSWER COULD NOT ACCOUNT FOR, rendered rather than
 		// dropped: "this company has no work" is a thing a person acts

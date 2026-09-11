@@ -21,6 +21,10 @@ import (
 // ---- the fakes -------------------------------------------------------- //
 
 type fakeTracker struct {
+	// answer overrides what Tasks returns, for the cases that are about
+	// the SHAPE of an answer rather than about the rows in it.
+	answer *tracker.Answer
+
 	// query is the last one the list tool built, so a case can assert
 	// what a model's ARGUMENTS became — which is the half of this tool
 	// nothing looked at while it dropped a filter and refused a flag.
@@ -55,6 +59,9 @@ func (f *fakeTracker) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tr
 	f.query = q
 	if f.readErr != nil {
 		return tracker.Answer{}, f.readErr
+	}
+	if f.answer != nil {
+		return *f.answer, nil
 	}
 	answer := tracker.Answer{Complete: true, Level: statelog.ReadSession}
 	for _, d := range f.tasks {
@@ -629,5 +636,35 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 			t.Errorf("the operator surface does not serve %s, which every "+
 				"seat holds", name)
 		}
+	}
+}
+
+// A SEAT IS NOT TOLD A POPULATED BOARD IS EMPTY.
+//
+// A grouped answer has no flat rows by construction, and the empty message
+// asked only about those — so a board with five columns came back as "No work
+// items match that filter", and a seat that believed it would file the
+// duplicate.
+func TestAGroupedAnswerIsNotReportedAsEmpty(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	trk.answer = &tracker.Answer{
+		Groups: []tracker.Group{{
+			Key: "todo", Count: 12,
+			Rows: []tracker.TaskRow{{ID: "t-1", Key: "ENG-1"}},
+		}},
+		Complete: true,
+	}
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	got := callWork(t, reg, builtin.ListWorkItemsTool, map[string]any{
+		"project": "eng",
+	})
+	if strings.Contains(got.Output, "No work items match") {
+		t.Fatalf("a board with a populated column was reported empty: %s",
+			got.Output)
+	}
+	if !strings.Contains(got.Output, "groups") {
+		t.Fatalf("the grouped half never reached the model: %s", got.Output)
 	}
 }
