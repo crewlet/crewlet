@@ -19,7 +19,7 @@
 // integration, they had already drifted on the question that matters most
 // (see [Classify]).
 //
-// # The three things it owns
+// # The four things it owns
 //
 //   - The VOCABULARY a pass reports in: [Phase], [Actor], [Finding] and the
 //     [Report] they fold into. One vocabulary for every surface, because a
@@ -32,18 +32,33 @@
 //     their schedule, not ours.
 //   - The LOOP ([Worker]), a fleet singleton that runs each registered
 //     reconciler when it is due and records what it found.
+//   - The DISCONNECT: [AskTeardown] records that somebody asked for a surface
+//     to be taken away, [Worker.tearDown] drives the vendor's
+//     [Disconnector] until it succeeds, and [ObserveTeardown] folds the
+//     result. It is here rather than beside the reconcile because a
+//     disconnecting row IS a row — the same record, read by the same screen,
+//     with the same rule about what a phase means — and the transition that
+//     was written inline at the API set three of its fields and forgot three.
 //
-// # What it deliberately does not own
+// # What a disconnect is, and what it is NOT
 //
-// TEARDOWN. The control plane this was ported from has a tenant who
+// It is a REQUEST, made once, by a person who pressed a button and answered a
+// question about the accounts. That distinction is the whole of the design and
+// this file used to state it as "teardown is deliberately not owned here",
+// which had stopped being true and read as though an edit could destroy
+// accounts.
+//
+// It cannot. The control plane this was ported from has a tenant who
 // disconnects an integration, and a loop that then removes the identities it
 // provisioned. An engine has no tenant: an operator who deletes the `gitlab:`
 // block from the company document has said what the engine should stop
 // talking to, NOT that fifteen service accounts and everything attributable
-// to them should be destroyed. So a removed block makes this package forget
-// its state and nothing else; decommissioning accounts stays an explicit
-// gesture on the integration's own subcommand, where the operator types the flag
-// and reads what it is about to delete.
+// to them should be destroyed. So a removed block still makes this package
+// forget its state and nothing else — that path runs through
+// [Store.ForgetIntegration] and touches no third-party app. Removing accounts
+// needs [State.RemoveSeats], which only [AskTeardown] sets and only from a
+// question somebody was asked; the integration's own subcommand is the other
+// way, where the operator types the flag and reads what it is about to delete.
 package integration
 
 import "slices"
