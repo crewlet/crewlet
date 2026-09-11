@@ -115,20 +115,74 @@ func (a *Applier) explodeFieldValues(ctx context.Context, tx *sql.Tx,
 	for _, id := range sortedRawKeys(task.Fields) {
 		field, held := declared[id]
 		if !held {
-			// A VALUE FOR A FIELD NOBODY DECLARES stays on the
-			// document and reaches no row. It is not dropped — a
-			// declaration that arrives later re-explodes it on the
-			// task's next write — and it is not guessed at either:
-			// with no declared type there is no column to put it in.
+			// A VALUE FOR A FIELD NOBODY DECLARES IS FOREIGN, and it
+			// gets a row saying so rather than no row at all. With no
+			// declaration there is no type and therefore no column,
+			// so nothing here guesses one — the row carries the
+			// value's own JSON and is both hidden and kinded
+			// `foreign`, which is what [liveFieldValue] excludes it
+			// by. What it buys is that the value has a local
+			// representation: a cross-project move orphans values,
+			// and a task that still holds them must not read as a
+			// task that lost them. A declaration arriving later
+			// re-explodes it as native on the task's next write.
+			rows, err := writeForeignValue(ctx, tx, task.ID, id, task.Fields[id])
+			if err != nil {
+				return 0, err
+			}
+			written += rows
 			continue
 		}
-		rows, err := writeFieldValue(ctx, tx, task.ID, field, task.Fields[id])
+		rows, err := writeFieldValue(ctx, tx, task.ID, field,
+			task.Fields[id], task.Type)
 		if err != nil {
 			return 0, err
 		}
 		written += rows
 	}
 	return written, nil
+}
+
+// appliesTo reports whether a declaration covers a task of this type.
+//
+// AN EMPTY LIST IS EVERY TYPE. It is the declaration that says nothing about
+// types, not one that applies to none — and reading it the other way would
+// hide every value of every field nobody restricted.
+func appliesTo(field FieldDef, taskType string) bool {
+	if len(field.AppliesTo) == 0 {
+		return true
+	}
+	for _, name := range field.AppliesTo {
+		if strings.EqualFold(name, taskType) {
+			return true
+		}
+	}
+	return false
+}
+
+// writeForeignValue records one value whose field this project does not
+// declare.
+//
+// ONE ROW WHATEVER THE VALUE IS, because a foreign value has no type to
+// explode by: a list stays a list, in the JSON the document holds. It is
+// bounded already — [MaxFieldValueBytes] caps what a write may carry per
+// field — so nothing is cut here.
+func writeForeignValue(ctx context.Context, tx *sql.Tx, taskID, fieldID string,
+	raw json.RawMessage) (int, error) {
+
+	if len(raw) == 0 || string(raw) == "null" {
+		return 0, nil
+	}
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO tracker_field_values
+			(task_id, field_id, seq, kind, hidden, num, text, at, ref)
+		VALUES (?,?,0,?,1,NULL,?,NULL,NULL)`,
+		taskID, fieldID, FieldValueForeign, string(raw))
+	if err != nil {
+		return 0, fmt.Errorf("tracker: write %s's foreign value for field %s: %w",
+			taskID, fieldID, err)
+	}
+	return affected(res)
 }
 
 // declaredFields is every field a task's project can carry, keyed by id.
@@ -165,7 +219,7 @@ func declaredFields(ctx context.Context, tx *sql.Tx, project string) (
 
 // writeFieldValue writes one field's value as the rows its type calls for.
 func writeFieldValue(ctx context.Context, tx *sql.Tx, taskID string,
-	field FieldDef, raw json.RawMessage) (int, error) {
+	field FieldDef, raw json.RawMessage, taskType string) (int, error) {
 
 	values, err := fieldRows(field, raw)
 	if err != nil {
@@ -179,13 +233,20 @@ func writeFieldValue(ctx context.Context, tx *sql.Tx, taskID string,
 	if len(values) > MaxFieldValueSeq {
 		values = values[:MaxFieldValueSeq]
 	}
+	// HIDDEN IS TWO FACTS, not one. An ARCHIVED field's values stay on
+	// their tasks and leave the filterable set; so do the values of a
+	// field whose AppliesTo excludes this task's TYPE, which is what a
+	// task re-typed from bug to task leaves behind. Reading only the first
+	// left a `severity` filterable, groupable and totalled on a task the
+	// field does not apply to — a live value of a field that is not there.
+	hidden := field.Archived || !appliesTo(field, taskType)
 	written := 0
 	for seq, value := range values {
 		res, err := tx.ExecContext(ctx, `
 			INSERT INTO tracker_field_values
 				(task_id, field_id, seq, kind, hidden, num, text, at, ref)
 			VALUES (?,?,?,?,?,?,?,?,?)`,
-			taskID, field.ID, seq, FieldValueNative, boolInt(field.Archived),
+			taskID, field.ID, seq, FieldValueNative, boolInt(hidden),
 			value.Num, value.Text, value.At, value.Ref)
 		if err != nil {
 			return 0, fmt.Errorf("tracker: write %s's value for field %s: %w",
