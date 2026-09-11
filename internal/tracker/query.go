@@ -802,6 +802,28 @@ func (q *Query) parseGrouping(p Params) error {
 		return fmt.Errorf("tracker: group_by=project inside project %s puts "+
 			"every row in one group", q.Scope.Project)
 	}
+	// A COLUMN FILTER WITH NO AXIS IS REFUSED NAMING IT. `group=todo` is
+	// "one column of a board grouped by status" and means nothing without
+	// the board — ignoring it would answer the WHOLE set, which is the
+	// widest possible reading of a narrowing the caller asked for.
+	if q.Group != "" && q.GroupBy == "" {
+		return fmt.Errorf("tracker: group=%s was passed without group_by — a "+
+			"column with no axis is a narrowing that would silently answer "+
+			"everything", q.Group)
+	}
+	if q.Subgroup != "" && q.GroupBy2 == "" {
+		return fmt.Errorf("tracker: subgroup=%s was passed without group_by2, "+
+			"so there is no second axis for it to name", q.Subgroup)
+	}
+	if q.GroupLimit != 0 && q.GroupBy == "" {
+		return fmt.Errorf("tracker: group_limit bounds the rows one COLUMN " +
+			"carries and no group_by was passed — `limit` is what bounds a " +
+			"flat answer")
+	}
+	if q.GroupLimit < 0 {
+		return fmt.Errorf("tracker: group_limit is %d — a column carries a "+
+			"number of rows, and a negative one is not a bound", q.GroupLimit)
+	}
 	return nil
 }
 

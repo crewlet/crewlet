@@ -153,7 +153,11 @@ A **view** is a saved query with a shape. Three shapes:
 - **`list`** — rows, sorted and grouped, which is what you want when the
   question is "what is there".
 - **`board`** — columns by status group (or by any field), which is what you
-  want when the question is "what is moving".
+  want when the question is "what is moving". A board is `group_by=`, and what
+  comes back is **columns**: each one's count is over the whole set, never over
+  the rows it carries, so a column of four hundred says four hundred and hands
+  you twenty. Loading one further is `group=<value>`, which narrows the whole
+  query — including its totals.
 - **`calendar`** — by date, which is what you want when the question is "what
   is due".
 
