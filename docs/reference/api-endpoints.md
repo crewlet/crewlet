@@ -1634,8 +1634,9 @@ between them is a silent outage.
 `secret_present` is a claim about the **document**: an operator wrote a secret
 down. It is three-valued because the cases mean opposite things: `null` — this
 surface does not use one (Mattermost authenticates its websocket with the
-bot's own token); `false` — it does, and none is configured, which means the
-webhook route answers `503` to every delivery.
+bot's own token, and Atlassian receives no delivery to verify); `false` — it
+does, and none is configured, which means the webhook route answers `503` to
+every delivery.
 
 `secret_usable` is a claim about what this process **resolved**. A secret lives
 in the config as a `${VAR}`, so `secret_present: true, secret_usable: false` is
@@ -1662,6 +1663,33 @@ no unit.
 `routes` is the third of the same family: whether a **verified** delivery
 would wake a seat. The three fail independently, and an operator staring at a
 silent integration needs to know which half broke.
+
+It is `null` for a surface nothing ever arrives from, which is a different
+answer from `false` and the only honest one. **Atlassian** is that surface:
+an organization is where an agent's account is *created*, and the products
+that account then works in — Jira, Confluence — are separate surfaces with
+their own webhooks and their own parsers. Reporting `routes: false` there
+described a real fault ("deliveries are verified and stored and no parser
+turns them into work") about a surface that is not asked the question, beside
+a `secret_usable: false` for a secret it does not have. Both are `null` now,
+and so are `inbound_kind` and `inbound_path` — the row used to name
+`/webhooks/atlassian`, a route this engine does not serve, as the address to
+check a settings page against.
+
+Mattermost is `false` rather than `null` when it does not route: it has no
+inbound *address* because the engine dials out, but everything said in its
+team arrives, so a missing parser there is the outage the field is for.
+
+**A surface is asked about the source its deliveries are published as**, which
+is not always its own name. The **Forge relay** is the case: a Cloud event it
+relays is republished as the product it belongs to — `jira` or `confluence` —
+and parsed by that product's parser, so nothing is ever registered under
+`forge`. Asked about itself the relay answered `false` on every Cloud
+deployment for ever, and because the dashboard groups it under the Atlassian
+row, a tenant whose relay was feeding both products correctly carried a
+permanent *Forge relay — routes nowhere* beside the two rows saying they
+routed fine. It now answers `true` when either product's parser is registered;
+the finer answer is on those two rows, immediately below it.
 
 **Health is deliberately not inferred.** An idle Slack and a 401-ing Slack
 are indistinguishable in the event store, so silence is reported as "no

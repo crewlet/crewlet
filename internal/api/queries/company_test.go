@@ -1435,3 +1435,142 @@ func TestEveryIntegrationKindCanBeReported(t *testing.T) {
 		}
 	}
 }
+
+// THE ORGANIZATION IS NOT AN INBOUND SURFACE, AND ITS ROW MUST NOT PRETEND TO
+// BE ONE.
+//
+// Atlassian is where an agent's ACCOUNT is created; the products that account
+// works in are Jira and Confluence, each with its own webhook and its own
+// parser. Nothing is ever addressed to the organization, so it has no delivery
+// to verify and nothing to route.
+//
+// The row passed the organization API key as the `secret` argument — a
+// PROVISIONING credential where a delivery-verification secret belongs — so it
+// answered `secret_usable: false` (nothing verifies atlassian, because nothing
+// needs to) and `routes: false` (no parser routes it, because nothing
+// arrives). The dashboard drew those as "secret unresolved — every delivery is
+// refused" and "routes nowhere", on an organization whose key had just created
+// every agent's account. Both are null now: "not applicable", which is what
+// the three-valued contract is for and what the screen already hides.
+func TestTheAtlassianOrganizationClaimsNoIngress(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	cfg.Integrations.Atlassian = &config.Atlassian{
+		OrgID: "f1240761-c455-41b5-a7f5-4a64f9c6e729", APIKey: "${ATLASSIAN_API_KEY}",
+	}
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+		// BOTH KNOWN, so a null here is this surface's own answer rather
+		// than a process that could not say: with these nil every row
+		// reports null and the test would pass over the old code too.
+		Routed:     func(context.Context) []string { return []string{"jira"} },
+		Verifiable: func(context.Context) []string { return []string{"jira"} },
+	}, "integrations", nil))
+
+	rows, _ := body["integrations"].([]any)
+	var org map[string]any
+	for _, row := range rows {
+		if entry, _ := row.(map[string]any); entry["key"] == "atlassian" {
+			org = entry
+		}
+	}
+	if org == nil {
+		t.Fatal("the Atlassian organization has no row at all")
+	}
+	for _, field := range []string{"secret_present", "secret_usable", "routes"} {
+		if got := org[field]; got != nil {
+			t.Errorf("atlassian %s = %v, want null: the organization receives no "+
+				"delivery, so it has none to verify and none to route", field, got)
+		}
+	}
+	// AND IT ADVERTISES NO ADDRESS. The row's default was `webhook` at
+	// `/webhooks/<kind>`, so the organization named `/webhooks/atlassian`
+	// — a route webhooks.go does not register — as the address to check a
+	// settings page against.
+	for _, field := range []string{"inbound_kind", "inbound_path"} {
+		if got := org[field]; got != nil {
+			t.Errorf("atlassian %s = %v, want null: nothing is ever addressed "+
+				"to the organization, and no such route is served", field, got)
+		}
+	}
+}
+
+// THE FORGE RELAY ROUTES AS THE PRODUCT IT RELAYS, and the row has to answer
+// for that rather than for its own name.
+//
+// A Cloud event the Forge app relays is republished as `jira` or `confluence`
+// and parsed by that product's parser, so no parser is ever registered under
+// `forge`. Asked about itself the relay answered `routes: false` on every
+// Cloud deployment for ever — and the dashboard groups it under the Atlassian
+// row, so a tenant whose relay was feeding both products correctly carried a
+// permanent "Forge relay — routes nowhere" beside the two rows saying they
+// routed fine.
+func TestTheForgeRelayRoutesAsTheProductItRelays(t *testing.T) {
+	t.Parallel()
+	forgeRow := func(t *testing.T, routed []string) map[string]any {
+		t.Helper()
+		cfg := company(t)
+		cfg.Integrations.ForgeAppID = "ari:cloud:ecosystem::app/a1b2"
+		body := asMap(t, answer(t, queries.Sources{
+			Company: func() *config.Company { return cfg },
+			Routed:  func(context.Context) []string { return routed },
+		}, "integrations", nil))
+		rows, _ := body["integrations"].([]any)
+		for _, row := range rows {
+			if entry, _ := row.(map[string]any); entry["key"] == "forge" {
+				return entry
+			}
+		}
+		t.Fatal("the Forge relay has no row at all")
+		return nil
+	}
+
+	// The relay's own name is in nothing and never will be: this is the
+	// answer the old code gave for every Cloud company.
+	if got := forgeRow(t, []string{"jira", "confluence"})["routes"]; got != true {
+		t.Errorf("forge routes = %v with both products parsed, want true: a "+
+			"relayed event is published as the product it belongs to", got)
+	}
+	// ONE PRODUCT IS ENOUGH, because a relayed event is one or the other and
+	// the finer answer is on those two rows, immediately below this one.
+	if got := forgeRow(t, []string{"confluence"})["routes"]; got != true {
+		t.Errorf("forge routes = %v with Confluence parsed, want true", got)
+	}
+	// AND FALSE IS STILL REACHABLE, which is what stops this being "null
+	// anything awkward": with neither product parsed, a relayed delivery
+	// really does reach nobody.
+	if got := forgeRow(t, []string{"slack"})["routes"]; got != false {
+		t.Errorf("forge routes = %v with neither product parsed, want false", got)
+	}
+}
+
+// AND MATTERMOST STILL ANSWERS, which is the half that makes the rule a rule
+// rather than "null anything with no inbound address".
+//
+// Mattermost has no address either — the engine DIALS OUT — but it then
+// receives everything said in its team, and whether a parser turns that into
+// work for a seat is a real question with a real answer. Kind.Ingress cannot
+// tell the two apart; Kind.Ingests can.
+func TestMattermostStillReportsWhetherItRoutes(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	cfg.Integrations.Mattermost = &config.Mattermost{URL: "https://chat.example.com", Team: "acme"}
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+		Routed:  func(context.Context) []string { return []string{"mattermost"} },
+	}, "integrations", nil))
+
+	rows, _ := body["integrations"].([]any)
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		if entry["key"] != "mattermost" {
+			continue
+		}
+		if got := entry["routes"]; got != true {
+			t.Fatalf("mattermost routes = %v, want true: it ingests over a "+
+				"websocket and a parser routes it", got)
+		}
+		return
+	}
+	t.Fatal("mattermost has no row")
+}

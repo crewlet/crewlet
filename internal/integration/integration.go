@@ -163,3 +163,21 @@ func (k Kind) Ingress() Ingress {
 		return IngressNone
 	}
 }
+
+// Ingests reports whether anything ever arrives FROM this surface.
+//
+// NOT THE SAME QUESTION AS [Kind.Ingress], which says who keeps the inbound
+// ADDRESS current — and which answers None for two surfaces that could not be
+// more different. Mattermost has no address because the engine DIALS OUT, and
+// then receives everything said in its team; Atlassian has none because
+// nothing is ever addressed to an organization at all. It is where an agent's
+// account is CREATED, and the products that account then works in are Jira and
+// Confluence, each with its own surface, its own webhook and its own parser.
+//
+// The difference shows on the one screen an operator watches. "Deliveries are
+// verified and stored, and no parser turns them into work for a seat" is a
+// real warning about Mattermost and a meaningless one about Atlassian — which
+// reported it while its organization key was busy creating every agent's
+// account, beside a second badge saying the key had not resolved. Both were
+// answers to questions this surface is not asked.
+func (k Kind) Ingests() bool { return k != KindAtlassian }

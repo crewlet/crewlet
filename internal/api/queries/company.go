@@ -183,10 +183,23 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 			// reason: null means this node could not read the outcome
 			// events, and reporting that as 0 would say every delivery
 			// woke a seat on a node that cannot tell.
-			"skipped":      countOrNil(seen.skipped, kind),
-			"coalesced":    countOrNil(seen.coalesced, kind),
-			"inbound_kind": map[bool]string{true: "websocket", false: "webhook"}[kind == "mattermost"],
-			"inbound_path": inboundPath(kind),
+			"skipped":   countOrNil(seen.skipped, kind),
+			"coalesced": countOrNil(seen.coalesced, kind),
+		}
+		// WHERE A DELIVERY ARRIVES, and null where none ever does.
+		//
+		// The default used to be `webhook` at `/webhooks/<kind>`, which is
+		// the route for five of the eight and a fabrication for the rest.
+		// Atlassian is the one it fabricated: the organization receives
+		// nothing at all, so the row advertised `/webhooks/atlassian` — a
+		// path webhooks.go does not register and never has — for an
+		// operator to check their settings page against. See
+		// [integration.Kind.Ingests].
+		row["inbound_kind"], row["inbound_path"] = nil, nil
+		if integration.Kind(kind).Ingests() {
+			row["inbound_kind"] = map[bool]string{
+				true: "websocket", false: "webhook"}[kind == "mattermost"]
+			row["inbound_path"] = inboundPath(kind)
 		}
 		// Rendered as a relative time, so an absent one has to be absent
 		// rather than the zero instant — which would print as 1970.
@@ -195,8 +208,10 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		} else {
 			row["last_at"] = nil
 		}
-		if known {
-			row["routes"] = slices.Contains(routed, kind)
+		if sources := deliversAs(kind); known && len(sources) > 0 {
+			row["routes"] = slices.ContainsFunc(sources, func(source string) bool {
+				return slices.Contains(routed, source)
+			})
 		} else {
 			row["routes"] = nil
 		}
@@ -347,8 +362,18 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		// beside it: the block carries no `enabled` switch, because an
 		// organization key is either there to create accounts with or it
 		// is not.
-		add("atlassian", true,
-			boolPtr(strings.TrimSpace(in.Atlassian.APIKey) != ""),
+		// NO DELIVERY SECRET, AND NOTHING TO ROUTE. The organization key is
+		// a PROVISIONING credential — it creates accounts — and `secret`
+		// here means the value an inbound delivery is verified with, which
+		// this surface has because it receives no delivery at all. Passed as
+		// the key, the row reported `secret_usable: false` (nothing verifies
+		// atlassian, because nothing needs to) and `routes: false` (no parser
+		// routes it, because nothing arrives), which the dashboard drew as
+		// "secret unresolved — every delivery is refused" and "routes
+		// nowhere" over an organization whose key had just created every
+		// agent's account. Mattermost, the other surface with no inbound
+		// address, has passed nil here all along.
+		add("atlassian", true, nil,
 			map[string]any{
 				"deployment": in.Atlassian.DeploymentOrDefault(),
 				"org_id":     in.Atlassian.OrgID,
@@ -381,10 +406,43 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	return body, nil
 }
 
+// deliversAs names the sources a verified delivery at this surface arrives
+// under. For six of the nine rows it is the surface itself, and the other
+// three are the whole reason it exists rather than a `slices.Contains`.
+//
+// The question `routes` answers is whether a verified delivery would WAKE A
+// SEAT, and only a registered parser can. A surface is therefore asked about
+// the source its deliveries are published as, which is not always its own
+// name.
+func deliversAs(kind string) []string {
+	switch {
+	case kind == "forge":
+		// AN INGRESS PATH, NOT A SOURCE. A Cloud event relayed by the
+		// Forge app is republished as the PRODUCT it belongs to — jira or
+		// confluence, from forgeEvents — and parsed by that product's
+		// parser. So no parser is ever registered under "forge", and the
+		// relay answered `routes: false` on every Cloud deployment for
+		// ever. The dashboard groups it under the Atlassian row, so a
+		// tenant whose relay was feeding both products correctly carried a
+		// permanent "Forge relay — routes nowhere" beside them.
+		return []string{"jira", "confluence"}
+	case !integration.Kind(kind).Ingests():
+		// Nothing arrives, so there is nothing to route and `false` —
+		// "verified deliveries reach nobody" — is a fault report about a
+		// question this surface is not asked. See [integration.Kind.Ingests].
+		return nil
+	default:
+		return []string{kind}
+	}
+}
+
 // inboundPath is where a third-party app's deliveries arrive, so an operator can check
 // what they pasted into the third-party app's settings page against what this engine
 // actually serves. Static per integration: these are the routes webhooks.go
 // registers, and a disagreement between the two is a route nothing reaches.
+//
+// Asked only of a surface that INGESTS, which is what lets the default stand:
+// a kind reaching it has a `/webhooks/<kind>` route unless it is named above.
 func inboundPath(kind string) string {
 	switch kind {
 	case "mattermost":
