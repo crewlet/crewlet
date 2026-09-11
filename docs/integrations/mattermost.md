@@ -291,7 +291,10 @@ For every Mattermost-enabled agent seat the command:
 3. keeps its **display name** current (`{role name}{display_name_suffix}`) — read from the bot record rather than its user, because the display name lives on the bot and comparing against the user's nickname would report drift on every run;
 4. adds it to the **team** and to every configured **channel** — a bot only
    receives messages from channels it is a member of, so this is the step
-   that makes the integration work at all;
+   that makes the integration work at all. Membership is **read first**, so a
+   bot already in a team or a channel costs no request: this ran
+   unconditionally once, three writes per seat on every pass for ever, each
+   one answered with a duplicate error and discarded;
 5. mints its **personal access token** into the config's own `${VAR}`,
    write-through (Mattermost returns a token's value exactly once).
 
@@ -308,9 +311,13 @@ finish: a credential that is not a system admin, a team that does not exist,
 **false** on a fresh install, and both fail *late* — every bot created and
 joined, then nothing minted), and a loopback [Site URL](#the-site-url) on a
 server reached at a real address, which would leave every browser without
-live updates. Membership is **verified**, never inferred from a status code:
-Mattermost answers an add for an existing member with success, so a 4xx
-there is a real failure.
+live updates. Membership is **read**, never inferred from a status code. The second half
+of that sentence used to say Mattermost answers an add for an existing
+member with success, so a 4xx there is a real failure — which was never
+true: it answers `400 "This user is already a team member."` and the code
+swallowed it, which is exactly why nothing noticed the pass was writing on
+every run. The membership lists are now read and compared, so a duplicate
+add is not sent at all.
 
 A configured channel that **does not exist** is the one case that is a note
 rather than a failure. Half a fleet of bots joined and the run stopped is a

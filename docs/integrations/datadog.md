@@ -188,7 +188,31 @@ What is left is naming it on the monitors you care about:
 
 You can see what the engine wrote under **Integrations → Webhooks**. Editing it
 there is temporary: the next pass restores the definition above, which is what
-keeps the address correct when the deployment moves.
+keeps the address correct when the deployment moves. A definition that already
+matches is left alone rather than rewritten, so a converged pass writes nothing
+at Datadog at all.
+
+### What the reconcile reports
+
+Three states the pass reaches and, until recently, could say nothing about —
+each one leaving the surface reporting `ready` while alerts went nowhere:
+
+| What it found | What it reports | What clears it |
+|---|---|---|
+| No webhook was registered because this deployment has no inbound address | `ingress_blocked` | set `integrations.public_base_url` |
+| No webhook was registered because `webhook_token` resolved to nothing, or because this node has no keyring to seal one with | `credential_missing` | set `integrations.datadog.webhook_token`, or install `secrets.keys` |
+| A seat's service account exists but is **disabled** | `identity_failed` | re-enable it in Datadog |
+
+The last is the one worth knowing about. Disabling an account is exactly how a
+disconnect with account removal decommissions one, so a company that had run
+that and then reconnected looked fully provisioned while no seat could act. It
+is **reported rather than re-enabled**: undoing an operator's explicit
+decommission from a timer is not a decision this loop gets to make.
+
+A node with no keyring also no longer creates the accounts. It used to make a
+real Datadog service account per seat and then fail to record its key — so the
+account existed, nothing could authenticate as it, and the next pass made
+another one.
 
 ### The payload template
 

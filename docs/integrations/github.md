@@ -142,6 +142,21 @@ until the next apply re-resolves it. A company with **no** resolved seats
 logs `github_has_no_seat_identities`, because the integration is completely
 inert in that state and nothing else would say so.
 
+**A seat with no token here is not a broken seat.** On the current design each
+agent carries its own [GitHub App](#one-github-app-per-agent), and a seat that names
+no `mcp_env.github` credential is acting through it — so the reconcile reports
+that seat as *unclaimed* rather than as a failed identity, and the provisioning
+command prints it under "act through their own GitHub App" rather than under a
+list of things to fix. The three outcomes a seat can have are therefore
+**resolved** (a token named an account), **unclaimed** (no token, which is
+expected) and **refused** (a token this run could not turn into an account,
+and the only one that becomes a finding).
+
+That distinction was missing, and its absence was loud: every agent seat in a
+company on the app design was reported as a failed identity, permanently
+degraded, with the integration card saying each of them could receive no
+GitHub events while all of them were working.
+
 ### Human seats
 
 A human seat holds no tool credential. It is addressed by
