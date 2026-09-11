@@ -89,6 +89,10 @@ func (f *fakeTracker) Goals(context.Context, tracker.GoalQuery) (tracker.GoalLis
 	return tracker.GoalListing{}, nil
 }
 
+func (f *fakeTracker) Catalogue(context.Context, tracker.CatalogueQuery) (tracker.CatalogueAnswer, error) {
+	return tracker.CatalogueAnswer{}, nil
+}
+
 // as records the actor and hands back a writer bound to it, which is the
 // tracker's own rule: a writer acts as exactly one party.
 func (f *fakeTracker) as(actor builtin.Actor) builtin.WorkWriter {

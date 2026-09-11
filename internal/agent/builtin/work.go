@@ -56,6 +56,7 @@ type WorkReader interface {
 		level statelog.ReadLevel) (tracker.TaskDetail, error)
 	Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error)
 	Goals(ctx context.Context, q tracker.GoalQuery) (tracker.GoalListing, error)
+	Catalogue(ctx context.Context, q tracker.CatalogueQuery) (tracker.CatalogueAnswer, error)
 }
 
 // WorkWriter is what these tools need from the tracker's write side.
@@ -98,6 +99,10 @@ type WorkDeps struct {
 	// GoalWriter resolves the goal write side for one actor, and is the
 	// operator surface's alone for the same reason ViewWriter is.
 	GoalWriter func(actor Actor) GoalWriter
+
+	// CatalogueWriter resolves the workspace catalogue write side, and is
+	// the operator surface's alone for the reason the two above are.
+	CatalogueWriter func(actor Actor) CatalogueWriter
 
 	// Mentions resolves the handles a comment names, so a mention wakes
 	// the person the author meant. Nil resolves nothing, which degrades to

@@ -51,6 +51,7 @@ type WorkReader interface {
 		level statelog.ReadLevel) (tracker.TaskDetail, error)
 	Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error)
 	Goals(ctx context.Context, q tracker.GoalQuery) (tracker.GoalListing, error)
+	Catalogue(ctx context.Context, q tracker.CatalogueQuery) (tracker.CatalogueAnswer, error)
 }
 
 // PageReader is the knowledge read side this surface calls.
@@ -239,6 +240,23 @@ func (s Sources) workGoals(ctx context.Context, p Params) (any, error) {
 		out["incomplete"] = listing.Incomplete
 	}
 	return out, nil
+}
+
+// workCatalogue answers what a task may BE and what it may carry.
+//
+// ONE QUESTION rather than two, because every caller wants both: a screen
+// draws types and fields together, and a model told which types exist and not
+// which fields are required would file work that is refused on the next
+// breath.
+func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
+	answer, err := s.Work.Catalogue(ctx, tracker.CatalogueQuery{
+		Archived: p.Bool("archived", false),
+		Level:    statelog.ReadStale,
+	})
+	if err != nil {
+		return nil, unavailableIfBehind(err)
+	}
+	return answer, nil
 }
 
 // ---- pages ------------------------------------------------------------- //

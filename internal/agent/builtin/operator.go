@@ -64,6 +64,8 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		{&saveWorkView{deps: work}, work.ViewWriter != nil},
 		{&listWorkGoals{deps: work}, work.Reader != nil},
 		{&writeWorkGoal{deps: work}, work.GoalWriter != nil},
+		{&getWorkCatalogue{deps: work}, work.Reader != nil},
+		{&writeWorkCatalogue{deps: work}, work.CatalogueWriter != nil},
 		{&listPages{deps: pages}, pages.Reader != nil},
 		{&getPage{deps: pages}, pages.Reader != nil},
 		{&writePage{deps: pages}, pages.Writer != nil},

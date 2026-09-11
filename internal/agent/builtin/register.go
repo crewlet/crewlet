@@ -150,6 +150,10 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		{&createWorkItem{deps: deps.Work}, deps.Work.Writer != nil},
 		{&updateWorkItem{deps: deps.Work}, deps.Work.Writer != nil && deps.Work.Reader != nil},
 		{&commentOnWorkItem{deps: deps.Work}, deps.Work.Writer != nil && deps.Work.Reader != nil},
+		// READING THE CATALOGUE IS A SEAT'S, writing it is not: a create
+		// refuses a type the company has not declared, and a model that
+		// cannot read the catalogue can only guess at one.
+		{&getWorkCatalogue{deps: deps.Work}, deps.Work.Reader != nil},
 		{&listPages{deps: deps.Pages}, deps.Pages.Reader != nil},
 		{&getPage{deps: deps.Pages}, deps.Pages.Reader != nil},
 		{&writePage{deps: deps.Pages}, deps.Pages.Writer != nil},

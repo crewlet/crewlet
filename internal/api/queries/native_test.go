@@ -38,6 +38,10 @@ func (s *stubWork) Goals(_ context.Context, q tracker.GoalQuery) (tracker.GoalLi
 	return s.goals, s.err
 }
 
+func (s *stubWork) Catalogue(context.Context, tracker.CatalogueQuery) (tracker.CatalogueAnswer, error) {
+	return tracker.CatalogueAnswer{}, nil
+}
+
 func (s *stubWork) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tracker.Answer, error) {
 	s.query = q
 	return s.answer, s.err

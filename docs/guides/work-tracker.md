@@ -29,7 +29,7 @@ what people paste into chat, so it can never be ambiguous.
 | Field | What it is |
 |---|---|
 | **key** | `ENG-412`. Unique in practice, never reused. |
-| **type** | a per-project catalogue — task, bug, epic, whatever the company declared. |
+| **type** | from the workspace catalogue — see [below](#the-catalogue). A type the company has not declared is REFUSED at the create. |
 | **title**, **body** | the body is versioned; every save writes an immutable revision. |
 | **status** | one of `todo`, `in_progress`, `in_review`, `done`, `cancelled`, `closed`. |
 | **priority** | `none`, `low`, `normal`, `high`, `urgent`. |
@@ -61,6 +61,42 @@ Every turn an agent spends on a task adds to that task's own counters. That is
 what makes "what did this cost" a question about a piece of work rather than
 about a seat's month, and it is the number a founder actually wants when a
 task has been reopened four times.
+
+## The catalogue
+
+Two declarations, and they are the company's own vocabulary: what a task may
+**be**, and what it may **carry**.
+
+**Types.** Six ship with the engine — `task`, `bug`, `epic`, `story`, `spike`,
+`chore` — and every company has them before it declares anything, which is what
+lets a fresh company file its first task in its first minute. A declared
+catalogue **adds** to them; a declaration sharing a builtin's slug **renames**
+it, so a company can call a bug a defect without losing the tasks already filed
+under `bug`.
+
+A type is **refused at the create** if the company does not declare it. That is
+what stops `Bug`, `bugfix` and `BUG` from filing three types beside `bug` that
+every board then groups and filters on as if they were real. An **archived**
+type takes no new work and leaves the tasks already under it alone — which is
+the whole reason a type is archived rather than deleted.
+
+**Fields.** Custom fields are declared at the workspace and on a project, and a
+task's effective set is the union. A value is keyed by the field's **id**, not
+its slug, which is what lets a field move between the two keeping every stored
+value.
+
+Archiving a field is **one-way**. Its values leave the value table, so a field
+that came back under its old id would silently re-admit values validated
+against a definition nobody has seen for a year. Bringing one back means
+declaring a **new** field — a new id, and the same slug, because the slug is
+the word the company uses.
+
+Read it at `GET /work/catalogue`, or with `get_work_catalogue`, which every
+seat holds: a model that cannot read the catalogue can only guess at a type.
+Writing it is an **operator** gesture — `write_work_catalogue` — because a seat
+adding a type to make its own create succeed is a seat editing the rules it is
+judged by, and the refusal it was working around is the signal a person needs
+to see.
 
 ## Sprints and goals
 
@@ -152,7 +188,7 @@ correct board.
 
 ## What a seat can do
 
-Five tools, and they are deliberately few:
+Six tools, and they are deliberately few:
 
 | Tool | What it does |
 |---|---|
@@ -161,6 +197,7 @@ Five tools, and they are deliberately few:
 | `create_work_item` | file a task or a subtask |
 | `update_work_item` | change any field, with an optional `if_match` |
 | `comment_on_work_item` | add to the thread |
+| `get_work_catalogue` | the types a task may be and the fields it may carry |
 
 Three of those count as a **delivery**: create, update and comment. A turn
 woken by an assignment answers by moving the task, commenting on it, or filing
@@ -189,9 +226,10 @@ queries a seat's tools use, against this node's own copy. Every answer says how
 far behind that copy is.
 
 **Your own AI assistant** can reach the same tracker over MCP, at
-`/operator/mcp`. It serves the same five work tools above, two more no seat is
-given — `list_work_views` and `save_work_view` — the five page tools beside
-them and knowledge search — the seat's own implementations, with one
+`/operator/mcp`. It serves the same six work tools above, five more no seat is
+given — `list_work_views`, `save_work_view`, `list_work_goals`,
+`write_work_goal` and `write_work_catalogue` — the five page tools beside them
+and knowledge search — the seat's own implementations, with one
 field different: a write carries the **token's** own name as its author and the
 author kind `operator`. There is deliberately no way for the caller to name a seat to act
 as — a tracker whose author field is chosen by the writer is not an audit
