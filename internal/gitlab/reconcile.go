@@ -55,6 +55,25 @@ type Result struct {
 	// of project hooks does not, and an operator reading "webhook
 	// registered" cannot tell which they got.
 	HookedOn []string
+
+	// NoIngress says why this run left the instance with no delivery path
+	// at all, and is empty when it registered one.
+	//
+	// A SEPARATE FIELD rather than an empty [Result.Hooked], for the same
+	// reason [jira.Result.NoIngress] is one: an empty Hooked is also what a
+	// perfectly healthy run looks like from the outside, and
+	// [integration.Classify] over no findings is READY. So a company that
+	// never set integrations.public_base_url — which the reconcile loop
+	// feeds into every pass — had GitLab reported ready while the instance
+	// had nowhere to deliver to and not one merge request, pipeline or
+	// comment ever reached a seat. The note below said so to whoever ran
+	// the CLI; the dashboard, which is where a running company is watched,
+	// was told nothing.
+	//
+	// The zero value is "nothing to report", deliberately: a Result built
+	// anywhere but [Reconcile] must not invent an ingress problem.
+	NoIngress string
+
 	// NoKeyring is a pass this node could not run at all because it has
 	// nowhere to seal what provisioning creates.
 	//
@@ -430,11 +449,17 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		res.Hooked, res.HookedOn = target, hooked
 		res.Notes = append(res.Notes, notes...)
 	} else {
-		res.Notes = append(res.Notes,
-			"no webhook was registered: pass the deployment's public base URL "+
-				"to register one, or add it by hand — without it the instance "+
-				"delivers nothing and the integration looks idle rather than "+
-				"unconfigured")
+		// REPORTED, not just noted. The note is what the CLI prints and it
+		// already said the right words — "the integration looks idle rather
+		// than unconfigured" — about a pass whose own answer then made it
+		// look exactly that way: no findings, so [integration.Classify]
+		// reported READY on a company whose GitLab delivers nothing. See
+		// [Result.NoIngress].
+		res.NoIngress = "no webhook is registered on this GitLab, so merge " +
+			"requests, pipelines, issues and comments reach no seat: set " +
+			"integrations.public_base_url to this deployment's public address " +
+			"and the next pass registers one, or register it by hand"
+		res.Notes = append(res.Notes, res.NoIngress)
 	}
 
 	if err := opts.Sink.Flush(ctx); err != nil {
@@ -1353,9 +1378,6 @@ func gatedByTier(err error) bool {
 // to fix, and a cleanup error that replaced it would hide the cause behind
 // its consequence.
 func rollback(ctx context.Context, opts Options, minted map[string]mintedToken, cause error) error {
-	if len(minted) == 0 {
-		return cause
-	}
 	// DETACHED, because the failure may BE a cancelled context — and a
 	// rollback that inherits it does nothing at all, leaving every minted
 	// credential live.
@@ -1374,10 +1396,31 @@ func rollback(ctx context.Context, opts Options, minted map[string]mintedToken, 
 			problems = append(problems, fmt.Sprintf("%s: %v", handle, err))
 		}
 	}
+	// DISCARDED WHETHER OR NOT A SEAT TOKEN WAS MINTED, which is the whole
+	// of what this used to get wrong: it returned early on an empty `minted`
+	// map, and the seat tokens are not the only thing a pass records.
+	//
+	// [signingSecret] MINTS A WEBHOOK SIGNING SECRET and Records it before
+	// [ensureHooks] runs. So a pass over a company whose seats all Kept
+	// their tokens — the steady state, every few minutes, for ever — that
+	// then failed to write the hook left a FRESH secret sealed in the
+	// fleet's store while GitLab went on signing with the old one. Nothing
+	// ever recovered: the next pass resolves that sealed value, sees a
+	// non-empty secret and takes [SigningReuse], so it never mints again
+	// and never re-points the hook. Every delivery after the next config
+	// apply fails verification, from a pass that reported an error once and
+	// then looked healthy.
+	//
+	// Discard on a run that recorded nothing is a no-op by contract
+	// ([provision.TokenSink]), so this costs a run that failed before its
+	// first Record exactly nothing.
 	if err := opts.Sink.Discard(ctx); err != nil {
 		problems = append(problems, err.Error())
 	}
 	if len(problems) == 0 {
+		if len(minted) == 0 {
+			return cause
+		}
 		return fmt.Errorf("%w (the %d token(s) this run minted were revoked)",
 			cause, len(minted))
 	}

@@ -1617,7 +1617,7 @@ func TestAnUnsetSecretIsMintedIntoItsOwnVariable(t *testing.T) {
 	if sink.recorded["GH_SECRET"] == "" {
 		t.Fatalf("nothing was minted into the variable the config names: %v", sink.recorded)
 	}
-	if !sink.flushed {
+	if sink.flushes == 0 {
 		t.Error("the minted secret was never flushed, so it exists at GitHub " +
 			"and nowhere else")
 	}
@@ -1659,9 +1659,30 @@ func TestALiteralSecretWithNoValueIsRefused(t *testing.T) {
 }
 
 // recordingSink is a [provision.TokenSink] that remembers what it was given.
+//
+// It counts FLUSHES rather than holding a bool, and keeps the context each
+// one arrived on. Both are what the failure path needs: a pass that fails
+// after minting used to return without flushing at all, and flushing on the
+// pass's own dead context is the same bug reached from the other side — the
+// call returns having done nothing, and the sealed value stays invisible to
+// the running engine while the next pass mints another one.
 type recordingSink struct {
 	recorded map[string]string
-	flushed  bool
+	flushes  int
+
+	// flushCtxErr is what ctx.Err() said at the last Flush.
+	flushCtxErr error
+
+	// flushErr is what Flush answers with. A sealed value that cannot be
+	// made durable is the one failure a caller must not swallow: the
+	// credential then exists in neither place an operator would look for
+	// it.
+	flushErr error
+
+	// cancelOnSeal, when set, kills the pass at the moment it mints —
+	// which is where a lease expiring mid-pass most expensively lands: a
+	// fresh secret exists and nothing has been registered with it yet.
+	cancelOnSeal func()
 }
 
 func (s *recordingSink) Record(_ context.Context, name, value string) error {
@@ -1669,6 +1690,9 @@ func (s *recordingSink) Record(_ context.Context, name, value string) error {
 		s.recorded = map[string]string{}
 	}
 	s.recorded[name] = value
+	if s.cancelOnSeal != nil {
+		s.cancelOnSeal()
+	}
 	return nil
 }
 
@@ -1678,9 +1702,15 @@ func (s *recordingSink) Value(_ context.Context, name string) (string, bool, err
 }
 
 func (s *recordingSink) Discard(context.Context) error { clear(s.recorded); return nil }
-func (s *recordingSink) Flush(context.Context) error   { s.flushed = true; return nil }
-func (s *recordingSink) Describe() string              { return "a test sink" }
-func (s *recordingSink) NextStep() string              { return "export it" }
+
+func (s *recordingSink) Flush(ctx context.Context) error {
+	s.flushes++
+	s.flushCtxErr = ctx.Err()
+	return s.flushErr
+}
+
+func (s *recordingSink) Describe() string { return "a test sink" }
+func (s *recordingSink) NextStep() string { return "export it" }
 
 var _ provision.TokenSink = (*recordingSink)(nil)
 

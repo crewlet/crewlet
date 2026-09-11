@@ -19,6 +19,12 @@ import (
 type convergedPass struct {
 	kind   integration.Kind
 	writes int
+
+	// findings is what this pass reports. Empty is the converged world;
+	// the outstanding one carries something a person owes, which is what
+	// the suite's findings clauses need in front of them — over a converged
+	// world they walk an empty list and certify nothing.
+	findings []integration.Finding
 }
 
 func (p *convergedPass) Kind() integration.Kind  { return p.kind }
@@ -31,7 +37,7 @@ func (p *convergedPass) Run(ctx context.Context, _ setup.PassInput) ([]integrati
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return nil, nil
+	return p.findings, nil
 }
 
 // THE ADAPTER'S OWN HALF OF THE CONTRACT, and only that half.
@@ -55,9 +61,9 @@ func (p *convergedPass) Run(ctx context.Context, _ setup.PassInput) ([]integrati
 func TestTheAdapterMeetsTheContract(t *testing.T) {
 	t.Parallel()
 	var pass *convergedPass
-	integrationtest.Run(t, integrationtest.Reconciler{
-		New: func(integrationtest.TB) integration.Reconciler {
-			pass = &convergedPass{kind: integration.KindGitLab}
+	adapter := func(findings ...integration.Finding) func(integrationtest.TB) integration.Reconciler {
+		return func(integrationtest.TB) integration.Reconciler {
+			pass = &convergedPass{kind: integration.KindGitLab, findings: findings}
 			e := &Engine{}
 			e.epoch.current.Store(companyFor(t, `
 name: Acme
@@ -69,7 +75,18 @@ providers:
       api_keys: ["${OPENAI_API_KEY}"]
 `))
 			return &passConverger{pass: pass, engine: e}
-		},
+		}
+	}
+	integrationtest.Run(t, integrationtest.Reconciler{
+		Converged: adapter(),
+		// WHAT THE ADAPTER IS ON THE HOOK FOR HERE is that it hands a
+		// vendor's findings BACK unchanged. It sits between every pass and
+		// the loop, so a finding it dropped, reordered or re-kinded would
+		// be one no vendor harness could ever notice missing.
+		Outstanding: adapter(integration.Finding{
+			Kind: integration.FindingGrantShort, Subject: "ceo",
+			Detail: "ceo holds reporter on the platform group and its role asks for maintainer",
+		}),
 		Mutations: func() int { return pass.writes },
 	})
 }

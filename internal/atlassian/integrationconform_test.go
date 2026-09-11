@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/integration/integrationtest"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provision"
 )
 
 // The Atlassian half of [integration.Reconciler]'s safety contract, certified
@@ -22,18 +24,32 @@ import (
 //
 // # Why this file exists at all
 //
-// integrationtest states the contract in seven clauses and its package doc
+// integrationtest states the contract in nine clauses and its package doc
 // calls the write-counting hook REQUIRED, because that clause is "the one most
 // likely to be wrong". Its only caller was a stub whose pass returned
 // (nil, nil), so "a converged pass writes nothing" held because nothing
 // happened — a green test over a world nobody had built and a reconciler
-// nobody had run. This points the same seven cases at [atlassian.Reconcile],
-// over an organization that has already been brought into line, and counts
-// what that organization and this deployment's own sealed store receive.
+// nobody had run. This points the same cases at [atlassian.Reconcile], over
+// organizations the pass itself has brought into line, and counts what those
+// organizations and this deployment's own sealed store receive.
 //
 // It found the clause false. The pass sent the product-access invite once per
 // seat on every tick for ever, and re-sealed each seat's account address
 // beside it. See the grant in reconcile.go for what replaced it.
+//
+// # TWO WORLDS, and the second one is not decoration
+//
+// A converged pass reports NO findings — that is what converged means — so
+// every case that walks a findings list walks an empty one and certifies
+// whatever this vendor happens to do. Three of the nine clauses were in that
+// state here. So each row below stands up a pair: an organization this pass
+// has converged, and one where something is genuinely wrong IN A WAY A PERSON
+// HAS TO ACT ON. The two rows break in DIFFERENT ways on purpose — a scoped
+// organization key that cannot create an account, and a node with no keyring
+// to seal a token into — because between them they are the only worlds in
+// this package that put all four of this vendor's finding kinds through the
+// suite. Each outstanding world pins the EXACT kinds it reports, so it cannot
+// quietly converge and go back to certifying nothing.
 //
 // # What counts as a write here, and what does not
 //
@@ -57,10 +73,32 @@ import (
 //     teardown route, never reached by a pass, counted so that a regression
 //     that reached it would be loud rather than invisible.
 //
-// And the fifth write is not an HTTP call at all: every [provision.TokenSink]
+// The fifth write is not an HTTP call at all: every [provision.TokenSink]
 // Record is counted too. The sealed store is the company's, shared by the
 // whole fleet and stamped with an author and a time, so a pass re-sealing the
 // same address every tick is writing exactly as surely as one that POSTs.
+//
+// And the sixth is a request this fake does NOT serve — see
+// [atlassianOrg.mutations] for why a route nobody matched counts as a write
+// rather than as a curiosity.
+//
+// [provision.TokenSink.Flush] is deliberately NOT counted. A write-through
+// sink makes nothing newly durable there, and the loop's own sink rebuilds
+// its `${VAR}` snapshot only when the run actually sealed something — so a
+// converged pass completes its run, seals nothing, and rebuilds nothing. That
+// the pass reaches the completion AT ALL is pinned in reconcile_test.go,
+// because it is a claim about a path this suite's converged world never takes.
+//
+// # One clause this vendor does not make falsifiable, said out loud
+//
+// "a cancelled pass reports a fault rather than health" passes here whatever
+// [atlassian.Reconcile] does at the top of a pass: with the guard removed, the
+// site discovery's own request fails on the dead context and the pass raises
+// anyway. What that guard actually protects — not accusing
+// integrations.atlassian.api_key when a node is merely draining — is pinned by
+// TestACancelledPassRaisesRatherThanBlamingTheOrganizationCredential, and by
+// nothing in this file. Nobody should read the clause's green tick as
+// coverage of it.
 
 const (
 	// testOrgID and testCloudID name the organization and the site this
@@ -102,6 +140,16 @@ type atlassianOrg struct {
 	accounts []*serviceAccount
 	next     int
 
+	// scopedKey is an organization whose API key was created WITH scopes,
+	// which is the misconfiguration this vendor punishes most quietly.
+	// Everything here authenticates with it except the one call that
+	// creates an account: account-management refuses a scoped key with 403
+	// whatever scopes it holds (see client.go's serviceAccountsPath). So
+	// the site is discovered, the listing answers, and every agent is left
+	// without an identity — which is why the connect form says "create it
+	// without scopes" and why this is the outstanding world worth having.
+	scopedKey bool
+
 	// writes counts the requests that MUTATED this organization, keyed by
 	// route. See this file's header for the four and why.
 	writes int
@@ -114,10 +162,36 @@ type atlassianOrg struct {
 	unexpected []string
 }
 
+// mutations is every request that changed this organization — plus every
+// request it does not serve at all.
+//
+// THE SECOND HALF IS NOT BOOKKEEPING, AND IT IS THE HOLE THIS HARNESS SHIPPED
+// WITH. `unexpected` was recorded by [atlassianOrg.refuse] and then looked at
+// in exactly one place: after the pass that converges a world. So a write the
+// pass made ONLY once that world was converged, to a route this fake does not
+// answer, was refused with a 404, remembered, and read by nobody — and the one
+// clause that exists to catch exactly that went green. It is reachable: a
+// stray call whose error the pass swallows leaves no other trace at all.
+//
+// A route nobody matched is not a request this harness knows to be harmless.
+// It is a request whose effect at the real Atlassian nothing here can vouch
+// for, and for a clause about writes the safe direction is to count it.
 func (o *atlassianOrg) mutations() int {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	return o.writes
+	return o.writes + len(o.unexpected)
+}
+
+// strayRoutes is what this organization was asked for and does not serve.
+//
+// Read where [atlassianOrg.mutations] cannot see it: before the suite takes
+// its baseline — the pass that converges a world runs first and its writes are
+// deliberately uncounted — and over the outstanding world, where nothing
+// samples the counter at all.
+func (o *atlassianOrg) strayRoutes() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return slices.Clone(o.unexpected)
 }
 
 func (o *atlassianOrg) serve(w http.ResponseWriter, r *http.Request) {
@@ -157,6 +231,17 @@ func (o *atlassianOrg) serve(w http.ResponseWriter, r *http.Request) {
 	// ---- the four mutations ------------------------------------------- //
 
 	case r.Method == http.MethodPost && path == serviceAccounts:
+		if o.scopedKey {
+			// NOT COUNTED: nothing changed. The same rule the refused mint
+			// below follows — counting a refusal would let it mask a real
+			// write, and this route is refused on every pass by design in
+			// the world that sets this.
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"message":"The API key is scoped. Creating a ` +
+				`service account requires an organization API key created ` +
+				`without scopes."}`))
+			return
+		}
 		o.writes++
 		var body struct {
 			DisplayName string `json:"displayName"`
@@ -235,8 +320,9 @@ func accountIn(path, suffix string) string {
 //
 // IT HAS NO Mints METHOD, so [provision.CanMint] answers true — which is what
 // makes the pass do its real work. A sink that cannot mint short-circuits
-// every seat before the first request, and a harness built on one would
-// certify a pass that never ran.
+// every seat before the first request, and a harness whose CONVERGED world was
+// built on one would certify a pass that never ran. That posture is a world in
+// its own right here, and it is the second row's outstanding one.
 type sealedStore struct {
 	mu     sync.Mutex
 	values map[string]string
@@ -274,13 +360,17 @@ func (s *sealedStore) mutations() int {
 }
 
 func (s *sealedStore) Discard(context.Context) error { return nil }
-func (s *sealedStore) Flush(context.Context) error   { return nil }
-func (s *sealedStore) Describe() string              { return "a sealed store this test counts" }
-func (s *sealedStore) NextStep() string              { return "" }
 
-// convergedOrg is an Atlassian organization this pass has already converged,
-// plus the pass itself as [integration.Reconciler] sees it.
-type convergedOrg struct {
+// Flush is NOT counted. A write-through sink makes nothing newly durable
+// completing a run, and the loop's own sink rebuilds its `${VAR}` snapshot
+// only where this one incremented writes. See this file's header.
+func (s *sealedStore) Flush(context.Context) error { return nil }
+func (s *sealedStore) Describe() string            { return "a sealed store this test counts" }
+func (s *sealedStore) NextStep() string            { return "" }
+
+// world is one Atlassian organization, this deployment's own sealed store, and
+// the pass over both as [integration.Reconciler] sees it.
+type world struct {
 	vendor *atlassianOrg
 	store  *sealedStore
 	opts   atlassian.Options
@@ -289,7 +379,7 @@ type convergedOrg struct {
 // Kind names the surface. A constant rather than anything derived, which is
 // what makes the suite's stability clause an assertion about the adapter
 // rather than about a field.
-func (*convergedOrg) Kind() integration.Kind { return integration.KindAtlassian }
+func (*world) Kind() integration.Kind { return integration.KindAtlassian }
 
 // Reconcile runs the real pass and maps its answer the way the loop's own
 // adapter does.
@@ -301,7 +391,7 @@ func (*convergedOrg) Kind() integration.Kind { return integration.KindAtlassian 
 // after one apply and is not this package's to certify; nothing here can
 // stand it up, and pretending otherwise would be the vacuous shape this file
 // exists to replace.
-func (w *convergedOrg) Reconcile(ctx context.Context) ([]integration.Finding, error) {
+func (w *world) Reconcile(ctx context.Context) ([]integration.Finding, error) {
 	res, err := atlassian.Reconcile(ctx, w.opts)
 	if err != nil {
 		return nil, err
@@ -311,7 +401,7 @@ func (w *convergedOrg) Reconcile(ctx context.Context) ([]integration.Finding, er
 
 // mutations is every write since this world was built: at Atlassian, and into
 // this deployment's own sealed store.
-func (w *convergedOrg) mutations() int { return w.vendor.mutations() + w.store.mutations() }
+func (w *world) mutations() int { return w.vendor.mutations() + w.store.mutations() }
 
 // nimbus is the company, as the engine's own pass reads it — through
 // [atlassian.PlanFor] over a real organization rather than a hand-built plan.
@@ -339,6 +429,52 @@ func nimbus() *org.Organization {
 	}
 }
 
+// standUp builds one Atlassian organization, the company that wants identities
+// in it, and the pass over both. NO PASS HAS RUN YET — what each caller does
+// with this world is what makes it converged or outstanding.
+//
+// BOTH t AND tb, deliberately. [integrationtest.TB] is the narrow interface
+// the suite's own tests drive its cases with and it has no Cleanup, so the
+// case's own reporter is tb while the server's lifetime hangs off the real
+// *testing.T of the subtest that owns this world.
+func standUp(
+	t *testing.T, tb integrationtest.TB,
+	vendor *atlassianOrg, tune func(*org.Organization), keyring bool,
+) *world {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(vendor.serve))
+	t.Cleanup(srv.Close)
+
+	company := nimbus()
+	if tune != nil {
+		tune(company)
+	}
+	plan, err := atlassian.PlanFor(company)
+	if err != nil {
+		tb.Fatalf("PlanFor: %v", err)
+	}
+	store := &sealedStore{}
+
+	// A NODE WITH NO KEYRING IS HANDED [provision.ReadOnly], WHICH IS NOT
+	// NIL. nil is the command line's check; this is a running node that has
+	// been told it may seal nothing, and the pass has to tell the two apart
+	// — see [atlassian.Options.Sink]. The store is still built either way so
+	// the write counter reads the same on both, and stays at zero on this
+	// one, which is the point.
+	var sink provision.TokenSink = store
+	if !keyring {
+		sink = provision.ReadOnly()
+	}
+
+	return &world{vendor: vendor, store: store, opts: atlassian.Options{
+		Client: atlassian.NewClient(atlassian.ClientOptions{BaseURL: srv.URL}),
+		OrgID:  testOrgID, Key: "an-organization-api-key", Plan: plan, Sink: sink,
+		// PINNED, so nothing here depends on the wall clock: the mint
+		// stamps its label and its expiry with this.
+		Now: func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) },
+	}}
+}
+
 // convergedAtlassian stands the organization up and converges it BY RUNNING
 // THE PASS.
 //
@@ -354,41 +490,24 @@ func nimbus() *org.Organization {
 // second identity, and an empty token listing makes every pass mint over a
 // live credential — and both would look like a passing test. Running the real
 // pass makes the world converged by definition, and leaves only the question
-// worth asking: whether the SECOND pass writes.
+// worth asking: whether a pass over a world that needs nothing writes.
 //
-// The seeding pass's own writes are not counted: [integrationtest.Run] takes
-// its baseline from Mutations() after New returns.
-//
-// BOTH t AND tb, deliberately. [integrationtest.TB] is the narrow interface
-// the suite's own tests drive its cases with and it has no Cleanup, so the
-// case's own reporter is tb while the server's lifetime hangs off the real
-// *testing.T of the subtest that owns this world.
+// Nothing this function does is counted: [integrationtest.Run] takes its
+// baseline from Mutations() after Converged returns, so the seeding pass's
+// writes — and the steady-state probe below it — are inside the baseline. The
+// probe does not blunt the clause: the writes it is about are made once per
+// pass, so a pass that writes still writes on the one the suite measures. The
+// only thing it changes is that the measured pass is the third rather than the
+// second, over a world that is if anything more converged.
 func convergedAtlassian(
 	t *testing.T, tb integrationtest.TB, tune func(*org.Organization), wantNotes int,
-) *convergedOrg {
+) *world {
 	t.Helper()
 	vendor := &atlassianOrg{}
-	srv := httptest.NewServer(http.HandlerFunc(vendor.serve))
-	t.Cleanup(srv.Close)
+	w := standUp(t, tb, vendor, tune, true)
+	plan := w.opts.Plan
 
-	company := nimbus()
-	if tune != nil {
-		tune(company)
-	}
-	plan, err := atlassian.PlanFor(company)
-	if err != nil {
-		tb.Fatalf("PlanFor: %v", err)
-	}
-	store := &sealedStore{}
-	world := &convergedOrg{vendor: vendor, store: store, opts: atlassian.Options{
-		Client: atlassian.NewClient(atlassian.ClientOptions{BaseURL: srv.URL}),
-		OrgID:  testOrgID, Key: "an-organization-api-key", Plan: plan, Sink: store,
-		// PINNED, so nothing here depends on the wall clock: the mint
-		// stamps its label and its expiry with this.
-		Now: func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) },
-	}}
-
-	findings, err := world.Reconcile(context.Background())
+	findings, err := w.Reconcile(context.Background())
 	if err != nil {
 		tb.Fatalf("the pass that converges the world failed: %v", err)
 	}
@@ -399,28 +518,52 @@ func convergedAtlassian(
 			tb.Fatalf("the world is not converged: the seeding pass reported %+v", findings)
 		}
 	}
-	// AND THE COUNT IS PINNED, so the two clauses about findings cannot go
-	// vacuous without saying so. Both of them walk the pass's findings, so a
-	// world that reported none would satisfy each by having nothing to
-	// check — which is the same silent weakening as a suite driven by a stub.
+	// AND THE COUNT IS PINNED, so a converged world cannot quietly grow a
+	// finding nobody expected — or lose the ones the second row is built to
+	// carry through the pass.
 	if len(findings) != wantNotes {
 		tb.Fatalf("the seeding pass reported %d finding(s), want %d: %+v",
 			len(findings), wantNotes, findings)
 	}
+	// AND CONVERGING IT CHANGED NOTHING ABOUT WHAT IS REPORTED.
+	//
+	// Everything above is about the pass that BUILT this world, and the
+	// suite's own two clauses about findings now run over the outstanding
+	// twin — so a finding this vendor reports only once a world is converged
+	// is seen by nothing at all. Nor by `two passes over an unchanged world
+	// agree`: that compares two steady-state passes with each other and is
+	// satisfied by any two identical wrong answers. This compares the steady
+	// state with what the pass that converged it said, which is the
+	// comparison that an integration reporting degraded on every tick of a
+	// company that is fine actually fails — and the state an operator
+	// watching a dashboard is in for the life of the deployment.
+	steady, err := w.Reconcile(context.Background())
+	if err != nil {
+		tb.Fatalf("the second pass over the converged world failed: %v", err)
+	}
+	if !slices.Equal(steady, findings) {
+		tb.Fatalf("converging this world changed what the pass reports about it:\n"+
+			"seeding: %+v\n steady: %+v", findings, steady)
+	}
 	// AND IT ACTUALLY DID THE WORK. A seeding pass that wrote nothing would
 	// leave every case below true about an empty organization, which is the
 	// exact vacuous pass this file exists to replace.
-	if vendor.mutations() == 0 || store.mutations() == 0 {
+	if vendor.mutations() == 0 || w.store.mutations() == 0 {
 		tb.Fatalf("the seeding pass made %d write(s) at Atlassian and %d into the "+
 			"store, so there is no converged world here to certify a second pass "+
-			"against", vendor.mutations(), store.mutations())
+			"against", vendor.mutations(), w.store.mutations())
+	}
+	// STRAY ROUTES ON THE SEEDING PASS, which is the ONE window
+	// [atlassianOrg.mutations] cannot see: the suite takes its baseline after
+	// this returns, so everything here — including a 404 nobody looked at —
+	// is already inside it. A stray call made only on the create-and-mint
+	// path shows up here and nowhere else.
+	if stray := vendor.strayRoutes(); len(stray) > 0 {
+		tb.Fatalf("the pass that converges the world called routes this "+
+			"organization does not serve: %v", stray)
 	}
 	vendor.mu.Lock()
 	defer vendor.mu.Unlock()
-	if len(vendor.unexpected) > 0 {
-		tb.Fatalf("the pass called routes this organization does not serve: %v",
-			vendor.unexpected)
-	}
 	if len(vendor.accounts) != len(plan.Seats) {
 		tb.Fatalf("the organization holds %d account(s) for %d planned seat(s)",
 			len(vendor.accounts), len(plan.Seats))
@@ -441,64 +584,182 @@ func convergedAtlassian(
 		}
 	}
 	for _, seat := range plan.Seats {
-		if store.held(seat.TokenVar) == "" {
+		if w.store.held(seat.TokenVar) == "" {
 			tb.Fatalf("%s holds no token after the seeding pass, so the second "+
 				"pass would mint rather than keep", seat.TokenVar)
 		}
-		if seat.EmailVar != "" && store.held(seat.EmailVar) == "" {
+		if seat.EmailVar != "" && w.store.held(seat.EmailVar) == "" {
 			tb.Fatalf("%s holds no address after the seeding pass, so the second "+
 				"pass would re-seal rather than keep", seat.EmailVar)
 		}
 	}
-	return world
+	return w
+}
+
+// broken is what is wrong in one row's OUTSTANDING world.
+//
+// Each shape is a real misconfiguration this vendor produces, chosen because
+// A PERSON — never the engine, never Atlassian — is the only thing that ends
+// it. The suite's anti-vacuity clause asks for at least one finding and at
+// least one somebody owes; kinds asks for more than that, because "at least
+// one" is satisfied by a world that has drifted into reporting something
+// else entirely.
+type broken struct {
+	// what this world is, for the failure messages.
+	what string
+
+	// scopedKey makes the account create refuse with the 403 Atlassian
+	// answers a scoped organization key. See [atlassianOrg.scopedKey].
+	scopedKey bool
+
+	// keyring is whether this node can seal a credential at all. False
+	// hands the pass [provision.ReadOnly], which is what the reconcile loop
+	// hands a node with no secrets.keys.
+	keyring bool
+
+	// kinds is EXACTLY what a pass over this world reports, in order. Pinned
+	// rather than counted: a world that starts answering identity_missing
+	// where it answered identity_failed has stopped being about a person,
+	// and every clause downstream would go on passing.
+	kinds []integration.FindingKind
+}
+
+// outstandingAtlassian stands up a world where something is genuinely wrong.
+//
+// NO CONVERGING PASS RUNS HERE, and that is the difference from the twin
+// above: this world is wrong when it is built and stays wrong however many
+// times the suite reconciles it, which is what makes the clauses that walk a
+// findings list mean something. A pass over it is allowed to write — it has
+// work to do — and nothing samples the counter.
+func outstandingAtlassian(
+	t *testing.T, tb integrationtest.TB, tune func(*org.Organization), b broken,
+) *world {
+	t.Helper()
+	vendor := &atlassianOrg{scopedKey: b.scopedKey}
+	w := standUp(t, tb, vendor, tune, b.keyring)
+
+	// THE WORLD PROVES ITSELF BEFORE THE SUITE SEES IT. The suite's own
+	// anti-vacuity clause would catch a world that reported nothing at all;
+	// it would not catch one that reported the wrong thing, and the two
+	// clauses after it — every finding is a known kind, a person's finding
+	// says what to do — would then certify whatever this world happened to
+	// drift into.
+	findings, err := w.Reconcile(context.Background())
+	if err != nil {
+		tb.Fatalf("a pass over the outstanding world (%s) raised rather than "+
+			"reporting: %v", b.what, err)
+	}
+	got := make([]integration.FindingKind, 0, len(findings))
+	for _, f := range findings {
+		got = append(got, f.Kind)
+	}
+	if !slices.Equal(got, b.kinds) {
+		tb.Fatalf("the outstanding world (%s) reported %v, want exactly %v: %+v",
+			b.what, got, b.kinds, findings)
+	}
+	// AND NOT BY REACHING FOR ANYTHING THIS ORGANIZATION DOES NOT SERVE.
+	// Nothing samples [atlassianOrg.mutations] over this world, so a stray
+	// route made only on a failing path would be recorded here and read
+	// nowhere at all.
+	if stray := vendor.strayRoutes(); len(stray) > 0 {
+		tb.Fatalf("the pass over the outstanding world (%s) called routes this "+
+			"organization does not serve: %v", b.what, stray)
+	}
+	return w
 }
 
 // THE CONTRACT IS CERTIFIED AGAINST THE REAL RECONCILER.
 func TestTheAtlassianReconcilerMeetsTheContract(t *testing.T) {
 	t.Parallel()
-	for _, world := range []struct {
+	for _, row := range []struct {
 		name string
 		tune func(*org.Organization)
 		// notes is how many findings a converged pass over this world still
 		// reports. See the count pinned in convergedAtlassian.
 		notes int
+		// broken is the same company with something genuinely wrong with it.
+		broken broken
 	}{
 		// Every seat opted in, which is the shape the loop spends its life
 		// on: two accounts, two grants, two tokens and two addresses, all
 		// already there, and nothing left to say about any of it.
-		{name: "every seat provisioned"},
+		{
+			name: "every seat provisioned",
+			broken: broken{
+				// THE MISCONFIGURATION THIS VENDOR HIDES BEST. A scoped
+				// organization API key authenticates for everything here
+				// except creating an account, which is refused 403 whatever
+				// scopes it holds — so the site is discovered, the listing
+				// answers, and every agent silently has no identity. Only a
+				// person can fix it, at admin.atlassian.com, by issuing an
+				// unscoped key.
+				what: "an organization API key created with scopes", scopedKey: true, keyring: true,
+				kinds: []integration.FindingKind{
+					integration.FindingIdentityFailed,
+					integration.FindingIdentityFailed,
+				},
+			},
+		},
 
 		// And a company that manages some of Atlassian by hand. Both of
 		// these are CONVERGED — no pass can do anything more for either
 		// seat — and both leave a note behind, which is what makes the
 		// suite's two clauses about findings say something here instead of
 		// running over an empty slice.
-		{name: "seats the company provisions by hand", notes: 2, tune: func(o *org.Organization) {
-			o.Roles = append(o.Roles,
-				// A literal where a ${VAR} belongs: nowhere to write a
-				// minted token, so the plan leaves the seat out entirely.
-				&org.Role{Name: "Data Analyst", MCPEnv: map[string]map[string]string{
-					"jira": {"JIRA_API_TOKEN": "a-token-somebody-pasted-in"},
-				}},
-				// And a token slot with no address slot beside it. This one
-				// IS provisioned — it gets an account, a grant and a token —
-				// and the address Atlassian assigned has nowhere to go, so
-				// the seat authenticates as nobody until a person adds one.
-				&org.Role{Name: "Release Manager", MCPEnv: map[string]map[string]string{
-					"confluence": {"CONFLUENCE_API_TOKEN": "${ATLASSIAN_TOKEN_RELEASE_MANAGER}"},
-				}},
-			)
-		}},
+		{
+			name:  "seats the company provisions by hand",
+			notes: 2,
+			tune: func(o *org.Organization) {
+				o.Roles = append(o.Roles,
+					// A literal where a ${VAR} belongs: nowhere to write a
+					// minted token, so the plan leaves the seat out entirely.
+					&org.Role{Name: "Data Analyst", MCPEnv: map[string]map[string]string{
+						"jira": {"JIRA_API_TOKEN": "a-token-somebody-pasted-in"},
+					}},
+					// And a token slot with no address slot beside it. This one
+					// IS provisioned — it gets an account, a grant and a token —
+					// and the address Atlassian assigned has nowhere to go, so
+					// the seat authenticates as nobody until a person adds one.
+					&org.Role{Name: "Release Manager", MCPEnv: map[string]map[string]string{
+						"confluence": {"CONFLUENCE_API_TOKEN": "${ATLASSIAN_TOKEN_RELEASE_MANAGER}"},
+					}},
+				)
+			},
+			broken: broken{
+				// THE OTHER END OF THE SAME PASS, and the one no retry ever
+				// clears. A node handed [provision.ReadOnly] has nowhere to
+				// seal a minted token, so it must not create the account
+				// either — and it stays that way until somebody sets
+				// secrets.keys in the bootstrap configuration. The three
+				// seats report as having no account because they genuinely
+				// have none, and the two notes survive from the plan.
+				what: "a node with no keyring", keyring: false,
+				kinds: []integration.FindingKind{
+					integration.FindingCredentialMissing,
+					integration.FindingIdentityMissing,
+					integration.FindingIdentityMissing,
+					integration.FindingIdentityMissing,
+					integration.FindingGrantShort,
+					integration.FindingGrantShort,
+				},
+			},
+		},
 	} {
-		t.Run(world.name, func(t *testing.T) {
+		t.Run(row.name, func(t *testing.T) {
 			t.Parallel()
-			// Assigned by New and read by Mutations, which the suite calls
-			// in that order within one sequential case.
-			var current *convergedOrg
+			// Assigned by Converged and read by Mutations, which the suite
+			// calls in that order within one sequential case. OUTSTANDING
+			// DOES NOT TOUCH IT: nothing counts writes over a world that has
+			// work to do, and letting one built there land here would point
+			// the load-bearing clause at the wrong organization.
+			var current *world
 			integrationtest.Run(t, integrationtest.Reconciler{
-				New: func(tb integrationtest.TB) integration.Reconciler {
-					current = convergedAtlassian(t, tb, world.tune, world.notes)
+				Converged: func(tb integrationtest.TB) integration.Reconciler {
+					current = convergedAtlassian(t, tb, row.tune, row.notes)
 					return current
+				},
+				Outstanding: func(tb integrationtest.TB) integration.Reconciler {
+					return outstandingAtlassian(t, tb, row.tune, row.broken)
 				},
 				Mutations: func() int { return current.mutations() },
 			})

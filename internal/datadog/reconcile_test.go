@@ -13,17 +13,29 @@ import (
 	"github.com/crewlet/crewlet/internal/provision"
 )
 
-// sink records what a pass mints, and can refuse a read.
+// sink records what a pass mints, and can refuse a read or a write.
 type sink struct {
-	held      map[string]string
-	readErr   error
-	recordErr error
-	flushed   bool
+	held    map[string]string
+	readErr error
+	// recordErr refuses every write; recordErrFor refuses ONE name, so a
+	// test can have a pass mint for one seat and fail on a later one.
+	recordErr    error
+	recordErrFor map[string]error
+	flushed      bool
+	// flushedHeld is what this sink was holding WHEN Flush was called,
+	// which is the only way to tell a pass that flushed what it sealed
+	// from one that flushed before it sealed anything.
+	flushedHeld map[string]string
 }
 
-func newSink() *sink { return &sink{held: map[string]string{}} }
+func newSink() *sink {
+	return &sink{held: map[string]string{}, recordErrFor: map[string]error{}}
+}
 
 func (s *sink) Record(_ context.Context, name, value string) error {
+	if err := s.recordErrFor[name]; err != nil {
+		return err
+	}
 	if s.recordErr != nil {
 		return s.recordErr
 	}
@@ -39,7 +51,14 @@ func (s *sink) Value(_ context.Context, name string) (string, bool, error) {
 	return v, ok, nil
 }
 
-func (s *sink) Flush(context.Context) error { s.flushed = true; return nil }
+func (s *sink) Flush(context.Context) error {
+	s.flushed = true
+	s.flushedHeld = map[string]string{}
+	for name, value := range s.held {
+		s.flushedHeld[name] = value
+	}
+	return nil
+}
 
 func (s *sink) Describe() string { return "a test sink" }
 func (s *sink) NextStep() string { return "a test next step" }
@@ -178,10 +197,10 @@ func TestADisabledAccountIsReportedRatherThanReadAsProvisioned(t *testing.T) {
 // retries, and an empty findings list is a statement that everything is fine.
 // A node shutting down would otherwise record Datadog ready on its way out,
 // and the next node to hold the duty trusts that for a full settled interval.
-// [integrationtest] drives the same clause; this pins it on its own, because
-// the ordering that makes it true — the credential probe is the FIRST thing
-// the pass does, so nothing else can answer before the context is consulted —
-// is not obvious from any one line of the pass.
+// [integrationtest] drives the same clause; this pins what makes it true,
+// which that clause cannot see. The pass consults the context ITSELF, before
+// anything else it could answer from — rather than relying on the credential
+// probe below to fail because a transport happened to honour cancellation.
 func TestACancelledPassRaisesRatherThanReportingHealth(t *testing.T) {
 	t.Parallel()
 	reg := newRegion(t)
@@ -200,11 +219,103 @@ func TestACancelledPassRaisesRatherThanReportingHealth(t *testing.T) {
 		t.Fatalf("a cancelled pass answered with findings rather than a fault: %+v",
 			res.Findings())
 	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want the cancellation itself", err)
+	}
+	// AND IT ASKED DATADOG NOTHING. Not an efficiency: a pass that reaches
+	// the network before it reads the context is one whose answer depends
+	// on the transport it was built with, and the arm ABOVE that probe
+	// returns integration.ErrNotConfigured — which the loop reads as
+	// "forget this surface's status row", so a node draining against a
+	// company mid-edit would delete the fleet's Datadog status on its way
+	// out.
+	if len(reg.calls) != 0 {
+		t.Errorf("a cancelled pass made %v; it observed nothing and must say so "+
+			"without asking", reg.calls)
+	}
 	// AND IT DOES NOT ACCUSE THE OPERATOR'S KEY. A cancellation says
-	// nothing about the credential, and reporting one as refused sends
-	// somebody to rotate a pair that works.
+	// nothing about the credential, and reporting one as refused — or even
+	// as unverifiable — sends somebody to rotate a pair that works.
 	if errors.Is(err, integration.ErrCredentialRejected) {
 		t.Errorf("a cancelled pass was classified as a credential rejection: %v", err)
+	}
+	if strings.Contains(err.Error(), "integrations.datadog.provisioning") {
+		t.Errorf("a cancelled pass sent somebody to look at the organization "+
+			"credential pair, which it never asked about: %v", err)
+	}
+}
+
+// EVERYTHING A PASS SEALED IS FLUSHED, INCLUDING WHEN A LATER SEAT FAILED.
+//
+// [provision.TokenSink] hands nothing to the fleet until Flush, so a key
+// minted at Datadog and sealed but never flushed is exactly the state that
+// contract legislates against: it exists, nobody holds it, and the next pass
+// finds a seat whose ${VAR} is empty and mints another — one orphaned
+// application key per tick, for ever, none of them recoverable because
+// Datadog shows a value once.
+//
+// The shape that produces it is a mid-pass `return res, err` placed after the
+// first mint, which is why the plan loop carries a failing seat in its own
+// SeatResult instead of returning. Nothing else in this package's tests would
+// notice if that changed, or if the Flush call were simply dropped: every
+// other assertion reads the sink's held map, which a Record has already
+// written.
+func TestEverySealedKeyIsFlushedEvenWhenALaterSeatFails(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[
+			{"id":"u1","attributes":{
+				"email":"crewlet-sre@agents.test.invalid","service_account":true}},
+			{"id":"u2","attributes":{
+				"email":"crewlet-dba@agents.test.invalid","service_account":true}}]}`))
+	}
+	mint := func(account, key string) func(http.ResponseWriter, *http.Request) {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				_, _ = w.Write([]byte(`{"data":[]}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"data":{"id":"` + key + `","attributes":{
+				"key":"value-for-` + account + `","name":"crewlet"}}}`))
+		}
+	}
+	reg.handle["/api/v2/service_accounts/u1/application_keys"] = mint("u1", "k1")
+	reg.handle["/api/v2/service_accounts/u2/application_keys"] = mint("u2", "k2")
+	reg.handle["/api/v2/service_accounts/u2/application_keys/k2"] = func(
+		w http.ResponseWriter, _ *http.Request,
+	) {
+		w.WriteHeader(http.StatusNoContent)
+	}
+
+	s := newSink()
+	s.recordErrFor["DBA_DD_KEY"] = errors.New("the keyring refused the write")
+	res, err := datadog.Reconcile(context.Background(), datadog.Options{
+		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre", "dba"),
+		Creds: pair, Sink: s,
+	})
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	// The plan orders seats by handle, so `dba` is attempted FIRST and
+	// fails, and `sre` mints after it — which is the ordering that matters
+	// here: what has to survive is the seal made after the failure.
+	byHandle := map[string]datadog.SeatResult{}
+	for _, seat := range res.Seats {
+		byHandle[seat.Handle] = seat
+	}
+	if len(res.Seats) != 2 || byHandle["dba"].Err == nil || byHandle["sre"].Err != nil {
+		t.Fatalf("seats = %+v, want dba failed and sre provisioned", res.Seats)
+	}
+	if !s.flushed {
+		t.Fatal("a pass that minted never flushed: the key is live at Datadog " +
+			"and the fleet holds nothing for it")
+	}
+	if s.flushedHeld["SRE_DD_KEY"] != "value-for-u1" {
+		t.Errorf("the flush carried %v, want the key minted after the seat that "+
+			"failed — a pass that returned on that failure, or flushed before "+
+			"it ran the plan, hands the fleet nothing", s.flushedHeld)
 	}
 }
 

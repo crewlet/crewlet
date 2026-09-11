@@ -133,9 +133,15 @@ type chatServer struct {
 	// member lookup and a bot's channel list — which is the instance a
 	// pass cannot ask "is it already in?" and has to join blind.
 	membershipFails bool
-	teamOf          map[string]bool   // user id -> in team
-	channels        map[string]string // channel name -> id
-	members         map[string]bool   // memberKey(channelID, userID) -> joined
+	// swallowJoins makes a channel join ANSWER SUCCESS and record
+	// nothing, which is the instance that leaves a pass believing it
+	// converged a world it did not. Nothing in the pass can tell the
+	// difference; only a harness reading the instance afterwards can,
+	// which is what it is here for.
+	swallowJoins bool
+	teamOf       map[string]bool   // user id -> in team
+	channels     map[string]string // channel name -> id
+	members      map[string]bool   // memberKey(channelID, userID) -> joined
 
 	// writes counts every request this instance received that CHANGES it,
 	// keyed by route. See [mutatingRoute] for what that means and why it
@@ -200,6 +206,112 @@ func mutatingRoute(method, path string) bool {
 		return false
 	}
 	return path != "/channels/direct" && !strings.HasSuffix(path, "/typing")
+}
+
+// ---- reading and breaking one instance ------------------------------- //
+//
+// The conformance harness proves its converged world really is converged by
+// reading THIS instance rather than the Result of the pass that made it, and
+// its guard test breaks one of those facts at a time. Both need the same
+// handful of accessors, and they live beside the fixture so a route that
+// changes shape changes them here rather than in two files.
+
+// botID is the account a username was created under, empty when there is
+// none.
+func (s *chatServer) botID(username string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bots[username]
+}
+
+// inTeam reports whether an account is in the one team this fixture serves.
+func (s *chatServer) inTeam(userID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.teamOf[userID]
+}
+
+// inChannel reports whether an account is in a channel by its slug.
+func (s *chatServer) inChannel(name, userID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id, ok := s.channels[name]
+	return ok && s.members[memberKey(id, userID)]
+}
+
+// mintedToken is the VALUE of the live token an account holds under a
+// description, empty when it holds none.
+//
+// The value, because that is what makes a converged world converged: the
+// keep-or-mint decision takes what the sealed variable holds and asks the
+// server who it is, so a harness comparing anything less than the value
+// cannot tell a seat whose credential works from one whose store holds a
+// string.
+func (s *chatServer) mintedToken(userID, description string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, token := range s.tokens[userID] {
+		if token.Description == description {
+			return token.Value
+		}
+	}
+	return ""
+}
+
+// lockDown is an administrator tightening this instance after the company
+// was provisioned: the provisioning account loses its system_admin role and
+// bot creation is switched off in the System Console.
+//
+// Neither is anything the engine can undo, and neither refuses a pass over a
+// company that needs nothing — which is exactly why they have to be
+// reported rather than discovered on the day a seat is added.
+func (s *chatServer) lockDown() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.adminRoles = "system_user"
+	s.settings["EnableBotAccountCreation"] = "false"
+}
+
+// forgetBots empties the account table, which is the instance a pass never
+// reached.
+func (s *chatServer) forgetBots() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bots = map[string]string{}
+}
+
+// leaveTeam removes an account from the team.
+func (s *chatServer) leaveTeam(userID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.teamOf, userID)
+}
+
+// leaveChannel removes an account from one channel, leaving the rest.
+func (s *chatServer) leaveChannel(name, userID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.members, memberKey(s.channels[name], userID))
+}
+
+// forgetTokens revokes everything an account holds, without the revoke.
+func (s *chatServer) forgetTokens(userID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.tokens, userID)
+}
+
+// relabelTokens re-describes every token an account holds, which is the
+// account whose only credential an administrator minted BY HAND. This engine
+// never touches one of those — the description is the only thing that says
+// whose a token is — so a world in that state is not one a converged pass
+// leaves behind.
+func (s *chatServer) relabelTokens(userID, description string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.tokens[userID] {
+		s.tokens[userID][i].Description = description
+	}
 }
 
 // forget clears the counters, so a test can measure ONE run.
@@ -595,6 +707,9 @@ func (s *chatServer) serve(w http.ResponseWriter, r *http.Request) {
 		json.NewDecoder(r.Body).Decode(&body)
 		channelID := strings.TrimSuffix(strings.TrimPrefix(path, "/channels/"), "/members")
 		key := memberKey(channelID, body["user_id"])
+		if s.swallowJoins {
+			return
+		}
 		if s.members[key] {
 			// And a duplicate CHANNEL membership is a 409. The two
 			// endpoints disagree, which is the point.
@@ -887,6 +1002,48 @@ func TestAFailedRecordRevokesTheMintedToken(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unreachable") {
 		t.Errorf("the error lost the cause: %v", err)
+	}
+}
+
+// A PASS THAT FAILS AFTER SEALING LEAVES NOTHING SEALED.
+//
+// # The bug this exists to keep out
+//
+// A pass MINTS partway through and FLUSHES at the end, so every return
+// between the two is a window: a credential sealed into this deployment's
+// store, live at the instance, and never committed. The next pass reads
+// nothing held, mints a second one, and the loop does that every few minutes
+// for ever — a credential rotated on a timer, from the one code path whose
+// promise is that re-running is free. Several third-party apps here had
+// exactly that, returning `res, err` straight past their own Flush.
+//
+// Mattermost does not, and this is why: every error return after the first
+// [provision.TokenSink.Record] goes through rollback, which revokes what this
+// run minted and DISCARDS what it recorded. The interesting shape is not the
+// seat that failed — it is the seat BEFORE it, which succeeded completely,
+// sealed a working token, and must still be rolled back.
+func TestAPassThatFailsAfterSealingLeavesNothingSealed(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	sink := newChatSink()
+	// The SECOND seat fails, so the first one has already minted, recorded
+	// and been reported joined by the time anything goes wrong.
+	sink.failOn = "MM_TOKEN_CTO"
+
+	_, err := reconcileChat(t, srv, sink, []*org.Role{
+		chatSeat("CEO", "${MM_TOKEN_CEO}", "leadership"),
+		chatSeat("CTO", "${MM_TOKEN_CTO}", "eng"),
+	})
+	if err == nil {
+		t.Fatal("a pass that could not seal the second seat reported success")
+	}
+	if got := sink.recorded(); len(got) != 0 {
+		t.Errorf("%d value(s) left sealed and uncommitted by a failed pass: %v; "+
+			"the next pass mints over them and the one after that does it "+
+			"again", len(got), slices.Sorted(maps.Keys(got)))
+	}
+	if live := srv.liveTokens(); live != 0 {
+		t.Errorf("%d token(s) still live at the instance after a rollback", live)
 	}
 }
 

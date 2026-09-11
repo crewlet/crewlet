@@ -341,25 +341,61 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	res.Hooks = hooks
 	res.Notes = append(res.Notes, notes...)
 	res.NoIngress = noIngressReason(opts)
+	if err == nil {
+		// AND AGAIN AT THE END, because a pass cancelled halfway does not
+		// stop halfway: every read between here and the probe reports its
+		// own failure as a FINDING rather than raising — a seat whose
+		// lookup failed becomes identity_failed, a repository whose hook
+		// listing failed becomes ingress_blocked — so a node draining
+		// mid-pass would record a page of sentences about the operator's
+		// credentials, every one of them actually about this engine
+		// shutting down.
+		err = interrupted(ctx)
+	}
 	if err != nil {
+		// THE SINK IS FLUSHED ON THE WAY OUT, WHICHEVER WAY THAT IS.
+		//
+		// [webhookSecret] seals a fresh secret BEFORE the hooks that have
+		// to carry it are registered, and the sink the loop hands in makes
+		// what it recorded visible to a running engine only inside Flush.
+		// Returning from a failure below that point left the minted secret
+		// sealed and INVISIBLE: the next pass resolved nothing, minted a
+		// second secret, failed at the same place, and went on doing that
+		// for as long as the failure lasted — a key rotated every few
+		// minutes by the loop whose whole promise is that it is safe to
+		// leave switched on, which is the exact runaway the "mint only
+		// where there is nothing usable" rule exists to prevent.
+		//
+		// ON AN UNCANCELLABLE COPY, the rule every teardown in this tree
+		// follows: the failure being cleaned up after is frequently the
+		// cancellation itself, and a flush that inherits a dead context
+		// does nothing at all — which is the bug again, reached through
+		// the drain instead of through a refused hook.
+		if flushErr := flushSink(context.WithoutCancel(ctx), opts); flushErr != nil {
+			return res, errors.Join(err, flushErr)
+		}
 		return res, err
 	}
-	if opts.Sink != nil {
-		if err := opts.Sink.Flush(ctx); err != nil {
-			return res, fmt.Errorf("github: %w", err)
-		}
-	}
-	// AND AGAIN AT THE END, because a pass cancelled halfway does not stop
-	// halfway: every read between here and the probe reports its own
-	// failure as a FINDING rather than raising — a seat whose lookup failed
-	// becomes identity_failed, a repository whose hook listing failed
-	// becomes ingress_blocked — so a node draining mid-pass would record a
-	// page of sentences about the operator's credentials, every one of them
-	// actually about this engine shutting down.
-	if err := interrupted(ctx); err != nil {
+	if err := flushSink(ctx, opts); err != nil {
 		return res, err
 	}
 	return res, nil
+}
+
+// flushSink completes this run's sink, where there is one.
+//
+// The context is the CALLER'S on the success path and an uncancellable copy
+// of it on the failure path — see the call site for why. The success path
+// keeps the deadline, because there a flush that hangs is a pass that never
+// returns.
+func flushSink(ctx context.Context, opts Options) error {
+	if opts.Sink == nil {
+		return nil
+	}
+	if err := opts.Sink.Flush(ctx); err != nil {
+		return fmt.Errorf("github: %w", err)
+	}
+	return nil
 }
 
 // interrupted reports a pass whose context is done, as the error the caller
@@ -467,16 +503,6 @@ func resolveSeats(ctx context.Context, opts Options) []SeatIdentity {
 	return out
 }
 
-// ensureWebhooks registers the inbound hooks, or converges the ones already
-// there.
-//
-// # The organization hook is tried first and is not required
-//
-// One org hook covers every repository in the organization, including ones
-// created after this run — which is the difference between a new repository
-// routing on day one and routing whenever somebody remembers. It needs
-// `admin:org_hook`, which a fine-grained token cannot carry, so `auto` falls
-// back to per-repository hooks rather than failing.
 // noIngressReason says why this run could register no delivery path, or "".
 //
 // ONLY THE ADDRESS. A company with no `provisioning` block has no
@@ -493,6 +519,16 @@ func noIngressReason(opts Options) string {
 		"an address to deliver to and no event reaches this deployment"
 }
 
+// ensureWebhooks registers the inbound hooks, or converges the ones already
+// there.
+//
+// # The organization hook is tried first and is not required
+//
+// One org hook covers every repository in the organization, including ones
+// created after this run — which is the difference between a new repository
+// routing on day one and routing whenever somebody remembers. It needs
+// `admin:org_hook`, which a fine-grained token cannot carry, so `auto` falls
+// back to per-repository hooks rather than failing.
 func ensureWebhooks(ctx context.Context, opts Options) ([]HookState, []string, error) {
 	target := webhookTarget(opts.WebhookBase)
 	if target == "" {

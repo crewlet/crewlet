@@ -93,7 +93,70 @@ type SeatResult struct {
 // It is also idempotent in the way that matters: an account is recognised by
 // the description this engine wrote on it, so a second pass over the same org
 // finds what the first made rather than creating it twice.
+//
+// # THE SINK IS COMPLETED WHATEVER THE PASS DID
+//
+// [provision.TokenSink.Flush] is the point at which what a run sealed STANDS,
+// and under the reconcile loop it is load-bearing rather than ceremonial: the
+// loop's own sink rebuilds the engine's `${VAR}` snapshot there, and ONLY
+// there. This pass reached it on no path at all — it created an account,
+// minted the API token that account acts with, sealed the token and the
+// address Atlassian assigned it, and returned without ever completing the run.
+//
+// On this pass that state is PERMANENT rather than self-healing, which is what
+// makes it worse than the same omission elsewhere. Everywhere a sealed-but-
+// unannounced value is simply re-minted next tick the damage is a rotation on
+// a timer; here the next pass reads the value back through
+// [provision.TokenSink.Value] (see the mint in [reconcileSeat]), finds it
+// held, and therefore never Records again — so the sink never seals again, so
+// the snapshot is never rebuilt, for the life of the deployment. Every agent
+// then authenticates at Jira and Confluence with the literal text
+// "${ATLASSIAN_TOKEN_…}" as its password, every call is refused with a 401
+// naming nothing, and this pass reports the seat provisioned on every tick
+// because as far as it can see the credential is there.
+//
+// So the flush happens on EVERY exit path, and it is not conditioned on
+// whether this pass minted: a sink that recorded nothing has nothing to make
+// durable and says so cheaply, where a "did we mint" flag is one more thing
+// that has to stay in step with a mint several call frames away.
 func Reconcile(ctx context.Context, opts Options) (*Result, error) {
+	res, err := reconcile(ctx, opts)
+	// A NIL SINK IS THE COMMAND LINE'S CHECK and there is nothing to
+	// complete. It is not [provision.ReadOnly], which is a sink and whose
+	// Flush answers cheaply — see [Options.Sink] for why the two are
+	// different facts.
+	if opts.Sink == nil {
+		return res, err
+	}
+	// WITHOUT THE CALLER'S CANCELLATION when the pass is already failing,
+	// which is the rule this tree applies to every rollback and teardown:
+	// the failure being completed is frequently the cancellation itself — a
+	// node draining mid-pass, having just sealed an agent's token — and a
+	// completion that inherits a dead context does nothing at all, which is
+	// the exact state above. A pass that SUCCEEDED keeps its caller's
+	// deadline, because there is nothing to rescue and a completion that
+	// outlives the request it belongs to is its own problem.
+	flushCtx := ctx
+	if err != nil {
+		flushCtx = context.WithoutCancel(ctx)
+	}
+	if flushErr := opts.Sink.Flush(flushCtx); flushErr != nil {
+		// JOINED, NEVER SUBSTITUTED. The pass's own error is the root cause
+		// and callers route on it — [integration.Reject] classifies it, and
+		// errors.Is against [integration.ErrCredentialRejected] decides
+		// whether an operator is sent to rotate the organization key or told
+		// to wait — so replacing it with a completion failure sends them to
+		// the wrong place, and dropping the completion failure hides a sink
+		// this deployment can no longer seal into. errors.Join keeps both
+		// reachable to errors.Is and errors.As.
+		return res, errors.Join(err, fmt.Errorf("atlassian: complete the run: %w", flushErr))
+	}
+	return res, err
+}
+
+// reconcile is the pass itself, with no opinion about the sink's completion:
+// see [Reconcile], which owns that on every path out of here.
+func reconcile(ctx context.Context, opts Options) (*Result, error) {
 	// A CANCELLED PASS HAS OBSERVED NOTHING, so it must RAISE rather than
 	// answer with a Result.
 	//

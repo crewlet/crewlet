@@ -21,15 +21,24 @@ import (
 //
 // # Why this file exists at all
 //
-// integrationtest states the contract in seven clauses and its package doc
+// integrationtest states the contract in nine clauses and its package doc
 // calls the write-counting hook REQUIRED, because that clause is "the one
 // most likely to be wrong". Its only caller was a stub whose pass returned
 // (nil, nil), so "a converged pass writes nothing" held because nothing
 // happened: a green test over a world nobody had built and a reconciler
-// nobody had run. This points the same seven cases at [datadog.Reconcile],
+// nobody had run. This points the same nine cases at [datadog.Reconcile],
 // over a Datadog organization that has already been brought into line, and
 // counts what that organization and this deployment's own sealed store
 // receive.
+//
+// # Two worlds, because one of them certifies nothing on its own
+//
+// A converged pass reports NO findings — that is what converged means — so
+// every clause that walks the findings list walks an empty one and passes
+// whatever this package does. Three of them did: the kinds are known, a
+// person-owed finding says what to do, and two passes over a world with
+// findings agree. [outstandingDatadog] is the other world, and its own doc
+// says which two faults it holds and why those two.
 //
 // # What counts as a write here, and why it is not "not a GET"
 //
@@ -111,6 +120,17 @@ func routeOf(method, path string) string {
 	return method + " " + shape
 }
 
+// The seats this company has.
+//
+// Spelled once because BOTH worlds are built from them and they must not
+// drift: [outstandingDatadog] decommissions seatOne at Datadog and leaves
+// seatTwo converged beside it, so a pass that reported every seat broken
+// would not satisfy that world's own test either.
+const (
+	seatOne = "sre"
+	seatTwo = "oncall"
+)
+
 // serviceAccount is one identity this organization holds.
 type serviceAccount struct {
 	id       string
@@ -127,7 +147,7 @@ type serviceAccount struct {
 // converged BY RUNNING THE PASS — see [convergedDatadog] — and a pass can only
 // converge a world that remembers what it was told.
 type alertingOrg struct {
-	t        *testing.T
+	t        integrationtest.TB
 	roleID   string
 	roleName string
 
@@ -139,7 +159,23 @@ type alertingOrg struct {
 	next     int
 }
 
-func newAlertingOrg(t *testing.T, roleName string) *alertingOrg {
+// newAlertingOrg builds one, reporting to the CASE that drives it.
+//
+// [integrationtest.TB] rather than the *testing.T that owns the world, and
+// the difference shows the moment a fixture complains: every Errorf in the
+// handlers below is a statement that THIS pass did something a pass must not
+// do — disabled a user, asked for a route the organization does not serve —
+// and attributed to the parent it names a test with nine subtests rather than
+// the clause that caught it.
+//
+// The SERVER's lifetime still hangs off the parent, because TB deliberately
+// has no Cleanup: the suite's own tests drive its cases with a recorder, so
+// the interface is the narrow one they can satisfy. That split is safe in the
+// one way it has to be — every request this organization ever serves
+// originates from a Reconcile call made synchronously inside a case, so no
+// handler can still be running, and reporting into a case that has finished,
+// once that case returns.
+func newAlertingOrg(t integrationtest.TB, roleName string) *alertingOrg {
 	t.Helper()
 	return &alertingOrg{
 		t: t, roleID: "role-1", roleName: roleName,
@@ -354,18 +390,31 @@ func (o *alertingOrg) serveWebhook(w http.ResponseWriter, r *http.Request) {
 // A fake that echoes the request body makes the convergence comparison pass
 // for the wrong reason: byte equality would satisfy it, and then the first
 // real region that re-encodes anything has the pass rewriting a definition
-// that is already correct on every tick, for ever. The two places the engine
-// deliberately compares by VALUE are both exercised here — `custom_headers`
-// is a JSON object Datadog stores as a string and re-encodes at its own
-// discretion, and `encode_as` comes back in whatever case it feels like — so
-// a comparison that tightened to bytes fails this fixture rather than
-// production.
+// that is already correct on every tick, for ever — an edit per tick in
+// somebody's audit log, invisible from inside this engine because nothing
+// here re-reads what it wrote.
+//
+// So EVERY FIELD THE ENGINE COMPARES IS PERTURBED WITHOUT CHANGING WHAT IT
+// MEANS, and the engine's own comparison decides. `encode_as` comes back in
+// whatever case Datadog feels like. `custom_headers` and `payload` are JSON
+// documents Datadog stores as strings and re-encodes at its own discretion,
+// so one is re-indented and the other collapsed — opposite directions on
+// purpose, so a comparison that tightened to bytes on either field fails
+// here rather than in production. The payload was the one echoed verbatim,
+// and it is the larger document of the two: [datadog.WebhookPayload] is ten
+// keys of literal JSON.
 func served(hook datadog.Webhook) datadog.Webhook {
 	hook.EncodeAs = strings.ToUpper(hook.EncodeAs)
 	var headers map[string]string
 	if json.Unmarshal([]byte(hook.CustomHeaders), &headers) == nil {
 		if reencoded, err := json.MarshalIndent(headers, "", "  "); err == nil {
 			hook.CustomHeaders = string(reencoded)
+		}
+	}
+	var payload any
+	if json.Unmarshal([]byte(hook.Payload), &payload) == nil {
+		if reencoded, err := json.Marshal(payload); err == nil {
+			hook.Payload = string(reencoded)
 		}
 	}
 	return hook
@@ -414,9 +463,14 @@ func (s *sealedStore) Discard(ctx context.Context) error {
 	return s.sink.Discard(ctx)
 }
 
-// convergedOrg is a Datadog this pass has already converged, plus the pass
-// itself as [integration.Reconciler] sees it.
-type convergedOrg struct {
+// datadogWorld is a Datadog organization, plus the pass that runs against it
+// as [integration.Reconciler] sees it.
+//
+// ONE TYPE FOR BOTH WORLDS. [convergedDatadog] builds the converged one and
+// [outstandingDatadog] builds the other by breaking that one, so the second
+// differs from the first by exactly the faults its own doc names and by
+// nothing else.
+type datadogWorld struct {
 	org  *alertingOrg
 	keys *sealedStore
 	opts datadog.Options
@@ -425,7 +479,7 @@ type convergedOrg struct {
 // Kind names the surface. [integration.KindDatadog] is a constant rather than
 // anything derived, which is what makes the suite's stability clause an
 // assertion about the adapter rather than about a field.
-func (*convergedOrg) Kind() integration.Kind { return integration.KindDatadog }
+func (*datadogWorld) Kind() integration.Kind { return integration.KindDatadog }
 
 // Reconcile runs the real pass and maps its answer the way the loop's own
 // adapter does.
@@ -437,7 +491,7 @@ func (*convergedOrg) Kind() integration.Kind { return integration.KindDatadog }
 // and each of them answers without a client at all. None is reachable over a
 // converged world, so mirroring them here would add branches no case can
 // take. What that adapter does on top of the pass is scored where it lives.
-func (w *convergedOrg) Reconcile(ctx context.Context) ([]integration.Finding, error) {
+func (w *datadogWorld) Reconcile(ctx context.Context) ([]integration.Finding, error) {
 	res, err := datadog.Reconcile(ctx, w.opts)
 	if err != nil {
 		return nil, err
@@ -447,7 +501,7 @@ func (w *convergedOrg) Reconcile(ctx context.Context) ([]integration.Finding, er
 
 // mutations is every write since this world was built, at Datadog and in the
 // sealed store.
-func (w *convergedOrg) mutations() int { return w.org.mutations() + w.keys.writes }
+func (w *datadogWorld) mutations() int { return w.org.mutations() + w.keys.writes }
 
 // convergedDatadog stands the organization up and converges it BY RUNNING THE
 // PASS.
@@ -477,10 +531,10 @@ func (w *convergedOrg) mutations() int { return w.org.mutations() + w.keys.write
 // the suite's own tests drive its cases with and it has no Cleanup, so the
 // case's own reporter is tb while the server's lifetime hangs off the real
 // *testing.T that owns this world.
-func convergedDatadog(t *testing.T, tb integrationtest.TB) *convergedOrg {
+func convergedDatadog(t *testing.T, tb integrationtest.TB) *datadogWorld {
 	t.Helper()
 	cfg := cfgWith()
-	org := newAlertingOrg(t, datadog.RoleName(cfg.Provisioning))
+	org := newAlertingOrg(tb, datadog.RoleName(cfg.Provisioning))
 	// A REAL PERSON UNDER THE SAME DOMAIN, because Datadog's user filter
 	// is a free-text substring match on the address and one is what the
 	// service-account check exists to drop. Without it every row in the
@@ -508,7 +562,7 @@ func convergedDatadog(t *testing.T, tb integrationtest.TB) *convergedOrg {
 		tb.Fatalf("NewClient: %v", err)
 	}
 
-	handles := []string{"sre", "oncall"}
+	handles := []string{seatOne, seatTwo}
 	plan := &provision.Plan{}
 	for _, handle := range handles {
 		plan.Add(provision.Seat{
@@ -523,7 +577,7 @@ func convergedDatadog(t *testing.T, tb integrationtest.TB) *convergedOrg {
 	}
 
 	keys := newSealedStore()
-	world := &convergedOrg{org: org, keys: keys, opts: datadog.Options{
+	world := &datadogWorld{org: org, keys: keys, opts: datadog.Options{
 		Client: client, Config: cfg, Plan: plan, Creds: pair, Sink: keys,
 		// BOTH OF THESE THE WAY THE ENGINE SETS THEM. Either one empty
 		// makes ensureWebhook return before it reads anything, so the
@@ -567,19 +621,144 @@ func convergedDatadog(t *testing.T, tb integrationtest.TB) *convergedOrg {
 	return world
 }
 
-// THE CONTRACT IS CERTIFIED AGAINST THE REAL RECONCILER.
+// outstandingDatadog is the same organization with two things genuinely
+// wrong — one in each half of the pass, and both of them a PERSON's to undo.
+//
+// # Why a second world exists at all
+//
+// [integrationtest.Reconciler.Outstanding]'s doc states it: a converged pass
+// reports no findings, so every clause that walks the findings list walks an
+// empty one and certifies nothing. For Datadog that was three of the nine.
+// This world is what those three are run against, and it has to prove itself
+// first — the suite's anti-vacuity clause fails if it reports nothing, or
+// nothing a person owes.
+//
+// # Why THESE two faults
+//
+// They are the two states this package learned about the hard way, they sit
+// one in each half of the pass, and each is STABLE across passes — which the
+// two-passes-agree clause needs and which rules out every fault the pass
+// would simply fix on the first tick:
+//
+//   - SEATONE'S SERVICE ACCOUNT IS DISABLED AT DATADOG. Not a hypothetical
+//     shape: disabling one is exactly how [datadog.Teardown] decommissions a
+//     seat, and a disabled account stays in the users listing — so an
+//     operator who disconnected, removed seats, and later switched the block
+//     back on has precisely this organization. The pass reports it and
+//     deliberately does not re-enable it, because undoing somebody's
+//     decommission is their decision, which is also what makes it stable
+//     here. It reads as identity_failed, owed by an admin.
+//   - THIS DEPLOYMENT HAS NO PUBLIC BASE URL, so there is no address to point
+//     a webhook at and every monitor this company has fires into nothing. It
+//     is the fault an alerting integration is worst at showing, because
+//     Datadog itself reports nothing wrong: the surface looks like coverage.
+//     It reads as ingress_blocked on the field somebody has to set.
+//
+// TWO RATHER THAN ONE, because the pass reports through two independent
+// halves and a world that broke only one leaves the other's finding path
+// exactly as unwalked as a converged world does. seatTwo is left converged
+// beside seatOne for the same reason in the other direction.
+//
+// Neither fault makes this pass write, which is incidental rather than
+// required: the suite counts mutations only over the converged world.
+func outstandingDatadog(t *testing.T, tb integrationtest.TB) *datadogWorld {
+	t.Helper()
+	world := convergedDatadog(t, tb)
+
+	// THE INGRESS HALF. Built converged and then taken away, so the world
+	// is one this deployment could actually be in rather than one that was
+	// never wired up.
+	world.opts.WebhookBase = ""
+
+	// THE IDENTITY HALF, applied at DATADOG rather than in the plan: the
+	// seat still wants an identity and the account is still in the
+	// listing, which is the whole reason this state went unnoticed.
+	decommissioned := datadog.AccountEmail(world.opts.Config.Provisioning, seatOne)
+	world.org.mu.Lock()
+	defer world.org.mu.Unlock()
+	for _, account := range world.org.accounts {
+		if account.email == decommissioned {
+			account.disabled = true
+			return world
+		}
+	}
+	tb.Fatalf("%s has no account to decommission, so this world is converged "+
+		"after all and the three clauses that walk a findings list are back "+
+		"to walking an empty one", seatOne)
+	return world
+}
+
+// THE CONTRACT IS CERTIFIED AGAINST THE REAL RECONCILER, OVER BOTH WORLDS.
 func TestTheDatadogReconcilerMeetsTheContract(t *testing.T) {
 	t.Parallel()
-	// Assigned by New and read by Mutations, which the suite calls in that
-	// order within one sequential case.
-	var world *convergedOrg
+	// Assigned by Converged and read by Mutations, which the suite calls in
+	// that order within one sequential case. Outstanding deliberately does
+	// not touch it: nothing counts mutations over that world, and sharing
+	// the variable would let a later case's world answer for an earlier
+	// case's baseline.
+	var converged *datadogWorld
 	integrationtest.Run(t, integrationtest.Reconciler{
-		New: func(tb integrationtest.TB) integration.Reconciler {
-			world = convergedDatadog(t, tb)
-			return world
+		Converged: func(tb integrationtest.TB) integration.Reconciler {
+			converged = convergedDatadog(t, tb)
+			return converged
 		},
-		Mutations: func() int { return world.mutations() },
+		Outstanding: func(tb integrationtest.TB) integration.Reconciler {
+			return outstandingDatadog(t, tb)
+		},
+		Mutations: func() int { return converged.mutations() },
 	})
+}
+
+// AND THE OUTSTANDING WORLD REPORTS EVERY FAULT IT WAS BUILT TO HOLD.
+//
+// The suite's anti-vacuity clause asks for ONE finding and one a person owes,
+// which two faults satisfy twice over — so it cannot notice that one of them
+// stopped being reported, and the world would quietly go on certifying the
+// findings clauses against half of what it was built for. That is the same
+// failure this world exists to remove, moved one level up. Each fault is
+// named here, so each is pinned on its own rather than by the other.
+func TestTheOutstandingWorldReportsEveryFaultItHolds(t *testing.T) {
+	t.Parallel()
+	world := outstandingDatadog(t, t)
+	findings, err := world.Reconcile(context.Background())
+	if err != nil {
+		t.Fatalf("a pass over the outstanding world: %v", err)
+	}
+
+	// The SUBJECT as well as the kind, because the subject is what a status
+	// row offers somebody to act on: a finding naming the wrong thing is a
+	// person sent to the wrong field.
+	want := map[integration.FindingKind]string{
+		integration.FindingIngressBlocked: "integrations.public_base_url",
+		integration.FindingIdentityFailed: seatOne,
+	}
+	for _, f := range findings {
+		subject, expected := want[f.Kind]
+		if !expected {
+			t.Errorf("the outstanding world reported %q on %q, which is neither "+
+				"of the two faults it holds: %s", f.Kind, f.Subject, f.Detail)
+			continue
+		}
+		if f.Subject != subject {
+			t.Errorf("%s names %q, want %q", f.Kind, f.Subject, subject)
+		}
+		delete(want, f.Kind)
+	}
+	for kind, subject := range want {
+		t.Errorf("the outstanding world holds a fault it did not report: %s on "+
+			"%s — every clause that walks the findings list is then walking a "+
+			"shorter list than this world was built to produce", kind, subject)
+	}
+
+	// AND THE SEAT BESIDE IT IS STILL FINE, which is what makes the
+	// identity finding above about one decommissioned account rather than
+	// about a pass that reports every seat broken.
+	for _, f := range findings {
+		if f.Subject == seatTwo {
+			t.Errorf("%s was reported too, so the world is broken more widely "+
+				"than it is meant to be: %s", seatTwo, f.Detail)
+		}
+	}
 }
 
 // AND THE COUNTER SEES THE WRITES IT IS THERE TO SEE.

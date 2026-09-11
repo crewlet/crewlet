@@ -1,10 +1,6 @@
 package gitlab
 
-import (
-	"fmt"
-
-	"github.com/crewlet/crewlet/internal/integration"
-)
+import "github.com/crewlet/crewlet/internal/integration"
 
 // Findings reads this run as the integration-neutral vocabulary.
 //
@@ -17,6 +13,16 @@ import (
 // A seat this run KEPT is not a finding. Keeping is the successful outcome of
 // a re-run, and reporting it as anything would make every converged company
 // look like it had work outstanding.
+//
+// NOR IS A SEAT THIS RUN DECOMMISSIONED. That branch existed and reported
+// each deleted account as [integration.FindingIdentityMissing], under a
+// comment describing "a seat with no account AND NO TOKEN… it is in the
+// plan". [Result.Decommissioned] is exactly the seats that are NOT in the
+// plan: an operator passed -decommission and the run deleted the accounts of
+// seats the company document no longer has. Reporting them made a successful
+// destructive run classify as PhaseProvisioning/ActorEngine — "creating agent
+// identities" — for handles that will never be created, on a row nothing
+// clears.
 func (r *Result) Findings() []integration.Finding {
 	if r == nil {
 		return nil
@@ -38,31 +44,28 @@ func (r *Result) Findings() []integration.Finding {
 		})
 	}
 
-	// A RUN THAT REGISTERED NO WEBHOOK, having been asked to. Empty
-	// HookedOn with a non-empty target is the shape a refused registration
-	// leaves: the run reached the instance, tried, and the credential
-	// could not create one.
-	if r.Hooked != "" && len(r.HookedOn) == 0 {
+	// A RUN THAT LEFT THE INSTANCE WITH NOWHERE TO DELIVER TO.
+	//
+	// This used to read `r.Hooked != "" && len(r.HookedOn) == 0`, described
+	// as the shape a refused registration leaves. It is not a shape
+	// [Reconcile] can produce: every route through `ensureHooks` either
+	// returns a non-empty list or returns an ERROR, so the branch could
+	// never fire and the one ingress state this pass really does reach —
+	// no public base URL to point a hook at — reported nothing at all and
+	// classified as READY. See [Result.NoIngress].
+	//
+	// The refusal that branch was written for is still a fault rather than
+	// a finding: a credential that may not administer the group's or a
+	// project's hooks fails the whole pass. That is the wrong verdict for
+	// the same reason [Result.NoKeyring] is reported rather than raised —
+	// no retry fixes it — but changing it also changes what
+	// `crewlet gitlab provision` prints and the status it exits with, so it
+	// is a coordinated change rather than a line here.
+	if r.NoIngress != "" {
 		out = append(out, integration.Finding{
 			Kind:    integration.FindingIngressBlocked,
-			Subject: r.Hooked,
-			Detail: fmt.Sprintf(
-				"no webhook was registered for %s, so its events reach nobody: "+
-					"the credential may not administer the group or its projects",
-				r.Hooked),
-		})
-	}
-
-	// A SEAT WITH NO ACCOUNT AND NO TOKEN. It is in the plan, so the
-	// company expects it to act on GitLab, and this run neither created
-	// nor kept it, which means it cannot authenticate as itself.
-	for _, handle := range r.Decommissioned {
-		out = append(out, integration.Finding{
-			Kind:    integration.FindingIdentityMissing,
-			Subject: handle,
-			Detail: fmt.Sprintf(
-				"%s no longer has a GitLab service account, so nothing it does "+
-					"on the instance is attributable to it", handle),
+			Subject: "integrations.public_base_url",
+			Detail:  r.NoIngress,
 		})
 	}
 	return out

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -256,39 +257,44 @@ func ensureWebhook(ctx context.Context, opts Options) WebhookResult {
 // the integration would report itself connected.
 func sameWebhook(current, want Webhook) bool {
 	return current.URL == want.URL &&
-		current.Payload == want.Payload &&
-		sameHeaders(current.CustomHeaders, want.CustomHeaders) &&
+		sameJSONText(current.Payload, want.Payload) &&
+		sameJSONText(current.CustomHeaders, want.CustomHeaders) &&
 		strings.EqualFold(current.EncodeAs, want.EncodeAs)
 }
 
-// sameHeaders compares two header sets by VALUE rather than by their text.
+// sameJSONText compares two fields Datadog stores as TEXT and this engine
+// writes as a JSON DOCUMENT, by the document rather than by the bytes.
 //
-// Datadog stores the field as a JSON string and hands back its own encoding
-// of it, which need not be byte-for-byte what was sent — a different key
-// order or spacing would otherwise read as a difference and have every tick
-// rewrite a definition that is already correct.
-func sameHeaders(current, want string) bool {
-	parse := func(raw string) map[string]string {
-		out := map[string]string{}
-		if strings.TrimSpace(raw) == "" {
-			return out
-		}
-		if err := json.Unmarshal([]byte(raw), &out); err != nil {
-			// UNREADABLE COUNTS AS DIFFERENT. Something else wrote this,
-			// and rewriting it with the shape the engine wants is the
-			// only way back to a definition that delivers.
-			return map[string]string{"": raw}
-		}
-		return out
+// # Both fields, for one reason
+//
+// `custom_headers` and `payload` are the two the engine authors as JSON and
+// Datadog keeps as a string, and Datadog hands back its own encoding of what
+// it was given — a different key order, different spacing, a re-indent.
+// Compared byte for byte, any of those reads as a difference this pass then
+// "fixes" with a PUT, on every tick, for ever: an edit per tick in the
+// organization's audit log over a definition that was already correct, which
+// is precisely the loop the read-before-write in [ensureWebhook] exists to
+// avoid. It is also invisible from inside this engine, because nothing here
+// ever re-reads what it wrote — the only place it shows is somebody else's
+// audit log.
+//
+// The header half of that was already true and written down. The payload was
+// compared with `==` beside it, on no stated reasoning, and it is the larger
+// document of the two: [WebhookPayload] is ten keys of literal JSON, so it is
+// the one a region has more to normalise in.
+//
+// # Unreadable falls back to the text
+//
+// Something else wrote it, and the shape this engine wants is the only one
+// that delivers — so a definition carrying a payload that is not JSON at all
+// is rewritten. But two identical unparseable strings are still the same
+// string, and rewriting on those would be the every-tick loop again under
+// another name, so the comparison drops to text rather than to "different".
+func sameJSONText(current, want string) bool {
+	var here, there any
+	if json.Unmarshal([]byte(current), &here) != nil ||
+		json.Unmarshal([]byte(want), &there) != nil {
+		return current == want
 	}
-	a, b := parse(current), parse(want)
-	if len(a) != len(b) {
-		return false
-	}
-	for key, value := range b {
-		if a[key] != value {
-			return false
-		}
-	}
-	return true
+	return reflect.DeepEqual(here, there)
 }

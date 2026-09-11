@@ -108,6 +108,24 @@ func (o *stubOrg) server(t *testing.T) *httptest.Server {
 type sink struct {
 	held  string
 	wrote map[string]string
+
+	// onRecord runs after a value has been sealed, for a test that has to
+	// make something go wrong AFTER the pass has minted a live credential.
+	// That window is the one the run's completion exists for, and it cannot
+	// be reached from the vendor's side: by the time a token is sealed,
+	// every request this seat makes is already behind it.
+	onRecord func(name string)
+
+	// flushErr is what completing the run answers, for the test about what
+	// happens to the pass's OWN error when it does not answer nil.
+	flushErr error
+
+	// flushes counts the completions, and flushLive records whether the
+	// context the last one was handed was still alive. The second is not a
+	// detail: a completion that inherits the cancellation it is completing
+	// does nothing at all, which is indistinguishable from never calling it.
+	flushes   int
+	flushLive bool
 }
 
 func (s *sink) Record(_ context.Context, name, value string) error {
@@ -115,6 +133,9 @@ func (s *sink) Record(_ context.Context, name, value string) error {
 		s.wrote = map[string]string{}
 	}
 	s.wrote[name] = value
+	if s.onRecord != nil {
+		s.onRecord(name)
+	}
 	return nil
 }
 func (s *sink) Value(_ context.Context, name string) (string, bool, error) {
@@ -127,9 +148,13 @@ func (s *sink) Value(_ context.Context, name string) (string, bool, error) {
 	return "", false, nil
 }
 func (s *sink) Discard(context.Context) error { return nil }
-func (s *sink) Flush(context.Context) error   { return nil }
-func (s *sink) Describe() string              { return "test" }
-func (s *sink) NextStep() string              { return "" }
+func (s *sink) Flush(ctx context.Context) error {
+	s.flushes++
+	s.flushLive = ctx.Err() == nil
+	return s.flushErr
+}
+func (s *sink) Describe() string { return "test" }
+func (s *sink) NextStep() string { return "" }
 
 // reconcile runs one pass and hands back everything it answered, the error
 // included.
@@ -383,5 +408,158 @@ func TestANodeWithNoKeyringCreatesNoAccountAndNamesTheSetting(t *testing.T) {
 	if sealing.created != 1 || sealing.granted != 1 || sealing.minted != 1 {
 		t.Errorf("a node that CAN seal created %d account(s), granted %d and minted "+
 			"%d, want one of each", sealing.created, sealing.granted, sealing.minted)
+	}
+}
+
+// ---- the run's completion --------------------------------------------- //
+
+// A PASS THAT SEALS A CREDENTIAL COMPLETES THE RUN THAT SEALED IT.
+//
+// [provision.TokenSink.Flush] is where what a run sealed STANDS, and under the
+// reconcile loop it is where the engine rebuilds the `${VAR}` snapshot every
+// seat's mcp_env resolves through. This pass reached it on no path at all: it
+// minted an agent's API token, sealed it, and returned. Nothing announced the
+// value, so nothing resolved it, and the next pass read the same sealed value
+// back, found it held and never sealed again — permanently, because the only
+// thing that rebuilds the snapshot is a Record that now never happens.
+func TestAMintIsFollowedByTheCompletionThatAnnouncesIt(t *testing.T) {
+	t.Parallel()
+	o := &stubOrg{tokens: 0}
+	s := &sink{held: "ATSTT-for-the-deleted-account"}
+
+	run(t, o, s)
+
+	if o.minted != 1 {
+		t.Fatalf("minted %d time(s); this test is about what follows a mint", o.minted)
+	}
+	if s.flushes != 1 {
+		t.Errorf("a pass that sealed a credential completed the run %d time(s): the "+
+			"token is live at Atlassian, sealed under the seat's ${VAR}, and no "+
+			"surface in this deployment can resolve it", s.flushes)
+	}
+}
+
+// mintThenFail is a pass that mints a live credential and THEN fails.
+//
+// The failure comes from the sink rather than from Atlassian, and that is the
+// only place it can come from: by the time a token is sealed this seat has
+// made its last request, so nothing the organization does afterwards is still
+// in the pass. Cancelling as the token is recorded puts the failure in exactly
+// the window the completion exists for — a node draining mid-pass, having just
+// minted.
+func mintThenFail(t *testing.T, s *sink) (*atlassian.Result, error) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	s.held = "ATSTT-for-the-deleted-account"
+	s.onRecord = func(name string) {
+		// THE TOKEN, NOT THE ADDRESS. The address is sealed first and the
+		// mint is still ahead of it, so cancelling there would fail the
+		// mint's own request and there would be no sealed credential to be
+		// about.
+		if name == "SEAT_TOKEN" {
+			cancel()
+		}
+	}
+	o := &stubOrg{tokens: 0}
+	res, err := reconcile(ctx, t, o, s)
+	if o.minted != 1 {
+		t.Fatalf("minted %d time(s); this test is about a pass that failed AFTER "+
+			"minting, and nothing was minted", o.minted)
+	}
+	return res, err
+}
+
+// AND SO DOES ONE THAT FAILED AFTER MINTING, which is the path that actually
+// occurs and the one an early return silently skips.
+//
+// A pass that returns its error several statements before the completion has
+// left a live Atlassian credential sealed and unannounced. Everywhere else in
+// this tree that state is re-minted on the next tick; here it is permanent,
+// because the next pass finds the value held and never Records again.
+func TestAPassThatFailsAfterMintingStillCompletesTheRun(t *testing.T) {
+	t.Parallel()
+	s := &sink{}
+
+	_, err := mintThenFail(t, s)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("the pass did not fail: %v", err)
+	}
+	if s.flushes != 1 {
+		t.Errorf("a pass that sealed a credential and then failed completed the run "+
+			"%d time(s), so the value is sealed, the engine's ${VAR} snapshot was "+
+			"never rebuilt, and no later pass will ever seal again", s.flushes)
+	}
+}
+
+// AND THE COMPLETION DOES NOT INHERIT THE CANCELLATION IT IS COMPLETING.
+//
+// The failure being cleaned up after is frequently the cancellation itself — a
+// node draining mid-pass — and a flush handed a dead context does nothing at
+// all, which is indistinguishable from the early return above. This is the
+// rule every rollback and teardown in this tree follows, and it is invisible
+// from a test that only counts the calls.
+func TestTheCompletionOfAFailedPassDoesNotInheritItsCancellation(t *testing.T) {
+	t.Parallel()
+	s := &sink{}
+
+	if _, err := mintThenFail(t, s); !errors.Is(err, context.Canceled) {
+		t.Fatalf("the pass did not fail: %v", err)
+	}
+	if s.flushes != 1 {
+		t.Fatalf("the run was completed %d time(s)", s.flushes)
+	}
+	if !s.flushLive {
+		t.Errorf("the completion was handed the context whose cancellation it was " +
+			"completing, so it does nothing at all and the sealed credential is " +
+			"announced by nobody")
+	}
+}
+
+// A FAILED COMPLETION IS REPORTED BESIDE THE PASS'S OWN ERROR, NEVER INSTEAD
+// OF IT.
+//
+// Callers route on the pass's error: [integration.Reject] classifies it and an
+// errors.Is against [integration.ErrCredentialRejected] decides whether an
+// operator is sent to rotate the organization key or told to wait. Replacing
+// it with a sink failure sends them to the wrong place; dropping the sink
+// failure hides a store this deployment can no longer seal into. Both have to
+// survive, which is what errors.Join is for.
+func TestAFailedCompletionIsJoinedWithThePassesOwnErrorRatherThanReplacingIt(t *testing.T) {
+	t.Parallel()
+	s := &sink{flushErr: errors.New("the sealed store would not answer")}
+
+	_, err := mintThenFail(t, s)
+	if err == nil {
+		t.Fatalf("neither the pass's failure nor the sink's was reported")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("the completion's failure replaced the pass's own, so every caller "+
+			"that routes on what went wrong now reads the wrong cause: %v", err)
+	}
+	if !strings.Contains(err.Error(), "the sealed store would not answer") {
+		t.Errorf("a sink this deployment can no longer seal into was swallowed: %v", err)
+	}
+}
+
+// AND A CHECK WITH NOWHERE TO SEAL HAS NOTHING TO COMPLETE.
+//
+// A nil sink is the command line's check — distinct from [provision.ReadOnly],
+// which is a sink that refuses — and completing one would dereference nothing.
+// Asserted because the guard that says so is one line and its absence is a
+// panic in a pass an operator runs by hand.
+func TestACheckWithNoSinkHasNothingToComplete(t *testing.T) {
+	t.Parallel()
+	o := &stubOrg{empty: true}
+
+	res, err := reconcile(context.Background(), t, o, nil)
+	if err != nil {
+		t.Fatalf("Reconcile with no sink: %v", err)
+	}
+	if o.created != 0 || o.minted != 0 {
+		t.Errorf("a check created %d account(s) and minted %d", o.created, o.minted)
+	}
+	if len(res.Seats) != 1 || res.Seats[0].AccountID != "" {
+		t.Errorf("a check reported an account it did not create: %+v", res.Seats)
 	}
 }

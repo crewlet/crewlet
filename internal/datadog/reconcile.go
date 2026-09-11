@@ -94,6 +94,33 @@ type SeatResult struct {
 // read-only check is. It still lists accounts, so an operator sees which
 // seats are missing one without the pass creating any.
 func Reconcile(ctx context.Context, opts Options) (*Result, error) {
+	// A CANCELLED PASS OBSERVED NOTHING, AND IT SAYS SO HERE RATHER THAN BY
+	// HAPPENING TO MAKE A NETWORK CALL FIRST.
+	//
+	// [integration.Reconciler]'s contract — and the clause
+	// integrationtest drives for it — is that a cancelled pass raises
+	// rather than answering with findings, because an error is a fault the
+	// loop retries and an empty findings list is a statement that
+	// everything is fine. This pass satisfied that only INCIDENTALLY: the
+	// credential probe below is a network call, so a dead context failed
+	// it. That left the clause resting on two things it should not rest
+	// on. The first is the transport honouring cancellation, which is a
+	// property of whatever [Client] was built with rather than of this
+	// package. The second is worse and is reachable today: the arm above
+	// the probe returns [integration.ErrNotConfigured], which the loop
+	// reads as "forget this surface's status row" — so a node draining
+	// during shutdown, against a company mid-edit, would delete the
+	// fleet's Datadog status on its way out.
+	//
+	// And when the probe DID answer for it, it answered wrongly. The
+	// sentence it produces names the organization credential pair and says
+	// it "could not be verified", so a pass cancelled by a node shutting
+	// down sent an operator to look at a key that was never asked about.
+	// [integration.Refusal]'s own doc is about exactly that class of
+	// mistake.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if opts.Client == nil {
 		return nil, errors.New("datadog: no client")
 	}
@@ -185,6 +212,16 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	for _, seat := range opts.Plan.Seats {
 		res.Seats = append(res.Seats, provisionSeat(ctx, opts, seat, byEmail, roleID))
 	}
+	// FLUSHED AFTER THE WHOLE PLAN, AND ON EVERY PATH THAT MINTED.
+	//
+	// [provision.TokenSink] hands nothing to the fleet until Flush, so a
+	// key minted at Datadog and sealed but never flushed is the state the
+	// sink's own contract legislates against: it exists, nobody holds it,
+	// and the next pass finds a seat with a key it cannot read a value for
+	// and mints another. The shape that produces it is a mid-pass `return
+	// res, err` placed after the first mint, which is why nothing in the
+	// loop above returns early — a seat that fails carries its failure in
+	// its own [SeatResult] and the plan runs to the end.
 	if opts.Sink != nil {
 		if err := opts.Sink.Flush(ctx); err != nil {
 			return res, fmt.Errorf("datadog: record the minted keys: %w", err)

@@ -49,9 +49,19 @@ type instance struct {
 	// answering, and everything else is it failing to.
 	projectStatus map[string]int
 	hooks         []map[string]any
-	created       []map[string]any
-	updated       []map[string]any
-	deleted       []string
+	// hookWriteStatus, when non-zero, is the status this instance refuses
+	// every webhook WRITE with — a create, an update or a delete.
+	//
+	// A refusal the instance ANSWERS, deliberately, and distinct from
+	// [instance.unanswered]: what it expresses is a pass that got as far as
+	// the one thing it changes and was told no (an org account without
+	// Administer Jira is the everyday cause). That is the window in which a
+	// pass has already minted and sealed a signing secret, which is what
+	// makes the sink's completion visible at all.
+	hookWriteStatus int
+	created         []map[string]any
+	updated         []map[string]any
+	deleted         []string
 	// nextHook numbers the registrations this instance issues, so two
 	// hooks created against one instance are two different hooks.
 	nextHook int
@@ -181,6 +191,14 @@ func (i *instance) serve(w http.ResponseWriter, req *http.Request) {
 func (i *instance) serveHooks(w http.ResponseWriter, req *http.Request, path string) {
 	id := strings.TrimPrefix(path, "/rest/webhooks/1.0/webhook")
 	id = strings.TrimPrefix(id, "/")
+
+	// The listing is exempt: it is a read, and a fixture that could not be
+	// listed would never reach the write this knob is about.
+	if i.hookWriteStatus != 0 && req.Method != http.MethodGet {
+		w.WriteHeader(i.hookWriteStatus)
+		_, _ = w.Write([]byte(`{"errorMessages":["You do not have permission"]}`))
+		return
+	}
 
 	switch req.Method {
 	case http.MethodGet:
@@ -841,6 +859,21 @@ type sink struct {
 	// count rather than the length of values, because re-sealing one name
 	// over and over is exactly the write that has to be visible.
 	sealed int
+	// flushes counts the completions this sink was given.
+	//
+	// COUNTED BECAUSE THE LOOP'S OWN SINK DOES WORK HERE: engine's
+	// refreshingSink rebuilds the `${VAR}` snapshot in Flush and nowhere
+	// else, so a pass that sealed a value and never flushed leaves the
+	// running engine unable to resolve what it just sealed. A fake whose
+	// Flush merely returned nil could not tell that pass from a correct
+	// one. See TestAPassThatMintedAndThenFailedStillCompletesTheSink.
+	flushes int
+	// liveOnFlush is whether the context the LAST Flush was given was still
+	// alive. See TestAPassCancelledAfterMintingCompletesTheSinkAnyway.
+	liveOnFlush bool
+	// flushErr is what Flush answers, so a sink this deployment can no
+	// longer seal into is expressible.
+	flushErr error
 }
 
 func newSink() *sink { return &sink{values: map[string]string{}} }
@@ -861,7 +894,29 @@ func (s *sink) records() int {
 }
 
 func (s *sink) Discard(context.Context) error { return nil }
-func (s *sink) Flush(context.Context) error   { return nil }
+
+func (s *sink) Flush(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.flushes++
+	s.liveOnFlush = ctx.Err() == nil
+	return s.flushErr
+}
+
+// flushes is how many times this sink was completed.
+func (s *sink) flushed() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.flushes
+}
+
+// flushedAlive reports the last completion having been given a context that
+// was still live.
+func (s *sink) flushedAlive() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.liveOnFlush
+}
 
 func (s *sink) Value(_ context.Context, name string) (string, bool, error) {
 	s.mu.Lock()

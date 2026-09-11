@@ -85,8 +85,6 @@ type Result struct {
 	Account string
 	Hooks   []HookState
 	Notes   []string
-	// Recorded counts the values this run wrote to the sink.
-	Recorded int
 }
 
 // Reconcile runs one pass.
@@ -107,21 +105,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	}
 	res := &Result{Deployment: opts.Client.Deployment(), Account: account}
 
-	base := strings.TrimRight(strings.TrimSpace(opts.WebhookBase), "/")
-	if base == "" {
-		res.Notes = append(res.Notes,
-			"no webhook was registered: set integrations.public_base_url or pass "+
-				"-public-url to register one. Without it the instance delivers "+
-				"nothing and the integration looks idle rather than unconfigured")
-		return res, nil
-	}
-
-	switch res.Deployment {
-	case Cloud:
-		err = reconcileCloud(ctx, opts, base, res)
-	default:
-		err = reconcileDataCenter(ctx, opts, base, res)
-	}
+	err = converge(ctx, opts, res)
 	if err == nil {
 		// A PASS THAT WAS CUT SHORT HAS NOT SEEN THE WORLD IT IS ABOUT TO
 		// REPORT ON, and on a converged instance that is invisible from
@@ -157,6 +141,41 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		return res, err
 	}
 	return res, nil
+}
+
+// converge is the pass's own work: the hooks, on whichever deployment this
+// is, or nothing at all when there is no address to point them at.
+//
+// A FUNCTION RATHER THAN A BLOCK INSIDE [Reconcile], and the reason is the
+// no-base exit below. It used to `return res, nil` straight out of Reconcile,
+// which made it the ONE path that never reached the ctx.Err() fold every
+// other exit goes through — so a pass that had run out of context still
+// answered (no findings, no error), which is the loop's word for "this
+// integration is ready".
+//
+// It was argued unreachable because [Client.Me] runs first and a dead context
+// fails it. That is true of a CANCELLATION and false of a DEADLINE: the pass
+// runs on a context bounded by the lease that protects it, so an expiry
+// landing between Me answering and this line is ordinary rather than exotic,
+// and a company with no public base URL is exactly where it costs the most —
+// there is no listing and no registration afterwards for anything else to
+// notice on. With the work in here, every exit folds, and the asymmetry
+// cannot come back by someone adding a sixth early return.
+func converge(ctx context.Context, opts Options, res *Result) error {
+	base := strings.TrimRight(strings.TrimSpace(opts.WebhookBase), "/")
+	if base == "" {
+		res.Notes = append(res.Notes,
+			"no webhook was registered: set integrations.public_base_url or pass "+
+				"-public-url to register one. Without it the instance delivers "+
+				"nothing and the integration looks idle rather than unconfigured")
+		return nil
+	}
+	switch res.Deployment {
+	case Cloud:
+		return reconcileCloud(ctx, opts, base, res)
+	default:
+		return reconcileDataCenter(ctx, opts, base, res)
+	}
 }
 
 // flushSink completes the run's sink, where there is one.
@@ -206,11 +225,21 @@ func reconcileCloud(ctx context.Context, opts Options, base string, res *Result)
 	if err != nil {
 		return fmt.Errorf("confluence: list webhooks: %w", err)
 	}
+	// INDEXED BY NAME, and the name is where this pass's namespace rule is
+	// enforced: every lookup below is keyed on HookName(event), which always
+	// carries [HookNamePrefix], so a hook an operator registered under any
+	// other name is never found and never touched.
+	//
+	// There was a prefix filter here too, dropping foreign hooks as the index
+	// was built. It was a second copy of that same rule and an unfalsifiable
+	// one — measured: removing it changes no behaviour any test in this
+	// package can see, because nothing reads this map except through a
+	// prefixed key. One rule at the point it is enforced is what this tree
+	// asks for everywhere else, and TestCloudLeavesForeignHooksAlone pins the
+	// guarantee itself rather than one of two spellings of it.
 	byName := make(map[string]Webhook, len(existing))
 	for _, hook := range existing {
-		if strings.HasPrefix(hook.Name, HookNamePrefix) {
-			byName[hook.Name] = hook
-		}
+		byName[hook.Name] = hook
 	}
 
 	// ONE EVENT'S REFUSAL IS NOT THE PASS'S.
@@ -336,14 +365,49 @@ func blame(ctx context.Context, state *HookState, err error) error {
 	return nil
 }
 
+// dataCenterHookEvent is the pseudo-event the single Data Center hook is
+// recorded under, and the name it is registered as.
+//
+// A constant because three things now read it and a typo in any one of them
+// is silent: the registration's name, the [HookState] the pass records, and
+// the sentence [Result.Findings] writes when that hook could not be
+// established.
+const dataCenterHookEvent = "all"
+
 // reconcileDataCenter converges the single signed hook Data Center wants.
+//
+// A REFUSAL FROM THE INSTANCE IS THIS HOOK'S, NOT THE PASS'S — the same rule
+// the Cloud half above states at length, and this branch was the half that
+// did not follow it.
+//
+// Every write here returned an error, so a Data Center instance that refused
+// the registration — a 403, which is what an org account without the
+// Confluence Administrator global permission gets from this endpoint — came
+// out of [Reconcile] as a FAULT. The two answers are opposite to the loop:
+// integration.Classify reads a fault as the engine still working on it and
+// retries it on the waiting backoff for ever, where FindingIngressBlocked is
+// degraded and owed by the ADMINISTRATOR who can grant that permission. So
+// the one person who could fix it was never told, on the deployment where it
+// is most likely — a self-hosted instance whose admin rights are somebody
+// else's to give.
+//
+// It is also worse here than on Cloud, and the finding says so: Cloud
+// registers one hook per event, so a refusal costs that event class alone,
+// while this branch's single hook carries all of them and a refusal means no
+// Confluence event reaches the engine at all.
+//
+// A dead context is still the pass's, through the same [blame] the Cloud walk
+// uses: it refuses this write exactly as the instance would, and reporting it
+// as an ingress block sends somebody to grant a permission that was never
+// missing.
 func reconcileDataCenter(ctx context.Context, opts Options, base string, res *Result) error {
 	secret, err := dataCenterSecret(ctx, opts, res)
 	if err != nil {
 		return err
 	}
 	target := base + "/webhooks/confluence"
-	name := HookName("all")
+	name := HookName(dataCenterHookEvent)
+	state := HookState{Event: dataCenterHookEvent}
 
 	existing, err := opts.Client.Webhooks(ctx)
 	if err != nil {
@@ -366,7 +430,16 @@ func reconcileDataCenter(ctx context.Context, opts Options, base string, res *Re
 		}
 		if opts.Recreate {
 			if err := opts.Client.DeleteWebhook(ctx, hook.ID); err != nil {
-				return fmt.Errorf("confluence: replace webhook: %w", err)
+				if stop := blame(ctx, &state, err); stop != nil {
+					return stop
+				}
+				// NO FALL-THROUGH TO THE CREATE. The hook this run was
+				// asked to replace is still registered, still enabled and
+				// still carrying the previous secret, so creating a second
+				// one would leave the instance delivering twice — once to
+				// an address whose key the engine has replaced.
+				res.Hooks = append(res.Hooks, state)
+				return nil
 			}
 			break
 		}
@@ -376,19 +449,30 @@ func reconcileDataCenter(ctx context.Context, opts Options, base string, res *Re
 		// eight events and the signing secret every time.
 		if hook.Enabled && SameAddress(hook.URL, target) &&
 			sameEventSet(hook.Events, WebhookEvents) {
-			res.Hooks = append(res.Hooks, HookState{Event: "all", URL: target})
+			state.URL = target
+			res.Hooks = append(res.Hooks, state)
 			return nil
 		}
 		if _, err := opts.Client.UpdateWebhook(ctx, hook.ID, name, target, WebhookEvents, secret); err != nil {
-			return fmt.Errorf("confluence: update webhook: %w", err)
+			if stop := blame(ctx, &state, err); stop != nil {
+				return stop
+			}
+			res.Hooks = append(res.Hooks, state)
+			return nil
 		}
-		res.Hooks = append(res.Hooks, HookState{Event: "all", URL: target})
+		state.URL = target
+		res.Hooks = append(res.Hooks, state)
 		return nil
 	}
 	if _, err := opts.Client.CreateWebhook(ctx, name, target, WebhookEvents, secret); err != nil {
-		return fmt.Errorf("confluence: create webhook: %w", err)
+		if stop := blame(ctx, &state, err); stop != nil {
+			return stop
+		}
+		res.Hooks = append(res.Hooks, state)
+		return nil
 	}
-	res.Hooks = append(res.Hooks, HookState{Event: "all", URL: target, Created: true})
+	state.URL, state.Created = target, true
+	res.Hooks = append(res.Hooks, state)
 	return nil
 }
 
@@ -458,12 +542,13 @@ func mintInto(
 	if err := opts.Sink.Record(ctx, variable, value); err != nil {
 		return "", fmt.Errorf("confluence: record %s: %w", variable, err)
 	}
-	// COUNTED WHERE IT IS SEALED, which is the only frame that knows one
-	// happened. [Result.Recorded] promised this number and nothing had ever
-	// assigned it, so a run that minted reported having written nothing to
-	// the sink — a field whose zero value is indistinguishable from the
-	// truth, waiting for the first reader to believe it.
-	res.Recorded++
+	// SAID IN THE NOTES, which is the one place a reader looks. There was a
+	// Result.Recorded counter beside this line as well, and it had no reader
+	// anywhere in the tree — printConfluenceHooks renders Deployment,
+	// Account, Hooks and Notes, and the only `.Recorded` in the tree is
+	// GitLab's own. A second, silent record of the same fact is a field
+	// waiting for its first reader to trust a number nothing keeps true, so
+	// the note below is the whole report and the counter is gone.
 	note := fmt.Sprintf("a fresh value was minted into %s (%s), and %s",
 		variable, role, opts.Sink.NextStep())
 	if opts.Recreate {
@@ -476,6 +561,32 @@ func mintInto(
 // sameEvents reports whether a hook subscribes to exactly one event.
 func sameEvents(have []string, want string) bool {
 	return len(have) == 1 && have[0] == want
+}
+
+// unhooked is the sentence an administrator reads about a hook that could
+// not be established, and the two deployments do not lose the same thing.
+//
+// A Cloud hook covers ONE event, because the payload names none and the path
+// is all that knows which fired, so a refusal there costs that event class
+// and the other seven keep arriving. Data Center registers a single signed
+// hook for every event at once, so the same refusal is total: nothing
+// reaches the engine at all. Rendering both through the Cloud sentence read
+// "no webhook for all, so those events reach nobody", which understates the
+// worse of the two while barely parsing.
+func unhooked(hook HookState) string {
+	if hook.Event == dataCenterHookEvent {
+		// "POINTS AT" rather than "is registered", because both ways this
+		// hook can be missing end here: one the pass could not create, and
+		// one it could not re-point after the engine moved. The second
+		// leaves a registration in place at an address that no longer
+		// answers, so a sentence saying nothing is registered would send
+		// somebody to the instance to look for what is plainly there.
+		return fmt.Sprintf(
+			"no webhook points at this engine, so NO Confluence event reaches it: %s",
+			detailOr(hook.Detail))
+	}
+	return fmt.Sprintf("no webhook for %s, so those events reach nobody: %s",
+		hook.Event, detailOr(hook.Detail))
 }
 
 // detailOr keeps a finding from ending in a dangling colon.
@@ -509,8 +620,7 @@ func (r *Result) Findings() []integration.Finding {
 		out = append(out, integration.Finding{
 			Kind:    integration.FindingIngressBlocked,
 			Subject: hook.Event,
-			Detail: fmt.Sprintf("no webhook for %s, so those events reach nobody: %s",
-				hook.Event, detailOr(hook.Detail)),
+			Detail:  unhooked(hook),
 		})
 	}
 	return out

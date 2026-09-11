@@ -918,6 +918,22 @@ type recordingSink struct {
 	// "nothing is held" — that would rotate every live credential.
 	holdsErr error
 	discards int
+	// writes counts every successful Record, MONOTONICALLY — Discard does
+	// not take it back.
+	//
+	// It is the sealed-store half of the conformance harness's write
+	// counter. [integrationtest]'s package doc defines a write as anything
+	// a person would have to undo and says a re-sealed credential is one,
+	// and nothing about a Record reaches the instance's request log, so a
+	// counter built only from HTTP routes reports zero for a pass that
+	// rotates every seat's token on every run. Monotonic because the
+	// harness samples it as a DELTA around one pass: a counter that a
+	// rollback rewound would read as "no writes" for the pass that made
+	// the most.
+	writes int
+	// written is what THIS run recorded, which is the only thing Discard
+	// may take back — see Discard.
+	written []string
 }
 
 func newRecordingSink() *recordingSink {
@@ -931,14 +947,36 @@ func (s *recordingSink) Record(_ context.Context, name, value string) error {
 		return errors.New("the store is unreachable")
 	}
 	s.values[name] = value
+	s.writes++
+	s.written = append(s.written, name)
 	return nil
 }
 
+// records is how many values this sink has been asked to seal, ever.
+func (s *recordingSink) records() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.writes
+}
+
+// Discard implements the sink contract: it removes EVERYTHING THIS RUN
+// RECORDED, and nothing else.
+//
+// It used to clear the whole map, which is a fake that cannot fail the test
+// that matters. [provision.SecretStoreSink] — the sink the loop actually
+// builds — tracks the names it wrote and unsets exactly those, so a rollback
+// leaves a credential an EARLIER pass sealed exactly where it was. A fake
+// that swept the lot agreed with a rollback that took a working company's
+// tokens down with it, and disagreed with the real sink about the one case
+// a rollback is for.
 func (s *recordingSink) Discard(context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.discards++
-	s.values = map[string]string{}
+	for _, name := range s.written {
+		delete(s.values, name)
+	}
+	s.written = nil
 	return nil
 }
 
@@ -1113,6 +1151,77 @@ func TestAFailedRecordRevokesEveryMintedToken(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "revoked") {
 		t.Errorf("the error does not say the tokens were revoked: %v", err)
+	}
+}
+
+// A ROLLBACK DISCARDS WHAT THE RUN SEALED EVEN WHEN IT MINTED NO SEAT TOKEN.
+//
+// # The window, and why it never closed on its own
+//
+// The seat tokens are not the only thing a pass seals. When
+// integrations.gitlab.signing_secret resolves to nothing, the pass MINTS a
+// webhook signing secret and Records it — and only then writes the hook. So
+// the steady-state pass, over a company whose seats all keep their tokens,
+// can record a credential and mint no token at all.
+//
+// The rollback returned early on an empty minted map, so that pass left a
+// FRESH secret in the fleet's sealed store while GitLab went on signing with
+// whatever it had. Nothing recovered: at the next config apply the engine
+// resolves the sealed value, so the pass sees a non-empty secret, takes
+// SigningReuse and never mints or re-points the hook again. Every delivery
+// fails verification from then on, off the back of one transient 500.
+//
+// Pinned on the SEALED STORE rather than on the count of Discard calls: an
+// implementation that called Discard and then re-recorded would satisfy a
+// call counter and leave the same broken instance behind.
+func TestAFailedHookRollsBackASecretItHadNoTokensToRevoke(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	sink := newRecordingSink()
+	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
+
+	// A converged company: the seat's token is live and recorded, so the
+	// pass below keeps it and mints nothing.
+	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+		t.Fatalf("the run that converges the seat: %v", err)
+	}
+	f.forget()
+	token := sink.value("GITLAB_TOKEN_SWE")
+
+	// A SINK PER PASS, which is what the loop builds: internal/engine's
+	// reconcile calls SetupSink once per pass, so Discard's "everything
+	// this run recorded" really is this run's. The seat's credential is
+	// SEEDED rather than recorded — that is what an earlier pass left
+	// behind, and it is what the rollback below must not touch.
+	next := newRecordingSink()
+	next.seed("GITLAB_TOKEN_SWE", token)
+
+	// And now a run with no resolved signing secret — so it mints one —
+	// against a group whose hooks API answers 500. A 500 is a FAULT rather
+	// than a tier gate, so the pass raises after the secret is sealed.
+	f.hookStatus = http.StatusInternalServerError
+
+	res, err := reconcileWith(t, f, next, seats, func(o *gitlab.Options) {
+		o.SigningSecret = ""
+		o.SigningSecretVar = "GITLAB_SIGNING_SECRET"
+	})
+	if err == nil {
+		t.Fatalf("a refused hooks API was reported as a successful run: %+v", res)
+	}
+	if next.discards == 0 {
+		t.Error("the sink was never asked to take back what the run sealed")
+	}
+	if got := next.value("GITLAB_SIGNING_SECRET"); got != "" {
+		t.Errorf("the rolled-back run left a signing secret sealed (%q); the "+
+			"hook carries a different one and no later pass will ever mint "+
+			"again, because this value now resolves", got)
+	}
+	// AND NOTHING THIS RUN DID NOT RECORD WAS TAKEN. Discard is scoped to
+	// the run — the seat's credential was sealed by an earlier pass and is
+	// what every agent is currently authenticating with, so a rollback that
+	// swept the whole store would take a working company down.
+	if next.value("GITLAB_TOKEN_SWE") != token {
+		t.Error("the rollback discarded a credential this run did not record")
 	}
 }
 
@@ -1727,6 +1836,92 @@ func TestDecommissionRemovesManagedAccountsWithNoSeat(t *testing.T) {
 	}
 	if _, still := f.users["crewlet-swe"]; !still {
 		t.Error("a live seat's account was deleted")
+	}
+}
+
+// A COMPANY WITH NO PUBLIC BASE URL IS DEGRADED, NOT READY.
+//
+// integrations.public_base_url is optional, the reconcile loop feeds it into
+// every pass verbatim, and with nothing in it this pass registers no webhook
+// at all: no merge request, pipeline, issue or comment ever reaches a seat.
+// The pass said so in a NOTE — which only whoever runs the CLI ever sees —
+// and returned no findings, so integration.Classify reported READY to the
+// dashboard where a running company is actually watched.
+//
+// The finding that should have carried it could not: it was keyed on
+// `Hooked != "" && len(HookedOn) == 0`, and every route through ensureHooks
+// either returns a non-empty list or an error, so the branch was unreachable
+// and this state reached nothing at all.
+//
+// Classify is asserted rather than just the finding, because READY is the
+// answer that was wrong and the finding is only how it gets fixed.
+func TestNoPublicBaseURLIsReportedRatherThanNoted(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	sink := newRecordingSink()
+	res, err := reconcileWith(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"},
+		func(o *gitlab.Options) { o.WebhookBase = "" })
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	findings := res.Findings()
+	if len(findings) != 1 || findings[0].Kind != integration.FindingIngressBlocked {
+		t.Fatalf("findings = %+v, want the delivery path reported as blocked", findings)
+	}
+	if findings[0].Subject != "integrations.public_base_url" {
+		t.Errorf("the finding names %q rather than the setting to fill in",
+			findings[0].Subject)
+	}
+	if report := integration.Classify(findings); report.Phase == integration.PhaseReady {
+		t.Errorf("a GitLab that delivers nothing classifies as %+v", report)
+	}
+	// AND THE SEATS WERE STILL PROVISIONED. Ingress is independent of
+	// identity: refusing to provision because there is nowhere to deliver
+	// would make one missing setting take the whole integration down.
+	if len(res.Created) != 1 || sink.value("GITLAB_TOKEN_SWE") == "" {
+		t.Errorf("the seat half did not run: created %v, sink %v",
+			res.Created, sink.recorded())
+	}
+}
+
+// A SUCCESSFUL DECOMMISSION IS NOT A FINDING.
+//
+// It reported one per deleted account, as FindingIdentityMissing — whose
+// verdict is PhaseProvisioning / ActorEngine, rendered as "creating agent
+// identities". So an operator who removed a seat and ran -decommission got a
+// run that did exactly what they asked for, and a status row claiming the
+// engine was mid-way through creating an identity for a handle the company
+// document no longer contains. Nothing ever cleared it: no later pass
+// provisions a seat that is not in the plan.
+//
+// The branch's own comment gave it away — "it is in the plan, so the company
+// expects it to act on GitLab" — which is the one thing Result.Decommissioned
+// is guaranteed not to be. Deleting a departed seat's account is the
+// successful outcome of a destructive flag, exactly as Result.Kept is the
+// successful outcome of a re-run, and neither is something a person has to
+// look at.
+func TestADecommissionedAccountIsNotReportedAsWorkOutstanding(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
+	if _, err := reconcileAgainst(t, f, newRecordingSink(), seats); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	f.mu.Lock()
+	f.join("crewlet-qa", 500, gitlabDeveloperLevel) // a seat that used to exist
+	f.mu.Unlock()
+
+	res, err := reconcileWith(t, f, newRecordingSink(), seats,
+		func(o *gitlab.Options) { o.Decommission = true })
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(res.Decommissioned) != 1 {
+		t.Fatalf("decommissioned = %v, want the departed seat's account gone",
+			res.Decommissioned)
+	}
+	if findings := res.Findings(); len(findings) != 0 {
+		t.Errorf("a run that did what -decommission asked reported %+v", findings)
 	}
 }
 

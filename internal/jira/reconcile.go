@@ -221,7 +221,65 @@ func (r *Result) Routing() int {
 // The one write this command makes is the webhook, and a run that registered
 // it before discovering the credential was dead would leave an instance
 // delivering to an engine that cannot enrich anything it receives.
+//
+// # THE SINK IS COMPLETED WHATEVER THE PASS DID
+//
+// [provision.TokenSink.Flush] is the point at which what a run sealed
+// STANDS, and under the reconcile loop it is load-bearing rather than
+// ceremonial: the loop's own sink rebuilds the engine's `${VAR}` snapshot
+// there, and only there. This returned the pass's error several statements
+// BEFORE reaching it, and the mint is earlier still — so a pass that minted a
+// signing secret and then failed to reach the instance sealed a value and
+// never announced it.
+//
+// On THIS pass that state is permanent rather than self-healing, and the
+// reason is the fix that came before it. Everywhere the sealed-but-unflushed
+// value is simply re-minted next tick, the damage is a rotation on a timer;
+// here the next pass reads the sealed value back through
+// [provision.TokenSink.Value] (see [webhookSecret]) and therefore never
+// Records again — so the sink never seals again, so the snapshot is never
+// rebuilt, for the life of the deployment. The instance ends up signing with
+// a key the engine's own webhook route cannot resolve, every delivery is
+// refused at the edge, and the pass reports Ready on every tick.
+//
+// So the flush happens on EVERY exit path, and it is not conditioned on
+// whether this pass minted: a sink that recorded nothing has nothing to make
+// durable and says so cheaply, where a "did we mint" flag is one more thing
+// that has to stay in step with a mint several call frames away.
 func Reconcile(ctx context.Context, opts Options) (*Result, error) {
+	res, err := reconcile(ctx, opts)
+	if opts.Sink == nil {
+		return res, err
+	}
+	// WITHOUT THE CALLER'S CANCELLATION when the pass is already failing,
+	// which is the rule this tree applies to every rollback and teardown:
+	// the failure being completed is frequently the cancellation itself —
+	// a node shutting down mid-pass, having just sealed a secret — and a
+	// completion that inherits a dead context does nothing at all, which is
+	// the exact state above. A pass that SUCCEEDED keeps its caller's
+	// deadline, because there is nothing to rescue and a completion that
+	// outlives the request it belongs to is its own problem.
+	flushCtx := ctx
+	if err != nil {
+		flushCtx = context.WithoutCancel(ctx)
+	}
+	if flushErr := opts.Sink.Flush(flushCtx); flushErr != nil {
+		// JOINED, NEVER SUBSTITUTED. The pass's own error is the root
+		// cause and callers route on it — [integration.Reject] classifies
+		// it, and errors.Is against [integration.ErrCredentialRejected]
+		// decides whether an operator is sent to rotate a token or told
+		// to wait — so replacing it with a flush failure sends them to the
+		// wrong place, and dropping the flush failure hides a sink this
+		// deployment can no longer seal into. errors.Join keeps both
+		// reachable to errors.Is and errors.As.
+		return res, errors.Join(err, fmt.Errorf("jira: %w", flushErr))
+	}
+	return res, err
+}
+
+// reconcile is the pass itself, with no opinion about the sink's completion:
+// see [Reconcile], which owns that on every path out of here.
+func reconcile(ctx context.Context, opts Options) (*Result, error) {
 	if opts.Client == nil {
 		return nil, errors.New("jira: no client")
 	}
@@ -261,11 +319,6 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	res.Hooked = in.Hooked
 	res.NoKeyring = in.NoKeyring
 	res.NoIngress = noIngressReason(opts, res.Deployment)
-	if opts.Sink != nil {
-		if err := opts.Sink.Flush(ctx); err != nil {
-			return res, fmt.Errorf("jira: %w", err)
-		}
-	}
 	return res, nil
 }
 

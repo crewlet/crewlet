@@ -40,6 +40,16 @@ type Result struct {
 	// joined, so a seat with an empty list is one that will never wake.
 	Joined map[string][]string
 
+	// NotAdmin is the sentence naming a provisioning account this run
+	// CONFIRMED holds no system_admin role. Empty when it holds one, and
+	// empty when this run could not ask — "cannot tell" must never report
+	// the same as "confirmed wrong". See [preflight].
+	NotAdmin string
+	// Disabled names the instance settings this run read as an explicit
+	// false, each one something an administrator has to switch on before
+	// any of this works.
+	Disabled []DisabledSetting
+
 	// NoKeyring is a pass this node could not run at all because it has
 	// nowhere to seal what provisioning creates.
 	//
@@ -183,7 +193,11 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	// it was working — and the message names an endpoint rather than the
 	// setting an administrator has to change. Checked, not assumed, because
 	// all three are invisible from the config.
-	preflight := checkPreflight(ctx, opts)
+	//
+	// NAMED `pre` rather than `preflight`, which would shadow the type: the
+	// struct it hands back is what carries this to BOTH readers — the notes
+	// the command line prints and the findings the reconcile loop reads.
+	pre := checkPreflight(ctx, opts)
 
 	// THE NOTES ARE COLLECTED AT THE END, not copied here: the run adds
 	// its own — a channel that does not exist, a bot that joined nothing
@@ -404,53 +418,125 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	// Result a caller is holding shares a backing array with a plan that
 	// is still being written to. The next Plan.Note then overwrites a
 	// note in a report somebody has already been given.
-	res.Notes = slices.Concat(notesOf(opts.Plan), preflight, res.Notes)
+	res.Notes = slices.Concat(notesOf(opts.Plan), pre.notes(), res.Notes)
+
+	// AND TO THE LOOP, not only to the terminal. The reconcile loop reads
+	// [Result.Findings] and nothing else, so an instance this pass has
+	// already proved it cannot write to has to say so in the shared
+	// vocabulary or it is reported ready. See [preflight].
+	res.NotAdmin, res.Disabled = pre.notAdmin, pre.disabled
 	return res, nil
+}
+
+// preflight is what this run learned about the instance before its first
+// write, in the shape BOTH readers of it need.
+//
+// There are two, and they are not the same reader. `crewlet mattermost
+// provision` prints [Result.Notes] to whoever ran it, and the reconcile loop
+// reads [Result.Findings] and NOTHING ELSE — engine.mattermostPass returns
+// `res.Findings()` and drops the notes on the floor. So a preflight that
+// spoke only in notes told the operator at the terminal that this credential
+// cannot write, and told the loop that Mattermost was ready: a company whose
+// administrator token has lost its role reports READY for ever, and the first
+// thing anybody learns is that adding the tenth seat fails.
+//
+// ONE SENTENCE PER FINDING, built once here and used for both, because this
+// text was already the operator's whole explanation and two spellings of it
+// would drift the moment one of them was edited.
+type preflight struct {
+	// unreadable is the account this run could not ask about.
+	//
+	// A NOTE AND NEVER A FINDING: "cannot tell" is not "confirmed wrong",
+	// and the run is about to make real calls that report the same
+	// reachability problem with far more context. Reporting it would put
+	// a company behind a blinking instance into a blocked phase a person
+	// is asked to go and fix.
+	unreadable string
+
+	// notAdmin is the sentence naming an account this run CONFIRMED is not
+	// a system administrator, empty when it is one or could not be asked.
+	//
+	// The sentence rather than the roles, because the roles can legitimately
+	// be empty — orNone renders that "(none)" — and a field keyed on them
+	// would then read as "fine" for the worst account of all.
+	notAdmin string
+
+	// disabled names the instance settings this run read as an EXPLICIT
+	// false, in the order they are checked.
+	disabled []DisabledSetting
+}
+
+// DisabledSetting is one instance setting an administrator has switched off
+// that this engine needs on.
+type DisabledSetting struct {
+	// Key is the ServiceSettings key, which is what somebody types into
+	// the System Console's search box to find it.
+	Key string
+	// Stops is what it prevents, as the second half of Detail's sentence.
+	Stops string
+}
+
+// Detail is the one sentence both the printed note and the finding carry.
+func (d DisabledSetting) Detail() string {
+	return fmt.Sprintf(
+		"ServiceSettings.%s is false on this instance, so %s — an "+
+			"administrator has to enable it in the System Console", d.Key, d.Stops)
+}
+
+// notes is what the command line prints, in the order it always printed them.
+func (p preflight) notes() []string {
+	var out []string
+	if p.unreadable != "" {
+		out = append(out, p.unreadable)
+	}
+	if p.notAdmin != "" {
+		out = append(out, p.notAdmin)
+	}
+	for _, setting := range p.disabled {
+		out = append(out, setting.Detail())
+	}
+	return out
 }
 
 // checkPreflight reports what would make this run fail on its first write.
 //
-// NOTES, not errors, and the distinction is deliberate: the two settings are
-// read from a config endpoint whose exact key set varies by server version,
-// so an absent key means "this server did not say", not "it is off". Refusing
-// on silence would make the provisioner unusable against a version this
-// engine has not seen; warning loudly on an explicit false is the honest
-// half.
+// NOT ERRORS, and the distinction is deliberate: the two settings are read
+// from a config endpoint whose exact key set varies by server version, so an
+// absent key means "this server did not say", not "it is off". Refusing on
+// silence would make the provisioner unusable against a version this engine
+// has not seen; reporting an explicit false is the honest half.
 //
 // The admin role IS checked hard enough to be worth naming, because a token
 // without it fails every single write.
-func checkPreflight(ctx context.Context, opts Options) []string {
-	var notes []string
+func checkPreflight(ctx context.Context, opts Options) preflight {
+	var out preflight
 	if me, err := opts.Client.Me(ctx); err != nil {
-		notes = append(notes, fmt.Sprintf(
-			"could not confirm the provisioning account: %v", err))
+		out.unreadable = fmt.Sprintf(
+			"could not confirm the provisioning account: %v", err)
 	} else if !me.SystemAdmin() {
-		notes = append(notes, fmt.Sprintf(
+		out.notAdmin = fmt.Sprintf(
 			"%s is not a system administrator (roles: %s) — creating a bot, "+
 				"minting an access token and adding a team member all require "+
 				"it, so this run will fail on its first write",
-			me.Username, orNone(me.Roles)))
+			me.Username, orNone(me.Roles))
 	}
 
 	cfg, err := opts.Client.ClientConfig(ctx)
 	if err != nil {
 		// Not worth a note of its own: the run is about to make real calls
 		// that will report the same reachability problem with more context.
-		return notes
+		return out
 	}
-	for _, setting := range []struct{ key, why string }{
+	for _, setting := range []DisabledSetting{
 		{"EnableBotAccountCreation", "no bot account can be created"},
 		{"EnableUserAccessTokens", "no bot can be given a token, so none of " +
 			"them can connect"},
 	} {
-		if cfg[setting.key] == "false" {
-			notes = append(notes, fmt.Sprintf(
-				"ServiceSettings.%s is false on this instance, so %s — "+
-					"an administrator has to enable it in the System Console",
-				setting.key, setting.why))
+		if cfg[setting.Key] == "false" {
+			out.disabled = append(out.disabled, setting)
 		}
 	}
-	return notes
+	return out
 }
 
 // decommission disables managed bots whose seats have left the config.
@@ -473,14 +559,17 @@ func decommission(ctx context.Context, opts Options, managed map[string]Bot) ([]
 		keep[strings.ToLower(BotUsername(opts.Config.Provisioning, seat.Handle))] = true
 	}
 	var disabled, notes []string
-	// SORTED, because managed is a MAP and this loop's output is read
-	// twice: Result.Decommissioned is what the command line prints, and
-	// [Result.Findings] turns that same slice straight into one finding
-	// per departed seat. Ranged over the map, two passes over one
-	// unchanged company produced finding lists that were not equal, so
-	// the loop saw the surface change on every pass — which resets the
-	// attempt counter and re-reads an integration that needs nothing at
-	// the shortest interval the schedule has.
+	// SORTED, because managed is a MAP and this loop's output is what the
+	// command line prints. Ranged over the map, two -decommission runs
+	// over one unchanged company printed the same departed seats in
+	// different orders, so an operator diffing two runs saw a change
+	// neither run made and could not tell a re-run from a new sweep.
+	//
+	// It used to matter twice over: [Result.Findings] turned this same
+	// slice straight into one finding per departed seat, and an order that
+	// moved made the reconcile loop see the surface change on every pass.
+	// That mapping is gone — a successful decommission is not outstanding
+	// work — and the printed order is reason enough on its own.
 	for _, username := range slices.Sorted(maps.Keys(managed)) {
 		bot := managed[username]
 		if !strings.HasPrefix(username, prefix) || keep[username] {
