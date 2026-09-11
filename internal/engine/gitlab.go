@@ -331,3 +331,21 @@ func gitlabSeatToken(seat *org.Role, env *config.Resolver) string {
 
 // gitlabPrompt is the code host's trigger builder. A value, held by nothing.
 func gitlabPrompt() notify.Prompt { return gitlab.Prompt{} }
+
+// unresolved names the seats holding a code-host credential that resolves to
+// no account. See [jiraIdentities.unresolved].
+func (g *gitlabIdentities) unresolved(c *Company, env *config.Resolver) []string {
+	g.mu.Lock()
+	known := maps.Clone(g.byToken)
+	g.mu.Unlock()
+
+	var out []string
+	for seat := range c.Org.AllRoles() {
+		token := gitlabSeatToken(seat, env)
+		if token != "" && known[token] == "" {
+			out = append(out, seat.Handle())
+		}
+	}
+	slices.Sort(out)
+	return out
+}

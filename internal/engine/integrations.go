@@ -357,10 +357,21 @@ func (c *passConverger) Reconcile(ctx context.Context) ([]integration.Finding, e
 	//
 	// ctx is already the guard's: bounded by [setup.PassDeadline], strictly
 	// inside the lease the worker is holding.
-	return c.pass.Run(ctx, setup.PassInput{
+	findings, err := c.pass.Run(ctx, setup.PassInput{
 		Sink:        sink,
 		WebhookBase: company.Config.Integrations.WebhookBase(c.engine.resolver().LookupOK),
 	})
+	if err != nil {
+		return nil, err
+	}
+	// AND WHAT THIS NODE'S OWN WIRING COULD NOT RESOLVE, which no vendor
+	// pass can see: a seat's tracker or code-host ACCOUNT is read with that
+	// seat's own credential by the engine, not by the pass, and a lookup
+	// that failed had nothing that would ever ask again. See
+	// [Engine.resolveRouting] — this visit is the retry, and the finding is
+	// what keeps the visits coming and stops the card reading ready over a
+	// seat that receives nothing.
+	return append(findings, c.engine.resolveRouting(ctx, c.pass.Kind())...), nil
 }
 
 // reconcileOperator is who the loop's writes are attributed to, so an audit

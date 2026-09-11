@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 
@@ -361,3 +362,42 @@ func (e *Engine) githubSeatApps(company *Company, env *config.Resolver) []github
 // githubPrompt is the hosted code host's trigger builder. A value, held by
 // nothing.
 func githubPrompt() notify.Prompt { return github.Prompt{} }
+
+// unresolved names the seats holding a code-host credential that resolves to
+// no account.
+//
+// A SEAT WITH ITS OWN APP IS NEVER HERE, and that is the one way this differs
+// from the other two: GitHub derives an app's account from its slug, which
+// this engine wrote down when it created the app, so such a seat is routable
+// with no lookup at all. Reporting it as unresolved because its leftover token
+// happened not to answer would put a working seat on the card as broken.
+//
+// See [jiraIdentities.unresolved] for the rest of the contract.
+func (g *githubIdentities) unresolved(c *Company, env *config.Resolver) []string {
+	g.mu.Lock()
+	known := maps.Clone(g.byToken)
+	g.mu.Unlock()
+
+	byApp := map[string]bool{}
+	for role := range c.Config.EachRole() {
+		seat := role.Seat()
+		if app := role.Integrations.GitHub; seat.IsAgent() && app != nil &&
+			github.NormalizeLogin(app.AppSlug) != "" {
+			byApp[seat.Handle()] = true
+		}
+	}
+
+	var out []string
+	for seat := range c.Org.AllRoles() {
+		handle := seat.Handle()
+		if byApp[handle] {
+			continue
+		}
+		token := github.CredentialOf(seat, env.Value)
+		if token != "" && known[token] == "" {
+			out = append(out, handle)
+		}
+	}
+	slices.Sort(out)
+	return out
+}

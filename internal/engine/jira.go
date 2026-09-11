@@ -309,3 +309,27 @@ func jiraSeatCredentials(c *Company, env *config.Resolver) []jira.Credential {
 
 // jiraPrompt is the tracker's trigger builder. A value, held by nothing.
 func jiraPrompt() notify.Prompt { return jira.Prompt{} }
+
+// unresolved names the seats holding a tracker credential that resolves to no
+// account.
+//
+// THE COMPLEMENT OF [jiraIdentities.register], read from the same two inputs,
+// so the two can never disagree about which seats are routable. A seat with no
+// credential at all is NOT here: it has opted out of the surface, which is a
+// choice rather than a fault, and reporting it would put every human seat in
+// the company on the card.
+func (j *jiraIdentities) unresolved(c *Company, env *config.Resolver) []string {
+	j.mu.Lock()
+	known := maps.Clone(j.byCred)
+	j.mu.Unlock()
+
+	var out []string
+	for seat := range c.Org.AllRoles() {
+		cred := jira.CredentialOf(seat, env.Value)
+		if cred.Held() && known[cred] == "" {
+			out = append(out, seat.Handle())
+		}
+	}
+	slices.Sort(out)
+	return out
+}
