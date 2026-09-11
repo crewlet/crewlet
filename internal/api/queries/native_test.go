@@ -35,6 +35,12 @@ func (s *stubWork) Views(_ context.Context, q tracker.ViewQuery) (tracker.ViewLi
 	return s.listing, s.err
 }
 
+func (s *stubWork) ExpandedQuery(_ context.Context, params map[string]any,
+	_ string, now time.Time, loc *time.Location) (tracker.Query, error) {
+
+	return tracker.ParseQuery(tracker.MapParams(params), now, loc)
+}
+
 func (s *stubWork) Goals(_ context.Context, q tracker.GoalQuery) (tracker.GoalListing, error) {
 	s.goalQuery = q
 	return s.goals, s.err

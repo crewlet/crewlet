@@ -175,6 +175,18 @@ func checkView(view *View) error {
 			"maximum is %d — a saved view is a filter, not a document",
 			view.ID, paramsBytes(view.Params), MaxViewParamsBytes)
 	}
+	// AND A VIEW MAY NOT CARRY A KEY THAT EXPANDS OR PAGES. `view` would
+	// expand into itself, `cursor` would resume a page nobody asked for,
+	// and a stored `read_level` would let a board silently downgrade a
+	// seat's own read — see [expansionRefused].
+	for _, key := range expansionRefused {
+		if _, held := view.Params[key]; held {
+			return fmt.Errorf("tracker: view %s carries %q, which a saved view "+
+				"cannot: it is about the CALLER's own read — where it resumes, "+
+				"how fresh it must be, or which view it came from — rather "+
+				"than about the rows", view.ID, key)
+		}
+	}
 	// THE PARAMS ARE THE QUERY, so they are parsed rather than measured.
 	// The instant is this parse's own and is thrown away with the query:
 	// what is being established is that the grammar accepts every key.

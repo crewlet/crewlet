@@ -134,7 +134,8 @@ func argFloat(args map[string]any, key string) float64 {
 //
 // A NON-STRING VALUE IS RENDERED rather than dropped, because a model writing
 // `{"limit": 10}` means the same thing as `{"limit": "10"}` and the grammar
-// these maps feed reads both identically — see [queries.Params]. Dropping it
+// these maps feed reads both identically — see the API's own parameter bag.
+// Dropping it
 // would save a saved view with a filter the caller believes is in it.
 func argStringMap(args map[string]any, key string) map[string]string {
 	raw, ok := args[key].(map[string]any)

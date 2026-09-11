@@ -85,6 +85,12 @@ func (f *fakeTracker) Views(context.Context, tracker.ViewQuery) (tracker.ViewLis
 	return tracker.ViewListing{}, nil
 }
 
+func (f *fakeTracker) ExpandedQuery(_ context.Context, params map[string]any,
+	_ string, now time.Time, loc *time.Location) (tracker.Query, error) {
+
+	return tracker.ParseQuery(tracker.MapParams(params), now, loc)
+}
+
 func (f *fakeTracker) Goals(context.Context, tracker.GoalQuery) (tracker.GoalListing, error) {
 	return tracker.GoalListing{}, nil
 }
