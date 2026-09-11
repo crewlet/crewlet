@@ -286,7 +286,8 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 			answer.GroupsDropped = groups.Dropped
 			answer.GroupsOverlap = groups.Overlap
 		} else {
-			rows, cursor, err := readTasks(ctx, tx, rowWhere, rowArgs, terms, limit)
+			rows, cursor, err := readTasks(ctx, tx, rowWhere, rowArgs, terms,
+				limit, q.DayStart)
 			if err != nil {
 				return err
 			}
@@ -352,6 +353,34 @@ func incompleteFrom(in *statelog.Incomplete) *Incomplete {
 // declared in the grammar. A filter's value reaching a statement as text is
 // how a saved view becomes a way to run a query nobody wrote.
 func compile(q Query, now time.Time, fields map[string]resolvedField) (string, []any, error) {
+	return compileWhere(q, now, fields, false)
+}
+
+// compileWhere is [compile], with `branch` telling it whether it is compiling
+// one arm of a disjunction rather than the query itself.
+//
+// # Why a branch is not simply the same compiler run again
+//
+// A branch is a PREDICATE, and four of the decisions this function makes are
+// not predicates the caller wrote — they are the shape of the ANSWER, applied
+// by default whether or not anybody asked: a removed task is excluded, a
+// finished one is excluded, an archived project's tasks are excluded, and a
+// subtask mode rewrites the whole predicate to be about roots.
+//
+// Run again inside a branch, each of those emits its DEFAULT and is ANDed
+// inside the OR — so `show_closed=true` at the top level was defeated by every
+// branch's own `status_group IN (not_started, active)`, and the identical
+// predicate written as a disjunction answered a strictly smaller set than the
+// one written flat. [Query.parseAny] refuses those keys in a branch for the
+// same reason; this is the other half, because refusing the key does not stop
+// the default the absent key resolves to.
+//
+// The scope IS a predicate and stays: a branch naming a container is asking
+// about that container's rows, which is exactly what the unassigned-work arm
+// of a personal queue is for.
+func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
+	branch bool) (string, []any, error) {
+
 	var where []string
 	var args []any
 	add := func(clause string, values ...any) {
@@ -376,10 +405,12 @@ func compile(q Query, now time.Time, fields map[string]resolvedField) (string, [
 	// makes about a task they can see. It is `IS NOT NULL` rather than a
 	// date bound so `tracker_tasks_removed_idx`, which is partial on
 	// exactly that, is the plan.
-	if q.Removed != nil && *q.Removed {
-		add("t.removed_at IS NOT NULL")
-	} else {
-		add("t.removed_at IS NULL")
+	if !branch {
+		if q.Removed != nil && *q.Removed {
+			add("t.removed_at IS NOT NULL")
+		} else {
+			add("t.removed_at IS NULL")
+		}
 	}
 
 	if len(q.Keys) > 0 {
@@ -627,19 +658,23 @@ func compile(q Query, now time.Time, fields map[string]resolvedField) (string, [
 		add(column + " = 1")
 	}
 
-	switch q.Archived {
-	case ArchivedExclude:
+	switch {
+	case branch:
+		// THE ANSWER'S SHAPE, NOT THIS ARM'S — see [compileWhere].
+	case q.Archived == ArchivedExclude:
 		// A JOIN RATHER THAN A COLUMN: a project's archive is the
 		// project's own fact, and copying it onto every task was the one
 		// unbounded cross-object write this design removed.
 		add("t.archived = 0 AND NOT EXISTS (SELECT 1 FROM tracker_projects p " +
 			"WHERE p.key = t.project_key AND p.archived = 1)")
-	case ArchivedOnly:
+	case q.Archived == ArchivedOnly:
 		add("(t.archived = 1 OR EXISTS (SELECT 1 FROM tracker_projects p " +
 			"WHERE p.key = t.project_key AND p.archived = 1))")
 	}
 
 	switch {
+	case branch:
+		// THE ANSWER'S SHAPE, NOT THIS ARM'S — see [compileWhere].
 	case q.ShowClosed.All:
 	case q.ShowClosed.Recent > 0:
 		// THE WINDOW APPLIES TO THE WHOLE FINISHED SET, so a task
@@ -655,10 +690,21 @@ func compile(q Query, now time.Time, fields map[string]resolvedField) (string, [
 
 	if len(q.Any) > 0 {
 		var branches []string
-		for _, branch := range q.Any {
-			clause, values, err := compile(branch, now, fields)
+		for i, arm := range q.Any {
+			clause, values, err := compileWhere(arm, now, fields, true)
 			if err != nil {
 				return "", nil, err
+			}
+			if clause == "" {
+				// AN EMPTY ARM IS "EVERYTHING", which makes the whole
+				// disjunction true and every other arm decoration. It
+				// is refused rather than rendered, because `()` is not
+				// SQL and "you selected nothing" is a thing a caller
+				// fixes.
+				return "", nil, fmt.Errorf("tracker: any branch %d selects "+
+					"nothing — a branch is a predicate, and an empty one "+
+					"matches every task and makes the other branches "+
+					"decoration", i)
 			}
 			branches = append(branches, "("+clause+")")
 			args = append(args, values...)
@@ -686,8 +732,8 @@ func compile(q Query, now time.Time, fields map[string]resolvedField) (string, [
 	// AND IT DOES NOT APPLY WHEN THE CALLER ASKED FOR A SUBTREE: `parent`
 	// and `root` are questions ABOUT subtasks, so filtering their roots
 	// would answer the parent's siblings instead.
-	if q.Subtasks != SubtasksSeparate && q.Parent == "" && q.Root == "" &&
-		len(where) > 0 {
+	if !branch && q.Subtasks != SubtasksSeparate && q.Parent == "" &&
+		q.Root == "" && len(where) > 0 {
 
 		inner := strings.Join(where, " AND ")
 		rooted := "t.root_id IN (SELECT t.id FROM tracker_tasks t WHERE " +
@@ -701,7 +747,7 @@ func compile(q Query, now time.Time, fields map[string]resolvedField) (string, [
 		where = []string{"t.removed_at IS NULL", rooted}
 	}
 
-	if q.Group != "" {
+	if q.Group != "" && !branch {
 		// A COLUMN FILTER IS A PREDICATE OF THE WHOLE QUERY, in its
 		// JOIN-FREE form: the count hint and the totals share this
 		// predicate and carry no join, so an axis expressed only as one
@@ -1003,9 +1049,23 @@ func renderOrder(terms []sortTerm) string {
 }
 
 // page is what a cursor carries: the last row's value for EVERY column the
-// order sorts by, ending in its id.
+// order sorts by, ending in its id — and the ORDER those values belong to.
+//
+// THE ORDER TRAVELS BECAUSE THE ARITY IS NOT THE ORDER. Two different sorts of
+// equal length both pass a count check, and the cursor's values are then bound
+// against columns of a different type — which SQLite resolves by affinity
+// rather than refusing, so the boundary is meaningless in both directions
+// rather than an error: an `updated` cursor fed to `sort=rank` returns rank's
+// own first page again, and a `rank` cursor fed to `sort=updated` compares TEXT
+// against INTEGER, which orders every row after it, so every page is the first.
 type page struct {
 	Keys []any `json:"k"`
+
+	// Order is the compiled order this cursor was minted under. Compiled
+	// rather than the caller's `sort=` spelling, because the default order
+	// depends on the scope and two queries that named no sort at all can
+	// still be sorted differently.
+	Order string `json:"o,omitempty"`
 }
 
 // cursorClause turns an opaque page cursor back into a predicate.
@@ -1041,42 +1101,88 @@ func cursorClause(q Query, fields map[string]resolvedField) (string, []any, erro
 			"after")
 	}
 	terms := sortTerms(q, fields)
-	if len(resume.Keys) != len(terms) {
+	order := renderOrder(terms)
+	if len(resume.Keys) != len(terms) || resume.Order != order {
 		// A CURSOR FROM A DIFFERENT ORDER IS REFUSED, never applied to
 		// this one: resuming a rank-ordered page inside an
 		// update-ordered query is a page boundary computed against a
 		// column the query does not sort by, which drops rows without
-		// saying so.
-		return "", nil, fmt.Errorf("tracker: this cursor carries %d key(s) and "+
-			"this order has %d — a cursor belongs to the order that minted it, "+
-			"and re-sorting starts a new page", len(resume.Keys), len(terms))
+		// saying so. The ORDER is what decides that, not the key count —
+		// see [page].
+		return "", nil, fmt.Errorf("tracker: this cursor was minted for the "+
+			"order %q and this query sorts by %q — a cursor belongs to the "+
+			"order that minted it, and re-sorting starts a new page",
+			resume.Order, order)
 	}
 	clause, args := keysetAfter(terms, resume.Keys)
 	return clause, args, nil
 }
 
 // keysetAfter builds the lexicographic "strictly after" predicate.
+//
+// # NULL IS A POSITION IN THE ORDER, not a missing value
+//
+// `sort=due` and every `sort=f.<slug>` reach columns that are genuinely NULL
+// for some rows — the custom-field join is a LEFT JOIN precisely so a task that
+// set no value still appears — and a comparison written with bare `>`, `<` and
+// `=` is NULL for every one of them. Written that way the boundary matched
+// nothing the moment a page ended on a row with no value, so the caller was
+// handed a short list with no next_cursor and no way to tell; and in the
+// descending direction the NULL rows were unreachable at every page, because
+// `col < ?` excludes them.
+//
+// SQLite sorts NULL below every value, so it leads an ascending order and
+// trails a descending one, and each direction needs both halves spelled out:
+//
+//   - ascending, after a value: `col > ?` — the NULLs are already behind.
+//   - ascending, after a NULL: `col IS NOT NULL` — every value is ahead, and
+//     the remaining NULL rows are reached through the equality leg.
+//   - descending, after a value: `col < ? OR col IS NULL` — the NULLs are the
+//     tail, so they are still ahead.
+//   - descending, after a NULL: nothing is ahead but other NULLs, so the
+//     "after" leg is false and only the tie-break carries the page.
+//
+// The equality leg is `IS NULL` rather than `= NULL` for the same reason, and
+// the recursion always bottoms out on `t.id`, which is NOT NULL.
 func keysetAfter(terms []sortTerm, keys []any) (string, []any) {
-	// THE DIRECTION DECIDES THE COMPARISON. "After" in a descending order
-	// is a SMALLER value, and a keyset that compared the same way in both
-	// directions would return the page before the boundary rather than the
-	// one after it — every descending page repeating the first.
-	after := ">"
-	if terms[0].Descending {
-		after = "<"
-	}
+	after, afterArgs := keysetAfterOne(terms[0], keys[0])
 	if len(terms) == 1 {
-		return terms[0].Column + " " + after + " ?", []any{keys[0]}
+		return after, afterArgs
 	}
+	equal, equalArgs := keysetEqualOne(terms[0], keys[0])
 	rest, restArgs := keysetAfter(terms[1:], keys[1:])
-	args := append([]any{keys[0], keys[0]}, restArgs...)
-	return "(" + terms[0].Column + " " + after + " ? OR (" +
-		terms[0].Column + " = ? AND " + rest + "))", args
+	args := append(append([]any{}, afterArgs...), equalArgs...)
+	args = append(args, restArgs...)
+	return "(" + after + " OR (" + equal + " AND " + rest + "))", args
+}
+
+// keysetAfterOne is "strictly after this key on this column", NULLs included.
+func keysetAfterOne(term sortTerm, key any) (string, []any) {
+	switch {
+	case key == nil && term.Descending:
+		// NOTHING IS AFTER A NULL IN A DESCENDING ORDER, and `0` says so
+		// literally rather than through a comparison that would be NULL.
+		return "0", nil
+	case key == nil:
+		return term.Column + " IS NOT NULL", nil
+	case term.Descending:
+		return "(" + term.Column + " < ? OR " + term.Column + " IS NULL)",
+			[]any{key}
+	}
+	return term.Column + " > ?", []any{key}
+}
+
+// keysetEqualOne is the tie-break leg: the same position on this column.
+func keysetEqualOne(term sortTerm, key any) (string, []any) {
+	if key == nil {
+		return term.Column + " IS NULL", nil
+	}
+	return term.Column + " = ?", []any{key}
 }
 
 // mintCursor encodes the page's own resume point.
-func mintCursor(keys []any) string {
-	body, err := json.Marshal(page{Keys: keys})
+func mintCursor(keys []any, order string) string {
+	body, err := json.Marshal(page{Keys: keys, Order: order})
 	if err != nil {
 		return ""
 	}
@@ -1084,9 +1190,9 @@ func mintCursor(keys []any) string {
 }
 
 func readTasks(ctx context.Context, tx *sql.Tx, where string, args []any,
-	terms []sortTerm, limit int) ([]TaskRow, string, error) {
+	terms []sortTerm, limit int, dayStart time.Time) ([]TaskRow, string, error) {
 
-	return readTasksJoined(ctx, tx, "", nil, where, args, terms, limit)
+	return readTasksJoined(ctx, tx, "", nil, where, args, terms, limit, dayStart)
 }
 
 // readTasksJoined is the same with one more join in front.
@@ -1096,8 +1202,8 @@ func readTasks(ctx context.Context, tx *sql.Tx, where string, args []any,
 // with the grouping axis's own join, which the predicate that selects the
 // column refers to.
 func readTasksJoined(ctx context.Context, tx *sql.Tx, extraJoin string,
-	extraArgs []any, where string, args []any, terms []sortTerm, limit int) (
-	[]TaskRow, string, error) {
+	extraArgs []any, where string, args []any, terms []sortTerm, limit int,
+	dayStart time.Time) ([]TaskRow, string, error) {
 
 	// THE SORT COLUMNS ARE SELECTED TOO, because the page cursor is their
 	// values: a keyset resume compares exactly the columns the order sorts
@@ -1188,12 +1294,21 @@ func readTasksJoined(ctx context.Context, tx *sql.Tx, extraJoin string,
 	cursor := ""
 	if len(out) > limit {
 		out = out[:limit]
-		cursor = mintCursor(pageKeys[limit-1])
+		// THE ORDER TRAVELS WITH THE KEYS — see [page].
+		cursor = mintCursor(pageKeys[limit-1], renderOrder(terms))
 	}
-	// AND THE OVERDUE FLAG IS DERIVED ONCE, here, so every renderer agrees.
+	// AND THE OVERDUE FLAG IS DERIVED ONCE, here, so every renderer agrees
+	// — against the QUERY's own day boundary rather than against this
+	// process's clock. The two are different predicates: `due=overdue`
+	// compiles to "before midnight today, in the company's zone", and a
+	// flag compared against `time.Now()` marked a task due at 09:00 today
+	// overdue from 09:01 while the filter that means the same thing
+	// excluded it all day. A renderer showing both then contradicted
+	// itself on the same row, which is the one thing this field exists to
+	// prevent.
 	for i := range out {
 		out[i].Overdue = out[i].Due != nil &&
-			out[i].StatusGroup.Open() && out[i].Due.Before(time.Now())
+			out[i].StatusGroup.Open() && out[i].Due.Before(dayStart)
 	}
 	return out, cursor, nil
 }

@@ -1,7 +1,9 @@
 package tracker_test
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -493,9 +495,248 @@ func TestACursorFromAnotherOrderIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseQuery: %v", err)
 	}
+	// THE LEVEL IS THE SURFACE'S, and naming it here is what makes this
+	// case about the CURSOR: an unset level is refused by Tasks before the
+	// cursor is ever decoded, so a case that left it unset passed against
+	// any cursor rule at all, including none.
+	q.Level = statelog.ReadStale
 	if _, err := r.reader.Tasks(t.Context(), q, wednesday); err == nil {
 		t.Fatal("a cursor minted by a two-column order was applied to a " +
 			"one-column one, which computes a boundary against a column the " +
 			"query does not sort by")
+	}
+}
+
+// AND A CURSOR FROM ANOTHER ORDER OF THE SAME LENGTH IS REFUSED TOO.
+//
+// The arity check above passes for any two orders of equal width, and the
+// cursor's values are then bound against columns of a DIFFERENT TYPE — which
+// SQLite resolves by affinity rather than refusing. An `updated` cursor fed to
+// `sort=rank` returns rank's own first page again; a `rank` cursor fed to
+// `sort=updated` compares TEXT against INTEGER, which orders after every row,
+// so every page is the first. Both are silent.
+func TestACursorFromAnotherOrderOfEqualLengthIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for i := range 4 {
+		if _, err := r.writer.CreateTask(t.Context(), fmt.Sprintf("op-%d", i),
+			newTask(fmt.Sprintf("t-%d", i)), nil); err != nil {
+			t.Fatalf("CreateTask: %v", err)
+		}
+		r.drain()
+	}
+	byUpdated := r.ask(map[string]any{
+		"container": "project:ENG", "sort": "updated", "limit": "2",
+	})
+	if byUpdated.NextCursor == "" {
+		t.Fatal("the first page minted no cursor, so this case asserts nothing")
+	}
+	for _, sort := range []string{"rank", "-updated"} {
+		q, err := tracker.ParseQuery(tracker.MapParams(map[string]any{
+			"container": "project:ENG", "sort": sort,
+			"cursor": byUpdated.NextCursor, "limit": "2",
+		}), wednesday, berlin)
+		if err != nil {
+			t.Fatalf("ParseQuery: %v", err)
+		}
+		q.Level = statelog.ReadStale
+		if _, err := r.reader.Tasks(t.Context(), q, wednesday); err == nil {
+			t.Errorf("an `updated` cursor was accepted by sort=%s — same key "+
+				"count, different order, so the boundary is computed against "+
+				"a column that does not mean what the values in it mean", sort)
+		}
+	}
+}
+
+// PAGING A NULLABLE SORT RETURNS EVERY ROW EXACTLY ONCE, in both directions.
+//
+// `due` is nullable and a `sort=f.<slug>` term is a LEFT JOIN whose column is
+// NULL for every task that set no value — that join is LEFT precisely so those
+// tasks still appear. A keyset written with bare `>`, `<` and `=` is NULL for
+// every one of them: ascending, the page that ended on a valueless row matched
+// nothing and the list simply stopped; descending, `col < ?` excluded the NULL
+// rows at every page, so they were unreachable.
+func TestPagingANullableOrderReturnsEveryRowExactlyOnce(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	seedFields(t, r)
+
+	// HALF THE ROWS CARRY NO VALUE, and they are interleaved with the ones
+	// that do — a fixture where the valueless rows are all at one end
+	// passes against an implementation that simply drops them.
+	const total = 9
+	for i := range total {
+		task := newTask(fmt.Sprintf("t-%d", i))
+		task.Key = fmt.Sprintf("ENG-%d", i)
+		if i%2 == 0 {
+			due := wednesday.Add(time.Duration(i) * 24 * time.Hour)
+			task.DueAt = &due
+			task.Fields = map[string]json.RawMessage{
+				"f-effort": json.RawMessage(fmt.Sprintf("%d", i)),
+			}
+		}
+		if _, err := r.writer.CreateTask(t.Context(), fmt.Sprintf("op-%d", i),
+			task, nil); err != nil {
+			t.Fatalf("CreateTask: %v", err)
+		}
+		r.drain()
+	}
+
+	for _, sort := range []string{"due", "-due", "f.effort", "-f.effort"} {
+		seen := map[string]int{}
+		cursor := ""
+		for page := 0; page < total+2; page++ {
+			params := map[string]any{
+				"container": "project:ENG", "sort": sort, "limit": "2",
+			}
+			if cursor != "" {
+				params["cursor"] = cursor
+			}
+			answer := r.ask(params)
+			for _, row := range answer.Rows {
+				seen[row.ID]++
+			}
+			if answer.NextCursor == "" {
+				break
+			}
+			cursor = answer.NextCursor
+		}
+		if len(seen) != total {
+			t.Errorf("paging by %s returned %d distinct tasks of %d — a "+
+				"boundary that is NULL for a row with no value ends the list "+
+				"where it should have carried on", sort, len(seen), total)
+		}
+		for id, times := range seen {
+			if times != 1 {
+				t.Errorf("paging by %s returned %s %d times", sort, id, times)
+			}
+		}
+	}
+}
+
+// A DISJUNCTION ANSWERS WHAT THE SAME PREDICATE ANSWERS WRITTEN FLAT.
+//
+// Four of the decisions the compiler makes are not predicates anybody wrote —
+// they are the shape of the answer, applied by default: a removed task is out,
+// a finished one is out, an archived project's tasks are out, and a subtask
+// mode rewrites the predicate to be about roots. Compiled again inside a
+// branch, each emitted its DEFAULT and was ANDed inside the OR, so a top-level
+// `show_closed=true` was defeated by every branch's own open-only clause and
+// the disjunction answered a strictly smaller set than the flat form.
+func TestADisjunctionDoesNotReapplyTheAnswersOwnShape(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+	h.seed("open", func(task *tracker.Task) { task.Assignee = "bo" })
+	h.seed("done", func(task *tracker.Task) {
+		task.Assignee = "bo"
+		task.Status, task.StatusGroup = tracker.StatusDone, tracker.GroupDone
+	})
+
+	flat := ids(h.ask(map[string]any{
+		"container": "project:ENG", "assignee": "bo",
+		"show_closed": "true", "subtasks": "separate",
+	}))
+	viaAny := ids(h.ask(map[string]any{
+		"container": "project:ENG", "any": `[{"assignee":"bo"}]`,
+		"show_closed": "true", "subtasks": "separate",
+	}))
+	if len(flat) != 2 {
+		t.Fatalf("the flat form answers %v, want both tasks", flat)
+	}
+	if len(viaAny) != len(flat) {
+		t.Fatalf("the same predicate answers %v flat and %v as a disjunction "+
+			"— a branch is a predicate, and one that re-applies the answer's "+
+			"own defaults narrows what the caller asked for", flat, viaAny)
+	}
+}
+
+// AND THE KEYS THAT DECIDE THAT SHAPE ARE REFUSED INSIDE A BRANCH.
+//
+// They are the same decision at every branch or they are incoherent, so the
+// place to say them is the query. Refusing the key is only half of it — the
+// other half is that the absent key must not resolve to its default inside the
+// branch either, which is what the case above asserts.
+func TestABranchMayNotCarryTheAnswersOwnShape(t *testing.T) {
+	t.Parallel()
+	for _, key := range []string{
+		"removed", "archived", "show_closed", "subtasks",
+		"read_level", "max_lag_seconds", "max_lag_seq",
+	} {
+		branch := `[{"assignee":"bo","` + key + `":"true"}]`
+		if _, err := tracker.ParseQuery(tracker.MapParams(map[string]any{
+			"any": branch,
+		}), wednesday, berlin); err == nil {
+			t.Errorf("a branch carrying %q was accepted — it is about the "+
+				"answer rather than about the rows", key)
+		}
+	}
+	// AND AN EMPTY BRANCH IS REFUSED AT THE COMPILE, because it selects
+	// every task and makes every other branch decoration.
+	h := newReadHarness(t)
+	h.seed("one", nil)
+	q, err := tracker.ParseQuery(tracker.MapParams(map[string]any{
+		"container": "project:ENG", "any": `[{}]`,
+	}), wednesday, berlin)
+	if err != nil {
+		t.Fatalf("ParseQuery: %v", err)
+	}
+	q.Level = statelog.ReadStale
+	_, err = h.reader.Tasks(t.Context(), q, wednesday)
+	if err == nil {
+		t.Fatal("an empty branch was accepted, and it selects every task")
+	}
+	// AND IT IS REFUSED BY NAME, not by SQLite choking on `()`. A syntax
+	// error names a statement the caller never wrote and cannot fix; this
+	// one names the branch.
+	if !strings.Contains(err.Error(), "any branch 0") {
+		t.Errorf("an empty branch was refused as %q, which does not say which "+
+			"branch is empty or why", err)
+	}
+}
+
+// THE ROW'S OVERDUE FLAG IS THE FILTER'S OWN PREDICATE.
+//
+// `due=overdue` compiles to "before midnight today, in the COMPANY's zone,
+// and still open". The row's flag was compared against `time.Now()` instead —
+// two different thresholds on two different clocks — so a task due at 09:00
+// today was rendered overdue from 09:01 by every list while `?due=overdue`
+// excluded it all day, and a screen showing both contradicted itself on one
+// row. The field exists precisely so a renderer never re-derives the
+// predicate differently.
+func TestTheOverdueFlagIsTheOverdueFilter(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+
+	// DUE EARLIER TODAY — past this process's clock, but not past
+	// midnight, which is exactly where the two predicates part company.
+	earlier := wednesday.Add(-3 * time.Hour)
+	h.seed("today", func(task *tracker.Task) { task.DueAt = &earlier })
+	// AND ONE GENUINELY OVERDUE, so the case is not passing against a
+	// reader that simply never sets the flag.
+	yesterday := wednesday.Add(-30 * time.Hour)
+	h.seed("yesterday", func(task *tracker.Task) { task.DueAt = &yesterday })
+
+	all := h.ask(map[string]any{"container": "project:ENG"})
+	flagged := map[string]bool{}
+	for _, row := range all.Rows {
+		flagged[row.ID] = row.Overdue
+	}
+	filtered := map[string]bool{}
+	for _, row := range h.ask(map[string]any{
+		"container": "project:ENG", "due": "overdue",
+	}).Rows {
+		filtered[row.ID] = true
+	}
+	for id, isFlagged := range flagged {
+		if isFlagged != filtered[id] {
+			t.Errorf("task %s carries overdue=%v on its row and %v in "+
+				"?due=overdue — the row's flag and the filter are one "+
+				"predicate or a renderer showing both contradicts itself",
+				id, isFlagged, filtered[id])
+		}
+	}
+	if !flagged["yesterday"] {
+		t.Error("a task due yesterday is not flagged overdue, so this case " +
+			"would pass against a reader that never sets the flag at all")
 	}
 }

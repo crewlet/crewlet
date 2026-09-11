@@ -356,3 +356,29 @@ func TestABooleanFilterTellsAbsentFromFalse(t *testing.T) {
 		t.Error("blocked=false parsed as true")
 	}
 }
+
+// A TASK KEY IS UPPER-CASED WHEREVER IT IS TYPED.
+//
+// `key=` and `container=project:` both upper-case, each with a comment naming
+// the exact failure — an empty list rather than a refusal. `references=` names
+// the same thing, a task KEY compared exactly against a column minted
+// upper-case, and it was read raw: `references=eng-7` answered nothing, with
+// no error, while `key=eng-7` beside it resolved. One spelling, two answers,
+// decided by which parameter it was pasted into.
+func TestATaskKeyIsUpperCasedWhereverItIsTyped(t *testing.T) {
+	t.Parallel()
+	q := mustParse(t, map[string]any{
+		"key": "eng-7,ops-2", "container": "project:eng", "references": "eng-7",
+	})
+	if q.Keys[0] != "ENG-7" || q.Keys[1] != "OPS-2" {
+		t.Errorf("key= parsed as %v", q.Keys)
+	}
+	if q.Scope.Project != "ENG" {
+		t.Errorf("container= parsed as %q", q.Scope.Project)
+	}
+	if q.References != "ENG-7" {
+		t.Errorf("references= parsed as %q, and the column it is compared "+
+			"against is minted upper-case — so this matches nothing and says "+
+			"nothing about why", q.References)
+	}
+}

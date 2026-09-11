@@ -1025,6 +1025,12 @@ export interface WorkGroup {
   count: number;
   rows: WorkSummary[];
   subgroups?: WorkGroup[];
+  /** Lanes this column has beyond the cap, said rather than silently cut —
+   *  the same rule `groups_dropped` follows for the columns themselves. A
+   *  swimlane board is bounded by its CELLS: the statement count is the
+   *  product of the two axes, so the column cap drops when lanes are asked
+   *  for. */
+  subgroups_dropped?: number;
 }
 
 export interface WorkItemsAnswer {
@@ -1298,6 +1304,16 @@ export interface WorkLink {
   one_sided_final?: boolean;
 }
 
+/** One task WHOLE, as the item screen draws it.
+ *
+ *  NOT an extension of WorkSummary, deliberately. A board row and a task are
+ *  two different shapes and six of the row's fields do not exist on the wire
+ *  here: `blocked` and `overdue` are DERIVED per row and live on the answer
+ *  (see WorkItemDetail.blocked), and the row's `updated`, `start`, `due` and
+ *  `estimate_min` are spelled `updated_at`, `start_at`, `due_at` and
+ *  `estimate_minutes` on a task. Inheriting them made the compiler promise
+ *  fields the server never sends — which is how a Blocked badge that renders
+ *  on the board silently never renders on the item it links to. */
 export interface WorkItem extends WorkSummary {
   type?: WorkType;
   body?: string;
