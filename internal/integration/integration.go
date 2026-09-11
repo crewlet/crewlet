@@ -89,6 +89,34 @@ var Kinds = []Kind{
 	KindGitHub, KindGitLab, KindDatadog, KindAtlassian,
 }
 
+// ConvergeOrder is the order the reconcile loop VISITS surfaces in, which is
+// not the order an operator reads them.
+//
+// ONE REAL DEPENDENCY, and it is the whole reason this is a second slice.
+// Atlassian is where an agent's service account is CREATED; Jira and
+// Confluence are products that account then works in, and each checks for the
+// account with the credential Atlassian minted. Visiting them in reading order
+// puts both products before the pass that creates what they are looking for.
+//
+// Measured, over a reconnect: the tracker checked first, found the seat mapped
+// to the account a disconnect had deleted, and reported `401 Action required —
+// you, at the third-party app` for about thirty-five seconds, until Atlassian's
+// own pass ran and made the new one. Nothing was wrong and nobody had anything
+// to do; the card simply asked the products about an account that was one pass
+// away from existing.
+//
+// It is a separate value rather than a reordering of [Kinds] because the two
+// orders answer different questions and would drift the moment either moved
+// for its own reason. A test pins them to the same SET, so a surface added to
+// one and forgotten in the other is caught rather than silently never
+// converged.
+var ConvergeOrder = []Kind{
+	// THE ACCOUNTS FIRST, then the products that authenticate as them.
+	KindAtlassian, KindJira, KindConfluence,
+	KindSlack, KindMattermost,
+	KindGitHub, KindGitLab, KindDatadog,
+}
+
 // Valid reports whether k is a surface this build knows.
 //
 // A value off the wire is a VALUE rather than a panic: the coordination store

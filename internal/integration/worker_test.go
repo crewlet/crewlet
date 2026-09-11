@@ -518,19 +518,35 @@ func TestNothingIsForgottenWithoutADocumentTest(t *testing.T) {
 // Surfaces are converged in the canonical order however the config listed
 // them, so two nodes with one company agree and a status listing does not
 // reshuffle when the duty moves between them.
+//
+// THE CANONICAL ORDER IS [ConvergeOrder], NOT [Kinds], and the fixture has to
+// contain a pair that tells them apart or this asserts nothing. It did not:
+// Slack, GitHub and Datadog sort identically under both, so the whole change
+// from one to the other left this green.
+//
+// Atlassian before Jira is the pair that differs, and it is a real dependency
+// rather than a preference. Atlassian is where an agent's service account is
+// CREATED; Jira is a product that account works in, and its pass checks for the
+// account with the credential Atlassian minted. In reading order Jira went
+// first, so over a reconnect the tracker found the seat still mapped to the
+// account the disconnect had deleted and showed "Action required — you, at the
+// third-party app" with a 401 for about thirty-five seconds, until Atlassian's
+// own pass made the new one. Nobody had anything to do.
 func TestOrderIsCanonicalNotRegistrationOrder(t *testing.T) {
 	w, err := New(Options{
 		Store: newStore(),
 		Registrations: []Registration{
 			{Reconciler: &fakeReconciler{kind: KindSlack}},
+			{Reconciler: &fakeReconciler{kind: KindJira}},
 			{Reconciler: &fakeReconciler{kind: KindDatadog}},
+			{Reconciler: &fakeReconciler{kind: KindAtlassian}},
 			{Reconciler: &fakeReconciler{kind: KindGitHub}},
 		},
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	want := []Kind{KindSlack, KindGitHub, KindDatadog}
+	want := []Kind{KindAtlassian, KindJira, KindSlack, KindGitHub, KindDatadog}
 	if !slices.Equal(w.order, want) {
 		t.Fatalf("order is %v, want %v", w.order, want)
 	}

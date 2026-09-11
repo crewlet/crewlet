@@ -540,8 +540,14 @@ func New(opts Options) (*Worker, error) {
 	// config's. Sorted into the canonical order instead, so two nodes with
 	// the same company converge their surfaces in the same sequence and a
 	// status listing does not reshuffle when the duty moves.
+	//
+	// [ConvergeOrder], NOT [Kinds]: the second is the order an operator
+	// READS them and the first is the order they depend on each other in.
+	// Atlassian creates the account Jira and Confluence authenticate as, so
+	// visiting the products first asks about an account one pass away from
+	// existing — which the card drew as a 401 an operator had to act on.
 	slices.SortFunc(order, func(a, b Kind) int {
-		return slices.Index(Kinds, a) - slices.Index(Kinds, b)
+		return slices.Index(ConvergeOrder, a) - slices.Index(ConvergeOrder, b)
 	})
 
 	interval := opts.Interval
