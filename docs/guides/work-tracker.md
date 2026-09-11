@@ -92,6 +92,20 @@ makes `f.effort=gt:9` a numeric comparison rather than a lexical one, and what
 keeps every task that chose an option when somebody renames it. A multi-valued
 field is one row per member, so `f.areas=api` is a seek rather than a scan.
 
+**A required field is required of the tasks it applies to.** `applies_to`
+names the types that carry a field, and a field that does not apply to a task
+cannot be missing from it — its value would be hidden the moment it was set. A
+field required at the **workspace** is required in every project, and one
+required on a project only there; a subtask is judged by the second toggle
+(`required_in_subtasks`, off by default) so one required field does not block
+every checklist item anybody promotes.
+
+**An option is one value however it is written.** A choice field stores the
+option's *id*, and a write naming the option by its slug or its name resolves
+to that id before it is stored — the same three spellings a filter accepts. A
+value that stored the word instead would be invisible to every filter,
+grouping and total on the field it had just set.
+
 Archiving a field is **one-way**. Its values leave the *filterable* set and stay on
 the task, so a field that came back under its old id would silently re-admit
 them against a definition nobody has seen for a year. Bringing one back means

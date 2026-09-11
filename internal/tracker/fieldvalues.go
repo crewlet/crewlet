@@ -319,15 +319,40 @@ func fieldRows(field FieldDef, raw json.RawMessage) ([]fieldValueRow, error) {
 		// exactly one.
 		members = []json.RawMessage{raw}
 	}
+	// THE OPTION SPELLINGS, resolved HERE and not at the query: a stored
+	// ref holds the option's ID, so a value written as the slug or the
+	// name has to become that id before it is stored. It did not, and the
+	// query resolved anyway — so a task set to the slug a person types was
+	// invisible to every filter, grouping and total on the field it had
+	// just set. [OptionIDs] is the one spelling of the rule both sides now
+	// read.
+	//
+	// A FIELD WITH NO OPTION LIST resolves nothing, which is the honest
+	// answer for a relationship or a people field: its ref is a task id or
+	// a handle the caller already holds and no catalogue knows.
+	var options map[string]string
+	if column == "ref" {
+		options = OptionIDs(field.Config.Options)
+	}
 	out := make([]fieldValueRow, 0, len(members))
 	for _, member := range members {
 		row, ok, err := fieldRow(column, field.Type, member)
 		if err != nil {
 			return nil, err
 		}
-		if ok {
-			out = append(out, row)
+		if !ok {
+			continue
 		}
+		if text, held := row.Ref.(string); held && len(options) > 0 {
+			if id, known := options[strings.ToLower(text)]; known {
+				row.Ref = id
+			}
+			// AN UNKNOWN WORD IS STORED AS IT WAS WRITTEN, exactly as
+			// the query passes one through: refusing it would drop a
+			// value the document keeps, and the two sides agreeing on
+			// the raw text is what still makes them match.
+		}
+		out = append(out, row)
 	}
 	return out, nil
 }

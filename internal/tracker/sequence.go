@@ -336,7 +336,7 @@ func refuseCreate(ctx context.Context, tx *sql.Tx, task Task) error {
 	if err := declaredType(ctx, tx, task); err != nil {
 		return err
 	}
-	return requiredFields(project, task)
+	return requiredFields(ctx, tx, project, task)
 }
 
 // declaredType refuses a task naming a type the company has not declared.
@@ -376,20 +376,42 @@ func declaredType(ctx context.Context, tx *sql.Tx, task Task) error {
 		"catalogue rather than invented at the create", task.Type, live)
 }
 
-// requiredFields refuses a task missing a field its project declares.
+// requiredFields refuses a task missing a field its company or its project
+// declares required.
+//
+// # THE WHOLE CHAIN, not the project's half of it
+//
+// Fields are declared in TWO places — the workspace catalogue and the
+// project — and [declaredFields] is what composes them, with a project's
+// declaration shadowing a workspace one of the same id. Reading
+// `project.Fields` alone meant a field marked required at the workspace was
+// enforced on no task in any project: a rule an operator set, that nothing
+// applied and nothing said was not applying.
+//
+// # AND ONLY THE FIELDS THAT APPLY TO THIS TASK
+//
+// `AppliesTo` names the TYPES a field is carried by, and a field that does not
+// apply cannot be missing from a task — its value would be hidden the moment
+// it was set (see [appliesTo] and the hidden state in `explodeFieldValues`).
+// Ignoring it refused every plain task filed into a project that required
+// `severity` of its bugs, which is the worked example this rule exists for.
 //
 // A SUBTASK IS JUDGED BY A DIFFERENT FLAG. ClickUp ships two toggles and so
 // does this, and the default that matters is the second: a field required on a
 // task is NOT required on a subtask unless the definition says so — otherwise
 // one required field blocks every checklist item anybody promotes.
-func requiredFields(project Project, task Task) error {
+func requiredFields(ctx context.Context, tx *sql.Tx, project Project, task Task) error {
+	declared, err := declaredFields(ctx, tx, project.Key)
+	if err != nil {
+		return err
+	}
 	var missing []string
-	for _, f := range project.Fields {
+	for _, f := range declared {
 		required := f.Required
 		if task.Parent != nil && *task.Parent != "" {
 			required = f.RequiredInSubtasks
 		}
-		if !required || f.Archived {
+		if !required || f.Archived || !appliesTo(f, task.Type) {
 			continue
 		}
 		if _, ok := task.Fields[f.ID]; !ok {
@@ -400,8 +422,8 @@ func requiredFields(project Project, task Task) error {
 		return nil
 	}
 	sort.Strings(missing)
-	return fmt.Errorf("tracker: project %s requires %v, which this task does "+
-		"not set", project.Key, missing)
+	return fmt.Errorf("tracker: a %s in project %s requires %v, which this task "+
+		"does not set", task.Type, project.Key, missing)
 }
 
 // bodyWarnings is what a writer is told and not refused for.
@@ -717,7 +739,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 			return fmt.Errorf("tracker: project %s is archived, so nothing "+
 				"moves into it", target)
 		}
-		if err := requiredFields(project, current); err != nil {
+		if err := requiredFields(ctx, tx, project, current); err != nil {
 			return err
 		}
 		subtree, err = readSubtree(ctx, tx, taskID)
