@@ -879,7 +879,20 @@ export interface SetupRequirement {
   vendor_url?: string;
   choices?: { value: string; label: string; hint?: string }[];
   format?: string;
-  /** The reconcile finding this input being absent produces. */
+  /**
+   * The reconcile finding this input being absent produces.
+   *
+   * ON THE WIRE AND NOT READ BY THIS SCREEN, deliberately. It is the server's
+   * join — setupapi's own suite checks that every vendor has a credential
+   * field claiming `credential_missing`, so a row asking for a credential
+   * cannot offer every field except the credential — and the dialog used to
+   * narrow to it when a Fix control existed. It does not any more: a card that
+   * needs attention says so in its tag, and the gear opens the same settings
+   * rather than a narrowed copy (see `actionFor` in Integrations.tsx).
+   *
+   * Declared because it is part of the shape the API sends, not because
+   * anything here consumes it.
+   */
   blocks?: string;
   /**
    * What the document holds here right now, for everything that is NOT a

@@ -390,14 +390,33 @@ test("a templated vendor link waits for the field it needs", () => {
   expect(vendorLink("https://example.com/keys", {}, same)).toBe("https://example.com/keys");
 });
 
-// A FIX NARROWS TO THE FIELDS THAT CLEAR THE FINDING, which is what the
-// blocks field on a requirement is for.
-test("a finding narrows the form to what clears it", () => {
-  const shown = fieldsFor(tool.requirements, "credential_missing");
-  expect(shown.map((r) => r.field)).toEqual(["webhook_token", "route_to"]);
-  // And a finding nothing clears falls back to the whole list rather than an
-  // empty dialog.
-  expect(fieldsFor(tool.requirements, "grant_short").length).toBe(tool.requirements.length);
+// CONNECT FIELDS COME FIRST, AND NOTHING IS HIDDEN.
+//
+// This used to assert the opposite half — that a finding narrowed the form to
+// the fields clearing it — over an argument nothing ever passed, because the
+// Fix control that would have passed it was removed. What the function
+// actually promises is an ordering: the person pasting an API key finds it at
+// the top, and the person changing a fallback seat can still reach it.
+test("connect fields come first and every field survives", () => {
+  // DECLARED OUT OF ORDER ON PURPOSE, and not read off the shared fixture.
+  // That fixture already lists its connect fields first, so asserting against
+  // its own order passes whatever this function does — the first version of
+  // this test did exactly that and stayed green when the partition was
+  // deleted. A list the partition has to actually move is the only one that
+  // can fail.
+  const reqs = [
+    req({ field: "handle_tag", connect: false }),
+    req({ field: "webhook_token", connect: true }),
+    req({ field: "route_to", connect: false }),
+    req({ field: "site", connect: true }),
+  ];
+
+  const shown = fieldsFor(reqs);
+
+  expect(shown.map((r) => r.field)).toEqual(["webhook_token", "site", "handle_tag", "route_to"]);
+  // AND THE ORDER WITHIN EACH GROUP SURVIVES, which is the other half: a
+  // stable partition, so an app's own declared sequence is not reshuffled.
+  expect(shown.length).toBe(reqs.length);
 });
 
 // THE SUBMISSION SENDS A MINT REQUEST, NOT A VALUE, and sends nothing for a

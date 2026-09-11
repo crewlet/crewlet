@@ -745,7 +745,7 @@ export function actionFor(
    * a real answer and not a thing to fall into.
    */
   present: boolean,
-): { label: string; blocks?: string } | null {
+): { label: string } | null {
   if (tools.length === 0) return null;
   // A CARD IN MOTION OFFERS NOTHING. Between a connect and the loop's first
   // report, and between asking for a disconnect and its finishing, there is
@@ -1031,7 +1031,7 @@ export function EntryRow({
   /** The engine's setup state per surface this tool is made of. */
   sections?: { name: string; tool: SetupToolState }[];
   /** Open the settings form: the connect form, and the same one afterwards. */
-  onConnect?: (blocks?: string) => void;
+  onConnect?: () => void;
   /** Take the tool away. Absent for a tool nothing has configured. */
   onDisconnect?: () => void;
 }) {
@@ -1086,7 +1086,7 @@ export function EntryRow({
         </Badge>
       )}
       {action && onConnect && (
-        <Button size="sm" variant="primary" onClick={() => onConnect(action.blocks)}>
+        <Button size="sm" variant="primary" onClick={() => onConnect()}>
           {action.label}
         </Button>
       )}
@@ -1458,7 +1458,6 @@ export function Integrations() {
   const [dialog, setDialog] = useState<{
     title: string;
     sections: { name: string; tool: SetupToolState }[];
-    blocks?: string;
   } | null>(null);
   const [dropping, setDropping] = useState<{
     name: string;
@@ -1555,7 +1554,6 @@ export function Integrations() {
         <SetupDialog
           sections={dialog.sections}
           title={dialog.title}
-          blocks={dialog.blocks}
           onClose={() => setDialog(null)}
           // BOTH HALVES. The requirements half says what the form should now
           // show; the status half is what reports whether the connect took,
@@ -1598,11 +1596,10 @@ export function Integrations() {
                 rows={rows}
                 sections={sectionsFor(entry, setup.byKey)}
                 publicBase={setup.base?.value}
-                onConnect={(blocks) =>
+                onConnect={() =>
                   setDialog({
                     title: entry.name,
                     sections: sectionsFor(entry, setup.byKey),
-                    blocks,
                   })
                 }
                 onDisconnect={() =>

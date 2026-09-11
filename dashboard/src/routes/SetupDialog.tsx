@@ -73,18 +73,27 @@ interface Submitted {
  * anything, so the person pasting an API key still finds it at the top and
  * the person changing the fallback seat can reach it at all.
  *
- * A FINDING still narrows to the fields that clear it, which is what makes
- * Fix on a failing row open the two inputs that matter rather than the whole
- * form. Somebody who pressed Fix asked about one thing.
+ * IT DOES NOT NARROW TO ONE FINDING, and that is a decision rather than a
+ * gap. This took a `blocks` argument and filtered to the requirements whose
+ * own `blocks` named that finding, so pressing Fix on a failing row opened the
+ * two inputs that mattered. The Fix control is gone — see `actionFor` in
+ * Integrations.tsx, which says why: a card that needs attention says so in its
+ * tag, and what is wrong and where to fix it are the note in its body and the
+ * settings the gear opens, "the same settings, not a narrowed copy".
+ *
+ * So nothing ever passed an argument, and the branch could not be reached.
+ * Collapsed rather than left half-wired: a knob with no caller is
+ * indistinguishable to the next reader from one whose caller nobody found, and
+ * this one read as a feature somebody had merely failed to hook up.
+ *
+ * The SERVER's join is untouched and is not this: `setup.Requirement.Blocks`
+ * has its own caller in setupapi's own suite, which checks that every vendor
+ * has a credential field claiming `credential_missing` so that a row asking
+ * for a credential cannot offer every field except the credential. That
+ * invariant is worth keeping whether or not a screen narrows on it, and it is
+ * what a Fix control would be rebuilt on.
  */
-export function fieldsFor(reqs: SetupRequirement[], blocks?: string): SetupRequirement[] {
-  if (blocks) {
-    const matching = reqs.filter((r) => r.blocks === blocks);
-    // A finding no requirement clears is not a reason to show an empty
-    // dialog: fall back to the whole list, where the answer is at least
-    // somewhere.
-    return matching.length ? matching : reqs;
-  }
+export function fieldsFor(reqs: SetupRequirement[]): SetupRequirement[] {
   // A STABLE PARTITION, so within each group the app's own declared order
   // survives. An app that declares no connect fields is one whose every
   // field is part of connecting, and this is then the list unchanged.
@@ -275,7 +284,6 @@ export interface SetupSection {
 export function SetupDialog({
   sections,
   title,
-  blocks,
   onClose,
   onDone,
 }: {
@@ -289,8 +297,6 @@ export function SetupDialog({
   sections: SetupSection[];
   /** The tool's own name, which the catalogue has and the API does not. */
   title: string;
-  /** Narrow to the fields clearing one finding. */
-  blocks?: string;
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -353,10 +359,10 @@ export function SetupDialog({
         section.seat === undefined
           ? section.tool.requirements
           : ((section.tool.seats ?? []).find((s) => s.handle === section.seat)?.requirements ?? []);
-      out.set(sectionKey(section), fieldsFor(reqs, blocks));
+      out.set(sectionKey(section), fieldsFor(reqs));
     }
     return out;
-  }, [sections, blocks]);
+  }, [sections]);
 
   // ASKED ONCE. A shared value belongs to the tool rather than to one of its
   // surfaces, so it is rendered by ONE section and dropped from the rest, and
