@@ -287,3 +287,29 @@ func TestTheInstallLinkGoesToTheAppsOwnSettings(t *testing.T) {
 		t.Errorf("an app with no slug was given a link: %q", got)
 	}
 }
+
+// THE DELETE LINK OPENS THE ADVANCED PAGE.
+//
+// The settings root opens on General, and the delete control lives only under
+// Advanced, so a link to the root left the operator one tab short of the one
+// thing the disconnect dialog sent them there to do.
+func TestTheDeleteLinkOpensTheAdvancedPage(t *testing.T) {
+	t.Parallel()
+	got := github.ManageURL("", "acme", "acme-sre-lead")
+	want := "https://github.com/organizations/acme/settings/apps/acme-sre-lead/advanced"
+	if got != want {
+		t.Errorf("ManageURL = %q, want %q", got, want)
+	}
+	if got := github.ManageURL("https://ghe.example.com/", "", "some-app"); got != "https://ghe.example.com/settings/apps/some-app/advanced" {
+		t.Errorf("a user-owned app on a custom host is deleted at %q", got)
+	}
+	if got := github.ManageURL("", "acme", " "); got != "" {
+		t.Errorf("an app with no slug was given a link: %q", got)
+	}
+	// THE HINT NAMES ONLY WHAT IS LEFT. The link already opened Advanced, so
+	// telling the operator to click it again sends them looking for a tab
+	// they are already on.
+	if strings.Contains(github.ManagePath(), "Advanced") {
+		t.Errorf("ManagePath repeats a step the link already took: %q", github.ManagePath())
+	}
+}
