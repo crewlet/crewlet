@@ -452,7 +452,7 @@ CHANGE rather than about state:
 | Tool | What it does |
 |---|---|
 | `list_work_items` | the query surface above, filtered any way a view can be — including `preset=my_queue`, which is the seat's own open work |
-| `get_work_item` | one task with its thread, history and links |
+| `get_work_item` | one task with its recent comments, history and links. `include` narrows to the parts you need; `comments_cursor` pages back through a long thread |
 | `create_work_item` | file a task or a subtask. `fields` sets custom fields by **slug**, and the create is refused naming any the project requires and this call leaves out |
 | `update_work_item` | change any field, with an optional `if_match`. `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration |
 | `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |
@@ -660,6 +660,31 @@ A comment from somebody who is not the assignee, naming nobody and asking
 nobody, still wakes the assignee — unaddressed, which a turn may absorb without
 replying. The result says so in a `warnings` line, because a commenter
 expecting an answer otherwise gets silence with nothing to explain it.
+
+### What an answer may weigh
+
+A tool answer is read by a **model**: every byte lands in a context window
+beside the system prompt, the conversation and whatever the turn has already
+accumulated. So one answer is capped at **64 KiB** — about a quarter of the
+smallest context the shipped models offer, spent on a single call.
+
+What keeps answers under it is that every collection which grows is paged:
+
+- **Comments** come back twenty at a time, newest page first, each body cut to
+  2 KiB with a marker. `comments_cursor` reads the page before. Twenty comments
+  at their full length would be 640 KiB — ten times the ceiling — for a thread
+  nobody asked to read in full.
+- **History** is the fifty most recent changes. `work_activity` is what pages
+  properly, with a cursor that survives a reanchor.
+- **Options** page by whole fields: a field whose list does not fit comes back
+  with **none** of its options rather than some, because half a list is worse
+  than none — a reader would choose from it and believe it was the set.
+  `options_total` beside `options_shown` is what says otherwise.
+
+When an answer still exceeds the ceiling — a task with a long body, a full
+thread and sixty-four links — it is **refused** naming what would narrow it,
+rather than truncated. A truncated JSON answer is not an answer: a model handed
+half an object either fails to parse it or reads the half it got as the whole.
 
 ## What wakes a seat
 
