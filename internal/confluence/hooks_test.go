@@ -295,6 +295,25 @@ type recordingSink struct {
 
 func newSink() *recordingSink { return &recordingSink{vals: map[string]string{}} }
 
+// value reads one sealed value, failing loudly rather than answering empty:
+// every caller uses it as a precondition, and "" would read as a pass in a
+// case that never ran.
+func (s *recordingSink) value(t *testing.T, name string) string {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.vals[name]
+}
+
+// clear drops a sealed value, which is what the engine sees when a variable
+// was never flushed into its resolver snapshot, when a peer's apply has not
+// caught up, or when somebody cleared it.
+func (s *recordingSink) clear(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.vals, name)
+}
+
 func (s *recordingSink) Record(_ context.Context, name, value string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1467,5 +1486,44 @@ func TestTeardownRemovesOnlyThisEnginesHooksAndIsSafeToRepeat(t *testing.T) {
 	if err := confluence.Teardown(context.Background(), opts); err != nil {
 		t.Errorf("a second teardown over an instance holding none of this "+
 			"engine's hooks failed, so a retried disconnect can never finish: %v", err)
+	}
+}
+
+// A DATA CENTER SECRET THIS PASS MINTED IS ALWAYS SENT, whatever else the
+// hook already matches.
+//
+// Confluence never reads a secret back and a Data Center registration carries
+// no token in its URL — SameAddress deliberately drops the query — so nothing
+// in the converged test could observe that the key had changed. The hook was
+// called ALREADY CORRECT and the new value was never written: the instance
+// went on signing with the old key, the engine verified with the new one, and
+// every delivery was refused by a surface reporting ready. Permanently, since
+// every later pass resolves the same stored value and reaches the same
+// conclusion. The Jira sibling threads the same flag for the same reason.
+func TestADataCenterHookIsRewrittenWhenThisPassMintedTheSecret(t *testing.T) {
+	t.Parallel()
+	site := newCloudSite(t)
+	sink := newSink()
+
+	runDataCenter(t, site, sink, "https://engine.example.com")
+	first := sink.value(t, "CONFLUENCE_WEBHOOK_SECRET")
+	if first == "" {
+		t.Fatal("precondition: the first pass minted nothing")
+	}
+	before := site.mutations()
+
+	// THE VALUE GOES, which is what the engine sees when the variable was
+	// never flushed into its snapshot, when a peer's apply has not caught
+	// up, or when somebody cleared it. The pass mints a replacement.
+	sink.clear("CONFLUENCE_WEBHOOK_SECRET")
+
+	runDataCenter(t, site, sink, "https://engine.example.com")
+	if got := sink.value(t, "CONFLUENCE_WEBHOOK_SECRET"); got == first || got == "" {
+		t.Fatalf("precondition: the second pass did not mint a fresh secret (%q)", got)
+	}
+	if got := site.mutations(); got == before {
+		t.Error("the hook was called converged and the freshly minted key was " +
+			"never sent, so the instance signs with a key the engine no " +
+			"longer holds and every delivery is refused")
 	}
 }

@@ -16,7 +16,7 @@ import (
 func TestARefusedWebhookTokenIsNotQuotedBack(t *testing.T) {
 	t.Parallel()
 	const token = "aLiteralTokenNobodyShouldEverSee"
-	_, err := mintInto(context.Background(), Options{
+	_, _, err := mintInto(context.Background(), Options{
 		Value:    func(v string) string { return v },
 		Recreate: true,
 	}, &Result{}, token, "webhook_token", "the token every delivery carries")

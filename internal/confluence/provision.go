@@ -401,7 +401,7 @@ const dataCenterHookEvent = "all"
 // as an ingress block sends somebody to grant a permission that was never
 // missing.
 func reconcileDataCenter(ctx context.Context, opts Options, base string, res *Result) error {
-	secret, err := dataCenterSecret(ctx, opts, res)
+	secret, minted, err := dataCenterSecret(ctx, opts, res)
 	if err != nil {
 		return err
 	}
@@ -447,7 +447,17 @@ func reconcileDataCenter(ctx context.Context, opts Options, base string, res *Re
 		// pass runs every few minutes for the life of the deployment,
 		// and an unconditional PUT re-sent the name, the address, all
 		// eight events and the signing secret every time.
-		if hook.Enabled && SameAddress(hook.URL, target) &&
+		// AND NOT WHEN THIS RUN MINTED THE KEY. A Data Center registration
+		// carries no token in its URL — [SameAddress] deliberately drops
+		// the query — and Confluence never reads a secret back, so nothing
+		// in the three checks below can observe that the key changed. The
+		// hook was therefore called ALREADY CORRECT and the new value was
+		// never sent: the instance went on signing with the old key, the
+		// engine verified with the new one, and every delivery was refused
+		// by a surface reporting ready. Permanently, because every later
+		// pass resolves the same stored value and reaches the same
+		// conclusion.
+		if !minted && hook.Enabled && SameAddress(hook.URL, target) &&
 			sameEventSet(hook.Events, WebhookEvents) {
 			state.URL = target
 			res.Hooks = append(res.Hooks, state)
@@ -493,13 +503,18 @@ func sameEventSet(have, want []string) bool {
 
 // cloudToken is the value the Cloud hooks carry, minted only where nothing
 // usable resolves.
+// The minted flag is DROPPED here, and only here: a Cloud hook carries the
+// token in its own URL, so a fresh one changes the target and [SameTarget]
+// — which compares the query — already reports the hook as needing a write.
+// The Data Center half has no such tell, which is what its flag is for.
 func cloudToken(ctx context.Context, opts Options, res *Result) (string, error) {
-	return mintInto(ctx, opts, res, opts.Config.WebhookToken, "webhook_token",
+	value, _, err := mintInto(ctx, opts, res, opts.Config.WebhookToken, "webhook_token",
 		"the token every Cloud hook carries in its URL")
+	return value, err
 }
 
 // dataCenterSecret is the HMAC key the Data Center hook is signed with.
-func dataCenterSecret(ctx context.Context, opts Options, res *Result) (string, error) {
+func dataCenterSecret(ctx context.Context, opts Options, res *Result) (string, bool, error) {
 	return mintInto(ctx, opts, res, opts.Config.WebhookSecret, "webhook_secret",
 		"the key the instance signs every delivery with")
 }
@@ -512,15 +527,24 @@ func dataCenterSecret(ctx context.Context, opts Options, res *Result) (string, e
 // delivery fail verification at the edge. So a value that already resolves is
 // used as it is, and minting happens when there is none or when the operator
 // asked to recreate the hooks having planned the restart.
+// It also reports WHETHER it minted, which is the one thing a converged check
+// cannot observe for itself. Confluence never gives a secret back, so nothing
+// can compare the instance's key with the fleet's; the only fact that settles
+// it is whether THIS run replaced the value, and it is known here and nowhere
+// else. See [reconcileDataCenter], where a hook was called converged on its
+// address and events alone and the new key was never sent — leaving the
+// instance signing with the old one, the engine verifying with the new one,
+// and every delivery refused by a surface reporting ready. The Jira sibling
+// threads the same flag for the same reason ([jira.converged]).
 func mintInto(
 	ctx context.Context, opts Options, res *Result, ref, field, role string,
-) (string, error) {
+) (string, bool, error) {
 	var resolved string
 	if opts.Value != nil {
 		resolved = strings.TrimSpace(opts.Value(ref))
 	}
 	if resolved != "" && !opts.Recreate {
-		return resolved, nil
+		return resolved, false, nil
 	}
 	variable, ok := provision.SoleVar(ref)
 	if !ok {
@@ -528,7 +552,7 @@ func mintInto(
 		// becomes State.LastError, which the fleet stores and the
 		// integrations query serves, so a %q of a literal webhook token
 		// publishes the one credential that route authenticates with.
-		return "", fmt.Errorf(
+		return "", false, fmt.Errorf(
 			"confluence: integrations.confluence.%s is %s rather than a value "+
 				"this run could resolve or a whole ${VAR} reference to mint "+
 				"one into; point it at a variable and set that variable, "+
@@ -536,11 +560,11 @@ func mintInto(
 			field, provision.Shape(ref))
 	}
 	if opts.Sink == nil {
-		return "", provision.ErrNoSink
+		return "", false, provision.ErrNoSink
 	}
 	value := rand.Text()
 	if err := opts.Sink.Record(ctx, variable, value); err != nil {
-		return "", fmt.Errorf("confluence: record %s: %w", variable, err)
+		return "", false, fmt.Errorf("confluence: record %s: %w", variable, err)
 	}
 	// SAID IN THE NOTES, which is the one place a reader looks. There was a
 	// Result.Recorded counter beside this line as well, and it had no reader
@@ -555,7 +579,7 @@ func mintInto(
 		note += ". The previous value is now invalid on every other deployment of this company"
 	}
 	res.Notes = append(res.Notes, note)
-	return value, nil
+	return value, true, nil
 }
 
 // sameEvents reports whether a hook subscribes to exactly one event.
