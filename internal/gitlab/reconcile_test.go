@@ -4155,3 +4155,92 @@ func TestTheGroupHookListingIsPagedToExhaustion(t *testing.T) {
 // size the client asks for. A smaller fixture is served whole by the instance
 // and proves nothing about whether the caller asked for page two.
 const hookPageProbe = 120
+
+// A SECRET ROTATED OUTSIDE A RECONCILE RUN REACHES THE HOOK.
+//
+// GitLab never returns a hook's signing token and answers exactly one question
+// about it — whether one is set — so "does this hook hold the key the fleet
+// currently holds" was unanswerable. A secret changed any other way (`crewlet
+// secrets set`, the signing-secret field on the setup form, a peer's apply)
+// therefore never reached the hook: the pass found it converged, wrote
+// nothing, and GitLab went on signing with the previous key while the engine
+// verified with the new one and refused every delivery — on a surface
+// reporting ready, permanently, because every later pass reached the same
+// conclusion.
+func TestASecretRotatedOutsideARunIsWrittenToTheHook(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+
+	if _, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"}, nil); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	f.forget()
+
+	// THE VALUE CHANGES UNDERNEATH, with nothing else about the world
+	// different: same address, same name, same events, and GitLab still
+	// reporting a signing token present.
+	const rotated = "whsec_Y3Jld2xldC1yb3RhdGVkLXNpZ25pbmcta2V5LTMyYnk="
+	if _, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
+		func(o *gitlab.Options) { o.SigningSecret = rotated }); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.updatedHooks) != 1 {
+		t.Fatalf("updated %v, want the hook re-keyed once", f.updatedHooks)
+	}
+	if len(f.hookBodies) != 1 || f.hookBodies[0]["signing_token"] != rotated {
+		t.Errorf("the write carried %v, want the rotated key", f.hookBodies)
+	}
+}
+
+// AND A PASS OVER AN UNCHANGED SECRET STILL WRITES NOTHING, which is the
+// clause the whole settled cadence is anchored on.
+func TestAnUnchangedSecretLeavesTheHookAlone(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+
+	if _, err := reconcileAgainst(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	f.forget()
+
+	if _, err := reconcileAgainst(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.hookBodies) != 0 {
+		t.Errorf("a converged pass wrote %v", f.hookBodies)
+	}
+}
+
+// AND THE DIGEST IS NEVER THE KEY. It is published in a field GitLab shows to
+// anyone who can read the hook's settings, so it has to be one-way and short:
+// the secret is 32 random bytes, so 48 bits is far more than enough to notice
+// a change and useless for recovering anything.
+func TestTheHookDigestIsNotTheKey(t *testing.T) {
+	t.Parallel()
+	digest := gitlab.HookDigest(testSigningSecret)
+	if digest == "" {
+		t.Fatal("a real secret digested to nothing")
+	}
+	if strings.Contains(digest, testSigningSecret) ||
+		strings.Contains(testSigningSecret, strings.TrimPrefix(digest, "crewlet:")) {
+		t.Fatalf("the digest %q carries the key", digest)
+	}
+	if gitlab.HookDigest(testSigningSecret+"x") == digest {
+		t.Error("two different keys digest the same, so a rotation is invisible")
+	}
+	// AN ABSENT KEY DIGESTS TO NOTHING rather than to the hash of the empty
+	// string: a hook whose key this run does not know must not read as
+	// carrying it.
+	if got := gitlab.HookDigest("  "); got != "" {
+		t.Errorf("an empty secret digested to %q", got)
+	}
+}

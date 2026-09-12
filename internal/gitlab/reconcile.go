@@ -484,12 +484,14 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	if target := webhookTarget(opts.WebhookBase); target != "" {
-		// freshSecret says a NEW signing secret exists as of this run,
-		// which is the one fact the hook listing cannot supply: GitLab
-		// never returns a signing token, so a hook that reports one may
-		// be carrying the value this run just replaced. It drives both
-		// the Recorded count and the forced re-write below, because they
-		// are the same event seen from two sides.
+		// freshSecret is this run's own record of whether it minted or
+		// rotated the key, and all it drives now is the Recorded count.
+		// It used to force the hook re-write as well, because GitLab
+		// never returns a signing token and nothing else could tell a
+		// hook carrying the current key from one carrying the value this
+		// run had just replaced. [HookDigest] answers that from the
+		// instance's own listing, for every key change rather than only
+		// the ones this process made, so the flag stops here.
 		secret, note, freshSecret, err := signingSecret(ctx, opts)
 		if err != nil {
 			return nil, rollback(ctx, opts, minted, err)
@@ -501,7 +503,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			res.Recorded++
 		}
 		opts.SigningSecret = secret
-		hooked, notes, err := ensureHooks(ctx, opts, group, projects, target, freshSecret)
+		hooked, notes, err := ensureHooks(ctx, opts, group, projects, target)
 		if err != nil {
 			return nil, rollback(ctx, opts, minted, err)
 		}
@@ -1143,18 +1145,19 @@ func MintSigningSecret() (string, error) { return whsec.Mint() }
 // group and falls back, true demands the group, false goes straight to the
 // projects.
 //
-// # freshSecret, and why it is passed in rather than worked out here
-//
 // A hook that already carries the right subscription is left alone
-// ([Hook.Converged]) — but "the right subscription" is everything GitLab will
-// show and the signing token is the one thing it will not. So the caller
-// hands down the only fact that settles it: whether THIS RUN minted or
-// rotated the secret, which is [PlanSigningSecret]'s decision and is already
-// made by the time the hooks are touched. Re-deriving it here would be a
-// second implementation of the most consequential judgement a run makes,
-// free to disagree with the one that recorded the value.
+// ([Hook.Converged]), and "the right subscription" now includes WHICH KEY it
+// is signed with: [HookDigest] publishes that in the one field this engine
+// controls and GitLab gives back. Nothing about the key is passed down here.
+// It used to be — a `freshSecret` flag saying whether THIS RUN minted or
+// rotated the secret — which was the strongest fact available while the
+// listing could only say that some token was set, and was silently blind to
+// every rotation another process made: `crewlet secrets set`, the setup
+// form's signing-secret field, a peer's apply. The digest is read off the
+// same listing every other converge test is read off, so there is one answer
+// rather than a run-local one beside an instance-side one.
 func ensureHooks(ctx context.Context, opts Options, group Group, projects []string,
-	target string, freshSecret bool,
+	target string,
 ) ([]string, []string, error) {
 	mode := config.ContainerWebhookAuto
 	if pv := opts.Config.Provisioning; pv != nil && pv.GroupWebhook != "" {
@@ -1177,7 +1180,7 @@ func ensureHooks(ctx context.Context, opts Options, group Group, projects []stri
 	// silence as "cannot tell": a self-managed instance keeps the behaviour
 	// it has, and the one case caught is a group that says it is free.
 	if mode == config.ContainerWebhookAuto && !group.PaidPlan() {
-		hooked, err := ensureProjectHooks(ctx, opts.Client, projects, name, target, secret, freshSecret)
+		hooked, err := ensureProjectHooks(ctx, opts.Client, projects, name, target, secret)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1193,7 +1196,7 @@ func ensureHooks(ctx context.Context, opts Options, group Group, projects []stri
 	}
 
 	if mode != config.ContainerWebhookNever {
-		err := ensureGroupHook(ctx, opts.Client, group.ID, name, target, secret, freshSecret)
+		err := ensureGroupHook(ctx, opts.Client, group.ID, name, target, secret)
 		switch {
 		case err == nil:
 			return []string{"group"}, nil, sweepProjectHooks(ctx, opts.Client, projects, name)
@@ -1210,7 +1213,7 @@ func ensureHooks(ctx context.Context, opts Options, group Group, projects []stri
 		// so — an operator who expected one group hook and got four
 		// project hooks should learn it here rather than from the
 		// instance's settings pages.
-		hooked, err := ensureProjectHooks(ctx, opts.Client, projects, name, target, secret, freshSecret)
+		hooked, err := ensureProjectHooks(ctx, opts.Client, projects, name, target, secret)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1222,7 +1225,7 @@ func ensureHooks(ctx context.Context, opts Options, group Group, projects []stri
 		}, nil
 	}
 
-	hooked, err := ensureProjectHooks(ctx, opts.Client, projects, name, target, secret, freshSecret)
+	hooked, err := ensureProjectHooks(ctx, opts.Client, projects, name, target, secret)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1415,9 +1418,7 @@ func mine(hooks []Hook, name string) []Hook {
 // first match and stopping still leaves every hook a previous address
 // created: this engine's own registrations, live, two of them delivering
 // somewhere that no longer answers. What "converged" has to mean is one.
-func ensureGroupHook(ctx context.Context, c *Client, groupID int, name, target, secret string,
-	freshSecret bool,
-) error {
+func ensureGroupHook(ctx context.Context, c *Client, groupID int, name, target, secret string) error {
 	hooks, err := c.GroupHooks(ctx, groupID)
 	if err != nil {
 		return fmt.Errorf("gitlab: list group hooks: %w", err)
@@ -1432,14 +1433,14 @@ func ensureGroupHook(ctx context.Context, c *Client, groupID int, name, target, 
 	}
 	if len(held) > 0 {
 		hook := held[0]
-		if hook.Converged(name, target) && !freshSecret {
+		if hook.Converged(name, target, HookDigest(secret)) {
 			// NOTHING TO WRITE, and the listing above is also the
 			// confirmation.
 			//
 			// This used to PUT unconditionally, on the reasoning that
 			// the signing secret may have rotated — true, and now
-			// answered by freshSecret, which is the run's own record of
-			// whether it did. What the unconditional write cost was the
+			// answered by the digest [hookBody] wrote into the hook's
+			// description. What the unconditional write cost was the
 			// steady state: the loop re-sent this identical body, all
 			// nineteen event flags of it, every few minutes for the life
 			// of the deployment.
@@ -1509,7 +1510,7 @@ func confirmSigned(what string, list func() ([]Hook, error), target string) erro
 // integration that delivers to nobody, which is the exact failure the
 // skipped-rather-than-guessed rule above exists to prevent.
 func ensureProjectHooks(ctx context.Context, c *Client, projects []string,
-	name, target, secret string, freshSecret bool,
+	name, target, secret string,
 ) ([]string, error) {
 	if len(projects) == 0 {
 		return nil, errors.New(
@@ -1519,7 +1520,7 @@ func ensureProjectHooks(ctx context.Context, c *Client, projects []string,
 	}
 	hooked := make([]string, 0, len(projects))
 	for _, project := range projects {
-		if err := ensureProjectHook(ctx, c, project, name, target, secret, freshSecret); err != nil {
+		if err := ensureProjectHook(ctx, c, project, name, target, secret); err != nil {
 			return nil, err
 		}
 		hooked = append(hooked, project)
@@ -1527,9 +1528,7 @@ func ensureProjectHooks(ctx context.Context, c *Client, projects []string,
 	return hooked, nil
 }
 
-func ensureProjectHook(ctx context.Context, c *Client, project, name, target, secret string,
-	freshSecret bool,
-) error {
+func ensureProjectHook(ctx context.Context, c *Client, project, name, target, secret string) error {
 	hooks, err := c.ProjectHooks(ctx, project)
 	if err != nil {
 		return fmt.Errorf("gitlab: list hooks on %s: %w", project, err)
@@ -1548,7 +1547,7 @@ func ensureProjectHook(ctx context.Context, c *Client, project, name, target, se
 		// this branch runs once per declared project, so an unconditional
 		// re-write cost one write per project per pass rather than one.
 		// See [ensureGroupHook] for the whole reasoning.
-		if hook.Converged(name, target) && !freshSecret {
+		if hook.Converged(name, target, HookDigest(secret)) {
 			return nil
 		}
 		if err := c.UpdateProjectHook(ctx, project, hook.ID, name, target, secret); err != nil {

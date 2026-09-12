@@ -3,6 +3,8 @@ package gitlab
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -697,6 +699,24 @@ type Hook struct {
 	// stranding it.
 	Name string `json:"name"`
 
+	// Description is where this engine records WHICH signing key the hook
+	// holds, because GitLab will not say.
+	//
+	// It is a digest and never the key: [HookDigest] over the secret, which
+	// is one-way and truncated. What it buys is the one fact
+	// [SigningTokenPresent] cannot give — a hook signs with SOME key, and
+	// whether it is the key the fleet currently holds was unknowable. A
+	// secret rotated outside a reconcile run (`crewlet secrets set`, or the
+	// signing-secret field on the setup form) therefore never reached the
+	// hook: the pass found it converged, wrote nothing, and GitLab went on
+	// signing with the previous key while the engine verified with the new
+	// one and refused every delivery — on a surface reporting ready.
+	//
+	// Empty on a hook an older build registered, which compares unequal and
+	// is rewritten once. That is the correct direction: a hook this engine
+	// cannot place is one it should re-key.
+	Description string `json:"description"`
+
 	// SigningTokenPresent is the ONLY thing GitLab will say about a hook's
 	// signing token: the token itself is never returned, by design. It is
 	// what lets a reconcile tell a hook that can verify from one that
@@ -772,20 +792,31 @@ func (h *Hook) UnmarshalJSON(raw []byte) error {
 // Converged reports a hook that already carries what [hookBody] would write,
 // so writing it again would change nothing at the instance.
 //
-// THE NAME AND THE ADDRESS ARE PART OF IT, because [hookBody] writes both.
+// THE NAME, THE ADDRESS AND THE KEY'S DIGEST ARE PART OF IT, because
+// [hookBody] writes all three.
 // They used to be the caller's business, which worked only while the caller
 // SELECTED on the address: now that [ours] selects on the name, a hook this
 // pass has to re-point — or a nameless one it has just adopted — would
 // otherwise answer "converged" and be left exactly as it was found.
 //
-// # What it can and cannot compare, and why that is enough
+// # How the key is compared at all
 //
 // GitLab never returns a hook's `signing_token` or its legacy plaintext
-// `token`, so this cannot prove the hook holds THIS deployment's secret — it
-// can only see that it holds one. That is the strongest honest test, and the
-// caller supplies the missing half: a run that MINTED or ROTATED the secret
-// knows the hook cannot be carrying it and writes regardless (see
-// [ensureHooks]).
+// `token`, so a direct comparison is impossible and this used to settle for
+// "it holds SOME token", with the caller supplying the other half from its
+// own run: a pass that had just minted knew the hook could not be carrying
+// the new value and wrote regardless. That was blind to every rotation
+// another process made — `crewlet secrets set`, the setup form's
+// signing-secret field, a peer's apply — and the consequence was silent and
+// permanent: the pass found the hook converged, wrote nothing, GitLab went on
+// signing with the previous key, the engine verified with the new one, and
+// every delivery was refused by a surface reporting ready.
+//
+// So the digest is compared instead. [hookBody] writes [HookDigest] of the
+// secret into the description, which is the one field this engine controls
+// and GitLab gives back, and the answer is then read off the same listing as
+// every other clause here — the same on every node, with nothing carried down
+// from whichever process happened to mint.
 //
 // The legacy plaintext token is covered by the same reasoning rather than
 // left out of it. A hook an older Crewlet created holds the signing key in
@@ -794,8 +825,8 @@ func (h *Hook) UnmarshalJSON(raw []byte) error {
 // — which is what clears the plaintext field. There is no state where a hook
 // both reports a signing token and still carries the old cleartext one,
 // because the write that produced the first also cleared the second.
-func (h Hook) Converged(name, target string) bool {
-	if h.Name != name || h.URL != target {
+func (h Hook) Converged(name, target, digest string) bool {
+	if h.Name != name || h.URL != target || h.Description != digest {
 		return false
 	}
 	if !h.SigningTokenPresent || !h.EnableSSLVerification {
@@ -933,6 +964,9 @@ func hookBody(name, target, secret string) map[string]any {
 		// alone made every change of address create a hook and abandon the
 		// one before it.
 		"name": name,
+		// AND WHICH KEY THIS HOOK HOLDS, which GitLab answers about in no
+		// other way. See [Hook.Description] and [HookDigest].
+		"description": HookDigest(secret),
 		// THE SIGNING TOKEN, and the field name is the whole feature.
 		//
 		// GitLab takes two different secrets on a hook and they are not
@@ -1041,4 +1075,39 @@ func isConflict(err error) bool {
 // that should simply have created the thing.
 func asAPIError(err error, target **APIError) bool {
 	return errors.As(err, target)
+}
+
+// HookDigest is how a hook records which signing key it was written with.
+//
+// # Why a digest is published at all
+//
+// GitLab never returns a hook's signing token, and answers exactly one
+// question about it: whether one is set ([Hook.SigningTokenPresent]). That
+// leaves "does this hook hold the key the fleet currently holds" unanswerable,
+// and the consequence is silent: a secret rotated outside a reconcile run is
+// never written to the hook, GitLab goes on signing with the previous key, the
+// engine verifies with the new one, and every delivery is refused while the
+// surface reports ready.
+//
+// The only field this engine controls and GitLab gives back is the
+// description, so the answer goes there. It is a HASH, truncated, and never
+// the key: SHA-256 over a domain string and the secret, cut to 48 bits. That
+// is far more than enough to notice a change and useless for recovering
+// anything — the secret is 32 random bytes, so there is no dictionary to run
+// and nothing shorter to guess. The engine publishes no other property of it.
+//
+// THE DOMAIN STRING IS NOT DECORATION. It stops this digest ever matching one
+// computed over the same bytes for another purpose, which is the rule
+// internal/runtoken already applies to its own key derivation and for the same
+// reason.
+//
+// An empty secret digests to nothing rather than to the hash of the empty
+// string: a hook whose key this run does not know must not be reported as
+// carrying it.
+func HookDigest(secret string) string {
+	if strings.TrimSpace(secret) == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte("crewlet/gitlab/hook-signing-key\x00" + secret))
+	return "crewlet:" + hex.EncodeToString(sum[:6])
 }
