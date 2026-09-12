@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -378,4 +379,40 @@ func ambiguousText(e *tracker.ErrAmbiguousAnswer) string {
 			clip(ask.Excerpt))
 	}
 	return b.String()
+}
+
+// fieldMap turns a model's `fields` object into the raw values a record
+// carries, or returns the model-facing refusal.
+//
+// THE KEYS ARE LEFT AS THEY CAME — a slug, a name or an id — because the
+// resolution belongs in the same snapshot as the declarations it resolves
+// against: a slug resolved here, against a catalogue the write then lands
+// beside, is a value filed under whichever field held that spelling a moment
+// ago. The writer does it inside its own decide.
+//
+// THE VALUES ARE LEFT AS THEY CAME TOO, uncoerced. The whole coercion table is
+// the writer's, for the same reason and one more: it is the place that can
+// REFUSE, and a tool that pre-coerced would be a second implementation of
+// rules stated once.
+func fieldMap(raw any) (map[string]json.RawMessage, string) {
+	object, ok := raw.(map[string]any)
+	if !ok {
+		return nil, "`fields` takes an object keyed by field slug, like " +
+			"{\"severity\": \"high\", \"effort\": 3}. Read the slugs with " +
+			"get_work_catalogue."
+	}
+	out := make(map[string]json.RawMessage, len(object))
+	for key, value := range object {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			return nil, "`fields` carries an entry with no field name."
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Sprintf("`fields` carries a value for %q that "+
+				"cannot be sent: %v", clip(key), err)
+		}
+		out[key] = encoded
+	}
+	return out, ""
 }

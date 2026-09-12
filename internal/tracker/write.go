@@ -127,6 +127,16 @@ type Writer struct {
 	// fallback recipient and never its delivery.
 	Leads Leads
 
+	// World is the two lookups the custom-field coercion table cannot do
+	// itself — a relationship's task and a people field's seat.
+	//
+	// ON THE WRITER for the same reason [Writer.Leads] is: the caller that
+	// needs it may be a duty on a tick with no arguments to carry a seam
+	// through. Nil refuses those two field types BY NAME rather than
+	// admitting anything, because a handle nothing checked is a value that
+	// filters against nobody.
+	World FieldWorld
+
 	// Now is the clock the AUTHORED instants are stamped from. An
 	// argument rather than a package call, so a test can pin it and so
 	// nothing on the write path reads a clock the applier is forbidden.
@@ -145,6 +155,10 @@ type WriterDeps struct {
 	DB        *store.DB
 	Claims    Claims
 	NodeID    string
+
+	// World is the chart seam the custom-field coercion needs for the one
+	// field type whose value is a colleague — see [Writer.World].
+	World     FieldWorld
 	Metrics   *metrics.Recorder
 	Drain     func() float64
 	Actor     string
@@ -231,7 +245,7 @@ func NewWriter(d WriterDeps) (*Writer, error) {
 	return &Writer{
 		publisher: d.Publisher, db: d.DB, claims: d.Claims, nodeID: d.NodeID,
 		metrics: d.Metrics, Actor: d.Actor, ActorKind: d.ActorKind,
-		Drain: d.Drain, Leads: d.Leads, Now: now,
+		Drain: d.Drain, Leads: d.Leads, World: d.World, Now: now,
 	}, nil
 }
 
@@ -305,6 +319,10 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 	}
 	at := w.Now()
 
+	// WARNINGS ARE COLLECTED FROM INSIDE THE DECIDE, which runs again on
+	// every round: the LAST run is the one whose record was published, so
+	// the slice is replaced rather than appended to.
+	var fieldWarnings []string
 	result, err := w.published(ctx, statelog.Request{
 		Subject:  wire(subject),
 		Scope:    scope.Resolve(subject),
@@ -364,6 +382,23 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			if err != nil {
 				return statelog.Decision{}, err
 			}
+			if charged.Fields != nil {
+				// THE COERCION TABLE, and the required-field half that
+				// only ever ran on a create. A patch reaching here
+				// unchecked is how "about 7 hours" became 7 on a number
+				// field and a required field was emptied by an update
+				// the next create of the same shape would refuse.
+				coerced, warned, err := settleFields(ctx, tx, current.Project,
+					current.Type, *charged.Fields, w.World)
+				if err != nil {
+					return statelog.Decision{}, err
+				}
+				if err := refuseUnsetRequired(ctx, tx, current, coerced); err != nil {
+					return statelog.Decision{}, err
+				}
+				charged.Fields = &coerced
+				fieldWarnings = warned
+			}
 			// THE SCOPE THE REQUEST CLAIMED STILL COVERS THIS WRITE.
 			//
 			// A status write's apply rewrites `blocker_open` and
@@ -397,6 +432,7 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 	if patch.Body != nil {
 		result.Warnings = bodyWarnings(*patch.Body)
 	}
+	result.Warnings = append(result.Warnings, fieldWarnings...)
 	return result, err
 }
 

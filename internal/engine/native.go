@@ -187,6 +187,12 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			// it is the sprint duty, a fleet singleton on a tick with
 			// no tool arguments to carry a seam through.
 			Leads: liveLeads{engine: e},
+			// AND THE CHART AGAIN, for the one custom-field type whose
+			// value is a colleague: a people field resolves through the
+			// company's own roster, which belongs to the EPOCH rather
+			// than to a row — so the write resolves it and the record
+			// carries the handle, and no applier ever reads an org.
+			World: liveSeats{engine: e},
 			// THE NODE'S OWN WRITER ACTS AS THE SYSTEM, and every
 			// surface derives its own from it with Writer.As: a seat's
 			// tools act as that seat, an operator's session as that
@@ -1032,6 +1038,26 @@ type liveUnits struct{ engine *Engine }
 
 func (l liveUnits) ResolveUnit(name string) (string, tracker.LeadRef, bool) {
 	return ChartUnits(l.engine.Company().Org).ResolveUnit(name)
+}
+
+// liveSeats resolves a people field's value to exactly one handle, against the
+// CURRENT epoch.
+//
+// EXACTLY ONE, and an ambiguous spelling is the same answer as an unknown one:
+// both mean "this does not name a person", which is the only thing a stored
+// value can be written from. A field holding a handle nobody has is a field
+// every filter on it misses, silently, for as long as the value is there.
+//
+// Per call for the reason every other live seam here is: the writer outlives a
+// revision, and a captured chart would admit a colleague who has left.
+type liveSeats struct{ engine *Engine }
+
+func (l liveSeats) ResolveSeat(ref string) (string, bool) {
+	found := colleague.Resolve(ref, builtin.Corpus(l.engine.Company().Org))
+	if len(found) != 1 {
+		return "", false
+	}
+	return found[0].Seat.Handle, true
 }
 
 // liveLeads resolves a wake's two fallbacks against the CURRENT epoch.
