@@ -1134,6 +1134,31 @@ func TestIntegrationsCarriesWhatTheReconcileLoopFound(t *testing.T) {
 		if len(findings) != 2 {
 			t.Fatalf("carried %d findings, want both", len(findings))
 		}
+		// AND EACH CARRIES ITS OWN VERDICT, which is what stops a reader
+		// keeping a second copy of the closed set.
+		//
+		// These two findings are the discriminating pair: grant_short is a
+		// real problem owed by an admin, grant_excess is an ADVISORY on a
+		// working integration — same subject shape, same wire shape, and
+		// nothing but the kind string to tell them apart until now. The
+		// dashboard guessed, treating any finding naming an agent as that
+		// agent not working, so one spare permission badged a healthy agent
+		// amber underneath a card reading Connected.
+		verdicts := map[string][2]string{}
+		for _, raw := range findings {
+			f, _ := raw.(map[string]any)
+			kind, _ := f["kind"].(string)
+			phase, _ := f["phase"].(string)
+			actor, _ := f["actor"].(string)
+			verdicts[kind] = [2]string{phase, actor}
+		}
+		if got := verdicts["grant_short"]; got != [2]string{"degraded", "admin"} {
+			t.Errorf("grant_short verdict = %v, want degraded/admin", got)
+		}
+		if got := verdicts["grant_excess"]; got != [2]string{"ready", "admin"} {
+			t.Errorf("grant_excess verdict = %v, want ready/admin — an advisory "+
+				"that reads as a fault reports a working agent as broken", got)
+		}
 		// A surface the loop has not reached is absent rather than
 		// asserted, which is not the same as the process being unable to
 		// say: the field is null either way, and only the presence of

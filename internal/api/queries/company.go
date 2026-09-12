@@ -819,11 +819,32 @@ func reconcileRow(state integration.State) map[string]any {
 func reconcileFindings(findings []integration.Finding) []map[string]any {
 	out := make([]map[string]any, 0, len(findings))
 	for _, f := range findings {
+		// THE VERDICT TRAVELS WITH THE FINDING, from
+		// [integration.FindingKind.Verdict] — the one table in the tree
+		// that says what a kind MEANS.
+		//
+		// Without it a reader has only the kind string, and the only way to
+		// tell a real problem from an advisory is to keep a second copy of
+		// the closed set wherever the question is asked. The dashboard did
+		// exactly that by accident: it treated any finding naming an agent
+		// as that agent not working, which is wrong for the two kinds whose
+		// verdict is PhaseReady — grant_excess and registration_orphaned
+		// both describe something that is working — so one spare permission
+		// on a GitHub app badged a healthy agent amber underneath a card
+		// reading Connected.
+		//
+		// A kind this build does not know still gets a verdict here,
+		// because Verdict's default arm answers for one: a peer on a newer
+		// build can write a kind into the shared row, and rendering it as
+		// an advisory would let it hide a real problem.
+		phase, actor := f.Kind.Verdict()
 		out = append(out, map[string]any{
 			"kind":       string(f.Kind),
 			"subject":    f.Subject,
 			"detail":     f.Detail,
 			"action_url": f.ActionURL,
+			"phase":      string(phase),
+			"actor":      string(actor),
 		})
 	}
 	return out
