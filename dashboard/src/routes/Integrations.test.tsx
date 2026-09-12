@@ -1622,7 +1622,7 @@ test("the disconnect roster lists each agent once", () => {
     enabled: true,
     satisfied: true,
     seats_required: true,
-    manage_path: "Advanced > Delete GitHub App",
+    manage_path: "Delete GitHub App",
     // A COMPANY BLOCK AS WELL AS SEATS, which is GitHub's real shape and
     // what makes the sections outnumber the agents.
     requirements: [
@@ -1641,7 +1641,7 @@ test("the disconnect roster lists each agent once", () => {
         name: "SRE Lead",
         satisfied: true,
         requirements: [],
-        manage_url: "https://github.com/settings/apps/acme-sre",
+        manage_url: "https://github.com/settings/apps/acme-sre/advanced",
       },
     ],
   };

@@ -136,10 +136,18 @@ test("removing the accounts names each agent and where to delete its app", () =>
       name="GitHub"
       kinds={["github"]}
       apps={[
-        { handle: "swe", name: "Agent SWE", url: "https://github.com/settings/apps/acme-swe" },
-        { handle: "sre", name: "SRE Lead", url: "https://github.com/settings/apps/acme-sre" },
+        {
+          handle: "swe",
+          name: "Agent SWE",
+          url: "https://github.com/settings/apps/acme-swe/advanced",
+        },
+        {
+          handle: "sre",
+          name: "SRE Lead",
+          url: "https://github.com/settings/apps/acme-sre/advanced",
+        },
       ]}
-      appPath="Advanced > Delete GitHub App"
+      appPath="Delete GitHub App"
       onClose={() => {}}
       onDone={() => {}}
     />,
@@ -155,12 +163,12 @@ test("removing the accounts names each agent and where to delete its app", () =>
   // THE AGENT, not the handle: a colleague is a name, and "swe" is a config
   // key.
   expect(screen.queryByText(/Delete swe's app/)).toBeNull();
-  // AND THE LAST CLICKS, because the link lands on a settings page whose
+  // AND THE LAST CLICK, because the link lands on a settings page whose
   // delete control is at the bottom under a heading named nothing like it.
   expect(screen.getByText(/Delete GitHub App/)).toBeDefined();
 
   const links = screen.getAllByRole("link");
-  expect(links[0]!.getAttribute("href")).toBe("https://github.com/settings/apps/acme-swe");
+  expect(links[0]!.getAttribute("href")).toBe("https://github.com/settings/apps/acme-swe/advanced");
 });
 
 // AN APP THE ENGINE REMOVES ITSELF HANDS OVER NOTHING.
