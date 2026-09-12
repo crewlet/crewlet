@@ -80,7 +80,7 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 	}
 	ctx := context.Background()
 
-	applied, pending, err := store.Pending(ctx, boot.Store.Path, opts)
+	schemas, err := store.Pending(ctx, boot.Store.Path, opts)
 	if err != nil {
 		// READING IS ALSO A SECOND PROCESS ON THE FILE, and until Pending
 		// took the lock this was the one path that did not say so: -check
@@ -94,29 +94,41 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 				"already applied every migration this binary carries, so a node "+
 				"that is up is a node with nothing pending.")
 	}
+	// BOTH ESTATES, ALWAYS BOTH. A node is two databases with two
+	// independent sequences, and a report that named one of them would be
+	// a deploy gate that passes while the other is behind.
+	var waiting int
+	for _, sch := range schemas {
+		waiting += len(sch.Pending)
+	}
 	if *check {
-		fmt.Fprintf(stdout, "%s: %d applied, %d pending\n",
-			boot.Store.Path, len(applied), len(pending))
-		for _, file := range pending {
-			fmt.Fprintf(stdout, "  pending  %s\n", file)
+		for _, sch := range schemas {
+			fmt.Fprintf(stdout, "%s (%s): %d applied, %d pending\n",
+				sch.Path, sch.Estate, len(sch.Applied), len(sch.Pending))
+			for _, file := range sch.Pending {
+				fmt.Fprintf(stdout, "  pending  %s\n", file)
+			}
 		}
-		if len(pending) > 0 {
+		if waiting > 0 {
 			// NON-ZERO, because this is what a deploy gate calls: a
 			// command that reported pending work and exited 0 would be
 			// a gate that never stops anything.
-			return fmt.Errorf("%d migration(s) pending", len(pending))
+			return fmt.Errorf("%d migration(s) pending", waiting)
 		}
 		return nil
 	}
-	if len(pending) == 0 {
-		fmt.Fprintf(stdout, "%s is up to date (%d migration(s) applied).\n",
-			boot.Store.Path, len(applied))
+	if waiting == 0 {
+		for _, sch := range schemas {
+			fmt.Fprintf(stdout, "%s (%s) is up to date (%d migration(s) applied).\n",
+				sch.Path, sch.Estate, len(sch.Applied))
+		}
 		return nil
 	}
 
 	// OPENING IS WHAT MIGRATES. There is deliberately no second code path
 	// that applies files: a migrator the engine does not use is one that
-	// can disagree with it about what "applied" means.
+	// can disagree with it about what "applied" means. One Open brings up
+	// both estates, so both sequences run here.
 	db, err := store.Open(ctx, boot.Store.Path, opts)
 	if err != nil {
 		// NO ROUTE AROUND THIS ONE, and that is correct: migrating the
@@ -128,14 +140,20 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 	}
 	defer func() { _ = db.Close() }()
 
-	now, err := db.AppliedMigrations(ctx)
-	if err != nil {
-		return err
-	}
-	fmt.Fprintf(stdout, "%s: applied %d migration(s).\n",
-		boot.Store.Path, len(now)-len(applied))
-	for _, file := range pending {
-		fmt.Fprintf(stdout, "  applied  %s\n", file)
+	for _, sch := range schemas {
+		handle := db
+		if sch.Estate == store.EstateReplicated {
+			handle = db.Replicated()
+		}
+		now, err := handle.AppliedMigrations(ctx)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "%s (%s): applied %d migration(s).\n",
+			sch.Path, sch.Estate, len(now)-len(sch.Applied))
+		for _, file := range sch.Pending {
+			fmt.Fprintf(stdout, "  applied  %s\n", file)
+		}
 	}
 	return nil
 }

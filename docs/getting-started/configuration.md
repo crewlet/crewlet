@@ -226,7 +226,12 @@ providers:
   llm:
     default:                            # named provider (referenced by roles via `llm: default`)
       type: openai                      # openai | anthropic | openai-compatible | cli-agent
-      model: gpt-4o
+      model: gpt-4o                     # required, and supports ${ENV_VAR}. A reference that
+                                        #   resolves to nothing is REFUSED naming the variable —
+                                        #   unlike a missing api_key, which still builds: every
+                                        #   call then comes back a clean 401 that names the
+                                        #   provider, where a missing model has no such tell and
+                                        #   the request is simply malformed
       api_keys:                         # one or more keys; multiple enables rate-limit rotation
         - "${LLM_API_KEY}"              # supports ${ENV_VAR} references
         # - "${LLM_API_KEY_BACKUP}"     # add more for rate-limit rotation
@@ -240,9 +245,17 @@ providers:
                                         #   a bench is SHARED across the fleet, so a peer's 429 benches the
                                         #   key here too — see concepts/coordination.md
       base_url: "${LLM_BASE_URL}"       # optional — custom endpoint; supports ${ENV_VAR} references.
-                                        #   Required for openai-compatible (it has no vendor default);
-                                        #   on `openai` / `anthropic` it points the vendor's own wire
-                                        #   format at a gateway or proxy instead of the vendor host
+                                        #   REQUIRED for openai-compatible and REFUSED when it is
+                                        #   empty — including when a ${VAR} resolved to nothing.
+                                        #   `openai-compatible` means "not OpenAI", and an empty
+                                        #   base_url would take the OpenAI backend's own default:
+                                        #   the company's whole model traffic sent to
+                                        #   api.openai.com under a key that is not an OpenAI key,
+                                        #   with a 401 naming a vendor nobody configured as the
+                                        #   only symptom.
+                                        #   On `openai` / `anthropic` it is genuinely optional and
+                                        #   points the vendor's own wire format at a gateway or
+                                        #   proxy instead of the vendor host
       timeout_seconds: 120              # optional — per-call HTTP timeout (default: 120); raise for slow / large-output reasoning models
                                         #   (the cli-agent backend drives a subprocess and uses cli.timeout_seconds instead)
       reasoning: false                  # optional — enable reasoning/extended thinking (default: false)
@@ -308,9 +321,12 @@ providers:
                                         #   Omit it and both fall back to recency;
                                         #   nothing else changes.
     type: openai                        # openai | openai-compatible
-    model: text-embedding-3-small       # required — no default, because a default
-                                        #   here would be a width the store was not
-                                        #   sized for
+    model: text-embedding-3-large       # required, and it DECIDES THE WIDTH: this
+                                        #   one emits 3072, text-embedding-3-small
+                                        #   1536. A new company gets the large one,
+                                        #   because the width is what search quality
+                                        #   rests on and it is not a knob worth
+                                        #   guessing
     api_key: "${OPENAI_API_KEY}"        # supports ${ENV_VAR} references; empty falls
                                         #   back to OPENAI_API_KEY, the same variable
                                         #   the chat backend reads
@@ -318,11 +334,24 @@ providers:
                                         #   difference between `openai` and
                                         #   `openai-compatible`, so a local embedding
                                         #   server needs nothing else
-    dimensions: 1536                    # the vector width. Requested from the API
-                                        #   (third-generation models truncate on
-                                        #   request), and checked against what comes
-                                        #   back on every call
+  # dimensions: 1024                  # OPTIONAL OVERRIDE, 64..4096. Unset takes the
+                                        #   named model's OWN width, which is what
+                                        #   you want unless you are deliberately
+                                        #   shortening it: third-generation models
+                                        #   truncate on request, and a shorter vector
+                                        #   is a smaller index and a worse answer.
+                                        #   A model this build does not know is
+                                        #   REFUSED with `dimensions` unset rather
+                                        #   than given a guess — name a known model
+                                        #   or state the width yourself
 ```
+
+**The width belongs to the model.** `text-embedding-3-large` emits 3072,
+`text-embedding-3-small` 1536, `gemini-embedding-001` 3072 and `embed-v4.0`
+1536, and leaving `dimensions` unset takes whichever the model named here
+emits. There is no global default, because a number that was right for one
+model is silently wrong for the next — and a model this build does not know is
+refused rather than guessed at, naming both ways to fix it.
 
 **The width is a contract with the store, not with the model.** Vectors of
 two different widths cannot be compared, so a row written at the wrong one is
@@ -359,6 +388,13 @@ stream:
                                     #   choice rather than a second backend
   store_dir: "./crewlet-data/stream"  # empty = in-memory: right for a test,
                                     #   and nothing published survives a restart
+                                    #   — which on the default native tracker
+                                    #   and knowledge base means every item and
+                                    #   every page, not just queued events. The
+                                    #   engine logs that at error level on each
+                                    #   boot rather than refusing it, because a
+                                    #   test and an ingress-only node run this
+                                    #   way on purpose
   # url: "nats://nats.internal:4222"  # required for `nats`, REFUSED for
                                     #   embedded — an embedded server has no
                                     #   address, so a url there is read by
@@ -375,6 +411,106 @@ stream:
   #   peers:                        #   the member name, so it must survive a
   #     - "nats://node-1:6222"      #   restart — a name minted at boot orphans
   #     - "nats://node-2:6222"      #   this member's replicas every time
+  #   host: 10.0.0.11               #   the interface the route port binds.
+                                    #   Unset binds EVERY interface, and a route
+                                    #   port is unauthenticated cluster access —
+                                    #   set it to the private address the peers
+                                    #   reach
+  #   advertise: "node-1.internal:6222"
+                                    #   what peers should DIAL for this member,
+                                    #   when that differs from what it binds — a
+                                    #   mapped container port, a NAT, a load
+                                    #   balancer. Members learn each other from
+                                    #   the members they already have, so unset
+                                    #   this address is derived from the
+                                    #   connection's remote address, which
+                                    #   behind a NAT is unreachable or somebody
+                                    #   else's. A bare host keeps this member's
+                                    #   own route port
+  # sync: always                    # what an acknowledged publish has actually
+                                    #   reached. `always` (the default, at every
+                                    #   replica count) fsyncs every write before
+                                    #   acknowledging it; a duration — `30s` —
+                                    #   declines the fsync and names the window
+                                    #   an acked write may be behind the disk.
+                                    #   It is NOT inferred from `replicas`: "a
+                                    #   replicated member has a quorum instead
+                                    #   of a disk" holds when one host loses
+                                    #   power and fails when a RACK does, and a
+                                    #   three-node fleet in one rack is three
+                                    #   copies of one unflushed page cache. A
+                                    #   window is refused where it would be
+                                    #   recorded and not honoured: against an
+                                    #   external cluster (which stores its own
+                                    #   data), below 3 replicas (no quorum to
+                                    #   trade the disk for), and on a cluster
+                                    #   whose peers are all on this host (one
+                                    #   failure domain). Declining it on a real
+                                    #   three-host fleet is a legitimate trade
+                                    #   and costs 1–3 ms per write on NVMe
+  # tracker_log_max_bytes: 17179869184
+                                    #   the byte ceiling on the mutation log —
+                                    #   the ordered stream the engine's own
+                                    #   tracker writes through. UNSET DERIVES a
+                                    #   quarter of the stream volume's free
+                                    #   space, clamped to 4..64 GiB, because one
+                                    #   fixed number is five years of history on
+                                    #   the modelled rate and one boot on a
+                                    #   small disk. CROSSING IT REFUSES, it does
+                                    #   not shed: there is no age bound on this
+                                    #   stream, so a full log drops no history —
+                                    #   the append is refused, loudly, naming
+                                    #   whatever is blocking the trim
+  # tracker_vectors_max_bytes: 17179869184
+                                    #   the vector changelog's ceiling (default
+                                    #   16 GiB). SIZED FOR THE PEAK: the stream
+                                    #   keeps one message per source, so a
+                                    #   week's minting is ~91 MB — but changing
+                                    #   the embedding model rewrites EVERY source
+                                    #   in a few hours, and for the following
+                                    #   week all of them are in the window. A
+                                    #   ceiling sized from the steady state would
+                                    #   refuse the one operation it exists to
+                                    #   survive
+  # tracker_retention:              # when the log may be trimmed. Every term
+                                    #   here is a statement about the OPERATOR's
+                                    #   estate rather than the company's policy,
+                                    #   which is why it is Tier A
+  #   min_age: 7d                   #   the age floor NO trim may cross, whatever
+                                    #   the other terms say (24h..90d). It can
+                                    #   only make a trim more conservative, so it
+                                    #   is a lower bound on how long the log
+                                    #   keeps a record and never a ceiling — and
+                                    #   it says nothing about any node's own
+                                    #   store file
+  #   backup_max_age: 24h           #   how stale the newest backup may be before
+                                    #   the trim STOPS ENTIRELY (1h..30d). A
+                                    #   company that never backs up never trims:
+                                    #   the log is the only copy of what no node
+                                    #   has applied yet
+  #   backup_floor: engine          #   whose word the trim takes for what is
+                                    #   backed up. `engine` follows the newest
+                                    #   backup the engine wrote and verified;
+                                    #   `operator` follows an explicit
+                                    #   acknowledgement, for a company that trims
+                                    #   only what has left the host — and then
+                                    #   trims NOTHING until somebody says so
+  #   snapshot_interval: 24h        #   how stale a node's newest snapshot may be
+                                    #   before it takes another (1h..7d). A
+                                    #   snapshot is a full copy of the replicated
+                                    #   estate, so four a day is a day's worth of
+                                    #   I/O to save a joining node a replay it
+                                    #   can do in under a minute. CROSS-FIELD:
+                                    #   `snapshot_interval × 2 < min_age`, or
+                                    #   every snapshot is older than the trim
+                                    #   floor and a node that lost its store has
+                                    #   nothing to resume from
+  #   rejoin_window: 30m            #   the budget for a node to become a
+                                    #   complete replica (5m..24h) — what a join
+                                    #   is measured against and reported on. A
+                                    #   setting rather than a constant, because
+                                    #   the answer is a property of the
+                                    #   operator's disks and network
   # event_retention_hours: 720      # 0 takes the queue's own default (30 days).
                                     #   Unbounded is deliberately not expressible:
                                     #   an event log nothing sweeps grows for the
@@ -392,9 +528,33 @@ stream:
                                     #   unset, and a private CA is one file
 
 store:
-  path: "./crewlet-data/company.db"   # ONE file, owned exclusively by this
-                                    #   process. Not a shared database, and no
-                                    #   DSN: two engines on one file corrupt it
+  path: "./crewlet-data/company.db"   # the NODE estate — the audit log, memory,
+                                    #   config revisions, the secret bootstrap.
+                                    #   Owned exclusively by this process. Not a
+                                    #   shared database, and no DSN: two engines
+                                    #   on one file corrupt it
+  # snapshot_dir: "./crewlet-data/snapshots"
+                                    #   where this node keeps its own snapshots
+                                    #   of the replicated estate — the file a
+                                    #   peer joining the fleet copies instead of
+                                    #   replaying the whole log. Absolute, or
+                                    #   relative to the store's directory. THE
+                                    #   DEFAULT PUTS A FULL COPY ON THE SAME
+                                    #   VOLUME as the live database, which is why
+                                    #   the snapshot loop refuses below 1.1× the
+                                    #   store's size free rather than filling the
+                                    #   disk the applier is committing to. A
+                                    #   separate volume is the production shape
+  # replicated_path: "./crewlet-data/crewlet-replicated.db"
+                                    #   the REPLICATED estate — everything a
+                                    #   state log's applier writes. Empty puts it
+                                    #   beside `path`, which is what makes "back
+                                    #   up the data directory" true. It is a
+                                    #   second FILE rather than more tables
+                                    #   because a snapshot for a joining node is
+                                    #   a copy of this one alone; separate it
+                                    #   only to put it on a different disk, and
+                                    #   never onto the same file as `path`
 
 coordination:
   type: local                       # one node holding its own seat leases;
@@ -426,7 +586,37 @@ logging:
   level: info       # debug, info (default), warn, error
   format: console   # console (default: columns and colour for a person),
                     #   text (slog key=value), json (for a log shipper)
+
+retention:
+  backup_owner: platform-oncall   # who owns this deployment's backups: a
+                                  #   person, a team, a scheduler's name. Free
+                                  #   text, read by a human at the moment an
+                                  #   alarm names it. `crewlet validate` warns
+                                  #   when it is unset — a company that never
+                                  #   backs up never trims, so "who is
+                                  #   responsible for this" has a real answer on
+                                  #   every deployment that intends to keep
+                                  #   working
 ```
+
+**`crewlet validate` prints warnings as well as refusals**, and they are
+separate on purpose: the exit code turns on refusals alone, so a CI step gates
+on what cannot run and still prints what its operator should read. A warning is
+a configuration that is valid and carries a consequence worth knowing before it
+is applied — a declined fsync's window, a trim that will never advance until
+somebody acknowledges a backup, an embedded stream with nowhere to persist, a
+unit keyed on a name somebody will rename.
+
+`api.host` and `api.port` are what this node **binds**, which is rarely where it
+**answers**: a fleet behind a load balancer binds `0.0.0.0:8000` and is reached
+at `https://crewlet.example.com`. That outside address is Tier B's
+[`integrations.public_base_url`](#integrations), written once and read by every
+provisioner and every link the engine composes.
+
+Binding a person to a credential crosses the tiers the other way: an
+`api.auth.tokens[].id` is named from the company document's
+`roles[].contact.crewlet_operator_id`, never from a `seat:` field on the token,
+because Tier A holds the keys to the secret store and may never read Tier B.
 
 The event store (LLM observability) is a table in that same file, created by
 the engine's own migrations on first start — there is nothing to configure
@@ -464,7 +654,28 @@ nesting depth — flat teams, departments with sub-teams, divisions, or custom t
 
 ```yaml
 units:
-  - name: Engineering                   # required — unit name
+  - name: Engineering                   # required — unit name, and what people
+                                        #   read: in a prompt, on a board, in a
+                                        #   channel topic
+    id: engineering                     # optional — the unit's STABLE IDENTITY.
+                                        #   Lowercase letters, digits, `-` and
+                                        #   `_`, starting with a letter. A name
+                                        #   is prose and gets renamed; an id is
+                                        #   read by nobody and survives, so
+                                        #   everything durable keys on the id
+                                        #   when there is one. Unique across the
+                                        #   chart, and it may not equal another
+                                        #   unit's NAME. Adding one to a unit
+                                        #   that already has work filed against
+                                        #   it rewrites nothing: a filter on a
+                                        #   unit matches its id and its name.
+                                        #   IT DOES NOT STOP A RENAME
+                                        #   RE-ONBOARDING the seats beneath it —
+                                        #   onboarding turns on the NAME, which
+                                        #   is what an agent reads as its team,
+                                        #   so changing the name changes the
+                                        #   context those seats were introduced
+                                        #   with, id or no id
     type: department                    # optional — unit type (default: "team")
     lead: CTO                           # optional — inherited from parent if omitted
     purpose: "Build and ship the product"  # optional
@@ -475,11 +686,10 @@ units:
         goals:                          # optional
           - "Ship features on 2-week cadence"
         channel: backend                # optional — the team's chat channel, inherited
-        integrations:                   # optional — the unit's tracker + wiki "home"
-          jira:                          #   identity (webhook routing + write home; NOT
-            project: "BACK"              #   read scope, NOT an MCP credential)
-          confluence:
-            space: "BACK"
+        project: "BACK"                 # optional — the unit's tracker "home": routing +
+        space: "BACK"                   #   write target. NOT read scope, NOT a credential,
+                                        #   and NOT vendor-specific — the same keys name a
+                                        #   native project/space or a Jira/Confluence one
         mcp_env:                        # optional — per-agent MCP creds, inherited by roles
           atlassian:                     #   (real tool credentials only; the chat transport
             JIRA_API_TOKEN: "${BACK_JIRA_TOKEN}"  #   identity is per-agent)
@@ -517,7 +727,7 @@ units:
 |-------|------|----------|-------------|
 | `name` | string | yes | Unique seat identity |
 | `kind` | `agent` \| `human` | no | Who holds the seat (default `agent`). `human` marks a [human seat](../concepts/humans-in-the-org.md) — addressable, never spawned; rejects every runtime-only field below and requires at least one `contact` identity |
-| `contact` | dict | human seats | External identities: `slack_user_id`, `mattermost_user_id` (a username, not an ID), `atlassian_account_id` (Jira+Confluence), `github_login`, `gitlab_username`. Each accepts a literal ID or exactly one whole-value `${VAR}` env reference, resolved at use time; values are whitespace-stripped, and a `${VAR}` embedded inside a longer string is rejected at validation (see [Humans in the Org Chart](../concepts/humans-in-the-org.md)) |
+| `contact` | dict | human seats | External identities: `slack_user_id`, `mattermost_user_id` (a username, not an ID), `atlassian_account_id` (Jira+Confluence), `github_login`, `gitlab_username`, `crewlet_operator_id`. Each accepts a literal ID or exactly one whole-value `${VAR}` env reference, resolved at use time; values are whitespace-stripped, and a `${VAR}` embedded inside a longer string is rejected at validation (see [Humans in the Org Chart](../concepts/humans-in-the-org.md)). `crewlet_operator_id` is the odd one: it names one of Tier A's `api.auth.tokens[].id`, binding that credential to this seat so a person writing through the dashboard or the API acts as **themselves** rather than as a token. It is an attribution and never an address — the engine never sends as itself — so it is left out of rosters and colleague cards, and a seat carrying only this one is reachable through their dashboard queue rather than by an @-mention |
 | `availability` | string | no | Human seats only — free-text availability rendered into rosters and `lookup_colleague` results |
 | `goal` | string | no | Individual mission statement |
 | `backstory` | string | no | Personality, background, expertise |
@@ -531,11 +741,11 @@ units:
 | `manages` | list[string] | no | Names of roles this agent manages |
 | `responsibilities` | list[string] | no | Role responsibilities |
 | `behavioral_guidelines` | list[string] | no | Behavioral rules |
-| `mcp_env` | dict | no | Per-agent MCP server credentials, keyed by server name — env vars for `stdio` servers, HTTP headers for `http` servers (e.g. `atlassian.JIRA_USERNAME` / `atlassian.JIRA_API_TOKEN`, `confluence.CONFLUENCE_USERNAME` / `confluence.CONFLUENCE_API_TOKEN`, `slack.SLACK_MCP_XOXB_TOKEN`, `mattermost.MATTERMOST_TOKEN`, `github.Authorization: "Bearer …"`). The per-agent tool-credential surface only — scope a server via its own filter (`JIRA_PROJECTS_FILTER` / `CONFLUENCE_SPACES_FILTER`) if needed. The unit's Jira project / Confluence space identity lives under `integrations` (below), not here |
+| `mcp_env` | dict | no | Per-agent MCP server credentials, keyed by server name — env vars for `stdio` servers, HTTP headers for `http` servers (e.g. `atlassian.JIRA_USERNAME` / `atlassian.JIRA_API_TOKEN`, `confluence.CONFLUENCE_USERNAME` / `confluence.CONFLUENCE_API_TOKEN`, `slack.SLACK_MCP_XOXB_TOKEN`, `mattermost.MATTERMOST_TOKEN`, `github.Authorization: "Bearer …"`). The per-agent tool-credential surface only — scope a server via its own filter (`JIRA_PROJECTS_FILTER` / `CONFLUENCE_SPACES_FILTER`) if needed. The unit's project / space identity is `project` and `space` (below), not here |
 | `integrations.slack` | dict | no | This seat's own Slack app: `bot_token`, `signing_secret`, optional `channel`. **Both credentials are required together** — without the token the seat receives messages it cannot answer, without the secret its route answers 503 while the app's settings page reports a healthy request URL. `crewlet slack provision` mints both into the `${VAR}`s these fields point at |
 | `integrations.mattermost` | dict | no | Per-agent Mattermost **transport** identity (`bot_token`, optional `username`, optional `channel`). One credential, three readers: the same token is named as `mcp_env.mattermost.MATTERMOST_TOKEN` for the MCP subprocess, and the inbound websocket for this seat authenticates with it too |
-| `integrations.jira.project` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.JiraProject` / `org.Role.JiraProject`). The team's Jira project as integration identity: an issue that names nobody in the org chart routes to the unit lead, and it is the project the team files work under. **Not** an MCP credential, and it does **not** scope knowledge reads |
-| `integrations.confluence.space` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.ConfluenceSpace` / `org.Role.ConfluenceSpace`). The team's Confluence space as integration identity: a page change that names nobody routes to the unit lead, and it is where the team writes. It does **not** scope reads — read scope is the org-wide `knowledge.confluence_spaces` only |
+| `project` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.Project` / `org.Role.Project`). The team's tracker project as identity: an item that names nobody in the org chart routes to the unit lead, and it is the project the team files work under. **Vendor-neutral** — it names a native project or a Jira one, whichever [`tracker.backend`](#tracker) the company runs, so switching backends does not rewrite the org chart. **Not** an MCP credential, and it does **not** scope knowledge reads. Keys are an upper-case letter plus 1–9 upper-case letters or digits (`ENG`, `PROD`), which is the shape every backend accepts |
+| `space` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.Space` / `org.Role.Space`). The team's knowledge container as identity: a page change that names nobody routes to the unit lead, and it is where the team writes. Vendor-neutral and shaped like `project`, above. It does **not** scope reads — read scope is the org-wide `knowledge.scope` only. The reserved containers (`knowledge.skills_container`, default `TS`, and `knowledge.root_space`, default `HOME`) are refused here |
 | `workers` | list[string] | no | Which [worker templates](#worker-templates) this seat may delegate to. **Empty means every one** — a company that publishes three workers wants its seats using them, and requiring each seat to opt in turns a shared library into per-seat copy-paste. A name no template defines is refused at load |
 | `schedules` | list | no | Role-scoped recurring tasks — see [Schedules](#schedules) |
 
@@ -622,6 +832,7 @@ Inbound / notification integrations live under a single `integrations:` block �
 
 ```yaml
 integrations:
+  public_base_url: "${CREWLET_PUBLIC_URL}"   # where this deployment answers from OUTSIDE
   forge_app_id: "ari:cloud:ecosystem::app/your-forge-app-id"   # Jira Cloud's delivery path
 
   jira:
@@ -639,7 +850,6 @@ integrations:
     token: "${CONFLUENCE_API_TOKEN}"      # API token (org read account)
     email: "${CONFLUENCE_EMAIL}"          # Cloud only — the account's email, for Basic auth
     webhook_secret: "${CONFLUENCE_WEBHOOK_SECRET}"  # Data Center only — HMAC-SHA256 secret
-    skills_space: TS                      # tool-skill pages; excluded from routing and search
 
   slack:                                 # per-seat apps live on each role
     typing_status: always                # working indicator: always (default) | addressed
@@ -675,9 +885,10 @@ integrations:
 
 ```
 
+- **`public_base_url`** — where this deployment answers from **outside**, which is rarely what `api.host` and `api.port` bind. A bare origin (`scheme://host[:port]`, no path, query or fragment): every consumer appends its own rooted path to it, so leftovers here land in the middle of every link. It is the base each provisioner's `-public-url` defaults to, the address every registered webhook points at, and what [tool-skill](../concepts/tool-skills.md) prose reaches as the reserved variable `${crewlet_base_url}` — which is why a company may not declare a `skill_variables` entry of that name. Write it as a whole `${VAR}` and staging and production answer at their own addresses off one revision; it is stored verbatim and resolved wherever a link or a registration is built, so a process that cannot read it registers nothing rather than a webhook at the literal text of a variable.
 - **`forge_app_id`** — verifies the Forge Invocation Token (FIT) on Cloud webhooks against Atlassian's JWKS; the `aud` claim must match. Required when Jira Cloud delivers through the Forge app.
 - **`jira`** — the Atlassian tracker, served end to end. Give `url` **or** `cloud_id`, never both — they are two ways to name one instance and `crewlet validate` refuses the ambiguity. `token` is the org read account (an issue's watchers are the one routing input a webhook never carries); `email` switches authentication to Cloud's Basic scheme; `site_url` is the human base for links when the instance is named by a cloud id. `webhook_secret` is **required for Data Center** and unused on Cloud, whose events arrive through the Forge app instead. Each seat's own credential lives in `mcp_env.atlassian` (or `mcp_env.jira`) and is what the engine resolves its account id from — see [Jira](../integrations/jira.md).
-- **`confluence`** — the knowledge base, and the **query-time search** behind every turn's "Relevant knowledge" block and the `search_knowledge` tool. Same address rule as `jira`: `url` **or** `cloud_id`, never both. `token` is the org read account a seat with no Confluence credential of its own searches under; a seat WITH one searches as itself and Confluence enforces its page permissions natively. `webhook_secret` is required for Data Center and unused on Cloud. The knowledge backend is **single-homed** — the engine wires exactly one `knowledge.Searcher`, because two would make an agent's answer to "what do we already know about this" depend on which one was asked. Scope reads with `knowledge.confluence_spaces`; publish with [`crewlet confluence import`](../reference/cli.md#crewlet-confluence-import). See [Confluence](../integrations/confluence.md).
+- **`confluence`** — the knowledge base, and the **query-time search** behind every turn's "Relevant knowledge" block and the `search_knowledge` tool. Same address rule as `jira`: `url` **or** `cloud_id`, never both. `token` is the org read account a seat with no Confluence credential of its own searches under; a seat WITH one searches as itself and Confluence enforces its page permissions natively. `webhook_secret` is required for Data Center and unused on Cloud. The knowledge backend is **single-homed** — the engine wires exactly one `knowledge.Searcher`, because two would make an agent's answer to "what do we already know about this" depend on which one was asked. Scope reads with `knowledge.scope`; publish with [`crewlet confluence import`](../reference/cli.md#crewlet-confluence-import). See [Confluence](../integrations/confluence.md).
 - **`slack`** — the hosted chat backend. The org-level block carries **no credentials at all**: Slack gives each agent its OWN app, so the token and signing secret live on each role's `integrations.slack`, and this block holds only the working-indicator settings. **`typing_status`** takes `always` / `addressed` and defaults to `always`, and Slack is where that default costs least: its indicator renders TEXT, so a phase change is something the person waiting can actually read, which is also what makes `status_phrases` worth having here. There is no `off`. Inbound events arrive per seat at `/webhooks/slack/{handle}`, verified against that seat's own signing secret. Provision with [`crewlet slack provision`](../reference/cli.md#crewlet-slack-provision). See [Slack Integration](../integrations/slack.md).
 - **`mattermost`** — the self-hosted chat backend, and the one integration that is **both** inbound and outbound: enabling it starts the outbound transport *and* the websocket fleet that holds one connection per agent seat (Mattermost has no usable inbound webhook, so nothing has to reach the engine — no public URL, no tunnel). `url` and `team` are both **required** when enabled. Per-agent identity lives on each role's `integrations.mattermost.bot_token`, named again as `mcp_env.mattermost.MATTERMOST_TOKEN` for the MCP subprocess. **`typing_status`** takes `always` / `addressed` and defaults to `always`, which on this backend is the expensive one: the indicator has to be re-asserted every few seconds rather than every 45, so a multi-minute turn costs one to two orders of magnitude more requests than Slack's for strictly less information. Most Mattermost deployments want `addressed`. There is deliberately no `status_phrases`: Mattermost renders a fixed client-side indicator with no API for the text. The `provisioning:` sub-block is read only by [`crewlet mattermost provision`](../reference/cli.md#crewlet-mattermost-provision), not the engine. A company may run Mattermost and Slack together — they are different workspaces with different people in them, and an org migrating from one to the other runs both for a while. See [Mattermost Integration](../integrations/mattermost.md).
 - **`github`** — the hosted code host, served end to end. `url` is **optional**: leave it unset for github.com, whose API lives on a different host rather than a path on the web UI, and name an Enterprise Server there — the REST base is derived either way. `webhook_secret` is **required** when enabled, and takes any string (GitHub signs with it verbatim, so unlike GitLab's there is no shape to get wrong). The optional `token` is a read credential for **participant fan-out** — a payload carries the author, assignees and requested reviewers but not who has commented or reviewed — and it is what `crewlet github provision` registers webhooks with. Each seat's own credential lives in `mcp_env.github` and is what the engine resolves its login from; a human seat is reached by `contact.github_login` instead. The `provisioning:` sub-block is read only by [`crewlet github provision`](../reference/cli.md#crewlet-github-provision): `org_webhook: auto` takes one organization-level hook where the credential may (covering repositories created later) and falls back to one per repository where it may not. A company may run GitHub and GitLab together — they are two hosts with different repositories on them. See [GitHub Integration](../integrations/github.md).
@@ -689,10 +900,70 @@ integrations:
 
 ```yaml
 knowledge:
-  confluence_spaces: ["ENG", "HANDBOOK"] # org-wide spaces every agent can search (optional)
+  backend: confluence                    # native (default) | confluence | none
+  scope: ["ENG", "HANDBOOK"]             # org-wide containers every agent can search (optional)
+  skills_container: TS                   # tool-skill pages; excluded from routing and search
+  root_space: HOME                       # the organisation's own pages, e.g. the root Onboarding page
+  vectors: true                          # fuse semantic recall; unset derives from providers.embeddings
 ```
 
-`knowledge.confluence_spaces` is the org-wide read scope: [Confluence](../integrations/confluence.md) space keys, materialised onto `org.Organization.ConfluenceSpaces` and read by the Confluence searcher. It requires an `integrations.confluence` block — a read scope for a backend that is not there narrows nothing while reading as though it does. **Optional:** leave it unset and a seat holding its own Confluence credential searches *unscoped*, bounded by that account's own page permissions; a seat with no credential of its own falls back to the org token and is **only** searched under a scope, because an unscoped search on the shared credential is how one seat reads a page its own account never could.
+`knowledge.backend` is **which knowledge base this company runs**, and there is exactly one: two would make an agent's answer to "what do we already know about this" depend on which was asked. Leaving it unset **derives** — `confluence` when an `integrations.confluence` block is declared, `native` otherwise — so a company that has configured nothing gets a wiki, and an Atlassian company that has not read this note keeps the backend it had. Naming `native` **beside** an `integrations.confluence` block is refused: pages would live in two places with nothing keeping them in step. `none` is a real posture — the `## Relevant knowledge` block stays empty and `search_knowledge` is not registered.
+
+`knowledge.scope` is the org-wide read scope, materialised onto `org.Organization.KnowledgeScope` and read by whichever searcher is wired. **Empty means unscoped, and what unscoped MEANS differs by backend:** natively it is the whole company, because the engine is the boundary — every reader is a seat of one company and there is no second account to launder a read through. On Confluence it is whatever the asking seat's own account can read, which is why a credential-less seat searching unscoped there gets nothing: an unscoped query on the shared org token is how one seat reads a page its own account never could. Set it only to **narrow** to a curated floor.
+
+`knowledge.skills_container` (default `TS`) holds [tool-skill](../concepts/tool-skills.md) pages and `knowledge.root_space` (default `HOME`) holds the organisation's own pages, starting with the root Onboarding page every seat reads first. Both are **reserved**: excluded from knowledge search and from routing, and refused as a unit's own `space`. `skills_container` is three-valued — absent takes the default, a name takes that container, and an explicit `""` turns tool skills **off** entirely.
+
+`knowledge.vectors` fuses semantic recall into the search. **Unset derives** from whether `providers.embeddings` is configured — a company already paying for embeddings for its diary gets the better search — and an explicit `true` with no provider is refused, because there would be nothing to compute an embedding with.
+
+---
+
+## Tracker
+
+```yaml
+tracker:
+  backend: native                        # native (default) | jira | none
+```
+
+Which **work tracker** this company runs, on exactly the terms `knowledge.backend` runs on. Unset derives `jira` when an `integrations.jira` block is declared and `native` otherwise; `native` beside `integrations.jira` is refused, because work would be filed in two places and a unit's `project` key would name two trackers. `none` is a company where schedules and chat are the only things that wake a seat.
+
+The two axes are **separate** on purpose. A company running a native tracker against a Confluence wiki, or Jira against native pages, is an ordinary arrangement rather than a mixture to refuse — they are two products with separate routing and separate lead maps.
+
+### The native tracker's own policy
+
+```yaml
+tracker:
+  backend: native
+  native:                                # ONLY on a native company — a block of
+                                         #   working days on a company running Jira
+                                         #   describes nothing, and is refused
+    timezone: Europe/Berlin              # the company's ONE clock, IANA name
+                                         #   (default UTC). It resolves "next
+                                         #   Friday", places an all-day date at
+                                         #   midnight and decides where a sprint's
+                                         #   window starts. It is a clock for
+                                         #   AUTHORED instants and calendar
+                                         #   boundaries only — no duration is
+                                         #   measured against it, because a duration
+                                         #   measured against a wall clock changes
+                                         #   length twice a year
+    non_working_weekdays:                # days this company does not work. Shades
+      - saturday                         #   the calendar and shapes the burndown
+      - sunday                           #   guideline, and does nothing else: work
+                                         #   can still be filed, due or done on a
+                                         #   Sunday, because a company that says it
+                                         #   does not work weekends is describing its
+                                         #   rhythm rather than issuing a rule
+    inbox_retention_days: 365            # how long a person's inbox keeps a row
+                                         #   (default 365, 30..3650). THE HISTORY IT
+                                         #   POINTS AT IS UNTOUCHED — this is a
+                                         #   mailbox horizon, not an archive one, and
+                                         #   "what was I told about last year" is
+                                         #   answered by the history either way
+```
+
+Everything else a tracker could be told is either a fact about the **operator** — how they back up, how long their disk holds a replay window — which lives in Tier A under [`stream.tracker_retention`](#stream), or a decision the engine makes once for everybody.
+
+**A native tracker needs a stream that survives a restart.** Its write-ahead log lives on the stream, and an embedded stream with no `stream.store_dir` keeps its streams in memory — so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve the tracker permanently, with no snapshot that helps. `crewlet validate` refuses that pair when it is given both documents, and so does the engine at boot. A company on a vendor tracker starts no log at all and is unaffected, which is why the rule needs both files to see.
 
 ---
 

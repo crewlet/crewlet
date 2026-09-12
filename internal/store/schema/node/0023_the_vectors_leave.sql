@@ -1,0 +1,22 @@
+-- The semantic half leaves this file, because it is not this node's own.
+--
+-- 0020 put `kb_vectors` here beside `kb_docs` and `kb_postings`, on the rule
+-- that file states at length: a table here is a REBUILDABLE copy of something
+-- coordination holds, kept locally so a node can query it. That was right for
+-- the lexical index, which every node builds from its own rows with no
+-- network, and wrong for the vectors, which cost a provider call per source
+-- and are the one thing in the search path a node cannot recompute alone.
+--
+-- The vector domain is what settles it: an embedding is now a record on an
+-- ordered stream, applied by one deterministic applier into the REPLICATED
+-- estate, so the fleet pays the embedding bill once and every node holds the
+-- answer. `0003_the_vector_domain_lands.sql` in that estate is where the
+-- reshaped `kb_vectors` and its 1-bit sibling are created.
+--
+-- NOTHING IS CARRIED ACROSS, and that is a fact about this build rather than
+-- a decision to lose data: no code in the tree has ever written this table.
+-- It was created by 0020 and left for the indexer that never landed, so it is
+-- empty in every database that has ever run this schema — and a copy between
+-- two estates is not something a migration in either one could perform, since
+-- no statement may name a table in both.
+DROP TABLE kb_vectors;

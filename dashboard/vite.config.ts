@@ -66,6 +66,9 @@ export default defineConfig({
       "/secrets": { target: "http://localhost:8000" },
       "/setup": { target: "http://localhost:8000" },
       "/stream": { target: "http://localhost:8000" },
+      // The state log's retention document and its two operator gates, which
+      // the Fleet screen's replication panels read and write.
+      "/work": { target: "http://localhost:8000" },
     },
   },
 });

@@ -36,26 +36,54 @@
 // each stream snapshot are taken one after another, and work continues
 // throughout — so the pieces are separated by however long the copy took.
 //
-// THE STORE IS COPIED FIRST, and the order is the decision. It leaves the
-// store OLDER than the stream estate, and the reason that is the safe
-// direction is that nothing in the store decides whether work runs again:
-// the completion ledger, the delivery dedupe and the fire claims all moved
-// to coordination (migrations 0010–0013), and they travel with the streams.
-// So an older store costs a bounded gap in one seat's own memory and audit —
-// a few episodes and conversation rows that the ledger already counts as
-// done — and changes nothing about what the fleet will do next.
+// THE STORE IS COPIED FIRST, and the order is now MANDATORY rather than
+// preferable. The reason it used to have — "nothing in the store decides
+// whether work runs again" — died the moment the store became the durable home
+// of the company's own history: the tracker's rows are derived from an ordered
+// log by an applier that keeps its checkpoint in the same transaction as the
+// rows, so the store copy carries a POSITION, and a position is a claim about
+// what has already been applied.
 //
-// The reverse order costs more. A stream estate older than the store is a
-// ledger that has NOT recorded work whose episode the store already holds:
-// the trigger is still unacked in its mailbox, so it is redelivered and run
-// again, and the duplicate reaches whoever the seat was talking to. Between
-// a small gap in a seat's memory and a repeated post to somebody's issue
-// tracker, the gap is the cheaper failure and the one that stays inside the
-// company. See docs/guides/backup.md.
+// Copy the store first and the artefact holds a store at position P beside a
+// log that has since moved past it. A restore replays the difference; the gap
+// is bounded and replayable, and it costs a few minutes of work being applied
+// twice — which is free, because the applier's guard is monotone in the
+// position.
+//
+// Copy the store LAST and the artefact holds a store at position P beside a
+// log whose newest record is BELOW P. Every subsequent record then lands at a
+// sequence the store has already marked applied, and the version-guarded
+// upsert drops it SILENTLY. That is not a gap, it is a permanent hole that
+// nothing reports — a restored company quietly missing whatever was written
+// during the copy, for ever.
+//
+// So the order trades a bounded, replayable gap against a permanent, silent
+// one. See docs/guides/backup.md.
+//
+// # The hold and the assertion
+//
+// The gap is only replayable while the log still HAS the records. The trim
+// deletes a record once every counted node has committed past it, and a backup
+// is not a counted node — so between the store copy and the stream snapshot the
+// trim can delete exactly the records the artefact needs. Two things close it,
+// and they are different kinds of thing:
+//
+//   - THE HOLD is a heartbeated pin in the fleet's own register, taken at the
+//     pre-copy position and released when the manifest is written. It is what
+//     makes the race not happen. Heartbeated, because a pin that outlived its
+//     owner would stop the trim for ever and the log would grow to its ceiling.
+//   - THE ASSERTION is `first_seq <= position + 1`, per domain, checked after
+//     the stream snapshots from the bounds those snapshots already captured. It
+//     is what makes "restorable" a CHECKABLE inequality rather than a hope, and
+//     it is why the hold failing is a refused backup instead of a corrupt one.
+//
+// A backup that cannot assert it writes NO manifest, which is exactly how a
+// reader tells debris from a backup.
 package backup
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -65,7 +93,10 @@ import (
 
 	"github.com/nats-io/nats.go"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/version"
 )
@@ -77,8 +108,13 @@ var log = logging.Get("backup")
 // or a shipping script has to look for — see docs/guides/backup.md.
 const ManifestName = "manifest.json"
 
-// storeFileName is the store copy inside a backup directory.
-const storeFileName = "store.db"
+// storeFileNames are the database copies inside a backup directory, one per
+// estate. Named rather than derived, because these strings are what a restore
+// procedure and every shipping script look for — see docs/guides/backup.md.
+var storeFileNames = map[store.Estate]string{
+	store.EstateNode:       "store.db",
+	store.EstateReplicated: "store-replicated.db",
+}
 
 // streamDirName holds the stream snapshots.
 const streamDirName = "streams"
@@ -122,15 +158,37 @@ type Manifest struct {
 
 	// Store describes the database copy, absent on a node running without
 	// one.
-	Store *StoreArtifact `json:"store,omitempty"`
+	Stores []StoreArtifact `json:"stores,omitempty"`
 
 	// Streams is every stream captured, coordination buckets included.
 	// Absent on a node with no broker reachable.
 	Streams []StreamArtifact `json:"streams,omitempty"`
+
+	// Domains is where each state-log domain's applier stood IN THE COPY,
+	// keyed by domain stream.
+	//
+	// READ FROM THE VERIFIED COPY, never from the live database. The
+	// checkpoint commits in the same transaction as the rows, so the
+	// position inside a file is the only position that describes that file
+	// — and the copy is taken while the applier is running, so the live
+	// cursor names where the node was when the copy STARTED.
+	//
+	// What a restore does with it is the whole reason it is here: it is the
+	// sequence the log has to replay from, and the number the assertion
+	// below compares the log's own first sequence against.
+	Domains map[string]statelog.Position `json:"domains,omitempty"`
 }
 
-// StoreArtifact describes the database copy inside a backup.
+// StoreArtifact describes one database copy inside a backup.
+//
+// ONE PER ESTATE, and a backup carries every estate or it carries none: a node
+// is two databases, and a restore holding one of them has a company whose
+// tracker and whose audit log are from different moments — which is not a
+// partial restore, it is an inconsistent one.
 type StoreArtifact struct {
+	// Estate is which of the node's databases this copy is.
+	Estate store.Estate `json:"estate"`
+
 	// File is the copy, relative to the backup directory.
 	File string `json:"file"`
 
@@ -140,6 +198,12 @@ type StoreArtifact struct {
 
 	// Bytes is its size.
 	Bytes int64 `json:"bytes"`
+
+	// SHA256 is the hex digest of the copy as it was written, taken by the
+	// engine at the moment the copy passed its integrity check. What it
+	// answers is the one question a shipped artifact raises: whether the
+	// file that arrived is the file that was verified.
+	SHA256 string `json:"sha256"`
 
 	// Migrations is the schema the copy carries. What a restore brings
 	// back, and the thing to compare against a binary before restoring
@@ -161,17 +225,60 @@ type Options struct {
 	// NodeID names the node in the manifest.
 	NodeID string
 
+	// Holds is the fleet's trim-hold register. Nil on a process with no
+	// coordination, which is the standalone API case.
+	//
+	// WITHOUT IT THE BACKUP STILL RUNS, and the assertion is what makes
+	// that safe: a trim that raced the copy is caught and the manifest is
+	// refused, so the outcome is a failed backup rather than an
+	// unrestorable one. The hold is what makes the race not happen; the
+	// assertion is what makes its absence loud.
+	Holds coord.HoldRegister
+
+	// Backups is where a finished copy is announced to the fleet. Nil on a
+	// process with no coordination, exactly as Holds is.
+	//
+	// WITHOUT IT THE TRIM CANNOT ADVANCE AT ALL, which is why it is here
+	// rather than left to a caller: the trim's backup term refuses to
+	// delete anything the newest backup does not hold, the node evaluating
+	// that term is not necessarily this one, and a copy nobody announced
+	// is a copy the fleet cannot see. A backup that ran and said nothing
+	// leaves a log that grows for ever with a healthy backup schedule
+	// behind it — the most confusing shape this gate has.
+	Backups coord.BackupRegister
+
+	// Metrics is where the copy's duration is recorded. Nil records
+	// nothing, which is a legal deployment and leaves the `backup_taken`
+	// log line as the only account of how long it took.
+	Metrics *metrics.Recorder
+
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
 }
 
 // Service takes backups. Nil when nothing on this node can be backed up.
 type Service struct {
-	store  *store.DB
-	conn   *nats.Conn
-	nodeID string
-	now    func() time.Time
+	store   *store.DB
+	conn    *nats.Conn
+	holds   coord.HoldRegister
+	backups coord.BackupRegister
+	nodeID  string
+	metrics *metrics.Recorder
+	now     func() time.Time
 }
+
+// HoldPurpose names this subsystem in the trim-hold register, so an operator
+// reading a stalled trim sees what is pinning it rather than which node is.
+const HoldPurpose = "backup"
+
+// HoldHeartbeat is how often the hold is renewed while a copy runs.
+//
+// A QUARTER OF THE STALE BOUND, which is the derivation every other
+// heartbeated fact in this estate uses: a holder may miss three beats and
+// still be believed. Deriving it rather than picking a number is what keeps
+// the two in step — a heartbeat slower than the bound would have the trim
+// ignore a live backup's pin, which is the bug the pin exists to prevent.
+const HoldHeartbeat = statelog.TrimHoldStale / 4
 
 // New builds the service, or returns nil when there is nothing to back up.
 //
@@ -188,7 +295,9 @@ func New(opts Options) *Service {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Service{store: opts.Store, conn: opts.Conn, nodeID: opts.NodeID, now: now}
+	return &Service{store: opts.Store, conn: opts.Conn, holds: opts.Holds,
+		backups: opts.Backups, nodeID: opts.NodeID, metrics: opts.Metrics,
+		now: now}
 }
 
 // Take writes a complete backup into dir and returns its manifest.
@@ -229,12 +338,29 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 		EngineVersion: version.String(),
 	}
 
+	// THE HOLD IS TAKEN BEFORE THE FIRST BYTE IS COPIED, at the position
+	// this node's appliers stand at NOW — the live cursor, deliberately,
+	// because the pin has to cover everything the copy is about to include
+	// and the copy has not happened yet. A pin at the copy's own position
+	// would be taken after the window it is meant to protect.
+	release, err := s.hold(ctx)
+	if err != nil {
+		return Manifest{}, err
+	}
+	defer release()
+
 	// THE STORE FIRST, and the order is a decision rather than a
 	// convenience — see the package doc. A store copy older than the
 	// stream estate makes a restore repeat work; the other way round makes
 	// it lose work.
-	if s.store != nil {
-		info, err := s.store.Backup(ctx, filepath.Join(dir, storeFileName))
+	// BOTH ESTATES, and neither is optional. A backup with the node
+	// estate alone has every credential and no tracker; with the
+	// replicated estate alone it has the tracker and no audit log, no
+	// memory and no secret bootstrap. Either one restores into a company
+	// that is missing half of itself while looking like a backup.
+	for _, db := range estates(s.store) {
+		name := storeFileNames[db.Estate()]
+		info, err := db.Backup(ctx, filepath.Join(dir, name))
 		if err != nil {
 			// The store's own destination refusals join this package's,
 			// so one question answers for the whole subsystem.
@@ -243,11 +369,56 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 			}
 			return Manifest{}, err
 		}
-		manifest.Store = &StoreArtifact{
-			File:       storeFileName,
-			Source:     s.store.Path(),
+		manifest.Stores = append(manifest.Stores, StoreArtifact{
+			Estate:     db.Estate(),
+			File:       name,
+			Source:     db.Path(),
 			Bytes:      info.Bytes,
+			SHA256:     info.SHA256,
 			Migrations: info.Migrations,
+		})
+	}
+
+	// THE POSITIONS COME OUT OF THE COPY, not out of the live database.
+	// The checkpoint commits with the rows, so the position inside the file
+	// is the only one that describes the file — and the applier ran
+	// throughout the copy, so the live cursor names where this node was
+	// when the copy started.
+	if replicated := copyOf(manifest, store.EstateReplicated); replicated != "" {
+		path := filepath.Join(dir, replicated)
+		cursors, err := statelog.CursorsInFile(ctx, path)
+		if err != nil {
+			return Manifest{}, fmt.Errorf("backup: read the copy's own "+
+				"checkpoints: %w", err)
+		}
+		manifest.Domains = cursors
+		// READING A DATABASE CREATES SIDECARS, even for a read, so the
+		// copy is folded back into one file — a -wal left inside the
+		// artefact is debris carrying the reader's own umask rather
+		// than this directory's deliberate 0700, and a restore script
+		// looking for a set of named files finds one it does not know.
+		if err := store.QuiesceCopy(ctx, path); err != nil {
+			return Manifest{}, err
+		}
+		// AND THE DIGEST IS RETAKEN, because it now describes a file
+		// this package has opened since the copy was verified. A
+		// checksum that named the bytes before that open would answer
+		// the ONE question a shipped artefact raises — is the file that
+		// arrived the file that was verified — with a number that never
+		// matched what was written.
+		digest, err := store.FileDigest(path)
+		if err != nil {
+			return Manifest{}, err
+		}
+		size, err := os.Stat(path)
+		if err != nil {
+			return Manifest{}, fmt.Errorf("backup: measure the copy: %w", err)
+		}
+		for i := range manifest.Stores {
+			if manifest.Stores[i].Estate == store.EstateReplicated {
+				manifest.Stores[i].SHA256 = digest
+				manifest.Stores[i].Bytes = size.Size()
+			}
 		}
 	}
 
@@ -257,12 +428,37 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 			return Manifest{}, err
 		}
 		manifest.Streams = streams
+		// THE ASSERTION, and it is what makes "restorable" checkable.
+		// The store is older than the streams by however long the copy
+		// took, and that gap is only replayable while the log still
+		// HOLDS the records — so a trim that ran inside the window is
+		// caught here, from bounds the snapshots already captured, and
+		// the manifest is refused rather than written over a hole.
+		if err := assertReplayable(manifest); err != nil {
+			return Manifest{}, err
+		}
 	}
 
 	manifest.FinishedAt = s.now()
 	if err := writeManifest(dir, manifest); err != nil {
 		return Manifest{}, err
 	}
+	// AFTER THE MANIFEST AND ONLY ON SUCCESS. What this measures is how
+	// long the trim hold covered and how much I/O the copy spent competing
+	// with the applier's own commits — both of which are properties of a
+	// backup that FINISHED. A failed run's partial duration would be
+	// mixed into the same distribution and would make the p95 an operator
+	// sizes a maintenance window against shorter than any real copy.
+	if s.metrics != nil {
+		s.metrics.Observe(metrics.BackupDuration,
+			manifest.FinishedAt.Sub(started), nil)
+	}
+	// AFTER THE MANIFEST, because the manifest is the claim: a point
+	// announced before it would name an artefact a crash could leave as
+	// debris, and the trim would delete the log against a backup that does
+	// not exist. See [Service.announce] for why a failure here does not
+	// fail the backup.
+	s.announce(ctx, dir, manifest)
 	log.InfoContext(ctx, "backup_taken",
 		"dir", dir,
 		"store_bytes", storeBytes(manifest),
@@ -270,6 +466,19 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 		"stream_bytes", snapshotSize(manifest.Streams),
 		"took", manifest.FinishedAt.Sub(started).String())
 	return manifest, nil
+}
+
+// estates is every database handle a node holds, in copy order, and empty on
+// a node running without a store.
+func estates(db *store.DB) []*store.DB {
+	if db == nil {
+		return nil
+	}
+	out := []*store.DB{db}
+	if peer := db.Replicated(); peer != nil {
+		out = append(out, peer)
+	}
+	return out
 }
 
 // emptyDir makes dir if it is absent, refuses it if it holds anything, and
@@ -332,10 +541,219 @@ func writeManifest(dir string, manifest Manifest) error {
 	return nil
 }
 
-// storeBytes reports the store copy's size, or 0 when there is none.
+// storeBytes reports the size of every database copy, or 0 when there is none.
 func storeBytes(m Manifest) int64 {
-	if m.Store == nil {
-		return 0
+	var total int64
+	for _, s := range m.Stores {
+		total += s.Bytes
 	}
-	return m.Store.Bytes
+	return total
+}
+
+// hold pins the trim at this node's current positions and returns the release.
+//
+// A GOROUTINE RENEWS IT while the copy runs, because the trim ignores a hold
+// older than its stale bound — a pin that stopped being renewed would be
+// treated as a crashed holder, which is exactly right for a crashed holder and
+// exactly wrong for a 40-minute copy of a large store.
+//
+// A node with no coordination gets a no-op release and no pin, which is
+// honest: the standalone API case has no register to write to, and the
+// assertion is what makes the missing pin loud rather than silent.
+func (s *Service) hold(ctx context.Context) (func(), error) {
+	if s.holds == nil || s.store == nil || s.store.Replicated() == nil {
+		return func() {}, nil
+	}
+	live, err := s.livePositions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(live) == 0 {
+		// A node with no registered domain has no log to pin. Not a
+		// failure: it is every deployment before the first domain's
+		// stream exists.
+		return func() {}, nil
+	}
+	owner := coord.HoldOwner(s.nodeID, HoldPurpose)
+	put := func(ctx context.Context) error {
+		return s.holds.PutHold(ctx, coord.TrimHold{
+			Owner: owner, At: s.now(), Streams: live,
+			Reason: "a backup is copying this node's store",
+		})
+	}
+	if err := put(ctx); err != nil {
+		// REFUSED RATHER THAN CARRIED ON WITHOUT. A backup that cannot
+		// pin the log is a backup whose own gap may be trimmed away
+		// while it runs, and it would report success either way.
+		return nil, fmt.Errorf("backup: pin the log's tail before copying: %w", err)
+	}
+
+	beat, stop := context.WithCancel(context.WithoutCancel(ctx))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(HoldHeartbeat)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-beat.Done():
+				return
+			case <-ticker.C:
+				if err := put(beat); err != nil {
+					// LOGGED AND CARRIED. A missed beat is
+					// survivable — the stale bound allows
+					// three — and the assertion is what
+					// catches the case where it was not.
+					log.WarnContext(beat, "backup_hold_not_renewed",
+						"owner", owner, "error", err.Error())
+				}
+			}
+		}
+	}()
+	return func() {
+		stop()
+		<-done
+		// RELEASED WITH A CONTEXT THAT OUTLIVES THE FAILURE. The
+		// failure being undone here is often the cancellation itself,
+		// and a release that inherited a dead context would leave the
+		// pin standing until the stale bound expired it.
+		if err := s.holds.ReleaseHold(context.WithoutCancel(ctx), owner); err != nil {
+			log.WarnContext(ctx, "backup_hold_not_released",
+				"owner", owner, "error", err.Error(),
+				"detail", "the trim ignores it after the stale bound, so this "+
+					"delays trimming rather than stopping it")
+		}
+	}, nil
+}
+
+// livePositions is where this node's appliers stand right now.
+func (s *Service) livePositions(ctx context.Context) (map[string]coord.Position, error) {
+	replicated := s.store.Replicated()
+	out := map[string]coord.Position{}
+	if err := replicated.Read(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx,
+			`SELECT stream, generation, seq FROM statelog_cursor`)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var stream string
+			var generation, seq int64
+			if err := rows.Scan(&stream, &generation, &seq); err != nil {
+				return err
+			}
+			out[stream] = coord.Position{
+				Stream: stream, Generation: uint32(generation), Seq: uint64(seq),
+			}
+		}
+		return rows.Err()
+	}); err != nil {
+		return nil, fmt.Errorf("backup: read this node's log positions: %w", err)
+	}
+	return out, nil
+}
+
+// copyOf is the file name one estate's copy was written under.
+func copyOf(m Manifest, estate store.Estate) string {
+	for _, artifact := range m.Stores {
+		if artifact.Estate == estate {
+			return artifact.File
+		}
+	}
+	return ""
+}
+
+// assertReplayable refuses a backup whose store copy names a position the
+// captured log can no longer reach.
+//
+// # Why this is an inequality and not a warning
+//
+// A restore replays from the store's position to the log's head. That is only
+// possible while the log still holds `position + 1`; below that the records
+// are gone, and applying what remains writes state derived from a prefix that
+// has a hole in it — silently, because every remaining record applies cleanly.
+// There is nothing a restore could do about it afterwards, so the check is at
+// the only moment anything can still be done: before the manifest is written.
+//
+// It needs NO NEW READ. The stream snapshot already captured the server's own
+// state verbatim, and its first sequence is the bound.
+func assertReplayable(m Manifest) error {
+	if len(m.Domains) == 0 {
+		return nil
+	}
+	for _, artifact := range m.Streams {
+		at, tracked := m.Domains[artifact.Name]
+		if !tracked {
+			// Not a state-log domain: a mailbox, a namespace stream,
+			// a coordination bucket. Nothing in the store names a
+			// position on it.
+			continue
+		}
+		var state struct {
+			FirstSeq uint64 `json:"first_seq"`
+		}
+		if len(artifact.State) == 0 {
+			return fmt.Errorf("backup: the snapshot of %s carries no state, so "+
+				"whether the copy at position %d is still replayable cannot be "+
+				"established", artifact.Name, at.Seq)
+		}
+		if err := json.Unmarshal(artifact.State, &state); err != nil {
+			return fmt.Errorf("backup: read %s's captured stream state: %w",
+				artifact.Name, err)
+		}
+		if state.FirstSeq > at.Seq+1 {
+			return fmt.Errorf("backup: the store copy stands at %s sequence %d "+
+				"and the captured log starts at %d — the records between them "+
+				"were trimmed while the copy ran, so a restore would apply a "+
+				"prefix with a hole in it and report nothing. Check that the "+
+				"trim hold was taken (a node with no coordination cannot take "+
+				"one) and take the backup again",
+				artifact.Name, at.Seq, state.FirstSeq)
+		}
+	}
+	return nil
+}
+
+// announce publishes what this backup covers, so the fleet's trim can see it.
+//
+// # Why a failure here does not fail the backup
+//
+// The artefact on disk is complete and restorable the moment its manifest is
+// written; this call is what lets the log be trimmed against it. Those are
+// different goods, and failing the backup because the announcement did not
+// land would throw away the first to report the second — while an operator's
+// cron reports a failed backup that in fact succeeded.
+//
+// The cost of a lost announcement is bounded and self-correcting: the trim's
+// backup term goes on refusing, the log keeps a longer window than it needed
+// to, and the next backup announces again. That is the safe direction, and it
+// is why this is a WARN rather than an error.
+func (s *Service) announce(ctx context.Context, dir string, manifest Manifest) {
+	if s.backups == nil || len(manifest.Domains) == 0 {
+		// NO DOMAINS IS NOT AN EMPTY ANNOUNCEMENT. A node with no state
+		// log has nothing to say about how far a log is covered, and a
+		// point claiming to reach no domain would be refused anyway —
+		// see [coord.BackupPoint.Validate].
+		return
+	}
+	point := coord.BackupPoint{
+		Owner: s.nodeID,
+		// THE INSTANT THE COPY STARTED, not the one it finished. Nothing
+		// in the artefact is older than that, and the trim's age
+		// comparison has to be against the state the copy describes
+		// rather than against how long writing it took.
+		At:       manifest.TakenAt,
+		Dir:      dir,
+		Streams:  map[string]coord.Position{},
+		Verified: true,
+	}
+	for stream, at := range manifest.Domains {
+		point.Streams[stream] = coord.Position{
+			Stream: stream, Generation: at.Generation, Seq: at.Seq,
+		}
+	}
+	if err := s.backups.PutBackupPoint(ctx, point); err != nil {
+		log.WarnContext(ctx, "backup_unannounced", "dir", dir, "err", err)
+	}
 }

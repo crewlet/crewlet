@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -461,5 +462,85 @@ func TestAbsentLedgersContributeNoJobs(t *testing.T) {
 	}
 	if jobs := maintenance.LearningJobs(nil); len(jobs) != 0 {
 		t.Fatalf("a nil diary produced %d jobs", len(jobs))
+	}
+}
+
+// A PER-NODE JOB RUNS WITHOUT THE DUTY, AND A FLEET JOB DOES NOT.
+//
+// # The failure this exists to catch
+//
+// The duty exists to stop N nodes deleting the same rows, which is right for
+// state the fleet shares and wrong for a table each node owns its own copy of.
+// Under the singleton alone, a per-node job is swept on ONE node and grows for
+// ever on all the others — and that looks identical to a sweep that is
+// working, to the operator who checks the node that holds the duty.
+func TestAPerNodeJobRunsWithoutTheDuty(t *testing.T) {
+	t.Parallel()
+	var fleet, mine int
+	w := maintenance.New(maintenance.Options{
+		ClaimDuty: func(context.Context) (bool, error) { return false, nil },
+		Jobs: []maintenance.Job{
+			{Name: "shared", Run: func(context.Context, time.Time, time.Time) (int64, error) {
+				fleet++
+				return 1, nil
+			}},
+			{Name: "mine", PerNode: true,
+				Run: func(context.Context, time.Time, time.Time) (int64, error) {
+					mine++
+					return 1, nil
+				}},
+		},
+	})
+	if _, err := w.Tick(t.Context()); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if fleet != 0 {
+		t.Errorf("the fleet's own job ran %d time(s) on a node without the "+
+			"duty, which is the N-nodes-deleting-one-row case the duty is for",
+			fleet)
+	}
+	if mine != 1 {
+		t.Errorf("this node's own job ran %d time(s) without the duty — its "+
+			"table is this machine's, and skipping it lets every node but the "+
+			"duty holder grow for ever", mine)
+	}
+}
+
+// A GATE THAT CANNOT BE READ SKIPS ITS JOB AND SAYS SO.
+//
+// "I could not tell whether there is work" is not "there is no work", and
+// treating it as the second is how a duty stops running with nothing to show
+// for it.
+func TestAnUnreadableGateIsReportedRatherThanReadAsNoWork(t *testing.T) {
+	t.Parallel()
+	ran := 0
+	w := maintenance.New(maintenance.Options{
+		Jobs: []maintenance.Job{
+			{Name: "gated",
+				Gate: func(context.Context) (bool, error) {
+					return false, errors.New("the store is unreachable")
+				},
+				Run: func(context.Context, time.Time, time.Time) (int64, error) {
+					ran++
+					return 1, nil
+				}},
+			{Name: "quiet",
+				Gate: func(context.Context) (bool, error) { return false, nil },
+				Run: func(context.Context, time.Time, time.Time) (int64, error) {
+					t.Error("a job whose gate said there is no work ran anyway")
+					return 0, nil
+				}},
+		},
+	})
+	_, err := w.Tick(t.Context())
+	if err == nil {
+		t.Fatal("a gate that could not be read was reported as no work, so a " +
+			"duty that has stopped running looks exactly like a quiet one")
+	}
+	if !strings.Contains(err.Error(), "gated") {
+		t.Errorf("the error is %v and does not name the job whose gate failed", err)
+	}
+	if ran != 0 {
+		t.Errorf("the job ran %d time(s) behind a gate that errored", ran)
 	}
 }

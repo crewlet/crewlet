@@ -808,6 +808,11 @@ type Fleet interface {
 	SandboxRuns
 	Secrets
 	Integrations
+	PositionRegister
+	HoldRegister
+	FloorRegister
+	BackupRegister
+	MaintenanceRegister
 }
 
 // SortUsage puts the org counter first, then the seats by scope.

@@ -2,10 +2,201 @@
 
 The knowledge system (`internal/knowledge`) is the read path agents use to find context they don't already have in their system prompt. It is two purpose-specific reads composed into the agent runtime:
 
-- **Shared knowledge** — the team knowledge base, searched live at query time. There is no synced local copy. The knowledge base is a single backend — [Confluence](../integrations/confluence.md) pages — behind a seam that keeps it swappable: a `knowledge.Searcher` translates the turn's trigger into a plain-text search query (once per turn, via the auxiliary LLM) and runs it against the backend's own search API, authenticating as the agent's own user so the backend enforces its page permissions natively.
+- **Shared knowledge** — the team knowledge base. **Exactly one backend per company**, chosen by `knowledge.backend`, behind a `knowledge.Searcher` seam that every consumer reads through. A `Searcher` takes plain text — never a backend fragment, never a space key — and answers ranked hits; the turn-start prefetch translates the trigger into that plain text once per turn with the auxiliary LLM, and the executor can re-run the same search itself with `search_knowledge`.
 - **`agent_diary`** (vector-indexed) — the agent's private observation log. One row per declarative fact the agent captured for itself via `reflect_and_persist` (or that the post-turn `PersistDecider` saved on its behalf), scoped to the agent's id. Rows are embedded on write; the `## Personal memory` prefetch picks candidates via a **hybrid selection** — the union of a vector top-K (semantic matches to the trigger) and a recency top-K (broadly-applicable operational rules that may not be a topical match), deduped by row id (the two halves are 50 each, so the union is the bound), then handed to an aux-LLM relevance filter.
 
-There is no shared vector index and no scope ladder for shared docs — no synced local copy of the knowledge base exists anywhere in the engine. Shared knowledge is read straight from the backend on demand, so there is no sync worker to run, no index to keep fresh, and no staleness window.
+**One backend, and that is a rule rather than a limitation.** "What do we already know about this" must not depend on which searcher was asked, so the config refuses a company that wires two.
+
+## The two backends
+
+```yaml
+knowledge:
+  backend: native      # the default — the engine's own pages
+# backend: confluence  # a live search against Confluence at query time
+# backend: none        # no knowledge base; every turn gets an empty block
+```
+
+| | `native` | `confluence` |
+|---|---|---|
+| Where pages live | the fleet's own ordered log, applied into every node's database | a Confluence site |
+| How search works | keyword (BM25 over the node's own lexical index), semantic (two-stage 1-bit retrieval with an exact rerank), or `hybrid` — both, fused | CQL against the site's search API, live at query time |
+| Who it searches as | the engine — every seat reads every page, so there is no per-seat credential to be missing | **the agent's own user**, so Confluence enforces its page permissions natively |
+| Staleness | the index is built behind the node's own applied rows; a node still indexing SAYS SO rather than answering empty | none — there is no local copy at all |
+| What it costs to set up | nothing | a site, a space, and a per-seat account |
+
+### Native: an index, and what that means
+
+There is a local copy, and being honest about it is the whole design. Every
+page change is one record on an ordered log, every node applies it into its own
+database, and a lexical index is built behind those rows asynchronously —
+tokenising a large wiki takes minutes, and doing it inline would put the whole
+index build inside the apply transaction that holds the node's only writer.
+
+So a search on a freshly joined node can be against an index that is still
+building, and that is **a different fact from an empty company**. Both the
+dashboard and a seat's own prompt say which: a seat is told "the knowledge
+base is not searchable from this node yet — ask a colleague rather than
+concluding nothing has been written down", because a seat that read an empty
+result would act on it by writing a page that already exists.
+
+Ranking is BM25 with term-frequency saturation and length normalisation — the
+part that stops a 20 KB runbook outranking the one-paragraph page that is
+actually the answer. There is no phrase query, no proximity and no query
+language, because the seam deliberately does not have one: a planner writes a
+keyword line and a person types into a box.
+
+### Semantic search: two stages, no index, no new dependency
+
+Keyword search finds what shares words. Semantic search finds what shares
+*meaning* — the question "how do we handle rate limits" against the page
+titled "429 backoff in the GitLab client", which share no term at all. That is
+the class the semantic half exists for, and it is worth naming precisely
+because it is also the class that is hardest to keep: a document only the
+semantic half found leaves the fused answer entirely if the semantic half
+drops it, where a document both halves found merely slides down.
+
+There is **no approximate-nearest-neighbour index**, because the driver this
+engine ships has none — `internal/store/caps.go` probes for one on every open
+and reports what it found. The alternatives were a full exact scan of every
+vector on every query, or embedding a search library with its own index
+format, file and backup story on every node. Instead the search is **two
+stages**, which is the shape every production vector engine uses anyway:
+
+1. **Stage one** scans a narrow table of **1-bit sign codes** — one bit per
+   dimension, 387 bytes at 3 072 dimensions against 12 KB for the vector — and
+   keeps the nearest 1 200 by Hamming distance.
+2. **Stage two** reranks exactly those candidates against their full vectors,
+   by primary key, and returns 150.
+
+The narrow *sibling table* is the load-bearing part rather than a compression
+detail. A row is stored contiguously, so reading any column of a 12 KB row
+costs traversing that row's overflow pages: the identical 1-bit column
+measures 7.31 µs/row inside the wide row and 0.99 µs/row in a narrow one. A
+generated column, an expression index and a second column on the vector table
+all buy the compression; none of them buys the speed.
+
+**The score you see is always the exact one.** A sign code decides which
+documents are looked at and never how they are ordered.
+
+#### What the quality of this can and cannot be promised
+
+A sign code keeps only each vector's orthant, and how much an orthant says
+about cosine rank is a property of *your corpus's* distribution and of nothing
+else. Over a family of embedding-shaped generators at one corpus size, recall
+at the shipped over-fetch spans **0.29 to 0.98**. So the engine's own gate
+measures the *arithmetic* — that an exact rerank over a 1-bit candidate pool
+recovers the exact ranking at sufficient depth — and deliberately makes no
+claim about recall on your documents.
+
+`crewlet search eval` is what answers that, against your own vectors. The
+ground truth is the exact scan's own top-K, so nobody authors a judgement:
+
+```console
+$ crewlet search eval -store /var/lib/crewlet/crewlet-replicated.db
+corpus       118432 sources, text-embedding-3-large at 3072 dimensions
+measured     25 queries at depth 150 from 1200 candidates
+recall       0.9761  (floor 0.9312 for this corpus size)
+worst query  0.9467
+head misses  0  (documents dropped from the exact top ten)
+verdict      the two-stage search recovers the exact ranking at the shipped depth
+```
+
+It exits non-zero when the recall is below the floor for that corpus size, so
+it can go in a schedule. Run it **monthly, and after any change to
+`providers.embeddings.model` or `.dimensions`** — those are the two inputs
+that move the answer. It reads a *file* rather than a running node: point it
+at the copy inside a backup, which needs nothing stopped and measures the same
+rows.
+
+The floor is a **curve** rather than a number, because recall from a sign code
+decreases as the corpus grows — 0.98 at twenty thousand sources, 0.93 at a
+hundred and twenty thousand, 0.88 at half a million. A single threshold would
+certify the smallest deployment and say nothing about the largest.
+
+If a run comes back below the floor, the remedy is decided in advance:
+
+1. Raise the quantization over-fetch. It measured **free** in latency, because
+   stage one is a full scan whose cost does not depend on how many candidates
+   it keeps.
+2. Failing that, an 8-bit first stage, which is a code change shipped in the
+   same release that moves the model default.
+
+#### Where the vectors come from
+
+Embedding a document costs a provider call, and it is the one thing in the
+search path a node cannot recompute on its own. So it is not done per node and
+not on the write path — a page save would otherwise carry a third-party HTTP
+round trip inside its own transaction. One **fleet-singleton duty** embeds each
+source once and publishes a record; every node applies it. The company pays the
+bill once and holds the answer everywhere.
+
+The duty ticks **every minute** and spends at most **8 batched provider calls**
+per tick, 128 sources apiece — so a tick on a caught-up company is one indexed
+anti-join that returns nothing and stops, and a tick on one that is behind
+cannot monopolise either the provider budget or the singleton lease it holds.
+Both source kinds are covered: the tracker's work items and the knowledge
+base's published pages. A **rename does not re-embed a page** — the vector is
+stored against the page's own edit number rather than the log version a rename
+also stamps.
+
+A cold fill of 110 000 sources is roughly **108 minutes and 860 batched
+requests**, and those numbers do not move with the configured width — providers
+bill per input *token*, and `dimensions` is a truncation parameter the request
+already carries.
+
+**How much of the corpus is covered is published**, as
+`crewlet.tracker.vector.coverage` — the fraction of sources carrying a current
+vector, summed across both corpora rather than averaged, so a small fully
+embedded corpus cannot mask a large uncovered one. The
+[`recall_below_floor`](../reference/alarms.md) alarm fires below 95 %, which is
+how a stalled backlog is reported: it never drops a seat, and semantic recall
+answering from a corpus it does not cover has no other symptom. A company with
+no embeddings configured measures nothing rather than zero.
+
+**A model change at the same width is the case to know about.** Until the
+refill finishes, the corpus holds two incompatible embedding spaces, and a
+search filters on the *pair* — so documents still on the old model are not
+ranked badly, they are simply not in the candidate pool. `crewlet search eval`
+names every space it finds, which is how you see a refill in progress.
+
+### Every document carries a bucket
+
+Both halves of the native backend stamp each document with a **search shard** —
+a stable hash of its own identity into 64 fixed buckets, written beside the row
+by the same function in both estates.
+
+It is unrelated to everything else the engine partitions on. Not a stream, not a
+project, not a container, not a log position, not the node holding the row. That
+independence is the point:
+
+- **A source that moves keeps its bucket.** Bucketing on the filed project would
+  re-bucket every task a re-file touches, and a search over the old bucket would
+  miss it — silently, because a result set that is one document short looks
+  exactly like a corpus that is one document short.
+- **The division follows the corpus, not the company's shape.** Bucketing on a
+  project puts the busiest project in one bucket.
+- **A document with no embedding is still in a bucket**, because the bucket is a
+  function of the id rather than of anything derived from it.
+
+**A single node reads every bucket**, exactly as it did before the column
+existed. A fleet above 10 000 documents divides them: each live node scans a
+contiguous range, returns its best candidates *with scores*, and the asking node
+merges. There is no routing plan to compute and nothing to configure — the
+division is a sorted roster and a remainder, and every node computes the same
+one. See [Search](../guides/search.md) for the merge order, why BM25 stays
+comparable across a divided scan, and what a partial answer names.
+
+The count is fixed for the life of a deployment and is deliberately not
+configurable. Changing it re-buckets every document, which costs a full index
+rebuild rather than a rebalance — a knob that can be turned exactly once, at the
+price of the whole index, is one that gets turned by somebody who did not know
+the price.
+
+### Confluence: no local copy at all
+
+Shared knowledge is read straight from the backend on demand, so there is no sync worker to run, no index to keep fresh, and no staleness window. It authenticates as the agent's own user, which is what makes the backend's own permissions the ones that apply.
+
+There is no shared vector index and no scope ladder for shared docs on this backend.
 
 ---
 
@@ -57,15 +248,34 @@ type Searcher interface {
 
 Contract semantics every backend honors:
 
-- **Scope lives behind the seam.** `Search` derives its container scope from the organization ([`accessible_spaces` / `accessible_projects`](#accessible-containers)); callers pass a role, a plain-text query, and ancestor-title exclusions — never CQL fragments, space keys, or project lists. Because the organization is a per-call parameter, live config edits to the `knowledge.*` scope flow through with no engine refresh hook.
+- **Scope lives behind the seam.** `Search` derives its container scope from the organization ([`knowledge.scope`](#accessible-containers)); callers pass a role, a plain-text query, and ancestor-title exclusions — never CQL fragments, space keys, or project lists. Because the organization is a per-call parameter, live config edits to `knowledge.scope` flow through with no engine refresh hook.
 - **Unscoped-vs-nothing is enforced inside `Search`**: empty scope + a self-authenticating role ⇒ unscoped search (the backend's own ACLs bound the hits); empty scope + a credential-less role ⇒ no results.
 - **`CanSearch` is a cheap, no-I/O pre-gate** — "could a search possibly hit anything?" Its only job is letting the [relevant-knowledge prefetch](#relevant-knowledge-prefetch) skip the aux-LLM query-generation call when the search is a guaranteed no-op.
 - **Best-effort**: `Search` never reports an error; every failure path returns no hits and the prompt block renders empty.
 - **`Query.ExcludeAncestors`** drops hits whose ancestor/parent chain matches any listed title. The prefetch defaults it to `["Auto-Drafted Skills"]` (`AUTO_DRAFTED_PARENT` in `internal/knowledge/knowledge.go`) so unreviewed [promotion drafts](agent-learning.md) never surface before a lead publishes them.
 
-**Selection is by integration presence, and single-homed.** Engine start constructs exactly one searcher: the Confluence searcher when `confluence` is configured. One knowledge home is what makes the turn-start prefetch, the `search_knowledge` builtin, onboarding hints and skill promotion agree about what the company knows — two searchers would make an agent's answer depend on which was asked, and neither would be wrong. With no backend configured, the searcher stays unwired and the `## Relevant knowledge` block renders empty. A live config change that rebuilds or removes a transport re-points the running turn engine at the new searcher (or at none) via `set_knowledge_searcher`.
+**Selection is by `knowledge.backend`, and single-homed.** Engine start constructs exactly one searcher: the native one over this node's own page index, or the Confluence one, or none. One knowledge home is what makes the turn-start prefetch, the `search_knowledge` builtin, onboarding hints and skill promotion agree about what the company knows — two searchers would make an agent's answer depend on which was asked, and neither would be wrong. With `backend: none`, the searcher stays unwired and the `## Relevant knowledge` block renders empty. A live config change re-points the running turn engine at the new searcher (or at none).
 
-**The seam stays an interface with one implementation, deliberately.** `knowledge.Searcher` is declared by its consumers — the prefetch, the onboarding hint, the promotion pass — so a second backend is a new implementation rather than a rewrite of everything that searches. A seam collapsed into its last backend is what makes the next one a rewrite.
+An empty `backend` **derives** rather than defaulting blindly: a company that declares `integrations.confluence` gets `confluence`, and one that declares nothing gets `native`. That is the compatible half of the rename — an Atlassian company that has not read this page keeps the backend it had, and a quickstart company gets a wiki without asking for one.
+
+**The seam has two implementations, and it was written for the second.** `knowledge.Searcher` is declared by its consumers — the prefetch, the onboarding hint, the promotion pass — so the native backend arrived as a new implementation rather than a rewrite of everything that searches. A seam collapsed into its last backend is what makes the next one a rewrite.
+
+### Native backend — the engine's own pages
+
+`internal/pages` + `internal/search`. The knowledge base is a [state-log domain](../guides/replication.md): every change is one record on `CREWLET_PAGES_LOG`, a deterministic applier writes it into every node's replicated database, and a lexical index is built behind those rows. A search is BM25 over the index — term-frequency saturation and length normalisation, so a long runbook that mentions a word thirty times does not outrank the short page that is about it.
+
+Two properties differ from the vendor path and both are visible:
+
+- **Every seat reads every page.** There is no per-seat credential, so `CanSearch` reduces to "is there an index at all" — the credential-less case below does not arise.
+- **An index that is still building says so.** It is a different fact from an empty company, and a seat is told which: "the knowledge base is not searchable from this node yet — ask a colleague rather than concluding nothing has been written down". A seat that read an empty result would act on it, by writing a page that already exists.
+- **A title is an ADDRESS.** It is unique within its container, claimed
+  first-writer-wins on the fleet, and a page is fetched by `CONTAINER/Title`
+  as readily as by its id. The address is the title NORMALISED — lowercased
+  and with runs of whitespace collapsed — so `ENG/deploy runbook` reaches a
+  page called "Deploy  Runbook", and two people cannot create pages whose
+  titles differ only in spacing or case.
+
+The tool-skills container is excluded from every result. A tool skill is machinery the engine injects into a phase, and a seat told to read one as knowledge would follow it as an instruction.
 
 ### Confluence backend — the Confluence searcher
 
@@ -75,26 +285,26 @@ Contract semantics every backend honors:
 
 ## Accessible containers
 
-The search scope is set by **one** thing: the org-wide `knowledge.*` scope list for the active backend, normalised once by `internal/knowledge` —
+The search scope is set by **one** thing: the org-wide `knowledge.scope` list, normalised once by `internal/knowledge` —
 
 ```text
-knowledge.confluence_spaces: ["HANDBOOK"]   # scoped to these containers
-knowledge.confluence_spaces: []             # empty ⇒ unscoped / ACL-bound for
+knowledge.scope: ["HANDBOOK"]   # scoped to these containers
+knowledge.scope: []             # empty ⇒ unscoped / ACL-bound for
                                             # self-authenticating agents
 ```
 
 It is **role- and unit-independent** — every agent has the same read scope.
 
-> **Read scope ≠ team identity.** A unit's own container — `integrations.confluence.space` (runtime `org.Unit.ConfluenceSpace`) — is *integration identity*: it decides webhook routing (page activity → the unit lead) and is the team's write / skill-promotion home. It deliberately does **not** narrow reads. An Engineering agent isn't limited to the `ENG` space when searching; it searches across everything its own account can read. (See [Confluence § integration identity](../integrations/confluence.md).)
+> **Read scope ≠ team identity.** A unit's own container — `space` (runtime `org.Unit.Space`) — is *integration identity*: it decides webhook routing (page activity → the unit lead) and is the team's write / skill-promotion home. It deliberately does **not** narrow reads. An Engineering agent isn't limited to the `ENG` space when searching; it searches across everything its own account can read. (See [Confluence § integration identity](../integrations/confluence.md).)
 
 **The list is optional — and empty is the useful default.** When the scope list is empty, behaviour depends on how the search authenticates (per-agent token vs. engine/admin fallback):
 
 - A role with **its own backend credentials** searches **unscoped**: the container clause is dropped and the backend's own ACLs bound the results — the agent finds anything its account can read that matches the query.
 - A **credential-less** role (engine/admin-token fallback) searches **nothing**: an unscoped query would read the shared account's entire view, so the empty list means "no search" rather than "everything".
 
-So set `knowledge.confluence_spaces` only to *narrow* reads to a curated floor (e.g. a company handbook); a fully per-agent-credentialled org leaves it unset and lets the backend's ACLs do the scoping. The backend's own permissions remain the hard boundary regardless.
+So set `knowledge.scope` only to *narrow* reads to a curated floor (e.g. a company handbook); a fully per-agent-credentialled org leaves it unset and lets the backend's ACLs do the scoping. The backend's own permissions remain the hard boundary regardless.
 
-> **Single-homed.** One backend per company. With one implementation behind the seam that is now structural rather than enforced; what validation still refuses is a read scope naming a backend the company does not configure — `confluence_spaces` without `integrations.confluence` reads as a working narrowing and narrows nothing.
+> **Single-homed, and validation enforces it.** A company that sets `knowledge.backend: native` *and* declares `integrations.confluence` is refused, because "what do we already know about this" would depend on which searcher was asked. Also refused: a read scope with no backend behind it — `knowledge.scope` under `backend: none` reads as a working narrowing and narrows nothing.
 
 ---
 
@@ -114,7 +324,30 @@ Static org configuration (mission, vision, policies, role profile, team roster, 
 
 ## Publishing knowledge docs
 
-Most shared knowledge is authored directly in the backend by humans and agents. For docs an operator wants to keep in version control — onboarding pages, runbooks, playbooks — the import CLI publishes local markdown:
+Most shared knowledge is authored directly by humans and agents — a seat calls
+`write_page` (native) or the vendor's own MCP tools (Confluence). For docs an
+operator wants to keep in **version control** — onboarding pages, runbooks,
+playbooks — there are two paths, one per backend.
+
+### On the native backend: your own assistant
+
+There is no import CLI, and there does not need to be one. Point any MCP client
+at [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant)
+with your API token and tell it what to publish:
+
+> Publish everything under `examples/nimbus-docs/` — one container per
+> directory, the page title from each file's first `# H1`.
+
+It calls `write_page` per file, with your token's own name on each page as the
+author. That handles the parts a flag-driven CLI handles badly: the parent
+chain, a title that already exists (`save_page` with the version it read), and
+a file that turns out to be a [tool skill](tool-skills.md) rather than prose.
+
+The [reserved containers](#accessible-containers) are refused to it, exactly as
+they are to a seat — a page written into the tool-skills container would be
+injected into a phase as an instruction rather than read as knowledge.
+
+### On Confluence: the import CLI
 
 ```
 crewlet confluence import <company.yaml> [DIR]
@@ -124,18 +357,22 @@ The positional config is the **Tier B company YAML** (the importer reads the bac
 
 Knowledge docs follow a **directory-based convention** — the files are pure prose, no frontmatter required:
 
-- **Container = the file's immediate parent directory name.** A file at `<root>/ENG/onboarding.md` publishes to Confluence space `ENG`.
+- **Container = the file's immediate parent directory name.** A file at `<root>/ENG/onboarding.md` publishes to the container `ENG` — a native container, or a Confluence space of that key.
 - **Title = the file's first `# H1` heading.** That H1 line is stripped from the published body (the backend shows the page title separately, so leaving it would duplicate the title on the page).
 
 `examples/nimbus-docs/` is a worked set of these — the pages the Nimbus
-example company publishes. `examples/nimbus.company.yaml` carries the
-`confluence:` block the importer reads its credentials from, so it is the
-positional argument as it ships. (The smaller
-`examples/nimbus-claude-cli.company.yaml` has no wiki at all; add a block
-per [Confluence](../integrations/confluence.md) first.)
+example company publishes. Both bundled examples run the **native**
+knowledge base, so neither is an argument to this CLI: they publish
+through the assistant path above. A company that moves to Confluence adds
+the `confluence:` block per [Confluence](../integrations/confluence.md),
+and its company YAML is then the positional argument the importer reads
+those credentials from.
 
 ```
 examples/nimbus-docs/
+├── HOME/
+│   └── Onboarding.md          → the ROOT container: the page every seat
+│                                reads before its own team's
 ├── ENG/
 │   └── Onboarding.md          → space ENG,  title "Onboarding"
 ├── LEAD/
@@ -145,6 +382,11 @@ examples/nimbus-docs/
 └── PROD/
     └── Onboarding.md          → space PROD, title "Onboarding"
 ```
+
+`HOME` is `knowledge.root_space`'s default. It holds what is true of the
+whole company, which is what makes it worth a container of its own: the
+alternative is the same four paragraphs in every team's `Onboarding`, where
+three of the four copies go stale and nobody can tell which.
 
 ```markdown
 # Onboarding

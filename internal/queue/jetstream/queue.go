@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -49,6 +50,38 @@ type Config struct {
 	ClusterURLs []string
 	ClusterPort int
 
+	// ClusterHost is the interface this member's route listener binds.
+	//
+	// Empty binds EVERY interface, which is right for a node with one
+	// address and wrong twice over otherwise. On a multi-homed host it is
+	// a security setting: the route port is unauthenticated cluster
+	// access, and a member that binds it on a public interface is
+	// offering that to anyone who can reach the machine. On a host whose
+	// peers are on a private network it is also the only way to say which
+	// address that is.
+	//
+	// It says nothing about what peers are TOLD to dial — that is
+	// ClusterAdvertise below, and the two differ precisely when they have
+	// to.
+	ClusterHost string
+
+	// ClusterAdvertise is the address peers should dial to reach this
+	// member, when that is not the address it binds.
+	//
+	// A member's route address travels between peers: when member A
+	// accepts a route from member B it tells every peer it already has
+	// where B can be found, and each of them dials that address itself.
+	// With this unset the address is derived from the CONNECTION'S REMOTE
+	// ADDRESS — which is correct on a flat network and wrong wherever the
+	// address B is seen from is not an address anyone else can use: a
+	// container with a mapped port, a NAT, a member behind a load
+	// balancer. There the derived address is either unreachable or, worse,
+	// somebody else's.
+	//
+	// Host and port both, or a bare host to keep this member's own route
+	// port: "nats-1.internal:6222", "203.0.113.9".
+	ClusterAdvertise string
+
 	// ServerName is this member's identity inside the cluster. REQUIRED
 	// when clustering and ignored otherwise.
 	//
@@ -65,6 +98,35 @@ type Config struct {
 	// where it is what makes a publish quorum-durable before Publish
 	// returns.
 	Replicas int
+
+	// SyncAlways makes the embedded server fsync every write before
+	// acknowledging it, at every replica count.
+	//
+	// DECIDED BY THE OPERATOR rather than inferred from Replicas, and the
+	// inference it replaces was wrong in the case that matters. "The
+	// quorum IS the durability" holds for a majority that survives, and
+	// the five failure classes are not one: a single host losing power
+	// (quorum survives, nothing lost), a rack or a zone losing power
+	// (a majority can go together), an orderly shutdown, a kernel panic
+	// (page cache lost, disk intact), and a correlated power loss across
+	// every member — which is the one an fsync-per-write is the only
+	// defence against, and the one a same-rack three-node fleet is
+	// exposed to by construction.
+	//
+	// It is also a claim about what Publish RETURNING means. A caller that
+	// treats an ack as durable is right under this setting and optimistic
+	// without it.
+	SyncAlways bool
+
+	// SyncInterval is how often the file store flushes when SyncAlways is
+	// off. Zero takes nats-server's own default.
+	//
+	// SET EXPLICITLY rather than left to the server, because the default
+	// is two minutes (server/filestore.go defaultSyncInterval) and two
+	// minutes of acked-but-unflushed writes is a recovery-point objective
+	// nobody chose. An operator who declines the fsync per write is
+	// choosing a window, and this is the field that names it.
+	SyncInterval time.Duration
 
 	// EventRetention bounds the audit/event stream.
 	EventRetention time.Duration
@@ -215,7 +277,7 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 	// actually depends on it: doing it in StartServer instead would make
 	// the first member of a fresh cluster wait for a quorum that cannot
 	// exist until the peers it is blocking have started.
-	if err := embedded.awaitClusterReady(ctx); err != nil {
+	if err := embedded.awaitClusterReady(ctx, q.cfg.Replicas); err != nil {
 		q.nc.Close()
 		return nil, err
 	}
@@ -253,7 +315,24 @@ func (q *Queue) ensureStreams(ctx context.Context) error {
 // message at the end.
 func (q *Queue) createStream(ctx context.Context, config jetstream.StreamConfig) error {
 	for attempt := 0; ; attempt++ {
-		_, err := q.js.CreateOrUpdateStream(ctx, config)
+		// CREATE, NOT CreateOrUpdate, and the difference is the whole
+		// race guard above rather than a preference.
+		//
+		// CreateOrUpdate never returns [jetstream.ErrStreamNameAlreadyInUse]
+		// — it UPDATES instead — so the caller's "a peer won the race,
+		// read what it made" branch was unreachable and the losers of a
+		// simultaneous boot each rewrote a configuration they already
+		// agreed with. Measured on three engines starting together: the
+		// update request never returns, and the boot fails after its
+		// whole provisioning deadline naming a stream rather than a
+		// cluster.
+		//
+		// It is also the honest ownership rule, and [Queue.observeStream]
+		// states it: a running stream's configuration is not something a
+		// booting node writes — "one node writing a shared stream's
+		// configuration at boot is how a ceiling an operator raised gets
+		// silently lowered".
+		_, err := q.js.CreateStream(ctx, config)
 		if err == nil || !unplaceable(err) {
 			return err
 		}
@@ -341,14 +420,35 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 		Replicas:          max(q.cfg.Replicas, 1),
 		MaxAge:            spec.maxAge,
 		MaxMsgsPerSubject: int64(spec.maxPerSubject),
+		MaxBytes:          spec.maxBytes,
+		Discard:           spec.discard,
+		Duplicates:        spec.duplicates,
+		DenyDelete:        spec.denyDelete,
+		AllowRollup:       spec.allowRollup,
+		AllowDirect:       spec.allowDirect,
+		MirrorDirect:      spec.mirrorDirect,
 	}
 	if spec.maxPerSubject == 0 {
 		// The client spells "unlimited" as -1; a zero would be read as a
 		// stream that retains nothing at all.
 		config.MaxMsgsPerSubject = -1
 	}
-	if err := q.createStream(ctx, config); err != nil {
-		return fmt.Errorf("ensure stream %s: %w", spec.name, err)
+	if spec.maxBytes == 0 {
+		config.MaxBytes = -1
+	}
+	// CREATE IF ABSENT, OBSERVE IF PRESENT.
+	//
+	// A running stream's configuration has ONE writer and a booting node is
+	// not it. This used to apply this node's own spec on every boot, which
+	// is N nodes writing one shared configuration from N possibly-different
+	// Tier A files, resolved by boot order: a node that came up late with a
+	// smaller ceiling silently lowered one an operator had just raised, and
+	// it did so with Tier A UNCHANGED, because max(M, M) is M.
+	//
+	// So the writer is removed rather than guarded, and what remains is a
+	// comparison. See observeStream for what each class of difference does.
+	if err := q.createOrObserveStream(ctx, spec, config); err != nil {
+		return err
 	}
 
 	q.mu.Lock()
@@ -358,6 +458,165 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 	q.streams[spec.name] = struct{}{}
 	q.mu.Unlock()
 	return nil
+}
+
+// createOrObserveStream creates the stream when it is absent and COMPARES when
+// it is present, writing nothing either way to a stream that already exists.
+//
+// The create races: two nodes booting together both find nothing and both
+// create. That is fine and deliberate — the loser gets "stream name already in
+// use", which is not an error here but the other node having won, so it falls
+// through to the same comparison the observe path makes.
+func (q *Queue) createOrObserveStream(
+	ctx context.Context, spec streamSpec, config jetstream.StreamConfig,
+) error {
+	info, err := q.js.Stream(ctx, spec.name)
+	switch {
+	case err == nil:
+		return q.observeStream(spec, config, info)
+	case !errors.Is(err, jetstream.ErrStreamNotFound):
+		return fmt.Errorf("ensure stream %s: %w", spec.name, err)
+	}
+
+	createErr := q.createStream(ctx, config)
+	if createErr == nil {
+		return nil
+	}
+	// A PEER MAY HAVE WON THE RACE, and it announces that in two shapes
+	// rather than one.
+	//
+	// The tidy shape is [jetstream.ErrStreamNameAlreadyInUse]: this
+	// node's create arrived after the winner's had committed.
+	//
+	// The other shape is a TIMEOUT, and it is the one a fleet booting
+	// together actually produces. Two members create the same stream in
+	// the same instant; the server commits one and holds the other while
+	// the metadata group settles, and the held request outlives the
+	// caller's deadline. The stream is there — the loser simply never
+	// heard so. Reported as a failure, that is a node refusing to boot
+	// because a peer beat it, on a cluster where everything worked.
+	//
+	// So the question is re-asked rather than assumed either way: does
+	// the stream exist now? A read-back is one round trip, it answers
+	// exactly that, and it holds whatever it finds to the same comparison
+	// a stream this node found on the first look gets. The read gets its
+	// OWN context, because the one above is the deadline that just
+	// expired.
+	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), streamReadBack)
+	defer cancel()
+	info, err = q.js.Stream(readCtx, spec.name)
+	if err != nil {
+		// THE CREATE'S ERROR IS WHAT IS REPORTED, with the read-back's
+		// beside it: "no suitable peers" or "deadline exceeded" on the
+		// create says what went wrong, and "not found" on the read
+		// only says the create really did fail.
+		return fmt.Errorf("ensure stream %s: %w (and it is not there: %w)",
+			spec.name, createErr, err)
+	}
+	q.log.Info("jetstream_stream_created_by_peer", "stream", spec.name,
+		"create_error", createErr.Error(),
+		"detail", "this node's own create did not complete and the stream "+
+			"exists, which is a peer having won the race; its configuration "+
+			"is compared here exactly as one found on the first look would be")
+	return q.observeStream(spec, config, info)
+}
+
+// streamReadBack bounds the one read that asks whether a peer won the race.
+//
+// SHORT, and deliberately not the provisioning deadline: this is an ordinary
+// metadata read against a group that has just proven it is working — it either
+// answers in a round trip or the cluster has gone away, and inheriting thirty
+// seconds would double a failing boot's time to say so.
+const streamReadBack = 5 * time.Second
+
+// observeStream compares a running stream against this node's spec and decides
+// per FIELD CLASS what the difference means. It writes nothing.
+func (q *Queue) observeStream(
+	spec streamSpec, want jetstream.StreamConfig, live jetstream.Stream,
+) error {
+	got := live.CachedInfo().Config
+	unsafe := safetyDifferences(want, got)
+	if len(unsafe) > 0 {
+		// REFUSES TO RUN. Every field here changes what a message on this
+		// stream means, so a node that carried on would be publishing
+		// durable records into a stream that drops them, replays them at
+		// wall-clock speed, or lets any client delete them.
+		return fmt.Errorf(
+			"jetstream: the running stream %q does not match this node's "+
+				"configuration on %d safety field(s): %s. Nothing here is "+
+				"applied to a stream that already exists — one node writing "+
+				"a shared stream's configuration at boot is how a ceiling an "+
+				"operator raised gets silently lowered — so this is an "+
+				"operator gesture: align the Tier A of every node, or resize "+
+				"the stream deliberately",
+			spec.name, len(unsafe), strings.Join(unsafe, "; "))
+	}
+
+	// DURABILITY: below the configured factor refuses; equal or higher is
+	// fine, so an R1 development node against an R3 stream starts.
+	if got.Replicas < want.Replicas {
+		return fmt.Errorf(
+			"jetstream: the running stream %q is replicated %dx and this node "+
+				"is configured for %dx: an acknowledged publish would be "+
+				"proving fewer copies than stream.replicas promises",
+			spec.name, got.Replicas, want.Replicas)
+	}
+
+	// CAPACITY: reported, never applied.
+	for _, d := range capacityDifferences(want, got) {
+		q.log.Info("jetstream_stream_capacity_differs", "stream", spec.name,
+			"difference", d,
+			"detail", "reported rather than applied: a stream's ceiling is "+
+				"changed by an operator gesture, not by whichever node booted "+
+				"last")
+	}
+	return nil
+}
+
+// safetyDifferences lists the safety-class fields on which a running stream
+// differs from this node's spec, each rendered as "field: got X, want Y".
+func safetyDifferences(want, got jetstream.StreamConfig) []string {
+	var out []string
+	add := func(field string, gotV, wantV any) {
+		if fmt.Sprint(gotV) != fmt.Sprint(wantV) {
+			out = append(out, fmt.Sprintf("%s: running %v, this node %v", field, gotV, wantV))
+		}
+	}
+	add("subjects", got.Subjects, want.Subjects)
+	add("retention", got.Retention, want.Retention)
+	add("max_age", got.MaxAge, want.MaxAge)
+	add("max_msgs_per_subject", got.MaxMsgsPerSubject, want.MaxMsgsPerSubject)
+	add("discard", got.Discard, want.Discard)
+	add("deny_delete", got.DenyDelete, want.DenyDelete)
+	add("allow_rollup", got.AllowRollup, want.AllowRollup)
+	add("allow_direct", got.AllowDirect, want.AllowDirect)
+	add("mirror_direct", got.MirrorDirect, want.MirrorDirect)
+	add("storage", got.Storage, want.Storage)
+	return out
+}
+
+// capacityDifferences lists the capacity-class fields, which are reported.
+func capacityDifferences(want, got jetstream.StreamConfig) []string {
+	var out []string
+	if got.MaxBytes != want.MaxBytes {
+		out = append(out, fmt.Sprintf("max_bytes: running %d, this node %d",
+			got.MaxBytes, want.MaxBytes))
+	}
+	if got.Duplicates != want.Duplicates {
+		out = append(out, fmt.Sprintf("duplicates: running %v, this node %v",
+			got.Duplicates, want.Duplicates))
+	}
+	return out
+}
+
+// EnsureDomainStream provisions the stream a statelog domain declares.
+//
+// The generic path, and it is deliberately not a new entry in engineStreams:
+// a domain's stream arrives WITH the domain, so the engine's own stream table
+// stays the list of streams the engine itself defines. It is also what lets a
+// test stand up a throwaway log stream without touching that table.
+func (q *Queue) EnsureDomainStream(ctx context.Context, spec DomainStream) error {
+	return q.ensureStream(ctx, spec.spec())
 }
 
 // streamFor resolves the stream carrying a subject, provisioning it when the
@@ -401,6 +660,36 @@ func (q *Queue) ackWait() time.Duration {
 // same broker outside the queue contract (the KV coordination backend).
 // The queue keeps ownership: closing it is Stop's job, not the caller's.
 func (q *Queue) Conn() *nats.Conn { return q.nc }
+
+// DialOwned opens a SECOND connection to the same broker, which the caller
+// owns and closes.
+//
+// # Why a caller would want its own rather than [Queue.Conn]
+//
+// Because some subsystems close what they are given, and they are right to:
+// the state log's snapshot DONOR serves for the life of a node and shuts its
+// connection down when it stops, which is the honest lifetime for a
+// long-running server of a request/reply subject.
+//
+// Handed the queue's own connection, that close takes the ENGINE's broker
+// with it — every publish, every consumer and the coordination store, all
+// through one `nc.Close()` in a subsystem that thought it owned what it had.
+// Worse where the queue was BORROWED: a caller that lent a broker to an
+// engine gets it back closed.
+//
+// So the ownership is in the name. Callers that ride the shared connection
+// take [Queue.Conn] and must not close it; callers with their own lifetime
+// take this and must.
+func (q *Queue) DialOwned() (*nats.Conn, error) {
+	if q.embedded != nil {
+		return q.embedded.connect()
+	}
+	if q.cfg.URL == "" {
+		return nil, fmt.Errorf("jetstream: this queue has no embedded server " +
+			"and no URL, so a second connection cannot be opened")
+	}
+	return dial(q.cfg)
+}
 
 // Backend names this backend for operator display. Nothing may branch on it.
 func (q *Queue) Backend() string {
@@ -508,7 +797,7 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 		return false, fmt.Errorf("inspect consumer %s: %w", name, getErr)
 	}
 
-	if _, err := q.js.CreateOrUpdateConsumer(ctx, stream, jetstream.ConsumerConfig{
+	if _, err := q.ensureDurableConsumer(ctx, stream, jetstream.ConsumerConfig{
 		Durable:       name,
 		FilterSubject: topic,
 		AckPolicy:     jetstream.AckExplicitPolicy,
@@ -522,6 +811,47 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 		return false, fmt.Errorf("ensure consumer %s: %w", name, err)
 	}
 	return !existed, nil
+}
+
+// ensureDurableConsumer creates a durable consumer, tolerating a PEER having
+// created the same one at the same moment.
+//
+// # Why a durable consumer needs this and an ephemeral one does not
+//
+// A durable consumer is named, and every node of a fleet ensures the SAME
+// names at boot: a seat's mailbox, the notification feed, a change feed. So on
+// a fleet starting together N members issue one call for one name, and the
+// server commits one while holding the rest — and a held request outlives the
+// caller's deadline. The consumer is there; the losers never heard so, and a
+// node that reported that as a failure would refuse to boot because a peer
+// beat it.
+//
+// An ephemeral consumer is nobody else's, so none of this applies and the
+// callers that make one do not come through here.
+//
+// A read-back is one round trip and answers exactly the question — does the
+// consumer exist now — so the timeout is re-asked rather than assumed either
+// way. It gets its OWN context, because the caller's may be the deadline that
+// just expired.
+func (q *Queue) ensureDurableConsumer(ctx context.Context, stream string,
+	cfg jetstream.ConsumerConfig) (jetstream.Consumer, error) {
+
+	if cfg.Durable == "" {
+		return nil, fmt.Errorf("jetstream: ensureDurableConsumer on %s was "+
+			"given no durable name — an ephemeral consumer is this caller's "+
+			"alone and races nobody, so it does not belong here", stream)
+	}
+	cons, createErr := q.js.CreateConsumer(ctx, stream, cfg)
+	if createErr == nil {
+		return cons, nil
+	}
+	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), streamReadBack)
+	defer cancel()
+	cons, err := q.js.Consumer(readCtx, stream, cfg.Durable)
+	if err != nil {
+		return nil, fmt.Errorf("%w (and it is not there: %w)", createErr, err)
+	}
+	return cons, nil
 }
 
 // DeleteSubscription destroys the durable consumer and the mail it retains.

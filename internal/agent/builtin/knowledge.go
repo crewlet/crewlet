@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -56,6 +57,16 @@ type KnowledgeSearcher interface {
 // so, never a failed turn.
 type searchKnowledge struct {
 	search KnowledgeSearcher
+
+	// org answers which company is in scope when there is no turn to ask.
+	//
+	// A SEAT'S SEARCH IS ITS SEAT'S, and the turn carries both halves. An
+	// OPERATOR has no turn and no seat — they hold the company's own
+	// credential and read everything — so the org comes from the wiring
+	// and the seat is nil, which both searchers already read as "the
+	// company's own account rather than somebody's". Nil here means a
+	// caller that must bring a turn, which is every seat registry.
+	org func() *org.Organization
 }
 
 var _ tools.SeatCallable = (*searchKnowledge)(nil)
@@ -107,17 +118,32 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed("search_knowledge needs a `query`: a few keywords describing " +
 			"what you are looking for."), nil
 	}
-	if len(query) > searchQueryMax {
-		query = query[:searchQueryMax]
+	// textcut, not a byte slice: a plain query[:n] splits whatever
+	// multi-byte rune straddles the cut, and the invalid UTF-8 that
+	// produces is substituted by the JSON encoder, read by a backend as a
+	// replacement character, and rejected outright by some. The cap is
+	// bytes because that is what a backend's own limit is measured in.
+	query = textcut.Bytes(query, searchQueryMax)
+	// THE TURN'S ORG, or the wiring's where there is no turn — see
+	// [searchKnowledge.org]. Reading the turn unconditionally made this
+	// tool refuse every call on the operator surface, where it is
+	// registered and where there is never a turn to read.
+	var seat *org.Role
+	var company *org.Organization
+	switch {
+	case turn != nil && turn.Org != nil:
+		seat, company = turn.Seat, turn.Org
+	case t.org != nil:
+		company = t.org()
 	}
-	if turn == nil || turn.Org == nil {
+	if company == nil {
 		return failed("No organization is in scope, so there is no knowledge base to search."), nil
 	}
 	// THE CHEAP GATE FIRST, exactly as the turn-start prefetch does it:
 	// CanSearch does no I/O, and a seat whose search could not hit anything
 	// is told so instead of waiting on a round trip that was always going
 	// to be empty.
-	if !t.search.CanSearch(turn.Seat, turn.Org) {
+	if !t.search.CanSearch(seat, company) {
 		return tools.Result{Output: "Your team's knowledge base is not searchable from " +
 			"this seat — either no knowledge backend is configured, or this seat has " +
 			"no read scope and no credential of its own. Ask a colleague, or work " +
@@ -125,7 +151,7 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 
 	hits := t.search.Search(ctx, knowledge.Query{
-		Text: query, Seat: turn.Seat, Org: turn.Org, Limit: searchHits,
+		Text: query, Seat: seat, Org: company, Limit: searchHits,
 		// AUTO-DRAFTS HIDDEN, the same exclusion the turn-start prefetch
 		// applies. Those pages are unreviewed proposals a synthesis pass
 		// wrote; an agent cannot tell one from a ratified runbook, and

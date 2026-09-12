@@ -43,13 +43,14 @@ func TestMigrateCheckReportsPendingWithoutApplying(t *testing.T) {
 	if _, statErr := os.Stat(filepath.Join(dir, "index.db")); statErr == nil {
 		// Reading may create the file, but it must not create the
 		// schema — which the next assertion proves.
-		applied, pending, perr := store.Pending(context.Background(),
+		schemas, perr := store.Pending(context.Background(),
 			filepath.Join(dir, "index.db"), store.Options{})
 		if perr != nil {
 			t.Fatalf("Pending: %v", perr)
 		}
-		if len(applied) != 0 || len(pending) == 0 {
-			t.Errorf("-check applied %d migration(s)", len(applied))
+		node := estate(t, schemas, store.EstateNode)
+		if len(node.Applied) != 0 || len(node.Pending) == 0 {
+			t.Errorf("-check applied %d migration(s)", len(node.Applied))
 		}
 	}
 }
@@ -412,13 +413,26 @@ func TestMigrateAcceptsASinglePositionalConfig(t *testing.T) {
 	if _, _, err := cli(t, "migrate", cfg); err != nil {
 		t.Fatalf("a single positional config was refused: %v", err)
 	}
-	applied, pending, err := store.Pending(context.Background(),
+	schemas, err := store.Pending(context.Background(),
 		filepath.Join(dir, "index.db"), store.Options{})
 	if err != nil {
 		t.Fatalf("Pending: %v", err)
 	}
-	if len(applied) == 0 || len(pending) != 0 {
+	node := estate(t, schemas, store.EstateNode)
+	if len(node.Applied) == 0 || len(node.Pending) != 0 {
 		t.Errorf("applied %d, pending %d: the named document was not the one migrated",
-			len(applied), len(pending))
+			len(node.Applied), len(node.Pending))
 	}
+}
+
+// estate picks one estate's report out of Pending's answer.
+func estate(t *testing.T, schemas []store.Schema, want store.Estate) store.Schema {
+	t.Helper()
+	for _, s := range schemas {
+		if s.Estate == want {
+			return s
+		}
+	}
+	t.Fatalf("Pending reported no %s estate: %+v", want, schemas)
+	return store.Schema{}
 }

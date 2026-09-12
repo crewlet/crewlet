@@ -7,14 +7,58 @@ import (
 	"io/fs"
 	"path"
 	"slices"
+	"strings"
 	"sync"
 )
 
 // schemaFS carries the consolidated schema into the binary, so a deployment is
 // one file with no data directory to keep in step with it.
 //
-//go:embed schema/*.sql
+// ONE SEQUENCE PER ESTATE, in a directory named for it. `all:` is what carries
+// a directory whose sequence is still empty: an estate's directory must be in
+// the binary before its first migration is, so a name that does not resolve is
+// a read error at Open rather than a sequence that silently applies nothing.
+//
+//go:embed all:schema
 var schemaFS embed.FS
+
+// Estate names one of a node's two databases.
+//
+// # Why there are two
+//
+// A node's own estate and the estate its appliers replicate are different
+// things under every reading, and the boundary was already drawn in prose
+// before it was drawn in the filesystem:
+//
+//   - A SNAPSHOT is a copy of the replicated estate. Taken from one file it
+//     is `VACUUM INTO` of everything followed by a DELETE of every local
+//     table on the copy — and Turso has no in-place VACUUM, so the copy keeps
+//     the deleted pages as free pages and the transfer, the checksum and the
+//     integrity check all pay for them. The largest of those tables is the
+//     audit event log, with every phase's prompt in its payload.
+//   - The IDENTITY CLAIM a peer verifies a snapshot against is a checksum
+//     over the replicated tables, and nothing else may be in the way of it.
+//   - The APPLIER's write cadence is its own: in one file every audit insert
+//     shares a WAL, a checkpoint and an fsync queue with the applier's
+//     commits, whatever the driver's conflict granularity turns out to be.
+//
+// NO TRANSACTION SPANS THE TWO and no read joins across them. A transaction
+// is one file, which is also why the tables an applier writes for its own
+// bookkeeping live with the rows it writes beside them rather than with the
+// node's other local state.
+type Estate string
+
+const (
+	// EstateNode is the node's own: the audit event log, learning and
+	// memory, config revisions, the bootstrap secret store.
+	EstateNode Estate = "node"
+
+	// EstateReplicated is everything a state log's applier writes.
+	EstateReplicated Estate = "replicated"
+)
+
+// Estates are the two, in the order [Open] brings them up.
+var Estates = []Estate{EstateNode, EstateReplicated}
 
 // migrateMu serialises migration runs across every handle in the process.
 //
@@ -53,7 +97,7 @@ func (d *DB) migrate(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 
-	files, err := schemaVersions()
+	files, err := schemaVersions(d.estate)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +107,7 @@ func (d *DB) migrate(ctx context.Context) ([]string, error) {
 		if slices.Contains(applied, name) {
 			continue
 		}
-		body, err := schemaFS.ReadFile(path.Join("schema", name))
+		body, err := schemaFS.ReadFile(path.Join("schema", string(d.estate), name))
 		if err != nil {
 			return nil, fmt.Errorf("store: read schema %s: %w", name, err)
 		}
@@ -71,7 +115,7 @@ func (d *DB) migrate(ctx context.Context) ([]string, error) {
 			return nil, err
 		}
 		done = append(done, name)
-		log.InfoContext(ctx, "schema_applied", "version", name)
+		log.InfoContext(ctx, "schema_applied", "estate", string(d.estate), "version", name)
 	}
 	return done, nil
 }
@@ -127,17 +171,40 @@ func (d *DB) appliedVersions(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
-// schemaVersions lists the embedded schema files in application order, which
-// is filename order — the numeric prefix is the ordering, and there is no
-// second source of truth for it.
-func schemaVersions() ([]string, error) {
-	entries, err := fs.ReadDir(schemaFS, "schema")
+// SchemaFile returns one embedded migration's bytes.
+//
+// EXPORTED FOR THE ONE ASSERTION THAT IS ABOUT THE SOURCE rather than about
+// what the driver created: an index's trailing comment naming the query it
+// serves is not part of the schema the database keeps, so a test that read the
+// schema back could never see it. Every other schema assertion in the tree
+// reads sqlite_master instead, deliberately — a clause a file carries and the
+// driver silently ignored would pass a text scan and fail in production.
+func SchemaFile(estate Estate, name string) ([]byte, error) {
+	body, err := schemaFS.ReadFile(path.Join("schema", string(estate), name))
 	if err != nil {
-		return nil, fmt.Errorf("store: read embedded schema: %w", err)
+		return nil, fmt.Errorf("store: read the %s estate's %s: %w", estate, name, err)
+	}
+	return body, nil
+}
+
+// schemaVersions lists one estate's embedded schema files in application
+// order, which is filename order — the numeric prefix is the ordering, and
+// there is no second source of truth for it.
+//
+// The two sequences are numbered INDEPENDENTLY. schema_migrations keys on the
+// base filename and each estate has its own table, so `0001` in one estate and
+// `0001` in the other are two migrations and neither can mask the other.
+func schemaVersions(estate Estate) ([]string, error) {
+	entries, err := fs.ReadDir(schemaFS, path.Join("schema", string(estate)))
+	if err != nil {
+		return nil, fmt.Errorf("store: read the %s estate's embedded schema: %w", estate, err)
 	}
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
-		if !e.IsDir() {
+		// Only .sql: `all:` carries whatever else is in the directory,
+		// which for an estate with no migrations yet is the file that
+		// makes the directory exist at all.
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
 			names = append(names, e.Name())
 		}
 	}
@@ -145,22 +212,22 @@ func schemaVersions() ([]string, error) {
 	return names, nil
 }
 
-// SchemaVersions reports the schema files this build carries, in application
-// order. Exposed for diagnostics and for the test that asserts a fresh
-// database ends up with all of them.
-func SchemaVersions() []string {
-	names, err := schemaVersions()
+// SchemaVersions reports one estate's schema files, in application order.
+// Exposed for diagnostics and for the test that asserts a fresh database ends
+// up with all of them.
+func SchemaVersions(estate Estate) []string {
+	names, err := schemaVersions(estate)
 	if err != nil {
 		// The FS is embedded at build time; a read failure means the
 		// binary is malformed, and reporting an empty list would let a
 		// caller conclude the schema is empty rather than broken.
-		panic(fmt.Sprintf("store: embedded schema unreadable: %v", err))
+		panic(fmt.Sprintf("store: the %s estate's embedded schema is unreadable: %v", estate, err))
 	}
 	return names
 }
 
-// Pending reports the schema files a database has not applied, WITHOUT
-// applying them.
+// Pending reports, for EACH of a node's two estates, the schema files its
+// database has not applied — WITHOUT applying them.
 //
 // # Why this is not Open followed by a comparison
 //
@@ -195,38 +262,91 @@ func SchemaVersions() []string {
 // leave the file excluded from every OTHER process for the rest of this one's
 // life, with nothing to point at. That is why the test asserts the refcount
 // rather than a following Open — an Open that succeeds proves nothing.
-func Pending(ctx context.Context, path string, opts Options) (applied, pending []string, err error) {
+func Pending(ctx context.Context, path string, opts Options) ([]Schema, error) {
+	out := make([]Schema, 0, len(Estates))
+	for _, estate := range Estates {
+		file := path
+		if estate == EstateReplicated {
+			file = ReplicatedPath(path, opts.ReplicatedPath)
+		}
+		one, err := pendingOne(ctx, estate, file, opts)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, one)
+	}
+	return out, nil
+}
+
+// Schema is one estate's migration state.
+type Schema struct {
+	// Estate is which of a node's two databases this describes.
+	Estate Estate
+	// Path is the file it lives in.
+	Path string
+	// Applied are the versions the database has recorded, in order.
+	Applied []string
+	// Pending are the versions this binary carries and it has not.
+	Pending []string
+}
+
+// KnownMigrations is every schema version THIS BINARY carries for an estate,
+// in application order.
+//
+// A recipient adopting a snapshot needs it to answer the one question
+// [PendingEstate] cannot: not what the artefact is missing, but what the
+// artefact has that this binary does not. A file shaped by code this node does
+// not run is a file whose rows it cannot reason about.
+func KnownMigrations(estate Estate) ([]string, error) {
+	return schemaVersions(estate)
+}
+
+// PendingEstate reports ONE estate file's applied and pending migrations,
+// without migrating it.
+//
+// It exists for the one caller that holds a database file which is not a
+// node's own: a snapshot being adopted. That file is a replicated estate and
+// nothing else, and it must be inspected BEFORE anything migrates it — a
+// recipient refuses a donor whose migrations this binary does not carry, and
+// migrating first would answer the question by changing it.
+func PendingEstate(ctx context.Context, estate Estate, path string, opts Options) (Schema, error) {
+	return pendingOne(ctx, estate, path, opts)
+}
+
+func pendingOne(ctx context.Context, estate Estate, path string, opts Options) (Schema, error) {
+	out := Schema{Estate: estate, Path: path}
+
 	lock, err := lockStore(path)
 	if err != nil {
-		return nil, nil, err
+		return Schema{}, err
 	}
 	defer lock.release()
 
-	pool, err := openPrepared(ctx, path, opts)
+	pool, err := openPrepared(ctx, path, opts.forEstate(estate))
 	if err != nil {
-		return nil, nil, err
+		return Schema{}, err
 	}
 	defer func() { _ = pool.Close() }()
 
-	db := &DB{sql: pool, path: path}
-	if applied, err = db.appliedVersions(ctx); err != nil {
+	db := &DB{sql: pool, path: path, estate: estate}
+	if out.Applied, err = db.appliedVersions(ctx); err != nil {
 		// A database that has never been migrated has no
 		// schema_migrations table, and that is the ordinary state of a
 		// fresh deployment rather than a fault.
-		applied = nil
+		out.Applied = nil
 	}
-	have := make(map[string]bool, len(applied))
-	for _, v := range applied {
+	have := make(map[string]bool, len(out.Applied))
+	for _, v := range out.Applied {
 		have[v] = true
 	}
-	files, err := schemaVersions()
+	files, err := schemaVersions(estate)
 	if err != nil {
-		return nil, nil, err
+		return Schema{}, err
 	}
 	for _, file := range files {
 		if !have[file] {
-			pending = append(pending, file)
+			out.Pending = append(out.Pending, file)
 		}
 	}
-	return applied, pending, nil
+	return out, nil
 }

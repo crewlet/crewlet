@@ -131,7 +131,7 @@ func TestASuccessfulBackupAnswersWithItsManifest(t *testing.T) {
 	t.Parallel()
 	taker := &fakeBackup{took: backup.Manifest{
 		NodeID: "node-7",
-		Store:  &backup.StoreArtifact{File: "store.db", Bytes: 4096},
+		Stores: []backup.StoreArtifact{{File: "store.db", Bytes: 4096}},
 		Streams: []backup.StreamArtifact{
 			{Name: "CREWLET_AGENT", File: "streams/CREWLET_AGENT.snapshot", Messages: 3},
 		},

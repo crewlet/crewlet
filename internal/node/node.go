@@ -80,6 +80,18 @@ type Config struct {
 	// coding job that is still going.
 	SeatReady func(ctx context.Context, handle string, lease coord.Lease) error
 
+	// SeatsAdmitted reports whether this node may take on NEW seats right
+	// now. Nil always admits. It gates the CLAIM only — see
+	// [seat.Config.Ready] for why it is neither the seat list nor the
+	// acquire hook.
+	SeatsAdmitted func() bool
+
+	// SeatsServiceable reports whether this node may KEEP the seats it
+	// holds, and names what stopped it when the answer is no. Nil keeps
+	// them. It is the opposite direction from SeatsAdmitted and fires on a
+	// different class of fault — see [seat.Config.Serviceable].
+	SeatsServiceable func() (bool, string)
+
 	// SeatDone runs after the mailbox is detached. It never fails a
 	// release: the seat is already gone from this node, and its durable
 	// state belongs to the store rather than to this process.
@@ -148,6 +160,8 @@ func New(cfg Config) (*Node, error) {
 		Owner:             cfg.Owner,
 		NodeID:            cfg.NodeID,
 		Seats:             cfg.Seats,
+		Ready:             cfg.SeatsAdmitted,
+		Serviceable:       cfg.SeatsServiceable,
 		Profile:           cfg.Profile,
 		Status:            cfg.Status,
 		Hooks:             n,

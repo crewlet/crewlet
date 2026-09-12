@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/api/opsmcp"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
@@ -51,6 +53,29 @@ type App struct {
 	// holding neither a store nor a broker, which that route reports
 	// rather than hides.
 	backup backupTaker
+
+	// retention is the fleet's own record of what the log may delete, for
+	// the one gesture that WRITES to it: an operator's backup
+	// acknowledgement. Nil on a standalone API with no coordination store.
+	retention retentionWriter
+
+	// nodes installs and lifts the eviction gate. A RECORD on the log
+	// rather than a coordination write, which is why it is a different
+	// seam from the one above. Nil on a process with no native tracker.
+	nodes NodeGate
+
+	// purger destroys a task, as the operator on the request. Its own
+	// field rather than a third method on the seam above, because it is
+	// the one write here attributed to a PERSON — see [TaskPurger]. Nil
+	// leaves the route absent, which is honest on a build that cannot
+	// serve it: an operator who cannot purge must not be told they can.
+	purger TaskPurger
+
+	// capacity drives a stream's byte ceiling through the maintenance
+	// window. Nil on a process with no state log — and on one that is
+	// publishing, the verb refuses rather than the route being absent,
+	// because "you are in the wrong mode" is the answer an operator needs.
+	capacity capacityRunner
 
 	// configured flips once a company revision is active. Atomic because
 	// the config refresher sets it from its own goroutine while every
@@ -132,12 +157,39 @@ type Options struct {
 	// token is signed rather than stored — see internal/runtoken.
 	Bridge *mcpbridge.Bridge
 
+	// Operator is the company's own tracker and knowledge base, served to
+	// an operator's AI assistant over MCP. Nil serves none and the route
+	// is ABSENT, which is the honest shape for a company on Jira and
+	// Confluence: there is nothing here it could manage.
+	//
+	// ALWAYS GUARDED — see [auth.GuardedPrefixes]. It writes to the
+	// company, and the credential's own name is what lands on each record
+	// as the author.
+	Operator *opsmcp.Server
+
 	// Budgets is the fleet's token counter. Supplied separately from
 	// Sources.Budget, which is the READ half: a reset is an operator
 	// action against a spend ceiling, and giving the read surface a
 	// method that clears one would put it a typo away from every screen
 	// that renders spend.
 	Budgets budgetResetter
+
+	// Retention is the fleet's record of what the log may delete, for the
+	// operator's backup acknowledgement. Nil leaves that route answering
+	// 503 rather than 404 — the route exists on this build.
+	Retention retentionWriter
+
+	// Nodes installs and lifts the eviction gate. Nil leaves the evict and
+	// readmit routes answering 503.
+	Nodes NodeGate
+
+	// Purger destroys a task as the operator who asked. Nil leaves the
+	// purge route unmounted.
+	Purger TaskPurger
+
+	// Capacity drives a stream's byte ceiling. Nil leaves the maintenance
+	// routes answering 503.
+	Capacity capacityRunner
 
 	// Backup copies this node's durable state to a path an operator
 	// names. Nil where there is nothing to copy — a process running
@@ -237,6 +289,8 @@ func New(opts Options) *App {
 	queries.Register(a.queries, sources)
 	a.budgets = opts.Budgets
 	a.backup = opts.Backup
+	a.retention, a.nodes, a.purger = opts.Retention, opts.Nodes, opts.Purger
+	a.capacity = opts.Capacity
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", http.HandlerFunc(a.serveHealth))
@@ -253,7 +307,22 @@ func New(opts Options) *App {
 	// every seat's memory to a path the caller names is not a read,
 	// whatever the anonymous-read posture allows.
 	mux.Handle("POST /backup", http.HandlerFunc(a.serveBackup))
+	// The three retention gestures that write. POSTs for the same reason:
+	// moving the floor the trim deletes against, stopping a machine
+	// writing and letting it write again are not reads, whatever the
+	// anonymous-read posture allows. See retention.go.
+	a.mountRetention(mux)
+	// The capacity window's own control surface. It is the one thing a
+	// maintenance-mode node serves that a publishing one does not need,
+	// and it is why the verb can run at all on a topology whose broker
+	// binds no socket. See retention.go.
+	a.mountCapacity(mux)
 	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.stream, a.answer))
+	// The OPERATOR MCP surface: the same tracker and knowledge tools a
+	// seat holds, offered to a person's own assistant. Under its own
+	// always-guarded prefix rather than under /mcp/, which is exempt
+	// wholesale for the sandbox bridge — see opsmcp.Path.
+	a.mountOperator(mux, opts.Operator)
 	// The dashboard shell and its assets. All four paths are exempt from
 	// the guard: the page that prompts for a token cannot itself require
 	// one, and it ships no data — every byte it renders comes from an
@@ -436,6 +505,10 @@ func (a *App) answer(ctx context.Context, what string, params map[string]any, op
 		return nil, fmt.Errorf("%w: %s", stream.ErrUnknownQuery, what)
 	case errors.Is(err, queries.ErrUnauthorized):
 		return nil, fmt.Errorf("%w: %s", stream.ErrUnauthorized, what)
+	case errors.Is(err, queries.ErrNotFound):
+		return nil, fmt.Errorf("%w: %s", stream.ErrNotFound, what)
+	case errors.Is(err, queries.ErrUnavailable):
+		return nil, fmt.Errorf("%w: %s", stream.ErrUnavailable, what)
 	default:
 		return nil, err
 	}
@@ -475,6 +548,26 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": stream.CodeUnauthorized})
 	case errors.Is(err, queries.ErrBadParams):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": stream.CodeQueryFailed})
+	case errors.Is(err, queries.ErrNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": stream.CodeNotFound})
+	case errors.Is(err, queries.ErrUnavailable):
+		// 503 AND RETRY-AFTER, because this is the one failure here that
+		// is expected to pass: this node is behind the log and is
+		// draining. A 500 would tell a client to give up on a screen
+		// that will work in a few seconds, and an empty 200 would tell a
+		// person the company has no work.
+		//
+		// THE HINT IS THE REFUSAL'S OWN where it has one — derived from
+		// how far behind this node is over how fast it is actually
+		// draining — and five seconds otherwise. A flat hint is wrong in
+		// both directions on one fleet.
+		after := 5
+		if hint := queries.RetryAfter(err); hint > 0 {
+			after = max(1, int(hint.Round(time.Second)/time.Second))
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(after))
+		writeJSON(w, http.StatusServiceUnavailable,
+			map[string]string{"error": stream.CodeUnavailable})
 	default:
 		// The reason reaches the LOG, not the caller: it can carry a
 		// database path or a driver's own message, and these routes are

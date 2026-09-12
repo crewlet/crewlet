@@ -90,11 +90,11 @@ func Walk(root, skillsSpace string) (*Plan, error) {
 				// skills space exists to keep out.
 				return nil, fmt.Errorf(
 					"confluence: %s declares a tool-skill trigger but this "+
-						"company has no tool-skills space — "+
-						"integrations.confluence.skills_space is set to the "+
-						"empty string, which turns tool skills off. Pass "+
-						"-space KEY to publish it anyway, or remove that "+
-						"setting", path)
+						"company has no tool-skills container — "+
+						"knowledge.skills_container is set to the empty "+
+						"string, which turns tool skills off. Pass -space "+
+						"KEY to publish it anyway, or remove that setting",
+					path)
 			}
 			return nil, fmt.Errorf(
 				"confluence: %s is not under a space directory — a page "+

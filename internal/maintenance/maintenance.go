@@ -83,6 +83,35 @@ type Job struct {
 	// The worker derives cutoff from Horizon, so a horizon [New] raises
 	// takes effect without a job rebuilding anything.
 	Run func(ctx context.Context, now, cutoff time.Time) (int64, error)
+
+	// PerNode marks a job that must run on EVERY node rather than once
+	// across the fleet.
+	//
+	// # Why this is not a detail
+	//
+	// The duty exists to stop N nodes deleting the same rows, which is
+	// exactly right for shared state — and exactly wrong for a table each
+	// node owns its own copy of. A per-node job under the fleet singleton
+	// is swept on one node and grows for ever on all the others, which
+	// looks identical to a sweep that is working: the operator who checks
+	// sees a table being tidied, on the node they happened to check.
+	//
+	// The two classes are not a spectrum. A job is about state the fleet
+	// agrees on, or about state this machine owns alone, and every job has
+	// to say which.
+	PerNode bool
+
+	// Gate reports whether this job has anything to do at all.
+	//
+	// It exists so a job whose work is RARE can cost nothing on the ticks
+	// where there is none: a re-spread walk runs when a project's own row
+	// says it needs one, and asking that is one indexed read where doing
+	// the walk's own selection would be a scan. A nil gate always runs.
+	//
+	// A gate that ERRORS skips its job and is reported: "I could not tell
+	// whether there is work" is not "there is no work", and treating it as
+	// the second is how a duty stops running and nothing says so.
+	Gate func(ctx context.Context) (bool, error)
 }
 
 // Purge builds a range-delete job over a retention horizon.
@@ -263,14 +292,37 @@ func (w *Worker) loop(ctx context.Context) {
 // "somebody else swept" and "nothing needed sweeping" are different facts,
 // and an empty map would merge them.
 func (w *Worker) Tick(ctx context.Context) (map[string]int64, error) {
+	// THE DUTY IS CLAIMED ONCE AND CONSULTED PER JOB. A per-node job runs
+	// whether or not this node holds it, because the table it sweeps is
+	// this node's own — and a fleet job runs only if it does. Skipping
+	// the whole tick on a lost claim would let every node's own tables
+	// grow for as long as one peer holds the duty.
 	holds, err := w.mayTick(ctx)
-	if err != nil || !holds {
+	if err != nil {
 		return nil, err
 	}
 	now := w.now()
 	swept := make(map[string]int64, len(w.jobs))
 	var errs []error
 	for _, j := range w.jobs {
+		if !holds && !j.PerNode {
+			continue
+		}
+		if j.Gate != nil {
+			work, err := j.Gate(ctx)
+			if err != nil {
+				// UNKNOWN IS NOT "NO WORK". A gate that cannot be
+				// read is a job that cannot be scheduled, and
+				// reading its failure as "nothing to do" is how a
+				// duty stops running with nothing to show for it.
+				errs = append(errs, fmt.Errorf("%s: read whether there is "+
+					"work: %w", j.Name, err))
+				continue
+			}
+			if !work {
+				continue
+			}
+		}
 		n, err := j.Run(ctx, now, now.Add(-j.Horizon))
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", j.Name, err))
@@ -279,6 +331,12 @@ func (w *Worker) Tick(ctx context.Context) (map[string]int64, error) {
 		if n > 0 {
 			swept[j.Name] = n
 		}
+	}
+	if !holds && len(swept) == 0 && len(errs) == 0 {
+		// SOMEBODY ELSE SWEPT THE FLEET'S TABLES and this node's own
+		// needed nothing, which is not the same fact as "nothing needed
+		// sweeping" — a nil map keeps them apart.
+		return nil, nil
 	}
 	if len(swept) > 0 {
 		log.InfoContext(ctx, "maintenance_swept", "rows", total(swept), "tables", swept)

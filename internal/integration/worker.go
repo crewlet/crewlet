@@ -26,9 +26,11 @@ var log = logging.Get("integration")
 //
 // It is also what the control plane's own reconcile poll ticks at, and the
 // two cost about the same: a tick with nothing due is one duty claim and one
-// read of a coordination bucket holding at most seven keys, on a connection
-// the process already holds. Nothing is fetched from a third-party app unless
-// one is due.
+// read of the activation pointer plus one status row per node, on a connection
+// the process already holds. That is the SHAPE rather than a count — a fixed
+// number here was a claim about how many nodes a fleet has, which is the one
+// thing about it nothing in this package knows. Nothing is fetched from a
+// third-party app unless one is due.
 const Interval = 15 * time.Second
 
 // WakeSettle is how long a config apply waits before the tick it brings
@@ -342,6 +344,23 @@ type Worker struct {
 	stop    context.CancelFunc
 	stopped chan struct{}
 
+	// unconfigured is every surface whose last pass said the company has no
+	// block for it.
+	//
+	// IN MEMORY AND NOT A ROW, because the absence of a row is exactly what
+	// [Observe]'s `forget` means: a surface nobody configured has no status
+	// to record, and writing one would put every unconfigured vendor on an
+	// operator's screen for ever. But forgetting it is also what un-paced
+	// it — the next tick reads no row, builds a zero [State] whose
+	// NextAttemptAt is already past, and runs the pass again, so a company
+	// that configured none of them reconciled all of them every interval
+	// for the life of the process.
+	//
+	// The set is cleared by `stale`, which is the one thing that can change
+	// the answer: a surface becomes configured when somebody edits the
+	// company document, and a config apply already marks the loop stale.
+	unconfigured sync.Map
+
 	// stale is set when the document every recorded conclusion was drawn
 	// from has been replaced, so the next tick reconsiders every surface
 	// whatever its cadence says. See [Worker.MarkStale].
@@ -586,6 +605,12 @@ func (w *Worker) Tick(ctx context.Context) {
 	// READ ONCE, AND CLEARED, so one apply costs one sweep rather than
 	// leaving every later tick ignoring the cadence for ever.
 	stale := w.stale.Swap(false)
+	if stale {
+		// THE DOCUMENT MOVED, so every "this company has no such
+		// integration" is a conclusion drawn from a document that is no
+		// longer the current one.
+		w.unconfigured.Clear()
+	}
 	for _, kind := range w.order {
 		if ctx.Err() != nil {
 			return
@@ -600,6 +625,15 @@ func (w *Worker) Tick(ctx context.Context) {
 		}
 		if !stale && !state.Due(now) {
 			continue
+		}
+		// A SURFACE THE COMPANY DOES NOT HAVE IS NOT ASKED AGAIN until
+		// the document that would give it one changes. Its pass is the
+		// only thing that can say so, and saying so forgets the row that
+		// would otherwise pace it — see [Worker.unconfigured].
+		if !stale {
+			if _, absent := w.unconfigured.Load(kind); absent {
+				continue
+			}
 		}
 		// STILL OURS? The duty was claimed once, before this loop, and its
 		// TTL is a small multiple of the tick interval — while the loop
@@ -806,6 +840,13 @@ func (w *Worker) reconcile(ctx context.Context, kind Kind, state State, now time
 	StampEndpoint(&state, kind, w.currentEndpoint())
 	switch {
 	case forget:
+		// AND IT IS NOT ASKED AGAIN until the company document moves.
+		// Forgetting the row is right — there is nothing to report about
+		// a surface nobody configured — and it is also what left the
+		// pass running every tick, because the row is what paces it.
+		if errors.Is(err, ErrNotConfigured) {
+			w.unconfigured.Store(kind, struct{}{})
+		}
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := w.store.ForgetIntegration(ctx, kind); err != nil {
 			log.WarnContext(ctx, "integration_status_not_forgotten",

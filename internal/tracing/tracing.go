@@ -81,6 +81,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 var log = logging.Get("tracing")
@@ -215,6 +216,16 @@ type Options struct {
 	// Env reads an environment variable. Nil means os.Getenv; a test passes
 	// its own so it never has to mutate the process.
 	Env func(string) string
+
+	// Recorder is the one place the engine's measurements are written, and
+	// the MeterProvider installed here is a READER of it.
+	//
+	// Passed in rather than built here, because the engine records into it
+	// long before and long after this package's provider exists — and two
+	// recorders would be the drift this whole arrangement exists to
+	// prevent. Nil builds one, so a caller that only wants traces is not
+	// made to know about metrics.
+	Recorder *metrics.Recorder
 }
 
 func (o Options) env(name string) string {
@@ -283,7 +294,35 @@ func Configure(ctx context.Context, opts Options) (Shutdown, error) {
 		"exporting", endpoint != "", "endpoint", endpoint,
 		"protocol", protocol(opts), "service", serviceName(opts))
 
-	return func(ctx context.Context) error { return shutdown(ctx, tp) }, nil
+	// THE METER PROVIDER, on the same terms and for the same reason: it is
+	// installed whether or not anything exports, so nothing above this
+	// package branches on whether metrics are "on" and the operator record
+	// reads the same recorder a collector would.
+	//
+	// A failure here does NOT fail the boot beyond what the traces half
+	// already refuses: the recorder still answers, so what is lost is the
+	// export rather than the measurement.
+	rec := opts.Recorder
+	if rec == nil {
+		if rec, err = metrics.New(); err != nil {
+			return nil, err
+		}
+	}
+	flushMetrics, err := configureMeter(ctx, opts, rec)
+	if err != nil {
+		return nil, err
+	}
+
+	return func(ctx context.Context) error {
+		// BOTH, and the traces error wins when both fail: it is the one
+		// with spans in flight, and a joined error here would be two
+		// telemetry failures where a caller wants one line.
+		metricsErr := flushMetrics(ctx)
+		if err := shutdown(ctx, tp); err != nil {
+			return err
+		}
+		return metricsErr
+	}, nil
 }
 
 // shutdown flushes and stops, bounded.

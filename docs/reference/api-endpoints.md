@@ -86,6 +86,31 @@ A body that does not arrive inside its deadline fails the read like any other tr
 | `POST` | `/budgets/reset` | Zero the fleet's token counter. `?scope=` clears one (`org`, `agent:<id>`); its absence clears every one. **Always needs a token** — a write is a write whatever `allow_anonymous_read` opens (see [below](#post-budgetsreset)) |
 | `POST` | `/backup` | Copy this node's store and stream estate into `?dir=` **on the engine's host**. **Always needs a token** — it writes every credential the company holds to a path the caller names (see [below](#post-backup)) |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
+| `GET` | `/work` | The company's own tracker: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `native` — a company on Jira gets `404 unknown_query`, not an empty board (see [below](#the-native-tracker-and-knowledge-base)) |
+| `GET` | `/work/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every node's position, and what this node costs to replace. **Operator-only, reads included** (see [below](#get-workretention--what-the-log-is-holding)) |
+| `POST` | `/work/retention/ack` | Publish an operator backup floor, for `backup_floor: operator` |
+| `POST` | `/work/retention/evict/{node}` | Install the eviction gate on a node, so the trim can pass a floor it is pinning |
+| `POST` | `/work/retention/readmit/{node}` | Lift it — the inverse commit rather than a delete |
+| `POST` | `/work/retention/capacity` | Drive a log's byte-ceiling change as far as this node's mode allows |
+| `GET` | `/work/retention/maintenance` | Where that window stands and what is holding it |
+| `POST` | `/work/retention/maintenance/abandon` | Change what the operation is trying to reach, never the barrier it must cross |
+| `POST` | `/work/retention/maintenance/exclude` | Record that a participant's process is stopped and holds no outstanding request |
+| `POST` | `/work/{id}/purge` | Destroy a task and every row it produced, on every node. The one operation with no inverse: `?confirm=` repeats the task's KEY, `?project=` names the container the record arbitrates under, `?reason=` is required and is the only account of the task that survives, and `?op_id=` is how an `unknown` outcome is retried without appending a second purge. **Operator-only**, and absent rather than 503 on a build with no tracker |
+| `GET` | `/work/retention/reanchor` | The live stream's own `created_at`, which a reanchor's confirmation has to echo |
+| `POST` | `/work/retention/reanchor` | Adopt a recreated stream at the next generation |
+| `GET` | `/work/views` | One container's **view strip**: the three every container has without anybody saving one, the two more a sprinting project adds, and whatever was saved beyond them. `?container=` takes the query grammar's own spelling (`workspace`, `project:ENG`, `unit:engineering`, `person:ana`) and `?viewer=` is whose personal views and pins order the strip |
+| `GET` | `/work/goals` | The company's **goals**, each with what its targets say. `?owner=` narrows to the goals a handle owns **or** contributes to, `?group=` to the free-text label they are filed under, and `?archived=true` includes the archived ones. Every percentage in the answer is computed from the work at read time and stored nowhere |
+| `GET` | `/work/catalogue` | The company's **vocabulary**: the task types a create may name and the workspace's custom-field declarations. `?archived=true` also lists what was retired. The types are the EFFECTIVE set — the six this build ships plus whatever the company declared, a declaration replacing a builtin of the same slug |
+| `GET` | `/work/projects` | Every **project** work is filed into, with its `task_counts` — the maintained `open`/`done`/`closed` columns, never an aggregate per poll — its chart-owned unit, its lead and its sprint state. `?q=` narrows by a word in the key, the name or the purpose; `?unit=` to the projects one unit owns; `?archived=true` includes the retired ones; `?limit=` caps at 200, which is also the default. A set read, so it carries `complete` and its `incomplete` beside the read level |
+| `GET` | `/work/projects/{key}` | One project in **full**: the six statuses with their labels, groups and descriptions; the effective types; the custom fields grouped by which type they apply to, required first, with the workspace ids this project **shadows** named; its tags; its default assignee, lead and owning unit; its sprint policy, the sprint that is running with what it is at, and the last five with the team's average velocity. `?for_type=` narrows the fields to one type plus the ones that apply to every type. Unknown key answers 404 naming the nearest three |
+| `GET` | `/work/sprints` | One project's **sprints** with every figure derived from the stays: `committed` is what the sprint held when it started, `added` arrived after, `removed` was pulled out without carrying, `done` is what entered a delivered status inside the sprint's own window, and `remaining` is what is still open at its end — each in the project's own `measure`, with `unestimated` beside them. `?project=` is required; `?sprint=` reports one; `?sprints=` covers 3 to 10 (default 5) and the answer names how many closed sprints fell below that window |
+| `GET` | `/work/activity` | The **activity feed** — one durable row per applied commit, quiet ones included, at any age with no live/archive boundary to cross. Ordered by the COMPOSED LOG POSITION rather than by any clock, so `?since=` and `?cursor=` are both positions written `<stream>@<generation>:<sequence>` — which is what lets a cursor span a reanchor with no gap and no repeat. `?task=` (by key, id or a FORMER key), `?container=`, `?kinds=`, `?actor=`, `?assignee=`, `?notified=`, `?from=`/`?to=` (RFC3339, bounding the AUTHORED instants), `?limit=` ≤200. `?q=` is an escaped `LIKE` over the excerpt and is REFUSED unless it names a task, or a project **and** a `since` inside 90 days |
+| `GET` | `/work/my-work` | **Operator-only.** Everything one person is expected to look at, in seven bounded lists: `priorities` in the stored order, `assigned`, `asked_of_me` (each with the literal call that answers it), `checklist_items` (which live on other people's tasks and no assignee filter reaches), `collaborating`, `watching_recent` and `unblocked_recent`. `?handle=` is whose |
+| `GET` | `/work/people/{handle}` | One human's **own state**: their inbox (unread, read, snoozed, and which snoozes are now **due**), the order they mean to work in and who set it, and their pinned views. A person nobody has written yet answers the EMPTY state with `held: false`, not a 404 — every human starts this way and the first write is what creates the record |
+| `GET` | `/work/{id}` | One item with its description, thread, history and links. `{id}` is either the key (`ENG-42`) or the id — a person holds the first and every internal link the second |
+| `GET` | `/pages` | The company's own knowledge base: a filtered listing. Served only where `knowledge.backend` is `native` |
+| `GET` | `/pages/{id}` | One page with its body, comments, revision metadata, children and ancestor breadcrumb. `{id}` is the id, or `CONTAINER/Title` — the title matches the way the fleet CLAIMED it, so case and runs of whitespace are ignored and `ENG/deploy runbook` reaches a page called "Deploy  Runbook" |
+| `GET` | `/containers` | Every knowledge container this node knows about |
 | `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection (REST fallback for the WebSocket) |
 | `WS`  | `/ws/stream` | Live dashboard stream — agents, events, LLM invocations, health |
 | `GET` | `/dashboard` | Dashboard shell (`/` redirects here; `/static/{path}` serves its assets) |
@@ -102,8 +127,9 @@ A body that does not arrive inside its deadline fails the read like any other tr
 | `POST` | `/webhooks/forge` | Receive Forge events (FIT-verified) |
 | `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path) |
 | `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to a coding agent in agent mode. Per-run token in the path; all three verbs because that is what the transport uses |
+| `GET` `POST` `DELETE` | `/operator/mcp` | The company's own tracker and knowledge base, served over MCP to **your** AI assistant. **Always needs a token** — it files and moves work (see [below](#operatormcp--your-own-assistant)). Absent where the company runs neither native backend |
 
-Plus the three always-guarded surfaces: [`/config/*`](#config--live-config-management-auth-gated), [`/secrets/*`](#secrets--the-companys-credentials-auth-gated) and [`/setup/*`](#setting-an-integration-up). `/setup` is guarded on its READS as well, and deliberately: the list of which credentials a company has not configured yet is a map of what to attack.
+Plus the four always-guarded surfaces: [`/config/*`](#config--live-config-management-auth-gated), [`/secrets/*`](#secrets--the-companys-credentials-auth-gated), [`/setup/*`](#setting-an-integration-up) and [`/operator/mcp`](#operatormcp--your-own-assistant). `/setup` is guarded on its READS as well, and deliberately: the list of which credentials a company has not configured yet is a map of what to attack.
 
 Read-side handlers live in the `internal/api` package (one module
 per domain — `agents`, `events`, `tokens`, `org`, `fleet`,
@@ -1166,7 +1192,7 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The health envelope — see [below](#the-health-envelope). |
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
-| `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error }` where `error` is a code: `not_found`, `unauthorized`, `unknown_query`, `no_event_store`, `no_pending_store`, `fleet_unavailable`, `query_failed`. |
+| `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error }` where `error` is a code: `not_found`, `unavailable`, `unauthorized`, `unknown_query`, `no_event_store`, `no_pending_store`, `fleet_unavailable`, `query_failed`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* — a projection still catching up after a restart or a fresh join — so a client says "ask again in a moment" rather than reporting a fault. Its REST twin is `503` with `Retry-After`. |
 | `pong`     | Reply to a client `ping`. | `null` |
 
 **Client → server kinds**
@@ -1194,8 +1220,70 @@ REST route calls, so the two surfaces cannot diverge:
 | `sandbox_runs` | — | `GET /sandbox-runs` — `no_pending_store` when no database is configured; the REST twin answers that case with the `degraded` body below |
 | `budgets` | — | `GET /budgets` |
 | `a2a_channels` | — | The fleet's agent-to-agent authorization record: who asked whom, how many messages crossed, and when. `available: false` when this node could not reach the coordination store — which is not the same as no channels having been opened |
-| `knowledge` | `{q}` | The company's own knowledge search, run live through the same `knowledge.Searcher` seam a seat's own `search_knowledge` tool uses. Searched as the ORG with no seat, so it applies the engine's own account and nothing more — searching as a named seat would let a dashboard reader read, through that seat's credential, material their own account may not have. Registered whenever a company is active, NOT only when a searcher exists — "this company has no knowledge backend" is a fact the company establishes on its own, and it is a far more useful answer than an unknown query. `available: false` covers all three of no company, no backend, and a backend wired with no org-wide read scope. `reason` (`no_company` / `no_backend` / `no_scope`, empty when the search ran) is the value to branch on and `note` is the prose for a person — a screen picking which remedy to offer must not string-match the note, nor infer the state from an empty `backend`, which means "no backend" and "no company" alike. The `no_scope` note names `knowledge.confluence_spaces`, because an operator whose integration is correct must not be sent to re-check it. It carries a reason on a failed search too, because search is best effort by contract and an empty result is not proof that nothing matches |
+| `knowledge` | `{q}` | The company's own knowledge search, run live through the same `knowledge.Searcher` seam a seat's own `search_knowledge` tool uses. Searched as the ORG with no seat, so it applies the engine's own account and nothing more — searching as a named seat would let a dashboard reader read, through that seat's credential, material their own account may not have. Registered whenever a company is active, NOT only when a searcher exists — "this company has no knowledge backend" is a fact the company establishes on its own, and it is a far more useful answer than an unknown query. `available: false` covers all three of no company, no backend, and a backend wired with no org-wide read scope. `reason` (`no_company` / `no_backend` / `no_scope`, empty when the search ran) is the value to branch on and `note` is the prose for a person — a screen picking which remedy to offer must not string-match the note, nor infer the state from an empty `backend`, which means "no backend" and "no company" alike. The `no_scope` note names `knowledge.scope`, because an operator whose integration is correct must not be sent to re-check it. It carries a reason on a failed search too, because search is best effort by contract and an empty result is not proof that nothing matches |
 | `integrations` | — | `GET /integrations` |
+| `work_items` | `{container, status, status_group, assignee, reporter, watcher, collaborator, tag, type, priority, sprint, parent, root, q, key, removed, blocked, blocking, has_dependencies, has_open_asks, flag, asked_of, asked_by, subtasks, f.<slug>, view, preset, viewer, group_by, group_by2, group, subgroup, group_limit, totals, sort, cursor, limit, …}` | `GET /work`. `container` is the scope — `workspace`, or `project:ENG` (a bare `ENG` works too, and the key is upper-cased because the column is) — and an ABSENT container is neither: the engine refuses to default it, because an omitted key would otherwise be the most expensive query in the system. Every list key is comma-separated, because a socket frame's JSON object cannot carry a repeated key and a filter only one transport can express is exactly the divergence this channel exists to prevent; `status` also takes `!` negation. There is no `open` flag — open and closed are STATUS GROUPS (`not_started`, `active`, `done`, `closed`), which is the level every rule in the tracker is written at. `f.<slug>=<value>` filters on a custom field — resolved against the company's catalogue by slug, id or label, and compared on the column its DECLARED TYPE says, so `f.effort=gt:9` is a numeric comparison and not a lexical one; the seventeen operators are `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `contains`, `startswith`, `in`, `range`, `any`, `all`, `not_any`, `not_all`, `me`, `null` and `not_null` — and which of them a field admits is a property of its TYPE, so `eq` on a `labels` field is REFUSED naming `any`, `all`, `not_any` and `not_all` rather than compiling to a clause that matches nothing and reads as "no task has this label". `null` and `not_null` are on every type, because "is this set" is a question about the ROW. A bare value is the type's NATURAL comparison — `any` on a set, because naming a value is not claiming the set IS it, and `eq` everywhere else. A set operator takes a comma-separated list (`any:api,ui`, at most 16) and `range` takes both ends (`range:3..8`), because a range with one end is `gte` or `lte`. A value whose text begins `<scheme>://` is a VALUE rather than an operator call, so a `url` field can be filtered by what it holds — anything else before a colon is carried through as an operator, so a typo is refused naming the set rather than silently answered. `f.<slug>=me` is resolved to the reader by the SURFACE before the query is parsed, which is what makes one saved view mean whoever opens it. A ref nothing resolves is REFUSED naming it. `q=` is a FIND rather than a search — a substring of a key (from the front) or a title (anywhere), which is what finds the item somebody half remembers; there is no `mode`, because this grammar has no ranker and ranked search over the company's prose is `search_knowledge`'s. `key=ENG-1,ENG-7` narrows to keys a caller already holds — upper-cased, like `container=` and `references=`, because a key is what somebody pasted and the column it is compared against is minted upper-case — and `removed=true` is the TRASH — the only way to list what a removal hid, which is what a restore is a gesture about. A parameter this grammar does not read is REFUSED naming it, never ignored: a filter nobody parsed is a board showing more than the person asked for, silently. An unknown status or group is refused naming the closed set rather than matching nothing. A custom field VALUE is checked against its own declaration at the write and refused naming the rule — never rounded or coerced to fit; see the coercion table in [the work tracker guide](../guides/work-tracker.md). `flag=` is the ATTENTION queue and its values OR: `cycle`, `too_deep`, `inconsistent_project` and `key_collision` are facts about a task's own row, and `one_sided` and `one_sided_final` are about a DEPENDENCY of it — an authored `waiting_on` whose blocker does not list it, and one whose mirror was refused permanently (the blocker is gone, was removed, or is full). The first is what the `tracker` duty repairs 30 seconds on; the second is what a person resolves. They OR because an attention queue asks "is anything wrong with this", and a conjunction over six flags answers nothing on every company. `totals=<column>:<op>` adds aggregates over the WHOLE matched set rather than the page — a number that changed as somebody scrolled would be the one thing a header must not do. The five ops are `sum`, `avg`, `min`, `max` and `count`; the columns are the summable ones (`points`, `estimate_min`, the `spend_*` family, `reassignments`, `depth`), the date columns for `min`/`max` only (a sum of dates is a number of microseconds nobody meant), `tasks:count`, and `f.<slug>` for a declared number or date field. A total with nothing to add up is ABSENT rather than zero: "nothing is estimated" and "everything is estimated at nothing" are different facts. `sprint=` is a csv that ORs: a NUMBER or a sprint NAME names one, `active` /
+`future` / `closed` name every sprint of the project in that state (resolved
+when the query runs, so a saved board keeps meaning "the sprint that is active
+now"), `next` is the earliest future one, and `none` is the BACKLOG —
+unfinished work in no sprint, which is an absence of an OPEN stay rather than
+of every stay, so a carry-over stays out of it. Membership is a STAY rather
+than a column, because a task that carried over is in two sprints and a column
+could name one. Everything but `none` names a sprint of ONE project — they are
+numbered and named per project — and is refused at company scope naming the
+container key that fixes it. `subtasks=` is how a tree is filtered: `collapsed` (the default) and `expanded` filter ROOT tasks and let their subtrees ride along unfiltered — so a todo root brings its done subtask — while `separate` filters every task on its own. The first two answer the same SET and differ only in how a caller renders it. Asking for a subtree with `parent=` or `root=` turns the mode off, because those are questions *about* subtasks and filtering their roots would answer the parent's siblings. `any=[{…},{…}]` is one level of disjunction, ANDed with the top-level keys: a branch is a PREDICATE, so it may not carry the keys that decide the answer's own shape (`removed`, `archived`, `show_closed`, `subtasks`) or how fresh it must be (`read_level`, `max_lag_seconds`, `max_lag_seq`) — those are the same decision at every branch or they are incoherent, and a branch that carried one would narrow what was asked for at the top level rather than widening it. An empty branch is refused, because it matches every task and makes the others decoration. `view=<id>` and `preset=<name>` are loaded FIRST and every explicit key overrides them — a saved view is a set of defaults rather than a lock, so somebody who opens a board and picks another assignee gets the view with that one key changed. A view beats a preset (somebody saved it) and what was typed beats both. The five presets are `my_queue`, `priorities`, `triage`, `blocked` and `overdue`. `my_queue` is *what can I pick up*: a DISJUNCTION of the work the viewer holds and the work in their OWN project nobody holds, open and unblocked, most important first — both arms matter, because written as "assigned to me" alone a seat with an empty queue reads the company as having nothing for it while its project's unclaimed backlog sits there, and the second arm is scoped to their project because unscoped it offers every unassigned task in the company. `priorities` is the viewer's own ordered list, open tasks only, IN THE ORDER somebody arranged it — that order is the answer, so nothing sorts over it, and a finished task drops out of the answer without the list being rewritten. `triage` is the unassigned open work, which with one fixed status set is the honest definition of "needs somebody to decide". `my_queue` and `priorities` both need `viewer=` and are refused without one, because a list with nobody's name on it is everybody's. A `view=` nothing resolves is REFUSED, never answered as the whole board. `group_by=` turns the answer into a BOARD: `groups` replaces `rows` — returning both would be the same rows twice — and each column carries its own `count` over the whole set beside a bounded slice of its rows (`group_limit`, default 20, max 100). A grouped answer mints no cursor, because across a set of columns there is no single order to be after; `group=<value>` is how a board loads one column further, and it narrows the WHOLE query, so the hint and the totals describe that column too. `group_by2=` adds swimlanes inside each column and `subgroup=` names one — a swimlane board is bounded by its CELLS rather than by either axis alone, because the work it costs is the PRODUCT of the two, so asking for lanes lowers the column cap and `subgroups_dropped` says how many lanes a column has beyond it. A `group_by=` over the WHOLE COMPANY is refused when the query's own narrowed predicate still matches more than 20 000 tasks: a board is drawn by sorting every one of them, and the refusal names the ceiling and what narrows it. It is a bounded COUNT rather than a check for the presence of a filter key, deliberately — `status_group=not_started,active` is a filter and narrows nothing, so a gate spelled "needs a narrowing filter" is one a caller clears in a single attempt without making the query any cheaper. Scoping to one project with `container=project:<key>` lifts it, because there the input is an index range whose width is one project's own size. An absent value is its own labelled column — "nobody is assigned" is a question a board answers rather than a row it hides. `group_by=tag` is the one axis where a task is on several columns at once; the answer sets `groups_overlap` so a reader knows the counts do not sum to `total_hint`, and `groups_dropped` says how many columns did not fit. `sort=f.<slug>` orders by a custom field, LEFT-joined so a task that set no value still appears — a sort that also filtered would be two things the caller asked for once. The answer carries `total_hint` (capped — an exact total over an unbounded set turns a poll into a scan), `next_cursor`, `totals`, `groups`, and an echo of the `view`/`preset` it was expanded from — these answers travel detached from their requests, so a board restored from a URL can still say which saved view it is showing — plus the coverage half below |
+| `work_item` | `{id}` | `GET /work/{id}` — key or id. Answers `{task, comments, history, links, blocked}` plus the same coverage half. `blocked` is on the ANSWER rather than on `task` because it is DERIVED — an open dependency edge, computed in the same transaction as the task, so the badge here and the badge on the board row cannot disagree; `links` say what the relations are, not whether any blocker is still open |
+| `work_goals` | `{id, owner, group, archived}` | `GET /work/goals`. `id` asks for exactly one. Each goal carries its targets, and each target its own `progress` — a fraction from 0 to 1, or ABSENT when the target measures nothing: a `tasks` target whose tasks were all purged, a numeric one that starts where it ends. The goal's own `progress` is the unweighted mean of the targets that do measure something, and is likewise absent when none do — "nothing has happened" and "there is nothing to measure" are different facts. A `tasks` target also carries `finished_tasks` and `total_tasks`, because "7 of 12" is the number a person acts on |
+| `work_catalogue` | `{archived}` | `GET /work/catalogue`. Answers `{types, fields, policy_version, types_version, fields_version}` plus the coverage half. `policy_version` moves on every *fields* edit and is what a task's policy stamp records having validated against; a *types* edit does not move it, because the two are separate objects on separate subjects so an unrelated edit never invalidates every task's stamp |
+| `work_projects` | `{q, unit, archived, limit}` | `GET /work/projects`. `task_counts` is read from `tracker_projects.open_count/done_count/closed_count`, MAINTAINED by the task apply whenever a status group changes or a task enters, leaves or is removed — never aggregated per poll, which over every task in every project is what a sixty-second refresh used to cost. `unit.resolved` is a FIELD rather than an absence: "this project names a unit the chart no longer has" is a finding, and an absent unit would be indistinguishable from a project that names none |
+| `work_project` | `{key, for_type}` | `GET /work/projects/{key}`. A SET read, not a point read: its shape is dominated by aggregates over task rows — the counts, the active sprint's figures, the velocity — so it carries `complete`/`incomplete` under the same contract every set answer takes, and its closure is the project's container plus both catalogues. `shadowed` names the workspace field ids this project redeclares, which is what a field in the middle of a move between scopes looks like |
+| `work_sprints` | `{project, sprint, sprints, archived}` | `GET /work/sprints`. Every figure is a predicate over `tracker_task_sprints` — one row per STAY — except `done`, which reads `tracker_status_spans`: delivery is not membership, and a task can sit in a sprint the whole way through without finishing or finish in one it joined an hour before the close. The window ends where the sprint DID (its close, or its planned end), so a closed sprint does not keep gaining velocity as its leftovers land. `velocity_avg` is the mean over the CLOSED sprints and is ABSENT when none has closed — zero would read as a team that delivers nothing |
+| `work_activity` | `{task, container, kinds, actor, assignee, q, notified, since, from, to, limit, cursor}` | `GET /work/activity`. Every commit writes a history row, so this is an account of what HAPPENED rather than of what was announced — `notified` is how a reader tells the two apart, and `kinds` is what the change WAS whether or not anybody heard about it. The two used to be one: a record's kind was read off its notification, so the same change filed under one word with an audience and another without, and a quiet removal reached the feed as `tombstone` while the filter spells it `removed`. `kinds` accepts the thirty-two change kinds and nothing else. Each record carries BOTH instants: `at` is the authored one a card renders, and `effective_at` is the fleet-agreed one every duration is measured on. `actor` is who made the change; `assignee` is whose work it is, and the two are routinely different people. The `q` gate is on what the query would SCAN, never on which keys were named — `container=workspace&q=` and a five-year `since` both name a key and narrow nothing |
+| `work_my_work` (operator) | `{handle}` | `GET /work/my-work`. Seven lists, each bounded at 20 so no block crowds out another — the whole answer is read as one page. `priorities` is NOT re-sorted: the order is what somebody decided. A finished or removed task is filtered out of it rather than rewritten out, because a read must not write to somebody's own object |
+| `work_person` | `{handle}` | `GET /work/people/{handle}`. `due` is the snoozes whose time has come, REPORTED rather than promoted: putting one back in the unread list is a write, and a read that performed one would change fleet state from a path with no operation id and no record. `priorities_set_by` is who last set the queue when it was not this person, which is how a lead's authority is made visible — every notification this domain carries is task-shaped, so one attached to a person record would render no card and reach nobody |
+| `work_views` | `{container, viewer}` | `GET /work/views`. `container` is the strip's own — `workspace`, `project:ENG`, `unit:engineering`, `person:ana` — and it is REQUIRED, because a strip belongs to exactly one. `viewer` is whose personal views appear and whose pins come first; absent is the shared strip. Every row carries `builtin`, which is what tells the three (five, on a sprinting project) nobody saved from the ones somebody did: a builtin row has no `id`, so there is nothing to rename, protect, rank or pin. `params` is the saved query in `work_items`' own parameter names, so a caller runs a view by handing them straight back |
+
+**Every tracker answer carries how far this node had got, and both halves
+matter.** `read_level` is the level the read was ACTUALLY served at, never the
+one asked for — a level never silently downgrades, so the two can differ only
+by a refusal you can see. `log_seq` is this node's committed position and
+`applied_through` the prefix whose consequences it actually holds; they are two
+numbers because a node applying nothing while its position advances looks
+identical to a caught-up one from either alone. `log_lag` is **absent** rather
+than zero when the broker could not be reached, because a read asks how far
+behind an answer may be and an unreachable broker answering "not at all" is the
+confident wrong answer. A caller that will not accept an answer of any age says
+so with `max_lag_seconds` and/or `max_lag_seq` beside `read_level=stale`, and
+the read refuses `too_stale` past whichever is reached first — the two are
+readings of ONE distance rather than two, the record count being what the
+broker actually answers and the duration being derived from it through this
+node's own drain rate. Both are refused at every other level, because they are
+a staleness bound and nothing else is. `read_level` itself accepts three of the
+four levels here: `read_level=session` is **refused**, because a session read
+waits for the caller's own high-water mark and this surface holds no position
+for you — the refusal names `linearizable` and `stale` with `max_lag_seq` as
+the two honest asks. Absent, the level resolves to **this surface's** default,
+which is `stale`; a seat's own tools resolve theirs to `linearizable` and
+cannot be asked for anything else. See [Read consistency](../guides/consistency.md).
+
+**`read_level`, `max_lag_seconds` and `max_lag_seq` work on every question that
+carries a read level**, not only on `/work/items` — `/work/views`,
+`/work/goals`, `/work/catalogue`, `/work/people/{handle}`, `/work/projects`,
+`/work/projects/{key}`, `/work/sprints`, `/work/activity`, `/work/my-work`,
+`/pages`, `/pages/{id}` and `/containers` all resolve them the same way. They
+did not until recently: each of those wrote a hardcoded `stale` into its read
+and never looked at the keys, so a caller asking for a stronger answer was
+served this node's rows and told, in the answer's own `read_level`, that it
+came back at the level asked for. The two single-object reads —
+`/work/items/{id}` and `/pages/{id}` — take the level but not the bounds: a
+bound is enforced against a SET read's coverage, and there is no set. And `complete: false` — with `incomplete` naming the
+count, the affected objects and the record version — says rows may be missing,
+rows that should have gone may still be present, and the totals were computed
+over the incomplete set. That is a different fact from staleness, and a client
+that renders `read_level` and swallows `complete` looks confidently right.
+| `pages` | `{container, parent, status, label, watcher, title, skills, onboarding, limit, offset}` | `GET /pages`. `skills` is three-stated on the same terms as `open`: only the tool-skill pages, everything but them, or everything |
+| `page` | `{id}` | `GET /pages/{id}` — id or `CONTAINER/Title` |
+| `containers` | — | `GET /containers`. A separate question from `pages` rather than a facet of it: a browser draws the container list once and the page list on every navigation |
 | `stream` | — | Facts about **this** socket — `{ client_id, dropped, queued, capacity, connected_at, clients }`. The only query with no REST twin, because there is no connection to describe outside one. |
 | `config` | — | `GET /config` *(operator token required)* |
 | `config_audit` | `{limit}` | The revision history — no REST twin; `GET /config/revisions` serves the same records *(operator token required)* |
@@ -1236,6 +1324,300 @@ a change has to keep — is documented in
 [Dashboard Design System](dashboard-design.md).
 
 ---
+
+## `/operator/mcp` — your own assistant
+
+The premise of running Crewlet is that an AI manages your company. The person
+doing that management is very often working through an AI of their own — a
+coding agent, an assistant, whatever they already have open — and this is the
+endpoint that lets it read the board, file the thing you just decided, and
+read what the company has written down. Without it they are reduced to
+describing the dashboard to it.
+
+Point any MCP client at it:
+
+```json
+{
+  "mcpServers": {
+    "crewlet": {
+      "type": "http",
+      "url": "https://crewlet.example.com/operator/mcp",
+      "headers": { "Authorization": "Bearer ${CREWLET_API_TOKEN}" }
+    }
+  }
+}
+```
+
+### What it serves
+
+The **same tools a seat holds**, not a parallel implementation: `list_work_items`,
+`get_work_item`, `create_work_item`, `update_work_item`, `comment_on_work_item`,
+`merge_work_item`, `search_work_items`, `get_work_catalogue`, `list_projects`, `describe_project`, `write_project`,
+`sprint_report`, `task_activity`, `my_work`, `list_work_goals`,
+`list_pages`, `get_page`, `write_page`, `save_page`, `comment_on_page`, and
+`search_knowledge`. A schema, a default, a trimmed field and the wording of a
+refusal are each written once — two copies of "file an item" drift on exactly
+the parts nobody looks at, and only one of the two is ever tested.
+
+The one field that differs is **who the call acts as**. There is no turn and no
+seat here, so this surface supplies its own identity, and every tool resolves
+the caller through that rather than through the turn — a read that asked the
+turn first refused every call on this endpoint while the writes beside it
+worked. A comment's `@handle` is resolved here too, against the company chart
+current when the comment is written, so mentioning somebody from your own
+assistant wakes them exactly as it does from a seat.
+
+Plus **eleven no seat is given**: `list_work_views`, `save_work_view`,
+`write_work_goal`, `write_work_catalogue`, `get_person`,
+`mark_inbox`, `set_pins`, `set_priorities`, `manage_sprint`,
+`remove_work_item` and `restore_work_item`. A view is furniture — a name, a shape
+and a filter, arranged so a person finds the same question tomorrow — and a
+seat's job is the work rather than the furniture around it. A goal is an
+outcome a *person* commits the company to, with owners who report on it; a seat
+setting its own goals is a seat marking its own homework. **Reading** one is a
+seat's, though — `list_work_goals` moved out of this list when `goal_updated`
+became a wake somebody receives, because every owner and member is woken when
+the commitment moves and a seat with no verb to read a goal would be told an
+outcome it could not look at. `write_work_goal`
+takes no progress argument at all, because there is nowhere to put one. And the
+catalogue is the company's own vocabulary: a seat adding a type so its own
+create succeeds is a seat editing the rules it is judged by, and the refusal it
+was working around is the signal a person needs to see — which is why reading
+the catalogue *is* a seat's and writing it is not. And a person's record is a
+HUMAN's: a seat has a mailbox — the durable subscription the engine attaches
+when it acquires the seat — and nothing on a person's record describes one.
+A sprint is a **commitment a team made together**, so starting one, closing one
+early or settling where its spillover goes is a lead's decision rather than a
+seat's — `manage_sprint` is additionally gated on leading the project, on top
+of being an operator's. The trash is the last of them: a removal takes an item off every board in the
+company, and a seat that could hide work it did not want to do would be marking
+its own homework in the one way that leaves no trace. Neither destroys
+anything — a removal is reversible at any age, and `crewlet work purge` is the
+one that is not.
+
+Each tool appears only where its half of the company is native: a company on
+`tracker.backend: jira` gets the page tools and not the work tools, and one on
+neither gets no endpoint at all. `search_knowledge` is the exception and is
+offered against **any** knowledge backend, Confluence included — a ranked
+search over the company's own wiki is exactly as useful to an assistant there.
+
+The turn-only tools are deliberately absent: the memory tools (a diary belongs
+to a seat), the skill tools (a skill is loaded into a phase), `a2a_ask` (a
+colleague's answer comes back by waking a seat, and there is nobody here for
+it to reach) and `run_sandbox` (a detached run resumes a suspended phase that
+does not exist).
+
+### Seeding a knowledge base with it
+
+On the native backend this endpoint is also how a directory of version-
+controlled markdown gets published — there is no import CLI for it and there
+does not need to be one:
+
+> Publish everything under `examples/nimbus-docs/` — one container per
+> directory, the page title from each file's first `# H1`.
+
+The assistant calls `write_page` per file. That handles what a flag-driven CLI
+handles badly: the parent chain, a title that already exists (`save_page` with
+the version it read), and a file that turns out to be a tool skill rather than
+prose. The reserved containers are refused to it exactly as they are to a seat.
+
+### Who a write is attributed to
+
+The **token's own name** — the key in `api.auth.tokens` — with author kind
+`operator`. Not a seat: a token is not a colleague, and a name in the handle
+field would render as one in every thread it appeared in. So an audit can tell
+an operator's edit from an agent's, and a person and the credential they used
+stay two separate facts on the record.
+
+There is deliberately **no way for the caller to name a seat to act as**. That
+would let anybody holding the token write as anybody, and a tracker whose
+author field is chosen by the writer is not an audit trail.
+
+### Why it is not under `/mcp/`
+
+`/mcp/` is exempt from authentication wholesale, because the sandbox
+[tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)
+lives there and a box running generated code holds no API token — a signed
+per-run token in its own path is what authenticates it instead. Mounting a
+writable company surface under the same prefix would have put it behind no
+credential at all. `/operator` is its own always-guarded prefix, alongside
+`/config` and `/secrets`.
+
+## The native tracker and knowledge base
+
+`GET /work`, `GET /pages` and their neighbours read **this node's own
+projection** of the company's tracker and knowledge base — the same copy a
+seat's tools read, so an operator and an agent looking at one item see one
+item.
+
+Three properties are worth stating because each is a decision rather than an
+implementation detail.
+
+**They are registered only where the company runs that backend.** A company on
+`tracker.backend: jira` has no `work_items` question at all, and asking gets
+`unknown_query` / `404`. That is deliberate: an operator who wired Jira and
+then found a blank Crewlet board would reasonably conclude their integration
+was broken. There is no native record for this node to have a copy of, and an
+empty board would claim otherwise.
+
+**A node that has not caught up refuses.** Every one of these answers
+`unavailable` (`503`, with a `Retry-After`) while this node is behind the log,
+rather than returning an empty list. "This company has no work" is an answer a
+person acts on — they file the duplicate, they conclude the migration failed —
+so a node that has not applied what the fleet holds must not be able to say it.
+
+The hint is **derived, not fixed**: how far behind this node is over how fast
+it is actually draining, so a node grinding through a bulk apply asks for
+longer than one that caught up in milliseconds. A refusal that waiting cannot
+clear — a node holding a record its build cannot decode — is **not** a `503`,
+because a client told to come back would go round a loop that cannot
+terminate; those are ordinary failures and the log names them. See
+[Read Consistency](../guides/consistency.md).
+
+**The item surface is read-only.** There is no `POST /work`. An item is filed
+and moved by a seat's own tools, or by an operator through the
+[MCP surface](../guides/tools-and-mcp.md), and both are attributed to somebody
+— where a dashboard button would write as "the dashboard", which is not a
+person and not a seat and cannot be asked why. The three routes under
+`/work/retention/` below are the exception, and they are not about items: they
+are operator gestures against the log's own history, attributed to the token
+that made them.
+
+### Paging and filters
+
+Both listings take `limit` (default 50, max 500) and `offset`. Multi-valued
+filters are **comma-separated** — `?status=todo,in_progress` — because the
+socket's query channel carries a JSON object, which cannot express a repeated
+key. A filter only one transport could send is exactly the divergence the
+shared answer function exists to prevent.
+
+Two filters are **three-stated**, and the third state is the one a boolean
+would lose:
+
+| Filter | Absent | `true` | `false` |
+|---|---|---|---|
+| `open` (work) | every item | open work | closed work |
+| `skills` (pages) | every page | only tool-skill pages | everything but them |
+
+An unknown enum value is refused naming the closed set — `?status=finished`
+answers `400` saying which statuses exist — rather than matching nothing. A
+listing that answered empty for a typo would send somebody looking for items
+that were never missing.
+
+### `GET /work/retention` — what the log is holding
+
+**Operator-only, reads included**, on the same rule `/config` and `/secrets`
+follow: the answer names every node in the fleet, its position, its disk and
+its snapshot repository, which is a map of which machine to take out to lose
+the company's history. It is never eligible for `allow_anonymous_read`.
+
+The document is assembled by the node you ask, and says so: half its fields are
+facts only that node can state — its own applier's lag, its snapshot, its disk
+— and half are fleet-wide, read from coordination. `node_id` is on the document
+rather than beside it, because a report pasted into a ticket without its author
+is three per-node facts attributed to a fleet.
+
+```json
+{
+  "node_id": "node-1",
+  "at": "2031-04-02T03:14:00Z",
+  "backup_owner": "platform-oncall",
+  "register_readable": true,
+  "domains": [
+    {
+      "domain": "tracker",
+      "stream": "CREWLET_TRACKER_LOG",
+      "generation": 0,
+      "first_seq": 918100000,
+      "last_seq": 918280001,
+      "bytes": 67108864,
+      "max_bytes": 4294967296,
+      "headroom_fraction": 0.984,
+      "trim_floor": 918100000,
+      "blocked_by": "backup_floor",
+      "blocked_since": "2031-03-30T02:00:00Z",
+      "prose": "Nothing is being trimmed on tracker: ...",
+      "terms": [{"name": "applied", "state": "known", "seq": 918279004, "detail": "..."}]
+    }
+  ],
+  "nodes": [...],
+  "snapshots": [...],
+  "replica": {"store_bytes": 10415140864, "projected_join_seconds": 308,
+              "rejoin_window_seconds": 1800},
+  "alarms": [{"kind": "backup_age", "detail": "...", "remedy": "..."}]
+}
+```
+
+`register_readable` is the field that keeps an empty `nodes` block honest: "this
+fleet has no nodes" cannot happen, and "coordination could not be listed"
+happens during exactly the outage somebody is running this in. Without the flag
+a renderer prints the impossible one.
+
+`headroom_fraction` is a **pointer** and is absent when the broker could not be
+asked. A fraction of an unknown ceiling is not zero headroom, and zero is what
+the one alarm an operator cannot ignore fires on.
+
+`crewlet retention status` renders exactly these bytes.
+
+### The three retention gestures that write
+
+All three are **POSTs**, so the anonymous-read posture never reaches them:
+moving the floor the trim deletes against, stopping a machine writing and
+letting it write again are not reads, whatever a laptop deployment allows.
+
+| Route | What it does |
+|---|---|
+| `POST /work/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, and `503` when the fleet's generation cannot be established — a bare sequence at the wrong generation pins a position on a log that no longer exists. |
+| `POST /work/retention/evict/{node}?confirm={node}` | Installs the eviction gate. |
+| `POST /work/retention/readmit/{node}?confirm={node}` | The inverse commit. |
+
+`confirm` echoes the node id, and a mismatch is `400`. Both gate routes answer
+with the write's **three-valued outcome** — `applied`, `pending` or `unknown` —
+its position and its operation id: a gate the caller believes has landed and
+which is only `pending` is the difference between a node that has stopped
+writing and one that is about to.
+
+A process with no coordination store answers `503`, not `404`. The route exists
+on this build, and telling an operator it does not sends them looking for a
+version mismatch that is not there.
+
+### The capacity window
+
+`stream.max_bytes` is not a live setting, and these routes are the window in
+which it changes. The
+[procedure is documented once](../guides/retention.md#changing-a-logs-ceiling);
+what follows is the wire surface.
+
+| Route | What it does |
+|---|---|
+| `POST /work/retention/capacity?stream=NAME&bytes=N&confirm=N` | Opens or resumes the operation and drives it as far as this node's mode allows. `confirm` repeats `bytes` and a mismatch is `400`: the target is chosen once for the life of an operation. `assert_excluded=true` is required only on an external broker. |
+| `GET /work/retention/maintenance?stream=NAME` | The operation, every acknowledgement, every admission, and — computed here rather than by each client — whether the seal holds, what is blocking it, and which admissions block activation. |
+| `POST /work/retention/maintenance/abandon?stream=NAME` | From `opened` clears the operation outright; from anywhere else enters the seal. |
+| `POST /work/retention/maintenance/exclude?stream=NAME&node=ID&confirm=ID` | Waives one participant's acknowledgement and withdraws its admission. |
+
+**A node in `normal` mode refuses the write routes**, naming the restart: the
+usage a resize is decided against has to be a quantity nothing can move. The
+three-mode boot is `crewlet run -mode`; see
+[the CLI reference](cli.md#crewlet-run).
+
+The `sealed` / `blocking` / `admissions_blocking` fields are **computed
+server-side**, from the same predicate the coordinator itself runs. A client
+that re-derived them would be a second opinion about one barrier, and the two
+would drift.
+
+### Re-anchoring
+
+| Route | What it does |
+|---|---|
+| `GET /work/retention/reanchor?stream=NAME` | The stream's own `created_at` and the current generation. |
+| `POST /work/retention/reanchor?stream=NAME&confirm=<created_at>[&force=true]` | Runs the generation transition, answering with the new generation. |
+
+`confirm` is the value the `GET` returns, supplied by the caller: the
+confirmation means *I looked at the thing I am re-anchoring*, so the two are
+deliberately separate round trips rather than one route that reads and acts.
+`force=true` is refused-by-default's escape, for a fleet whose hydrated peer
+cannot be reached — adopting that peer's snapshot is strictly the better
+recovery, and the refusal names it.
 
 ## Agent Memory
 

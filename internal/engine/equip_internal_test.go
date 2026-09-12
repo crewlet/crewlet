@@ -79,12 +79,25 @@ func TestTuningBatchingWithoutAnythingToTuneIsHarmless(t *testing.T) {
 // like a real one.
 func TestSearchKnowledgeIsGatedOnConfigAndResolvedPerCall(t *testing.T) {
 	t.Parallel()
-	// A NIL INTERFACE with no knowledge block, not a live adapter over a
-	// nil searcher: the tool is omitted rather than registered-and-empty,
-	// so a seat is never offered a search its company cannot serve.
+	// A NIL INTERFACE when the company runs NO knowledge base, not a live
+	// adapter over a nil searcher: the tool is omitted rather than
+	// registered-and-empty, so a seat is never offered a search its
+	// company cannot serve.
+	off := &Company{Config: &config.Company{
+		Knowledge: config.Knowledge{Backend: config.KnowledgeNone},
+	}}
+	if got := knowledgeSearch(&Engine{}, off); got != nil {
+		t.Errorf("a company that turned its knowledge base off got %v", got)
+	}
+
+	// THE GATE IS THE BACKEND, not the presence of a vendor block. A
+	// company that declares nothing runs the NATIVE knowledge base, and
+	// gating on `integrations.confluence` left every one of them without
+	// search_knowledge while the pages it was meant to find sat in the
+	// index.
 	bare := &Company{Config: &config.Company{}}
-	if got := knowledgeSearch(&Engine{}, bare); got != nil {
-		t.Errorf("a company with no knowledge base got %v", got)
+	if got := knowledgeSearch(&Engine{}, bare); got == nil {
+		t.Error("a company on the default backend got no search tool")
 	}
 
 	wired := &Company{Config: &config.Company{

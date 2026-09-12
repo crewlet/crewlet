@@ -372,9 +372,8 @@ func firstLine(s string, limit int) string {
 	if limit <= 0 || len(line) <= limit {
 		return line
 	}
-	// Not [textcut.Ellipsis]: that one does not count its marker against
-	// max, and this limit bounds what reaches the phase event, marker
-	// included. So the budget is reduced first and the cut taken with
-	// [textcut.Bytes].
-	return textcut.Bytes(line, max(limit-len("…"), 0)) + "…"
+	// [textcut.Within] rather than Ellipsis: that one does not count its
+	// marker against max, and this limit bounds what reaches the phase
+	// event, marker included.
+	return textcut.Within(line, limit)
 }

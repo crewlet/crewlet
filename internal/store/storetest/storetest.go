@@ -102,7 +102,7 @@ func testSchema(t *testing.T, db *store.DB) {
 	if err != nil {
 		t.Fatalf("AppliedMigrations: %v", err)
 	}
-	want := store.SchemaVersions()
+	want := store.SchemaVersions(store.EstateNode)
 	if len(want) == 0 {
 		t.Fatal("no schema files embedded")
 	}
@@ -129,7 +129,7 @@ func testSchemaIdempotent(t *testing.T, db *store.DB) {
 	if err != nil {
 		t.Fatalf("AppliedMigrations: %v", err)
 	}
-	if !slices.Equal(applied, store.SchemaVersions()) {
+	if !slices.Equal(applied, store.SchemaVersions(store.EstateNode)) {
 		t.Fatalf("reopen changed the applied set: %v", applied)
 	}
 }
@@ -865,8 +865,9 @@ func testBackup(t *testing.T, db *store.DB) {
 	// The schema the copy carries is what a restore would bring back, so a
 	// copy that claims a different one than this binary applied would
 	// restore into a migration that runs from the wrong place.
-	if !slices.Equal(info.Migrations, store.SchemaVersions()) {
-		t.Errorf("copy carries schema %v, want %v", info.Migrations, store.SchemaVersions())
+	if !slices.Equal(info.Migrations, store.SchemaVersions(store.EstateNode)) {
+		t.Errorf("copy carries schema %v, want %v", info.Migrations,
+			store.SchemaVersions(store.EstateNode))
 	}
 
 	// Opened as a database in its own right — the restore path, exercised.

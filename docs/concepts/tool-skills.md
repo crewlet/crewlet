@@ -39,11 +39,27 @@ flowchart TD
     REG --> LOAD --> BODY
 ```
 
-**No database row.** The registry is in-memory. Engine restart re-fetches every page in the container. Skill changes propagate via the same Atlassian page webhook the engine already uses for the backend's notification routing.
+**No database row.** The registry is in-memory. Engine restart re-reads every page in the container.
 
-**No code defaults.** The engine ships zero skill prose. An empty container → empty registry → just the tool catalogue. Operators seed it with `crewlet confluence import` (see below).
+**No code defaults.** The engine ships zero skill prose. An empty container →
+empty registry → just the tool catalogue. Operators seed it by publishing
+markdown: with their own assistant over
+[`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant)
+on the native backend, or `crewlet confluence import` on Confluence (see below).
 
-**One sync worker, matching the single-homed knowledge backend** (see [Knowledge System](knowledge-system.md#the-knowledgesearcher-seam)). It applies the same **admission predicate** to every page, at boot and on each webhook alike: the page lives in the configured container *and* identifies as a skill (the `crewlet-skill` marker label + a decodable YAML macro). A previously admitted page that stops satisfying the predicate — deleted, moved out, or edited into a non-skill — is **evicted**, never left serving its last-good body.
+**One sync worker, matching the single-homed knowledge backend** (see [Knowledge System](knowledge-system.md#the-knowledgesearcher-seam)). It applies the same **admission predicate** to every page, at boot and on every re-read alike: the page lives in the configured container *and* identifies as a skill. A previously admitted page that stops satisfying the predicate — deleted, moved out, or edited into a non-skill — is **evicted**, never left serving its last-good body.
+
+**What triggers a re-read differs by backend, and only one of them is a
+webhook.** On Confluence it is the same page webhook the engine already uses
+for notification routing. Natively there is no webhook, and there is
+deliberately no delivery either: the change feed **drops** a skill-page change
+rather than waking a team about a procedure written for one phase of one turn.
+So the *projection's apply* is what notices — it already derives the skill flag
+on every page it writes, so it is the one thing that sees both a page becoming
+a skill and a page ceasing to be one. It reports that after the batch commits,
+coalesced to one re-read however many skill pages moved in it, and a failed
+batch reports nothing: the registry replaces wholesale, so a re-read triggered
+by rows that rolled back is how a company loses every skill it has.
 
 ---
 
@@ -316,15 +332,15 @@ Each skill page combines a leading YAML frontmatter `code` **macro** (the small 
 
 | Setting | Default | Description |
 |---|---|---|
-| `integrations.confluence.skills_space` | `TS` | Confluence space key the engine watches when Confluence is the knowledge backend — read by the skill sync, the searcher's result exclusion and the parser's routing exclusion alike. |
+| `knowledge.skills_container` | `TS` | Confluence space key the engine watches when Confluence is the knowledge backend — read by the skill sync, the searcher's result exclusion and the parser's routing exclusion alike. |
 | `-space <key>` (CLI flag) | the config field | Per-invocation override of the Tool Skills space for `crewlet confluence import` / `resync` (skill files only — knowledge docs take their container from their parent directory). |
 | `CREWLET_TOOL_SKILLS_SPACE` (env var) | — | The **flag default** for those two commands, so an operator running them repeatedly does not retype the space. Nothing else reads it. |
 
-**The field is three-valued, and the empty string is an answer.** Absent takes the reserved default `TS`; a named space takes that space; an explicit `skills_space: ""` turns tool skills **off** — no sync, no routing exclusion, no search exclusion, and an import that meets a skill file refuses rather than filing it as prose. The off switch exists because the default reserves a real space key: a company whose ordinary work space happens to be `TS` would otherwise have it silently dropped from every knowledge search and every routing decision, with no way in the config to say otherwise.
+**The field is three-valued, and the empty string is an answer.** Absent takes the reserved default `TS`; a named space takes that space; an explicit `skills_container: ""` turns tool skills **off** — no sync, no routing exclusion, no search exclusion, and an import that meets a skill file refuses rather than filing it as prose. The off switch exists because the default reserves a real space key: a company whose ordinary work space happens to be `TS` would otherwise have it silently dropped from every knowledge search and every routing decision, with no way in the config to say otherwise.
 
 **The engine reads the config field and only the config field.** The environment variables are flag defaults for the operator commands and nothing more: a fleet whose nodes each read a container out of whoever's shell started them would disagree about which one holds the skills, and the symptom is agents on one node following guidance the others have never heard of. A routing decision belongs in the versioned document describing the company.
 
-The Tool Skills container holds engine-managed scaffolding, not general knowledge. Crewlet does not maintain a synced knowledge index, so there is nothing for the container to pollute; just don't add it to the knowledge read scope (`knowledge.confluence_spaces`) and skill pages won't surface in the `## Relevant knowledge` query-time search — the searcher drops the skills space from results wholesale as well, since a skill page is machinery rather than knowledge.
+The Tool Skills container holds engine-managed scaffolding, not general knowledge. Crewlet does not maintain a synced knowledge index, so there is nothing for the container to pollute; just don't add it to the knowledge read scope (`knowledge.scope`) and skill pages won't surface in the `## Relevant knowledge` query-time search — the searcher drops the skills space from results wholesale as well, since a skill page is machinery rather than knowledge.
 
 The container is also **excluded from notification routing**. Webhooks for tool-skill pages still drive the in-memory registry update via the engine's skill-sync callback, but both transports short-circuit the recipient-routing path (`set_notification_excluded_spaces` / `set_notification_excluded_projects`) so engine-managed pages don't surface as `notification_undeliverable` warnings or emit spurious `notification_skipped` events. Page edits in the Tool Skills container have no human or agent recipient by design — only the engine consumes them.
 
@@ -351,4 +367,4 @@ The container is also **excluded from notification routing**. Webhooks for tool-
 - [Agent Runtime](agent-runtime.md) — where the per-phase prompt builders live; how the registry is threaded into the turn engine.
 - [Turn Engine](turn-engine.md) — phase contracts and the tool surface each one gets.
 - [CLI Reference](../reference/cli.md) — full flag reference for `crewlet confluence import` / `crewlet confluence resync`.
-- [Environment Variables](../reference/environment-variables.md) — `CREWLET_TOOL_SKILLS_SPACE` (import/resync flag default; the engine reads `integrations.confluence.skills_space`).
+- [Environment Variables](../reference/environment-variables.md) — `CREWLET_TOOL_SKILLS_SPACE` (import/resync flag default; the engine reads `knowledge.skills_container`).

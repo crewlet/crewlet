@@ -34,6 +34,8 @@ import (
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
@@ -65,6 +67,26 @@ type Engine struct {
 	// operator's pass, the reconcile loop's tick and a disconnect's
 	// teardown all take it from here.
 	setupRunner func() *setup.Runner
+	// metrics is the process's one recorder, from [Options.Metrics].
+	metrics *metrics.Recorder
+
+	// searching is how many knowledge scans this node is running right
+	// now — the gauge behind `crewlet.tracker.search.concurrency`. On the
+	// ENGINE rather than on the searcher because the searcher is rebuilt
+	// per epoch and a counter rebuilt underneath an in-flight scan would
+	// decrement a fresh zero to minus one.
+	searching atomic.Int64
+
+	// mode is what this node started for, and incarnation is this
+	// PROCESS's identity — the two facts the capacity window's handshake
+	// and its barrier are written in terms of.
+	mode        statelog.MaintenanceMode
+	incarnation string
+
+	// id is this node's stable identity, resolved once at construction.
+	// A PLACEMENT rather than a process: what registers under it must
+	// survive a restart, which is the opposite property to incarnation's.
+	id string
 
 	// startedAt is when THIS engine started, which on a split deployment
 	// is a different process on a different clock from the API's own
@@ -183,6 +205,19 @@ type Engine struct {
 	// state — see learning.Reflector.
 	reflector *learning.Reflector
 
+	// native is this node's copy of the company's own tracker and
+	// knowledge base: the projectors, their index, and the read and write
+	// sides over them. Nil on a company running the vendor backends, which
+	// is the whole switch — see native.go.
+	//
+	// On the ENGINE rather than on an epoch, because a projector follows a
+	// coordination FAMILY and a family does not change when a company
+	// revision does. Rebuilding it on an apply would drop the projection
+	// and re-run a boot reconcile on every configuration change, which for
+	// a company that edits its org chart twice a day is a projection that
+	// is never hydrated.
+	native *native
+
 	// env is this node's ${VAR} resolver: the secret store in front of the
 	// process environment, refreshed on every apply. One per node rather
 	// than one per call site — see secrets.go for why that matters.
@@ -199,6 +234,12 @@ type Engine struct {
 	// cipher per process is what keeps a row this node wrote a row it can
 	// read back.
 	cipher secrets.Cipher
+
+	// sinkUnavailable makes the loop say "this node cannot seal a minted
+	// credential" ONCE. It is a property of [Engine.cipher] — the same for
+	// every integration and unchanged until the process restarts — and the
+	// reconcile loop asks per surface per tick. See integrations.go.
+	sinkUnavailable sync.Once
 
 	// profile is what this node declared it does: whether it claims
 	// seats, serves inbound traffic, and runs the fleet's singleton
@@ -268,6 +309,21 @@ type Engine struct {
 	maintenance  *maintenance.Worker
 	integrations *integration.Worker
 
+	// retention is the state log's trim: the fleet singleton that decides
+	// how far each domain's log may be purged and publishes what it
+	// concluded. On the ENGINE for the reason maintenance is — it is a
+	// loop this process runs, and rebuilding it on an apply would leave
+	// two loops publishing one fleet's floor.
+	retention *retention
+
+	// embedding is the vector domain's one writer: the fleet singleton
+	// that turns sources whose text has moved into vector records. On the
+	// ENGINE for the reason the trim is — it is a loop this process runs,
+	// and rebuilding it on an apply would leave two loops holding one
+	// company's provider budget. It reads the current epoch's embedder per
+	// tick instead, so a model change lands without a restart.
+	embedding *embedDuty
+
 	// scheduler is the role/unit cron tick. On the ENGINE rather than on an
 	// epoch for the same reason maintenance is: it is a loop this process
 	// runs, and rebuilding it on an apply would leave two loops racing for
@@ -293,6 +349,30 @@ type Engine struct {
 type Options struct {
 	Bootstrap *config.Bootstrap
 	Company   *config.Company
+
+	// Mode is what this node starts for: normal, or one of the two
+	// maintenance modes a capacity change restarts the fleet into.
+	//
+	// A RUN'S PROPERTY rather than the deployment's, so it is never read
+	// from Tier A: every node enters and leaves it three times over one
+	// change, and a file carrying it would leave a node that came back
+	// after an unrelated restart still refusing to publish, with the
+	// reason in a file nobody re-read. Empty is normal.
+	Mode statelog.MaintenanceMode
+
+	// Metrics is where this node's measurements are written.
+	//
+	// ONE RECORDER FOR THE PROCESS, built by the caller and shared with
+	// [tracing.Configure], whose MeterProvider is a READER of it — two
+	// recorders would make a collector's dashboard and `crewlet retention
+	// status` disagree about the same event, which is the drift the single
+	// catalogue exists to prevent.
+	//
+	// Nil records nothing, which is a legal deployment (a test, an
+	// embedded engine) and NOT the normal one: every instrument in
+	// [metrics.Catalogue] is declared either way, so a nil recorder is a
+	// documented catalogue nothing fills.
+	Metrics *metrics.Recorder
 
 	// OtelReceiver mints the per-run OTLP endpoints a sandbox exports to.
 	// Nil builds one from the environment; see
@@ -350,6 +430,14 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	if opts.Bootstrap == nil {
 		return nil, fmt.Errorf("engine: no bootstrap config")
 	}
+	// THE CROSS-TIER RULES, before anything is opened. Each tier validated
+	// alone on its way in; what neither could see is the other, and the one
+	// rule that needs both — a native tracker whose log would live on an
+	// in-memory stream — produces a node that refuses to serve
+	// permanently rather than one that fails on the way up.
+	if err := config.CheckTiers(opts.Bootstrap, opts.Company); err != nil {
+		return nil, fmt.Errorf("engine: %w", err)
+	}
 
 	backends := opts.Backends
 	ownsBackends := false
@@ -389,12 +477,31 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		bridge = mcpbridge.Build(os.Getenv, keyMaterial(opts.Bootstrap))
 	}
 
+	// THE MODE AND THE INCARNATION, resolved once. An unset mode is
+	// normal, which is what every caller that does not know about
+	// maintenance gets; the incarnation is minted here rather than at the
+	// lease, because the capacity barrier compares it and a second mint
+	// would be a second identity for one process.
+	mode := opts.Mode
+	if mode == "" {
+		mode = statelog.ModeNormal
+	}
+	nodeIdentity, err := config.ResolveNodeID(opts.Bootstrap, nil)
+	if err != nil {
+		return nil, err
+	}
+	incarnation := config.NewIncarnation(nodeIdentity)
+
 	e := &Engine{
 		backends: backends, ownsBackends: ownsBackends,
 		onboarded: runner.NewLatch(), skills: skills.NewRegistry(),
 		mcp:         mcp.NewBridge(nil),
 		sandboxOtel: otel,
 		bridge:      bridge,
+		metrics:     opts.Metrics,
+		mode:        mode,
+		incarnation: incarnation,
+		id:          nodeIdentity,
 		startedAt:   time.Now().UTC(),
 		// Built before equip, which is what writes the company's own
 		// numbers into it, and before node.New, which hands the same
@@ -427,6 +534,20 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		return fail(err)
 	}
 	e.cipher = cipher
+
+	// THE ADMISSION HANDSHAKE, BEFORE ANY PUBLISHER — and this is the
+	// earliest point at which it can run, because it needs the
+	// coordination backend and nothing else. Everything below it starts
+	// something that writes.
+	//
+	// A NODE IN A MAINTENANCE MODE SKIPS IT AND ACKNOWLEDGES INSTEAD: it
+	// is not admitting itself to publish, it is offering the evidence the
+	// capacity barrier is established from. See maintenance_mode.go.
+	if err := e.admit(ctx, maintenanceStreams()); err != nil {
+		return fail(err)
+	}
+	e.acknowledge(ctx, maintenanceStreams())
+
 	// MIGRATED BEFORE THE SNAPSHOT, so a value set on this node while the
 	// engine was stopped is on the fleet before anything resolves it —
 	// and, once it is, so are this node's peers. See [Engine.migrateSecrets].
@@ -462,6 +583,20 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := e.buildSandboxRuntime(company); err != nil {
 			return fail(fmt.Errorf("engine: sandbox: %w", err))
+		}
+		// BEFORE equip too, and for exactly the same reason: the ten
+		// native tracker and knowledge tools are registered only where
+		// their halves exist, so a node that equipped first would run a
+		// company on the native backends whose seats have no way to read
+		// or write them.
+		//
+		// It does NOT wait for hydration — the reconcile is O(keys), and
+		// a node that blocked here would serve no dashboard, answer no
+		// probe and run no duty until it finished. Seat acquisition is
+		// what waits; see [Engine.NativeHydrated].
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
+		if err := e.startNative(ctx, opts.Bootstrap, company); err != nil {
+			return fail(err)
 		}
 		// EQUIPPED BEFORE PUBLISHED. A turn can start the instant the
 		// epoch is current, and one that found an empty registry would run
@@ -502,8 +637,23 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// deleted role no longer has and never claim a new one. The
 		// host's own doc asks for exactly this and the binding did the
 		// opposite.
-		Seats:   func() []placement.Seat { return e.Company().Seats() },
-		Profile: e.profile,
+		Seats: func() []placement.Seat { return e.Company().Seats() },
+		// A seat whose mailbox attached before this node's projection had
+		// caught up would answer "there is no such item" to its own
+		// tools — and that is an answer a seat ACTS on: it files the
+		// duplicate, it tells a person their link is dead. So a node
+		// mid-hydration keeps every seat it holds and claims nothing new
+		// until its copy of the company's records is current.
+		//
+		// Trivially true on a company running the vendor backends, which
+		// have no projection to wait for.
+		SeatsAdmitted: e.NativeHydrated,
+		// AND THE OTHER DIRECTION. Admission withholds new work from a
+		// node that is merely behind; this gives back work already held
+		// by a node whose rows are wrong. Two gates because the remedies
+		// differ: one is waiting, the other is a peer taking over.
+		SeatsServiceable: e.SeatsServiceable,
+		Profile:          e.profile,
 		// WHAT THIS NODE IS DOING, advertised to peers on every
 		// heartbeat. Only the node running a seat knows its in-flight
 		// count and its drain state, and /health answers about whichever
@@ -560,12 +710,47 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	e.watchdog.Watch("seat-host", n.Host())
 	e.node = n
 	e.dispatch = e.buildDispatcher(opts, backends)
+
+	// EVERYTHING BELOW THIS LINE PUBLISHES, and a maintenance-mode node
+	// starts none of it: the seat host and its mailboxes, every duty, the
+	// scheduler, the change feeds, the notification spine, the retention
+	// trim and the reflection pass.
+	//
+	// ONE GATE RATHER THAN A CONDITION PER LOOP. Each of these is started
+	// by its own call and a per-call check is a list somebody maintains —
+	// which is the shape that lets one publisher be forgotten and the
+	// whole exclusion be a claim. What makes this correct is that the
+	// gate is the LAST thing in the constructor: a loop added after it
+	// cannot be started by accident, because there is no code after it to
+	// add one to.
+	if !e.mode.Publishes() {
+		log.InfoContext(ctx, "maintenance_mode_started",
+			"mode", e.mode, "node", nodeID, "incarnation", e.incarnation,
+			"detail", "the broker and the coordination estate are up and no "+
+				"publisher is: no seats, no duties, no scheduler, no change "+
+				"feed and no write routes")
+		return e, nil
+	}
+
 	// LAST, because its fleet-singleton duty is claimed under the node's
 	// own incarnation.
 	if err := e.startSandboxWaiter(ctx, opts.SandboxPollInterval); err != nil {
 		return fail(fmt.Errorf("engine: sandbox waiter: %w", err))
 	}
 	e.startMaintenance(ctx)
+	// THE LOG'S OWN TRIM, beside the sweep and after the node exists for
+	// the same reason: its duty is claimed under the node's incarnation,
+	// and a trim that ran before the lease existed would run on every node
+	// at once. Without it a domain's log only ever grows — to its ceiling,
+	// where appends are refused.
+	if e.native != nil {
+		e.startRetention(ctx, opts.Bootstrap, e.native.log)
+		// AND THE VECTOR DOMAIN'S ONE WRITER. Without it every other
+		// half of semantic search is present and correct over an empty
+		// corpus — which reports as a healthy domain rather than as a
+		// missing one.
+		e.startEmbedding(ctx, e.native.log)
+	}
 	// Beside the sweep, and a fleet singleton on the same terms: two nodes
 	// reconciling one third-party app at the same moment can each create an identity
 	// for one seat, and no later pass can detect or repair that.
@@ -588,6 +773,10 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// The two background passes, after the node exists: both are fleet
 	// singletons claimed under its own incarnation.
 	e.startLearningBackground(ctx)
+	// BEFORE notifications, because a feed publishes onto the same inbound
+	// edge the service consumes: started after, the changes committed in
+	// the window between would reach the record and wake nobody.
+	e.startNativeFeeds(ctx)
 	if err := e.startNotifications(ctx, e.Company()); err != nil {
 		return fail(fmt.Errorf("engine: %w", err))
 	}
@@ -748,6 +937,17 @@ func (e *Engine) Stop(ctx context.Context) {
 	e.stopSandbox()
 	e.stopNotifications(ctx)
 	e.stopMaintenance()
+	e.stopRetention()
+	e.stopEmbedding()
+	// AFTER THE DRAIN AND AFTER EVERY LOOP, which is what the admission
+	// says: the key means "this process may be publishing", so withdrawing
+	// it while a seat was still finishing a turn would tell a coordinator
+	// the opposite of the truth.
+	if err := e.withdraw(ctx); err != nil {
+		log.WarnContext(ctx, "admission_not_withdrawn", "err", err,
+			"detail", "a capacity operation will see this node as a possible "+
+				"publisher until an operator excludes it")
+	}
 	e.stopIntegrations()
 	// AFTER the drain, which released every seat and flushed each one's
 	// memory on the way out. Stopping it before the drain would leave the
@@ -762,6 +962,11 @@ func (e *Engine) Stop(ctx context.Context) {
 	e.stopLearning()
 	e.stopScheduler()
 	e.stopCooldownRefresh()
+	// BEFORE backends.Close, for the same reason and with more at stake:
+	// the projectors and the indexer both write, and an apply landing
+	// after the close would fail its transaction mid-batch and leave the
+	// cursor ahead of the rows it claims to describe.
+	e.stopNative()
 	e.node.Stop(ctx)
 	// AFTER the seats are released, so a per-role child is normally
 	// already gone with its seat. This is the backstop for the ones that
@@ -800,6 +1005,14 @@ func (e *Engine) Node() *node.Node { return e.node }
 // connections to one broker fail independently, and the store is exclusive to
 // one process, so a second open is contention with itself.
 func (e *Engine) Backends() *Backends { return e.backends }
+
+// Recorder is the process's one metrics recorder, or nil.
+//
+// EXPOSED for the same reason [Engine.Backends] is: a subsystem the CLI
+// composes beside the engine — the backup service is the one — measures
+// something the catalogue declares, and a second recorder would be a second
+// set of series for one process. Nil is legal and records nothing.
+func (e *Engine) Recorder() *metrics.Recorder { return e.metrics }
 
 // Dispatch delivers one inbox partition to a seat.
 //
@@ -1009,6 +1222,18 @@ func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
 	if n := e.node; n != nil {
 		if host := n.Host(); host != nil {
 			status.Draining = host.Draining()
+		}
+	}
+	// The native replication loops — the wiki's projector and every
+	// state-log domain's applier — so an operator asking why a fresh node
+	// holds no seats can see the answer in the fleet view rather than
+	// inferring it from an empty claim list. See
+	// [coord.NodeStatus.ProjectionsReady] for why this is not a readiness
+	// signal.
+	for _, loop := range e.NativeStatus(ctx) {
+		status.ProjectionsTotal++
+		if loop.Ready {
+			status.ProjectionsReady++
 		}
 	}
 	if fn := e.posture.Load(); fn != nil {

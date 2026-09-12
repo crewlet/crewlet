@@ -124,10 +124,6 @@
           "description": "Human-readable base for shareable links; needed with cloud_id.",
           "type": "string"
         },
-        "skills_space": {
-          "description": "Space holding tool-skill pages; excluded from routing and knowledge search. Default TS; empty string disables tool skills entirely.",
-          "type": "string"
-        },
         "token": {
           "description": "Admin API token or PAT; ${VAR} supported.",
           "type": "string"
@@ -342,7 +338,8 @@
           "type": "string"
         },
         "dimensions": {
-          "description": "Vector width; must match the model's output size.",
+          "description": "Vector width; 0 takes the named model's own width. 64..4096 to override, and it must match what the model produces.",
+          "maximum": 4096,
           "minimum": 0,
           "type": "integer"
         },
@@ -580,6 +577,9 @@
         "atlassian_account_id": {
           "type": "string"
         },
+        "crewlet_operator_id": {
+          "type": "string"
+        },
         "github_login": {
           "type": "string"
         },
@@ -681,12 +681,33 @@
     "Knowledge": {
       "additionalProperties": false,
       "properties": {
-        "confluence_spaces": {
-          "description": "Org-wide Confluence read scope. Empty = unscoped, bounded by each seat's own ACLs. Requires integrations.confluence.",
+        "backend": {
+          "description": "Which knowledge base: native, confluence, or none. Empty derives from integrations.confluence.",
+          "enum": [
+            "native",
+            "confluence",
+            "none"
+          ],
+          "type": "string"
+        },
+        "root_space": {
+          "description": "Container for org-level pages such as the root Onboarding. Absent takes the default.",
+          "type": "string"
+        },
+        "scope": {
+          "description": "Org-wide read scope. Empty = unscoped. Was knowledge.confluence_spaces.",
           "items": {
             "type": "string"
           },
           "type": "array"
+        },
+        "skills_container": {
+          "description": "Container holding tool-skill pages. Absent takes the default; \"\" turns tool skills off.",
+          "type": "string"
+        },
+        "vectors": {
+          "description": "Fuse semantic recall into knowledge search. Unset derives from providers.embeddings.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -1022,16 +1043,6 @@
       },
       "type": "object"
     },
-    "ProjectRef": {
-      "additionalProperties": false,
-      "properties": {
-        "project": {
-          "description": "Project key or identifier.",
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
     "Providers": {
       "additionalProperties": false,
       "properties": {
@@ -1343,6 +1354,10 @@
           "$ref": "#/$defs/RolePlacement",
           "description": "Which nodes may run this seat. Absent = any node that runs seats."
         },
+        "project": {
+          "description": "Tracker project this seat owns. Root-level seats; a unit member takes its unit's.",
+          "type": "string"
+        },
         "responsibilities": {
           "description": "What this seat owns.",
           "items": {
@@ -1360,6 +1375,10 @@
             "$ref": "#/$defs/Schedule"
           },
           "type": "array"
+        },
+        "space": {
+          "description": "Knowledge container this seat owns. Root-level seats; a unit member takes its unit's.",
+          "type": "string"
         },
         "token_budget": {
           "description": "Per-seat token ceiling; 0 = unlimited.",
@@ -1423,17 +1442,9 @@
     "RoleIntegrations": {
       "additionalProperties": false,
       "properties": {
-        "confluence": {
-          "$ref": "#/$defs/SpaceRef",
-          "description": "The Confluence space this seat owns."
-        },
         "github": {
           "$ref": "#/$defs/RoleGitHub",
           "description": "This seat's own GitHub App: how much it may do, and where."
-        },
-        "jira": {
-          "$ref": "#/$defs/ProjectRef",
-          "description": "The Jira project this seat owns."
         },
         "mattermost": {
           "$ref": "#/$defs/RoleMattermost",
@@ -1923,16 +1934,6 @@
       },
       "type": "object"
     },
-    "SpaceRef": {
-      "additionalProperties": false,
-      "properties": {
-        "space": {
-          "description": "Space key.",
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
     "StatusPhrases": {
       "additionalProperties": false,
       "properties": {
@@ -1963,6 +1964,47 @@
             "type": "string"
           },
           "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Tracker": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "description": "Which work tracker: native, jira, or none. Empty derives from integrations.jira.",
+          "enum": [
+            "native",
+            "jira",
+            "none"
+          ],
+          "type": "string"
+        },
+        "native": {
+          "$ref": "#/$defs/TrackerNativeConfig"
+        }
+      },
+      "type": "object"
+    },
+    "TrackerNativeConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "inbox_retention_days": {
+          "description": "How long a person's inbox keeps a row (default 365, 30..3650). The history it points at is untouched.",
+          "maximum": 3650,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "non_working_weekdays": {
+          "description": "Days this company does not work — used by the calendar and the burndown guideline. Full English names, e.g. saturday.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "timezone": {
+          "description": "IANA timezone for authored dates and sprint boundaries (default UTC).",
+          "type": "string"
         }
       },
       "type": "object"
@@ -2047,8 +2089,10 @@
           },
           "type": "array"
         },
-        "integrations": {
-          "$ref": "#/$defs/UnitIntegrations"
+        "id": {
+          "description": "Stable identity for this unit, so a rename does not move what is keyed on it. Lowercase, starts with a letter.",
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+          "type": "string"
         },
         "knowledge": {
           "description": "Free-text knowledge references. Not a read scope.",
@@ -2075,6 +2119,10 @@
           "description": "Unit name; also what a manages entry can reference.",
           "type": "string"
         },
+        "project": {
+          "description": "Tracker project this unit owns. Not a credential, not a read scope.",
+          "type": "string"
+        },
         "purpose": {
           "description": "What this unit is for.",
           "type": "string"
@@ -2093,6 +2141,10 @@
           },
           "type": "array"
         },
+        "space": {
+          "description": "Knowledge container this unit owns. Not a credential, not a read scope.",
+          "type": "string"
+        },
         "type": {
           "description": "Informational label: team (default), department, squad, ...",
           "type": "string"
@@ -2101,20 +2153,6 @@
       "required": [
         "name"
       ],
-      "type": "object"
-    },
-    "UnitIntegrations": {
-      "additionalProperties": false,
-      "properties": {
-        "confluence": {
-          "$ref": "#/$defs/SpaceRef",
-          "description": "The Confluence space this unit owns."
-        },
-        "jira": {
-          "$ref": "#/$defs/ProjectRef",
-          "description": "The Jira project this unit owns."
-        }
-      },
       "type": "object"
     },
     "Worker": {
@@ -2233,6 +2271,9 @@
       "description": "Org-wide token ceiling across all seats; 0 = unlimited.",
       "minimum": 0,
       "type": "integer"
+    },
+    "tracker": {
+      "$ref": "#/$defs/Tracker"
     },
     "turn_engine": {
       "$ref": "#/$defs/TurnEngine"

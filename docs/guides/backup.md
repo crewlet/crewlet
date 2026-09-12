@@ -18,7 +18,8 @@ crewlet backup -dir /var/backups/crewlet/2026-08-30T18-00
 Backup written to /var/backups/crewlet/2026-08-30T18-00 on node-0 in 1.412s
 
 WHAT                     FILE                                  SIZE       CONTENTS
-store                    store.db                              252.0 KiB  14 migrations
+store (node)             store.db                              252.0 KiB  20 migrations
+store (replicated)       store-replicated.db                   1.2 MiB    3 migrations
 stream CREWLET_AGENT     streams/CREWLET_AGENT.snapshot        1.1 KiB    5 messages
 bucket crewlet_budgets   streams/KV_crewlet_budgets.snapshot   512 B      3 messages
 …
@@ -35,8 +36,9 @@ A deployment's durable state lives in four estates:
 
 | Estate | Where | What it holds |
 |---|---|---|
-| **The node's store file** | `store.path`, plus its `-wal` sidecar | The seat's memory — diary, episodes, counterparty profiles, synthesized skills, onboarding markers, the [conversation ledger](../concepts/conversation-sessions.md) — which is also [replicated onto the stream](../concepts/seat-ownership.md#a-seats-memory-follows-it), so this file is a cache of it rather than its only copy; and, held here **only**: the audit event log (30 days), scheduled-run history, the company-config revision history, the [secret store's](../concepts/secret-store.md) bootstrap rows |
-| **The stream estate** | `stream.store_dir` per embedded member, or the external NATS cluster | Agent mailboxes (unacked in-flight work), the shared event and config streams, and every [coordination](../concepts/coordination.md) KV bucket: seat leases and fencing epochs, the activation pointer with the current company payload, the completion ledger, delivery dedupe, budget counters, scheduled-fire claims, detached sandbox-run records, the sealed credentials |
+| **The node's own store file** | `store.path`, with its `-wal` sidecar | The seat's memory — diary, episodes, counterparty profiles, synthesized skills, onboarding markers, the [conversation ledger](../concepts/conversation-sessions.md) — which is also [replicated onto the stream](../concepts/seat-ownership.md#a-seats-memory-follows-it), so this file is a cache of it rather than its only copy; and, held here **only**: the audit event log (30 days), scheduled-run history, the company-config revision history, the [secret store's](../concepts/secret-store.md) bootstrap rows, and this node's own record of any snapshot it has adopted |
+| **The replicated estate** | `store.replicated_path`, with its `-wal` sidecar | Everything a state log's applier derives from the fleet's own records — today the work tracker and the knowledge embeddings — together with the checkpoint that says how far this node has applied. Derivable by replay **only while the log still holds the records**: past the trim floor, a node with no copy of this file adopts a peer's snapshot instead |
+| **The stream estate** | `stream.store_dir` per embedded member, or the external NATS cluster | Agent mailboxes (unacked in-flight work), the shared event and config streams, one ordered **log per state-log domain** — which is the record of truth the file above is derived from — and every [coordination](../concepts/coordination.md) KV bucket: seat leases and fencing epochs, the activation pointer with the current company payload, the completion ledger, delivery dedupe, budget counters, scheduled-fire claims, detached sandbox-run records, the sealed credentials |
 | **Tier A, on disk** | `crewlet.yaml` and the environment it reads | The keyring (`CREWLET_SECRET_KEY_*`) — the sole root of trust for everything sealed — plus API tokens and any NATS credential/TLS files |
 | **cli-agent homes** | Per-seat state directories on the engine host | Subscription CLI logins (portable via `crewlet llm export`) |
 
@@ -51,6 +53,14 @@ Classify before you size the job:
   new node — so a store file lost with the stream estate intact costs at most
   the last sync cycle, and the seat re-hydrates the rest on its next
   acquisition.
+- **Derived, and rebuildable *only within the replay window*:** everything in
+  the replicated estate. A node that loses that file replays the domain logs
+  from the beginning and arrives at exactly the same rows — but only if the
+  logs still hold them. Past the trim floor the records are gone, and the node
+  fetches a peer's verified snapshot instead, which it does automatically at
+  boot. That fallback needs a **peer**: a single-node company that loses this
+  file and whose logs have been trimmed has lost the trimmed history, which is
+  the case `retention.backup_max_age` exists to keep from arising.
 - **Authoritative, with no other copy:** the event log's history, the config
   revision history, the sealed credential bucket, the budget counters, and
   each detached sandbox-run record, which is the only thing that knows a
@@ -66,7 +76,8 @@ why the manifest is written last.
 ```
 2026-08-30T18-00/
 ├── manifest.json                          what was captured, from which node
-├── store.db                               the store, one self-contained file
+├── store.db                               the node estate, self-contained
+├── store-replicated.db                    the replicated estate, self-contained
 └── streams/
     ├── CREWLET_AGENT.snapshot             a mailbox stream
     ├── KV_crewlet_secrets.snapshot        a coordination bucket
@@ -75,11 +86,20 @@ why the manifest is written last.
 
 Three properties worth knowing:
 
-- **The store copy is taken with `VACUUM INTO` and then verified** — reopened,
-  integrity-checked, and its schema recorded — before it is renamed into
-  place. A copy that will not open is a failed backup rather than a surprise
-  on the worst day of the deployment's life. It is also self-contained: no
-  `-wal` travels with it.
+- **Each store copy is taken with `VACUUM INTO` and then verified** — reopened,
+  integrity-checked, its schema compared against the database it came from,
+  and a sha256 of the finished file recorded in the manifest — before it is
+  renamed into place. A copy that will not open is a failed backup rather than
+  a surprise on the worst day of the deployment's life; the digest is what
+  tells a copy that was truncated in transit from one that was bad when it was
+  made. Each is self-contained: no `-wal` travels with it.
+- **A node is two databases, and a backup carries both.** The node estate holds
+  the audit log, memory, the config revisions and the secret bootstrap; the
+  replicated estate holds everything a state log's applier writes. They are
+  separate files because a snapshot for a joining node is a copy of the second
+  one alone, and it must not carry the donor's audit log or the bootstrap half
+  of its secret store. Restoring one without the other gives a company whose
+  halves are from different moments.
 - **Streams are enumerated, not listed.** A namespace stream is created on
   first publish and a coordination bucket's name depends on a configurable
   prefix, so what gets captured is what is actually there.
@@ -92,15 +112,48 @@ Three properties worth knowing:
 
 It is a copy of a **moment**, not an instant — the engine keeps working
 throughout, and the pieces are separated by however long the copy took. The
-store is copied **first**, deliberately, which leaves it slightly older than
-the stream estate. That is the safe direction because nothing in the store
-decides whether work runs again: the completion ledger, the delivery dedupe
-and the fire claims all live in coordination and travel with the streams. So
-the cost is a bounded gap in one seat's own memory and audit, and no change
-to what the fleet does next. The reverse order would leave the ledger not yet
-recording work whose episode the store already holds — the trigger is still
-unacked in its mailbox, so it runs again and the duplicate reaches whoever
-the seat was talking to.
+store is copied **first**, and that order is now mandatory rather than
+preferable.
+
+The store carries a **position**: the tracker's rows are derived from an
+ordered log by an applier that commits its checkpoint in the same transaction
+as the rows, so a store copy is a claim about what has already been applied.
+
+- **Store first** leaves the artefact holding a store at position *P* beside a
+  log that has since moved past it. A restore replays the difference. The gap
+  is bounded and replayable, and it costs a few minutes of work being applied
+  twice — which is free, because the applier's guard is monotone in the
+  position.
+- **Store last** would leave a store at position *P* beside a log whose newest
+  record is *below* it. Every subsequent record then lands at a sequence the
+  store has already marked applied, and the version-guarded write drops it
+  **silently**. That is not a gap, it is a permanent hole nothing reports — a
+  restored company quietly missing whatever was written during the copy.
+
+So the order trades a bounded, replayable gap against a permanent, silent one.
+
+**The gap is only replayable while the log still has the records**, and the
+fleet's own trim deletes a record once every counted node has committed past
+it. A backup is not a counted node, so two things close that window and they
+are different kinds of thing:
+
+- **A trim hold** is taken before the first byte is copied, at the position
+  this node's appliers stand at, and released when the manifest is written. It
+  is what makes the race not happen. It is *heartbeated*: a pin that outlived
+  its owner would stop the trim for ever and the log would grow to its ceiling,
+  so the fleet ignores a hold nobody has renewed. A node that cannot write the
+  hold refuses the backup rather than taking one whose gap may be trimmed away
+  while it runs.
+- **An assertion** — the log's first surviving sequence must be at or below the
+  copy's position plus one, checked per domain after the stream snapshots from
+  bounds those snapshots already captured. It is what makes "restorable" a
+  *checkable inequality* rather than a hope. A backup that cannot assert it
+  writes **no manifest**, which is how a reader tells debris from a backup.
+
+The manifest records the position **read from the copy itself**, not from the
+live database: the checkpoint commits with the rows, so the position inside a
+file is the only one that describes that file, and the applier ran throughout
+the copy.
 
 ### One node, or every node?
 
@@ -117,16 +170,23 @@ matter which node wrote them. On a clustered embedded stream you are
 snapshotting a replicated stream, so one member's snapshot carries what its
 peers hold too.
 
-The **store file is that node's alone**, and what only lives there is what
-only *that node* did: its audit event log, its scheduled-run history, its
-share of the config revision history. Those do not exist anywhere else and no
-peer's backup contains them.
+A node is **two** database files, and they answer differently.
+
+The **replicated estate** is a copy of state every node holds: the tracker's
+projects, tasks, comments and history, derived from an ordered log by an
+applier that runs identically everywhere. Any healthy node's copy of it is the
+company's, in the same sense the stream estate is.
+
+The **node estate** is that node's alone, and what only lives there is what
+only *that node* did: its audit event log, its scheduled-run history, its share
+of the config revision history. Those exist nowhere else and no peer's backup
+contains them.
 
 So:
 
 - **For the company's state — one node is enough.** Everything a restore needs
-  to bring the company back is on the stream estate, and a single node's
-  backup captures all of it.
+  to bring the company back is on the stream estate and the replicated estate,
+  and a single node's backup captures both.
 - **For the complete audit trail — take one per node**, on the same schedule,
   and keep them together. The event log is per-node history with no second
   copy, so a fleet-wide audit trail is the union of every node's.
@@ -143,6 +203,77 @@ second step. Schedule it the way you schedule anything else against a node
 (cron, a systemd timer, your orchestrator) — one directory per run, named by
 timestamp, since a destination that already holds something is refused rather
 than merged.
+
+**The schedule is yours, and so is its cost.** Every run is a full copy, so the
+footprint is arithmetic rather than a judgement:
+
+```
+backup storage = copies retained x replicated estate bytes
+```
+
+A flat *every 6 hours, retained 14 days* is 56 copies, which at a year-five
+estate of ≈ 44 GB is **≈ 2.4 TB** — plus a full `VACUUM INTO` of that estate
+four times a day on a live node, competing with the applier's own commits for
+the same disk. That is a real cost nobody quotes, so the shipped guidance is
+**tiered**:
+
+| Tier | Kept | Covers |
+|---|---|---|
+| every 6 hours | 8 copies | the last two days, at the granularity an incident needs |
+| daily | 14 copies | the fortnight, at the granularity a discovered problem needs |
+
+Twenty copies rather than fifty-six — **≈ 875 GB** at the same year-five
+estate, for a recovery point that is worse by nothing anybody has ever
+needed. [`crewlet.backup.duration`](../reference/metrics.md) is what measures
+the copy's own cost against your hardware — the window the trim hold covers and
+the I/O the copy spends competing with the applier's own commits; start from the
+table and move it once you have that number.
+
+**How stale is too stale is a separate setting.** `retention.backup_max_age`
+is what the trim reads, and it is deliberately not derived from the schedule:
+a company that never backs up never trims, loudly and by design, so the engine
+has to know what "recent enough" means to *you* rather than inferring it from
+how often a cron happened to fire. The age itself is read from the newest
+complete **manifest** on disk rather than from a counter the engine keeps —
+a counter records that a process believed it took a backup, and the disk
+records that one exists. They differ in exactly the cases the alarm is for — a
+copy taken and then deleted, a volume never mounted, a schedule pointing at a
+path nobody ships from — and in every one of them the counter says the fleet is
+protected. It is published as `crewlet.backup.age`, by the node that holds the
+artefact, because that is the only process whose disk the manifests are on; a
+node that has never taken one publishes nothing rather than a zero, since zero
+is the freshest backup imaginable.
+
+**The backup interval IS the recovery point for history below the trim
+floor.** Above that floor the log holds every record on R replicas and every
+node holds the applied rows, so losing a node loses nothing. Below it the log
+holds nothing, and each node's own database file is the only copy of that
+history — N of them, independent, none replicated. A schedule of six hours is
+therefore a six-hour RPO for that half of the company's past, and no replica
+count changes it. See [Retention](retention.md).
+
+**A finished backup announces itself to the fleet.** When the manifest is
+written, the taker publishes what the copy reaches — per stream, with the
+generation — so the trim's backup term can see it from whichever node holds the
+duty. That node is often not the one that took the copy, and can never see a
+directory on another host. A backup that ran and announced nothing leaves a
+fleet with a working nightly schedule whose log grows for ever, so a failure to
+announce is logged rather than silent — and it is bounded and self-correcting:
+the log keeps a longer window than it needed to, and the next backup announces
+again.
+
+**A pin that outlives its owner is visible.** A backup takes a trim hold before
+the first byte is copied and releases it when the copy ends; `crewlet.backup.holds`
+is how many the fleet is carrying, and a count that does not return to zero is a
+backup that crashed mid-copy. Until the stale bound expires that pin the trim
+does not advance, which has no other symptom at all until the log walks into its
+ceiling.
+
+**Name the owner.** `retention.backup_owner` is free text — a person, a team, a
+scheduler's name — and `crewlet backup` records it in the manifest, which is
+where it stops being configuration and becomes durable evidence of who was
+responsible for the artefact somebody is now restoring. `crewlet validate`
+warns when it is unset.
 
 Two rules carry over from the cold runbook and are worth repeating because
 this path makes them easier to forget: the directory holds every credential
@@ -183,9 +314,13 @@ every hazard below is about ordering and identity, and a tool that hid them
 behind one verb would be hiding exactly what has to be got right. What
 `crewlet backup` produces is what these steps move.
 
-The store half is a file copy: put `store.db` from the backup at the node's
-`store.path`, with no `-wal` beside it — the copy is self-contained, and a
-stale sidecar from the old database is the one thing that would corrupt it.
+The store half is two file copies: put `store.db` at the node's `store.path`
+and `store-replicated.db` at its `store.replicated_path` (by default
+`crewlet-replicated.db` beside `store.path`), with no `-wal` beside either —
+each copy is self-contained, and a stale sidecar from the old database is the
+one thing that would corrupt it. **Both, from the same backup set**: they are
+one node's state, and a restore holding one of them has an audit log and a
+tracker from different moments.
 The stream half is restored into a broker with `nats stream restore` per
 snapshot for an external cluster; for the embedded topology, restore into a
 fresh `stream.store_dir` on a node started for that purpose. Then:

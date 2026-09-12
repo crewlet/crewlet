@@ -20,6 +20,13 @@ It is not a throughput lever on its own: `node.max_concurrent` is per process,
 so N nodes is N × that ceiling whether you wanted it or not. Size it per
 node.
 
+**One thing does divide by itself.** Above 10 000 indexed documents a fleet
+splits the knowledge search's 64 buckets between its live nodes, so each scans
+a share of the corpus rather than all of it. Nothing is configured and nothing
+is rebuilt — adding a node divides the buckets again on the next search, and an
+answer a node did not come back for is labelled partial rather than silently
+short. See [Search](search.md).
+
 ## What a fleet needs
 
 **Shared coordination.** Seat leases live in the `coordination` slot.
@@ -55,7 +62,13 @@ choice, not a second backend.
 **`stream.replicas: 3` on a clustered fleet.** Replication is what makes a
 publish a quorum commit before it returns, so "published" means "survives
 losing this node" rather than "reached the member I happened to be talking
-to". Tier A refuses `replicas` above 1 when no peers are configured, because
+to". **What it does not cover is a disk that is lost while the members share
+one host, or a site**: replicas placed on one machine survive that machine's
+process and not its hardware, and the engine cannot tell whether your hosts
+are in different failure domains — so it does not claim they are. The failure
+matrix, per topology, is in [Replication](replication.md).
+
+Tier A refuses `replicas` above 1 when no peers are configured, because
 there is nothing to replicate to. Expect a boot to pause the first time a
 cluster forms: a member waits for the metadata group to elect a leader before
 it provisions anything — measured at about eight seconds on a quiet
@@ -280,6 +293,46 @@ A node whose applied config epoch lags the fleet's is not an error on its
 own — every rollout produces lag. See
 [the control plane](../concepts/control-plane.md) for when lag becomes a
 posture change.
+
+## How a node that fell behind catches up
+
+The work tracker and the knowledge embeddings are derived on every node from
+an ordered log the fleet shares. A node replays that log from wherever its own
+rows say it stopped — which works only while the log still **holds** those
+records. It does not hold them for ever: once every node has applied past a
+record, a backup covers it and it is at least a week old, it is trimmed.
+
+So a node that was down long enough, or that has never run at all, can wake up
+below what the log still holds. There is nothing left for it to replay, and no
+amount of waiting produces it. What it does instead is ask the fleet for a
+**snapshot** — a copy of another member's replicated estate — verify it
+against its own requirements and a checksum, and install it wholesale before
+anything reads from it. That happens automatically, at boot, before the node
+serves anything.
+
+Three things make that work, and all three are per node:
+
+- **Every node publishes its own position**, every ten seconds. This is what
+  the trim reads to decide what the fleet has finished with — a node that
+  publishes nothing is a node the trim cannot see, and the log is then
+  trimmed past records that node still needs.
+- **Every node takes snapshots**, into `store.snapshot_dir` (by default
+  `snapshots/` beside the store file), no more often than
+  `stream.tracker_retention.snapshot_interval` (default 24h). A node declines
+  to take one while it is still catching up, while it holds a record it
+  cannot decode, while the disk is short, or while it is the only member —
+  and retries shortly rather than waiting out the interval.
+- **Every node serves them.** There is no designated donor: a fleet whose
+  only donor was down would have nothing to give.
+
+**A fleet with no successful backups eventually stops trimming**, which is
+deliberate — see [Backup and restore](backup.md). Until it trims, nothing can
+fall below the floor, and this path is never needed.
+
+Watch for **`statelog_no_snapshot_yet`**, which says a node has never
+successfully taken one and why. A fleet where every node logs it has no
+recovery path: a member that falls behind will find nothing to adopt, months
+later, in the one situation where it matters.
 
 ## See also
 

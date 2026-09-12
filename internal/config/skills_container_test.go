@@ -3,7 +3,7 @@ package config
 import "testing"
 
 // THE OFF SWITCH IS THE WHOLE POINT of the field being a pointer: a company
-// whose ordinary work space happens to be named TS would otherwise have it
+// whose ordinary work container happens to be named TS would otherwise have it
 // silently dropped from every knowledge search and every routing decision,
 // with no way in the config to say so.
 func TestTheSkillsContainerIsThreeValued(t *testing.T) {
@@ -13,36 +13,32 @@ func TestTheSkillsContainerIsThreeValued(t *testing.T) {
 		yaml string
 		want string
 	}{
-		{"unset takes the reserved default", "", DefaultSkillsSpace},
-		{"a named space is upper-cased", "\n    skills_space: skills", "SKILLS"},
-		{"an explicit empty string is off", `
-    skills_space: ""`, ""},
-		{"whitespace is the same answer as empty", "\n    skills_space: \"   \"", ""},
+		{"unset takes the reserved default", "", DefaultSkillsContainer},
+		{"a named container is upper-cased", "knowledge:\n  skills_container: skills\n", "SKILLS"},
+		{"an explicit empty string is off", "knowledge:\n  skills_container: \"\"\n", ""},
+		{"whitespace is the same answer as empty", "knowledge:\n  skills_container: \"   \"\n", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			cfg := mustCompany(t, `
-name: Acme
-integrations:
-  confluence:
-    url: "https://wiki.example.com"
-    token: "${T}"
-    webhook_secret: "${S}"`+tc.yaml+"\n")
-			if got := cfg.Integrations.Confluence.SkillsSpaceKey(); got != tc.want {
-				t.Errorf("skills space = %q, want %q", got, tc.want)
+			cfg := mustCompany(t, "name: Acme\n"+tc.yaml)
+			if got := cfg.SkillsContainerKey(); got != tc.want {
+				t.Errorf("skills container = %q, want %q", got, tc.want)
 			}
 		})
 	}
 
-	// NO BACKEND AT ALL IS NOT THE DEFAULT. A nil block has no container to
-	// name, and answering "TS" would have the engine watching a space on an
-	// instance the company does not run.
+	// NO KNOWLEDGE BASE AT ALL IS NOT THE DEFAULT. A company that switched
+	// the backend off has no container to name, and answering "TS" would
+	// have the engine watching a container nothing holds.
 	t.Run("no backend answers nothing", func(t *testing.T) {
 		t.Parallel()
-		var cf *Confluence
-		if got := cf.SkillsSpaceKey(); got != "" {
-			t.Errorf("a nil confluence answered %q", got)
+		cfg := mustCompany(t, "name: Acme\nknowledge:\n  backend: none\n")
+		if got := cfg.SkillsContainerKey(); got != "" {
+			t.Errorf("a company with no knowledge base answered %q", got)
+		}
+		if got := cfg.RootSpaceKey(); got != "" {
+			t.Errorf("a company with no knowledge base has a root space %q", got)
 		}
 	})
 }

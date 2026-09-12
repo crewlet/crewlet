@@ -76,3 +76,57 @@ func TestANonPositiveCapYieldsNothing(t *testing.T) {
 		}
 	}
 }
+
+// WITHIN'S BUDGET INCLUDES ITS MARKER, which is the whole difference from
+// [Ellipsis] and the reason it exists: a tracker excerpt is REFUSED above its
+// cap, so a marker outside the budget turns every long comment into a failed
+// write rather than a marked one.
+func TestWithinCountsItsMarker(t *testing.T) {
+	t.Parallel()
+	const max = 12
+	for name, in := range map[string]string{
+		"plain ascii":   strings.Repeat("a", 100),
+		"multi-byte":    strings.Repeat("é", 100),
+		"mixed":         "aé" + strings.Repeat("漢", 100),
+		"exactly at it": strings.Repeat("a", max),
+		"just under":    strings.Repeat("a", max-1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := textcut.Within(in, max)
+			if len(got) > max {
+				t.Fatalf("Within(%d bytes, %d) = %d bytes — the marker has to "+
+					"fit inside the budget or a capped field is refused",
+					len(in), max, len(got))
+			}
+			if !utf8.ValidString(got) {
+				t.Fatalf("Within split a rune: %q", got)
+			}
+			if len(in) > max && !strings.HasSuffix(got, "…") {
+				t.Errorf("Within cut %q and did not say so", got)
+			}
+			if len(in) <= max && got != in {
+				t.Errorf("Within altered a value that already fit")
+			}
+		})
+	}
+}
+
+// AND A BUDGET TOO SMALL FOR THE MARKER YIELDS THE MARKER, not the empty
+// string: something was cut, and a reader shown nothing cannot tell that from
+// a value that was empty to begin with.
+//
+// It is the ONE case where the result exceeds max, which is why it is asserted
+// rather than left to fall out of [textcut.Bytes]'s own contract — a change to
+// that contract would move this silently.
+func TestWithinUnderTheMarkersOwnLength(t *testing.T) {
+	t.Parallel()
+	for _, max := range []int{0, 1, 2} {
+		if got := textcut.Within("hello", max); got != "…" {
+			t.Errorf("Within(%q, %d) = %q, want the marker alone", "hello", max, got)
+		}
+	}
+	// AND IT NEVER EXCEEDS A BUDGET IT CAN MEET.
+	if got := textcut.Within("hello", 3); got != "…" {
+		t.Errorf("Within(%q, 3) = %q", "hello", got)
+	}
+}

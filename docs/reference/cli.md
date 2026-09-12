@@ -15,6 +15,16 @@ subcommand below is served by it.
 | `crewlet budgets show [config]` | Print token usage per scope (`org`, `agent:<id>`), read from a running node — the counter is the fleet's, not this file's |
 | `crewlet budgets reset [config]` | Zero token usage on a running node — durable across restarts, so resetting is deliberate. `-scope` limits it to one scope, and the report names what it cleared |
 | `crewlet backup -dir PATH [config]` | Copy a running node's store **and** its stream estate into one verified directory on the *engine's* host — the only way to copy either, since the store is locked to that process and the embedded broker binds no socket. See [Backups & Restore](../guides/backup.md) |
+| `crewlet retention status [config]` | What each domain's log is holding, what the trim concluded and which of the six terms is stopping it, every node's position, and what this node costs to replace. **Exits non-zero when any alarm is active**, printing each one's measurement and remedy on stderr — the hook for your own cron |
+| `crewlet retention snapshots [config]` | The per-node snapshot inventory: what each machine holds, per domain, how old and how large — or why it holds none. The question you ask when a join fails |
+| `crewlet retention ack -stream NAME -position N` | Publish an operator backup floor, for `backup_floor: operator`. It exists because the engine cannot see a copy that has left the host |
+| `crewlet retention evict <node> -confirm <node>` | Stop a node's records applying anywhere in the fleet, so the trim can pass a floor an absent machine is pinning. Prints the watermark before and after |
+| `crewlet retention readmit <node> -confirm <node>` | The inverse commit. Can be refused when the node's own position is below the current trim floor, and the refusal prints both |
+| `crewlet retention set-capacity <stream> <bytes> -confirm <bytes>` | Change a log's byte ceiling. Runs inside a fleet-wide maintenance window and costs three restarts — `stream.max_bytes` is not a live setting |
+| `crewlet retention maintenance status\|abandon\|exclude -stream NAME` | Where that window stands, who has not acknowledged, and the two gestures that act on it |
+| `crewlet retention reanchor -stream NAME -confirm <created_at>` | Adopt a recreated stream: declare every position below the next generation comparable and safely stale |
+| `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
+| `crewlet work purge <task-id> -project KEY -reason TEXT -confirm <task-key>` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a person or an operator token. Its children move onto its own parent rather than being destroyed with it |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load Tier B YAML, activate as a new `company_config` revision |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
@@ -30,6 +40,7 @@ subcommand below is served by it.
 | `crewlet secrets unset <NAME>` | Remove a stored secret |
 | `crewlet secrets get <NAME> -reveal` | Print one stored value to stdout — break-glass, audited, CLI-only |
 | `crewlet secrets rekey [-dry-run]` | Re-encrypt stored secrets under the active keyring key |
+| `crewlet search eval [-store PATH]` | Measure the two-stage semantic search against the exact scan, on the vectors a store file actually holds. Ground truth is the exact scan's own top-K, so nobody authors a judgement; exits non-zero below the floor for that corpus size |
 | `crewlet llm list` | Every `cli-agent` provider the company declares, with its CLI, model and login state |
 | `crewlet llm doctor [KEY]` | Verify a subscription backend end to end — the CLI is installed, the login answers, a real completion returns, the CLI's own shell is refused and its web tool reaches the network (`-no-smoke` stops before all three real calls) |
 | `crewlet llm login <KEY>` | Establish the vendor's own login for a provider: brokered interactively, `-from-host` to adopt one this machine already has, `-capture-token` to mint a headless token into the [secret store](../concepts/secret-store.md) (add `-print-token` to send it to stdout and store nothing), `-token-stdin` for one you already hold |
@@ -73,7 +84,7 @@ subcommand below is served by it.
 
 ```
 crewlet run [<config.yaml>] [-company PATH | -import-company PATH] [-debug]
-            [-log-level LEVEL] [-log-format FORMAT]
+            [-log-level LEVEL] [-log-format FORMAT] [-mode MODE]
             [-roles ROLE[,ROLE...]] [-api-host HOST] [-api-port PORT]
 ```
 
@@ -111,6 +122,7 @@ the wrong document on a machine that has both. Tier B is read from the `company_
 | `-debug` | Shorthand for `-log-level debug`; wins if both are given. It only ever *raises* — to quieten a file that sets `logging.level: debug`, pass `-log-level info`. |
 | `-api-host HOST` | Bind address, overriding `api.host` |
 | `-api-port PORT` | Bind port, overriding `api.port`. `0` serves **no HTTP at all** — no dashboard, no REST, no webhook endpoint, so every integration goes deaf. That is why leaving the flag off is not the same as passing `0`. |
+| `-mode MODE` | `maintenance` or `seal`: boot for a [capacity window](../guides/retention.md#changing-a-logs-ceiling) rather than for service. Both start the broker and **no publisher** — no seats, no duties, no schedulers — and the difference is that `maintenance` may write stream configuration while `seal` may not, which is exactly what makes a `seal`-mode acknowledgement evidence. Leave it off for a node in service; a node in either mode refuses to run a company. |
 | `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all three — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. See [Running a Fleet](../guides/fleet.md). |
 
 The logging flags override the Tier A `logging:` block **only when they are actually given**: a flag carries its default whether or not anyone typed it, so applying them unconditionally would pin every node at `info` and make the file's own setting dead on arrival.
@@ -532,6 +544,239 @@ what the copy is a copy *of*, and how a restore uses it.
 
 ---
 
+## `crewlet work`
+
+```
+crewlet work purge <task-id> -project KEY -reason TEXT -confirm <task-key>
+    [-op-id ID] [<config.yaml>] [-url URL] [-token TOKEN]
+```
+
+The gestures on work items that belong to a **person** rather than to a seat.
+Everything else a company does to its tasks is done by seats through their own
+tools, and that is the design — an engine whose operator edits work by hand is
+one whose org chart is decoration. The exception is the operation no seat may
+perform.
+
+### `crewlet work purge`
+
+Destroys a task and every row it produced: its own row, its comments, its body
+revisions, its checklist, its field values, its watchers, its relations, its
+dependencies, its status spans, its sprint memberships, and every inbound
+reference and key alias that made it resolvable. A marker is written in their
+place, and every later record about that task is dropped for ever — which is
+what stops a redelivery months afterwards resurrecting any of it.
+
+`remove` hides a task and `delete` stops later records about it. Neither takes
+the body out of a single database, which is why this verb exists: an erasure
+request and a credential pasted into a task description both need the rows
+gone.
+
+**The confirmation is the task's key**, not its id. The id is on the command
+line already, so repeating it confirms nothing; the key has to be looked up.
+**The reason is required** because it is the only thing that survives — the
+marker's reason is the entire account of what used to be at that key for
+whoever reads it a year later.
+
+**Its children are moved, not destroyed.** Each direct child re-parents onto
+the purged task's own parent, or becomes a root when the purged task was one.
+Destroying the subtree would destroy work nobody confirmed; leaving it would
+leave every child pointing at an id that resolves to nothing.
+
+The outcome is three-valued, like every write here. `applied` means the rows
+are gone on this node and the record is durable. `pending` means the record is
+durable and this node has not applied it yet — **do not run it again**, because
+a second gesture appends a second purge. `unknown` is the one to retry, and the
+operation id it prints goes back in `-op-id` so the retry cannot append a
+second record.
+
+What it does **not** reach: a node that is offline or evicted keeps its copy
+until it replays, adopts a snapshot, is replaced or is destroyed. There is no
+duration to state, and `crewlet retention status` names which nodes those are.
+
+## `crewlet retention`
+
+```
+crewlet retention status|snapshots|ack|evict|readmit|set-capacity|maintenance|reanchor|verify
+    [<config.yaml>] [-url URL] [-token TOKEN]
+```
+
+What the state log is holding, why it is not shrinking, and the gestures that
+change it. A **group** rather than nine top-level verbs, because several of
+them stop a machine writing and that should not sit at the same level as
+`version`.
+
+Every verb but one talks to a running node, for `backup`'s reason: the register
+they read and write is a coordination bucket on a broker embedded in the
+engine, which binds no socket, so there is no address any other tool could be
+given. The exception is `verify --restore`, which reads an artefact off disk on
+purpose — see below.
+
+### `crewlet retention status`
+
+The blocking term is printed **first and in prose**, because it is the answer
+to the only question anybody runs this for:
+
+```
+Nothing is being trimmed on tracker: the newest complete backup is 3 days old
+(backup_max_age is 24h).
+```
+
+Then one row per registered domain — its stream, generation, replay protocol,
+both ends, bytes, ceiling and headroom — the six terms with their state and
+detail, one row per node per domain, and this node's own replica line.
+
+A term that does not apply to a domain prints `n/a` rather than `0`: a
+compacted domain has no wake feed, and an absent term is a different fact from
+one that permits nothing.
+
+**It exits non-zero exactly when this node has an active alarm**, on the
+report's own rule rather than a second one in the CLI — the shell script
+watching this exit code would otherwise be watching the definition nobody
+maintained. Each alarm's measurement and remedy go to **stderr**, so a cron
+capturing stdout for a dashboard still gets the reason in its own mail.
+
+`-domain <name>` narrows the log and watermark blocks to one domain.
+
+### `crewlet retention snapshots`
+
+Its own verb rather than a block of `status`, because the repository is per
+node: *which of my machines can donate, and how old is what they hold* is a
+disk question. A node with no artefact still gets a row, carrying the reason —
+`sole_node`, `lagging`, `unhydrated`, `deferred`, `insufficient_space` or
+`recent` — because the absence is the answer to "why did the join fail".
+
+### `crewlet retention ack`
+
+```
+crewlet retention ack -stream CREWLET_TRACKER_LOG -position 918100000
+```
+
+Publishes an operator backup floor. Under `backup_floor: operator` the trim
+follows this rather than the engine's own copies, because a backup is not a
+backup until it leaves the host and the engine cannot see that it has. Both
+flags are required: an acknowledgement moves the floor the trim deletes
+against, so there is no value to guess.
+
+### `crewlet retention evict` / `readmit`
+
+```
+crewlet retention evict node-4 -confirm node-4
+```
+
+An absent node pins the `applied` term for ever — its position never advances,
+so nothing above it can be deleted. That is deliberate for a node that is
+coming back; eviction is the gesture for one that is not.
+
+`-confirm` repeats the node id, the same shape the other destructive gestures
+use. The command prints the watermark before and after and the instant the
+eviction takes effect: **the node stays counted for about a minute**, so a live
+one is certain to have read its own tombstone before the trim passes it.
+
+`readmit` is the inverse commit rather than a delete, so the eviction's whole
+history survives a replay. It can be refused when the node's own position is
+below the current trim floor — that node has to adopt a snapshot first — and
+the refusal prints its position beside the floor, because that inequality is
+the reason.
+
+### `crewlet retention set-capacity`
+
+```
+crewlet retention set-capacity CREWLET_TRACKER_LOG 8589934592 -confirm 8589934592
+```
+
+Changes a log's byte ceiling. `stream.max_bytes` is not a live setting: a
+resize is decided against the usage the log is at, and a publisher makes that a
+moving quantity — so this runs with the whole fleet in a maintenance mode and
+costs **three fleet-wide restarts**, two more per retry. The
+[procedure is documented once](../guides/retention.md#changing-a-logs-ceiling),
+in the retention guide; this command's help prints the five steps.
+
+`-confirm` repeats the byte count, and the target is then fixed for the life of
+the operation: a verify compares the observed ceiling against it, so a target
+that could move would make a mismatch unreadable.
+
+`-i-have-excluded-all-publishers` is required only on `stream.type: nats`.
+There the engine does not run the broker and cannot establish who else holds a
+connection to it, so the assertion is yours in your own words rather than a
+check that quietly proves nothing.
+
+Run from a node in `normal` mode it refuses outright, naming the restart. Run
+from `maintenance` it opens, baselines and applies; run from `seal` it collects
+the barrier, seals, verifies and confirms. It prints the phase it reached and
+the next gesture, never the transition table.
+
+### `crewlet retention maintenance`
+
+```
+crewlet retention maintenance status  -stream CREWLET_TRACKER_LOG
+crewlet retention maintenance exclude -stream CREWLET_TRACKER_LOG -node node-4 -confirm node-4
+crewlet retention maintenance abandon -stream CREWLET_TRACKER_LOG -confirm capacity-01J...
+```
+
+`status` is the one page an operator can see why a fleet is still excluded: the
+operation, its phase and attempt, every participant's baselined incarnation
+against what it acknowledged as, which acknowledgements are missing, any
+unresolved write attempt, and any admission still blocking activation. On a
+fleet with no window it says so — *no window* and *a window in phase `opened`*
+are different facts with different next steps.
+
+`exclude` is your assertion that a participant's **process is stopped** and
+holds no outstanding request. It is the only thing that waives an
+acknowledgement; an eviction does not, because that is about whose records
+apply and this is about whose process is running.
+
+`abandon` changes what the operation is trying to reach and never the barrier
+it must cross. From `opened` it clears outright — no request was issued. From
+anywhere else the fleet still has to restart into `seal`, because a paused
+coordinator's request is outstanding whether or not a person has read a status
+page. `-confirm` repeats the operation id from `status`.
+
+### `crewlet retention reanchor`
+
+```
+crewlet retention reanchor -stream CREWLET_TRACKER_LOG
+crewlet retention reanchor -stream CREWLET_TRACKER_LOG -confirm 2031-04-02T03:00:00Z
+```
+
+The recovery for a stream that was genuinely recreated. Run without `-confirm`
+it **prints the live stream's own `created_at` and refuses**: the confirmation
+means *I looked at the thing I am re-anchoring*, and a verb that read the value
+and fed it straight back would be confirming against its own output.
+
+It refuses while any peer is hydrated on the live stream, **naming the peer** —
+adopting that peer's snapshot recovers history a reanchor discards. `-force` is
+for the case where the peer cannot be reached.
+
+It does not recover records that were on the old stream and were never applied
+here, and the refusal says so. See
+[Re-anchoring a recreated stream](../guides/retention.md#re-anchoring-a-recreated-stream).
+
+### `crewlet retention verify --restore`
+
+```
+crewlet retention verify --restore -dir /var/backups/crewlet [-cadence 720h]
+```
+
+**The one verb here that talks to no node.** It restores the newest artefact
+under `-dir` and opens the copy — the point is to establish that the artefact
+alone is enough, and running it through a running engine would be asking the
+thing under test to test itself. It writes nothing to the live store and takes
+no lock on it, so it is safe beside a running node.
+
+It prints what the artefact holds and **exits non-zero past its cadence**,
+which defaults to 30 days. Put it in cron: a lapsed restore test that exits
+zero is a paragraph in a runbook nobody read.
+
+A directory with no manifest is **debris** rather than a partial backup — the
+manifest is written last — and an artefact naming no domain position cannot be
+verified whatever else it contains, because a restore replays from that
+sequence.
+
+See [Retention](../guides/retention.md) for the six terms, the snapshot
+repository and the join runbook.
+
+---
+
 ## `crewlet schema`
 
 ```
@@ -567,6 +812,75 @@ name: "Acme AI"
 ```
 
 See [Authoring with an AI assistant](../getting-started/ai-authoring.md).
+
+---
+
+## `crewlet search eval`
+
+```
+crewlet search eval [-store PATH] [-config crewlet.yaml] [flags]
+```
+
+Measures the semantic half of knowledge search — the two-stage 1-bit retrieval
+described in [Knowledge System](../concepts/knowledge-system.md) — against the
+exact scan it approximates, **on your own vectors**.
+
+There is no other number that answers this. The engine's own quality gate
+measures the arithmetic on a seeded fixture and deliberately makes no claim
+about recall on a particular company's documents: a 1-bit code keeps only each
+vector's orthant, and how much that says about ranking is a property of your
+corpus's distribution. Over a family of embedding-shaped generators the same
+arithmetic spans 0.29 to 0.98 recall.
+
+**Ground truth is the exact scan's own top-K**, so nobody authors a judgement —
+which is the step that otherwise makes an evaluation stop being run. The
+queries are held-out documents from the corpus itself, spread deterministically
+across it so two runs are comparable.
+
+**It reads a file, not a running node.** The replicated estate is exclusively
+owned by the running engine, so pass the copy inside a
+[backup](../guides/backup.md) — which needs nothing stopped and measures the
+same rows — or the node's own file with the engine stopped. With neither
+`-store` nor a reachable Tier A file it has nothing to open.
+
+```console
+$ crewlet search eval -store /var/backups/crewlet/2026-09-01/store-replicated.db
+corpus       118432 sources, text-embedding-3-large at 3072 dimensions
+measured     25 queries at depth 150 from 1200 candidates
+recall       0.9761  (floor 0.9312 for this corpus size)
+worst query  0.9467
+head misses  0  (documents dropped from the exact top ten)
+verdict      the two-stage search recovers the exact ranking at the shipped depth
+```
+
+| Flag | Default | What it does |
+|---|---|---|
+| `-store PATH` | from `-config` | The replicated database to measure. Overrides the Tier A file |
+| `-config PATH` | `./crewlet.yaml` | Tier A, read only for the replicated store's path |
+| `-queries N` | `25` | How many held-out documents to measure over. Each one is a full exact scan, which is what bounds the run |
+| `-limit N` | `150` | The depth recall is measured at — the shipped returned depth |
+| `-candidates N` | `1200` | The stage-1 candidate depth — the shipped pair |
+| `-model NAME` | most populated | The embedding model to measure |
+| `-dimensions N` | the model's | The width to measure |
+| `-fit` | off | Also print the corpus's own mean pairwise cosine, which is the parameter the engine's seeded fixture is fitted from |
+| `-metrics` | off | Print one `key value` line per metric instead of a report, for a collector or a shell |
+
+**It exits non-zero** when the recall is below the floor for that corpus size,
+or when any document was dropped from the exact top ten — so it can go in a
+schedule. Both conditions matter: an aggregate of 0.98 is compatible with
+losing exactly the documents that mattered, and a semantic-only document the
+first stage drops leaves the fused answer entirely.
+
+Run it **monthly, and after any change to `providers.embeddings.model` or
+`providers.embeddings.dimensions`** — those are the two inputs that move the
+answer. A report naming more than one embedding space is a refill in progress:
+until it finishes, documents still on the old model are not in the candidate
+pool at all, because the scan filters on the model/width pair.
+
+Below the floor, the remedy is decided in advance and in this order: raise the
+quantization over-fetch (measured free in latency — stage one is a full scan
+whose cost does not depend on how many candidates it keeps), then an 8-bit
+first stage, which ships in the same release that moves the model default.
 
 ---
 
@@ -842,7 +1156,7 @@ crewlet confluence import <company.yaml> <directory> [-space KEY] [-prune]
     [-config PATH] [-dry-run]
 ```
 
-Publishes a tree of authored markdown into Confluence. **One walk, two destinations, decided by the file**: a file whose frontmatter declares a `trigger:` is a [tool skill](../concepts/tool-skills.md) and goes to `integrations.confluence.skills_space` with the leading code block the engine parses back out; everything else is a knowledge doc, published as prose into the space its parent directory names, titled by its first `# H1`.
+Publishes a tree of authored markdown into Confluence. **One walk, two destinations, decided by the file**: a file whose frontmatter declares a `trigger:` is a [tool skill](../concepts/tool-skills.md) and goes to `knowledge.skills_container` with the leading code block the engine parses back out; everything else is a knowledge doc, published as prose into the space its parent directory names, titled by its first `# H1`.
 
 The routing is the FILE'S, not the directory's, because a skill is identified by what it declares — an operator who files one under `ENG/` still means a skill, and publishing it there as prose would put an instruction meant for one phase of one turn into every seat's context.
 
@@ -858,13 +1172,13 @@ The routing is the FILE'S, not the directory's, because a skill is identified by
 
 | Flag | Description |
 |------|-------------|
-| `-space KEY` | Publish tool skills into this space instead of `integrations.confluence.skills_space`. Empty reads `$CREWLET_TOOL_SKILLS_SPACE`, then the config field. Skill files only — a knowledge doc takes its space from its parent directory. |
+| `-space KEY` | Publish tool skills into this space instead of `knowledge.skills_container`. Empty reads `$CREWLET_TOOL_SKILLS_SPACE`, then the config field. Skill files only — a knowledge doc takes its space from its parent directory. |
 | — | Frontmatter on a knowledge doc may declare `parent:` (the title of a page in the same space to nest under) and `labels:` (the author's own, lower-cased and de-duplicated because that is what Confluence stores). See below. |
 | `-prune` | After publishing, delete skill pages in the skills space that carry the `crewlet-skill` label and whose key no local file publishes any more. **Three conditions, all required**: in the skills space, labelled, and parsing as a skill whose key this run's tree does not publish — the label protects a hand-authored page, the parse protects an ordinary page filed in the same space, and the key comparison is what makes a renamed skill a delete-and-create rather than a silent duplicate. The orphan set is derived by subtraction, so **a prune that cannot enumerate the space deletes nothing** and fails the run: a partial read would make the orphan set larger and delete live pages. The set is taken from the *plan*, not from the writes that landed, so a page whose update happened to 403 is never deleted as an orphan of itself. A page that declares a trigger and does not parse has an unknown key and is reported rather than deleted. |
 | `-config` | Tier A config naming this node's store and keyring, for resolving the `${VAR}`s in the company's `confluence:` block. |
 | `-dry-run` | Print the plan and write or delete nothing. |
 
-A company that has turned tool skills off (`integrations.confluence.skills_space: ""`) has no space for a skill file to go to: a tree containing one **stops the walk** naming both the setting and `-space`, rather than filing an instruction meant for one phase of one turn into a space every seat searches.
+A company that has turned tool skills off (`knowledge.skills_container: ""`) has no space for a skill file to go to: a tree containing one **stops the walk** naming both the setting and `-space`, rather than filing an instruction meant for one phase of one turn into a space every seat searches.
 
 See [Confluence Integration](../integrations/confluence.md#publishing-local-pages-from-your-machine-cli).
 
@@ -933,7 +1247,7 @@ and exits non-zero. That is the case worth failing on: somebody wrote a trigger
 and got the rest wrong, and counting it as an ordinary page is exactly how a
 skill goes missing unnoticed.
 
-`-space` overrides `integrations.confluence.skills_space`, for checking a space
+`-space` overrides `knowledge.skills_container`, for checking a space
 the company document does not name yet.
 
 **Skills only.** Knowledge docs are searched live at query time and never

@@ -22,8 +22,8 @@ func TestTheLeadMapReadsTheTrackersOwnField(t *testing.T) {
 			{Name: "Ops Lead", DeclaredHandle: "ops"},
 		},
 		Units: []*org.Unit{
-			{Name: "Engineering", Lead: "CTO", JiraProject: "eng", ConfluenceSpace: "PLATFORM"},
-			{Name: "Operations", Lead: "Ops Lead", ConfluenceSpace: "OPS"},
+			{Name: "Engineering", Lead: "CTO", Project: "eng", Space: "PLATFORM"},
+			{Name: "Operations", Lead: "Ops Lead", Space: "OPS"},
 		},
 	}
 	o.Normalize()
@@ -41,14 +41,14 @@ func TestTheLeadMapReadsTheTrackersOwnField(t *testing.T) {
 
 // AN INHERITED LEAD OWNS THE PROJECT. A lead set on a division owns a team
 // three levels down that named nobody itself.
-func TestAnInheritedLeadOwnsTheJiraProject(t *testing.T) {
+func TestAnInheritedLeadOwnsTheProject(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{
 		Name:  "nimbus",
 		Roles: []*org.Role{{Name: "CTO", DeclaredHandle: "cto"}},
 		Units: []*org.Unit{{
 			Name: "Engineering", Lead: "CTO",
-			Children: []*org.Unit{{Name: "Platform", JiraProject: "PLAT"}},
+			Children: []*org.Unit{{Name: "Platform", Project: "PLAT"}},
 		}},
 	}
 	o.Normalize()
@@ -59,11 +59,11 @@ func TestAnInheritedLeadOwnsTheJiraProject(t *testing.T) {
 
 // A ROOT SEAT OWNS ITS OWN PROJECT — it belongs to no unit, so there is no
 // lead to resolve and the seat IS the owner.
-func TestARootSeatOwnsItsJiraProject(t *testing.T) {
+func TestARootSeatOwnsItsProject(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{
 		Name:  "nimbus",
-		Roles: []*org.Role{{Name: "CEO", DeclaredHandle: "ceo", JiraProject: "BIZ"}},
+		Roles: []*org.Role{{Name: "CEO", DeclaredHandle: "ceo", Project: "BIZ"}},
 	}
 	o.Normalize()
 	if got := jira.LeadsFrom(o)["BIZ"]; got != "ceo" {
@@ -73,11 +73,11 @@ func TestARootSeatOwnsItsJiraProject(t *testing.T) {
 
 // A UNIT WITH NO LEAD OWNS NOTHING, rather than routing to a guess. The
 // warning is the operator's signal; a wrong owner would be silent.
-func TestAUnitWithNoLeadOwnsNoJiraProject(t *testing.T) {
+func TestAUnitWithNoLeadOwnsNoProject(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{
 		Name:  "nimbus",
-		Units: []*org.Unit{{Name: "Engineering", JiraProject: "ENG"}},
+		Units: []*org.Unit{{Name: "Engineering", Project: "ENG"}},
 	}
 	o.Normalize()
 	if leads := jira.LeadsFrom(o); len(leads) != 0 {
@@ -91,10 +91,10 @@ func TestEveryDeclaredProjectIsEnumerated(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{
 		Name:  "nimbus",
-		Roles: []*org.Role{{Name: "CEO", DeclaredHandle: "ceo", JiraProject: "biz"}},
+		Roles: []*org.Role{{Name: "CEO", DeclaredHandle: "ceo", Project: "biz"}},
 		Units: []*org.Unit{{
-			Name: "Engineering", JiraProject: "ENG",
-			Roles: []*org.Role{{Name: "SWE", DeclaredHandle: "swe", JiraProject: "ENG"}},
+			Name: "Engineering", Project: "ENG",
+			Roles: []*org.Role{{Name: "SWE", DeclaredHandle: "swe", Project: "ENG"}},
 		}},
 	}
 	o.Normalize()

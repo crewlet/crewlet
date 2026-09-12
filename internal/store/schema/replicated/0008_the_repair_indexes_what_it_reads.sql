@@ -1,0 +1,67 @@
+-- The missed-unblocked repair reads a status DELTA, so that is what it indexes.
+--
+-- # What this replaces and why the old one could not stay
+--
+-- `tracker_history_kind_seq_idx (kind, log_seq)` was annotated "the
+-- missed-unblocked repair, which is bounded by its own last position" and the
+-- repair no longer selects on `kind` at all. It reads the row's own status
+-- delta, for the reason `recomputeSpans` states beside the identical
+-- predicate: the kind is ONE word a writer chose for a patch that may have
+-- moved several things, so a change that moved the status and something else
+-- is filed under the something else and is invisible to a scan keyed on the
+-- word.
+--
+-- The reachable case was the sprint rollover close, which cancels every
+-- straggler into the `done` group — clearing every dependency edge naming
+-- them as a blocker, making their dependents workable — while announcing the
+-- sprint move. Those people were never told, and the repair's horizon then
+-- advanced past the record and never reconsidered it.
+--
+-- An index maintained on every applied commit with no query behind it is the
+-- worst of both: the write cost of a reader that does not exist. And the
+-- repair, left with no index at all, scans `tracker_history` whole on every
+-- tick — a table that grows for the life of the company and is never swept.
+--
+-- # Why a partial index over an expression rather than a column
+--
+-- Because the fact is already in the row. `fields_json` carries the applier's
+-- own deltas on every commit, loud or quiet, and `$.status.to` is what both
+-- readers test. A `status_to` column beside it would be a second copy of a
+-- value the row already has, maintained by the applier, and two copies of one
+-- fact is how one stops matching the other.
+--
+-- The engine takes it: the predicate is accepted and the planner SEARCHes on
+-- it (`SEARCH tracker_history USING COVERING INDEX`) rather than scanning,
+-- which is what a partial index over an expression has to earn before it is
+-- worth having.
+--
+-- # And the other dead one goes with it
+--
+-- `tracker_history_kind_idx (kind, effective_at)` is annotated "every
+-- report's window predicate, on the instant a duration uses" and no query in
+-- the tree filters or orders on `effective_at`. The reports it names read
+-- `tracker_status_spans` and `tracker_task_sprints`, which the applier
+-- derives FROM this table — so the window predicate the comment describes
+-- lives on those tables, not here. Worse than idle: `raiseSuccessors` UPDATEs
+-- `effective_at` on every successor row a late record raises, and each of
+-- those rewrites this index entry.
+--
+-- A `kinds=` filter on the activity feed still has an index: the feed is
+-- bounded by `subject_id`, `project_key` or `log_seq` first, and the kind
+-- narrows within that range.
+--
+-- # 0002 IS NOT EDITED, which is why it still creates both
+--
+-- `schema_migrations` keys on the FILENAME, so a file that has already run
+-- never runs again: editing 0002 would leave every database that applied it
+-- holding the old shape while the file on disk claimed otherwise, and a fresh
+-- database would take a path no existing one ever took. Both converge here
+-- instead — 0002 creates, this drops — so every database in the fleet is at
+-- the same schema by the same route. The annotations in 0002 are the record
+-- of what it did, and this file is where a reader learns what superseded it.
+
+DROP INDEX IF EXISTS tracker_history_kind_seq_idx;
+DROP INDEX IF EXISTS tracker_history_kind_idx;
+
+CREATE INDEX tracker_history_status_seq_idx ON tracker_history (log_seq)
+    WHERE json_extract(fields_json, '$.status.to') IS NOT NULL;            -- the missed-unblocked repair, bounded by its own last position and never by a clock

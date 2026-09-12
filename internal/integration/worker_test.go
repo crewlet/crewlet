@@ -1049,3 +1049,47 @@ func TestARenamedRegistrationReachesTheStatusRow(t *testing.T) {
 		t.Errorf("phase = %s; an orphan is an advisory, not a fault", row.Report.Phase)
 	}
 }
+
+// A SURFACE THE COMPANY DOES NOT HAVE IS ASKED ONCE, not once per tick.
+//
+// An unconfigured pass answers [ErrNotConfigured], and the fold FORGETS its
+// row — which is right, because a surface nobody configured has no status
+// worth putting on an operator's screen. The row is also the only thing that
+// paces it: the next tick reads none, builds a zero state whose NextAttemptAt
+// is already past, and runs the pass again. A company that configured none of
+// the eight vendors therefore reconciled all eight every interval for the life
+// of the process, which is what an operator's log actually showed.
+func TestAnUnconfiguredSurfaceIsNotReconciledEveryTick(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	r := &fakeReconciler{kind: KindGitLab, err: ErrNotConfigured}
+	w := at(t, now, newStore(), nil, Registration{Reconciler: r})
+
+	for range 5 {
+		w.Tick(context.Background())
+	}
+	if got := r.count(); got != 1 {
+		t.Fatalf("five ticks ran %d passes against a surface this company has "+
+			"no block for, want 1 — forgetting its row is what un-paced it",
+			got)
+	}
+}
+
+// AND IT IS ASKED AGAIN WHEN THE DOCUMENT MOVES, because that is the one thing
+// that can turn "this company has no such integration" into a different
+// answer. The loop already has that signal; nothing was reading it here.
+func TestAnUnconfiguredSurfaceIsAskedAgainAfterAnApply(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	r := &fakeReconciler{kind: KindGitLab, err: ErrNotConfigured}
+	w := at(t, now, newStore(), nil, Registration{Reconciler: r})
+
+	w.Tick(context.Background())
+	w.Tick(context.Background())
+	w.MarkStale()
+	w.Tick(context.Background())
+
+	if got := r.count(); got != 2 {
+		t.Fatalf("the surface ran %d passes across two ticks and an apply, "+
+			"want 2 — a company that just added the block would wait out the "+
+			"process otherwise", got)
+	}
+}

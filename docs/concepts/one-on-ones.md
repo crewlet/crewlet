@@ -188,19 +188,19 @@ A ready-to-publish playbook ships at
 [`examples/nimbus-docs/LEAD/Manager 1-1.md`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus-docs/LEAD/Manager%201-1.md)
 — its `LEAD/` parent directory routes it to the org-wide `LEAD` space
 every agent can read, and its `# Manager 1:1` H1 becomes the page title.
-Publish it with
-`crewlet confluence import <company.yaml> examples/nimbus-docs/`
-(it has no `trigger:`, so it imports as a [knowledge doc](knowledge-system.md#publishing-knowledge-docs)),
-against a company whose config carries a `confluence:` block —
-`examples/nimbus.company.yaml` does; the smaller
-`examples/nimbus-claude-cli.company.yaml` does not.
+Both bundled examples run the engine's own knowledge base, so publish it
+through your own assistant on
+[`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant)
+— see [publishing knowledge docs](knowledge-system.md#publishing-knowledge-docs).
+On a company that moved its wiki to Confluence,
+`crewlet confluence import <company.yaml> examples/nimbus-docs/` does the same
+(it has no `trigger:`, so it imports as a knowledge doc).
 Edit it in the page editor thereafter — no redeploy.
 
 **A 1:1 does not need the page.** The schedule and `a2a_ask` are the whole
-mechanism; the playbook is guidance both parties read when there is a wiki to
-read it from. `examples/nimbus-claude-cli.company.yaml` runs the same
-`weekly-1on1` schedule with no knowledge base at all, and the task text
-carries the shape of the conversation instead.
+mechanism; the playbook is guidance both parties read. A company running no
+knowledge backend at all runs the same `weekly-1on1` schedule, and the task
+text carries the shape of the conversation instead.
 
 ---
 

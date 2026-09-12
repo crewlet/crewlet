@@ -261,3 +261,35 @@ func TestALimitIsClampedAtBothEnds(t *testing.T) {
 		}
 	}
 }
+
+// KEYS IS SORTED, AND SOMETHING DEPENDS ON IT.
+//
+// The tracker's custom-field filters are `f.<slug>` — a prefix whose slugs a
+// company declares — so the only way to find them is to enumerate, and a
+// parsed query carries them in the order they were enumerated. Two callers
+// passing the same filters must produce the same query, and a map's iteration
+// order is deliberately random, so the guarantee has to live here: a caller
+// that re-sorted would be a second place the property could be true, and the
+// first time the two disagreed nobody would know which one ran.
+func TestKeysAreSortedBecauseACallerDependsOnIt(t *testing.T) {
+	t.Parallel()
+	p := queries.FromMap(map[string]any{
+		"f.severity": "s1", "status": "todo", "f.area": "platform",
+		"container": "workspace", "f.owner": "ana",
+	})
+	got := p.Keys()
+	if !slices.IsSorted(got) {
+		t.Fatalf("Keys returned %v, which is not sorted — a parsed query would "+
+			"differ between two identical requests", got)
+	}
+	if len(got) != 5 {
+		t.Fatalf("Keys returned %d names for five parameters: %v", len(got), got)
+	}
+	// And it is the same answer every time, which one sorted call proves
+	// and one map iteration does not.
+	for range 16 {
+		if again := p.Keys(); !slices.Equal(again, got) {
+			t.Fatalf("Keys returned %v and then %v", got, again)
+		}
+	}
+}

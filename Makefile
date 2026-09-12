@@ -48,7 +48,29 @@ BIN := crewlet
 # parallelism and CI runs the WHOLE suite under the detector, so a `make test`
 # without it would pass where CI fails. `make test-norace` is the escape
 # hatch, and says what it costs.
-GOTEST := $(GO) test -race -count=1
+#
+# -timeout IS NOT A BUDGET, it is a HANG DETECTOR, and it has to be stated
+# because go's own default is 10 minutes PER PACKAGE and internal/e2e does not
+# fit in it: that package starts a real engine, a real broker and the real API
+# per test, and measured 776s here under -race. Left at the default the gate
+# does not merely flap — it cannot pass on a machine this speed, and the
+# failure reads as a hung test rather than as a budget nobody set.
+#
+# Thirty minutes is 2.3x the measured run, which is enough for a runner half
+# this fast, and still kills a real deadlock twelve times sooner than the CI
+# job's own limit. It applies to every package because the flag is per test
+# BINARY: a unit package that hangs now dies in thirty minutes rather than ten,
+# which is the cost of having a gate that can pass at all.
+#
+# TEST_TIMEOUT is ci.yml's value, and the two must not drift: the Makefile is
+# the same command CI runs or it is a lie. It is defined BEFORE GOTEST, and
+# that is load-bearing rather than tidy: `:=` expands immediately, so with the
+# assignment below the reference the flag was handed an EMPTY value and `go
+# test` parsed the package list as its argument — `invalid value "./..." for
+# flag -timeout`. `make test` and therefore `make check` could not run at all.
+TEST_TIMEOUT := 30m
+
+GOTEST := $(GO) test -race -count=1 -timeout $(TEST_TIMEOUT)
 
 # The release targets, cross-compiled. Nothing else builds for anything but
 # the machine you are on, so a build tag or a platform-gated file that only
@@ -67,7 +89,7 @@ COMPANY ?=
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build crewlet install fmt tidy schema \
+.PHONY: help build crewlet install fmt tidy schema metrics-doc alarms-doc \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
         check fmt-check tidy-check signoff-check signoff-test vet lint test test-norace test-cross test-e2e \
         require-npm \
@@ -261,7 +283,7 @@ test: require-node ## the full suite under the race detector (ci: test (race))
 # The suite without the detector. It is roughly twice as fast and it is NOT
 # what CI runs: a data race it cannot see is a data race that lands.
 test-norace: require-node ## the full suite without -race (faster; not a gate)
-	$(GO) test -count=1 ./...
+	$(GO) test -count=1 -timeout $(TEST_TIMEOUT) ./...
 
 # Every target reports in one run rather than stopping at the first failure —
 # ci.yml sets `fail-fast: false` on this matrix for the same reason: when a
@@ -335,6 +357,20 @@ gitlab-down: ## stop the GitLab stack
 schema: ## regenerate schema/*.schema.json from the config models
 	$(GO) run ./cmd/crewlet schema bootstrap -o schema/bootstrap.schema.json
 	$(GO) run ./cmd/crewlet schema company -o schema/company.schema.json
+
+# docs/reference/metrics.md is generated from the instrument catalogue for the
+# same reason and with the same guard — internal/statelog/metrics regenerates
+# it and compares, so an instrument added without running this is a failing
+# test rather than a reference an operator cannot find their metric in.
+metrics-doc: ## regenerate docs/reference/metrics.md from the instrument catalogue
+	$(GO) run ./internal/statelog/metrics/gen > docs/reference/metrics.md
+
+# docs/reference/alarms.md is generated from the alarm table, and diffed by
+# internal/statelog for the same reason: an operator meets an alarm for the
+# first time in a log line at an inconvenient hour, and the page is where they
+# look it up.
+alarms-doc: ## regenerate docs/reference/alarms.md from the alarm table
+	$(GO) run ./internal/statelog/alarmgen > docs/reference/alarms.md
 
 # The whole release pipeline, without a tag and without touching GitHub —
 # the same two commands release.yml's snapshot job runs, in the same order.

@@ -1316,3 +1316,22 @@ kbd {
   height: 28px;
   overflow: visible;
 }
+
+/* The work BOARD: one column per group, side by side, scrolling sideways
+   rather than wrapping.
+
+   HORIZONTAL OVERFLOW IS THE POINT. A board grouped by assignee can have a
+   dozen columns, and wrapping them into rows loses the one thing a board is
+   for — every column visible at once, in the order the axis declares. So the
+   strip scrolls and each column keeps a readable width instead of being
+   squeezed to a fraction of one. */
+.board {
+  display: flex;
+  gap: var(--sp-3);
+  overflow-x: auto;
+  padding-bottom: var(--sp-2);
+}
+.board > .panel {
+  flex: 0 0 auto;
+  width: min(320px, 80vw);
+}

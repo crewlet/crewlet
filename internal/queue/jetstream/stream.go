@@ -124,6 +124,16 @@ const defaultEventRetention = 30 * 24 * time.Hour
 //   - The event stream uses LIMITS retention with an age bound, because its
 //     consumers are ephemeral dashboards and per-node materializers that
 //     must be able to fall behind, disconnect, and catch up.
+//
+// # Every field is CLASSIFIED, and the classification is exhaustive
+//
+// A stream this process did not create is a stream some other node created,
+// possibly from a different Tier A file. What a boot does about a difference
+// depends entirely on WHICH field differs, and the four answers are not
+// interchangeable — see [specField] and [classifyStreamSpec]. The
+// classification is derived by reflection over this struct so that adding a
+// field and forgetting to classify it fails a test rather than silently
+// joining the class whose default it happens to match.
 type streamSpec struct {
 	name      string
 	subjects  []string
@@ -135,6 +145,114 @@ type streamSpec struct {
 	// unlimited, which is what every stream but the memory changelog
 	// wants.
 	maxPerSubject int
+
+	// maxBytes caps the stream's size on disk. Zero means unlimited.
+	//
+	// CAPACITY rather than safety: two nodes disagreeing about how big a
+	// log may grow is an operator question, and a boot that refused over
+	// it would take a fleet down for a number nobody is losing data to.
+	maxBytes int64
+
+	// discard decides what a full stream does. DiscardNew REFUSES the
+	// append; DiscardOld drops the oldest message to make room.
+	//
+	// SAFETY, and the sharpest one here. A log whose records are the
+	// company's own state cannot silently drop its oldest record to
+	// accept a new one: the append is refused loudly instead, and the
+	// operator raises the ceiling. A stream created with the wrong
+	// discard policy would lose durable state with nothing reporting it.
+	discard jetstream.DiscardPolicy
+
+	// duplicates is the window in which a repeated Nats-Msg-Id is
+	// collapsed rather than appended twice.
+	//
+	// CAPACITY: it costs memory on the server and bounds how long a retry
+	// stays idempotent. A shorter window than a publisher's retry budget
+	// is a correctness question for the PUBLISHER, which is why the
+	// framework derives its own budget from this value rather than
+	// asserting the stream's.
+	duplicates time.Duration
+
+	// denyDelete refuses the delete-message API on this stream.
+	//
+	// TRUE for anything holding durable state, and it is not optional: a
+	// KV bucket gets DenyDelete and DenyPurge for free and a plain stream
+	// does not, so a log built as a stream is deletable by any client with
+	// the API unless it says otherwise. SAFETY.
+	denyDelete bool
+
+	// allowRollup permits a publisher to replace a stream's whole history
+	// with one message.
+	//
+	// FALSE for a log, for the same reason denyDelete is true: a rollup is
+	// a delete of everything below it, spelled as a publish. SAFETY.
+	allowRollup bool
+
+	// allowDirect and mirrorDirect let a client read a message from a
+	// FOLLOWER rather than the leader.
+	//
+	// SAFETY, and false for anything the framework reads a last-message
+	// answer from: a direct get is served from replica state that may be
+	// behind an acknowledged write, so a discriminator built on it would
+	// answer "no message here" for a message the quorum has.
+	allowDirect  bool
+	mirrorDirect bool
+}
+
+// specFieldClass is what a boot does when the running stream's value for a
+// field differs from this node's spec.
+type specFieldClass int
+
+const (
+	// classIdentity names the stream. A difference here is not a
+	// difference at all — it is a different stream.
+	classIdentity specFieldClass = iota
+
+	// classSafety is a field whose value changes what the stream MEANS.
+	// A mismatch REFUSES TO RUN, naming the field, the observed value and
+	// the expected one: a node that carried on would be publishing durable
+	// records into a stream that drops them, replays them at wall-clock
+	// speed, or lets any client delete them.
+	classSafety
+
+	// classDurability is the replication factor. A mismatch refuses
+	// ADMISSION TO NORMAL SERVICE when the observed factor is BELOW the
+	// configured one — an R3-configured node against an R1 stream is
+	// proving one copy while reporting healthy — and is fine when it is
+	// equal or higher, so an R1 development node against an R3 stream
+	// starts normally.
+	classDurability
+
+	// classCapacity is a ceiling. REPORTED and not acted on: it is an
+	// operator's question, the operator has a verb for it, and a boot that
+	// refused over a number would take a fleet down for a difference
+	// nobody is losing data to.
+	classCapacity
+)
+
+// classifyStreamSpec is the one place a spec field's class is decided.
+//
+// KEYED ON THE STRUCT FIELD NAME and asserted EXHAUSTIVE by reflection, which
+// is what a hand-written list of nine could not do: `retention` and `subjects`
+// were both missing from that list, and both are fields whose difference
+// changes what every message on the stream means.
+func classifyStreamSpec() map[string]specFieldClass {
+	return map[string]specFieldClass{
+		"name": classIdentity,
+
+		"subjects":      classSafety,
+		"retention":     classSafety,
+		"maxAge":        classSafety,
+		"maxPerSubject": classSafety,
+		"discard":       classSafety,
+		"denyDelete":    classSafety,
+		"allowRollup":   classSafety,
+		"allowDirect":   classSafety,
+		"mirrorDirect":  classSafety,
+
+		"maxBytes":   classCapacity,
+		"duplicates": classCapacity,
+	}
 }
 
 // engineStreams is the topology for the subjects the engine defines. Other
@@ -328,4 +446,103 @@ func consumerName(topic, group string) string {
 		readable = readable[:max]
 	}
 	return readable + "__" + id
+}
+
+// DomainStream is the stream a statelog domain declares, in the vocabulary a
+// domain owns rather than the broker's.
+//
+// A NARROW SURFACE ON PURPOSE. A domain says what its log IS — its name, its
+// subject space, how big it may grow and what a full log does — and every
+// safety field below is the framework's, identical for every domain, because
+// they are the fields that decide whether an ordered log is an ordered log.
+// A domain that could set them could build one that drops its oldest record
+// to accept a new one.
+type DomainStream struct {
+	// Name is the stream. Conventionally CREWLET_<DOMAIN>_LOG.
+	Name string
+
+	// Subjects is the subject space the domain publishes into.
+	Subjects []string
+
+	// MaxBytes is the ceiling. Zero is unlimited, which no shipped domain
+	// wants: a log with no ceiling fills the volume instead of refusing.
+	MaxBytes int64
+
+	// Duplicates is the window a repeated Nats-Msg-Id is collapsed in. It
+	// has to outlast a publisher's whole retry budget, or a retry that
+	// takes longer than the window appends the record twice.
+	Duplicates time.Duration
+
+	// MaxPerSubject turns the stream from a log into a KEYED TABLE by
+	// keeping only the newest message on each subject. Zero is a log; one
+	// is the compacted shape a derived, recomputable domain uses.
+	//
+	// It is the domain's because it is what the domain IS, and it is the
+	// one field here that changes what replay means: keeping one message
+	// per subject removes an INTERIOR sequence, so a loop that treats
+	// contiguity as an invariant stalls on the first ordinary write. The
+	// framework refuses the mismatch rather than inferring the loop.
+	MaxPerSubject int
+
+	// MaxAge bounds how long a message is kept, and it is legitimate on
+	// exactly one shape: a compacted stream whose rows are durable in SQL
+	// on every node anyway, so an expired message deletes nothing.
+	//
+	// ZERO ON A LOG, always. An age bound on a log deletes records a node
+	// has not applied, and there is no node whose word it takes.
+	MaxAge time.Duration
+
+	// Replicas is unused here and named to say so: the replication factor
+	// is Tier A's, identical for every stream on the node, and a domain
+	// choosing its own would be a domain choosing its own durability.
+	//
+	// REPLAY IS NOT HERE EITHER, and that is a correction rather than an
+	// omission: replay is a CONSUMER policy in this client
+	// (jetstream.ReplayPolicy on ConsumerConfig, not on StreamConfig), so
+	// a stream cannot carry it and a spec field for it could never have
+	// been applied. It is set where it exists — on the replication
+	// consumer the framework creates — and `ReplayInstantPolicy` is the
+	// client's zero value, so the guard that matters is the one asserting
+	// nothing sets it to ReplayOriginal rather than one setting it here.
+}
+
+// spec renders the domain's declaration as the broker-level spec, with every
+// safety field the framework's own.
+func (d DomainStream) spec() streamSpec {
+	return streamSpec{
+		name:      d.Name,
+		subjects:  d.Subjects,
+		retention: jetstream.LimitsPolicy,
+		maxBytes:  d.MaxBytes,
+
+		// REFUSE THE APPEND rather than drop the oldest record. The
+		// records here are the company's own state, so a full log is an
+		// operator's problem and a dropped record is nobody's until the
+		// day somebody reads the gap.
+		discard: jetstream.DiscardNew,
+
+		duplicates: d.Duplicates,
+
+		// A LOG IS NOT DELETABLE and not roll-uppable. A KV bucket gets
+		// both of these for free; a plain stream does not, so without
+		// them any client holding the API can delete a committed record
+		// or replace the whole history with one message.
+		denyDelete:  true,
+		allowRollup: false,
+
+		// NO DIRECT GETS. The framework asks the broker for a subject's
+		// last message to decide whether a write raced, and a direct get
+		// is served from replica state that may be behind an
+		// acknowledged write — so the discriminator would answer "no
+		// message here" for a message the quorum already has.
+		allowDirect:  false,
+		mirrorDirect: false,
+
+		// A log keeps every record until the trim moves the floor; a
+		// compacted stream keeps one per subject and may bound its own
+		// age, because its rows are durable in SQL on every node and an
+		// expired message therefore deletes nothing.
+		maxAge:        d.MaxAge,
+		maxPerSubject: d.MaxPerSubject,
+	}
 }

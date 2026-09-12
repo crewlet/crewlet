@@ -9,6 +9,8 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // maintenanceDutyName is the fleet singleton the retention sweep claims.
@@ -57,6 +59,67 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 		// closed one are decisions, so they are taken under the same
 		// singleton duty as every other sweep rather than by a clock.
 		jobs = append(jobs, maintenance.ChannelJobs(a2a.NewCoordStore(fleet))...)
+		// The NATIVE backends' own records, on the same edge and for a
+		// related reason: their family holds several classes under one
+		// grammar, and only some of them age out — so no bucket age can
+		// express the retention and it is taken as a decision here.
+		//
+		// Contributed only where THIS node runs the backend, which is
+		// what makes it correct to sweep a fleet-wide record from a
+		// per-node job list: the duty is a singleton, so exactly one
+		// node's list runs per tick, and a node with no backend
+		// contributes nothing rather than an empty sweep.
+		if e.native != nil {
+			if e.native.writer != nil {
+				// THE TRACKER'S OWN JOBS, and they are a different
+				// kind of thing from a sweep: its records are a log
+				// and nothing deletes them here. Four finish work a
+				// crash left half-done — a re-spread walk, an
+				// abandoned merge — and tell the tasks a close
+				// unblocked; the fifth advances the sprints, whose
+				// start and end are CALENDAR boundaries that arrive
+				// whether or not anybody is looking. Every one is
+				// GATED, so a tick with nothing to do costs one
+				// indexed read.
+				jobs = append(jobs, tracker.Jobs(tracker.DutyDeps{
+					DB: e.backends.Store, Writer: e.native.writer,
+					NodeID: e.native.nodeID,
+					// THE COMPANY'S ONE ZONE, because a sprint's
+					// window is a weekday and a minute past midnight
+					// — and a boundary computed in UTC for a team in
+					// Berlin starts their sprint at one in the
+					// morning.
+					Zone: e.trackerZone(),
+					// AND THE LEAD MAP, for the one repair whose
+					// commit carries a wake. Read per call against
+					// the epoch current when the job runs, for the
+					// reason every other live seam here is: the duty
+					// outlives a revision, and a captured map would
+					// route by an org chart that has since moved.
+					Leads: liveLeads{engine: e},
+				})...)
+			}
+			// AND THE STATE LOG'S OWN OPERATION LEDGERS, one per
+			// registered domain. Every `<domain>_ops` migration says
+			// the table is swept and ships the index a range delete
+			// needs, and nothing swept them: a row per applied record,
+			// kept for ever, on every node. PER NODE rather than under
+			// the singleton, because each node owns its own copy —
+			// see [maintenance.StatelogJobs].
+			if e.native.log != nil {
+				jobs = append(jobs, maintenance.StatelogJobs(
+					e.native.log.opsLedgers(), statelog.OpsRetention)...)
+			}
+			// THE KNOWLEDGE BASE HAS NO SWEEP ANY MORE, and its
+			// absence is a consequence rather than an omission. Its
+			// three passes were a change retention, a revision prune
+			// and an orphan collector; the prune now RIDES EACH
+			// COMMIT as the record's own list of retired versions, the
+			// orphans cannot occur because a create is one
+			// transaction, and the history is a Replicated table an
+			// applier owns — so deleting a row here on one node's own
+			// authority is exactly what the identity claim forbids.
+		}
 	}
 
 	e.maintenance = maintenance.New(maintenance.Options{
@@ -115,4 +178,18 @@ func (e *Engine) stopMaintenance() {
 	if e.maintenance != nil {
 		e.maintenance.Stop()
 	}
+}
+
+// trackerZone is the company's ONE timezone, read per call.
+//
+// PER CALL rather than captured, because a config apply replaces the epoch:
+// captured at wiring time, a company that moved its own zone would go on
+// minting sprints on the old one for the life of the process. UTC where there
+// is no company, which is the only answer a process with no epoch has.
+func (e *Engine) trackerZone() *time.Location {
+	c := e.Company()
+	if c == nil {
+		return time.UTC
+	}
+	return c.Config.Tracker.Native.Location()
 }

@@ -2,9 +2,13 @@ package config
 
 import (
 	"encoding/base64"
+	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -53,7 +57,29 @@ type Bootstrap struct {
 
 	// Logging is how loud this node is, and in what shape.
 	Logging Logging `yaml:"logging,omitempty" json:"logging"`
+
+	// Retention is the operator's own half of keeping this deployment's
+	// history: who owns its backups. The trim's terms live under
+	// `stream.tracker_retention`, beside the log they bound.
+	Retention Retention `yaml:"retention,omitempty" json:"retention,omitzero"`
 }
+
+// Retention is what the operator owns about this deployment's history.
+type Retention struct {
+	// BackupOwner is who owns the backup: a person, a team, a scheduler's
+	// name. Free text, because it is read by a human at the moment an
+	// alarm names it and by nothing else.
+	//
+	// UNSET IS WARNED ABOUT rather than refused. A company that never
+	// backs up never trims — the log is the only copy of what no node has
+	// applied yet — so "who is responsible for this" is a question with a
+	// real answer on every deployment that intends to keep working, and
+	// nowhere to put it is how it goes unasked.
+	BackupOwner string `yaml:"backup_owner,omitempty" json:"backup_owner,omitempty" desc:"Who owns this deployment's backups — a person, a team, a scheduler. Warned about when unset."`
+}
+
+// IsZero lets an unset retention block drop out of a JSON round trip.
+func (r Retention) IsZero() bool { return strings.TrimSpace(r.BackupOwner) == "" }
 
 // Logging is Tier A's logging surface: the level this node emits at and the
 // shape it writes.
@@ -433,6 +459,31 @@ type Store struct {
 	// Path is the database file. Created if absent, along with its parent.
 	Path string `yaml:"path,omitempty" json:"path,omitempty" desc:"Local database file this node owns exclusively."`
 
+	// SnapshotDir is where this node keeps its own snapshots of the
+	// replicated estate — the file a peer joining the fleet copies instead
+	// of replaying the whole log.
+	//
+	// DELIBERATELY NOT UNDER stream., because it is a disk fact rather
+	// than a broker fact. Absolute, or relative to the store's directory.
+	//
+	// THE DEFAULT PUTS A FULL COPY OF THE ESTATE ON THE SAME VOLUME as the
+	// live database and its write-ahead log, which is why the snapshot
+	// loop carries a free-space precondition and refuses rather than
+	// filling the disk the applier is committing to. A separate volume is
+	// the production shape.
+	SnapshotDir string `yaml:"snapshot_dir,omitempty" json:"snapshot_dir,omitempty" desc:"Where this node keeps snapshots of the replicated estate; empty is <dir of path>/snapshots."`
+
+	// ReplicatedPath is the second database this node owns: everything a
+	// state log's applier writes. Empty puts it beside Path, which is
+	// what makes "back up the data directory" true.
+	//
+	// Separable because the two files have different appetites — the
+	// replicated one is what a snapshot copies and what a node joining the
+	// fleet writes at line rate — so an operator with a fast local disk
+	// and a large network volume has a real reason to split them. Both are
+	// still this node's alone, and neither is shared with a peer.
+	ReplicatedPath string `yaml:"replicated_path,omitempty" json:"replicated_path,omitempty" desc:"Second local database, for replicated state; empty puts it beside path."`
+
 	// MaxOpenConns bounds the connection pool; 0 takes the store's own
 	// default, which is sized to the dashboard's query concurrency.
 	MaxOpenConns int `yaml:"max_open_conns,omitempty" json:"max_open_conns,omitempty" js:"min=0" desc:"Connection pool bound; 0 takes the store default."`
@@ -448,6 +499,15 @@ func (s *Store) validate(path string) error {
 		p.add(at(path, "path"), ErrMissing,
 			"the store is a local file this node owns; name one (e.g. %q)",
 			DefaultStorePath)
+	}
+	// THE SAME FILE TWICE IS TWO EXCLUSIVE LOCKS ON ONE PATH, which this
+	// process would take and then deadlock nothing — it would simply
+	// migrate one estate's schema into the other's database and run both
+	// appliers against the audit log's file.
+	if rp := strings.TrimSpace(s.ReplicatedPath); rp != "" && rp == strings.TrimSpace(s.Path) {
+		p.add(at(path, "replicated_path"), ErrConflict,
+			"is the same file as store.path; the two estates are two databases, "+
+				"and one file holding both is neither")
 	}
 	if s.MaxOpenConns < 0 {
 		p.add(at(path, "max_open_conns"), ErrOutOfRange,
@@ -528,6 +588,182 @@ type Stream struct {
 	// `tls { verify: true }`, which REQUIRES a client certificate — is
 	// simply unreachable.
 	TLS NATSTLS `yaml:"tls,omitempty" json:"tls,omitzero"`
+
+	// Sync decides what an acknowledged publish has actually reached, and
+	// it is the one Tier A field that changes what durability MEANS here.
+	//
+	// `always` fsyncs every write before acknowledging it. `<duration>`
+	// declines the fsync and names the window instead — the most an
+	// acknowledged write can be behind the disk. Unset takes `always`,
+	// which is the strong value at every replica count, because the
+	// alternative is a default that is silently weaker on exactly the
+	// deployments that matter most.
+	//
+	// IT IS NOT INFERRED FROM replicas, and the inference it replaces is
+	// the reason this field exists. "A replicated member has a quorum
+	// instead of a disk" is true when one host loses power and false when
+	// a rack does — and a three-node fleet in one rack, which is what a
+	// first production deployment looks like, is exposed to the second by
+	// construction. Three copies of the same unflushed page cache is one
+	// copy.
+	Sync string `yaml:"sync,omitempty" json:"sync,omitempty" desc:"always (default) fsyncs every write before acknowledging it; a duration (30s) declines the fsync and names the window an acknowledged write may be behind the disk."`
+
+	// TrackerLogMaxBytes is the byte ceiling on the mutation log — the
+	// ordered stream a state-log domain writes through.
+	//
+	// UNSET DERIVES IT from the volume the stream is stored on: a quarter
+	// of its free space, clamped to 4 GiB..64 GiB. A fixed default is
+	// wrong in both directions — the same number is five years of history
+	// on the modelled write rate and one boot on a small disk — and the
+	// value is recorded on the stream when it is created, so a node that
+	// derived it can say what it derived it from.
+	//
+	// WHAT THIS FIELD DOES IS NARROWER THAN IT LOOKS. It is the value the
+	// stream is CREATED with, and thereafter a DECLARATION the engine
+	// checks the broker's actual ceiling against and reports on. Editing
+	// it on a running fleet changes nothing by itself: a stream's
+	// configuration has one writer and a booting node is not it, so
+	// re-applying it at boot would let restart order decide a shared limit
+	// and let a late node lower a ceiling an emergency grant had just
+	// raised.
+	//
+	// CROSSING IT REFUSES; IT DOES NOT SHED. There is no age bound on this
+	// stream, so a full log drops no history — the append is refused,
+	// loudly, naming this field and whatever is blocking the trim.
+	TrackerLogMaxBytes int64 `yaml:"tracker_log_max_bytes,omitempty" json:"tracker_log_max_bytes,omitempty" js:"min=1073741824;max=1099511627776" desc:"Byte ceiling on the mutation log; unset derives a quarter of the stream volume's free space, clamped to 4 GiB..64 GiB."`
+
+	// TrackerVectorsMaxBytes is the byte ceiling on the vector changelog.
+	//
+	// SIZED FOR THE PEAK, NOT THE STEADY STATE, and the two differ by 93×.
+	// The stream keeps one message per source and bounds their age, so a
+	// week's minting is about 91 MB. But changing the embedding model or
+	// its width rewrites EVERY source in a few hours, and for the
+	// following week every source's current message is inside the window:
+	// 8.46 GB at the modelled year-five corpus. The default is twice that.
+	// Sizing this field from the steady state would refuse the one
+	// operation it exists to survive.
+	TrackerVectorsMaxBytes int64 `yaml:"tracker_vectors_max_bytes,omitempty" json:"tracker_vectors_max_bytes,omitempty" js:"min=1073741824;max=274877906944" desc:"Byte ceiling on the vector changelog; default 16 GiB, sized for a model change rather than the steady state."`
+
+	// TrackerRetention is when the log may be trimmed, and it is the one
+	// block here that can stop a fleet's log growing for ever — or stop it
+	// trimming at all, deliberately, when a term it depends on is unknown.
+	TrackerRetention TrackerRetention `yaml:"tracker_retention,omitempty" json:"tracker_retention,omitzero"`
+}
+
+// TrackerRetention is the operator's half of the log trim.
+//
+// # Why these are Tier A and not the company's config
+//
+// Every one of them is a statement about the OPERATOR's estate rather than
+// about the company: how they back up, how long their disk should hold a
+// replay window, how much I/O their machines can spend, how long they will
+// wait for a node to become a complete replica. None is a policy a founder
+// sets, and Tier B is edited live — so lowering a durability gate there would
+// move it underneath a trim that had already computed against it.
+//
+// # Why the duration fields carry a Raw suffix
+//
+// The Go name and the YAML key are allowed to differ, and here they must: the
+// operator writes `min_age: 7d` and every reader wants a [time.Duration], so
+// the field holds the text and the method holds the value. A field and a
+// method cannot share a name, and of the two the METHOD should have the plain
+// one — the parsed value is what the engine uses everywhere and the text is
+// read in exactly one place.
+type TrackerRetention struct {
+	// MinAgeRaw is the age floor no trim may cross, whatever the other terms
+	// say. It can only make a trim MORE conservative, so it is a LOWER
+	// bound on how long the log keeps a record and never a ceiling — and
+	// it says nothing at all about any node's own store file.
+	//
+	// Seven days is the horizon this fleet already treats as how long a
+	// node may be away, and a retention floor that disagreed with it would
+	// be a second answer to one question.
+	//
+	// THE 24-HOUR FLOOR HAS THREE REASONS: a value below a day cannot
+	// outlast a nightly backup cycle; it is the margin that keeps a quiet
+	// object writable, because an object whose last record has been
+	// trimmed away has to be recognised as trimmed rather than as absent;
+	// and it is the age bound on the vector changelog, so lowering it
+	// shortens the window a joining node's vector gap is refilled from.
+	MinAgeRaw string `yaml:"min_age,omitempty" json:"min_age,omitempty" desc:"Age floor no trim may cross (default 7d, 24h..90d)."`
+
+	// BackupMaxAge is how stale the newest complete backup may be before
+	// the trim stops entirely.
+	//
+	// A COMPANY THAT NEVER BACKS UP NEVER TRIMS. The log is the only copy
+	// of what no node has applied yet, and trimming past the newest backup
+	// is deleting the last thing that could rebuild it. A day is the
+	// cadence a nightly backup keeps against a trim that runs every
+	// fifteen minutes, so a fleet with a working nightly never notices and
+	// a fleet with a broken one stops within a day.
+	BackupMaxAgeRaw string `yaml:"backup_max_age,omitempty" json:"backup_max_age,omitempty" desc:"How stale the newest backup may be before the trim stops (default 24h, 1h..30d)."`
+
+	// BackupFloor is whose word the trim takes for what is backed up.
+	//
+	// `engine` follows the newest backup the engine itself wrote and
+	// verified. `operator` follows an explicit acknowledgement, for a
+	// company whose policy is "trim only what is off-site" — which the
+	// engine cannot see for itself, because a backup is not a backup until
+	// it leaves the host. Under `operator` the trim does not advance until
+	// that acknowledgement has been given at least once, which is a state
+	// worth being warned about rather than discovering.
+	BackupFloor BackupFloor `yaml:"backup_floor,omitempty" json:"backup_floor,omitempty" js:"enum=engine|operator" desc:"Whose word the trim takes for what is backed up: engine (default) or operator."`
+
+	// SnapshotInterval is how stale a node's newest snapshot may be before
+	// it takes another.
+	//
+	// A day rather than six hours, and the arithmetic is the reason: a
+	// snapshot is a full copy of the replicated estate — tens of gigabytes
+	// at a mature company — so four a day is a day's worth of I/O to save
+	// a joining node a replay it can do in under a minute.
+	SnapshotIntervalRaw string `yaml:"snapshot_interval,omitempty" json:"snapshot_interval,omitempty" desc:"How stale a node's newest snapshot may be before it takes another (default 24h, 1h..7d)."`
+
+	// RejoinWindow is the operator's budget for a node to become a
+	// complete replica — what a join is measured against and reported on.
+	//
+	// A SETTING RATHER THAN A CONSTANT because the answer is a property of
+	// the operator's disks and network, and the spread between a
+	// conservative and a fast profile is more than twice.
+	RejoinWindowRaw string `yaml:"rejoin_window,omitempty" json:"rejoin_window,omitempty" desc:"Budget for a node to become a complete replica (default 30m, 5m..24h)."`
+}
+
+// BackupFloor is whose word the trim takes for what is backed up.
+type BackupFloor string
+
+const (
+	// BackupFloorEngine follows the newest backup the engine wrote and
+	// verified itself.
+	BackupFloorEngine BackupFloor = "engine"
+
+	// BackupFloorOperator follows an explicit acknowledgement, for a
+	// company that trims only what has left the host.
+	BackupFloorOperator BackupFloor = "operator"
+)
+
+// BackupFloors is the closed set.
+var BackupFloors = []BackupFloor{BackupFloorEngine, BackupFloorOperator}
+
+// StreamSyncAlways is [Stream.Sync]'s strong value.
+const StreamSyncAlways = "always"
+
+// SyncAlways reports whether every write is fsynced before it is
+// acknowledged. Unset means yes — see [Stream.Sync].
+func (s Stream) SyncAlways() bool {
+	v := strings.TrimSpace(s.Sync)
+	return v == "" || v == StreamSyncAlways
+}
+
+// SyncInterval is the flush window when the fsync is declined, or 0 when it is
+// not. Validation has already established the value parses.
+func (s Stream) SyncInterval() time.Duration {
+	if s.SyncAlways() {
+		return 0
+	}
+	d, err := time.ParseDuration(strings.TrimSpace(s.Sync))
+	if err != nil {
+		return 0
+	}
+	return d
 }
 
 // StreamCluster is an embedded server's membership in a cluster.
@@ -538,11 +774,31 @@ type StreamCluster struct {
 	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"Route port for cluster traffic."`
 	// Peers are the other members' route URLs.
 	Peers []string `yaml:"peers,omitempty" json:"peers,omitempty" desc:"Route URLs of the other members."`
+
+	// Host is the interface the route listener binds. Empty binds every
+	// one of them, which on a host with a public interface publishes
+	// UNAUTHENTICATED CLUSTER ACCESS: a route port is how a member joins,
+	// and joining is how it reads and writes every stream. Set it to the
+	// private address the peers reach.
+	Host string `yaml:"host,omitempty" json:"host,omitempty" desc:"Interface the route listener binds. Empty binds every interface."`
+
+	// Advertise is the address peers should dial for this member when it
+	// differs from what the member binds — a mapped container port, a NAT,
+	// a member behind a load balancer.
+	//
+	// It matters because a member's address TRAVELS: peers learn about
+	// each other from the members they are already connected to, and dial
+	// what they are told. Unset, that address is derived from the
+	// connection's own remote address, which on a NAT'd host is either
+	// unreachable or somebody else's. Host and port, or a bare host to
+	// keep this member's own route port.
+	Advertise string `yaml:"advertise,omitempty" json:"advertise,omitempty" desc:"host:port peers should dial for this member, when it differs from what it binds."`
 }
 
 // IsZero lets an unset cluster block drop out of a JSON round trip.
 func (c StreamCluster) IsZero() bool {
-	return c.Name == "" && c.Port == 0 && len(c.Peers) == 0
+	return c.Name == "" && c.Port == 0 && len(c.Peers) == 0 &&
+		c.Host == "" && c.Advertise == ""
 }
 
 func (s *Stream) validate(path string) error {
@@ -568,6 +824,9 @@ func (s *Stream) validate(path string) error {
 	if s.Replicas < 0 {
 		p.add(at(path, "replicas"), ErrOutOfRange, "must not be negative, got %d", s.Replicas)
 	}
+	if err := s.validateSync(path, external); err != nil {
+		p.wrap(err)
+	}
 	if s.EventRetentionHours < 0 {
 		p.add(at(path, "event_retention_hours"), ErrOutOfRange,
 			"must be 0 (the queue default) or positive, got %v", s.EventRetentionHours)
@@ -575,8 +834,47 @@ func (s *Stream) validate(path string) error {
 	if s.Cluster.Port < 0 || s.Cluster.Port > 65535 {
 		p.add(at(path, "cluster.port"), ErrOutOfRange, "must be 0..65535, got %d", s.Cluster.Port)
 	}
+	// Refused here rather than at the broker. nats-server validates an
+	// advertise address while STARTING, logs it and shuts the server down
+	// — which surfaces as a node that boots, fails and leaves the operator
+	// reading broker logs for a typo in their own config file.
+	bytesInRange(&p, path, "tracker_log_max_bytes", s.TrackerLogMaxBytes,
+		TrackerLogMaxBytesFloor, TrackerLogMaxBytesCeiling)
+	bytesInRange(&p, path, "tracker_vectors_max_bytes", s.TrackerVectorsMaxBytes,
+		TrackerVectorsMaxBytesFloor, TrackerVectorsMaxBytesCeiling)
+	p.wrap(s.TrackerRetention.validate(at(path, "tracker_retention")))
+	if adv := strings.TrimSpace(s.Cluster.Advertise); adv != "" {
+		if err := validateAdvertise(adv); err != nil {
+			p.add(at(path, "cluster.advertise"), ErrShape, "%v", err)
+		}
+	}
 	p.wrap(s.TLS.validate(at(path, "tls")))
 	return p.err()
+}
+
+// validateAdvertise checks a cluster advertise address: a host, optionally
+// with a port. A bare host keeps this member's own route port, which is the
+// common case behind a NAT that maps the port through unchanged.
+func validateAdvertise(adv string) error {
+	host, port, err := net.SplitHostPort(adv)
+	if err != nil {
+		// No port at all is legitimate; anything else is not. An address
+		// with a colon in it and no port is a bracket the operator left
+		// off an IPv6 literal, and reporting that as "no port" would send
+		// them looking in the wrong place.
+		if strings.Contains(adv, ":") {
+			return fmt.Errorf("%q is not a host or host:port: %w", adv, err)
+		}
+		return nil
+	}
+	if host == "" {
+		return fmt.Errorf("%q names a port with no host: peers have nothing to dial", adv)
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return fmt.Errorf("%q: port must be 1..65535", adv)
+	}
+	return nil
 }
 
 // EventRetention is the retention window as a duration; zero means the
@@ -925,4 +1223,101 @@ func (s *Secrets) Cipher() (secrets.Cipher, error) {
 		ring.Keys[key.ID] = material
 	}
 	return secrets.NewCipher(ring)
+}
+
+// validateSync checks stream.sync, and its three refusals are the cases where
+// the value is a claim the deployment cannot make.
+//
+// The refusals are about MEANING rather than about syntax. Declining the fsync
+// is a legitimate operator choice with a real cost, and each of these is a
+// place where the choice would be recorded and then not honoured — which is
+// worse than either answer, because the operator believes the number they
+// wrote.
+func (s *Stream) validateSync(path string, external bool) error {
+	var p problems
+	raw := strings.TrimSpace(s.Sync)
+	if raw == "" || raw == StreamSyncAlways {
+		// THE WARNING, not a refusal: an unset value takes `always`, and
+		// on a replicated fleet that is a deliberate cost rather than an
+		// accident. It is stated where the operator will read it — see
+		// docs/guides/deployment.md — rather than made a validation
+		// problem, because there is nothing here to fix.
+		return nil
+	}
+
+	// (1) AN EXTERNAL CLUSTER'S DISK IS NOT THIS PROCESS'S TO CONFIGURE.
+	// The field sets an option on the EMBEDDED server; against
+	// `stream.type: nats` it is read by nobody, so accepting it would
+	// record a durability decision that never reaches the thing storing
+	// the data.
+	if external {
+		p.add(at(path, "sync"), ErrConflict,
+			"stream.sync configures the EMBEDDED server's file store, and an "+
+				"external NATS cluster stores its own data: set sync_interval "+
+				"on that cluster instead, or remove this field")
+		return p.err()
+	}
+
+	d, err := time.ParseDuration(raw)
+	switch {
+	case err != nil:
+		p.add(at(path, "sync"), ErrUnknownValue,
+			"%q is neither %q nor a duration (30s, 2m): it names how far behind "+
+				"the disk an acknowledged write may be", s.Sync, StreamSyncAlways)
+		return p.err()
+	case d <= 0:
+		p.add(at(path, "sync"), ErrOutOfRange,
+			"%q must be positive: a zero or negative window is %q said in a way "+
+				"nothing reads", s.Sync, StreamSyncAlways)
+		return p.err()
+	}
+
+	// (2) BELOW THREE REPLICAS THERE IS NO QUORUM TO SPEND INSTEAD. The
+	// whole argument for declining the fsync is that a majority holds the
+	// write; a solo member's disk is the only copy there is, so the
+	// window is not a trade, it is a straight loss.
+	if s.Replicas < 3 {
+		p.add(at(path, "sync"), ErrConflict,
+			"declining the fsync trades this member's disk for a quorum, and "+
+				"replicas=%d has no quorum to trade for: the local disk is the "+
+				"only copy, so %q would be a window with nothing behind it",
+			max(s.Replicas, 1), s.Sync)
+	}
+
+	// (3) A SAME-HOST CLUSTER IS ONE FAILURE DOMAIN. Peers that resolve to
+	// this host share its power, its kernel and its page cache, so the
+	// majority the window is traded for dies with the member that has it.
+	if sameHostCluster(s.Cluster.Peers) {
+		p.add(at(path, "sync"), ErrConflict,
+			"every peer in stream.cluster.peers is on this host, so the quorum "+
+				"this window trades for shares one power supply and one page "+
+				"cache: %q would be recorded and not honoured", s.Sync)
+	}
+	return p.err()
+}
+
+// sameHostCluster reports whether every peer address is on this machine.
+//
+// A HOST TEST rather than an address test: `localhost`, `127.0.0.1` and `::1`
+// are the three spellings a compose file or a laptop fleet uses, and they are
+// one failure domain however they are written. An empty peer list is not a
+// cluster at all and answers false — the replica rule above is what covers it.
+func sameHostCluster(peers []string) bool {
+	if len(peers) == 0 {
+		return false
+	}
+	for _, peer := range peers {
+		host := strings.TrimSpace(peer)
+		if u, err := url.Parse(host); err == nil && u.Host != "" {
+			host = u.Hostname()
+		} else if h, _, splitErr := net.SplitHostPort(host); splitErr == nil {
+			host = h
+		}
+		switch strings.ToLower(strings.Trim(host, "[]")) {
+		case "localhost", "127.0.0.1", "::1", "0.0.0.0":
+		default:
+			return false
+		}
+	}
+	return true
 }

@@ -494,6 +494,184 @@ export interface FleetNode {
   posture?: string;
 }
 
+/**
+ * The state log's retention document, as `crewlet retention status --json` and
+ * `GET /work/retention` both serve it.
+ *
+ * MIRRORS `statelog.Report` FIELD FOR FIELD, deliberately. It is one wire
+ * contract with three readers — a CLI, a script and this screen — and a shape
+ * restated loosely here would be a fourth idea of what the answer is.
+ */
+export interface RetentionReport {
+  v: number;
+  node_id: string;
+  at: string;
+  backup_owner?: string;
+  domains: RetentionDomain[];
+  nodes: RetentionNode[];
+  /**
+   * False means the node block is what could be READ of the fleet rather than
+   * the fleet. An empty list is otherwise two different answers — "this fleet
+   * has no nodes", which cannot happen, and "coordination could not be
+   * listed", which happens during exactly the outage somebody is reading this
+   * during.
+   */
+  register_readable: boolean;
+  /**
+   * The level the node SERVED this document at, which is what keeps a
+   * replication answer inside the read-level contract rather than exempt from
+   * it. Nobody chooses it, on any surface: `stale` while the node could
+   * measure its own distance from the log, `consistent_prefix` when it could
+   * not — because `stale` is a claim about AGE and an unmeasured lag cannot
+   * make one. Anything but `stale` is rendered, since a document that cannot
+   * claim an age otherwise looks exactly like one that can.
+   */
+  read_level?: ReadLevel;
+  snapshots: RetentionSnapshot[];
+  replica: RetentionReplica;
+  alarms: RetentionAlarm[];
+  /**
+   * The capacity operation currently holding the fleet, ABSENT when there is
+   * none. Maintenance stops every publisher on every node — no seats, no
+   * duties, no scheduler, no write routes — and it was visible on no screen
+   * at all: an operator watching a company go quiet had nothing to look at
+   * that said why.
+   */
+  maintenance?: RetentionMaintenance;
+}
+
+/** One open capacity operation. */
+export interface RetentionMaintenance {
+  stream: string;
+  operation_id: string;
+  /** Where it stands, and which write-then-seal cycle it is on. */
+  phase: string;
+  attempt: number;
+  target_max_bytes: number;
+  original_max_bytes: number;
+  since: string;
+  by?: string;
+  /**
+   * The nodes whose acknowledgement the seal is still waiting for. EMPTY IS
+   * NOT UNKNOWN: an operation with nobody outstanding is one waiting on its
+   * operator, which is the state somebody finding this most needs to see.
+   */
+  participants_missing?: string[];
+  /** Why it cannot proceed without a person, empty while it can. */
+  blocked?: string;
+}
+
+/** One registered domain's row. */
+export interface RetentionDomain {
+  domain: string;
+  stream: string;
+  generation: number;
+  replay: string;
+  first_seq: number;
+  last_seq: number;
+  bytes: number;
+  max_bytes?: number;
+  /** ABSENT when the broker could not be asked — which is not zero headroom. */
+  headroom_fraction?: number;
+  /** What has actually been removed, and what THIS tick concluded may be. */
+  trim_floor: number;
+  trim_to: number;
+  terms: RetentionTerm[];
+  blocked_by?: string;
+  blocked_since?: string;
+  /** The sentence a blocked trim leads with. */
+  prose?: string;
+  /** The snapshot loop's OWN skip reason — a different problem from a blocked
+   *  trim, with a different remedy, which is why it is its own field. */
+  snapshot_blocked_by?: string;
+}
+
+/** A term's third value made explicit: read, unreadable, or not applicable. */
+export type RetentionTermState = "ok" | "unknown" | "n/a";
+
+export interface RetentionTerm {
+  name: string;
+  state: RetentionTermState;
+  /** Meaningless unless `state` is "ok". */
+  seq?: number;
+  detail?: string;
+  /** On EVERY term rather than the blocking one: an operator watching a term
+   *  approach is the case this surface exists for. */
+  remedy: string;
+}
+
+export interface RetentionNode {
+  node_id: string;
+  /** Counted means the trim waits for it; live means it holds a lease right
+   *  now. INDEPENDENT: counted-and-not-live is the node pinning the log, and
+   *  live-and-not-counted is one inside its eviction fence window. */
+  counted: boolean;
+  live: boolean;
+  /** ABSENT for a node that is live and has never reported, which renders as
+   *  "counted, no position yet" rather than as a node at position zero. */
+  at?: string;
+  domains?: Record<string, RetentionNodeDomain>;
+  evicted?: RetentionEviction;
+}
+
+export interface RetentionNodeDomain {
+  generation: number;
+  seq: number;
+  /** BESIDE seq, never instead of it: a node applying nothing while its
+   *  position advances looks identical to a caught-up one from either alone. */
+  applied_through: number;
+  /** ABSENT rather than zero when the stream could not be read. */
+  lag?: number;
+  deferred?: number;
+}
+
+export interface RetentionEviction {
+  by: string;
+  at: string;
+  /** When the trim stops counting the node — one fence window after the
+   *  gesture. Printed because the gesture is NOT immediate, and an operator
+   *  who does not know that reads the unchanged watermark as a failure. */
+  effective_at: string;
+  effective: boolean;
+}
+
+export interface RetentionSnapshot {
+  node_id: string;
+  /** Absent when the node holds none, in which case `skip` says why. */
+  domains?: Record<string, number>;
+  at?: string;
+  bytes?: number;
+  /** The loop's own reason for holding none, which is what turns "node-4
+   *  none" into an answer. */
+  skip?: string;
+}
+
+export interface RetentionReplica {
+  store_bytes: number;
+  projected_join_seconds: number;
+  rejoin_window_seconds: number;
+}
+
+export interface RetentionAlarm {
+  kind: string;
+  detail: string;
+  remedy: string;
+}
+
+/** What a retention gate answered. The outcome is three-valued (D134). */
+export interface RetentionGateResult {
+  node: string;
+  evicted: boolean;
+  /**
+   * `applied` is durable AND in this node's rows; `pending` is durable at the
+   * position and unapplied HERE, so what it produced is unresolved rather
+   * than failed; `unknown` is the only one where retrying is correct.
+   */
+  outcome: "applied" | "pending" | "unknown";
+  position?: { stream?: string; generation?: number; seq?: number };
+  op_id?: string;
+}
+
 export interface FleetSeatLease {
   handle: string;
   /** The node holding it. `owner` beside it is the fencing token, not an id. */
@@ -723,7 +901,17 @@ export interface KnowledgeHit {
  * learn a reason this build does not know, and an unknown one must render as
  * its prose `note` rather than crash the screen.
  */
-export type KnowledgeReason = "" | "no_company" | "no_backend" | "no_scope" | (string & {});
+export type KnowledgeReason =
+  | ""
+  | "no_company"
+  | "no_backend"
+  | "no_scope"
+  /** The backend keeps a local index and it is still catching up. NOT the
+   *  same fact as an empty result: on a freshly joined node this is true for
+   *  the whole first index build, and rendering it as "nothing found" tells a
+   *  reader the company has written nothing down. */
+  | "building"
+  | (string & {});
 
 export interface KnowledgeAnswer {
   backend: string;
@@ -739,6 +927,726 @@ export interface KnowledgeAnswer {
   reason: KnowledgeReason;
   /** Search is best effort: a failure is an empty result plus this note. */
   note: string;
+}
+
+// ---------------------------------------------------------------------------
+// The native tracker and knowledge base
+// ---------------------------------------------------------------------------
+//
+// These are the engine's OWN backends — a company on Jira or Confluence has
+// none of these questions registered at all, and the screens say so rather
+// than drawing an empty board. Every field here is the Go type's own JSON
+// tag; the wire shape is [work.Summary], [work.Detail], [pages.Summary] and
+// [pages.Detail], serialised as they stand.
+
+/** The tracker's SIX statuses. `blocked` is deliberately not among them: a
+ *  blocker is DATA a badge and a filter read, carried beside the status on
+ *  `WorkSummary.blocked`, because a task can be both in progress and blocked
+ *  and a single field cannot say so. There is no `close_reason` either —
+ *  `cancelled` IS "finished without being delivered", which is what keeps it
+ *  invisible to velocity with no second value to keep in step. */
+export type WorkStatus =
+  | "todo"
+  | "in_progress"
+  | "in_review"
+  | "done"
+  | "cancelled"
+  | "closed"
+  | (string & {});
+
+/** The four groups every rule is written at. */
+export type WorkStatusGroup = "not_started" | "active" | "done" | "closed" | (string & {});
+
+/** OPEN, not an enum: the type catalogue is the workspace's, and a company
+ *  filing "incident" is filing something this build has never heard of. */
+export type WorkType = string;
+export type WorkPriority = "none" | "low" | "normal" | "high" | "urgent" | (string & {});
+
+/** How stale an answer may be, as the engine ACTUALLY served it — never the
+ *  level asked for. A level never silently downgrades, so the two can differ
+ *  only by a refusal.
+ *
+ *  THE FOUR THE ENGINE HAS. It listed `monotonic`, which is not one of them
+ *  and never arrives, and omitted `consistent_prefix`, which does — so the one
+ *  value a screen has to treat specially was the one the type did not name.
+ *  `session` is here because the framework has it; no read surface offers it,
+ *  since it waits for a position no client can supply.
+ *
+ *  The open `string` arm stays: a newer build may serve a level this bundle
+ *  does not know, and a badge that renders it is better than a type error. */
+export type ReadLevel =
+  | "linearizable"
+  | "session"
+  | "stale"
+  | "consistent_prefix"
+  | (string & {});
+
+/** One task as a board row draws it. The BODY IS ABSENT — fifty tasks at
+ *  64 KiB each is three megabytes to draw a list of titles. */
+export interface WorkSummary {
+  id: string;
+  key: string;
+  project: string;
+  title: string;
+  status: WorkStatus;
+  status_group?: WorkStatusGroup;
+  priority?: WorkPriority;
+  assignee?: string;
+  sprint?: number;
+  parent?: string;
+  depth?: number;
+  start?: string;
+  due?: string;
+  /** The row's OWN copy of the overdue predicate, so a renderer never
+   *  re-derives it differently — which is how one screen shows a task as
+   *  overdue and another does not. */
+  overdue?: boolean;
+  estimate_min?: number;
+  points?: number;
+  /** Data a badge and a filter read. It gates nothing: closing a task with
+   *  open blockers is allowed. */
+  blocked?: boolean;
+  archived?: boolean;
+  rank?: string;
+  updated: string;
+  /** The composed log position this row was last written at. */
+  version: number;
+}
+
+/** What an answer could NOT account for: records this node holds and cannot
+ *  decode, whose scope could intersect the question. */
+export interface WorkIncomplete {
+  records: number;
+  from: { stream: string; generation: number; seq: number };
+  /** What is affected. It does NOT say in which direction — that is what
+   *  "cannot decode" means. */
+  scope: string[];
+  /** The record version this node could not read, which is the one number an
+   *  operator needs to pick a build. */
+  version: number;
+}
+
+/** One aggregate over an answer's whole matched set. */
+export interface WorkTotal {
+  key: string;
+  column: string;
+  op: string;
+  /** ABSENT when no row contributed — which is not zero: "nothing is
+   *  estimated" and "everything is estimated at nothing" are different
+   *  facts. */
+  value?: number;
+  /** The instant, for a min or a max over a date column. */
+  at?: string;
+}
+
+/** One column of a grouped answer.
+ *
+ *  `count` is over the WHOLE set, never over `rows`: a column of four hundred
+ *  tasks says four hundred and carries twenty. */
+export interface WorkGroup {
+  key: string;
+  label?: string;
+  count: number;
+  rows: WorkSummary[];
+  subgroups?: WorkGroup[];
+  /** Lanes this column has beyond the cap, said rather than silently cut —
+   *  the same rule `groups_dropped` follows for the columns themselves. A
+   *  swimlane board is bounded by its CELLS: the statement count is the
+   *  product of the two axes, so the column cap drops when lanes are asked
+   *  for. */
+  subgroups_dropped?: number;
+}
+
+export interface WorkItemsAnswer {
+  items: WorkSummary[];
+  /** The board's columns. `items` is EMPTY whenever this is set — returning
+   *  both would be the same rows twice. */
+  groups?: WorkGroup[];
+  /** Columns that did not fit the cap. A board that drew sixty-four of two
+   *  hundred and said nothing would look like a company with sixty-four
+   *  assignees. */
+  groups_dropped?: number;
+  /** True on an axis where one task is on several columns — a label board —
+   *  so a reader knows the counts do not sum to `total_hint`. */
+  groups_overlap?: boolean;
+  totals?: WorkTotal[];
+  /** What this answer was expanded from, echoed so a payload that arrives
+   *  detached from its request can still say which saved view it is. */
+  view?: string;
+  preset?: string;
+  /** Capped by construction: an exact total over an unbounded set is the one
+   *  query in this grammar that turns a poll into a scan. */
+  total_hint: number;
+  next_cursor?: string;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  /** ABSENT rather than zero when the broker could not be reached: a read
+   *  asks how far behind an answer may be, and an unreachable broker answers
+   *  "not at all". */
+  log_lag?: number;
+  /** False means rows may be missing, rows that should have left may still be
+   *  present, and the totals were computed over the incomplete set. A screen
+   *  that swallows this is worse than a stale tile: staleness and coverage
+   *  are different facts, and `read_level` speaks only to the first. */
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
+/** One entry in a container's view strip.
+ *
+ *  A BUILTIN ROW HAS NO ID. Every container has a list, a board and a calendar
+ *  without anybody saving one — they are not objects, so there is nothing to
+ *  rename, protect, rank or pin — and a screen renders them from `key`. */
+export interface WorkView {
+  id?: string;
+  key: string;
+  name: string;
+  type: "list" | "board" | "calendar";
+  container: { kind: string; id: string };
+  builtin: boolean;
+  /** Empty is a SHARED view; a handle makes it personal to that person. */
+  owner?: string;
+  protected?: boolean;
+  /** The container's landing tab, and at most one row carries it. */
+  default?: boolean;
+  /** THIS VIEWER's, never the row's: the same view is pinned for one reader
+   *  and not for another. */
+  pinned?: boolean;
+  rank?: string;
+  icon?: string;
+  /** The saved query, in `work_items`' own parameter names. */
+  params?: Record<string, string>;
+}
+
+export interface WorkViewsAnswer {
+  views: WorkView[];
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
+/** A project's chart-owned unit, as a reader renders it.
+ *
+ *  `resolved` IS A FIELD rather than an absence, because "this project names a
+ *  unit the chart no longer has" is a finding — and an absent unit would be
+ *  indistinguishable from a project that names none. */
+export interface WorkUnitRef {
+  key?: string;
+  name?: string;
+  resolved: boolean;
+}
+
+export interface WorkLeadRef {
+  handle?: string;
+  kind?: "agent" | "human" | "operator" | "system";
+}
+
+/** A project's task census.
+ *
+ *  MAINTAINED by the applier on every status-group change and every arrival or
+ *  departure, never aggregated per poll — which is what makes a sixty-second
+ *  refresh three column reads rather than a scan of every task in the
+ *  company. */
+export interface WorkTaskCounts {
+  open: number;
+  done: number;
+  closed: number;
+}
+
+/** One sprint's arithmetic, in the project's own measure.
+ *
+ *  `measure` is on the row because a bare number is points to one team and
+ *  minutes to another. */
+export interface WorkSprintFigures {
+  measure: "points" | "estimate_min";
+  committed: number;
+  added: number;
+  removed: number;
+  done: number;
+  remaining: number;
+  open_after_close: number;
+  tasks: number;
+  /** How many of them carry NO value in the measure — the honesty column. */
+  unestimated: number;
+}
+
+export interface WorkSprintAssignee {
+  handle: string;
+  committed: number;
+  done: number;
+  remaining: number;
+  total: number;
+  tasks: number;
+  /** ABSENT when the project's policy declares none: an unset capacity is not
+   *  a capacity of zero, which would render every assignee permanently over. */
+  capacity?: number;
+  over_capacity?: boolean;
+}
+
+export interface WorkSprintRow {
+  project: string;
+  number: number;
+  name: string;
+  goal?: string;
+  state: "future" | "active" | "closed";
+  start_at: string;
+  end_at: string;
+  closed_at?: string;
+  closed_by?: string;
+  /** ABSENT on anything but an active sprint — a future one has not started
+   *  and a closed one has no remainder. */
+  days_remaining?: number;
+  figures: WorkSprintFigures;
+  by_assignee?: WorkSprintAssignee[];
+  /** A CLOSED sprint whose spillover nobody has decided — the one thing on
+   *  this answer a lead has to act on. */
+  rollover_pending?: boolean;
+  rollover_to?: number;
+  archived?: boolean;
+  version: number;
+}
+
+export interface WorkActiveSprint {
+  number: number;
+  name: string;
+  state: "future" | "active" | "closed";
+  end_at: string;
+  figures: WorkSprintFigures;
+  days_remaining: number;
+}
+
+/** ABSENT on a project that runs no sprints at all, which is not the same as
+ *  a project that has none right now. */
+export interface WorkSprintSummary {
+  active?: WorkActiveSprint;
+  next?: number;
+  pending_spillovers?: number[];
+}
+
+export interface WorkProjectRow {
+  key: string;
+  name: string;
+  purpose?: string;
+  unit: WorkUnitRef;
+  lead: WorkLeadRef;
+  default_assignee?: string;
+  sprints?: WorkSprintSummary;
+  task_counts: WorkTaskCounts;
+  archived?: boolean;
+  version: number;
+}
+
+export interface WorkProjectsAnswer {
+  projects: WorkProjectRow[];
+  total: number;
+  truncated?: boolean;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
+/** One label in a project's tag set. */
+export interface WorkProjectTag {
+  slug: string;
+  label: string;
+  color?: string;
+  description?: string;
+  archived?: boolean;
+}
+
+export interface WorkFieldGroup {
+  applies_to?: string;
+  fields: WorkFieldDef[];
+}
+
+export interface WorkStatusDef {
+  status: WorkStatus;
+  label: string;
+  group: string;
+  description: string;
+}
+
+export interface WorkProjectDetail extends WorkProjectRow {
+  statuses: WorkStatusDef[];
+  types: WorkTypeDef[];
+  fields: WorkFieldGroup[];
+  /** The workspace field ids this project redeclares — the state a field in
+   *  the middle of a move between scopes is in. */
+  shadowed?: string[];
+  tags?: WorkProjectTag[];
+  sprint_policy?: Record<string, unknown>;
+  recent_sprints?: WorkSprintRow[];
+  velocity_avg?: number;
+  policy_stamp: number;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
+export interface WorkSprintsAnswer {
+  project: string;
+  sprints: WorkSprintRow[];
+  /** ABSENT where no sprint has closed: a team that has not finished one has
+   *  no velocity, and zero reads as a team that delivers nothing. */
+  velocity_avg?: number;
+  /** Closed sprints below the window this answer covers, NAMED rather than
+   *  silently truncated. */
+  earlier_sprints_dropped?: number;
+  measure: "points" | "estimate_min";
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
+/** One measurable outcome under a goal. */
+export interface WorkGoalTarget {
+  id: string;
+  name: string;
+  type: "tasks" | "number" | "percent" | "binary";
+  start?: number;
+  goal?: number;
+  current?: number;
+  unit?: string;
+  tasks?: string[];
+  projects?: string[];
+  done?: boolean;
+  /** 0..1, ABSENT when the target measures nothing — a `tasks` target whose
+   *  tasks were all purged, or a numeric one that starts where it ends.
+   *  Rendering that as 0% is a goal somebody escalates. */
+  progress?: number;
+  finished_tasks?: number;
+  total_tasks?: number;
+}
+
+/** A goal, with what its targets say.
+ *
+ *  THE PROGRESS IS COMPUTED ON EVERY READ and stored nowhere. A goal is at
+ *  what its targets are at; a stored number would be a second answer that
+ *  drifts the moment a task closes without anybody editing the goal. */
+export interface WorkGoal {
+  id: string;
+  name: string;
+  description?: string;
+  owners: string[];
+  members?: string[];
+  group?: string;
+  health?: "on_track" | "at_risk" | "off_track" | "done" | "";
+  start_at?: string;
+  due_at?: string;
+  archived?: boolean;
+  targets?: WorkGoalTarget[];
+  /** ABSENT when the goal has no targets — "nothing has happened" and "there
+   *  is nothing to measure" are different facts. */
+  progress?: number;
+  version: number;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkGoalsAnswer {
+  goals: WorkGoal[];
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
+/** One task type a company may file under — the DECLARATION, where
+ *  [WorkType] is the slug a task carries. */
+export interface WorkTypeDef {
+  slug: string;
+  name: string;
+  plural?: string;
+  icon?: string;
+  description?: string;
+  /** True for a slug this build ships. It survives a company renaming the
+   *  type, because what it says is that the ENGINE knows the slug. */
+  builtin?: boolean;
+  archived?: boolean;
+}
+
+/** One custom-field declaration. */
+export interface WorkFieldDef {
+  id: string;
+  slug: string;
+  name: string;
+  description?: string;
+  type: string;
+  applies_to?: string[];
+  required?: boolean;
+  required_in_subtasks?: boolean;
+  /** ONE-WAY: the values left the value table, so restoring means a new
+   *  field with a new id. */
+  archived?: boolean;
+  pinned?: boolean;
+  hide_from_agents?: boolean;
+}
+
+export interface WorkCatalogueAnswer {
+  /** The EFFECTIVE set: what this build ships plus what the company declared,
+   *  a declaration replacing a builtin of the same slug. */
+  types: WorkTypeDef[];
+  /** The WORKSPACE's declarations. A project declares its own beside them. */
+  fields: WorkFieldDef[];
+  policy_version: number;
+  types_version: number;
+  fields_version: number;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
+/** One entry in a person's inbox, with the log position it was at. */
+export interface WorkInboxEntry {
+  record_id: string;
+  position: number;
+  /** On a snooze, when it comes back. */
+  until?: string;
+}
+
+/** One human's own state.
+ *
+ *  `held` is false for somebody nobody has written yet, which is an EMPTY
+ *  state rather than a missing one: every human starts with no inbox, no pins
+ *  and no priorities, and the first write is what creates the record. */
+export interface WorkPersonState {
+  handle: string;
+  unread?: WorkInboxEntry[];
+  read?: WorkInboxEntry[];
+  snoozed?: WorkInboxEntry[];
+  /** Snoozes whose time has come. REPORTED, never promoted — putting one back
+   *  is a write, and a read that performed one would change fleet state. */
+  due?: WorkInboxEntry[];
+  primary_reasons?: string[];
+  priorities?: string[];
+  pinned_views?: string[];
+  favorites?: { kind: string; id: string }[];
+  /** Who last set the queue when it was not this person, and empty when it
+   *  was theirs. Their own next change clears it. */
+  priorities_set_by?: string;
+  priorities_set_at?: string;
+  seen_through?: { stream: string; generation: number; seq: number };
+  version: number;
+  held: boolean;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
+export interface WorkComment {
+  id: string;
+  task: string;
+  author: string;
+  author_kind?: string;
+  body: string;
+  reply_to?: string;
+  mentions?: string[];
+  resolved?: boolean;
+  resolved_by?: string;
+  resolved_at?: string;
+  removed?: boolean;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface WorkChange {
+  id: string;
+  kind: string;
+  actor?: string;
+  actor_kind?: string;
+  operator_id?: string;
+  comment_id?: string;
+  excerpt?: string;
+  turn_id?: string;
+  fields?: Record<string, unknown>;
+  /** A commit that woke nobody — a fact about the change rather than about
+   *  its importance, since a bulk edit is quiet by construction. */
+  quiet?: boolean;
+  /** The EFFECTIVE instant: the fleet-agreed one rather than the writer's own
+   *  clock, so two nodes render one feed in one order. */
+  at: string;
+  /** Where the change sits on the log, which is the cursor a feed pages on.
+   *  A position on one stream, so it is never compared with one from
+   *  another. */
+  log_seq: number;
+}
+
+export interface WorkLink {
+  kind: string;
+  other: string;
+  key?: string;
+  title?: string;
+  status?: WorkStatus;
+  note?: string;
+  /** The half nobody authored. A UI renders it differently, and an editor
+   *  knows which end to change. */
+  derived?: boolean;
+  /** An edge whose mirror was never written, and one whose mirror was
+   *  refused permanently. The first is a repair a duty retries; the second is
+   *  an attention flag a person resolves. */
+  one_sided?: boolean;
+  one_sided_final?: boolean;
+}
+
+/** One task WHOLE, as the item screen draws it.
+ *
+ *  NOT an extension of WorkSummary, deliberately. A board row and a task are
+ *  two different shapes and six of the row's fields do not exist on the wire
+ *  here: `blocked` and `overdue` are DERIVED per row and live on the answer
+ *  (see WorkItemDetail.blocked), and the row's `updated`, `start`, `due` and
+ *  `estimate_min` are spelled `updated_at`, `start_at`, `due_at` and
+ *  `estimate_minutes` on a task. Inheriting them made the compiler promise
+ *  fields the server never sends — which is how a Blocked badge that renders
+ *  on the board silently never renders on the item it links to. */
+export interface WorkItem {
+  id: string;
+  key: string;
+  project: string;
+  /** The unit this was FILED into, immutable and a record of what was true;
+   *  routing_unit is the mutable half — whose lead hears about it now. */
+  filed_unit?: string;
+  routing_unit?: string;
+  sprint?: number;
+  parent?: string;
+  depth?: number;
+  type?: WorkType;
+  title: string;
+  body?: string;
+  body_version?: number;
+  status: WorkStatus;
+  status_group?: WorkStatusGroup;
+  priority?: WorkPriority;
+  rank?: string;
+  reporter?: string;
+  assignee?: string;
+  collaborators?: string[];
+  /** The set, and `muted` the subtraction: "not a watcher" and "watching but
+   *  muted" are different facts and both travel. */
+  watchers?: string[];
+  muted?: string[];
+  tags?: string[];
+  start_at?: string;
+  due_at?: string;
+  due_all_day?: boolean;
+  estimate_minutes?: number;
+  points?: number;
+  archived?: boolean;
+  /** The item's own hand-off budget, spent by an agent reassigning it and
+   *  reset by any human touch. Past its cap the engine refuses the next
+   *  hand-off rather than letting the item circle. */
+  reassignments?: number;
+  created_at?: string;
+  updated_at?: string;
+  /** The composed log position this task was last written at. */
+  version: number;
+}
+
+export interface WorkItemDetail {
+  task: WorkItem;
+  comments?: WorkComment[];
+  history?: WorkChange[];
+  links?: WorkLink[];
+  /** The SAME predicate WorkSummary.blocked carries — an open dependency edge
+   *  — computed by the server in the same transaction as the task, so the
+   *  badge here and the badge on the board row cannot disagree. It is on the
+   *  ANSWER rather than on the task because it is derived rather than stored:
+   *  `links` say what the relations are, not whether any blocker is open. */
+  blocked?: boolean;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
+export type PageStatus = "published" | "draft" | "trashed" | (string & {});
+
+export interface PageSummary {
+  id: string;
+  container: string;
+  parent_id?: string;
+  title: string;
+  status: PageStatus;
+  author?: string;
+  version: number;
+  /** A tool-skill page: machinery the sync publishes, not prose somebody
+   *  wrote to be read. */
+  skill?: boolean;
+  onboarding?: boolean;
+  labels?: string[];
+  updated_at: string;
+  revision: number;
+}
+
+export interface PagesAnswer {
+  pages: PageSummary[];
+  limit: number;
+  offset: number;
+}
+
+export interface PageContainer {
+  key: string;
+  name?: string;
+  purpose?: string;
+  created_at?: string;
+}
+
+export interface PageComment {
+  id: string;
+  page_id: string;
+  author: string;
+  author_kind?: string;
+  body: string;
+  mentions?: string[];
+  created_at: string;
+  edited_at?: string;
+}
+
+/** One past version, METADATA ONLY: the projection keeps no bodies, and
+ *  reading one is a coordination read on demand. */
+export interface PageRevision {
+  version: number;
+  author?: string;
+  message?: string;
+  created_at: string;
+}
+
+export interface Page extends PageSummary {
+  body?: string;
+  watchers?: string[];
+  created_at?: string;
+}
+
+export interface PageDetail {
+  page: Page;
+  revision: number;
+  comments?: PageComment[];
+  history?: PageRevision[];
+  children?: PageSummary[];
+  /** The parent chain, outermost first — the breadcrumb. */
+  ancestors?: PageSummary[];
 }
 
 // ---------------------------------------------------------------------------
@@ -1133,6 +2041,105 @@ export interface Frame {
 }
 
 /** The named answers the socket's request/response channel serves. */
+/** One field's before and after, AS TEXT — every renderer of a delta wants
+ *  "todo → in_progress", and the typed value is on the row for anything that
+ *  needs it. */
+export interface WorkDelta {
+  from: string;
+  to: string;
+}
+
+/** One commit, as the activity feed renders it.
+ *
+ *  `at` is the AUTHORED instant — what the writer's own clock said, and what a
+ *  card renders — and `effective_at` is the fleet-agreed one every duration is
+ *  measured on. Both, because they are different facts and a surface carrying
+ *  one of them silently answers a different question than it looks like. */
+export interface WorkActivityRecord {
+  id: string;
+  log_seq: number;
+  log_stream: string;
+  log_generation: number;
+  at: string;
+  effective_at: string;
+  kind: string;
+  actor?: string;
+  actor_kind?: string;
+  operator_id?: string;
+  subject_kind: string;
+  subject_id: string;
+  subject_key?: string;
+  project?: string;
+  excerpt?: string;
+  fields?: Record<string, WorkDelta>;
+  comment_id?: string;
+  batch_id?: string;
+  turn_id?: string;
+  /** How a reader tells "nothing was announced" from "nothing happened" —
+   *  which is the whole reason a quiet commit still writes a row. */
+  notified: boolean;
+  late?: boolean;
+}
+
+export interface WorkActivityAnswer {
+  records: WorkActivityRecord[];
+  /** Resumes exactly after the last row, as a log POSITION — a bare sequence
+   *  names no stream and no generation, so a cursor built from one cannot
+   *  survive a reanchor. */
+  next_cursor?: string;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
+/** One question waiting on somebody, with what to do about it. */
+export interface WorkAskRow extends WorkSummary {
+  comment: string;
+  asked_by: string;
+  asked_at: string;
+  body: string;
+  /** The literal call that answers it. A model handed a comment id still has
+   *  to compose the call, and every one it composes differently is a round
+   *  spent being refused. */
+  answer_with: string;
+}
+
+/** One sub-item claimed by somebody. It lives on ANOTHER person's task, which
+ *  is why it is its own block: no assignee filter over tasks reaches it. */
+export interface WorkChecklistRow {
+  task: string;
+  task_key: string;
+  task_title: string;
+  checklist: string;
+  item: string;
+  name: string;
+  done: boolean;
+}
+
+/** Everything one person is expected to look at — seven different CLAIMS on
+ *  their attention, each bounded the same so no block crowds out another. */
+export interface WorkMyWork {
+  handle: string;
+  /** In the STORED order, never re-sorted: the order is the content — it is
+   *  what somebody decided — and sorting it discards the decision. */
+  priorities: WorkSummary[];
+  assigned: WorkSummary[];
+  asked_of_me: WorkAskRow[];
+  checklist_items: WorkChecklistRow[];
+  collaborating: WorkSummary[];
+  watching_recent: WorkSummary[];
+  unblocked_recent: WorkSummary[];
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
 export interface QueryMap {
   agent: AgentAnswer;
   agent_memory: AgentMemoryAnswer;
@@ -1148,6 +2155,21 @@ export interface QueryMap {
   schedules: SchedulesAnswer;
   integrations: IntegrationsAnswer;
   sandbox_runs: { runs: SandboxRun[] };
+  retention: RetentionReport;
+  work_items: WorkItemsAnswer;
+  work_item: WorkItemDetail;
+  work_views: WorkViewsAnswer;
+  work_projects: WorkProjectsAnswer;
+  work_project: WorkProjectDetail;
+  work_sprints: WorkSprintsAnswer;
+  work_activity: WorkActivityAnswer;
+  work_my_work: WorkMyWork;
+  work_goals: WorkGoalsAnswer;
+  work_catalogue: WorkCatalogueAnswer;
+  work_person: WorkPersonState;
+  pages: PagesAnswer;
+  page: PageDetail;
+  containers: { containers: PageContainer[] };
   conversations: ConversationsAnswer;
   a2a_channels: A2AAnswer;
   knowledge: KnowledgeAnswer;
@@ -1165,6 +2187,11 @@ export type QueryErrorCode =
   | "unauthorized"
   | "query_failed"
   | "not_found"
+  /** This node understood the question and cannot answer it YET — a
+   *  projection still catching up after a restart or a fresh join. A screen
+   *  says "ask again in a moment", never "there is nothing": the second is an
+   *  answer a person acts on. */
+  | "unavailable"
   | "no_event_store"
   | "timeout"
   | "closed";

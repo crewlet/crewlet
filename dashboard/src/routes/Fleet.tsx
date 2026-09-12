@@ -16,6 +16,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, relTime, plural } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { FleetNode } from "~/protocol/index.ts";
+import { RetentionPanels } from "./Retention.tsx";
 
 /**
  * The lease table has no push behind it, so it polls — at 15 seconds, chosen
@@ -357,6 +358,12 @@ export function Fleet() {
           </Panel>
         )}
       </QueryState>
+
+      {/* THE REPLICATION HALF, on this screen rather than its own. "Why is
+          nothing being trimmed" and "which node is behind" are the same
+          investigation, and a separate screen would make an operator hold two
+          polls in their head to answer one question. */}
+      <RetentionPanels thisNode={data?.this_node} />
     </>
   );
 }

@@ -291,6 +291,26 @@ export function QueryState({
       </div>
     );
   }
+  if (error === "unavailable") {
+    return (
+      <div className="banner neutral">
+        <Icon name="clock" size="sm" />
+        <span>
+          This node has not finished reading the company's own records yet — its projection is still
+          catching up. Nothing is wrong and nothing is lost; the screen fills in on its own.
+          <strong> This is not an empty company.</strong>
+        </span>
+      </div>
+    );
+  }
+  if (error === "not_found") {
+    return (
+      <div className="banner neutral">
+        <Icon name="info" size="sm" />
+        <span>There is no such record. The link may point at something that was removed.</span>
+      </div>
+    );
+  }
   if (error === "timeout") {
     return (
       <div className="banner caution">

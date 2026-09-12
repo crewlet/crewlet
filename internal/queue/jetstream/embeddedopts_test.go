@@ -2,6 +2,7 @@ package jetstream
 
 import (
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/queue"
 )
@@ -34,27 +35,48 @@ func TestTheEmbeddedServerCarriesWhatTheContractPromises(t *testing.T) {
 		}
 	})
 
-	// Replicas is the whole input: a member with no peers to recover from
-	// must reach the disk before Publish returns, and a replicated one has
-	// already reached a majority by then.
+	// THE FSYNC IS THE OPERATOR'S SETTING, not an inference from the
+	// replica count. The inference this replaces — a replicated member has
+	// a quorum, so it needs no fsync — is true of one failure class and was
+	// applied to five: a rack losing power takes a majority together, and a
+	// three-node fleet on one rack is what a first production deployment
+	// looks like.
+	//
+	// The replica count is asserted to have NO effect here, which is the
+	// half a "does it pass through" test would miss.
 	for _, tc := range []struct {
 		name     string
-		replicas int
+		cfg      Config
 		want     bool
+		wantSync time.Duration
 	}{
-		{"a solo member has only its own disk", 1, true},
-		{"an unset replica count is solo", 0, true},
-		{"a replicated member has a quorum instead", 3, false},
+		{"unset declines the fsync", Config{}, false, 0},
+		{"set at R1", Config{SyncAlways: true, Replicas: 1}, true, 0},
+		{"set at R3, where the inference used to refuse it",
+			Config{SyncAlways: true, Replicas: 3}, true, 0},
+		{"unset at R1, where the inference used to force it",
+			Config{Replicas: 1}, false, 0},
+		{"an interval is passed through when the fsync is declined",
+			Config{SyncInterval: 30 * time.Second}, false, 30 * time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			opts, _, err := embeddedOptions(Config{StoreDir: t.TempDir(), Replicas: tc.replicas})
+			cfg := tc.cfg
+			cfg.StoreDir = t.TempDir()
+			opts, _, err := embeddedOptions(cfg)
 			if err != nil {
 				t.Fatalf("embeddedOptions: %v", err)
 			}
 			if opts.SyncAlways != tc.want {
-				t.Errorf("replicas=%d gave SyncAlways=%v, want %v",
-					tc.replicas, opts.SyncAlways, tc.want)
+				t.Errorf("SyncAlways = %v, want %v: the fsync per write is "+
+					"stream.sync's answer and nothing else's",
+					opts.SyncAlways, tc.want)
+			}
+			if opts.SyncInterval != tc.wantSync {
+				t.Errorf("SyncInterval = %v, want %v: an operator who declines "+
+					"the fsync is choosing a window, and leaving it unset "+
+					"takes the server's two minutes instead",
+					opts.SyncInterval, tc.wantSync)
 			}
 		})
 	}

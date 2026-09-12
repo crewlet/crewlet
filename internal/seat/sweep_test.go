@@ -127,3 +127,93 @@ func TestATinyHeartbeatStillPublishesStatus(t *testing.T) {
 		t.Errorf("status = %+v, published = %v", live, ok)
 	}
 }
+
+// --- the unserviceable shed ------------------------------------------------
+
+// A NODE WHOSE ROWS ARE WRONG GIVES THE SEATS BACK, which is the half of D122
+// that had no implementation at all.
+//
+// [Config.Ready] withholds claims and says so in its own log line — "it keeps
+// what it holds and claims nothing until it is" — which is right for a copy
+// that is merely behind. It is wrong for a copy that is WRONG, and the engine
+// was telling operators otherwise: the `deferred_old` alarm reads "its seats
+// move at 30m0s" with the remedy "its seats have already moved", against a
+// mechanism where nothing moved them.
+func TestAnUnserviceableNodeGivesBackEverySeat(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	hooks := &hookLog{}
+	fit := true
+	h := f.newHost("node-a", Config{
+		Seats: seatsNamed("ceo", "eng"), Hooks: hooks,
+		Serviceable: func() (bool, string) {
+			if fit {
+				return true, ""
+			}
+			return false, "tracker"
+		},
+	})
+	h.renewNodePresence(f.ctx)
+	h.Sweep(f.ctx)
+	wantInt(t, len(h.Held()), 2, "seats held while serviceable")
+
+	fit = false
+	h.Sweep(f.ctx)
+	wantStrings(t, h.Held(), nil, "seats held while unserviceable")
+	wantStrings(t, hooks.released(),
+		[]string{"ceo:unserviceable", "eng:unserviceable"}, "releases")
+
+	// AND IT CLAIMS NOTHING WHILE IT HOLDS. A shed that let the very next
+	// pass re-claim would be a node cycling its whole company every sweep
+	// interval, which is worse than either holding or shedding.
+	h.Sweep(f.ctx)
+	wantStrings(t, h.Held(), nil, "seats re-claimed while still unserviceable")
+
+	// THE RECOVERY IS THE SAME GATE, from the other side: nothing has to
+	// be reset by hand, and the node takes its share back on the first
+	// pass after its rows are right again.
+	fit = true
+	h.Sweep(f.ctx)
+	wantInt(t, len(h.Held()), 2, "seats reclaimed once serviceable again")
+}
+
+// THE RELEASE IS VOLUNTARY, not fenced. The lease is still held and still
+// renewed — what is wrong is this node's ROWS — so the turn already running
+// against them finishes rather than being abandoned mid-flight.
+func TestTheUnserviceableShedIsVoluntary(t *testing.T) {
+	t.Parallel()
+	if ReasonUnserviceable.Fenced() {
+		t.Error("ReasonUnserviceable reports itself fenced, so an in-flight " +
+			"turn is abandoned rather than finished — the lease is intact " +
+			"and only the rows are wrong")
+	}
+}
+
+// A GATE THAT CANNOT ANSWER MUST NOT SHED A FLEET'S WORK, which is the
+// opposite default from every other check in this file and deliberate: a
+// panicking readiness gate costs a node its new claims, and a panicking
+// serviceability gate would cost the company every seat on the node.
+func TestAPanickingServiceabilityGateKeepsTheSeats(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	hooks := &hookLog{}
+	h := f.newHost("node-a", Config{
+		Seats: seatsNamed("ceo"), Hooks: hooks,
+		Serviceable: func() (bool, string) { panic("status source is down") },
+	})
+	h.renewNodePresence(f.ctx)
+	h.Sweep(f.ctx)
+	wantInt(t, len(h.Held()), 1, "seats held through a panicking gate")
+	wantStrings(t, hooks.released(), nil, "releases from a panicking gate")
+}
+
+// A NIL GATE KEEPS EVERY SEAT, which is the single-node case and every
+// deployment with no native backend at all.
+func TestNoServiceabilityGateKeepsTheSeats(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	h := f.newHost("node-a", Config{Seats: seatsNamed("ceo", "eng")})
+	h.renewNodePresence(f.ctx)
+	h.Sweep(f.ctx)
+	wantInt(t, len(h.Held()), 2, "seats held with no gate wired")
+}
