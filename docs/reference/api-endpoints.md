@@ -1335,7 +1335,7 @@ Point any MCP client at it:
 The **same tools a seat holds**, not a parallel implementation: `list_work_items`,
 `get_work_item`, `create_work_item`, `update_work_item`, `comment_on_work_item`,
 `get_work_catalogue`, `list_projects`, `describe_project`, `write_project`,
-`sprint_report`, `task_activity`, `my_work`,
+`sprint_report`, `task_activity`, `my_work`, `list_work_goals`,
 `list_pages`, `get_page`, `write_page`, `save_page`, `comment_on_page`, and
 `search_knowledge`. A schema, a default, a trimmed field and the wording of a
 refusal are each written once — two copies of "file an item" drift on exactly
@@ -1349,14 +1349,18 @@ worked. A comment's `@handle` is resolved here too, against the company chart
 current when the comment is written, so mentioning somebody from your own
 assistant wakes them exactly as it does from a seat.
 
-Plus **twelve no seat is given**: `list_work_views`, `save_work_view`,
-`list_work_goals`, `write_work_goal`, `write_work_catalogue`, `get_person`,
+Plus **eleven no seat is given**: `list_work_views`, `save_work_view`,
+`write_work_goal`, `write_work_catalogue`, `get_person`,
 `mark_inbox`, `set_pins`, `set_priorities`, `manage_sprint`,
 `remove_work_item` and `restore_work_item`. A view is furniture — a name, a shape
 and a filter, arranged so a person finds the same question tomorrow — and a
 seat's job is the work rather than the furniture around it. A goal is an
 outcome a *person* commits the company to, with owners who report on it; a seat
-setting its own goals is a seat marking its own homework. `write_work_goal`
+setting its own goals is a seat marking its own homework. **Reading** one is a
+seat's, though — `list_work_goals` moved out of this list when `goal_updated`
+became a wake somebody receives, because every owner and member is woken when
+the commitment moves and a seat with no verb to read a goal would be told an
+outcome it could not look at. `write_work_goal`
 takes no progress argument at all, because there is nowhere to put one. And the
 catalogue is the company's own vocabulary: a seat adding a type so its own
 create succeeds is a seat editing the rules it is judged by, and the refusal it

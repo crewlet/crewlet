@@ -39,9 +39,18 @@ import (
 
 // Unblock is one dependent that is ready and has not been told.
 type Unblock struct {
-	// Task is the dependent, Project its container and Assignee whoever
-	// is waiting on it.
+	// Task is the dependent, Key its addressable name, Project its
+	// container and Assignee whoever is waiting on it.
+	//
+	// BOTH THE ID AND THE KEY, because they are read by different things
+	// and neither substitutes for the other: the id is what the record is
+	// written against, and the KEY is what a card shows, what
+	// `tracker_notifications.subject_key` stores and what the prompt tells
+	// the seat to fetch. Carrying only the id put a uuid in all three —
+	// the one row in that column that was not a key, and a prompt asking a
+	// seat to read `3f2a…` by name.
 	Task     string
+	Key      string
 	Project  string
 	Assignee string
 
@@ -100,7 +109,7 @@ func ScanUnblocked(ctx context.Context, db *store.DB, since uint64,
 		// clearing among the blockers that moved is not the newest among
 		// the blockers.
 		rows, err := tx.QueryContext(ctx, `
-			SELECT DISTINCT t.id, t.project_key, t.assignee,
+			SELECT DISTINCT t.id, t.key, t.project_key, t.assignee,
 			       (SELECT MAX(o.cleared_at) FROM tracker_task_deps o
 			        WHERE o.task_id = t.id AND o.cleared_at IS NOT NULL)
 			FROM tracker_history h
@@ -122,7 +131,8 @@ func ScanUnblocked(ctx context.Context, db *store.DB, since uint64,
 		defer rows.Close()
 		for rows.Next() {
 			var u Unblock
-			if err := rows.Scan(&u.Task, &u.Project, &u.Assignee, &u.ClearedAt); err != nil {
+			if err := rows.Scan(&u.Task, &u.Key, &u.Project, &u.Assignee,
+				&u.ClearedAt); err != nil {
 				return fmt.Errorf("tracker: read an unblocked dependent: %w", err)
 			}
 			scan.Pending = append(scan.Pending, u)
@@ -165,8 +175,10 @@ func (w *Writer) TellUnblocked(ctx context.Context, opID string, u Unblock) (Wri
 		// it hours after the close should see why.
 		Late: true,
 		Snapshot: Snapshot{
-			Key: u.Task, Project: u.Project,
-			Unblocked: []TaskParty{{Task: u.Task, Assignee: u.Assignee}},
+			Key: u.Key, Project: u.Project,
+			Unblocked: []TaskParty{{
+				Task: u.Task, Key: u.Key, Assignee: u.Assignee,
+			}},
 		},
 	})
 }

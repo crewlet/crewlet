@@ -28,6 +28,26 @@ const (
 	MetaExcerpt    = "excerpt"
 	MetaLate       = "late"
 
+	// MetaObject and MetaObjectID are WHAT the change was about, and they
+	// exist because three of the four routable kinds are not tasks. The
+	// prompt keys its opener on the object rather than on the change kind:
+	// "a goal you own" and "a sprint you have work in" are different
+	// sentences from "a task you are assigned to", and a builder that had
+	// only the kind would have to infer the noun from a switch that grows
+	// with every kind.
+	MetaObject   = "object"
+	MetaObjectID = "object_id"
+
+	// MetaProjectLead is who may settle a sprint's pending rollover.
+	//
+	// RENDERED AS A NAME rather than branched on, because the prompt is
+	// built per RECIPIENT and an [notify.Inbound] does not say who is
+	// reading it — the routing reason is all it carries, and `sprint`
+	// covers the sprint's assignees and its project lead alike. So the
+	// prompt names the lead in the text and lets the reader see whether
+	// that is them, which is honest for both halves of the audience.
+	MetaProjectLead = "project_lead"
+
 	// MetaVia is WHY this seat is being told, and it is not decoration:
 	// "you were mentioned" and "you are watching this" ask for different
 	// things, and the prompt renders them as an ask and as news.
@@ -90,11 +110,12 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 		// having decided the same way.
 		return nil, nil
 	}
-	if record.Subject.Kind != KindTask {
-		// EVERY ROUTING RULE HERE IS ABOUT A TASK — the assignee, the
-		// watchers, the dependents, the lead. A project or catalogue
-		// edit is announced through its own surfaces rather than woken
-		// into somebody's inbox.
+	if !record.Subject.Kind.Routable() {
+		// A PROJECT, A CATALOGUE, A VIEW OR A TAG SET is read from its
+		// own surface rather than woken into somebody's inbox, and a
+		// counter or an alias has no audience at all. See
+		// [ObjectKind.Routable] for why the set is closed rather than a
+		// negative test.
 		return nil, nil
 	}
 
@@ -143,17 +164,35 @@ func registryHas(reg *notify.Registry) func(string) bool {
 }
 
 // inbound is the notification every recipient's copy is made from.
+//
+// # Why the task id is the SNAPSHOT's and not the subject's
+//
+// Three of the four routable kinds are not tasks, and on those the subject's
+// id is a goal's uuid, a sprint's `KEY.n` or a person's handle. Writing any of
+// those into `item_id` would hand the prompt a pointer that `get_work_item`
+// cannot resolve — and the prompt would render a "read this task first" block
+// naming something that is not a task, which costs the seat a round and a
+// failed tool call to discover.
+//
+// So the task fields come from the SNAPSHOT, which carries a task only when
+// the wake is genuinely about one: a `prioritised` wake names the task that
+// reached the top of somebody's list, and a goal or sprint wake names none.
 func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 	snapshot := record.Notify.Snapshot
 	metadata := map[string]string{
 		MetaTaskKey:    snapshot.Key,
-		MetaTaskID:     record.Subject.ID,
+		MetaTaskID:     snapshot.TaskID(record.Subject),
 		MetaProject:    snapshot.Project,
 		MetaStatus:     string(snapshot.Status),
 		MetaAssignee:   snapshot.Assignee,
 		MetaRecordID:   record.OpID,
 		MetaChangeKind: string(record.Notify.Kind),
 		MetaTitle:      snapshot.Title,
+		MetaObject:     string(record.Subject.Kind),
+		MetaObjectID:   record.Subject.ID,
+	}
+	if snapshot.ProjectLead != "" {
+		metadata[MetaProjectLead] = snapshot.ProjectLead
 	}
 	if record.Notify.Excerpt != "" {
 		metadata[MetaExcerpt] = record.Notify.Excerpt
@@ -168,22 +207,49 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 		Source:    Source,
 		EventType: string(record.Notify.Kind),
 		Sender:    record.Actor,
-		Subject:   subjectLine(snapshot, record.Notify.Kind),
+		Subject:   subjectLine(snapshot, record.Subject, record.Notify.Kind),
 		Body:      record.Notify.Excerpt,
 		Metadata:  metadata,
 	}
 }
 
 // subjectLine is the one line a recipient sees before they read anything.
-func subjectLine(snapshot Snapshot, kind ChangeKind) string {
+//
+// IT NAMES THE OBJECT, because a line that said "a task" for a goal would be
+// the first false sentence a recipient reads — and the subject is also what a
+// digest coalesces on, so a wrong noun there is wrong in every summary too.
+func subjectLine(snapshot Snapshot, subject Subject, kind ChangeKind) string {
 	key := snapshot.Key
 	if key == "" {
-		key = "a task"
+		key = objectLabel(snapshot, subject)
 	}
 	if snapshot.Title == "" {
 		return fmt.Sprintf("%s: %s", key, kind)
 	}
 	return fmt.Sprintf("%s %s: %s", key, kind, snapshot.Title)
+}
+
+// objectLabel is what a non-task subject is CALLED in one line.
+//
+// The name rather than the id wherever the snapshot carries one: a goal's uuid
+// and a person's handle are not the same kind of thing, and a recipient
+// reading "3f2a…: goal_updated" learns nothing they can act on.
+func objectLabel(snapshot Snapshot, subject Subject) string {
+	switch subject.Kind {
+	case KindGoal:
+		if snapshot.GoalName != "" {
+			return snapshot.GoalName
+		}
+		return "a goal"
+	case KindSprint:
+		if snapshot.SprintName != "" {
+			return snapshot.SprintName
+		}
+		return "a sprint"
+	case KindPerson:
+		return "your priorities"
+	}
+	return "a task"
 }
 
 // withVia copies the metadata with this recipient's own reason on it.

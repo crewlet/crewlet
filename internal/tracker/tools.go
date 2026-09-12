@@ -35,6 +35,18 @@ const (
 	ListProjectsTool    = "list_projects"
 	DescribeProjectTool = "describe_project"
 
+	// ListWorkGoalsTool is the goal READ, and it is a seat's for the
+	// reason [GetWorkCatalogueTool] is: reading is not writing.
+	//
+	// It moved here when `goal_updated` became a wake somebody actually
+	// receives. A goal names its owners and its members, every one of them
+	// is woken when the commitment moves, and a seat woken about a goal it
+	// has no verb to read would be told an outcome it cannot look at —
+	// which is not a notification, it is a riddle. Setting a goal stays a
+	// person's; being told about one and being able to read it have to
+	// travel together.
+	ListWorkGoalsTool = "list_work_goals"
+
 	// WriteProjectTool is the one project WRITE a seat holds, and it is
 	// held for one facet: `tags.add`. A tag is how work is grouped for a
 	// week, declaring one is open to every seat by design, and a create
@@ -72,12 +84,13 @@ const (
 	ListWorkViewsTool = "list_work_views"
 	SaveWorkViewTool  = "save_work_view"
 
-	// The GOAL tools, and the same rule puts them here: a goal is an
-	// outcome a PERSON commits the company to, with owners who report on
-	// it. A seat setting its own goals is a seat marking its own homework,
-	// and the delegation this engine is built on already gives a founder a
-	// better lever — the work itself.
-	ListWorkGoalsTool = "list_work_goals"
+	// WriteWorkGoalTool is a goal's WRITE, and the same rule puts it here:
+	// a goal is an outcome a PERSON commits the company to, with owners
+	// who report on it. A seat setting its own goals is a seat marking its
+	// own homework, and the delegation this engine is built on already
+	// gives a founder a better lever — the work itself.
+	//
+	// Its READ is not here. See [ListWorkGoalsTool].
 	WriteWorkGoalTool = "write_work_goal"
 
 	// WriteWorkCatalogueTool is the company's own VOCABULARY — what a
@@ -126,19 +139,18 @@ const GetWorkCatalogueTool = "get_work_catalogue"
 func OperatorOnlyTools() []string {
 	return []string{
 		ListWorkViewsTool, SaveWorkViewTool,
-		ListWorkGoalsTool, WriteWorkGoalTool,
-		WriteWorkCatalogueTool,
+		WriteWorkGoalTool, WriteWorkCatalogueTool,
 		GetPersonTool, SetPrioritiesTool, SetPinsTool, MarkInboxTool,
 		RemoveWorkItemTool, RestoreWorkItemTool, ManageSprintTool,
 	}
 }
 
-// Tools are the twelve a seat holds, so a caller registering them names one thing.
+// Tools are the thirteen a seat holds, so a caller registering them names one thing.
 func Tools() []string {
 	return []string{ListWorkItemsTool, GetWorkItemTool, CreateWorkItemTool,
 		UpdateWorkItemTool, CommentOnWorkTool, GetWorkCatalogueTool,
 		ListProjectsTool, DescribeProjectTool, WriteProjectTool,
-		SprintReportTool, TaskActivityTool, MyWorkTool}
+		ListWorkGoalsTool, SprintReportTool, TaskActivityTool, MyWorkTool}
 }
 
 // WriteTools are the three that count as a DELIVERY.

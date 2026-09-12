@@ -579,3 +579,208 @@ func (w *Writer) ArchiveSprint(ctx context.Context, opID, project string,
 		},
 	})
 }
+
+// MaxSprintWakeParties bounds how many seats one sprint transition wakes.
+//
+// SIXTY-FOUR, which is this engine's universal fan-out batch — the same number
+// as MaxWatchers, MaxBulkTasks, MaxScopeTerms and the descendants-per-move
+// batch — and it is a cap on the RECORD rather than on the company: the
+// snapshot travels on the log to every node, and an unbounded handle list on a
+// sprint of four hundred tasks would put the whole company's roster in every
+// copy of it.
+//
+// It is not reachable by a healthy company. A sprint's assignees are distinct
+// SEATS, not tasks, so the bound is the size of the teams planning into one
+// project's sprint — and a project whose sprint is shared by more than
+// sixty-four seats has a planning problem this notification cannot fix.
+const MaxSprintWakeParties = 64
+
+// sprintWake is what a sprint's start or close announces.
+//
+// # Who hears it, and why the lead is on the same reason
+//
+// The seats with work in the sprint, plus the project's lead. They are one
+// reason (`sprint`) rather than two because what each is told is the same
+// fact — the window opened, or it closed with this much unfinished — and the
+// one thing that differs, who may settle a pending rollover, is rendered by
+// naming the lead in the prompt rather than by splitting the routing.
+//
+// # Why this reads rows and the task wakes do not
+//
+// A task's routing snapshot is the task's own row, already in hand. A sprint's
+// is a QUERY — who has work in it — and there is nowhere else to get it: the
+// node that wins the delivery is rarely the node that wrote the record and is
+// often behind on its own rows, so a lookup at wake time would read a stay
+// table that has moved on, or one the rollover has already emptied. The read
+// happens inside the decide snapshot, where a single consistent view of the
+// sprint's membership exists.
+//
+// # An error here takes the close down with it, DELIBERATELY
+//
+// This runs inside the transition's own Decide, so a failure returned from it
+// aborts the state change — a cosmetic wake becoming a stuck sprint lifecycle,
+// which is the worst-sounding shape a notification can have. It is still
+// right, because of WHAT can fail: the reads below run in the same transaction
+// whose `readSprint` has already succeeded, so the connection is healthy and
+// the only remaining failure is a malformed statement — a programming error.
+// One of those shipped in this very function (the stays table's column is
+// `sprint`, not `sprint_number`) and the loud failure is what surfaced it
+// inside a minute. A swallowed error would have left every close silently
+// waking nobody instead, which is the state this whole change exists to end.
+//
+// The honest degradations are the ones that are not errors at all: a sprint
+// with no assignees and no lead returns nil, and so does a transition that is
+// not a start or a close.
+//
+// # Three closes, one loud
+//
+// A close itself is loud. A re-target of its spillover and its archive are
+// both the same sprint being closed again in the reader's eyes, so neither
+// carries a notification — which is why this is keyed on the TRANSITION rather
+// than on the record: only a state change reaches it at all.
+func sprintWake(ctx context.Context, tx *sql.Tx, sprint Sprint, to SprintState,
+	leads Leads) (*Notify, error) {
+
+	var kind ChangeKind
+	switch to {
+	case SprintActive:
+		kind = ChangeSprintStarted
+	case SprintClosed:
+		kind = ChangeSprintClosed
+	default:
+		// A FUTURE SPRINT IS NOT NEWS. Minting one is bookkeeping the
+		// policy does on a tick, and a company keeping three ahead would
+		// otherwise be told about a sprint eight weeks out every time the
+		// duty ran.
+		return nil, nil
+	}
+	assignees, err := sprintAssignees(ctx, tx, sprint.Project, sprint.Number)
+	if err != nil {
+		return nil, err
+	}
+	// THE LEAD COMES FROM THE CALLER'S CHART, never from the rows: a
+	// project's lead is CHART-OWNED and `tracker_projects` carries no
+	// column for it, because the applier may not read an org — two nodes
+	// briefly on different epochs would write different rows. Nil resolves
+	// to no lead, which is the honest answer for a writer built without
+	// one, and costs the wake only its fallback recipient.
+	lead := ""
+	if leads != nil {
+		lead = leads.ProjectLead(sprint.Project)
+	}
+	if len(assignees) == 0 && lead == "" {
+		// NOBODY TO TELL. An empty sprint starting is a window opening on
+		// no work, which is a fact about the calendar rather than about
+		// anybody's day.
+		return nil, nil
+	}
+	return &Notify{
+		Kind: kind,
+		Snapshot: Snapshot{
+			Project:         sprint.Project,
+			SprintName:      sprintLabel(sprint),
+			SprintAssignees: assignees,
+			ProjectLead:     lead,
+		},
+		Excerpt: sprintExcerpt(sprint, kind),
+	}, nil
+}
+
+// sprintLabel is what a sprint is CALLED on a card.
+func sprintLabel(sprint Sprint) string {
+	if name := strings.TrimSpace(sprint.Name); name != "" {
+		return name
+	}
+	return fmt.Sprintf("%s sprint %d", sprint.Project, sprint.Number)
+}
+
+// sprintExcerpt is the line a card shows.
+//
+// THE CLOSE CARRIES FIGURES and the start carries none, which is the honest
+// asymmetry: "the sprint started" is the whole of what a start means, and a
+// close is the one moment a sprint has something to report.
+func sprintExcerpt(sprint Sprint, kind ChangeKind) string {
+	if kind != ChangeSprintClosed {
+		return ""
+	}
+	text := fmt.Sprintf("%s closed with %d open task(s)",
+		sprintLabel(sprint), sprint.OpenAtClose)
+	switch {
+	case sprint.RolloverTo == "":
+		// PENDING IS THE ONE A READER HAS TO ACT ON, so it says what is
+		// waiting rather than leaving the sentence to trail off. WHO may
+		// settle it is the prompt's to render, per recipient — the
+		// excerpt is shared by everybody the change reached.
+		text += ", rollover pending"
+	case sprint.RolloverTo == string(RolloverBacklog):
+		text += ", moved to the backlog"
+	case sprint.RolloverTo == string(RolloverClose):
+		text += ", the rest cancelled"
+	default:
+		text += ", rolled to sprint " + sprint.RolloverTo
+	}
+	return text
+}
+
+// sprintAssignees is every seat with work in one sprint.
+//
+// DISTINCT, and over the OPEN stays rather than every stay a task ever had:
+// somebody whose task was pulled out of the sprint last week is not planning
+// into it, and telling them it closed is a notice about work that is no longer
+// theirs to think about.
+func sprintAssignees(ctx context.Context, tx *sql.Tx, project string, number int) (
+	[]string, error) {
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT DISTINCT t.assignee
+		FROM tracker_task_sprints s
+		JOIN tracker_tasks t ON t.id = s.task_id
+		WHERE s.project_key = ? AND s.sprint = ? AND s.to_at IS NULL
+		  AND t.assignee <> '' AND t.removed_at IS NULL
+		ORDER BY t.assignee
+		LIMIT ?`, project, number, MaxSprintWakeParties)
+	if err != nil {
+		return nil, fmt.Errorf("tracker: read who has work in sprint %s.%d: %w",
+			project, number, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var handle string
+		if err := rows.Scan(&handle); err != nil {
+			return nil, fmt.Errorf("tracker: scan a sprint assignee: %w", err)
+		}
+		out = append(out, handle)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tracker: read who has work in sprint %s.%d: %w",
+			project, number, err)
+	}
+	return out, nil
+}
+
+// countOpenInSprint is how much unfinished work a sprint holds.
+//
+// A COUNT RATHER THAN A PAGE, unlike [Writer.openTasksInSprint] beside it,
+// and the difference is what each is for: the rollover walks the open tasks
+// sixty-four at a time because it WRITES to each one, and this answers "how
+// many" for a record that is about to be closed. A count that stopped at the
+// walk's page size would report a sprint with four hundred unfinished tasks as
+// holding sixty-four.
+func countOpenInSprint(ctx context.Context, tx *sql.Tx, project string,
+	number int) (int, error) {
+
+	open := openGroups()
+	args := append([]any{project, number}, open...)
+	var count int
+	err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM tracker_tasks t
+		WHERE t.project_key = ? AND t.sprint_number = ?
+		  AND t.removed_at IS NULL
+		  AND t.status_group IN (`+placeholders(len(open))+`)`, args...).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("tracker: count the open work of sprint %d of "+
+			"%s: %w", number, project, err)
+	}
+	return count, nil
+}

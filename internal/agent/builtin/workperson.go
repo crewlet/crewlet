@@ -146,13 +146,42 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// THE LEAD RELATION IS RESOLVED HERE and passed as a value, because
 	// the tracker has no chart — see the file head. A surface that wired
 	// no lookup resolves false, which degrades to "your own only".
-	authority := tracker.PersonAuthority{}
+	authority := tracker.PersonAuthority{
+		// A HUMAN OR AN OPERATOR MAY WRITE ANYBODY'S, which is the
+		// design's own rule and the one the gate was missing. It matters
+		// here specifically: this tool is registered on the operator MCP
+		// alone, and an operator's actor is a TOKEN's name rather than a
+		// handle in the chart — so no ancestor walk can ever match it,
+		// `Lead` is false for every operator by construction, and the
+		// only shipped surface for the verb could not use it.
+		Person: actor.Kind == tracker.AuthorHuman ||
+			actor.Kind == tracker.AuthorOperator,
+	}
+	// AND THE LEAD RELATION IS RESOLVED HERE and passed as a value,
+	// because the tracker has no chart — see the file head. A surface that
+	// wired no lookup resolves false, which degrades to "your own only".
 	if t.leads != nil && handle != actor.Handle {
 		authority.Lead = t.leads(ctx, actor.Handle, handle)
 	}
+	// EVERY ENTRY IS RESOLVED TO AN ID, because the list is stored as ids
+	// and read back by joining on them — and this tool's own description
+	// invites a key. An unresolved `ENG-42` failed in three places at
+	// once and reported nothing anywhere: the entry vanished from
+	// `my_work`, it vanished from `preset=priorities`, and the wake that
+	// tells the person their queue changed was silently suppressed —
+	// while the call answered `outcome: applied`.
+	items := argStrings(args, "items")
+	resolved := make([]string, 0, len(items))
+	for _, ref := range items {
+		id, refusal := t.deps.resolveRef(ctx, tracker.SetPrioritiesTool,
+			"`items`", ref)
+		if refusal != "" {
+			return failed(refusal), nil
+		}
+		resolved = append(resolved, id)
+	}
 	result, err := writer.WritePriorities(ctx,
-		"prio-"+handle+"-"+turnKeyOr(turn), handle,
-		argStrings(args, "items"), authority)
+		"prio-"+handle+"-"+turnKeyOr(turn), handle, resolved, authority)
 	if err != nil {
 		return failed(writeFailure(tracker.SetPrioritiesTool, err)), nil
 	}

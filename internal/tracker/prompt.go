@@ -60,6 +60,19 @@ func (Prompt) RequiresRecon(n notify.Inbound) bool {
 	switch ChangeKind(n.EventType) {
 	case ChangeComment, ChangeCommentEdited:
 		return strings.TrimSpace(n.Body) == ""
+	case ChangePrioritised, ChangeSprintClosed:
+		// NEITHER IS A POINTER. A `prioritised` wake names the task, the
+		// person who put it there and the position, and a closed sprint
+		// carries its own figures — so the seat can begin reasoning from
+		// the trigger, and turning the recon on would cost it the
+		// personal memory and episode recall that the flag suppresses,
+		// for a fetch of something it was already told.
+		//
+		// `prioritised` reaches this switch at all only because it is the
+		// one non-task wake that DOES carry a task key: the task at the
+		// top of the list. Without this arm the key alone would have
+		// turned it into a pointer.
+		return false
 	}
 	return true
 }
@@ -81,7 +94,17 @@ func (Prompt) Addressed(n notify.Inbound) bool {
 // ENG-42 and the tracker activity on it land in one ledger, which is the whole
 // point of a conversation key.
 func (Prompt) ConversationKey(metadata map[string]string, _ string) string {
-	return metadata[MetaTaskKey]
+	if key := metadata[MetaTaskKey]; key != "" {
+		return key
+	}
+	// A NON-TASK WAKE KEYS ON ITS OWN OBJECT. Falling through to an empty
+	// key would put every goal update in the company into ONE ledger
+	// together with every sprint close — a conversation key is what
+	// separates threads, and a shared empty one merges them all.
+	if id := metadata[MetaObjectID]; id != "" {
+		return metadata[MetaObject] + ":" + id
+	}
+	return ""
 }
 
 // WakesActor implements [notify.Prompt].
@@ -110,6 +133,18 @@ func (Prompt) DigestBody(eventType, body string) string {
 // Build implements [notify.Prompt].
 func (Prompt) Build(n notify.Inbound, parties notify.Parties) string {
 	meta := n.Metadata
+	// THE OBJECT DECIDES THE FRAME, before the reason does. Every opener
+	// below says "A task…", the header is labelled **Task:** and the
+	// context block sends the reader to get_work_item — none of which is
+	// true of a goal, a sprint or a person's priority list.
+	//
+	// AN ABSENT KEY IS A TASK, which is what keeps a record written by an
+	// older build rendering exactly as it did: this metadata arrived with
+	// the non-task wakes, and a rolling upgrade puts records without it on
+	// the wire in both directions.
+	if kind := ObjectKind(meta[MetaObject]); kind != "" && kind != KindTask {
+		return buildObjectPrompt(kind, n, parties)
+	}
 	reason := Reason(meta[MetaVia])
 	var b strings.Builder
 

@@ -271,9 +271,22 @@ rendered at 0% because nobody set a target is one somebody escalates.
 whether the movement is on track. A goal at 90% with a week left and one at 90%
 with a day left are different situations, and no arithmetic separates them.
 
-Goals are read at `GET /work/goals` and on the dashboard's Goals screen, and
-written through the operator MCP with `write_work_goal` — not by a seat. A
-seat setting its own goals is a seat marking its own homework.
+**A health update is what somebody wrote.** `write_work_goal(update: {health,
+text})` appends one — it never rewrites an existing one, and the author and
+the instant are stamped by the engine rather than sent by the caller, because
+an update is an assessment filed under somebody's name on a date. The history
+is carried forward on every save: a goal save is a whole post-state replace,
+and one that dropped the updates would destroy the only part of a goal written
+in prose.
+
+Goals are **read** by every seat with `list_work_goals` and at
+`GET /work/goals`, and on the dashboard's Goals screen. **Writing** one is an
+operator gesture — `write_work_goal`, not a seat's: a seat setting its own
+goals is a seat marking its own homework. The read is a seat's for the same
+reason reading the catalogue is, and for one more: a goal names owners and
+members, and **every one of them is woken when the commitment moves** — so a
+seat told its goal changed and holding no verb to read a goal would have been
+handed a riddle.
 
 ## Views
 
@@ -379,9 +392,10 @@ correct board.
 
 ## What a seat can do
 
-Twelve tools, and they are deliberately few — six that act on a task, three
+Thirteen tools, and they are deliberately few — six that act on a task, three
 that read the container it is filed into, one that writes the one part of that
-container a seat owns, and two about CHANGE rather than about state:
+container a seat owns, one that reads the company's goals, and two about
+CHANGE rather than about state:
 
 | Tool | What it does |
 |---|---|
@@ -394,6 +408,7 @@ container a seat owns, and two about CHANGE rather than about state:
 | `list_projects` | every project work is filed into, with how much open work each holds, who leads it and which sprint is running |
 | `describe_project` | one project in full: the six statuses with what each means, the types it files, the fields grouped by which type they apply to (required first, with their options), its tags, its lead and its active sprint. Omitting the project means the seat's own |
 | `write_project` | a project's own settings. Declaring a **tag** is open to every seat; renaming or archiving one, declaring project fields, setting the sprint policy and setting the default assignee are the project **lead's**; archiving the project takes a person |
+| `list_work_goals` | the company's goals, what each is at, and the health updates written against them. A read only — setting a goal is a person's |
 | `sprint_report` | how a project's recent sprints went — committed, added, removed, done and remaining, per sprint and per person, in the project's own measure |
 | `task_activity` | what HAPPENED, in the order the log made it happen: every change to one task or one project, with who made it and exactly which fields moved |
 | `my_work` | everything this seat is expected to look at, in one call — see below |
@@ -433,7 +448,7 @@ policy and its default assignee are the **lead's**, and archiving the project
 itself takes a person's own credential. Every one of those is gated inside the
 verb, and each refusal names who can.
 
-An operator holds the same twelve and three more that no seat does:
+An operator holds the same thirteen and more that no seat does:
 `manage_sprint` (above), and the two below. `remove_work_item` puts an item
 in the **trash** and `restore_work_item` takes it out again, at any age. A
 removal hides an item from every list and board and destroys nothing — its
@@ -484,10 +499,11 @@ queries a seat's tools use, against this node's own copy. Every answer says how
 far behind that copy is.
 
 **Your own AI assistant** can reach the same tracker over MCP, at
-`/operator/mcp`. It serves the same six work tools above, nine more no seat is
-given — `list_work_views`, `save_work_view`, `list_work_goals`,
-`write_work_goal`, `write_work_catalogue`, `get_person`, `mark_inbox`,
-`set_pins` and `set_priorities` — the five page tools beside them and knowledge
+`/operator/mcp`. It serves the same work tools above, more no seat is
+given — `list_work_views`, `save_work_view`, `write_work_goal`,
+`write_work_catalogue`, `get_person`, `mark_inbox`, `set_pins`,
+`set_priorities`, `manage_sprint`, `remove_work_item` and `restore_work_item`
+— the five page tools beside them and knowledge
 search — the seat's own implementations, with one
 field different: a write carries the **token's** own name as its author and the
 author kind `operator`. There is deliberately no way for the caller to name a seat to act
@@ -497,6 +513,35 @@ trail.
 **The REST API** serves the read side at `/work`, `/work/{id}` and
 `/work/views`. Writes go through a seat's tools or the operator MCP, both of
 which are attributed to somebody.
+
+## What wakes a seat
+
+A change that concerns somebody becomes a **wake** — a turn on that seat, with
+a prompt written for the reason it reached them. Most wakes are about a task:
+you were assigned it, mentioned on it, watching it, blocked by it. Four are
+not, and they exist because the thing that moved is not a row on a board:
+
+| Wake | Who hears it | What it asks |
+|---|---|---|
+| `goal_updated` | every owner and every member of the goal | nothing — re-plan your own work if the health moved |
+| `sprint_started` | the seats with work in the sprint, and the project lead | nothing — look at what you committed to |
+| `sprint_closed` | the same | nothing — find where your unfinished work went |
+| `prioritised` | the person whose queue somebody else wrote | **an answer**: take it up, or say why you cannot |
+
+Only the last **addresses** its recipient. A goal's owners are told so they can
+act in the work, not so they can reply — a wake that asked for an answer on
+every health update would fill the tracker with "noted, thanks". Being told
+what to do next by somebody above you is a different thing, and silence on it
+is indistinguishable from a message that was lost.
+
+None of the four sends you to `get_work_item` for the object it is about: a
+goal's id and a sprint's number are not task keys, and a pointer at one costs a
+round and a failed tool call to discover. Each names the tool that answers its
+own question — `list_work_goals`, `sprint_report`, `my_work`.
+
+A **sprint close changes no task's status.** The close is about the sprint;
+what happens to the unfinished work is the rollover, and the wake says which of
+`next`, the backlog, cancelled, or still pending it was.
 
 ## A person's own state
 
@@ -508,7 +553,7 @@ authorities over them — which is why they are three separate writes.
 |---|---|
 | **inbox** — read, unread, snoozed, and how far you have read | only on behalf of the person whose it is |
 | **pins** — pinned views and starred things | the same |
-| **queue** — the order you mean to work in | yours, **or a lead's** for somebody in their line |
+| **queue** — the order you mean to work in | yours, **or** a lead's for somebody in their line, a human's, or an operator's |
 
 Somebody else marking your work read is the one thing an inbox must never
 allow: the item is then gone from the only place you would have looked for it,
@@ -516,11 +561,22 @@ and nothing anywhere says who removed it. A pin is the same rule for the
 plainer reason — one somebody else can set is one that moves under you.
 
 The **queue is the exception**, and deliberately: telling somebody what to do
-next is what a lead is for. A lead's write is **stamped** with who made it, so
-a person who starts the day on work they did not choose can see who chose it,
-and their own next change clears the stamp — taking your queue back is the
-gesture that says you have seen it. The lead relation is any ancestor in the
-management chain, not just the direct manager: a founder leads everybody.
+next is what a lead is for. A **seat** is the one party that may not write
+somebody else's — an agent re-ordering a colleague's list is a hand-off in
+disguise, and it bypasses the guarded take and the reassignment budget that a
+real hand-off goes through.
+
+Somebody else's write is **stamped** with who made it, so a person who starts
+the day on work they did not choose can see who chose it, and their own next
+change clears the stamp — taking your queue back is the gesture that says you
+have seen it. The lead relation is any ancestor in the management chain, not
+just the direct manager: a founder leads everybody.
+
+It also **wakes the seat**, and that is the other half of the same authority:
+a stamp is seen by somebody who opens a screen, and a seat has no screen. The
+wake names the task now at the top of the list, and it is the one notification
+in this section that **asks for an answer** — take it up, or say why you
+cannot. Going silent on it looks exactly like a message that was lost.
 
 **An entry you have read past is pruned on the next write.** That is what keeps
 the record small without a cap that discards: an entry at or below your

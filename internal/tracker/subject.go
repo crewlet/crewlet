@@ -308,6 +308,34 @@ func (k ObjectKind) HomedInAProject() bool {
 	return false
 }
 
+// Routable reports an object kind whose records can wake somebody.
+//
+// FOUR, and the three beyond a task are there because their wakes are about a
+// PERSON rather than about a row: a goal's owners hear that the outcome they
+// committed the company to moved, a sprint's assignees hear that the window
+// they planned into opened or closed, and one person hears that somebody else
+// wrote their priority list. None of those is reachable from a task's own
+// routing — an assignee, a watcher, a dependent — which is why the parser used
+// to drop them all and why they arrive under their own reasons instead.
+//
+// EVERY OTHER KIND IS MACHINERY OR IS ANNOUNCED ELSEWHERE. A counter, an alias
+// and a rank order have no audience at all; a catalogue, a view, a tag set and
+// a project's settings are read from their own surfaces rather than woken into
+// somebody's inbox, and a wake per catalogue edit would page the whole company
+// for a renamed dropdown.
+//
+// A CLOSED SET RATHER THAN A NEGATIVE ONE, so a kind added later is silently
+// unroutable rather than silently routed: the failure of a missing wake is one
+// person not hearing something, and the failure of an unintended one is every
+// seat in the company woken by a bookkeeping append.
+func (k ObjectKind) Routable() bool {
+	switch k {
+	case KindTask, KindGoal, KindSprint, KindPerson:
+		return true
+	}
+	return false
+}
+
 // RequiresAProject reports a kind that cannot live at the top of the company.
 func (k ObjectKind) RequiresAProject() bool {
 	return k == KindTask || k == KindTurn

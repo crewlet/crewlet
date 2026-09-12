@@ -1026,7 +1026,18 @@ func patchFromArgs(args map[string]any, actor Actor,
 				"priorities are: %s.", clip(raw), priorityList())
 		}
 		patch.Priority = &priority
-		kind = tracker.ChangePrioritised
+		// AND THE KIND STAYS `fields`, which is what a task's priority
+		// moving IS. `prioritised` is a different event entirely — it is
+		// somebody writing YOUR OWN priority list, on the person object,
+		// and it is the one kind whose recipient is read from
+		// Snapshot.Person rather than from the task.
+		//
+		// Setting it here was silently worse than picking the wrong
+		// word: ChangePrioritised is not in [tracker.ChangeKind.TaskCommit],
+		// so a task's priority change woke no assignee, no collaborator
+		// and no watcher — while Snapshot.Person was empty on this path,
+		// so the one arm that does route it added nobody either. A
+		// priority change reached NOBODY AT ALL.
 	}
 	if raw := strings.TrimSpace(argString(args, "status")); raw != "" {
 		status := tracker.Status(raw)

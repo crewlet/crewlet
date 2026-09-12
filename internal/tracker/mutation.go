@@ -909,6 +909,52 @@ type Snapshot struct {
 	// Person is whose object a person-scoped change was about — the
 	// handle whose priorities somebody else wrote.
 	Person string `json:"person,omitempty"`
+
+	// GoalName and SprintName are what a NON-TASK wake is called.
+	//
+	// ON THE SNAPSHOT for the reason every other field here is: the node
+	// that wins the delivery is rarely the node that wrote the record and
+	// is often behind on its own rows, so a name looked up at wake time
+	// would be read from a row that has moved on — or, for a goal
+	// somebody archived in between, from no row at all. The record
+	// carries what a card has to render.
+	GoalName   string `json:"goal_name,omitempty"`
+	SprintName string `json:"sprint_name,omitempty"`
+
+	// PrioritisedBy is who wrote somebody else's priority list, and
+	// Position is where in it the task named by Key now sits, ONE-BASED
+	// because that is how the excerpt reads it back: "put ENG-42 at
+	// position 2 of your priorities".
+	PrioritisedBy string `json:"prioritised_by,omitempty"`
+	Position      int    `json:"position,omitempty"`
+
+	// Task is the task this wake POINTS AT when the record's own subject
+	// is not one.
+	//
+	// It exists for exactly one wake today: `prioritised` is written on a
+	// person's object and is about the task that reached the top of their
+	// list, so without this the one useful pointer in the whole
+	// notification would be missing. Every task-subject wake leaves it
+	// empty and [Snapshot.TaskID] falls back to the subject, because
+	// duplicating the id a record already carries is a second place for it
+	// to disagree with itself.
+	Task string `json:"task,omitempty"`
+}
+
+// TaskID is the task this wake points at, or empty when it points at none.
+//
+// THE SNAPSHOT'S OWN, falling back to the subject only when the subject IS a
+// task. Three of the four routable kinds are not tasks, and handing the prompt
+// a goal's uuid under `item_id` would render a "read this task first" block
+// naming something `get_work_item` cannot resolve.
+func (s Snapshot) TaskID(subject Subject) string {
+	if s.Task != "" {
+		return s.Task
+	}
+	if subject.Kind == KindTask {
+		return subject.ID
+	}
+	return ""
 }
 
 // Notify is the routing snapshot a wake is derived from.

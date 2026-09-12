@@ -179,6 +179,13 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			DB:     e.backends.Store,
 			Claims: e.backends.Coord,
 			NodeID: nodeID,
+			// THE CHART, read PER CALL. A project's lead is the one
+			// fact a sprint wake needs that the rows cannot give —
+			// `tracker_projects` carries no column for it, because the
+			// applier may not read an org — and the caller that needs
+			// it is the sprint duty, a fleet singleton on a tick with
+			// no tool arguments to carry a seam through.
+			Leads: liveLeads{engine: e},
 			// THE NODE'S OWN WRITER ACTS AS THE SYSTEM, and every
 			// surface derives its own from it with Writer.As: a seat's
 			// tools act as that seat, an operator's session as that
