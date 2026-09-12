@@ -526,3 +526,51 @@ func TestAPassThatSealedNothingLeavesTheSnapshotAlone(t *testing.T) {
 		t.Errorf("a read-only pass rebuilt the snapshot: ${UNSEEN} = %q", got)
 	}
 }
+
+// TWO PASSES SEALING IN ONE BURST RE-ACTIVATE ONCE.
+//
+// The rebuild goes through [republisher] rather than straight to
+// [Engine.rebuildForSealedSecrets], and that wiring is the whole of the
+// coalescing: connecting a third-party app from the dashboard writes one
+// request per surface — Atlassian's alone applies three revisions in a row —
+// and each seal used to be a whole-company rebuild and a permanent config
+// revision. Twenty of one deployment's fifty-six revisions were these.
+//
+// Worse, an apply marks every surface stale and brings the reconcile loop's
+// next tick forward, so a pass that cannot converge seals as fast as an apply
+// completes. One did: GitLab minted a year-long `api`-scoped token every five
+// seconds, 144 of them from a single connect.
+//
+// THE SINK'S `flushed` FLAG DOES NOT COVER THIS. That stops one sink
+// rebuilding twice; this is two sinks, which is what a burst is.
+func TestASecondPassSealingInTheSameBurstDoesNotRebuildAgain(t *testing.T) {
+	e, _ := sealingEngine(t, "https://jira.example.com")
+	w := &reloadingWriter{}
+	e.UseConfigWriter(w)
+
+	for _, name := range []string{"JIRA_AGENT_TOKEN", "CONFLUENCE_AGENT_TOKEN"} {
+		// A SINK PER PASS, which is what the engine hands out: SetupSink
+		// builds a fresh one for every request.
+		sink, err := e.SetupSink("founder@example.com")
+		if err != nil {
+			t.Fatalf("sink: %v", err)
+		}
+		if err := sink.Record(t.Context(), name, "value"); err != nil {
+			t.Fatalf("record %s: %v", name, err)
+		}
+		if err := sink.Flush(t.Context()); err != nil {
+			t.Fatalf("flush %s: %v", name, err)
+		}
+	}
+
+	w.awaitReloads(t, 1)
+	// SETTLED, because what is being claimed is that a SECOND one does not
+	// happen: the coalescing window is fifteen seconds, so anything the
+	// burst asked for beyond the first is owed rather than immediate.
+	time.Sleep(50 * time.Millisecond)
+	if got := w.reloads(); got != 1 {
+		t.Errorf("re-activations = %d from one burst of two seals, want 1: "+
+			"each is a permanent config revision, and an apply brings the "+
+			"reconcile tick that seals again forward", got)
+	}
+}
