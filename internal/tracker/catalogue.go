@@ -205,6 +205,29 @@ func checkTypes(types []TaskType) ([]TaskType, error) {
 		seen[t.Slug] = true
 		out = append(out, t)
 	}
+	// AND THE NAMES, case-insensitively, OVER THE EFFECTIVE SET. A type
+	// resolves by name as well as by slug — a model writes what it read
+	// off a board — and the schema has carried `name_norm` with an index
+	// annotated "the case-insensitive collision rule" the whole time, with
+	// nothing enforcing it: "Bug" and "bug " both landed, and a
+	// resolve-by-name picked whichever row was read first.
+	//
+	// THE EFFECTIVE SET RATHER THAN THE DECLARED ONE, because that is what
+	// resolves: a catalogue ADDS to the builtins, so a company declaring
+	// `defect` named "Bug" collides with the shipped `bug` — and checking
+	// only its own declarations would be the same hole one level up. A
+	// declared type carrying a builtin's SLUG replaces it rather than
+	// joining it, which is how a company renames `bug` to its own word,
+	// and [EffectiveTypes] is what states that.
+	named := make([]namedDeclaration, 0, len(out)+len(builtinTypes))
+	for _, t := range EffectiveTypes(out) {
+		named = append(named, namedDeclaration{
+			ident: t.Slug, name: t.Name, archived: t.Archived,
+		})
+	}
+	if err := checkNames("task types", named); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
@@ -265,6 +288,9 @@ func checkFields(fields []FieldDef) error {
 		if err := checkOptions(f); err != nil {
 			return err
 		}
+		if err := checkConfig(f); err != nil {
+			return err
+		}
 		ids[f.ID] = true
 		if !f.Archived {
 			slugs[f.Slug] = true
@@ -276,7 +302,16 @@ func checkFields(fields []FieldDef) error {
 			"across every field and the maximum is %d", options,
 			MaxOptionsPerDocument)
 	}
-	return nil
+	// AND THE FIELD NAMES, on the types' own rule and for the same reason:
+	// `f.<name>` is the third tier of the resolution every filter, grouping
+	// and sort goes through.
+	named := make([]namedDeclaration, 0, len(fields))
+	for _, f := range fields {
+		named = append(named, namedDeclaration{
+			ident: f.Slug, name: f.Name, archived: f.Archived,
+		})
+	}
+	return checkNames("fields", named)
 }
 
 // checkOptions refuses a choice list a value could not resolve against.
@@ -308,11 +343,30 @@ func checkOptions(f *FieldDef) error {
 		case o.Name == "":
 			return fmt.Errorf("tracker: option %s of field %s has no name",
 				o.Slug, f.Slug)
+		case len(o.Name) > MaxOptionName:
+			return fmt.Errorf("tracker: option %s of field %s has a %d-byte "+
+				"name and the maximum is %d", o.Slug, f.Slug, len(o.Name),
+				MaxOptionName)
 		}
 		ids[o.ID] = true
 		if !o.Archived {
 			slugs[o.Slug] = true
 		}
+	}
+	// AND THE OPTION NAMES, which is the sharpest of the three: [OptionIDs]
+	// maps a lowercased NAME to an option's id, so two options whose names
+	// differ only in case collapsed to ONE entry there — and the one that
+	// survived was whichever came last in the slice. A value written by
+	// name resolved differently after somebody reordered the list, with
+	// nothing anywhere saying so.
+	named := make([]namedDeclaration, 0, len(f.Config.Options))
+	for _, o := range f.Config.Options {
+		named = append(named, namedDeclaration{
+			ident: o.Slug, name: o.Name, archived: o.Archived,
+		})
+	}
+	if err := checkNames("options of field "+f.Slug, named); err != nil {
+		return err
 	}
 	// OPTIONS BELONG TO THE THREE TYPES THAT HAVE THEM, and a list on any
 	// other is a caller who believes they configured something.
