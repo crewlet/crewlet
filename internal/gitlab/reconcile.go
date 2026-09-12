@@ -46,6 +46,23 @@ type Result struct {
 	Kept []string
 	// Decommissioned names the accounts this run deleted.
 	Decommissioned []string
+
+	// Blocked is the seats whose GitLab account exists and cannot sign in.
+	//
+	// Its own list rather than a line in [Result.Unusable], because the two
+	// are different facts with different remedies: unusable is an account
+	// that authenticated and was refused, and this is one GitLab will not
+	// let authenticate at all — most often because a previous disconnect
+	// blocked it, since GitLab's service-account delete blocks rather than
+	// erases.
+	Blocked []BlockedAccount
+
+	// AccountsURL is where a person goes to act on one, and is empty when
+	// this run could not work out an address. It is the page that lists the
+	// accounts this engine provisions — the group's service accounts, or
+	// the instance's user administration — rather than any one account's
+	// profile, because the profile has no control on it.
+	AccountsURL string
 	// Hooked is the webhook target this run registered or re-pointed, or
 	// empty when webhooks were not part of it.
 	Hooked string
@@ -298,7 +315,10 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 				"provisioned", p.Group)
 	}
 
-	res := &Result{Notes: notesOf(opts.Plan)}
+	res := &Result{
+		Notes:       notesOf(opts.Plan),
+		AccountsURL: accountsURL(opts),
+	}
 
 	// PROJECTS ARE RESOLVED BEFORE ANYTHING IS MUTATED, and a missing one
 	// is dropped rather than fatal — see [resolveProjects].
@@ -330,6 +350,33 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		}
 		if created {
 			res.Created = append(res.Created, seat.Handle)
+		}
+		// A BLOCKED ACCOUNT IS REPORTED BEFORE ANYTHING IS WRITTEN ON IT.
+		//
+		// GitLab's service-account delete BLOCKS rather than erases, so the
+		// ordinary disconnect-then-reconnect cycle finds the account it
+		// decommissioned sitting where it left it — and this pass used to
+		// walk straight past the state: it added the memberships, minted a
+		// token, watched its own post-mint probe refuse the token, swept
+		// the token and reported the SEAT unusable, naming an
+		// authentication failure and suggesting an unconfirmed address.
+		// Every one of those writes was spent on an account that cannot
+		// sign in, and the sentence sent the operator looking for the
+		// wrong thing.
+		//
+		// NOT UNBLOCKED HERE, which is the difference from datadog and is
+		// the vendor's rather than a choice: unblocking is
+		// POST /users/:id/unblock, an INSTANCE ADMIN route, and the
+		// ordinary deployment holds a group Owner token. Attempting it
+		// would be a 403 on every tick. So the state is named, with the
+		// page that can change it, and no provenance marker is written
+		// either — a marker is only worth having where the engine could
+		// act on it.
+		if !created && user.Blocked() {
+			res.Blocked = append(res.Blocked, BlockedAccount{
+				Handle: seat.Handle, Username: user.Username, State: user.State,
+			})
+			continue
 		}
 		level := accessLevel(p, seat.Handle)
 		if err = have.ensureGroup(ctx, opts.Client, group.ID, user.ID, level); err != nil {
@@ -783,6 +830,43 @@ func clock(opts Options) time.Time {
 // instance whatever owns it, which is what makes switching modes safe — an
 // operator who moves a company from group to instance finds the accounts it
 // already has rather than colliding with their usernames.
+// accountsURL is the page a person acts on this engine's service accounts
+// from, or "" when this run cannot name one.
+//
+// THE LISTING, NOT A PROFILE. An account's own page carries no control that
+// changes its state; the group's service-accounts settings and the instance's
+// user administration both do, and which one applies is exactly what
+// [Options.Mode] already decides.
+func accountsURL(opts Options) string {
+	base := strings.TrimRight(strings.TrimSpace(opts.Config.URL), "/")
+	if base == "" {
+		return ""
+	}
+	// ONLY THE INSTANCE'S, and the group half is deliberately absent.
+	//
+	// /admin/users has been GitLab's user administration for many years and
+	// `filter=blocked` is one of its own filters, so an instance-mode
+	// deployment — whose credential is an instance administrator by
+	// definition — gets a link that works. Where a group Owner manages
+	// service accounts has MOVED between GitLab versions, and a link that
+	// 404s costs an operator the trip to find that out: the finding names
+	// the account and the state in words instead, which is worse than a
+	// working link and better than a broken one.
+	if opts.Mode.Or() == ModeInstance {
+		return base + "/admin/users?filter=blocked"
+	}
+	return ""
+}
+
+// BlockedAccount is one seat whose GitLab account cannot sign in.
+type BlockedAccount struct {
+	// Handle is the seat, Username the account, and State GitLab's own
+	// word for why it cannot — blocked, deactivated, ldap_blocked, banned.
+	// The state is quoted back because the remedy differs between them and
+	// only GitLab knows which applies.
+	Handle, Username, State string
+}
+
 func ensureAccount(ctx context.Context, opts Options, groupID int,
 	seat provision.Seat,
 ) (User, bool, error) {

@@ -126,6 +126,28 @@ type User struct {
 	Username string `json:"username"`
 	Name     string `json:"name"`
 	Email    string `json:"email"`
+	// State is GitLab's own word for whether the account may sign in —
+	// active, blocked, deactivated, ldap_blocked, banned. It is served on
+	// the listing and it is the only thing that distinguishes an account
+	// this engine can mint into from one it must only report on: see
+	// [User.Blocked].
+	State string `json:"state"`
+}
+
+// Blocked reports an account GitLab will not let sign in.
+//
+// ANYTHING BUT active, rather than an enumeration of the states that mean
+// no. GitLab has five and has added to them across versions — blocked,
+// deactivated, ldap_blocked, banned — and each one refuses every token the
+// account holds; a list would go stale silently, minting into whichever
+// state was added last.
+//
+// AN EMPTY STATE IS NOT BLOCKED, which is the other half. The field is
+// absent from some older listings and from the service-account creation
+// response, and reading absence as "cannot sign in" would report every seat
+// on such an instance as failed while provisioning nothing.
+func (u User) Blocked() bool {
+	return strings.TrimSpace(u.State) != "" && !strings.EqualFold(u.State, "active")
 }
 
 // UserByUsername finds an account, reporting whether it exists.

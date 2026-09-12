@@ -527,7 +527,17 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 		var out []map[string]any
 		for name, id := range f.users {
 			if strings.HasPrefix(name, username) {
-				out = append(out, map[string]any{"id": id, "username": name})
+				// `state` IS ON THE LISTING, and a fake that omitted it
+				// answered every account "active" — including the ones
+				// its own service-account delete had just blocked. See
+				// [adminInstance.blocked].
+				state := "active"
+				if f.blocked[name] {
+					state = "blocked"
+				}
+				out = append(out, map[string]any{
+					"id": id, "username": name, "state": state,
+				})
 			}
 		}
 		sortByUsername(out)
@@ -4345,5 +4355,111 @@ func TestASecondPassDoesNotMintOverASigningSecretThisDeploymentSealed(t *testing
 		if strings.Contains(note, "signing secret") {
 			t.Errorf("a pass that minted nothing reported %q", note)
 		}
+	}
+}
+
+// A RECONNECT AFTER A `remove_seats` DISCONNECT REPORTS THE BLOCKED ACCOUNT
+// RATHER THAN MINTING INTO IT.
+//
+// GitLab's service-account delete BLOCKS rather than erases (see
+// [adminInstance.blocked]), so the ordinary disconnect-then-reconnect leaves
+// an account that still exists, still answers the lookup, and can sign in
+// nowhere. The pass used to walk straight past that: it found the account,
+// minted a token, recorded it, and the very next request with that token was
+// refused — so every tick minted another one, and the card said `degraded`
+// with no word about why.
+//
+// The three things this pins are what a person needs and what a machine must
+// not do: the state is NAMED, the page that can change it is LINKED, and
+// nothing is minted into an account no credential can work on.
+func TestABlockedAccountIsReportedRatherThanMintedInto(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.blocks = true
+	sink := newRecordingSink()
+	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
+	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	if _, err := tearDownAgainst(t, f, func(o *gitlab.TeardownOptions) {
+		o.RemoveSeats = true
+		o.Plan = &provision.Plan{}
+		o.Plan.Add(provision.Seat{Handle: "swe", Role: "SWE", TokenVar: "GITLAB_TOKEN_SWE"})
+	}); err != nil {
+		t.Fatalf("disconnect: %v", err)
+	}
+	f.mu.Lock()
+	id := f.users["crewlet-swe"]
+	before := len(f.tokens[id])
+	f.mu.Unlock()
+
+	res, err := reconcileAgainst(t, f, sink, seats)
+	if err != nil {
+		t.Fatalf("reconnect: %v", err)
+	}
+	if len(res.Blocked) != 1 || res.Blocked[0].Handle != "swe" ||
+		res.Blocked[0].State != "blocked" {
+		t.Fatalf("blocked = %+v, want the seat named with the state GitLab reports",
+			res.Blocked)
+	}
+	f.mu.Lock()
+	after := len(f.tokens[id])
+	f.mu.Unlock()
+	if after != before {
+		t.Errorf("minted %d token(s) into an account that can sign in nowhere",
+			after-before)
+	}
+
+	var got integration.Finding
+	for _, finding := range res.Findings() {
+		if finding.Subject == "swe" {
+			got = finding
+		}
+	}
+	if got.Kind != integration.FindingIdentityFailed {
+		t.Fatalf("findings = %+v, want the seat reported as identity_failed",
+			res.Findings())
+	}
+	if !strings.Contains(got.Detail, "blocked") {
+		t.Errorf("detail = %q, want the state GitLab reports", got.Detail)
+	}
+	// AND NOTHING IS LINKED IN GROUP MODE, which is the deliberate half:
+	// where a group Owner administers service accounts has moved between
+	// GitLab versions, so the finding says the state in words rather than
+	// sending somebody to a 404. See [TestAnInstanceLinksItsUserAdmin].
+	if got.ActionURL != "" {
+		t.Errorf("action_url = %q, want nothing guessed for a group-mode "+
+			"deployment", got.ActionURL)
+	}
+}
+
+// AND AN INSTANCE-MODE DEPLOYMENT GETS THE PAGE, because its credential is an
+// instance administrator by definition and /admin/users?filter=blocked is
+// where that person unblocks the account. Nobody else here can: unblocking is
+// POST /users/:id/unblock, an instance-admin route, so the finding is owed to
+// a human and has to reach them somewhere they can act.
+func TestAnInstanceLinksItsUserAdmin(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.instanceOnly, f.instanceAdmin = true, true
+	f.join("crewlet-swe", 502, gitlabDeveloperLevel)
+	f.mu.Lock()
+	f.blocked["crewlet-swe"] = true
+	f.mu.Unlock()
+
+	res, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
+		func(o *gitlab.Options) { o.Mode = gitlab.ModeInstance })
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	var got integration.Finding
+	for _, finding := range res.Findings() {
+		if finding.Subject == "swe" {
+			got = finding
+		}
+	}
+	if want := "https://gitlab.example.com/admin/users?filter=blocked"; got.ActionURL != want {
+		t.Errorf("action_url = %q, want %q", got.ActionURL, want)
 	}
 }

@@ -1,6 +1,10 @@
 package gitlab
 
-import "github.com/crewlet/crewlet/internal/integration"
+import (
+	"fmt"
+
+	"github.com/crewlet/crewlet/internal/integration"
+)
 
 // Findings reads this run as the integration-neutral vocabulary.
 //
@@ -77,6 +81,31 @@ func (r *Result) Findings() []integration.Finding {
 	// "a seat's account could not be created or its credential was refused" —
 	// and because the verdict it carries is the true one: DEGRADED, owed by
 	// an ADMIN at GitLab. Nobody here can fix it and no retry will.
+	// AN ACCOUNT GITLAB WILL NOT LET SIGN IN, named before the one that
+	// signed in and was refused: they read alike on a card and have
+	// different remedies, and this one is what an ordinary
+	// disconnect-then-reconnect leaves behind, because GitLab's
+	// service-account delete blocks rather than erases.
+	//
+	// identity_failed, and owed by an ADMIN: nothing this engine holds can
+	// undo it. Unblocking is an instance-admin route and the ordinary
+	// deployment provisions with a group Owner token, so the honest answer
+	// is the account's name, the state GitLab reports, and the page where
+	// somebody who can change it goes.
+	for _, account := range r.Blocked {
+		out = append(out, integration.Finding{
+			Kind:      integration.FindingIdentityFailed,
+			Subject:   account.Handle,
+			ActionURL: r.AccountsURL,
+			Detail: fmt.Sprintf(
+				"%s's GitLab account %s is %s, so it can sign in nowhere and "+
+					"holds no usable credential. A previous disconnect blocks "+
+					"the account rather than deleting it, which is the usual "+
+					"cause; unblock it at GitLab to bring this agent back",
+				account.Handle, account.Username, account.State),
+		})
+	}
+
 	for _, handle := range r.Unusable {
 		out = append(out, integration.Finding{
 			Kind: integration.FindingIdentityFailed, Subject: handle,
