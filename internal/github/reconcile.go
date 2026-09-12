@@ -555,32 +555,51 @@ func noIngressReason(opts Options) string {
 }
 
 // noRegistrarReason says why a run with no organization credential could
-// register nothing although the company asked for hooks, or "" when it asked
-// for none.
+// register nothing that the company ASKED FOR, or "" when it asked for
+// nothing this credential is needed for.
 //
-// ASKED FOR is the whole of the test, and it is the `provisioning` block: an
-// organization or a list of repositories is a company saying it wants hooks
-// on them. A company with no block wants none — each agent's own app carries
-// its own webhook in its own manifest — so silence there is correct rather
-// than a gap, and reporting it would put a permanent finding on every company
-// running GitHub the way the form sets it up.
+// # An organization is named for the agents, not for a hook
+//
+// The connect form asks for `provisioning.org` and requires it, because that
+// is where the agents' own apps are installed — and it asks for no token at
+// all, deliberately. So "the block names an organization" is not a company
+// wanting an organization-wide webhook, and reading it as one put a permanent
+// finding on the ordinary shape: every company that connects GitHub from the
+// dashboard, for ever, over a fallback that is working exactly as designed.
+// Measured on a live connect, where it survived the operator installing the
+// app and read as though the install had not taken.
+//
+// What IS a company asking for a hook this credential must register:
+//
+//   - `org_webhook: true`, which demands one and has no fallback;
+//   - a non-empty `repos` list, which names repositories to hook and is not
+//     covered by any agent's own app.
+//
+// `auto` with no repositories — the default, and what the form writes — is a
+// company that takes an organization hook if one can be had and per-agent app
+// webhooks otherwise. The second is not a degradation to report; it is the
+// design.
 func noRegistrarReason(opts Options) string {
 	pv := opts.Config.Provisioning
 	if pv == nil {
 		return ""
 	}
-	where := hookTargetNames(pv)
-	if len(where) == 0 {
+	var asked []string
+	if org := strings.TrimSpace(pv.Org); org != "" &&
+		pv.OrgWebhook == config.ContainerWebhookRequire {
+		asked = append(asked, org)
+	}
+	for _, target := range TargetsOf(pv) {
+		asked = append(asked, target.String())
+	}
+	if len(asked) == 0 {
 		return ""
 	}
 	return fmt.Sprintf(
-		"integrations.github.provisioning names %s, so this company asked for "+
-			"a webhook there, and no credential resolved to register one with: "+
-			"nothing at GitHub delivers to this deployment from %s. Set "+
-			"integrations.github.token to a credential with webhook access, or "+
-			"clear the provisioning block and let each agent's own app carry "+
-			"its own webhook",
-		strings.Join(where, ", "), strings.Join(where, ", "))
+		"no webhook on %s: registering one needs integrations.github.token, "+
+			"and none resolved. Set it, or let each agent's own app carry its "+
+			"own webhook instead",
+		strings.Join(asked, ", "))
 }
 
 // ingress is what one webhook pass concluded. A struct rather than three

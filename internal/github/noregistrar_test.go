@@ -10,14 +10,15 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 )
 
-// A SURFACE THAT AUTHENTICATED WITH NOBODY DOES NOT REPORT READY.
+// A SURFACE THAT COULD NOT REGISTER WHAT IT WAS ASKED FOR DOES NOT REPORT
+// READY.
 //
 // `integrations.github.token` is optional and the connect form does not ask
 // for it, both deliberately: routing needs nothing from it, because each
 // agent's own app answers who is participating in a thread. What it IS still
-// needed for is the one thing `provisioning` asks for — a hook on an
-// organization or on a list of repositories — and with no token the pass
-// reads nothing and writes nothing.
+// needed for is a hook the company DEMANDED — `org_webhook: true`, which has
+// no fallback, or a `repos` list, which no agent's own app covers — and with
+// no token the pass reads nothing and writes nothing.
 //
 // It said so in NOTES, and notes are not findings. Measured on a live
 // connect: `phase: ready`, `phase_label: Connected`, `findings: []`,
@@ -29,7 +30,10 @@ func TestAPassWithNoCredentialToRegisterWithReportsIt(t *testing.T) {
 		Config: &config.GitHub{
 			Enabled:       true,
 			WebhookSecret: "s",
-			Provisioning:  &config.GitHubProvisioning{Org: "crewbed"},
+			Provisioning: &config.GitHubProvisioning{
+				Org:        "crewbed",
+				OrgWebhook: config.ContainerWebhookRequire,
+			},
 		},
 		WebhookBase: "https://engine.example.com",
 	})
@@ -53,8 +57,13 @@ func TestAPassWithNoCredentialToRegisterWithReportsIt(t *testing.T) {
 		}
 		// AND BOTH WAYS OUT, because the form offers no field for this.
 		if !strings.Contains(f.Detail, "integrations.github.token") ||
-			!strings.Contains(f.Detail, "provisioning") {
+			!strings.Contains(f.Detail, "own app") {
 			t.Errorf("the finding names no way out:\n%s", f.Detail)
+		}
+		// SHORT ENOUGH TO READ. It is the card's one-line status, so a
+		// paragraph there is a paragraph nobody reads.
+		if len(f.Detail) > 200 {
+			t.Errorf("the status line is %d characters:\n%s", len(f.Detail), f.Detail)
 		}
 	}
 	if !found {
@@ -66,26 +75,91 @@ func TestAPassWithNoCredentialToRegisterWithReportsIt(t *testing.T) {
 	}
 }
 
-// AND A COMPANY THAT ASKED FOR NO HOOK IS STILL SILENT.
+// AND A NAMED REPOSITORY IS ASKED FOR TOO.
 //
-// Each agent's own app carries its own webhook in its own manifest, so a
-// company with no `provisioning` block wants no organization-wide hook at
-// all — that is how the connect form sets GitHub up. Reporting one there
-// would put a permanent finding on the ordinary shape.
-func TestAPassAskedForNoHookReportsNoRegistrar(t *testing.T) {
+// The other half of "a hook this credential must register": no agent's own
+// app covers a repository the company named, so `repos` is a request with no
+// fallback behind it, exactly like `org_webhook: true`.
+func TestNamedRepositoriesWithNoCredentialAreReported(t *testing.T) {
 	t.Parallel()
 	res, err := github.Reconcile(context.Background(), github.Options{
-		Config:      &config.GitHub{Enabled: true, WebhookSecret: "s"},
+		Config: &config.GitHub{
+			Enabled: true, WebhookSecret: "s",
+			Provisioning: &config.GitHubProvisioning{
+				Org:   "crewbed",
+				Repos: []string{"crewbed/infraflow"},
+			},
+		},
 		WebhookBase: "https://engine.example.com",
 	})
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
+	var found bool
 	for _, f := range res.Findings() {
-		if f.Subject == "integrations.github.token" {
-			t.Errorf("a company that asked for no hook was told it has no "+
-				"credential to register one with:\n%s", f.Detail)
+		if f.Subject != "integrations.github.token" {
+			continue
 		}
+		found = true
+		if !strings.Contains(f.Detail, "crewbed/infraflow") {
+			t.Errorf("the finding does not name the repository:\n%s", f.Detail)
+		}
+		// NOT THE ORGANIZATION, which this company left on the default
+		// mode and therefore did not demand a hook on.
+		if strings.Contains(f.Detail, " crewbed:") ||
+			strings.Contains(f.Detail, "on crewbed,") {
+			t.Errorf("the finding names the organization, which was not "+
+				"asked for:\n%s", f.Detail)
+		}
+	}
+	if !found {
+		t.Fatalf("findings = %v: a named repository was left unhooked in "+
+			"silence", res.Findings())
+	}
+}
+
+// AND THE ORDINARY SHAPE IS SILENT, which is the half that matters more.
+//
+// The connect form REQUIRES `provisioning.org` — that is where the agents'
+// apps are installed — and asks for no token at all. So a block naming an
+// organization is not a company wanting an organization-wide webhook, and
+// reading it as one put a permanent finding on every company that connects
+// GitHub from the dashboard: measured on a live connect, where it survived
+// the operator installing the app and read as though the install had not
+// taken. `auto` takes an organization hook if one can be had and each agent's
+// own app webhook otherwise, and the second is the design rather than a
+// degradation.
+func TestAPassAskedForNoHookReportsNoRegistrar(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		pv   *config.GitHubProvisioning
+	}{
+		{"no provisioning block", nil},
+		{"an org and the default mode", &config.GitHubProvisioning{Org: "crewbed"}},
+		{"an org the company does not want hooked", &config.GitHubProvisioning{
+			Org: "crewbed", OrgWebhook: config.ContainerWebhookNever,
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			res, err := github.Reconcile(context.Background(), github.Options{
+				Config: &config.GitHub{
+					Enabled: true, WebhookSecret: "s", Provisioning: tc.pv,
+				},
+				WebhookBase: "https://engine.example.com",
+			})
+			if err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			for _, f := range res.Findings() {
+				if f.Subject == "integrations.github.token" {
+					t.Errorf("a company that asked for no hook it must "+
+						"register was told it has no credential to register "+
+						"one with:\n%s", f.Detail)
+				}
+			}
+		})
 	}
 }
 
