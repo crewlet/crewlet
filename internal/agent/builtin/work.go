@@ -452,6 +452,74 @@ func (t *listWorkItems) Parameters() map[string]any {
 					"item you half remember; use search_knowledge for a " +
 					"question about the company's written knowledge.",
 			},
+			"type": map[string]any{
+				"type": "string",
+				"description": "A work type — `bug`, `story`, `task`, and " +
+					"whatever else this company declares. get_work_catalogue " +
+					"lists them. Comma separate for several.",
+			},
+			"priority": map[string]any{
+				"type":        "string",
+				"description": "One of: " + priorityList() + ". Comma separate for several.",
+			},
+			"due": map[string]any{
+				"type": "string",
+				"description": "When it is due. A comparison — `lt:today`, " +
+					"`gte:+3d`, `range:sow..eow` — or one of the shorthands " +
+					"`overdue`, `next7`, `last7`, `thisweek`, `thismonth`, " +
+					"`lastmonth`, `earlier`.",
+			},
+			"updated": map[string]any{
+				"type": "string",
+				"description": "When it last changed, in the same shapes as " +
+					"`due`. `gte:-1d` is what moved since yesterday.",
+			},
+			"created": map[string]any{
+				"type":        "string",
+				"description": "When it was filed, in the same shapes as `due`.",
+			},
+			"parent": map[string]any{
+				"type": "string",
+				"description": "A key or id: lists that item's SUBTASKS. For " +
+					"reading a piece of work broken down.",
+			},
+			"reporter": map[string]any{
+				"type":        "string",
+				"description": "Who filed it. Your own handle is what you filed.",
+			},
+			"watcher": map[string]any{
+				"type":        "string",
+				"description": "Who is following it. Your own handle is what you follow.",
+			},
+			"unit": map[string]any{
+				"type": "string",
+				"description": "A team's key: the work routed to that team, " +
+					"whoever holds it.",
+			},
+			"goal": map[string]any{
+				"type":        "string",
+				"description": "A goal's id: the work counted against it.",
+			},
+			"field_filters": map[string]any{
+				"type": "object",
+				"description": "Filter on this company's own custom fields, " +
+					"keyed by field SLUG — {\"impact\": \"high\"}. " +
+					"describe_project lists what a project declares and what " +
+					"each may hold. An operator is available per type, e.g. " +
+					"`>3` on a number or `a..b` on a date.",
+				"additionalProperties": true,
+			},
+			"sort": map[string]any{
+				"type": "string",
+				"description": "How to order: `rank` (the board's own order), " +
+					"`updated`, `created`, `due`, `priority`, or `f.<slug>` " +
+					"for a custom field. Prefix with `-` to reverse.",
+			},
+			"cursor": map[string]any{
+				"type": "string",
+				"description": "The `next_cursor` from a previous call, for " +
+					"the page after it. Everything else stays as it was.",
+			},
 			"limit": map[string]any{
 				"type":        "integer",
 				"description": fmt.Sprintf("How many to return, 1..%d (default %d).", tracker.PageMax, tracker.PageDefault),
@@ -489,9 +557,44 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	if v := strings.TrimSpace(argString(args, "project")); v != "" {
 		params["container"] = "project:" + strings.ToUpper(v)
 	}
-	for _, key := range []string{"assignee", "limit", "sprint", "removed"} {
+	// THE KEYS WHOSE TOOL ARGUMENT AND GRAMMAR KEY ARE THE SAME WORD, which
+	// is most of them: the tool's vocabulary was deliberately built from
+	// the grammar's, so forwarding is the whole translation. The three that
+	// differ are below, each with its own reason.
+	//
+	// THE SET IS WHAT A SEAT CANNOT ASK ANOTHER WAY. The grammar has
+	// forty-odd keys and this tool is deliberately few, so what earns a
+	// place here is a question a seat actually has and no other argument
+	// answers — "the bugs", "what is due this week", "what moved since
+	// yesterday", "the subtasks of ENG-4", "what I filed", "what I follow",
+	// "that team's board", and the next page of any of them. Board
+	// FURNITURE — group, subgroup, group_limit, totals — is not on it: a
+	// model reads rows, and a grouped answer costs it a shape to unpack for
+	// a heading nobody renders.
+	for _, key := range []string{
+		"assignee", "limit", "sprint", "removed",
+		"type", "priority", "due", "updated", "created",
+		"parent", "reporter", "watcher", "unit", "goal",
+		"sort", "cursor",
+	} {
 		if v, held := args[key]; held {
 			params[key] = v
+		}
+	}
+	// THE CUSTOM-FIELD FILTERS, which are the one part of the grammar
+	// whose keys a company invents: `f.<slug>` is how the whole
+	// declaration machinery is reached, and with no way to name one a seat
+	// could set a field and never filter on it again. An object rather
+	// than a list of strings, because the value is the model's and the
+	// slug is the company's, and splitting a typed string on `=` would
+	// make a value containing one unwritable.
+	if raw, held := args["field_filters"].(map[string]any); held {
+		for slug, value := range raw {
+			slug = strings.TrimSpace(slug)
+			if slug == "" {
+				continue
+			}
+			params[tracker.FieldKeyPrefix+slug] = value
 		}
 	}
 	// THE GRAMMAR'S TEXT KEY IS `q`, and the tool's argument is `text`
@@ -629,12 +732,14 @@ func (t *getWorkItem) Parameters() map[string]any {
 			"include": map[string]any{
 				"type": "array",
 				"description": "Which parts to read beside the item itself: " +
-					"`comments`, `history`, `links`. All three by default — " +
-					"name fewer when you only need one, and the answer is " +
-					"smaller.",
+					"`comments`, `history`, `links`, `fields`. All four by " +
+					"default — name fewer when you only need one, and the " +
+					"answer is smaller. `fields` are the custom-field values " +
+					"with the slug, name and type that explain each, which " +
+					"is what you write back with.",
 				"items": map[string]any{
 					"type": "string",
-					"enum": []any{"comments", "history", "links"},
+					"enum": []any{"comments", "history", "links", "fields"},
 				},
 			},
 			"comments_cursor": map[string]any{
@@ -647,7 +752,7 @@ func (t *getWorkItem) Parameters() map[string]any {
 	}
 }
 
-// detailWants reads the `include` argument, defaulting to all three.
+// detailWants reads the `include` argument, defaulting to all four.
 //
 // ALL THREE BY DEFAULT, because that is what this tool answered before the
 // argument existed and a model that never learned to pass it must keep getting
@@ -660,7 +765,8 @@ func detailWants(args map[string]any) (tracker.DetailWants, string) {
 	}
 	raw, held := args["include"]
 	if !held || raw == nil {
-		want.Comments, want.History, want.Links = true, true, true
+		want.Comments, want.History = true, true
+		want.Links, want.Fields = true, true
 		return want, ""
 	}
 	for _, part := range refList(raw) {
@@ -671,9 +777,11 @@ func detailWants(args map[string]any) (tracker.DetailWants, string) {
 			want.History = true
 		case "links":
 			want.Links = true
+		case "fields":
+			want.Fields = true
 		default:
 			return want, fmt.Sprintf("get_work_item has no %q to include. The "+
-				"parts are: comments, history, links.", clip(part))
+				"parts are: comments, history, links, fields.", clip(part))
 		}
 	}
 	return want, ""

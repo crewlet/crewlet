@@ -264,9 +264,18 @@ export function SeatScreen({ handle }: { handle: string }) {
               // itself. A lead may set what somebody in their line does
               // next, and a person who starts the day on work they did
               // not choose should be able to tell.
+              // AND WHEN. A queue somebody else ordered three weeks ago
+              // is a different fact from one they ordered this morning,
+              // and the name alone cannot tell them apart — which is
+              // what carrying the instant the whole way and rendering
+              // nothing amounted to.
               sub={
                 person.data.priorities_set_by
-                  ? `set by ${person.data.priorities_set_by}`
+                  ? `set by ${person.data.priorities_set_by}${
+                      person.data.priorities_set_at
+                        ? ` ${relTime(person.data.priorities_set_at, now)}`
+                        : ""
+                    }`
                   : "their own order"
               }
             />

@@ -57,6 +57,12 @@ type DetailWants struct {
 	History  bool
 	Links    bool
 
+	// Fields asks for the task's custom-field values ANNOTATED — each
+	// with the slug, name and type that explain it, and with the two
+	// non-live states a filter already excludes. See detailfields.go for
+	// why the document alone is not an answer.
+	Fields bool
+
 	// HistoryLimit caps the feed, newest first. Zero takes
 	// [DetailHistoryDefault].
 	HistoryLimit int
@@ -89,6 +95,12 @@ type TaskDetail struct {
 	// a total would need a second scan over a table that grows for the
 	// life of the task, to tell them something the cursor already says.
 	CommentsCursor string `json:"comments_cursor,omitempty"`
+
+	// Fields are the task's custom-field values with the declaration that
+	// explains each one, and with the values nothing explains reported as
+	// exactly that. The raw map stays on [TaskDetail.Task] — it is the
+	// record — and this is the reader's view of it.
+	Fields []FieldValue `json:"fields,omitempty"`
 
 	// Links are BOTH DIRECTIONS, so a reader sees "blocks" and "blocked
 	// by" without a second query and without knowing which end authored
@@ -228,6 +240,11 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 		}
 		if want.Links {
 			if out.Links, err = readLinks(ctx, tx, id); err != nil {
+				return err
+			}
+		}
+		if want.Fields {
+			if out.Fields, err = readFieldValues(ctx, tx, task); err != nil {
 				return err
 			}
 		}
