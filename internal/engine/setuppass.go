@@ -323,15 +323,26 @@ func (e *Engine) setupDuty(kind integration.Kind) setup.Duty {
 
 // Teardown removes the webhooks this pass registered, at both the
 // organization and the repository level.
-// It removes nothing this engine has to forget a credential for.
 //
-// IT MUST REPORT NOTHING, and this is the one that has to be argued rather
-// than assumed. It UNINSTALLS each seat's App, which revokes its access — but
-// GitHub has no API to delete an App, so the registration and the `private_key`
-// behind it stay valid and re-installable. Naming that key here would delete a
-// company's only copy of a working key for an App that still exists, which no
-// API anywhere can undo. See [Engine.ForgetGitHubApp], which states the same
-// rule for the same reason.
+// IT REPORTS NO REMOVED ACCOUNT, and this is the one that has to be argued
+// rather than assumed. It UNINSTALLS each seat's App, which revokes its access
+// — but GitHub has no API to delete an App, so the registration and the
+// `private_key` behind it stay valid and re-installable. Naming that key in a
+// [provision.Removed] would delete a company's only copy of a working key for
+// an App that still exists, which no API anywhere can undo. See
+// [Engine.ForgetGitHubApp], which states the same rule for the same reason.
+// The sealed values are REPORTED to the operator instead, by the disconnect
+// route, off the seat roster — which is where every company-level credential
+// that survives a disconnect is already named.
+//
+// WHAT IT DOES RECORD IS THE INSTALLATION, and that is not a credential.
+// `installation_id` names something this teardown has just removed at GitHub,
+// so a record that keeps it claims an installation that is gone: the seat
+// reads as a finished agent, the roster reports it satisfied, and the
+// integrations row stays alive on the strength of an app that reaches
+// nothing. Measured on a live disconnect — the card sat on Connecting with a
+// `routes nowhere` badge permanently, because every reader keyed on the
+// record rather than on what GitHub holds.
 func (p *githubPass) Teardown(ctx context.Context, in setup.TeardownInput) (provision.Removed, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.GitHub
@@ -370,12 +381,28 @@ func (p *githubPass) Teardown(ctx context.Context, in setup.TeardownInput) (prov
 			APIBase: apiBase,
 		}, seat); err != nil {
 			failures = append(failures, fmt.Errorf("%s: %w", seat.Handle, err))
+			continue
+		}
+		// AND THE RECORD FOLLOWS THE WORLD. Zero is the value
+		// [Engine.RecordGitHubInstallation] already has for an
+		// installation somebody removed at GitHub, and this is the same
+		// fact arrived at deliberately.
+		//
+		// A failure here is a failure of the teardown rather than a note:
+		// the block stays, the surface holds in PhaseDisconnecting, and
+		// the next attempt uninstalls nothing (already gone) and writes
+		// the record again. Swallowing it drops the block with every seat
+		// still claiming an installation that no longer exists, and
+		// nothing ever looks again.
+		if err := p.engine.RecordGitHubInstallation(ctx, seat.Handle, 0); err != nil {
+			failures = append(failures, fmt.Errorf("%s: %w", seat.Handle, err))
 		}
 	}
 	if len(failures) > 0 {
 		return provision.Removed{}, fmt.Errorf(
-			"engine: github teardown: some agents' apps are still installed and "+
-				"can still act, so the block stays until they are not: %w",
+			"engine: github teardown: some agents' apps are still installed, or "+
+				"still recorded as installed, so the block stays until they are "+
+				"not: %w",
 			errors.Join(failures...))
 	}
 	return provision.Removed{}, nil

@@ -1599,3 +1599,73 @@ func TestMattermostStillReportsWhetherItRoutes(t *testing.T) {
 	}
 	t.Fatal("mattermost has no row")
 }
+
+// A GITHUB ROW OUTLIVES THE ORG BLOCK ONLY WHILE AN AGENT'S APP IS INSTALLED.
+//
+// The row is reported on the org block OR on the agents' own apps, because a
+// company can hold nothing but those and a GitHub row keyed on the block
+// alone left five agents receiving deliveries with no row at all. What makes
+// an agent's app count is the INSTALLATION: one that is not installed sees no
+// repository, mints no token and receives nothing, so counting its signing
+// secret reports a surface that is being delivered to over an app that
+// reaches nowhere.
+//
+// Measured on a live disconnect, which is where it bites: the org block went,
+// every installation was removed at GitHub, and the row stayed alive on two
+// sealed per-seat values — rendering the card as Connecting with a `routes
+// nowhere` badge, permanently, because nothing else would ever look again.
+func TestAGitHubRowNeedsAnInstallationRatherThanALeftoverSecret(t *testing.T) {
+	t.Parallel()
+	rowFor := func(t *testing.T, cfg *config.Company) map[string]any {
+		t.Helper()
+		body := asMap(t, answer(t, queries.Sources{
+			Company: func() *config.Company { return cfg },
+		}, "integrations", nil))
+		rows, _ := body["integrations"].([]any)
+		for _, row := range rows {
+			entry, _ := row.(map[string]any)
+			if entry["key"] == "github" {
+				return entry
+			}
+		}
+		return nil
+	}
+
+	// A COMPANY WITH NO ORG BLOCK AND ONE INSTALLED APP still gets a row:
+	// that is the clause this counter exists for.
+	installed := company(t)
+	installed.Integrations.GitHub = nil
+	for role := range installed.EachRole() {
+		if role.Seat().IsAgent() {
+			role.Integrations.GitHub = &config.RoleGitHub{
+				AppID: 7, AppSlug: "acme-ceo", InstallationID: 9,
+				PrivateKey: "${CEO_PEM}", WebhookSecret: "${CEO_HOOK}",
+			}
+			break
+		}
+	}
+	if rowFor(t, installed) == nil {
+		t.Error("a company whose agent has its own installed app got no github " +
+			"row, so a surface receiving deliveries is invisible")
+	}
+
+	// AND THE SAME COMPANY AFTER A DISCONNECT gets none. The app record and
+	// both sealed values survive — GitHub has no API to delete an app — and
+	// the installation does not.
+	disconnected := company(t)
+	disconnected.Integrations.GitHub = nil
+	for role := range disconnected.EachRole() {
+		if role.Seat().IsAgent() {
+			role.Integrations.GitHub = &config.RoleGitHub{
+				AppID: 7, AppSlug: "acme-ceo",
+				PrivateKey: "${CEO_PEM}", WebhookSecret: "${CEO_HOOK}",
+			}
+			break
+		}
+	}
+	if row := rowFor(t, disconnected); row != nil {
+		t.Errorf("github row = %v after a disconnect removed every "+
+			"installation: the card renders as Connecting for ever over an "+
+			"app that reaches nothing", row)
+	}
+}

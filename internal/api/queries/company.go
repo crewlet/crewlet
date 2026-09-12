@@ -622,7 +622,21 @@ func seatSecrets(company *config.Company, kind string) int {
 				secret = slack.SigningSecret
 			}
 		case "github":
-			if app := r.Integrations.GitHub; app != nil {
+			// AND AN INSTALLATION, which is what makes the secret mean
+			// anything.
+			//
+			// A seat app that is not installed on the organization sees no
+			// repository, mints no token and receives no delivery — so
+			// counting its signing secret reported a surface that is
+			// receiving events on the strength of an app that reaches
+			// nothing. It survived a disconnect for exactly that reason:
+			// the org block went, every installation was removed at
+			// GitHub, and the row stayed alive on two sealed values,
+			// rendering the card as Connecting with a `routes nowhere`
+			// badge permanently. The clause this counter exists for — a
+			// company whose agents have their own apps and no org block —
+			// is unaffected, because such a company installed them.
+			if app := r.Integrations.GitHub; app != nil && app.InstallationID != 0 {
 				secret = app.WebhookSecret
 			}
 		}
