@@ -200,7 +200,20 @@ func removeAccounts(
 	if opts.Plan == nil {
 		return removed, nil
 	}
+	// WHERE THIS COMPANY'S ACCOUNTS LIVE, settled ONCE and before anything
+	// is touched. Both halves of removing an account — revoking its tokens
+	// and deleting it — are addressed through the same owner, and a route
+	// that does not resolve is a refusal naming the field to fix rather
+	// than a fallback to the other owner's: asking /personal_access_tokens
+	// about a group account answers an empty list, which reads as "nothing
+	// to revoke" and is the silent half of the bug this ordering exists to
+	// fix.
+	scope, routeErr := accountRoute(opts, groupID)
 	var failures []error
+	// STRANDED, and named once. The route is a property of the COMPANY
+	// rather than of a seat, so one sentence repeated per seat would be
+	// the same fact N times in a report an operator reads.
+	var stranded []string
 	for _, seat := range opts.Plan.Seats {
 		username := Username(opts.Config.Provisioning, seat.Handle)
 		user, found, err := opts.Client.UserByUsername(ctx, username)
@@ -210,18 +223,53 @@ func removeAccounts(
 			continue
 		}
 		if !found {
-			// ALREADY GONE, and its credential with it.
+			// ALREADY GONE, and its credential with it. Reported whatever
+			// the route says, because "this account does not exist" is an
+			// answer the instance gave and does not depend on how a
+			// surviving one would have been removed.
 			removed.Add(provision.Removal{
 				Handle: seat.Handle, Role: seat.Role, Account: username,
 				Secrets: secretsOf(seat),
 			})
 			continue
 		}
+		if routeErr != nil {
+			// AN ACCOUNT THAT IS THERE AND CANNOT BE ADDRESSED. Nothing is
+			// touched and nothing is reported removed, so its sealed value
+			// stays where it is.
+			stranded = append(stranded, username)
+			continue
+		}
+		// THE TOKENS FIRST, THEN THE ACCOUNT, which is the order datadog's
+		// teardown and mattermost's both argue for: a revoked token on a
+		// live account is an agent that can do nothing, and a live token
+		// on a removed account is a credential that works again the moment
+		// anybody restores it. The first is the safer thing to be
+		// interrupted at.
+		//
+		// IT IS NOT HYPOTHETICAL HERE. GitLab's service-account delete
+		// BLOCKS rather than erases — measured on a live disconnect, which
+		// left `crewlet-sre-lead` state: blocked, out of the group, and
+		// holding one active token — while the engine deleted its own copy
+		// of the value. So the company lost the credential and GitLab kept
+		// a working one, on an account one click restores.
+		if err := opts.Client.RevokeTokens(ctx, scope, user.ID); err != nil {
+			failures = append(failures, fmt.Errorf(
+				"gitlab: revoke %s's tokens before removing it: %w", username, err))
+			// AND THE ACCOUNT STAYS AS IT IS, so the state is one an
+			// operator can see: an account still listed holding a
+			// credential nobody could withdraw, rather than a blocked one
+			// quietly holding a working token. The seat is NOT reported
+			// removed either, so its sealed value stays where it is —
+			// deleting the company's only copy of a live credential is
+			// the one move nothing can undo.
+			continue
+		}
 		// DOWN THE ROUTE THAT OWNS IT. This always sent the group delete,
 		// which answers 404 as success for an instance-owned account — so
 		// the teardown reported every one of them removed while they
 		// stayed live.
-		if err := removeOne(ctx, opts, groupID, user.ID); err != nil {
+		if err := removeOne(ctx, opts, scope, user.ID); err != nil {
 			failures = append(failures, fmt.Errorf(
 				"gitlab: remove service account %s: %w", username, err))
 			continue
@@ -230,6 +278,11 @@ func removeAccounts(
 			Handle: seat.Handle, Role: seat.Role, Account: username,
 			Secrets: secretsOf(seat),
 		})
+	}
+	if len(stranded) > 0 {
+		failures = append(failures, fmt.Errorf(
+			"%w — these accounts are still live: %s",
+			routeErr, strings.Join(stranded, ", ")))
 	}
 	return removed, failures
 }
@@ -246,19 +299,35 @@ func removeAccounts(
 // same trap [TeardownOptions.Mode] exists to close, reached by a different
 // road. It happens when the configured group does not resolve; see the
 // not-found arm of [Teardown], which is the only caller that passes zero.
-func removeOne(ctx context.Context, opts TeardownOptions, groupID, userID int) error {
+// accountRoute is the owner this company's service accounts are addressed
+// through: the group's id in group mode, and 0 for the INSTANCE's own.
+//
+// Zero is a real value here rather than "unset", which is why the group that
+// does not resolve is an ERROR instead: an instance-mode 0 means
+// /personal_access_tokens and /service_accounts, and falling back to it for
+// an account the group owns asks about the wrong thing entirely — a token
+// listing answers empty and a delete answers 404, both of which read as
+// success.
+func accountRoute(opts TeardownOptions, groupID int) (int, error) {
 	if opts.Mode.Or() == ModeInstance {
-		return opts.Client.DeleteInstanceServiceAccount(ctx, userID)
+		return 0, nil
 	}
 	if groupID == 0 {
-		return fmt.Errorf(
-			"gitlab: %s does not resolve, so this account cannot be removed "+
+		return 0, fmt.Errorf(
+			"gitlab: %s does not resolve, so these accounts cannot be removed "+
 				"through it — restore the group, correct "+
 				"integrations.gitlab.provisioning.group, or supply a token "+
 				"that can see it",
 			strings.TrimSpace(opts.Config.Provisioning.Group))
 	}
-	return opts.Client.DeleteServiceAccount(ctx, groupID, userID)
+	return groupID, nil
+}
+
+func removeOne(ctx context.Context, opts TeardownOptions, scope, userID int) error {
+	if opts.Mode.Or() == ModeInstance {
+		return opts.Client.DeleteInstanceServiceAccount(ctx, userID)
+	}
+	return opts.Client.DeleteServiceAccount(ctx, scope, userID)
 }
 
 // secretsOf is the variables one seat's credentials live in.

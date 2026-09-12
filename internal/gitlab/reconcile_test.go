@@ -46,6 +46,18 @@ type adminInstance struct {
 	people map[string]bool         // usernames the instance treats as humans
 	tokens map[int][]*gitlab.Token // user id -> its token rows
 
+	// blocked is what a service-account delete actually LEAVES BEHIND on
+	// the deployments this was measured against: the account is blocked
+	// and removed from the group, and its access tokens survive.
+	//
+	// Seeded by [adminInstance.blocksRatherThanErases], because a fixture
+	// that erases the tokens with the account cannot tell a teardown that
+	// revoked first from one that did not — which is exactly how a live
+	// disconnect came to leave `crewlet-sre-lead` blocked, out of the
+	// group, and holding one working token.
+	blocked map[string]bool
+	blocks  bool
+
 	// groupMembers is the group's ROSTER — user id -> access level — and
 	// it is not the same thing as `users`.
 	//
@@ -182,6 +194,7 @@ const adminToken = "admin-token"
 func newAdminInstance() *adminInstance {
 	return &adminInstance{
 		users: map[string]int{}, tokens: map[int][]*gitlab.Token{},
+		blocked:        map[string]bool{},
 		people:         map[string]bool{},
 		unusable:       map[int]bool{},
 		instanceOwned:  map[string]bool{},
@@ -448,6 +461,13 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusBadRequest)
 				w.Write([]byte(`{"message":"400 Bad request - Not a service account"}`))
 				return
+			}
+			if f.blocks {
+				// BLOCKED, NOT ERASED, and the tokens stay. See
+				// [adminInstance.blocked].
+				f.blocked[name] = true
+				delete(f.groupMembers, id)
+				break
 			}
 			delete(f.users, name)
 			delete(f.tokens, id)

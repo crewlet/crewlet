@@ -198,3 +198,75 @@ func TestAGroupOwnedAccountIsNotDeletedThroughAGroupThatIsNotThere(t *testing.T)
 		t.Errorf("error %q does not name the field to fix", err)
 	}
 }
+
+// A REMOVED ACCOUNT NEVER KEEPS A WORKING TOKEN.
+//
+// GitLab's service-account delete BLOCKS rather than erases on the
+// deployments this was measured against: after a `remove_seats` disconnect
+// the account was `state: blocked`, out of the group, and holding one active
+// token — while the engine had already deleted its own copy of that value. So
+// the company lost the credential and GitLab kept a working one, on an
+// account that one click restores. datadog's teardown names this hazard
+// exactly ("a live key on a disabled account is a credential that works again
+// the moment anybody re-enables it") and mattermost's argues the same
+// ordering; this was the one that did not follow it.
+func TestARemovedAccountKeepsNoWorkingToken(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.blocks = true
+	f.join("crewlet-swe", 502, gitlabDeveloperLevel)
+	f.pileTokens(502, "crewlet-swe", 1)
+
+	removed, err := tearDownAgainst(t, f, func(o *gitlab.TeardownOptions) {
+		o.RemoveSeats = true
+		o.Plan = &provision.Plan{}
+		o.Plan.Add(provision.Seat{Handle: "swe", Role: "SWE", TokenVar: "GITLAB_TOKEN_SWE"})
+	})
+	if err != nil {
+		t.Fatalf("Teardown: %v", err)
+	}
+	if len(removed.Accounts) != 1 {
+		t.Fatalf("removed = %+v, want the seat reported", removed.Accounts)
+	}
+	if live := f.liveTokensOf(502); live != 0 {
+		t.Errorf("%d live token(s) on an account this disconnect removed, and "+
+			"the engine has just deleted the company's own copy: whoever "+
+			"unblocks it gets a working credential nobody is tracking", live)
+	}
+}
+
+// AND A TOKEN THAT COULD NOT BE REVOKED LEAVES THE ACCOUNT ALONE.
+//
+// The state an operator can then see is an account still listed holding a
+// credential nobody could withdraw, rather than a blocked one quietly holding
+// a working token. The seat is not reported removed either, so its sealed
+// value stays where it is — deleting the company's only copy of a live
+// credential is the one move nothing can undo.
+func TestATokenThatCannotBeRevokedLeavesTheAccountIntact(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.blocks = true
+	f.join("crewlet-swe", 502, gitlabDeveloperLevel)
+	f.pileTokens(502, "crewlet-swe", 1)
+	f.failTokenRevoke = true
+
+	removed, err := tearDownAgainst(t, f, func(o *gitlab.TeardownOptions) {
+		o.RemoveSeats = true
+		o.Plan = &provision.Plan{}
+		o.Plan.Add(provision.Seat{Handle: "swe", Role: "SWE", TokenVar: "GITLAB_TOKEN_SWE"})
+	})
+	if err == nil {
+		t.Fatal("a teardown that could not revoke a live token reported success")
+	}
+	if len(removed.Accounts) != 0 {
+		t.Errorf("removed = %+v: the seat was reported removed, so the engine "+
+			"deletes the company's only copy of a token that still works",
+			removed.Accounts)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.blocked["crewlet-swe"] {
+		t.Error("the account was blocked with a token nobody could revoke, " +
+			"which is the state that hides the live credential")
+	}
+}
