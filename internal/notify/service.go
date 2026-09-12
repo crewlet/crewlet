@@ -154,12 +154,29 @@ type Service struct {
 	admits   Admitter
 	now      func() time.Time
 
+	// retired is every source whose parser this process once had and
+	// [Service.Unregister] took away, which is the only way to tell a
+	// delivery from a surface somebody DISCONNECTED from one nothing here
+	// ever parsed.
+	//
+	// The two are opposite facts with opposite next steps: the first is a
+	// webhook still registered at a third-party app for an integration that
+	// is gone (go and remove it), the second is an integration wired at the
+	// edge and nowhere else (go and wire it). Reported as one warning, a
+	// disconnect produced a page of what reads as parser failures — measured
+	// on a live GitHub disconnect, where every `installation` event GitHub
+	// sent afterwards logged inbound_source_unparsed.
+	//
+	// NEVER CLEARED BY ANYTHING BUT A RE-REGISTRATION, because that is the
+	// only event that makes the source parseable again.
+	retired map[string]bool
+
 	mu      sync.RWMutex
 	started bool
-	// parsers and prompts are guarded because a third-party app can JOIN after the
-	// service is running — an extension registering a custom transport,
-	// or a backend that came up late — and the delivery path reads them
-	// on every event.
+	// parsers, prompts and retired are guarded because a third-party app can
+	// JOIN after the service is running — an extension registering a custom
+	// transport, or a backend that came up late — and the delivery path
+	// reads them on every event.
 }
 
 // New builds the inbound service.
@@ -217,6 +234,7 @@ func (s *Service) Register(p Parser, prompt Prompt) error {
 		return fmt.Errorf("notify: source %q already has a parser", p.Source())
 	}
 	s.parsers[p.Source()] = p
+	delete(s.retired, p.Source())
 	if prompt != nil {
 		s.prompts = s.prompts.With(prompt)
 	}
@@ -261,6 +279,7 @@ func (s *Service) Replace(p Parser, prompt Prompt) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.parsers[p.Source()] = p
+	delete(s.retired, p.Source())
 	if prompt != nil {
 		s.prompts = s.prompts.With(prompt)
 	}
@@ -289,6 +308,10 @@ func (s *Service) Unregister(source string) bool {
 		return false
 	}
 	delete(s.parsers, source)
+	if s.retired == nil {
+		s.retired = map[string]bool{}
+	}
+	s.retired[source] = true
 	return true
 }
 
@@ -352,6 +375,7 @@ func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 
 	s.mu.RLock()
 	parser, ok := s.parsers[ev.Source]
+	retired := s.retired[ev.Source]
 	prompts := s.prompts
 	s.mu.RUnlock()
 	if !ok {
@@ -359,6 +383,22 @@ func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 		// "nothing happened" are opposite facts, and only the first one
 		// tells an operator their integration is wired at the edge and
 		// nowhere else.
+		//
+		// AND A DISCONNECTED SURFACE IS NEITHER. A delivery arriving after
+		// [Service.Unregister] is a webhook still registered at a
+		// third-party app for an integration this company no longer has,
+		// which reads as a parser failure under the same word and sends an
+		// operator looking at the engine rather than at the registration
+		// they have to remove. See [Service.retired].
+		if retired {
+			log.InfoContext(ctx, "inbound_source_retired",
+				"source", ev.Source, "event", ev.ID,
+				"detail", "this company no longer enables "+ev.Source+
+					", so the delivery reaches no seat: remove the webhook "+
+					"still registered at "+ev.Source)
+			s.skip(ctx, ev.Source, "", "this source was disconnected")
+			return queue.Ack()
+		}
 		log.WarnContext(ctx, "inbound_source_unparsed", "source", ev.Source, "event", ev.ID)
 		s.skip(ctx, ev.Source, "", "no parser for this source")
 		return queue.Ack()
