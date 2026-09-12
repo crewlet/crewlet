@@ -62,8 +62,11 @@ import (
 // strictly better than a caller's separate read — a target resolved outside
 // could be a task this node does not hold.
 //
-// A nil world refuses a people field BY NAME rather than admitting anything,
-// because a handle nothing checked is a value that filters against nobody.
+// A nil world passes a people value through UNNORMALISED rather than refusing
+// it, which is what [Writer.Leads] already does for the other seam of this
+// kind: a build with no roster cannot turn a name into a handle, and refusing
+// every people field it holds would fail writes for a reason unrelated to what
+// the caller asked for.
 type FieldWorld interface {
 	// ResolveSeat turns what somebody typed into exactly one handle. The
 	// second return is false for no match AND for an ambiguous one: both
@@ -205,7 +208,19 @@ func coerceField(field FieldDef, raw json.RawMessage, refs fieldRefs) (coerced, 
 	if len(raw) == 0 || string(raw) == "null" {
 		return coerced{Value: raw}, nil
 	}
-	if field.Config.Multi || field.Type == FieldLabels {
+	// WHICH TYPES HOLD SEVERAL VALUES IS [MultiValued]'s ANSWER, not a
+	// second one written here. The query side reads that function to
+	// decide whether a group renders a task under each of its values, and
+	// the applier's own [fieldRows] takes the same reading — so a third
+	// rule here is how one of the three stops matching the others. It
+	// did, immediately: gating on `Config.Multi` refused a one-element
+	// list on a `people` field, which is exactly what the tree already
+	// writes and the row layer already accepts.
+	//
+	// `Config.Multi` is the DECLARATION's own flag and is honoured below
+	// as the cap, because "this field holds several" and "this field is
+	// allowed to" are different questions.
+	if MultiValued(field.Type) || field.Config.Multi {
 		return coerceMany(field, raw, refs)
 	}
 	return coerceOne(field, raw, refs)
@@ -483,9 +498,18 @@ func coercePeople(field FieldDef, raw json.RawMessage, refs fieldRefs) (coerced,
 	}
 	text = strings.TrimSpace(text)
 	if refs.world == nil {
-		return coerced{}, fmt.Errorf("tracker: field %q names %q and this write "+
-			"cannot resolve a colleague — a handle nothing checked filters "+
-			"against nobody", field.Slug, clip(text))
+		// NO CHART DEGRADES RATHER THAN REFUSING, which is the rule
+		// [Writer.Leads] already states for the other seam of the same
+		// kind: nil "costs a wake its fallback recipient and never its
+		// delivery". A build with no roster cannot normalise a name to a
+		// handle, and refusing every people field it holds would be a
+		// write failed for a reason unrelated to what the caller asked.
+		//
+		// The spelling is where a typo is caught in that build, exactly
+		// as it is for an ASSIGNEE: the tool resolves that one against
+		// the roster before the write, and a build without a roster does
+		// not check it either.
+		return coerced{Value: raw}, nil
 	}
 	handle, held := refs.world.ResolveSeat(text)
 	if !held {

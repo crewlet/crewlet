@@ -351,3 +351,100 @@ func TestPrecisionCountsTheDecimalsSomebodyWrote(t *testing.T) {
 		}
 	}
 }
+
+// WHATEVER THE WRITE ACCEPTS, THE APPLIER STORES AS THE WRITE MEANT IT — and
+// a multi-valued type decomposes on BOTH sides.
+//
+// Three places decide what a field value is: [MultiValued], which the query
+// reads to render a grouping; [fieldRows], which the applier uses to write one
+// row per member; and the table here. A rule written independently in the
+// third is how it stops matching the first two, and it did so immediately —
+// gating on `Config.Multi` alone refused a one-element list on a `people`
+// field, which is exactly what this tree already writes and the row layer
+// already accepts.
+//
+// # The one asymmetry, and why it is not a disagreement
+//
+// The write REFUSES a list on a single-valued type and the applier accepts
+// one. That is the salvage contract rather than a mismatch: the applier may
+// not refuse anything — a value it cannot handle would stop that task's every
+// later change on every node — so it stores what arrives, and the check that a
+// `number` holds one number lives at the only place that can make it. What
+// must never differ is the other direction, which is what this asserts: a
+// value the write said yes to has to reach the rows the write intended.
+func TestTheApplierStoresWhatTheWriteAccepted(t *testing.T) {
+	t.Parallel()
+	options := []Option{
+		{ID: "o1", Slug: "one", Name: "One"},
+		{ID: "o2", Slug: "two", Name: "Two"},
+	}
+	for _, kind := range FieldTypes {
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+			field := FieldDef{ID: "f1", Slug: "f", Type: kind,
+				Config: FieldConfig{Options: options, Precision: 2}}
+			raw := json.RawMessage(listFixture(kind))
+			got, err := coerceField(field, raw, world())
+			if err != nil {
+				if MultiValued(kind) {
+					t.Fatalf("a multi-valued type refused a list: %v — the "+
+						"query renders it as holding several and the applier "+
+						"writes one row each", err)
+				}
+				return // The asymmetry above: refused here, salvaged there.
+			}
+			rows, err := fieldRows(field, got.Value)
+			if err != nil {
+				t.Fatalf("the applier refused the coerced value %s: %v",
+					got.Value, err)
+			}
+			if len(rows) != 2 {
+				t.Errorf("a two-member list coerced to %s and the applier "+
+					"wrote %d rows — a value the write said yes to has to "+
+					"reach the rows the write intended", got.Value, len(rows))
+			}
+		})
+	}
+}
+
+// listFixture is a two-member list of whatever this type accepts.
+func listFixture(kind FieldType) string {
+	switch kind {
+	case FieldNumber, FieldProgress, FieldRollup:
+		return `[1,2]`
+	case FieldCheckbox:
+		return `[true,false]`
+	case FieldDate:
+		return `["2026-03-04","2026-03-05"]`
+	case FieldRelationship:
+		return `["ENG-7","ENG-7"]`
+	case FieldPeople:
+		return `["ana","ana"]`
+	case FieldURL:
+		return `["https://a.example.com","https://b.example.com"]`
+	case FieldEmail:
+		return `["a@example.com","b@example.com"]`
+	}
+	return `["one","two"]`
+}
+
+// NO ROSTER DEGRADES RATHER THAN REFUSING, which is the rule [Writer.Leads]
+// already states for the other seam of this kind: a build with no chart cannot
+// turn a name into a handle, and failing every write that touches a people
+// field would refuse them for a reason unrelated to what the caller asked.
+func TestAPeopleFieldWithoutARosterPassesThrough(t *testing.T) {
+	t.Parallel()
+	field := FieldDef{Slug: "reviewer", Type: FieldPeople}
+	got, err := coerceField(field, json.RawMessage(`"ana"`), fieldRefs{})
+	if err != nil {
+		t.Fatalf("a people field was refused by a writer with no chart: %v", err)
+	}
+	if string(got.Value) != `"ana"` {
+		t.Errorf("the value became %s, want what was sent", got.Value)
+	}
+	// AND WITH ONE, IT IS CHECKED — so the degradation is the absence of
+	// a seam rather than the absence of a rule.
+	if _, err := coerceField(field, json.RawMessage(`"whoever"`), world()); err == nil {
+		t.Error("a build WITH a roster accepted a handle nobody has")
+	}
+}
