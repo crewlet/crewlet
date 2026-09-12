@@ -478,13 +478,13 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	if err != nil {
 		return failed(fmt.Sprintf("That filter is not one the tracker accepts: %v", err)), nil
 	}
-	// THIS SURFACE'S OWN DEFAULT, and it matches the detail read beside
-	// it: a seat reads its own writes, so `session` is what stops a turn
-	// filing a duplicate of the item it just created. A model that names a
-	// level explicitly keeps it.
-	if q.Level == "" {
-		q.Level = statelog.ReadSession
-	}
+	// THIS SURFACE'S OWN LEVEL, and it OVERRULES rather than fills in.
+	// One query grammar serves the board, the socket, the REST route and
+	// this tool, so a level can arrive here from a path that knew nothing
+	// about which surface would answer — and the surface is the authority.
+	// A guard that only filled an empty field would enforce nothing the
+	// day something populated it; see [statelog.LevelFor].
+	q.Level = statelog.LevelFor(statelog.SurfaceSeat, q.Level)
 	answer, err := t.deps.Reader.Tasks(ctx, q, t.deps.now())
 	switch {
 	case errors.Is(err, tracker.ErrTooBroad):
@@ -592,7 +592,7 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	}
 	detail, err := t.deps.Reader.Task(ctx, id, tracker.DetailWants{
 		Comments: true, History: true, Links: true,
-	}, statelog.ReadSession)
+	}, seatReadLevel)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
 		return failed(fmt.Sprintf("There is no work item %q. Check the key, or "+
@@ -800,7 +800,7 @@ func (d WorkDeps) resolveRef(ctx context.Context, tool, field, ref string) (stri
 	if d.Reader == nil {
 		return "", unconfiguredText(tool)
 	}
-	got, err := d.Reader.Task(ctx, ref, tracker.DetailWants{}, statelog.ReadSession)
+	got, err := d.Reader.Task(ctx, ref, tracker.DetailWants{}, seatReadLevel)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
 		return "", fmt.Sprintf("%s names %s %q and there is no such work item. "+
@@ -1016,7 +1016,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	if ref == "" {
 		return failed("update_work_item needs an `item` — a key like ENG-42, or an id."), nil
 	}
-	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, statelog.ReadSession)
+	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatReadLevel)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
 		return failed(fmt.Sprintf("There is no work item %q.", clip(ref))), nil
@@ -1337,7 +1337,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	case body == "":
 		return failed("comment_on_work_item needs a `body`. Say the substantive thing, once."), nil
 	}
-	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, statelog.ReadSession)
+	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatReadLevel)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
 		return failed(fmt.Sprintf("There is no work item %q.", clip(ref))), nil
@@ -1524,3 +1524,30 @@ func joinValues[T ~string](values []T) string {
 	}
 	return strings.Join(out, ", ")
 }
+
+// seatReadLevel is what every read on this surface uses.
+//
+// # Why it is a name and not the literal it replaced
+//
+// Because the literal was `session` at every one of these call sites, each
+// plausible on its own — "the caller sees its own writes" is what a tool
+// wants — and what it produced was the opposite. A session read waits for the
+// caller's own high-water mark, NOTHING here ever populated one, so the wait
+// target was the zero position: the read served this node's committed prefix
+// immediately and labelled the answer `session`. The state-log reader's own
+// comment names that shape — "a stale read wearing a stronger name".
+//
+// A seat asked for the strongest guarantee the engine has, was handed the
+// weakest, and could not tell. It has no screen on which to notice, and its
+// reads DECIDE things: a create refuses a project the company does not have,
+// a hand-off names a colleague, a turn reports what it found. A seat that
+// reads a stale task and tells a colleague "nobody is assigned to this" has
+// produced a wrong answer no broker refuses.
+//
+// # The operator MCP reads through the same value
+//
+// It serves these same tool implementations, and the design gives it the same
+// level for the same reason: a person deciding something about their own
+// company is not helped by a faster wrong answer. Neither surface lets the
+// caller choose — see [statelog.LevelSettable].
+var seatReadLevel = statelog.DefaultReadLevel(statelog.SurfaceSeat)

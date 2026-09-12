@@ -11,6 +11,8 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // `crewlet retention` — what the log is holding, why, and the gestures that
@@ -86,6 +88,13 @@ type retentionReport struct {
 	At               time.Time `json:"at"`
 	BackupOwner      string    `json:"backup_owner"`
 	RegisterReadable bool      `json:"register_readable"`
+
+	// ReadLevel is the level the node served this document at, and it is
+	// PRINTED rather than merely decoded: the whole point of the field is
+	// that a document which cannot claim an age looks identical to one
+	// that can, and an operator reading the second as the first is the
+	// silent downgrade the read-level contract exists to prevent.
+	ReadLevel string `json:"read_level"`
 
 	Domains   []retentionDomain   `json:"domains"`
 	Nodes     []retentionNode     `json:"nodes"`
@@ -275,6 +284,17 @@ func retentionStatus(args []string, stdout, stderr io.Writer) error {
 	if !report.RegisterReadable {
 		fmt.Fprintln(stdout, "The fleet register could not be listed, so the node "+
 			"block below is what could be read rather than the fleet.")
+	}
+	// AND WHAT THIS DOCUMENT MAY CLAIM ABOUT ITS OWN AGE, on the one
+	// answer that has to keep answering during the outage it describes.
+	// `stale` is a claim about age; anything weaker is this node saying
+	// it could not measure its distance from the log — which is the
+	// ordinary signature of the broker or coordination being unreachable,
+	// and the state an operator most needs named rather than inferred.
+	if report.ReadLevel != "" && report.ReadLevel != string(statelog.ReadStale) {
+		fmt.Fprintf(stdout, "This node could not measure its own distance from "+
+			"the log, so the figures below are a coherent point in its order "+
+			"with no statement about age (read_level %s).\n", report.ReadLevel)
 	}
 
 	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)

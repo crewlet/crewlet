@@ -84,6 +84,12 @@ type ViewQuery struct {
 	Session     statelog.Position
 	MinPosition statelog.Position
 	MaxLag      time.Duration
+
+	// MaxLagSeq is the same bound counted in RECORDS, which is what
+	// the broker actually answers — the duration above is derived
+	// from it through this node's own drain rate. Both may be set
+	// and the read refuses past whichever is reached first.
+	MaxLagSeq uint64
 }
 
 // ViewListing is the strip, with the framework's own verdict on the read.
@@ -143,12 +149,13 @@ func (r *Reader) Views(ctx context.Context, q ViewQuery) (ViewListing, error) {
 
 	var listing ViewListing
 	served, err := r.log.Read(ctx, statelog.Query{
-		Level:       q.Level,
-		Scope:       viewScope(q.Container),
-		Session:     q.Session,
-		MinPosition: q.MinPosition,
-		MaxLag:      q.MaxLag,
-		Set:         true,
+		Level:           q.Level,
+		Scope:           viewScope(q.Container),
+		Session:         q.Session,
+		MinPosition:     q.MinPosition,
+		MaxLag:          q.MaxLag,
+		MaxLagPositions: q.MaxLagSeq,
+		Set:             true,
 	}, func(tx *sql.Tx) error {
 		pinned, err := pinnedViews(ctx, tx, q.Viewer)
 		if err != nil {

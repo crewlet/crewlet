@@ -1258,7 +1258,25 @@ the read refuses `too_stale` past whichever is reached first — the two are
 readings of ONE distance rather than two, the record count being what the
 broker actually answers and the duration being derived from it through this
 node's own drain rate. Both are refused at every other level, because they are
-a staleness bound and nothing else is. And `complete: false` — with `incomplete` naming the
+a staleness bound and nothing else is. `read_level` itself accepts three of the
+four levels here: `read_level=session` is **refused**, because a session read
+waits for the caller's own high-water mark and this surface holds no position
+for you — the refusal names `linearizable` and `stale` with `max_lag_seq` as
+the two honest asks. Absent, the level resolves to **this surface's** default,
+which is `stale`; a seat's own tools resolve theirs to `linearizable` and
+cannot be asked for anything else. See [Read consistency](../guides/consistency.md).
+
+**`read_level`, `max_lag_seconds` and `max_lag_seq` work on every question that
+carries a read level**, not only on `/work/items` — `/work/views`,
+`/work/goals`, `/work/catalogue`, `/work/people/{handle}`, `/work/projects`,
+`/work/projects/{key}`, `/work/sprints`, `/work/activity`, `/work/my-work`,
+`/pages`, `/pages/{id}` and `/containers` all resolve them the same way. They
+did not until recently: each of those wrote a hardcoded `stale` into its read
+and never looked at the keys, so a caller asking for a stronger answer was
+served this node's rows and told, in the answer's own `read_level`, that it
+came back at the level asked for. The two single-object reads —
+`/work/items/{id}` and `/pages/{id}` — take the level but not the bounds: a
+bound is enforced against a SET read's coverage, and there is no set. And `complete: false` — with `incomplete` naming the
 count, the affected objects and the record version — says rows may be missing,
 rows that should have gone may still be present, and the totals were computed
 over the incomplete set. That is a different fact from staleness, and a client

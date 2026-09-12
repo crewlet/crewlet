@@ -517,6 +517,16 @@ export interface RetentionReport {
    * during.
    */
   register_readable: boolean;
+  /**
+   * The level the node SERVED this document at, which is what keeps a
+   * replication answer inside the read-level contract rather than exempt from
+   * it. Nobody chooses it, on any surface: `stale` while the node could
+   * measure its own distance from the log, `consistent_prefix` when it could
+   * not — because `stale` is a claim about AGE and an unmeasured lag cannot
+   * make one. Anything but `stale` is rendered, since a document that cannot
+   * claim an age otherwise looks exactly like one that can.
+   */
+  read_level?: ReadLevel;
   snapshots: RetentionSnapshot[];
   replica: RetentionReplica;
   alarms: RetentionAlarm[];
@@ -954,8 +964,22 @@ export type WorkPriority = "none" | "low" | "normal" | "high" | "urgent" | (stri
 
 /** How stale an answer may be, as the engine ACTUALLY served it — never the
  *  level asked for. A level never silently downgrades, so the two can differ
- *  only by a refusal. */
-export type ReadLevel = "stale" | "session" | "monotonic" | "linearizable" | (string & {});
+ *  only by a refusal.
+ *
+ *  THE FOUR THE ENGINE HAS. It listed `monotonic`, which is not one of them
+ *  and never arrives, and omitted `consistent_prefix`, which does — so the one
+ *  value a screen has to treat specially was the one the type did not name.
+ *  `session` is here because the framework has it; no read surface offers it,
+ *  since it waits for a position no client can supply.
+ *
+ *  The open `string` arm stays: a newer build may serve a level this bundle
+ *  does not know, and a badge that renders it is better than a type error. */
+export type ReadLevel =
+  | "linearizable"
+  | "session"
+  | "stale"
+  | "consistent_prefix"
+  | (string & {});
 
 /** One task as a board row draws it. The BODY IS ABSENT — fifty tasks at
  *  64 KiB each is three megabytes to draw a list of titles. */

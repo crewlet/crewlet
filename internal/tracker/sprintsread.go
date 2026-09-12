@@ -224,6 +224,12 @@ type SprintQuery struct {
 	Session     statelog.Position
 	MinPosition statelog.Position
 	MaxLag      time.Duration
+
+	// MaxLagSeq is the same bound counted in RECORDS, which is what
+	// the broker actually answers — the duration above is derived
+	// from it through this node's own drain rate. Both may be set
+	// and the read refuses past whichever is reached first.
+	MaxLagSeq uint64
 }
 
 // Sprints answers a project's sprints with every figure computed.
@@ -258,12 +264,13 @@ func (r *Reader) Sprints(ctx context.Context, q SprintQuery, now time.Time) (
 
 	listing := SprintListing{Project: project}
 	served, err := r.log.Read(ctx, statelog.Query{
-		Level:       q.Level,
-		Scope:       sprintReadScope(project),
-		Session:     q.Session,
-		MinPosition: q.MinPosition,
-		MaxLag:      q.MaxLag,
-		Set:         true,
+		Level:           q.Level,
+		Scope:           sprintReadScope(project),
+		Session:         q.Session,
+		MinPosition:     q.MinPosition,
+		MaxLag:          q.MaxLag,
+		MaxLagPositions: q.MaxLagSeq,
+		Set:             true,
 	}, func(tx *sql.Tx) error {
 		p, found, err := readProject(ctx, tx, project)
 		if err != nil {

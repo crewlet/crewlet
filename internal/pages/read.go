@@ -164,7 +164,7 @@ func (r *Reader) List(ctx context.Context, f Filter, level statelog.ReadLevel) (
 	if level == "" {
 		return Listing{}, errors.New("pages: this read names no level — a " +
 			"surface resolves an absent read_level to its own default (a seat " +
-			"tool session, a dashboard poll stale) before it reads")
+			"tool linearizable, a dashboard poll stale) before it reads")
 	}
 	where := []string{"1 = 1"}
 	var args []any

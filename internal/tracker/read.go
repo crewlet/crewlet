@@ -230,7 +230,7 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 		// answer they got carried the empty string as its level.
 		return Answer{}, fmt.Errorf("tracker: this read names no level — a " +
 			"surface resolves an absent read_level to its own default (a seat " +
-			"tool session, a dashboard poll stale) before it reads")
+			"tool linearizable, a dashboard poll stale) before it reads")
 	}
 
 	answer := Answer{View: q.View, Preset: q.Preset}

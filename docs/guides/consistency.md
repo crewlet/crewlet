@@ -16,26 +16,102 @@ There are four answers, and picking one is the whole of it.
 | `stale` | Whatever this node holds, with its lag reported. | No broker call. |
 | `consistent_prefix` | A coherent point in the log's own order, possibly behind. | No broker call. |
 
-**`session` is what an agent's tools use.** A seat that files a task and then
-lists its project must see the task it just filed — that is the only
-consistency property agent behaviour actually depends on, and it costs nothing
-when the seat is caught up.
+**`linearizable` is for a decision, which is why it is what an agent reads
+at.** Use it when the answer *decides* something — an admission check, a gate,
+a number somebody is about to act on irreversibly. It is the only level that
+establishes a position at the log's current end before answering. Every seat
+tool read is one of these: a create that refuses a project the company does
+not have, a hand-off that names a colleague, a turn that reports what it
+found. A seat has no screen on which to notice it was reading a stale copy, so
+it never reads one.
 
 **`stale` is what the dashboard and the read API use.** A board that is two
 hundred milliseconds behind is a board, and the answer carries its own lag so
-a reader can tell.
+a reader can tell. A tile that took a barrier append to redraw would put the
+fleet's whole read rate on the log to remove a staleness the next redraw
+removes anyway.
 
-**`linearizable` is for a decision.** Use it when the answer *decides*
-something — an admission check, a gate, a number somebody is about to act on
-irreversibly. It is the only level that establishes a position at the log's
-current end before answering.
+**`session` is the write path's level, and no read surface offers it.** It
+waits for *your own* high-water mark, which you have to supply — and nothing
+outside the engine can. An HTTP request holds no position, and a seat's tools
+carry none either. A surface that accepted `session` would wait for the zero
+position, serve whatever that node happened to hold, and label the answer
+`session`: a wrong label rather than a weaker answer. So `read_level=session`
+is **refused** by the read grammar, naming the two honest asks — `linearizable`,
+or `stale` with `max_lag_seq`. Inside the engine the level is real and used:
+a write waits for its own caller's last write to be applied before it opens
+the snapshot it decides from.
 
-**`consistent_prefix` is the default for nobody, and it has to be asked for.**
-It promises a *named prefix* of the log — everything up to a stated position,
-with nothing from after it — and makes **no statement about age**. That makes
-it weaker than `session` in a way the answer cannot show, so nothing defaults
-to it: a surface that quietly downgraded to it would give every reader that
-did not know to ask for more an answer they could not tell apart.
+**`consistent_prefix` is the default for nobody, and it is either asked for or
+resolved to.** It promises a *named prefix* of the log — everything up to a
+stated position, with nothing from after it — and makes **no statement about
+age**. That makes it weaker than `session` in a way the answer cannot show, so
+nothing defaults to it: a surface that quietly downgraded to it would give
+every reader that did not know to ask for more an answer they could not tell
+apart. The dashboard may ask for it, and a replication answer resolves to it
+when the lag is unmeasurable — which is not a downgrade but the honest name
+for what is left when there is no age to claim, and the answer says so.
+
+## Which surface reads at which level
+
+The level is a property of the **surface asking**, never of the caller who
+happened to omit the key. There are four:
+
+| Surface | Default | May the caller choose? |
+|---|---|---|
+| A seat's own tools, inside a turn | `linearizable` | No |
+| The operator MCP, about tracker content | `linearizable` | No |
+| The dashboard and the REST read path | `stale` | Yes — `linearizable`, `stale` or `consistent_prefix` |
+| Any answer **about replication** — the retention report, the Fleet screen's lag, whether a purge landed | `stale`, weakening to `consistent_prefix` | No — it is derived, not chosen |
+
+**Only the screen chooses**, and the reason is that only the screen can see
+what it got: the level and the lag are rendered beside the rows, so a person
+who asks for a weaker answer is shown the one they were given.
+
+**A replication answer is the one row where the SUBJECT decides the level, not
+the caller**, and it holds on every surface including the operator MCP.
+`linearizable` means *every mutation committed anywhere in the company before
+this read was issued is in the answer*, and it is established by appending a
+barrier and waiting through its position. But the question these answers ask is
+**how far behind that same log this node is** — the barrier is the instrument
+and its health is the subject. A node cannot produce a `linearizable` answer to
+a question about its own replication, so that is not a stronger answer costing
+more; it is a level that cannot be served, refusing in precisely the incident
+somebody opened the page for.
+
+It weakens one step further when this node could not measure its own lag at
+all — the broker unreachable, or coordination — because `stale` is a claim
+about *age* and there is then no age to claim. `crewlet retention status` and
+the Fleet screen say so in a sentence rather than printing the same figures
+under the stronger name.
+
+An agent cannot choose because the level is not a model's to pick — a tool
+argument for it would be a model trading correctness for latency it cannot
+perceive. The operator's reads cannot choose because nothing is wrong and the
+person is deciding something about their own company: a knob that only ever
+weakens the answer is one somebody turns once, forgets, and then reads a stale
+board from for a year.
+
+Every answer reports the level it was **actually** read at, so a caller that
+asked for one and got another can tell.
+
+## Bounding staleness
+
+`stale` on its own accepts an answer of any age. A caller that will not says so
+with `max_lag_seconds`, `max_lag_seq`, or both — and the read refuses
+`too_stale` past **whichever is reached first**. They are two readings of one
+distance rather than two distances: the record count is what the broker
+actually answers, and the duration is derived from it through this node's own
+drain rate, so a caller who can say "at most 250 records behind" is naming the
+measured quantity instead of an estimate made from it.
+
+Both are refused at every other level, because they are a staleness bound and
+nothing else is — asking for `linearizable&max_lag_seq=250` is a caller who
+believes they asked for something they did not.
+
+A zero bound is not a bound: it accepts anything, which is what makes
+declaring one the caller's own decision rather than a default somebody
+inherits.
 
 ## How `linearizable` actually works
 
@@ -73,7 +149,7 @@ rather than downgraded. Each code names a different thing to do.
 | `stalled` | This node's applied prefix has stopped moving. | Its rows are frozen, so a short answer would be wrong rather than old. Check the applier — `crewlet retention status` names the domain and its position. |
 | `no_quorum` | The barrier did not commit: the broker answered and a majority did not agree. | Retry after the hint (4 s, the broker's own minimum election timeout). If it persists, a member is down or partitioned. |
 | `broker_unreachable` | The broker did not answer at all. | Retry. Not the same as `no_quorum`, and the difference is where to look. |
-| `log_full` | The log is at its byte ceiling and refuses appends, so no barrier can be written. | Raise the ceiling with `crewlet retention set-capacity`, or unblock the trim — `crewlet retention status` names the term. **`stale` and `session` keep answering**, so a full log costs `linearizable` rather than reads. |
+| `log_full` | The log is at its byte ceiling and refuses appends, so no barrier can be written. | Raise the ceiling with `crewlet retention set-capacity`, or unblock the trim — `crewlet retention status` names the term. **`stale` keeps answering**, so a full log costs `linearizable` reads — every seat tool read among them — rather than every read. |
 | `deferred` | This node holds a record it cannot decode covering what this read is about. | Ask another node, or upgrade this one. No amount of waiting changes it. |
 | `deferred_scope_unknown` | The deferred record's own scope could not be read, so nothing can be said about what it covers. | It blocks the whole domain, which is why it is a different code. Upgrade the node that is behind on the record version. |
 | `below_floor` | Records this node never applied have been trimmed. | Its rows are missing state no replay can supply. The node has to adopt a peer's snapshot; see [Retention](retention.md). |
@@ -123,10 +199,12 @@ level does not touch them:
 An agent woken by a change sees that change. That is guaranteed, and it is
 guaranteed by the *wake* carrying the record's own position — the turn waits
 for its own applier to reach it — rather than by the level the turn's tools
-then read at. `session` is what those tools use, and it is enough because the
-trigger has already established the floor.
+then read at.
 
-Do not read a stronger level to "make sure the trigger landed". It already did.
+So a seat's `linearizable` reads are not what makes it see its own trigger; the
+floor was already established before the turn opened. What they buy is the
+other half: that an answer the turn *decides* on is not one from before the
+read arrived.
 
 ## See also
 

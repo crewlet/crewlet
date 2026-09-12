@@ -280,10 +280,14 @@ func expandPreset(name string, viewer Viewer) (MapParams, error) {
 // expandView reads one saved view's own parameters.
 func (r *Reader) expandView(ctx context.Context, id string) (MapParams, error) {
 	var out MapParams
-	// A STALE READ, always: the parameters of a saved view are not
-	// something a caller writes and then reads back in one gesture, and
-	// taking the caller's own level here would put a board's furniture on
-	// the same round trip as its rows.
+	// A STALE READ, ALWAYS — and deliberately NOT a surface of its own in
+	// [statelog.ReadLevelDefaults]. The level here is a property of the
+	// ROWS rather than of the reader: the parameters of a saved view are
+	// not something anybody writes and then reads back in one gesture, so
+	// no caller's surface has an interest in them being fresher. Taking
+	// the caller's own level would put a board's furniture on the same
+	// round trip as its rows, which is a barrier per navigation to
+	// re-read a filter somebody saved last month.
 	if _, err := r.log.Read(ctx, statelog.Query{
 		Level: statelog.ReadStale, Scope: viewScope(Container{
 			Kind: ContainerWorkspace,

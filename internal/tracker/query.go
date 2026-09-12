@@ -968,50 +968,121 @@ func (q *Query) parseTotals(p Params) error {
 	return nil
 }
 
-func (q *Query) parseLevel(p Params) error {
+// Freshness is everything a caller may say about how OLD an answer may be.
+//
+// # Why it is a type and not three fields on one query
+//
+// Thirteen registered questions take a level and a staleness bound, and
+// exactly ONE of them — the task board, which happens to be the one that goes
+// through [ParseQuery] — used to read either. The other twelve hardcoded a
+// level and never looked at a bound at all, so a caller asking a project
+// listing for a fresher answer was served the same one and told it came back
+// at the level asked for.
+//
+// The fix is not twelve more parsers. One grammar serves the board, the
+// socket, the REST route and a seat's own tools, and a second reading of
+// `read_level` would be the one place a freshness key meant something
+// slightly different — which is the whole argument this package's query
+// grammar already rests on.
+type Freshness struct {
+	// Level is the level asked for, EMPTY when the caller said nothing.
+	//
+	// Empty is not a fourth state: it means the SURFACE resolves it, and
+	// resolving is [statelog.LevelFor]'s job rather than this parser's —
+	// a grammar shared by four surfaces cannot know which one is asking.
+	Level statelog.ReadLevel
+
+	// MaxLag and MaxLagSeq are the same bound in the two units a caller
+	// may have: seconds, and the RECORD count the broker actually
+	// answers. Both may be set and a read refuses past whichever is
+	// reached first, because they are two readings of one distance.
+	MaxLag    time.Duration
+	MaxLagSeq uint64
+}
+
+// ParseFreshness reads the three freshness keys, and is the ONE place their
+// rules are stated.
+func ParseFreshness(p Params) (Freshness, error) {
+	var out Freshness
 	value := strings.TrimSpace(p.String("read_level"))
 	if value == "" {
 		// ABSENT IS NOT A FOURTH STATE. It resolves to the SURFACE's own
 		// default — a seat tool linearizable, a dashboard poll stale —
 		// which is what makes the default a property of the surface
 		// rather than of the model that happened to omit the key.
-		return nil
+		//
+		// AND A BOUND WITHOUT A LEVEL IS STILL READ, because the surface
+		// that resolves an absent level to `stale` is exactly the one
+		// whose callers bound staleness — a dashboard poll. Refusing it
+		// here would refuse the common case; carrying it and letting a
+		// non-stale resolution ignore it would be the silent drop this
+		// grammar was already fixed for once.
+		return out.withBounds(p)
 	}
 	level := statelog.ReadLevel(value)
 	if !level.Valid() {
-		return fmt.Errorf("tracker: %q is not a read level — the four are "+
+		return out, fmt.Errorf("tracker: %q is not a read level — the four are "+
 			"linearizable, session, stale and consistent_prefix", value)
 	}
-	q.Level = level
+	// AND `session` IS NOT ONE THIS GRAMMAR CAN HONOUR, which is a fact
+	// about the grammar rather than about the framework. A session read
+	// waits for the CALLER'S OWN high-water mark and this grammar has no
+	// key to carry one: accepted, it would wait for the zero position,
+	// serve this node's committed prefix and label the answer `session`.
+	// That is a wrong label rather than a weak answer, and it is the
+	// defect [statelog.SettableLevels] exists to state once.
+	if level == statelog.ReadSession {
+		return out, fmt.Errorf("tracker: read_level=session waits for the " +
+			"caller's own last write and this surface holds no position for " +
+			"you — ask for linearizable, or for stale with max_lag_seq to " +
+			"bound how far behind an answer may be")
+	}
+	out.Level = level
 	if level != statelog.ReadStale {
 		for _, key := range []string{"max_lag_seq", "max_lag_seconds"} {
 			if p.Has(key) {
-				return fmt.Errorf("tracker: %s bounds how STALE an answer may "+
-					"be and read_level is %s, which is not a staleness bound at "+
-					"all", key, level)
+				return out, fmt.Errorf("tracker: %s bounds how STALE an answer "+
+					"may be and read_level is %s, which is not a staleness "+
+					"bound at all", key, level)
 			}
 		}
-		return nil
+		return out, nil
 	}
-	// AND THE BOUND IS CARRIED, not just checked. A bound refused when it
-	// is inconsistent and dropped when it is not is a bound that never
-	// bounded anything.
+	return out.withBounds(p)
+}
+
+// withBounds reads the two staleness bounds onto an answer that may carry them.
+//
+// THE BOUND IS CARRIED, not just checked. A bound refused where it is
+// inconsistent and dropped where it is not is a bound that never bounded
+// anything — which is what `max_lag_seconds` did before it was fixed, and what
+// `max_lag_seq` did after, in the same function, for longer.
+func (f Freshness) withBounds(p Params) (Freshness, error) {
 	if p.Has("max_lag_seconds") {
 		secs := p.Int("max_lag_seconds", 0)
 		if secs < 0 {
-			return fmt.Errorf("tracker: max_lag_seconds is how many seconds "+
+			return f, fmt.Errorf("tracker: max_lag_seconds is how many seconds "+
 				"behind an answer may be, and %d is not a duration", secs)
 		}
-		q.MaxLag = time.Duration(secs) * time.Second
+		f.MaxLag = time.Duration(secs) * time.Second
 	}
 	if p.Has("max_lag_seq") {
 		records := p.Int("max_lag_seq", 0)
 		if records < 0 {
-			return fmt.Errorf("tracker: max_lag_seq is how many records behind "+
-				"an answer may be, and %d is not a count", records)
+			return f, fmt.Errorf("tracker: max_lag_seq is how many records "+
+				"behind an answer may be, and %d is not a count", records)
 		}
-		q.MaxLagSeq = uint64(records)
+		f.MaxLagSeq = uint64(records)
 	}
+	return f, nil
+}
+
+func (q *Query) parseLevel(p Params) error {
+	got, err := ParseFreshness(p)
+	if err != nil {
+		return err
+	}
+	q.Level, q.MaxLag, q.MaxLagSeq = got.Level, got.MaxLag, got.MaxLagSeq
 	return nil
 }
 

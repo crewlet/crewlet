@@ -1281,11 +1281,23 @@ func (e *Engine) syncNativeSkills(ctx context.Context) {
 	}
 	reader := e.native.pageReader
 	e.syncSkillsFrom(ctx, c, func(ctx context.Context, container string) ([]skills.Page, error) {
-		// SESSION, because this walk is what a skill EDIT resolves to:
-		// the applier's own nudge fires it, so a walk that read older
-		// rows than the record that woke it would rebuild the registry
-		// without the change that asked for the rebuild.
-		found, err := reader.SkillPages(ctx, container, statelog.ReadSession)
+		// STALE, and it is the strongest level this walk could
+		// HONESTLY name — not a saving.
+		//
+		// What the walk must not do is rebuild the registry without the
+		// change that asked for the rebuild. It cannot: [nudgeSkills]
+		// is called from the applier's POST-COMMIT hook, so by the time
+		// this worker runs, the record that woke it is already in this
+		// node's own committed prefix — which is exactly what a stale
+		// read serves. The causality is LOCAL, so no barrier and no
+		// high-water mark buys anything here.
+		//
+		// It read `session` before, which named a wait that never
+		// happened: nothing populated [statelog.Query.Session], so the
+		// target was the zero position and the read served this same
+		// prefix under a stronger name. The behaviour is unchanged and
+		// the claim is now true.
+		found, err := reader.SkillPages(ctx, container, statelog.ReadStale)
 		if err != nil {
 			return nil, err
 		}

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -87,7 +86,7 @@ func (t *getPerson) Call(ctx context.Context, args map[string]any) (tools.Result
 		return failed("Name whose state to read with `handle`."), nil
 	}
 	state, err := t.deps.Reader.Person(ctx, tracker.PersonQuery{
-		Handle: handle, Level: statelog.ReadSession,
+		Handle: handle, Level: seatReadLevel,
 	}, t.deps.now())
 	if err != nil {
 		return failed(readFailure(tracker.GetPersonTool, err)), nil

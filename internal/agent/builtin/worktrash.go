@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -99,7 +98,7 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if ref == "" {
 		return failed("remove_work_item needs an `item` — a key like ENG-42, or an id."), nil
 	}
-	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, statelog.ReadSession)
+	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatReadLevel)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
 		return failed(fmt.Sprintf("There is no work item %q.", clip(ref))), nil
@@ -182,7 +181,7 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// is by definition out of every ordinary list, so the detail read is
 	// the only way to reach it — and it answers for a removed task, which
 	// is what makes the trash readable from both ends.
-	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, statelog.ReadSession)
+	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatReadLevel)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
 		return failed(fmt.Sprintf("There is no work item %q.", clip(ref))), nil

@@ -8,7 +8,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -77,9 +76,10 @@ func (t *listWorkViews) Call(ctx context.Context, args map[string]any) (tools.Re
 	listing, err := t.deps.Reader.Views(ctx, tracker.ViewQuery{
 		Container: container,
 		Viewer:    strings.TrimSpace(argString(args, "viewer")),
-		// SESSION, like every other tool read here: a caller that saves
-		// a view and then lists the strip sees the view it just saved.
-		Level: statelog.ReadSession,
+		// THE SEAT'S OWN LEVEL, like every other tool read here: a
+		// caller that saves a view and then lists the strip sees the
+		// view it just saved — see [seatReadLevel].
+		Level: seatReadLevel,
 	})
 	if err != nil {
 		return failed(readFailure(tracker.ListWorkViewsTool, err)), nil

@@ -394,7 +394,7 @@ func TestCommentOnPageStillPostsWithoutAnEditID(t *testing.T) {
 	}
 }
 
-// EVERY PAGE READ A SEAT MAKES NAMES ITS LEVEL, and it is `session`.
+// EVERY PAGE READ A SEAT MAKES NAMES ITS LEVEL, and it is the seat surface's.
 //
 // A seat must see its own writes. A turn that created a page and then read the
 // container back at whatever this node happened to hold would find the page
@@ -403,8 +403,11 @@ func TestCommentOnPageStillPostsWithoutAnEditID(t *testing.T) {
 //
 // Until the level reached the reader at all, every one of these calls was
 // served from local rows and reported back at the level the caller had asked
-// for, so the degradation was invisible in the answer.
-func TestEveryPageToolReadsAtSession(t *testing.T) {
+// for, so the degradation was invisible in the answer. Naming `session` as a
+// literal was the second half of that same bug: nothing populates a seat
+// query's [statelog.Query.Session], so the level named a position the read
+// never carried and degraded to the same local prefix under a stronger name.
+func TestEveryPageToolReadsAtTheSeatDefault(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		tool string
@@ -423,11 +426,12 @@ func TestEveryPageToolReadsAtSession(t *testing.T) {
 			if len(kb.levels) == 0 {
 				t.Fatalf("%s made no read, so this case proves nothing", tc.tool)
 			}
+			want := statelog.DefaultReadLevel(statelog.SurfaceSeat)
 			for _, got := range kb.levels {
-				if got != statelog.ReadSession {
+				if got != want {
 					t.Errorf("%s read at %q, want %q — a seat that cannot see "+
 						"its own writes files the duplicate",
-						tc.tool, got, statelog.ReadSession)
+						tc.tool, got, want)
 				}
 			}
 		})

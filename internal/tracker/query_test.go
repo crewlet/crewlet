@@ -228,7 +228,11 @@ func TestAStalenessBoundBelongsToTheStaleLevelAlone(t *testing.T) {
 	if q.Level != statelog.ReadStale {
 		t.Fatalf("read_level parsed as %q", q.Level)
 	}
-	for _, level := range []string{"linearizable", "session", "consistent_prefix"} {
+	// `session` IS NOT IN THIS LIST, deliberately: the grammar refuses it
+	// outright (see [TestSessionIsNotALevelThisGrammarCanHonour]), so a
+	// case for it here would pass for a reason that has nothing to do
+	// with the staleness bound this test is about.
+	for _, level := range []string{"linearizable", "consistent_prefix"} {
 		_, err := parse(t, map[string]any{"read_level": level, "max_lag_seq": "10"})
 		if err == nil {
 			t.Errorf("a staleness bound was accepted at read_level=%s", level)
@@ -236,6 +240,49 @@ func TestAStalenessBoundBelongsToTheStaleLevelAlone(t *testing.T) {
 	}
 	if _, err := parse(t, map[string]any{"read_level": "eventually"}); err == nil {
 		t.Error("a fifth read level was accepted")
+	}
+}
+
+// `session` IS A LEVEL THIS GRAMMAR CANNOT HONOUR, so it is refused rather
+// than served.
+//
+// A session read waits for the CALLER'S OWN high-water mark, which the caller
+// supplies — [statelog.Query.Session]. This grammar has no key that carries
+// one, and neither does any surface built on it: an HTTP request holds no
+// position and a seat's tools carry none either. Accepted, the level would
+// wait for the zero position, serve this node's committed prefix and come back
+// labelled `session` — a WRONG LABEL on a stale answer rather than a weaker
+// answer than the one asked for, which is precisely how twenty-one seat call
+// sites asked for the engine's strongest guarantee and were handed its
+// weakest without anything saying so.
+//
+// The refusal names both honest alternatives, because a caller who typed
+// `session` wants freshness and has to be told which kind they can have.
+func TestSessionIsNotALevelThisGrammarCanHonour(t *testing.T) {
+	t.Parallel()
+	_, err := parse(t, map[string]any{"read_level": "session"})
+	if err == nil {
+		t.Fatal("read_level=session was accepted — it waits for a position " +
+			"no caller on this surface can supply, so what comes back is this " +
+			"node's own prefix wearing a stronger name")
+	}
+	// THE REFUSAL IS ACTIONABLE. A caller told only "no" asks again.
+	for _, want := range []string{"linearizable", "max_lag_seq"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %q — a caller who typed "+
+				"`session` wants freshness and has to be told which kind "+
+				"they can have: %v", want, err)
+		}
+	}
+	// AND THE OTHER THREE STILL PARSE, so this is a refusal of one level
+	// rather than of the key.
+	for _, level := range []statelog.ReadLevel{
+		statelog.ReadLinearizable, statelog.ReadStale, statelog.ReadConsistentPrefix,
+	} {
+		q := mustParse(t, map[string]any{"read_level": string(level)})
+		if q.Level != level {
+			t.Errorf("read_level=%s parsed as %q", level, q.Level)
+		}
 	}
 }
 

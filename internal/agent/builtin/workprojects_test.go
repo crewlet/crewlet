@@ -50,12 +50,16 @@ func TestTheProjectToolsFallBackToTheSeatsOwnProject(t *testing.T) {
 	}
 }
 
-// EVERY ONE OF THESE READS AT `session`.
+// EVERY ONE OF THESE READS AT THE SEAT SURFACE'S OWN DEFAULT.
 //
 // A turn must see its own writes: a seat that files into a project and then
 // describes it would otherwise read a copy from before its own create, and a
-// model that cannot see its own write files it again.
-func TestTheProjectToolsReadAtSessionLevel(t *testing.T) {
+// model that cannot see its own write files it again. The level is asserted
+// against [statelog.DefaultReadLevel] rather than a literal, because a literal
+// is what let twenty-one call sites drift to a level nothing populated: a
+// `session` read with no position is this node's committed prefix wearing a
+// stronger name, which is exactly the stale answer the comment above forbids.
+func TestTheProjectToolsReadAtTheSeatDefault(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := workRegistry(t, builtin.WorkDeps{
@@ -66,14 +70,15 @@ func TestTheProjectToolsReadAtSessionLevel(t *testing.T) {
 	callWork(t, reg, tracker.DescribeProjectTool, map[string]any{})
 	callWork(t, reg, tracker.SprintReportTool, map[string]any{})
 
+	want := statelog.DefaultReadLevel(statelog.SurfaceSeat)
 	for name, level := range map[string]statelog.ReadLevel{
 		tracker.ListProjectsTool:    trk.projectQuery.Level,
 		tracker.DescribeProjectTool: trk.detailQuery.Level,
 		tracker.SprintReportTool:    trk.sprintQuery.Level,
 	} {
-		if level != statelog.ReadSession {
-			t.Errorf("%s read at %q, want session — a turn has to see its own "+
-				"writes", name, level)
+		if level != want {
+			t.Errorf("%s read at %q, want %q — a turn has to see its own "+
+				"writes", name, level, want)
 		}
 	}
 }
@@ -187,10 +192,10 @@ func TestMyWorkIsAlwaysTheTurnsOwnSeat(t *testing.T) {
 		t.Errorf("my_work declares %v — a parameter a model can set is a "+
 			"parameter it will set", params)
 	}
-	if trk.myWorkQuery.Level != statelog.ReadSession {
-		t.Errorf("my_work read at %q, want session — a turn opens on this "+
+	if want := statelog.DefaultReadLevel(statelog.SurfaceSeat); trk.myWorkQuery.Level != want {
+		t.Errorf("my_work read at %q, want %q — a turn opens on this "+
 			"answer and must see its own last turn's writes",
-			trk.myWorkQuery.Level)
+			trk.myWorkQuery.Level, want)
 	}
 }
 

@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -89,9 +88,10 @@ func (t *listWorkGoals) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Owner:    strings.TrimSpace(argString(args, "owner")),
 		Group:    strings.TrimSpace(argString(args, "group")),
 		Archived: argBool(args, "archived"),
-		// SESSION, like every other tool read here: a caller that writes
-		// a goal and then lists sees the goal it just wrote.
-		Level: statelog.ReadSession,
+		// THE SEAT'S OWN LEVEL, like every other tool read here: a
+		// caller that writes a goal and then lists sees the goal it
+		// just wrote — see [seatReadLevel].
+		Level: seatReadLevel,
 	})
 	if err != nil {
 		return failed(readFailure(tracker.ListWorkGoalsTool, err)), nil
@@ -294,7 +294,7 @@ func (d WorkDeps) goalParties(ctx context.Context, id string) []string {
 		return nil
 	}
 	listing, err := d.Reader.Goals(ctx, tracker.GoalQuery{
-		ID: id, Level: statelog.ReadSession,
+		ID: id, Level: seatReadLevel,
 	})
 	if err != nil || len(listing.Goals) == 0 {
 		return nil
