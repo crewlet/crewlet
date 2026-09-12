@@ -80,6 +80,19 @@ const (
 	// on. Distinct from no_keyring, which is about sealing a credential:
 	// the two are different missing pieces and lead to different advice.
 	codeNoStatusStore = httpjson.Code("no_status_store")
+
+	// codeSurfaceBusy is a disconnect refused because something else is
+	// writing at this surface right now — a reconcile tick, or an operator's
+	// own pass.
+	//
+	// ITS OWN CODE, because it is the one refusal here that is TRANSIENT and
+	// it was indistinguishable from the ones that are not. It answered
+	// `internal_error`, which a caller can only treat as terminal: the
+	// disconnect dialog submits one DELETE per kind in order and stopped at
+	// the first, so a refusal on the second of Atlassian's three left the
+	// tool half disconnected with no retry. Measured on a live disconnect,
+	// where a retry minutes later completed cleanly.
+	codeSurfaceBusy = httpjson.Code("surface_busy")
 )
 
 // Options wire the service.
@@ -1057,6 +1070,121 @@ func mcpEnvAt(envs, keys []string) seatCredentialAt {
 // WHAT IS ACTUALLY STORED, which is the rule the original had right and is
 // kept: a requirement nobody ever set names nothing, because telling an
 // operator to unset a value that does not exist is a list they cannot act on.
+// stillUsedBySibling reports the credential names this disconnect must NOT
+// call orphaned, because another surface that is staying still reads them.
+//
+// # Jira and Confluence share one credential, and one of them can go alone
+//
+// A seat opts in by naming a token, and the ordinary place is the SHARED
+// `mcp_env.atlassian` block: Atlassian issues one API token per account and
+// both products authenticate with it. So disconnecting Jira alone listed that
+// token and the address beside it as orphaned while Confluence went on
+// resolving both — measured on a live deployment, on the one list an operator
+// reads to decide what to unset. Following it breaks the product that stayed.
+//
+// # And a card that takes all three still names them
+//
+// The dashboard disconnects the card's surfaces in order — jira, confluence,
+// then the organization — and each request only ASKS: the block leaves the
+// document minutes later, when the loop finishes. So "is the sibling still in
+// the document" would be true on every one of the three and the shared
+// credential would be named by none of them.
+//
+// A sibling that is ITSELF DISCONNECTING is therefore not a user. That is the
+// fleet row's own phase, which the first request writes before the second is
+// made, so across the three requests the union the dialog shows names the
+// credential exactly once — and a single-product disconnect names it not at
+// all. A row this node cannot read is treated as a LIVE sibling, because
+// over-naming a credential costs an operator a question and under-naming it
+// costs them the product.
+func (s *Service) stillUsedBySibling(
+	ctx context.Context, kind integration.Kind, company *config.Company,
+) func(string) bool {
+	keep := map[string]bool{}
+	for _, sibling := range atlassianSiblings[kind] {
+		if !s.surfaceStaying(ctx, sibling, company) {
+			continue
+		}
+		for _, name := range atlassianSeatVars(company, sibling) {
+			keep[name] = true
+		}
+	}
+	if len(keep) == 0 {
+		return func(string) bool { return false }
+	}
+	return func(name string) bool { return keep[name] }
+}
+
+// atlassianSiblings is which other surfaces read a credential this one would
+// otherwise report orphaned.
+//
+// The organization is listed against the products and not the other way
+// round: `integrations.atlassian` is what PROVISIONS a seat's account, and a
+// company that removes it while keeping Jira leaves every seat authenticating
+// with the token it already has.
+var atlassianSiblings = map[integration.Kind][]integration.Kind{
+	integration.KindJira:       {integration.KindConfluence},
+	integration.KindConfluence: {integration.KindJira},
+	integration.KindAtlassian:  {integration.KindJira, integration.KindConfluence},
+}
+
+// surfaceStaying reports a surface this company still declares and has not
+// asked to disconnect.
+func (s *Service) surfaceStaying(
+	ctx context.Context, kind integration.Kind, company *config.Company,
+) bool {
+	if company == nil {
+		return false
+	}
+	var declared bool
+	switch kind {
+	case integration.KindJira:
+		declared = company.Integrations.Jira != nil
+	case integration.KindConfluence:
+		declared = company.Integrations.Confluence != nil
+	case integration.KindAtlassian:
+		declared = company.Integrations.Atlassian != nil
+	}
+	if !declared || s.status == nil {
+		return declared
+	}
+	state, err := s.currentState(ctx, kind)
+	if err != nil {
+		// UNREADABLE IS A LIVE SIBLING. See [Service.stillUsedBySibling]:
+		// naming a credential that is still in use costs a question, and
+		// failing to name one that is not costs the operator the product.
+		log.WarnContext(ctx, "setup_sibling_phase_unreadable",
+			"integration", kind.String(), "error", err.Error(),
+			"detail", "a shared Atlassian credential is treated as still in "+
+				"use, so it is not reported orphaned")
+		return true
+	}
+	// THE INTENT, NOT THE PHASE, which is [integration.State.TearingDown]'s
+	// own distinction: the flag is written when somebody presses Disconnect
+	// and the phase only follows once a pass has run, so watching the phase
+	// would read the gap as a sibling that is staying.
+	return !state.TearingDown()
+}
+
+// atlassianSeatVars is every `${VAR}` one Atlassian surface reads a seat's
+// credential out of, across every seat.
+func atlassianSeatVars(company *config.Company, kind integration.Kind) []string {
+	product := atlassian.ProductAny
+	switch kind {
+	case integration.KindJira:
+		product = atlassian.ProductJira
+	case integration.KindConfluence:
+		product = atlassian.ProductConfluence
+	}
+	at := atlassianAt(product)
+	var out []string
+	for role := range company.EachRole() {
+		out = append(out, seatSecretNames(at, role, "")...)
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
 func orphanedSecrets(kind integration.Kind, state ToolState) []string {
 	out := []string{}
 	add := func(reqs []setup.Requirement) {
@@ -1410,6 +1538,27 @@ func slackSeats(company *config.Company, resolve func(string) (string, bool),
 	return out
 }
 
+// githubSeatSecrets names the `${VAR}`s one seat's app has sealed values in.
+//
+// The two the engine writes itself when it converts a manifest: the private
+// key GitHub returns exactly once, and the webhook secret the app's own
+// deliveries are signed with. Both are per-seat, both survive a disconnect,
+// and neither is typed in by anybody — so this list is the only way an
+// operator learns they exist.
+func githubSeatSecrets(app *config.RoleGitHub) []string {
+	if app == nil {
+		return nil
+	}
+	var out []string
+	for _, ref := range []string{app.PrivateKey, app.WebhookSecret} {
+		if name, ok := provision.SoleVar(ref); ok {
+			out = append(out, name)
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
 // repoScope is the repositories a finished seat works in.
 //
 // EMPTY MEANS EVERY ONE THE INSTALLATION COVERS, which is what the operator
@@ -1472,6 +1621,18 @@ func githubSeats(company *config.Company, resolve func(string) (string, bool)) [
 			// GitHub returned, so a form field for any of them would be a
 			// box no operator can fill.
 			Requirements: []setup.Requirement{},
+			// WHAT THIS SEAT HAS SEALED, which is how a disconnect names
+			// what it leaves behind.
+			//
+			// It named nothing, so a disconnect answered `orphaned_secrets`
+			// with the company-level signing secret alone while every
+			// agent's app key and app webhook secret stayed sealed and
+			// unmentioned — the one list an operator reads to decide what
+			// to unset, silent about the credentials most worth knowing
+			// about. They are NOT deleted, for the reason
+			// [Engine.ForgetGitHubApp] gives: the app itself survives a
+			// disconnect, because GitHub has no API to delete one.
+			Secrets: githubSeatSecrets(app),
 		}
 		// THE MANAGE LINK IS ON EVERY SEAT THAT HAS AN APP, whatever step
 		// it is on. It is what a disconnect hands over: the engine can
@@ -1480,6 +1641,19 @@ func githubSeats(company *config.Company, resolve func(string) (string, bool)) [
 			state.ManageURL = github.ManageURL(webBase, githubOrgOf(company), app.AppSlug)
 		}
 		switch {
+		// NO `configured` CASE, and that is deliberate rather than the gap
+		// every other roster here fills with one. A company whose agents
+		// each have their own app and which declares no `integrations.github`
+		// block at all is a SUPPORTED shape — the org block is the
+		// organization-wide reconcile, not the agents' identities — so
+		// leading with "waiting for GitHub to be connected" would tell such
+		// a company its working agents were waiting on nothing.
+		//
+		// What a disconnect changes is the INSTALLATION, which it removes at
+		// GitHub and records as removed ([githubPass.Teardown]) — so a
+		// disconnected seat falls to the install step below, with the honest
+		// sentence and Satisfied false, rather than reporting its slug as a
+		// finished agent on a card that no longer exists.
 		case app == nil || app.AppID == 0:
 			// NO ACTION URL, and that is the contract rather than an
 			// omission: an app is created by POSTing a manifest from a
@@ -1788,6 +1962,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	// request, the 202 path minutes later when the teardown finishes. See
 	// [Service.orphanedSecrets].
 	orphaned := orphanedSecrets(kind, state)
+	orphaned = slices.DeleteFunc(orphaned, s.stillUsedBySibling(r.Context(), kind, company))
 
 	// ASKED FOR, NOT DONE HERE. The block stays in the document until the
 	// third-party app teardown has run, because that block carries the credential
@@ -1811,7 +1986,15 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.markDisconnecting(r.Context(), kind, req.RemoveSeats); err != nil {
-			httpjson.FailWith(w, http.StatusServiceUnavailable, httpjson.CodeInternalError,
+			// TRANSIENT SAID AS TRANSIENT. Both answers are 503 — the
+			// request can be repeated and may then work — but only this
+			// one is a race the caller should sit out and retry, and a
+			// caller cannot tell them apart from the status alone.
+			code := httpjson.CodeInternalError
+			if errors.Is(err, errSurfaceBusy) {
+				code = codeSurfaceBusy
+			}
+			httpjson.FailWith(w, http.StatusServiceUnavailable, code,
 				map[string]string{"detail": err.Error()})
 			return
 		}
@@ -1968,6 +2151,26 @@ type disconnectRequest struct {
 	Force bool `json:"force"`
 }
 
+// errSurfaceBusy is [Service.markDisconnecting] refused by a concurrent
+// writer, which is a state that clears on its own.
+var errSurfaceBusy = errors.New("setupapi: this surface is being written at")
+
+// disconnectRetryFor is how long one disconnect waits for a concurrent writer
+// to finish before answering "busy, try again".
+//
+// Short DELIBERATELY, and shorter than the thing it waits on. A pass may hold
+// the surface for setup.PassDeadline — minutes — and an HTTP request that
+// waited that out would be a browser tab spinning against a socket most
+// proxies will have closed. What this window is for is the common case: a
+// tick that is a moment from finishing. Past that the honest answer is the
+// retryable refusal, which the caller acts on.
+const disconnectRetryFor = 3 * time.Second
+
+// disconnectRetryEvery is how often that window re-tries. Six attempts over
+// the window, which is enough to catch a pass finishing and few enough that a
+// dozen operators pressing Disconnect at once are not a load.
+const disconnectRetryEvery = 500 * time.Millisecond
+
 // markDisconnecting records the intent on the fleet row, so the loop picks it
 // up and the screen stops showing a connected integration.
 //
@@ -1988,10 +2191,26 @@ func (s *Service) markDisconnecting(
 			"setupapi: this node could not take %s to record the disconnect: %w",
 			kind, err)
 	}
+	// WAITED OUT BRIEFLY BEFORE IT IS REFUSED. A tick a moment from
+	// finishing is the common collision, and answering it with a refusal
+	// spent an operator's whole gesture on a race that was over before they
+	// read the message. See [disconnectRetryFor].
+	for deadline := time.Now().Add(disconnectRetryFor); !held && time.Now().Before(deadline); {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(disconnectRetryEvery):
+		}
+		if _, release, held, err = s.passes.Hold(ctx, kind); err != nil {
+			return fmt.Errorf(
+				"setupapi: this node could not take %s to record the disconnect: %w",
+				kind, err)
+		}
+	}
 	if !held {
 		return fmt.Errorf(
-			"setupapi: %s is being provisioned right now, so the disconnect was "+
-				"not started; try again in a moment", kind)
+			"%w: %s is being provisioned right now, so the disconnect was "+
+				"not started; try again in a moment", errSurfaceBusy, kind)
 	}
 	defer release()
 

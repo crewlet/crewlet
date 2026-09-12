@@ -1,6 +1,7 @@
 package setupapi_test
 
 import (
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -33,17 +34,29 @@ func TestAnOrdinaryDisconnectNamesTheCredentialsItLeaves(t *testing.T) {
 
 	// WITH A STATUS STORE, because the ordinary path records the intent on
 	// the fleet row and refuses without one.
-	s.withPass(t, &recordingPass{kind: integration.KindAtlassian})
-	out := s.do(t, http.MethodDelete, "/setup/integrations/atlassian",
-		`{"remove_seats": true}`, nil)
-	if out.Code != http.StatusAccepted {
-		t.Fatalf("disconnect = %d: %s", out.Code, out.Body)
+	s.withPass(t, &recordingPass{kind: integration.KindAtlassian},
+		&recordingPass{kind: integration.KindJira})
+
+	// THE WHOLE CARD, in the order the dashboard takes it: the products
+	// first, the organization last, because the organization's credential
+	// is what removes the accounts. The list an operator sees is the union,
+	// and a shared credential is named by whichever request is the last to
+	// still see a sibling using it.
+	orphans := map[string]bool{}
+	for _, kind := range []string{"jira", "atlassian"} {
+		out := s.do(t, http.MethodDelete, "/setup/integrations/"+kind,
+			`{"remove_seats": true}`, nil)
+		if out.Code != http.StatusAccepted {
+			t.Fatalf("disconnect %s = %d: %s", kind, out.Code, out.Body)
+		}
+		named, _ := decode(t, out)["orphaned_secrets"].([]any)
+		for _, name := range named {
+			orphans[fmt.Sprint(name)] = true
+		}
 	}
-	body := decode(t, out)
-	orphans, _ := body["orphaned_secrets"].([]any)
 
 	// THE ORGANIZATION'S OWN KEY, which the old list would have named.
-	if !slices.Contains(orphans, any("ORG_KEY")) {
+	if !orphans["ORG_KEY"] {
 		t.Errorf("orphaned_secrets = %v, want the organization key named", orphans)
 	}
 	// AND THE SEAT'S, which it never did. A pass mints a token under the
@@ -52,9 +65,57 @@ func TestAnOrdinaryDisconnectNamesTheCredentialsItLeaves(t *testing.T) {
 	// base64(address:token) — so a disconnect orphans two values per agent
 	// and named neither.
 	for _, want := range []string{"SRE_ATLASSIAN", "SRE_EMAIL"} {
-		if !slices.Contains(orphans, any(want)) {
+		if !orphans[want] {
 			t.Errorf("orphaned_secrets = %v, want the seat's %s named", orphans, want)
 		}
+	}
+}
+
+// AND ONE PRODUCT GOING ALONE DOES NOT NAME THE CREDENTIAL THE OTHER USES.
+//
+// A seat opts in by naming a token, and the ordinary place is the SHARED
+// `mcp_env.atlassian` block: Atlassian issues one API token per account and
+// both products authenticate with it. Disconnecting Jira alone listed that
+// token and the address beside it as orphaned while Confluence went on
+// resolving both — measured on a live deployment, on the one list an operator
+// reads to decide what to unset. Following it takes the product that stayed
+// down.
+func TestASingleAtlassianProductLeavesTheSharedCredentialUnnamed(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	res := s.do(t, http.MethodPut, "/config", identityDoc,
+		map[string]string{"X-Summary": "a provisioned company"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("import = %d: %s", res.Code, res.Body)
+	}
+	// CONFLUENCE STAYS, reading the same shared credential Jira does.
+	patch := s.do(t, http.MethodPatch, "/config",
+		`{"integrations":{"confluence":{"url":"https://acme.atlassian.net/wiki","token":"${OPS_TOKEN}"}}}`,
+		map[string]string{"X-Summary": "connect confluence"})
+	if patch.Code != http.StatusCreated {
+		t.Fatalf("connect confluence = %d: %s", patch.Code, patch.Body)
+	}
+	s.withPass(t, &recordingPass{kind: integration.KindJira},
+		&recordingPass{kind: integration.KindConfluence})
+
+	out := s.do(t, http.MethodDelete, "/setup/integrations/jira",
+		`{"remove_seats": true}`, nil)
+	if out.Code != http.StatusAccepted {
+		t.Fatalf("disconnect = %d: %s", out.Code, out.Body)
+	}
+	orphans, _ := decode(t, out)["orphaned_secrets"].([]any)
+
+	for _, shared := range []string{"SRE_ATLASSIAN", "SRE_EMAIL"} {
+		if slices.Contains(orphans, any(shared)) {
+			t.Errorf("orphaned_secrets = %v names %s, which Confluence still "+
+				"resolves: an operator who unsets it takes the product that "+
+				"stayed down", orphans, shared)
+		}
+	}
+	// AND JIRA'S OWN COMPANY-LEVEL CREDENTIAL IS STILL NAMED, because
+	// nothing else reads it.
+	if !slices.Contains(orphans, any("OPS_TOKEN")) {
+		t.Errorf("orphaned_secrets = %v, want Jira's own credential named", orphans)
 	}
 }
 
@@ -292,5 +353,117 @@ func mustSaveStatus(t *testing.T, status *statusStore, state integration.State) 
 	t.Helper()
 	if err := status.SaveIntegration(t.Context(), state); err != nil {
 		t.Fatalf("seed the status row: %v", err)
+	}
+}
+
+// AND A GITHUB DISCONNECT NAMES EACH AGENT'S OWN APP CREDENTIALS.
+//
+// GitHub is the one surface whose per-seat credentials nobody types in: the
+// engine converts a manifest and writes what GitHub returns, so the private
+// key and the app's webhook secret exist without an operator having chosen
+// either name. They also SURVIVE a disconnect by design — GitHub offers no
+// API to delete an app registration, so uninstalling is all the engine can do
+// and deleting the key would destroy the only copy of a working one for an
+// app that still exists.
+//
+// Which makes this list the only place they are ever mentioned. It named the
+// company-level signing secret alone: measured on a live disconnect, two
+// sealed per-seat values stayed in the store with the operator never told
+// they were there.
+func TestAGitHubDisconnectNamesEachAgentsAppCredentials(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seedGitHubApps(t)
+	// AND THE ORG BLOCK, because a disconnect needs something to
+	// disconnect: the roster fixture is a company whose agents each have
+	// their own app and which declares no organization-wide integration,
+	// which is a supported shape with no Disconnect button on it.
+	res := s.do(t, http.MethodPatch, "/config",
+		`{"integrations":{"github":{"enabled":true,"webhook_secret":"${GH_SIGN}"}}}`,
+		map[string]string{"X-Summary": "connect github"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("connect = %d: %s", res.Code, res.Body)
+	}
+
+	s.withPass(t, &recordingPass{kind: integration.KindGitHub})
+	out := s.do(t, http.MethodDelete, "/setup/integrations/github",
+		`{"remove_seats": true}`, nil)
+	if out.Code != http.StatusAccepted {
+		t.Fatalf("disconnect = %d: %s", out.Code, out.Body)
+	}
+	orphans, _ := decode(t, out)["orphaned_secrets"].([]any)
+
+	for _, want := range []string{"REVIEWER_GITHUB_APP_KEY", "STRAY_GITHUB_APP_KEY"} {
+		if !slices.Contains(orphans, any(want)) {
+			t.Errorf("orphaned_secrets = %v, want %s named: it stays sealed "+
+				"after this disconnect and nothing else ever mentions it",
+				orphans, want)
+		}
+	}
+}
+
+// A DISCONNECT REFUSED BY A CONCURRENT PASS SAYS IT IS WORTH REPEATING.
+//
+// Something else writing at the surface — a reconcile tick, or an operator's
+// own pass — is the one refusal here that clears on its own, and it answered
+// `internal_error`: a code a caller can only treat as terminal. The dashboard
+// submits one DELETE per kind in order and stopped at the first refusal, so a
+// collision on the second of Atlassian's three left the tool half
+// disconnected with nothing retrying. Measured on a live disconnect, where
+// the same gesture minutes later completed cleanly.
+func TestADisconnectRefusedByAConcurrentPassSaysItIsRetryable(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	res := s.do(t, http.MethodPut, "/config", identityDoc,
+		map[string]string{"X-Summary": "a provisioned company"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("import = %d: %s", res.Code, res.Body)
+	}
+	_, runner := s.withPass(t, &recordingPass{kind: integration.KindGitLab})
+
+	// SOMETHING ELSE IS WRITING AT IT, held for the whole request.
+	_, release, held, err := runner.Hold(t.Context(), integration.KindGitLab)
+	if err != nil || !held {
+		t.Fatalf("the premise is wrong: Hold = %v, %v", held, err)
+	}
+	defer release()
+
+	out := s.do(t, http.MethodDelete, "/setup/integrations/gitlab", `{}`, nil)
+	if out.Code != http.StatusServiceUnavailable {
+		t.Fatalf("disconnect = %d: %s", out.Code, out.Body)
+	}
+	body := decode(t, out)
+	if body["error"] != "surface_busy" {
+		t.Errorf("error = %v, want surface_busy: a caller cannot tell a race "+
+			"it should sit out from a refusal that will never change, and "+
+			"treats both as terminal", body["error"])
+	}
+	if detail, _ := body["detail"].(string); !strings.Contains(detail, "try again") {
+		t.Errorf("detail = %q, which does not say the request is worth "+
+			"repeating", detail)
+	}
+}
+
+// AND ONE REFUSED FOR A REASON THAT WILL NOT CHANGE DOES NOT.
+//
+// A node with no fleet status store cannot record a disconnect however many
+// times it is asked, and telling a caller to retry that is a loop with no
+// exit. Both answers are 503; only one of them is a race.
+func TestADisconnectRefusedPermanentlyIsNotMarkedRetryable(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	res := s.do(t, http.MethodPut, "/config", identityDoc,
+		map[string]string{"X-Summary": "a provisioned company"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("import = %d: %s", res.Code, res.Body)
+	}
+	// NO withPass, so no status store is wired.
+	out := s.do(t, http.MethodDelete, "/setup/integrations/gitlab", `{}`, nil)
+	if out.Code != http.StatusServiceUnavailable {
+		t.Fatalf("disconnect = %d: %s", out.Code, out.Body)
+	}
+	if got := decode(t, out)["error"]; got == "surface_busy" {
+		t.Error("a node with no status store was reported as busy, so a " +
+			"caller retries a refusal that cannot ever change")
 	}
 }

@@ -674,10 +674,20 @@ func (s *statusStore) get(kind integration.Kind) (integration.State, bool) {
 }
 
 // withPass rebuilds the surface with a provisioning pass wired in.
-func (s *surface) withPass(t *testing.T, pass *recordingPass) (*statusStore, *setup.Runner) {
+// PASSES, PLURAL. A card can cover more than one surface — Atlassian is an
+// organization and two products — and a disconnect now reads the SIBLING
+// surfaces' own rows to decide whether a shared credential is orphaned. A
+// harness that could wire only one made every sibling unreconciled.
+func (s *surface) withPass(
+	t *testing.T, passes ...*recordingPass,
+) (*statusStore, *setup.Runner) {
 	t.Helper()
 	status := &statusStore{}
-	runner := setup.NewRunner([]setup.Pass{pass}, nil, func() time.Time { return pinned })
+	wired := make([]setup.Pass, 0, len(passes))
+	for _, pass := range passes {
+		wired = append(wired, pass)
+	}
+	runner := setup.NewRunner(wired, nil, func() time.Time { return pinned })
 	s.mux = http.NewServeMux()
 	setupapi.New(setupapi.Options{
 		Company: s.company, Config: s.config, Secrets: s.vault,

@@ -604,8 +604,41 @@ is the deliberate path.
 > a `${VAR}` in the company document, and both paths end with that block gone.
 > The dashboard shows the list rather than discarding the response and closing.
 
+> **A credential a sibling surface still reads is not on the list.** Jira and
+> Confluence normally share one seat credential — Atlassian issues one API
+> token per account, and the ordinary place for it is the shared
+> `mcp_env.atlassian` block — so disconnecting one product alone used to name a
+> token the other went on resolving. Following that list takes the product that
+> stayed down. A sibling counts as a user unless it is itself disconnecting,
+> which is what makes a whole card work: the dashboard takes the card's
+> surfaces in order, each request records its intent before the next is made,
+> and the union the dialog shows names the shared credential exactly once.
+
+> **GitHub's per-seat App credentials are on the list too**, and they are the
+> ones nobody typed in: the engine converts a manifest and writes what GitHub
+> returns, so an agent's `private_key` and its App's webhook secret exist
+> without an operator having chosen either name. They also survive a disconnect
+> by design — GitHub has no API for deleting an App registration, so the engine
+> uninstalls the App and hands over a link to the page a person deletes it from,
+> and the key stays valid for something that still exists. That makes this list
+> the only place either value is ever mentioned; it named the company-level
+> signing secret alone, so two sealed per-seat credentials stayed in the store
+> with nothing telling the operator they were there.
+
 Refusals: `503 no_status_store` on a node with no coordination, which has
-nowhere to record the intent. Retry against a node that has one, or force it.
+nowhere to record the intent — retry against a node that has one, or force it —
+and `503 surface_busy` when a reconcile tick or an operator's own pass is
+writing at this surface right now. Those two are the same status and opposite
+facts: the first will not change however many times it is asked, and the second
+clears on its own, which is why it carries its own code. The request waits a
+busy surface out for a few seconds first (a tick a moment from finishing is the
+common collision) and then names it; repeating the request is correct, because
+every step of a disconnect is idempotent. It used to answer `internal_error`,
+which a caller can only treat as terminal — the dashboard stopped at the first
+refusal, so a collision on the second of Atlassian's three surfaces left the
+tool half disconnected. A busy surface is now waited out rather than skipped,
+because the order matters: the organization's credential is what removes the
+accounts.
 
 Refusals worth knowing: `409 requirements_outstanding` names the fields still
 missing (a pass writes at the third-party app and must not run against a

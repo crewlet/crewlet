@@ -23,6 +23,61 @@ import { Icon } from "~/ui/Icon.tsx";
 import { marked } from "~/ui/Problems.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 
+/**
+ * How long one surface is waited out while something else is writing at it.
+ *
+ * A reconcile tick or an operator's own pass holds a surface while it runs,
+ * and the engine answers `surface_busy` — a 503 that says, unlike every other
+ * refusal here, that the request is worth repeating. This dialog used to stop
+ * at the first refusal of any kind, so a collision on the second of
+ * Atlassian's three surfaces left the tool half disconnected with nothing
+ * retrying: measured on a live disconnect, where the same gesture minutes
+ * later completed cleanly.
+ *
+ * Bounded rather than indefinite, because a pass can hold a surface for
+ * minutes and a modal that spun that long would be indistinguishable from one
+ * that had hung. Past the window the operator is told which surface is busy
+ * and what has already been taken away, and pressing Disconnect again resumes
+ * — every step is idempotent.
+ */
+const BUSY_RETRY_MS = 45_000;
+
+/** How long between attempts while a surface is busy. */
+const BUSY_RETRY_EVERY_MS = 3_000;
+
+const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+
+/**
+ * disconnectOne asks for one surface's disconnect, sitting out a busy one.
+ *
+ * Only `surface_busy` is retried. Every other refusal is terminal by
+ * construction — a bad body, a node with no status store, a credential the
+ * engine will not accept — and repeating one of those is a slower way to fail.
+ */
+async function disconnectOne(
+  kind: string,
+  removeSeats: boolean,
+  force: boolean,
+  waiting: (on: string | null) => void,
+): Promise<unknown> {
+  const until = Date.now() + BUSY_RETRY_MS;
+  for (;;) {
+    try {
+      const answer = await rest.del(`/setup/integrations/${kind}`, {
+        remove_seats: removeSeats,
+        force,
+      });
+      waiting(null);
+      return answer;
+    } catch (err) {
+      const busy = err instanceof RestError && err.code === "surface_busy";
+      if (!busy || Date.now() >= until) throw err;
+      waiting(kind);
+      await sleep(BUSY_RETRY_EVERY_MS);
+    }
+  }
+}
+
 export function DisconnectDialog({
   name,
   kinds,
@@ -84,25 +139,41 @@ export function DisconnectDialog({
    * dialog threw every response away and closed, so nobody ever saw it.
    */
   const [orphans, setOrphans] = useState<string[] | null>(null);
+  /**
+   * What the engine is waiting on, while a surface is busy being provisioned.
+   *
+   * Shown instead of the error banner, because it is not one: the disconnect
+   * has not failed, it has not started yet, and the next attempt is already
+   * scheduled.
+   */
+  const [waitingOn, setWaitingOn] = useState<string | null>(null);
 
   async function submit(force: boolean) {
     setBusy(true);
     setError(null);
+    setWaitingOn(null);
     try {
       // ONE AT A TIME, in order, and the first refusal stops the rest.
       //
       // The organization goes LAST on Atlassian because the two products are
       // reached with their own credentials and the organization's is what
       // removes the accounts: taking it first would strand whatever the
-      // products still hold.
+      // products still hold. Which is also why a busy surface is RETRIED
+      // rather than skipped: carrying on past it would take the organization
+      // away from a product that still needs it.
       const left = new Set<string>();
       for (const kind of kinds) {
-        const answer = (await rest.del(`/setup/integrations/${kind}`, {
-          remove_seats: removeSeats,
+        const answer = (await disconnectOne(
+          kind,
+          removeSeats,
           force,
-        })) as { orphaned_secrets?: string[] } | undefined;
+          setWaitingOn,
+        )) as
+          | { orphaned_secrets?: string[] }
+          | undefined;
         for (const name of answer?.orphaned_secrets ?? []) left.add(name);
       }
+      setWaitingOn(null);
       onDone();
       if (left.size === 0) {
         onClose();
@@ -119,6 +190,7 @@ export function DisconnectDialog({
       // RestError.message already falls back to the status itself.
       setError(err instanceof RestError ? err.message : String(err));
     } finally {
+      setWaitingOn(null);
       setBusy(false);
     }
   }
@@ -235,6 +307,21 @@ export function DisconnectDialog({
                 </li>
               ))}
             </ul>
+          </div>
+        )}
+
+        {/* NOT AN ERROR, so not the error banner. Something else is writing
+            at this surface — a reconcile tick, or an operator's own pass —
+            and the disconnect has not failed, it has not started yet. This
+            dialog used to stop dead at that refusal, which on a card
+            covering three surfaces left the tool half disconnected. */}
+        {waitingOn && !error && (
+          <div className="banner">
+            <Icon name="clock" size="sm" />
+            <span>
+              {name} is being provisioned right now, so {waitingOn} has to wait its turn. Still
+              trying.
+            </span>
           </div>
         )}
 

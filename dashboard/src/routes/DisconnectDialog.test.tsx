@@ -32,6 +32,10 @@ beforeEach(() => localStorage.setItem("crewlet_api_token", "t"));
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  // RESTORED HERE rather than at the end of the test that installs them: a
+  // fake clock left running by a FAILING test makes every later test in the
+  // file fail too, which hides the one real failure behind a page of noise.
+  vi.useRealTimers();
   localStorage.clear();
 });
 
@@ -252,4 +256,101 @@ test("a disconnect that leaves nothing behind closes", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
 
   await waitFor(() => expect(closed).toHaveBeenCalled());
+});
+
+/**
+ * A BUSY SURFACE IS WAITED OUT, AND THE REST OF THE CARD STILL GOES.
+ *
+ * A reconcile tick or an operator's own pass holds a surface while it runs,
+ * and the engine answers `surface_busy` — the one refusal here that clears on
+ * its own. This dialog stopped at the first refusal of any kind, so a
+ * collision on the second of Atlassian's three surfaces left the tool half
+ * disconnected with nothing retrying: measured on a live disconnect, where
+ * the same gesture minutes later completed cleanly.
+ *
+ * RETRIED RATHER THAN SKIPPED, because the order is load-bearing: the
+ * organization's credential is what removes the accounts, so carrying on past
+ * a busy product would take it away from one that still needs it.
+ */
+test("a surface that is busy is retried rather than abandoning the rest", async () => {
+  vi.useFakeTimers();
+  const sent: Sent[] = [];
+  let refusals = 2;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://engine.test").pathname;
+      sent.push({
+        method: init?.method ?? "GET",
+        path,
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      });
+      if (path.endsWith("/jira") && refusals > 0) {
+        refusals--;
+        return new Response(
+          JSON.stringify({ error: "surface_busy", detail: "try again in a moment" }),
+          { status: 503 },
+        );
+      }
+      return new Response(JSON.stringify({ key: "x", disconnecting: true }), { status: 202 });
+    }),
+  );
+
+  const done = vi.fn();
+  render(
+    <DisconnectDialog
+      name="Atlassian"
+      kinds={["jira", "confluence", "atlassian"]}
+      onClose={() => {}}
+      onDone={done}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+
+  // THE WAIT IS SAID, and not as an error: the disconnect has not failed, it
+  // has not started.
+  await vi.waitFor(() => expect(screen.getByText(/has to wait its turn/)).toBeTruthy());
+  await vi.advanceTimersByTimeAsync(10_000);
+
+  await vi.waitFor(() => expect(done).toHaveBeenCalled());
+  const asked = sent.filter((s) => s.method === "DELETE").map((s) => s.path);
+  for (const kind of ["jira", "confluence", "atlassian"]) {
+    expect(asked.some((p) => p.endsWith(`/${kind}`))).toBe(true);
+  }
+  // AND THE ORDER HELD: the organization is last, after the product that had
+  // to wait.
+  expect(asked[asked.length - 1]).toMatch(/atlassian$/);
+});
+
+/**
+ * AND A REFUSAL THAT WILL NOT CHANGE IS STILL TERMINAL.
+ *
+ * Retrying a node with no fleet status store is a loop with no exit, and the
+ * operator needs the banner and the way out rather than a spinner.
+ */
+test("a refusal that is not a race stops and offers the force", async () => {
+  const sent: Sent[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      sent.push({
+        method: init?.method ?? "GET",
+        path: new URL(String(input), "http://engine.test").pathname,
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      });
+      return new Response(
+        JSON.stringify({ error: "no_status_store", detail: "this node has no fleet status store" }),
+        { status: 503 },
+      );
+    }),
+  );
+
+  render(
+    <DisconnectDialog name="Jira" kinds={["jira"]} onClose={() => {}} onDone={() => {}} />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+
+  await waitFor(() => expect(screen.getByText(/no fleet status store/)).toBeTruthy());
+  expect(screen.queryByText(/has to wait its turn/)).toBeNull();
+  expect(sent.filter((s) => s.method === "DELETE")).toHaveLength(1);
 });
