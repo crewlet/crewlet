@@ -982,14 +982,38 @@ func signingSecret(ctx context.Context, opts Options) (secret, note string, fres
 	case SigningBlocked:
 		return "", "", false, errors.New("gitlab: " + plan.Note)
 	}
-	secret, err = whsec.Mint()
+	// THE SINK IS ASKED BEFORE ANYTHING IS MINTED, which is
+	// [provision.MintSecret]'s subject and was missing here. `secret`
+	// above comes from the resolver, and the resolver answers from a
+	// SNAPSHOT taken at apply time — so the variable a previous pass
+	// minted into resolves to nothing until something rebuilds it, and
+	// every pass in that window minted a SECOND key, sealed it over the
+	// first and re-pointed the hook at it. The engine's own
+	// /webhooks/gitlab route verifies with the snapshot, so each rotation
+	// moved the instance further from the value the running process holds,
+	// on the reconcile loop's timer.
+	minted, err := provision.MintSecret(
+		ctx, opts.Sink, plan.Var, plan.Action == SigningRotate, whsec.Mint)
 	if err != nil {
-		return "", "", false, err
+		return "", "", false, fmt.Errorf("gitlab: %w", err)
 	}
-	if err := opts.Sink.Record(ctx, plan.Var, secret); err != nil {
-		return "", "", false, fmt.Errorf("gitlab: record %s: %w", plan.Var, err)
+	if minted.NoKeyring {
+		// UNREACHABLE, and an error rather than an empty secret if it
+		// ever is not. [Reconcile] reports the keyring and returns long
+		// before this, because a pass here creates an ACCOUNT before it
+		// mints anything; what must never happen is falling through with
+		// no value and registering a hook nothing can sign.
+		return "", "", false, errors.New(
+			"gitlab: this node has no keyring, so no signing secret could be " +
+				"sealed — set secrets.keys in the bootstrap configuration")
 	}
-	return secret, plan.Note + " — " + opts.Sink.NextStep(), true, nil
+	if !minted.Minted {
+		// ALREADY SEALED, by a pass whose value the resolver has not
+		// caught up with. Nothing was minted, so the plan's note would
+		// claim a rotation that did not happen.
+		return minted.Value, "", false, nil
+	}
+	return minted.Value, plan.Note + " — " + opts.Sink.NextStep(), true, nil
 }
 
 // SigningAction is what a run will do about the webhook signing secret.

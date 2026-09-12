@@ -1527,3 +1527,121 @@ func TestADataCenterHookIsRewrittenWhenThisPassMintedTheSecret(t *testing.T) {
 			"longer holds and every delivery is refused")
 	}
 }
+
+// blindPass runs one reconcile with a RESOLVER THAT SEES NOTHING, which is
+// exactly what the engine looks like between a seal and the apply that
+// rebuilds its `${VAR}` snapshot. The other helpers here resolve through the
+// sink, which hides that window entirely.
+func blindPass(
+	t *testing.T, site *cloudSite, sink provision.TokenSink, cloud bool,
+) *confluence.Result {
+	t.Helper()
+	client := dataCenterClient(t, site)
+	if cloud {
+		client = cloudClient(t, site)
+	}
+	res, err := confluence.Reconcile(context.Background(), confluence.Options{
+		Client: client,
+		Config: &config.Confluence{
+			URL: site.URL, Token: "t",
+			WebhookSecret: "${CONFLUENCE_WEBHOOK_SECRET}",
+			WebhookToken:  "${CONFLUENCE_WEBHOOK_TOKEN}",
+		},
+		Value:       func(string) string { return "" },
+		Sink:        sink,
+		WebhookBase: "https://engine.example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+// A SECOND PASS DOES NOT MINT OVER A VALUE THIS DEPLOYMENT ALREADY SEALED.
+//
+// The resolver answers from a SNAPSHOT taken at apply time, so the variable a
+// previous pass minted into resolves to nothing until something rebuilds it.
+// Every pass in that window used to mint a SECOND value, seal it over the
+// first and re-register the hooks with it — and the engine's own
+// /webhooks/confluence route authenticates with the snapshot, so each
+// rotation moved the instance further from the value the running process
+// holds, on the reconcile loop's timer.
+func TestASecondPassDoesNotMintOverAValueThisDeploymentAlreadySealed(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		cloud bool
+		vari  string
+	}{
+		{"data center", false, "CONFLUENCE_WEBHOOK_SECRET"},
+		{"cloud", true, "CONFLUENCE_WEBHOOK_TOKEN"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			site := newCloudSite(t)
+			sink := newSink()
+
+			blindPass(t, site, sink, tc.cloud)
+			minted := sink.value(t, tc.vari)
+			if minted == "" {
+				t.Fatal("the premise is wrong: the first pass sealed nothing")
+			}
+
+			blindPass(t, site, sink, tc.cloud)
+			if got := sink.value(t, tc.vari); got != minted {
+				t.Errorf("%s was rotated by a pass nobody asked to rotate "+
+					"anything, so the instance now authenticates with a value "+
+					"this deployment does not hold", tc.vari)
+			}
+		})
+	}
+}
+
+// A NODE WITH NO KEYRING REPORTS, IT DOES NOT FAULT.
+//
+// An error here is a fault the loop retries while telling an operator the
+// engine is working on it, which is the one thing that is certainly not
+// happening: no pass will ever seal anything until somebody sets
+// secrets.keys. It is reported against the field that fixes it — and which
+// field that is depends on the deployment, because Cloud carries its whole
+// authentication in the URL while Data Center signs.
+func TestANodeWithNoKeyringReportsTheFieldThatFixesIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		cloud bool
+		field string
+	}{
+		{"data center", false, "integrations.confluence.webhook_secret"},
+		{"cloud", true, "integrations.confluence.webhook_token"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			site := newCloudSite(t)
+			res := blindPass(t, site, provision.ReadOnly(), tc.cloud)
+
+			if got := site.mutations(); got != 0 {
+				t.Errorf("%d hook(s) were registered with nothing to "+
+					"authenticate a delivery with", got)
+			}
+			var found bool
+			for _, f := range res.Findings() {
+				if f.Subject != tc.field {
+					continue
+				}
+				found = true
+				if f.Kind != integration.FindingIngressBlocked {
+					t.Errorf("reported as %s, want ingress_blocked", f.Kind)
+				}
+				if !strings.Contains(f.Detail, "secrets.keys") {
+					t.Errorf("the finding does not name the bootstrap field "+
+						"that fixes it:\n%s", f.Detail)
+				}
+			}
+			if !found {
+				t.Errorf("a pass that could seal nothing reported %v, none of "+
+					"it against %s", res.Findings(), tc.field)
+			}
+		})
+	}
+}

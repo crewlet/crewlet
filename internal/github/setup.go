@@ -71,7 +71,13 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			// value minted here, and nobody has to copy anything.
 			Mintable: true,
 			Help:     "Signs every delivery. Without it the route refuses all of them.",
-			Blocks:   integration.FindingCredentialMissing,
+			// INGRESS, NOT CREDENTIAL, which jira and confluence already
+			// declare for the same field. It said credential_missing, and
+			// this pass emits that kind nowhere for the webhook secret —
+			// every ingress state it reports is ingress_blocked — so the
+			// join was dangling and the screen offered this field for
+			// nothing that could ever ask for it.
+			Blocks: integration.FindingIngressBlocked,
 		},
 		{
 			Field: "url",

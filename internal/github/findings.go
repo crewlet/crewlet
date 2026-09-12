@@ -55,6 +55,29 @@ func (r *Result) Findings() []integration.Finding {
 		})
 	}
 
+	// AND NO KEY TO SIGN WITH IS THE OTHER WAY TO HAVE NO INGRESS, said
+	// against the field that fixes it.
+	//
+	// INGRESS RATHER THAN CREDENTIAL, on Jira's reasoning: a webhook secret
+	// is not how this engine authenticates AT GitHub — it is what makes a
+	// delivery verifiable when it arrives here, and a route with nothing to
+	// verify with answers 503. It is also what [Requirements] declares:
+	// `webhook_secret` says Blocks: FindingIngressBlocked, and that
+	// declaration is the join the setup screen uses to offer the field that
+	// clears this.
+	if r.NoKeyring {
+		out = append(out, integration.Finding{
+			Kind:    integration.FindingIngressBlocked,
+			Subject: "integrations.github.webhook_secret",
+			Detail: "no webhook was registered because this deployment has no " +
+				"secret to sign deliveries with and this node has no keyring " +
+				"to seal a fresh one into: set secrets.keys in the bootstrap " +
+				"configuration so a pass can mint it, or set the variable " +
+				"integrations.github.webhook_secret points at and register the " +
+				"hooks on the next pass",
+		})
+	}
+
 	// AND A TARGET THIS RUN TRIED AND COULD NOT HOOK.
 	//
 	// Reported per target rather than once: a partial hook-up is the state

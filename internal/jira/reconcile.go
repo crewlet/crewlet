@@ -711,20 +711,11 @@ type webhookKey struct {
 //
 // # And "nothing usable" includes what this deployment already sealed
 //
-// [integration.Reconciler]'s safety contract states it outright — "check what
-// the sink recorded (provision.TokenSink.Value) and keep a working
-// credential" — and this pass was the one that did not. The resolver answers
-// from a SNAPSHOT taken at apply time, so the variable a previous pass minted
-// into resolves to nothing until something rebuilds it; every pass in that
-// window minted a second secret, sealed it over the first and re-registered
-// the hook with it. The engine's own webhook route verifies with the
-// snapshot, so each rotation moved the instance further from the value the
-// running process holds, on the reconcile loop's timer.
-//
-// So the sink is asked first, and only a name nothing holds is minted into.
-// The read is THREE-VALUED like every other in this engine: held,
-// definitively not held, and "the store could not say" — and the third
-// raises, because minting over a value that may exist is the outage above.
+// Which is [provision.MintSecret]'s whole subject, and the reason it is not
+// written out here: the sink is asked before anything is minted, the read is
+// three-valued, and a node with no keyring reports rather than faults. This
+// pass was the one that got that right while three others did not, so the
+// rule moved to the leaf they all share rather than being copied twice more.
 func webhookSecret(
 	ctx context.Context, opts Options, target string,
 ) (webhookKey, error) {
@@ -750,44 +741,27 @@ func webhookSecret(
 				"register %s by hand",
 			provision.Shape(opts.Config.WebhookSecret), target)
 	}
-	if opts.Sink == nil {
-		// THE COMMAND LINE'S CASE, and it stays a refusal: a run told to
-		// mint with nowhere to put the result would leave a live signing
-		// secret at the instance and print none of it.
-		return webhookKey{}, provision.ErrNoSink
+	secret, err := provision.MintSecret(ctx, opts.Sink, secretVar,
+		opts.RecreateWebhook, func() (string, error) { return rand.Text(), nil })
+	if err != nil {
+		return webhookKey{}, fmt.Errorf("jira: %w", err)
 	}
-	if !provision.CanMint(opts.Sink) {
-		// A NODE WITH NO KEYRING REPORTS, IT DOES NOT FAULT. Record
-		// answers [provision.ErrNoSink] on such a sink, so this pass
-		// raised on every tick for ever over a deployment that had simply
-		// not set secrets.keys — the exact permanent-fault posture
-		// [provision.ReadOnly] exists to remove. See [Result.NoKeyring].
-		return webhookKey{NoKeyring: true}, nil
+	key := webhookKey{
+		Secret:    secret.Value,
+		Minted:    secret.Minted,
+		NoKeyring: secret.NoKeyring,
 	}
-	if !opts.RecreateWebhook {
-		// ASKED BEFORE ANYTHING IS MINTED, and skipped only where the
-		// operator asked for a fresh key having planned the restart that
-		// rotating one costs.
-		held, ok, err := opts.Sink.Value(ctx, secretVar)
-		if err != nil {
-			return webhookKey{}, fmt.Errorf("jira: read %s: %w", secretVar, err)
+	if secret.Minted {
+		note := fmt.Sprintf(
+			"a fresh webhook secret was minted into %s — %s", secretVar,
+			opts.Sink.NextStep())
+		if opts.RecreateWebhook {
+			note += ". The previous secret is now invalid on every other " +
+				"deployment of this company"
 		}
-		if ok && strings.TrimSpace(held) != "" {
-			return webhookKey{Secret: strings.TrimSpace(held)}, nil
-		}
+		key.Notes = []string{note}
 	}
-	fresh := rand.Text()
-	if recordErr := opts.Sink.Record(ctx, secretVar, fresh); recordErr != nil {
-		return webhookKey{}, fmt.Errorf("jira: record %s: %w", secretVar, recordErr)
-	}
-	note := fmt.Sprintf(
-		"a fresh webhook secret was minted into %s — %s", secretVar,
-		opts.Sink.NextStep())
-	if opts.RecreateWebhook {
-		note += ". The previous secret is now invalid on every other " +
-			"deployment of this company"
-	}
-	return webhookKey{Secret: fresh, Minted: true, Notes: []string{note}}, nil
+	return key, nil
 }
 
 // converged reports a hook that already carries everything this run would

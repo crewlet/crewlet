@@ -681,7 +681,17 @@ delivery with a key the running engine does not hold — every webhook refused
 at the edge, from a command whose whole promise is that it is safe to re-run.
 A secret that already resolves is used as it is; one that resolves to nothing
 is minted into the `${VAR}` the config already points at, and the run says
-where it went.
+where it went — **unless this deployment has already sealed** a value under
+that variable, which is read back and reused instead. That read-back matters
+to the reconcile loop rather than to this command: a `${VAR}` resolves from a
+snapshot taken at apply time, so in the window between a pass sealing a secret
+and something rebuilding that snapshot the resolver answers empty for a
+variable the fleet already holds — and without the read-back the loop minted
+again on every tick, rotating the key GitHub signs with until the snapshot
+caught up. On a node with **no keyring** at all (`secrets.keys` unset) nothing
+is minted and no hook is registered: the surface reports `ingress_blocked`
+against `integrations.github.webhook_secret`, naming `secrets.keys`, rather
+than failing every pass as though the engine were working on it.
 
 **A repository that cannot be hooked is reported, not raised.** A company's
 list will contain one that was renamed, archived, or made private to a team

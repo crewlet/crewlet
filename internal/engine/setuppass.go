@@ -590,6 +590,15 @@ type refreshingSink struct {
 	flushed bool
 }
 
+// Mints forwards the wrapped sink's answer, because an embedded INTERFACE
+// contributes no method to this type's method set: without this,
+// [provision.CanMint]'s type assertion misses a [provision.ReadOnly] inside
+// and every pass gated on it would create accounts on a node that can seal
+// nothing. It is true for every sink this type is built over today —
+// [Engine.SetupSink] refuses without a keyring — which is exactly why a
+// wrapper that silently claims it is a trap rather than a bug.
+func (s *refreshingSink) Mints() bool { return provision.CanMint(s.TokenSink) }
+
 func (s *refreshingSink) Record(ctx context.Context, name, value string) error {
 	if err := s.TokenSink.Record(ctx, name, value); err != nil {
 		return err

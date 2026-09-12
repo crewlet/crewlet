@@ -4244,3 +4244,57 @@ func TestTheHookDigestIsNotTheKey(t *testing.T) {
 		t.Errorf("an empty secret digested to %q", got)
 	}
 }
+
+// A SECOND PASS DOES NOT MINT OVER A SIGNING SECRET THIS DEPLOYMENT SEALED.
+//
+// `opts.SigningSecret` comes from the resolver, and the resolver answers from
+// a SNAPSHOT taken at apply time — so the variable a previous pass minted
+// into resolves to nothing until something rebuilds it. Every pass in that
+// window used to mint a SECOND key, seal it over the first and re-point the
+// hook at it, and the engine's own /webhooks/gitlab route verifies with the
+// snapshot: each rotation moved the instance further from the value the
+// running process holds, on the reconcile loop's timer. The seat tokens in
+// this same file have asked the sink first since they hit it; the signing
+// secret never did.
+func TestASecondPassDoesNotMintOverASigningSecretThisDeploymentSealed(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	sink := newRecordingSink()
+	// THE RESOLVER NEVER GAINS THE VALUE, which is the state a node is in
+	// for as long as the snapshot lags the seal.
+	blind := func(o *gitlab.Options) {
+		o.SigningSecret = ""
+		o.SigningSecretVar = "GITLAB_SIGNING_SECRET"
+	}
+
+	if _, err := reconcileWith(t, f, sink,
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"}, blind); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	minted := sink.value("GITLAB_SIGNING_SECRET")
+	if minted == "" {
+		t.Fatal("the premise is wrong: the first pass sealed no signing secret")
+	}
+	f.forget()
+
+	res, err := reconcileWith(t, f, sink,
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"}, blind)
+	if err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if got := sink.value("GITLAB_SIGNING_SECRET"); got != minted {
+		t.Error("the signing secret was rotated by a pass nobody asked to " +
+			"rotate anything, so the instance now signs with a key this " +
+			"deployment does not hold and every delivery is refused")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.hookBodies) != 0 {
+		t.Errorf("the second pass rewrote the hook with %v", f.hookBodies)
+	}
+	for _, note := range res.Notes {
+		if strings.Contains(note, "signing secret") {
+			t.Errorf("a pass that minted nothing reported %q", note)
+		}
+	}
+}

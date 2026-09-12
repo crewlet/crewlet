@@ -85,6 +85,16 @@ type Result struct {
 	Account string
 	Hooks   []HookState
 	Notes   []string
+
+	// NoKeyring is a run that had to mint the value its hooks are
+	// authenticated with and had nowhere to seal one.
+	//
+	// REPORTED, NOT RAISED. Record answers [provision.ErrNoSink] on a sink
+	// that cannot seal, so this pass faulted on every tick for ever over a
+	// deployment that had simply not set secrets.keys — the exact
+	// permanent-fault posture [provision.ReadOnly] exists to remove, and
+	// the posture jira has had since it hit the same wall.
+	NoKeyring bool
 }
 
 // Reconcile runs one pass.
@@ -219,6 +229,13 @@ func reconcileCloud(ctx context.Context, opts Options, base string, res *Result)
 	token, err := cloudToken(ctx, opts, res)
 	if err != nil {
 		return err
+	}
+	if res.NoKeyring {
+		// NOTHING TO AUTHENTICATE WITH, so nothing is registered: a Cloud
+		// hook carries its whole authentication in the URL, and one
+		// registered without it is an open endpoint anybody can drive a
+		// turn through. See [Result.NoKeyring].
+		return nil
 	}
 
 	existing, err := opts.Client.Webhooks(ctx)
@@ -405,6 +422,12 @@ func reconcileDataCenter(ctx context.Context, opts Options, base string, res *Re
 	if err != nil {
 		return err
 	}
+	if res.NoKeyring {
+		// NOTHING TO SIGN WITH, so nothing is registered: the engine's own
+		// route verifies every Data Center delivery against this secret
+		// and refuses one it cannot check. See [Result.NoKeyring].
+		return nil
+	}
 	target := base + "/webhooks/confluence"
 	name := HookName(dataCenterHookEvent)
 	state := HookState{Event: dataCenterHookEvent}
@@ -559,13 +582,28 @@ func mintInto(
 				"or drop -public-url and register the hooks by hand",
 			field, provision.Shape(ref))
 	}
-	if opts.Sink == nil {
-		return "", false, provision.ErrNoSink
+	secret, err := provision.MintSecret(ctx, opts.Sink, variable, opts.Recreate,
+		func() (string, error) { return rand.Text(), nil })
+	if err != nil {
+		return "", false, fmt.Errorf("confluence: %w", err)
 	}
-	value := rand.Text()
-	if err := opts.Sink.Record(ctx, variable, value); err != nil {
-		return "", false, fmt.Errorf("confluence: record %s: %w", variable, err)
+	if secret.NoKeyring {
+		// REPORTED ON THE RESULT, and the caller stops. Returning an
+		// error here is the permanent fault [Result.NoKeyring] exists to
+		// remove, and returning an empty value without saying so would
+		// register a Cloud hook whose URL carries no token — an
+		// unauthenticated endpoint that drives a turn with whatever
+		// arrives at it.
+		res.NoKeyring = true
+		return "", false, nil
 	}
+	if !secret.Minted {
+		// ALREADY SEALED, by a pass whose value the resolver has not
+		// caught up with. Nothing was minted, so the note below would
+		// claim a rotation that did not happen.
+		return secret.Value, false, nil
+	}
+	value := secret.Value
 	// SAID IN THE NOTES, which is the one place a reader looks. There was a
 	// Result.Recorded counter beside this line as well, and it had no reader
 	// anywhere in the tree — printConfluenceHooks renders Deployment,
@@ -637,6 +675,30 @@ func (r *Result) Findings() []integration.Finding {
 		return nil
 	}
 	var out []integration.Finding
+
+	// NOTHING TO AUTHENTICATE A DELIVERY WITH IS AN INGRESS BLOCK, said
+	// against the field that fixes it — and which field that is depends on
+	// the deployment, because the two halves authenticate differently:
+	// Cloud signs nothing at all and the token in the URL is the whole
+	// check, while Data Center signs every delivery against a secret. See
+	// the package doc in setup.go.
+	if r.NoKeyring {
+		field := "integrations.confluence.webhook_secret"
+		if r.Deployment == Cloud {
+			field = "integrations.confluence.webhook_token"
+		}
+		out = append(out, integration.Finding{
+			Kind:    integration.FindingIngressBlocked,
+			Subject: field,
+			Detail: "no webhook was registered because this deployment has " +
+				"nothing to authenticate a delivery with and this node has no " +
+				"keyring to seal a fresh value into: set secrets.keys in the " +
+				"bootstrap configuration so a pass can mint it, or set the " +
+				"variable " + field + " points at and register the hooks on " +
+				"the next pass",
+		})
+	}
+
 	for _, hook := range r.Hooks {
 		if hook.Hooked() {
 			continue

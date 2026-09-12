@@ -532,9 +532,44 @@ type countingSink struct {
 	log *routeLog
 }
 
+// Mints forwards, for the reason engine's refreshingSink does: an embedded
+// interface contributes no method, so a wrapper that does not say this hides
+// a [provision.ReadOnly] inside and is answered CanMint TRUE.
+func (s countingSink) Mints() bool { return provision.CanMint(s.TokenSink) }
+
 func (s countingSink) Record(ctx context.Context, name, value string) error {
 	s.log.wrote("secret store: seal " + name)
 	return s.TokenSink.Record(ctx, name, value)
+}
+
+// sealingSink is a keyring that works, for the one case that has to reach
+// Record: [provision.ReadOnly] answers CanMint false and a pass now REPORTS
+// that rather than minting into it, so a counter wired behind one would never
+// see a seal again.
+type sealingSink struct {
+	provision.TokenSink
+	mu   sync.Mutex
+	held map[string]string
+}
+
+func newSealingSink() *sealingSink {
+	return &sealingSink{TokenSink: provision.ReadOnly(), held: map[string]string{}}
+}
+
+func (s *sealingSink) Mints() bool { return true }
+
+func (s *sealingSink) Record(_ context.Context, name, value string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.held[name] = value
+	return nil
+}
+
+func (s *sealingSink) Value(_ context.Context, name string) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, ok := s.held[name]
+	return v, ok, nil
 }
 
 // ---- the outstanding world -------------------------------------------- //
@@ -909,10 +944,14 @@ func TestTheWriteCounterSeesASecretSealedWhenThereIsOneToSeal(t *testing.T) {
 	// one way into webhookSecret's minting arm that is not an operator
 	// asking for a rotation.
 	opts.Value = func(string) string { return "" }
+	// AND A KEYRING THAT WORKS. The loop's read-only sink now stops the
+	// mint before Record rather than failing at it, which is the whole
+	// point of the posture — so a counter behind one would never see a
+	// seal again and this clause would certify nothing.
+	opts.Sink = countingSink{TokenSink: newSealingSink(), log: &world.routeLog}
 
-	if _, err := github.Reconcile(t.Context(), opts); err == nil {
-		t.Fatal("a pass that minted into provision.ReadOnly reported success; " +
-			"a node with no keyring cannot seal anything")
+	if _, err := github.Reconcile(t.Context(), opts); err != nil {
+		t.Fatalf("Reconcile: %v", err)
 	}
 	want := "secret store: seal " + webhookSecretVar
 	if got := world.writeLog(); !slices.Contains(got, want) {
@@ -920,6 +959,79 @@ func TestTheWriteCounterSeesASecretSealedWhenThereIsOneToSeal(t *testing.T) {
 			"%v, which does not include %q — so the sealed-store arm of the "+
 			"counter is wired to nothing and a pass re-minting on every tick "+
 			"would be certified as converged", got, want)
+	}
+}
+
+// A SECOND PASS DOES NOT MINT OVER A SECRET THIS DEPLOYMENT ALREADY SEALED.
+//
+// The resolver answers from a SNAPSHOT taken at apply time, so the variable a
+// previous pass minted into resolves to nothing until something rebuilds it.
+// Every pass in that window used to mint a SECOND secret, seal it over the
+// first and re-register every hook with it — and the engine's own
+// /webhooks/github route verifies with the snapshot, so each rotation moved
+// GitHub further from the value the running process holds, on the loop's
+// timer.
+func TestASecondPassDoesNotMintOverASecretThisDeploymentAlreadySealed(t *testing.T) {
+	t.Parallel()
+	_, pem := testKey(t)
+	world, opts, _ := newConvergedWorld(t, t, pem, true)
+	sink := newSealingSink()
+	opts.Value = func(string) string { return "" }
+	opts.Sink = countingSink{TokenSink: sink, log: &world.routeLog}
+
+	if _, err := github.Reconcile(t.Context(), opts); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	minted, _, _ := sink.Value(t.Context(), webhookSecretVar)
+	if minted == "" {
+		t.Fatal("the premise is wrong: the first pass sealed nothing")
+	}
+
+	if _, err := github.Reconcile(t.Context(), opts); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if got, _, _ := sink.Value(t.Context(), webhookSecretVar); got != minted {
+		t.Error("the signing secret was rotated by a pass nobody asked to " +
+			"rotate anything, so GitHub now signs with a key this deployment " +
+			"does not hold")
+	}
+}
+
+// AND A NODE WITH NO KEYRING REPORTS RATHER THAN FAULTING.
+//
+// An error here is a fault the loop retries while telling an operator the
+// engine is working on it, which is the one thing that is certainly not
+// happening: no pass will ever seal anything until somebody sets
+// secrets.keys. It is reported against the field that fixes it, which is what
+// the setup screen joins on.
+func TestANodeWithNoKeyringReportsTheFieldThatFixesIt(t *testing.T) {
+	t.Parallel()
+	_, pem := testKey(t)
+	_, opts, _ := newConvergedWorld(t, t, pem, true)
+	opts.Value = func(string) string { return "" }
+
+	res, err := github.Reconcile(t.Context(), opts)
+	if err != nil {
+		t.Fatalf("a node with no keyring faulted: %v", err)
+	}
+	var found bool
+	for _, f := range res.Findings() {
+		if f.Subject == "integrations.github.webhook_secret" {
+			found = true
+			if f.Kind != integration.FindingIngressBlocked {
+				t.Errorf("reported as %s, want ingress_blocked: a webhook "+
+					"secret is not how this engine authenticates AT GitHub",
+					f.Kind)
+			}
+			if !strings.Contains(f.Detail, "secrets.keys") {
+				t.Errorf("the finding does not name the bootstrap field that "+
+					"fixes it:\n%s", f.Detail)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("a pass that could seal nothing reported %v, none of it "+
+			"against the field an operator has to set", res.Findings())
 	}
 }
 

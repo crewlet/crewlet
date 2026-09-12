@@ -262,6 +262,21 @@ type Result struct {
 	// The zero value is "nothing to report", deliberately: a Result built
 	// anywhere but Reconcile must not invent an ingress problem.
 	NoIngress string
+
+	// NoKeyring is a run that had to mint the webhook signing secret and
+	// had nowhere to seal one.
+	//
+	// SEPARATE FROM NoIngress although both end as one ingress finding,
+	// because they name DIFFERENT FIELDS to change and the subject is the
+	// whole value of the report: NoIngress is answered by setting
+	// integrations.public_base_url, and this is answered by setting
+	// secrets.keys or by supplying the secret yourself.
+	//
+	// REPORTED, NOT RAISED. Record answers [provision.ErrNoSink] on a sink
+	// that cannot seal, so this pass faulted on every tick for ever over a
+	// deployment that had simply not set secrets.keys — the exact
+	// permanent-fault posture [provision.ReadOnly] exists to remove.
+	NoKeyring bool
 }
 
 // Routing reports the seats whose inbound events can reach them.
@@ -337,9 +352,10 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	res := &Result{Login: login}
 	res.Seats = resolveSeats(ctx, opts)
 
-	hooks, notes, err := ensureWebhooks(ctx, opts)
-	res.Hooks = hooks
-	res.Notes = append(res.Notes, notes...)
+	in, err := ensureWebhooks(ctx, opts)
+	res.Hooks = in.Hooks
+	res.Notes = append(res.Notes, in.Notes...)
+	res.NoKeyring = in.NoKeyring
 	res.NoIngress = noIngressReason(opts)
 	if err == nil {
 		// AND AGAIN AT THE END, because a pass cancelled halfway does not
@@ -519,6 +535,16 @@ func noIngressReason(opts Options) string {
 		"an address to deliver to and no event reaches this deployment"
 }
 
+// ingress is what one webhook pass concluded. A struct rather than three
+// returns because the third — a node that could not seal a signing secret —
+// is a POSTURE the caller reports rather than an error, and a bare bool
+// beside a slice and an error is the shape nobody reads.
+type ingress struct {
+	Hooks     []HookState
+	Notes     []string
+	NoKeyring bool
+}
+
 // ensureWebhooks registers the inbound hooks, or converges the ones already
 // there.
 //
@@ -529,27 +555,31 @@ func noIngressReason(opts Options) string {
 // routing on day one and routing whenever somebody remembers. It needs
 // `admin:org_hook`, which a fine-grained token cannot carry, so `auto` falls
 // back to per-repository hooks rather than failing.
-func ensureWebhooks(ctx context.Context, opts Options) ([]HookState, []string, error) {
+func ensureWebhooks(ctx context.Context, opts Options) (ingress, error) {
 	target := webhookTarget(opts.WebhookBase)
 	if target == "" {
-		return nil, []string{
+		return ingress{Notes: []string{
 			"no webhook was registered: pass the deployment's public base URL " +
 				"to register one, or add it by hand — without it GitHub " +
 				"delivers nothing and the integration looks idle rather than " +
-				"unconfigured"}, nil
+				"unconfigured"}}, nil
 	}
 	pv := opts.Config.Provisioning
 	if pv == nil {
-		return nil, []string{
+		return ingress{Notes: []string{
 			"no webhook was registered: integrations.github.provisioning is " +
 				"unset, so this run has no organization and no repositories to " +
-				"register one on"}, nil
+				"register one on"}}, nil
 	}
 
-	secret, minted, notes, err := webhookSecret(ctx, opts, target)
+	key, err := webhookSecret(ctx, opts, target)
 	if err != nil {
-		return nil, notes, err
+		return ingress{Notes: key.Notes}, err
 	}
+	if key.NoKeyring {
+		return ingress{Notes: key.Notes, NoKeyring: true}, nil
+	}
+	secret, minted, notes := key.Secret, key.Minted, key.Notes
 
 	mode := config.ContainerWebhookAuto
 	if pv.OrgWebhook != "" {
@@ -572,10 +602,10 @@ func ensureWebhooks(ctx context.Context, opts Options) ([]HookState, []string, e
 					"one organization-level hook on %s covers every repository "+
 						"in it, including ones created later — the repos list "+
 						"was not hooked separately", org))
-				return hooks, notes, nil
+				return ingress{Hooks: hooks, Notes: notes}, nil
 			}
 		case mode == config.ContainerWebhookRequire:
-			return hooks, notes, fmt.Errorf(
+			return ingress{Hooks: hooks, Notes: notes}, fmt.Errorf(
 				"github: org_webhook: true demands one hook on %s and this "+
 					"credential cannot register it (%w) — a classic token needs "+
 					"the admin:org_hook scope, which a fine-grained token cannot "+
@@ -594,12 +624,12 @@ func ensureWebhooks(ctx context.Context, opts Options) ([]HookState, []string, e
 		notes = append(notes, "integrations.github.provisioning.repos is empty, "+
 			"so there is nothing left to hook — name the repositories whose "+
 			"events should reach the engine")
-		return hooks, notes, nil
+		return ingress{Hooks: hooks, Notes: notes}, nil
 	}
 	for _, t := range targets {
 		hooks = append(hooks, ensureRepoWebhook(ctx, opts, t, target, secret, minted))
 	}
-	return hooks, notes, nil
+	return ingress{Hooks: hooks, Notes: notes}, nil
 }
 
 // ensureOrgWebhook converges the organization's hook.
@@ -760,19 +790,46 @@ func ensureRepoWebhook(
 // value behind it: `integrations.github.webhook_secret` is what the edge
 // verifies against, so a per-repository secret would be a key the engine
 // never checks.
-// The bool is whether a FRESH secret was minted on this run, and it is what
-// lets a converged pass leave a working hook alone: GitHub never gives a
-// secret back, so "the hook already points at the right address" is only
-// enough when this run did not change the key it must be signed with.
+//
+// # And "nothing usable" includes what this deployment already sealed
+//
+// Which is [provision.MintSecret]'s whole subject, and the reason it is not
+// written out here: the sink is asked before anything is minted, the read is
+// three-valued, and a node with no keyring reports rather than faults. This
+// pass had none of that — it minted whenever the RESOLVER answered empty, and
+// the resolver answers from a snapshot taken at apply time, so every pass in
+// the window after a mint sealed a second secret over the first and
+// re-registered every hook with it.
+type webhookKey struct {
+	// Secret is the value every hook is registered with. Empty only where
+	// NoKeyring is set or an error was returned: a hook must never be
+	// registered unsigned.
+	Secret string
+
+	// Minted is whether a FRESH secret was minted on this run, and it is
+	// what lets a converged pass leave a working hook alone: GitHub never
+	// gives a secret back, so "the hook already points at the right
+	// address" is only enough when this run did not change the key it must
+	// be signed with.
+	Minted bool
+
+	// NoKeyring is a run that had to mint and had nowhere to seal it. See
+	// [Result.NoKeyring].
+	NoKeyring bool
+
+	// Notes is what to tell the operator about a value this run created.
+	Notes []string
+}
+
 func webhookSecret(
 	ctx context.Context, opts Options, target string,
-) (secret string, minted bool, notes []string, err error) {
+) (webhookKey, error) {
 	var resolved string
 	if opts.Value != nil {
 		resolved = strings.TrimSpace(opts.Value(opts.Config.WebhookSecret))
 	}
 	if resolved != "" && !opts.RecreateWebhooks {
-		return resolved, false, nil, nil
+		return webhookKey{Secret: resolved}, nil
 	}
 	secretVar, ok := provision.SoleVar(opts.Config.WebhookSecret)
 	if !ok {
@@ -781,32 +838,38 @@ func webhookSecret(
 		// slot holding a LITERAL — so the one time the message is
 		// reached, the thing it would print is the credential. The path
 		// is what an operator needs, and the path is what it says.
-		return "", false, nil, fmt.Errorf(
+		return webhookKey{}, fmt.Errorf(
 			"github: integrations.github.webhook_secret holds neither a value "+
 				"this run could resolve nor a whole ${VAR} reference to mint "+
 				"one into — point it at a variable, set that variable, or "+
 				"clear both -public-url and integrations.public_base_url and "+
 				"register %s by hand", target)
 	}
-	if opts.Sink == nil {
-		return "", false, nil, provision.ErrNoSink
-	}
 	// rand.Text is 26 base32 characters over a 128-bit draw. GitHub
 	// accepts any string as a webhook secret and signs with it verbatim,
 	// so the only property that matters is that it is unguessable — there
 	// is no shape to satisfy, unlike the self-hosted host's whsec_ form.
-	fresh := rand.Text()
-	if recordErr := opts.Sink.Record(ctx, secretVar, fresh); recordErr != nil {
-		return "", false, nil, fmt.Errorf("github: record %s: %w", secretVar, recordErr)
+	secret, err := provision.MintSecret(ctx, opts.Sink, secretVar,
+		opts.RecreateWebhooks, func() (string, error) { return rand.Text(), nil })
+	if err != nil {
+		return webhookKey{}, fmt.Errorf("github: %w", err)
 	}
-	note := fmt.Sprintf(
-		"a fresh webhook secret was minted into %s — %s", secretVar,
-		opts.Sink.NextStep())
-	if opts.RecreateWebhooks {
-		note += ". The previous secret is now invalid on every other " +
-			"deployment of this company"
+	key := webhookKey{
+		Secret:    secret.Value,
+		Minted:    secret.Minted,
+		NoKeyring: secret.NoKeyring,
 	}
-	return fresh, true, []string{note}, nil
+	if secret.Minted {
+		note := fmt.Sprintf(
+			"a fresh webhook secret was minted into %s — %s", secretVar,
+			opts.Sink.NextStep())
+		if opts.RecreateWebhooks {
+			note += ". The previous secret is now invalid on every other " +
+				"deployment of this company"
+		}
+		key.Notes = []string{note}
+	}
+	return key, nil
 }
 
 // converged reports a hook that already carries everything this run would
