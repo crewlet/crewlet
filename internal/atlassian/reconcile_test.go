@@ -42,6 +42,11 @@ type stubOrg struct {
 	// Atlassian answers for an account it has only just created: a 404
 	// whose message says the account is not in the directory.
 	inviteNotReady bool
+	// mintRefused makes the token mint answer 403, which is what an
+	// organization key that may invite but may not manage API tokens
+	// gets. It is the state that proved the Granted arm was shadowing
+	// every failure after the grant.
+	mintRefused bool
 
 	minted  int
 	granted int
@@ -99,6 +104,11 @@ func (o *stubOrg) server(t *testing.T) *httptest.Server {
 			}
 			_ = json.NewEncoder(w).Encode(out)
 		case strings.Contains(r.URL.Path, "/manage/api-tokens") && r.Method == http.MethodPost:
+			if o.mintRefused {
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"detail":"this key may not manage API tokens"}`))
+				return
+			}
 			o.minted++
 			_, _ = w.Write([]byte(`{"token":"ATSTT-fresh"}`))
 		default:
@@ -675,5 +685,46 @@ func TestASeatGrantedByAnEarlierPassIsNotReportedAgain(t *testing.T) {
 	}
 	if findings := res.Findings(); len(findings) != 0 {
 		t.Errorf("findings = %+v, want none over a converged seat", findings)
+	}
+}
+
+// A SEAT THAT WAS GRANTED AND THEN FAILED REPORTS THE FAILURE, NOT THE WAIT.
+//
+// reconcileSeat sets Granted and keeps going: the address Record, the
+// token-slot read, the mint and the token Record all follow, and each sets Err
+// without clearing Granted. With the Granted arm ahead of the Err arm in
+// Findings, every one of those four failures came out as grant_pending —
+// PhaseActivating / ActorProvider, "Nothing has to be done; the next pass
+// checks again" — so a seat whose mint was being refused sat there for ever
+// with its error string dropped and nobody named.
+func TestASeatGrantedAndThenRefusedReportsTheFailureRatherThanAWait(t *testing.T) {
+	t.Parallel()
+	o := &stubOrg{tokens: 0, mintRefused: true}
+	s := &sink{}
+
+	res := run(t, o, s)
+
+	if o.granted != 1 {
+		t.Fatalf("granted %d time(s), so this case does not reach the shadowed arm", o.granted)
+	}
+	findings := res.Findings()
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want the one seat reported once", findings)
+	}
+	got := findings[0]
+	if got.Kind != integration.FindingIdentityFailed {
+		t.Fatalf("kind = %q, want %q: a refused mint is a failure, and %q tells "+
+			"an operator nobody has to act",
+			got.Kind, integration.FindingIdentityFailed, integration.FindingGrantPending)
+	}
+	// AND THE THIRD-PARTY APP'S OWN WORDS SURVIVE. The grant_pending
+	// sentence is this engine's prose; the reason a seat has no credential
+	// is Atlassian's, and dropping it leaves nothing to act on.
+	if !strings.Contains(got.Detail, "may not manage API tokens") {
+		t.Errorf("detail = %q, want the vendor's refusal in it", got.Detail)
+	}
+	// AND THE VERDICT IS THE ONE THAT NAMES SOMEBODY.
+	if phase, actor := got.Kind.Verdict(); actor != integration.ActorAdmin {
+		t.Errorf("classified %s/%s, want an admin owed it", phase, actor)
 	}
 }

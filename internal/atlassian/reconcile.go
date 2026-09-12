@@ -588,6 +588,29 @@ func (r *Result) Findings() []integration.Finding {
 	}
 	for _, seat := range r.Seats {
 		switch {
+		case seat.Err != nil:
+			// A FAILURE OUTRANKS EVERY WAIT, and it has to be FIRST.
+			//
+			// [reconcileSeat] sets Granted and then keeps going — the
+			// address Record, the token-slot read, the mint and the token
+			// Record all follow it, and each sets Err without clearing
+			// Granted. With the Granted arm ahead of this one, all four of
+			// those failures were reported as [integration.FindingGrantPending]
+			// — PhaseActivating / ActorProvider, the one classification that
+			// tells an operator NOBODY has to act — under the sentence
+			// "Nothing has to be done; the next pass checks again". A seat
+			// whose mint is being refused therefore sat there for ever, with
+			// its error string dropped, while the card said the provider was
+			// working on it.
+			//
+			// NotReady is safe either way because it returns immediately,
+			// and AccountID == "" is the create that failed, whose Err is
+			// the better sentence. So the ordering rule is simply: what
+			// went wrong beats what is being waited for.
+			out = append(out, integration.Finding{
+				Kind: integration.FindingIdentityFailed, Subject: seat.Handle,
+				Detail: seat.Err.Error(),
+			})
 		case seat.Granted:
 			// THE GRANT LANDED AND ATLASSIAN HAS NOT APPLIED IT YET, which
 			// is a provider's wait and not a finished seat.
@@ -616,11 +639,6 @@ func (r *Result) Findings() []integration.Finding {
 				Kind: integration.FindingGrantPending, Subject: seat.Handle,
 				Detail: seat.Handle + " has its Atlassian account and is waiting " +
 					"for Atlassian to make it grantable, which the next pass does",
-			})
-		case seat.Err != nil:
-			out = append(out, integration.Finding{
-				Kind: integration.FindingIdentityFailed, Subject: seat.Handle,
-				Detail: seat.Err.Error(),
 			})
 		case seat.AccountID == "":
 			out = append(out, integration.Finding{
