@@ -130,8 +130,15 @@ func TestCustomFieldsAreCollectedInAStableOrder(t *testing.T) {
 	if q.Fields[0].Ref != "area" || q.Fields[1].Ref != "severity" {
 		t.Fatalf("the field filters are not in a stable order: %+v", q.Fields)
 	}
-	if q.Fields[0].Op != "eq" || q.Fields[0].Value != "platform" {
-		t.Errorf("a bare value did not default to eq: %+v", q.Fields[0])
+	// A BARE VALUE CARRIES NO OPERATOR AT ALL, and it must not be given
+	// one here: what "no operator" means is a property of the field's
+	// TYPE — on a `labels` it is `any`, on a `text` it is `eq` — and this
+	// parser has not read the catalogue and cannot know which it is.
+	// Defaulted to `eq` here, every bare filter on a set field became a
+	// comparison the type does not admit.
+	if q.Fields[0].Op != "" || q.Fields[0].Value != "platform" {
+		t.Errorf("a bare value was given an operator by the parser: %+v",
+			q.Fields[0])
 	}
 	if q.Fields[1].Op != "any" || q.Fields[1].Value != "s1,s2" {
 		t.Errorf("an explicit op did not survive: %+v", q.Fields[1])

@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/statelog"
+
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -31,7 +33,7 @@ func TestASavedViewIsDefaultsTheCallerCanOverride(t *testing.T) {
 
 	q, err := r.reader.ExpandedQuery(t.Context(),
 		map[string]any{"container": "project:ENG", "view": "v-mine"},
-		"", wednesday, berlin)
+		tracker.Viewer{}, wednesday, berlin)
 	if err != nil {
 		t.Fatalf("ExpandedQuery: %v", err)
 	}
@@ -49,7 +51,7 @@ func TestASavedViewIsDefaultsTheCallerCanOverride(t *testing.T) {
 	// assignee gets the view with that one key changed.
 	q, err = r.reader.ExpandedQuery(t.Context(), map[string]any{
 		"container": "project:ENG", "view": "v-mine", "assignee": "bob",
-	}, "", wednesday, berlin)
+	}, tracker.Viewer{}, wednesday, berlin)
 	if err != nil {
 		t.Fatalf("ExpandedQuery: %v", err)
 	}
@@ -67,16 +69,41 @@ func TestAPresetExpandsToTheQuestionItNames(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 
-	// MY QUEUE NEEDS A VIEWER, and the surface supplies it.
+	// MY QUEUE NEEDS A VIEWER, and the surface supplies it — with the
+	// viewer's own PROJECT, because the preset asks two things about the
+	// reader rather than one.
 	q, err := r.reader.ExpandedQuery(t.Context(),
 		map[string]any{"container": "project:ENG", "preset": "my_queue"},
-		"ana", wednesday, berlin)
+		tracker.Viewer{Handle: "ana", Project: "ENG"}, wednesday, berlin)
 	if err != nil {
 		t.Fatalf("ExpandedQuery: %v", err)
 	}
-	if len(q.Assignee) != 1 || q.Assignee[0] != "ana" {
-		t.Fatalf("my_queue resolved to %v, want the viewer's own name",
-			q.Assignee)
+	// "WHAT CAN I PICK UP" IS A DISJUNCTION, and both arms matter: the
+	// work this person HOLDS, and the work in their own project that
+	// NOBODY holds. Written as `assignee=me` alone it answered only the
+	// first, so a seat with an empty queue read the company as having
+	// nothing for it while its project's unclaimed backlog sat there.
+	if len(q.Any) != 2 {
+		t.Fatalf("my_queue expanded to %d branches, want two — mine, and the "+
+			"unclaimed work in my own project", len(q.Any))
+	}
+	mine, unclaimed := q.Any[0], q.Any[1]
+	if len(mine.Assignee) != 1 || mine.Assignee[0] != "ana" {
+		t.Fatalf("the first branch is %v, want the viewer's own name",
+			mine.Assignee)
+	}
+	if len(unclaimed.Assignee) != 1 || unclaimed.Assignee[0] != "none" ||
+		unclaimed.Scope.Project != "ENG" {
+		t.Fatalf("the second branch is assignee=%v in %q, want the unassigned "+
+			"work in the viewer's OWN project — unscoped it offers every "+
+			"unclaimed task in the company",
+			unclaimed.Assignee, unclaimed.Scope.Project)
+	}
+	// AND BLOCKED WORK IS NOT SOMETHING TO PICK UP: it is
+	// `preset=blocked`'s answer, and leaving it here would make the two
+	// presets return the same rows for the wrong reason.
+	if q.Blocked == nil || *q.Blocked {
+		t.Fatalf("my_queue's blocked filter is %v, want false", q.Blocked)
 	}
 	if len(q.StatusGroups) != 2 {
 		t.Fatalf("my_queue's groups are %v, want the two open ones",
@@ -91,12 +118,12 @@ func TestAPresetExpandsToTheQuestionItNames(t *testing.T) {
 	// A QUEUE WITH NOBODY'S NAME ON IT IS EVERY OPEN TASK, which is the
 	// widest possible reading of "mine" — so it is refused.
 	if _, err := r.reader.ExpandedQuery(t.Context(),
-		map[string]any{"preset": "my_queue"}, "", wednesday, berlin); err == nil {
+		map[string]any{"preset": "my_queue"}, tracker.Viewer{}, wednesday, berlin); err == nil {
 		t.Fatal("my_queue was answered for nobody")
 	}
 
 	blocked, err := r.reader.ExpandedQuery(t.Context(),
-		map[string]any{"preset": "blocked"}, "ana", wednesday, berlin)
+		map[string]any{"preset": "blocked"}, tracker.Viewer{Handle: "ana"}, wednesday, berlin)
 	if err != nil {
 		t.Fatalf("ExpandedQuery: %v", err)
 	}
@@ -108,7 +135,7 @@ func TestAPresetExpandsToTheQuestionItNames(t *testing.T) {
 	// its own open condition, and writing it again would be two spellings
 	// of one question that drift apart.
 	overdue, err := r.reader.ExpandedQuery(t.Context(),
-		map[string]any{"preset": "overdue"}, "ana", wednesday, berlin)
+		map[string]any{"preset": "overdue"}, tracker.Viewer{Handle: "ana"}, wednesday, berlin)
 	if err != nil {
 		t.Fatalf("ExpandedQuery: %v", err)
 	}
@@ -117,7 +144,7 @@ func TestAPresetExpandsToTheQuestionItNames(t *testing.T) {
 	}
 
 	if _, err := r.reader.ExpandedQuery(t.Context(),
-		map[string]any{"preset": "whatever"}, "ana", wednesday, berlin); err == nil {
+		map[string]any{"preset": "whatever"}, tracker.Viewer{Handle: "ana"}, wednesday, berlin); err == nil {
 		t.Fatal("a preset that is not one was expanded")
 	}
 }
@@ -143,7 +170,7 @@ func TestAViewBeatsAPresetAndTheCallerBeatsBoth(t *testing.T) {
 
 	q, err := r.reader.ExpandedQuery(t.Context(), map[string]any{
 		"container": "project:ENG", "preset": "my_queue", "view": "v-1",
-	}, "ana", wednesday, berlin)
+	}, tracker.Viewer{Handle: "ana"}, wednesday, berlin)
 	if err != nil {
 		t.Fatalf("ExpandedQuery: %v", err)
 	}
@@ -161,7 +188,7 @@ func TestAViewBeatsAPresetAndTheCallerBeatsBoth(t *testing.T) {
 	explicit, err := r.reader.ExpandedQuery(t.Context(), map[string]any{
 		"container": "project:ENG", "preset": "my_queue", "view": "v-1",
 		"assignee": "cleo",
-	}, "ana", wednesday, berlin)
+	}, tracker.Viewer{Handle: "ana"}, wednesday, berlin)
 	if err != nil {
 		t.Fatalf("ExpandedQuery: %v", err)
 	}
@@ -204,7 +231,7 @@ func TestAMissingViewIsRefusedRatherThanIgnored(t *testing.T) {
 
 	_, err := r.reader.ExpandedQuery(t.Context(),
 		map[string]any{"container": "project:ENG", "view": "v-gone"},
-		"", wednesday, berlin)
+		tracker.Viewer{}, wednesday, berlin)
 	if err == nil {
 		t.Fatal("a view nobody saved expanded to nothing and answered the " +
 			"whole board")
@@ -238,7 +265,7 @@ func TestAnAnswerSaysWhatItWasExpandedFrom(t *testing.T) {
 
 	q, err := r.reader.ExpandedQuery(t.Context(), map[string]any{
 		"container": "project:ENG", "view": "v-1", "preset": "blocked",
-	}, "ana", wednesday, berlin)
+	}, tracker.Viewer{Handle: "ana"}, wednesday, berlin)
 	if err != nil {
 		t.Fatalf("ExpandedQuery: %v", err)
 	}
@@ -261,5 +288,81 @@ func TestAnAnswerSaysWhatItWasExpandedFrom(t *testing.T) {
 	if plain.View != "" || plain.Preset != "" {
 		t.Fatalf("an ordinary answer claims view %q and preset %q",
 			plain.View, plain.Preset)
+	}
+}
+
+// THE TWO LISTS A PERSON HAS that the rows alone cannot express.
+//
+// `priorities` is the ORDER somebody arranged, which lives on their own
+// object and has no column to sort by; `triage` is the work nobody has picked
+// up, which with one fixed status set is the only honest definition of
+// "needs somebody to decide" — a company cannot declare an intake status.
+func TestThePersonalPresets(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, id := range []string{"a", "b", "c"} {
+		inSprint(t, r, id, nil)
+	}
+	mine := newTask("mine")
+	mine.Assignee = "ana"
+	if _, err := r.writer.CreateTask(t.Context(), "op-mine", mine, nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+	// DELIBERATELY NOT ALPHABETICAL and not creation order, so an answer
+	// sorted by either is visibly wrong.
+	if _, err := r.writer.WritePriorities(t.Context(), "op-prio", "ana",
+		[]string{"c", "a"}, tracker.PersonAuthority{}); err != nil {
+		t.Fatalf("WritePriorities: %v", err)
+	}
+	r.drain()
+
+	q, err := r.reader.ExpandedQuery(t.Context(),
+		map[string]any{"container": "project:ENG", "preset": "priorities"},
+		tracker.Viewer{Handle: "ana", Project: "ENG"}, wednesday, berlin)
+	if err != nil {
+		t.Fatalf("ExpandedQuery: %v", err)
+	}
+	q.Level = statelog.ReadStale
+	answer, err := r.reader.Tasks(t.Context(), q, wednesday)
+	if err != nil {
+		t.Fatalf("Tasks: %v", err)
+	}
+	got := ids(answer)
+	if len(got) != 2 || got[0] != "c" || got[1] != "a" {
+		t.Fatalf("preset=priorities answers %v, want [c a] — the order of the "+
+			"list IS the answer, and there is no column to sort by", got)
+	}
+
+	// TRIAGE IS THE UNASSIGNED OPEN WORK, so the one task somebody holds
+	// is out of it.
+	triage, err := r.reader.ExpandedQuery(t.Context(),
+		map[string]any{"container": "project:ENG", "preset": "triage"},
+		tracker.Viewer{Handle: "ana", Project: "ENG"}, wednesday, berlin)
+	if err != nil {
+		t.Fatalf("ExpandedQuery: %v", err)
+	}
+	triage.Level = statelog.ReadStale
+	unclaimed, err := r.reader.Tasks(t.Context(), triage, wednesday)
+	if err != nil {
+		t.Fatalf("Tasks: %v", err)
+	}
+	for _, row := range unclaimed.Rows {
+		if row.Assignee != "" {
+			t.Errorf("preset=triage answered %s, which %s holds — triage is "+
+				"what nobody has picked up", row.ID, row.Assignee)
+		}
+	}
+	if len(unclaimed.Rows) != 3 {
+		t.Fatalf("preset=triage answers %d tasks, want the three nobody holds",
+			len(unclaimed.Rows))
+	}
+
+	// AND `priorities` NEEDS A VIEWER, exactly as `my_queue` does: a list
+	// with nobody's name on it is nobody's list.
+	if _, err := r.reader.ExpandedQuery(t.Context(),
+		map[string]any{"preset": "priorities"}, tracker.Viewer{},
+		wednesday, berlin); err == nil {
+		t.Error("preset=priorities was answered for nobody")
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -75,12 +76,97 @@ const (
 	FieldOpContains = "contains"
 	FieldOpNull     = "null"
 	FieldOpNotNull  = "not_null"
+
+	// The SET operators, which are what a multi-valued field is actually
+	// asked about. A `labels` field holds several options at once, so
+	// `eq` against it is a question with no useful answer: it matches a
+	// task whose field holds that option AND, because the value is one
+	// row per option, says nothing about the others.
+	FieldOpAny    = "any"
+	FieldOpAll    = "all"
+	FieldOpNotAny = "not_any"
+	FieldOpNotAll = "not_all"
+
+	// FieldOpIn is `any` over a SINGLE-valued text column. Spelled
+	// separately because the two read differently on the surface they
+	// apply to: "the status text is one of these" and "this label set
+	// contains one of these" are not the same question, and one grammar
+	// word for both would make a caller guess which they were asking.
+	FieldOpIn = "in"
+
+	// FieldOpStartsWith is the prefix comparison, which `contains` cannot
+	// express and an index could serve where `contains` never can.
+	FieldOpStartsWith = "startswith"
+
+	// FieldOpRange is the closed interval, written `from..to`. Two bounds
+	// in one filter rather than a `gte` and an `lte` a caller has to pair
+	// up — and the pairing is what they get wrong.
+	FieldOpRange = "range"
+
+	// FieldOpMe is the viewer, on a `people` field. It takes no value at
+	// all: a query that named a handle would be a query somebody saved
+	// and everybody else read as that person's.
+	FieldOpMe = "me"
 )
 
-// FieldOps are the nine.
+// FieldOps are the seventeen.
 var FieldOps = []string{
 	FieldOpEq, FieldOpNe, FieldOpLt, FieldOpLte, FieldOpGt, FieldOpGte,
-	FieldOpContains, FieldOpNull, FieldOpNotNull,
+	FieldOpContains, FieldOpStartsWith, FieldOpIn, FieldOpRange,
+	FieldOpAny, FieldOpAll, FieldOpNotAny, FieldOpNotAll,
+	FieldOpMe, FieldOpNull, FieldOpNotNull,
+}
+
+// fieldOpsFor is which operators a field TYPE admits.
+//
+// PER TYPE, because an operator that does not apply is not a narrower answer
+// — it is a clause that matches nothing and reads as "no task has this". A
+// caller comparing a `labels` field with `eq` gets a board that looks empty
+// rather than a refusal naming `any`.
+//
+// `null` and `not_null` are on every type and are not listed: "is this set"
+// is a question about the ROW rather than about the value, so it means the
+// same thing whatever the column holds.
+func fieldOpsFor(t FieldType) []string {
+	switch t {
+	case FieldText, FieldURL, FieldEmail:
+		return []string{FieldOpEq, FieldOpNe, FieldOpContains,
+			FieldOpStartsWith, FieldOpIn}
+	case FieldTextarea:
+		// NO EQUALITY ON A 16 KiB BODY. Matching one exactly means
+		// pasting it into the query, which nobody does — and the
+		// comparison would be over a column the value table truncates.
+		return []string{FieldOpContains, FieldOpStartsWith}
+	case FieldNumber, FieldProgress:
+		return []string{FieldOpEq, FieldOpNe, FieldOpLt, FieldOpLte,
+			FieldOpGt, FieldOpGte, FieldOpRange}
+	case FieldDate:
+		// NO `ne` ON A DATE. An instant is stored to the microsecond,
+		// so "not this instant" is true of everything and reads as a
+		// filter that did nothing.
+		return []string{FieldOpEq, FieldOpLt, FieldOpLte, FieldOpGt,
+			FieldOpGte, FieldOpRange}
+	case FieldDropdown:
+		return []string{FieldOpEq, FieldOpNe, FieldOpAny, FieldOpNotAny}
+	case FieldLabels:
+		// NO `eq` ON A SET. The value is one row per option, so an
+		// equality would ask whether the set contains one option while
+		// looking like it asked whether the set IS that option.
+		return []string{FieldOpAny, FieldOpAll, FieldOpNotAny, FieldOpNotAll}
+	case FieldCheckbox:
+		return []string{FieldOpEq}
+	case FieldRelationship:
+		return []string{FieldOpAny, FieldOpAll, FieldOpNotAny}
+	case FieldPeople:
+		return []string{FieldOpAny, FieldOpAll, FieldOpNotAny, FieldOpMe}
+	case FieldRollup:
+		// A ROLLUP IS A POST-FILTER over a correlated aggregate — it
+		// has no row in the value table at all — so the comparison is
+		// applied after the rows are read and only the ordered ones
+		// mean anything.
+		return []string{FieldOpLt, FieldOpGt, FieldOpRange}
+	}
+	return FieldOps
 }
 
 // resolveFields reads the declarations every `f.<ref>` in a query names.
@@ -254,6 +340,16 @@ func fieldClause(filter FieldFilter, field resolvedField) (string, []any, error)
 			"WHERE v.field_id = ? AND " + liveFieldValue + " AND " +
 			predicate + ")", append([]any{field.ID}, args...), nil
 	}
+	if err := checkFieldOp(filter.Op, field); err != nil {
+		return "", nil, err
+	}
+	if filter.Op == "" {
+		// RESOLVED ONCE, HERE, so every arm below reads one operator
+		// rather than each remembering that an empty one is a value the
+		// type decides — which is how the set arms would have been
+		// skipped for the bare form and answered as an equality.
+		filter.Op = defaultFieldOp(field.Type)
+	}
 	switch filter.Op {
 	case FieldOpNull:
 		// UNSET IS THE ABSENCE OF A ROW, not a row holding nothing: the
@@ -268,12 +364,73 @@ func fieldClause(filter FieldFilter, field resolvedField) (string, []any, error)
 		return inner(column + " IS NOT NULL")
 	}
 
+	// THE SET OPERATORS TAKE A LIST and are compiled before the single
+	// value is parsed, because there is no single value to parse: their
+	// argument is a comma-separated set and each member resolves on its
+	// own.
+	switch filter.Op {
+	case FieldOpAny, FieldOpNotAny, FieldOpIn:
+		values, err := fieldValueSet(filter, field)
+		if err != nil {
+			return "", nil, err
+		}
+		clause, args, err := inner(column+" IN ("+placeholders(len(values))+")",
+			values...)
+		if err != nil || filter.Op != FieldOpNotAny {
+			return clause, args, err
+		}
+		// NOT_ANY IS "NO ROW IS ONE OF THESE", never "some row is not
+		// one of these": a labels field holding two options satisfies
+		// the second for every option it holds beside the excluded one,
+		// so the negation has to be of the whole membership.
+		return negated(clause), args, nil
+	case FieldOpAll, FieldOpNotAll:
+		values, err := fieldValueSet(filter, field)
+		if err != nil {
+			return "", nil, err
+		}
+		// ALL IS A COUNT, not an intersection: one subquery counting the
+		// DISTINCT members a task holds from the set, compared against
+		// the size of the set. Written as N chained IN clauses it would
+		// be N subqueries over one index for a question one answers.
+		clause, args, err := inner(column+" IN ("+placeholders(len(values))+")",
+			values...)
+		if err != nil {
+			return "", nil, err
+		}
+		all := strings.Replace(clause, "SELECT v.task_id", "SELECT v.task_id", 1)
+		all = strings.TrimSuffix(all, ")") +
+			" GROUP BY v.task_id HAVING COUNT(DISTINCT " + column + ") = ?)"
+		args = append(args, len(values))
+		if filter.Op == FieldOpNotAll {
+			return negated(all), args, nil
+		}
+		return all, args, nil
+	case FieldOpRange:
+		from, to, err := fieldValueRange(filter, field)
+		if err != nil {
+			return "", nil, err
+		}
+		return inner(column+" >= ? AND "+column+" <= ?", from, to)
+	case FieldOpMe:
+		// A VIEWER IS RESOLVED BY THE SURFACE from its own credential,
+		// before the query is parsed — see [Reader.Expand], which is
+		// also where `preset=my_queue` resolves the same word. One
+		// reaching here is a surface that read without expanding, and
+		// answering it as a literal would match the tasks whose people
+		// field holds a person called "me".
+		return "", nil, fmt.Errorf("tracker: `f.%s=me` reached the reader "+
+			"unresolved — a surface resolves the viewer from its own "+
+			"credential before it reads, which is what makes a saved view "+
+			"mean the reader rather than whoever saved it", field.Slug)
+	}
+
 	value, err := fieldValueArg(filter, field)
 	if err != nil {
 		return "", nil, err
 	}
 	switch filter.Op {
-	case "", FieldOpEq:
+	case FieldOpEq:
 		return inner(column+" = ?", value)
 	case FieldOpNe:
 		// NOT EQUAL IS "NO ROW EQUALS IT", never "some row differs":
@@ -290,18 +447,19 @@ func fieldClause(filter FieldFilter, field resolvedField) (string, []any, error)
 	case FieldOpGte:
 		return inner(column+" >= ?", value)
 	case FieldOpContains:
-		if FieldValueColumn(field.Type) != "text" {
-			return "", nil, fmt.Errorf("tracker: f.%s is a %s and `contains` "+
-				"is a text comparison — use eq, or one of lt, lte, gt and gte",
-				field.Slug, field.Type)
-		}
 		// LIKE WITH THE VALUE BOUND and the wildcards composed here, so
 		// a caller's own `%` is escaped rather than becoming a pattern.
 		return inner(column+` LIKE ? ESCAPE '\'`,
 			"%"+likeEscape(fmt.Sprint(value))+"%")
+	case FieldOpStartsWith:
+		// ONE TRAILING WILDCARD, which is the whole difference from
+		// `contains`: a prefix is a RANGE over the column and an index
+		// can serve it, where a leading `%` can only be scanned.
+		return inner(column+` LIKE ? ESCAPE '\'`,
+			likeEscape(fmt.Sprint(value))+"%")
 	}
 	return "", nil, fmt.Errorf("tracker: %q is not a field comparison — the "+
-		"nine are %s", filter.Op, strings.Join(FieldOps, ", "))
+		"seventeen are %s", filter.Op, strings.Join(FieldOps, ", "))
 }
 
 // fieldValueArg turns the caller's text into the column's own type.
@@ -372,3 +530,107 @@ func clipValue(value string) string {
 func negated(clause string) string {
 	return strings.Replace(clause, "t.id IN (", "t.id NOT IN (", 1)
 }
+
+// checkFieldOp refuses an operator the field's TYPE does not admit.
+//
+// NAMING WHAT IT DOES ADMIT, because the failure this replaces is silent: a
+// `labels` field compared with `eq` produced a clause that matched nothing,
+// and a board that came back empty reads as "no task has this label" rather
+// than as "that is not a question you can ask of a set".
+func checkFieldOp(op string, field resolvedField) error {
+	// "IS IT SET" IS A QUESTION ABOUT THE ROW rather than about the value,
+	// so it means the same thing on every type.
+	if op == FieldOpNull || op == FieldOpNotNull {
+		return nil
+	}
+	if op == "" {
+		op = defaultFieldOp(field.Type)
+	}
+	allowed := fieldOpsFor(field.Type)
+	if slices.Contains(allowed, op) {
+		return nil
+	}
+	if !slices.Contains(FieldOps, op) {
+		return fmt.Errorf("tracker: %q is not a field comparison — the "+
+			"seventeen are %s", op, strings.Join(FieldOps, ", "))
+	}
+	return fmt.Errorf("tracker: f.%s is a %s, and %q is not a comparison it "+
+		"admits — a %s takes %s, plus null and not_null",
+		field.Slug, field.Type, op, field.Type, strings.Join(allowed, ", "))
+}
+
+// defaultFieldOp is what a bare `f.<slug>=<value>` means.
+//
+// THE TYPE'S NATURAL COMPARISON, not equality everywhere: a caller writing
+// `f.areas=api` is naming a value, not claiming the set IS that value — so on
+// a multi-valued field the bare form is `any`, which is what they meant. An
+// EXPLICIT `eq:` on one is still refused, because that one is a claim.
+func defaultFieldOp(t FieldType) string {
+	switch t {
+	case FieldLabels, FieldRelationship, FieldPeople:
+		return FieldOpAny
+	}
+	return FieldOpEq
+}
+
+// fieldValueSet parses a set operator's comma-separated argument.
+//
+// EACH MEMBER RESOLVES ON ITS OWN, through the same three-tier rule one value
+// takes: a caller writing `f.areas=any:api,UI` means two options, and one of
+// them is spelled by its name.
+func fieldValueSet(filter FieldFilter, field resolvedField) ([]any, error) {
+	members := csv(filter.Value)
+	if len(members) == 0 {
+		return nil, fmt.Errorf("tracker: `f.%s=%s:` names no values — a set "+
+			"comparison with nothing in it matches nothing and reads as a "+
+			"field nobody has set", field.Slug, filter.Op)
+	}
+	if len(members) > MaxFieldSetMembers {
+		return nil, fmt.Errorf("tracker: `f.%s=%s:` names %d values and at "+
+			"most %d are compared at once — an N-way OR across one index is "+
+			"the shape the planner handles worst",
+			field.Slug, filter.Op, len(members), MaxFieldSetMembers)
+	}
+	out := make([]any, 0, len(members))
+	for _, member := range members {
+		value, err := fieldValueArg(FieldFilter{Value: member}, field)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, value)
+	}
+	return out, nil
+}
+
+// fieldValueRange parses `from..to`.
+//
+// TWO BOUNDS IN ONE FILTER rather than a `gte` and an `lte` a caller pairs up
+// themselves — and the pairing is what they get wrong: `gte` alone on a date
+// field is the single most common way to ask for "this quarter" and get
+// everything since it.
+func fieldValueRange(filter FieldFilter, field resolvedField) (any, any, error) {
+	from, to, found := strings.Cut(filter.Value, "..")
+	if !found {
+		return nil, nil, fmt.Errorf("tracker: `f.%s=range:` is written "+
+			"`<from>..<to>` — both ends, because a range with one is `gte` "+
+			"or `lte`", field.Slug)
+	}
+	low, err := fieldValueArg(FieldFilter{Value: strings.TrimSpace(from)}, field)
+	if err != nil {
+		return nil, nil, err
+	}
+	high, err := fieldValueArg(FieldFilter{Value: strings.TrimSpace(to)}, field)
+	if err != nil {
+		return nil, nil, err
+	}
+	return low, high, nil
+}
+
+// MaxFieldSetMembers bounds a set comparison.
+//
+// SIXTEEN, which is [MaxAnyBranches] doubled: a set operator compiles to ONE
+// `IN` over one index rather than to an N-way OR across several, so it is
+// cheaper per member than a disjunction — but it is still a list the planner
+// expands, and a label filter naming more than sixteen options is a filter
+// nobody typed.
+const MaxFieldSetMembers = 16

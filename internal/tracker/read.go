@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -255,6 +256,17 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 		if err != nil {
 			return err
 		}
+		// AND THE PRIORITY LIST, inside the same transaction and for the
+		// same reason: it lives on another object, so a parser that read
+		// it would be a parser that could fail on a store — and a list
+		// read outside this snapshot could name a task the rows below
+		// were never filtered against.
+		if q.PriorityListOf != "" {
+			q.PriorityList, err = readPriorityList(ctx, tx, q.PriorityListOf)
+			if err != nil {
+				return err
+			}
+		}
 		where, args, err := compile(q, now, fields)
 		if err != nil {
 			return err
@@ -291,7 +303,7 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 			if err != nil {
 				return err
 			}
-			answer.Rows, answer.NextCursor = rows, cursor
+			answer.Rows, answer.NextCursor = orderByList(rows, q), cursor
 		}
 
 		hint, err := countHint(ctx, tx, where, args)
@@ -421,6 +433,17 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 
 	if len(q.Keys) > 0 {
 		add("t.key IN ("+placeholders(len(q.Keys))+")", anyOf(q.Keys)...)
+	}
+	if q.PriorityListOf != "" {
+		if len(q.PriorityList) == 0 {
+			// AN EMPTY LIST IS AN EMPTY ANSWER, stated rather than
+			// omitted: dropping the clause would answer every task in
+			// scope as though it were on somebody's list.
+			add("0")
+		} else {
+			add("t.id IN ("+placeholders(len(q.PriorityList))+")",
+				anyOf(q.PriorityList)...)
+		}
 	}
 
 	if len(q.Status) > 0 {
@@ -1606,4 +1629,56 @@ func placeholders(n int) string {
 		return ""
 	}
 	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
+}
+
+// readPriorityList reads one person's stored order.
+//
+// A MISSING PERSON IS AN EMPTY LIST, not an error: everybody starts without a
+// row, so "no row" is the ordinary state of every human on their first day and
+// every seat for ever — and refusing would make a turn-start read fail on a
+// seat that had simply never been given a priority.
+func readPriorityList(ctx context.Context, tx *sql.Tx, handle string) ([]string, error) {
+	person, held, err := readPerson(ctx, tx, handle)
+	if err != nil {
+		return nil, err
+	}
+	if !held {
+		return nil, nil
+	}
+	return person.Priorities, nil
+}
+
+// orderByList restores a stored order SQL cannot express.
+//
+// THE ORDER IS THE CONTENT of a priority list — it is what somebody decided —
+// and there is no column to sort by: the sequence lives in a JSON array on
+// another object, and a keyset cursor over a CASE expression built from it
+// would be a page boundary that changed every time the list was reordered.
+// The list is bounded at [MaxPriorities], so this is a re-order of at most
+// thirty-two rows.
+//
+// A ROW THE LIST DOES NOT NAME KEEPS ITS PLACE at the end, because a caller
+// that combined `priorities=` with another filter still asked for those rows.
+func orderByList(rows []TaskRow, q Query) []TaskRow {
+	if q.PriorityListOf == "" || len(q.PriorityList) == 0 || len(rows) == 0 {
+		return rows
+	}
+	at := make(map[string]int, len(q.PriorityList))
+	for i, id := range q.PriorityList {
+		at[id] = i
+	}
+	slices.SortStableFunc(rows, func(a, b TaskRow) int {
+		x, inA := at[a.ID]
+		y, inB := at[b.ID]
+		switch {
+		case inA && inB:
+			return x - y
+		case inA:
+			return -1
+		case inB:
+			return 1
+		}
+		return 0
+	})
+	return rows
 }

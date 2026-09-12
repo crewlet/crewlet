@@ -203,6 +203,19 @@ type Query struct {
 	Types      []string
 	Priorities []Priority
 
+	// PriorityListOf is whose stored priority list to narrow to — the
+	// ordered ids on a Person, not the priority ENUM above. Two keys with
+	// nearly one name because that is the surface's own vocabulary:
+	// `Person.Priorities` and `update_priorities` are what a person calls
+	// their list, and renaming it here would leave one word meaning two
+	// things across the API.
+	PriorityListOf string
+
+	// PriorityList is that list, RESOLVED — filled inside the read's own
+	// transaction, because it lives on another object and a parser that
+	// read it would be a parser that could fail on a store.
+	PriorityList []string
+
 	Parent   string
 	Root     string
 	Subtasks SubtaskMode
@@ -374,7 +387,8 @@ var QueryKeys = []string{
 	"group_limit", "has_children", "has_dependencies", "has_open_asks",
 	"has_parent", "key", "limit", "linked_page",
 	"max_lag_seconds", "max_lag_seq", "parent", "points", "preset",
-	"priority", "q", "read_level", "references", "removed", "reporter",
+	"priorities", "priority", "q", "read_level", "references", "removed",
+	"reporter",
 	"root", "routing_unit", "show_closed", "sort", "spend", "sprint",
 	"start", "status", "status_entered", "status_group", "subgroup",
 	"subtasks", "tag", "totals", "type", "unit", "updated", "view",
@@ -447,9 +461,11 @@ func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
 		Goal:       p.String("goal"),
 		Batch:      p.String("batch"),
 		AskedOf:    p.String("asked_of"),
-		AskedBy:    p.String("asked_by"),
-		Parent:     p.String("parent"),
-		Root:       p.String("root"),
+		// THE LIST, not the enum. See [Query.PriorityListOf].
+		PriorityListOf: strings.TrimSpace(p.String("priorities")),
+		AskedBy:        p.String("asked_by"),
+		Parent:         p.String("parent"),
+		Root:           p.String("root"),
 	}
 
 	if err := q.parseScope(p); err != nil {
@@ -734,13 +750,34 @@ func (q *Query) parseFields(p Params) {
 		// refuses it, and against a text one, which silently matches the
 		// tasks whose field literally says "not_null".
 		switch value {
-		case FieldOpNull, FieldOpNotNull:
+		case FieldOpNull, FieldOpNotNull, FieldOpMe:
+			// AND `me` IS THE WHOLE VALUE TOO, for the same reason:
+			// it names no operand. Its operand is the VIEWER, which
+			// [Reader.Expand] substitutes before this parser ever sees
+			// it — exactly where `preset=my_queue` resolves the same
+			// word — so one reaching here is a surface that read
+			// without expanding, and [checkFieldOp] says so.
 			q.Fields = append(q.Fields, FieldFilter{Ref: ref, Op: value})
 			continue
 		}
-		op, rest, found := strings.Cut(value, ":")
-		if !found {
-			op, rest = FieldOpEq, value
+		// A COLON IS AN OPERATOR SEPARATOR, EXCEPT IN A URL.
+		//
+		// `strings.Cut` alone read the scheme of every URL as an
+		// operator — `f.homepage=https://x` became op `https` — so a
+		// `url` field could not be filtered by value at all. The `//`
+		// is what tells the two apart, and it is the whole exception:
+		// an unknown prefix anywhere else is still carried through as an
+		// operator, so a TYPO is refused naming the set rather than
+		// silently answered as a value nobody holds.
+		//
+		// AND A BARE VALUE IS LEFT WITH NO OPERATOR rather than
+		// defaulting to `eq` here, because what "no operator" means is a
+		// property of the field's TYPE — on a set it is `any` — and this
+		// parser has not read the catalogue and cannot know which it is.
+		op, rest := "", value
+		if head, tail, found := strings.Cut(value, ":"); found &&
+			!strings.HasPrefix(tail, "//") {
+			op, rest = head, tail
 		}
 		q.Fields = append(q.Fields, FieldFilter{Ref: ref, Op: op, Value: rest})
 	}

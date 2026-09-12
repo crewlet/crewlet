@@ -802,6 +802,19 @@ func containerLeads(o *org.Organization) pages.Leads {
 // its department's rather than being told to name one. A seat with none
 // anywhere returns empty, and the tool refuses rather than guessing — which
 // is right: a page filed into a container nobody chose is one nobody finds.
+// ProjectOfSeat is one seat's home project, from a chart.
+//
+// EXPORTED because two surfaces need the same answer and a second walk is how
+// one stops matching the other: the seat tools resolve it to default a create's
+// container, and the API resolves it to scope `preset=my_queue`'s second arm —
+// and a queue scoped to a different project from the one a create files into
+// is the shape a person cannot diagnose from either screen.
+func ProjectOfSeat(o *org.Organization, handle string) string {
+	return scopeOfSeat(o, handle,
+		func(u *org.Unit) string { return u.Project },
+		func(r *org.Role) string { return r.Project })
+}
+
 func scopeOfSeat(o *org.Organization, handle string, of func(*org.Unit) string,
 	own func(*org.Role) string) string {
 	if o == nil || handle == "" {
@@ -900,9 +913,7 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		// into its lease and an apply does not rebuild the clone, so a
 		// captured project would outlive the org chart that named it.
 		DefaultProject: func(handle string) string {
-			return scopeOfSeat(e.Company().Org, handle,
-				func(u *org.Unit) string { return u.Project },
-				func(r *org.Role) string { return r.Project })
+			return ProjectOfSeat(e.Company().Org, handle)
 		},
 		// THE LEAD MAP IS READ PER CALL against the epoch current when the
 		// tool runs, for the reason the default project is: a seat's
