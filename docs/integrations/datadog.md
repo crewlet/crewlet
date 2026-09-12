@@ -111,6 +111,23 @@ disabling it, in Datadog's own `title` field on the account. Both matter:
 > restore from backup. Accounts disabled before this shipped carry no marker and
 > stay manual.
 
+**The marker is written unconditionally, and before the disable.** It used to be
+written inside the same branch as the disable — only when the account was still
+enabled — which made an already-disabled account permanently unrecoverable. Two
+ordinary situations reach one: a disconnect retried after a partial failure, and
+a disconnect over an account somebody had already disabled at Datadog. Either
+way the teardown found `disabled: true`, skipped the whole branch, wrote no
+marker, and reported the seat removed; the next connect then read an unmarked
+disabled account, correctly refused to touch it, and the seat sat at *degraded /
+admin* with no remedy but a hand edit at Datadog. Measured:
+`crewlet-sre-lead@agents.crewlet.invalid`, `disabled: true`, `title: ""`, six
+retry attempts deep. Marking first also means a teardown interrupted between the
+two steps leaves an account **marked but still enabled**, which the next connect
+simply clears — the harmless direction of the same race.
+
+This is the rule every app that disables rather than deletes follows; see
+[three apps disable rather than delete](../concepts/integration-reconcile.md#three-apps-disable-rather-than-delete-and-one-rule-covers-all-three).
+
 
 ## Configuration
 

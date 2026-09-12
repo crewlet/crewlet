@@ -136,6 +136,24 @@ func NewClient(opts ClientOptions) (*Client, error) {
 // Site is the region this client talks to.
 func (c *Client) Site() string { return c.site }
 
+// UsersURL is where a person goes to act on this organization's users.
+//
+// THE LISTING, NOT ONE ACCOUNT. Datadog addresses a user page by its internal
+// id, and the page a person needs is the one with the enable control on it —
+// the organization's user administration, filtered to the disabled ones,
+// which is where a re-enable is actually performed.
+//
+// Built from the SITE rather than from the API host, because they differ:
+// every region serves its console at `app.<site>` and its API at
+// `api.<site>`, and a link to the second is a JSON endpoint.
+func (c *Client) UsersURL() string {
+	site := normalizeSite(c.site)
+	if site == "" {
+		return ""
+	}
+	return "https://app." + site + "/organization-settings/users?filter=disabled"
+}
+
 func (c *Client) endpoint(path string) string {
 	return "https://api." + c.site + path
 }

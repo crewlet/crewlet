@@ -132,27 +132,48 @@ func Teardown(ctx context.Context, opts TeardownOptions) (provision.Removed, err
 			// holding a working key.
 			continue
 		}
+		// MARKED WHATEVER STATE THE ACCOUNT IS IN, and marked BEFORE it is
+		// disabled.
+		//
+		// Re-enabling is a decision this engine may only make about an
+		// account IT turned off, and the surface's own status row — the
+		// obvious place to record that — is forgotten the moment this
+		// disconnect succeeds. The marker lives on the account instead,
+		// and writing it first means an interrupted run leaves a marked,
+		// live account rather than a disabled one with no provenance.
+		//
+		// THE ALREADY-DISABLED CASE IS WHY THIS IS NOT GUARDED. Both calls
+		// used to sit behind `if !account.Disabled`, and the seat was
+		// reported removed either way — so a teardown that met an account
+		// already off wrote no marker and swore the work was done. That
+		// state is reached by an ordinary disconnect twice, by a
+		// disconnect after somebody disabled the account by hand, and by
+		// a teardown retried after a partial failure, and from it there is
+		// NO WAY BACK: every later connect takes the unmarked-disabled arm
+		// and refuses for ever, because the marker can now never appear.
+		// Measured: crewlet-sre-lead@agents.crewlet.invalid, disabled,
+		// title empty, the card at degraded/admin after six attempts.
+		//
+		// The write is idempotent and costs one request, which is the
+		// whole price of making the state recoverable.
+		if err := opts.Client.MarkDisconnected(ctx, opts.Creds, account.ID); err != nil {
+			failures = append(failures, fmt.Errorf(
+				"datadog: record that this engine is disabling %s: %w",
+				seat.Handle, integration.Reject(err, Status(err))))
+			continue
+		}
 		if !account.Disabled {
-			// MARKED BEFORE IT IS DISABLED. Re-enabling is a decision this
-			// engine may only make about an account IT turned off, and the
-			// surface's own status row — the obvious place to record that
-			// — is forgotten the moment this disconnect succeeds. The
-			// marker lives on the account instead. Written first so an
-			// interrupted run leaves a marked, live account rather than a
-			// disabled one with no provenance, which is the state nothing
-			// can ever undo on its own.
-			if err := opts.Client.MarkDisconnected(ctx, opts.Creds, account.ID); err != nil {
-				failures = append(failures, fmt.Errorf(
-					"datadog: record that this engine is disabling %s: %w",
-					seat.Handle, integration.Reject(err, Status(err))))
-				continue
-			}
 			if err := opts.Client.DisableUser(ctx, opts.Creds, account.ID); err != nil {
 				failures = append(failures, fmt.Errorf("datadog: disable %s: %w",
 					seat.Handle, integration.Reject(err, Status(err))))
 				continue
 			}
 		}
+		// REPORTED REMOVED ONLY ONCE IT IS BOTH MARKED AND OFF, which is
+		// what the two `continue`s above are for: a seat named here has
+		// its sealed credentials deleted by the engine, and saying so over
+		// an account that is still live, or still unmarked, is the claim
+		// that produced the unrecoverable state.
 		removed.Add(removalFor(seat, account.Email))
 	}
 	return removed, errors.Join(failures...)

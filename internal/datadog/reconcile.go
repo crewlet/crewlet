@@ -63,6 +63,14 @@ type Result struct {
 	// [sealsNothing].
 	NoKeyring bool
 
+	// UsersURL is this organization's user administration at Datadog, or ""
+	// when the pass could not name one. It is where a person goes to act on
+	// an account this engine may not touch — one somebody else disabled —
+	// and without it the finding says "re-enable it at Datadog" and hands
+	// them nothing to click, over an engine that holds the credentials and
+	// is declining to use them on purpose.
+	UsersURL string
+
 	// Orphaned are the service accounts at this company's own email domain
 	// that match no seat this engine plans for.
 	//
@@ -189,7 +197,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 				"else this run reports would be trustworthy: %w",
 			integration.Refusal(rejected), rejected)
 	}
-	res := &Result{Org: org}
+	res := &Result{Org: org, UsersURL: opts.Client.UsersURL()}
 
 	// THE INBOUND HALF FIRST, and before the early return below. A company
 	// with no seats to give identities to still wants its alerts to
@@ -662,10 +670,17 @@ func (r *Result) Findings() []integration.Finding {
 	for _, seat := range r.Seats {
 		switch {
 		case seat.Err != nil:
+			// THE CONSOLE, on every seat failure rather than only the
+			// disabled one. Each of them is something a person settles at
+			// Datadog — an account somebody else turned off, a key the
+			// engine could not replace, a role the organization does not
+			// have — and the user administration is where all three are
+			// looked at. See [Result.UsersURL].
 			out = append(out, integration.Finding{
-				Kind:    integration.FindingIdentityFailed,
-				Subject: seat.Handle,
-				Detail:  seat.Err.Error(),
+				Kind:      integration.FindingIdentityFailed,
+				Subject:   seat.Handle,
+				ActionURL: r.UsersURL,
+				Detail:    seat.Err.Error(),
 			})
 		case seat.AccountID == "":
 			out = append(out, integration.Finding{
