@@ -213,12 +213,27 @@ func (t *writeWorkGoal) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if id == "" {
 		id = uuid.NewString()
 	}
+	// THE OWNERS AND MEMBERS THE GOAL ALREADY HAS, read before the write so
+	// a save can carry a handle that no longer resolves without being
+	// refused for it — see [WorkDeps.resolveHandles]. A goal whose owner
+	// left the company must stay editable, not least to take them off it.
+	before := t.deps.goalParties(ctx, id)
+	owners, refusal := t.deps.resolveHandles(tracker.WriteWorkGoalTool,
+		"`owners`", argStrings(args, "owners"), before)
+	if refusal != "" {
+		return failed(refusal), nil
+	}
+	members, refusal := t.deps.resolveHandles(tracker.WriteWorkGoalTool,
+		"`members`", argStrings(args, "members"), before)
+	if refusal != "" {
+		return failed(refusal), nil
+	}
 	goal := tracker.Goal{
 		ID:          id,
 		Name:        strings.TrimSpace(argString(args, "name")),
 		Description: argString(args, "description"),
-		Owners:      argStrings(args, "owners"),
-		Members:     argStrings(args, "members"),
+		Owners:      owners,
+		Members:     members,
 		Group:       strings.TrimSpace(argString(args, "group")),
 		Health:      strings.TrimSpace(argString(args, "health")),
 		Archived:    argBool(args, "archived"),
@@ -266,6 +281,26 @@ func (t *writeWorkGoal) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return jsonResult(map[string]any{
 		"id": id, "outcome": string(result.Outcome), "version": result.Version,
 	})
+}
+
+// goalParties is who a stored goal already names.
+//
+// BEST EFFORT: a read that fails answers nobody, which makes the save STRICTER
+// rather than laxer — every handle then has to resolve. The alternative,
+// failing the write because a read for a leniency check failed, would refuse a
+// save that is perfectly valid.
+func (d WorkDeps) goalParties(ctx context.Context, id string) []string {
+	if d.Reader == nil || id == "" {
+		return nil
+	}
+	listing, err := d.Reader.Goals(ctx, tracker.GoalQuery{
+		ID: id, Level: statelog.ReadSession,
+	})
+	if err != nil || len(listing.Goals) == 0 {
+		return nil
+	}
+	return append(append([]string{}, listing.Goals[0].Owners...),
+		listing.Goals[0].Members...)
 }
 
 // goalTargets reads the targets a model sent.

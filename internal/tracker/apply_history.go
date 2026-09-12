@@ -291,7 +291,7 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext) (i
 			return 0, nil
 		}
 	}
-	candidates := Candidates(notify, c.record.BatchID != nil)
+	candidates := Candidates(notify, c.record.Batched())
 	written := 0
 	for _, candidate := range candidates {
 		res, err := tx.ExecContext(ctx, `

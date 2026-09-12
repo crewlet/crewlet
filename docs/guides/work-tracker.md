@@ -514,6 +514,31 @@ trail.
 `/work/views`. Writes go through a seat's tools or the operator MCP, both of
 which are attributed to somebody.
 
+## A handle is checked before it is stored
+
+Every argument that names a colleague — a task's assignee, a goal's owners and
+members, a project's default assignee, whose priority list is being written —
+is resolved against the company's own roster before the write, and a name
+nobody has is **refused**, listing the seats.
+
+That is not tidiness. An unknown handle fails *silently and permanently*: it is
+stored, it rides the change's routing snapshot, it becomes a candidate — and
+the wake path drops it against the live roster with no error and no log. The
+write answers `applied`, and the person it named never hears anything. A
+misspelling is indistinguishable from a colleague who is simply quiet. On a
+goal it is worse still, because a goal update reaches its owners and *nobody
+else*: there is no lead fallback to catch the fall, so one typo silences that
+goal for everybody, for ever.
+
+A name is **resolved**, not merely checked — so a caller that typed a role's
+name rather than its handle gets the handle back rather than a refusal.
+
+**A handle already on the object is kept.** People leave, and a save that
+carries a departed owner is not adding a typo — it is carrying what is there.
+A whole-document write is refused only when its set of unresolvable names
+*grows*, because the alternative is a goal whose owner left being permanently
+unsaveable, including the one edit that takes them off it.
+
 ## What wakes a seat
 
 A change that concerns somebody becomes a **wake** — a turn on that seat, with

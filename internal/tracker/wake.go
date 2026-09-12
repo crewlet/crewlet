@@ -176,6 +176,14 @@ func TaskDeltas(before, after Task) map[string]Delta {
 }
 
 // excerpt is what a card shows, cut rune-safely to the display limit.
+//
+// MARKED, and the marker counted against the cap. A card is the whole of what
+// most recipients read — the wake prompt renders it under "What changed" and a
+// digest coalesces on it — so a comment cut at exactly six hundred bytes and
+// handed over unmarked reads as a comment that ENDED there, which is a
+// different message. [textcut.Within] rather than Ellipsis because
+// [Notify.Validate] REFUSES an excerpt above MaxExcerpt: a marker outside the
+// budget would turn every long comment into a failed write.
 func (w Wake) excerpt() string {
 	text := w.Excerpt
 	if text == "" && w.Comment != nil {
@@ -184,7 +192,7 @@ func (w Wake) excerpt() string {
 	if text == "" && w.Kind == ChangeCreated {
 		text = w.After.Body
 	}
-	return textcut.Bytes(strings.TrimSpace(text), MaxExcerpt)
+	return textcut.Within(strings.TrimSpace(text), MaxExcerpt)
 }
 
 // without is a minus b, order preserved.

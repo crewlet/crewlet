@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/config"
@@ -921,6 +922,14 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 			})
 		},
 		Mentions: seatMentions{org: c.Org},
+		// THE ROSTER, read PER CALL for the reason the default project
+		// and the unit seam are: a seat's tools are cloned into its
+		// lease, an apply does not rebuild the clone, and a captured
+		// chart would refuse a colleague who joined this morning and
+		// admit one who left.
+		Seats: func() []colleague.Seat {
+			return builtin.Corpus(e.Company().Org)
+		},
 		// AND THE UNIT SEAM, read per call for the reason the default
 		// project is: a seat's tools are cloned into its lease, an apply
 		// does not rebuild the clone, and a captured chart would render
@@ -1076,6 +1085,19 @@ type seatMentions struct{ org *org.Organization }
 // OPERATOR MCP needs the same rule and there must not be a second copy of it:
 // built without one, that surface wrote comments whose @-mentions resolved to
 // nothing and woke nobody, while its own tool description promised otherwise.
+// LiveLeads and LiveUnits are the chart seams a surface outside this package
+// needs, resolved PER CALL against the epoch current when the tool runs.
+//
+// EXPORTED BECAUSE THE OPERATOR SURFACE WENT WITHOUT THEM, and their absence
+// was invisible rather than harmless: with no Leads an operator filing an
+// unassigned task woke nobody at all — the lead fallback is precisely what
+// catches a task naming nobody — and with no Units every project that surface
+// listed rendered as belonging to no team.
+func LiveLeads(e *Engine) tracker.Leads { return liveLeads{engine: e} }
+
+// LiveUnits is the tracker's unit seam over the engine's current chart.
+func LiveUnits(e *Engine) tracker.Units { return liveUnits{engine: e} }
+
 func LiveMentions(e *Engine) builtin.MentionResolver {
 	return liveMentions{engine: e}
 }

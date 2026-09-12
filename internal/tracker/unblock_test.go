@@ -27,6 +27,10 @@ func TestAnUnblockedDependentIsFoundAfterAGapOfAnyLength(t *testing.T) {
 	dependent.Relations = []tracker.Relation{{
 		Kind: tracker.RelationWaitingOn, Other: "t-1",
 	}}
+	// THE DEPENDENT HAS AN ASSIGNEE, because the notice's only recipient
+	// IS the assignee — an unassigned dependent is owed nothing, and a
+	// fixture without one would assert a wake with nobody to receive it.
+	dependent.Assignee = "alice"
 	for _, task := range []tracker.Task{blocker, dependent} {
 		if _, err := r.writer.CreateTask(t.Context(), "op-"+task.ID, task, nil); err != nil {
 			t.Fatalf("CreateTask %s: %v", task.ID, err)
@@ -91,6 +95,11 @@ func TestADependentWithASecondOpenBlockerIsNotTold(t *testing.T) {
 		{Kind: tracker.RelationWaitingOn, Other: "t-1"},
 		{Kind: tracker.RelationWaitingOn, Other: "t-2"},
 	}
+	// AN ASSIGNEE, because the notice has no other recipient and the scan
+	// skips a dependent with nobody to tell. This case is about the
+	// EVERY-BLOCKER rule, so the assignment is scaffolding rather than
+	// what it asserts — see TestAnUnassignedDependentIsNotToldAboutItself.
+	dependent.Assignee = "alice"
 	if _, err := r.writer.CreateTask(t.Context(), "op-t-3", dependent, nil); err != nil {
 		t.Fatalf("CreateTask t-3: %v", err)
 	}
@@ -144,6 +153,7 @@ func TestAnUnblockedNoticeNamesTheKeyRatherThanTheID(t *testing.T) {
 	dependent.Relations = []tracker.Relation{{
 		Kind: tracker.RelationWaitingOn, Other: "t-1",
 	}}
+	dependent.Assignee = "alice"
 	// THE KEYS ARE MINTED BY THE WRITER, so the case reads them back
 	// rather than asserting against a literal it chose.
 	for _, task := range []tracker.Task{blocker, dependent} {
@@ -188,5 +198,54 @@ func TestAnUnblockedNoticeNamesTheKeyRatherThanTheID(t *testing.T) {
 	}
 	if wake.Snapshot.Key == want.Task.ID {
 		t.Error("the notice put the task's uuid in the KEY field")
+	}
+}
+
+// AN UNASSIGNED DEPENDENT IS NOT SCANNED, because there is nobody to tell.
+//
+// The notice's only recipient is the dependent's own assignee — every other
+// routing arm reads a snapshot field this record does not carry — so a repair
+// record for an unassigned task names NOBODY, and the duty manufactured one on
+// a timer for every unassigned dependent that became workable: a full routing
+// snapshot on the durable log, a change-feed delivery and an ack for every
+// node in the company, a parse, and no inbox row at the end of it.
+//
+// Skipping costs nothing: the scan's window is bounded by the log position
+// rather than by the told-stamp, so a skipped dependent is never found again
+// rather than found repeatedly.
+func TestAnUnassignedDependentIsNotToldAboutItself(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	blocker := newTask("t-1")
+	assigned, unassigned := newTask("t-2"), newTask("t-3")
+	assigned.Assignee = "alice"
+	for _, task := range []*tracker.Task{&assigned, &unassigned} {
+		task.Relations = []tracker.Relation{{
+			Kind: tracker.RelationWaitingOn, Other: "t-1",
+		}}
+	}
+	for _, task := range []tracker.Task{blocker, assigned, unassigned} {
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+task.ID, task, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", task.ID, err)
+		}
+		r.drain()
+	}
+	done := tracker.StatusDone
+	if _, err := r.writer.UpdateTask(t.Context(), "op-close", "t-1", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Status: &done},
+		&tracker.Notify{Kind: tracker.ChangeStatus}); err != nil {
+		t.Fatalf("close the blocker: %v", err)
+	}
+	r.drain()
+
+	scan := scanUnblocked(t, r, 0)
+	var found []string
+	for _, u := range scan.Pending {
+		found = append(found, u.Task)
+	}
+	if len(found) != 1 || found[0] != "t-2" {
+		t.Fatalf("the scan found %v, want the assigned dependent alone — an "+
+			"unassigned one has nobody to tell, and a record for it wakes "+
+			"nobody on every node in the company", found)
 	}
 }

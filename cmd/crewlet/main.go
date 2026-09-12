@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
@@ -2085,7 +2086,26 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 				return writer.As(actor.Handle, actor.Kind,
 					tracker.Provenance{OperatorID: actor.OperatorID})
 			},
-			Actor: opsmcp.WorkActor,
+			// THE ROSTER, so an operator's assistant is refused a
+			// handle nobody has rather than silently filing work for
+			// one — the same check every seat's tools make.
+			Seats: func() []colleague.Seat {
+				c := e.Company()
+				if c == nil {
+					return nil
+				}
+				return builtin.Corpus(c.Org)
+			},
+			// AND THE THREE CHART SEAMS THE SEAT SURFACE HAS AND THIS
+			// ONE WENT WITHOUT. Their absence was invisible and not
+			// harmless: with no Leads, an operator filing an unassigned
+			// task woke nobody at all — the lead fallback is what
+			// catches exactly that task — and with no Units every
+			// project this surface listed read as belonging to no team.
+			Leads:          engine.LiveLeads(e),
+			Units:          engine.LiveUnits(e),
+			DefaultProject: func(string) string { return "" },
+			Actor:          opsmcp.WorkActor,
 			// THE MENTION RESOLVER, which this surface went without: a
 			// comment's @-mention is turned into a wake by the tracker's
 			// recipients only when the writer resolved it, so an

@@ -60,6 +60,24 @@ type Unblock struct {
 	ClearedAt int64
 }
 
+// An unassigned dependent is skipped, and that is not a narrowing of the
+// repair — it is the repair declining to manufacture a record with no
+// recipient.
+//
+// The notice's only recipient is the dependent's own assignee (the
+// Unblocked party list is what recipients.go routes off), so a repair record
+// for an unassigned task names NOBODY: a full routing snapshot on the durable
+// log, a change-feed delivery and an ack for every node in the company, a
+// parse, a debug line — and no inbox row at the end of it. The duty
+// manufactures one on a timer for every unassigned dependent that becomes
+// workable, for ever.
+//
+// Skipping costs nothing, because the scan's window is bounded by the log
+// position rather than by the told-stamp: "since" advances on every tick
+// whether or not a row produced a notice, so a skipped dependent is simply
+// never found again rather than found repeatedly. Somebody assigned the task
+// afterwards reads its state when they pick it up.
+//
 // UnblockScan is one tick's worth of repair work, and the position it read to.
 type UnblockScan struct {
 	Pending []Unblock
@@ -117,6 +135,9 @@ func ScanUnblocked(ctx context.Context, db *store.DB, since uint64,
 			JOIN tracker_tasks t ON t.id = d.task_id
 			WHERE h.kind = ? AND h.log_seq > ? AND h.log_seq <= ?
 			  AND t.removed_at IS NULL
+			  -- AN UNASSIGNED DEPENDENT HAS NOBODY TO TELL: see the
+			  -- comment on ScanUnblocked.
+			  AND t.assignee <> ''
 			  AND NOT EXISTS (SELECT 1 FROM tracker_task_deps o
 			                  WHERE o.task_id = t.id AND o.blocker_open = 1)
 			  AND (SELECT MAX(o.cleared_at) FROM tracker_task_deps o

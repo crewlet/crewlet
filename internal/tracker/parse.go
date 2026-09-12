@@ -70,12 +70,6 @@ const (
 // organization.
 type Parser struct {
 	logger *slog.Logger
-
-	// batched says this delivery is one of a bulk gesture's, which is what
-	// suppresses the fan-out to watchers: a bulk edit of sixty-four tasks
-	// would otherwise wake everybody watching any of them, sixty-four
-	// times, about one person's afternoon.
-	batched bool
 }
 
 // ParserOptions configure a parser.
@@ -120,7 +114,11 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	}
 
 	base := p.inbound(record)
-	candidates := Candidates(record.Notify, p.batched)
+	// FROM THE RECORD, exactly as the applier reads it — see
+	// [MutationRecord.Batched]. This used to read a field on the parser
+	// that nothing ever assigned, so the two surfaces agreed only by the
+	// accident that no writer sets a batch id yet.
+	candidates := Candidates(record.Notify, record.Batched())
 	routed := Route(candidates, registryHas(reg), record.Actor)
 	if len(routed) == 0 {
 		p.logger.DebugContext(ctx, "tracker_change_reaches_nobody",

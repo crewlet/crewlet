@@ -84,9 +84,18 @@ type ActivityRecord struct {
 	BatchID   string           `json:"batch_id,omitempty"`
 	TurnID    string           `json:"turn_id,omitempty"`
 
-	// Notified says whether anybody was told. It is how a reader tells
-	// "nothing was announced" from "nothing happened", which is the whole
-	// reason a quiet commit still writes a row.
+	// Notified says whether the commit carried a notification — whether
+	// this change was ANNOUNCED. It is how a reader tells "nothing was
+	// announced" from "nothing happened", which is the whole reason a
+	// quiet commit still writes a row.
+	//
+	// IT IS DELIBERATELY NOT "SOMEBODY WAS WOKEN", and the applier could
+	// not answer that even if the column meant it: who was actually told
+	// is [Route]'s answer, and Route needs the company's CURRENT roster —
+	// which the applier deliberately does not hold, because two nodes
+	// briefly on different epochs would then write different rows for one
+	// record. An announced change can reach nobody: every candidate may
+	// be the actor, or may have left.
 	Notified bool `json:"notified"`
 
 	// Late marks a record the broker accepted well after it was authored.
@@ -141,7 +150,9 @@ type ActivityQuery struct {
 	// [ActivityQuerySpanDays].
 	Q string
 
-	// Notified narrows to what did or did not wake anybody.
+	// Notified narrows to what was or was not ANNOUNCED — see
+	// [ActivityRecord.Notified]. Not to what woke somebody: a change can
+	// be announced and still reach nobody.
 	Notified *bool
 
 	Batch string

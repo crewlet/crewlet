@@ -38,6 +38,8 @@ type fakeTracker struct {
 	actors   []builtin.Actor
 	opIDs    []string
 
+	goalListing      tracker.GoalListing
+	goalsWritten     []tracker.Goal
 	projectEdits     []tracker.ProjectEdit
 	projectAuthority []tracker.ProjectAuthority
 	tagEdits         []tracker.TagEdit
@@ -119,7 +121,20 @@ func (f *fakeTracker) ExpandedQuery(_ context.Context, params map[string]any,
 }
 
 func (f *fakeTracker) Goals(context.Context, tracker.GoalQuery) (tracker.GoalListing, error) {
-	return tracker.GoalListing{}, nil
+	return f.goalListing, nil
+}
+
+func (f *fakeTracker) WriteGoal(_ context.Context, _ string, goal tracker.Goal) (
+	tracker.WriteResult, error) {
+
+	if f.writeErr != nil {
+		return tracker.WriteResult{}, f.writeErr
+	}
+	f.goalsWritten = append(f.goalsWritten, goal)
+	return tracker.WriteResult{
+		Outcome:  statelog.OutcomeApplied,
+		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 30},
+	}, nil
 }
 
 func (f *fakeTracker) Catalogue(context.Context, tracker.CatalogueQuery) (tracker.CatalogueAnswer, error) {

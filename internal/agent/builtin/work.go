@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -133,6 +134,17 @@ type WorkDeps struct {
 	// to do would be marking its own homework in the one way that leaves
 	// no trace — the board simply has one fewer item on it.
 	TrashWriter func(actor Actor) TrashWriter
+
+	// Seats is the company's roster, for validating a handle a caller
+	// typed. Nil admits every handle, which is the honest state for a
+	// surface with no chart loaded.
+	//
+	// A FUNCTION, resolved per call, for the reason [WorkDeps.Units] and
+	// [WorkDeps.DefaultProject] are: a seat's tools are cloned into its
+	// lease, an apply does not rebuild the clone, and a captured roster
+	// would validate against an org that has since moved — refusing a
+	// colleague who joined this morning and admitting one who left.
+	Seats func() []colleague.Seat
 
 	// Units resolves a project's chart-owned unit at READ time — the
 	// tracker holds no org, because the applier may not read one. Nil
@@ -731,6 +743,15 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 				"in rather than guessing."), nil
 		}
 	}
+	// THE ASSIGNEE IS RESOLVED BEFORE THE WATCHERS, so the canonical
+	// handle is what gets watched: a task watched under one spelling and
+	// assigned under another is a task whose assignee is not following it.
+	assignee, refusal := t.deps.resolveHandle(CreateWorkItemTool,
+		"`assignee`", task.Assignee)
+	if refusal != "" {
+		return failed(refusal), nil
+	}
+	task.Assignee = assignee
 	// THE REPORTER WATCHES WHAT THEY FILED, and so does the assignee. Set
 	// at the write rather than derived at the wake: a watcher list built
 	// later would be built from a row that has moved on.
@@ -740,8 +761,9 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// project has not declared and the declare is a separate record on a
 	// separate subject: doing it after would file the task that already
 	// failed.
-	declared, refusal := t.deps.declareLabels(ctx, actor, args, task.Project, task.Tags)
-	if refusal != "" {
+	declared, labelRefusal := t.deps.declareLabels(ctx, actor, args,
+		task.Project, task.Tags)
+	if refusal := labelRefusal; refusal != "" {
 		return failed(refusal), nil
 	}
 	notify := tracker.Wake{
@@ -789,6 +811,101 @@ func (d WorkDeps) resolveRef(ctx context.Context, tool, field, ref string) (stri
 		return "", readFailure(tool, err)
 	}
 	return got.Task.ID, ""
+}
+
+// resolveHandle turns a handle a caller typed into one the company has.
+//
+// # Why a handle is validated AT ALL, when nothing used to
+//
+// Because an unknown one fails silently and permanently. It is stored, it
+// rides the routing snapshot, it becomes a candidate — and [tracker.Route]
+// drops it against the live roster with no error, no per-candidate log and no
+// metric. The write answers `outcome: applied`; the person it named never
+// hears anything; and on a goal there is not even a lead to catch the fall,
+// because `goal_updated` is deliberately outside the fallback set. A
+// misspelling is indistinguishable from a colleague who is simply quiet.
+//
+// # Why HERE and not in the tracker
+//
+// The tracker holds no org chart, deliberately: the applier may not read one,
+// because two nodes briefly on different epochs would write different rows for
+// one record. So the chart is the CALLER's, and this is the caller.
+//
+// It resolves rather than merely checking, through the same machinery
+// `lookup_colleague` uses — so a caller that typed a role's NAME, or a handle
+// in the wrong shape, gets the canonical handle rather than a refusal it
+// cannot act on.
+//
+// A NIL ROSTER ADMITS EVERYTHING. A surface with no chart loaded cannot tell a
+// typo from a colleague, and refusing every handle there would be worse than
+// the hole this closes.
+func (d WorkDeps) resolveHandle(tool, field, arg string) (string, string) {
+	handle := strings.TrimSpace(arg)
+	if handle == "" || d.Seats == nil {
+		return handle, ""
+	}
+	seats := d.Seats()
+	if len(seats) == 0 {
+		return handle, ""
+	}
+	found := colleague.Resolve(handle, seats)
+	switch {
+	case len(found) == 1:
+		return found[0].Seat.Handle, ""
+	case len(found) == 0:
+		return "", fmt.Sprintf("%s names %s %q and there is nobody here by "+
+			"that name. Look them up with %s rather than guessing — a handle "+
+			"nobody has is stored, and then every notification to it is "+
+			"dropped in silence. The seats are: %s.",
+			tool, field, clip(handle), LookupColleagueTool,
+			strings.Join(allHandles(seats), ", "))
+	}
+	return "", fmt.Sprintf("%s names %s %q and it matches %s. Name one of them "+
+		"exactly.", tool, field, clip(handle), strings.Join(matchHandles(found), " or "))
+}
+
+// resolveHandles is the same for a LIST, and the difference is the one that
+// makes a whole-post-state write safe.
+//
+// A SAVE MAY NOT GROW THE UNRESOLVABLE SET, rather than refusing any save that
+// carries one. `write_work_goal` replaces the whole document, so a flat
+// refusal would make a goal whose owner LEFT THE COMPANY permanently
+// unsaveable — including the one edit that removes them. A departure is
+// repaired by editing the object, never blocked by it; a typo adds a name that
+// was not there before, and that is what is refused.
+func (d WorkDeps) resolveHandles(tool, field string, args, before []string) (
+	[]string, string) {
+
+	known := map[string]bool{}
+	for _, h := range before {
+		known[strings.TrimSpace(h)] = true
+	}
+	out := make([]string, 0, len(args))
+	for _, arg := range args {
+		handle, refusal := d.resolveHandle(tool, field, arg)
+		if refusal == "" {
+			out = append(out, handle)
+			continue
+		}
+		if known[strings.TrimSpace(arg)] {
+			// ALREADY ON THE OBJECT. Somebody left, or was renamed;
+			// the save carries them because it carries everything, and
+			// refusing it would leave nobody able to take them off.
+			out = append(out, strings.TrimSpace(arg))
+			continue
+		}
+		return nil, refusal
+	}
+	return out, ""
+}
+
+// matchHandles renders an ambiguous resolution's candidates.
+func matchHandles(found []colleague.Candidate) []string {
+	out := make([]string, 0, len(found))
+	for _, c := range found {
+		out = append(out, c.Seat.Handle)
+	}
+	return out
 }
 
 // handles is a de-duplicated, order-preserving list with the empties dropped.
@@ -924,6 +1041,19 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// wants, and given it refuses if anybody moved the task since the read
 	// the model reasoned from.
 	ifMatch := uint64(max(argInt(args, "if_match", 0), 0))
+	if patch.Assignee != nil {
+		// THE SAME CHECK THE CREATE MAKES, and it belongs here rather
+		// than in patchFromArgs for the reason that function is a free
+		// one: the roster is on the deps, and a patch builder that
+		// reached for it would need the whole surface threaded through
+		// it to validate one field.
+		assignee, refusal := t.deps.resolveHandle(UpdateWorkItemTool,
+			"`assignee`", *patch.Assignee)
+		if refusal != "" {
+			return failed(refusal), nil
+		}
+		patch.Assignee = &assignee
+	}
 	var declared []string
 	if patch.Tags != nil {
 		// AGAINST THE TASK'S HOME PROJECT, which is the one whose set

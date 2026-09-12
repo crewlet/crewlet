@@ -136,9 +136,15 @@ type HistoryEntry struct {
 	// Fields is what changed, as the notification snapshot recorded it.
 	Fields map[string]any `json:"fields,omitempty"`
 
-	// Quiet marks a commit that woke nobody. It is a fact about the
-	// change rather than about its importance — a bulk edit is quiet by
-	// construction — and it is what an activity feed renders differently.
+	// Quiet marks a commit that ANNOUNCED NOTHING — one that carried no
+	// notification at all. It is a fact about the change rather than
+	// about its importance — a bulk edit is quiet by construction — and
+	// it is what an activity feed renders differently.
+	//
+	// A LOUD COMMIT MAY STILL HAVE REACHED NOBODY: who was told is
+	// resolved against the live roster at wake time, and every candidate
+	// may be the actor or may have left. This says what the change
+	// claimed, not what landed.
 	Quiet bool `json:"quiet,omitempty"`
 
 	// At is the EFFECTIVE instant: the fleet-agreed one rather than the
