@@ -809,11 +809,20 @@ func (h Hook) Converged(name, target string) bool {
 	return true
 }
 
-// GroupHooks lists a group's webhooks.
+// GroupHooks lists a group's webhooks, PAGED TO EXHAUSTION.
+//
+// For the reason [Client.Tokens] and [Client.InstanceServiceAccounts] are: a
+// truncated listing is not a slow report, it is a wrong DECISION. Every hook
+// choice this package makes is made out of this listing — [ours] selects this
+// deployment's hooks from it, [ensureGroupHook] decides converged-or-create
+// and deletes the extras from it, and [sweepGroupHooks] and the teardown's
+// removeHooks delete from it. Unpaged it returned GitLab's default first page
+// of twenty, so on a container already carrying twenty hooks this engine's own
+// sat past the boundary, was invisible, and every pass registered another —
+// which is the duplicate-hook failure the name matching exists to stop, with
+// the disconnect reporting success and leaving the real hook live and signed.
 func (c *Client) GroupHooks(ctx context.Context, groupID int) ([]Hook, error) {
-	var out []Hook
-	err := c.get(ctx, "/groups/"+strconv.Itoa(groupID)+"/hooks", nil, &out)
-	return out, err
+	return hookPages(ctx, c, "/groups/"+strconv.Itoa(groupID)+"/hooks")
 }
 
 // CreateGroupHook registers a webhook on a group.
@@ -843,11 +852,37 @@ func (c *Client) DeleteGroupHook(ctx context.Context, groupID, hookID int) error
 		"/groups/"+strconv.Itoa(groupID)+"/hooks/"+strconv.Itoa(hookID), nil, nil)
 }
 
-// ProjectHooks lists a project's webhooks.
+// ProjectHooks lists a project's webhooks, paged for the reason
+// [Client.GroupHooks] gives — and this is the likelier of the two to overflow,
+// because a project is where CI, chat and scanner integrations all register.
 func (c *Client) ProjectHooks(ctx context.Context, project string) ([]Hook, error) {
+	return hookPages(ctx, c, "/projects/"+url.PathEscape(project)+"/hooks")
+}
+
+// hookPages walks one container's hooks to exhaustion.
+//
+// NO CEILING, unlike the token and account walks beside it. Those bound a pile
+// this engine's own bug created — 164 tokens on one account — where a number
+// that large means something is wrong and refusing is safer than acting. A
+// container's hooks are other people's integrations, a couple of dozen at
+// worst, and refusing to read them would turn a busy project into a surface
+// this engine cannot converge at all.
+func hookPages(ctx context.Context, c *Client, path string) ([]Hook, error) {
 	var out []Hook
-	err := c.get(ctx, "/projects/"+url.PathEscape(project)+"/hooks", nil, &out)
-	return out, err
+	for page := 1; ; page++ {
+		var batch []Hook
+		err := c.get(ctx, path, url.Values{
+			"per_page": {strconv.Itoa(userPageSize)},
+			"page":     {strconv.Itoa(page)},
+		}, &batch)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, batch...)
+		if len(batch) < userPageSize {
+			return out, nil
+		}
+	}
 }
 
 // CreateProjectHook registers a webhook on one project.
