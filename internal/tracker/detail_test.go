@@ -232,3 +232,143 @@ func (r *roundTrip) deferRecordOn(taskID, project string) {
 func strptr(s string) *string { return &s }
 
 func isNoTask(err error) bool { return errors.Is(err, tracker.ErrNoTask) }
+
+// A COMMENT IS A ROW, and until one was written the whole thread was invisible.
+//
+// `tracker_comments` was DELETEd on purge, READ by get_task's thread, by
+// `has_open_asks`, by `asked_of`, by `asked_by` and by my_work's own block —
+// and INSERTed by nothing. Every comment the company had ever written landed
+// in its task's document and produced no row, so every one of those answered
+// as though nobody had ever said anything.
+func TestACommentIsARowAndAnAnswerClosesItsAsk(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	created := r.createTask("who owns the rollback")
+
+	question := "who owns the rollback?"
+	if _, err := r.writer.UpdateTask(t.Context(), "op-ask", created.ID, "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Comment: &tracker.Comment{
+			ID: "cm-1", Task: created.ID, Author: "ana",
+			AuthorKind: tracker.AuthorHuman, Body: question, Ask: "bob",
+			CreatedAt: wednesday,
+		}}, nil); err != nil {
+		t.Fatalf("comment: %v", err)
+	}
+	r.drain()
+
+	detail, err := r.reader.Task(t.Context(), created.ID,
+		tracker.DetailWants{Comments: true}, statelog.ReadStale)
+	if err != nil {
+		t.Fatalf("read the thread: %v", err)
+	}
+	if len(detail.Comments) != 1 || detail.Comments[0].Body != question {
+		t.Fatalf("the thread holds %+v, want the one comment — a comment that "+
+			"produced no row is a comment nobody can read", detail.Comments)
+	}
+
+	// AND THE ASK IS OPEN, which is a filter over that same row.
+	if got := ids(r.ask(map[string]any{
+		"container": "project:ENG", "has_open_asks": "true",
+	})); len(got) != 1 || got[0] != created.ID {
+		t.Fatalf("has_open_asks answers %v, want the task with the question", got)
+	}
+	if got := ids(r.ask(map[string]any{
+		"container": "project:ENG", "asked_of": "bob",
+	})); len(got) != 1 {
+		t.Fatalf("asked_of=bob answers %v, want the task", got)
+	}
+
+	// AN ANSWER CLOSES IT. The two are separate rows — a reply is its own
+	// comment — so without the stamp the ask stayed open on every board
+	// and in the answerer's own queue for ever.
+	answers := "cm-1"
+	if _, err := r.writer.UpdateTask(t.Context(), "op-answer", created.ID, "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Comment: &tracker.Comment{
+			ID: "cm-2", Task: created.ID, Author: "bob",
+			AuthorKind: tracker.AuthorHuman, Body: "platform does",
+			Answers: &answers, CreatedAt: wednesday,
+		}}, nil); err != nil {
+		t.Fatalf("answer: %v", err)
+	}
+	r.drain()
+	if got := ids(r.ask(map[string]any{
+		"container": "project:ENG", "has_open_asks": "true",
+	})); len(got) != 0 {
+		t.Fatalf("has_open_asks still answers %v after the question was "+
+			"answered", got)
+	}
+
+	// AND AN EDIT REPLACES THE ROW rather than adding one: a comment is
+	// edited, resolved and removed in place, and an insert-only write
+	// would leave the thread showing the first version for ever.
+	if _, err := r.writer.UpdateTask(t.Context(), "op-edit", created.ID, "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Comment: &tracker.Comment{
+			ID: "cm-1", Task: created.ID, Author: "ana",
+			AuthorKind: tracker.AuthorHuman, Body: "who owns the rollback now?",
+			Ask: "bob", CreatedAt: wednesday, UpdatedAt: wednesday,
+		}}, nil); err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	r.drain()
+	edited, err := r.reader.Task(t.Context(), created.ID,
+		tracker.DetailWants{Comments: true}, statelog.ReadStale)
+	if err != nil {
+		t.Fatalf("read the thread: %v", err)
+	}
+	if len(edited.Comments) != 2 {
+		t.Fatalf("the thread holds %d comments after an EDIT, want 2 — an "+
+			"edit is the same row", len(edited.Comments))
+	}
+	for _, comment := range edited.Comments {
+		if comment.ID == "cm-1" && comment.Body != "who owns the rollback now?" {
+			t.Errorf("the edited comment still reads %q", comment.Body)
+		}
+	}
+}
+
+// A CHECKLIST ITEM IS A ROW TOO, and it lives on somebody else's task.
+//
+// No assignee filter over tasks reaches one, so a seat holding six checklist
+// items and no assignment read its queue as empty — and `checklist_assignee=`,
+// which the shipped partial index is named for, matched nothing at all.
+func TestAChecklistItemIsARow(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	created := r.createTask("the release checklist")
+
+	lists := []tracker.Checklist{{ID: "l-1", Name: "Release", Items: []tracker.ChecklistItem{
+		{ID: "i-1", Name: "cut the tag", Assignee: "bob"},
+		{ID: "i-2", Name: "publish the notes", Assignee: "ana", Done: true},
+	}}}
+	if _, err := r.writer.UpdateTask(t.Context(), "op-checklist", created.ID,
+		"ENG", tracker.NoIfMatch,
+		tracker.TaskPatch{Checklists: &lists}, nil); err != nil {
+		t.Fatalf("checklist: %v", err)
+	}
+	r.drain()
+
+	if got := ids(r.ask(map[string]any{
+		"container": "project:ENG", "checklist_assignee": "bob",
+	})); len(got) != 1 || got[0] != created.ID {
+		t.Fatalf("checklist_assignee=bob answers %v, want the task carrying "+
+			"his item", got)
+	}
+
+	// AND A REMOVED ITEM LEAVES THE TABLE. The collection is rebuilt from
+	// the document on every apply, so an upsert-only write would keep
+	// answering for an item nobody can see any more.
+	shorter := []tracker.Checklist{{ID: "l-1", Name: "Release",
+		Items: []tracker.ChecklistItem{lists[0].Items[1]}}}
+	if _, err := r.writer.UpdateTask(t.Context(), "op-shorter", created.ID,
+		"ENG", tracker.NoIfMatch,
+		tracker.TaskPatch{Checklists: &shorter}, nil); err != nil {
+		t.Fatalf("checklist: %v", err)
+	}
+	r.drain()
+	if got := ids(r.ask(map[string]any{
+		"container": "project:ENG", "checklist_assignee": "bob",
+	})); len(got) != 0 {
+		t.Fatalf("checklist_assignee=bob still answers %v after his item was "+
+			"deleted", got)
+	}
+}

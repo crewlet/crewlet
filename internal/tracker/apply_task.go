@@ -85,6 +85,10 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
+	thread, err := a.writeThread(ctx, tx, next, c)
+	if err != nil {
+		return 0, err
+	}
 	counts, err := a.maintainProjectCounts(ctx, tx, current, next, held)
 	if err != nil {
 		return 0, err
@@ -114,7 +118,7 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
-	return rows + children + counts + history + spans + told, nil
+	return rows + children + thread + counts + history + spans + told, nil
 }
 
 // stampUnblocked records that this commit told a dependent it is workable.
@@ -1465,4 +1469,231 @@ func nullableRaw(raw json.RawMessage) any {
 		return nil
 	}
 	return string(raw)
+}
+
+// writeThread writes the rows a record's own payload carries, as against the
+// collections the DOCUMENT carries.
+//
+// # Why these three are not in [explodeTask]
+//
+// Everything exploded there is a collection ON the task document, rebuilt from
+// it on every apply so a reprocess converges. A comment and a body revision
+// are not: they are append-only rows one RECORD produced, and rebuilding them
+// from the document is impossible because the document does not hold them —
+// which is exactly what made them vanish. A task carried its thread on the
+// wire and produced no row, so `get_task(include=comments)` answered an empty
+// thread for every task in the company, `has_open_asks` was false for every
+// one, and `my_work.asked_of_me` could not see a question anybody had asked.
+//
+// The checklists ARE a document collection and are exploded here rather than
+// beside the others only because the same guard covers all three: a redelivery
+// must not write a second copy of an append-only row.
+func (a *Applier) writeThread(ctx context.Context, tx *sql.Tx, task Task,
+	c applyContext) (int, error) {
+
+	written := 0
+	items, err := writeChecklistItems(ctx, tx, task)
+	if err != nil {
+		return 0, err
+	}
+	written += items
+
+	if OpKind(c.record.Op) != OpPatch {
+		// ONLY A PATCH CARRIES ONE. A create carries the task and a
+		// tombstone carries a stamp, and decoding either as a patch to
+		// look for a comment would be reading a shape that is not there.
+		return written, nil
+	}
+	var patch TaskPatch
+	if err := decodePayload(c.record.Mutation, &patch); err != nil {
+		return 0, fmt.Errorf("tracker: decode the patch at %s: %w", c.position, err)
+	}
+	if patch.Comment != nil {
+		n, err := writeComment(ctx, tx, task, *patch.Comment, c)
+		if err != nil {
+			return 0, err
+		}
+		written += n
+	}
+	if patch.BodyRevision != nil {
+		n, err := writeBodyRevision(ctx, tx, task, *patch.BodyRevision, patch.Retires)
+		if err != nil {
+			return 0, err
+		}
+		written += n
+	}
+	return written, nil
+}
+
+// writeComment writes one comment row, and every EDIT of it.
+//
+// AN UPSERT ON THE ID, because a comment is edited, answered, resolved and
+// removed in place — each of those is a later patch naming the same comment,
+// and an insert-only write would leave the thread showing the first version of
+// every remark for ever. The id is derived from the operation, so a retried
+// turn lands on the row it already wrote rather than saying the same thing
+// twice.
+func writeComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
+	c applyContext) (int, error) {
+
+	if comment.ID == "" {
+		// A COMMENT WITH NO ID IS NOT A ROW. It is dropped rather than
+		// given one here: a minted id would differ on every node, and
+		// two nodes' threads would stop matching.
+		return 0, nil
+	}
+	comment.Task = task.ID
+	document, err := json.Marshal(comment)
+	if err != nil {
+		return 0, fmt.Errorf("tracker: encode comment %s at %s: %w",
+			comment.ID, c.position, err)
+	}
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO tracker_comments
+			(id, task_id, author, author_kind, body, reply_to, ask, answers,
+			 answered_by, resolved, resolved_by, resolved_at, removed,
+			 record_id, created_at, updated_at, document)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT (id) DO UPDATE SET
+			body = excluded.body, ask = excluded.ask,
+			answers = excluded.answers, answered_by = excluded.answered_by,
+			resolved = excluded.resolved, resolved_by = excluded.resolved_by,
+			resolved_at = excluded.resolved_at, removed = excluded.removed,
+			record_id = excluded.record_id, updated_at = excluded.updated_at,
+			document = excluded.document`,
+		comment.ID, task.ID, comment.Author, string(comment.AuthorKind),
+		comment.Body, comment.ReplyTo, comment.Ask,
+		comment.Answers, nil,
+		boolInt(comment.Resolved), nonEmpty(comment.ResolvedBy),
+		nullableTime(comment.ResolvedAt), boolInt(comment.Removed),
+		c.record.OpID, store.EncodeTime(comment.CreatedAt),
+		store.EncodeTime(commentUpdatedAt(comment)), document)
+	if err != nil {
+		return 0, fmt.Errorf("tracker: write comment %s at %s: %w",
+			comment.ID, c.position, err)
+	}
+	written, err := affected(res)
+	if err != nil {
+		return 0, err
+	}
+	// AND AN ANSWER CLOSES THE ASK IT NAMES. The two are separate rows —
+	// a reply is its own comment — so the ask stays open on every board,
+	// in every `has_open_asks` filter and in the answerer's own my_work
+	// until this write lands.
+	if comment.Answers != nil && *comment.Answers != "" {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE tracker_comments SET answered_by = ?
+			WHERE id = ? AND task_id = ? AND answered_by IS NULL`,
+			comment.ID, *comment.Answers, task.ID)
+		if err != nil {
+			return 0, fmt.Errorf("tracker: close the ask %s answers at %s: %w",
+				comment.ID, c.position, err)
+		}
+		n, err := affected(res)
+		if err != nil {
+			return 0, err
+		}
+		written += n
+	}
+	return written, nil
+}
+
+// commentUpdatedAt is the edit instant, defaulting to the creation one so the
+// column is never zero on a comment nobody has touched.
+func commentUpdatedAt(comment Comment) time.Time {
+	if comment.UpdatedAt.IsZero() {
+		return comment.CreatedAt
+	}
+	return comment.UpdatedAt
+}
+
+func nonEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// writeBodyRevision keeps the body a write replaced, and prunes what the
+// record says it pruned.
+//
+// THE PRUNE IS ON THE COMMIT, so every node deletes exactly the same rows at
+// exactly the same position rather than each deciding for itself from a count
+// it read locally.
+func writeBodyRevision(ctx context.Context, tx *sql.Tx, task Task,
+	revision BodyRevision, retires []int) (int, error) {
+
+	document, err := json.Marshal(revision)
+	if err != nil {
+		return 0, fmt.Errorf("tracker: encode revision %d of %s: %w",
+			revision.Version, task.ID, err)
+	}
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO tracker_body_revisions
+			(task_id, version, author, author_kind, at, size, document)
+		VALUES (?,?,?,?,?,?,?)
+		ON CONFLICT (task_id, version) DO NOTHING`,
+		task.ID, revision.Version, revision.Author, string(revision.AuthorKind),
+		store.EncodeTime(revision.At), len(revision.Body), document)
+	if err != nil {
+		return 0, fmt.Errorf("tracker: write revision %d of %s: %w",
+			revision.Version, task.ID, err)
+	}
+	written, err := affected(res)
+	if err != nil {
+		return 0, err
+	}
+	for _, version := range retires {
+		res, err := tx.ExecContext(ctx,
+			`DELETE FROM tracker_body_revisions WHERE task_id = ? AND version = ?`,
+			task.ID, version)
+		if err != nil {
+			return 0, fmt.Errorf("tracker: retire revision %d of %s: %w",
+				version, task.ID, err)
+		}
+		n, err := affected(res)
+		if err != nil {
+			return 0, err
+		}
+		written += n
+	}
+	return written, nil
+}
+
+// writeChecklistItems rebuilds a task's sub-items from its document.
+//
+// A CLEAR-AND-REBUILD, like every other document collection here, so a
+// reprocess converges rather than accumulating — and so an item DELETED from a
+// checklist leaves the table, which an upsert-only write would never do.
+func writeChecklistItems(ctx context.Context, tx *sql.Tx, task Task) (int, error) {
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM tracker_checklist_items WHERE task_id = ?`, task.ID); err != nil {
+		return 0, fmt.Errorf("tracker: clear the checklist of %s: %w", task.ID, err)
+	}
+	written := 0
+	for _, list := range task.Checklists {
+		for i, item := range list.Items {
+			res, err := tx.ExecContext(ctx, `
+				INSERT INTO tracker_checklist_items
+					(task_id, checklist_id, item_id, name, done, assignee,
+					 parent_id, ord, promoted_to)
+				VALUES (?,?,?,?,?,?,?,?,?)
+				ON CONFLICT (task_id, checklist_id, item_id) DO UPDATE SET
+					name = excluded.name, done = excluded.done,
+					assignee = excluded.assignee, parent_id = excluded.parent_id,
+					ord = excluded.ord, promoted_to = excluded.promoted_to`,
+				task.ID, list.ID, item.ID, item.Name, boolInt(item.Done),
+				item.Assignee, item.Parent, i, item.PromotedTo)
+			if err != nil {
+				return 0, fmt.Errorf("tracker: write checklist item %s of %s: %w",
+					item.ID, task.ID, err)
+			}
+			n, err := affected(res)
+			if err != nil {
+				return 0, err
+			}
+			written += n
+		}
+	}
+	return written, nil
 }
