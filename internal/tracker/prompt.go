@@ -227,6 +227,11 @@ func promptFollowing(b *strings.Builder, n notify.Inbound, parties notify.Partie
 			"here is named on it.")
 	case reason == ReasonBlocking:
 		b.WriteString("A task that is blocking somebody else's work changed.")
+	case reason == ReasonPurged:
+		// NOT "changed". The task and everything on it were destroyed,
+		// and a reader who opens this expecting an edit goes looking for
+		// what moved — on a row that is gone.
+		b.WriteString("A task in your project was permanently destroyed.")
 	default:
 		b.WriteString("A task you are watching changed.")
 	}
@@ -310,6 +315,11 @@ func changeLead(meta map[string]string, actor string) string {
 		return "The task was removed" + by + "."
 	case ChangeRestored:
 		return "The task was restored" + by + "."
+	case ChangePurged:
+		// THE ONE WITH NO INVERSE, and the line says so: every other kind
+		// here describes something a reader could undo or answer.
+		return "The task and everything on it were permanently destroyed" +
+			by + ". This cannot be undone."
 	}
 	return ""
 }
@@ -335,9 +345,12 @@ func promptContext(b *strings.Builder, meta map[string]string) {
 	if key == "" {
 		return
 	}
-	if ChangeKind(meta[MetaChangeKind]) == ChangeRemoved {
-		// Nothing to fetch. Sending a seat to read a task that no longer
-		// exists costs it a round and a failed tool call.
+	switch ChangeKind(meta[MetaChangeKind]) {
+	case ChangeRemoved, ChangePurged:
+		// NOTHING TO FETCH. Sending a seat to read a task that no longer
+		// exists costs it a round and a failed tool call — and on a
+		// purge the row is not in the trash either, so the tool answers
+		// `not_found` rather than offering a restore.
 		return
 	}
 	b.WriteString("\n## Get full context" +
@@ -387,6 +400,22 @@ func promptWhyYou(b *strings.Builder, project string) {
 // quality bar — belongs in the role's behavioural guidelines, and repeating it
 // here would put one team's standards on every seat.
 func promptHandling(b *strings.Builder, meta map[string]string, reason Reason) {
+	if ChangeKind(meta[MetaChangeKind]) == ChangePurged {
+		// A DIFFERENT INSTRUCTION FROM A REMOVAL, because the remedies
+		// differ: a removed task is in the trash and `restore_task`
+		// brings it back, and a purged one is gone from every node with
+		// no gesture that returns it. Telling a lead to "record any
+		// progress worth keeping" is right in both; telling them the
+		// task can come back is right in only one.
+		b.WriteString("\n## How to handle this" +
+			"\nThe task, its comments, its history and its turn records were" +
+			" destroyed on every node, and nothing restores them. Stop any" +
+			" in-flight work on it. If anybody on your team had progress worth" +
+			" keeping, it now exists only where they wrote it down." +
+			"\n\nYou are hearing this because you lead the project it was" +
+			" filed in. No action is required of you beyond knowing.\n")
+		return
+	}
 	if ChangeKind(meta[MetaChangeKind]) == ChangeRemoved {
 		b.WriteString("\n## How to handle this" +
 			"\nThe task no longer exists — stop any in-flight work on it. If" +

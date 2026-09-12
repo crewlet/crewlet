@@ -261,7 +261,7 @@ func TestABulkEditReportsEveryTaskSeparately(t *testing.T) {
 	done := tracker.StatusDone
 	result, err := r.writer.UpdateTasks(t.Context(), "op-bulk",
 		[]string{"t-1", "t-2", "t-missing"}, "ENG",
-		tracker.TaskPatch{Status: &done}, nil)
+		tracker.TaskPatch{Status: &done}, tracker.ChangeStatus, nil)
 	if err != nil {
 		t.Fatalf("UpdateTasks: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestABulkEditIsRefusedBeforeAnythingLands(t *testing.T) {
 		ids[i] = "t-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
 	}
 	if _, err := r.writer.UpdateTasks(t.Context(), "op-bulk", ids, "ENG",
-		tracker.TaskPatch{Title: ptr("x")}, nil); err == nil {
+		tracker.TaskPatch{Title: ptr("x")}, tracker.ChangeFields, nil); err == nil {
 		t.Fatal("a batch over the task ceiling was accepted")
 	}
 
@@ -318,7 +318,7 @@ func TestABulkEditIsRefusedBeforeAnythingLands(t *testing.T) {
 	}
 	if _, err := r.writer.UpdateTasks(t.Context(), "op-bytes",
 		ids[:tracker.MaxBulkTasks], "ENG",
-		tracker.TaskPatch{Fields: &fields}, nil); err == nil {
+		tracker.TaskPatch{Fields: &fields}, tracker.ChangeFields, nil); err == nil {
 		t.Fatal("a batch over the byte ceiling was accepted")
 	} else if !strings.Contains(err.Error(), "bytes of commits") {
 		t.Fatalf("the refusal is %v and does not say what the ceiling is "+
@@ -373,7 +373,7 @@ func archiveENG(t *testing.T, r *roundTrip) {
 		tracker.ProjectSubject("ENG"), "", tracker.Project{
 			V: 1, Key: "ENG", Name: "Engineering", Archived: true,
 			CreatedAt: wednesday, UpdatedAt: wednesday,
-		}, nil); err != nil {
+		}, tracker.ChangeProjectCreated, nil); err != nil {
 		t.Fatalf("archive the project: %v", err)
 	}
 	r.drain()
@@ -389,7 +389,7 @@ func requireAField(t *testing.T, r *roundTrip) {
 				Type: tracker.FieldText, Required: true,
 			}},
 			CreatedAt: wednesday, UpdatedAt: wednesday,
-		}, nil); err != nil {
+		}, tracker.ChangeProjectCreated, nil); err != nil {
 		t.Fatalf("declare the field: %v", err)
 	}
 	r.drain()
@@ -403,7 +403,7 @@ func seedSprint(t *testing.T, r *roundTrip, number int) {
 			Name: "Sprint", State: tracker.SprintFuture,
 			StartAt: wednesday, EndAt: wednesday.AddDate(0, 0, 14),
 			CreatedAt: wednesday, UpdatedAt: wednesday,
-		}, nil); err != nil {
+		}, tracker.ChangeMoved, nil); err != nil {
 		t.Fatalf("seed sprint %d: %v", number, err)
 	}
 	r.drain()

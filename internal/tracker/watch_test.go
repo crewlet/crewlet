@@ -38,7 +38,7 @@ func TestAWatchGestureAddsOnePersonAndRemovesNobody(t *testing.T) {
 	r.drain()
 
 	if _, err := r.writer.UpdateTask(t.Context(), "op-watch", "t-watch", "ENG", 0,
-		tracker.TaskPatch{Watch: &tracker.WatchIntent{Handle: "carol", Watch: true}},
+		tracker.TaskPatch{Watch: &tracker.WatchIntent{Handle: "carol", Watch: true}}, tracker.ChangeFields,
 		nil); err != nil {
 		t.Fatalf("watch: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestAWatchGestureAddsOnePersonAndRemovesNobody(t *testing.T) {
 	// Both halves travel, because "not a watcher" and "watching but muted"
 	// are the distinction those two fields exist to keep.
 	if _, err := r.writer.UpdateTask(t.Context(), "op-unwatch", "t-watch", "ENG", 0,
-		tracker.TaskPatch{Watch: &tracker.WatchIntent{Handle: "bob", Watch: false}},
+		tracker.TaskPatch{Watch: &tracker.WatchIntent{Handle: "bob", Watch: false}}, tracker.ChangeFields,
 		nil); err != nil {
 		t.Fatalf("unwatch: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestAPatchCarryingBothAWatchGestureAndASetIsRefused(t *testing.T) {
 		tracker.TaskPatch{
 			Watch:    &tracker.WatchIntent{Handle: "carol", Watch: true},
 			Watchers: &[]string{"dave"},
-		}, nil)
+		}, tracker.ChangeWatchers, nil)
 	if err == nil {
 		t.Fatal("a patch carrying both a watch gesture and a whole watcher " +
 			"set was accepted, so one of them was silently discarded")
@@ -124,7 +124,7 @@ func TestAWatchGestureRefusesPastTheRoutingCap(t *testing.T) {
 	r.drain()
 
 	_, err := r.writer.UpdateTask(t.Context(), "op-over", "t-full", "ENG", 0,
-		tracker.TaskPatch{Watch: &tracker.WatchIntent{Handle: "one-more", Watch: true}},
+		tracker.TaskPatch{Watch: &tracker.WatchIntent{Handle: "one-more", Watch: true}}, tracker.ChangeFields,
 		nil)
 	if err == nil {
 		t.Fatalf("a %dth watcher was accepted against a cap of %d",
@@ -134,7 +134,7 @@ func TestAWatchGestureRefusesPastTheRoutingCap(t *testing.T) {
 	// AND UN-WATCHING IS NEVER REFUSED BY IT: leaving a set that is too
 	// large is the one move that makes it smaller.
 	if _, err := r.writer.UpdateTask(t.Context(), "op-leave", "t-full", "ENG", 0,
-		tracker.TaskPatch{Watch: &tracker.WatchIntent{Handle: "w0", Watch: false}},
+		tracker.TaskPatch{Watch: &tracker.WatchIntent{Handle: "w0", Watch: false}}, tracker.ChangeFields,
 		nil); err != nil {
 		t.Fatalf("un-watching a full item was refused: %v", err)
 	}

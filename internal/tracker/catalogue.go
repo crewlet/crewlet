@@ -112,7 +112,12 @@ func (w *Writer) WriteTypes(ctx context.Context, opID string, types []TaskType) 
 			post := TypeCatalogue{
 				V: DocumentVersion, Types: clean, UpdatedAt: at,
 			}
-			return w.decide(subject, OpPatch, scope, opID, post, nil, at)
+			// THE CATALOGUE IS EDITED QUIETLY AND STILL NAMES ITSELF: a
+			// wake per catalogue edit would page the whole company for a
+			// renamed dropdown, and the feed still has to be able to say
+			// a dropdown was renamed.
+			return w.decide(subject, OpPatch, ChangeCatalogue, scope, opID,
+				post, nil, at)
 		},
 	})
 }
@@ -153,7 +158,12 @@ func (w *Writer) WriteFields(ctx context.Context, opID string, fields []FieldDef
 				// writer chose is one two writers can choose alike.
 				PolicyVersion: current.PolicyVersion + 1,
 			}
-			return w.decide(subject, OpPatch, scope, opID, post, nil, at)
+			// THE CATALOGUE IS EDITED QUIETLY AND STILL NAMES ITSELF: a
+			// wake per catalogue edit would page the whole company for a
+			// renamed dropdown, and the feed still has to be able to say
+			// a dropdown was renamed.
+			return w.decide(subject, OpPatch, ChangeCatalogue, scope, opID,
+				post, nil, at)
 		},
 	})
 }

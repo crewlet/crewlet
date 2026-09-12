@@ -197,7 +197,7 @@ func (w *Writer) WritePriorities(ctx context.Context, opID, handle string,
 			"an order, it is the backlog again", handle, len(priorities),
 			MaxPriorities)
 	}
-	return w.writePersonNotifying(ctx, opID, handle,
+	return w.writePersonNotifying(ctx, opID, handle, ChangePrioritised,
 		func(tx *sql.Tx, post *Person, at time.Time) (*Notify, error) {
 			post.Priorities = priorities
 			// THE STAMP IS WHAT MAKES THIS AUTHORITY VISIBLE ON THE
@@ -384,7 +384,11 @@ func prunedSnoozes(entries []InboxEntry, now time.Time) []InboxEntry {
 func (w *Writer) writePerson(ctx context.Context, opID, handle string,
 	apply func(*Person, time.Time) error) (WriteResult, error) {
 
-	return w.writePersonNotifying(ctx, opID, handle,
+	// EVERY OTHER PERSON WRITE IS THE PERSON'S OWN BOOKKEEPING — a pin, an
+	// inbox mark, a snooze — and it files under its own kind rather than
+	// under the operation. The row is written either way; what changes is
+	// whether a reader can name it.
+	return w.writePersonNotifying(ctx, opID, handle, ChangePersonUpdated,
 		func(_ *sql.Tx, post *Person, at time.Time) (*Notify, error) {
 			return nil, apply(post, at)
 		})
@@ -399,6 +403,7 @@ func (w *Writer) writePerson(ctx context.Context, opID, handle string,
 // same snapshot. Built outside, it would name whichever task was first when
 // the caller last looked.
 func (w *Writer) writePersonNotifying(ctx context.Context, opID, handle string,
+	kind ChangeKind,
 	apply func(*sql.Tx, *Person, time.Time) (*Notify, error)) (WriteResult, error) {
 
 	if strings.TrimSpace(handle) == "" {
@@ -426,7 +431,7 @@ func (w *Writer) writePersonNotifying(ctx context.Context, opID, handle string,
 			if err != nil {
 				return statelog.Decision{}, err
 			}
-			return w.decide(subject, OpPatch, scope, opID, post, notify, at)
+			return w.decide(subject, OpPatch, kind, scope, opID, post, notify, at)
 		},
 	})
 }

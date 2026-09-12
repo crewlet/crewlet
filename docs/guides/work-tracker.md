@@ -492,6 +492,19 @@ task's current watchers in the same transaction that writes them. An item with
 more than 64 watchers refuses the next one: past that it is an announcement
 rather than something people follow, and a comment on it wakes the company.
 
+**Commenting makes you a watcher, and never fails because of it.** The
+commenter's watch is the same one-handle gesture, resolved against the current
+row — a comment does not write the watcher set whole, which would silently
+discard somebody who watched or unwatched while the comment was being written.
+And at the cap the comment lands and the watch is skipped: an explicit
+sixty-fifth watch is refused, because the person asked for it and can be told;
+an automatic one is not, because refusing it would fail somebody's comment for
+a reason that has nothing to do with what they wrote.
+
+**Leaving is never refused**, whatever the set holds. Only joining is capped —
+the check is about growth, and applying it to an unwatch would leave a task
+that had somehow grown past the cap as one nobody could leave.
+
 ## What a person can do
 
 **The dashboard** renders the board, the list and the calendar over the same
@@ -553,7 +566,22 @@ not, and they exist because the thing that moved is not a row on a board:
 | `sprint_closed` | the same | nothing — find where your unfinished work went |
 | `prioritised` | the person whose queue somebody else wrote | **an answer**: take it up, or say why you cannot |
 
-Only the last **addresses** its recipient. A goal's owners are told so they can
+A fifth is about a task and is listed apart from the others because of what it
+says rather than what it is about:
+
+| Wake | Who hears it | What it asks |
+|---|---|---|
+| `purged` | the lead of the project the task was filed in | nothing — the task is gone from every node and nothing restores it |
+
+`purge_task` is the one operation in this engine with no inverse, and for a
+long time it told **nobody**: a task, its comments, its revisions, its history
+and its turn records were destroyed on every node and the person accountable
+for that project heard nothing. The wake names the key, who ran it and their
+stated reason — and nothing else. It quotes neither the title nor the body,
+because the record outlives the rows: an excerpt of what was purged would keep
+a copy of exactly that, on the log, for its whole retention window.
+
+Only `prioritised` **addresses** its recipient. A goal's owners are told so they can
 act in the work, not so they can reply — a wake that asked for an answer on
 every health update would fill the tracker with "noted, thanks". Being told
 what to do next by somebody above you is a different thing, and silence on it
@@ -562,7 +590,9 @@ is indistinguishable from a message that was lost.
 None of the four sends you to `get_work_item` for the object it is about: a
 goal's id and a sprint's number are not task keys, and a pointer at one costs a
 round and a failed tool call to discover. Each names the tool that answers its
-own question — `list_work_goals`, `sprint_report`, `my_work`.
+own question — `list_work_goals`, `sprint_report`, `my_work`. A `purged` wake
+sends you nowhere for the sharper version of the same reason: the row is gone
+from every node, so the tool would answer `not_found`.
 
 A **sprint close changes no task's status.** The close is about the sprint;
 what happens to the unfinished work is the rollover, and the wake says which of
@@ -656,6 +686,12 @@ crewlet work purge <task-id> -project KEY -reason "why" -confirm <task-key>
 Its **children move rather than being destroyed**: each direct child
 re-parents onto the purged task's own parent, or becomes a root when the purged
 task was one. Destroying the subtree would destroy work nobody confirmed.
+
+**The project's lead is told**, and nobody else. There is no assignee left to
+tell and no watcher list worth carrying — a notification naming them would be
+a copy of exactly the content the purge exists to remove, kept on the log for
+its whole retention window. What survives is that it happened, to which key,
+by whom, and the reason the operator gave.
 
 The purge report gives no time guarantee, and that is honest rather than
 evasive: an offline or evicted disk keeps its copy until it replays, adopts a

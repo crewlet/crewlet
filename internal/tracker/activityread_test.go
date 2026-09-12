@@ -30,7 +30,7 @@ func TestTheActivityFeedCarriesQuietCommits(t *testing.T) {
 	done := tracker.StatusDone
 	// NO NOTIFY: this change tells nobody.
 	if _, err := r.writer.UpdateTask(t.Context(), "op-quiet", "t-1", "ENG",
-		tracker.NoIfMatch, tracker.TaskPatch{Status: &done}, nil); err != nil {
+		tracker.NoIfMatch, tracker.TaskPatch{Status: &done}, tracker.ChangeStatus, nil); err != nil {
 		t.Fatalf("UpdateTask: %v", err)
 	}
 	r.drain()
@@ -195,7 +195,7 @@ func TestTheActivityFiltersNarrow(t *testing.T) {
 	inSprint(t, r, "t-2", nil)
 	done := tracker.StatusDone
 	if _, err := r.writer.UpdateTask(t.Context(), "op-done", "t-1", "ENG",
-		tracker.NoIfMatch, tracker.TaskPatch{Status: &done}, nil); err != nil {
+		tracker.NoIfMatch, tracker.TaskPatch{Status: &done}, tracker.ChangeStatus, nil); err != nil {
 		t.Fatalf("UpdateTask: %v", err)
 	}
 	r.drain()

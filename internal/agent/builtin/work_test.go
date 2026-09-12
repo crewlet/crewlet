@@ -35,8 +35,12 @@ type fakeTracker struct {
 	patched  []tracker.TaskPatch
 	ifMatch  []uint64
 	notified []*tracker.Notify
-	actors   []builtin.Actor
-	opIDs    []string
+
+	// kinds is what each write said it WAS, which is a different fact
+	// from whether it notified anybody — see [tracker.MutationRecord.Kind].
+	kinds  []tracker.ChangeKind
+	actors []builtin.Actor
+	opIDs  []string
 
 	goalListing      tracker.GoalListing
 	goalsWritten     []tracker.Goal
@@ -210,7 +214,8 @@ func (f *fakeTracker) CreateTask(_ context.Context, opID string, task tracker.Ta
 }
 
 func (f *fakeTracker) UpdateTask(_ context.Context, opID, _, _ string, ifMatch uint64,
-	patch tracker.TaskPatch, notify *tracker.Notify) (tracker.WriteResult, error) {
+	patch tracker.TaskPatch, kind tracker.ChangeKind,
+	notify *tracker.Notify) (tracker.WriteResult, error) {
 
 	if f.writeErr != nil {
 		return tracker.WriteResult{}, f.writeErr
@@ -218,6 +223,7 @@ func (f *fakeTracker) UpdateTask(_ context.Context, opID, _, _ string, ifMatch u
 	f.patched = append(f.patched, patch)
 	f.ifMatch = append(f.ifMatch, ifMatch)
 	f.notified = append(f.notified, notify)
+	f.kinds = append(f.kinds, kind)
 	f.opIDs = append(f.opIDs, opID)
 	return tracker.WriteResult{
 		Key: "ENG-1", Outcome: statelog.OutcomeApplied,

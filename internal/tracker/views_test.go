@@ -273,7 +273,7 @@ func TestAContainerHasItsViewsBeforeAnybodySavesOne(t *testing.T) {
 			V: 1, Key: "ENG", Name: "Engineering",
 			Sprints:   &tracker.SprintPolicy{},
 			CreatedAt: wednesday, UpdatedAt: wednesday,
-		}, nil); err != nil {
+		}, tracker.ChangeProjectCreated, nil); err != nil {
 		t.Fatalf("turn sprints on: %v", err)
 	}
 	r.drain()
@@ -308,7 +308,7 @@ func TestEveryImplicitViewsQueryParses(t *testing.T) {
 			V: 1, Key: "ENG", Name: "Engineering",
 			Sprints:   &tracker.SprintPolicy{},
 			CreatedAt: wednesday, UpdatedAt: wednesday,
-		}, nil); err != nil {
+		}, tracker.ChangeProjectCreated, nil); err != nil {
 		t.Fatalf("turn sprints on: %v", err)
 	}
 	r.drain()
@@ -436,7 +436,7 @@ func TestAPinOrdersOneViewersStripAndNoOthers(t *testing.T) {
 	if _, err := r.writer.WriteDocument(t.Context(), "op-ana",
 		tracker.PersonSubject("ana"), "", tracker.Person{
 			V: 1, Handle: "ana", PinnedViews: []string{"v-3"},
-		}, nil); err != nil {
+		}, tracker.ChangePersonUpdated, nil); err != nil {
 		t.Fatalf("pin v-3 for ana: %v", err)
 	}
 	r.drain()

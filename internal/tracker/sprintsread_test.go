@@ -45,7 +45,7 @@ func seedSprintWindow(t *testing.T, r *roundTrip, number int,
 		sprint.ClosedBy = "system"
 	}
 	if _, err := r.writer.WriteDocument(t.Context(), "op-sw-"+itoa(number),
-		tracker.SprintSubject("ENG", number), "", sprint, nil); err != nil {
+		tracker.SprintSubject("ENG", number), "", sprint, tracker.ChangeSprintMinted, nil); err != nil {
 		t.Fatalf("seed sprint %d: %v", number, err)
 	}
 	r.drain()
@@ -134,7 +134,7 @@ func TestASprintsDeliveryIsCountedFromItsSpans(t *testing.T) {
 
 	done := tracker.StatusDone
 	if _, err := r.writer.UpdateTask(t.Context(), "op-ship", "ship", "ENG",
-		tracker.NoIfMatch, tracker.TaskPatch{Status: &done}, nil); err != nil {
+		tracker.NoIfMatch, tracker.TaskPatch{Status: &done}, tracker.ChangeStatus, nil); err != nil {
 		t.Fatalf("finish a task: %v", err)
 	}
 	r.drain()
@@ -154,7 +154,7 @@ func TestASprintsDeliveryIsCountedFromItsSpans(t *testing.T) {
 	// remaining work at a hundred per cent.
 	cancelled := tracker.StatusCancelled
 	if _, err := r.writer.UpdateTask(t.Context(), "op-drop", "stuck", "ENG",
-		tracker.NoIfMatch, tracker.TaskPatch{Status: &cancelled}, nil); err != nil {
+		tracker.NoIfMatch, tracker.TaskPatch{Status: &cancelled}, tracker.ChangeStatus, nil); err != nil {
 		t.Fatalf("cancel a task: %v", err)
 	}
 	r.drain()
@@ -195,7 +195,7 @@ func TestASprintsWindowEndsWhereTheSprintDid(t *testing.T) {
 
 	done := tracker.StatusDone
 	if _, err := r.writer.UpdateTask(t.Context(), "op-late", "late", "ENG",
-		tracker.NoIfMatch, tracker.TaskPatch{Status: &done}, nil); err != nil {
+		tracker.NoIfMatch, tracker.TaskPatch{Status: &done}, tracker.ChangeStatus, nil); err != nil {
 		t.Fatalf("finish a task: %v", err)
 	}
 	r.drain()

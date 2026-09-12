@@ -336,6 +336,36 @@ func (k ObjectKind) Routable() bool {
 	return false
 }
 
+// RecordsHistory reports a kind whose apply writes a `tracker_history` row.
+//
+// # Why it is a closed set and why it is here rather than in the applier
+//
+// It is the rule that decides which records must STATE what they did. A
+// history row's `kind` is what every feed filter, every report window and the
+// unblocked repair's own scan select on, so a record that produces one and
+// names no kind leaves that column to be guessed — and the guess used to be
+// made from the OPERATION, which is a different vocabulary: a quiet catalogue
+// edit filed as `patch`, a purge as `purge` rather than `purged`, and neither
+// is a [ChangeKind] any filter can name.
+//
+// The seven document kinds and the task are exactly the kinds [Applier.apply]
+// routes to a path that writes one. Everything else — a barrier, a turn, an
+// eviction, a generation, an alias, a rank order, a counter — is machinery
+// with no audience and no entry in anybody's account of what happened, so a
+// change kind on one of those would be a word about a record nobody reads.
+//
+// A CLOSED SET, for [ObjectKind.Routable]'s reason turned around: a kind added
+// later must fail the writer's own check rather than silently publish a record
+// whose history row is filed under a guess.
+func (k ObjectKind) RecordsHistory() bool {
+	switch k {
+	case KindTask, KindProject, KindSprint, KindTags, KindCatalogue,
+		KindView, KindGoal, KindPerson:
+		return true
+	}
+	return false
+}
+
 // RequiresAProject reports a kind that cannot live at the top of the company.
 func (k ObjectKind) RequiresAProject() bool {
 	return k == KindTask || k == KindTurn

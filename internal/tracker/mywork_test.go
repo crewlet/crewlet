@@ -25,7 +25,7 @@ func (r *roundTrip) myWork(handle string) tracker.MyWork {
 func askOn(t *testing.T, r *roundTrip, opID, task string, comment tracker.Comment) {
 	t.Helper()
 	if _, err := r.writer.UpdateTask(t.Context(), opID, task, "ENG",
-		tracker.NoIfMatch, tracker.TaskPatch{Comment: &comment}, nil); err != nil {
+		tracker.NoIfMatch, tracker.TaskPatch{Comment: &comment}, tracker.ChangeComment, nil); err != nil {
 		t.Fatalf("comment on %s: %v", task, err)
 	}
 	r.drain()
@@ -75,7 +75,7 @@ func TestMyWorkKeepsThePriorityOrder(t *testing.T) {
 	// filters — and the next write to the list drops it for good.
 	done := tracker.StatusDone
 	if _, err := r.writer.UpdateTask(t.Context(), "op-done", "a", "ENG",
-		tracker.NoIfMatch, tracker.TaskPatch{Status: &done}, nil); err != nil {
+		tracker.NoIfMatch, tracker.TaskPatch{Status: &done}, tracker.ChangeStatus, nil); err != nil {
 		t.Fatalf("UpdateTask: %v", err)
 	}
 	r.drain()
@@ -104,7 +104,7 @@ func TestMyWorkSeparatesTheSevenClaims(t *testing.T) {
 	if _, err := r.writer.UpdateTask(t.Context(), "op-collab", "theirs", "ENG",
 		tracker.NoIfMatch, tracker.TaskPatch{
 			Collaborators: &[]string{"ana"},
-		}, nil); err != nil {
+		}, tracker.ChangeCollaborators, nil); err != nil {
 		t.Fatalf("UpdateTask: %v", err)
 	}
 	r.drain()

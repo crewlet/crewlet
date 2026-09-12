@@ -180,8 +180,8 @@ func (w *Writer) WriteGoal(ctx context.Context, opID string, goal Goal) (WriteRe
 				// goal somebody else set.
 				post.CreatedAt, post.CreatedBy = current.CreatedAt, current.CreatedBy
 			}
-			return w.decide(subject, OpPatch, scope, opID, post,
-				goalWake(current, held, post), at)
+			return w.decide(subject, OpPatch, ChangeGoalUpdated, scope, opID,
+				post, goalWake(current, held, post), at)
 		},
 	})
 }

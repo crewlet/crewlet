@@ -167,7 +167,7 @@ func TestAGoalsProgressIsItsTargets(t *testing.T) {
 	// which is the whole reason the number is not stored.
 	done := tracker.StatusDone
 	if _, err := r.writer.UpdateTask(t.Context(), "op-finish", "gt-2", "ENG", 0,
-		tracker.TaskPatch{Status: &done}, nil); err != nil {
+		tracker.TaskPatch{Status: &done}, tracker.ChangeStatus, nil); err != nil {
 		t.Fatalf("finish a task: %v", err)
 	}
 	r.drain()
@@ -183,7 +183,7 @@ func TestAGoalsProgressIsItsTargets(t *testing.T) {
 	// its goal.
 	cancelled := tracker.StatusCancelled
 	if _, err := r.writer.UpdateTask(t.Context(), "op-abandon", "gt-3", "ENG", 0,
-		tracker.TaskPatch{Status: &cancelled}, nil); err != nil {
+		tracker.TaskPatch{Status: &cancelled}, tracker.ChangeStatus, nil); err != nil {
 		t.Fatalf("cancel the last open task: %v", err)
 	}
 	r.drain()

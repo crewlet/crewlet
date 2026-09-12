@@ -60,7 +60,7 @@ func TestATaskCanBeRemovedAndRestored(t *testing.T) {
 	// editing something nobody can see.
 	title := "a new title"
 	if _, err := r.writer.UpdateTask(t.Context(), "op-edit", "t-gone", "ENG", 0,
-		tracker.TaskPatch{Title: &title}, nil); err == nil {
+		tracker.TaskPatch{Title: &title}, tracker.ChangeFields, nil); err == nil {
 		t.Error("a removed task took an ordinary patch, so the tombstone is a " +
 			"flag rather than a freeze")
 	}
@@ -189,7 +189,7 @@ func TestACrossProjectMoveCarriesTheSubtree(t *testing.T) {
 		tracker.ProjectSubject("OPS"), "", tracker.Project{
 			V: 1, Key: "OPS", Name: "Operations",
 			CreatedAt: wednesday, UpdatedAt: wednesday,
-		}, nil); err != nil {
+		}, tracker.ChangeProjectCreated, nil); err != nil {
 		t.Fatalf("seed the target project: %v", err)
 	}
 	r.drain()

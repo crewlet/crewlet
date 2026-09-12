@@ -54,7 +54,7 @@ func newRoundTrip(t *testing.T) *roundTrip {
 		tracker.ProjectSubject("ENG"), "", tracker.Project{
 			V: 1, Key: "ENG", Name: "Engineering",
 			CreatedAt: wednesday, UpdatedAt: wednesday,
-		}, nil); err != nil {
+		}, tracker.ChangeProjectCreated, nil); err != nil {
 		t.Fatalf("seed the project: %v", err)
 	}
 	r.drain()
@@ -400,7 +400,7 @@ func TestATaskWrittenIsATaskRead(t *testing.T) {
 
 	// AND A SECOND WRITE ARBITRATES AGAINST THE FIRST.
 	if _, err := r.writer.UpdateTask(t.Context(), "op-patch", "t-1", "ENG", tracker.NoIfMatch,
-		tracker.TaskPatch{Title: ptr("wired")}, nil); err != nil {
+		tracker.TaskPatch{Title: ptr("wired")}, tracker.ChangeFields, nil); err != nil {
 		t.Fatalf("UpdateTask: %v", err)
 	}
 	r.drain()

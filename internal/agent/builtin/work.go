@@ -72,8 +72,13 @@ type WorkReader interface {
 type WorkWriter interface {
 	CreateTask(ctx context.Context, opID string, task tracker.Task,
 		notify *tracker.Notify) (tracker.WriteResult, error)
+	// UpdateTask takes the change KIND beside the notification because
+	// they are two facts: what happened, and who is told about it. A tool
+	// that stated only the second left the record's kind to be guessed
+	// from the operation whenever nobody was listening.
 	UpdateTask(ctx context.Context, opID, id, project string, ifMatch uint64,
-		patch tracker.TaskPatch, notify *tracker.Notify) (tracker.WriteResult, error)
+		patch tracker.TaskPatch, kind tracker.ChangeKind,
+		notify *tracker.Notify) (tracker.WriteResult, error)
 }
 
 // WorkDeps are the tracker halves plus what a write needs to attribute itself.
@@ -1065,7 +1070,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	}
 	got, err := writer.UpdateTask(ctx,
 		opIDFor(actor, "update", before.Task.ID), before.Task.ID,
-		before.Task.Project, ifMatch, patch,
+		before.Task.Project, ifMatch, patch, kind,
 		tracker.Wake{
 			Kind:   kind,
 			Before: before.Task,
@@ -1369,17 +1374,40 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// mutation of the task and shares its arbitration: two people
 	// commenting at once contend at the broker on one subject, and exactly
 	// one wins a round.
-	after := before.Task
-	after.Watchers = handles(append(slices.Clone(after.Watchers), actor.Handle)...)
+	//
+	// THE COMMENTER'S WATCH IS A GESTURE, NOT A SET. Sending the whole
+	// watcher set — read here, OUTSIDE the writer's own decide snapshot —
+	// made a comment a last-write-wins over that collection: somebody who
+	// watched or unwatched between this read and the append had their
+	// change silently discarded by a comment that was not about them. It
+	// could also push the set past [tracker.MaxWatchers] with nothing
+	// checking, after which the cap refused every unwatch and nobody
+	// could leave. The gesture is resolved against the CURRENT row inside
+	// the decide, and it is `Auto` because nobody pressed watch: at the
+	// cap the comment lands and the watch is skipped.
+	patch := tracker.TaskPatch{
+		Comment: comment,
+		Watch: &tracker.WatchIntent{
+			Handle: actor.Handle, Watch: true, Auto: true,
+		},
+	}
 	got, err := writer.UpdateTask(ctx,
 		opIDFor(actor, "comment", comment.ID), before.Task.ID, before.Task.Project,
 		// A COMMENT NEVER CONDITIONS ON A VERSION: it adds to the thread
 		// rather than replacing anybody's value, so there is nothing a
 		// concurrent edit could make it clobber.
-		tracker.NoIfMatch,
-		tracker.TaskPatch{Comment: comment, Watchers: &after.Watchers},
+		tracker.NoIfMatch, patch, tracker.ChangeComment,
 		tracker.Wake{
-			Kind: tracker.ChangeComment, Before: before.Task, After: after,
+			Kind:   tracker.ChangeComment,
+			Before: before.Task,
+			// THROUGH THE SAME SIMULATION EVERY OTHER WRITE USES, so the
+			// gesture is applied once rather than here and again in
+			// [patched]: a second copy is how the two stop agreeing,
+			// and this one had already drifted — it appended the
+			// commenter to the watcher set unconditionally, which is
+			// wrong at the cap now that an automatic watch is skipped
+			// there rather than refused.
+			After:   patched(before.Task, patch),
 			Comment: comment, Mentions: comment.Mentions,
 		}.Notify(t.deps.Leads))
 	if err != nil {

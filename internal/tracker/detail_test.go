@@ -25,7 +25,7 @@ func TestATaskReadsBackWholeAndByEveryNameItHasHad(t *testing.T) {
 	created := r.createTask("Rate limits in the GitLab client")
 
 	if _, err := r.writer.UpdateTask(t.Context(), "op-assign", created.ID, "ENG", tracker.NoIfMatch,
-		tracker.TaskPatch{Assignee: strptr("ana")}, nil); err != nil {
+		tracker.TaskPatch{Assignee: strptr("ana")}, tracker.ChangeAssignee, nil); err != nil {
 		t.Fatalf("assign: %v", err)
 	}
 	r.drain()
@@ -198,7 +198,7 @@ func (r *roundTrip) relate(from, to string, kind tracker.RelationKind) {
 	if _, err := r.writer.UpdateTask(r.t.Context(), "op-rel-"+from+to, from, "ENG",
 		tracker.NoIfMatch, tracker.TaskPatch{
 			Relations: &[]tracker.Relation{{Kind: kind, Other: to}},
-		}, nil); err != nil {
+		}, tracker.ChangeRelations, nil); err != nil {
 		r.t.Fatalf("relate: %v", err)
 	}
 	r.drain()
@@ -251,7 +251,7 @@ func TestACommentIsARowAndAnAnswerClosesItsAsk(t *testing.T) {
 			ID: "cm-1", Task: created.ID, Author: "ana",
 			AuthorKind: tracker.AuthorHuman, Body: question, Ask: "bob",
 			CreatedAt: wednesday,
-		}}, nil); err != nil {
+		}}, tracker.ChangeComment, nil); err != nil {
 		t.Fatalf("comment: %v", err)
 	}
 	r.drain()
@@ -287,7 +287,7 @@ func TestACommentIsARowAndAnAnswerClosesItsAsk(t *testing.T) {
 			ID: "cm-2", Task: created.ID, Author: "bob",
 			AuthorKind: tracker.AuthorHuman, Body: "platform does",
 			Answers: &answers, CreatedAt: wednesday,
-		}}, nil); err != nil {
+		}}, tracker.ChangeComment, nil); err != nil {
 		t.Fatalf("answer: %v", err)
 	}
 	r.drain()
@@ -306,7 +306,7 @@ func TestACommentIsARowAndAnAnswerClosesItsAsk(t *testing.T) {
 			ID: "cm-1", Task: created.ID, Author: "ana",
 			AuthorKind: tracker.AuthorHuman, Body: "who owns the rollback now?",
 			Ask: "bob", CreatedAt: wednesday, UpdatedAt: wednesday,
-		}}, nil); err != nil {
+		}}, tracker.ChangeComment, nil); err != nil {
 		t.Fatalf("edit: %v", err)
 	}
 	r.drain()
@@ -342,7 +342,7 @@ func TestAChecklistItemIsARow(t *testing.T) {
 	}}}
 	if _, err := r.writer.UpdateTask(t.Context(), "op-checklist", created.ID,
 		"ENG", tracker.NoIfMatch,
-		tracker.TaskPatch{Checklists: &lists}, nil); err != nil {
+		tracker.TaskPatch{Checklists: &lists}, tracker.ChangeChecklist, nil); err != nil {
 		t.Fatalf("checklist: %v", err)
 	}
 	r.drain()
@@ -361,7 +361,7 @@ func TestAChecklistItemIsARow(t *testing.T) {
 		Items: []tracker.ChecklistItem{lists[0].Items[1]}}}
 	if _, err := r.writer.UpdateTask(t.Context(), "op-shorter", created.ID,
 		"ENG", tracker.NoIfMatch,
-		tracker.TaskPatch{Checklists: &shorter}, nil); err != nil {
+		tracker.TaskPatch{Checklists: &shorter}, tracker.ChangeChecklist, nil); err != nil {
 		t.Fatalf("checklist: %v", err)
 	}
 	r.drain()
