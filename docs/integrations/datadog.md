@@ -228,8 +228,19 @@ each one leaving the surface reporting `ready` while alerts went nowhere:
 | A seat's service account exists but is **disabled**, with no Crewlet marker | `identity_failed` | re-enable it in Datadog — it was not disabled by this engine |
 | A seat's service account is disabled **by a Crewlet disconnect** | — | the next pass re-enables it |
 | A seat holds a sealed key and its account holds **no application key at all** | — | the next pass mints a replacement and seals it |
+| Service accounts at this company's own email domain that match **no seat** | `registration_orphaned` | disable or delete them in Datadog — nothing here touches them |
 
 Two of those are worth knowing about in detail.
+
+#### Accounts this engine made and no longer manages
+
+A live organization accumulates them: a seat renamed, a handle changed, an older naming scheme. **Measured on one: 36 disabled accounts under `agent-cs-…@agents.crewlet.invalid`**, matching nothing a current pass would ask for. They are absent from the plan by construction, so no seat's row mentioned them and the card read **Connected** over an organization full of them.
+
+They are reported in **one** finding, with the addresses in the detail: the decision is the same for all of them, it is a person's, and thirty-six rows of it would bury everything else on the card. It is an **advisory** — phase `ready`, owed to an admin — because nothing is broken and nothing this engine runs will ever change it, so reporting it as a wait would leave somebody watching a retry with nothing to retry.
+
+**Nothing removes them.** An account is a colleague at Datadog with history attached, so deleting one because a handle changed is not a decision a timer makes — the same rule a disconnect follows when it declines to delete a company's credentials.
+
+Which accounts count as this engine's is decided in two steps, and the domain alone is not enough: Datadog's user filter is a free-text substring match, so a listing under a real domain carries the company's own people. A **`.invalid`** domain (the default, reserved by [RFC 2606](https://www.rfc-editor.org/rfc/rfc2606) precisely so nothing can deliver there) is conclusive — no person has a mailbox at one. Under any other domain the **`crewlet-` prefix** is the marker, so a service account somebody else created at a domain you own is left alone. The prefixes this engine *no longer writes* are deliberately not enumerated: that list would grow for ever and be wrong the moment `email_domain` changed, and the `.invalid` clause catches them all without naming any.
 
 **An account this engine disabled is re-enabled, and one a person disabled is not.** Disabling is exactly how a disconnect with account removal decommissions an account, so a company that had run that and then reconnected looked fully provisioned while no seat could act. The disconnect writes a marker — the account's `title` becomes `crewlet:disconnected` — *before* it disables, so an interrupted teardown leaves a marked live account rather than an unmarked dead one, and connecting again re-enables only accounts carrying that marker. An account somebody disabled in Datadog's own console is reported and never touched: undoing an operator's explicit decision from a timer is not a decision this loop gets to make.
 

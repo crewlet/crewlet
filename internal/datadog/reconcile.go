@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -60,6 +62,26 @@ type Result struct {
 	// cannot seal what it would mint, so it created nothing. See
 	// [sealsNothing].
 	NoKeyring bool
+
+	// Orphaned are the service accounts at this company's own email domain
+	// that match no seat this engine plans for.
+	//
+	// REPORTED AND NEVER TOUCHED, which is the whole of it. A live
+	// organization accumulates these: a seat renamed, a handle changed, an
+	// older naming scheme this engine no longer derives — measured on one,
+	// 36 disabled accounts under `agent-cs-…@agents.crewlet.invalid` that
+	// match nothing a current pass would ask for. Every one is an identity
+	// somebody has to decide about, and nothing named them: they are absent
+	// from the plan by construction, so no seat's result mentions them and
+	// the card read Ready over an organization full of them.
+	//
+	// Not removed, for the reason the disconnect gives at length: an account
+	// is a colleague at that app with history attached, and deleting one
+	// because a handle changed is not a decision a timer makes. It is an
+	// ADVISORY — [integration.FindingRegistrationOrphaned] is phase-ready,
+	// owed to an admin — so it says so without holding the surface out of
+	// Ready.
+	Orphaned []User
 
 	// Notes are the caveats: a seat whose key is a literal, a role the
 	// organization does not have.
@@ -230,6 +252,9 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	for _, seat := range opts.Plan.Seats {
 		res.Seats = append(res.Seats, provisionSeat(ctx, opts, seat, byEmail, roleID))
 	}
+	// AND WHAT THE LISTING HOLDS THAT THE PLAN DOES NOT. Read off the same
+	// listing the seats were matched against, so it costs no extra request.
+	res.Orphaned = orphanedAccounts(existing, opts.Plan, emailDomainOf(opts.Config))
 	// FLUSHED AFTER THE WHOLE PLAN, AND ON EVERY PATH THAT MINTED.
 	//
 	// [provision.TokenSink] hands nothing to the fleet until Flush, so a
@@ -501,6 +526,67 @@ func roleIDOf(ctx context.Context, opts Options, name string) (string, error) {
 			"integrations.datadog.provisioning.role", name)
 }
 
+// orphanedAccounts is every service account at this company's own domain that
+// no seat in the plan claims.
+//
+// # Which accounts count as this engine's
+//
+// The domain is the first half and it is not enough on its own: a company may
+// point `email_domain` at a real domain it owns, where its own people have
+// addresses. So a `.invalid` domain — the default, and reserved by RFC 2606
+// precisely because nothing can deliver to it — is taken as conclusive, since
+// no person has a mailbox there and a service account at one was made by a
+// provisioner. Anywhere else the `crewlet-` prefix is the marker.
+//
+// THE PREFIX THIS ENGINE NO LONGER WRITES is deliberately not listed. The
+// accounts a live organization actually holds came from whatever scheme was
+// current when they were made, and enumerating past ones would be a list that
+// grows for ever and is wrong the moment somebody edits `email_domain`. The
+// `.invalid` clause catches every one of them without naming any.
+//
+// A seat is matched on its PLANNED ADDRESS rather than on the account it ended
+// up with: a seat whose account this pass could not read is still a seat
+// somebody is managing, and reporting its account as orphaned would tell an
+// operator to clean up the identity of a working agent.
+func orphanedAccounts(existing []User, plan *provision.Plan, domain string) []User {
+	if plan == nil {
+		return nil
+	}
+	claimed := make(map[string]bool, len(plan.Seats))
+	for _, seat := range plan.Seats {
+		claimed[strings.ToLower(strings.TrimSpace(seat.Email))] = true
+	}
+	var out []User
+	for _, user := range existing {
+		if claimed[strings.ToLower(strings.TrimSpace(user.Email))] {
+			continue
+		}
+		if !madeHere(user.Email, domain) {
+			continue
+		}
+		out = append(out, user)
+	}
+	slices.SortFunc(out, func(a, b User) int { return strings.Compare(a.Email, b.Email) })
+	return out
+}
+
+// madeHere reports an address only a provisioner of this company could have
+// created. See [orphanedAccounts].
+func madeHere(email, domain string) bool {
+	at := strings.LastIndex(email, "@")
+	if at < 0 {
+		return false
+	}
+	local, host := email[:at], strings.TrimSpace(email[at+1:])
+	if !strings.EqualFold(host, strings.TrimSpace(domain)) {
+		return false
+	}
+	if strings.HasSuffix(strings.ToLower(host), ".invalid") {
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(local), "crewlet-")
+}
+
 // sealsNothing reports a sink that EXISTS and cannot record.
 //
 // DISTINCT FROM A NIL SINK, and collapsing the two would lose the more useful
@@ -601,6 +687,38 @@ func (r *Result) Findings() []integration.Finding {
 					"the next provisioning pass mints a replacement",
 			})
 		}
+	}
+
+	// AND THE ACCOUNTS NOTHING CLAIMS, said once.
+	//
+	// ONE FINDING rather than one per account, because there is nothing
+	// per-account to do differently: the decision is the same for all of
+	// them and is one person's, and 36 rows of it — measured — would bury
+	// every other finding on the card. The addresses are in the detail,
+	// which is where a list an operator acts on belongs.
+	//
+	// AN ADVISORY, so it does not hold the surface out of Ready.
+	// [integration.FindingRegistrationOrphaned]'s verdict is phase-ready
+	// and admin-owed: nothing is broken, and nothing this engine runs will
+	// ever change it, so reporting it as a wait would leave somebody
+	// watching a retry that has nothing to retry.
+	if len(r.Orphaned) > 0 {
+		addresses := make([]string, 0, len(r.Orphaned))
+		for _, user := range r.Orphaned {
+			addresses = append(addresses, user.Email)
+		}
+		out = append(out, integration.Finding{
+			Kind:    integration.FindingRegistrationOrphaned,
+			Subject: "datadog service accounts",
+			Detail: fmt.Sprintf(
+				"%d service account(s) at this company's own email domain "+
+					"match no seat this engine provisions for — a renamed seat, "+
+					"a changed handle, or an older naming scheme. Nothing here "+
+					"removes them: an account is a colleague at Datadog with "+
+					"history attached. Disable or delete the ones you do not "+
+					"want at Datadog: %s",
+				len(r.Orphaned), strings.Join(addresses, ", ")),
+		})
 	}
 	return out
 }
