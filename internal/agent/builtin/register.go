@@ -155,6 +155,13 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		// refuses a type the company has not declared, and a model that
 		// cannot read the catalogue can only guess at one.
 		{&getWorkCatalogue{deps: deps.Work}, deps.Work.Reader != nil},
+		// AND SO IS READING THE PROJECT, for the same reason and one more:
+		// a create refuses a project the company does not have and a
+		// required field left empty, and both refusals are one round a
+		// model could have skipped by looking the container up first.
+		{&listProjects{deps: deps.Work}, projectReads(deps.Work)},
+		{&describeProject{deps: deps.Work}, projectReads(deps.Work)},
+		{&sprintReport{deps: deps.Work}, projectReads(deps.Work)},
 		{&listPages{deps: deps.Pages}, deps.Pages.Reader != nil},
 		{&getPage{deps: deps.Pages}, deps.Pages.Reader != nil},
 		{&writePage{deps: deps.Pages}, deps.Pages.Writer != nil},
@@ -258,7 +265,8 @@ func annotationsFor(name string) tools.Annotations {
 		// box, and a second set of commits.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
 	case ListWorkItemsTool, GetWorkItemTool, ListPagesTool, GetPageTool,
-		tracker.GetWorkCatalogueTool:
+		tracker.GetWorkCatalogueTool, tracker.ListProjectsTool,
+		tracker.DescribeProjectTool, tracker.SprintReportTool:
 		// Reads, and idempotent: asking twice costs a round and changes
 		// nothing. The catalogue lookup belongs here with the rest — left
 		// out, it fell to the default arm, whose ReadOnly=No with
@@ -354,4 +362,18 @@ func orDefault(value, fallback int) int {
 		return fallback
 	}
 	return value
+}
+
+// projectReads reports whether this build's reader answers the project seam.
+//
+// A TYPE ASSERTION rather than a second field on the deps, because the reader
+// is ONE object: a build wiring the native tracker satisfies the whole seam
+// and a build wiring none satisfies nothing, so a separate switch would be a
+// second thing to keep in step with the first.
+func projectReads(deps WorkDeps) bool {
+	if deps.Reader == nil {
+		return false
+	}
+	_, ok := deps.Reader.(ProjectReader)
+	return ok
 }

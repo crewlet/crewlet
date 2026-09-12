@@ -1105,6 +1105,188 @@ export interface WorkViewsAnswer {
   incomplete?: WorkIncomplete;
 }
 
+/** A project's chart-owned unit, as a reader renders it.
+ *
+ *  `resolved` IS A FIELD rather than an absence, because "this project names a
+ *  unit the chart no longer has" is a finding — and an absent unit would be
+ *  indistinguishable from a project that names none. */
+export interface WorkUnitRef {
+  key?: string;
+  name?: string;
+  resolved: boolean;
+}
+
+export interface WorkLeadRef {
+  handle?: string;
+  kind?: "agent" | "human" | "operator" | "system";
+}
+
+/** A project's task census.
+ *
+ *  MAINTAINED by the applier on every status-group change and every arrival or
+ *  departure, never aggregated per poll — which is what makes a sixty-second
+ *  refresh three column reads rather than a scan of every task in the
+ *  company. */
+export interface WorkTaskCounts {
+  open: number;
+  done: number;
+  closed: number;
+}
+
+/** One sprint's arithmetic, in the project's own measure.
+ *
+ *  `measure` is on the row because a bare number is points to one team and
+ *  minutes to another. */
+export interface WorkSprintFigures {
+  measure: "points" | "estimate_min";
+  committed: number;
+  added: number;
+  removed: number;
+  done: number;
+  remaining: number;
+  open_after_close: number;
+  tasks: number;
+  /** How many of them carry NO value in the measure — the honesty column. */
+  unestimated: number;
+}
+
+export interface WorkSprintAssignee {
+  handle: string;
+  committed: number;
+  done: number;
+  remaining: number;
+  total: number;
+  tasks: number;
+  /** ABSENT when the project's policy declares none: an unset capacity is not
+   *  a capacity of zero, which would render every assignee permanently over. */
+  capacity?: number;
+  over_capacity?: boolean;
+}
+
+export interface WorkSprintRow {
+  project: string;
+  number: number;
+  name: string;
+  goal?: string;
+  state: "future" | "active" | "closed";
+  start_at: string;
+  end_at: string;
+  closed_at?: string;
+  closed_by?: string;
+  /** ABSENT on anything but an active sprint — a future one has not started
+   *  and a closed one has no remainder. */
+  days_remaining?: number;
+  figures: WorkSprintFigures;
+  by_assignee?: WorkSprintAssignee[];
+  /** A CLOSED sprint whose spillover nobody has decided — the one thing on
+   *  this answer a lead has to act on. */
+  rollover_pending?: boolean;
+  rollover_to?: number;
+  archived?: boolean;
+  version: number;
+}
+
+export interface WorkActiveSprint {
+  number: number;
+  name: string;
+  state: "future" | "active" | "closed";
+  end_at: string;
+  figures: WorkSprintFigures;
+  days_remaining: number;
+}
+
+/** ABSENT on a project that runs no sprints at all, which is not the same as
+ *  a project that has none right now. */
+export interface WorkSprintSummary {
+  active?: WorkActiveSprint;
+  next?: number;
+  pending_spillovers?: number[];
+}
+
+export interface WorkProjectRow {
+  key: string;
+  name: string;
+  purpose?: string;
+  unit: WorkUnitRef;
+  lead: WorkLeadRef;
+  default_assignee?: string;
+  sprints?: WorkSprintSummary;
+  task_counts: WorkTaskCounts;
+  archived?: boolean;
+  version: number;
+}
+
+export interface WorkProjectsAnswer {
+  projects: WorkProjectRow[];
+  total: number;
+  truncated?: boolean;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
+/** One label in a project's tag set. */
+export interface WorkProjectTag {
+  slug: string;
+  label: string;
+  color?: string;
+  description?: string;
+  archived?: boolean;
+}
+
+export interface WorkFieldGroup {
+  applies_to?: string;
+  fields: WorkFieldDef[];
+}
+
+export interface WorkStatusDef {
+  status: WorkStatus;
+  label: string;
+  group: string;
+  description: string;
+}
+
+export interface WorkProjectDetail extends WorkProjectRow {
+  statuses: WorkStatusDef[];
+  types: WorkTypeDef[];
+  fields: WorkFieldGroup[];
+  /** The workspace field ids this project redeclares — the state a field in
+   *  the middle of a move between scopes is in. */
+  shadowed?: string[];
+  tags?: WorkProjectTag[];
+  sprint_policy?: Record<string, unknown>;
+  recent_sprints?: WorkSprintRow[];
+  velocity_avg?: number;
+  policy_stamp: number;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
+export interface WorkSprintsAnswer {
+  project: string;
+  sprints: WorkSprintRow[];
+  /** ABSENT where no sprint has closed: a team that has not finished one has
+   *  no velocity, and zero reads as a team that delivers nothing. */
+  velocity_avg?: number;
+  /** Closed sprints below the window this answer covers, NAMED rather than
+   *  silently truncated. */
+  earlier_sprints_dropped?: number;
+  measure: "points" | "estimate_min";
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
 /** One measurable outcome under a goal. */
 export interface WorkGoalTarget {
   id: string;
@@ -1854,6 +2036,9 @@ export interface QueryMap {
   work_items: WorkItemsAnswer;
   work_item: WorkItemDetail;
   work_views: WorkViewsAnswer;
+  work_projects: WorkProjectsAnswer;
+  work_project: WorkProjectDetail;
+  work_sprints: WorkSprintsAnswer;
   work_goals: WorkGoalsAnswer;
   work_catalogue: WorkCatalogueAnswer;
   work_person: WorkPersonState;

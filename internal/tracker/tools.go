@@ -21,6 +21,24 @@ const (
 	CreateWorkItemTool = "create_work_item"
 	UpdateWorkItemTool = "update_work_item"
 	CommentOnWorkTool  = "comment_on_work_item"
+
+	// The PROJECT reads, and they are a seat's for the reason
+	// [GetWorkCatalogueTool] is: a create refuses a project the company
+	// does not have, a type it has not declared and a required field left
+	// empty, and a model that cannot READ any of that can only guess.
+	//
+	// There is no companion that WRITES. A project's name, purpose and
+	// owning unit are chart-owned — written by the epoch apply and by
+	// nothing else — so a seat editing them would be editing the company's
+	// structure through the back door; its sprint policy and its field
+	// declarations are a lead's.
+	ListProjectsTool    = "list_projects"
+	DescribeProjectTool = "describe_project"
+
+	// SprintReportTool is how a sprint went, which a seat asking "what did
+	// we take on and what landed" needs and cannot derive from the board:
+	// every figure is over a PAST window, and the board is about now.
+	SprintReportTool = "sprint_report"
 )
 
 // The OPERATOR-ONLY tools, which no seat is given.
@@ -87,10 +105,11 @@ func OperatorOnlyTools() []string {
 	}
 }
 
-// Tools are the six a seat holds, so a caller registering them names one thing.
+// Tools are the nine a seat holds, so a caller registering them names one thing.
 func Tools() []string {
 	return []string{ListWorkItemsTool, GetWorkItemTool, CreateWorkItemTool,
-		UpdateWorkItemTool, CommentOnWorkTool, GetWorkCatalogueTool}
+		UpdateWorkItemTool, CommentOnWorkTool, GetWorkCatalogueTool,
+		ListProjectsTool, DescribeProjectTool, SprintReportTool}
 }
 
 // WriteTools are the three that count as a DELIVERY.

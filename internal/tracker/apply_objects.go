@@ -125,7 +125,7 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 			WHERE excluded.version > tracker_projects.version`,
 			key, project.Name, project.Purpose, project.Unit, project.ChartEpoch,
 			project.DefaultAssignee, jsonOf(project.Sprints), sprintNext(project),
-			nullableInt(project.ActiveSprint), measureOf(project),
+			nullableInt(project.ActiveSprint), string(measureOf(project)),
 			project.PolicyVersion, boolInt(project.Archived),
 			store.EncodeTime(project.CreatedAt), store.EncodeTime(project.UpdatedAt),
 			c.packed, []byte(c.record.Mutation))
@@ -550,9 +550,9 @@ func sprintNext(p Project) int {
 	return p.Sprints.Next
 }
 
-func measureOf(p Project) string {
-	if p.Sprints == nil || p.Sprints.Measure == "" {
-		return "points"
+func measureOf(p Project) SprintMeasure {
+	if p.Sprints == nil {
+		return MeasurePoints
 	}
-	return p.Sprints.Measure
+	return p.Sprints.Measure.Or()
 }

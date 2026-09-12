@@ -158,6 +158,24 @@ func (emptyWork) Catalogue(context.Context, tracker.CatalogueQuery) (tracker.Cat
 	return tracker.CatalogueAnswer{}, nil
 }
 
+func (emptyWork) Projects(context.Context, tracker.ProjectQuery, time.Time) (
+	tracker.ProjectListing, error) {
+
+	return tracker.ProjectListing{}, nil
+}
+
+func (emptyWork) Project(context.Context, tracker.ProjectDetailQuery, time.Time) (
+	tracker.ProjectDetail, error) {
+
+	return tracker.ProjectDetail{}, nil
+}
+
+func (emptyWork) Sprints(context.Context, tracker.SprintQuery, time.Time) (
+	tracker.SprintListing, error) {
+
+	return tracker.SprintListing{}, nil
+}
+
 func (emptyWork) Person(context.Context, tracker.PersonQuery, time.Time) (tracker.PersonState, error) {
 	return tracker.PersonState{}, nil
 }

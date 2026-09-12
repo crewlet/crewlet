@@ -243,7 +243,8 @@ correct board.
 
 ## What a seat can do
 
-Six tools, and they are deliberately few:
+Nine tools, and they are deliberately few — six that act on a task and three
+that read the container it is filed into:
 
 | Tool | What it does |
 |---|---|
@@ -253,8 +254,23 @@ Six tools, and they are deliberately few:
 | `update_work_item` | change any field, with an optional `if_match`. `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it |
 | `comment_on_work_item` | add to the thread |
 | `get_work_catalogue` | the types a task may be and the fields it may carry |
+| `list_projects` | every project work is filed into, with how much open work each holds, who leads it and which sprint is running |
+| `describe_project` | one project in full: the six statuses with what each means, the types it files, the fields grouped by which type they apply to (required first, with their options), its tags, its lead and its active sprint. Omitting the project means the seat's own |
+| `sprint_report` | how a project's recent sprints went — committed, added, removed, done and remaining, per sprint and per person, in the project's own measure |
 
-An operator holds two more that no seat does: `remove_work_item` puts an item
+The three project reads are a seat's for the same reason the catalogue read
+is: a create refuses a project the company does not have, a type it has not
+declared and a required field left empty, and a model that cannot **read** any
+of that can only guess. A refusal that names the valid values is only half an
+answer if there was no way to look them up first.
+
+None of them writes, and there is no companion that does. A project's name,
+purpose and owning unit are **chart-owned** — written by the epoch apply from
+the org chart and by nothing else — so a seat editing them would be editing
+the company's structure through the back door; its sprint policy and its field
+declarations are a lead's.
+
+An operator holds the same nine and two more that no seat does: `remove_work_item` puts an item
 in the **trash** and `restore_work_item` takes it out again, at any age. A
 removal hides an item from every list and board and destroys nothing — its
 history is untouched and `list_work_items` with `removed: true` is the only

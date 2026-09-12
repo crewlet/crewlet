@@ -1,0 +1,162 @@
+package builtin_test
+
+import (
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tracker"
+)
+
+// A SEAT THAT NAMES NO PROJECT MEANS ITS OWN, on every one of these.
+//
+// Three tools fall back to it and each one used to be a separate chance to
+// get it wrong: a describe that answered about a different project from the
+// one a create files into teaches a model the wrong vocabulary for the
+// container it is writing to, and the model has no way to notice.
+func TestTheProjectToolsFallBackToTheSeatsOwnProject(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{
+		Reader: trk, Writer: trk.as,
+		DefaultProject: func(string) string { return "ENG" },
+	})
+
+	if got := callWork(t, reg, tracker.DescribeProjectTool, map[string]any{}); got.Failed {
+		t.Fatalf("describe_project with no project failed: %q", got.Output)
+	}
+	if trk.detailQuery.Project != "ENG" {
+		t.Errorf("describe_project asked about %q, want the seat's own project",
+			trk.detailQuery.Project)
+	}
+	if got := callWork(t, reg, tracker.SprintReportTool, map[string]any{}); got.Failed {
+		t.Fatalf("sprint_report with no project failed: %q", got.Output)
+	}
+	if trk.sprintQuery.Project != "ENG" {
+		t.Errorf("sprint_report asked about %q, want the seat's own project",
+			trk.sprintQuery.Project)
+	}
+
+	// AND A SEAT WHOSE UNIT OWNS NONE IS REFUSED NAMING THE LOOKUP, never
+	// answered about an empty key: an empty project is not a project, and
+	// a reader handed one would answer "no such project ''".
+	unowned := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+	got := callWork(t, unowned, tracker.DescribeProjectTool, map[string]any{})
+	if !got.Failed || !strings.Contains(got.Output, "list_projects") {
+		t.Errorf("describe_project with no project and no default gave %q, "+
+			"want a refusal naming the lookup", got.Output)
+	}
+}
+
+// EVERY ONE OF THESE READS AT `session`.
+//
+// A turn must see its own writes: a seat that files into a project and then
+// describes it would otherwise read a copy from before its own create, and a
+// model that cannot see its own write files it again.
+func TestTheProjectToolsReadAtSessionLevel(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{
+		Reader: trk, Writer: trk.as,
+		DefaultProject: func(string) string { return "ENG" },
+	})
+	callWork(t, reg, tracker.ListProjectsTool, map[string]any{})
+	callWork(t, reg, tracker.DescribeProjectTool, map[string]any{})
+	callWork(t, reg, tracker.SprintReportTool, map[string]any{})
+
+	for name, level := range map[string]statelog.ReadLevel{
+		tracker.ListProjectsTool:    trk.projectQuery.Level,
+		tracker.DescribeProjectTool: trk.detailQuery.Level,
+		tracker.SprintReportTool:    trk.sprintQuery.Level,
+	} {
+		if level != statelog.ReadSession {
+			t.Errorf("%s read at %q, want session — a turn has to see its own "+
+				"writes", name, level)
+		}
+	}
+}
+
+// THE ARGUMENTS REACH THE QUERY. Each one is a filter a model typed, and a
+// tool that accepted it and then dropped it answers a question nobody asked.
+func TestTheProjectToolsCarryTheirArguments(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	callWork(t, reg, tracker.ListProjectsTool, map[string]any{
+		"q": "platform", "unit": "Engineering", "archived": true, "limit": 12,
+	})
+	q := trk.projectQuery
+	if q.Q != "platform" || q.Unit != "Engineering" || !q.Archived || q.Limit != 12 {
+		t.Errorf("list_projects built %+v, want every argument carried", q)
+	}
+
+	callWork(t, reg, tracker.DescribeProjectTool, map[string]any{
+		"project": "ops", "for_type": "bug",
+	})
+	if trk.detailQuery.Project != "ops" || trk.detailQuery.ForType != "bug" {
+		t.Errorf("describe_project built %+v, want the project and the type",
+			trk.detailQuery)
+	}
+
+	callWork(t, reg, tracker.SprintReportTool, map[string]any{
+		"project": "OPS", "sprint": 4, "sprints": 7,
+	})
+	if trk.sprintQuery.Project != "OPS" || trk.sprintQuery.Number != 4 ||
+		trk.sprintQuery.Sprints != 7 {
+		t.Errorf("sprint_report built %+v, want the project, the sprint and "+
+			"the window", trk.sprintQuery)
+	}
+}
+
+// THE UNIT SEAM TRAVELS. Resolving a project's chart-owned unit is a READ-time
+// join against the epoch's org, and a tool that did not pass its resolver
+// would report every project orphaned from a chart that in fact names it.
+func TestTheProjectToolsPassTheChart(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	units := stubUnits{}
+	reg := workRegistry(t, builtin.WorkDeps{
+		Reader: trk, Writer: trk.as, Units: units,
+		DefaultProject: func(string) string { return "ENG" },
+	})
+	callWork(t, reg, tracker.ListProjectsTool, map[string]any{})
+	if trk.projectQuery.Units == nil {
+		t.Error("list_projects passed no chart, so every project's unit reads " +
+			"as one the org no longer has")
+	}
+	callWork(t, reg, tracker.DescribeProjectTool, map[string]any{})
+	if trk.detailQuery.Units == nil {
+		t.Error("describe_project passed no chart")
+	}
+}
+
+// A READ FAILURE IS A TOOL FAILURE, never an empty answer: "this company has
+// no projects" is a conclusion a model acts on, by filing into one it invents.
+func TestAProjectReadFailureIsReported(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	trk.readErr = errors.New("this node has not caught up")
+	reg := workRegistry(t, builtin.WorkDeps{
+		Reader: trk, Writer: trk.as,
+		DefaultProject: func(string) string { return "ENG" },
+	})
+	for _, name := range []string{
+		tracker.ListProjectsTool, tracker.DescribeProjectTool,
+		tracker.SprintReportTool,
+	} {
+		if got := callWork(t, reg, name, map[string]any{}); !got.Failed {
+			t.Errorf("%s answered %q on a read failure, want a failure — an "+
+				"empty answer reads as a company with no projects",
+				name, got.Output)
+		}
+	}
+}
+
+type stubUnits struct{}
+
+func (stubUnits) ResolveUnit(string) (string, tracker.LeadRef, bool) {
+	return "Platform", tracker.LeadRef{Handle: "ada", Kind: tracker.AuthorAgent}, true
+}

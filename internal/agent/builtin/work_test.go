@@ -38,6 +38,13 @@ type fakeTracker struct {
 	actors   []builtin.Actor
 	opIDs    []string
 
+	projectQuery tracker.ProjectQuery
+	projects     tracker.ProjectListing
+	detailQuery  tracker.ProjectDetailQuery
+	project      tracker.ProjectDetail
+	sprintQuery  tracker.SprintQuery
+	sprints      tracker.SprintListing
+
 	readErr  error
 	writeErr error
 }
@@ -112,6 +119,30 @@ func (f *fakeTracker) Person(context.Context, tracker.PersonQuery, time.Time) (t
 
 // as records the actor and hands back a writer bound to it, which is the
 // tracker's own rule: a writer acts as exactly one party.
+// The PROJECT seam, which [builtin.ProjectReader] asserts for: a reader that
+// answers the task questions and not these is a build with no native tracker,
+// and the registration turns on exactly that.
+func (f *fakeTracker) Projects(_ context.Context, q tracker.ProjectQuery,
+	_ time.Time) (tracker.ProjectListing, error) {
+
+	f.projectQuery = q
+	return f.projects, f.readErr
+}
+
+func (f *fakeTracker) Project(_ context.Context, q tracker.ProjectDetailQuery,
+	_ time.Time) (tracker.ProjectDetail, error) {
+
+	f.detailQuery = q
+	return f.project, f.readErr
+}
+
+func (f *fakeTracker) Sprints(_ context.Context, q tracker.SprintQuery,
+	_ time.Time) (tracker.SprintListing, error) {
+
+	f.sprintQuery = q
+	return f.sprints, f.readErr
+}
+
 func (f *fakeTracker) as(actor builtin.Actor) builtin.WorkWriter {
 	f.actors = append(f.actors, actor)
 	return f

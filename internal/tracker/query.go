@@ -428,7 +428,7 @@ func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
 		// error while `key=eng-7` beside it resolved — one spelling
 		// answering two ways depending on which parameter it was
 		// pasted into.
-		References: strings.ToUpper(strings.TrimSpace(p.String("references"))),
+		References: ProjectKey(p.String("references")),
 		Goal:       p.String("goal"),
 		Batch:      p.String("batch"),
 		AskedOf:    p.String("asked_of"),
@@ -458,7 +458,7 @@ func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
 	// upper-case, so lowering the column instead would defeat
 	// `tracker_tasks_key_idx`.
 	for _, key := range csv(p.String("key")) {
-		q.Keys = append(q.Keys, strings.ToUpper(key))
+		q.Keys = append(q.Keys, ProjectKey(key))
 	}
 	if p.Has("removed") {
 		removed := p.Bool("removed", true)
@@ -538,7 +538,7 @@ func (q *Query) parseScope(p Params) error {
 	// `project:eng` would otherwise answer an empty list rather than a
 	// refusal — the one failure shape a person acts on, by filing the
 	// duplicate or concluding the migration lost their work.
-	q.Scope.Project = strings.ToUpper(key)
+	q.Scope.Project = ProjectKey(key)
 	return nil
 }
 
