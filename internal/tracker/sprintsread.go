@@ -140,7 +140,12 @@ type SprintRow struct {
 	// decided — the state `AutoRoll: false` leaves behind, and the one
 	// thing on this answer a lead has to act on.
 	RolloverPending bool `json:"rollover_pending,omitempty"`
-	RolloverTo      *int `json:"rollover_to,omitempty"`
+
+	// RolloverTo is WHERE the spillover went, and it is a string because
+	// three of the four answers are not numbers: `backlog` and `close`
+	// name no sprint, a number names one, and EMPTY is what pending
+	// means — which is why an absent value is a state rather than a gap.
+	RolloverTo string `json:"rollover_to,omitempty"`
 
 	Archived bool   `json:"archived,omitempty"`
 	Version  uint64 `json:"version"`
@@ -342,7 +347,7 @@ func readSprintRows(ctx context.Context, tx *sql.Tx, p Project, q SprintQuery,
 		var start, end int64
 		var closedAt sql.NullInt64
 		var closedBy sql.NullString
-		var rolloverTo sql.NullInt64
+		var rolloverTo sql.NullString
 		var rolloverDone, archived int
 		var state string
 		if err := rows.Scan(&row.Number, &row.Name, &row.Goal, &start, &end,
@@ -359,15 +364,13 @@ func readSprintRows(ctx context.Context, tx *sql.Tx, p Project, q SprintQuery,
 			row.ClosedAt = &at
 		}
 		row.ClosedBy = closedBy.String
-		if rolloverTo.Valid {
-			to := int(rolloverTo.Int64)
-			row.RolloverTo = &to
-		}
+		row.RolloverTo = rolloverTo.String
 		// PENDING IS AN ABSENT POINTER ON A CLOSED SPRINT — the state
 		// `AutoRoll: false` leaves behind. `rollover_done` says the
 		// walk finished; a nil pointer says nobody has decided yet, and
 		// the two are different facts.
-		row.RolloverPending = row.State == SprintClosed && !rolloverTo.Valid
+		row.RolloverPending = row.State == SprintClosed &&
+			(!rolloverTo.Valid || rolloverTo.String == "")
 		row.Archived = archived != 0
 		out = append(out, row)
 	}

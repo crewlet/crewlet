@@ -97,11 +97,27 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 
 	var res sql.Result
 	var err error
+	// extra is what a document's own EXPLOSION wrote — the child rows that
+	// are not columns on the object's row. Counted with the upsert rather
+	// than instead of it, because the applier's row count is what the
+	// drain rate is measured in.
+	extra := 0
 	switch table {
 	case "tracker_projects":
 		var project Project
 		if err := decodePayload(c.record.Mutation, &project); err != nil {
 			return 0, fmt.Errorf("tracker: decode the project at %s: %w", c.position, err)
+		}
+		// THE PROJECT'S OWN FIELD DECLARATIONS, into the same union the
+		// workspace catalogue's go into. Without this the row set was
+		// half the truth — every workspace field and no project field —
+		// which is worse than an empty table: a reader joining it would
+		// have answered confidently and wrongly about exactly the
+		// projects that declare their own.
+		if extra, err = writeFieldDefs(ctx, tx, FieldScopeProject, key,
+			project.Fields); err != nil {
+
+			return 0, err
 		}
 		res, err = tx.ExecContext(ctx, `
 			INSERT INTO tracker_projects
@@ -265,7 +281,7 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 	if err != nil {
 		return 0, fmt.Errorf("tracker: read the %s write's effect: %w", table, err)
 	}
-	return int(n), nil
+	return int(n) + extra, nil
 }
 
 // applyCounter writes a project's key sequence.

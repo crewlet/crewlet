@@ -1272,24 +1272,69 @@ func (a *Applier) explodeCatalogue(ctx context.Context, tx *sql.Tx, name string,
 	if err := decodePayload(c.record.Mutation, &catalogue); err != nil {
 		return 0, err
 	}
+	written, err := writeFieldDefs(ctx, tx, FieldScopeWorkspace, "", catalogue.Fields)
+	if err != nil {
+		return 0, err
+	}
+	// AND THE VALUES FOLLOW THE DECLARATION'S ARCHIVE, in this same
+	// transaction.
+	//
+	// `hidden` on a value row is the DECLARATION's archived state, and
+	// nothing else propagated it: a task untouched since the archive kept
+	// `hidden = 0` for ever, so the DDL's own rule — "every filter and
+	// total adds `hidden = 0 AND kind <> 'foreign'`" — described a column
+	// that did not carry what it claimed. The filter is shielded anyway,
+	// because an archived field does not RESOLVE, but a row that lies
+	// about its own state is a trap for the next reader of it.
+	swept, err := a.settleFieldVisibility(ctx, tx, catalogue.Fields)
+	if err != nil {
+		return 0, err
+	}
+	return written + swept, nil
+}
+
+// The two SCOPES a field is declared at, as the rows spell them.
+//
+// CONSTANTS RATHER THAN LITERALS, because the string appears in an INSERT, in
+// a scoped DELETE and in every future read of the union — and three spellings
+// of "workspace" is a row set that deletes nothing and accumulates for ever.
+const (
+	FieldScopeWorkspace = "workspace"
+	FieldScopeProject   = "project"
+)
+
+// writeFieldDefs explodes one declaring document's fields into the rows.
+//
+// ONE FUNCTION FOR BOTH SCOPES. Fields are declared in two places — the
+// workspace catalogue and a project — and the row set is a union keyed on
+// `(scope_kind, scope_id)`, so a second copy of this explosion is how one
+// scope's rows come to carry a column the other's do not. The DELETE is scoped
+// the same way, which is what lets a project's edit leave the workspace's rows
+// alone and the reverse.
+func writeFieldDefs(ctx context.Context, tx *sql.Tx, scopeKind, scopeID string,
+	fields []FieldDef) (int, error) {
+
 	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM tracker_fields WHERE scope_kind = 'workspace'`); err != nil {
-		return 0, fmt.Errorf("tracker: clear the field catalogue: %w", err)
+		`DELETE FROM tracker_fields WHERE scope_kind = ? AND scope_id = ?`,
+		scopeKind, scopeID); err != nil {
+
+		return 0, fmt.Errorf("tracker: clear the %s field declarations: %w",
+			scopeKind, err)
 	}
 	written := 0
-	for _, field := range catalogue.Fields {
+	for _, field := range fields {
 		res, err := tx.ExecContext(ctx, `
 			INSERT INTO tracker_fields
 				(id, scope_kind, scope_id, slug, name, name_norm, description,
 				 type, applies_to_json, required, required_in_subtasks, archived,
 				 pinned, hide_from_agents, config_json, default_json, shadowed)
-			VALUES (?,'workspace','',?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
-			field.ID, field.Slug, field.Name, strings.ToLower(field.Name),
-			field.Description, string(field.Type), jsonOf(field.AppliesTo),
-			boolInt(field.Required), boolInt(field.RequiredInSubtasks),
-			boolInt(field.Archived), boolInt(field.Pinned),
-			boolInt(field.HideFromAgents), jsonOf(field.Config),
-			nullableRaw(field.Default))
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
+			field.ID, scopeKind, scopeID, field.Slug, field.Name,
+			strings.ToLower(field.Name), field.Description, string(field.Type),
+			jsonOf(field.AppliesTo), boolInt(field.Required),
+			boolInt(field.RequiredInSubtasks), boolInt(field.Archived),
+			boolInt(field.Pinned), boolInt(field.HideFromAgents),
+			jsonOf(field.Config), nullableRaw(field.Default))
 		if err != nil {
 			return 0, fmt.Errorf("tracker: write field %s: %w", field.Slug, err)
 		}
@@ -1315,21 +1360,7 @@ func (a *Applier) explodeCatalogue(ctx context.Context, tx *sql.Tx, name string,
 		}
 		written += options
 	}
-	// AND THE VALUES FOLLOW THE DECLARATION'S ARCHIVE, in this same
-	// transaction.
-	//
-	// `hidden` on a value row is the DECLARATION's archived state, and
-	// nothing else propagated it: a task untouched since the archive kept
-	// `hidden = 0` for ever, so the DDL's own rule — "every filter and
-	// total adds `hidden = 0 AND kind <> 'foreign'`" — described a column
-	// that did not carry what it claimed. The filter is shielded anyway,
-	// because an archived field does not RESOLVE, but a row that lies
-	// about its own state is a trap for the next reader of it.
-	swept, err := a.settleFieldVisibility(ctx, tx, catalogue.Fields)
-	if err != nil {
-		return 0, err
-	}
-	return written + swept, nil
+	return written, nil
 }
 
 // settleFieldVisibility makes every value row agree with its declaration.

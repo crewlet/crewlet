@@ -39,8 +39,8 @@ import (
 
 // The builtin task types, which every company has before it declares any.
 //
-// SIX, and each is a shape of work rather than a workflow state: a status says
-// where a task IS and a type says what it is. They carry `builtin` so a
+// SEVEN, and each is a shape of work rather than a workflow state: a status
+// says where a task IS and a type says what it is. They carry `builtin` so a
 // catalogue screen can tell what a company chose from what it inherited.
 var builtinTypes = []TaskType{
 	{Slug: "task", Name: "Task", Plural: "Tasks", Builtin: true,
@@ -55,6 +55,15 @@ var builtinTypes = []TaskType{
 		Description: "Time boxed to answer a question, not to deliver."},
 	{Slug: "chore", Name: "Chore", Plural: "Chores", Builtin: true,
 		Description: "Upkeep nobody asked for and everybody needs."},
+	// A MILESTONE IS A DATE SOMEBODY COMMITTED TO, which is why it is a
+	// TYPE rather than a status or a flag: it is an item on a board with
+	// an owner, a due date and things blocking it, and everything the
+	// tracker does to a task — a dependency, a watcher, a comment thread
+	// — is exactly what a milestone needs. A separate object would have
+	// been a second thing to file, route, notify about and report on.
+	{Slug: "milestone", Name: "Milestone", Plural: "Milestones", Builtin: true,
+		Description: "A date the company committed to, and what has to " +
+			"land before it."},
 }
 
 // DefaultTaskType is what a create that names none files under.

@@ -2069,6 +2069,22 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 				return writer.As(actor.Handle, actor.Kind,
 					tracker.Provenance{OperatorID: actor.OperatorID})
 			},
+			// AND A PROJECT'S OWN SETTINGS. Unlike the five above,
+			// this one is on every surface — declaring a tag is open
+			// to every seat — and what an operator adds here is the
+			// credential the archive facet asks for.
+			ProjectWriter: func(actor builtin.Actor) builtin.ProjectWriter {
+				return writer.As(actor.Handle, actor.Kind,
+					tracker.Provenance{OperatorID: actor.OperatorID})
+			},
+			// AND THE SPRINT SIDE. A sprint is a commitment a team made
+			// together, so starting or closing one is a lead's decision
+			// — which is why this surface has it and no seat does, and
+			// why the tool is additionally gated on leading the project.
+			SprintWriter: func(actor builtin.Actor) builtin.SprintWriter {
+				return writer.As(actor.Handle, actor.Kind,
+					tracker.Provenance{OperatorID: actor.OperatorID})
+			},
 			Actor: opsmcp.WorkActor,
 			// THE MENTION RESOLVER, which this surface went without: a
 			// comment's @-mention is turned into a wake by the tracker's
@@ -2109,6 +2125,9 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 	// it holds no org chart, and one it derived would be a second opinion
 	// about the hierarchy.
 	opts.Leads = leadsOf(e)
+	// AND THE PROJECT'S OWN LEAD, which is a different question: one is
+	// about a person's line, the other about who plans a container's work.
+	opts.LeadsProject = engine.LeadsProjectOf(e)
 	return opsmcp.New(opts)
 }
 

@@ -653,8 +653,18 @@ const (
 	MaxOptions            = 128
 	MaxOptionsPerDocument = 2048
 
-	// MaxTagsPerProject is the tag set's cap.
+	// MaxTagsPerProject is the tag set's cap, and MaxTagLabel bounds one
+	// tag's human-readable half. The SLUG is bounded by its own grammar
+	// (64 characters, [ValidTagSlug]) rather than by a constant, so there
+	// is one place a tag's shape is stated.
+	//
+	// The label takes [MaxViewName] rather than a number of its own, for
+	// the reason that constant gives: a tag is rendered as a chip beside a
+	// title on every row it is on, exactly as a view is rendered on a tab
+	// strip, and a name that does not fit its strip is one nobody can tell
+	// from its neighbour.
 	MaxTagsPerProject = 512
+	MaxTagLabel       = MaxViewName
 
 	// MaxGoalOwners, MaxGoalMembers, MaxGoalTargets, MaxGoalUpdates and
 	// MaxTasksPerTarget bound a goal.

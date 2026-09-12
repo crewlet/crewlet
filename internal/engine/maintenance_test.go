@@ -89,6 +89,13 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		"tracker_duplicate_ranks",
 		"tracker_ops",
 		"tracker_respread",
+		// AND THE SPRINT LIFECYCLE, which is the same kind of thing as
+		// the four beside it and deletes nothing either: it mints the
+		// sprints a policy says to keep ahead, starts one at its window,
+		// closes one at its end, rolls the spillover and archives what
+		// is old. On this list because the list is what says a job
+		// exists — unregistered, a company's sprints simply never start.
+		"tracker_sprints",
 		"tracker_unblocked",
 		"vectors_ops",
 	}

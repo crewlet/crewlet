@@ -902,6 +902,17 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 				TurnID: actor.TurnID, Chain: actor.Chain,
 			})
 		},
+		// AND THE PROJECT SETTINGS, which every surface has rather than
+		// the operator's alone: declaring a tag is open to every seat by
+		// design, and a create refuses a label the project has not
+		// declared — so a seat without this writer could never use the
+		// `labels` argument on the tools it already holds. The authority
+		// for every other facet is resolved per call.
+		ProjectWriter: func(actor builtin.Actor) builtin.ProjectWriter {
+			return e.native.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
+				TurnID: actor.TurnID, Chain: actor.Chain,
+			})
+		},
 		Mentions: seatMentions{org: c.Org},
 		// AND THE UNIT SEAM, read per call for the reason the default
 		// project is: a seat's tools are cloned into its lease, an apply
@@ -1351,5 +1362,51 @@ func (e *Engine) enterSearch() func() {
 	return func() {
 		e.metrics.Set(metrics.TrackerSearchConcurrency,
 			float64(e.searching.Add(-1)), nil)
+	}
+}
+
+// LeadsProjectOf answers whether a handle leads the unit that owns a project.
+//
+// THE UNIT'S EFFECTIVE LEAD, inherited from an ancestor where the unit
+// declares none — because that is who actually answers for the project's work,
+// and refusing somebody whose parent unit's lead they are would send them
+// looking for an authority nobody holds.
+//
+// A PROJECT THIS BUILD CANNOT RESOLVE ANSWERS FALSE, which is the conservative
+// direction: the sprint decision is then refused naming the project rather
+// than made by whoever asked.
+//
+// HERE RATHER THAN AT EITHER CALLER, because both surfaces ask it — a seat's
+// write_project and an operator's manage_sprint — and two copies of "who leads
+// this" is two chances for the seat surface and the operator surface to answer
+// the same question differently about the same person.
+func LeadsProjectOf(e *Engine) builtin.LeadsProject {
+	return func(_ context.Context, actor, project string) bool {
+		c := e.Company()
+		if c == nil || c.Org == nil || actor == "" || project == "" {
+			return false
+		}
+		key := tracker.ProjectKey(project)
+		for unit := range c.Org.AllUnits() {
+			if tracker.ProjectKey(unit.Project) != key {
+				continue
+			}
+			if lead := c.Org.EffectiveLead(unit); lead != nil &&
+				lead.Handle() == actor {
+
+				return true
+			}
+		}
+		// A ROLE'S OWN PROJECT IS LED BY THAT ROLE. A seat that names
+		// its own project plans its own sprints, which is the only
+		// reading of "the lead" a one-seat project has.
+		for role := range c.Org.AllRoles() {
+			if tracker.ProjectKey(role.Project) == key &&
+				role.Handle() == actor {
+
+				return true
+			}
+		}
+		return false
 	}
 }

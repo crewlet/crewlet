@@ -49,6 +49,14 @@ type OperatorDeps struct {
 	// resolves nothing, which degrades to "your own only" rather than to
 	// a hole — see [Leads].
 	Leads Leads
+
+	// LeadsProject answers whether a handle leads the unit that owns a
+	// project, which is the authority over that project's PLAN. A
+	// separate seam from [Leads] because it is a different question: one
+	// is about a person, the other about a container, and a company can
+	// answer either without answering the other. Nil REFUSES rather than
+	// degrading — see [LeadsProject].
+	LeadsProject LeadsProject
 }
 
 // OperatorTools is the catalogue for one operator surface.
@@ -89,6 +97,10 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		{&setPriorities{deps: work, leads: deps.Leads}, work.PersonWriter != nil},
 		{&setPins{deps: work}, work.PersonWriter != nil},
 		{&markInbox{deps: work}, work.PersonWriter != nil},
+		{&writeProject{deps: work, leads: deps.LeadsProject},
+			work.ProjectWriter != nil},
+		{&manageSprint{deps: work, leads: deps.LeadsProject},
+			work.SprintWriter != nil},
 		{&removeWorkItem{deps: work}, work.TrashWriter != nil && work.Reader != nil},
 		{&restoreWorkItem{deps: work}, work.TrashWriter != nil && work.Reader != nil},
 		{&listPages{deps: pages}, pages.Reader != nil},

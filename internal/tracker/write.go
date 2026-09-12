@@ -258,6 +258,18 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			"names no project — the caller resolved a key to reach this task "+
 			"and therefore holds one", id)
 	}
+	if patch.Tags != nil {
+		// NORMALISED BEFORE THE PUBLISH, so the record carries the
+		// spelling the rows hold rather than the one somebody typed —
+		// every node applies this payload, and a node that re-derived
+		// the slug itself would be a second implementation of the
+		// grammar.
+		tags, err := normaliseTags(project, *patch.Tags)
+		if err != nil {
+			return WriteResult{}, err
+		}
+		patch.Tags = &tags
+	}
 	subject := TaskSubject(id)
 	// A PROJECT MOVE TOUCHES BOTH CONTAINERS, so it states them: the
 	// task's rows leave one project's closure and arrive in another's, and
@@ -301,6 +313,19 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 					"version %d and the edit was conditioned on %d — re-read "+
 					"it and decide again rather than re-sending this patch",
 					ErrStaleVersion, id, current.Version, ifMatch)
+			}
+			if patch.Tags != nil {
+				// AGAINST THE TASK'S OWN PROJECT rather than the
+				// argument's, because a move carries the tags into
+				// the destination before it re-homes the task and
+				// this read is the one that sees both.
+				home := current.Project
+				if patch.Project != nil {
+					home = *patch.Project
+				}
+				if err := declaredTags(ctx, tx, home, *patch.Tags); err != nil {
+					return statelog.Decision{}, err
+				}
 			}
 			charged, err := w.chargeHandOff(current, patch)
 			if err != nil {

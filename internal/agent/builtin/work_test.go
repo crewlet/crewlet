@@ -38,6 +38,14 @@ type fakeTracker struct {
 	actors   []builtin.Actor
 	opIDs    []string
 
+	projectEdits     []tracker.ProjectEdit
+	projectAuthority []tracker.ProjectAuthority
+	tagEdits         []tracker.TagEdit
+	tagAuthority     []tracker.TagAuthority
+	tagWarnings      []string
+	ensured          [][]string
+	ensuredIn        []string
+
 	projectQuery tracker.ProjectQuery
 	projects     tracker.ProjectListing
 	detailQuery  tracker.ProjectDetailQuery
@@ -203,6 +211,54 @@ func (f *fakeTracker) UpdateTask(_ context.Context, opID, _, _ string, ifMatch u
 	}, nil
 }
 
+// The PROJECT write side, which every surface has: declaring a tag is open to
+// every seat, so a seat without it could never use the `labels` argument on
+// the create and update tools it already holds.
+func (f *fakeTracker) WriteProject(_ context.Context, opID, key string,
+	edit tracker.ProjectEdit, authority tracker.ProjectAuthority) (
+	tracker.WriteResult, error) {
+
+	if f.writeErr != nil {
+		return tracker.WriteResult{}, f.writeErr
+	}
+	f.projectEdits = append(f.projectEdits, edit)
+	f.projectAuthority = append(f.projectAuthority, authority)
+	f.opIDs = append(f.opIDs, opID)
+	return tracker.WriteResult{
+		Outcome: statelog.OutcomeApplied, Version: 3,
+		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 13},
+	}, nil
+}
+
+func (f *fakeTracker) WriteTags(_ context.Context, opID, project string,
+	edit tracker.TagEdit, authority tracker.TagAuthority) (
+	tracker.WriteResult, error) {
+
+	if f.writeErr != nil {
+		return tracker.WriteResult{}, f.writeErr
+	}
+	f.tagEdits = append(f.tagEdits, edit)
+	f.tagAuthority = append(f.tagAuthority, authority)
+	f.opIDs = append(f.opIDs, opID)
+	return tracker.WriteResult{
+		Outcome: statelog.OutcomeApplied, Version: 4,
+		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 14},
+		Warnings: f.tagWarnings,
+	}, nil
+}
+
+func (f *fakeTracker) EnsureTags(_ context.Context, opID, project string,
+	tags []string) ([]string, []string, error) {
+
+	if f.writeErr != nil {
+		return nil, nil, f.writeErr
+	}
+	f.ensured = append(f.ensured, tags)
+	f.ensuredIn = append(f.ensuredIn, project)
+	f.opIDs = append(f.opIDs, opID)
+	return tags, f.tagWarnings, nil
+}
+
 type fakeMentions []string
 
 func (f fakeMentions) Mentions(string) []string { return f }
@@ -305,7 +361,10 @@ func TestAWriteIsAttributedToTheTurnsSeat(t *testing.T) {
 func TestTheTrackerToolsRefuseOutsideATurn(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+	reg := workRegistry(t, builtin.WorkDeps{
+		Reader: trk, Writer: trk.as,
+		ProjectWriter: func(builtin.Actor) builtin.ProjectWriter { return trk },
+	})
 	for _, name := range builtin.WorkTools() {
 		entry, ok := reg.Lookup(name)
 		if !ok {
@@ -652,6 +711,8 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 		CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
 		PersonWriter:    func(builtin.Actor) builtin.PersonWriter { return nil },
 		TrashWriter:     func(builtin.Actor) builtin.TrashWriter { return nil },
+		SprintWriter:    func(builtin.Actor) builtin.SprintWriter { return nil },
+		ProjectWriter:   func(builtin.Actor) builtin.ProjectWriter { return trk },
 	})
 	for _, name := range tracker.OperatorOnlyTools() {
 		if _, held := reg.Lookup(name); held {
@@ -671,6 +732,8 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 			CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
 			PersonWriter:    func(builtin.Actor) builtin.PersonWriter { return nil },
 			TrashWriter:     func(builtin.Actor) builtin.TrashWriter { return nil },
+			SprintWriter:    func(builtin.Actor) builtin.SprintWriter { return nil },
+			ProjectWriter:   func(builtin.Actor) builtin.ProjectWriter { return trk },
 			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
 				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
 			},
@@ -684,7 +747,7 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 				"serve it, so nothing serves it at all", name)
 		}
 	}
-	// AND THE SEAT'S OWN SIX ARE THERE TOO: the operator surface is the
+	// AND THE SEAT'S OWN ARE THERE TOO: the operator surface is the
 	// same tools with one field different, not a second catalogue.
 	for _, name := range tracker.Tools() {
 		if !operator[name] {

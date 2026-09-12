@@ -348,3 +348,32 @@ func TestAnArchivedEntryIsOutOfTheDefaultCatalogue(t *testing.T) {
 		t.Fatalf("an archived type is unreachable even when asked for: %v", got)
 	}
 }
+
+// A MILESTONE IS A TASK, and that is the whole of the decision.
+//
+// A date the company committed to is an item on a board with an owner, a due
+// date and things blocking it — so everything the tracker already does to a
+// task is exactly what a milestone needs. A separate object would have been a
+// second thing to file, route, notify about and report on, for a shape that
+// differs from a task in nothing but what people call it.
+func TestAMilestoneIsABuiltinType(t *testing.T) {
+	t.Parallel()
+	slugs := map[string]tracker.TaskType{}
+	for _, taskType := range tracker.BuiltinTypes() {
+		slugs[taskType.Slug] = taskType
+	}
+	milestone, held := slugs["milestone"]
+	if !held {
+		t.Fatal("nothing can be filed as a milestone — the builtins are " +
+			"what a company has before it declares anything, so a type that " +
+			"is not among them is one a fresh company cannot use")
+	}
+	if !milestone.Builtin {
+		t.Error("the milestone type does not say it is a builtin, so a " +
+			"catalogue screen cannot tell it from one the company chose")
+	}
+	if milestone.Description == "" || milestone.Plural == "" {
+		t.Errorf("the milestone type is %+v — a model chooses a type BY its "+
+			"description, exactly as it chooses a status", milestone)
+	}
+}

@@ -1334,8 +1334,8 @@ Point any MCP client at it:
 
 The **same tools a seat holds**, not a parallel implementation: `list_work_items`,
 `get_work_item`, `create_work_item`, `update_work_item`, `comment_on_work_item`,
-`get_work_catalogue`, `list_projects`, `describe_project`, `sprint_report`,
-`task_activity`, `my_work`,
+`get_work_catalogue`, `list_projects`, `describe_project`, `write_project`,
+`sprint_report`, `task_activity`, `my_work`,
 `list_pages`, `get_page`, `write_page`, `save_page`, `comment_on_page`, and
 `search_knowledge`. A schema, a default, a trimmed field and the wording of a
 refusal are each written once — two copies of "file an item" drift on exactly
@@ -1349,10 +1349,10 @@ worked. A comment's `@handle` is resolved here too, against the company chart
 current when the comment is written, so mentioning somebody from your own
 assistant wakes them exactly as it does from a seat.
 
-Plus **eleven no seat is given**: `list_work_views`, `save_work_view`,
+Plus **twelve no seat is given**: `list_work_views`, `save_work_view`,
 `list_work_goals`, `write_work_goal`, `write_work_catalogue`, `get_person`,
-`mark_inbox`, `set_pins`, `set_priorities`, `remove_work_item` and
-`restore_work_item`. A view is furniture — a name, a shape
+`mark_inbox`, `set_pins`, `set_priorities`, `manage_sprint`,
+`remove_work_item` and `restore_work_item`. A view is furniture — a name, a shape
 and a filter, arranged so a person finds the same question tomorrow — and a
 seat's job is the work rather than the furniture around it. A goal is an
 outcome a *person* commits the company to, with owners who report on it; a seat
@@ -1364,7 +1364,10 @@ was working around is the signal a person needs to see — which is why reading
 the catalogue *is* a seat's and writing it is not. And a person's record is a
 HUMAN's: a seat has a mailbox — the durable subscription the engine attaches
 when it acquires the seat — and nothing on a person's record describes one.
-The trash is the last of them: a removal takes an item off every board in the
+A sprint is a **commitment a team made together**, so starting one, closing one
+early or settling where its spillover goes is a lead's decision rather than a
+seat's — `manage_sprint` is additionally gated on leading the project, on top
+of being an operator's. The trash is the last of them: a removal takes an item off every board in the
 company, and a seat that could hide work it did not want to do would be marking
 its own homework in the one way that leaves no trace. Neither destroys
 anything — a removal is reversible at any age, and `crewlet work purge` is the

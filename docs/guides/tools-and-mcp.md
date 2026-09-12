@@ -47,7 +47,7 @@ did-this-reach-anybody gate, and each waits for its own write to reach this
 node's projection before answering — so a turn that files an item and then
 lists the project sees what it just filed.
 
-The same eleven tools are served to **your** AI assistant over
+The same twelve tools are served to **your** AI assistant over
 [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant),
 with the writes attributed to your token rather than to a seat.
 

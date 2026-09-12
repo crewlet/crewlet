@@ -191,6 +191,10 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		builtin.WritePageTool:      true,
 		builtin.SavePageTool:       true,
 		builtin.CommentOnPageTool:  true,
+
+		// A project's own settings, which every seat holds for one
+		// facet: a declared tag is a filter on everybody's board.
+		tracker.WriteProjectTool: true,
 	}
 
 	reg := tools.NewRegistry()
@@ -769,7 +773,12 @@ func fullDeps(t *testing.T) builtin.Deps {
 		// all, defaulted to a public write, and denied to every worker
 		// its parent granted it while list_work_items beside it was
 		// admitted.
-		Work:  builtin.WorkDeps{Reader: newFakeTracker(), Writer: newFakeTracker().as},
+		Work: builtin.WorkDeps{
+			Reader: newFakeTracker(), Writer: newFakeTracker().as,
+			ProjectWriter: func(builtin.Actor) builtin.ProjectWriter {
+				return newFakeTracker()
+			},
+		},
 		Pages: builtin.PageDeps{Reader: &fakeKB{}, Writer: &fakeKB{}},
 	}
 }
