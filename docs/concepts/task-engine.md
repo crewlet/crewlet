@@ -102,7 +102,14 @@ a cache cannot:
   duplicate rather than filing one.
 - **A write can wait for itself.** A turn that files a task and then lists the
   project sees what it just filed, because the tool waits for this node to
-  apply its own position before it reads.
+  apply its own position before it reads. A gesture that writes one item
+  *twice* waits the same way: a dependency change naming both directions
+  records the edges this item waits on and the ones that now wait for it as two
+  commits on the same item, and the second carries the first's position — so it
+  decides from a state that contains it rather than losing a race with
+  itself. When this node is too far behind for that wait to finish, the refusal
+  names **your own** write and the position to retry against — a different
+  situation from a colleague editing the same item, and it reads differently.
 - **An answer that could not account for everything says so.** A node holding
   a record a newer build wrote — one this build cannot decode — reports the
   answer as incomplete, names how many records and which objects, and the

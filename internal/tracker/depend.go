@@ -158,8 +158,15 @@ func (w *Writer) Depend(ctx context.Context, opID string, change DependencyChang
 	}
 
 	// STEP 3 — THE MIRRORS, best effort.
+	//
+	// THE AUTHORED COMMIT'S POSITION TRAVELS WITH THEM, because a call
+	// naming both directions writes THIS task's subject twice: once above
+	// for its own `waiting_on` edges, and once here for the dependents it
+	// gains. See [Writer.After] for what the second one would otherwise
+	// spend discovering that the first had moved it.
 	var last WriteResult
-	out.Mirrored, out.OneSided, last = w.mirror(ctx, opID, change, found, leads)
+	out.Mirrored, out.OneSided, last = w.mirror(ctx, opID, change, found, leads,
+		out.Position)
 	// THE POSITION IS THE LAST COMMIT THIS CALL MADE, whatever its shape.
 	// A `blocking`-only change writes nothing on its own subject, so the
 	// authored branch above never ran — and a caller that settled at the
@@ -200,8 +207,12 @@ func edgesOn(add, remove []string, actor, note string, at time.Time) *RelationIn
 // mirror that lost its race is a `one_sided` edge the duty repairs. So a
 // failure here is COLLECTED rather than raised — a caller told "failed" about
 // a dependency that exists would write it a second time.
+// authored is the position of step 2's commit on this call's own task, or the
+// zero position when this call authored no `waiting_on` edge of its own. It is
+// the session mark for the ONE mirror that lands on that same subject.
 func (w *Writer) mirror(ctx context.Context, opID string, change DependencyChange,
-	found parties, leads Leads) (mirrored, oneSided []string, last WriteResult) {
+	found parties, leads Leads,
+	authored statelog.Position) (mirrored, oneSided []string, last WriteResult) {
 
 	type edit struct {
 		add, remove []string
@@ -258,7 +269,15 @@ func (w *Writer) mirror(ctx context.Context, opID string, change DependencyChang
 		if len(e.announce) > 0 {
 			notify = found.wakeFor(subject, e.announce, leads)
 		}
-		result, err := w.UpdateTask(ctx, stepID(opID, fmt.Sprintf("m%d", i)),
+		// ONLY THIS CALL'S OWN TASK CARRIES THE MARK. Every other
+		// mirror is the FIRST record this gesture puts on its subject,
+		// so a wait there would be a wait for a position that says
+		// nothing about it.
+		writer := w
+		if id == change.Task {
+			writer = w.After(authored)
+		}
+		result, err := writer.UpdateTask(ctx, stepID(opID, fmt.Sprintf("m%d", i)),
 			id, subject.Project, NoIfMatch, TaskPatch{Depend: intent},
 			ChangeRelations, notify)
 		if err != nil {

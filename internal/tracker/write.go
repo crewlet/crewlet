@@ -142,6 +142,13 @@ type Writer struct {
 	// nothing on the write path reads a clock the applier is forbidden.
 	Now func() time.Time
 
+	// after is one of this writer's OWN earlier writes, carried so the
+	// framework waits for this node's applier to reach it before it opens
+	// the next snapshot. Zero means there is nothing the next write has to
+	// see first, which is every write a surface makes on its own. See
+	// [Writer.After].
+	after statelog.Position
+
 	// refusal is set by [Writer.As] when the identity it was handed
 	// cannot author a record. It is checked at the one funnel every write
 	// passes through — see the comment there for why it is carried rather
@@ -207,6 +214,75 @@ func (w *Writer) As(actor string, kind AuthorKind, provenance Provenance) *Write
 	clone.OperatorID = provenance.OperatorID
 	clone.TurnID = provenance.TurnID
 	clone.Chain = provenance.Chain
+	return &clone
+}
+
+// After is this writer carrying one of its own earlier writes, and it is how a
+// GESTURE that touches one subject twice stays a single wait rather than a
+// wasted round.
+//
+// # The shape it is for
+//
+// A sequence's later append onto a subject an earlier append of the SAME
+// sequence already moved decides from a snapshot of THIS NODE's rows — and the
+// record that moved that subject is still on its way to this node's applier.
+// So the expectation formed in that snapshot is one the earlier append has
+// already made stale. The framework recovers correctly, but only after it has
+// opened a snapshot, run the decide, asked the broker for the subject's last
+// sequence and been refused — and what it does then is wait for exactly the
+// position this writer was holding all along.
+//
+// [statelog.Request.Session] is that wait moved AHEAD of all of it. It costs
+// nothing when the applier is caught up, which is the common case; the decide
+// never runs against a state below the caller's own write, so no decision is
+// formed from rows that are about to move; and when the wait does expire the
+// refusal names THE CALLER'S OWN WRITE rather than "the log" — the difference
+// between "my applier is lagging" and "a colleague is editing this", which an
+// operator acts on differently and which the session-wait histogram separates
+// from every other reason a write waits.
+//
+// # Why a copy, and why it is not accumulated
+//
+// [Writer.As]'s idiom, for a weaker version of its reason: the mark belongs to
+// ONE gesture. A writer that remembered every position it had published would
+// carry a stale one into every later write a surface made — and on a surface
+// serving a whole turn that is an unbounded wait for a record nothing is
+// waiting on.
+//
+// It is deliberately not the tool layer's mechanism either. A tool call that
+// writes and then READS its own rows settles — waiting after the write, best
+// effort, because the write already landed and telling a model its create
+// failed is how a duplicate gets filed. This one waits before the NEXT WRITE
+// and refuses, because a write decided from a stale snapshot is not a stale
+// answer, it is a wrong one.
+//
+// # And why it is not carried on the TURN
+//
+// A turn-wide mark was the obvious next step and is the wrong scope twice
+// over. It would be a mutable value SHARED by every goroutine a turn ever
+// started — the one hazard the turn context exists to prevent, and a live data
+// race rather than a merely obscured dependency. And a mark that is a stream
+// position rather than a subject's makes every append of every sequence wait
+// for the one before it: a create is three appends on three different
+// subjects, none of which reads what the others wrote, so the wait would buy
+// nothing and cost a whole apply per step.
+//
+// What actually covers a turn is already there. Between two tool calls the
+// settle above has run, so the second call's writes are not below the first's;
+// and when that settle fails — it is best effort — the framework still
+// recovers, one wasted round later, with the same refusal under a less exact
+// name. Only a GESTURE's own appends have no settle between them, which is
+// precisely the scope this method has.
+//
+// THE ZERO POSITION IS A NO-OP, so a step whose predecessor published nothing
+// — a dependency change that touches only the far end — passes what it has
+// without a branch.
+func (w *Writer) After(at statelog.Position) *Writer {
+	if w == nil {
+		return nil
+	}
+	clone := *w
+	clone.after = at
 	return &clone
 }
 
@@ -848,6 +924,12 @@ func (w *Writer) publish(ctx context.Context, req statelog.Request) (statelog.Re
 		// is the shape of every hole this package has had.
 		return statelog.Result{}, w.refusal
 	}
+	// THE CALLER'S OWN HIGH-WATER MARK, and this is the one place it is
+	// set: the gesture that made the earlier write hands it on through
+	// [Writer.After], so nothing here has to remember what this writer has
+	// published. Zero — every write a surface makes on its own — waits for
+	// nothing.
+	req.Session = w.after
 	result, err := w.publisher.Publish(ctx, req)
 	switch {
 	case err == nil:

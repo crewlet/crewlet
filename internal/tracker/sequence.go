@@ -1019,9 +1019,10 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 		CreatedBy: w.Actor, CreatedAt: w.Now(),
 	})
 	merging := true
-	if _, err := w.UpdateTask(ctx, stepID(opID, "mark"), duplicate, task.Project, NoIfMatch,
+	marked, err := w.UpdateTask(ctx, stepID(opID, "mark"), duplicate, task.Project, NoIfMatch,
 		TaskPatch{Relations: &relations, Merging: &merging},
-		ChangeRelations, nil); err != nil {
+		ChangeRelations, nil)
+	if err != nil {
 		return WriteResult{}, err
 	}
 
@@ -1040,7 +1041,12 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 
 	cancelled := StatusCancelled
 	done := false
-	return w.UpdateTask(ctx, stepID(opID, "close"), duplicate, task.Project, NoIfMatch,
+	// THE CLOSE LANDS ON THE SUBJECT THE MARK ALREADY MOVED, and the
+	// re-parented children in between are on subjects of their own — so
+	// the mark's position is what this last append has to see, whatever
+	// the loop above published. See [Writer.After].
+	return w.After(marked.Position).UpdateTask(ctx, stepID(opID, "close"),
+		duplicate, task.Project, NoIfMatch,
 		TaskPatch{Status: &cancelled, Merging: &done}, ChangeStatus, notify)
 }
 

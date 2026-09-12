@@ -142,6 +142,19 @@ type Request struct {
 	// publisher waits for its own applier to reach it BEFORE it opens a
 	// snapshot, so a caller that created a task and immediately edits it
 	// decides from a state that contains its own write.
+	//
+	// THE CALLER SETS IT PER GESTURE, and the framework deliberately does
+	// not remember it instead. A publisher is a domain's singleton, shared
+	// by every sequence on this node, so a mark it accumulated would make
+	// one gesture's step wait for an unrelated gesture's record — and a
+	// mark scoped to a long-lived writer would carry a stale position into
+	// every later write that surface made. Only the gesture knows which of
+	// its own appends the next one has to see, which is why a domain's
+	// writer hands the position from step to step (see
+	// `tracker.Writer.After`) rather than this package deriving it.
+	//
+	// The zero position waits for nothing, which is every write a surface
+	// makes on its own.
 	Session Position
 
 	// Pattern is how this write arbitrates.

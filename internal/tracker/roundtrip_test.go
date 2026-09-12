@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -34,6 +35,7 @@ type roundTrip struct {
 	applier  *tracker.Applier
 	reader   *tracker.Reader
 	waiter   *testWaiter
+	metrics  *metrics.Recorder
 	consumed uint64
 
 	// at is the writer's AUTHORED clock, which a case moves when it is
@@ -116,9 +118,19 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 	// an absent anchor really does mean an empty subject.
 	fence.Floor = func(context.Context) (uint64, error) { return 0, nil }
 	waiter := &testWaiter{}
+	// A REAL RECORDER, because two of this harness's invariants are only
+	// visible as instruments: the session wait is a HISTOGRAM and nothing
+	// it does reaches a result, so a case asserting that a gesture waited
+	// for its own earlier append has no other witness.
+	recorder, err := metrics.New()
+	if err != nil {
+		t.Fatalf("build a metrics recorder: %v", err)
+	}
+	r.metrics = recorder
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: tracker.Domain{}, Log: log, Rows: rows, Fence: fence,
 		Gates: tracker.NewGates(db), Waiter: waiter, NodeID: "node-a",
+		Metrics:       recorder,
 		Generation:    func() uint32 { return 0 },
 		ResolveBudget: 2 * time.Second,
 	})
