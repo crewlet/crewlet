@@ -176,6 +176,18 @@ func (emptyWork) Sprints(context.Context, tracker.SprintQuery, time.Time) (
 	return tracker.SprintListing{}, nil
 }
 
+func (emptyWork) Activity(context.Context, tracker.ActivityQuery, time.Time) (
+	tracker.ActivityAnswer, error) {
+
+	return tracker.ActivityAnswer{}, nil
+}
+
+func (emptyWork) MyWork(context.Context, tracker.MyWorkQuery, time.Time) (
+	tracker.MyWork, error) {
+
+	return tracker.MyWork{}, nil
+}
+
 func (emptyWork) Person(context.Context, tracker.PersonQuery, time.Time) (tracker.PersonState, error) {
 	return tracker.PersonState{}, nil
 }

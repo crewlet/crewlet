@@ -11,7 +11,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { SprintPanel } from "./Sprints.tsx";
-import { ProjectOverview } from "./Work.tsx";
+import { describeChange, ProjectOverview } from "./Work.tsx";
 import type { WorkProjectDetail, WorkSprintRow } from "~/protocol/index.ts";
 
 afterEach(cleanup);
@@ -186,4 +186,72 @@ test("a project with no sprints renders none rather than a zeroed one", () => {
 test("no overview is drawn before the answer arrives", () => {
   const { container } = render(<ProjectOverview detail={null} />);
   expect(container.textContent).toBe("");
+});
+
+// A CHANGE IS RENDERED FROM ITS DELTAS, because "todo → in_progress" is what
+// every reader of one wants and the kind alone does not say it.
+test("a change with deltas renders them", () => {
+  expect(
+    describeChange({
+      id: "r", log_seq: 1, log_stream: "s", log_generation: 1,
+      at: "2031-04-16T00:00:00Z", effective_at: "2031-04-16T00:00:00Z",
+      kind: "status", subject_kind: "task", subject_id: "t", notified: true,
+      fields: { status: { from: "todo", to: "in_progress" } },
+    }),
+  ).toBe("status: todo → in_progress");
+});
+
+// AN EMPTY SIDE RENDERS AS AN EM-DASH rather than as nothing: "assignee:  →
+// ada" reads as a rendering bug, where "assignee: — → ada" reads as an
+// assignment.
+test("an empty side of a delta renders as a dash", () => {
+  expect(
+    describeChange({
+      id: "r", log_seq: 1, log_stream: "s", log_generation: 1,
+      at: "2031-04-16T00:00:00Z", effective_at: "2031-04-16T00:00:00Z",
+      kind: "assignee", subject_kind: "task", subject_id: "t", notified: true,
+      fields: { assignee: { from: "", to: "ada" } },
+    }),
+  ).toBe("assignee: — → ada");
+});
+
+// A REMOVAL RENDERS AS A DASH ON THE OTHER SIDE TOO — "assignee: ada → " is
+// the same rendering bug read from the other end, where "ada → —" is somebody
+// being taken off a task.
+test("a cleared value renders as a dash", () => {
+  expect(
+    describeChange({
+      id: "r", log_seq: 1, log_stream: "s", log_generation: 1,
+      at: "2031-04-16T00:00:00Z", effective_at: "2031-04-16T00:00:00Z",
+      kind: "assignee", subject_kind: "task", subject_id: "t", notified: true,
+      fields: { assignee: { from: "ada", to: "" } },
+    }),
+  ).toBe("assignee: ada → —");
+});
+
+// A COMMENT HAS NO DELTAS AND IS THE THING MOST WORTH READING, so the excerpt
+// is what a feed shows for it — the kind alone says only that somebody spoke.
+test("a change with no deltas renders its excerpt", () => {
+  expect(
+    describeChange({
+      id: "r", log_seq: 1, log_stream: "s", log_generation: 1,
+      at: "2031-04-16T00:00:00Z", effective_at: "2031-04-16T00:00:00Z",
+      kind: "comment", subject_kind: "task", subject_id: "t", notified: true,
+      excerpt: "rolled back, the migration was the cause",
+    }),
+  ).toBe("rolled back, the migration was the cause");
+});
+
+// AND A CHANGE WITH NEITHER DELTAS NOR AN EXCERPT IS STILL A CHANGE. Rendered
+// blank it would look like a rendering bug where it is a real commit — a
+// watcher added, a rank moved — so the kind is the last resort.
+test("a change with nothing to show falls back to its kind", () => {
+  expect(
+    describeChange({
+      id: "r", log_seq: 1, log_stream: "s", log_generation: 1,
+      at: "2031-04-16T00:00:00Z", effective_at: "2031-04-16T00:00:00Z",
+      kind: "comment_resolved", subject_kind: "task", subject_id: "t",
+      notified: false,
+    }),
+  ).toBe("comment resolved");
 });

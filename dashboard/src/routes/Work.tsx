@@ -51,6 +51,7 @@ import { fmtDateTime, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import type {
   WorkGroup,
+  WorkActivityRecord,
   WorkProjectDetail,
   WorkProjectRow,
   WorkIncomplete,
@@ -162,6 +163,14 @@ export function Work() {
     project ? { key: project } : undefined,
     { pollMs: 60_000 },
   );
+  // AND WHAT HAPPENED, which is a different question from what is there: the
+  // feed is ordered by the LOG rather than by anything this board sorts on,
+  // so a change that moved nothing on screen is still visible.
+  const feed = useQuery(
+    "work_activity",
+    { container: params.container, limit: 20 },
+    { pollMs: 60_000 },
+  );
   const types = catalogue.data?.types ?? [];
   const views = strip.data?.views ?? [];
   // THE VIEW IS A SET OF DEFAULTS, never a lock: picking one puts its
@@ -208,6 +217,14 @@ export function Work() {
       <ScreenHead
         title="Work"
         sub="The company's own tracker — every item, who owns it and what moved it. Read-only here: work is filed and moved by the seats themselves, so every change is attributed to somebody."
+        actions={
+          // ONE PERSON'S DAY IS NOT A NAV ENTRY, because route dispatch is a
+          // switch on the first path segment and `work` already owns it —
+          // two entries claiming one head would make one of them silently
+          // unreachable. It is reached from here instead, which is also
+          // where somebody is when they want it.
+          <a href={href(["work", "me"])}>My work →</a>
+        }
       />
 
       {/* The counts are of what is ON SCREEN, and the label says so. A header
@@ -316,6 +333,8 @@ export function Work() {
           its lead and the unit that owns it are facts about the CONTAINER,
           and a board can say none of them from its rows. */}
       {project && <ProjectOverview detail={overview.data} />}
+
+      <ActivityFeed records={feed.data?.records ?? []} now={now} />
 
       {loading && <Skeleton rows={6} />}
 
@@ -561,6 +580,61 @@ export function ProjectOverview({ detail }: { detail?: WorkProjectDetail | null 
  *  offered exactly one choice and no way back. The fallback is not decoration:
  *  the listing is a separate poll, and a filter that empties while it is in
  *  flight is a control that flickers every time the board is re-read. */
+/** What happened in this container lately.
+ *
+ *  A DIFFERENT QUESTION from what is on the board: the feed is ordered by the
+ *  log rather than by anything the rows sort on, so a change that moved
+ *  nothing on screen — a comment, a watcher, a quiet re-type — is still
+ *  visible. It renders the AUTHORED instant, which is what the writer's clock
+ *  said and what "yesterday" has to keep meaning.
+ *
+ *  ABSENT when empty rather than drawn as an empty panel: a board with no
+ *  history yet has nothing to say about it. */
+export function ActivityFeed({
+  records,
+  now,
+}: {
+  records: WorkActivityRecord[];
+  now: number;
+}) {
+  if (records.length === 0) return null;
+  return (
+    <Panel title="Recent activity" count={records.length} padding="tight">
+      {records.map((record) => (
+        <div key={record.id} className="row gap-sm">
+          <span className="muted">{relTime(record.at, now)}</span>
+          <Badge tone="neutral">{record.kind}</Badge>
+          {record.subject_key && (
+            <a className="mono" href={href(["work", record.subject_key])}>
+              {record.subject_key}
+            </a>
+          )}
+          <span className="truncate">{describeChange(record)}</span>
+          <span className="muted">{record.actor}</span>
+        </div>
+      ))}
+    </Panel>
+  );
+}
+
+/** One commit in a sentence.
+ *
+ *  FROM THE DELTAS where there are any, because "todo → in_progress" is what
+ *  every reader of a change wants and the kind alone does not say it. The
+ *  excerpt is the fallback, and the kind is the last resort — a row with
+ *  neither is still a row, and rendering it blank would make a real commit
+ *  look like a rendering bug. */
+export function describeChange(record: WorkActivityRecord): string {
+  const moved = Object.entries(record.fields ?? {});
+  if (moved.length > 0) {
+    return moved
+      .map(([field, d]) => `${field}: ${d.from || "—"} → ${d.to || "—"}`)
+      .join(", ");
+  }
+  if (record.excerpt) return record.excerpt;
+  return record.kind.replaceAll("_", " ");
+}
+
 export function projectKeys(
   listed: WorkProjectRow[] | undefined,
   shown: WorkSummary[],

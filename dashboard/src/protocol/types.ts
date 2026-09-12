@@ -2017,6 +2017,105 @@ export interface Frame {
 }
 
 /** The named answers the socket's request/response channel serves. */
+/** One field's before and after, AS TEXT — every renderer of a delta wants
+ *  "todo → in_progress", and the typed value is on the row for anything that
+ *  needs it. */
+export interface WorkDelta {
+  from: string;
+  to: string;
+}
+
+/** One commit, as the activity feed renders it.
+ *
+ *  `at` is the AUTHORED instant — what the writer's own clock said, and what a
+ *  card renders — and `effective_at` is the fleet-agreed one every duration is
+ *  measured on. Both, because they are different facts and a surface carrying
+ *  one of them silently answers a different question than it looks like. */
+export interface WorkActivityRecord {
+  id: string;
+  log_seq: number;
+  log_stream: string;
+  log_generation: number;
+  at: string;
+  effective_at: string;
+  kind: string;
+  actor?: string;
+  actor_kind?: string;
+  operator_id?: string;
+  subject_kind: string;
+  subject_id: string;
+  subject_key?: string;
+  project?: string;
+  excerpt?: string;
+  fields?: Record<string, WorkDelta>;
+  comment_id?: string;
+  batch_id?: string;
+  turn_id?: string;
+  /** How a reader tells "nothing was announced" from "nothing happened" —
+   *  which is the whole reason a quiet commit still writes a row. */
+  notified: boolean;
+  late?: boolean;
+}
+
+export interface WorkActivityAnswer {
+  records: WorkActivityRecord[];
+  /** Resumes exactly after the last row, as a log POSITION — a bare sequence
+   *  names no stream and no generation, so a cursor built from one cannot
+   *  survive a reanchor. */
+  next_cursor?: string;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
+/** One question waiting on somebody, with what to do about it. */
+export interface WorkAskRow extends WorkSummary {
+  comment: string;
+  asked_by: string;
+  asked_at: string;
+  body: string;
+  /** The literal call that answers it. A model handed a comment id still has
+   *  to compose the call, and every one it composes differently is a round
+   *  spent being refused. */
+  answer_with: string;
+}
+
+/** One sub-item claimed by somebody. It lives on ANOTHER person's task, which
+ *  is why it is its own block: no assignee filter over tasks reaches it. */
+export interface WorkChecklistRow {
+  task: string;
+  task_key: string;
+  task_title: string;
+  checklist: string;
+  item: string;
+  name: string;
+  done: boolean;
+}
+
+/** Everything one person is expected to look at — seven different CLAIMS on
+ *  their attention, each bounded the same so no block crowds out another. */
+export interface WorkMyWork {
+  handle: string;
+  /** In the STORED order, never re-sorted: the order is the content — it is
+   *  what somebody decided — and sorting it discards the decision. */
+  priorities: WorkSummary[];
+  assigned: WorkSummary[];
+  asked_of_me: WorkAskRow[];
+  checklist_items: WorkChecklistRow[];
+  collaborating: WorkSummary[];
+  watching_recent: WorkSummary[];
+  unblocked_recent: WorkSummary[];
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
 export interface QueryMap {
   agent: AgentAnswer;
   agent_memory: AgentMemoryAnswer;
@@ -2039,6 +2138,8 @@ export interface QueryMap {
   work_projects: WorkProjectsAnswer;
   work_project: WorkProjectDetail;
   work_sprints: WorkSprintsAnswer;
+  work_activity: WorkActivityAnswer;
+  work_my_work: WorkMyWork;
   work_goals: WorkGoalsAnswer;
   work_catalogue: WorkCatalogueAnswer;
   work_person: WorkPersonState;
