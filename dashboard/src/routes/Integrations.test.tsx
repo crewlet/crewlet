@@ -60,9 +60,16 @@ test("the tone follows how much is not working", () => {
   }
 });
 
-// The detail is the sentence that saves somebody reading logs, and the link
-// is where they go to act on it.
-test("a blocked surface says what to do and where", () => {
+// The detail is the sentence that saves somebody reading logs, and it is the
+// whole of what this band says.
+//
+// NEITHER AN ACTOR CLAUSE NOR A LINK BESIDE IT. "you, at the third-party app"
+// named a place the sentence already names — and names better, because it
+// says which app and what to do there — and the anchor under it read "Open
+// where this is fixed", unlabelled, directly above the agent row's own
+// "Install on GitHub" button pointing at the same address. Two controls for
+// one act and a clause repeating the sentence above it.
+test("a blocked surface says what to do", () => {
   render(
     <Reconcile
       status={{
@@ -75,8 +82,8 @@ test("a blocked surface says what to do and where", () => {
     />,
   );
   expect(screen.getByText(/swe has no Jira account/)).toBeTruthy();
-  expect(screen.getByText(/you, at the third-party app/)).toBeTruthy();
-  expect(screen.getByRole("link").getAttribute("href")).toBe("https://jira.example.com/admin");
+  expect(screen.queryByText(/at the third-party app/)).toBeNull();
+  expect(screen.queryByRole("link")).toBeNull();
 });
 
 // AN OPERATOR'S OWN FINDING NAMES NO PLACE.

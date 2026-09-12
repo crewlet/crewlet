@@ -160,7 +160,15 @@ func TestTheInstallArrivalStillNamesTheSeatAndTheWait(t *testing.T) {
 	t.Parallel()
 	res := landing(t, &stubFlow{}, "installed=sre-lead&installation_id=159853568")
 	body := res.Body.String()
-	for _, want := range []string{"sre-lead", "App installed for", "next pass"} {
+	// AND THE WAIT IS THE REAL ONE. It said "usually within a minute",
+	// which is true only for the first few ticks of a backoff that runs to
+	// ten minutes — so an operator who installed the app and watched a card
+	// for a minute read the silence as the install not having taken.
+	// Recheck is named because it makes the wait zero.
+	for _, want := range []string{
+		"sre-lead", "App installed for", "next reconcile pass",
+		"ten minutes", "Recheck",
+	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the page does not mention %q:\n%s", want, body)
 		}

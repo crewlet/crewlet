@@ -263,8 +263,20 @@ func (r *Receiver) githubAppLanding(w http.ResponseWriter, req *http.Request) {
 		view.Heading = "App installed for"
 		view.Seat = strings.TrimSpace(q.Get("installed"))
 		view.Done = true
-		view.Message = "Crewlet picks the installation up on its next pass, usually " +
-			"within a minute, and the Integrations screen will say so."
+		// THE WAIT SAID HONESTLY. "usually within a minute" is true only
+		// for the first few ticks: the admin cadence is a BACKOFF
+		// ([integration.Schedule.Next]) from fifteen seconds to ten
+		// minutes, so a seat that has been waiting on this click for an
+		// hour is polled every ten — and an operator who installed the app
+		// and watched a card for a minute read the silence as the install
+		// not having taken. It was measured exactly that way.
+		//
+		// And it names the control that makes it immediate, because there
+		// is one: Recheck runs the same pass on demand.
+		view.Message = "Crewlet picks the installation up on its next reconcile " +
+			"pass — within a minute if this agent was set up just now, and up " +
+			"to ten minutes on a surface that has been waiting a while. " +
+			"Press Recheck on the Integrations screen to look immediately."
 
 	case r.appFlow == nil:
 		view.Heading, status = "App not created", http.StatusServiceUnavailable

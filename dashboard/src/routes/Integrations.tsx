@@ -240,8 +240,13 @@ function actorLabel(actor: string | undefined): string {
       return "the engine is working on it";
     case "provider":
       return "the third-party app is applying it";
+    // THE ADMIN IS UNLABELLED TOO, on the same reasoning as the operator
+    // below. "you, at the third-party app" named a place the finding's own
+    // sentence already names — and names better, because it says WHICH app
+    // and what to do there — so the clause was a second, vaguer copy of the
+    // instruction sitting beside it.
     case "admin":
-      return "you, at the third-party app";
+      return "";
     // THE OPERATOR IS UNLABELLED, and deliberately. "you, in the company
     // configuration" named a place this screen IS: the note sits inside the
     // card whose Settings control opens the very form the fix is made in, so
@@ -517,7 +522,12 @@ export function Reconcile({
   // On a healthy surface that timestamp was the ONLY thing in the band, so
   // the card grew a grey stripe per surface saying nothing had happened.
   // The tag says the state; the band is for what a person has to act on.
-  if (!status.detail && !status.action_url && !status.last_error && others.length === 0) {
+  // NO action_url CLAUSE, because nothing here renders one any more. It was
+  // an anchor reading "Open where this is fixed" under the finding's own
+  // sentence — which already says where — and directly beneath the seat row's
+  // own "Install on GitHub" button, which is the same address with a name on
+  // it. Two controls for one act, one of them unlabelled.
+  if (!status.detail && !status.last_error && others.length === 0) {
     return null;
   }
 
@@ -531,12 +541,6 @@ export function Reconcile({
             simply unreachable from the screen. */}
         {reported && <FindingSubjects of={reported} />}
         {actor && <span className="int-row-note-when">{actor}</span>}
-
-        {status.action_url && (
-          <a href={status.action_url} target="_blank" rel="noreferrer">
-            Open where this is fixed
-          </a>
-        )}
 
         {status.last_error && (
           <span className="int-row-note-when" title="the last pass could not read this surface">
@@ -1044,7 +1048,11 @@ export function SeatStep({
     // to nothing is a control that lies.
     if (!seat.action_url) return null;
     return (
-      <a className="btn sm" href={seat.action_url} target="_blank" rel="noreferrer">
+      // PRIMARY, like the Create button it follows. These are the two acts
+      // that build a seat's app and they are the same kind of thing — the one
+      // control on the row a person is meant to press — so drawing the second
+      // as an ordinary button made the finished half look optional.
+      <a className="btn sm primary" href={seat.action_url} target="_blank" rel="noreferrer">
         Install on {app}
       </a>
     );
