@@ -662,20 +662,27 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 		add(clause, values...)
 	}
 	if len(q.Flags) > 0 {
-		// THE INDEX'S OWN PREDICATE, stated because it is what makes the
-		// index reachable. The attention index is partial over the four
-		// flags together — a task with any of them is a fraction of a
-		// percent of the table — and `cycle = 1` alone does not imply
-		// that disjunction to a planner, so a flag filter without it
-		// reads every task in the company.
-		add(anyFlagSet)
-	}
-	for _, flag := range q.Flags {
-		column, ok := flagColumn(flag)
-		if !ok {
-			return "", nil, fmt.Errorf("tracker: %q is not an attention flag", flag)
+		clause, onTask, err := flagsClause(q.Flags)
+		if err != nil {
+			return "", nil, err
 		}
-		add(column + " = 1")
+		if onTask {
+			// THE INDEX'S OWN PREDICATE, stated because it is what
+			// makes the index reachable. The attention index is
+			// partial over the four task flags together — a task
+			// with any of them is a fraction of a percent of the
+			// table — and `cycle = 1` alone does not imply that
+			// disjunction to a planner, so a flag filter without it
+			// reads every task in the company.
+			//
+			// ONLY WHEN EVERY NAMED FLAG IS ON THE TASK ROW. The two
+			// dependency flags live on `tracker_relations`, and a
+			// task whose edge is one-sided carries none of these
+			// four — so adding this predicate beside them would
+			// silently answer nothing.
+			add(anyFlagSet)
+		}
+		add(clause)
 	}
 
 	switch {
@@ -1095,15 +1102,66 @@ const anyFlagSet = `(t.inconsistent_project = 1 OR t.cycle = 1 OR ` +
 func flagColumn(flag string) (string, bool) {
 	switch flag {
 	case "cycle":
-		return "t.cycle", true
+		return "t.cycle = 1", true
 	case "too_deep":
-		return "t.too_deep", true
+		return "t.too_deep = 1", true
 	case "inconsistent_project":
-		return "t.inconsistent_project", true
+		return "t.inconsistent_project = 1", true
 	case "key_collision":
-		return "t.key_collision", true
+		return "t.key_collision = 1", true
 	}
 	return "", false
+}
+
+// flagsClause is the whole flag filter, and the two things it settles.
+//
+// # The set is an OR, not an AND
+//
+// Each flag was ANDed with the last, so `flag=cycle,too_deep` meant a task
+// that is BOTH in a cycle and too deep — which is not what an attention queue
+// asks, and not what the screen that reads this passes: it names every flag
+// there is and expects the tasks carrying any of them. With conjunction that
+// screen answered nothing, on every company, for ever, and looked exactly like
+// a company with nothing wrong.
+//
+// # And two of the six are not on the task row
+//
+// `one_sided` and `one_sided_final` are properties of a dependency EDGE — an
+// authored `waiting_on` whose blocker does not list it, and one whose mirror
+// was refused permanently. They are on `tracker_relations`, which is why they
+// are an EXISTS rather than a column, and why the caller is told whether every
+// flag it named is on the task row: the attention index's partial predicate
+// applies to those four and to nothing else.
+func flagsClause(flags []string) (clause string, allOnTask bool, err error) {
+	terms := make([]string, 0, len(flags))
+	allOnTask = true
+	for _, flag := range flags {
+		switch term, onTask := flagColumn(flag); {
+		case onTask:
+			terms = append(terms, term)
+		case flag == "one_sided":
+			allOnTask = false
+			terms = append(terms, "EXISTS (SELECT 1 FROM tracker_relations x "+
+				"WHERE x.task_id = t.id AND x.one_sided = 1 "+
+				"AND x.one_sided_final = 0)")
+		case flag == "one_sided_final":
+			allOnTask = false
+			terms = append(terms, "EXISTS (SELECT 1 FROM tracker_relations x "+
+				"WHERE x.task_id = t.id AND x.one_sided_final = 1)")
+		default:
+			return "", false, fmt.Errorf("tracker: %q is not an attention "+
+				"flag. The flags are: %s", flag, strings.Join(AttentionFlags, ", "))
+		}
+	}
+	return "(" + strings.Join(terms, " OR ") + ")", allOnTask, nil
+}
+
+// AttentionFlags is the closed set, in the order the attention queue reads
+// them: the four a task carries on its own row, then the two a dependency
+// edge carries.
+var AttentionFlags = []string{
+	"cycle", "too_deep", "inconsistent_project", "key_collision",
+	"one_sided", "one_sided_final",
 }
 
 // orderBy compiles the sort, always ending in the id.

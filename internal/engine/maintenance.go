@@ -90,6 +90,13 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 					// Berlin starts their sprint at one in the
 					// morning.
 					Zone: e.trackerZone(),
+					// AND THE LEAD MAP, for the one repair whose
+					// commit carries a wake. Read per call against
+					// the epoch current when the job runs, for the
+					// reason every other live seam here is: the duty
+					// outlives a revision, and a captured map would
+					// route by an org chart that has since moved.
+					Leads: liveLeads{engine: e},
 				})...)
 			}
 			// AND THE STATE LOG'S OWN OPERATION LEDGERS, one per

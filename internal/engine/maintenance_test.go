@@ -87,6 +87,16 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// runs and a board that stays wrong.
 		"tracker_abandoned_merges",
 		"tracker_duplicate_ranks",
+		// AND THE ONE-SIDED DEPENDENCY REPAIR, which is the same kind
+		// of thing: a dependency is two commits on two subjects, the
+		// mirror is best effort because the authored edge is durable
+		// without it, and this writes the one that did not land. Its
+		// repair is LOUD — the authored commit routes to the
+		// DEPENDENT's parties, so the blocker's assignee was never told
+		// at all — which makes it the only wake that side ever gets.
+		// Unregistered, a half-written dependency stays half-written
+		// and nobody hears about it.
+		"tracker_one_sided",
 		"tracker_ops",
 		"tracker_respread",
 		// AND THE SPRINT LIFECYCLE, which is the same kind of thing as

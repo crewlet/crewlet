@@ -823,6 +823,31 @@ func ProjectOfSeat(o *org.Organization, handle string) string {
 		func(r *org.Role) string { return r.Project })
 }
 
+// UnitOfSeat is the team a seat belongs to, as a task's unit fields hold it.
+//
+// THE UNIT'S KEY rather than its name, because a unit is renamed for the
+// reasons prose is renamed and every task filed under it would otherwise stop
+// resolving — [org.Unit.Key] is the stable identity, falling back to the name
+// for a unit that has not been given one.
+//
+// THE SAME UPWARD WALK as the project, so a seat in a team nested under a
+// department is filed under its OWN team rather than the department's: the
+// first unit that holds the role is the answer, which is what a person means
+// by "my team".
+func UnitOfSeat(o *org.Organization, handle string) string {
+	if o == nil || handle == "" {
+		return ""
+	}
+	for unit := range o.AllUnits() {
+		for _, role := range unit.Roles {
+			if role.Handle() == handle {
+				return unit.Key()
+			}
+		}
+	}
+	return ""
+}
+
 func scopeOfSeat(o *org.Organization, handle string, of func(*org.Unit) string,
 	own func(*org.Role) string) string {
 	if o == nil || handle == "" {
@@ -921,6 +946,15 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 				TurnID: actor.TurnID, Chain: actor.Chain,
 			})
 		},
+		// AND THE DEPENDENCY SEQUENCE, which is the same writer in its
+		// third shape: a dependency is two commits on two subjects, so
+		// it needs the replicated estate to check its counterparties
+		// before the first of them — and this writer has one.
+		Dependencies: func(actor builtin.Actor) builtin.WorkDepender {
+			return e.native.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
+				TurnID: actor.TurnID, Chain: actor.Chain,
+			})
+		},
 		Mentions: seatMentions{org: c.Org},
 		// THE ROSTER, read PER CALL for the reason the default project
 		// and the unit seam are: a seat's tools are cloned into its
@@ -941,6 +975,11 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		// captured project would outlive the org chart that named it.
 		DefaultProject: func(handle string) string {
 			return ProjectOfSeat(e.Company().Org, handle)
+		},
+		// AND THE SEAT'S OWN TEAM, which a create stamps on both unit
+		// fields. Per call for the reason the default project is.
+		UnitOfSeat: func(handle string) string {
+			return UnitOfSeat(e.Company().Org, handle)
 		},
 		// THE LEAD MAP IS READ PER CALL against the epoch current when the
 		// tool runs, for the reason the default project is: a seat's

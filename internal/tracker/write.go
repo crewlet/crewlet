@@ -297,6 +297,12 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			{Kind: TermObject, Container: *patch.Project, ID: id},
 		}}
 	}
+	if patch.Status != nil {
+		var err error
+		if scope, err = w.scopeForStatus(ctx, id, project, scope); err != nil {
+			return WriteResult{}, err
+		}
+	}
 	at := w.Now()
 
 	result, err := w.published(ctx, statelog.Request{
@@ -348,6 +354,35 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			}
 			charged, err = settleWatch(current, charged)
 			if err != nil {
+				return statelog.Decision{}, err
+			}
+			charged, err = settleRelations(current, charged)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			charged, err = settleDependents(current, charged)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			// THE SCOPE THE REQUEST CLAIMED STILL COVERS THIS WRITE.
+			//
+			// A status write's apply rewrites `blocker_open` and
+			// `cleared_at` on every row that names this task as a
+			// blocker — rows keyed on OTHER tasks — so the record
+			// enumerates one object term per dependent (see
+			// [scopeForStatus]). That enumeration is read BEFORE the
+			// request is built, because the publisher probes the
+			// deferral index with the REQUEST's scope while the applier
+			// files a deferral under the ENVELOPE's, and the two must
+			// be one set.
+			//
+			// This is the check that makes reading it early honest: if
+			// a dependent arrived between that read and this snapshot,
+			// the claim is short by one object and the write is refused
+			// rather than published under a scope that does not cover
+			// it. The caller re-runs and the second attempt enumerates
+			// the dependent that arrived.
+			if err := scope.covers(current.Dependents); err != nil {
 				return statelog.Decision{}, err
 			}
 			decision, err := w.decide(subject, OpPatch, kind, scope, opID,

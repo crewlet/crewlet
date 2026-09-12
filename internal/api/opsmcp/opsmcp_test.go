@@ -191,6 +191,11 @@ func (stubWorkReader) Person(context.Context, tracker.PersonQuery, time.Time) (t
 	return tracker.PersonState{}, nil
 }
 
+func (stubWorkReader) Thread(context.Context, tracker.ThreadQuery,
+	statelog.ReadLevel) (tracker.ResolvedThread, error) {
+	return tracker.ResolvedThread{}, nil
+}
+
 type stubWorkWriterT struct{}
 
 func stubWorkWriter(builtin.Actor) builtin.WorkWriter { return stubWorkWriterT{} }

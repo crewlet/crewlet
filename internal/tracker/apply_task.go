@@ -653,18 +653,51 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx, task Task,
 				})
 		}},
 		{"tracker_relations", func() (int, error) {
+			// `one_sided` IS DERIVED HERE AND NEVER CARRIED. Whether a
+			// blocker lists this task among its dependents is a fact
+			// about the OTHER end's rows, so a writer stating it would
+			// be stating something it read in a different transaction
+			// on a different subject — and, until this derivation
+			// existed, every record said nothing and the column was
+			// zero on every row a repair duty was supposed to find.
+			//
+			// `one_sided_final` is the opposite kind of fact and stays
+			// on the record: it is the duty's DECISION that this edge
+			// will never be mirrored, which no derivation can reach.
 			return insertMany(ctx, tx, `
 				INSERT INTO tracker_relations
 					(task_id, other_id, kind, derived, one_sided,
-					 one_sided_final, note)
-				VALUES (?,?,?,0,?,?,?)
+					 one_sided_final, note, created_at)
+				VALUES (?,?,?,0,
+					CASE WHEN ? = 'waiting_on' AND NOT EXISTS (
+						SELECT 1 FROM tracker_task_dependents d
+						WHERE d.task_id = ? AND d.dependent_id = ?)
+					THEN 1 ELSE 0 END, ?, ?, ?)
 				ON CONFLICT (task_id, other_id, kind) DO UPDATE SET
 					one_sided = excluded.one_sided,
 					one_sided_final = excluded.one_sided_final,
 					note = excluded.note`,
 				task.Relations, func(r Relation) []any {
 					return []any{task.ID, r.Other, string(r.Kind),
-						boolInt(r.OneSided), boolInt(r.OneSidedFinal), r.Note}
+						string(r.Kind), r.Other, task.ID,
+						boolInt(r.OneSidedFinal), r.Note,
+						// THE AUTHORED INSTANT, and NOT re-stamped on
+						// conflict: this is what the repair ages on, and
+						// an edge whose clock restarted every time its
+						// task was touched is one the duty would never
+						// reach on a busy task.
+						store.EncodeTime(r.CreatedAt)}
+				})
+		}},
+		{"tracker_task_dependents", func() (int, error) {
+			// THE MIRROR AS A ROW, so the derivation above is an
+			// indexed probe rather than a document decode per edge.
+			return insertMany(ctx, tx, `
+				INSERT INTO tracker_task_dependents (task_id, dependent_id)
+				VALUES (?,?)
+				ON CONFLICT (task_id, dependent_id) DO NOTHING`,
+				task.Dependents, func(id string) []any {
+					return []any{task.ID, id}
 				})
 		}},
 	} {
@@ -768,6 +801,33 @@ func (a *Applier) maintainDeps(ctx context.Context, tx *sql.Tx, task Task) (int,
 		return 0, fmt.Errorf("tracker: clear the dependents of %s: %w", task.ID, err)
 	}
 	n, err := affected(res)
+	if err != nil {
+		return 0, err
+	}
+	written += n
+
+	// AND THE MIRROR FLAG, FROM THIS SIDE. `one_sided` is derived on the
+	// DEPENDENT's apply from whether this blocker listed it; this commit
+	// is the other half — the blocker's own `Dependents` just changed, so
+	// every edge pointing at it is re-judged against the rows this
+	// transaction has written.
+	//
+	// BOTH DIRECTIONS ARE NEEDED and neither is redundant: without this
+	// one a mirror that lands SECOND never clears the flag its own
+	// dependent set while waiting, and the duty repairs an edge that is
+	// already whole — for ever, because its repair writes the mirror that
+	// is already there.
+	res, err = tx.ExecContext(ctx, `
+		UPDATE tracker_relations SET one_sided =
+			CASE WHEN EXISTS (SELECT 1 FROM tracker_task_dependents d
+			                  WHERE d.task_id = ? AND d.dependent_id = tracker_relations.task_id)
+			THEN 0 ELSE 1 END
+		WHERE other_id = ? AND kind = 'waiting_on'`, task.ID, task.ID)
+	if err != nil {
+		return 0, fmt.Errorf("tracker: re-judge the edges waiting on %s: %w",
+			task.ID, err)
+	}
+	n, err = affected(res)
 	if err != nil {
 		return 0, err
 	}

@@ -49,6 +49,11 @@ type DutyDeps struct {
 	// starts their sprint at one in the morning.
 	Zone *time.Location
 
+	// Leads is the company's lead map, for the one repair whose commit
+	// carries a wake. Nil routes to the blocker's assignee alone, which
+	// is what that wake is for — the project lead is only its fallback.
+	Leads Leads
+
 	// NodeID is who this node is, and it goes into every operation id the
 	// duty mints. A duty's records are its own, and attributing them to
 	// the company would make an abandoned walk's completion
@@ -58,7 +63,7 @@ type DutyDeps struct {
 
 // Jobs is the tracker's housekeeping, as the maintenance worker's own shape.
 //
-// FIVE JOBS, all fleet-wide and all gated. The names are the log's, and each
+// SIX JOBS, all fleet-wide and all gated. The names are the log's, and each
 // is the table or the walk it is about rather than the code that runs it.
 func Jobs(d DutyDeps) []maintenance.Job {
 	duty := &duty{deps: d}
@@ -84,6 +89,11 @@ func Jobs(d DutyDeps) []maintenance.Job {
 		{
 			Name: "tracker_unblocked",
 			Run:  duty.tellUnblocked,
+		},
+		{
+			Name: "tracker_one_sided",
+			Gate: duty.pendingOneSided,
+			Run:  duty.repairOneSided,
 		},
 		// THE ONE JOB THAT IS NOT A REPAIR, and it says so rather than
 		// pretending: a sprint's start and end are CALENDAR boundaries
@@ -812,3 +822,71 @@ func (d *duty) closedSprintsAfter(ctx context.Context, project string, number in
 	}
 	return n, nil
 }
+
+// pendingOneSided is the gate: one indexed read against the partial index the
+// schema ships for exactly this predicate.
+//
+// A HEALTHY COMPANY PAYS THIS AND NOTHING ELSE. The index is
+// `tracker_relations (task_id) WHERE one_sided = 1 AND one_sided_final = 0`,
+// so the probe touches no row at all when every dependency is whole — which
+// is the shape every job in this file is held to.
+func (d *duty) pendingOneSided(ctx context.Context) (bool, error) {
+	var any int
+	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `
+			SELECT EXISTS (SELECT 1 FROM tracker_relations
+			               WHERE one_sided = 1 AND one_sided_final = 0)`).
+			Scan(&any)
+	})
+	if err != nil {
+		return false, fmt.Errorf("tracker: probe for one-sided dependencies: %w", err)
+	}
+	return any == 1, nil
+}
+
+// repairOneSided writes the mirror commit a dependency gesture never reached.
+//
+// AGED, by [OneSidedRepairAge], so the duty never races a gesture that is
+// still running: a mirror published a second before the writer's own would be
+// two records on one subject and two wakes for one blocker's assignee.
+func (d *duty) repairOneSided(ctx context.Context, now, _ time.Time) (int64, error) {
+	edges, err := ScanOneSided(ctx, d.deps.DB, now.Add(-OneSidedRepairAge), WalkBatch)
+	if err != nil {
+		return 0, err
+	}
+	var repaired int64
+	for _, edge := range edges {
+		reason, final := edge.Final()
+		if _, err := d.deps.Writer.RepairOneSided(ctx,
+			d.opID("onesided", edge.Dependent+"."+edge.Blocker, now),
+			edge, d.leads()); err != nil {
+			// ONE EDGE'S FAILURE IS NOT THE TICK'S. The rest of this
+			// batch is independent — different subjects, different
+			// blockers — and stopping here would let one wedged
+			// counterparty hold up every other repair in the company.
+			d.deps.Logger.WarnContext(ctx, "tracker_one_sided_repair_failed",
+				"dependent", edge.Dependent, "blocker", edge.Blocker,
+				"error", err)
+			continue
+		}
+		repaired++
+		if final {
+			d.deps.Logger.InfoContext(ctx, "tracker_one_sided_final",
+				"dependent", edge.Dependent, "blocker", edge.Blocker,
+				"reason", reason)
+		}
+	}
+	if repaired > 0 {
+		d.deps.Logger.InfoContext(ctx, "tracker_one_sided_repaired",
+			"edges", repaired)
+	}
+	return repaired, nil
+}
+
+// leads is the duty's own lead map, which is nil unless one was supplied.
+//
+// NIL IS A VALID ANSWER rather than a missing dependency: a repair's wake
+// routes to the blocker's assignee, and the project lead is only the fallback
+// for a blocker that has none. A duty without a chart tells the assignee and
+// nobody else, which is the whole of what this wake is for.
+func (d *duty) leads() Leads { return d.deps.Leads }
