@@ -152,3 +152,53 @@ func seatRow(t *testing.T, s *surface, kind, handle string) map[string]any {
 	t.Fatalf("no roster row for %s on %s", handle, kind)
 	return nil
 }
+
+// A SEAT IS NOT SATISFIED ON AN INTEGRATION THE COMPANY DOES NOT HAVE.
+//
+// The roster answered about the CREDENTIAL and nothing else, so a seat whose
+// `${VAR}` resolved read as satisfied over a surface that had been
+// disconnected out of the document entirely — with the detail naming the
+// config path the value sits at, which is a fact about YAML rather than a
+// state. Measured after a Datadog disconnect: the block gone, every agent
+// still shown ready on it.
+func TestASeatIsNotSatisfiedOnASurfaceTheCompanyDoesNotDeclare(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	res := s.do(t, http.MethodPut, "/config", identityDoc,
+		map[string]string{"X-Summary": "a provisioned company"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("import = %d: %s", res.Code, res.Body)
+	}
+	for name, value := range map[string]string{
+		"SRE_ATLASSIAN": "atlassian-token",
+		"SRE_EMAIL":     "crewlet-sre-lead@acme.invalid",
+	} {
+		if err := s.vault.Set(t.Context(), name, value, "op", "test", pinned); err != nil {
+			t.Fatalf("seal %s: %v", name, err)
+		}
+	}
+	if seat := seatRow(t, s, "jira", "sre-lead"); seat["satisfied"] != true {
+		t.Fatalf("precondition: a provisioned seat reads as %v", seat["satisfied"])
+	}
+
+	// THE INTEGRATION GOES, and the seat's sealed credentials stay — which
+	// is what a disconnect that keeps the accounts deliberately leaves.
+	drop := s.do(t, http.MethodPatch, "/config", `{"integrations":{"jira":null}}`,
+		map[string]string{
+			"Content-Type": "application/merge-patch+json", "X-Summary": "disconnect jira",
+		})
+	if drop.Code != http.StatusCreated {
+		t.Fatalf("drop = %d: %s", drop.Code, drop.Body)
+	}
+
+	seat := seatRow(t, s, "jira", "sre-lead")
+	if seat["satisfied"] == true {
+		t.Error("the seat reads as satisfied on an integration this company " +
+			"no longer declares, so nothing reads what it holds")
+	}
+	detail, _ := seat["detail"].(string)
+	if !strings.Contains(detail, "connected") {
+		t.Errorf("detail = %q, want the sentence to be about the integration "+
+			"rather than about a variable", detail)
+	}
+}

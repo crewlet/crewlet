@@ -141,13 +141,34 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 	in := setup.PassInput{
 		Recreate: req.Recreate,
 		Operator: req.OperatorCredential,
+		// THE ADDRESS EVERY RUN GETS, INCLUDING A READ-ONLY ONE.
+		//
+		// This used to be set only on the writing branch, on the reasoning
+		// below that supplying the base IS the permission to register. That
+		// reasoning is right about the PERMISSION and wrong about the FACT:
+		// a vendor reads an empty base as "this deployment has no public
+		// base URL" and reports ingress_blocked against
+		// integrations.public_base_url, owed by an admin — and `check`
+		// persists its findings through the same fold the loop uses. So
+		// pressing Check on a perfectly healthy company wrote "every
+		// monitor that fires reaches nobody" into the live status row and
+		// flipped the card to Action required, telling an operator to set a
+		// value that was already set and answering 200.
+		//
+		// The permission is the SINK, which is what it has always actually
+		// been: every vendor gates its registration on having one
+		// (datadog's hook path reports rather than registers, gitlab and
+		// jira refuse outright, confluence and github the same), so a
+		// read-only run holding the address still writes nothing at the
+		// third-party app. What it gains is the ability to say what is
+		// TRUE: the webhook points somewhere else, or there is no address
+		// at all.
+		WebhookBase: company.Integrations.WebhookBase(s.resolve),
 	}
 	if !readOnly {
-		base := company.Integrations.WebhookBase(s.resolve)
-		if base == "" {
-			// SUPPLYING THE BASE IS THE PERMISSION TO REGISTER, so a pass
-			// with none would run and register nothing while reporting
-			// success. Refused by name instead.
+		if in.WebhookBase == "" {
+			// A WRITING PASS WITH NO ADDRESS IS REFUSED BY NAME, rather
+			// than run to register nothing and report success.
 			httpjson.FailWith(w, http.StatusConflict, codeNoPublicBaseURL, map[string]string{
 				"config_path": "integrations.public_base_url",
 				"hint": "set the HTTPS address third-party apps reach this deployment on; " +
@@ -155,7 +176,6 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 			})
 			return
 		}
-		in.WebhookBase = base
 		sink, err := s.sink(operatorOf(r))
 		if err != nil {
 			httpjson.FailWith(w, http.StatusServiceUnavailable, codeNoKeyring, map[string]string{

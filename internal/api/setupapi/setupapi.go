@@ -572,6 +572,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 			}
 			return datadog.AccountEmail(block.Provisioning, handle)
 		})
+		at.Configured = block != nil
 		seats = credentialSeats(company, s.resolve, at, "Datadog",
 			s.passes.Serves(kind), datadogAccess(block))
 		configured = block != nil
@@ -607,6 +608,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		// install an app they do not need.
 		at := atlassianAt(atlassian.ProductJira)
 		at.Identity = atlassianIdentity(s.resolve)
+		at.Configured = block != nil
 		seats = credentialSeats(company, s.resolve, at, "Jira", false)
 		// THE ATLASSIAN BLOCKS HAVE NO `enabled` FIELD. Their presence IS
 		// the switch, which is why a disconnect removes the block rather
@@ -619,6 +621,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		reqs = confluence.Requirements(block, company.Integrations.Atlassian.IsCloud(), s.resolve)
 		at := atlassianAt(atlassian.ProductConfluence)
 		at.Identity = atlassianIdentity(s.resolve)
+		at.Configured = block != nil
 		seats = credentialSeats(company, s.resolve, at, "Confluence", false)
 		configured, enabled = block != nil, block != nil
 	case integration.KindAtlassian:
@@ -627,6 +630,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		reqs = atlassian.Requirements(block, s.resolve)
 		at := atlassianAt(atlassian.ProductAny)
 		at.Identity = atlassianIdentity(s.resolve)
+		at.Configured = block != nil
 		seats = credentialSeats(company, s.resolve, at, "Atlassian",
 			s.passes.Serves(kind))
 		configured, enabled = block != nil, block != nil
@@ -641,6 +645,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 			}
 			return gitlab.Username(block.Provisioning, handle)
 		})
+		at.Configured = block != nil
 		seats = credentialSeats(company, s.resolve, at, "GitLab",
 			s.passes.Serves(kind))
 		configured = block != nil
@@ -661,6 +666,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 			}
 			return "@" + mattermost.BotUsername(block.Provisioning, handle)
 		})
+		at.Configured = block != nil
 		seats = credentialSeats(company, s.resolve, at, "Mattermost",
 			s.passes.Serves(kind))
 		configured = block != nil
@@ -801,6 +807,16 @@ func credentialSeats(company *config.Company, resolve func(string) (string, bool
 		state.Present = stored != ""
 		state.Secrets = seatSecretNames(at, role, stored)
 		switch {
+		case !at.Configured:
+			// NO INTEGRATION, SO NOTHING IS SATISFIED. Whatever this seat
+			// holds, nothing reads it and no pass will look at it: the
+			// company does not declare the app. Said before the credential
+			// cases below because it is the larger fact, and because the
+			// sentence an operator needs is about the integration rather
+			// than about a variable.
+			state.Detail = "waiting for " + app + " to be connected: this " +
+				"company declares no " + app + " integration, so nothing " +
+				"reads what this agent holds for it"
 		case stored == "":
 			// WHAT HAPPENS NEXT, not just what is absent, and the two apps
 			// differ honestly: the reconcile loop creates the account where
@@ -905,6 +921,21 @@ type seatCredentialAt struct {
 	// Nil derives the list from Find, which is right for every app that
 	// seals one value per seat.
 	Vars func(role *config.Role) []string
+
+	// Configured reports whether the company declares this app at all.
+	//
+	// A ROSTER ROW IS ABOUT A CREDENTIAL AND AN INTEGRATION, and without
+	// this it was only about the credential: a seat whose `${VAR}` resolved
+	// was reported SATISFIED on a surface the company does not have, with
+	// the detail naming the config path the value sits at. Measured after a
+	// disconnect — Datadog gone from the document entirely, and every agent
+	// still shown ready on it, which is a claim about nothing.
+	//
+	// Passed per call site rather than derived here, because what "declared"
+	// means is the app's own question: the Atlassian blocks have no
+	// `enabled` field and their presence IS the switch, where every other
+	// app has both facts.
+	Configured bool
 
 	// Identity is who this agent IS at the app, in the app's own words:
 	// the service account, the bot, the app registration. Empty where

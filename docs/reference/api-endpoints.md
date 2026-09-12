@@ -615,9 +615,21 @@ when another pass for the same third-party app is already running. That last
 one is a refusal rather than a queue on purpose: minting twice is not something
 a retry should paper over.
 
-`POST /setup/integrations/{kind}/check` runs the **same pass with neither**,
-which makes it read-only. It is what answers "did what I just fixed at the
-third-party app take" without the engine writing anything.
+`POST /setup/integrations/{kind}/check` runs the **same pass with no sink**,
+which is what makes it read-only: every vendor gates its registration and its
+minting on having somewhere to seal a credential, so a run without one reads
+and reports and writes nothing at the third-party app. It answers "did what I
+just fixed at the third-party app take".
+
+A check **does** get `integrations.public_base_url`, and the `409
+no_public_base_url` refusal above is the writing route's alone. Withholding
+the address from a check made it report the wrong fact: a vendor handed no
+base reads that as *this deployment has no inbound address* and reports
+`ingress_blocked` owed by an admin — and a check records its findings through
+the same fold as everything else, so pressing Check on a healthy company wrote
+"every monitor that fires reaches nobody" into the live status row and flipped
+the card to **Action required** over a value that was already set. Supplying
+the base is not the permission to register; having a sink is.
 
 Both record their outcome on the same fleet integration status the reconcile
 loop writes, through the same fold, so a pass run by hand and a tick that runs
@@ -708,6 +720,13 @@ to set. It names the reference, never a key.
 An unfinished roster does **not** hold the card open: the company block is what
 decides whether deliveries arrive, and a company running apps for three of its
 ten agents chose that.
+
+**A seat is never `satisfied` on an integration the company does not declare.**
+The roster used to answer about the credential alone, so a seat whose `${VAR}`
+resolved read as satisfied over a surface a disconnect had removed from the
+document entirely — with `detail` naming the config path the value sits at,
+which is a fact about YAML rather than a state. It says the seat is waiting for
+the integration to be connected instead.
 
 ### One agent's own GitHub App
 

@@ -768,8 +768,18 @@ func TestAProvisionPassGetsASinkAndABase(t *testing.T) {
 	}
 }
 
-// A CHECK IS THE SAME PASS WITH NEITHER. It answers "is it working now"
-// without the engine writing anything at the third-party app.
+// A CHECK IS THE SAME PASS WITH NO SINK — and WITH the address.
+//
+// THE SINK IS THE PERMISSION TO WRITE, which is what it has always actually
+// been: every vendor gates its registration on having one. The address is a
+// FACT, and withholding it made a check report the wrong one. A vendor reads
+// an empty base as "this deployment has no public base URL" and emits
+// ingress_blocked against integrations.public_base_url owed by an admin, and
+// a check persists its findings through the same fold the loop uses — so
+// pressing Check on a healthy company wrote "every monitor that fires reaches
+// nobody" into the live status row and flipped the card to Action required
+// over a value that was already set. Measured against a running deployment
+// behind a working tunnel.
 func TestACheckRunsTheSamePassReadOnly(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
@@ -786,9 +796,50 @@ func TestACheckRunsTheSamePassReadOnly(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("the pass ran %d times", calls)
 	}
-	if in.Sink != nil || in.WebhookBase != "" {
-		t.Fatalf("a check was given permission to write: sink=%v base=%q",
-			in.Sink != nil, in.WebhookBase)
+	if in.Sink != nil {
+		t.Fatalf("a check was given a sink, which is the permission to write")
+	}
+	if in.WebhookBase != "https://engine.example.com" {
+		t.Fatalf("a check was given base %q, so the vendor cannot tell "+
+			"\"no address\" from \"not allowed to register\" and reports the "+
+			"first about a deployment that has one", in.WebhookBase)
+	}
+}
+
+// AND A CHECK OVER A COMPANY THAT GENUINELY HAS NO ADDRESS IS NOT REFUSED.
+//
+// The refusal is the WRITING route's, because a pass that registers nothing
+// while reporting success is the failure it exists to stop. A check has
+// nothing to register, so it runs and reports the absence — which is a true
+// finding, and the one an operator needs.
+func TestACheckWithNoPublicBaseRunsAndReportsIt(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	pass := &recordingPass{}
+	s.withPass(t, pass)
+	res := s.do(t, http.MethodPatch, "/config",
+		`{"integrations":{"github":{"enabled":true,"webhook_secret":"${GH_SECRET}","provisioning":{"org":"acme"}}}}`,
+		map[string]string{
+			"Content-Type": "application/merge-patch+json", "X-Summary": "no base",
+		})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("seed = %d: %s", res.Code, res.Body)
+	}
+	if err := s.vault.Set(t.Context(), "GH_SECRET", "s", "test", "test", pinned); err != nil {
+		t.Fatal(err)
+	}
+
+	got := s.do(t, http.MethodPost, "/setup/integrations/github/check", `{}`, nil)
+	if got.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", got.Code, got.Body)
+	}
+	in, calls := pass.last()
+	if calls != 1 {
+		t.Fatalf("the check ran %d times", calls)
+	}
+	if in.WebhookBase != "" {
+		t.Errorf("base = %q, want empty: the company really has none", in.WebhookBase)
 	}
 }
 
