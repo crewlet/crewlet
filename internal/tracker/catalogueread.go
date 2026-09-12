@@ -28,6 +28,18 @@ type CatalogueAnswer struct {
 	// this answer names its scope rather than claiming to be complete.
 	Fields []FieldDef `json:"fields"`
 
+	// OptionsTotal is how many options the returned fields declare between
+	// them, and OptionsShown how many this answer carries.
+	//
+	// THE TWO TOGETHER, because a reader's question is "am I seeing all the
+	// choices" and a single number cannot answer it. At the caps this
+	// engine allows — 64 fields carrying 128 options each — the option
+	// lists ALONE are the largest thing a catalogue answer holds, and an
+	// answer that quietly carried some of them would have a model choosing
+	// from a list it believed was complete.
+	OptionsTotal int `json:"options_total"`
+	OptionsShown int `json:"options_shown"`
+
 	// PolicyVersion is what a task's policy stamp records having been
 	// validated against.
 	PolicyVersion int `json:"policy_version"`
@@ -48,6 +60,10 @@ type CatalogueQuery struct {
 	// Archived includes the archived types and fields; absent excludes
 	// them, which is what a form offering choices means.
 	Archived bool
+
+	// Options is how many option rows this answer may carry. Zero takes
+	// [MaxCatalogueOptions].
+	Options int
 
 	Level       statelog.ReadLevel
 	Session     statelog.Position
@@ -94,6 +110,12 @@ func (r *Reader) Catalogue(ctx context.Context, q CatalogueQuery) (CatalogueAnsw
 			out.Types = liveTypes(out.Types)
 			out.Fields = liveFields(out.Fields)
 		}
+		// THE OPTION COUNTS, before the fields are handed on: they are
+		// what a reader checks to know the choices they were offered are
+		// all of them, and at this engine's own caps — 64 fields of 128
+		// options — the lists are the largest thing this answer holds.
+		out.OptionsTotal = countOptions(out.Fields)
+		out.Fields, out.OptionsShown = pageOptions(out.Fields, q.Options)
 		position, applied, err := readCheckpoint(ctx, tx)
 		if err != nil {
 			return err
@@ -139,4 +161,58 @@ func liveFields(in []FieldDef) []FieldDef {
 		}
 	}
 	return out
+}
+
+// MaxCatalogueOptions is how many option rows ONE catalogue answer carries.
+//
+// The engine's own caps allow 64 fields of 128 options — 8 192 rows, which
+// encodes at nearly a megabyte and is fourteen times the ceiling on one tool
+// answer. A catalogue that large is a company with a genuinely deep
+// vocabulary, and the answer for it is a page rather than a refusal: a model
+// choosing a value needs the options of the ONE field it is setting, and
+// `options_total` beside `options_shown` is what tells it whether it is
+// looking at all of them.
+//
+// 256, which is TWO maximal option lists, or every option of a company with an
+// ordinary catalogue. The figure is chosen against what sits BESIDE the
+// options in the same answer rather than on its own: at their own caps the 64
+// type declarations and 64 field declarations are already ≈ 37 KiB, so the
+// options have ≈ 27 KiB of the ceiling to fit in, and 256 rows encode at
+// ≈ 20 KiB. `TestEveryToolAnswerFitsToolAnswerBytes` is what re-measures that
+// when any of the three caps moves.
+const MaxCatalogueOptions = 256
+
+// pageOptions cuts the option lists to the answer's budget, FIELD BY FIELD, and
+// says how many rows survived.
+//
+// WHOLE FIELDS RATHER THAN A FLAT CUT: a model setting `severity` needs every
+// option of `severity`, and half a list is worse than none — it would choose
+// from what it was shown and believe that was the set. So a field whose list
+// does not fit is returned with NO options rather than some, and the counts say
+// what is missing.
+func pageOptions(fields []FieldDef, budget int) ([]FieldDef, int) {
+	if budget <= 0 {
+		budget = MaxCatalogueOptions
+	}
+	out := make([]FieldDef, 0, len(fields))
+	shown := 0
+	for _, f := range fields {
+		if n := len(f.Config.Options); n > 0 && shown+n > budget {
+			f.Config.Options = nil
+			out = append(out, f)
+			continue
+		}
+		shown += len(f.Config.Options)
+		out = append(out, f)
+	}
+	return out, shown
+}
+
+// countOptions is how many choices a set of fields declares between them.
+func countOptions(fields []FieldDef) int {
+	total := 0
+	for _, f := range fields {
+		total += len(f.Config.Options)
+	}
+	return total
 }

@@ -2,7 +2,6 @@ package builtin
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -592,10 +591,10 @@ var _ tools.SeatCallable = (*getWorkItem)(nil)
 func (t *getWorkItem) Name() string { return GetWorkItemTool }
 
 func (t *getWorkItem) Description() string {
-	return "Read one work item in full: its description, status, assignee, " +
-		"labels, links in both directions, its whole comment thread and its " +
-		"recent history. Take the `revision` from the result and pass it back " +
-		"as `if_match` on update_work_item to make your edit conditional."
+	return "Read one work item: its description, status, assignee, labels, " +
+		"links in both directions, the most recent comments and its recent " +
+		"history. Take the `revision` from the result and pass it back as " +
+		"`if_match` on update_work_item to make your edit conditional."
 }
 
 func (t *getWorkItem) Parameters() map[string]any {
@@ -606,9 +605,57 @@ func (t *getWorkItem) Parameters() map[string]any {
 				"type":        "string",
 				"description": "The item key (ENG-42) or its id.",
 			},
+			"include": map[string]any{
+				"type": "array",
+				"description": "Which parts to read beside the item itself: " +
+					"`comments`, `history`, `links`. All three by default — " +
+					"name fewer when you only need one, and the answer is " +
+					"smaller.",
+				"items": map[string]any{
+					"type": "string",
+					"enum": []any{"comments", "history", "links"},
+				},
+			},
+			"comments_cursor": map[string]any{
+				"type": "string",
+				"description": "The `comments_cursor` from a previous read, " +
+					"to see the comments before that page.",
+			},
 		},
 		"required": []any{"item"},
 	}
+}
+
+// detailWants reads the `include` argument, defaulting to all three.
+//
+// ALL THREE BY DEFAULT, because that is what this tool answered before the
+// argument existed and a model that never learned to pass it must keep getting
+// a whole item. What the argument buys is the caller who knows they want one
+// part: the answer is then smaller by the parts they did not ask for, rather
+// than by a cap the engine chose for them.
+func detailWants(args map[string]any) (tracker.DetailWants, string) {
+	want := tracker.DetailWants{
+		CommentCursor: strings.TrimSpace(argString(args, "comments_cursor")),
+	}
+	raw, held := args["include"]
+	if !held || raw == nil {
+		want.Comments, want.History, want.Links = true, true, true
+		return want, ""
+	}
+	for _, part := range refList(raw) {
+		switch strings.ToLower(part) {
+		case "comments":
+			want.Comments = true
+		case "history":
+			want.History = true
+		case "links":
+			want.Links = true
+		default:
+			return want, fmt.Sprintf("get_work_item has no %q to include. The "+
+				"parts are: comments, history, links.", clip(part))
+		}
+	}
+	return want, ""
 }
 
 func (t *getWorkItem) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
@@ -628,9 +675,11 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	if id == "" {
 		return failed("get_work_item needs an `item` — a key like ENG-42, or an id."), nil
 	}
-	detail, err := t.deps.Reader.Task(ctx, id, tracker.DetailWants{
-		Comments: true, History: true, Links: true,
-	}, seatReadLevel)
+	want, refusal := detailWants(args)
+	if refusal != "" {
+		return failed(refusal), nil
+	}
+	detail, err := t.deps.Reader.Task(ctx, id, want, seatReadLevel)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
 		return failed(fmt.Sprintf("There is no work item %q. Check the key, or "+
@@ -638,12 +687,14 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	case err != nil:
 		return failed(readFailure(GetWorkItemTool, err)), nil
 	}
+	narrow := "Ask for less with `include`: the parts are comments, history " +
+		"and links."
 	if !detail.Complete {
-		return jsonResult(map[string]any{
+		return jsonAnswer(map[string]any{
 			"task": detail, "incomplete": incompleteNote(detail.Incomplete),
-		})
+		}, narrow)
 	}
-	return jsonResult(detail)
+	return jsonAnswer(detail, narrow)
 }
 
 // ---- create_work_item -------------------------------------------------- //
@@ -1802,12 +1853,15 @@ var commentNamespace = uuid.MustParse("6f9619ff-8b86-d011-b42d-00c04fc964ff")
 // JSON rather than prose, because these results are STRUCTURED — a board, an
 // item, a set of ids — and a model asked to parse a rendered table back into
 // fields gets it wrong in ways that are invisible until it acts on them.
+// jsonResult is [jsonAnswer] for the answers whose size is bounded by their
+// own shape — a write's receipt, a refusal, a handful of fields.
+//
+// THE CEILING STILL APPLIES, because "bounded by its own shape" is a claim
+// about today's shape: a field added to a receipt is exactly how one of these
+// stops being small, and the guard is what says so rather than a reader
+// noticing a turn ran out of context.
 func jsonResult(v any) (tools.Result, error) {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return failed("The result could not be rendered."), nil
-	}
-	return tools.Result{Output: string(data)}, nil
+	return jsonAnswer(v, "Narrow what you asked for.")
 }
 
 // readFailure explains a read that could not be served.

@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // Reading ONE task, and why it is not a board query with a filter.
@@ -57,6 +60,9 @@ type DetailWants struct {
 	// HistoryLimit caps the feed, newest first. Zero takes
 	// [DetailHistoryDefault].
 	HistoryLimit int
+
+	// CommentCursor pages the thread. Empty starts at the newest.
+	CommentCursor string
 }
 
 // DetailHistoryDefault is how many history rows a detail read returns when the
@@ -74,6 +80,15 @@ type TaskDetail struct {
 
 	Comments []Comment      `json:"comments,omitempty"`
 	History  []HistoryEntry `json:"history,omitempty"`
+
+	// CommentsCursor pages the thread, and is empty when this page is the
+	// whole of it.
+	//
+	// PRESENT RATHER THAN A COUNT, because the caller's question is "is
+	// there more" and the answer that lets them act is the cursor itself —
+	// a total would need a second scan over a table that grows for the
+	// life of the task, to tell them something the cursor already says.
+	CommentsCursor string `json:"comments_cursor,omitempty"`
 
 	// Links are BOTH DIRECTIONS, so a reader sees "blocks" and "blocked
 	// by" without a second query and without knowing which end authored
@@ -196,7 +211,9 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 		}
 		out.Task = task
 		if want.Comments {
-			if out.Comments, err = readComments(ctx, tx, id); err != nil {
+			out.Comments, out.CommentsCursor, err = readComments(ctx, tx, id,
+				want.CommentCursor)
+			if err != nil {
 				return err
 			}
 		}
@@ -318,36 +335,115 @@ func readTaskDocument(ctx context.Context, tx *sql.Tx, id string) (Task, error) 
 	return task, nil
 }
 
-// readComments is the thread, oldest first.
+// DetailComments is how many comments one detail read returns.
 //
-// OLDEST FIRST, unlike every other feed here, because a thread is READ in the
-// order it was written: a reply resolves against what came before it, and a
-// newest-first thread is a conversation printed backwards.
+// TWENTY, which is the design's own figure and is what a thread's recent shape
+// takes: past that a reader is scrolling rather than catching up, and the
+// cursor is how they do it. A task's thread is the ONE collection on a detail
+// read with no bound of its own — a body is capped, a history feed is capped,
+// a relation set is capped — so it is the shape that decides whether this
+// answer fits [ToolAnswerBytes] at all.
+const DetailComments = 20
+
+// CommentBodyShown is how much of each body a detail read carries.
+//
+// 2 KiB, against [MaxCommentBody]'s 32 KiB — which is the whole point: twenty
+// comments at their full length is 640 KiB, ten times the ceiling on ONE tool
+// answer, for a thread nobody asked to read in full. The excerpt is what a
+// reader skims; `get_work_item(comment:)` is how they open one.
+const CommentBodyShown = 2 << 10
+
+// readComments is a page of the thread, NEWEST FIRST.
+//
+// NEWEST FIRST, unlike the whole thread a person scrolls, because a PAGE has
+// to start somewhere and the end is what a reader catching up needs: the
+// oldest twenty of a two-hundred-comment thread is the conversation's
+// beginning, which is the part they have already read. The page is reversed
+// before it is returned, so what a caller holds is still in the order it was
+// written — a reply resolves against what came before it.
 //
 // A REMOVED COMMENT KEEPS ITS ROW with a blank body, which is what lets a
 // reply still resolve against something — so it is returned rather than
 // filtered, and its `removed` flag is what a renderer reads.
-func readComments(ctx context.Context, tx *sql.Tx, taskID string) ([]Comment, error) {
+func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string) (
+	[]Comment, string, error) {
+
+	// ONE MORE THAN THE PAGE, which is how the cursor knows whether there
+	// IS a next page without a second count over a table that grows for
+	// the life of the task.
 	rows, err := tx.QueryContext(ctx, `
-		SELECT document FROM tracker_comments
-		WHERE task_id = ? ORDER BY created_at, id`, taskID)
+		SELECT document, created_at, id FROM tracker_comments
+		WHERE task_id = ? AND (? = '' OR (created_at, id) < (?, ?))
+		ORDER BY created_at DESC, id DESC
+		LIMIT ?`, taskID, cursor, cursorAt(cursor), cursorID(cursor),
+		DetailComments+1)
 	if err != nil {
-		return nil, fmt.Errorf("tracker: read the thread on %s: %w", taskID, err)
+		return nil, "", fmt.Errorf("tracker: read the thread on %s: %w", taskID, err)
 	}
 	defer func() { _ = rows.Close() }()
-	var out []Comment
+	var (
+		out  []Comment
+		next string
+	)
 	for rows.Next() {
 		var body []byte
-		if err := rows.Scan(&body); err != nil {
-			return nil, err
+		var at int64
+		var id string
+		if err := rows.Scan(&body, &at, &id); err != nil {
+			return nil, "", err
+		}
+		if len(out) == DetailComments {
+			// THE EXTRA ROW IS THE CURSOR, not a result: it is the
+			// first comment of the NEXT page, and naming it is
+			// cheaper than counting what is left.
+			next = formatCommentCursor(at, id)
+			break
 		}
 		var comment Comment
 		if err := json.Unmarshal(body, &comment); err != nil {
-			return nil, fmt.Errorf("tracker: decode a comment on %s: %w", taskID, err)
+			return nil, "", fmt.Errorf("tracker: decode a comment on %s: %w",
+				taskID, err)
 		}
+		// THE BODY IS ELIDED HERE and not at the caller, because the
+		// caller that forgot would send the whole thread — and the
+		// elision is what makes twenty of them fit an answer at all.
+		comment.Body = elideCommentBody(comment.Body)
 		out = append(out, comment)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	slices.Reverse(out)
+	return out, next, nil
+}
+
+// elideCommentBody is what a thread carries of one comment.
+//
+// MARKED, and that is the half a plain cut leaves out: a body cut at exactly
+// the cap and handed over unmarked reads as a comment that ENDED there, which
+// is a different message from the one somebody wrote. [textcut.Ellipsis] is
+// the tree's one rune-safe cut, so a multi-byte character on the boundary does
+// not reach a model as a replacement character.
+func elideCommentBody(body string) string {
+	return textcut.Ellipsis(body, CommentBodyShown)
+}
+
+// The comment cursor is the pair the page is ordered by, because an instant
+// alone is not unique: two comments share a created_at routinely, and a cursor
+// that compared one would skip whichever the page boundary fell between.
+func formatCommentCursor(at int64, id string) string {
+	return strconv.FormatInt(at, 10) + ":" + id
+}
+
+func cursorAt(cursor string) int64 {
+	at, _, _ := strings.Cut(cursor, ":")
+	n, _ := strconv.ParseInt(at, 10, 64)
+	return n
+}
+
+func cursorID(cursor string) string {
+	_, id, _ := strings.Cut(cursor, ":")
+	return id
 }
 
 // readHistory is the activity feed, NEWEST FIRST and capped.
