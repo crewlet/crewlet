@@ -35,6 +35,15 @@ const (
 	ListProjectsTool    = "list_projects"
 	DescribeProjectTool = "describe_project"
 
+	// WriteProjectTool is the one project WRITE a seat holds, and it is
+	// held for one facet: `tags.add`. A tag is how work is grouped for a
+	// week, declaring one is open to every seat by design, and a create
+	// refuses a label the project has not declared — so a seat without
+	// this verb could never use the `labels` argument on the tools it does
+	// hold. Every other facet it carries is gated inside, on the project's
+	// lead or on a person's own credential, and the refusals name which.
+	WriteProjectTool = "write_project"
+
 	// SprintReportTool is how a sprint went, which a seat asking "what did
 	// we take on and what landed" needs and cannot derive from the board:
 	// every figure is over a PAST window, and the board is about now.
@@ -96,6 +105,13 @@ const (
 	// write is not a freeze.
 	RemoveWorkItemTool  = "remove_work_item"
 	RestoreWorkItemTool = "restore_work_item"
+
+	// ManageSprintTool is the two sprint decisions a policy cannot make:
+	// ending one early, and settling a spillover the policy declined to
+	// decide. Lead-gated, and an operator's — a sprint is a COMMITMENT a
+	// team made together, and a seat that could start or close one would
+	// be deciding its own team's plan.
+	ManageSprintTool = "manage_sprint"
 )
 
 // GetWorkCatalogueTool is the one catalogue verb a SEAT does hold.
@@ -113,16 +129,16 @@ func OperatorOnlyTools() []string {
 		ListWorkGoalsTool, WriteWorkGoalTool,
 		WriteWorkCatalogueTool,
 		GetPersonTool, SetPrioritiesTool, SetPinsTool, MarkInboxTool,
-		RemoveWorkItemTool, RestoreWorkItemTool,
+		RemoveWorkItemTool, RestoreWorkItemTool, ManageSprintTool,
 	}
 }
 
-// Tools are the eleven a seat holds, so a caller registering them names one thing.
+// Tools are the twelve a seat holds, so a caller registering them names one thing.
 func Tools() []string {
 	return []string{ListWorkItemsTool, GetWorkItemTool, CreateWorkItemTool,
 		UpdateWorkItemTool, CommentOnWorkTool, GetWorkCatalogueTool,
-		ListProjectsTool, DescribeProjectTool, SprintReportTool,
-		TaskActivityTool, MyWorkTool}
+		ListProjectsTool, DescribeProjectTool, WriteProjectTool,
+		SprintReportTool, TaskActivityTool, MyWorkTool}
 }
 
 // WriteTools are the three that count as a DELIVERY.

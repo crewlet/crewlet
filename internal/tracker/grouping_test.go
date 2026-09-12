@@ -150,6 +150,10 @@ func TestALabelBoardSaysItsColumnsOverlap(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 
+	// THE TAGS ARE DECLARED FIRST, because a create refuses a label the
+	// project does not have — see internal/tracker/tags.go.
+	r.declareTags("urgent", "api")
+
 	task := newTask("t-1")
 	task.Tags = []string{"urgent", "api"}
 	if _, err := r.writer.CreateTask(t.Context(), "op-1", task, nil); err != nil {
@@ -289,6 +293,7 @@ func TestAColumnFilterOnAJoinedAxisNarrowsTheTotals(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	seedFields(t, r)
+	r.declareTags("api", "ui")
 
 	for id, spec := range map[string]struct {
 		impact string

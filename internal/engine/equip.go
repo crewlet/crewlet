@@ -79,6 +79,11 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 		deps.ToolSkills = e.skills
 	}
 	deps.Work = e.workDeps(c)
+	// THE PROJECT-LEAD SEAM, read PER CALL against the epoch current when
+	// the tool runs rather than against this one: a seat's tools are
+	// cloned into its lease, an apply does not rebuild the clone, and a
+	// captured chart would grant or refuse against an org that has moved.
+	deps.LeadsProject = LeadsProjectOf(e)
 	deps.Pages = e.pageDeps(c)
 	if _, err := builtin.Register(c.Tools, deps); err != nil {
 		return err

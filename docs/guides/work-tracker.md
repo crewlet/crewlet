@@ -38,7 +38,7 @@ what people paste into chat, so it can never be ambiguous.
 | **collaborators**, **watchers** | who is on the thread and who is listening. |
 | **parent**, **subtasks** | a tree, with a depth cap. A query filters ROOTS by default and lets their subtrees ride along; `subtasks=separate` filters every task on its own. |
 | **start / due**, **estimate**, **points** | scheduling and sizing. |
-| **tags** | from a per-project tag set. |
+| **tags** | from a per-project tag set — see [Tags](#tags). A tag the project has not declared is REFUSED at the write. |
 | **custom fields** | declared per project and at the workspace, typed, with option lists — see [the catalogue](#the-catalogue). Filter on one with `f.<slug>`, and see [the operators](#filtering-a-custom-field). |
 | **checklist** | items with their own assignees. |
 | **relations**, **dependencies** | links between tasks, and blocking edges. |
@@ -67,8 +67,8 @@ task has been reopened four times.
 Two declarations, and they are the company's own vocabulary: what a task may
 **be**, and what it may **carry**.
 
-**Types.** Six ship with the engine — `task`, `bug`, `epic`, `story`, `spike`,
-`chore` — and every company has them before it declares anything, which is what
+**Types.** Seven ship with the engine — `task`, `bug`, `epic`, `story`,
+`spike`, `chore` and `milestone` — and every company has them before it declares anything, which is what
 lets a fresh company file its first task in its first minute. A declared
 catalogue **adds** to them; a declaration sharing a builtin's slug **renames**
 it, so a company can call a bug a defect without losing the tasks already filed
@@ -119,12 +119,104 @@ adding a type to make its own create succeed is a seat editing the rules it is
 judged by, and the refusal it was working around is the signal a person needs
 to see.
 
+A **project's own** field declarations are the project **lead's**, written with
+`write_project(fields: [...])`. That list REPLACES the project's declarations
+and leaves the workspace's alone — the two are separate scopes and a task's
+effective set is their union — so send the whole set, and read
+`describe_project` first. A project declaration sharing a workspace field's id
+**shadows** it, which `describe_project` names so a reader can see which
+definition is in force.
+
+## Tags
+
+Tags are the one catalogue any seat may add to, and they live **per project** —
+a tag is how work is grouped for a week, and a company whose tags could only be
+declared by a person would be a company whose tags were never declared.
+
+A tag has a **slug** and a **label**. The slug is what every task's row holds
+and what a filter compares, so it is normalised on the way in — `Regression`,
+`regression` and `needs design` arrive as `regression` and `needs-design` — and
+it never changes. The label is what a person reads, and renaming a tag moves
+only that.
+
+**A tag is declared before it is used.** A write naming a label the project does
+not have is refused, listing the ones it does and the nearest match, because
+the alternative is what happened to the task-type catalogue before its own
+check existed: any string a model invented became a type, and `Bug`, `bugfix`
+and `BUG` came to sit beside `bug` on every board. There are two ways past the
+refusal, and both are deliberate rather than automatic:
+
+- `write_project(tags_add: [...])` declares one, which **any seat** may do.
+- `labels_create_missing: true` on `create_work_item` or `update_work_item`
+  declares what that write is about to use, in one append before the task's
+  own. The answer lists what it created under `labels_created`, so a caller
+  that set the flag out of habit still sees a typo now rather than on a board
+  three weeks later.
+
+A slug within a **typo** of an existing one is accepted with a warning naming
+the nearest three — advisory, never a refusal, because a lead can merge two
+tags and a refusal with no override would block `apis` behind `api` for ever.
+A **label** that collides with another tag's label or slug, case-insensitively,
+*is* refused: two tags a person cannot tell apart split the work between them
+at random.
+
+**Renaming and archiving are the lead's.** A rename changes the word on every
+task already filed under the tag, and an archive takes a filter off everybody's
+board — both are decisions about how the company groups its work rather than
+about one task. An archive is **one-way**, like a field's: the tasks keep the
+tag and every filter on it still answers, and what the archive buys is a tag
+that takes no *new* work. Bringing one back means declaring it again under its
+own name.
+
+A task carries at most **40** tags, and a project declares at most **512**.
+
 ## Sprints and goals
 
 **Sprints** are numbered per project, with a name and dates. A task can be in
 more than one — which is what a carry-over is — and the sprint's own record
 carries what it started with, so a burn-down is a fact rather than a
 reconstruction.
+
+**The engine runs the cadence.** A project's sprint policy says how long a
+sprint is, which weekday it starts on and how many to keep minted ahead, and
+the engine's own duty does the rest on a one-minute tick:
+
+| Step | When | Gated on |
+|---|---|---|
+| **mint** | whenever the project is short of its `ahead` count | — |
+| **start** | at the sprint's own `start_at` | `auto_start` |
+| **close** | at the sprint's own `end_at` | **nothing** — a sprint always closes at its end |
+| **rollover** | on the same tick as the close | `auto_roll` |
+| **archive** | once `archive_after` newer sprints have closed | `archive_after` |
+
+The close is not a setting, and that is deliberate: every figure in a sprint
+report is a predicate over the sprint's own window, so a sprint that ran past
+its end is a number nobody can report on. It changes **no task's status** — the
+close is about the sprint.
+
+What happens to the unfinished work *is* the setting. With `auto_roll` the same
+tick carries it into the next sprint, minting one if the project has none.
+Without it the sprint closes with the spillover **pending** — a state a lead
+settles with `manage_sprint`, and one `sprint_report` reports so somebody can
+see there is a decision waiting. The four choices are `next`, `backlog` (clear
+each task's sprint and leave it in the project — which is what the Backlog
+*is* here), `close` (cancel every open task: abandoned, not delivered) or a
+sprint **number**. Rolling into a closed sprint, or into the sprint being
+rolled, is refused — either would put the work back where the rollover was
+called to take it out of.
+
+The policy itself is the project **lead's**, written with
+`write_project(sprints: {...})`. Sending `enabled: false` stops the cadence and
+does **not** close a running sprint — the pointer belongs to the lifecycle, and
+a settings change that ended a team's commitment as a side effect would be the
+worst kind of surprise. A sprint is between 1 and 92 days long and a project
+keeps at most 12 minted ahead; every one of those is refused at the write
+rather than at the duty, which runs on another node where nobody is watching.
+
+`manage_sprint` is an **operator** tool and is additionally gated on leading
+the project: a sprint is a commitment a team made together, so starting one
+changes what everybody is expected to work on and closing one decides what
+counted. A seat that could do either would be deciding its own team's plan.
 
 Membership is a **stay**: the pair of instants a task was in one sprint for,
 recorded by the engine rather than carried by whoever moved it. That is what
@@ -287,9 +379,9 @@ correct board.
 
 ## What a seat can do
 
-Eleven tools, and they are deliberately few — six that act on a task, three
-that read the container it is filed into, and two about CHANGE rather than
-about state:
+Twelve tools, and they are deliberately few — six that act on a task, three
+that read the container it is filed into, one that writes the one part of that
+container a seat owns, and two about CHANGE rather than about state:
 
 | Tool | What it does |
 |---|---|
@@ -301,6 +393,7 @@ about state:
 | `get_work_catalogue` | the types a task may be and the fields it may carry |
 | `list_projects` | every project work is filed into, with how much open work each holds, who leads it and which sprint is running |
 | `describe_project` | one project in full: the six statuses with what each means, the types it files, the fields grouped by which type they apply to (required first, with their options), its tags, its lead and its active sprint. Omitting the project means the seat's own |
+| `write_project` | a project's own settings. Declaring a **tag** is open to every seat; renaming or archiving one, declaring project fields, setting the sprint policy and setting the default assignee are the project **lead's**; archiving the project takes a person |
 | `sprint_report` | how a project's recent sprints went — committed, added, removed, done and remaining, per sprint and per person, in the project's own measure |
 | `task_activity` | what HAPPENED, in the order the log made it happen: every change to one task or one project, with who made it and exactly which fields moved |
 | `my_work` | everything this seat is expected to look at, in one call — see below |
@@ -332,13 +425,16 @@ declared and a required field left empty, and a model that cannot **read** any
 of that can only guess. A refusal that names the valid values is only half an
 answer if there was no way to look them up first.
 
-None of them writes, and there is no companion that does. A project's name,
-purpose and owning unit are **chart-owned** — written by the epoch apply from
-the org chart and by nothing else — so a seat editing them would be editing
-the company's structure through the back door; its sprint policy and its field
-declarations are a lead's.
+`write_project` is the one project **write** a seat holds, and it holds it for
+one facet: declaring a tag. A project's name, purpose and owning unit are
+**chart-owned** — written by the epoch apply from the org chart and by nothing
+else — so nothing writes them here at all; its field declarations, its sprint
+policy and its default assignee are the **lead's**, and archiving the project
+itself takes a person's own credential. Every one of those is gated inside the
+verb, and each refusal names who can.
 
-An operator holds the same eleven and two more that no seat does: `remove_work_item` puts an item
+An operator holds the same twelve and three more that no seat does:
+`manage_sprint` (above), and the two below. `remove_work_item` puts an item
 in the **trash** and `restore_work_item` takes it out again, at any age. A
 removal hides an item from every list and board and destroys nothing — its
 history is untouched and `list_work_items` with `removed: true` is the only

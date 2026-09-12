@@ -103,8 +103,8 @@ func (t *writeWorkCatalogue) Description() string {
 		"REPLACES the one it names, so send the whole set — read " +
 		"get_work_catalogue first. The two are separate writes: sending only " +
 		"`types` leaves the fields alone, and the reverse. The built-in types " +
-		"(task, bug, epic, story, spike, chore) are always available; carry " +
-		"one here only to rename it or to archive it."
+		"(task, bug, epic, story, spike, chore, milestone) are always " +
+		"available; carry one here only to rename it or to archive it."
 }
 
 func (t *writeWorkCatalogue) Parameters() map[string]any {

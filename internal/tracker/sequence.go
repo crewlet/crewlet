@@ -134,6 +134,12 @@ type WriteResult struct {
 	Applied []string
 	Failed  map[string]string
 
+	// Declared are the tags a write brought into existence, reported from
+	// inside the snapshot that decided them rather than from a read before
+	// it — so a caller is never told it created a word a colleague
+	// declared a moment earlier.
+	Declared []string
+
 	// Warnings are what the caller should know and was not refused for —
 	// a body carrying more task keys than the applier will resolve, a tag
 	// that nearly matched an existing one. THE APPLY MUST NEVER DEPEND ON
@@ -179,6 +185,15 @@ func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 	if task.Type == "" {
 		task.Type = DefaultTaskType
 	}
+	// THE TAGS ARE NORMALISED HERE and checked against the project's set
+	// inside the mint's own snapshot, for the same split: the spelling is
+	// a property of the argument and the declaration is a property of the
+	// project, and only the second needs a read.
+	tags, err := normaliseTags(task.Project, task.Tags)
+	if err != nil {
+		return WriteResult{}, err
+	}
+	task.Tags = tags
 
 	n, minted, err := w.mintKey(ctx, stepID(opID, "counter"), task.Project, 1,
 		func(tx *sql.Tx) error { return refuseCreate(ctx, tx, task) })
@@ -334,6 +349,9 @@ func refuseCreate(ctx context.Context, tx *sql.Tx, task Task) error {
 			"work; unarchive it first", task.Project)
 	}
 	if err := declaredType(ctx, tx, task); err != nil {
+		return err
+	}
+	if err := declaredTags(ctx, tx, task.Project, task.Tags); err != nil {
 		return err
 	}
 	return requiredFields(ctx, tx, project, task)
@@ -1040,8 +1058,20 @@ func (w *Writer) moveSprint(ctx context.Context, opID, project string, number in
 	if to != SprintActive {
 		pointer = nil
 	}
+	// `ErrExists` FROM THE POINTER IS THE OTHER HALF ALREADY LANDING, not
+	// a failure — it is exactly the interrupted transition this order
+	// leaves and the one the duty exists to complete. Returned to the
+	// caller it made that repair impossible: a close whose pointer moved
+	// and whose record did not could never finish, and the project would
+	// claim to run no sprint while the sprint claimed to be running.
+	//
+	// It is also the ordinary state of a close whose sprint was never
+	// pointed at — a sprint started before this pointer existed, or one
+	// the duty is closing after a restart.
 	if _, err := w.setActiveSprint(ctx, stepID(opID, "pointer"), project,
-		number, from, to, pointer, at); err != nil {
+		number, from, to, pointer, at); err != nil &&
+		!errors.Is(err, statelog.ErrExists) {
+
 		return WriteResult{}, err
 	}
 

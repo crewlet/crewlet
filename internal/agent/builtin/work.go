@@ -112,6 +112,21 @@ type WorkDeps struct {
 	// describes one.
 	PersonWriter func(actor Actor) PersonWriter
 
+	// ProjectWriter resolves a project's own settings for one actor.
+	//
+	// EVERY SURFACE HAS ONE, unlike the five above it, because one of its
+	// facets — declaring a tag — is open to every seat: a seat that could
+	// not declare a label could never use the `labels` argument on the
+	// create and update tools it already holds. The authority for the rest
+	// is resolved per call rather than per surface.
+	ProjectWriter func(actor Actor) ProjectWriter
+
+	// SprintWriter resolves the sprint side for one actor, and is the
+	// operator surface's alone: a sprint is a commitment a team made
+	// together, so starting or closing one is a lead's decision rather
+	// than a seat's.
+	SprintWriter func(actor Actor) SprintWriter
+
 	// TrashWriter resolves the removal and restore side for one actor, and
 	// is the operator surface's alone: a removal hides a task from every
 	// list in the company, and a seat that could hide work it did not want
@@ -632,8 +647,18 @@ func (t *createWorkItem) Parameters() map[string]any {
 				"description": "The id or key of the item this belongs under.",
 			},
 			"labels": map[string]any{
-				"type":  "array",
+				"type": "array",
+				"description": "Tags this project declares — read them with " +
+					"describe_project. A label the project has not declared " +
+					"is refused, because a typo would otherwise become a " +
+					"grouping nobody can filter on twice.",
 				"items": map[string]any{"type": "string"},
+			},
+			"labels_create_missing": map[string]any{
+				"type": "boolean",
+				"description": "Declare any label in `labels` this project " +
+					"does not have, then file. Say true only when you MEANT " +
+					"to add a grouping — the answer lists what it created.",
 			},
 		},
 		"required": []any{"title"},
@@ -711,6 +736,14 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// later would be built from a row that has moved on.
 	task.Watchers = handles(actor.Handle, task.Assignee)
 
+	// THE LABELS BEFORE THE TASK, because the create refuses one the
+	// project has not declared and the declare is a separate record on a
+	// separate subject: doing it after would file the task that already
+	// failed.
+	declared, refusal := t.deps.declareLabels(ctx, actor, args, task.Project, task.Tags)
+	if refusal != "" {
+		return failed(refusal), nil
+	}
 	notify := tracker.Wake{
 		Kind: tracker.ChangeCreated, After: task,
 	}.Notify(t.deps.Leads)
@@ -722,7 +755,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	return jsonResult(map[string]any{
 		"key": got.Key, "id": task.ID, "status": task.Status,
 		"assignee": task.Assignee, "outcome": string(got.Outcome),
-		"version": got.Version,
+		"labels_created": declared, "version": got.Version,
 	})
 }
 
@@ -812,8 +845,16 @@ func (t *updateWorkItem) Parameters() map[string]any {
 			"title":    map[string]any{"type": "string"},
 			"body":     map[string]any{"type": "string", "description": "Replaces the description."},
 			"labels": map[string]any{
-				"type": "array", "items": map[string]any{"type": "string"},
-				"description": "Replaces the whole label set.",
+				"type": "array",
+				"description": "REPLACES the item's labels. Each must be a " +
+					"tag this project declares — describe_project lists them.",
+				"items": map[string]any{"type": "string"},
+			},
+			"labels_create_missing": map[string]any{
+				"type": "boolean",
+				"description": "Declare any label in `labels` this project " +
+					"does not have, then write. Say true only when you MEANT " +
+					"to add a grouping.",
 			},
 			"duplicate_of": map[string]any{
 				"type": "string",
@@ -883,6 +924,15 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// wants, and given it refuses if anybody moved the task since the read
 	// the model reasoned from.
 	ifMatch := uint64(max(argInt(args, "if_match", 0), 0))
+	var declared []string
+	if patch.Tags != nil {
+		// AGAINST THE TASK'S HOME PROJECT, which is the one whose set
+		// the write is checked against — never the caller's default.
+		if declared, refusal = t.deps.declareLabels(ctx, actor, args,
+			before.Task.Project, *patch.Tags); refusal != "" {
+			return failed(refusal), nil
+		}
+	}
 	got, err := writer.UpdateTask(ctx,
 		opIDFor(actor, "update", before.Task.ID), before.Task.ID,
 		before.Task.Project, ifMatch, patch,
@@ -897,8 +947,48 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	t.deps.settle(ctx, got.Position)
 	return jsonResult(map[string]any{
 		"key": before.Task.Key, "outcome": string(got.Outcome),
-		"version": got.Version,
+		"labels_created": declared, "version": got.Version,
 	})
+}
+
+// declareLabels declares the labels a write is about to use that its project
+// does not have — but only if the caller SAID SO.
+//
+// # Why an opt-in rather than a create-on-use
+//
+// Because the two failures look identical at the call and are opposite in
+// effect: a seat that meant `regression` and a seat that typo'd `regresion`
+// both send one unknown label, and declaring whichever arrived would fill a
+// board's filter strip with every misspelling anybody ever typed. The flag is
+// the difference between them, and it is the only thing that can be.
+//
+// It returns what it created, so a caller that set the flag by habit still
+// sees a typo in the answer rather than on a board three weeks later.
+func (d WorkDeps) declareLabels(ctx context.Context, actor Actor,
+	args map[string]any, project string, labels []string) ([]string, string) {
+
+	if len(labels) == 0 || !argBool(args, "labels_create_missing") {
+		return nil, ""
+	}
+	if d.ProjectWriter == nil {
+		// THE REFUSAL NAMES THE OTHER ROUTE rather than failing the
+		// write: a build with no project writer still has a lead who
+		// can declare the tag, and the create that follows will say
+		// which label is missing.
+		return nil, "This build cannot declare labels at a write. Ask the " +
+			"project lead to declare it, or file without the label."
+	}
+	created, warnings, err := d.ProjectWriter(actor).EnsureTags(ctx,
+		"tags-"+uuid.NewString(), project, labels)
+	if err != nil {
+		return nil, writeFailure(tracker.WriteProjectTool, err)
+	}
+	if len(warnings) > 0 {
+		// THE WARNINGS RIDE THE CREATED LIST, because they are about
+		// exactly these slugs and the caller has one answer to read.
+		created = append(created, warnings...)
+	}
+	return created, ""
 }
 
 // patchFromArgs builds the patch and the change kind, or the refusal to show

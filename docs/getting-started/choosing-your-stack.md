@@ -117,8 +117,9 @@ knowledge:
 ```
 
 That is the whole setup. Items and pages live in the fleet's own store, there
-is a board and a page browser on the dashboard, seats get ten tools for them,
-and your own AI assistant can reach them over
+is a board and a page browser on the dashboard, seats get seventeen tools for
+them — twelve over the tracker and five over the pages — and your own AI
+assistant can reach them over
 [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant).
 Nothing to create, nothing to provision, no per-seat accounts, no webhook.
 

@@ -98,6 +98,13 @@ type Deps struct {
 	// point: a seat offered a tracker tool against a tracker this company
 	// does not run would reach for it and fail at the call.
 	Work WorkDeps
+
+	// LeadsProject answers whether a seat leads the unit that owns a
+	// project, which is the authority over that project's own settings.
+	// Nil REFUSES rather than degrading — see [LeadsProject] — so a build
+	// that wired no chart lookup leaves write_project able to declare a
+	// tag and nothing else, which is the safe direction.
+	LeadsProject LeadsProject
 }
 
 // Register adds every builtin the given dependencies can support.
@@ -162,6 +169,11 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		{&listProjects{deps: deps.Work}, projectReads(deps.Work)},
 		{&describeProject{deps: deps.Work}, projectReads(deps.Work)},
 		{&sprintReport{deps: deps.Work}, projectReads(deps.Work)},
+		// AND THE ONE PROJECT WRITE a seat holds, for one facet: a
+		// create refuses a label the project has not declared, so a
+		// seat without this could never use `labels` at all.
+		{&writeProject{deps: deps.Work, leads: deps.LeadsProject},
+			deps.Work.ProjectWriter != nil},
 		// AND THE TWO ABOUT CHANGE rather than about state: a board says
 		// what is there now, and no filter over its rows can answer
 		// "who moved this" or "what is waiting on me".
@@ -281,6 +293,38 @@ func annotationsFor(name string) tools.Annotations {
 		// lookup was refused it as a write to a surface a human reads
 		// while list_work_items beside it was admitted.
 		return tools.Annotations{ReadOnly: mcp.Yes, Idempotent: mcp.Yes}
+	case tracker.ManageSprintTool:
+		// A WRITE EVERYBODY SEES — a start changes what a whole team is
+		// expected to work on — so OpenWorld is Yes. Not destructive: a
+		// close destroys nothing and the tasks keep their rows. And NOT
+		// idempotent, which is the one that matters: a second `rollover`
+		// call moves whatever arrived since, and a second `close` is
+		// refused rather than free.
+		return tools.Annotations{
+			ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes,
+		}
+	case tracker.WriteProjectTool:
+		// A WRITE EVERYBODY SEES — a declared tag is a filter on
+		// everybody's board and an archived project takes no work from
+		// anyone — so OpenWorld is Yes and [mcp.WritesToSharedSurface]
+		// reads true, which keeps it away from a sub-agent acting under
+		// its parent's name.
+		//
+		// DESTRUCTIVE, and the reason is the facet a caller is most
+		// likely to reach for by accident rather than the one it is
+		// named after: `fields` REPLACES a project's declarations, so a
+		// call sending a short list retires every field it left out.
+		// Declaring a tag is additive and archiving is reversible by
+		// nothing, and the flag asks whether a call can undo somebody
+		// else's work — which this one can.
+		//
+		// NOT idempotent as a whole, although an add genuinely is: a
+		// second `tags_rename` against a set a lead has since edited is
+		// a different change, and the annotation describes the tool a
+		// model is offered rather than its luckiest facet.
+		return tools.Annotations{
+			ReadOnly: mcp.No, Destructive: mcp.Yes, OpenWorld: mcp.Yes,
+		}
 	case tracker.RemoveWorkItemTool, tracker.RestoreWorkItemTool:
 		// WRITES EVERYBODY SEES — a removal takes an item off every board
 		// in the company — so OpenWorld is Yes and
