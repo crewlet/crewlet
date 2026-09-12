@@ -3,6 +3,7 @@ package tracker_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -222,6 +223,47 @@ func TestACrossProjectMoveCarriesTheSubtree(t *testing.T) {
 		if !strings.HasPrefix(got.Key, "OPS-") {
 			t.Errorf("%s keeps the key %q after the move, and a key names the "+
 				"project it is in", id, got.Key)
+		}
+	}
+}
+
+// THE TRASH IS ORDERED BY WHEN WORK WAS REMOVED, never by board rank.
+//
+// A removed task's rank is its position on a board it is no longer on, so a
+// trash listing ordered by it is ordered by a stale number — and the only
+// index over removed rows is the partial one on `removed_at`.
+func TestTheTrashIsOrderedByRemoval(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, id := range []string{"first", "second", "third"} {
+		inSprint(t, r, id, nil)
+	}
+	// REMOVED OUT OF RANK ORDER, each at its own instant, so an answer
+	// ordered by rank and one ordered by removal are different lists. A
+	// removal's stamp is an AUTHORED instant — it is displayed, and §5's
+	// rule is that every displayed instant is the one somebody typed —
+	// so moving the writer's clock is what separates them.
+	for i, id := range []string{"second", "third", "first"} {
+		r.at = wednesday.Add(time.Duration(i) * time.Minute)
+		if _, err := r.writer.RemoveTask(t.Context(), "op-rm-"+id, id, "ENG",
+			false, nil); err != nil {
+			t.Fatalf("RemoveTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	r.at = wednesday
+
+	got := ids(r.ask(map[string]any{
+		"container": "project:ENG", "removed": "true",
+	}))
+	want := []string{"first", "third", "second"}
+	if len(got) != len(want) {
+		t.Fatalf("the trash answers %v, want the three removed tasks", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("the trash answers %v, want %v — newest removal first, "+
+				"not the rank each task held on a board it has left", got, want)
 		}
 	}
 }

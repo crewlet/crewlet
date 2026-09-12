@@ -35,6 +35,11 @@ type roundTrip struct {
 	reader   *tracker.Reader
 	waiter   *testWaiter
 	consumed uint64
+
+	// at is the writer's AUTHORED clock, which a case moves when it is
+	// about the order of instants somebody typed. It defaults to
+	// `wednesday` so every case that is not about time sees one instant.
+	at time.Time
 }
 
 func newRoundTrip(t *testing.T) *roundTrip {
@@ -101,6 +106,10 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
+	// THE HARNESS EXISTS BEFORE THE WRITER, because the writer's authored
+	// clock reads a field on it that a case may move.
+	r := &roundTrip{t: t, db: db, log: log, at: wednesday}
+
 	fence := tracker.NewFence(db, "node-a")
 	// The published trim floor is zero on a fleet that has never trimmed,
 	// which is the state every new company is in — and the state in which
@@ -126,7 +135,7 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 		// there to exclude a SECOND node.
 		Claims: memory.New(),
 		Actor:  "ana", ActorKind: tracker.AuthorHuman,
-		Now: func() time.Time { return wednesday },
+		Now: func() time.Time { return r.at },
 	})
 	if err != nil {
 		t.Fatalf("build the writer: %v", err)
@@ -144,11 +153,8 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 	if err != nil {
 		t.Fatalf("tracker reader: %v", err)
 	}
-	r := &roundTrip{
-		t: t, db: db, log: log, writer: writer,
-		applier: tracker.NewApplier("node-a"),
-		reader:  reader, waiter: waiter,
-	}
+	r.writer, r.applier = writer, tracker.NewApplier("node-a")
+	r.reader, r.waiter = reader, waiter
 	return r
 }
 
