@@ -39,6 +39,18 @@ const (
 	// we take on and what landed" needs and cannot derive from the board:
 	// every figure is over a PAST window, and the board is about now.
 	SprintReportTool = "sprint_report"
+
+	// TaskActivityTool is what HAPPENED, which no board can answer: a
+	// board is about what is there now, and every question about a change
+	// — who moved this, when did it stop being blocked, what did that
+	// bulk edit do — is about the ordered log instead.
+	TaskActivityTool = "task_activity"
+
+	// MyWorkTool is the one call a turn opens with. Seven lists in one
+	// answer rather than seven calls, because assembled separately a seat
+	// could see a task in `assigned` that had already moved out of it by
+	// the time `priorities` was read.
+	MyWorkTool = "my_work"
 )
 
 // The OPERATOR-ONLY tools, which no seat is given.
@@ -105,11 +117,12 @@ func OperatorOnlyTools() []string {
 	}
 }
 
-// Tools are the nine a seat holds, so a caller registering them names one thing.
+// Tools are the eleven a seat holds, so a caller registering them names one thing.
 func Tools() []string {
 	return []string{ListWorkItemsTool, GetWorkItemTool, CreateWorkItemTool,
 		UpdateWorkItemTool, CommentOnWorkTool, GetWorkCatalogueTool,
-		ListProjectsTool, DescribeProjectTool, SprintReportTool}
+		ListProjectsTool, DescribeProjectTool, SprintReportTool,
+		TaskActivityTool, MyWorkTool}
 }
 
 // WriteTools are the three that count as a DELIVERY.

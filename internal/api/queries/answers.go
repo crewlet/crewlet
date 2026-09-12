@@ -324,6 +324,16 @@ func Register(r *Registry, s Sources) {
 		r.Register("work_projects", s.workProjects)
 		r.Register("work_project", s.workProject)
 		r.Register("work_sprints", s.workSprints)
+		// THE FEED IS ITS OWN QUESTION, because it is ordered by the
+		// LOG rather than by anything a board sorts on: one durable
+		// table at any age, with a cursor that is a position.
+		r.Register("work_activity", s.workActivity)
+		// AND ONE PERSON'S DAY. Operator-only, because it is seven
+		// lists ABOUT somebody — their priorities, the questions
+		// waiting on them, the sub-items they claimed — and a surface
+		// that answered it anonymously would render anybody's day to
+		// anybody who asked.
+		r.RegisterOperator("work_my_work", s.workMyWork)
 		r.Register("work_goals", s.workGoals)
 		r.Register("work_catalogue", s.workCatalogue)
 		r.Register("work_person", s.workPerson)

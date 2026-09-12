@@ -35,6 +35,11 @@ type stubWork struct {
 	sprintQuery  tracker.SprintQuery
 	sprints      tracker.SprintListing
 
+	activityQuery tracker.ActivityQuery
+	activity      tracker.ActivityAnswer
+	myWorkQuery   tracker.MyWorkQuery
+	myWork        tracker.MyWork
+
 	err error
 }
 
@@ -57,6 +62,20 @@ func (s *stubWork) Sprints(_ context.Context, q tracker.SprintQuery,
 
 	s.sprintQuery = q
 	return s.sprints, s.err
+}
+
+func (s *stubWork) Activity(_ context.Context, q tracker.ActivityQuery,
+	_ time.Time) (tracker.ActivityAnswer, error) {
+
+	s.activityQuery = q
+	return s.activity, s.err
+}
+
+func (s *stubWork) MyWork(_ context.Context, q tracker.MyWorkQuery,
+	_ time.Time) (tracker.MyWork, error) {
+
+	s.myWorkQuery = q
+	return s.myWork, s.err
 }
 
 func (s *stubWork) Views(_ context.Context, q tracker.ViewQuery) (tracker.ViewListing, error) {

@@ -45,6 +45,11 @@ type fakeTracker struct {
 	sprintQuery  tracker.SprintQuery
 	sprints      tracker.SprintListing
 
+	activityQuery tracker.ActivityQuery
+	activity      tracker.ActivityAnswer
+	myWorkQuery   tracker.MyWorkQuery
+	myWork        tracker.MyWork
+
 	readErr  error
 	writeErr error
 }
@@ -141,6 +146,23 @@ func (f *fakeTracker) Sprints(_ context.Context, q tracker.SprintQuery,
 
 	f.sprintQuery = q
 	return f.sprints, f.readErr
+}
+
+// The FEED seam — what happened, and what is waiting on somebody. A reader
+// that answers the task questions and not these is a build with no native
+// tracker, and the registration turns on exactly that.
+func (f *fakeTracker) Activity(_ context.Context, q tracker.ActivityQuery,
+	_ time.Time) (tracker.ActivityAnswer, error) {
+
+	f.activityQuery = q
+	return f.activity, f.readErr
+}
+
+func (f *fakeTracker) MyWork(_ context.Context, q tracker.MyWorkQuery,
+	_ time.Time) (tracker.MyWork, error) {
+
+	f.myWorkQuery = q
+	return f.myWork, f.readErr
 }
 
 func (f *fakeTracker) as(actor builtin.Actor) builtin.WorkWriter {

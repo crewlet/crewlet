@@ -160,3 +160,76 @@ type stubUnits struct{}
 func (stubUnits) ResolveUnit(string) (string, tracker.LeadRef, bool) {
 	return "Platform", tracker.LeadRef{Handle: "ada", Kind: tracker.AuthorAgent}, true
 }
+
+// MY_WORK TAKES NO HANDLE, ever.
+//
+// A model that could name whose day to read could read anybody's — which is a
+// colleague's priorities, their inbox and the questions they owe, handed to an
+// agent nobody asked. The handle is the turn's own seat and comes from the
+// immutable turn context the tool surface bound.
+func TestMyWorkIsAlwaysTheTurnsOwnSeat(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	callWork(t, reg, tracker.MyWorkTool, map[string]any{"handle": "somebody-else"})
+	if trk.myWorkQuery.Handle != "eng" {
+		t.Errorf("my_work read %q's day, want the turn's own seat — a tool "+
+			"that took a handle would hand one agent a colleague's queue",
+			trk.myWorkQuery.Handle)
+	}
+	entry, ok := reg.Lookup(tracker.MyWorkTool)
+	if !ok {
+		t.Fatal("my_work is not registered")
+	}
+	params, _ := entry.Tool.Parameters()["properties"].(map[string]any)
+	if len(params) != 0 {
+		t.Errorf("my_work declares %v — a parameter a model can set is a "+
+			"parameter it will set", params)
+	}
+	if trk.myWorkQuery.Level != statelog.ReadSession {
+		t.Errorf("my_work read at %q, want session — a turn opens on this "+
+			"answer and must see its own last turn's writes",
+			trk.myWorkQuery.Level)
+	}
+}
+
+// THE FEED FALLS BACK TO THE SEAT'S OWN PROJECT, never to the whole company.
+//
+// A model asking "what has been going on" means its own work, and a
+// company-wide feed is the one answer that is both expensive and almost never
+// what was meant.
+func TestTaskActivityFallsBackToTheSeatsOwnProject(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{
+		Reader: trk, Writer: trk.as,
+		DefaultProject: func(string) string { return "ENG" },
+	})
+
+	callWork(t, reg, tracker.TaskActivityTool, map[string]any{})
+	if trk.activityQuery.Project != "ENG" || trk.activityQuery.Workspace {
+		t.Errorf("task_activity asked for %+v, want the seat's own project",
+			trk.activityQuery)
+	}
+
+	// AND A NAMED TASK WINS, because it is the narrower question.
+	callWork(t, reg, tracker.TaskActivityTool, map[string]any{
+		"task": "ENG-1", "kinds": "status,assignee", "actor": "ada", "limit": 5,
+	})
+	q := trk.activityQuery
+	if q.Task != "ENG-1" || q.Actor != "ada" || q.Limit != 5 || len(q.Kinds) != 2 {
+		t.Errorf("task_activity built %+v, want every argument carried", q)
+	}
+
+	// A `since` THAT IS NEITHER SHAPE IS REFUSED naming both, rather than
+	// silently dropped — a bound the caller believed in and that never
+	// reached the query answers a different question.
+	got := callWork(t, reg, tracker.TaskActivityTool, map[string]any{
+		"task": "ENG-1", "since": "last tuesday",
+	})
+	if !got.Failed || !strings.Contains(got.Output, "RFC3339") {
+		t.Errorf("an unparseable `since` gave %q, want a refusal naming the "+
+			"two shapes", got.Output)
+	}
+}

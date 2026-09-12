@@ -243,8 +243,9 @@ correct board.
 
 ## What a seat can do
 
-Nine tools, and they are deliberately few — six that act on a task and three
-that read the container it is filed into:
+Eleven tools, and they are deliberately few — six that act on a task, three
+that read the container it is filed into, and two about CHANGE rather than
+about state:
 
 | Tool | What it does |
 |---|---|
@@ -257,6 +258,29 @@ that read the container it is filed into:
 | `list_projects` | every project work is filed into, with how much open work each holds, who leads it and which sprint is running |
 | `describe_project` | one project in full: the six statuses with what each means, the types it files, the fields grouped by which type they apply to (required first, with their options), its tags, its lead and its active sprint. Omitting the project means the seat's own |
 | `sprint_report` | how a project's recent sprints went — committed, added, removed, done and remaining, per sprint and per person, in the project's own measure |
+| `task_activity` | what HAPPENED, in the order the log made it happen: every change to one task or one project, with who made it and exactly which fields moved |
+| `my_work` | everything this seat is expected to look at, in one call — see below |
+
+`my_work` is the call a turn opens with, and it answers **seven lists** rather
+than one: the seat's priorities in the order somebody put them, the work it
+holds, the questions waiting on its answer (each with the literal call that
+answers it), the checklist items it claimed on **other people's** tasks, the
+work it was brought onto without owning, what moved on what it follows, and
+what just became workable. Each is a different claim on the reader's
+attention, and a seat that saw only its assignments would miss six of them.
+One call rather than seven because assembled separately a seat could see a
+task in `assigned` that had already moved out of it by the time `priorities`
+was read — and spend its turn on work somebody else had taken. It takes **no
+handle**: the seat is the turn's own, because a tool that named whose day to
+read could read a colleague's queue.
+
+`task_activity` is the only way to ask what CHANGED. A board is about what is
+there now, and a task that was reassigned twice and back looks exactly like
+one nobody touched. Its order is the **log's**, not a clock's, so its `since`
+and its cursor are log positions — which is what lets a cursor span a reanchor
+with no gap and no repeat. Its `q` needs either a task, or a project **and** a
+`since` inside 90 days: an unscoped text search reads every change the company
+has ever made, and it has no cheaper mode to fall back to.
 
 The three project reads are a seat's for the same reason the catalogue read
 is: a create refuses a project the company does not have, a type it has not
@@ -270,7 +294,7 @@ the org chart and by nothing else — so a seat editing them would be editing
 the company's structure through the back door; its sprint policy and its field
 declarations are a lead's.
 
-An operator holds the same nine and two more that no seat does: `remove_work_item` puts an item
+An operator holds the same eleven and two more that no seat does: `remove_work_item` puts an item
 in the **trash** and `restore_work_item` takes it out again, at any age. A
 removal hides an item from every list and board and destroys nothing — its
 history is untouched and `list_work_items` with `removed: true` is the only

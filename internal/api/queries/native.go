@@ -61,6 +61,10 @@ type WorkReader interface {
 		tracker.ProjectDetail, error)
 	Sprints(ctx context.Context, q tracker.SprintQuery, now time.Time) (
 		tracker.SprintListing, error)
+	Activity(ctx context.Context, q tracker.ActivityQuery, now time.Time) (
+		tracker.ActivityAnswer, error)
+	MyWork(ctx context.Context, q tracker.MyWorkQuery, now time.Time) (
+		tracker.MyWork, error)
 	Person(ctx context.Context, q tracker.PersonQuery, now time.Time) (tracker.PersonState, error)
 }
 
@@ -556,4 +560,115 @@ func (s Sources) chartUnits() tracker.Units {
 		return nil
 	}
 	return engine.ChartUnits(organization)
+}
+
+// ---- the activity feed and one person's day ----------------------------- //
+
+// workActivity answers a slice of the company's own history.
+func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
+	q := tracker.ActivityQuery{
+		Task:     strings.TrimSpace(p.String("task")),
+		Actor:    strings.TrimSpace(p.String("actor")),
+		Assignee: strings.TrimSpace(p.String("assignee")),
+		Q:        strings.TrimSpace(p.String("q")),
+		Batch:    strings.TrimSpace(p.String("batch")),
+		Limit:    p.Int("limit", 0),
+		Cursor:   strings.TrimSpace(p.String("cursor")),
+		Level:    statelog.ReadStale,
+	}
+	if raw := strings.TrimSpace(p.String("container")); raw != "" {
+		container, err := viewContainer(p)
+		if err != nil {
+			return nil, err
+		}
+		switch container.Kind {
+		case tracker.ContainerWorkspace:
+			q.Workspace = true
+		case tracker.ContainerProject:
+			q.Project = container.ID
+		default:
+			return nil, badParams("container", raw,
+				[]string{"workspace", "project:<KEY>"})
+		}
+	}
+	for _, kind := range strings.Split(p.String("kinds"), ",") {
+		if kind = strings.TrimSpace(kind); kind != "" {
+			q.Kinds = append(q.Kinds, tracker.ChangeKind(kind))
+		}
+	}
+	// THE `since` KEY TAKES EITHER SHAPE, and which one it is decides what
+	// it means: a LOG POSITION resumes a feed exactly, and an instant is
+	// the wall-clock bound a person typed. Tried as a position first,
+	// because a position is unambiguous and a timestamp is not.
+	if since := strings.TrimSpace(p.String("since")); since != "" {
+		if at, err := tracker.ParseLogPosition(since); err == nil {
+			q.Since = at
+		} else {
+			when, err := time.Parse(time.RFC3339, since)
+			if err != nil {
+				return nil, badParams("since", since,
+					[]string{"an RFC3339 instant", "a <stream>@<generation>:<sequence> position"})
+			}
+			q.SinceAt = when
+		}
+	}
+	from, err := optionalInstant(p, "from")
+	if err != nil {
+		return nil, err
+	}
+	to, err := optionalInstant(p, "to")
+	if err != nil {
+		return nil, err
+	}
+	q.From, q.To = from, to
+	if p.Has("notified") {
+		notified := p.Bool("notified", true)
+		q.Notified = &notified
+	}
+	answer, err := s.Work.Activity(ctx, q, time.Now().UTC())
+	if err != nil {
+		switch {
+		case errors.Is(err, tracker.ErrNoTask):
+			return nil, ErrNotFound
+		case errors.Is(err, statelog.ErrUnavailable):
+			return nil, unavailableIfBehind(err)
+		}
+		// A GATE REFUSAL IS A BAD REQUEST, not a failure: the caller
+		// asked a question this surface will not run, and the message
+		// names the keys that make it runnable.
+		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+	}
+	return answer, nil
+}
+
+// workMyWork answers everything one person is expected to look at.
+func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
+	handle := strings.TrimSpace(p.String("handle"))
+	if handle == "" {
+		return nil, badParams("handle", "", nil)
+	}
+	out, err := s.Work.MyWork(ctx, tracker.MyWorkQuery{
+		Handle: handle,
+		// STALE. This is a POLL of somebody's day, not a read-back of a
+		// write they just made — see [Sources.workItems] for the
+		// arithmetic every dashboard read here shares.
+		Level: statelog.ReadStale,
+	}, time.Now().UTC())
+	if err != nil {
+		return nil, unavailableIfBehind(err)
+	}
+	return out, nil
+}
+
+// optionalInstant reads an RFC3339 key, refusing anything else by name.
+func optionalInstant(p Params, key string) (time.Time, error) {
+	raw := strings.TrimSpace(p.String(key))
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	when, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, badParams(key, raw, []string{"an RFC3339 instant"})
+	}
+	return when, nil
 }

@@ -162,6 +162,11 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		{&listProjects{deps: deps.Work}, projectReads(deps.Work)},
 		{&describeProject{deps: deps.Work}, projectReads(deps.Work)},
 		{&sprintReport{deps: deps.Work}, projectReads(deps.Work)},
+		// AND THE TWO ABOUT CHANGE rather than about state: a board says
+		// what is there now, and no filter over its rows can answer
+		// "who moved this" or "what is waiting on me".
+		{&taskActivity{deps: deps.Work}, feedReads(deps.Work)},
+		{&myWork{deps: deps.Work}, feedReads(deps.Work)},
 		{&listPages{deps: deps.Pages}, deps.Pages.Reader != nil},
 		{&getPage{deps: deps.Pages}, deps.Pages.Reader != nil},
 		{&writePage{deps: deps.Pages}, deps.Pages.Writer != nil},
@@ -266,7 +271,8 @@ func annotationsFor(name string) tools.Annotations {
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
 	case ListWorkItemsTool, GetWorkItemTool, ListPagesTool, GetPageTool,
 		tracker.GetWorkCatalogueTool, tracker.ListProjectsTool,
-		tracker.DescribeProjectTool, tracker.SprintReportTool:
+		tracker.DescribeProjectTool, tracker.SprintReportTool,
+		tracker.TaskActivityTool, tracker.MyWorkTool:
 		// Reads, and idempotent: asking twice costs a round and changes
 		// nothing. The catalogue lookup belongs here with the rest — left
 		// out, it fell to the default arm, whose ReadOnly=No with
@@ -375,5 +381,14 @@ func projectReads(deps WorkDeps) bool {
 		return false
 	}
 	_, ok := deps.Reader.(ProjectReader)
+	return ok
+}
+
+// feedReads reports whether this build's reader answers the feed seam.
+func feedReads(deps WorkDeps) bool {
+	if deps.Reader == nil {
+		return false
+	}
+	_, ok := deps.Reader.(FeedReader)
 	return ok
 }

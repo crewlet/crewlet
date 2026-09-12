@@ -49,6 +49,21 @@ const (
 	// which key is present — the shape it replaces asked for "a task, a
 	// container or a since: bound", and `container=workspace` and a
 	// five-year `since:` both satisfied that while narrowing nothing.
+	//
+	// `q=` is an escaped LIKE over `excerpt`, which no index on
+	// `tracker_history` covers: unscoped it reads every commit the company
+	// has ever made — every quiet one included, since every commit writes a
+	// row — and at the measured scan coefficient that busts a five-second
+	// read budget inside the first year and only gets worse, with no
+	// cheaper mode to fall back to and no partial answer to return.
+	//
+	// A project and a ninety-day window make it a range over
+	// `(project_key, log_seq DESC)`. Ninety because it is a quarter, which
+	// is the span somebody actually asks a question like this about. The
+	// alternatives were refused: pushing `q=` through the lexical index is
+	// a second search surface for a facet nobody asked to rank, and
+	// DEFAULTING to a window silently answers a different question than the
+	// one asked. See [Reader.Activity].
 	ActivityQuerySpanDays = 90
 
 	// GroupByRowCeiling is the row count at which a grouped answer's sort

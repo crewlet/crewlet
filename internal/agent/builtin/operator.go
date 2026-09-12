@@ -83,6 +83,8 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		{&listProjects{deps: work}, projectReads(work)},
 		{&describeProject{deps: work}, projectReads(work)},
 		{&sprintReport{deps: work}, projectReads(work)},
+		{&taskActivity{deps: work}, feedReads(work)},
+		{&myWork{deps: work}, feedReads(work)},
 		{&getPerson{deps: work}, work.Reader != nil},
 		{&setPriorities{deps: work, leads: deps.Leads}, work.PersonWriter != nil},
 		{&setPins{deps: work}, work.PersonWriter != nil},

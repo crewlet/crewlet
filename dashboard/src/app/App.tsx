@@ -19,6 +19,7 @@ import { OrgScreen } from "~/routes/Org.tsx";
 import { Runs } from "~/routes/Runs.tsx";
 import { Work, WorkItem } from "~/routes/Work.tsx";
 import { Sprints } from "~/routes/Sprints.tsx";
+import { MyWork } from "~/routes/MyWork.tsx";
 import { Pages, PageView } from "~/routes/Pages.tsx";
 import { Conversations } from "~/routes/Conversations.tsx";
 import { Schedules } from "~/routes/Schedules.tsx";
@@ -55,6 +56,10 @@ function Screen() {
     // carries the id. The engine's own Get takes either, so the route does
     // not have to know which it was handed.
     case "work":
+      // `me` IS NOT A TASK. Keys are `<PROJECT>-<n>` and ids are uuids, so
+      // neither can collide with it — and `#/work/me` is the address this
+      // screen has had since it was designed.
+      if (id === "me") return <MyWork />;
       return id ? <WorkItem id={id} /> : <Work />;
     case "goals":
       return <Goals />;
