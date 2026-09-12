@@ -30,9 +30,11 @@ const (
 	CreateWorkItemTool = tracker.CreateWorkItemTool
 	UpdateWorkItemTool = tracker.UpdateWorkItemTool
 	CommentOnWorkTool  = tracker.CommentOnWorkTool
+	MergeWorkItemTool  = tracker.MergeWorkItemTool
 )
 
-// WorkTools are the five, so a caller registering them names one thing.
+// WorkTools are the whole native catalogue, so a caller registering them names
+// one thing.
 func WorkTools() []string { return tracker.Tools() }
 
 // WorkWrites are the three that count as a DELIVERY.
@@ -96,6 +98,16 @@ type WorkDepender interface {
 		leads tracker.Leads) (tracker.DependencyResult, error)
 }
 
+// WorkMerger folds one item into another, which is the second gesture here
+// that is a SEQUENCE rather than a patch — and the reason it is not folded
+// into [WorkWriter] is [WorkDepender]'s: it reads a subtree before its first
+// append and takes a fleet claim, neither of which a surface holding no
+// replicated estate can do.
+type WorkMerger interface {
+	MergeDuplicates(ctx context.Context, opID, duplicate, into string,
+		reparent bool, notify *tracker.Notify) (tracker.WriteResult, error)
+}
+
 // WorkDeps are the tracker halves plus what a write needs to attribute itself.
 type WorkDeps struct {
 	Reader WorkReader
@@ -116,6 +128,15 @@ type WorkDeps struct {
 	// Nil on a build whose writer holds no replicated estate, which is
 	// what the dependency arguments are refused by name against.
 	Dependencies func(actor Actor) WorkDepender
+
+	// Merges resolves the duplicate-merge sequence FOR ONE ACTOR, in the
+	// same shape and for the same reason [WorkDeps.Dependencies] is.
+	//
+	// Nil on a build whose writer holds no replicated estate, and the merge
+	// tool is then OMITTED rather than refusing at the call: it is a whole
+	// verb rather than an argument on one, and a catalogue advertising a
+	// tool that always fails is how a model learns to distrust all of them.
+	Merges func(actor Actor) WorkMerger
 
 	// ViewWriter resolves the saved-view write side for one actor, in the
 	// same shape and for the same reason [WorkDeps.Writer] is a function.
@@ -1126,9 +1147,10 @@ func (t *updateWorkItem) Name() string { return UpdateWorkItemTool }
 func (t *updateWorkItem) Description() string {
 	return "Change a work item: its status, assignee, priority, title, " +
 		"description, labels, or whether you watch it. Only the fields you " +
-		"pass are changed. Closing as `done` or `cancelled` takes a " +
-		"`close_reason`; closing as a duplicate must name the item that " +
-		"survives."
+		"pass are changed. Say WHY you closed something with " +
+		"comment_on_work_item — an item that went to `cancelled` with no " +
+		"word is one somebody has to reconstruct. Closing as a duplicate " +
+		"also names the item that survives, in `duplicate_of`."
 }
 
 func (t *updateWorkItem) Parameters() map[string]any {
@@ -1253,15 +1275,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		return failed(readFailure(UpdateWorkItemTool, err)), nil
 	}
 
-	var duplicateOf string
-	if ref := strings.TrimSpace(argString(args, "duplicate_of")); ref != "" {
-		var refusal string
-		if duplicateOf, refusal = t.deps.resolveRef(ctx, UpdateWorkItemTool,
-			"`duplicate_of`", ref); refusal != "" {
-			return failed(refusal), nil
-		}
-	}
-	patch, kind, refusal := patchFromArgs(args, actor, duplicateOf)
+	patch, kind, refusal := patchFromArgs(args, actor)
 	if refusal != "" {
 		return failed(refusal), nil
 	}
@@ -1322,7 +1336,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// item, while `waiting_on` is an authored edge on one item and a
 	// mirrored entry on another, which is a sequence rather than a field.
 	inert, refusal := t.deps.inertRelations(ctx, UpdateWorkItemTool, args,
-		before.Task, actor)
+		before.Task)
 	if refusal != "" {
 		return failed(refusal), nil
 	}
@@ -1456,8 +1470,8 @@ func (d WorkDeps) declareLabels(ctx context.Context, actor Actor,
 // it, and a recipient told "fields changed" would have to read the deltas to
 // find out what happened. The order below is that judgement, most specific
 // first.
-func patchFromArgs(args map[string]any, actor Actor,
-	duplicateOf string) (tracker.TaskPatch, tracker.ChangeKind, string) {
+func patchFromArgs(args map[string]any,
+	actor Actor) (tracker.TaskPatch, tracker.ChangeKind, string) {
 
 	var patch tracker.TaskPatch
 	kind := tracker.ChangeFields
@@ -1536,15 +1550,6 @@ func patchFromArgs(args map[string]any, actor Actor,
 		// why this one does not should find the answer rather than a
 		// gap.
 		patch.Fields = &fields
-	}
-	if duplicateOf != "" {
-		patch.Relations = &[]tracker.Relation{{
-			Kind: tracker.RelationDuplicates, Other: duplicateOf,
-			CreatedBy: actor.Handle,
-		}}
-		if kind == tracker.ChangeFields {
-			kind = tracker.ChangeRelations
-		}
 	}
 	return patch, kind, ""
 }

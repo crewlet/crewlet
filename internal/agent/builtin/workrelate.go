@@ -216,7 +216,7 @@ func delta(have, want []string) (add, remove []string) {
 // page id, and there is no write to the pages family at all — which is why it
 // is a separate argument rather than a `kind` on one list.
 func (d WorkDeps) inertRelations(ctx context.Context, tool string,
-	args map[string]any, task tracker.Task, actor Actor) (*tracker.RelationIntent, string) {
+	args map[string]any, task tracker.Task) (*tracker.RelationIntent, string) {
 
 	intent := &tracker.RelationIntent{}
 	touched := false
@@ -251,8 +251,12 @@ func (d WorkDeps) inertRelations(ctx context.Context, tool string,
 			stated.Add, stated.Remove = delta(othersOfKind(task, side.kind), stated.Values)
 		}
 		for _, id := range stated.Add {
+			// UNSIGNED HERE, because the writer signs the edges it
+			// authors with the actor it is already acting as — and a
+			// second rule stating the same handle is how one of them
+			// comes to state a different one.
 			intent.Add = append(intent.Add, tracker.Relation{
-				Kind: side.kind, Other: id, CreatedBy: actor.Handle,
+				Kind: side.kind, Other: id,
 			})
 		}
 		for _, id := range stated.Remove {
@@ -260,6 +264,27 @@ func (d WorkDeps) inertRelations(ctx context.Context, tool string,
 				Kind: side.kind, Other: id,
 			})
 		}
+	}
+	// AND THE DUPLICATE LINK, which belongs here and nowhere else: it is
+	// one edge on one item with no second end, exactly as a link is.
+	//
+	// IN THE SAME INTENT, because a patch carries ONE relation gesture —
+	// stated apart, whichever ran last silently dropped the other's edges,
+	// and stated as the whole collection (which is what this used to do)
+	// it dropped every relation the item already had.
+	//
+	// A SCALAR rather than the `set` grammar the two above use: an item is
+	// a duplicate of ONE other item, and offering a list would invite one
+	// nothing downstream means.
+	if ref := strings.TrimSpace(argString(args, "duplicate_of")); ref != "" {
+		id, refusal := d.resolveRef(ctx, tool, "`duplicate_of`", ref)
+		if refusal != "" {
+			return nil, refusal
+		}
+		touched = true
+		intent.Add = append(intent.Add, tracker.Relation{
+			Kind: tracker.RelationDuplicates, Other: id,
+		})
 	}
 	if !touched || (len(intent.Add) == 0 && len(intent.Remove) == 0) {
 		return nil, ""

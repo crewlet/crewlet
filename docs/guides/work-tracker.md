@@ -444,9 +444,9 @@ correct board.
 
 ## What a seat can do
 
-Thirteen tools, and they are deliberately few — six that act on a task, three
-that read the container it is filed into, one that writes the one part of that
-container a seat owns, one that reads the company's goals, and two about
+Fourteen tools, and they are deliberately few — seven that act on a task,
+three that read the container it is filed into, one that writes the one part of
+that container a seat owns, one that reads the company's goals, and two about
 CHANGE rather than about state:
 
 | Tool | What it does |
@@ -457,6 +457,7 @@ CHANGE rather than about state:
 | `update_work_item` | change any field, with an optional `if_match`. `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration |
 | `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |
 | `comment_on_work_item` | add to the thread, optionally as a **question** somebody owes an answer to (`ask`) or as the **answer** that closes one (`answers`) |
+| `merge_work_item` | fold a duplicate into the item that survives: the duplicate is linked to it, its **subtasks are re-parented onto it** (`move_subtasks`, true unless you say otherwise), and the duplicate is closed as `cancelled`. Nothing is destroyed and both histories stay readable. Closing a duplicate by hand instead leaves its subtasks under a closed parent, where nobody finds them |
 | `get_work_catalogue` | the types a task may be and the fields it may carry |
 | `list_projects` | every project work is filed into, with how much open work each holds, who leads it and which sprint is running |
 | `describe_project` | one project in full: the six statuses with what each means, the types it files, the fields grouped by which type they apply to (required first, with their options), its tags, its lead and its active sprint. Omitting the project means the seat's own |
@@ -501,7 +502,7 @@ policy and its default assignee are the **lead's**, and archiving the project
 itself takes a person's own credential. Every one of those is gated inside the
 verb, and each refusal names who can.
 
-An operator holds the same thirteen and more that no seat does:
+An operator holds the same fourteen and more that no seat does:
 `manage_sprint` (above), and the two below. `remove_work_item` puts an item
 in the **trash** and `restore_work_item` takes it out again, at any age. A
 removal hides an item from every list and board and destroys nothing — its

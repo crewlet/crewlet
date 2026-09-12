@@ -450,7 +450,7 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			if err != nil {
 				return statelog.Decision{}, err
 			}
-			charged, err = settleRelations(current, charged)
+			charged, err = w.settleRelations(current, charged)
 			if err != nil {
 				return statelog.Decision{}, err
 			}

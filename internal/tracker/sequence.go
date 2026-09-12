@@ -1014,13 +1014,17 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 		return WriteResult{}, err
 	}
 
-	relations := append(append([]Relation{}, task.Relations...), Relation{
-		Kind: RelationDuplicates, Other: into,
-		CreatedBy: w.Actor, CreatedAt: w.Now(),
-	})
+	// THE EDGE IS A GESTURE, not a collection this sequence composes. The
+	// read above is a PRE-FLIGHT — it happens before the first append and
+	// outside every snapshot — so a set built from it and written whole
+	// silently drops any relation a colleague added in between. An add is
+	// resolved against the task's own rows inside the decide, which is the
+	// one place a single consistent read of them exists.
 	merging := true
 	marked, err := w.UpdateTask(ctx, stepID(opID, "mark"), duplicate, task.Project, NoIfMatch,
-		TaskPatch{Relations: &relations, Merging: &merging},
+		TaskPatch{Relate: &RelationIntent{Add: []Relation{{
+			Kind: RelationDuplicates, Other: into,
+		}}}, Merging: &merging},
 		ChangeRelations, nil)
 	if err != nil {
 		return WriteResult{}, err

@@ -34,7 +34,7 @@ func TestEachHalfIsOfferedOnItsOwn(t *testing.T) {
 	only := opsmcp.New(opsmcp.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Actor: opsmcp.WorkActor,
+			Merges: stubWorkMerger, Actor: opsmcp.WorkActor,
 		},
 	})
 	if only == nil {
@@ -132,7 +132,10 @@ func TestTheOperatorSurfaceIsNeverAnonymous(t *testing.T) {
 func TestTheOperatorCatalogueIsDrawnFromTheSeatOne(t *testing.T) {
 	t.Parallel()
 	s := opsmcp.New(opsmcp.Options{
-		Work:  builtin.WorkDeps{Reader: stubWorkReader{}, Writer: stubWorkWriter, Actor: opsmcp.WorkActor},
+		Work: builtin.WorkDeps{
+			Reader: stubWorkReader{}, Writer: stubWorkWriter,
+			Merges: stubWorkMerger, Actor: opsmcp.WorkActor,
+		},
 		Pages: builtin.PageDeps{Reader: stubPageReader{}, Writer: stubPageWriter{}, Actor: opsmcp.PageActor},
 	})
 	if s == nil {
@@ -199,6 +202,16 @@ func (stubWorkReader) Thread(context.Context, tracker.ThreadQuery,
 type stubWorkWriterT struct{}
 
 func stubWorkWriter(builtin.Actor) builtin.WorkWriter { return stubWorkWriterT{} }
+
+// stubWorkMerger is the same stub in its second shape, for the fold — which is
+// a SEQUENCE and therefore its own seam. See builtin.WorkMerger.
+func stubWorkMerger(builtin.Actor) builtin.WorkMerger { return stubWorkWriterT{} }
+
+func (stubWorkWriterT) MergeDuplicates(context.Context, string, string, string,
+	bool, *tracker.Notify) (tracker.WriteResult, error) {
+
+	return tracker.WriteResult{}, nil
+}
 
 func (stubWorkWriterT) CreateTask(context.Context, string, tracker.Task,
 	*tracker.Notify) (tracker.WriteResult, error) {
