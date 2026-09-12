@@ -165,6 +165,9 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		// already cancel and link by hand, which is the same gesture
 		// without the children. See workmerge.go.
 		{&mergeWorkItem{deps: deps.Work}, deps.Work.Merges != nil && deps.Work.Reader != nil},
+		// AND THE RANKED SEARCH, which is the only way to reach what an
+		// item's DESCRIPTION says — see worksearch.go.
+		{&searchWorkItems{deps: deps.Work}, deps.Work.Search != nil},
 		// READING THE CATALOGUE IS A SEAT'S, writing it is not: a create
 		// refuses a type the company has not declared, and a model that
 		// cannot read the catalogue can only guess at one.

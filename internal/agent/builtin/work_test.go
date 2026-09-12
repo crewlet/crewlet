@@ -34,11 +34,17 @@ type fakeTracker struct {
 	params map[string]string
 	tasks  map[string]tracker.TaskDetail
 
-	created  []tracker.Task
-	merged   []mergeCall
-	patched  []tracker.TaskPatch
-	ifMatch  []uint64
-	notified []*tracker.Notify
+	created []tracker.Task
+	merged  []mergeCall
+
+	// searched is every text the ranked search was asked for, and ranked
+	// what it answers with.
+	searched  []string
+	ranked    []tracker.Ranked
+	searchErr error
+	patched   []tracker.TaskPatch
+	ifMatch   []uint64
+	notified  []*tracker.Notify
 
 	// kinds is what each write said it WAS, which is a different fact
 	// from whether it notified anybody — see [tracker.MutationRecord.Kind].
@@ -264,6 +270,21 @@ func (f *fakeTracker) depends(actor builtin.Actor) builtin.WorkDepender {
 	return f
 }
 
+// Search implements [builtin.WorkSearcher]: the fake in its fifth shape, for
+// the one read here that is a RANKING rather than a filter.
+func (f *fakeTracker) Search(_ context.Context, text string,
+	limit int) ([]tracker.Ranked, error) {
+
+	f.searched = append(f.searched, text)
+	if f.searchErr != nil {
+		return nil, f.searchErr
+	}
+	if limit <= 0 || limit > len(f.ranked) {
+		return f.ranked, nil
+	}
+	return f.ranked[:limit], nil
+}
+
 // merges is its fourth, for the second sequence.
 func (f *fakeTracker) merges(actor builtin.Actor) builtin.WorkMerger {
 	f.actors = append(f.actors, actor)
@@ -483,7 +504,7 @@ func TestTheTrackerToolsRefuseOutsideATurn(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := workRegistry(t, builtin.WorkDeps{
-		Reader: trk, Writer: trk.as, Merges: trk.merges,
+		Reader: trk, Writer: trk.as, Merges: trk.merges, Search: trk,
 		ProjectWriter: func(builtin.Actor) builtin.ProjectWriter { return trk },
 	})
 	for _, name := range builtin.WorkTools() {
@@ -876,7 +897,7 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 	// is missing because the registry does not offer it rather than
 	// because its dependency was nil.
 	reg := workRegistry(t, builtin.WorkDeps{
-		Reader: trk, Writer: trk.as, Merges: trk.merges,
+		Reader: trk, Writer: trk.as, Merges: trk.merges, Search: trk,
 		ViewWriter:      func(builtin.Actor) builtin.ViewWriter { return nil },
 		GoalWriter:      func(builtin.Actor) builtin.GoalWriter { return nil },
 		CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
@@ -897,7 +918,7 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 	operator := map[string]bool{}
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
 		Work: builtin.WorkDeps{
-			Reader: trk, Writer: trk.as, Merges: trk.merges,
+			Reader: trk, Writer: trk.as, Merges: trk.merges, Search: trk,
 			ViewWriter:      func(builtin.Actor) builtin.ViewWriter { return nil },
 			GoalWriter:      func(builtin.Actor) builtin.GoalWriter { return nil },
 			CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },

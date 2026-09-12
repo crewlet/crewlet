@@ -492,3 +492,94 @@ func TestAReadThatFailsPartWayThroughIsNotAShortAnswer(t *testing.T) {
 		t.Errorf("after recovery the search found %d of 12", len(again))
 	}
 }
+
+// item writes an applied work-item row, which is the tracker half of the
+// indexer's input.
+func item(t testing.TB, db *store.DB, id, project, title, body string, version int) {
+	t.Helper()
+	_, err := db.Replicated().SQL().ExecContext(t.Context(), `
+		INSERT INTO tracker_tasks (id, key, project_key, root_id, type, title,
+		                           status, status_group, rank, document,
+		                           version, created_at, updated_at)
+		VALUES (?, ?, ?, ?, 'task', ?, 'todo', 'not_started', 'a0',
+		        json_object('body', ?), ?, 0, 0)
+		ON CONFLICT (id) DO UPDATE SET
+			title = excluded.title, document = excluded.document,
+			version = excluded.version`,
+		id, id, project, id, title, body, version)
+	if err != nil {
+		t.Fatalf("insert item %s: %v", id, err)
+	}
+}
+
+// A WORK ITEM IS FINDABLE BY ITS OWN WORDS, and until this it was findable by
+// none of them.
+//
+// The engine already EMBEDS every task — [TaskCorpus] is registered on the
+// fleet-singleton duty, so a company pays a provider bill per item and stores
+// a replicated, snapshotted, backed-up vector for each — while the lexical
+// half had never heard of the tracker: the walk selected from `pages_heads`,
+// the orphan sweep and the readiness gate spelled `source = 'page'` into their
+// own predicates, and the one ranked reader asked for pages only. A seat's
+// whole vocabulary for finding an item it half remembered was a substring of
+// the key or the title.
+func TestAWorkItemIsFoundByItsOwnWords(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	x := search.NewIndexer(db)
+
+	item(t, db, "i.retry", "ENG", "Flaky checkout",
+		"the payment client retries with no backoff and hammers the gateway", 1)
+	page(t, db, "p.runbook", "ENG", "On-call runbook",
+		"pager rotation, escalation, and who to call at night", 1)
+	indexAll(t, x)
+
+	hits, err := x.Search(t.Context(), search.SearchQuery{Text: "backoff gateway"})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(hits) != 1 || hits[0].ID != "i.retry" {
+		t.Fatalf("search returned %v, and the words are in a work item's "+
+			"DESCRIPTION — which no filter this engine offers can reach",
+			titles(hits))
+	}
+	if hits[0].Source != string(search.SourceTask) {
+		t.Errorf("the hit came back as source %q", hits[0].Source)
+	}
+
+	// AND A REMOVED ITEM LEAVES, through the sweep rather than by hand —
+	// what has to hold is that the indexer NOTICES it, and the trash is
+	// reachable by asking for it rather than by ranking above live work.
+	if _, err := db.Replicated().SQL().ExecContext(t.Context(),
+		`UPDATE tracker_tasks SET removed_at = 1 WHERE id = 'i.retry'`); err != nil {
+		t.Fatal(err)
+	}
+	indexAll(t, x)
+	if hits, _ := x.Search(t.Context(), search.SearchQuery{Text: "backoff gateway"}); len(hits) != 0 {
+		t.Errorf("a removed item is still findable: %v", titles(hits))
+	}
+}
+
+// THE GATE COUNTS EVERY CORPUS. A node whose pages are indexed and whose items
+// are not is one that would report itself ready and answer an item search
+// empty — which is the "nothing written down" lie the gate exists to prevent,
+// moved one corpus over.
+func TestTheReadinessGateCountsEveryCorpus(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	x := search.NewIndexer(db)
+
+	item(t, db, "i.1", "ENG", "Something", "a body worth indexing", 1)
+	ready, err := x.Ready(t.Context())
+	if err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	if ready {
+		t.Fatal("the index reports itself ready with an unindexed work item " +
+			"in the company, so a seat is told the tracker holds nothing")
+	}
+	indexAll(t, x)
+	if ready, err = x.Ready(t.Context()); err != nil || !ready {
+		t.Fatalf("Ready = %v (%v) after a full build", ready, err)
+	}
+}

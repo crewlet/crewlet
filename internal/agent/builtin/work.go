@@ -25,12 +25,13 @@ import (
 // for — and a constant defined here and read there is an import cycle. The
 // domain owns its vocabulary; this package implements it.
 const (
-	ListWorkItemsTool  = tracker.ListWorkItemsTool
-	GetWorkItemTool    = tracker.GetWorkItemTool
-	CreateWorkItemTool = tracker.CreateWorkItemTool
-	UpdateWorkItemTool = tracker.UpdateWorkItemTool
-	CommentOnWorkTool  = tracker.CommentOnWorkTool
-	MergeWorkItemTool  = tracker.MergeWorkItemTool
+	ListWorkItemsTool   = tracker.ListWorkItemsTool
+	GetWorkItemTool     = tracker.GetWorkItemTool
+	CreateWorkItemTool  = tracker.CreateWorkItemTool
+	UpdateWorkItemTool  = tracker.UpdateWorkItemTool
+	CommentOnWorkTool   = tracker.CommentOnWorkTool
+	MergeWorkItemTool   = tracker.MergeWorkItemTool
+	SearchWorkItemsTool = tracker.SearchWorkItemsTool
 )
 
 // WorkTools are the whole native catalogue, so a caller registering them names
@@ -137,6 +138,14 @@ type WorkDeps struct {
 	// verb rather than an argument on one, and a catalogue advertising a
 	// tool that always fails is how a model learns to distrust all of them.
 	Merges func(actor Actor) WorkMerger
+
+	// Search ranks work items by text — see worksearch.go for why that is
+	// a verb of its own beside the board.
+	//
+	// A VALUE rather than a function of the actor, unlike every writer
+	// above: a search reads, and what it reads is the same corpus for
+	// everybody. There is nothing here to attribute.
+	Search WorkSearcher
 
 	// ViewWriter resolves the saved-view write side for one actor, in the
 	// same shape and for the same reason [WorkDeps.Writer] is a function.
@@ -448,9 +457,11 @@ func (t *listWorkItems) Parameters() map[string]any {
 			},
 			"text": map[string]any{
 				"type": "string",
-				"description": "Substring of the key or title. For finding an " +
-					"item you half remember; use search_knowledge for a " +
-					"question about the company's written knowledge.",
+				"description": "Substring of the KEY or TITLE only — it does " +
+					"not see descriptions. For an item whose key you are half " +
+					"sure of. To find work by what it is ABOUT, use " +
+					"search_work_items, which ranks over descriptions too; " +
+					"search_knowledge is for the company's written knowledge.",
 			},
 			"type": map[string]any{
 				"type": "string",
