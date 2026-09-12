@@ -402,8 +402,8 @@ CHANGE rather than about state:
 | `list_work_items` | the query surface above, filtered any way a view can be — including `preset=my_queue`, which is the seat's own open work |
 | `get_work_item` | one task with its thread, history and links |
 | `create_work_item` | file a task or a subtask |
-| `update_work_item` | change any field, with an optional `if_match`. `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it |
-| `comment_on_work_item` | add to the thread |
+| `update_work_item` | change any field, with an optional `if_match`. `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below |
+| `comment_on_work_item` | add to the thread, optionally as a **question** somebody owes an answer to (`ask`) or as the **answer** that closes one (`answers`) |
 | `get_work_catalogue` | the types a task may be and the fields it may carry |
 | `list_projects` | every project work is filed into, with how much open work each holds, who leads it and which sprint is running |
 | `describe_project` | one project in full: the six statuses with what each means, the types it files, the fields grouped by which type they apply to (required first, with their options), its tags, its lead and its active sprint. Omitting the project means the seat's own |
@@ -552,12 +552,81 @@ A whole-document write is refused only when its set of unresolvable names
 *grows*, because the alternative is a goal whose owner left being permanently
 unsaveable, including the one edit that takes them off it.
 
+### Dependencies, and the set-valued arguments
+
+A **dependency** is the one relation with two ends. `waiting_on` is authored on
+the task that is blocked; the blocker carries the dependent's id, so closing it
+can say who it unblocks without scanning every task in the company.
+
+Both ends are written, and in that order: the blocker's row is read first, so a
+blocker that is gone, tombstoned or already at its 64 dependents refuses the
+edge before anything is published. Then the authored edge lands, then the
+mirror. The mirror is **best effort** — the edge is already durable without it
+— so a mirror that lost its race leaves a **one-sided** edge, and the `tracker`
+duty writes the missing commit 30 seconds later. That repair is the only wake
+the blocker's side gets: the authored commit routes to the *dependent's*
+watchers, so "the wake went out with the other commit" was never true.
+
+When the mirror can never be written — the blocker is gone, was removed since,
+or is full — the edge is stamped **permanently** one-sided and never retried.
+Both states are in the attention queue: `flag=one_sided` is the repair still
+pending, `flag=one_sided_final` the one a person has to resolve. The `flag`
+filter takes any number of values and matches a task carrying **any** of them.
+
+`waiting_on`, `blocking`, `linked` and `linked_pages` on `update_work_item`
+take one of two explicit shapes and never a bare list:
+
+```json
+{"waiting_on": {"add": ["ENG-7"], "remove": ["ENG-2"]}}
+{"waiting_on": {"set": ["ENG-7", "ENG-9"]}}
+```
+
+A bare list is refused naming both, because the two readings of it are
+opposite: as a delta it adds one edge, and as a set it silently drops every
+edge not repeated. `create_work_item` keeps a plain `waiting_on` list — a new
+item has no dependencies to replace.
+
+### A question on a task
+
+A comment can carry an `ask`: a colleague's handle, meaning this comment is a
+question that person owes an answer to. They are woken **asking for one**,
+rather than told about activity, and they start following the item. An ask does
+**not** hand the item over and does **not** block a close — a question nobody
+has answered is not a reason to hold delivered work open.
+
+The answer closes it. `answers` names the question's comment id, and is
+**inferred** when exactly one open question on the item is addressed to the
+caller; with several it is required, and the refusal lists them. Answering
+wakes the person who **asked** — not the person who just replied, which is what
+routing off the answering comment's author would have done.
+
+`my_work` reads both sides: `asked_of_me` is the questions waiting on this
+seat, and the `has_open_asks` filter finds the items carrying any.
+
+A comment from somebody who is not the assignee, naming nobody and asking
+nobody, still wakes the assignee — unaddressed, which a turn may absorb without
+replying. The result says so in a `warnings` line, because a commenter
+expecting an answer otherwise gets silence with nothing to explain it.
+
 ## What wakes a seat
 
 A change that concerns somebody becomes a **wake** — a turn on that seat, with
 a prompt written for the reason it reached them. Most wakes are about a task:
 you were assigned it, mentioned on it, watching it, blocked by it. Four are
 not, and they exist because the thing that moved is not a row on a board:
+
+**One wake per person per change**, whatever number of reasons name them: the
+first reason in the precedence order wins and the rest are dropped. Somebody
+mentioned on a task they are watching hears that they were mentioned.
+
+The order puts **what this change did to you** ahead of **the role you hold**.
+Being @-mentioned, being asked a question, having your question answered, and
+learning that somebody's work now waits on yours all outrank being the
+assignee — because each says something the standing role does not, about this
+change. Below those come assignee, then reporter, then the following
+reasons — collaborator, watcher, and last the lead fallback, which reaches a
+lead only when the change named nobody else at all.
+
 
 | Wake | Who hears it | What it asks |
 |---|---|---|

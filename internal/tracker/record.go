@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"encoding/json"
+	"slices"
 	"time"
 )
 
@@ -64,6 +65,16 @@ const (
 	// MaxOtherRelations the rest together.
 	MaxWaitingOn      = 64
 	MaxOtherRelations = 128
+
+	// MaxRelationNote bounds the one free-text field an edge carries.
+	//
+	// 256 BYTES, which is a sentence saying WHY this task waits on that
+	// one. Anything longer is the conversation, and the conversation has
+	// a comment thread of its own — while every byte here rides on the
+	// task document, is re-encoded by every commit that touches any
+	// relation, and is counted against MaxCommitBytes 128 edges at a
+	// time.
+	MaxRelationNote = 256
 	// MaxDependents is the OTHER end, and it is the cap that bounds a
 	// status write's declared scope: a group change on a blocker rewrites
 	// two columns on every dependent, so the record enumerates at most
@@ -181,6 +192,18 @@ const (
 	RelationPage RelationKind = "page"
 )
 
+// RelationKinds is the closed set, in the order a refusal lists them.
+var RelationKinds = []RelationKind{
+	RelationWaitingOn, RelationLinked, RelationDuplicates, RelationPage,
+}
+
+// Valid reports whether this is a kind this build knows.
+//
+// A NAMED STRING TYPE WITH A Valid METHOD, so an unknown value off the wire is
+// a value rather than a panic — and so the one place that decides what an edge
+// may be is this list rather than a switch somewhere that forgot a case.
+func (k RelationKind) Valid() bool { return slices.Contains(RelationKinds, k) }
+
 // Relation is one edge, authored on ONE end.
 type Relation struct {
 	Kind      RelationKind `json:"kind"`
@@ -189,11 +212,17 @@ type Relation struct {
 	CreatedBy string       `json:"created_by,omitempty"`
 	CreatedAt time.Time    `json:"created_at,omitzero"`
 
-	// OneSided marks an edge whose mirror was never written, and
-	// OneSidedFinal one whose mirror was refused permanently — a cap, a
-	// tombstone, or a blocker that is not there. The first is a repair the
-	// duty retries; the second is an attention flag a person resolves.
-	OneSided      bool `json:"one_sided,omitempty"`
+	// OneSidedFinal marks an edge whose mirror was refused PERMANENTLY —
+	// by the dependents cap, by a tombstone the blocker acquired since, or
+	// by a blocker that is no longer there. An attention flag a person
+	// resolves, and the duty never retries it.
+	//
+	// THE OTHER HALF IS NOT HERE. "The mirror has not been written YET" is
+	// a fact about the blocker's own rows, so the applier derives it —
+	// see the `one_sided` case in writeChildren. A writer stating it would
+	// be stating what it read in another transaction about another
+	// subject, which is why the field existed for so long with no producer
+	// and the repair duty it was declared for had nothing to select.
 	OneSidedFinal bool `json:"one_sided_final,omitempty"`
 }
 
@@ -583,6 +612,25 @@ type TaskPatch struct {
 	// from whatever it had applied by then.
 	Watch *WatchIntent `json:"-"`
 
+	// Relate and Depend are the SAME KIND OF GESTURE for the two halves
+	// of a dependency, and they exist for the same reason Watch does: a
+	// caller cannot form these collections.
+	//
+	// [TaskPatch.Relations] and [TaskPatch.Dependents] are carried whole,
+	// so a tool that read the set in one transaction and wrote it in
+	// another discards every edge that arrived in between — which is
+	// exactly what the merge sequence did before this existed, composing
+	// `append(task.Relations, …)` from a read outside the decide. Worse
+	// for these two than for the watchers: [MaxWaitingOn],
+	// [MaxOtherRelations] and [MaxDependents] are the bounds the sets are
+	// declared under, and a whole-set write has nothing to count against.
+	//
+	// NEVER ON THE WIRE, like Watch: the record an applier sees carries
+	// the resolved collections, so a replay writes rows rather than
+	// re-deriving a set from whatever it had applied by then.
+	Relate *RelationIntent  `json:"-"`
+	Depend *DependentIntent `json:"-"`
+
 	// The collections, carried WHOLE when touched.
 	Collaborators *[]string                   `json:"collaborators,omitempty"`
 	Watchers      *[]string                   `json:"watchers,omitempty"`
@@ -622,6 +670,49 @@ type WatchIntent struct {
 	// because sixty-four other people are watching — a write refused for
 	// a reason that has nothing to do with what the writer asked for.
 	Auto bool
+}
+
+// RelationIntent is a gesture over a task's relation set, resolved inside the
+// writer's own decide snapshot by [settleRelations].
+//
+// TWO SPELLINGS AND NEVER BOTH: Set states the whole collection, Add and
+// Remove state a delta against whatever is there. Both are gestures rather
+// than a collection write, because even a Set has to be counted against
+// [MaxWaitingOn] and [MaxOtherRelations] — and the set it would be counted
+// against is the one the decide reads, not the one the caller happened to see.
+type RelationIntent struct {
+	// Set replaces the whole collection. Empty and non-nil clears it,
+	// which is what `{set: []}` means.
+	Set []Relation
+
+	// Add and Remove are the delta. Remove matches on (Kind, Other) —
+	// a note is not part of an edge's identity, so removing an edge does
+	// not require quoting the note somebody wrote on it.
+	Add    []Relation
+	Remove []Relation
+
+	// Final marks edges [Relation.OneSidedFinal], matched on (Kind,
+	// Other) like Remove.
+	//
+	// A GESTURE RATHER THAN A WHOLE SET for the reason the rest of this
+	// type exists: the only writer of it is the repair duty, running
+	// minutes after the edge was authored, and a collection it composed
+	// from its own scan would discard every edge that arrived since.
+	Final []Relation
+}
+
+// Whole reports whether this gesture states the collection outright.
+func (r *RelationIntent) Whole() bool { return r != nil && r.Set != nil }
+
+// DependentIntent is the BLOCKER's half: which dependents this commit adds to
+// or removes from [Task.Dependents].
+//
+// IDS RATHER THAN RELATIONS, because the blocker's side of a dependency is not
+// an edge it authored — it is the list of tasks whose own `waiting_on` names
+// it, kept so a close can say who it unblocks without a reverse scan.
+type DependentIntent struct {
+	Add    []string
+	Remove []string
 }
 
 // FieldType is a custom field's type.

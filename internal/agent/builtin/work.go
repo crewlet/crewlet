@@ -60,6 +60,8 @@ type WorkReader interface {
 	Goals(ctx context.Context, q tracker.GoalQuery) (tracker.GoalListing, error)
 	Catalogue(ctx context.Context, q tracker.CatalogueQuery) (tracker.CatalogueAnswer, error)
 	Person(ctx context.Context, q tracker.PersonQuery, now time.Time) (tracker.PersonState, error)
+	Thread(ctx context.Context, q tracker.ThreadQuery,
+		level statelog.ReadLevel) (tracker.ResolvedThread, error)
 }
 
 // WorkWriter is what these tools need from the tracker's write side.
@@ -81,6 +83,20 @@ type WorkWriter interface {
 		notify *tracker.Notify) (tracker.WriteResult, error)
 }
 
+// WorkDepender writes a dependency, which is the one gesture here that is a
+// SEQUENCE rather than a patch.
+//
+// ITS OWN INTERFACE, declared beside [WorkWriter] rather than folded into it,
+// because the two are satisfied by different surfaces: every surface that can
+// write a task can patch one, and only a surface holding the replicated estate
+// can read the counterparties a dependency has to have checked before its
+// first append. A build without one refuses the dependency arguments by name
+// and still serves every other edit.
+type WorkDepender interface {
+	Depend(ctx context.Context, opID string, change tracker.DependencyChange,
+		leads tracker.Leads) (tracker.DependencyResult, error)
+}
+
 // WorkDeps are the tracker halves plus what a write needs to attribute itself.
 type WorkDeps struct {
 	Reader WorkReader
@@ -94,6 +110,13 @@ type WorkDeps struct {
 	// immutable identity: the seat bound into the turn context here, and
 	// the credential on the request in the operator's surface.
 	Writer func(actor Actor) WorkWriter
+
+	// Dependencies resolves the dependency sequence FOR ONE ACTOR, in the
+	// same shape and for the same reason [WorkDeps.Writer] is a function.
+	//
+	// Nil on a build whose writer holds no replicated estate, which is
+	// what the dependency arguments are refused by name against.
+	Dependencies func(actor Actor) WorkDepender
 
 	// ViewWriter resolves the saved-view write side for one actor, in the
 	// same shape and for the same reason [WorkDeps.Writer] is a function.
@@ -150,6 +173,16 @@ type WorkDeps struct {
 	// would validate against an org that has since moved — refusing a
 	// colleague who joined this morning and admitting one who left.
 	Seats func() []colleague.Seat
+
+	// UnitOfSeat is the team a seat belongs to, read PER CALL against the
+	// epoch current when the tool runs — for the reason the default
+	// project is: a seat's tools are cloned into its lease, an apply does
+	// not rebuild the clone, and a captured unit would file today's work
+	// under the team somebody left last week.
+	//
+	// Nil stamps no unit, which is what a build with no chart has: the
+	// task is filed unrouted and its project lead is the only fallback.
+	UnitOfSeat func(handle string) string
 
 	// Units resolves a project's chart-owned unit at READ time — the
 	// tracker holds no org, because the applier may not read one. Nil
@@ -663,6 +696,19 @@ func (t *createWorkItem) Parameters() map[string]any {
 				"type":        "string",
 				"description": "The id or key of the item this belongs under.",
 			},
+			"unit": map[string]any{
+				"type": "string",
+				"description": "The team this work belongs to. Defaults to " +
+					"YOUR team, which is almost always right — name another " +
+					"only when you are filing on their behalf.",
+			},
+			"waiting_on": map[string]any{
+				"type": "array",
+				"description": "Items this one is blocked BY, as keys or ids. " +
+					"A plain list here, unlike update_work_item: a new item " +
+					"has no dependencies to replace.",
+				"items": map[string]any{"type": "string"},
+			},
 			"labels": map[string]any{
 				"type": "array",
 				"description": "Tags this project declares — read them with " +
@@ -748,6 +794,24 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 				"in rather than guessing."), nil
 		}
 	}
+	// THE FILING SEAT'S OWN TEAM, on both unit fields, and open to every
+	// seat — deliberately unlike the re-route above. `FiledUnit` is the
+	// immutable record of where this came from; `RoutingUnit` is the
+	// mutable half, and a create that stamped neither left a task whose
+	// unit lead could never be a fallback for it.
+	if unit := strings.TrimSpace(argString(args, "unit")); unit != "" {
+		if t.deps.Units != nil {
+			if _, _, found := t.deps.Units.ResolveUnit(unit); !found {
+				return failed(fmt.Sprintf("This company has no team %q.",
+					clip(unit))), nil
+			}
+		}
+		task.FiledUnit, task.RoutingUnit = unit, unit
+	} else if t.deps.UnitOfSeat != nil {
+		task.FiledUnit = t.deps.UnitOfSeat(actor.Handle)
+		task.RoutingUnit = task.FiledUnit
+	}
+
 	// THE ASSIGNEE IS RESOLVED BEFORE THE WATCHERS, so the canonical
 	// handle is what gets watched: a task watched under one spelling and
 	// assigned under another is a task whose assignee is not following it.
@@ -774,16 +838,51 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	notify := tracker.Wake{
 		Kind: tracker.ChangeCreated, After: task,
 	}.Notify(t.deps.Leads)
+	// THE BLOCKERS ARE RESOLVED BEFORE THE CREATE, so a dependency on a
+	// task that does not exist refuses the whole call rather than leaving
+	// a new item filed with an edge nobody asked to drop.
+	var blockers []string
+	for _, ref := range argStrings(args, "waiting_on") {
+		id, refusal := t.deps.resolveRef(ctx, CreateWorkItemTool, "`waiting_on`", ref)
+		if refusal != "" {
+			return failed(refusal), nil
+		}
+		blockers = append(blockers, id)
+	}
+	if len(blockers) > 0 && t.deps.Dependencies == nil {
+		return failed(unconfiguredText(CreateWorkItemTool)), nil
+	}
 	got, err := writer.CreateTask(ctx, opIDFor(actor, "create", task.ID), task, notify)
 	if err != nil {
 		return failed(writeFailure(CreateWorkItemTool, err)), nil
 	}
 	t.deps.settle(ctx, got.Position)
-	return jsonResult(map[string]any{
+	answer := map[string]any{
 		"key": got.Key, "id": task.ID, "status": task.Status,
 		"assignee": task.Assignee, "outcome": string(got.Outcome),
 		"labels_created": declared, "version": got.Version,
-	})
+	}
+	// AND THE DEPENDENCIES AFTER IT, because a dependency is an edge
+	// between two items that exist: the mirror commit names this task,
+	// and writing it before the create would name a task no node holds.
+	if len(blockers) > 0 {
+		result, err := t.deps.Dependencies(actor).Depend(ctx,
+			opIDFor(actor, "depend", task.ID), tracker.DependencyChange{
+				Task: task.ID, Project: task.Project, WaitingOnAdd: blockers,
+			}, t.deps.Leads)
+		if err != nil {
+			// THE ITEM EXISTS AND IS REPORTED. Failing the call would
+			// tell a model its item was not filed, and the next
+			// attempt would file a second one.
+			answer["dependencies_failed"] = writeFailure(CreateWorkItemTool, err)
+			return jsonResult(answer)
+		}
+		t.deps.settle(ctx, result.Position)
+		if len(result.OneSided) > 0 {
+			answer["dependencies_pending_mirror"] = len(result.OneSided)
+		}
+	}
+	return jsonResult(answer)
 }
 
 // resolveRef turns what a model typed — a key like ENG-7, or an id — into the
@@ -939,7 +1038,18 @@ func opIDFor(actor Actor, verb, object string) string {
 
 // ---- update_work_item -------------------------------------------------- //
 
-type updateWorkItem struct{ deps WorkDeps }
+type updateWorkItem struct {
+	deps WorkDeps
+
+	// leads answers whether this seat leads the project a task is filed
+	// in, which is the gate on `routing_unit`.
+	//
+	// A RE-ROUTE IS A LEAD'S, unlike the unit a create stamps: filing your
+	// own work into your own team is what every seat does, and pointing
+	// somebody ELSE's work at a different team is a decision about who
+	// owns it.
+	leads LeadsProject
+}
 
 var _ tools.SeatCallable = (*updateWorkItem)(nil)
 
@@ -997,8 +1107,46 @@ func (t *updateWorkItem) Parameters() map[string]any {
 					"read it. Omitted, your fields are merged onto the " +
 					"current item — which is usually what you want.",
 			},
+			"routing_unit": map[string]any{
+				"type": "string",
+				"description": "Point this item at a different team: its " +
+					"lead hears that work routes to them now. The project " +
+					"lead's to set — filing your own work into your own team " +
+					"is what `unit` on create_work_item does.",
+			},
+			"waiting_on":   setArgSchema("The items this one is blocked BY. Each is a key or an id."),
+			"blocking":     setArgSchema("The items blocked BY this one. Each is a key or an id."),
+			"linked":       setArgSchema("Related items, with no blocking meaning. Each is a key or an id."),
+			"linked_pages": setArgSchema("Knowledge-base pages this item references, by page id."),
+			"dependency_note": map[string]any{
+				"type": "string",
+				"description": "One line saying WHY, recorded on every " +
+					"dependency this call adds. Skipped on removals.",
+			},
 		},
 		"required": []any{"item"},
+	}
+}
+
+// setArgSchema is the shape every set-valued argument takes.
+//
+// SPELLED OUT IN THE SCHEMA rather than left to the refusal, because the
+// refusal only arrives after a model has already decided what it meant — and
+// the reading it would otherwise pick, a bare list, is the one that silently
+// drops every entry it did not repeat.
+func setArgSchema(what string) map[string]any {
+	return map[string]any{
+		"type":        "object",
+		"description": what + " Pass {\"add\": [...], \"remove\": [...]} to change part of the set, or {\"set\": [...]} to replace it entirely. Never a bare list.",
+		"properties": map[string]any{
+			"add":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"remove": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"set": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "REPLACES the whole set. Everything not listed is removed.",
+			},
+		},
 	}
 }
 
@@ -1068,22 +1216,110 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			return failed(refusal), nil
 		}
 	}
-	got, err := writer.UpdateTask(ctx,
-		opIDFor(actor, "update", before.Task.ID), before.Task.ID,
-		before.Task.Project, ifMatch, patch, kind,
-		tracker.Wake{
-			Kind:   kind,
-			Before: before.Task,
-			After:  patched(before.Task, patch),
-		}.Notify(t.deps.Leads))
-	if err != nil {
-		return failed(writeFailure(UpdateWorkItemTool, err)), nil
+	// THE RE-ROUTE IS ITS OWN KIND AND ITS OWN GATE. `routed` carries
+	// exactly one delta, and the new unit's lead hears it as an ORDINARY
+	// candidate rather than a fallback — which is what makes the promise
+	// "the new unit's lead learns work routes to them now" keepable on a
+	// task that still has an assignee.
+	if raw, held := args["routing_unit"]; held {
+		unit := strings.TrimSpace(argString(map[string]any{"v": raw}, "v"))
+		if t.leads == nil || !t.leads(ctx, actor.Handle, before.Task.Project) {
+			return failed(fmt.Sprintf("Pointing %s at a different team is the "+
+				"lead of %s's decision, not yours. Ask them, or say in a "+
+				"comment why it belongs elsewhere.",
+				before.Task.Key, before.Task.Project)), nil
+		}
+		if unit != "" && t.deps.Units != nil {
+			if _, _, found := t.deps.Units.ResolveUnit(unit); !found {
+				return failed(fmt.Sprintf("This company has no team %q. A task "+
+					"routed at a team nobody has reaches nobody at all.",
+					clip(unit))), nil
+			}
+		}
+		patch.RoutingUnit = &unit
+		if kind == tracker.ChangeFields {
+			kind = tracker.ChangeRouted
+		}
 	}
-	t.deps.settle(ctx, got.Position)
-	return jsonResult(map[string]any{
-		"key": before.Task.Key, "outcome": string(got.Outcome),
-		"labels_created": declared, "version": got.Version,
-	})
+	// THE INERT EDGES RIDE THE PATCH and the DEPENDENCIES DO NOT, because
+	// a dependency has two ends: a `linked` edge is one collection on one
+	// item, while `waiting_on` is an authored edge on one item and a
+	// mirrored entry on another, which is a sequence rather than a field.
+	inert, refusal := t.deps.inertRelations(ctx, UpdateWorkItemTool, args,
+		before.Task, actor)
+	if refusal != "" {
+		return failed(refusal), nil
+	}
+	if inert != nil {
+		patch.Relate = inert
+		if kind == tracker.ChangeFields {
+			kind = tracker.ChangeRelations
+		}
+	}
+	change, refusal := t.deps.dependencyChange(ctx, UpdateWorkItemTool, args, before.Task)
+	if refusal != "" {
+		return failed(refusal), nil
+	}
+
+	answer := map[string]any{"key": before.Task.Key, "labels_created": declared}
+	// THE PATCH IS SKIPPED WHEN THIS CALL IS ONLY A DEPENDENCY CHANGE.
+	// An empty patch is a real write — it stamps a version and writes a
+	// history row — and spending one on a call that changed no field of
+	// this item would put a `fields` commit in the feed that changed no
+	// fields.
+	if !patchIsEmpty(patch) {
+		got, err := writer.UpdateTask(ctx,
+			opIDFor(actor, "update", before.Task.ID), before.Task.ID,
+			before.Task.Project, ifMatch, patch, kind,
+			tracker.Wake{
+				Kind:   kind,
+				Before: before.Task,
+				After:  patched(before.Task, patch),
+				Parent: t.deps.parentParty(ctx, before.Task, patch),
+			}.Notify(t.deps.Leads))
+		if err != nil {
+			return failed(writeFailure(UpdateWorkItemTool, err)), nil
+		}
+		t.deps.settle(ctx, got.Position)
+		answer["outcome"], answer["version"] = string(got.Outcome), got.Version
+	}
+	if !change.Empty() {
+		if t.deps.Dependencies == nil {
+			return failed(unconfiguredText(UpdateWorkItemTool)), nil
+		}
+		result, err := t.deps.Dependencies(actor).Depend(ctx,
+			opIDFor(actor, "depend", before.Task.ID), change, t.deps.Leads)
+		if err != nil {
+			return failed(writeFailure(UpdateWorkItemTool, err)), nil
+		}
+		t.deps.settle(ctx, result.Position)
+		if _, held := answer["outcome"]; !held {
+			answer["outcome"], answer["version"] = string(result.Outcome), result.Version
+		}
+		// THE HALF-WRITTEN EDGES ARE REPORTED, never swallowed. A
+		// dependency whose mirror lost its race is durable on the
+		// authoring side and repaired by the tracker duty — so the
+		// honest answer names it rather than either failing the call or
+		// claiming it landed whole.
+		if len(result.OneSided) > 0 {
+			answer["dependencies_pending_mirror"] = len(result.OneSided)
+		}
+	}
+	return jsonResult(answer)
+}
+
+// patchIsEmpty reports a patch that would change no field of the item.
+//
+// BY THE FIELDS THEMSELVES rather than by a flag the caller sets, because the
+// two callers that could set one — the argument parser and the relation
+// composer — each see half the patch, and a flag either of them forgot would
+// be an empty commit nobody could trace back.
+func patchIsEmpty(patch tracker.TaskPatch) bool {
+	return patch.Title == nil && patch.Body == nil && patch.Assignee == nil &&
+		patch.Status == nil && patch.Priority == nil && patch.Tags == nil &&
+		patch.Watch == nil && patch.Watchers == nil && patch.Muted == nil &&
+		patch.Relations == nil && patch.Relate == nil && patch.Comment == nil &&
+		patch.Dependents == nil && patch.Depend == nil
 }
 
 // declareLabels declares the labels a write is about to use that its project
@@ -1260,6 +1496,9 @@ func patched(task tracker.Task, patch tracker.TaskPatch) tracker.Task {
 	if patch.Tags != nil {
 		task.Tags = *patch.Tags
 	}
+	if patch.RoutingUnit != nil {
+		task.RoutingUnit = *patch.RoutingUnit
+	}
 	if patch.Watchers != nil {
 		task.Watchers = *patch.Watchers
 	}
@@ -1310,9 +1549,25 @@ func (t *commentOnWorkItem) Parameters() map[string]any {
 				"description": "The comment, in markdown. @-mention a " +
 					"colleague by handle to reach them specifically.",
 			},
+			"ask": map[string]any{
+				"type": "string",
+				"description": "A colleague's handle: this comment is a " +
+					"QUESTION they owe an answer to. They are woken asking " +
+					"for one and start following the item. It does not hand " +
+					"the item over, and it does not stop anybody closing it.",
+			},
+			"answers": map[string]any{
+				"type": "string",
+				"description": "The comment id of the question this answers, " +
+					"which closes it. Omitted, it is inferred when exactly " +
+					"one open question on the item is addressed to you.",
+			},
 			"reply_to": map[string]any{
-				"type":        "string",
-				"description": "The id of the comment you are answering.",
+				"type": "string",
+				"description": "The id of the comment you are replying to. " +
+					"This threads the conversation and wakes everybody " +
+					"already in that thread; it does not close a question — " +
+					"`answers` is what does.",
 			},
 		},
 		"required": []any{"item", "body"},
@@ -1369,6 +1624,31 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if t.deps.Mentions != nil {
 		comment.Mentions = t.deps.Mentions.Mentions(body)
 	}
+	// THE ASK IS RESOLVED LIKE ANY OTHER HANDLE, because an ask that
+	// names nobody the company has wakes nobody and leaves a question
+	// open on the board for ever, addressed to a spelling.
+	ask := strings.TrimSpace(argString(args, "ask"))
+	if ask != "" {
+		resolved, refusal := t.deps.resolveHandle(CommentOnWorkTool, "`ask`", ask)
+		if refusal != "" {
+			return failed(refusal), nil
+		}
+		ask = resolved
+	}
+	thread, refusal := t.deps.resolveThread(ctx, tracker.ThreadQuery{
+		Task:    before.Task.ID,
+		ReplyTo: strings.TrimSpace(argString(args, "reply_to")),
+		Ask:     ask,
+		Answers: strings.TrimSpace(argString(args, "answers")),
+		Author:  actor.Handle,
+	})
+	if refusal != "" {
+		return failed(refusal), nil
+	}
+	comment.Ask = thread.Asked
+	if thread.Answers != "" {
+		comment.Answers = &thread.Answers
+	}
 
 	// A COMMENT RIDES THE TASK'S OWN WRITE, because a comment is a
 	// mutation of the task and shares its arbitration: two people
@@ -1409,16 +1689,46 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			// there rather than refused.
 			After:   patched(before.Task, patch),
 			Comment: comment, Mentions: comment.Mentions,
+			Thread: thread.ThreadParties,
 		}.Notify(t.deps.Leads))
 	if err != nil {
 		return failed(writeFailure(CommentOnWorkTool, err)), nil
 	}
 	t.deps.settle(ctx, got.Position)
-	return jsonResult(map[string]any{
+	answer := map[string]any{
 		"comment_id": comment.ID, "item": before.Task.Key,
 		"mentioned": comment.Mentions, "outcome": string(got.Outcome),
 		"version": got.Version,
-	})
+	}
+	if comment.Ask != "" {
+		answer["asked"] = comment.Ask
+	}
+	if comment.Answers != nil {
+		answer["answered"] = *comment.Answers
+	}
+	// THE WARNING THE CALLER CANNOT SEE FOR THEMSELVES. A comment from
+	// somebody who is not the assignee, naming nobody, still WAKES the
+	// assignee — unaddressed, which a turn is entitled to absorb without
+	// replying. A commenter expecting an answer therefore gets silence,
+	// and nothing about the call says so.
+	if warning := unansweredWarning(before.Task, actor, comment); warning != "" {
+		answer["warnings"] = []string{warning}
+	}
+	return jsonResult(answer)
+}
+
+// unansweredWarning says when a comment will wake somebody who is not being
+// asked anything.
+func unansweredWarning(task tracker.Task, actor Actor, comment *tracker.Comment) string {
+	switch {
+	case task.Assignee == "" || task.Assignee == actor.Handle:
+		return ""
+	case comment.Ask != "" || len(comment.Mentions) > 0:
+		return ""
+	}
+	return fmt.Sprintf("%s is woken by this but is not asked to answer it. "+
+		"Use ask: %s, or @-mention them, if you are expecting a reply.",
+		task.Assignee, task.Assignee)
 }
 
 // commentID is the comment's own id, derived so a re-run turn posts once.

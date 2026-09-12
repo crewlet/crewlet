@@ -148,14 +148,7 @@ func (Prompt) Build(n notify.Inbound, parties notify.Parties) string {
 	reason := Reason(meta[MetaVia])
 	var b strings.Builder
 
-	switch {
-	case reason == ReasonMention || reason == ReasonAsked:
-		promptAsked(&b, n, parties)
-	case reason.Primary():
-		promptOwned(&b, n, parties, reason)
-	default:
-		promptFollowing(&b, n, parties, reason)
-	}
+	promptOpener(&b, n, parties, reason)
 
 	promptChanged(&b, n)
 	promptContext(&b, meta)
@@ -175,28 +168,43 @@ func (Prompt) Build(n notify.Inbound, parties notify.Parties) string {
 // was told, which is the only thing it has.
 func isFallback(reason Reason) bool { return reason == ReasonLeadFallback }
 
-// promptAsked: somebody named this seat and is waiting.
-func promptAsked(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
-	if Reason(n.Metadata[MetaVia]) == ReasonAsked {
+// promptOpener writes the one sentence that says why this seat is reading
+// this, and — for the reasons that are ABOUT something somebody said — the
+// text itself.
+//
+// ONE SWITCH, and the shape is deliberate. This was three functions chosen by
+// [Reason.Primary], and that split put six arms where their own reason could
+// never reach them: `blocking` was written in the "following" half while
+// Primary sends it to the "owned" one, and `unblocked` and `collaborator` the
+// other way round — so a blocker's assignee read "a task you are named on
+// changed" and somebody whose work had just become startable read "a task you
+// are watching changed". Each arm looked right beside the others in its own
+// function, and nothing could see the pairing was wrong.
+//
+// EVERY REASON HAS AN ARM, and the default is the honest sentence for one a
+// newer build routed that this one does not know: a rolling upgrade puts such
+// a wake on the wire, and "a task you are named on changed" is true of every
+// reason there is.
+func promptOpener(b *strings.Builder, n notify.Inbound, parties notify.Parties,
+	reason Reason) {
+
+	quoted := false
+	switch reason {
+	case ReasonMention:
+		b.WriteString("You were @-mentioned in a comment on a task.")
+		quoted = true
+	case ReasonAsked:
 		b.WriteString("You were asked a question on a task, and the person " +
 			"who asked is waiting for an answer.")
-	} else {
-		b.WriteString("You were @-mentioned in a comment on a task.")
-	}
-	promptHeader(b, n, parties)
-	body := n.Body
-	if body == "" {
-		body = "(no text)"
-	}
-	b.WriteString("\n**Comment:**\n" + body + "\n")
-}
-
-// promptOwned: the work is theirs, by one of the primary reasons.
-func promptOwned(b *strings.Builder, n notify.Inbound, parties notify.Parties, reason Reason) {
-	switch reason {
-	case ReasonUnblocked:
-		b.WriteString("A task you are waiting on is now workable — every " +
-			"blocker on it has finished.")
+		quoted = true
+	case ReasonAnswered:
+		b.WriteString("A question you asked on a task was answered.")
+		quoted = true
+	case ReasonThread:
+		b.WriteString("A comment thread you are part of has a new reply.")
+		quoted = true
+	case ReasonPrioritised:
+		b.WriteString("Somebody else set the order of your work queue.")
 	case ReasonAssignee:
 		switch ChangeKind(n.EventType) {
 		case ChangeCreated:
@@ -208,34 +216,55 @@ func promptOwned(b *strings.Builder, n notify.Inbound, parties notify.Parties, r
 		default:
 			b.WriteString("A task you are assigned to changed.")
 		}
-	case ReasonCollaborator:
-		b.WriteString("A task you are collaborating on changed.")
+	case ReasonUnassigned:
+		b.WriteString("A task you were assigned to went to somebody else.")
 	case ReasonReporter:
 		b.WriteString("A task you filed changed.")
-	default:
-		b.WriteString("A task you are named on changed.")
-	}
-	promptHeader(b, n, parties)
-}
-
-// promptFollowing: activity on something they follow, or that reached them
-// because nobody else was named.
-func promptFollowing(b *strings.Builder, n notify.Inbound, parties notify.Parties, reason Reason) {
-	switch {
-	case isFallback(reason):
-		b.WriteString("A task in your team's project has activity and nobody " +
-			"here is named on it.")
-	case reason == ReasonBlocking:
-		b.WriteString("A task that is blocking somebody else's work changed.")
-	case reason == ReasonPurged:
+	case ReasonUnblocked:
+		b.WriteString("A task you are waiting on is now workable — every " +
+			"blocker on it has finished.")
+	case ReasonBlocking:
+		// THE BLOCKER'S OWN ASSIGNEE, and the sentence has to say whose
+		// problem it is: this seat holds the task somebody else is now
+		// waiting for, which is a call on THEIR time rather than news
+		// about somebody else's work.
+		b.WriteString("Somebody's work now waits on a task of yours.")
+	case ReasonRoutedTo:
+		b.WriteString("Work routes to your team now: a task was pointed at it.")
+	case ReasonParentAssignee:
+		b.WriteString("A subtask of a task you hold finished or was reopened.")
+	case ReasonChecklist:
+		b.WriteString("A checklist item assigned to you changed.")
+	case ReasonCollaborator:
+		b.WriteString("A task you are collaborating on changed.")
+	case ReasonGoalOwner:
+		b.WriteString("A goal you own or are part of changed.")
+	case ReasonSprint:
+		b.WriteString("A sprint your work is in started or closed.")
+	case ReasonWatcher:
+		b.WriteString("A task you are watching changed.")
+	case ReasonUnwatched:
+		b.WriteString("Somebody removed your watch on a task.")
+	case ReasonPurged:
 		// NOT "changed". The task and everything on it were destroyed,
 		// and a reader who opens this expecting an edit goes looking for
 		// what moved — on a row that is gone.
 		b.WriteString("A task in your project was permanently destroyed.")
+	case ReasonLeadFallback:
+		b.WriteString("A task in your team's project has activity and nobody " +
+			"here is named on it.")
 	default:
-		b.WriteString("A task you are watching changed.")
+		b.WriteString("A task you are named on changed.")
 	}
 	promptHeader(b, n, parties)
+	if !quoted {
+		return
+	}
+	body := n.Body
+	if body == "" {
+		body = "(no text)"
+	}
+	b.WriteString("\n**Comment:**\n" + body + "\n")
 }
 
 // promptHeader is the identifying block every opener shares.

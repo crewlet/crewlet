@@ -42,6 +42,18 @@ type fakeTracker struct {
 	actors []builtin.Actor
 	opIDs  []string
 
+	// thread is what Thread answers and threadQuery the last one asked,
+	// which is how a case asserts what the comment tool RESOLVED rather
+	// than only what it wrote.
+	thread      tracker.ResolvedThread
+	threadQuery tracker.ThreadQuery
+	threadErr   error
+
+	// depended is every dependency change the tool composed, and
+	// dependErr what the sequence answers.
+	depended  []tracker.DependencyChange
+	dependErr error
+
 	goalListing      tracker.GoalListing
 	goalsWritten     []tracker.Goal
 	projectEdits     []tracker.ProjectEdit
@@ -69,7 +81,7 @@ type fakeTracker struct {
 }
 
 func newFakeTracker() *fakeTracker {
-	return &fakeTracker{tasks: map[string]tracker.TaskDetail{
+	tasks := map[string]tracker.TaskDetail{
 		"ENG-1": {
 			Task: tracker.Task{
 				ID: "i1", Key: "ENG-1", Project: "ENG", Title: "the work",
@@ -78,7 +90,20 @@ func newFakeTracker() *fakeTracker {
 			},
 			Complete: true,
 		},
-	}}
+	}
+	// THREE MORE TO POINT AT, because every relation argument resolves its
+	// references to IDS before anything is written — a key stored in a
+	// relation resolves to nothing on every node, for ever.
+	for _, n := range []string{"2", "3", "4"} {
+		tasks["ENG-"+n] = tracker.TaskDetail{
+			Task: tracker.Task{
+				ID: "id-" + n, Key: "ENG-" + n, Project: "ENG",
+				Status: tracker.StatusTodo, StatusGroup: tracker.GroupNotStarted,
+			},
+			Complete: true,
+		}
+	}
+	return &fakeTracker{tasks: tasks}
 }
 
 func (f *fakeTracker) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tracker.Answer, error) {
@@ -149,6 +174,29 @@ func (f *fakeTracker) Person(context.Context, tracker.PersonQuery, time.Time) (t
 	return tracker.PersonState{}, nil
 }
 
+// Thread answers what the fake was TOLD to answer, and records the query.
+//
+// A REAL SEAM RATHER THAN A ZERO VALUE: the comment tool's ask handling is
+// decided by what comes back from here — who is in the thread, which open ask
+// was inferred, whose question is being answered — so a stub returning nothing
+// would let every one of those arms pass while doing nothing at all.
+func (f *fakeTracker) Thread(_ context.Context, q tracker.ThreadQuery,
+	_ statelog.ReadLevel) (tracker.ResolvedThread, error) {
+
+	f.threadQuery = q
+	if f.threadErr != nil {
+		return tracker.ResolvedThread{}, f.threadErr
+	}
+	out := f.thread
+	if out.Asked == "" {
+		out.Asked = q.Ask
+	}
+	if out.Answers == "" {
+		out.Answers = q.Answers
+	}
+	return out, nil
+}
+
 // as records the actor and hands back a writer bound to it, which is the
 // tracker's own rule: a writer acts as exactly one party.
 // The PROJECT seam, which [builtin.ProjectReader] asserts for: a reader that
@@ -193,6 +241,13 @@ func (f *fakeTracker) MyWork(_ context.Context, q tracker.MyWorkQuery,
 }
 
 func (f *fakeTracker) as(actor builtin.Actor) builtin.WorkWriter {
+	f.actors = append(f.actors, actor)
+	return f
+}
+
+// depends is the same fake in its third shape, for the one gesture that is a
+// SEQUENCE rather than a patch.
+func (f *fakeTracker) depends(actor builtin.Actor) builtin.WorkDepender {
 	f.actors = append(f.actors, actor)
 	return f
 }
@@ -852,4 +907,24 @@ func TestEveryOperatorToolAnswersOutsideATurn(t *testing.T) {
 				"WorkDeps.actor, not turn.RequireSeat", tool.Name())
 		}
 	}
+}
+
+// Depend records the dependency change the tool composed.
+//
+// THE COMPOSITION IS THE HALF THAT CAN BE WRONG HERE: the tool turns keys into
+// ids and a `{set}` gesture into the adds and removes a two-ended write needs,
+// and the sequence itself is certified against a real store elsewhere.
+func (f *fakeTracker) Depend(_ context.Context, _ string,
+	change tracker.DependencyChange, _ tracker.Leads) (tracker.DependencyResult, error) {
+
+	f.depended = append(f.depended, change)
+	if f.dependErr != nil {
+		return tracker.DependencyResult{}, f.dependErr
+	}
+	return tracker.DependencyResult{WriteResult: tracker.WriteResult{
+		Result: statelog.Result{
+			Outcome:  statelog.OutcomeApplied,
+			Position: statelog.Position{Stream: "S", Generation: 1, Seq: 41},
+		},
+	}}, nil
 }

@@ -49,10 +49,17 @@ const (
 // handle hears under, and every later one for the same handle is dropped. A
 // person who is mentioned AND watching is told they were mentioned, which is
 // the stronger fact and the one they will act on.
+//
+// It has to match the order [Candidates] adds them in, and the three reasons
+// ahead of `assignee` are why that is worth saying. Each describes what THIS
+// COMMIT did to the recipient, and each names exactly the handle the standing
+// role was about to claim: behind `assignee` they were shadowed on the one
+// person most likely to be the subject, and `blocking` — whose only handle IS
+// the blocker's assignee — could never name anybody at all.
 var Reasons = []Reason{
-	ReasonMention, ReasonPrioritised, ReasonAssignee, ReasonUnassigned,
-	ReasonReporter, ReasonAsked, ReasonAnswered, ReasonThread,
-	ReasonUnblocked, ReasonBlocking, ReasonRoutedTo, ReasonParentAssignee,
+	ReasonMention, ReasonPrioritised, ReasonBlocking, ReasonAsked,
+	ReasonAnswered, ReasonAssignee, ReasonUnassigned, ReasonReporter,
+	ReasonThread, ReasonUnblocked, ReasonRoutedTo, ReasonParentAssignee,
 	ReasonChecklist, ReasonCollaborator, ReasonGoalOwner, ReasonSprint,
 	ReasonWatcher, ReasonUnwatched, ReasonPurged, ReasonLeadFallback,
 }
@@ -151,6 +158,29 @@ func Candidates(n *Notify, batched bool) []Candidate {
 	if n.Kind == ChangePrioritised {
 		add(n.Snapshot.Person, ReasonPrioritised, true)
 	}
+	// WHAT THIS COMMIT DID TO YOU OUTRANKS THE ROLE YOU HOLD, and these
+	// three arms are where that rule bites.
+	//
+	// The order here IS the precedence — the first reason that names a
+	// handle is the one that handle hears under — and all three name
+	// exactly the people the generic `assignee` arm was about to claim.
+	// Behind it they were not merely outranked; `blocking` could never
+	// name ANYBODY, because the only handle it ever adds is the blocker's
+	// own assignee. `asked` and `answered` fared worse than they looked:
+	// they fired for a colleague and fell silent for the one person most
+	// likely to be asked, so asking the assignee a question told them "a
+	// task you are assigned to changed" — and, when the asker was another
+	// agent, told them so UNADDRESSED, which a turn is entitled to absorb
+	// without replying. That is the exact silence an ask exists to prevent.
+	//
+	// It is the same rule that already puts `mention` first: being named
+	// in the text outranks holding the task, and an ask is a mention with
+	// an obligation attached.
+	if n.Kind == ChangeRelations && len(n.Snapshot.Dependents) > 0 {
+		add(n.Snapshot.Assignee, ReasonBlocking, false)
+	}
+	add(n.Snapshot.CommentAsk, ReasonAsked, true)
+	add(n.Snapshot.AnsweredAuthor, ReasonAnswered, false)
 	if task {
 		add(n.Snapshot.Assignee, ReasonAssignee, n.assigneeAddressed(finishedEdge))
 	}
@@ -164,8 +194,6 @@ func Candidates(n *Notify, batched bool) []Candidate {
 		n.Kind == ChangeRemoved:
 		add(n.Snapshot.Reporter, ReasonReporter, false)
 	}
-	add(n.Snapshot.CommentAsk, ReasonAsked, true)
-	add(n.Snapshot.AnsweredAuthor, ReasonAnswered, false)
 	if n.Kind == ChangeComment {
 		addAll(n.Snapshot.ThreadParticipants, ReasonThread, false)
 	}
@@ -180,9 +208,6 @@ func Candidates(n *Notify, batched bool) []Candidate {
 		out = append(out, Candidate{
 			Handle: party.Assignee, Reason: ReasonUnblocked, Task: party.Task,
 		})
-	}
-	if n.Kind == ChangeRelations && len(n.Snapshot.Dependents) > 0 {
-		add(n.Snapshot.Assignee, ReasonBlocking, false)
 	}
 	if n.Kind == ChangeRouted {
 		add(n.Snapshot.RoutedTo, ReasonRoutedTo, false)

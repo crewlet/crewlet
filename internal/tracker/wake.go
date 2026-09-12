@@ -65,6 +65,64 @@ type Wake struct {
 	// Excerpt overrides what a card shows. Empty derives one from the
 	// comment, or from the body on a create.
 	Excerpt string
+
+	// Dependents, Parent and Thread are the three routing facts this
+	// package cannot derive from the two states of ONE task, and they are
+	// filled by the caller for the same reason [Wake.Mentions] is: every
+	// one of them is about a DIFFERENT row, and resolving another row at
+	// the wake would resolve it from a node that may never have applied
+	// it.
+	//
+	// Each is also the only thing standing between a reason and silence.
+	// [Candidates] reads `Snapshot.Dependents` for `blocking`,
+	// `Snapshot.ParentAssignee` for `parent_assignee`, and the thread for
+	// `asked`, `answered` and `thread` — and a field nothing fills routes
+	// to nobody without ever looking wrong, because an empty handle is
+	// dropped by the candidate builder's own guard.
+
+	// Dependents names the tasks a MIRROR commit added to this blocker,
+	// with each one's key and assignee. Set on the blocker's side of a
+	// dependency and on the duty's repair of one, and on nothing else: a
+	// new dependent is a fact for the blocker's assignee to weigh.
+	Dependents []TaskParty
+
+	// Parent is this task's parent as it stood, carried so a child
+	// entering or leaving a finished group can tell the parent's
+	// assignee. Nil on a root, and on every change that is not a status
+	// move across that edge.
+	Parent *TaskParty
+
+	// Thread is the comment conversation this change joins: who has
+	// already spoken, who asked, and who is being answered. Empty on
+	// every change that is not a comment.
+	Thread ThreadParties
+}
+
+// ThreadParties is what a comment's routing needs to know about the
+// conversation it lands in.
+//
+// RESOLVED BY THE CALLER, from the thread rows, because [Candidates] is pure
+// over the notification and the node that routes the wake is rarely the node
+// that holds the thread.
+type ThreadParties struct {
+	// Participants are the handles already in this thread — the parent
+	// comment's author and everyone who has replied. Capped at
+	// [MaxThreadParticipants] by the caller's own query; this package
+	// cuts what arrives longer, deterministically, so two nodes reading
+	// one record agree.
+	Participants []string
+
+	// Asked is the handle THIS comment asks, which is a question somebody
+	// now owes an answer to.
+	Asked string
+
+	// AnsweredAuthor is the author of the comment this one ANSWERS.
+	//
+	// The author of the answering comment is the ANSWERER, so routing off
+	// it would wake the seat that just replied and leave the person who
+	// asked unwoken. That is why this is a snapshot field and not a
+	// lookup at the wake.
+	AnsweredAuthor string
 }
 
 // Notify builds the record's routing snapshot, or nil when this change wakes
@@ -136,7 +194,154 @@ func (w Wake) snapshot(leads Leads) Snapshot {
 			snapshot.RoutingUnitLead = leads.UnitLead(after.RoutingUnit)
 		}
 	}
+	if w.Kind == ChangeRouted && after.RoutingUnit != w.Before.RoutingUnit {
+		// THE NEW UNIT'S LEAD IS AN ORDINARY CANDIDATE, never the
+		// fallback — which is the whole reason this field exists beside
+		// RoutingUnitLead rather than being read from it. A fallback
+		// survives only when no ordinary candidate did, so on any task
+		// that still has an assignee, a collaborator or a watcher the
+		// new lead would be dropped in silence.
+		//
+		// GATED ON THE UNIT ACTUALLY MOVING. A `routed` commit that
+		// re-asserts the unit it already had tells its lead nothing
+		// they do not know, and a walk that re-stamps a thousand tasks
+		// with the unit they are already in would otherwise wake one
+		// person a thousand times.
+		snapshot.RoutedTo = snapshot.RoutingUnitLead
+	}
+	if len(w.Dependents) > 0 {
+		snapshot.Dependents = capParties(w.Dependents, MaxDependents)
+	}
+	if w.Parent != nil && w.Kind == ChangeStatus &&
+		w.Before.StatusGroup.Finished() != after.StatusGroup.Finished() {
+		// ONLY ACROSS THE FINISHED EDGE, which is the one transition
+		// the parent's assignee is told about — and the gate is the
+		// same predicate [Candidates] applies, computed from the same
+		// two values, so a field filled here can never be one the
+		// router will not read.
+		snapshot.ParentAssignee = w.Parent.Assignee
+	}
+	if lists := checklistAssignees(w.Before, after); len(lists) > 0 {
+		snapshot.ChecklistAssignees = lists
+	}
+	if w.Comment != nil && w.Kind == ChangeComment {
+		// THE CREATION KIND ALONE. A comment becomes a question when it
+		// is WRITTEN — see [Comment.Ask] — and an edit re-sends the whole
+		// comment document, so a snapshot filled on `comment_edited`
+		// would wake the asked party again for a typo fix, and re-wake
+		// the person who asked a question that was answered days ago.
+		snapshot.CommentAsk = w.Thread.Asked
+		snapshot.AnsweredAuthor = w.Thread.AnsweredAuthor
+		snapshot.ThreadParticipants = capHandles(
+			w.Thread.Participants, MaxThreadParticipants)
+	}
 	return snapshot
+}
+
+// checklistAssignees is everybody whose checklist item this change touched.
+//
+// BY ITEM ID rather than by position, because a checklist is reordered and
+// renamed constantly and a positional diff would report the whole list as
+// changed the first time somebody dragged a line. An item counts as touched
+// when it appeared, disappeared, or changed in any way its assignee would care
+// about — its text, its done flag, its owner, or the subtask it was promoted
+// into.
+//
+// The set is SORTED and deduped, because two nodes read the record rather than
+// re-deriving it and a slice in map order would put two spellings of one
+// notification in the store.
+func checklistAssignees(before, after Task) []string {
+	was := itemsByID(before)
+	now := itemsByID(after)
+	touched := map[string]bool{}
+	mark := func(item ChecklistItem) {
+		if item.Assignee != "" {
+			touched[item.Assignee] = true
+		}
+	}
+	for id, item := range now {
+		previous, held := was[id]
+		switch {
+		case !held:
+			mark(item)
+		case previous != item:
+			// BOTH OWNERS, because a reassigned item is news to the
+			// person who had it as much as to the person who has it.
+			mark(item)
+			mark(previous)
+		}
+	}
+	for id, item := range was {
+		if _, held := now[id]; !held {
+			mark(item)
+		}
+	}
+	out := make([]string, 0, len(touched))
+	for handle := range touched {
+		out = append(out, handle)
+	}
+	sort.Strings(out)
+	return capHandles(out, MaxChecklists)
+}
+
+// itemsByID flattens a task's checklists to their items.
+func itemsByID(task Task) map[string]ChecklistItem {
+	out := map[string]ChecklistItem{}
+	for _, list := range task.Checklists {
+		for _, item := range list.Items {
+			if item.ID != "" {
+				out[item.ID] = item
+			}
+		}
+	}
+	return out
+}
+
+// capHandles cuts a handle set to its cap, deduped, order preserved.
+//
+// CUT RATHER THAN REFUSED, unlike every collection a caller states: these are
+// derived from rows, so a set over its cap is a task that grew rather than a
+// writer that asked for too much — and refusing the write would fail somebody's
+// comment because a thread has many voices. The cap bounds what rides on the
+// record; nobody is silenced, because a participant past it is still a watcher.
+func capHandles(in []string, cap int) []string {
+	out := make([]string, 0, min(len(in), cap))
+	seen := make(map[string]bool, len(in))
+	for _, handle := range in {
+		if handle == "" || seen[handle] {
+			continue
+		}
+		seen[handle] = true
+		if len(out) == cap {
+			break
+		}
+		out = append(out, handle)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// capParties is the same cut over the two lists that name somebody else's
+// task, keyed on the task rather than on the handle.
+func capParties(in []TaskParty, cap int) []TaskParty {
+	out := make([]TaskParty, 0, min(len(in), cap))
+	seen := make(map[string]bool, len(in))
+	for _, party := range in {
+		if party.Task == "" || seen[party.Task] {
+			continue
+		}
+		seen[party.Task] = true
+		if len(out) == cap {
+			break
+		}
+		out = append(out, party)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // deltas are the fields that moved, as TEXT.
