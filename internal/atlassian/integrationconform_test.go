@@ -573,7 +573,7 @@ func convergedAtlassian(
 	if err != nil {
 		tb.Fatalf("the second pass over the converged world failed: %v", err)
 	}
-	if !slices.Equal(steady, findings) {
+	if !integration.SameAll(steady, findings) {
 		tb.Fatalf("converging this world changed what the pass reports about it:\n"+
 			"seeding: %+v\n steady: %+v", findings, steady)
 	}

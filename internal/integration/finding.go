@@ -1,6 +1,10 @@
 package integration
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+	"strings"
+)
 
 // FindingKind is one thing a pass observed that is not "fine".
 //
@@ -284,6 +288,85 @@ type Finding struct {
 	// ActionURL is where the person named by the actor goes to do it. Only
 	// meaningful for a kind whose actor is a person.
 	ActionURL string `json:"action_url,omitempty"`
+
+	// Subjects is every thing this finding is about, when there are many
+	// and Subject cannot name them all.
+	//
+	// # Why the list is not just written into Detail
+	//
+	// Detail is the CARD'S STATUS LINE, and it is capped at
+	// [MaxDetailLength] — a cap that exists because an oversized status row
+	// is REFUSED by the store rather than truncated, which would stop the
+	// surface recording anything at all. So a finding that listed its
+	// subjects inline became a 500-character wall cut off mid-item.
+	// Measured: 36 Datadog service accounts, the card's one-line status
+	// ending `…@agents.cr…`.
+	//
+	// With this, Detail says the count and two or three examples — enough
+	// to recognise what it is about — and the whole list travels here for a
+	// reader that has room for it. [Listed] is how a finding builds the
+	// pair, so the sentence and the list cannot disagree about the count.
+	//
+	// EMPTY IS THE ORDINARY CASE. A finding about one thing names it in
+	// Subject and leaves this nil; a reader with nothing to render finds
+	// nothing to render. It is additive on a struct written to the
+	// coordination store, so a peer on an older build reads the Detail it
+	// always read.
+	Subjects []string `json:"subjects,omitempty"`
+}
+
+// Same reports two findings that say the same thing.
+//
+// A METHOD RATHER THAN ==, because [Finding.Subjects] made the struct
+// uncomparable and the equality the suites want is over every field rather
+// than over the slice's identity. One implementation, so a field added here
+// is compared everywhere: the certification suite asserts that two passes
+// over one world produce the same findings, which is the clause a silent
+// per-pass difference would walk through.
+func (f Finding) Same(other Finding) bool {
+	return f.Kind == other.Kind &&
+		f.Subject == other.Subject &&
+		f.Detail == other.Detail &&
+		f.ActionURL == other.ActionURL &&
+		slices.Equal(f.Subjects, other.Subjects)
+}
+
+// SameAll reports two finding lists that say the same things in the same
+// order.
+func SameAll(a, b []Finding) bool { return slices.EqualFunc(a, b, Finding.Same) }
+
+// ListedExamples is how many of a finding's subjects its own sentence names.
+//
+// THREE, from what the sentence is for: it has to let a reader recognise
+// WHICH things the finding is about without becoming the list itself. One
+// example reads as though that is the only one; the whole list is the wall
+// this exists to stop. Three of an address-shaped subject is around 120
+// characters, which leaves the sentence around it room inside
+// [MaxDetailLength].
+const ListedExamples = 3
+
+// Listed builds the detail for a finding about MANY subjects, and the list
+// that travels beside it.
+//
+// lead is the sentence before the examples and must end without punctuation;
+// tail is what to do about them. The count comes from the subjects rather
+// than from the caller, so the number a person reads is the number of things
+// in the list by construction.
+func Listed(lead string, subjects []string, tail string) (detail string, all []string) {
+	if len(subjects) == 0 {
+		return "", nil
+	}
+	shown := subjects
+	suffix := ""
+	if len(shown) > ListedExamples {
+		shown = shown[:ListedExamples]
+		suffix = fmt.Sprintf(" and %d more", len(subjects)-len(shown))
+	}
+	detail = fmt.Sprintf("%s: %s%s", lead, strings.Join(shown, ", "), suffix)
+	if strings.TrimSpace(tail) != "" {
+		detail += ". " + tail
+	}
+	return detail, subjects
 }
 
 // worstOf is the finding [Classify] promotes, and where it sits.

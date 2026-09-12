@@ -45,7 +45,6 @@ package integrationtest
 import (
 	"context"
 	"errors"
-	"slices"
 	"strings"
 	"testing"
 
@@ -215,7 +214,7 @@ func passesAgree(t TB, r Reconciler) {
 		t.Fatalf("second pass: %v", err)
 	}
 
-	if !slices.Equal(first, second) {
+	if !integration.SameAll(first, second) {
 		t.Fatalf("two passes over one world disagree:\n first: %+v\nsecond: %+v",
 			first, second)
 	}
@@ -318,7 +317,7 @@ func outstandingPassesAgree(t TB, r Reconciler) {
 	if err != nil {
 		t.Fatalf("second pass: %v", err)
 	}
-	if !slices.Equal(first, second) {
+	if !integration.SameAll(first, second) {
 		t.Fatalf("two passes over one outstanding world disagree:\n first: %+v\nsecond: %+v",
 			first, second)
 	}

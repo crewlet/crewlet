@@ -1138,7 +1138,7 @@ func TestTwoPassesOverARefusingDataCenterInstanceAgree(t *testing.T) {
 	if got := len(site.snapshot()); got != 0 {
 		t.Errorf("a refused registration left %d hook(s) at the instance", got)
 	}
-	if !slices.Equal(first.Findings(), second.Findings()) {
+	if !integration.SameAll(first.Findings(), second.Findings()) {
 		t.Fatalf("two passes disagree:\n first: %+v\nsecond: %+v",
 			first.Findings(), second.Findings())
 	}
