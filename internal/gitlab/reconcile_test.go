@@ -73,6 +73,10 @@ type adminInstance struct {
 	// noGroupHooks makes the GROUP hooks API answer 404, the way GitLab
 	// hides an endpoint the instance's tier does not serve.
 	noGroupHooks bool
+	// noGroup makes the group PATH lookup answer 404 — a renamed group, a
+	// typo, or one the credential cannot see, which GitLab never tells
+	// apart.
+	noGroup bool
 	// plan is what GET /groups/:path reports as the subscription tier.
 	// Empty is a self-managed instance, which sends no such field at all;
 	// "free" is what gitlab.com answers for a group whose group webhooks
@@ -451,6 +455,14 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 
 	case r.Method == http.MethodGet && path == "/groups/nimbus":
+		// A GROUP THAT DOES NOT RESOLVE, which GitLab answers 404 for in
+		// three different situations — renamed, mistyped, or invisible to
+		// the presenting credential — and never distinguishes.
+		if f.noGroup {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{"message": "404 Group Not Found"})
+			return
+		}
 		group := map[string]any{"id": 7, "full_path": "nimbus"}
 		if f.plan != "" {
 			group["plan"] = f.plan
@@ -681,7 +693,11 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(path, "/hooks") && strings.HasPrefix(path, "/projects/"):
 		project := strings.TrimSuffix(strings.TrimPrefix(path, "/projects/"), "/hooks")
 		if r.Method == http.MethodGet {
-			json.NewEncoder(w).Encode(renderHooks(f.projectHooks[project]))
+			// PAGED, through the same helper every other listing in this
+			// fake goes through. These two bypassed it, so a caller that
+			// never asked for page two looked correct — which is exactly
+			// how the token listing's own bug survived a suite.
+			json.NewEncoder(w).Encode(pageOf(renderHooks(f.projectHooks[project]), r.URL.Query()))
 			return
 		}
 		var body map[string]any
@@ -713,7 +729,7 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"message": "404 Not Found"})
 
 	case r.Method == http.MethodGet && path == "/groups/7/hooks":
-		json.NewEncoder(w).Encode(renderHooks(f.hooks))
+		json.NewEncoder(w).Encode(pageOf(renderHooks(f.hooks), r.URL.Query()))
 
 	case r.Method == http.MethodPost && path == "/groups/7/hooks":
 		var body map[string]any
@@ -4071,3 +4087,71 @@ func TestTheProjectSweepLeavesSomebodyElsesHookAlone(t *testing.T) {
 			f.projectHooks["nimbus/api"])
 	}
 }
+
+// THE HOOK LISTINGS ARE PAGED, AND THIS BRANCH MADE THEM DECIDE DELETIONS.
+//
+// Unpaged they returned GitLab's default first page of twenty. Every hook
+// choice is made out of that listing — which hook is this deployment's, which
+// extras to delete, converged-or-create — so on a project already carrying
+// twenty hooks from CI, chat and scanners, this engine's own sat past the
+// boundary, was invisible, and every pass registered another one. Exactly the
+// duplicate-hook failure the name matching exists to stop, reached by the same
+// road the token listing's own bug took.
+func TestTheProjectHookListingIsPagedToExhaustion(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.noGroupHooks = true
+	// MORE THAN ONE PAGE OF STRANGERS' HOOKS, then this deployment's own
+	// at the end — which is where a create puts it, and where a caller
+	// that reads one page cannot see it. The count has to exceed a FULL
+	// page (userPageSize, 100) rather than GitLab's unasked-for default of
+	// 20: a fixture of 26 is served whole to a caller asking for 100, so
+	// it cannot tell a walk that exhausts the listing from one that stops.
+	rows := make([]hookRow, 0, hookPageProbe+1)
+	for i := 1; i <= hookPageProbe; i++ {
+		rows = append(rows, foreignHook(i, fmt.Sprintf("https://ci-%d.example.com/hook", i)))
+	}
+	rows = append(rows, namedHook(hookPageProbe+1, "crewlet",
+		"https://crewlet.example.com/webhooks/gitlab"))
+	f.projectHooks = map[string][]hookRow{"nimbus/api": rows}
+
+	if _, err := reconcileAgainst(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if got, want := len(f.projectHooks["nimbus/api"]), hookPageProbe+1; got != want {
+		t.Errorf("%d hooks on nimbus/api, want the %d it started with: a "+
+			"listing that stops short cannot see this engine's own hook "+
+			"and registers a second", got, want)
+	}
+}
+
+// AND THE GROUP LISTING TOO, on the same terms.
+func TestTheGroupHookListingIsPagedToExhaustion(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	for i := 1; i <= hookPageProbe; i++ {
+		f.hooks = append(f.hooks,
+			foreignHook(i, fmt.Sprintf("https://ci-%d.example.com/hook", i)))
+	}
+	f.hooks = append(f.hooks, namedHook(hookPageProbe+1, "crewlet",
+		"https://crewlet.example.com/webhooks/gitlab"))
+
+	if _, err := reconcileAgainst(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if got, want := len(f.hooks), hookPageProbe+1; got != want {
+		t.Errorf("%d group hooks, want the %d it started with", got, want)
+	}
+}
+
+// hookPageProbe is how many strangers' hooks a paging case seeds before this
+// deployment's own, and it is deliberately larger than one full page of the
+// size the client asks for. A smaller fixture is served whole by the instance
+// and proves nothing about whether the caller asked for page two.
+const hookPageProbe = 120

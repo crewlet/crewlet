@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/gitlab"
@@ -112,5 +113,88 @@ func TestADisconnectOnAnInstanceWithoutGroupHooksStillFinishes(t *testing.T) {
 	defer f.mu.Unlock()
 	if len(f.projectHooks["nimbus/api"]) != 0 {
 		t.Errorf("project hooks = %+v, want them removed", f.projectHooks["nimbus/api"])
+	}
+}
+
+// A GROUP THAT DOES NOT RESOLVE IS NOT A GROUP THAT WAS DELETED, AND THE
+// ACCOUNTS ARE STILL ASKED ABOUT.
+//
+// This arm used to fabricate a full provision.Removed for every planned seat
+// without one request — "the group is gone, so everything in it went with it"
+// — and Engine.forgetRemoved then deleted those seats' sealed tokens.
+// GroupByPath maps ANY 404 to not-found, and GitLab answers 404 for a renamed
+// group, for a typo, and for a group the credential cannot see; an instance-
+// owned account survives its group being deleted outright. So the disconnect
+// destroyed live agents' credentials and reported success.
+func TestAGroupThatDoesNotResolveDoesNotReportLiveAccountsAsRemoved(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.noGroup = true
+	// The account is THERE, on the instance, whatever the group says.
+	f.join("crewlet-swe", 501, gitlabDeveloperLevel)
+
+	removed, err := tearDownAgainst(t, f, func(o *gitlab.TeardownOptions) {
+		o.RemoveSeats = true
+		o.Plan = &provision.Plan{}
+		o.Plan.Add(provision.Seat{Handle: "swe", Role: "SWE", TokenVar: "GITLAB_TOKEN_SWE"})
+	})
+	if err == nil {
+		t.Fatal("a group that does not resolve, over an account that is still " +
+			"there, reported a clean teardown")
+	}
+	if len(removed.Accounts) != 0 {
+		t.Fatalf("reported %+v as removed, so the engine would delete a live "+
+			"agent's sealed token", removed.Accounts)
+	}
+	if len(removed.Secrets()) != 0 {
+		t.Errorf("named %v for deletion", removed.Secrets())
+	}
+}
+
+// AND A SEAT WHOSE ACCOUNT REALLY IS ABSENT IS STILL REPORTED, on the
+// instance's own authority: UserByUsername needs no group, so the honest
+// answer is available even when the group is not. Without this the fix would
+// have traded a destructive teardown for one that can never finish.
+func TestAGroupThatDoesNotResolveStillReportsAnAccountThatIsGone(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.noGroup = true
+
+	removed, err := tearDownAgainst(t, f, func(o *gitlab.TeardownOptions) {
+		o.RemoveSeats = true
+		o.Plan = &provision.Plan{}
+		o.Plan.Add(provision.Seat{Handle: "swe", Role: "SWE", TokenVar: "GITLAB_TOKEN_SWE"})
+	})
+	if err != nil {
+		t.Fatalf("Teardown: %v", err)
+	}
+	if len(removed.Accounts) != 1 || removed.Accounts[0].Handle != "swe" {
+		t.Fatalf("removed = %+v, want the absent seat reported", removed.Accounts)
+	}
+	if got := removed.Secrets(); len(got) != 1 || got[0] != "GITLAB_TOKEN_SWE" {
+		t.Errorf("secrets = %v, want the dead credential named", got)
+	}
+}
+
+// AND AN INSTANCE-OWNED ACCOUNT IS NEVER SENT DOWN THE GROUP ROUTE WITH NO
+// GROUP. The group delete reads 404 as success, so addressing group 0 would
+// report every account removed and leave it live — the same trap
+// TeardownOptions.Mode exists to close, by a different road.
+func TestAGroupOwnedAccountIsNotDeletedThroughAGroupThatIsNotThere(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.noGroup = true
+	f.join("crewlet-swe", 502, gitlabDeveloperLevel)
+
+	_, err := tearDownAgainst(t, f, func(o *gitlab.TeardownOptions) {
+		o.RemoveSeats = true
+		o.Plan = &provision.Plan{}
+		o.Plan.Add(provision.Seat{Handle: "swe", Role: "SWE", TokenVar: "GITLAB_TOKEN_SWE"})
+	})
+	if err == nil {
+		t.Fatal("the delete was reported as done")
+	}
+	if !strings.Contains(err.Error(), "provisioning.group") {
+		t.Errorf("error %q does not name the field to fix", err)
 	}
 }

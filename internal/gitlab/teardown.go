@@ -76,19 +76,37 @@ func Teardown(ctx context.Context, opts TeardownOptions) (provision.Removed, err
 		failures = append(failures, fmt.Errorf("gitlab: resolve group %q to remove what it holds: %w",
 			group, err))
 	case !found:
-		// The group is gone, so everything in it went with it — including
-		// every service account it owned, whose credentials are now dead.
-		// Reported as removed for that reason: the accounts really are
-		// absent, which is the end state a teardown names.
-		if opts.RemoveSeats && opts.Plan != nil {
-			for _, seat := range opts.Plan.Seats {
-				removed.Add(provision.Removal{
-					Handle: seat.Handle, Role: seat.Role,
-					Account: Username(p, seat.Handle), Secrets: secretsOf(seat),
-				})
-			}
+		// THE GROUP DOES NOT RESOLVE, WHICH IS NOT THE SAME AS DELETED —
+		// and this arm used to read it as "the group is gone, so everything
+		// in it went with it", fabricating a full [provision.Removed] for
+		// every planned seat without making one request about any of them.
+		// [Engine.forgetRemoved] then deleted those seats' sealed tokens.
+		//
+		// Three things are wrong with that reading. [Client.GroupByPath]
+		// maps ANY 404 to not-found, and GitLab answers 404 for a group
+		// that was renamed or moved, for a typo in `provisioning.group`,
+		// and for a group the presenting credential cannot SEE — it does
+		// not answer 403 for an unauthorized private resource. And an
+		// account created in [ModeInstance] is a member of nothing and
+		// survives its group being deleted outright, so a missing group
+		// says nothing at all about it.
+		//
+		// SO THE ACCOUNTS ARE STILL ASKED ABOUT, one by one. That costs
+		// nothing extra and answers the question honestly, because
+		// [Client.UserByUsername] is an INSTANCE-level lookup that needs no
+		// group: a seat whose account is genuinely absent is reported
+		// removed on the instance's own authority, and one that is still
+		// there is reported as a FAILURE naming it rather than as a
+		// credential safe to delete.
+		//
+		// The hooks are skipped, and only here: they live at the group and
+		// at its projects, so an address that does not resolve is one this
+		// pass cannot reach either way.
+		if opts.RemoveSeats {
+			gone, errs := removeAccounts(ctx, opts, 0)
+			removed, failures = gone, append(failures, errs...)
 		}
-		return removed, nil
+		return removed, errors.Join(failures...)
 	default:
 		failures = append(failures, removeHooks(ctx, opts, groupID)...)
 		if opts.RemoveSeats {
@@ -219,9 +237,26 @@ func removeAccounts(
 // removeOne deletes one account down the route its owner requires, which is
 // the split [deleteAccount] makes on the reconcile path and for the same
 // reason.
+//
+// A GROUP-OWNED ACCOUNT WITH NO GROUP TO DELETE IT THROUGH IS REFUSED, not
+// sent down the route anyway. The group delete reads a 404 as success
+// ("unknown or already removed; both are the state the caller asked for"), so
+// addressing `/groups/0/service_accounts/N` would answer 404, report the
+// account deleted, and leave it live with every credential it holds — the
+// same trap [TeardownOptions.Mode] exists to close, reached by a different
+// road. It happens when the configured group does not resolve; see the
+// not-found arm of [Teardown], which is the only caller that passes zero.
 func removeOne(ctx context.Context, opts TeardownOptions, groupID, userID int) error {
 	if opts.Mode.Or() == ModeInstance {
 		return opts.Client.DeleteInstanceServiceAccount(ctx, userID)
+	}
+	if groupID == 0 {
+		return fmt.Errorf(
+			"gitlab: %s does not resolve, so this account cannot be removed "+
+				"through it — restore the group, correct "+
+				"integrations.gitlab.provisioning.group, or supply a token "+
+				"that can see it",
+			strings.TrimSpace(opts.Config.Provisioning.Group))
 	}
 	return opts.Client.DeleteServiceAccount(ctx, groupID, userID)
 }
