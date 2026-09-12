@@ -5,10 +5,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // THE TWO GATES, and they are in one file because they are ONE CATEGORY: a
@@ -315,6 +317,70 @@ type PurgeResult struct {
 	Stale []string
 }
 
+// purgeWake is what the one irreversible operation announces, and to whom.
+//
+// # Why it exists at all
+//
+// Because it did not, and the absence was invisible from both ends. Every
+// purge published with a nil notification, so nobody was ever told that a
+// task and every comment, revision, history row and turn record on it had
+// been destroyed — while [Candidates] carried a `ChangePurged` branch and
+// [ReasonPurged] sat in the reason list, neither of which any record could
+// ever reach. Dead code on one side, silence on the other, and the two looked
+// like each other's explanation.
+//
+// # The project lead, and only the project lead
+//
+// A purge has no assignee to tell — the row is gone, and the snapshot
+// deliberately carries no watchers, no collaborators and no reporter, because
+// a notification that named them would be a copy of the content the purge
+// exists to destroy, retained on the log for its whole retention window. What
+// survives is that it HAPPENED, to which key, by whom: the lead's own
+// accountability for their project, which is exactly why the reason is
+// `purged` rather than `watcher`.
+//
+// NIL WHEN THERE IS NO LEAD, on [sprintWake]'s rule: a company with nobody to
+// tell is told nothing, and the record still names itself `purged` because the
+// kind is the writer's and not the notification's.
+func purgeWake(task Task, reason, actor string, leads Leads) *Notify {
+	if leads == nil {
+		return nil
+	}
+	lead := leads.ProjectLead(task.Project)
+	if lead == "" {
+		return nil
+	}
+	return &Notify{
+		Kind: ChangePurged,
+		Snapshot: Snapshot{
+			Key: task.Key, Project: task.Project, ProjectLead: lead,
+		},
+		Excerpt: purgeExcerpt(task, reason, actor),
+	}
+}
+
+// purgeExcerpt is the line the lead reads.
+//
+// IT NAMES THE KEY AND NOT THE TITLE. A purge destroys the content; an
+// excerpt quoting it would keep a copy on the log for the whole retention
+// window, which is the one thing this operation is for. The key is an
+// identifier the person already has in whatever ticket asked for the purge.
+//
+// The REASON is the operator's own sentence and is kept, cut to fit: it is
+// why they did it, and a record of an irreversible act with no reason on it is
+// the shape nobody can audit afterwards.
+func purgeExcerpt(task Task, reason, actor string) string {
+	out := task.Key + " was purged"
+	if actor != "" {
+		out += " by " + actor
+	}
+	out += " — this cannot be undone"
+	if reason = strings.TrimSpace(reason); reason != "" {
+		out += ": " + reason
+	}
+	return textcut.Within(out, MaxExcerpt)
+}
+
 // PurgeTask destroys a task and every row it produced.
 //
 // THE ONE SEQUENCE NO DUTY EVER COMPLETES, because nothing may destroy data
@@ -355,10 +421,10 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 				return statelog.Decision{}, fmt.Errorf("tracker: task %s is "+
 					"not on this node: %w", id, statelog.ErrUnavailable)
 			}
-			decision, err := w.decide(subject, OpPurge, scope, opID, struct {
+			decision, err := w.decide(subject, OpPurge, ChangePurged, scope, opID, struct {
 				V      int    `json:"v"`
 				Reason string `json:"reason,omitempty"`
-			}{V: GateRecordVersion, Reason: reason}, nil, at)
+			}{V: GateRecordVersion, Reason: reason}, purgeWake(current, reason, w.Actor, w.Leads), at)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -405,7 +471,7 @@ func (w *Writer) gateNode(ctx context.Context, opID, nodeID string, readmit bool
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
 		Decide: func(*sql.Tx) (statelog.Decision, error) {
-			return w.decide(subject, OpEviction, scope, opID, Eviction{
+			return w.decide(subject, OpEviction, "", scope, opID, Eviction{
 				V: GateRecordVersion, NodeID: nodeID,
 				EvictedBy: w.Actor, EvictedAt: at, Readmitted: readmit,
 			}, nil, at)

@@ -550,6 +550,39 @@ type MutationRecord struct {
 	Chain      []string   `json:"chain,omitempty"`
 	BatchID    *string    `json:"batch_id,omitempty"`
 
+	// Kind is WHAT THIS RECORD DID, stated by the writer, and it is a
+	// different fact from whether anybody was told about it.
+	//
+	// # Why it is not simply read off the Notify
+	//
+	// Because it was, and that made the activity feed's own vocabulary a
+	// property of whether the change happened to have an audience. A
+	// history row's `kind` is what the feed's `kinds=` filter, the report
+	// windows and the unblocked repair's own scan all select on; when a
+	// record carried no Notify the applier fell back to guessing one from
+	// the OPERATION, which is a different vocabulary altogether. A quiet
+	// catalogue edit filed as `patch`, a sprint close with no assignees as
+	// `patch`, a purge as `purge` — and `patch` and `purge` are not
+	// [ChangeKind]s at all, so no filter could name them and nothing
+	// noticed.
+	//
+	// The file that writes the history row opens by stating the principle
+	// this field exists to make true: "the activity feed is a complete
+	// account of what HAPPENED rather than an account of what was
+	// ANNOUNCED, and `notified` is how a reader tells 'nothing was
+	// announced' from 'nothing happened'". A kind read off the
+	// announcement could not deliver that.
+	//
+	// REQUIRED exactly where [ObjectKind.RecordsHistory] is true, and
+	// refused everywhere else — a barrier, a turn or a rank order writes
+	// no row for a kind to describe. [Writer.decide] enforces both.
+	//
+	// EMPTY ON A RECORD AN OLDER BUILD WROTE, which a rolling upgrade
+	// makes ordinary traffic: the applier falls back to [fallbackKind]
+	// there, which is the same guess as before with its invalid answers
+	// removed.
+	Kind ChangeKind `json:"kind,omitempty"`
+
 	// Notify is the routing snapshot, and NIL is what "wakes nobody"
 	// means.
 	//
@@ -558,6 +591,11 @@ type MutationRecord struct {
 	// boolean a writer can forget to set. A quiet commit is a full record,
 	// arbitrated exactly like a loud one, and writes its history row like
 	// every other: quiet means it wakes nobody, and nothing else.
+	//
+	// IT NO LONGER CARRIES THE KIND ALONE — see [MutationRecord.Kind].
+	// When both are present they must agree, which [Writer.decide]
+	// checks: one fact with two carriers is one fact that can disagree
+	// with itself.
 	Notify *Notify `json:"notify,omitempty"`
 
 	// Extra carries fields a newer build wrote, so a record round-trips
@@ -748,11 +786,27 @@ const (
 	ChangeViewSaved       ChangeKind = "view_saved"
 	ChangeCatalogue       ChangeKind = "catalogue_updated"
 	ChangePrioritised     ChangeKind = "prioritised"
+
+	// ChangePersonUpdated is every OTHER write to a person's own record —
+	// a pin, an inbox mark, a snooze.
+	//
+	// ITS OWN KIND BECAUSE THE ROW EXISTS EITHER WAY. A person record's
+	// apply writes a history row like every other document's, so the
+	// choice was never "name this or write nothing"; it was "name this or
+	// file it under the OPERATION", which is what it did — every pin
+	// toggle landing in the company's account of itself as a `patch`, a
+	// word no filter can select and no card can render.
+	//
+	// IT IS NOT ROUTABLE and carries no notification: a person's own
+	// bookkeeping wakes nobody, which is what separates it from
+	// [ChangePrioritised] — the one person write that announces itself,
+	// because somebody else reordered your day.
+	ChangePersonUpdated ChangeKind = "person_updated"
 )
 
-// ChangeKinds are the thirty-one.
+// ChangeKinds are the thirty-two.
 //
-// THIRTY-ONE AGAINST FIFTEEN SUBJECTS, and the gap is not an inconsistency:
+// THIRTY-TWO AGAINST FIFTEEN SUBJECTS, and the gap is not an inconsistency:
 // five commit classes carry no notification at all — a turn, a generation, an
 // eviction, a rank move and a barrier — because a reposition is not history
 // and a barrier writes no rows whatever.
@@ -765,7 +819,7 @@ var ChangeKinds = []ChangeKind{
 	ChangeRestored, ChangePurged, ChangeProjectCreated, ChangeProjectUpdated,
 	ChangePolicyChanged, ChangeSprintMinted, ChangeSprintStarted,
 	ChangeSprintClosed, ChangeGoalUpdated, ChangeViewSaved, ChangeCatalogue,
-	ChangePrioritised,
+	ChangePrioritised, ChangePersonUpdated,
 }
 
 // Valid reports whether a change kind off the wire is one this build knows.
@@ -1031,6 +1085,57 @@ func (n *Notify) Validate() error {
 	if len(n.Excerpt) > MaxExcerpt {
 		return fmt.Errorf("tracker: a notification excerpt is %d bytes against a "+
 			"%d cap", len(n.Excerpt), MaxExcerpt)
+	}
+	return n.checkSnapshot()
+}
+
+// checkSnapshot bounds every collection the routing snapshot carries.
+//
+// # Why this is at the publish boundary and not at each builder
+//
+// Because the record is what the cost lives on. A snapshot is COPIED onto the
+// log, replicated to every node, held for the stream's whole retention window
+// and read back by every applier — so a collection that grew without a bound
+// is not one screen rendering badly, it is bytes every member of the fleet
+// stores for a year. The design's own arithmetic sums these eleven caps to
+// about 19 KiB worst and sizes [MaxCommitBytes] from it, and until this
+// existed [Notify.Validate] read `Kind`, `Fields` and `Excerpt` and NOTHING
+// on the snapshot: the caps that held were incidental properties of whichever
+// builder happened to read a bounded table, and the ones that did not hold
+// were invisible.
+//
+// # And it is a REFUSAL rather than a trim
+//
+// A trim would publish a notification that silently told fewer people than
+// the writer named — which is the failure this whole family exists to
+// prevent, arriving at the one place nobody is watching. The bound is the
+// same one the object itself is held to, so a caller that hits it is a caller
+// whose object is already refused, and the message names the field.
+func (n *Notify) checkSnapshot() error {
+	for _, c := range []struct {
+		field string
+		size  int
+		max   int
+	}{
+		{"watchers", len(n.Snapshot.Watchers), MaxWatchers},
+		{"removed_watchers", len(n.Snapshot.RemovedWatchers), MaxWatchers},
+		{"collaborators", len(n.Snapshot.Collaborators), MaxCollaborators},
+		{"unblocked", len(n.Snapshot.Unblocked), MaxDependents},
+		{"dependents", len(n.Snapshot.Dependents), MaxDependents},
+		{"thread_participants", len(n.Snapshot.ThreadParticipants), MaxThreadParticipants},
+		{"checklist_assignees", len(n.Snapshot.ChecklistAssignees), MaxChecklists},
+		{"goal_owners", len(n.Snapshot.GoalOwners), MaxGoalOwners},
+		{"goal_members", len(n.Snapshot.GoalMembers), MaxGoalMembers},
+		{"sprint_assignees", len(n.Snapshot.SprintAssignees), MaxSprintWakeParties},
+		{"mentions", len(n.Mentions), MaxMentions},
+	} {
+		if c.size > c.max {
+			return fmt.Errorf("tracker: a notification names %d %s and the "+
+				"maximum is %d — a routing snapshot is copied onto the log, "+
+				"replicated to every node and held for the stream's whole "+
+				"retention window, so an unbounded one is bytes the fleet "+
+				"stores for a year", c.size, c.field, c.max)
+		}
 	}
 	return nil
 }

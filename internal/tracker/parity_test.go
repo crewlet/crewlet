@@ -171,7 +171,7 @@ func TestAnAnnouncedChangeThatNamesNobodyIsStillNotified(t *testing.T) {
 	}
 	title := "Renamed"
 	if _, err := r.writer.UpdateTask(t.Context(), "op-silent", task.ID, "ENG",
-		tracker.NoIfMatch, tracker.TaskPatch{Title: &title}, empty); err != nil {
+		tracker.NoIfMatch, tracker.TaskPatch{Title: &title}, tracker.ChangeFields, empty); err != nil {
 
 		t.Fatalf("update: %v", err)
 	}

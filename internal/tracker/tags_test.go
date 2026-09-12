@@ -181,7 +181,7 @@ func TestUpdateRefusesAnUndeclaredTag(t *testing.T) {
 
 	labels := []string{"invented"}
 	_, err := r.writer.UpdateTask(t.Context(), "op-patch-tags", task.ID, "ENG",
-		tracker.NoIfMatch, tracker.TaskPatch{Tags: &labels}, nil)
+		tracker.NoIfMatch, tracker.TaskPatch{Tags: &labels}, tracker.ChangeTags, nil)
 	if err == nil {
 		t.Fatal("an update invented a tag the project never declared")
 	}

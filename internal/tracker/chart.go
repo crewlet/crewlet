@@ -128,11 +128,11 @@ func (w *Writer) applyChartProject(ctx context.Context, epoch int64,
 			next.UpdatedAt = at
 			changed = true
 
-			op := OpPatch
+			op, kind := OpPatch, ChangeProjectUpdated
 			if !held {
-				op = OpCreate
+				op, kind = OpCreate, ChangeProjectCreated
 			}
-			decision, err := w.decide(subject, op, scope,
+			decision, err := w.decide(subject, op, kind, scope,
 				chartOpID(epoch, p.Key), next, nil, at)
 			if err != nil {
 				return statelog.Decision{}, err

@@ -250,7 +250,8 @@ func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 			if present > 0 {
 				return statelog.Decision{}, statelog.ErrExists
 			}
-			return w.decide(subject, OpCreate, scope, opID, task, notify, at)
+			return w.decide(subject, OpCreate, ChangeCreated, scope, opID,
+				task, notify, at)
 		},
 	})
 	return WriteResult{
@@ -309,7 +310,8 @@ func (w *Writer) mintKey(ctx context.Context, opID, project string, k int,
 			next := Counter{
 				V: DocumentVersion, Project: project, Last: counter.Last + k,
 			}
-			decision, err := w.decide(subject, OpPatch, scope, opID, next, nil, at)
+			decision, err := w.decide(subject, OpPatch, "", scope, opID,
+				next, nil, at)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -562,7 +564,8 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 
 	lists := markPromoted(parent, itemID, subtask.ID)
 	marked, err := w.UpdateTask(ctx, stepID(opID, "parent"), parentID,
-		parent.Project, NoIfMatch, TaskPatch{Checklists: &lists}, nil)
+		parent.Project, NoIfMatch, TaskPatch{Checklists: &lists},
+		ChangeChecklist, nil)
 	if err != nil {
 		return created, fmt.Errorf("tracker: subtask %s was created and its "+
 			"item in %s is still un-marked; re-run the promotion, which "+
@@ -778,7 +781,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		}
 		if merged, changed := mergeTags(set, newTags); changed {
 			if _, err := w.WriteDocument(ctx, stepID(opID, "tags"),
-				TagsSubject(target), "", merged, nil); err != nil {
+				TagsSubject(target), "", merged, ChangeTags, nil); err != nil {
 				return WriteResult{}, fmt.Errorf("tracker: declare the moving "+
 					"subtree's tags in %s: %w", target, err)
 			}
@@ -831,7 +834,8 @@ func (w *Writer) moveOne(ctx context.Context, opID string, task Task,
 	// NO NOTIFICATION AND NO HISTORY BUMP on a descendant: a subtree that
 	// moved wakes the people watching the root, not everybody watching
 	// every task beneath it.
-	return w.UpdateTask(ctx, opID, task.ID, task.Project, NoIfMatch, patch, nil)
+	return w.UpdateTask(ctx, opID, task.ID, task.Project, NoIfMatch, patch,
+		ChangeMoved, nil)
 }
 
 // claimAlias takes a former key, create-only, so the key keeps resolving.
@@ -857,7 +861,7 @@ func (w *Writer) claimAlias(ctx context.Context, opID, key, taskID string,
 				return statelog.Decision{}, fmt.Errorf("tracker: key %s belongs "+
 					"to task %s, so it cannot be aliased to %s", key, owner, taskID)
 			}
-			return w.decide(subject, OpCreate, scope, opID, KeyAlias{
+			return w.decide(subject, OpCreate, "", scope, opID, KeyAlias{
 				Key: key, TaskID: taskID,
 			}, nil, at)
 		},
@@ -984,7 +988,8 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 	})
 	merging := true
 	if _, err := w.UpdateTask(ctx, stepID(opID, "mark"), duplicate, task.Project, NoIfMatch,
-		TaskPatch{Relations: &relations, Merging: &merging}, nil); err != nil {
+		TaskPatch{Relations: &relations, Merging: &merging},
+		ChangeRelations, nil); err != nil {
 		return WriteResult{}, err
 	}
 
@@ -993,7 +998,8 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 			continue
 		}
 		if _, err := w.UpdateTask(ctx, stepID(opID, fmt.Sprintf("c%d", i)),
-			child.ID, child.Project, NoIfMatch, TaskPatch{Parent: &into}, nil); err != nil {
+			child.ID, child.Project, NoIfMatch, TaskPatch{Parent: &into},
+			ChangeReparented, nil); err != nil {
 			return WriteResult{}, fmt.Errorf("tracker: %d of %d children "+
 				"re-parented onto %s; the tracker duty completes the rest: %w",
 				i, len(children), into, err)
@@ -1003,7 +1009,7 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 	cancelled := StatusCancelled
 	done := false
 	return w.UpdateTask(ctx, stepID(opID, "close"), duplicate, task.Project, NoIfMatch,
-		TaskPatch{Status: &cancelled, Merging: &done}, notify)
+		TaskPatch{Status: &cancelled, Merging: &done}, ChangeStatus, notify)
 }
 
 // StartSprint moves a project's active sprint on. SEQUENCE 18.
@@ -1132,8 +1138,8 @@ func (w *Writer) moveSprint(ctx context.Context, opID, project string, number in
 			if err != nil {
 				return statelog.Decision{}, err
 			}
-			decision, err := w.decide(subject, OpPatch, scope,
-				stepID(opID, "sprint"), sprint, wake, at)
+			decision, err := w.decide(subject, OpPatch, sprintChangeKind(to),
+				scope, stepID(opID, "sprint"), sprint, wake, at)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -1202,7 +1208,12 @@ func (w *Writer) setActiveSprint(ctx context.Context, opID, project string,
 				return statelog.Decision{}, statelog.ErrExists
 			}
 			current.ActiveSprint = pointer
-			decision, err := w.decide(subject, OpPatch, scope, opID, current, nil, at)
+			// THE POINTER MOVE IS NOT A NOTIFICATION — the sprint's own
+			// record carries that — but it IS a row in the project's
+			// account of itself, so it files under the project's kind
+			// rather than under the bare operation.
+			decision, err := w.decide(subject, OpPatch, ChangeProjectUpdated,
+				scope, opID, current, nil, at)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -1246,7 +1257,8 @@ var ErrBulkInFlight = errors.New("tracker: a bulk edit is already applying")
 // what read-your-writes means: the alternative is a write that cannot see the
 // write before it.
 func (w *Writer) UpdateTasks(ctx context.Context, opID string, ids []string,
-	project string, patch TaskPatch, notify *Notify) (WriteResult, error) {
+	project string, patch TaskPatch, kind ChangeKind,
+	notify *Notify) (WriteResult, error) {
 
 	switch {
 	case len(ids) == 0:
@@ -1297,7 +1309,7 @@ func (w *Writer) UpdateTasks(ctx context.Context, opID string, ids []string,
 	result := WriteResult{Failed: map[string]string{}}
 	for i, id := range subjects {
 		one, err := w.UpdateTask(ctx, stepID(opID, fmt.Sprintf("b%d", i)),
-			id, project, NoIfMatch, patch, notify)
+			id, project, NoIfMatch, patch, kind, notify)
 		if err != nil {
 			result.Failed[id] = err.Error()
 			continue

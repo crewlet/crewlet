@@ -147,7 +147,8 @@ func (w *Writer) WriteTags(ctx context.Context, opID, project string,
 				// a legitimate outcome.
 				return statelog.Decision{}, nil
 			}
-			decision, err := w.decide(subject, OpPatch, scope, opID, next, nil, at)
+			decision, err := w.decide(subject, OpPatch, ChangeTags, scope, opID,
+				next, nil, at)
 			if err != nil {
 				return statelog.Decision{}, err
 			}

@@ -202,7 +202,7 @@ func (stubWorkWriterT) CreateTask(context.Context, string, tracker.Task,
 }
 
 func (stubWorkWriterT) UpdateTask(context.Context, string, string, string, uint64,
-	tracker.TaskPatch, *tracker.Notify) (tracker.WriteResult, error) {
+	tracker.TaskPatch, tracker.ChangeKind, *tracker.Notify) (tracker.WriteResult, error) {
 
 	return tracker.WriteResult{}, nil
 }

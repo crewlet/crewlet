@@ -125,7 +125,7 @@ func (w *Writer) MintSprints(ctx context.Context, opID, project string,
 	for _, number := range numbers {
 		sprint := sprintFor(project, number, policy, w.Now(), zone)
 		_, err := w.WriteDocument(ctx, stepID(opID, fmt.Sprintf("m%d", number)),
-			SprintSubject(project, number), "", sprint, nil)
+			SprintSubject(project, number), "", sprint, ChangeSprintMinted, nil)
 		switch {
 		case errors.Is(err, statelog.ErrExists),
 			errors.Is(err, statelog.ErrConflict):
@@ -388,7 +388,17 @@ func (w *Writer) rollOne(ctx context.Context, opID string, task rollTask,
 		cancelled := StatusCancelled
 		patch.Status, patch.Sprint = &cancelled, &clear
 	}
-	_, err := w.UpdateTask(ctx, opID, task.ID, task.Project, NoIfMatch, patch, nil)
+	// THE KIND IS THE STATUS ON A CLOSE, because that is what the change
+	// IS to everything downstream: `StatusCancelled` is in the `done`
+	// group, so the apply stamps the task finished and clears every edge
+	// naming it a blocker. Filing it under the sprint move would be
+	// accurate about the operator's gesture and wrong about the company.
+	kind := ChangeSprint
+	if patch.Status != nil {
+		kind = ChangeStatus
+	}
+	_, err := w.UpdateTask(ctx, opID, task.ID, task.Project, NoIfMatch, patch,
+		kind, nil)
 	if errors.Is(err, statelog.ErrConflict) {
 		// ANOTHER WRITER MOVED IT FIRST, which on a rollover is another
 		// node's pass or the task's own assignee. The selection is what
@@ -431,8 +441,11 @@ func (w *Writer) settleRollover(ctx context.Context, opID, project string,
 			next.RolloverTo = rolloverLabel(target, into)
 			next.RolloverDone = true
 			next.UpdatedAt = at
-			decision, err := w.decide(subject, OpPatch, scope, opID, next,
-				nil, at)
+			// THE SECOND HALF OF THE CLOSE, so it files under the close:
+			// a reader asking what happened to this sprint wants the
+			// settlement beside the closing, not under a word of its own.
+			decision, err := w.decide(subject, OpPatch, ChangeSprintClosed,
+				scope, opID, next, nil, at)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -569,8 +582,8 @@ func (w *Writer) ArchiveSprint(ctx context.Context, opID, project string,
 			next := current
 			next.Archived = true
 			next.UpdatedAt = at
-			decision, err := w.decide(subject, OpPatch, scope, opID, next,
-				nil, at)
+			decision, err := w.decide(subject, OpPatch, ChangeArchived,
+				scope, opID, next, nil, at)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -594,6 +607,34 @@ func (w *Writer) ArchiveSprint(ctx context.Context, opID, project string,
 // project's sprint — and a project whose sprint is shared by more than
 // sixty-four seats has a planning problem this notification cannot fix.
 const MaxSprintWakeParties = 64
+
+// sprintChangeKind is what a sprint's move to a state IS, in the feed's own
+// vocabulary.
+//
+// A PURE FUNCTION OF THE DESTINATION, and separate from [sprintWake] because
+// the two answer different questions. The wake asks "is there anybody to tell,
+// and what do they see"; this asks "what happened", which is true whether
+// anybody is listening or not — a sprint starting on an unstaffed project in a
+// company with no lead is still a sprint starting, and the feed has to be able
+// to say so.
+//
+// Collapsing the two is what filed those transitions under the OPERATION: the
+// wake returned nil both for "nobody to tell" and for "not a start or a
+// close", the record then carried no kind at all, and the applier guessed
+// `patch` — a word that is not a [ChangeKind] and that no `kinds=` filter can
+// name.
+func sprintChangeKind(to SprintState) ChangeKind {
+	switch to {
+	case SprintActive:
+		return ChangeSprintStarted
+	case SprintClosed:
+		return ChangeSprintClosed
+	}
+	// EVERY OTHER DESTINATION IS A MINT. A sprint that is not becoming
+	// active and not becoming closed is one written ahead of time, which
+	// is what the policy's own tick does.
+	return ChangeSprintMinted
+}
 
 // sprintWake is what a sprint's start or close announces.
 //
@@ -641,12 +682,9 @@ const MaxSprintWakeParties = 64
 func sprintWake(ctx context.Context, tx *sql.Tx, sprint Sprint, to SprintState,
 	leads Leads) (*Notify, error) {
 
-	var kind ChangeKind
+	kind := sprintChangeKind(to)
 	switch to {
-	case SprintActive:
-		kind = ChangeSprintStarted
-	case SprintClosed:
-		kind = ChangeSprintClosed
+	case SprintActive, SprintClosed:
 	default:
 		// A FUTURE SPRINT IS NOT NEWS. Minting one is bookkeeping the
 		// policy does on a tick, and a company keeping three ahead would

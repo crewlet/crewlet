@@ -93,11 +93,31 @@ type UnblockScan struct {
 //
 // # The query, and why each clause is there
 //
-// It reads status changes at `log_seq > since` — an index range on
-// (kind, log_seq), which is the sibling of the one every report's window
-// predicate uses — restricted to subjects that are BLOCKERS, collects their
+// It reads status changes at `log_seq > since` — a keyset range on the
+// (log_seq) index — restricted to subjects that are BLOCKERS, collects their
 // dependents, and keeps a dependent only when it has no open blocker left and
 // the newest clearing among its blockers is later than what it was last told.
+//
+// # THE ROW'S OWN STATUS DELTA DECIDES, NOT ITS KIND
+//
+// A row CARRYING a status delta is a status change, whatever it was filed
+// under — and the kind cannot be trusted for this, for exactly the reason
+// [Applier.recomputeSpans] states beside the same predicate. The kind is ONE
+// word a writer chose for a patch that may have moved several things, so a
+// change that moved the status and something else is filed under the something
+// else and was invisible here.
+//
+// The reachable case was the sprint ROLLOVER CLOSE. It cancels every straggler
+// — `StatusCancelled` is in the `done` group, whose own description names this
+// path — so the apply stamps the task finished and clears every edge naming it
+// as a blocker, and its dependents become workable. The record is quiet by
+// design, and nothing outside [Writer.TellUnblocked] ever fills
+// `Snapshot.Unblocked`, so this scan is the ONLY path by which those people
+// hear. Filed under the sprint move, the join never reached them — and the
+// horizon below, computed from the same predicate, then advanced past the
+// record on the next status row anywhere in the log, so it was never
+// reconsidered. "A gap of any length is caught up on the next tick" does not
+// hold for a row the predicate cannot name.
 //
 // A dependent with any open edge is not ready. A dependent already told about
 // a later clearing is not owed anything. Both are the difference between a
@@ -110,10 +130,14 @@ func ScanUnblocked(ctx context.Context, db *store.DB, since uint64,
 		// THE POSITION FIRST, and from the same transaction as the rows:
 		// a `through` read afterwards would cover records this scan did
 		// not see, and advancing past them is how a wake is lost.
+		// THE HORIZON IS OVER THE SAME PREDICATE AS THE ROWS, which is
+		// what makes advancing it safe: a horizon computed over a WIDER
+		// set steps past records the scan below never looked at.
 		if err := tx.QueryRowContext(ctx, `
 			SELECT COALESCE(MAX(log_seq), ?) FROM tracker_history
-			WHERE kind = ? AND log_seq > ?`,
-			since, string(ChangeStatus), since).Scan(&scan.Through); err != nil {
+			WHERE log_seq > ?
+			  AND json_extract(fields_json, '$.status.to') IS NOT NULL`,
+			since, since).Scan(&scan.Through); err != nil {
 			return fmt.Errorf("tracker: read the repair's own horizon: %w", err)
 		}
 		// THE TWO PREDICATES ABOUT THE DEPENDENT ARE SUBQUERIES OVER
@@ -133,7 +157,8 @@ func ScanUnblocked(ctx context.Context, db *store.DB, since uint64,
 			FROM tracker_history h
 			JOIN tracker_task_deps d ON d.blocker_id = h.subject_id
 			JOIN tracker_tasks t ON t.id = d.task_id
-			WHERE h.kind = ? AND h.log_seq > ? AND h.log_seq <= ?
+			WHERE json_extract(h.fields_json, '$.status.to') IS NOT NULL
+			  AND h.log_seq > ? AND h.log_seq <= ?
 			  AND t.removed_at IS NULL
 			  -- AN UNASSIGNED DEPENDENT HAS NOBODY TO TELL: see the
 			  -- comment on ScanUnblocked.
@@ -144,7 +169,7 @@ func ScanUnblocked(ctx context.Context, db *store.DB, since uint64,
 			       WHERE o.task_id = t.id AND o.cleared_at IS NOT NULL)
 			      > COALESCE(t.unblocked_told_at, 0)
 			ORDER BY t.id LIMIT ?`,
-			string(ChangeStatus), since, scan.Through, limit)
+			since, scan.Through, limit)
 		if err != nil {
 			return fmt.Errorf("tracker: read the unblocked dependents since "+
 				"%d: %w", since, err)
@@ -180,8 +205,26 @@ func ScanUnblocked(ctx context.Context, db *store.DB, since uint64,
 // applied commit that named it — so it is order-independent and identical on
 // every node, and a redelivery cannot re-issue the wake.
 func (w *Writer) TellUnblocked(ctx context.Context, opID string, u Unblock) (WriteResult, error) {
-	if u.Task == "" {
+	switch {
+	case u.Task == "":
 		return WriteResult{}, fmt.Errorf("tracker: an unblocked notice names no task")
+	case u.Assignee == "":
+		// THE ASSIGNEE IS THE WHOLE RECIPIENT LIST, so a notice without
+		// one tells nobody — and it does not merely waste a record. The
+		// apply stamps `unblocked_told_at` from this notification, and
+		// [ScanUnblocked] selects on that column being older than the
+		// clearing instant: a notice nobody received would mark the task
+		// TOLD and the repair would never look at it again.
+		//
+		// The scan already filters `t.assignee <> ''`, so nothing in the
+		// duty reaches this. That is what makes the guard worth having
+		// rather than redundant: the filter is one query's predicate and
+		// this is the verb's own rule, and a second caller would inherit
+		// the rule rather than have to rediscover the predicate.
+		return WriteResult{}, fmt.Errorf("tracker: the unblocked notice for "+
+			"task %s names no assignee, and the assignee is the only person "+
+			"it tells — publishing it would stamp the task told and stop the "+
+			"repair ever looking at it again", u.Task)
 	}
 	// AN EMPTY PATCH, DELIBERATELY. The repair changes no field of the
 	// task — it tells people the task is ready, which was already true —
@@ -189,17 +232,18 @@ func (w *Writer) TellUnblocked(ctx context.Context, opID string, u Unblock) (Wri
 	// stamped by the APPLIER from this notification rather than carried
 	// as a field: a writer-supplied instant would be one node's clock
 	// where the column has to be a MAX every node computes alike.
-	return w.UpdateTask(ctx, opID, u.Task, u.Project, NoIfMatch, TaskPatch{}, &Notify{
-		Kind: ChangeRelations,
-		// LATE, and the flag is what tells a reader this wake is a
-		// repair rather than the change itself — a person who receives
-		// it hours after the close should see why.
-		Late: true,
-		Snapshot: Snapshot{
-			Key: u.Key, Project: u.Project,
-			Unblocked: []TaskParty{{
-				Task: u.Task, Key: u.Key, Assignee: u.Assignee,
-			}},
-		},
-	})
+	return w.UpdateTask(ctx, opID, u.Task, u.Project, NoIfMatch, TaskPatch{},
+		ChangeRelations, &Notify{
+			Kind: ChangeRelations,
+			// LATE, and the flag is what tells a reader this wake is a
+			// repair rather than the change itself — a person who receives
+			// it hours after the close should see why.
+			Late: true,
+			Snapshot: Snapshot{
+				Key: u.Key, Project: u.Project,
+				Unblocked: []TaskParty{{
+					Task: u.Task, Key: u.Key, Assignee: u.Assignee,
+				}},
+			},
+		})
 }

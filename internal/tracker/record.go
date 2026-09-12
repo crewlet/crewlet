@@ -89,6 +89,19 @@ const (
 	// MaxMentions bounds a comment's resolved mentions.
 	MaxMentions = 32
 
+	// MaxThreadParticipants bounds the people a REPLY carries with it, so
+	// a thread that has grown a hundred voices does not put a hundred
+	// handles on every subsequent record.
+	//
+	// SIXTEEN, which is the design's own figure for this collection and
+	// is derived from what a thread IS rather than from what a table
+	// holds: past a dozen or so people a comment thread is a meeting, and
+	// the routing that matters there is the mention. The cap does not
+	// silence anybody — a participant beyond it still watches the task
+	// and hears through the watcher arm; what it bounds is how many
+	// handles ride on the record.
+	MaxThreadParticipants = 16
+
 	// MaxDepth is the subtask depth, and MaxDescendants the subtree size
 	// under one root.
 	MaxDepth       = 7
@@ -597,6 +610,18 @@ type TaskPatch struct {
 type WatchIntent struct {
 	Handle string
 	Watch  bool
+
+	// Auto marks a watch nobody asked for — the one a commenter picks up
+	// by commenting, rather than by pressing watch.
+	//
+	// IT DECIDES WHAT HAPPENS AT THE CAP, which is the whole of it.
+	// [MaxWatchers] says it plainly: "an explicit sixty-fifth watch is
+	// refused, and an automatic one is skipped". Refusing an explicit one
+	// tells the person their gesture did not take, which is true and
+	// actionable. Refusing an automatic one would fail somebody's COMMENT
+	// because sixty-four other people are watching — a write refused for
+	// a reason that has nothing to do with what the writer asked for.
+	Auto bool
 }
 
 // FieldType is a custom field's type.

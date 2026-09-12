@@ -262,7 +262,8 @@ func NewWriter(d WriterDeps) (*Writer, error) {
 // re-derive it from rows it applied in its own order, and a counter derived
 // twice is a counter two nodes can disagree about.
 func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
-	ifMatch uint64, patch TaskPatch, notify *Notify) (WriteResult, error) {
+	ifMatch uint64, patch TaskPatch, kind ChangeKind,
+	notify *Notify) (WriteResult, error) {
 
 	switch {
 	case id == "":
@@ -349,7 +350,8 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			if err != nil {
 				return statelog.Decision{}, err
 			}
-			decision, err := w.decide(subject, OpPatch, scope, opID, charged, notify, at)
+			decision, err := w.decide(subject, OpPatch, kind, scope, opID,
+				charged, notify, at)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -400,17 +402,40 @@ func settleWatch(current Task, patch TaskPatch) (TaskPatch, error) {
 	}
 	watchers := without(current.Watchers, []string{handle})
 	muted := without(current.Muted, []string{handle})
-	if patch.Watch.Watch {
-		watchers = append(watchers, handle)
-	} else {
+	if !patch.Watch.Watch {
+		// THE MUTE IS THE WHOLE POINT OF AN UNWATCH. Dropping somebody
+		// from the watcher set only says they are not watching NOW; the
+		// mute is what says they CHOSE not to, which is what stops the
+		// next mention silently putting them back.
 		muted = append(muted, handle)
+		// AND AN UNWATCH IS NEVER REFUSED, which is why the branch
+		// returns here rather than falling through to the cap below.
+		// That check used to run on both branches, over a set an unwatch
+		// can only SHRINK — so a task that had somehow grown past the
+		// cap was one nobody could leave, and the only gesture that
+		// could have brought it back under was the one being refused.
+		patch.Watch = nil
+		patch.Watchers, patch.Muted = &watchers, &muted
+		return patch, nil
 	}
+	watchers = append(watchers, handle)
 	if len(watchers) > MaxWatchers {
 		// THE ROUTING CAP, enforced at the one place a watcher set grows
 		// by one. Past it an item is a broadcast rather than a thing
 		// people follow, and the wake it sends is the company's whole
 		// inbox — which is what [MaxWatchers] was declared to bound and,
 		// until this gesture existed, nothing in this package did.
+		//
+		// AN AUTOMATIC WATCH IS SKIPPED RATHER THAN REFUSED, which is
+		// [WatchIntent.Auto]'s whole purpose: a commenter picks up a
+		// watch by commenting, and failing their comment because
+		// sixty-four other people are watching refuses a write for a
+		// reason that has nothing to do with what they asked for. The
+		// comment lands; the watch does not.
+		if patch.Watch.Auto {
+			patch.Watch = nil
+			return patch, nil
+		}
 		return patch, fmt.Errorf("tracker: task %s already has %d watchers and "+
 			"the maximum is %d — an item this many people follow is an "+
 			"announcement, and a comment on it wakes all of them",
@@ -520,7 +545,7 @@ func (w *Writer) MoveTasks(ctx context.Context, opID, project string,
 			// history: it changes where a card sits and nothing about
 			// what the work is, so waking anybody for it would make a
 			// board's own drag a source of inbox traffic.
-			return w.decide(subject, OpPatch, scope, opID, RankOrder{
+			return w.decide(subject, OpPatch, "", scope, opID, RankOrder{
 				V: DocumentVersion, Project: project, Placements: placements,
 			}, nil, at)
 		},
@@ -533,7 +558,8 @@ func (w *Writer) MoveTasks(ctx context.Context, opID, project string,
 // patch semantics to get wrong — and the kinds that take it are exactly the
 // ones small enough for that to be affordable.
 func (w *Writer) WriteDocument(ctx context.Context, opID string, subject Subject,
-	container string, document any, notify *Notify) (WriteResult, error) {
+	container string, document any, kind ChangeKind,
+	notify *Notify) (WriteResult, error) {
 
 	if _, _, err := documentTable(subject); err != nil {
 		return WriteResult{}, err
@@ -557,7 +583,7 @@ func (w *Writer) WriteDocument(ctx context.Context, opID string, subject Subject
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
 		Decide: func(*sql.Tx) (statelog.Decision, error) {
-			return w.decide(subject, OpPatch, scope, opID, document, notify, at)
+			return w.decide(subject, OpPatch, kind, scope, opID, document, notify, at)
 		},
 	})
 }
@@ -585,9 +611,61 @@ func (w *Writer) RecordTurn(ctx context.Context, opID, taskID, project string,
 		MintedAt: at,
 		Pattern:  statelog.PatternAdditive,
 		Decide: func(*sql.Tx) (statelog.Decision, error) {
-			return w.decide(subject, OpTurn, scope, opID, payload, nil, at)
+			return w.decide(subject, OpTurn, "", scope, opID, payload, nil, at)
 		},
 	})
+}
+
+// checkChangeKind is the rule that a record which writes a history row states
+// what it did, and one that writes none states nothing.
+//
+// # Why a writer states it rather than the applier deriving it
+//
+// Because the applier cannot. "What happened" is the caller's own knowledge —
+// it created, it closed a sprint, it purged — and everything derivable from
+// the two document states is already derived. What is NOT derivable is the
+// difference between a catalogue patch and a view save, or between a tombstone
+// and a purge: those are the same operation on different subjects, and the
+// operation is all the applier has.
+//
+// It used to guess, from the operation and the moved fields, whenever a record
+// carried no [Notify]. The guess is still there for records an older build
+// wrote ([fallbackKind]) and it is no longer allowed to answer with a
+// non-[ChangeKind]; but a build that can state the fact states it.
+//
+// THE THIRD RULE IS THE ONE WORTH THE FUNCTION: when a record carries both a
+// kind and a notification, they must AGREE. One fact with two carriers is one
+// fact that can disagree with itself, and the disagreement would be invisible
+// — the feed would file the row under one word and the card render the other.
+func checkChangeKind(subject Subject, op OpKind, kind ChangeKind, notify *Notify) error {
+	switch {
+	case !subject.Kind.RecordsHistory():
+		if kind != "" {
+			return fmt.Errorf("tracker: a %s record names change kind %q, and "+
+				"an apply of it writes no history row for that kind to "+
+				"describe — see ObjectKind.RecordsHistory", subject.Kind, kind)
+		}
+		if notify != nil {
+			return fmt.Errorf("tracker: a %s record carries a notification, "+
+				"and an apply of it writes no history row a wake could be "+
+				"derived from", subject.Kind)
+		}
+		return nil
+	case kind == "":
+		return fmt.Errorf("tracker: a %s %s record names no change kind — its "+
+			"apply writes a history row, and the kind is what every feed "+
+			"filter, report window and repair scan selects on", subject.Kind, op)
+	case !kind.Valid():
+		return fmt.Errorf("tracker: %q is not a change kind this build writes "+
+			"— every kind has exactly one writer, so an unknown one is a "+
+			"history row no filter can name", kind)
+	case notify != nil && notify.Kind != kind:
+		return fmt.Errorf("tracker: this %s record says it is a %q and its "+
+			"notification says %q — one fact with two carriers is one fact "+
+			"that can disagree with itself, and a reader would see the feed "+
+			"and the card name different things", subject.Kind, kind, notify.Kind)
+	}
+	return nil
 }
 
 // decide builds the record a write path publishes.
@@ -596,9 +674,13 @@ func (w *Writer) RecordTurn(ctx context.Context, opID, taskID, project string,
 // in one place: a path that filled seven of them would publish a record the
 // deferral index could not file, and the failure would only show up on a
 // rolling upgrade.
-func (w *Writer) decide(subject Subject, op OpKind, scope ScopeSet, opID string,
-	payload any, notify *Notify, at time.Time) (statelog.Decision, error) {
+func (w *Writer) decide(subject Subject, op OpKind, kind ChangeKind,
+	scope ScopeSet, opID string, payload any, notify *Notify,
+	at time.Time) (statelog.Decision, error) {
 
+	if err := checkChangeKind(subject, op, kind, notify); err != nil {
+		return statelog.Decision{}, err
+	}
 	if err := notify.Validate(); err != nil {
 		return statelog.Decision{}, err
 	}
@@ -621,6 +703,7 @@ func (w *Writer) decide(subject Subject, op OpKind, scope ScopeSet, opID string,
 			V: RecordVersion, OpID: opID, Subject: subject, Op: op,
 			CreatedAt: at, Scope: scope,
 		},
+		Kind:       kind,
 		Mutation:   body,
 		Actor:      w.Actor,
 		ActorKind:  w.ActorKind,

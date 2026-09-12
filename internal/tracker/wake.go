@@ -110,6 +110,26 @@ func (w Wake) snapshot(leads Leads) Snapshot {
 		PrevAssignee:    w.Before.Assignee,
 		PrevStatusGroup: w.Before.StatusGroup,
 	}
+	if w.Comment != nil {
+		// WHO WROTE IT DECIDES WHETHER THE ASSIGNEE IS ADDRESSED, which
+		// is the difference between a turn that answers and one that
+		// absorbs — see [Notify.assigneeAddressed]. It was never copied
+		// here, so the field was the zero AuthorKind on every record
+		// ever written and the comparison against `human`/`operator`
+		// was false for every comment: a person asking an agent a
+		// question in a comment produced an unaddressed wake, and the
+		// agent read it as activity to note rather than a question to
+		// answer.
+		snapshot.CommentAuthorKind = w.Comment.AuthorKind
+	}
+	if w.Kind == ChangeWatchers {
+		// THE HANDLES THIS COMMIT DROPPED, which only the two states
+		// know. [Candidates] reads them on this kind alone and writes
+		// them to the INBOX rather than routing them — a human learns
+		// that a lead removed her watch — and with nothing filling the
+		// field that never happened at all.
+		snapshot.RemovedWatchers = without(w.Before.Watchers, after.Watchers)
+	}
 	if leads != nil {
 		snapshot.ProjectLead = leads.ProjectLead(after.Project)
 		if after.RoutingUnit != "" {

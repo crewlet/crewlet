@@ -42,6 +42,13 @@ func TestEveryChangeKindIsClassifiedAsTaskOrNot(t *testing.T) {
 		tracker.ChangeSprintMinted:   true,
 		tracker.ChangeViewSaved:      true,
 		tracker.ChangeCatalogue:      true,
+
+		// A person's own bookkeeping — a pin, an inbox mark, a snooze.
+		// It writes a history row like every other document's, which is
+		// why it needs a kind at all, and it wakes nobody: the one
+		// person write that announces itself is `prioritised`, above,
+		// because somebody else reordered your day.
+		tracker.ChangePersonUpdated: true,
 	}
 	for _, kind := range tracker.ChangeKinds {
 		if got := kind.TaskCommit(); got == notTasks[kind] {

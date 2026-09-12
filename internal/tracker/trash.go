@@ -175,8 +175,8 @@ func (w *Writer) tombstone(ctx context.Context, opID, id, project string,
 				// task is in the state the caller asked for.
 				return statelog.Decision{}, nil
 			}
-			decision, err := w.decide(subject, OpTombstone, scope, opID,
-				TaskPatch{Removed: &stamp}, notify, at)
+			decision, err := w.decide(subject, OpTombstone, ChangeRemoved, scope,
+				opID, TaskPatch{Removed: &stamp}, notify, at)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -215,8 +215,8 @@ func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
 				// own rule: a re-run must be able to finish.
 				return statelog.Decision{}, nil
 			}
-			decision, err := w.decide(subject, OpRestore, scope, opID,
-				TaskPatch{Removed: &Tombstone{}}, notify, at)
+			decision, err := w.decide(subject, OpRestore, ChangeRestored, scope,
+				opID, TaskPatch{Removed: &Tombstone{}}, notify, at)
 			if err != nil {
 				return statelog.Decision{}, err
 			}

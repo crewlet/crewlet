@@ -38,7 +38,7 @@ func seedProject(t *testing.T, r *roundTrip, p tracker.Project) {
 	p.V = 1
 	p.CreatedAt, p.UpdatedAt = wednesday, wednesday
 	if _, err := r.writer.WriteDocument(t.Context(), "op-project-"+p.Key,
-		tracker.ProjectSubject(p.Key), "", p, nil); err != nil {
+		tracker.ProjectSubject(p.Key), "", p, tracker.ChangeProjectCreated, nil); err != nil {
 		t.Fatalf("seed project %s: %v", p.Key, err)
 	}
 	r.drain()
@@ -61,7 +61,7 @@ func TestAProjectListingReadsTheMaintainedCounts(t *testing.T) {
 
 	done := tracker.StatusDone
 	if _, err := r.writer.UpdateTask(t.Context(), "op-ship", "shipped", "ENG",
-		tracker.NoIfMatch, tracker.TaskPatch{Status: &done}, nil); err != nil {
+		tracker.NoIfMatch, tracker.TaskPatch{Status: &done}, tracker.ChangeStatus, nil); err != nil {
 		t.Fatalf("finish a task: %v", err)
 	}
 	r.drain()

@@ -18,7 +18,7 @@ func seedNamedSprint(t *testing.T, r *roundTrip, number int, name string,
 			Name: name, State: state,
 			StartAt: wednesday, EndAt: wednesday.AddDate(0, 0, 14),
 			CreatedAt: wednesday, UpdatedAt: wednesday,
-		}, nil); err != nil {
+		}, tracker.ChangeMoved, nil); err != nil {
 		t.Fatalf("seed sprint %d: %v", number, err)
 	}
 	r.drain()
@@ -97,7 +97,7 @@ func TestACarryOverIsInBothSprints(t *testing.T) {
 	inSprint(t, r, "rolled", &four)
 
 	if _, err := r.writer.UpdateTask(t.Context(), "op-roll", "rolled", "ENG", 0,
-		tracker.TaskPatch{Sprint: &five}, nil); err != nil {
+		tracker.TaskPatch{Sprint: &five}, tracker.ChangeSprint, nil); err != nil {
 		t.Fatalf("carry it over: %v", err)
 	}
 	r.drain()
@@ -128,7 +128,7 @@ func TestACarryOverIsInBothSprints(t *testing.T) {
 	// A ZERO IS THE CLEAR — the patch's own spelling for "no sprint",
 	// since an absent field means "leave it alone".
 	if _, err := r.writer.UpdateTask(t.Context(), "op-pull", "rolled", "ENG", 0,
-		tracker.TaskPatch{Sprint: new(int)}, nil); err != nil {
+		tracker.TaskPatch{Sprint: new(int)}, tracker.ChangeSprint, nil); err != nil {
 		t.Fatalf("pull it out of the sprint: %v", err)
 	}
 	r.drain()

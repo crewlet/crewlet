@@ -171,7 +171,7 @@ func TestTheDutyClearsAnAbandonedMerge(t *testing.T) {
 	// between the first append and the last leaves behind.
 	merging := true
 	if _, err := r.writer.UpdateTask(t.Context(), "op-mark", "t-1", "ENG", tracker.NoIfMatch,
-		tracker.TaskPatch{Merging: &merging}, nil); err != nil {
+		tracker.TaskPatch{Merging: &merging}, tracker.ChangeFields, nil); err != nil {
 		t.Fatalf("UpdateTask: %v", err)
 	}
 	r.drain()

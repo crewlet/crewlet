@@ -28,7 +28,7 @@ func TestAnIfMatchIsRefusedFromTheSnapshotThatDecides(t *testing.T) {
 	// THE VERSION IS THE PACKED POSITION, which is what a caller reads
 	// back from get_work_item and hands to the next edit.
 	if _, err := r.writer.UpdateTask(t.Context(), "op-match", task.ID, "ENG",
-		task.Version, tracker.TaskPatch{Title: ptr("edited")}, nil); err != nil {
+		task.Version, tracker.TaskPatch{Title: ptr("edited")}, tracker.ChangeFields, nil); err != nil {
 		t.Fatalf("an edit at the version it read was refused: %v", err)
 	}
 	r.drain()
@@ -36,7 +36,7 @@ func TestAnIfMatchIsRefusedFromTheSnapshotThatDecides(t *testing.T) {
 	// AND THE SAME EXPECTATION AGAIN IS NOW STALE, because the write above
 	// moved the task — which is exactly the second writer's case.
 	_, err := r.writer.UpdateTask(t.Context(), "op-stale", task.ID, "ENG",
-		task.Version, tracker.TaskPatch{Title: ptr("clobbered")}, nil)
+		task.Version, tracker.TaskPatch{Title: ptr("clobbered")}, tracker.ChangeFields, nil)
 	if !errors.Is(err, tracker.ErrStaleVersion) {
 		t.Fatalf("an edit conditioned on a version that has moved gave %v, "+
 			"want ErrStaleVersion — a caller told anything else re-sends the "+
@@ -51,7 +51,7 @@ func TestAnIfMatchIsRefusedFromTheSnapshotThatDecides(t *testing.T) {
 	// ZERO MERGES, which is the default every caller naming two fields
 	// wants: it is not a precondition of "version 0".
 	if _, err := r.writer.UpdateTask(t.Context(), "op-merge", task.ID, "ENG",
-		tracker.NoIfMatch, tracker.TaskPatch{Title: ptr("merged")}, nil); err != nil {
+		tracker.NoIfMatch, tracker.TaskPatch{Title: ptr("merged")}, tracker.ChangeFields, nil); err != nil {
 		t.Fatalf("an unconditional edit was refused: %v", err)
 	}
 	r.drain()
@@ -76,7 +76,7 @@ func TestTheHandOffBudgetIsChargedToTheItem(t *testing.T) {
 		to := fmt.Sprintf("peer-%d", i)
 		if _, err := agent.UpdateTask(t.Context(), fmt.Sprintf("op-hand-%d", i),
 			task.ID, "ENG", tracker.NoIfMatch,
-			tracker.TaskPatch{Assignee: &to}, nil); err != nil {
+			tracker.TaskPatch{Assignee: &to}, tracker.ChangeAssignee, nil); err != nil {
 			t.Fatalf("hand-off %d of %d was refused: %v",
 				i+1, tracker.ReassignmentBudget, err)
 		}
@@ -85,7 +85,7 @@ func TestTheHandOffBudgetIsChargedToTheItem(t *testing.T) {
 
 	over := "peer-last"
 	_, err := agent.UpdateTask(t.Context(), "op-hand-over", task.ID, "ENG",
-		tracker.NoIfMatch, tracker.TaskPatch{Assignee: &over}, nil)
+		tracker.NoIfMatch, tracker.TaskPatch{Assignee: &over}, tracker.ChangeAssignee, nil)
 	if !errors.Is(err, tracker.ErrReassignmentBudget) {
 		t.Fatalf("hand-off %d gave %v, want ErrReassignmentBudget",
 			tracker.ReassignmentBudget+1, err)
@@ -96,7 +96,7 @@ func TestTheHandOffBudgetIsChargedToTheItem(t *testing.T) {
 	// the case fails if the exemption is dropped.
 	same := fmt.Sprintf("peer-%d", tracker.ReassignmentBudget-1)
 	if _, err := agent.UpdateTask(t.Context(), "op-hand-same", task.ID, "ENG",
-		tracker.NoIfMatch, tracker.TaskPatch{Assignee: &same}, nil); err != nil {
+		tracker.NoIfMatch, tracker.TaskPatch{Assignee: &same}, tracker.ChangeAssignee, nil); err != nil {
 		t.Fatalf("re-asserting the current assignee was charged: %v", err)
 	}
 	r.drain()
@@ -105,7 +105,7 @@ func TestTheHandOffBudgetIsChargedToTheItem(t *testing.T) {
 	// changed. Somebody looked, which is the condition the counter exists
 	// to detect the absence of.
 	if _, err := r.writer.UpdateTask(t.Context(), "op-human", task.ID, "ENG",
-		tracker.NoIfMatch, tracker.TaskPatch{Title: ptr("a person looked")},
+		tracker.NoIfMatch, tracker.TaskPatch{Title: ptr("a person looked")}, tracker.ChangeFields,
 		nil); err != nil {
 		t.Fatalf("the human touch was refused: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestTheHandOffBudgetIsChargedToTheItem(t *testing.T) {
 
 	after := "peer-again"
 	if _, err := agent.UpdateTask(t.Context(), "op-hand-after", task.ID, "ENG",
-		tracker.NoIfMatch, tracker.TaskPatch{Assignee: &after}, nil); err != nil {
+		tracker.NoIfMatch, tracker.TaskPatch{Assignee: &after}, tracker.ChangeAssignee, nil); err != nil {
 		t.Fatalf("the budget was not returned by the human touch: %v", err)
 	}
 	r.drain()
@@ -153,7 +153,7 @@ func TestAWriterWithNoIdentityRefusesAtTheWrite(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := w.UpdateTask(t.Context(), "op-anon", task.ID, "ENG",
-				tracker.NoIfMatch, tracker.TaskPatch{Title: ptr("anonymous")}, nil)
+				tracker.NoIfMatch, tracker.TaskPatch{Title: ptr("anonymous")}, tracker.ChangeFields, nil)
 			if err == nil {
 				t.Fatal("an unattributable writer wrote a history row")
 			}

@@ -39,8 +39,15 @@ position, serve whatever that node happened to hold, and label the answer
 `session`: a wrong label rather than a weaker answer. So `read_level=session`
 is **refused** by the read grammar, naming the two honest asks — `linearizable`,
 or `stale` with `max_lag_seq`. Inside the engine the level is real and used:
-a write waits for its own caller's last write to be applied before it opens
-the snapshot it decides from.
+a write waits for its own last write to be applied before it opens the snapshot
+it decides from.
+
+That wait is **per log, not per object**. A node that has just published a bulk
+update waits for it to apply locally before its next write on that log — any
+subject — and may be refused `behind`, naming its own record. That is what
+read-your-writes means on the write path: the alternative is a write that
+cannot see the write before it. It costs nothing when the node is caught up,
+which is every ordinary write.
 
 **`consistent_prefix` is the default for nobody, and it is either asked for or
 resolved to.** It promises a *named prefix* of the log — everything up to a
