@@ -1324,7 +1324,7 @@ func (a *Applier) explodeCatalogue(ctx context.Context, tx *sql.Tx, name string,
 				(slug, name, name_norm, plural, icon, description, builtin, archived)
 			VALUES (?,?,?,?,?,?,?,?)`,
 			catalogue.Types, func(t TaskType) []any {
-				return []any{t.Slug, t.Name, strings.ToLower(t.Name), t.Plural,
+				return []any{t.Slug, t.Name, NormName(t.Name), t.Plural,
 					t.Icon, t.Description, boolInt(t.Builtin), boolInt(t.Archived)}
 			})
 	}
@@ -1390,7 +1390,7 @@ func writeFieldDefs(ctx context.Context, tx *sql.Tx, scopeKind, scopeID string,
 				 pinned, hide_from_agents, config_json, default_json, shadowed)
 			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
 			field.ID, scopeKind, scopeID, field.Slug, field.Name,
-			strings.ToLower(field.Name), field.Description, string(field.Type),
+			NormName(field.Name), field.Description, string(field.Type),
 			jsonOf(field.AppliesTo), boolInt(field.Required),
 			boolInt(field.RequiredInSubtasks), boolInt(field.Archived),
 			boolInt(field.Pinned), boolInt(field.HideFromAgents),
@@ -1413,7 +1413,7 @@ func writeFieldDefs(ctx context.Context, tx *sql.Tx, scopeKind, scopeID string,
 			VALUES (?,?,?,?,?,?,?,?)`,
 			field.Config.Options, func(o Option) []any {
 				return []any{field.ID, o.ID, o.Slug, o.Name,
-					strings.ToLower(o.Name), o.Color, o.Order, boolInt(o.Archived)}
+					NormName(o.Name), o.Color, o.Order, boolInt(o.Archived)}
 			})
 		if err != nil {
 			return 0, fmt.Errorf("tracker: write the options of %s: %w", field.Slug, err)

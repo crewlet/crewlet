@@ -100,6 +100,24 @@ required on a project only there; a subtask is judged by the second toggle
 (`required_in_subtasks`, off by default) so one required field does not block
 every checklist item anybody promotes.
 
+**A name is a resolution key, not a label.** A type, a field and an option are
+each resolvable three ways — by id, by slug, and by **name** — which is what
+lets a model write `severity: High` after reading "High" off a board. So two
+declarations whose names differ only in case or spacing are refused: they are
+two rows one lookup cannot tell apart, and the resolution would pick whichever
+was read first. A type's name is checked against the **shipped** types too,
+because a catalogue adds to them — though renaming a builtin by declaring its
+own slug is exactly what the override is for.
+
+**A field's configuration is checked against its type.** A precision on a
+checkbox, a time flag on a number, a rollup on a text field: each is a setting
+that would be stored, replicated and read by nothing, so the declaration is
+refused naming which types use it. A minimum above its maximum is refused at
+the declaration rather than at every write that then fails against it, and an
+automatic progress field that counts nothing is refused because it would read
+zero for ever — a bar that never moves, which looks like work that never
+started.
+
 **An option is one value however it is written.** A choice field stores the
 option's *id*, and a write naming the option by its slug or its name resolves
 to that id before it is stored — the same three spellings a filter accepts. A
