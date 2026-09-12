@@ -75,6 +75,20 @@ type SeatResult struct {
 	Created bool
 	// KeyMinted reports an application key this pass minted.
 	KeyMinted bool
+	// KeyMissing reports an account that holds NO application key, seen by
+	// a run that may not write.
+	//
+	// A WRITING PASS NEVER SETS IT, because it repairs the same state
+	// instead: it mints and seals, and the seat comes out healthy. This is
+	// what a read-only check can honestly say — it cannot read the store,
+	// so it cannot ask whether the sealed value is one of the account's
+	// keys, but this engine mints one key per opted-in seat, so an account
+	// with none is a seat that cannot act whatever is stored for it.
+	//
+	// Reported as [integration.FindingIdentityMissing], whose verdict is
+	// PhaseProvisioning / ActorEngine: the engine's own next writing pass
+	// is what clears it, which is exactly true.
+	KeyMissing bool
 	// Enabled reports an account this pass turned back on, having
 	// established that a previous disconnect of this engine's is what
 	// disabled it. See [DisconnectedTitle].
@@ -312,13 +326,53 @@ func provisionSeat(
 		account = created
 	}
 
-	// A KEY IS MINTED ONLY WHEN THE SEAT HAS NONE, because Datadog returns
-	// a key's value exactly once: minting a second on every pass would
-	// leave a trail of keys nobody holds, and rotating one revokes what
-	// the agent is currently authenticating with.
-	if opts.Sink == nil {
+	// WHAT THE ACCOUNT HOLDS, ASKED BEFORE THE SINK IS CONSULTED AT ALL.
+	//
+	// "A value is stored" is not the same fact as "the agent can
+	// authenticate", and this block used to end the seat's work on the
+	// first of them. An application key DELETED AT DATADOG leaves the
+	// sealed string answering 403 for ever, while every pass reported the
+	// seat ready. Measured against a real organization: Connected in five
+	// seconds, seat satisfied, zero findings, nought application keys on
+	// the account.
+	//
+	// It is deletion at Datadog and nothing else, which is worth being
+	// exact about because the first draft of this comment blamed a
+	// disconnect and was wrong: [Teardown] returns after withdrawing the
+	// webhook unless RemoveSeats is set, so a disconnect that KEEPS the
+	// accounts touches no seat and leaves the key and the sealed value
+	// consistent with each other. One that removes them revokes the keys
+	// and deletes the sealed values together.
+	//
+	// AND IT IS ASKED WITH NO SINK TOO, which is the half a nil check got
+	// wrong. A read-only check runs with no sink, so gating the whole
+	// enquiry on one meant the button an operator presses when they
+	// suspect trouble returned without looking and answered "ready" over
+	// the dead agent it was pressed about — while the next scheduled pass
+	// repaired the very thing it had just declared fine. The other three
+	// provisioning surfaces gate on [provision.CanMint] rather than on
+	// nil for exactly this reason: what a missing sink withholds is the
+	// permission to WRITE, never the ability to look.
+	//
+	// Datadog is the last of the four to ask the vendor at all. Each of
+	// the others had to be taught the same lesson: atlassian counts the
+	// account's tokens ([orphaned]), gitlab and mattermost ask the
+	// instance who the credential is (Client.verify).
+	keys, listErr := opts.Client.ListAppKeys(ctx, opts.Creds, account.ID)
+
+	// A RUN THAT MAY NOT WRITE REPORTS WHAT IT CAN ESTABLISH AND STOPS.
+	//
+	// It cannot read the store — [provision.ReadOnly] answers Value as
+	// UNKNOWN and a nil sink cannot be asked — so "is the sealed value one
+	// of this account's keys" is beyond it. What is not beyond it is the
+	// account's own side: this engine mints one key per opted-in seat, so
+	// an account holding NONE is a seat that cannot act, whatever the store
+	// says. That is the finding a check exists to surface.
+	if !provision.CanMint(opts.Sink) {
+		out.KeyMissing = listErr == nil && len(keys) == 0
 		return out
 	}
+
 	// THREE-VALUED, and the unknown case matters: a sink that could not be
 	// read is not a seat with no key. Minting on unknown would revoke what
 	// the agent is authenticating with, so an unreadable sink stops this
@@ -331,25 +385,6 @@ func provisionSeat(
 		return out
 	}
 
-	// AND THE ACCOUNT IS ASKED EVEN WHEN A VALUE IS HELD, which is the
-	// whole of this block's correctness.
-	//
-	// "A value is stored" used to return here, and it is not the same fact
-	// as "the agent can authenticate". A teardown that KEEPS the account
-	// still revokes the key this engine minted (see [Teardown]), and the
-	// sealed value survives that by design — an operator's own decision,
-	// which a plain disconnect lists rather than deletes. So a reconnect
-	// found a value, minted nothing, and reported the seat ready over a
-	// credential Datadog answers 403 for. Measured over five cycles
-	// against a real organization: Connected in five seconds, seat
-	// satisfied, zero findings, nought application keys on the account.
-	// The same held for a key an administrator deleted by hand, for ever.
-	//
-	// Datadog is the last of the four provisioning surfaces to ask. Every
-	// other one already does, and each had to be taught the same lesson:
-	// atlassian counts the account's tokens ([orphaned]), gitlab and
-	// mattermost ask the instance who the credential is (Client.verify).
-	keys, listErr := opts.Client.ListAppKeys(ctx, opts.Creds, account.ID)
 	switch {
 	case listErr != nil && held:
 		// CANNOT TELL, AND SOMETHING IS HELD, so nothing changes. This is
@@ -376,9 +411,9 @@ func provisionSeat(
 		// changing underneath a running agent is worth a line.
 		log.InfoContext(ctx, "datadog_seat_key_replaced", "seat", seat.Handle,
 			"detail", "this seat's Datadog account holds no application key, "+
-				"so the credential sealed for it cannot authenticate — either "+
-				"the key was deleted at Datadog, or a disconnect revoked it. "+
-				"Minting a replacement; nothing has to be done by hand")
+				"so the credential sealed for it cannot authenticate — the key "+
+				"was deleted at Datadog. Minting a replacement; nothing has "+
+				"to be done by hand")
 	case len(keys) > 0:
 		// AN ACCOUNT WITH A KEY THIS ENGINE CANNOT READ. Datadog shows a
 		// value once, so a key that exists with nothing stored for it is
@@ -552,6 +587,18 @@ func (r *Result) Findings() []integration.Finding {
 				Subject: seat.Handle,
 				Detail: seat.Handle + " has no Datadog account yet, so nothing " +
 					"authenticates as it there",
+			})
+		case seat.KeyMissing:
+			// THE ACCOUNT IS THERE AND HOLDS NO KEY, which is what a
+			// read-only check can establish and what it used to report as
+			// nothing at all. Same verdict as the arm above and for the
+			// same reason: the engine's own next writing pass mints one.
+			out = append(out, integration.Finding{
+				Kind:    integration.FindingIdentityMissing,
+				Subject: seat.Handle,
+				Detail: seat.Handle + "'s Datadog account holds no application " +
+					"key, so whatever is sealed for it cannot authenticate — " +
+					"the next provisioning pass mints a replacement",
 			})
 		}
 	}

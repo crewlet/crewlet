@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -382,7 +383,16 @@ func TestAnUnreadableSinkStopsTheSeatRatherThanMinting(t *testing.T) {
 			"email":"crewlet-sre@agents.test.invalid","service_account":true}}]}`))
 	}
 	minted := 0
-	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(w http.ResponseWriter, _ *http.Request) {
+	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(
+		w http.ResponseWriter, r *http.Request,
+	) {
+		// THE LIST IS NOT A MINT, and counting both on one handler made
+		// this fixture unable to tell them apart — it reported a mint the
+		// moment the pass started ASKING what the account holds.
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"data":[{"id":"k1","attributes":{"name":"crewlet"}}]}`))
+			return
+		}
 		minted++
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"data":{"id":"k1","attributes":{"key":"v"}}}`))
@@ -857,5 +867,181 @@ func TestAnUnreadableKeyListingLeavesAHeldCredentialAlone(t *testing.T) {
 	}
 	if len(res.Seats) != 1 || res.Seats[0].Err != nil {
 		t.Errorf("seat = %+v, want no failure over a blip", res.Seats)
+	}
+}
+
+// A READ-ONLY CHECK LOOKS, AND SAYS WHAT IT FINDS.
+//
+// The key enquiry sat behind a bare `Sink == nil`, and a check runs with no
+// sink — so the button an operator presses when they suspect trouble returned
+// without looking and answered "ready" over the dead agent it was pressed
+// about, while the next scheduled pass repaired the very thing it had just
+// declared fine. What a missing sink withholds is the permission to WRITE,
+// never the ability to look, which is why the other three provisioning
+// surfaces gate on provision.CanMint instead.
+func TestACheckReportsASeatWhoseAccountHoldsNoKey(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		sink provision.TokenSink
+	}{
+		// A NODE WITH NO KEYRING IS DELIBERATELY NOT HERE. It returns
+		// before the seat walk and reports secrets.keys instead — one
+		// bootstrap field rather than a finding per agent — which is the
+		// argued behaviour sealsNothing exists for. See
+		// TestANodeWithNoKeyringReportsTheOneFieldThatFixesIt below.
+		{"the dashboard's check, with no sink at all", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			reg := newRegion(t)
+			orgOK(reg)
+			reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(`{"data":[{"id":"u1","attributes":{
+					"email":"crewlet-sre@agents.test.invalid","service_account":true}}]}`))
+			}
+			minted := 0
+			reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(
+				w http.ResponseWriter, r *http.Request,
+			) {
+				if r.Method == http.MethodGet {
+					_, _ = w.Write([]byte(`{"data":[]}`))
+					return
+				}
+				minted++
+				_, _ = w.Write([]byte(`{"data":{"id":"k9","attributes":{"key":"fresh"}}}`))
+			}
+
+			res, err := datadog.Reconcile(context.Background(), datadog.Options{
+				Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
+				Creds: pair, Sink: tc.sink,
+			})
+			if err != nil {
+				t.Fatalf("pass: %v", err)
+			}
+			if minted != 0 {
+				t.Fatalf("a run that may not write minted %d keys", minted)
+			}
+			// THE FINDING IS THE POINT. Zero findings is what made the
+			// button a lie.
+			var got []integration.Finding
+			for _, f := range res.Findings() {
+				if f.Subject == "sre" {
+					got = append(got, f)
+				}
+			}
+			if len(got) != 1 {
+				t.Fatalf("%d findings about sre, want exactly one: %+v", len(got), got)
+			}
+			if got[0].Kind != integration.FindingIdentityMissing {
+				t.Errorf("kind = %q, want %q", got[0].Kind, integration.FindingIdentityMissing)
+			}
+			// AND OWED BY THE ENGINE, because the engine's own next writing
+			// pass is what mints one. Telling an operator to act would be
+			// the opposite error.
+			if phase, actor := got[0].Kind.Verdict(); actor != integration.ActorEngine {
+				t.Errorf("classified %s/%s, want the engine's own work", phase, actor)
+			}
+		})
+	}
+}
+
+// AND A CHECK OVER A HEALTHY SEAT STILL REPORTS NOTHING. The enquiry must not
+// turn every read-only run into a finding: an account that holds a key is the
+// strongest thing anything can establish without the store.
+func TestACheckOverASeatWithAKeyReportsNothing(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"u1","attributes":{
+			"email":"crewlet-sre@agents.test.invalid","service_account":true}}]}`))
+	}
+	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(
+		w http.ResponseWriter, _ *http.Request,
+	) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"k1","attributes":{"name":"crewlet"}}]}`))
+	}
+
+	res, err := datadog.Reconcile(context.Background(), datadog.Options{
+		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
+		Creds: pair, Sink: nil,
+	})
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	for _, f := range res.Findings() {
+		if f.Subject == "sre" {
+			t.Errorf("reported %+v over a seat whose account holds a key", f)
+		}
+	}
+}
+
+// AND A LISTING DATADOG COULD NOT ANSWER IS NOT "NO KEY". A check that read a
+// blip as an absent credential would put a false identity_missing on the card
+// every time Datadog was briefly unwell — the same three-valued rule the
+// writing path applies, on the read-only side.
+func TestACheckThatCannotReadTheKeysReportsNothing(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"u1","attributes":{
+			"email":"crewlet-sre@agents.test.invalid","service_account":true}}]}`))
+	}
+	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(
+		w http.ResponseWriter, _ *http.Request,
+	) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"errors":["unwell"]}`))
+	}
+
+	res, err := datadog.Reconcile(context.Background(), datadog.Options{
+		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
+		Creds: pair, Sink: nil,
+	})
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	for _, f := range res.Findings() {
+		if f.Subject == "sre" {
+			t.Errorf("reported %+v on an answer Datadog never gave", f)
+		}
+	}
+}
+
+// AND A NODE WITH NO KEYRING STILL REPORTS THE ONE FIELD THAT FIXES IT.
+//
+// It cannot provision an identity at all, so it returns before the seat walk:
+// a finding per agent would be seven third-party app problems standing in for
+// one bootstrap field, and none of them would name secrets.keys. Asserted here
+// because the check above deliberately excludes this sink, and an exclusion
+// nothing pins is an exclusion that quietly becomes a gap.
+func TestANodeWithNoKeyringReportsTheOneFieldThatFixesIt(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"u1","attributes":{
+			"email":"crewlet-sre@agents.test.invalid","service_account":true}}]}`))
+	}
+
+	res, err := datadog.Reconcile(context.Background(), datadog.Options{
+		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
+		Creds: pair, Sink: provision.ReadOnly(),
+	})
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	var subjects []string
+	for _, f := range res.Findings() {
+		subjects = append(subjects, f.Subject)
+		if f.Subject == "sre" {
+			t.Errorf("reported %+v per seat, standing in for one bootstrap field", f)
+		}
+	}
+	if !slices.Contains(subjects, "secrets.keys") {
+		t.Errorf("findings name %v, want secrets.keys — the only thing that fixes it",
+			subjects)
 	}
 }
