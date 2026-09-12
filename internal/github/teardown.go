@@ -62,12 +62,27 @@ func Teardown(ctx context.Context, opts Options) error {
 	// delete an app, so the engine uninstalls what it can and hands over a
 	// link for the rest.
 	if opts.Client == nil {
-		log.Warn("github_hooks_not_removed",
-			"targets", hookTargetNames(pv),
-			"delivery_url", target,
-			"detail", "no integrations.github.token resolved, so this engine "+
-				"cannot list or delete the webhooks it registered: remove any "+
-				"hook pointing at this address by hand")
+		// SAID ONLY WHERE A HOOK COULD BE, and said as a place to LOOK
+		// rather than as a hook that is there.
+		//
+		// It named every container in `provisioning` unconditionally, so a
+		// company with `org_webhook: never` was told to go and clean up
+		// hooks at an organization this engine never registered one on —
+		// measured on a live disconnect, where the one named container
+		// held nothing but an unrelated third-party hook. The engine has
+		// no credential here and therefore cannot know what exists; what
+		// it does know is where it would have put one, and the sentence
+		// now claims exactly that much.
+		if where := hookTargetNames(pv); len(where) > 0 {
+			log.Warn("github_hooks_not_removed",
+				"may_hold_a_hook", where,
+				"delivery_url", target,
+				"detail", "no integrations.github.token resolved, so this engine "+
+					"cannot list or delete the webhooks it registered: check "+
+					"these for a hook pointing at this address and remove it. "+
+					"There may be none — this engine registers one where it "+
+					"can and cannot look now")
+		}
 		return nil
 	}
 
@@ -116,9 +131,13 @@ func Teardown(ctx context.Context, opts Options) error {
 
 // hookTargetNames is where a hook this engine registered may still be, for an
 // operator who has to go and remove them by hand.
+// EXCLUDING WHAT THE MODE FORBIDS. `org_webhook: never` means the pass never
+// registered an organization hook, so naming the organization sends an
+// operator to a settings page with nothing of this engine's on it.
 func hookTargetNames(pv *config.GitHubProvisioning) []string {
 	var out []string
-	if org := strings.TrimSpace(pv.Org); org != "" {
+	if org := strings.TrimSpace(pv.Org); org != "" &&
+		pv.OrgWebhook != config.ContainerWebhookNever {
 		out = append(out, org)
 	}
 	for _, t := range TargetsOf(pv) {
