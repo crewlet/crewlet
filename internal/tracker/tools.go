@@ -39,6 +39,18 @@ const (
 	// triage, which is the work itself rather than furniture around it.
 	MergeWorkItemTool = "merge_work_item"
 
+	// SearchWorkItemsTool finds an item by what it SAYS, ranked over every
+	// item's title and description.
+	//
+	// ITS OWN VERB beside [ListWorkItemsTool], because the two answer
+	// differently shaped questions: a board narrows a list and keeps the
+	// board's order, and this ranks a corpus so its answer IS the order.
+	// The board's own `q` is a substring of the key or the title and
+	// cannot see a description at all — so the whole of what somebody
+	// wrote down about a piece of work was unreachable from a seat, while
+	// the engine had been paying to embed every one of those descriptions.
+	SearchWorkItemsTool = "search_work_items"
+
 	// The PROJECT reads, and they are a seat's for the reason
 	// [GetWorkCatalogueTool] is: a create refuses a project the company
 	// does not have, a type it has not declared and a required field left
@@ -166,7 +178,7 @@ func OperatorOnlyTools() []string {
 func Tools() []string {
 	return []string{ListWorkItemsTool, GetWorkItemTool, CreateWorkItemTool,
 		UpdateWorkItemTool, CommentOnWorkTool, MergeWorkItemTool,
-		GetWorkCatalogueTool, ListProjectsTool, DescribeProjectTool,
+		SearchWorkItemsTool, GetWorkCatalogueTool, ListProjectsTool, DescribeProjectTool,
 		WriteProjectTool, ListWorkGoalsTool, SprintReportTool,
 		TaskActivityTool, MyWorkTool}
 }

@@ -89,6 +89,12 @@ type native struct {
 	// searcher answers the knowledge seam natively.
 	searcher *pages.Searcher
 
+	// itemSearch is the tracker's own ranked search, over the SAME index
+	// and the SAME fan-out — see worksearch.go. Its own field because the
+	// two verbs are the tracker's and the wiki's, and a caller holding one
+	// must not be able to reach the other's corpus.
+	itemSearch *tracker.Searcher
+
 	// stopSlices withdraws this node as an answerer for the fleet's
 	// search fan-out. Nil when there is no queue to serve on, which is
 	// every embedded engine and every test.
@@ -259,6 +265,22 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			Roster: e.searchRoster,
 			Report: e.reportSearch,
 			Enter:  e.enterSearch,
+		})
+		// AND THE TRACKER'S OWN, over the same index: the fan-out is
+		// built here rather than borrowed from the searcher above so
+		// each verb's corpus filter is its own, and neither can widen
+		// into the other's.
+		n.itemSearch = tracker.NewSearcher(e.backends.Store, itemRanker{
+			index: n.indexer,
+			fan: &search.FanOut{
+				Self:   nodeID,
+				Local:  search.NodeScanner{Index: n.indexer},
+				Peers:  e.searchPeers(),
+				Roster: e.searchRoster,
+				Corpus: n.indexer.Corpus,
+				Report: e.reportSearch,
+				Enter:  e.enterSearch,
+			},
 		})
 		// AND THIS NODE ANSWERS FOR ITS PEERS. Registered here rather
 		// than beside the coordinator because they are different jobs
@@ -966,6 +988,11 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 				TurnID: actor.TurnID, Chain: actor.Chain,
 			})
 		},
+		// THE RANKED SEARCH, which reads and therefore takes no actor:
+		// the corpus is the same for everybody and there is nothing to
+		// attribute. Nil where this node has no index, and the tool is
+		// then not advertised at all.
+		Search:   workSearchOrNil(e),
 		Mentions: seatMentions{org: c.Org},
 		// THE ROSTER, read PER CALL for the reason the default project
 		// and the unit seam are: a seat's tools are cloned into its

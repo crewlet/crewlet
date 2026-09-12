@@ -81,6 +81,7 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 			work.Writer != nil && work.Reader != nil},
 		{&commentOnWorkItem{deps: work}, work.Writer != nil && work.Reader != nil},
 		{&mergeWorkItem{deps: work}, work.Merges != nil && work.Reader != nil},
+		{&searchWorkItems{deps: work}, work.Search != nil},
 		// THE VIEW TOOLS ARE HERE AND IN NO SEAT'S REGISTRY. A saved
 		// view is furniture a person arranges; see the file head of
 		// workviews.go for why a seat is not given them.

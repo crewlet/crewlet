@@ -87,12 +87,27 @@ type Indexer struct {
 	// inside it. A second caller would be a second indexer over one node's
 	// tables, which is a race about the postings long before it is a race
 	// about these.
-	cursor       string
-	orphanCursor string
+	cursor       map[string]string
+	orphanCursor map[string]string
+
+	// sources is what this index covers. See [LexicalSource] for why the
+	// SQL is theirs and the walk is this type's.
+	sources []LexicalSource
 }
 
-// NewIndexer builds an indexer over a node's store.
-func NewIndexer(db *store.DB) *Indexer { return &Indexer{db: db} }
+// NewIndexer builds an indexer over a node's store, covering every corpus in
+// [DefaultLexicalSources].
+func NewIndexer(db *store.DB) *Indexer { return NewIndexerOver(db, DefaultLexicalSources()) }
+
+// NewIndexerOver builds one over the sources given, which is what a test that
+// is about ONE corpus uses.
+func NewIndexerOver(db *store.DB, sources []LexicalSource) *Indexer {
+	return &Indexer{
+		db: db, sources: sources,
+		cursor:       map[string]string{},
+		orphanCursor: map[string]string{},
+	}
+}
 
 // Upsert indexes documents, replacing whatever each had before.
 //
@@ -220,31 +235,41 @@ func (x *Indexer) Stale(ctx context.Context, limit int) ([]Doc, error) {
 	// unfinished thought and a trashed page is deleted as far as a reader
 	// is concerned, and surfacing either in a knowledge search would put
 	// content in front of an agent that no person considers current.
-	batch, err := x.sources(ctx, limit)
-	if err != nil {
-		return nil, err
-	}
-	if len(batch) == 0 {
-		// THE WALK WRAPS. It is a cursor over ids rather than a
-		// watermark over versions, so reaching the end is the ordinary
-		// case rather than a failure.
-		x.cursor = ""
-		return nil, nil
-	}
-	x.cursor = batch[len(batch)-1].ID
-
-	indexed, err := x.versions(ctx, batch)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]Doc, 0, len(batch))
-	for _, doc := range batch {
-		if held, ok := indexed[doc.ID]; ok && held == doc.Version {
+	// ONE SOURCE PER CALL, in order, and the first with work wins. A pass
+	// that read every corpus would make a batch mean "twenty pages AND
+	// twenty items", which is two transactions of work behind one
+	// [IndexBatch] — and the loop calls this until it finds nothing, so
+	// nothing is starved by taking them in turn.
+	for _, source := range x.sources {
+		batch, err := x.nextBatch(ctx, source, limit)
+		if err != nil {
+			return nil, err
+		}
+		if len(batch) == 0 {
+			// THE WALK WRAPS. It is a cursor over ids rather than
+			// a watermark over versions, so reaching the end is
+			// the ordinary case rather than a failure.
+			x.cursor[source.Source()] = ""
 			continue
 		}
-		out = append(out, doc)
+		x.cursor[source.Source()] = batch[len(batch)-1].ID
+
+		indexed, err := x.versions(ctx, batch)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]Doc, 0, len(batch))
+		for _, doc := range batch {
+			if held, ok := indexed[doc.ID]; ok && held == doc.Version {
+				continue
+			}
+			out = append(out, doc)
+		}
+		if len(out) > 0 {
+			return out, nil
+		}
 	}
-	return out, nil
+	return nil, nil
 }
 
 // sources reads the next batch of indexable documents from the REPLICATED
@@ -263,7 +288,9 @@ func (x *Indexer) Stale(ctx context.Context, limit int) ([]Doc, error) {
 // hundred steps. What it buys is a repair the version compare never had — an
 // index row that drifted for any reason at all is rebuilt on the next pass,
 // where a watermark over versions would only ever notice a source that moved.
-func (x *Indexer) sources(ctx context.Context, limit int) ([]Doc, error) {
+func (x *Indexer) nextBatch(ctx context.Context, source LexicalSource,
+	limit int) ([]Doc, error) {
+
 	var out []Doc
 	// THROUGH THE HANDLE, NOT ITS POOL. `DB.SQL()` answers a NIL pool on a
 	// replicated estate that is not open — which is a legitimate,
@@ -272,28 +299,9 @@ func (x *Indexer) sources(ctx context.Context, limit int) ([]Doc, error) {
 	// [store.ErrNoEstate] instead, which every caller here already reads
 	// as an empty index pass.
 	err := x.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `
-		SELECT id, container, title, body, MAX(version, scoped_through)
-		  FROM pages_heads
-		 WHERE status = 'published' AND id > ?
-		 ORDER BY id
-		 LIMIT ?`, x.cursor, limit)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		out = nil
-		for rows.Next() {
-			doc := Doc{Source: "page"}
-			var version int64
-			if err := rows.Scan(&doc.ID, &doc.Container, &doc.Title, &doc.Body,
-				&version); err != nil {
-				return err
-			}
-			doc.Version = uint64(version)
-			out = append(out, doc)
-		}
-		return rows.Err()
+		batch, err := source.Next(ctx, tx, x.cursor[source.Source()], limit)
+		out = batch
+		return err
 	})
 	if err != nil {
 		return nil, fmt.Errorf("search: read the next documents to index: %w", err)
@@ -336,12 +344,45 @@ func (x *Indexer) Orphans(ctx context.Context, limit int) ([]string, error) {
 	if limit <= 0 {
 		limit = IndexBatch
 	}
+	// ONE SOURCE PER CALL, exactly as [Indexer.Stale] takes them: the
+	// orphan check is a batch from each estate, and mixing two sources in
+	// one batch would ask each source's existence query about the other's
+	// ids. The caller removes what comes back UNDER the source named
+	// beside it, which is why both travel together.
+	_, gone, err := x.orphanPass(ctx, limit)
+	return gone, err
+}
+
+// orphanPass is [Indexer.Orphans] with the SOURCE the ids belong to, which is
+// what a removal needs and what an id on its own cannot say.
+func (x *Indexer) orphanPass(ctx context.Context, limit int) (string, []string, error) {
+	if limit <= 0 {
+		limit = IndexBatch
+	}
+	for _, source := range x.sources {
+		gone, err := x.orphansOf(ctx, source, limit)
+		if err != nil {
+			return source.Source(), nil, err
+		}
+		if len(gone) > 0 {
+			return source.Source(), gone, nil
+		}
+	}
+	return "", nil, nil
+}
+
+// orphansOf is one source's share of that walk, and it answers the ids to
+// drop from the index under that source's own name.
+func (x *Indexer) orphansOf(ctx context.Context, source LexicalSource,
+	limit int) ([]string, error) {
+
 	// THE SAME ESTATE BOUNDARY as [Indexer.Stale], and the same answer: a
 	// batch of index rows read here, and their sources checked against the
 	// replicated estate in a second read.
 	rows, err := x.db.SQL().QueryContext(ctx,
-		`SELECT source_id FROM kb_docs WHERE source = 'page' AND source_id > ?
-		  ORDER BY source_id LIMIT ?`, x.orphanCursor, limit)
+		`SELECT source_id FROM kb_docs WHERE source = ? AND source_id > ?
+		  ORDER BY source_id LIMIT ?`,
+		source.Source(), x.orphanCursor[source.Source()], limit)
 	if err != nil {
 		return nil, fmt.Errorf("search: read the next index rows to check: %w", err)
 	}
@@ -360,43 +401,26 @@ func (x *Indexer) Orphans(ctx context.Context, limit int) ([]string, error) {
 	}
 	_ = rows.Close()
 	if len(candidates) == 0 {
-		x.orphanCursor = ""
+		x.orphanCursor[source.Source()] = ""
 		return nil, nil
 	}
-	x.orphanCursor = candidates[len(candidates)-1]
+	x.orphanCursor[source.Source()] = candidates[len(candidates)-1]
 
-	ids := make([]any, 0, len(candidates))
-	for _, id := range candidates {
-		ids = append(ids, id)
-	}
-	published := map[string]bool{}
-	// THROUGH THE HANDLE, for [Indexer.sources]' reason: a nil pool from a
-	// closed replicated estate panics where the handle answers
+	live := map[string]bool{}
+	// THROUGH THE HANDLE, for [Indexer.nextBatch]' reason: a nil pool from
+	// a closed replicated estate panics where the handle answers
 	// [store.ErrNoEstate].
 	if err := x.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-		live, err := tx.QueryContext(ctx,
-			`SELECT id FROM pages_heads
-		  WHERE status = 'published' AND id IN (`+binds(len(ids))+`)`, ids...)
-		if err != nil {
-			return err
-		}
-		defer live.Close()
-		clear(published)
-		for live.Next() {
-			var id string
-			if err := live.Scan(&id); err != nil {
-				return err
-			}
-			published[id] = true
-		}
-		return live.Err()
+		held, err := source.Live(ctx, tx, candidates)
+		live = held
+		return err
 	}); err != nil {
-		return nil, fmt.Errorf("search: check which indexed pages still "+
-			"exist: %w", err)
+		return nil, fmt.Errorf("search: check which indexed %s documents "+
+			"still exist: %w", source.Source(), err)
 	}
 	var out []string
 	for _, id := range candidates {
-		if !published[id] {
+		if !live[id] {
 			out = append(out, id)
 		}
 	}
@@ -412,18 +436,32 @@ func (x *Indexer) Orphans(ctx context.Context, limit int) ([]string, error) {
 // all is a page a search reports as not existing.
 func (x *Indexer) Pending(ctx context.Context) (int, error) {
 	var published, indexed int
-	// THROUGH THE HANDLE, for [Indexer.sources]' reason.
+	// SUMMED ACROSS SOURCES, because the gate is about the whole index: a
+	// seat whose company has pages indexed and items not is one that would
+	// be told its own tracker holds nothing.
+	// THROUGH THE HANDLE, for [Indexer.nextBatch]' reason.
 	if err := x.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM pages_heads WHERE status = 'published'`).
-			Scan(&published)
+		for _, source := range x.sources {
+			n, err := source.Count(ctx, tx)
+			if err != nil {
+				return err
+			}
+			published += n
+		}
+		return nil
 	}); err != nil {
-		return 0, fmt.Errorf("search: count the published pages: %w", err)
+		return 0, fmt.Errorf("search: count the documents %s offers: %w",
+			sourceNames(x.sources), err)
 	}
-	if err := x.db.SQL().QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM kb_docs WHERE source = 'page'`).
-		Scan(&indexed); err != nil {
-		return 0, fmt.Errorf("search: count the indexed pages: %w", err)
+	for _, source := range x.sources {
+		var n int
+		if err := x.db.SQL().QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM kb_docs WHERE source = ?`,
+			source.Source()).Scan(&n); err != nil {
+			return 0, fmt.Errorf("search: count the indexed %s documents: %w",
+				source.Source(), err)
+		}
+		indexed += n
 	}
 	// NEVER NEGATIVE. The index can legitimately hold rows the sources no
 	// longer have — a page trashed between the two reads, an orphan the
@@ -494,12 +532,15 @@ const indexIdle = 2 * time.Second
 // the index is missing and is deliberately blind to a row that is merely
 // stale.
 func (x *Indexer) Sweep(ctx context.Context) (bool, error) {
-	orphans, err := x.Orphans(ctx, IndexBatch)
+	// THE ORPHAN PASS NAMES ITS SOURCE, because the index is one table over
+	// every corpus and a page and a work item can share an id-shaped
+	// string: removing by id alone would delete whichever row sorted first.
+	source, orphans, err := x.orphanPass(ctx, IndexBatch)
 	if err != nil {
 		return false, err
 	}
 	for _, id := range orphans {
-		if err := x.Remove(ctx, "page", id); err != nil {
+		if err := x.Remove(ctx, source, id); err != nil {
 			return false, err
 		}
 	}
