@@ -752,6 +752,29 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 	// GitHub card reading Connected over an agent that could do nothing.
 	seatsRequired := kind == integration.KindSlack || kind == integration.KindGitHub
 	if seatsRequired {
+		// NOT ONE AGENT CAN ACT, which is a different question from any
+		// single seat's and the one this missed entirely.
+		//
+		// The loop below asks only about seats that have STARTED, so that a
+		// company running GitHub for three of its ten agents is finished
+		// when those three are. A company where NOBODY has started passed
+		// it vacuously: measured on a live connect, one agent seat with no
+		// app, `satisfied: true` and `seats_required: true` on the same
+		// answer, the card Connected, and the seat's own row three screens
+		// away saying "no app of its own yet, so this agent acts as nobody
+		// on GitHub". Connecting a per-seat surface for nobody is not a
+		// company's choice in the way opting nine agents out of ten is; it
+		// is the work not having been done.
+		working := false
+		for _, seat := range seats {
+			if seat.Satisfied {
+				working = true
+				break
+			}
+		}
+		if len(seats) > 0 && !working {
+			satisfied = false
+		}
 		for _, seat := range seats {
 			// ENROLLED OR STARTED, because those are two different ways
 			// of having work outstanding and Present only catches the

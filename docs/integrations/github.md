@@ -428,6 +428,10 @@ pass and corrects the document from what it finds.
 | An app id GitHub answers 404 to | Clears `app_id`, `app_slug`, `installation_id`, `private_key` and `webhook_secret` | Create an app for this seat |
 | A **disconnect** uninstalled the app | `installation_id: 0` | Install it, with the link |
 
+**An agent with no app at all is reported too, and it used to be invisible.** The loop builds its seat list from the seats carrying an `integrations.github` block, because that block is where an app's id, slug and key are recorded — so a seat that has never had one was absent from the pass's input and produced no finding. Measured on a live connect: a company with one agent, no app, `phase: ready`, `findings: []`, and the seat's own row three screens away saying "no app of its own yet, so this agent acts as nobody on GitHub". They are reported as **one** `approval_required` naming the count and up to three handles, because creating an app is the same act for every one of them and a fifty-agent company does not need fifty rows saying it; the whole list travels beside the sentence. `approval_required` rather than `identity_missing` because the engine can never do it — an app is created by a form POST from a page carrying your own GitHub session — so a card reading *Setting up agents* would wait for an act nobody is performing.
+
+**And the card is not Connected while no agent can act.** One GitHub App is one bot identity, so an agent without its own app acts as nobody there. The satisfaction check asks only about seats that have *started*, which is what lets a company running GitHub for three of its ten agents be finished when those three are — and a company where nobody had started passed it vacuously: `satisfied: true` beside `seats_required: true`, over an agent that could do nothing.
+
 Every one of these reads as **Action needed**, waiting on a person at GitHub.
 The engine cannot create an app or install one for anybody: both are acts in a
 browser, carrying the operator's own session.
@@ -675,6 +679,8 @@ So it does the two things GitHub genuinely allows:
 | `-secret-store` / `-env-file PATH` / `-print` | Where a minted webhook secret goes. **Required for a real run** — a run with nowhere to put what it mints creates a live secret and prints none of it |
 | `-recreate-webhooks` | Delete and remake every hook to mint a fresh secret. **Destructive**: it invalidates the secret every other deployment of this company holds |
 | `-dry-run` | Read and report; register nothing, and do not open the secret store |
+
+**No organization credential means no organization hook, and the surface says so.** `integrations.github.token` is optional and the connect form does not ask for it, both deliberately — routing needs nothing from it, because each agent's own app answers who is participating in a thread. What it is still needed for is the one thing `provisioning` asks for: a hook on an organization or on a list of repositories. With no token the pass reads nothing and writes nothing, and it used to say so only in its *notes*, which are not findings — so a surface that had authenticated with nobody reported `ready` with an empty finding list. Measured on a live connect: `phase: ready`, `routes: true`, and exactly one webhook on the organization, belonging to a different deployment and never triggered. It is now `ingress_blocked` against `integrations.github.token`, naming the organization that went unanswered and both ways out (set the token, or clear `provisioning` and let each agent's own app carry its own webhook). A company with no `provisioning` block asked for no hook and is still silent — that is how this form sets GitHub up.
 
 **A working secret is never reminted.** The engine is running with the old
 one, so re-registering with a fresh secret would have GitHub sign every

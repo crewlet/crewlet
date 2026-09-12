@@ -131,6 +131,50 @@ type SeatAppResult struct {
 	Findings []integration.Finding
 }
 
+// SeatsWithNoApp is the one finding for the agent seats that have no app
+// record at all, or nil when every agent has one.
+//
+// # Why these are reported together and the rest are reported one by one
+//
+// [ReconcileSeatApps] walks the seats that HAVE an app and says what is
+// outstanding on each, because each is a different act: install this one,
+// re-create that one. A seat with no app at all is the same act for every one
+// of them — a person creates it from the Integrations screen — so N of those
+// is one sentence, not N findings, and a fifty-agent company that has just
+// connected does not get fifty rows saying the same thing.
+//
+// # And why they are reported at all
+//
+// They were invisible. The engine builds its seat list from the seats
+// carrying an `integrations.github` block, because that block is where an
+// app's id, slug and key are recorded — so a seat that has never had one is
+// absent from the pass's input, the AppID == 0 arm below cannot be reached
+// for it, and no finding is produced. Measured on a live connect: a company
+// with one agent, no app, `phase: ready`, `findings: []`, and a seat row
+// three screens away saying "no app of its own yet, so this agent acts as
+// nobody on GitHub".
+//
+// APPROVAL_REQUIRED, on the same reasoning the arm below gives: the engine
+// can do nothing until a person acts at GitHub, so a card reading "Setting up
+// agents" would wait for an act nobody is performing.
+func SeatsWithNoApp(handles []string) *integration.Finding {
+	if len(handles) == 0 {
+		return nil
+	}
+	detail, all := integration.Listed(
+		fmt.Sprintf("%d agent(s) have no GitHub App of their own, so nothing "+
+			"they do on GitHub is theirs", len(handles)),
+		handles,
+		"Create one per agent from the Integrations screen — GitHub offers no "+
+			"API for it, so it is a click there and nothing else can do it.")
+	return &integration.Finding{
+		Kind:     integration.FindingApprovalRequired,
+		Subject:  "agents without an app",
+		Detail:   detail,
+		Subjects: all,
+	}
+}
+
 // ReconcileSeatApps brings every agent's own app in line.
 //
 // The result is returned WITH an error rather than instead of it: the seats

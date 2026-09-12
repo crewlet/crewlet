@@ -263,6 +263,24 @@ type Result struct {
 	// anywhere but Reconcile must not invent an ingress problem.
 	NoIngress string
 
+	// NoRegistrar says why this run could register no webhook AT ALL
+	// although the company asked for one, and is empty when it could.
+	//
+	// SEPARATE FROM NoIngress, whose subject is the ADDRESS. This one's is
+	// the credential: `provisioning` names an organization or a list of
+	// repositories, which is a company asking for hooks on them, and
+	// `integrations.github.token` is what registering one takes. With no
+	// token the pass reads nothing and writes nothing — and said so only in
+	// Notes, which are not findings, so a surface that had authenticated
+	// with nobody reported READY. Measured on a live connect: `phase:
+	// ready`, `findings: []`, `routes: true`, and exactly one webhook on
+	// the organization, belonging to somebody else's deployment.
+	//
+	// The form asks for no token, deliberately (see [Requirements]), so
+	// this finding has no field to offer and its detail names the variable
+	// and the way out instead.
+	NoRegistrar string
+
 	// NoKeyring is a run that had to mint the webhook signing secret and
 	// had nowhere to seal one.
 	//
@@ -338,7 +356,8 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			Notes: []string{
 				"no org credential resolved, so this run read nothing at GitHub",
 			},
-			NoIngress: noIngressReason(opts),
+			NoIngress:   noIngressReason(opts),
+			NoRegistrar: noRegistrarReason(opts),
 		}, nil
 	}
 	login, err := opts.Client.Me(ctx)
@@ -533,6 +552,35 @@ func noIngressReason(opts Options) string {
 	}
 	return "integrations.public_base_url is unset, so nothing at GitHub has " +
 		"an address to deliver to and no event reaches this deployment"
+}
+
+// noRegistrarReason says why a run with no organization credential could
+// register nothing although the company asked for hooks, or "" when it asked
+// for none.
+//
+// ASKED FOR is the whole of the test, and it is the `provisioning` block: an
+// organization or a list of repositories is a company saying it wants hooks
+// on them. A company with no block wants none — each agent's own app carries
+// its own webhook in its own manifest — so silence there is correct rather
+// than a gap, and reporting it would put a permanent finding on every company
+// running GitHub the way the form sets it up.
+func noRegistrarReason(opts Options) string {
+	pv := opts.Config.Provisioning
+	if pv == nil {
+		return ""
+	}
+	where := hookTargetNames(pv)
+	if len(where) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		"integrations.github.provisioning names %s, so this company asked for "+
+			"a webhook there, and no credential resolved to register one with: "+
+			"nothing at GitHub delivers to this deployment from %s. Set "+
+			"integrations.github.token to a credential with webhook access, or "+
+			"clear the provisioning block and let each agent's own app carry "+
+			"its own webhook",
+		strings.Join(where, ", "), strings.Join(where, ", "))
 }
 
 // ingress is what one webhook pass concluded. A struct rather than three

@@ -578,3 +578,84 @@ func TestAFinishedGitHubSeatNamesItsLogin(t *testing.T) {
 		t.Errorf("detail = %q repeats the scope the install already settled", detail)
 	}
 }
+
+// A GITHUB CARD IS NOT SATISFIED WHILE NO AGENT CAN ACT.
+//
+// One GitHub App is one bot identity, so an agent without its own app acts as
+// nobody there. The satisfaction check asked only about seats that had
+// STARTED — which is what lets a company running GitHub for three of its ten
+// agents be finished when those three are — and a company where NOBODY had
+// started passed it vacuously.
+//
+// Measured on a live connect: one agent seat with no app, `satisfied: true`
+// and `seats_required: true` on the same answer, the card reading Connected,
+// and the seat's own row saying "no app of its own yet, so this agent acts as
+// nobody on GitHub".
+func TestAGitHubToolWithNoWorkingAgentIsNotSatisfied(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	// A COMPANY WHERE NOBODY HAS STARTED: the org block is complete and no
+	// seat has an app.
+	res := s.do(t, http.MethodPut, "/config", `{
+	  "name": "Acme",
+	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
+	  "integrations": {
+	    "public_base_url": "https://engine.example.com",
+	    "github": {"enabled": true, "webhook_secret": "${GH_SIGN}",
+	               "provisioning": {"org": "crewbed"}}
+	  },
+	  "roles": [{"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"}]
+	}`, map[string]string{"X-Summary": "github connected for nobody"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("import = %d: %s", res.Code, res.Body)
+	}
+	if err := s.vault.Set(t.Context(), "GH_SIGN", "s", "test", "test", pinned); err != nil {
+		t.Fatal(err)
+	}
+
+	state := decode(t, s.do(t, http.MethodGet, "/setup/integrations/github", "", nil))
+	if state["seats_required"] != true {
+		t.Fatalf("the premise is wrong: seats_required = %v", state["seats_required"])
+	}
+	if state["satisfied"] == true {
+		t.Error("a GitHub card with no agent able to act reported satisfied, " +
+			"which is what a person reads as done")
+	}
+}
+
+// AND A COMPANY RUNNING GITHUB FOR SOME OF ITS AGENTS IS STILL FINISHED.
+//
+// The clause above must not turn the opt-in model into a permanent block: a
+// company whose three enrolled agents are done is done, whatever the other
+// seven chose.
+func TestAGitHubToolWithOneWorkingAgentIsSatisfied(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seedGitHubApps(t)
+	res := s.do(t, http.MethodPatch, "/config",
+		`{"integrations":{"public_base_url":"https://engine.example.com",
+		  "github":{"enabled":true,"webhook_secret":"${GH_SIGN}"}}}`,
+		map[string]string{"X-Summary": "connect github"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("connect = %d: %s", res.Code, res.Body)
+	}
+	if err := s.vault.Set(t.Context(), "GH_SIGN", "s", "test", "test", pinned); err != nil {
+		t.Fatal(err)
+	}
+
+	// The fixture's `reviewer` seat is installed with a key that resolves,
+	// and `sre-lead` has no app at all.
+	seats := githubSeats(t, s)
+	if seats["reviewer"]["satisfied"] != true {
+		t.Fatalf("the premise is wrong: reviewer = %v", seats["reviewer"])
+	}
+	if seats["sre-lead"]["satisfied"] == true {
+		t.Fatalf("the premise is wrong: sre-lead = %v", seats["sre-lead"])
+	}
+	state := decode(t, s.do(t, http.MethodGet, "/setup/integrations/github", "", nil))
+	// NOT satisfied, because `builder` and `stray` are ENROLLED and
+	// unfinished — which is the pre-existing clause, still working.
+	if state["satisfied"] == true {
+		t.Error("a company with enrolled unfinished agents reported satisfied")
+	}
+}

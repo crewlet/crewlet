@@ -1114,6 +1114,15 @@ func (p *githubPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 	// loop rather than at connect time because installing an app is a click
 	// in a browser that tells the engine nothing.
 	seats := p.seatApps(env)
+	// AND THE AGENTS WITH NO APP AT ALL, which the list above cannot hold:
+	// it is built from the seats carrying an `integrations.github` block,
+	// because that block is where an app's id, slug and key are recorded.
+	// So a seat that has never had one was absent from the pass's input and
+	// produced no finding — a company with one agent and no app reported
+	// ready with an empty finding list. See [github.SeatsWithNoApp].
+	if missing := p.seatsWithoutApps(company); missing != nil {
+		findings = append(findings, *missing)
+	}
 	if len(seats) > 0 {
 		apiBase, webBase := cfg.Bases(env.LookupOK)
 		apps, appsErr := github.ReconcileSeatApps(ctx, github.SeatAppOptions{
@@ -1172,6 +1181,33 @@ func (p *githubPass) forgetApp(in setup.PassInput) func(context.Context, string)
 	return func(ctx context.Context, handle string) error {
 		return p.engine.ForgetGitHubApp(ctx, handle)
 	}
+}
+
+// seatsWithoutApps is the finding for this company's agents that have no
+// GitHub App recorded, or nil when every one of them has.
+//
+// READ OFF THE ORG MODEL rather than off [Engine.githubSeatApps], which
+// answers the other question: which seats this pass has an app to RECONCILE.
+// A seat with no app is exactly the one that list cannot carry.
+func (p *githubPass) seatsWithoutApps(company *Company) *integration.Finding {
+	if company == nil {
+		return nil
+	}
+	var missing []string
+	for role := range company.Config.EachRole() {
+		seat := role.Seat()
+		if !seat.IsAgent() {
+			// A HUMAN SEAT HAS ITS OWN GITHUB ACCOUNT. Creating an app
+			// for a person would be a second identity for somebody who
+			// already has one.
+			continue
+		}
+		if app := role.Integrations.GitHub; app != nil && app.AppID != 0 {
+			continue
+		}
+		missing = append(missing, seat.Handle())
+	}
+	return github.SeatsWithNoApp(missing)
 }
 
 // githubOrg is the organization these apps are installed on.

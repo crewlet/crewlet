@@ -78,6 +78,24 @@ func (r *Result) Findings() []integration.Finding {
 		})
 	}
 
+	// AND NO CREDENTIAL TO REGISTER THE HOOK THE COMPANY ASKED FOR.
+	//
+	// The organization credential is optional and the form does not ask for
+	// it, both deliberately — routing needs nothing from it, because each
+	// agent's own app answers who is participating. What it IS still needed
+	// for is the one thing `provisioning` asks for: a hook on an
+	// organization or on a list of repositories. Without it the pass reads
+	// nothing and writes nothing, and it said so in NOTES, which are not
+	// findings — so a surface that had authenticated with nobody reported
+	// READY with an empty finding list. See [Result.NoRegistrar].
+	if r.NoRegistrar != "" {
+		out = append(out, integration.Finding{
+			Kind:    integration.FindingIngressBlocked,
+			Subject: "integrations.github.token",
+			Detail:  r.NoRegistrar,
+		})
+	}
+
 	// AND A TARGET THIS RUN TRIED AND COULD NOT HOOK.
 	//
 	// Reported per target rather than once: a partial hook-up is the state

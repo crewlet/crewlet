@@ -10,12 +10,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
@@ -222,5 +224,99 @@ func TestAGitHubDisconnectThatCannotRecordTheUninstallHolds(t *testing.T) {
 	if _, err := pass.Teardown(t.Context(), setup.TeardownInput{RemoveSeats: true}); err == nil {
 		t.Fatal("a teardown that could not record the uninstall reported success, " +
 			"so the block drops with the record still claiming an installation")
+	}
+}
+
+// THE PASS REPORTS THE AGENTS THAT HAVE NO APP AT ALL.
+//
+// The engine builds its seat list from the seats carrying an
+// `integrations.github` block, because that block is where an app's id, slug
+// and key are recorded — so a seat that has never had one is absent from the
+// pass's input and github's "no app" arm cannot be reached for it. Measured
+// on a live connect: `phase: ready`, `findings: []`, one agent, no app, and
+// the seat's own row three screens away saying it acts as nobody.
+//
+// APPROVAL_REQUIRED, because the engine can never create an app: it is a form
+// POST from a page carrying a person's own GitHub session.
+func TestTheGitHubPassReportsAgentsWithNoAppOfTheirOwn(t *testing.T) {
+	t.Parallel()
+	pemKey := testAppKey(t)
+	doc := fmt.Sprintf(`
+name: Acme
+providers:
+  llm:
+    zulu:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["sk-ant-fake-zulu-key"]
+integrations:
+  github:
+    enabled: true
+    webhook_secret: "whsec_Y3Jld2xldC10ZXN0LXNpZ25pbmcta2V5LTMyYnl0ZXM="
+roles:
+  - name: SRE Lead
+    handle: sre-lead
+    llm: zulu
+  - name: Reviewer
+    handle: reviewer
+    llm: zulu
+    integrations:
+      github:
+        app_id: 42
+        app_slug: acme-reviewer
+        installation_id: 7
+        private_key: |
+%s
+  - name: Jane Founder
+    handle: founder
+    kind: human
+    contact:
+      github_login: jane
+`, indent(pemKey, "          "))
+	cfg, err := config.ParseCompany([]byte(doc))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	e := &Engine{}
+	company, err := NewCompanyWith(cfg, e.resolver())
+	if err != nil {
+		t.Fatalf("company: %v", err)
+	}
+	e.epoch.current.Store(company)
+
+	// THROUGH Run, not through the helper: what was missing was the WIRING,
+	// so a case that called the helper directly would pass over a pass that
+	// never calls it.
+	pass := &githubPass{engine: e}
+	findings, err := pass.Run(t.Context(), setup.PassInput{
+		Sink:        newSealingTestSink(),
+		WebhookBase: "https://engine.example.com",
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var got *integration.Finding
+	for i, f := range findings {
+		if f.Kind == integration.FindingApprovalRequired &&
+			strings.Contains(f.Detail, "no GitHub App of their own") {
+			got = &findings[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("findings = %v: an agent with no app of its own was reported "+
+			"as nothing, so the card reads Connected over an agent that can "+
+			"do nothing", findings)
+	}
+	if !strings.Contains(got.Detail, "sre-lead") {
+		t.Errorf("the finding does not name the agent:\n%s", got.Detail)
+	}
+	// NOT THE SEAT THAT HAS ONE, and not the person: a human seat has its
+	// own GitHub account, so creating an app for one would be a second
+	// identity for somebody who already has one.
+	for _, wrong := range []string{"reviewer", "founder"} {
+		if strings.Contains(got.Detail, wrong) ||
+			slices.Contains(got.Subjects, wrong) {
+			t.Errorf("the finding names %s:\n%s / %v", wrong, got.Detail, got.Subjects)
+		}
 	}
 }
