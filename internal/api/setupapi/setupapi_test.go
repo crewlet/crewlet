@@ -636,15 +636,25 @@ type statusStore struct {
 	mu     sync.Mutex
 	states map[integration.Kind]integration.State
 	forgot []integration.Kind
+
+	// onSave runs inside every write, which is how a case observes what
+	// was TRUE at the moment the row was written — the lease being held,
+	// most of all. Nothing else can see that: the write is the last thing
+	// a pass does and the lease is released a frame later.
+	onSave func(integration.State)
 }
 
 func (s *statusStore) SaveIntegration(_ context.Context, state integration.State) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.states == nil {
 		s.states = map[integration.Kind]integration.State{}
 	}
 	s.states[state.Kind] = state
+	hook := s.onSave
+	s.mu.Unlock()
+	if hook != nil {
+		hook(state)
+	}
 	return nil
 }
 
