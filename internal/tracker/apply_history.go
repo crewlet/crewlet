@@ -28,7 +28,7 @@ import (
 // hanging there would leave that record out of the spans entirely. A missing
 // span is strictly worse than a slightly wrong instant.
 func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
-	projectKey string) (int, error) {
+	projectKey string, applied map[string]Delta) (int, error) {
 
 	subject := c.subject()
 	effective, err := effectiveAt(ctx, tx, subject.ID, c)
@@ -42,16 +42,33 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 	if notify != nil {
 		kind = string(notify.Kind)
 		excerpt = notify.Excerpt
-		fields = jsonOf(notify.Fields)
 		commentID = notify.CommentID
 		notified = 1
 		late = boolInt(notify.Late)
 	} else {
 		// A QUIET COMMIT STILL NAMES WHAT IT DID. The kind falls back to
-		// the operation, because a history row whose kind was empty
-		// would be a row no filter can select and no card can render —
-		// which is indistinguishable from a commit that never happened.
-		kind = string(c.record.Op)
+		// what actually moved, and then to the operation, because a
+		// history row whose kind was empty would be a row no filter can
+		// select and no card can render — which is indistinguishable
+		// from a commit that never happened.
+		kind = string(quietKind(applied, c.record.Op))
+	}
+	// THE DELTAS ARE THE APPLIER'S, on every commit, loud or quiet.
+	//
+	// They used to be the NOTIFICATION's, which made "what changed" a
+	// property of what was ANNOUNCED: a quiet status change wrote `{}`
+	// here and produced no span, so every report derived from the spans
+	// silently omitted it. The two are the same function of the same two
+	// documents — see [TaskDeltas] — so nothing is lost by taking the
+	// applier's, and what is gained is that a record nobody was told
+	// about is still a record of what happened.
+	if len(applied) > 0 {
+		fields = jsonOf(applied)
+	} else if notify != nil {
+		// A COMMENT, A MENTION OR AN ASK carries fields no document
+		// comparison can produce, so the notification's own are kept
+		// wherever the apply found nothing to compare.
+		fields = jsonOf(notify.Fields)
 	}
 
 	res, err := tx.ExecContext(ctx, `
@@ -148,12 +165,22 @@ func (a *Applier) recomputeSpans(ctx context.Context, tx *sql.Tx, taskID string)
 		`DELETE FROM tracker_status_spans WHERE task_id = ?`, taskID); err != nil {
 		return 0, fmt.Errorf("tracker: clear the spans of %s: %w", taskID, err)
 	}
+	// THE ROW'S OWN STATUS DELTA DECIDES, not its kind.
+	//
+	// A row CARRYING a status delta is a status change, whatever it was
+	// filed under — and the kind cannot be trusted for this: a quiet
+	// commit's kind is the operation, and a loud one's is whichever single
+	// word the writer chose to announce, so a patch that moved the status
+	// AND the assignee is filed under `assignee` and would have been
+	// invisible here. The predicate is over the same rows the subject
+	// index already selects, so it costs nothing beyond them.
 	rows, err := tx.QueryContext(ctx, `
 		SELECT h.id, h.effective_at,
 		       json_extract(h.fields_json, '$.status.to') AS status
 		FROM tracker_history h
-		WHERE h.subject_id = ? AND h.kind = ?
-		ORDER BY h.log_seq`, taskID, string(ChangeStatus))
+		WHERE h.subject_id = ?
+		  AND json_extract(h.fields_json, '$.status.to') IS NOT NULL
+		ORDER BY h.log_seq`, taskID)
 	if err != nil {
 		return 0, fmt.Errorf("tracker: read the status history of %s: %w", taskID, err)
 	}
@@ -338,4 +365,38 @@ func batchOf(rec MutationRecord) any {
 		return nil
 	}
 	return *rec.BatchID
+}
+
+// quietKind is what a commit nobody was told about is filed under.
+//
+// BY WHAT MOVED, in a fixed precedence, because the kind is what every feed
+// filter selects on and a whole class of change filed under the bare operation
+// is a class no filter can reach. The order puts `status` first for the same
+// reason the spans read the delta: it is the change other tables are derived
+// from.
+func quietKind(applied map[string]Delta, op OpKind) ChangeKind {
+	if op == OpCreate {
+		// A CREATE IS A CREATE, whatever it set on the way in: every
+		// field moves from empty on a create, so deciding by what moved
+		// would file every new task under the first field in the
+		// precedence.
+		return ChangeCreated
+	}
+	for _, moved := range []struct {
+		field string
+		kind  ChangeKind
+	}{
+		{"status", ChangeStatus},
+		{"assignee", ChangeAssignee},
+		{"project", ChangeMoved},
+		{"priority", ChangeFields},
+		{"title", ChangeFields},
+		{"type", ChangeFields},
+		{"tags", ChangeFields},
+	} {
+		if _, changed := applied[moved.field]; changed {
+			return moved.kind
+		}
+	}
+	return ChangeKind(op)
 }

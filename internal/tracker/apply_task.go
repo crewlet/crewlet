@@ -42,7 +42,9 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		// history row below is still written, because a record that
 		// produced no object change is still something that happened —
 		// and its own guard makes THAT idempotent.
-		return a.writeHistory(ctx, tx, c, current.Project)
+		// NO DELTAS: this record changed no document, so there is
+		// nothing for the history row to say moved.
+		return a.writeHistory(ctx, tx, c, current.Project, nil)
 	}
 
 	next, err := mergeTask(current, held, c)
@@ -87,12 +89,23 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
-	history, err := a.writeHistory(ctx, tx, c, next.Project)
+	// WHAT THE APPLY ACTUALLY DID, computed from the two documents this
+	// frame holds — which is the only frame that can, and the one the
+	// history row and the spans below are both derived from.
+	before := current
+	if !held {
+		before = Task{}
+	}
+	applied := TaskDeltas(before, next)
+	history, err := a.writeHistory(ctx, tx, c, next.Project, applied)
 	if err != nil {
 		return 0, err
 	}
 	spans := 0
-	if c.record.Notify != nil && c.record.Notify.Kind == ChangeStatus {
+	// THE STATUS MOVED, not "somebody was told the status moved". Gated on
+	// the notification, a quiet status change produced no span at all —
+	// and every report derived from the spans omitted it silently.
+	if _, moved := applied["status"]; moved {
 		if spans, err = a.recomputeSpans(ctx, tx, id); err != nil {
 			return 0, err
 		}
@@ -1005,7 +1018,9 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
-	history, err := a.writeHistory(ctx, tx, c, task.Project)
+	// A PURGE MOVES NO FIELD — the row is gone, and a delta naming what
+	// it used to hold would be the content the purge exists to destroy.
+	history, err := a.writeHistory(ctx, tx, c, task.Project, nil)
 	if err != nil {
 		return 0, err
 	}

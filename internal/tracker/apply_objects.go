@@ -53,7 +53,7 @@ func (a *Applier) applyDocument(ctx context.Context, tx *sql.Tx, c applyContext)
 			return 0, err
 		}
 	}
-	history, err := a.writeHistory(ctx, tx, c, "")
+	history, err := a.writeHistory(ctx, tx, c, "", nil)
 	if err != nil {
 		return 0, err
 	}

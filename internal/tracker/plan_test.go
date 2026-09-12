@@ -485,3 +485,62 @@ func planFields(q Query) map[string]resolvedField {
 	}
 	return out
 }
+
+// THE CONTAINER SURVIVES THE SUBTASK ROLLUP, and it is the only predicate the
+// outer row has to enter on.
+//
+// The rollup replaces the whole predicate with `root_id IN (<the predicate>)`,
+// and it used to drop the container with it — so every container-scoped query
+// in the default subtask mode, which is every board, read the outer row with
+// nothing but a tombstone every task shares. This asserts the compiled SQL
+// rather than the plan because it is the CLAUSE that was missing: a planner
+// that happened to pick some other index would hide it.
+func TestTheSubtaskRollupKeepsItsContainer(t *testing.T) {
+	t.Parallel()
+	for name, params := range map[string]map[string]any{
+		"the board":          {"container": "project:P01"},
+		"the trash":          {"container": "project:P01", "removed": "true"},
+		"a filtered board":   {"container": "project:P01", "assignee": "ada"},
+		"a searched backlog": {"container": "project:P01", "q": "login"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			q, err := ParseQuery(MapParams(params), planNow, time.UTC)
+			if err != nil {
+				t.Fatalf("ParseQuery: %v", err)
+			}
+			where, args, err := compile(q, planNow, planFields(q))
+			if err != nil {
+				t.Fatalf("compile: %v", err)
+			}
+			outer, _, found := strings.Cut(where, "t.root_id IN (")
+			if !found {
+				t.Fatalf("this query did not roll subtasks up at all:\n%s", where)
+			}
+			if !strings.Contains(outer, "t.project_key = ?") {
+				t.Errorf("the rollup's OUTER predicate is %q and names no "+
+					"container — the row itself is then every task in the "+
+					"company, filtered afterwards by the subquery", outer)
+			}
+			// AND EVERY ARGUMENT IS WHERE ITS PLACEHOLDER IS.
+			//
+			// Placeholders bind in TEXTUAL order, so a clause added
+			// before the subquery whose argument was appended after
+			// every other binds the wrong value silently — and a
+			// clause-only assertion cannot see it. The outer carries
+			// exactly one placeholder, the container's; the subquery's
+			// own first placeholder is its copy of the same clause. So
+			// the container has to be the first TWO arguments, and a
+			// single-argument case would bind correctly whichever end
+			// it was added at.
+			if outers := strings.Count(outer, "?"); outers != 1 {
+				t.Fatalf("the rollup's outer predicate %q carries %d "+
+					"placeholders, want the container's one", outer, outers)
+			}
+			if len(args) < 2 || args[0] != "P01" || args[1] != "P01" {
+				t.Errorf("the compiled arguments are %v, want the container "+
+					"bound twice at the front — once out here and once inside "+
+					"the subquery every other argument moved into", args)
+			}
+		})
+	}
+}

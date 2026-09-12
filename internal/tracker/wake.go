@@ -128,20 +128,32 @@ func (w Wake) snapshot(leads Leads) Snapshot {
 // CAPPED AT THE DISPLAY LIMIT and no lower: the cap governs what a card SHOWS
 // and never what the mutation carries, and a writer that hit it should be
 // trimming what it shows rather than what it recorded.
-func (w Wake) deltas() map[string]Delta {
+func (w Wake) deltas() map[string]Delta { return TaskDeltas(w.Before, w.After) }
+
+// TaskDeltas is what changed between two versions of a task.
+//
+// EXPORTED AND SHARED, because two frames need the same answer and a second
+// copy is how one stops matching the other: the WRITER computes it for the
+// notification card, and the APPLIER computes it for the history row — which
+// every quiet commit also writes, and which the status spans are rebuilt
+// from. While this was a method on [Wake] the applier had no way to reach it,
+// so a quiet status change wrote a history row with NO deltas and produced NO
+// span, and every report derived from the spans — burndown, cumulative flow,
+// cycle time, a sprint's `done` and therefore velocity — silently omitted it.
+func TaskDeltas(before, after Task) map[string]Delta {
 	moved := map[string]Delta{}
 	add := func(field, from, to string) {
 		if from != to {
 			moved[field] = Delta{From: from, To: to}
 		}
 	}
-	add("title", w.Before.Title, w.After.Title)
-	add("status", string(w.Before.Status), string(w.After.Status))
-	add("assignee", w.Before.Assignee, w.After.Assignee)
-	add("priority", string(w.Before.Priority), string(w.After.Priority))
-	add("project", w.Before.Project, w.After.Project)
-	add("type", w.Before.Type, w.After.Type)
-	add("tags", strings.Join(w.Before.Tags, ", "), strings.Join(w.After.Tags, ", "))
+	add("title", before.Title, after.Title)
+	add("status", string(before.Status), string(after.Status))
+	add("assignee", before.Assignee, after.Assignee)
+	add("priority", string(before.Priority), string(after.Priority))
+	add("project", before.Project, after.Project)
+	add("type", before.Type, after.Type)
+	add("tags", strings.Join(before.Tags, ", "), strings.Join(after.Tags, ", "))
 	if len(moved) == 0 {
 		return nil
 	}

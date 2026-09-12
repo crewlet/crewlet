@@ -388,9 +388,15 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 		args = append(args, values...)
 	}
 
+	// THE SCOPE IS KEPT SEPARATELY as well as added, because the subtask
+	// rollup below replaces the whole predicate with a subquery and the
+	// container has to survive that — see the rewrite for what it costs
+	// when it does not.
+	scope, scopeArgs := "", []any(nil)
 	switch {
 	case q.Scope.Project != "":
-		add("t.project_key = ?", q.Scope.Project)
+		scope, scopeArgs = "t.project_key = ?", []any{q.Scope.Project}
+		add(scope, scopeArgs...)
 	case q.Scope.Workspace:
 		// The Everything level, and it is explicit: no predicate.
 	}
@@ -747,7 +753,33 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 		if q.Removed != nil && *q.Removed {
 			tomb = "t.removed_at IS NOT NULL"
 		}
-		where = []string{tomb, rooted}
+		where = []string{tomb}
+		if scope != "" {
+			// AND THE CONTAINER SURVIVES THE REWRITE.
+			//
+			// Without it the outer row carried no scope at all, so
+			// EVERY container-scoped query in the default subtask
+			// mode — which is every board — was a scan of every task
+			// in the COMPANY, filtered afterwards by the subquery.
+			// The planner has nothing else to enter on out here: the
+			// only other outer predicate is a tombstone every row
+			// shares.
+			//
+			// It narrows no legitimate answer either. A subtree lives
+			// in one project — a cross-project move takes the
+			// descendants with it — and a subtask whose project
+			// differs from its root's is the `inconsistent_project`
+			// anomaly the attention set exists to surface, not a
+			// shape a board should quietly return rows from another
+			// container for.
+			//
+			// THE ARGUMENT IS PREPENDED, because placeholders bind in
+			// textual order and this clause now precedes the subquery
+			// every other argument moved into.
+			where = append(where, scope)
+			args = append(append([]any{}, scopeArgs...), args...)
+		}
+		where = append(where, rooted)
 	}
 
 	if q.Group != "" && !branch {
@@ -1084,6 +1116,10 @@ var sortColumns = map[string]string{
 	"priority": "t.prio_rank", "created": "t.created_at",
 	"title": "t.title", "estimate": "t.estimate_min", "points": "t.points",
 	"spend": "t.spend_tokens", "status_entered": "t.status_entered_at",
+	// THE TRASH'S OWN ORDER, and the only sort key that is about a row's
+	// removal rather than about its work. It sorts NULLS anywhere, because
+	// the only query that names it is one already filtered to removed rows.
+	"removed": "t.removed_at",
 }
 
 // sortTerms compiles the sort, ALWAYS ENDING IN THE ID.
@@ -1128,12 +1164,24 @@ func sortTerms(q Query, fields map[string]resolvedField) []sortTerm {
 		terms = append(terms, sortTerm{Column: column, Descending: sort.Descending})
 	}
 	if len(terms) == 0 {
-		// The default is the manual order inside a project and the most
-		// recently touched everywhere else, because a rank is only an
-		// order within the container that owns it.
-		if q.Scope.Project != "" {
+		switch {
+		case q.Removed != nil && *q.Removed:
+			// THE TRASH IS ORDERED BY WHEN IT WAS REMOVED, never by
+			// rank: a removed task's rank is its position on a board
+			// it is no longer on, so ordering a trash listing by it
+			// is ordering by a stale number — and the only index over
+			// removed rows is the partial one on this column, so the
+			// board default also made the listing a heap scan.
+			terms = append(terms, sortTerm{
+				Column: "t.removed_at", Descending: true,
+			})
+		case q.Scope.Project != "":
+			// The default is the manual order inside a project and
+			// the most recently touched everywhere else, because a
+			// rank is only an order within the container that owns
+			// it.
 			terms = append(terms, sortTerm{Column: "t.rank"})
-		} else {
+		default:
 			terms = append(terms, sortTerm{Column: "t.updated_at", Descending: true})
 		}
 	}
