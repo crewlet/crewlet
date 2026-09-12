@@ -324,22 +324,62 @@ func provisionSeat(
 	// the agent is authenticating with, so an unreadable sink stops this
 	// seat and says so rather than acting on a guess.
 	_, held, err := opts.Sink.Value(ctx, seat.TokenVar)
-	switch {
-	case err != nil:
+	if err != nil {
 		out.Err = fmt.Errorf(
 			"could not read whether %s already holds a key, so none was "+
 				"minted: %w", seat.TokenVar, err)
 		return out
-	case held:
-		return out
 	}
-	keys, err := opts.Client.ListAppKeys(ctx, opts.Creds, account.ID)
-	if err != nil {
+
+	// AND THE ACCOUNT IS ASKED EVEN WHEN A VALUE IS HELD, which is the
+	// whole of this block's correctness.
+	//
+	// "A value is stored" used to return here, and it is not the same fact
+	// as "the agent can authenticate". A teardown that KEEPS the account
+	// still revokes the key this engine minted (see [Teardown]), and the
+	// sealed value survives that by design — an operator's own decision,
+	// which a plain disconnect lists rather than deletes. So a reconnect
+	// found a value, minted nothing, and reported the seat ready over a
+	// credential Datadog answers 403 for. Measured over five cycles
+	// against a real organization: Connected in five seconds, seat
+	// satisfied, zero findings, nought application keys on the account.
+	// The same held for a key an administrator deleted by hand, for ever.
+	//
+	// Datadog is the last of the four provisioning surfaces to ask. Every
+	// other one already does, and each had to be taught the same lesson:
+	// atlassian counts the account's tokens ([orphaned]), gitlab and
+	// mattermost ask the instance who the credential is (Client.verify).
+	keys, listErr := opts.Client.ListAppKeys(ctx, opts.Creds, account.ID)
+	switch {
+	case listErr != nil && held:
+		// CANNOT TELL, AND SOMETHING IS HELD, so nothing changes. This is
+		// the same asymmetry [orphaned] draws and for the same reason: a
+		// Datadog blip that read as "no keys" would rotate every agent's
+		// credential on the loop's timer, which is an outage this engine
+		// caused. The seat keeps what it has and the next pass asks again.
+		return out
+	case listErr != nil:
 		out.Err = fmt.Errorf("read %s's keys: %w", seat.Handle,
-			integration.Reject(err, Status(err)))
+			integration.Reject(listErr, Status(listErr)))
 		return out
-	}
-	if len(keys) > 0 {
+	case held && len(keys) > 0:
+		// CONVERGED, as far as anything can establish. Datadog shows a
+		// key's value once, so nothing can prove the stored string is one
+		// of these — exactly the limit [atlassian.CountTokens] names. What
+		// it CAN prove is the negative below.
+		return out
+	case held:
+		// THE ACCOUNT HOLDS NO KEY AT ALL, so whatever is sealed for this
+		// seat is not one of its keys and cannot be: it was revoked at
+		// Datadog, or the account was recreated under it. Minted over,
+		// which is the repair, and said out loud because a credential
+		// changing underneath a running agent is worth a line.
+		log.InfoContext(ctx, "datadog_seat_key_replaced", "seat", seat.Handle,
+			"detail", "this seat's Datadog account holds no application key, "+
+				"so the credential sealed for it cannot authenticate — either "+
+				"the key was deleted at Datadog, or a disconnect revoked it. "+
+				"Minting a replacement; nothing has to be done by hand")
+	case len(keys) > 0:
 		// AN ACCOUNT WITH A KEY THIS ENGINE CANNOT READ. Datadog shows a
 		// value once, so a key that exists with nothing stored for it is
 		// unrecoverable: it is reported rather than replaced, because

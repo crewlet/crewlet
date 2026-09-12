@@ -341,7 +341,18 @@ func TestAKeyIsNotMintedForASeatThatAlreadyHasOne(t *testing.T) {
 			"email":"crewlet-sre@agents.test.invalid","service_account":true}}]}`))
 	}
 	minted := 0
-	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(w http.ResponseWriter, _ *http.Request) {
+	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(
+		w http.ResponseWriter, r *http.Request,
+	) {
+		// THE LIST AND THE MINT ARE THE SAME PATH, AND DIFFERENT ANSWERS.
+		// The pass asks what the account holds before it decides, so a
+		// fake that answered the mint's body to a GET would report a
+		// decode failure — and the run would skip the mint for the wrong
+		// reason, which is a passing test proving nothing.
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"data":[{"id":"k1","attributes":{"name":"crewlet"}}]}`))
+			return
+		}
 		minted++
 		_, _ = w.Write([]byte(`{"data":{"id":"k1","attributes":{"key":"v","name":"crewlet"}}}`))
 	}
@@ -744,5 +755,107 @@ func TestAnAccountDisabledByHandIsStillReportedRatherThanReEnabled(t *testing.T)
 	}
 	if !strings.Contains(res.Seats[0].Err.Error(), "not disabled by this engine") {
 		t.Errorf("the report does not say who disabled it: %v", res.Seats[0].Err)
+	}
+}
+
+// A STORED VALUE IS NOT A WORKING CREDENTIAL, AND THE ACCOUNT IS WHAT SAYS SO.
+//
+// "A value is held" used to end the seat's work, and it is a different fact
+// from "the agent can authenticate". A teardown that KEEPS the account still
+// revokes the key this engine minted, and the sealed value survives that by
+// design — so a reconnect found a value, minted nothing, and reported the seat
+// ready over a credential Datadog answers 403 for. Measured over five cycles
+// against a real organization: Connected in five seconds, seat satisfied, zero
+// findings, nought application keys on the account. An administrator deleting
+// the key by hand left the same state, for ever.
+func TestASeatWhoseAccountHoldsNoKeyIsMintedOver(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"u1","attributes":{
+			"email":"crewlet-sre@agents.test.invalid","service_account":true}}]}`))
+	}
+	minted := 0
+	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(
+		w http.ResponseWriter, r *http.Request,
+	) {
+		if r.Method == http.MethodGet {
+			// NOUGHT KEYS, which is the state a revoked or hand-deleted
+			// key leaves and the one thing that proves the sealed value
+			// cannot be one of the account's.
+			_, _ = w.Write([]byte(`{"data":[]}`))
+			return
+		}
+		minted++
+		_, _ = w.Write([]byte(`{"data":{"id":"k9","attributes":{"key":"fresh","name":"crewlet"}}}`))
+	}
+
+	s := newSink()
+	s.held["SRE_DD_KEY"] = "dead-value-from-an-earlier-cycle"
+	res, err := datadog.Reconcile(context.Background(), datadog.Options{
+		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
+		Creds: pair, Sink: s,
+	})
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if minted != 1 {
+		t.Fatalf("minted %d keys, want exactly one over the dead value", minted)
+	}
+	if got := s.held["SRE_DD_KEY"]; got != "fresh" {
+		t.Errorf("sealed %q, want the replacement: a mint nobody recorded is a "+
+			"credential nobody can use", got)
+	}
+	if len(res.Seats) != 1 || res.Seats[0].Err != nil {
+		t.Fatalf("seat = %+v, want it reported healthy once repaired", res.Seats)
+	}
+	if !res.Seats[0].KeyMinted {
+		t.Error("the replacement was not reported as minted")
+	}
+}
+
+// AND "CANNOT TELL" CHANGES NOTHING. A Datadog blip that read as "no keys"
+// would rotate every agent's credential on the loop's timer, which is an
+// outage this engine caused — the same asymmetry atlassian.orphaned draws.
+func TestAnUnreadableKeyListingLeavesAHeldCredentialAlone(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"u1","attributes":{
+			"email":"crewlet-sre@agents.test.invalid","service_account":true}}]}`))
+	}
+	minted := 0
+	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(
+		w http.ResponseWriter, r *http.Request,
+	) {
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"errors":["unwell"]}`))
+			return
+		}
+		minted++
+		_, _ = w.Write([]byte(`{"data":{"id":"k9","attributes":{"key":"fresh"}}}`))
+	}
+
+	s := newSink()
+	s.held["SRE_DD_KEY"] = "the-live-one"
+	res, err := datadog.Reconcile(context.Background(), datadog.Options{
+		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
+		Creds: pair, Sink: s,
+	})
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if minted != 0 {
+		t.Error("a key was minted on an answer Datadog never gave, revoking " +
+			"what the agent is authenticating with")
+	}
+	if got := s.held["SRE_DD_KEY"]; got != "the-live-one" {
+		t.Errorf("the held value became %q", got)
+	}
+	if len(res.Seats) != 1 || res.Seats[0].Err != nil {
+		t.Errorf("seat = %+v, want no failure over a blip", res.Seats)
 	}
 }

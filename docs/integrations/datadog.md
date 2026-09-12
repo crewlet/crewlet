@@ -227,12 +227,15 @@ each one leaving the surface reporting `ready` while alerts went nowhere:
 | No webhook was registered because `webhook_token` resolved to nothing, or because this node has no keyring to seal one with | `credential_missing` | set `integrations.datadog.webhook_token`, or install `secrets.keys` |
 | A seat's service account exists but is **disabled**, with no Crewlet marker | `identity_failed` | re-enable it in Datadog — it was not disabled by this engine |
 | A seat's service account is disabled **by a Crewlet disconnect** | — | the next pass re-enables it |
+| A seat holds a sealed key and its account holds **no application key at all** | — | the next pass mints a replacement and seals it |
 
-The last is the one worth knowing about. Disabling an account is exactly how a
-disconnect with account removal decommissions one, so a company that had run
-that and then reconnected looked fully provisioned while no seat could act. It
-is **reported rather than re-enabled**: undoing an operator's explicit
-decommission from a timer is not a decision this loop gets to make.
+Two of those are worth knowing about in detail.
+
+**An account this engine disabled is re-enabled, and one a person disabled is not.** Disabling is exactly how a disconnect with account removal decommissions an account, so a company that had run that and then reconnected looked fully provisioned while no seat could act. The disconnect writes a marker — the account's `title` becomes `crewlet:disconnected` — *before* it disables, so an interrupted teardown leaves a marked live account rather than an unmarked dead one, and connecting again re-enables only accounts carrying that marker. An account somebody disabled in Datadog's own console is reported and never touched: undoing an operator's explicit decision from a timer is not a decision this loop gets to make.
+
+**A sealed key is checked against the account, not trusted because it is there.** Datadog shows an application key's value exactly once, so nothing can prove the stored string is one of the account's keys. What *can* be proved is the negative: an account holding **no** keys cannot be the owner of whatever is sealed for that seat. That happens two ways — an administrator deletes the key, or a disconnect that **kept** the account still revoked the key this engine minted (it always does; the account survives, the engine's own credential does not) while the sealed value stayed, which is the operator's own decision that a plain disconnect lists rather than deletes. Either way the next pass mints a replacement and re-seals it, and logs `datadog_seat_key_replaced` saying which of the two it was.
+
+Reading the key list is what makes that possible, so it happens on every pass, held value or not — one request per seat, the same shape Atlassian's own token count has. It stays **three-valued**: a listing Datadog could not answer changes nothing, because reading a blip as "no keys" would rotate every agent's credential on the loop's timer, which is an outage this engine would have caused itself.
 
 A node with no keyring also no longer creates the accounts. It used to make a
 real Datadog service account per seat and then fail to record its key — so the

@@ -527,7 +527,22 @@ func TestADisconnectedAccountCanBeConnectedAgain(t *testing.T) {
 	// THE ACCOUNT HOLDS THE KEY THIS ENGINE MINTED FOR IT, which is the
 	// value sealed in the seat's variable.
 	keys := []string{"k1"}
-	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(w http.ResponseWriter, _ *http.Request) {
+	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(
+		w http.ResponseWriter, r *http.Request,
+	) {
+		// ONE PATH, TWO ANSWERS, as Datadog gives: a LIST to GET and the
+		// one-and-only value to POST. The fake answered the list to both,
+		// which was invisible while a pass reached only one of them per
+		// run — the seat's work ended at "a value is held" and never
+		// listed. Now that a held value is CHECKED against the account,
+		// the reconnect lists and then mints, and a fake that cannot tell
+		// the two apart fails the decode instead of exercising the repair.
+		if r.Method == http.MethodPost {
+			keys = append(keys, "k-fresh")
+			_, _ = w.Write([]byte(
+				`{"data":{"id":"k-fresh","attributes":{"key":"fresh","name":"crewlet"}}}`))
+			return
+		}
 		rows := make([]string, 0, len(keys))
 		for _, id := range keys {
 			rows = append(rows, fmt.Sprintf(`{"id":%q,"attributes":{"name":"crewlet"}}`, id))
