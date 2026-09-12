@@ -22,6 +22,23 @@ const (
 	UpdateWorkItemTool = "update_work_item"
 	CommentOnWorkTool  = "comment_on_work_item"
 
+	// MergeWorkItemTool folds one item into another, and it is a SEAT's
+	// for the reason the trash tools are not.
+	//
+	// The trash's argument is about INVISIBILITY — a removal takes an item
+	// off every board and leaves an absence nobody reads — and none of it
+	// applies here. A merge leaves the item exactly where it was, cancelled,
+	// linked to the one that survives, with a history row naming who folded
+	// it; every part of that is something a person sees.
+	//
+	// And a seat can already do the damage this verb is careful about. It
+	// can cancel the item and it can draw the `duplicates` link, both with
+	// `update_work_item`, and what it CANNOT do by hand is move the
+	// children — so withholding this verb does not prevent the gesture, it
+	// only guarantees the orphans. Deciding that two items are one is
+	// triage, which is the work itself rather than furniture around it.
+	MergeWorkItemTool = "merge_work_item"
+
 	// The PROJECT reads, and they are a seat's for the reason
 	// [GetWorkCatalogueTool] is: a create refuses a project the company
 	// does not have, a type it has not declared and a required field left
@@ -148,9 +165,10 @@ func OperatorOnlyTools() []string {
 // Tools are the thirteen a seat holds, so a caller registering them names one thing.
 func Tools() []string {
 	return []string{ListWorkItemsTool, GetWorkItemTool, CreateWorkItemTool,
-		UpdateWorkItemTool, CommentOnWorkTool, GetWorkCatalogueTool,
-		ListProjectsTool, DescribeProjectTool, WriteProjectTool,
-		ListWorkGoalsTool, SprintReportTool, TaskActivityTool, MyWorkTool}
+		UpdateWorkItemTool, CommentOnWorkTool, MergeWorkItemTool,
+		GetWorkCatalogueTool, ListProjectsTool, DescribeProjectTool,
+		WriteProjectTool, ListWorkGoalsTool, SprintReportTool,
+		TaskActivityTool, MyWorkTool}
 }
 
 // WriteTools are the three that count as a DELIVERY.
@@ -161,5 +179,6 @@ func Tools() []string {
 // delivering, which is why get and list are not here: a turn that only read is
 // exactly the turn the gate exists to catch.
 func WriteTools() []string {
-	return []string{CreateWorkItemTool, UpdateWorkItemTool, CommentOnWorkTool}
+	return []string{CreateWorkItemTool, UpdateWorkItemTool, CommentOnWorkTool,
+		MergeWorkItemTool}
 }

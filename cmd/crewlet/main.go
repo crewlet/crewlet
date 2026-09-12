@@ -2033,6 +2033,21 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 				return writer.As(actor.Handle, actor.Kind,
 					tracker.Provenance{OperatorID: actor.OperatorID})
 			},
+			// AND THE TWO SEQUENCES, which this surface went
+			// without — so an operator's assistant was refused
+			// `waiting_on` and `blocking` by name on a tool whose
+			// own description offers them, and would not have been
+			// served the fold at all. Both need the replicated
+			// estate, which this writer has; nothing else about
+			// them differs from a seat's.
+			Dependencies: func(actor builtin.Actor) builtin.WorkDepender {
+				return writer.As(actor.Handle, actor.Kind,
+					tracker.Provenance{OperatorID: actor.OperatorID})
+			},
+			Merges: func(actor builtin.Actor) builtin.WorkMerger {
+				return writer.As(actor.Handle, actor.Kind,
+					tracker.Provenance{OperatorID: actor.OperatorID})
+			},
 			// THE SAVED-VIEW WRITER, which only this surface has: a
 			// view is furniture a person arranges, and no seat is
 			// given the tools that reach it.

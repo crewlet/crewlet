@@ -1352,7 +1352,7 @@ Point any MCP client at it:
 
 The **same tools a seat holds**, not a parallel implementation: `list_work_items`,
 `get_work_item`, `create_work_item`, `update_work_item`, `comment_on_work_item`,
-`get_work_catalogue`, `list_projects`, `describe_project`, `write_project`,
+`merge_work_item`, `get_work_catalogue`, `list_projects`, `describe_project`, `write_project`,
 `sprint_report`, `task_activity`, `my_work`, `list_work_goals`,
 `list_pages`, `get_page`, `write_page`, `save_page`, `comment_on_page`, and
 `search_knowledge`. A schema, a default, a trimmed field and the wording of a

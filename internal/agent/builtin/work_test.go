@@ -32,6 +32,7 @@ type fakeTracker struct {
 	tasks map[string]tracker.TaskDetail
 
 	created  []tracker.Task
+	merged   []mergeCall
 	patched  []tracker.TaskPatch
 	ifMatch  []uint64
 	notified []*tracker.Notify
@@ -252,6 +253,39 @@ func (f *fakeTracker) depends(actor builtin.Actor) builtin.WorkDepender {
 	return f
 }
 
+// merges is its fourth, for the second sequence.
+func (f *fakeTracker) merges(actor builtin.Actor) builtin.WorkMerger {
+	f.actors = append(f.actors, actor)
+	return f
+}
+
+// mergeCall is one fold as the tool composed it.
+type mergeCall struct {
+	duplicate, into string
+	reparent        bool
+	notify          *tracker.Notify
+}
+
+// MergeDuplicates records the fold, for the same reason Depend does: what the
+// TOOL resolves and decides is the half that lives here, and the sequence
+// itself is certified against a real store in the tracker's own suite.
+func (f *fakeTracker) MergeDuplicates(_ context.Context, _ string,
+	duplicate, into string, reparent bool,
+	notify *tracker.Notify) (tracker.WriteResult, error) {
+
+	f.merged = append(f.merged, mergeCall{
+		duplicate: duplicate, into: into, reparent: reparent, notify: notify,
+	})
+	if f.writeErr != nil {
+		return tracker.WriteResult{}, f.writeErr
+	}
+	return tracker.WriteResult{Result: statelog.Result{
+		Outcome:  statelog.OutcomeApplied,
+		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 51},
+		Version:  51,
+	}}, nil
+}
+
 func (f *fakeTracker) CreateTask(_ context.Context, opID string, task tracker.Task,
 	notify *tracker.Notify) (tracker.WriteResult, error) {
 
@@ -386,7 +420,7 @@ func callWork(t *testing.T, reg *tools.Registry, name string, args map[string]an
 func TestTheTrackerWritesCountAsDeliveries(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Merges: trk.merges})
 
 	deliverables := reg.Deliverables()
 	for _, name := range builtin.WorkWrites() {
@@ -438,7 +472,7 @@ func TestTheTrackerToolsRefuseOutsideATurn(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := workRegistry(t, builtin.WorkDeps{
-		Reader: trk, Writer: trk.as,
+		Reader: trk, Writer: trk.as, Merges: trk.merges,
 		ProjectWriter: func(builtin.Actor) builtin.ProjectWriter { return trk },
 	})
 	for _, name := range builtin.WorkTools() {
@@ -602,11 +636,22 @@ func TestAReferenceIsResolvedRatherThanStoredAsTyped(t *testing.T) {
 	}); got.Failed {
 		t.Fatalf("the duplicate link failed: %s", got.Output)
 	}
-	relations := trk.patched[0].Relations
-	if relations == nil || len(*relations) != 1 {
-		t.Fatalf("relations = %v", relations)
+	// A GESTURE, AND NEVER THE WHOLE SET. [tracker.TaskPatch]'s
+	// collections are carried whole, so stating this one edge as the
+	// collection deleted every other relation the item had — and the
+	// `waiting_on` edges are the expensive half, because their mirrors on
+	// the blockers survive and the repair scans for a missing mirror from
+	// the AUTHORED end, which is the row that was deleted.
+	gesture := trk.patched[0].Relate
+	if trk.patched[0].Relations != nil {
+		t.Fatalf("the tool stated the whole relation set %v, which is every "+
+			"other edge this item had being deleted",
+			*trk.patched[0].Relations)
 	}
-	if got := (*relations)[0].Other; got != "i1" {
+	if gesture == nil || len(gesture.Add) != 1 {
+		t.Fatalf("the relation gesture is %v", gesture)
+	}
+	if got := gesture.Add[0].Other; got != "i1" {
 		t.Errorf("the link stored %q — the id is what the mirror edge and "+
 			"every board render from, so a key here is a dead reference", got)
 	}
@@ -628,6 +673,45 @@ func TestAReferenceIsResolvedRatherThanStoredAsTyped(t *testing.T) {
 	})
 	if !got.Failed || !strings.Contains(got.Output, "no such work item") {
 		t.Errorf("a dangling duplicate_of gave %q", got.Output)
+	}
+}
+
+// EVERY INERT EDGE ONE CALL STATES TRAVELS IN ONE GESTURE.
+//
+// A patch carries exactly one relation gesture and the writer resolves it
+// against the item's own rows. Two arms composing two gestures means whichever
+// ran last wins and the other's edges are silently gone — and two arms
+// composing one gesture and one whole SET is worse still: the writer refuses
+// the pair outright, so a model that named a link and a duplicate in one call
+// was told its own arguments were a programming error.
+func TestOneCallsLinkAndDuplicateBothSurvive(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	if got := callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
+		"item": "ENG-1", "duplicate_of": "ENG-1",
+		"linked": map[string]any{"add": []any{"ENG-1"}},
+		"status": "cancelled",
+	}); got.Failed {
+		t.Fatalf("a link and a duplicate in one call failed: %s", got.Output)
+	}
+	gesture := trk.patched[0].Relate
+	if gesture == nil {
+		t.Fatal("the call carried no relation gesture at all")
+	}
+	var kinds []tracker.RelationKind
+	for _, add := range gesture.Add {
+		kinds = append(kinds, add.Kind)
+	}
+	for _, want := range []tracker.RelationKind{
+		tracker.RelationLinked, tracker.RelationDuplicates,
+	} {
+		if !slices.Contains(kinds, want) {
+			t.Errorf("the gesture adds %v and not %q — the arm that ran "+
+				"second replaced the first one's edges rather than joining "+
+				"them", kinds, want)
+		}
 	}
 }
 
@@ -674,7 +758,7 @@ func TestAStaleVersionSaysToReadItAgain(t *testing.T) {
 func TestTheTrackerWritesAreClassifiedAsSharedWrites(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Merges: trk.merges})
 
 	for _, name := range builtin.WorkWrites() {
 		entry, ok := reg.Lookup(name)
@@ -781,7 +865,7 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 	// is missing because the registry does not offer it rather than
 	// because its dependency was nil.
 	reg := workRegistry(t, builtin.WorkDeps{
-		Reader: trk, Writer: trk.as,
+		Reader: trk, Writer: trk.as, Merges: trk.merges,
 		ViewWriter:      func(builtin.Actor) builtin.ViewWriter { return nil },
 		GoalWriter:      func(builtin.Actor) builtin.GoalWriter { return nil },
 		CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
@@ -802,7 +886,7 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 	operator := map[string]bool{}
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
 		Work: builtin.WorkDeps{
-			Reader: trk, Writer: trk.as,
+			Reader: trk, Writer: trk.as, Merges: trk.merges,
 			ViewWriter:      func(builtin.Actor) builtin.ViewWriter { return nil },
 			GoalWriter:      func(builtin.Actor) builtin.GoalWriter { return nil },
 			CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },

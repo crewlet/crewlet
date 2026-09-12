@@ -159,6 +159,12 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		{&updateWorkItem{deps: deps.Work, leads: deps.LeadsProject},
 			deps.Work.Writer != nil && deps.Work.Reader != nil},
 		{&commentOnWorkItem{deps: deps.Work}, deps.Work.Writer != nil && deps.Work.Reader != nil},
+		// AND THE FOLD, which is a seat's for the reason the trash is
+		// not: it leaves the item where it was, cancelled and linked, so
+		// there is no absence for anybody to miss — and a seat can
+		// already cancel and link by hand, which is the same gesture
+		// without the children. See workmerge.go.
+		{&mergeWorkItem{deps: deps.Work}, deps.Work.Merges != nil && deps.Work.Reader != nil},
 		// READING THE CATALOGUE IS A SEAT'S, writing it is not: a create
 		// refuses a type the company has not declared, and a model that
 		// cannot read the catalogue can only guess at one.

@@ -36,13 +36,14 @@ learns to distrust the whole catalogue.
 | `create_work_item` | File one. `project` defaults to the seat's own unit's, and is required when the unit owns none |
 | `update_work_item` | Move it — status, assignee, priority, labels, links — with an optional `if_match` that refuses on a concurrent edit |
 | `comment_on_work_item` | Post to the thread. Mentions wake the seats they name; the turn's own key makes a re-run turn post once |
+| `merge_work_item` | Fold a duplicate into the item that survives — linked, its subtasks re-parented, and closed as `cancelled` |
 | `list_pages` | Browse the knowledge base by container, parent or title |
 | `get_page` | One page's body, breadcrumb, children and history |
 | `write_page` | Create one. Titles are addresses and are unique per container |
 | `save_page` | Edit one, stating the version you read — there is no per-field merge that makes overwriting prose safe |
 | `comment_on_page` | Remark on a page, or replace one of your own with `edit` |
 
-The three writes on each side count as a **delivery** for the turn's own
+The writes on each side count as a **delivery** for the turn's own
 did-this-reach-anybody gate, and each waits for its own write to reach this
 node's projection before answering — so a turn that files an item and then
 lists the project sees what it just filed.

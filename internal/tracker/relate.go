@@ -32,12 +32,13 @@ import (
 // It returns a COPY rather than writing through the patch it was given,
 // because Decide runs again on a retry and a resolution folded into the
 // captured patch would compound across attempts.
-func settleRelations(current Task, patch TaskPatch) (TaskPatch, error) {
+func (w *Writer) settleRelations(current Task, patch TaskPatch) (TaskPatch, error) {
 	if patch.Relate == nil {
-		// A WHOLE SET STILL HAS TO FIT. The gesture is how a tool
-		// states relations, but the merge sequence writes its own
-		// collection, and a cap enforced on one path only is a cap the
-		// second writer walks straight past.
+		// A WHOLE SET STILL HAS TO FIT. Nothing in this tree states
+		// one any more — every caller says what it wants as a gesture —
+		// but the field is on the RECORD, so it is what a future writer
+		// reaches for first, and a cap enforced on the gesture alone is
+		// a cap that writer walks straight past.
 		if patch.Relations != nil {
 			if err := checkRelations(current.ID, *patch.Relations); err != nil {
 				return patch, err
@@ -54,7 +55,27 @@ func settleRelations(current Task, patch TaskPatch) (TaskPatch, error) {
 			"relation gesture and a whole relation set — a caller states one "+
 			"or the other", current.ID)
 	}
-	next, err := patch.Relate.resolve(current)
+	// THE WRITER STAMPS THE EDGES IT AUTHORS, so no caller has to hold a
+	// clock or repeat the actor it is already acting as. An edge arriving
+	// with either already set keeps it: the dependency sequence stamps its
+	// own from one instant shared across every edge of the call, and a
+	// second stamp here would give the last one a different second.
+	//
+	// ON A COPY, because this runs inside a decide the framework may run
+	// again — and a stamp written back onto the caller's own intent would
+	// make the second round's record carry the first round's instant, for
+	// every path that reuses an intent value.
+	stamped := *patch.Relate
+	stamped.Add = slices.Clone(stamped.Add)
+	for i, add := range stamped.Add {
+		if add.CreatedBy == "" {
+			stamped.Add[i].CreatedBy = w.Actor
+		}
+		if add.CreatedAt.IsZero() {
+			stamped.Add[i].CreatedAt = w.Now()
+		}
+	}
+	next, err := stamped.resolve(current)
 	if err != nil {
 		return patch, err
 	}

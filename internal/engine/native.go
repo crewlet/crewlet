@@ -961,6 +961,11 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 				TurnID: actor.TurnID, Chain: actor.Chain,
 			})
 		},
+		Merges: func(actor builtin.Actor) builtin.WorkMerger {
+			return e.native.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
+				TurnID: actor.TurnID, Chain: actor.Chain,
+			})
+		},
 		Mentions: seatMentions{org: c.Org},
 		// THE ROSTER, read PER CALL for the reason the default project
 		// and the unit seam are: a seat's tools are cloned into its

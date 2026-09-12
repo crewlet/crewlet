@@ -170,6 +170,26 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 	return r
 }
 
+// applyWhileWriting makes this node's applier run from inside a write's own
+// wait, which is what it does in production and what this harness otherwise
+// cannot express.
+//
+// EVERY OTHER CASE DRIVES THE APPLIER BY HAND, deliberately: what most of them
+// are about is one record's journey, and a node that is behind is the state
+// half the framework's answers are about — a create's `pending` outcome is
+// only reachable while nothing has consumed it.
+//
+// But a GESTURE that writes one subject twice waits for its own earlier append
+// before it opens the next snapshot (see [tracker.Writer.After]), and in a
+// harness where nothing consumes the log during a call that wait can only
+// expire. So a case about a whole sequence turns this on, and gets the applier
+// every deployment has.
+func (r *roundTrip) applyWhileWriting() {
+	r.waiter.mu.Lock()
+	defer r.waiter.mu.Unlock()
+	r.waiter.advance = r.drain
+}
+
 // drain consumes every record the broker holds beyond what this node has
 // applied, exactly as the framework's own loop does — one transaction per
 // record, carrying the rows and the checkpoint together.
@@ -341,6 +361,11 @@ func (r *roundTrip) ask(kv map[string]any) tracker.Answer {
 type testWaiter struct {
 	mu sync.Mutex
 	at statelog.Position
+
+	// advance is the applier, run from inside a wait. See
+	// [roundTrip.applyWhileWriting] for why a harness that drives the
+	// applier by hand needs one.
+	advance func()
 }
 
 func (w *testWaiter) reach(p statelog.Position) {
@@ -361,6 +386,12 @@ func (w *testWaiter) WaitCommitted(ctx context.Context, p statelog.Position) err
 	for {
 		if w.Committed().Packed() >= p.Packed() {
 			return nil
+		}
+		w.mu.Lock()
+		advance := w.advance
+		w.mu.Unlock()
+		if advance != nil {
+			advance()
 		}
 		select {
 		case <-ctx.Done():

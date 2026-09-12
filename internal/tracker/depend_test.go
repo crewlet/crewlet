@@ -563,3 +563,66 @@ func TestTheRepairAgesOnTheEdgeNotTheTask(t *testing.T) {
 		t.Errorf("the scan took %d edges from before its own horizon", len(fresh))
 	}
 }
+
+// CLOSING AN ITEM AS A DUPLICATE KEEPS ITS OTHER RELATIONS.
+//
+// A relation gesture is an ADD against the task's own rows, resolved inside
+// the writer's snapshot. The alternative — stating the one edge as the whole
+// collection, which is how both callers of this used to do it — deletes every
+// other relation the item had, and the dependency edges are the expensive
+// half: their mirrors on the blockers survive, so those tasks go on listing a
+// dependent whose own side is gone. That is the one-sided state INVERTED, and
+// nothing scans for it: the repair selects on the AUTHORED edge, which is
+// exactly the row that was deleted.
+func TestMarkingADuplicateKeepsTheEdgesTheItemAlreadyHad(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	inSprint(t, r, "dup", nil)
+	inSprint(t, r, "blk", nil)
+	inSprint(t, r, "keep", nil)
+
+	if _, err := r.writer.Depend(t.Context(), "op-depend", tracker.DependencyChange{
+		Task: "dup", Project: "ENG", WaitingOnAdd: []string{"blk"},
+	}, fixedLeads{}); err != nil {
+		t.Fatalf("Depend: %v", err)
+	}
+	r.drain()
+
+	if _, err := r.writer.UpdateTask(t.Context(), "op-dup", "dup", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{
+			Relate: &tracker.RelationIntent{Add: []tracker.Relation{{
+				Kind: tracker.RelationDuplicates, Other: "keep",
+			}}},
+		}, tracker.ChangeRelations, nil); err != nil {
+		t.Fatalf("mark the duplicate: %v", err)
+	}
+	r.drain()
+
+	dup := r.task(t, "dup")
+	var kinds []tracker.RelationKind
+	for _, rel := range dup.Task.Relations {
+		kinds = append(kinds, rel.Kind)
+	}
+	if !slices.Contains(kinds, tracker.RelationWaitingOn) {
+		t.Fatalf("the item carries %v after being marked a duplicate, and the "+
+			"dependency it was waiting on is gone — the blocker still lists "+
+			"it as a dependent, and no scan looks for a mirror whose authored "+
+			"edge was deleted", kinds)
+	}
+	if !slices.Contains(kinds, tracker.RelationDuplicates) {
+		t.Fatalf("the item carries %v and not the duplicate edge the write "+
+			"asked for", kinds)
+	}
+	// AND THE WRITER STAMPED IT. An edge records who drew it and when,
+	// and neither is something a tool should have to hold a clock for.
+	for _, rel := range dup.Task.Relations {
+		if rel.Kind != tracker.RelationDuplicates {
+			continue
+		}
+		if rel.CreatedBy == "" || rel.CreatedAt.IsZero() {
+			t.Errorf("the duplicate edge was drawn by %q at %v — a relation "+
+				"nobody signed is one an audit cannot attribute",
+				rel.CreatedBy, rel.CreatedAt)
+		}
+	}
+}
