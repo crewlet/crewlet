@@ -696,6 +696,13 @@ func (t *createWorkItem) Parameters() map[string]any {
 				"type":        "string",
 				"description": "The id or key of the item this belongs under.",
 			},
+			"fields": map[string]any{
+				"type": "object",
+				"description": "Custom fields, keyed by SLUG — read them with " +
+					"get_work_catalogue or describe_project. A project may " +
+					"REQUIRE some for this type, and the create is refused " +
+					"naming any that are missing.",
+			},
 			"unit": map[string]any{
 				"type": "string",
 				"description": "The team this work belongs to. Defaults to " +
@@ -766,6 +773,13 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	if task.Title == "" {
 		return failed("create_work_item needs a `title` — one line saying what " +
 			"the work is."), nil
+	}
+	if raw, held := args["fields"]; held {
+		fields, refusal := fieldMap(raw)
+		if refusal != "" {
+			return failed(refusal), nil
+		}
+		task.Fields = fields
 	}
 	if task.Type == "" {
 		task.Type = tracker.DefaultType
@@ -861,6 +875,9 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		"key": got.Key, "id": task.ID, "status": task.Status,
 		"assignee": task.Assignee, "outcome": string(got.Outcome),
 		"labels_created": declared, "version": got.Version,
+	}
+	if len(got.Warnings) > 0 {
+		answer["warnings"] = got.Warnings
 	}
 	// AND THE DEPENDENCIES AFTER IT, because a dependency is an edge
 	// between two items that exist: the mirror commit names this task,
@@ -1118,6 +1135,14 @@ func (t *updateWorkItem) Parameters() map[string]any {
 			"blocking":     setArgSchema("The items blocked BY this one. Each is a key or an id."),
 			"linked":       setArgSchema("Related items, with no blocking meaning. Each is a key or an id."),
 			"linked_pages": setArgSchema("Knowledge-base pages this item references, by page id."),
+			"fields": map[string]any{
+				"type": "object",
+				"description": "Custom fields, keyed by SLUG — read them with " +
+					"get_work_catalogue or describe_project. A value is " +
+					"checked against the field's own declaration and refused " +
+					"naming the rule, never rounded or coerced to fit; null " +
+					"clears a field.",
+			},
 			"dependency_note": map[string]any{
 				"type": "string",
 				"description": "One line saying WHY, recorded on every " +
@@ -1282,6 +1307,15 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		}
 		t.deps.settle(ctx, got.Position)
 		answer["outcome"], answer["version"] = string(got.Outcome), got.Version
+		// THE WARNINGS THE WRITE PRODUCED, which today is the one the
+		// coercion table can raise: a timestamp truncated to its date on
+		// a field that holds no time. A change the engine made to a
+		// value somebody typed is one they have to be told about, or the
+		// board shows something they did not write with nothing saying
+		// why.
+		if len(got.Warnings) > 0 {
+			answer["warnings"] = got.Warnings
+		}
 	}
 	if !change.Empty() {
 		if t.deps.Dependencies == nil {
@@ -1438,6 +1472,19 @@ func patchFromArgs(args map[string]any, actor Actor,
 		if kind == tracker.ChangeFields {
 			kind = tracker.ChangeWatchers
 		}
+	}
+	if raw, held := args["fields"]; held {
+		fields, refusal := fieldMap(raw)
+		if refusal != "" {
+			return patch, kind, refusal
+		}
+		// AND THE KIND STAYS `fields`, which is what a custom field
+		// moving IS — the default this function already starts from, so
+		// there is nothing to set. It is stated here because every other
+		// arm in this function changes the kind, and a reader checking
+		// why this one does not should find the answer rather than a
+		// gap.
+		patch.Fields = &fields
 	}
 	if duplicateOf != "" {
 		patch.Relations = &[]tracker.Relation{{

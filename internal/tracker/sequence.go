@@ -195,10 +195,25 @@ func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 	}
 	task.Tags = tags
 
+	// THE COERCED VALUES COME BACK OUT OF THE SNAPSHOT, and the LAST run
+	// of the closure is the one whose mint was accepted — so both are
+	// assigned rather than appended to, exactly as the update path does
+	// with its own warnings.
+	var (
+		coerced  map[string]json.RawMessage
+		warnings []string
+	)
 	n, minted, err := w.mintKey(ctx, stepID(opID, "counter"), task.Project, 1,
-		func(tx *sql.Tx) error { return refuseCreate(ctx, tx, task) })
+		func(tx *sql.Tx) error {
+			var err error
+			coerced, warnings, err = w.refuseCreate(ctx, tx, task)
+			return err
+		})
 	if err != nil {
 		return WriteResult{Result: minted}, err
+	}
+	if coerced != nil {
+		task.Fields = coerced
 	}
 	rank, err := IntegerAt(n)
 	if err != nil {
@@ -219,6 +234,7 @@ func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 
 	result, err := w.writeTask(ctx, stepID(opID, "task"), task, notify, at)
 	result.Key, result.Rank = task.Key, task.Rank
+	result.Warnings = append(result.Warnings, warnings...)
 	return result, err
 }
 
@@ -338,25 +354,36 @@ func (w *Writer) mintKey(ctx context.Context, opID, project string, k int,
 }
 
 // refuseCreate is what sequence 1 reads the project and its catalogues for.
-func refuseCreate(ctx context.Context, tx *sql.Tx, task Task) error {
+// It also COERCES the task's custom-field values, which is why it answers with
+// them rather than only with an error: a value is normalised against the
+// declarations this snapshot holds — an option spelling to the option's id, a
+// timestamp on a date-only field to its date — and the record has to carry
+// that canonical form, so every node writes identical rows without re-deciding
+// anything.
+func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
+	map[string]json.RawMessage, []string, error) {
+
 	project, held, err := readProject(ctx, tx, task.Project)
 	switch {
 	case err != nil:
-		return err
+		return nil, nil, err
 	case !held:
-		return fmt.Errorf("tracker: project %s is not on this node: %w",
+		return nil, nil, fmt.Errorf("tracker: project %s is not on this node: %w",
 			task.Project, statelog.ErrUnavailable)
 	case project.Archived:
-		return fmt.Errorf("tracker: project %s is archived, so it takes no new "+
-			"work; unarchive it first", task.Project)
+		return nil, nil, fmt.Errorf("tracker: project %s is archived, so it "+
+			"takes no new work; unarchive it first", task.Project)
 	}
 	if err := declaredType(ctx, tx, task); err != nil {
-		return err
+		return nil, nil, err
 	}
 	if err := declaredTags(ctx, tx, task.Project, task.Tags); err != nil {
-		return err
+		return nil, nil, err
 	}
-	return requiredFields(ctx, tx, project, task)
+	if err := requiredFields(ctx, tx, project, task); err != nil {
+		return nil, nil, err
+	}
+	return settleFields(ctx, tx, task.Project, task.Type, task.Fields, w.World)
 }
 
 // declaredType refuses a task naming a type the company has not declared.
@@ -529,7 +556,12 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 					parentID, itemID)
 			}
 			parent = current
-			return refuseCreate(ctx, tx, subtask)
+			// A PROMOTION'S SUBTASK CARRIES NO CUSTOM FIELDS — it is
+			// built from a checklist item, which has none — so the
+			// coerced map it answers with is empty and is dropped
+			// deliberately rather than threaded through.
+			_, _, err = w.refuseCreate(ctx, tx, subtask)
+			return err
 		})
 	if err != nil {
 		return WriteResult{Result: minted}, err

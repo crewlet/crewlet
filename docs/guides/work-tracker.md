@@ -106,6 +106,40 @@ to that id before it is stored — the same three spellings a filter accepts. A
 value that stored the word instead would be invisible to every filter,
 grouping and total on the field it had just set.
 
+### What a field value may be
+
+Every value is checked against its own declaration at the **write**, and
+refused naming the rule. The check is at the write because that is where it can
+be refused: by the time a record is applied the value is durable, and the
+applier deliberately salvages — a value it cannot decode writes no row and the
+change carries on, because refusing it would let one malformed field stop that
+task's every later edit on every node.
+
+| Type | Accepts | Refuses |
+|---|---|---|
+| `number`, `progress`, `rollup` | a number, or a string that is one | text that is not a number, and anything outside `min`/`max` or carrying more decimals than `precision` |
+| `checkbox` | `true` or `false` | a string — every rule for reading one disagrees about `"false"` |
+| `date` | a date; a timestamp when the field holds no time, **truncated with a warning** | a value that is not a date, and a bare date on a field that holds a time |
+| `dropdown`, `labels` | the option's slug, name or id — stored as the **id** | an option the field does not declare |
+| `relationship` | a key, a former key or an id — stored as the **id** | an item that does not exist |
+| `people` | anything that resolves to exactly **one** colleague | a spelling that names nobody, or more than one |
+| `url` | an absolute url | one with no scheme or no host |
+| `email` | a parseable address — the **address**, not the display name | anything `Ana <ana@example.com>` cannot be read as |
+| `text`, `textarea` | text within the type's byte cap | anything longer, named rather than cut |
+
+`null` clears any field. **Nothing is rounded to fit**: a field declared exact
+to two places refuses `3.14159` rather than storing `3.14`, because the stored
+value would be a number nobody typed under a declaration that says the field is
+exact.
+
+The one change the engine makes for you is the date truncation, and it says so
+in the result's `warnings` — a value the engine altered is one the writer has
+to be told about, or the board shows something they did not write.
+
+Required fields are enforced at **every** write, not only at the create: an
+update may not clear one. ClickUp enforces them at creation only; this is the
+difference, and there is no toggle.
+
 Archiving a field is **one-way**. Its values leave the *filterable* set and stay on
 the task, so a field that came back under its old id would silently re-admit
 them against a definition nobody has seen for a year. Bringing one back means
@@ -401,8 +435,9 @@ CHANGE rather than about state:
 |---|---|
 | `list_work_items` | the query surface above, filtered any way a view can be — including `preset=my_queue`, which is the seat's own open work |
 | `get_work_item` | one task with its thread, history and links |
-| `create_work_item` | file a task or a subtask |
-| `update_work_item` | change any field, with an optional `if_match`. `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below |
+| `create_work_item` | file a task or a subtask. `fields` sets custom fields by **slug**, and the create is refused naming any the project requires and this call leaves out |
+| `update_work_item` | change any field, with an optional `if_match`. `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration |
+| `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |
 | `comment_on_work_item` | add to the thread, optionally as a **question** somebody owes an answer to (`ask`) or as the **answer** that closes one (`answers`) |
 | `get_work_catalogue` | the types a task may be and the fields it may carry |
 | `list_projects` | every project work is filed into, with how much open work each holds, who leads it and which sprint is running |
