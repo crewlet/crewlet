@@ -29,7 +29,10 @@ type fakeTracker struct {
 	// what a model's ARGUMENTS became — which is the half of this tool
 	// nothing looked at while it dropped a filter and refused a flag.
 	query tracker.Query
-	tasks map[string]tracker.TaskDetail
+
+	// params is what the tool handed the grammar, before it was parsed.
+	params map[string]string
+	tasks  map[string]tracker.TaskDetail
 
 	created  []tracker.Task
 	merged   []mergeCall
@@ -147,6 +150,14 @@ func (f *fakeTracker) Views(context.Context, tracker.ViewQuery) (tracker.ViewLis
 func (f *fakeTracker) ExpandedQuery(_ context.Context, params map[string]any,
 	_ tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error) {
 
+	// THE KEYS THE TOOL COMPOSED, kept as strings: what a case here is
+	// about is the TRANSLATION from a model's arguments to the grammar's
+	// own keys, and the parse below is the real one, so a key this tool
+	// never forwarded reaches neither.
+	f.params = map[string]string{}
+	for key, value := range params {
+		f.params[key] = fmt.Sprint(value)
+	}
 	return tracker.ParseQuery(tracker.MapParams(params), now, loc)
 }
 
@@ -1011,4 +1022,43 @@ func (f *fakeTracker) Depend(_ context.Context, _ string,
 			Position: statelog.Position{Stream: "S", Generation: 1, Seq: 41},
 		},
 	}}, nil
+}
+
+// EVERY FILTER THIS TOOL DECLARES REACHES THE QUERY, and the ones a seat
+// could not ask for at all were most of the grammar.
+//
+// The board's query language compiles forty-odd keys, every one indexed and
+// reachable from the dashboard and the REST route, and this tool forwarded
+// ten. So a seat could not ask for the bugs, for what is due this week, for
+// what moved since yesterday, for the subtasks of one item, for what it filed
+// or follows — or for a page after the first, which is the one that makes a
+// long answer usable at all. It also could not name a CUSTOM FIELD, which is
+// the whole point of a company declaring one.
+func TestEveryDeclaredFilterReachesTheQuery(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	if got := callWork(t, reg, builtin.ListWorkItemsTool, map[string]any{
+		"type": "bug", "priority": "high", "due": "thisweek",
+		"updated": "gte:-1d", "created": "gte:-7d", "parent": "ENG-1",
+		"reporter": "bo", "watcher": "ana", "unit": "platform",
+		"sort": "-updated", "cursor": "c1",
+		"field_filters": map[string]any{"impact": "high"},
+	}); got.Failed {
+		t.Fatalf("the filtered list failed: %s", got.Output)
+	}
+	for key, want := range map[string]string{
+		"type": "bug", "priority": "high", "due": "thisweek",
+		"updated": "gte:-1d", "created": "gte:-7d", "parent": "ENG-1",
+		"reporter": "bo", "watcher": "ana", "unit": "platform",
+		"sort": "-updated", "cursor": "c1", "f.impact": "high",
+	} {
+		if got := trk.params[key]; got != want {
+			t.Errorf("the query carries %s=%q, want %q — a filter this tool "+
+				"declares and does not forward is one a model asks for, is "+
+				"not refused for, and gets an unfiltered list back from",
+				key, got, want)
+		}
+	}
 }

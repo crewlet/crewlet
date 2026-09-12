@@ -799,3 +799,76 @@ func TestTheViewerKeywordIsResolvedPerRead(t *testing.T) {
 		t.Error("f.reviewers=me with no viewer was answered")
 	}
 }
+
+// A DETAIL READ ANSWERS IN WORDS, not in field identifiers.
+//
+// The document keys values by field ID and carries opaque JSON per entry,
+// which is the right shape for a record and the wrong one for an answer: the
+// WRITE side takes an id, a slug or a name interchangeably, and the read side
+// handed back the one of the three a caller cannot interpret without spending
+// a second call on the catalogue.
+//
+// The two non-live states travel with it, because only a reader can be told
+// about them: `hidden` is a value whose declaration was archived — kept on the
+// task, out of every filter — and a value whose field this company declares
+// nowhere stays on the document with no row at all, which is a third thing
+// again and reported as exactly that.
+func TestADetailReadNamesEachFieldAndItsState(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	seedFields(t, r)
+	seedWithFields(t, r, "t-1", map[string]any{
+		"f-effort":  3,
+		"f-ghostly": "a field nobody declared",
+	})
+
+	// AND ONE OF THEM IS ARCHIVED AFTER THE FACT, which is the state the
+	// archive's one-way rule creates and nothing could read back.
+	if _, err := r.writer.WriteFields(t.Context(), "op-archive", []tracker.FieldDef{
+		{ID: "f-effort", Slug: "effort", Name: "Effort",
+			Type: tracker.FieldNumber, Archived: true},
+	}); err != nil {
+		t.Fatalf("archive the field: %v", err)
+	}
+	r.drain()
+
+	detail, err := r.reader.Task(t.Context(), "t-1",
+		tracker.DetailWants{Fields: true}, statelog.ReadStale)
+	if err != nil {
+		t.Fatalf("Task: %v", err)
+	}
+	if len(detail.Fields) != 2 {
+		t.Fatalf("the read answered %d field values for a task carrying two: %+v",
+			len(detail.Fields), detail.Fields)
+	}
+	byID := map[string]tracker.FieldValue{}
+	for _, value := range detail.Fields {
+		byID[value.ID] = value
+	}
+
+	effort := byID["f-effort"]
+	if effort.Slug != "effort" || effort.Name != "Effort" {
+		t.Errorf("the declared value came back as %+v — a caller reading an "+
+			"id it cannot interpret has to spend a second call on the "+
+			"catalogue to write the same value back", effort)
+	}
+	if effort.Type != tracker.FieldNumber {
+		t.Errorf("the value's type is %q and its declaration says %q",
+			effort.Type, tracker.FieldNumber)
+	}
+	if !effort.Hidden {
+		t.Error("an archived field's value is not reported hidden, so it " +
+			"renders beside a live one and somebody acts on a rule this " +
+			"company stopped using")
+	}
+
+	ghost := byID["f-ghostly"]
+	if !ghost.Undeclared {
+		t.Errorf("a value for a field declared nowhere came back as %+v — it "+
+			"is on the record and has no row, and an answer that dropped it "+
+			"would disagree with the task itself", ghost)
+	}
+	if ghost.Slug != "" {
+		t.Errorf("an undeclared value named a slug %q it cannot have", ghost.Slug)
+	}
+}
