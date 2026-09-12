@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // Goals: the tier above projects, and the one number this package refuses to
@@ -153,6 +154,19 @@ func (w *Writer) WriteGoal(ctx context.Context, opID string, goal Goal) (WriteRe
 			}
 			post := goal
 			post.V = DocumentVersion
+			// THE UPDATE HISTORY IS CARRIED FORWARD, never taken from
+			// the caller. A goal save is a whole post-state replace, and
+			// `write_work_goal` builds its Goal from the tool's own
+			// arguments — which carry no updates — so every save through
+			// the only shipped surface DESTROYED the whole health
+			// history, silently, with `outcome: applied`.
+			//
+			// APPEND-ONLY, because an update is something somebody WROTE
+			// on a date: a save that could rewrite one would let a
+			// second writer edit a colleague's assessment of how the
+			// quarter is going, and the timestamps would still read as
+			// theirs.
+			post.Updates = appendUpdates(current.Updates, goal.Updates, w.Actor, at)
 			if !held {
 				post.CreatedAt, post.CreatedBy = at, w.Actor
 			} else {
@@ -161,9 +175,168 @@ func (w *Writer) WriteGoal(ctx context.Context, opID string, goal Goal) (WriteRe
 				// goal somebody else set.
 				post.CreatedAt, post.CreatedBy = current.CreatedAt, current.CreatedBy
 			}
-			return w.decide(subject, OpPatch, scope, opID, post, nil, at)
+			return w.decide(subject, OpPatch, scope, opID, post,
+				goalWake(current, held, post), at)
 		},
 	})
+}
+
+// goalWake is what a goal save announces, or nil when it announces nothing.
+//
+// # Every owner and every member, and the actor drops out downstream
+//
+// D11's rule is that a goal has several owners and every one is woken. The
+// members are woken on the same reason: a goal names them because the outcome
+// is partly theirs, and a member who is not told the health moved to off_track
+// learns it at the review. [Route] drops the actor, so a lead writing an
+// update never wakes themselves.
+//
+// # A SAVE THAT CHANGES NOTHING WAKES NOBODY
+//
+// This verb is a whole post-state replace, so a form that submits every
+// control saves on every submit — and eight owners paged for a no-op is how a
+// company learns to ignore the one that mattered. The deltas are computed
+// against the stored document inside the same snapshot the decision is formed
+// in, which is the only place a single consistent read of it exists.
+//
+// # What counts as a change is DELIBERATELY narrow
+//
+// The name, the health, the owners, the members, the dates and the archive —
+// facts about the commitment itself. A target's CURRENT VALUE is excluded, and
+// that is the interesting one: a `tasks` target recomputes as the tasks under
+// it move, so waking on it would page every owner on every status change in
+// every project the goal counts. The wake is for the commitment moving, and
+// the work moving has its own wakes already.
+func goalWake(current Goal, held bool, post Goal) *Notify {
+	fields := map[string]Delta{}
+	delta := func(name, before, after string) {
+		if before != after {
+			fields[name] = Delta{From: before, To: after}
+		}
+	}
+	if !held {
+		// A NEW GOAL IS ALL NEWS. Its owners are hearing that they own
+		// something, which is the one case where every field is a change.
+		fields["goal"] = Delta{To: post.Name}
+	} else {
+		delta("name", current.Name, post.Name)
+		delta("health", current.Health, post.Health)
+		delta("owners", strings.Join(current.Owners, ", "),
+			strings.Join(post.Owners, ", "))
+		delta("members", strings.Join(current.Members, ", "),
+			strings.Join(post.Members, ", "))
+		delta("due", instantText(current.DueAt), instantText(post.DueAt))
+		delta("start", instantText(current.StartAt), instantText(post.StartAt))
+		delta("archived", boolText(current.Archived), boolText(post.Archived))
+		if len(post.Updates) > len(current.Updates) {
+			// A HEALTH UPDATE IS PROSE SOMEBODY WROTE, which is the
+			// most useful thing a goal wake ever carries — and it can
+			// arrive with no other field moving at all.
+			fields["update"] = Delta{To: latestUpdateText(post)}
+		}
+	}
+	if len(fields) == 0 {
+		return nil
+	}
+	parties := append(append([]string{}, post.Owners...), post.Members...)
+	if len(parties) == 0 {
+		// NOBODY TO TELL. A goal with no owners is refused at
+		// [checkGoal], so this is unreachable through the verb — but a
+		// notification routed to nobody is a record carrying a routing
+		// snapshot for no reason, and the check costs nothing.
+		return nil
+	}
+	return &Notify{
+		Kind:   ChangeGoalUpdated,
+		Fields: fields,
+		Snapshot: Snapshot{
+			GoalName:    post.Name,
+			GoalOwners:  post.Owners,
+			GoalMembers: post.Members,
+		},
+		Excerpt: goalExcerpt(post, fields),
+	}
+}
+
+// goalExcerpt is the line a card shows.
+//
+// THE HEALTH UPDATE WINS when there is one, because it is the only part of a
+// goal that is somebody's own words — every other delta renders as "x → y",
+// which the card already shows under its own heading.
+func goalExcerpt(post Goal, fields map[string]Delta) string {
+	if update, held := fields["update"]; held && update.To != "" {
+		return update.To
+	}
+	if health, held := fields["health"]; held {
+		return fmt.Sprintf("%s is now %s", post.Name, health.To)
+	}
+	return ""
+}
+
+// latestUpdateText is the newest health update's prose, cut to an excerpt.
+func latestUpdateText(goal Goal) string {
+	if len(goal.Updates) == 0 {
+		return ""
+	}
+	last := goal.Updates[len(goal.Updates)-1]
+	text := strings.TrimSpace(last.Text)
+	if last.Health != "" && text != "" {
+		text = last.Health + ": " + text
+	} else if text == "" {
+		text = last.Health
+	}
+	return textcut.Bytes(text, MaxExcerpt)
+}
+
+// instantText and boolText render an optional instant and a flag for a delta.
+//
+// A DELTA IS TEXT, because it is read by a card and by a history row rather
+// than compared — so an absent date is the empty string rather than a zero
+// instant that renders as the year one.
+func instantText(at *time.Time) string {
+	if at == nil {
+		return ""
+	}
+	return at.UTC().Format(time.RFC3339)
+}
+
+func boolText(v bool) string {
+	// BOTH SIDES RENDER, unlike [instantText]'s deliberate empty: a flag
+	// that went false is a CHANGE, and rendering it as "true → " puts an
+	// empty right-hand side on the card that reads as missing data rather
+	// than as an un-archive.
+	if v {
+		return "true"
+	}
+	return "false"
+}
+
+// appendUpdates carries a goal's health history forward and adds what this
+// save wrote.
+//
+// THE STAMP IS THE WRITER'S, not the caller's: an update carries who said it
+// and when, and a caller that could set either would be able to file an
+// assessment under somebody else's name on a date of its choosing.
+//
+// THE OLDEST GO FIRST at the cap, because the newest update is the one a card
+// renders and the one anybody reads — a goal that stopped accepting updates at
+// a hundred would freeze its own health at whatever it was that day.
+func appendUpdates(stored, incoming []GoalUpdate, actor string, at time.Time) []GoalUpdate {
+	out := slices.Clone(stored)
+	for _, update := range incoming {
+		text := strings.TrimSpace(update.Text)
+		if text == "" && strings.TrimSpace(update.Health) == "" {
+			continue
+		}
+		out = append(out, GoalUpdate{
+			At: at, Author: actor, Health: update.Health,
+			Text: textcut.Bytes(text, MaxGoalUpdateText),
+		})
+	}
+	if len(out) > MaxGoalUpdates {
+		out = out[len(out)-MaxGoalUpdates:]
+	}
+	return out
 }
 
 // goalProjects is the projects a stored goal's targets already count.

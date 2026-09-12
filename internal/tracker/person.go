@@ -50,10 +50,34 @@ import (
 // priorities" is a question about a PAIR — who is asking and about whom — and
 // the answer for one pair says nothing about another.
 type PersonAuthority struct {
-	// Lead reports whether the actor leads the handle being written, which
-	// is the only authority that reaches across people here. Resolved by
-	// the caller from the org chart, because this package has no chart.
+	// Lead reports whether the actor leads the handle being written.
+	// Resolved by the caller from the org chart, because this package has
+	// no chart.
 	Lead bool
+
+	// Person reports an actor acting as a HUMAN or through a person's own
+	// credential, rather than as a seat.
+	//
+	// # Why this is a second authority rather than a special case of Lead
+	//
+	// Because it is a different question, and the chart cannot answer it.
+	// An operator's actor is an API TOKEN's name — it is not a handle in
+	// the chart, so no ancestor walk can ever match it, and `Lead` is
+	// false for every operator by construction.
+	//
+	// Without it the ONE shipped surface for this verb could not use it.
+	// `set_priorities` is registered on the operator MCP alone; an
+	// operator could therefore never satisfy `own || Lead`, so a founder
+	// re-ordering an agent's queue through the only tool that exists got
+	// "<token> is not <handle> and does not lead them" every time — while
+	// omitting the handle silently wrote a PERSON RECORD FOR THE TOKEN.
+	//
+	// The rule this restores is the design's own: a person's priorities
+	// are written by the owner, by lead-or-above, by a human, or by an
+	// operator. A SEAT is the one party that may not, which is the whole
+	// point — an agent re-ordering a colleague's list is a hand-off in
+	// disguise, bypassing the guarded take and the reassignment budget.
+	Person bool
 }
 
 // MaxSnoozeAhead bounds how far into the future an item may be snoozed.
@@ -134,6 +158,23 @@ func (w *Writer) WritePins(ctx context.Context, opID, handle string,
 // told what to do next by somebody else is news, and re-ordering your own list
 // is not.
 //
+// # Why it is a wake AND a stamp, when it used to be only a stamp
+//
+// This verb used to argue that a notification "would not do it", because every
+// Notify the domain carried was task-shaped and one attached to a person record
+// "renders no card and reaches nobody". That was an accurate description of the
+// code and a wrong conclusion from it: the parser dropped every non-task
+// subject outright (see [ObjectKind.Routable]) and the prompt had no frame but
+// a task's, so the wake was unreachable — while recipients.go already routed
+// `prioritised` off Snapshot.Person, the reason was already in the enum and
+// already Primary, and the spec already called this write "the one that
+// produces a `prioritised` Notify".
+//
+// The stamp alone is only half an answer, and which half it is matters: a
+// stamp is seen by somebody who OPENS A SCREEN, and the recipients of this
+// gesture are seats, which have no screen. A lead re-ordering an agent's queue
+// and getting silence could not tell whether it was read.
+//
 // The caller resolves the lead relation, because this package has no org
 // chart; what it enforces is that a caller which did NOT resolve one may only
 // write its own.
@@ -143,10 +184,12 @@ func (w *Writer) WritePriorities(ctx context.Context, opID, handle string,
 	priorities = cleanHandles(priorities)
 	own := w.Actor == handle
 	switch {
-	case !own && !authority.Lead:
-		return WriteResult{}, fmt.Errorf("tracker: %s is not %s and does not "+
-			"lead them, so they cannot set what %s does next — a priority "+
-			"list anybody may write is not a queue, it is a suggestion box: %w",
+	case !own && !authority.Lead && !authority.Person:
+		return WriteResult{}, fmt.Errorf("tracker: %s is a seat, is not %s and "+
+			"does not lead them, so it cannot set what %s does next — an agent "+
+			"re-ordering a colleague's list is a hand-off in disguise, and it "+
+			"bypasses the guarded take and the reassignment budget. A lead, a "+
+			"human or an operator may: %w",
 			w.Actor, handle, handle, statelog.ErrConflict)
 	case len(priorities) > MaxPriorities:
 		return WriteResult{}, fmt.Errorf("tracker: %s's priority list carries "+
@@ -154,26 +197,85 @@ func (w *Writer) WritePriorities(ctx context.Context, opID, handle string,
 			"an order, it is the backlog again", handle, len(priorities),
 			MaxPriorities)
 	}
-	return w.writePerson(ctx, opID, handle, func(post *Person, at time.Time) error {
-		post.Priorities = priorities
-		// THE STAMP IS WHAT MAKES THIS AUTHORITY VISIBLE. A lead
-		// silently re-ordering somebody's queue is a person who starts
-		// the day on work they did not choose and cannot tell why.
-		//
-		// A NOTIFICATION WOULD NOT DO IT: every [Notify] this domain
-		// carries is task-shaped — its snapshot is a key, a project and
-		// a title — so one attached to a person record renders no card
-		// and reaches nobody. The stamp is on the thing the person is
-		// already looking at.
-		//
-		// AND THE PERSON'S OWN WRITE CLEARS IT, because taking your
-		// queue back is the gesture that says you have seen it.
-		post.PrioritiesSetBy, post.PrioritiesSetAt = "", time.Time{}
-		if !own {
+	return w.writePersonNotifying(ctx, opID, handle,
+		func(tx *sql.Tx, post *Person, at time.Time) (*Notify, error) {
+			post.Priorities = priorities
+			// THE STAMP IS WHAT MAKES THIS AUTHORITY VISIBLE ON THE
+			// SCREEN. A lead silently re-ordering somebody's queue is a
+			// person who starts the day on work they did not choose and
+			// cannot tell why — so the stamp sits on the thing they are
+			// already looking at.
+			//
+			// AND THE PERSON'S OWN WRITE CLEARS IT, because taking your
+			// queue back is the gesture that says you have seen it.
+			post.PrioritiesSetBy, post.PrioritiesSetAt = "", time.Time{}
+			if own {
+				// YOUR OWN LIST WAKES NOBODY. Re-ordering your own
+				// queue is not news to anybody, least of all to you,
+				// and this is the one tracker write that vetoes its
+				// own delivery per call.
+				return nil, nil
+			}
 			post.PrioritiesSetBy, post.PrioritiesSetAt = w.Actor, at
-		}
-		return nil
-	})
+			// AND THE WAKE, which is the other half of the same
+			// authority: the stamp is seen by somebody who opens the
+			// screen, and a SEAT has no screen. Being told what to do
+			// next by somebody above you is an instruction, and the one
+			// Addressed wake of the four — a seat takes it up or says
+			// why it cannot.
+			return w.prioritisedWake(ctx, tx, handle, priorities, at)
+		})
+}
+
+// prioritisedWake is what a lead writing somebody's queue announces.
+//
+// IT NAMES THE TASK AT THE TOP, which is what makes this wake actionable
+// rather than a notice that something moved: "your list changed" sends a seat
+// to read the whole list and work out what is new, and the list does not
+// record what was new. The first entry is the answer to "what do I do next",
+// which is the only question the gesture was making.
+//
+// AN EMPTY LIST WAKES NOBODY. A lead clearing somebody's priorities is taking
+// an instruction back rather than giving one, and there is no task to name.
+func (w *Writer) prioritisedWake(ctx context.Context, tx *sql.Tx, handle string,
+	priorities []string, at time.Time) (*Notify, error) {
+
+	if len(priorities) == 0 {
+		return nil, nil
+	}
+	top, held, err := readTask(ctx, tx, priorities[0])
+	if err != nil {
+		return nil, err
+	}
+	if !held {
+		// A TASK THIS NODE HAS NOT APPLIED YET. The list is still
+		// written — the priorities are the caller's to set and a wake is
+		// not worth refusing a write for — but naming a task whose row
+		// is not here would put an empty key and an empty title on the
+		// card. Silence is the honest degradation.
+		return nil, nil
+	}
+	return &Notify{
+		Kind: ChangePrioritised,
+		Snapshot: Snapshot{
+			Person: handle,
+			Task:   top.ID,
+			Key:    top.Key,
+			Title:  top.Title,
+			// THE PROJECT AND STATUS TRAVEL because the card renders
+			// them and the seat would otherwise open the task to learn
+			// whether the thing it has just been told to do first is
+			// already done.
+			Project:       top.Project,
+			Status:        top.Status,
+			StatusGroup:   top.StatusGroup,
+			Assignee:      top.Assignee,
+			PrioritisedBy: w.Actor,
+			Position:      1,
+		},
+		Excerpt: fmt.Sprintf("%s put %s at position 1 of your priorities",
+			w.Actor, top.Key),
+	}, nil
 }
 
 // ownRecord refuses a write on somebody else's half of a person record.
@@ -282,6 +384,23 @@ func prunedSnoozes(entries []InboxEntry, now time.Time) []InboxEntry {
 func (w *Writer) writePerson(ctx context.Context, opID, handle string,
 	apply func(*Person, time.Time) error) (WriteResult, error) {
 
+	return w.writePersonNotifying(ctx, opID, handle,
+		func(_ *sql.Tx, post *Person, at time.Time) (*Notify, error) {
+			return nil, apply(post, at)
+		})
+}
+
+// writePersonNotifying is the same write with a NOTIFICATION the apply decides.
+//
+// THE NOTIFY IS BUILT INSIDE THE DECIDE, which is not a convenience: the one
+// person write that announces itself is a lead writing somebody else's
+// priority list, and what it announces — the task now at the top, and its
+// position — is a property of the list AFTER the apply, read from rows in the
+// same snapshot. Built outside, it would name whichever task was first when
+// the caller last looked.
+func (w *Writer) writePersonNotifying(ctx context.Context, opID, handle string,
+	apply func(*sql.Tx, *Person, time.Time) (*Notify, error)) (WriteResult, error) {
+
 	if strings.TrimSpace(handle) == "" {
 		return WriteResult{}, fmt.Errorf("tracker: a person write names nobody")
 	}
@@ -303,10 +422,11 @@ func (w *Writer) writePerson(ctx context.Context, opID, handle string,
 				return statelog.Decision{}, err
 			}
 			post.V, post.Handle, post.UpdatedAt = DocumentVersion, handle, at
-			if err := apply(&post, at); err != nil {
+			notify, err := apply(tx, &post, at)
+			if err != nil {
 				return statelog.Decision{}, err
 			}
-			return w.decide(subject, OpPatch, scope, opID, post, nil, at)
+			return w.decide(subject, OpPatch, scope, opID, post, notify, at)
 		},
 	})
 }

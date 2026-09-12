@@ -40,7 +40,7 @@ type GoalReader interface {
 
 type listWorkGoals struct{ deps WorkDeps }
 
-var _ tools.Callable = (*listWorkGoals)(nil)
+var _ tools.SeatCallable = (*listWorkGoals)(nil)
 
 func (t *listWorkGoals) Name() string { return tracker.ListWorkGoalsTool }
 
@@ -66,6 +66,21 @@ func (t *listWorkGoals) Parameters() map[string]any {
 }
 
 func (t *listWorkGoals) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
+	return t.CallForTurn(ctx, nil, args)
+}
+
+func (t *listWorkGoals) CallForTurn(ctx context.Context, turn *turnctx.Turn,
+	args map[string]any) (tools.Result, error) {
+
+	// THE IDENTITY CHECK IS ON A READ TOO, exactly as it is on
+	// get_work_catalogue beside it: outside a turn a seat's registry has
+	// no seat, and a tool that answered anyway would be answering as
+	// nobody. The operator surface supplies its own actor, so this
+	// succeeds there.
+	if _, err := t.deps.actor(ctx, turn); err != nil {
+		//nolint:nilerr // A tool failure is a RESULT the caller reads.
+		return notInATurn(tracker.ListWorkGoalsTool), nil
+	}
 	if t.deps.Reader == nil {
 		return unconfigured(tracker.ListWorkGoalsTool), nil
 	}
@@ -125,6 +140,17 @@ func (t *writeWorkGoal) Parameters() map[string]any {
 			"group": map[string]any{
 				"type":        "string",
 				"description": "A free-text label goals are filed under, e.g. `H1` or `2026 Q2`.",
+			},
+			"update": map[string]any{
+				"type": "object",
+				"description": "Post a health update — the one part of a goal " +
+					"written in somebody's own words, and what its owners and " +
+					"members are woken with. APPENDED to the goal's history; " +
+					"nothing rewrites an existing one.",
+				"properties": map[string]any{
+					"health": map[string]any{"type": "string", "description": "The health this update reports."},
+					"text":   map[string]any{"type": "string", "description": "What is going on, in prose."},
+				},
 			},
 			"health": map[string]any{
 				"type": "string",
@@ -218,6 +244,19 @@ func (t *writeWorkGoal) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed(refusal), nil
 	}
 	goal.Targets = targets
+	// THE UPDATE IS APPENDED BY THE WRITER, which carries the stored
+	// history forward and stamps the author and the instant: an update is
+	// something somebody SAID on a date, and a caller that could set
+	// either would be filing an assessment under another name.
+	if raw, held := args["update"].(map[string]any); held {
+		health := strings.TrimSpace(argString(raw, "health"))
+		text := strings.TrimSpace(argString(raw, "text"))
+		if health == "" && text == "" {
+			return failed("An `update` needs a `health`, a `text` or both — " +
+				"an empty one tells the goal's owners nothing."), nil
+		}
+		goal.Updates = []tracker.GoalUpdate{{Health: health, Text: text}}
+	}
 
 	result, err := t.deps.GoalWriter(actor).WriteGoal(ctx, "goal-"+id, goal)
 	if err != nil {

@@ -178,6 +178,7 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		tracker.SprintReportTool:     false,
 		tracker.TaskActivityTool:     false,
 		tracker.MyWorkTool:           false,
+		tracker.ListWorkGoalsTool:    false,
 		builtin.ListPagesTool:        false,
 		builtin.GetPageTool:          false,
 

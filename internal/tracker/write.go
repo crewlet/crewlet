@@ -114,6 +114,19 @@ type Writer struct {
 	// pessimistic floor rather than as infinity.
 	Drain func() float64
 
+	// Leads resolves a project's or a unit's lead, and it is the ONE
+	// thing this writer needs that the rows cannot give: a project's lead
+	// is chart-owned, `tracker_projects` carries no column for it, and the
+	// applier may not read an org at all — two nodes briefly on different
+	// epochs would write different rows from the same record.
+	//
+	// ON THE WRITER rather than per call, unlike the task wakes' own
+	// [Wake.Notify], because the caller that needs it here is the SPRINT
+	// DUTY: a fleet singleton on a tick, with no tool arguments to carry a
+	// seam through. Nil resolves to no lead, which costs a wake its
+	// fallback recipient and never its delivery.
+	Leads Leads
+
 	// Now is the clock the AUTHORED instants are stamped from. An
 	// argument rather than a package call, so a test can pin it and so
 	// nothing on the write path reads a clock the applier is forbidden.
@@ -136,6 +149,7 @@ type WriterDeps struct {
 	Drain     func() float64
 	Actor     string
 	ActorKind AuthorKind
+	Leads     Leads
 	Now       func() time.Time
 }
 
@@ -217,7 +231,7 @@ func NewWriter(d WriterDeps) (*Writer, error) {
 	return &Writer{
 		publisher: d.Publisher, db: d.DB, claims: d.Claims, nodeID: d.NodeID,
 		metrics: d.Metrics, Actor: d.Actor, ActorKind: d.ActorKind,
-		Drain: d.Drain, Now: now,
+		Drain: d.Drain, Leads: d.Leads, Now: now,
 	}, nil
 }
 

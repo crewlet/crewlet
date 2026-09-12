@@ -1109,9 +1109,31 @@ func (w *Writer) moveSprint(ctx context.Context, opID, project string, number in
 			if to == SprintClosed {
 				closed := at
 				sprint.ClosedAt, sprint.ClosedBy = &closed, w.Actor
+				// WHAT IT CLOSED WITH, counted HERE and nowhere else.
+				// The column has been on the row and in the applier's
+				// INSERT since the tracker landed, and no writer ever
+				// set it — so `open_at_close` was 0 on every sprint
+				// this engine has ever closed, `rollover_pending` could
+				// never be true, and the close's own card read "closed
+				// with 0 open task(s)" over a sprint holding a
+				// fortnight's unfinished work.
+				//
+				// INSIDE THE DECIDE, because it is a property of the
+				// sprint AT THE MOMENT IT CLOSES: counted before, the
+				// rollover has not run; counted after, the rollover has
+				// already emptied it and the answer is always zero.
+				open, err := countOpenInSprint(ctx, tx, project, number)
+				if err != nil {
+					return statelog.Decision{}, err
+				}
+				sprint.OpenAtClose = open
+			}
+			wake, err := sprintWake(ctx, tx, sprint, to, w.Leads)
+			if err != nil {
+				return statelog.Decision{}, err
 			}
 			decision, err := w.decide(subject, OpPatch, scope,
-				stepID(opID, "sprint"), sprint, nil, at)
+				stepID(opID, "sprint"), sprint, wake, at)
 			if err != nil {
 				return statelog.Decision{}, err
 			}

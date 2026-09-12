@@ -668,10 +668,17 @@ const (
 
 	// MaxGoalOwners, MaxGoalMembers, MaxGoalTargets, MaxGoalUpdates and
 	// MaxTasksPerTarget bound a goal.
-	MaxGoalOwners     = 8
-	MaxGoalMembers    = 32
-	MaxGoalTargets    = 32
-	MaxGoalUpdates    = 100
+	MaxGoalOwners  = 8
+	MaxGoalMembers = 32
+	MaxGoalTargets = 32
+	MaxGoalUpdates = 100
+
+	// MaxGoalUpdateText bounds one health update's prose, at the plan's
+	// own 2 KiB. It is the one part of a goal somebody writes in their own
+	// words, and it is what the wake's card carries — so it is cut here
+	// rather than at the card, where a longer stored value would be
+	// invisible until somebody opened the goal.
+	MaxGoalUpdateText = 2 << 10
 	MaxTasksPerTarget = 64
 
 	// MaxViewParamsBytes and MaxViewParamKeys bound a saved view's query;

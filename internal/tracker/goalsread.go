@@ -59,6 +59,15 @@ type GoalRow struct {
 
 	Targets []GoalTargetRow `json:"targets,omitempty"`
 
+	// Updates is the health history, newest LAST as it was written.
+	//
+	// ON THE ROW because a `goal_updated` wake tells its owners to read
+	// the updates written against the goal — and for as long as this
+	// field was absent, the only verb a seat has for reading a goal
+	// returned everything about it EXCEPT the part somebody wrote in
+	// their own words, which is the part the wake was about.
+	Updates []GoalUpdate `json:"updates,omitempty"`
+
 	// Progress is the mean of the targets', and ABSENT when there are
 	// none: a goal with nothing to measure is not a goal at zero.
 	Progress *float64 `json:"progress,omitempty"`
@@ -211,8 +220,8 @@ func readGoalRows(ctx context.Context, tx *sql.Tx, q GoalQuery) ([]GoalRow, erro
 			Health: GoalHealth(goal.Health), StartAt: goal.StartAt,
 			DueAt: goal.DueAt, Archived: goal.Archived, Version: version,
 			CreatedBy: goal.CreatedBy, CreatedAt: goal.CreatedAt,
-			UpdatedAt: goal.UpdatedAt,
-			Targets:   make([]GoalTargetRow, 0, len(goal.Targets)),
+			UpdatedAt: goal.UpdatedAt, Updates: goal.Updates,
+			Targets: make([]GoalTargetRow, 0, len(goal.Targets)),
 		})
 		row := &out[len(out)-1]
 		for _, target := range goal.Targets {

@@ -174,6 +174,10 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		// seat without this could never use `labels` at all.
 		{&writeProject{deps: deps.Work, leads: deps.LeadsProject},
 			deps.Work.ProjectWriter != nil},
+		// AND THE GOAL READ, which is a seat's because `goal_updated`
+		// wakes every owner and every member: a seat told its goal moved
+		// and holding no verb to read one has been handed a riddle.
+		{&listWorkGoals{deps: deps.Work}, deps.Work.Reader != nil},
 		// AND THE TWO ABOUT CHANGE rather than about state: a board says
 		// what is there now, and no filter over its rows can answer
 		// "who moved this" or "what is waiting on me".
@@ -284,7 +288,8 @@ func annotationsFor(name string) tools.Annotations {
 	case ListWorkItemsTool, GetWorkItemTool, ListPagesTool, GetPageTool,
 		tracker.GetWorkCatalogueTool, tracker.ListProjectsTool,
 		tracker.DescribeProjectTool, tracker.SprintReportTool,
-		tracker.TaskActivityTool, tracker.MyWorkTool:
+		tracker.TaskActivityTool, tracker.MyWorkTool,
+		tracker.ListWorkGoalsTool:
 		// Reads, and idempotent: asking twice costs a round and changes
 		// nothing. The catalogue lookup belongs here with the rest — left
 		// out, it fell to the default arm, whose ReadOnly=No with
