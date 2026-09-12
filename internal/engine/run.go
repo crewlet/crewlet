@@ -235,6 +235,12 @@ type Engine struct {
 	// read back.
 	cipher secrets.Cipher
 
+	// sinkUnavailable makes the loop say "this node cannot seal a minted
+	// credential" ONCE. It is a property of [Engine.cipher] — the same for
+	// every integration and unchanged until the process restarts — and the
+	// reconcile loop asks per surface per tick. See integrations.go.
+	sinkUnavailable sync.Once
+
 	// profile is what this node declared it does: whether it claims
 	// seats, serves inbound traffic, and runs the fleet's singleton
 	// duties. Held because the duty gate reads it on every claim — see

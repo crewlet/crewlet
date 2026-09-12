@@ -274,9 +274,20 @@ func (c *passConverger) Reconcile(ctx context.Context) ([]integration.Finding, e
 	// in the environment and has no secrets.keys at all.
 	sink, err := c.engine.SetupSink(reconcileOperator)
 	if err != nil {
-		log.WarnContext(ctx, "integration_sink_unavailable",
-			"integration", c.pass.Kind().String(), "error", err,
-			"detail", "this pass reads and reports; it will mint nothing")
+		// ONCE PER NODE, NOT ONCE PER SURFACE PER TICK. Whether this node
+		// holds a keyring is a fact about the NODE — identical for all
+		// eight surfaces and unchanged until it restarts — so the loop
+		// said it eight times an interval, for ever, about the
+		// deployment shape the comment above calls the ordinary one. A
+		// warning that repeats on an unchanging normal condition is one
+		// an operator filters, and filtering it is how the real warning
+		// beside it goes unread.
+		c.engine.sinkUnavailable.Do(func() {
+			log.WarnContext(ctx, "integration_sink_unavailable",
+				"error", err, "detail", "no integration pass on this node "+
+					"will mint a credential; every one of them still reads "+
+					"its surface and reports what it finds")
+		})
 		sink = provision.ReadOnly()
 	}
 	// UNDER THE SURFACE'S OWN GUARD, the same one an operator's pass takes.
