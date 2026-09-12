@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
@@ -94,10 +95,14 @@ func TestThePlanNeedsAnEnabledIntegrationAndATeam(t *testing.T) {
 type chatServer struct {
 	mu sync.Mutex
 
-	bots   map[string]string             // username -> user id
-	names  map[string]string             // user id -> display name
-	off    map[string]bool               // user id -> disabled
-	tokens map[string][]mattermost.Token // user id -> its live tokens
+	bots  map[string]string // username -> user id
+	names map[string]string // user id -> display name
+	// descriptions is the bot record's own field, which is where this
+	// engine records that IT disabled a bot. A user carries none, so a
+	// fixture that only served users could not exercise the marker at all.
+	descriptions map[string]string             // user id -> description
+	off          map[string]bool               // user id -> disabled
+	tokens       map[string][]mattermost.Token // user id -> its live tokens
 	// adminRoles is what /users/me reports for the operator credential.
 	// Empty means the shipped system_admin; a value is the under-privileged
 	// token the preflight exists to catch.
@@ -619,6 +624,23 @@ func (s *chatServer) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		json.NewEncoder(w).Encode(row)
 
+	// ONE BOT'S OWN RECORD, which is where the description lives: a USER
+	// carries none, so this is the only place the disconnect marker can be
+	// read from. Matched ahead of the listing below, which is the same
+	// prefix with nothing after it.
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/bots/"):
+		id := strings.TrimPrefix(path, "/bots/")
+		username := ""
+		for name, botID := range s.bots {
+			if botID == id {
+				username = name
+			}
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"user_id": id, "username": username,
+			"display_name": s.names[id], "description": s.descriptions[id],
+		})
+
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/bots"):
 		if s.botsFail {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -636,7 +658,20 @@ func (s *chatServer) serve(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPut && strings.HasPrefix(path, "/bots/"):
 		var body map[string]string
 		json.NewDecoder(r.Body).Decode(&body)
-		s.names[strings.TrimPrefix(path, "/bots/")] = body["display_name"]
+		id := strings.TrimPrefix(path, "/bots/")
+		// EACH FIELD ONLY WHERE IT WAS SENT, as Mattermost's own PUT
+		// behaves: the display-name write and the marker write are two
+		// different calls, and a fake that blanked the other would make
+		// either look like it had undone the first.
+		if name, set := body["display_name"]; set {
+			s.names[id] = name
+		}
+		if description, set := body["description"]; set {
+			if s.descriptions == nil {
+				s.descriptions = map[string]string{}
+			}
+			s.descriptions[id] = description
+		}
 		w.Write([]byte(`{}`))
 
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/disable") &&
@@ -1835,9 +1870,90 @@ func TestReconnectingReEnablesABotADisconnectDisabled(t *testing.T) {
 		t.Errorf("Enabled = %v, and the report does not name the bot it turned back on",
 			res.Enabled)
 	}
+	// AND THE MARKER GOES WITH IT. A live bot still described as
+	// disconnected reads to the next pass as one to re-enable, so the pass
+	// would send that call again on every tick for the life of the
+	// deployment.
+	srv.mu.Lock()
+	marker := srv.descriptions[id]
+	srv.mu.Unlock()
+	if marker != "" {
+		t.Errorf("the re-enabled bot is still described %q, so every later "+
+			"pass re-enables an account that is already on", marker)
+	}
 	// THE SAME ACCOUNT, not a second one: keeping the username and its
 	// history is the whole reason a disconnect disables rather than deletes.
 	if now != id {
 		t.Errorf("the reconnect made a new bot %q, orphaning %q", now, id)
+	}
+}
+
+// A DEACTIVATION SOMEBODY ELSE PERFORMED IS REPORTED, NOT REVERSED.
+//
+// Mattermost deactivates rather than deletes, so a disconnect leaves the
+// account behind — and "disabled" alone is an ambiguous bit: a disconnect
+// this engine performed and a deactivation an administrator performed at
+// Mattermost look identical. Reconnecting used to re-enable EITHER,
+// unconditionally, so a person who turned an agent off had that undone on the
+// next tick, and on the one after, for ever.
+//
+// This is the risk datadog's marker exists to avoid, and this pass had no way
+// even to see it. The marker is written by every path that disables — the
+// teardown and the decommission — and read here.
+func TestAnAdministratorsDeactivationIsNotReversed(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	both := []*org.Role{
+		chatSeat("CEO", "${MM_TOKEN_CEO}", "leadership"),
+		chatSeat("CTO", "${MM_TOKEN_CTO}", "eng"),
+	}
+	if _, err := reconcileChat(t, srv, newChatSink(), both); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	srv.mu.Lock()
+	id := srv.bots["agent-cto"]
+	// SOMEBODY AT MATTERMOST TURNS IT OFF: the account is deactivated and
+	// its description says nothing, because no disconnect of this engine's
+	// wrote one.
+	srv.off[id] = true
+	srv.mu.Unlock()
+
+	res, err := reconcileChat(t, srv, newChatSink(), both)
+	if err != nil {
+		t.Fatalf("reconnect: %v", err)
+	}
+	srv.mu.Lock()
+	stillOff := srv.off[id]
+	srv.mu.Unlock()
+	if !stillOff {
+		t.Error("the pass re-enabled a bot an administrator deactivated, so " +
+			"the engine undoes a person's decision on every tick")
+	}
+	if len(res.Enabled) != 0 {
+		t.Errorf("Enabled = %v over an account this engine did not disable",
+			res.Enabled)
+	}
+	if len(res.Deactivated) != 1 || res.Deactivated[0] != "cto" {
+		t.Fatalf("Deactivated = %v, so an agent that reads and posts nothing "+
+			"is reported as nothing at all", res.Deactivated)
+	}
+	// AND IT SAYS SO IN THE VOCABULARY EVERY SURFACE SHARES, owed to an
+	// admin: this engine will not reverse it and no retry will change it.
+	var found bool
+	for _, f := range res.Findings() {
+		if f.Subject != "cto" {
+			continue
+		}
+		found = true
+		if f.Kind != integration.FindingIdentityFailed {
+			t.Errorf("reported as %s, want identity_failed", f.Kind)
+		}
+		if !strings.Contains(f.Detail, "not deactivated by this engine") {
+			t.Errorf("the finding does not say whose decision it was:\n%s", f.Detail)
+		}
+	}
+	if !found {
+		t.Errorf("findings = %v, none of them about the deactivated agent",
+			res.Findings())
 	}
 }

@@ -96,6 +96,26 @@ func BotDisplayName(p *config.MattermostProvisioning, role string) string {
 type Bot struct {
 	UserID   string `json:"user_id"`
 	Username string `json:"username"`
+
+	// Description is where this engine records that IT disabled the bot.
+	//
+	// Mattermost deactivates rather than deletes, so a disconnect leaves
+	// the account behind — and "disabled" alone is an ambiguous bit: a
+	// disconnect this engine performed and a deactivation a person
+	// performed at Mattermost look identical. Reconnecting used to re-enable
+	// EITHER, unconditionally, so an administrator who turned an agent off
+	// had that reversed on the next tick, for ever.
+	//
+	// The provenance lives on the account for the reason datadog's does
+	// ([datadog.DisconnectedTitle]): the surface's own status row is
+	// forgotten the moment a disconnect succeeds, and it does not survive a
+	// lost coordination store or a restore from backup. The account does.
+	//
+	// Empty on a bot an older build disabled, which compares unequal and is
+	// therefore reported rather than re-enabled. That is the safe
+	// direction: it asks a person about an account this engine cannot prove
+	// it turned off.
+	Description string `json:"description"`
 	// DisplayName is the bot's own, which lives on the BOT record rather
 	// than on its user: the user's nickname is a different field the bots
 	// API does not set, so comparing against it would report drift on every
@@ -348,6 +368,48 @@ func (c *Client) PatchBot(ctx context.Context, userID, displayName string) error
 	_, err := c.request(ctx, http.MethodPut, "/bots/"+userID,
 		map[string]string{"display_name": displayName}, nil, false)
 	return err
+}
+
+// DisconnectedDescription is what a bot's description says while this
+// engine's own disconnect is what turned it off.
+//
+// The same mechanism and the same wording shape as
+// [datadog.DisconnectedTitle], because it answers the same question on the
+// same terms: which of the two things that disable an account did it, when
+// the account is all that is left to ask.
+const DisconnectedDescription = "crewlet:disconnected"
+
+// MarkDisconnected records that THIS engine is the one disabling a bot.
+//
+// Written BEFORE the disable, so a run interrupted between the two leaves a
+// marked, live bot rather than a disabled one with no provenance — which is
+// the state nothing can undo on its own. Idempotent, so a teardown that meets
+// a bot somebody already deactivated still records who is decommissioning it.
+func (c *Client) MarkDisconnected(ctx context.Context, userID string) error {
+	_, err := c.request(ctx, http.MethodPut, "/bots/"+userID,
+		map[string]string{"description": DisconnectedDescription}, nil, false)
+	return err
+}
+
+// ClearDisconnected removes the marker, which a re-enable does: a live bot
+// still described as disconnected would be re-enabled again on every pass.
+func (c *Client) ClearDisconnected(ctx context.Context, userID string) error {
+	_, err := c.request(ctx, http.MethodPut, "/bots/"+userID,
+		map[string]string{"description": ""}, nil, false)
+	return err
+}
+
+// BotRecord reads one bot's own record, which is where the description lives:
+// [Client.BotByUsername] answers with the USER, and a user carries no
+// description at all.
+//
+// ASKED ONLY ABOUT A DEACTIVATED SEAT, so the ordinary converged pass makes
+// no extra call: the question it answers — who disabled this — has no meaning
+// for a bot that is running.
+func (c *Client) BotRecord(ctx context.Context, userID string) (Bot, error) {
+	var out Bot
+	_, err := c.request(ctx, http.MethodGet, "/bots/"+userID, nil, &out, false)
+	return out, err
 }
 
 // DisableBot deactivates a bot account without deleting it.

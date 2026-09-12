@@ -30,7 +30,17 @@ type Result struct {
 	// between a reconnect that works and one that reports ready over an
 	// agent that cannot sign in.
 	Enabled []string
-	Rotated []string
+
+	// Deactivated names the bots that are OFF and were not turned off by
+	// this engine, which it leaves exactly as it found them.
+	//
+	// Its own list because it is the opposite outcome to Enabled and has
+	// the opposite owner: somebody deactivated this agent at Mattermost on
+	// purpose, so the pass reports it and does not fight the gesture. See
+	// [Client.DisconnectedDescription] for how the two are told apart, and
+	// why "disabled" alone could not be.
+	Deactivated []string
+	Rotated     []string
 	// Kept names the seats whose existing token was left alone — the
 	// SUCCESSFUL outcome of a re-run, said out loud because a silent
 	// report reads as a run that did nothing.
@@ -234,18 +244,59 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			return nil, rollback(ctx, opts, minted,
 				fmt.Errorf("mattermost: %s: %w", seat.Handle, err))
 		}
-		// A DISABLED BOT IS ONE THIS ENGINE TURNED OFF, and reconnecting
-		// has to turn it back on. The teardown disables rather than
-		// deletes so an agent keeps its history, which means the account
-		// is still here to be found: without this the pass joins it,
-		// mints it a token, reports ready, and every socket that token
-		// opens is refused because the account is deactivated.
+		// A DISABLED BOT THIS ENGINE TURNED OFF IS TURNED BACK ON, and one
+		// somebody else turned off is REPORTED.
+		//
+		// The teardown disables rather than deletes so an agent keeps its
+		// history, which means the account is still here to be found:
+		// without the re-enable the pass joins it, mints it a token,
+		// reports ready, and every socket that token opens is refused
+		// because the account is deactivated.
+		//
+		// WHICH OF THE TWO DISABLED IT is the part that was missing. This
+		// re-enabled either, unconditionally, so an administrator who
+		// deactivated an agent at Mattermost had that reversed on the next
+		// tick — the engine fighting a person's gesture for ever, which is
+		// precisely the risk datadog's marker was added to avoid and which
+		// this had no way even to see. The marker
+		// ([Client.DisconnectedDescription]) is written by the teardown
+		// before it disables, and read here.
+		//
+		// ASKED ONLY OF A DEACTIVATED SEAT, so a converged pass makes no
+		// extra call: the bot's own record is a second request, and the
+		// question it answers has no meaning for a bot that is running.
 		if exists && user.DeleteAt != 0 {
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
+			record, err := opts.Client.BotRecord(ctx, user.ID)
+			if err != nil {
+				return nil, rollback(ctx, opts, minted, fmt.Errorf(
+					"mattermost: %s: read whether this engine disabled the bot: %w",
+					seat.Handle, err))
+			}
+			if strings.TrimSpace(record.Description) != DisconnectedDescription {
+				// SOMEBODY ELSE'S DECISION. Reported and left alone, on
+				// the same terms datadog reports one: a deliberate act at
+				// the instance, which a pass that reversed it would undo
+				// on every tick.
+				res.Deactivated = append(res.Deactivated, seat.Handle)
+				continue
+			}
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := opts.Client.EnableBot(ctx, user.ID); err != nil {
 				return nil, rollback(ctx, opts, minted, fmt.Errorf(
 					"mattermost: %s: re-enable the bot a disconnect disabled: %w",
 					seat.Handle, err))
+			}
+			// AND THE MARKER GOES WITH IT, or a live bot still described
+			// as disconnected would be re-enabled again on every pass.
+			// Best effort: the bot is back, which is what the seat needed,
+			// and a description that could not be cleared costs one
+			// no-op enable next tick rather than the agent.
+			if err := opts.Client.ClearDisconnected(ctx, user.ID); err != nil {
+				res.Notes = append(res.Notes, fmt.Sprintf(
+					"%s is enabled again and its bot description still reads "+
+						"%q, which this engine will try to clear on the next "+
+						"pass: %v", seat.Handle, DisconnectedDescription, err))
 			}
 			res.Enabled = append(res.Enabled, seat.Handle)
 		}
@@ -589,6 +640,19 @@ func decommission(ctx context.Context, opts Options, managed map[string]Bot) ([]
 				"%s matches the managed prefix and its tokens could not be "+
 					"revoked, so it was left enabled rather than disabled "+
 					"holding a live credential: %v", bot.Username, err))
+			continue
+		}
+		// MARKED BEFORE IT IS DISABLED, the same rule the teardown
+		// follows and for the same reason: "disabled" is an ambiguous bit,
+		// and a bot this engine turned off with nothing recording that is
+		// one it can never bring back. Written first, so a run interrupted
+		// between the two leaves a marked, live bot.
+		if err := opts.Client.MarkDisconnected(ctx, bot.UserID); err != nil {
+			notes = append(notes, fmt.Sprintf(
+				"%s matches the managed prefix and this engine could not "+
+					"record that it is decommissioning it, so it was left "+
+					"enabled rather than disabled with no provenance: %v",
+				bot.Username, err))
 			continue
 		}
 		if err := opts.Client.DisableBot(ctx, bot.UserID); err != nil {

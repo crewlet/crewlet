@@ -67,6 +67,28 @@ func (r *Result) Findings() []integration.Finding {
 		})
 	}
 
+	// AND AN AGENT SOMEBODY DEACTIVATED AT MATTERMOST.
+	//
+	// identity_failed, owed to an ADMIN: the bot exists, it cannot sign in,
+	// and nothing this engine does will change that — re-enabling it is
+	// exactly the gesture it must not reverse, because a person made it on
+	// purpose. Said once per seat, because each is its own decision.
+	//
+	// It used to be reversed instead, silently and on every tick. See
+	// [Client.DisconnectedDescription] for the marker that tells this from
+	// a bot this engine's own disconnect turned off, which IS re-enabled.
+	for _, handle := range r.Deactivated {
+		out = append(out, integration.Finding{
+			Kind:    integration.FindingIdentityFailed,
+			Subject: handle,
+			Detail: handle + "'s Mattermost bot is deactivated and was not " +
+				"deactivated by this engine, so it reads and posts nothing. " +
+				"Re-activate it at Mattermost if that was not deliberate — " +
+				"this engine will not, because reversing it would undo the " +
+				"decision on every pass",
+		})
+	}
+
 	// AND THE INSTANCE'S OWN SWITCHES, which no credential can get past.
 	//
 	// The ADMIN's, not the operator's: what has to happen is in somebody's
