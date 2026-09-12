@@ -51,8 +51,8 @@ type WorkReader interface {
 	Task(ctx context.Context, idOrKey string, want tracker.DetailWants,
 		level statelog.ReadLevel) (tracker.TaskDetail, error)
 	Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error)
-	ExpandedQuery(ctx context.Context, params map[string]any, viewer string,
-		now time.Time, loc *time.Location) (tracker.Query, error)
+	ExpandedQuery(ctx context.Context, params map[string]any,
+		viewer tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error)
 	Goals(ctx context.Context, q tracker.GoalQuery) (tracker.GoalListing, error)
 	Catalogue(ctx context.Context, q tracker.CatalogueQuery) (tracker.CatalogueAnswer, error)
 	Projects(ctx context.Context, q tracker.ProjectQuery, now time.Time) (
@@ -84,8 +84,13 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	// is a parameter here for the reason it is on the view strip: this
 	// surface is guarded, so the caller already holds the company's own
 	// credential, and what it selects is whose queue to render.
-	q, err := s.Work.ExpandedQuery(ctx, p.Values(),
-		strings.TrimSpace(p.String("viewer")), now, time.UTC)
+	// THE VIEWER'S OWN PROJECT comes from the chart, because
+	// `preset=my_queue` asks what is unclaimed in THEIR container and an
+	// unscoped second arm offers every unassigned task in the company.
+	q, err := s.Work.ExpandedQuery(ctx, p.Values(), tracker.Viewer{
+		Handle:  strings.TrimSpace(p.String("viewer")),
+		Project: s.projectOf(strings.TrimSpace(p.String("viewer"))),
+	}, now, time.UTC)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrBadParams, err)
 	}
@@ -671,4 +676,20 @@ func optionalInstant(p Params, key string) (time.Time, error) {
 		return time.Time{}, badParams(key, raw, []string{"an RFC3339 instant"})
 	}
 	return when, nil
+}
+
+// projectOf is one seat's home container, from the epoch's own chart.
+//
+// EMPTY WHERE THERE IS NO CHART OR NO SEAT, which narrows `preset=my_queue` to
+// that person's own assignments rather than widening it to everybody's
+// backlog — the safe direction, and the one a reader can tell from the rows.
+func (s Sources) projectOf(handle string) string {
+	if handle == "" {
+		return ""
+	}
+	organization := s.organization()
+	if organization == nil {
+		return ""
+	}
+	return engine.ProjectOfSeat(organization, handle)
 }

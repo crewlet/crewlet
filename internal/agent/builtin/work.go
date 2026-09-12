@@ -54,8 +54,8 @@ type WorkReader interface {
 	Task(ctx context.Context, idOrKey string, want tracker.DetailWants,
 		level statelog.ReadLevel) (tracker.TaskDetail, error)
 	Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error)
-	ExpandedQuery(ctx context.Context, params map[string]any, viewer string,
-		now time.Time, loc *time.Location) (tracker.Query, error)
+	ExpandedQuery(ctx context.Context, params map[string]any,
+		viewer tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error)
 	Goals(ctx context.Context, q tracker.GoalQuery) (tracker.GoalListing, error)
 	Catalogue(ctx context.Context, q tracker.CatalogueQuery) (tracker.CatalogueAnswer, error)
 	Person(ctx context.Context, q tracker.PersonQuery, now time.Time) (tracker.PersonState, error)
@@ -441,7 +441,12 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// it could name. The seat comes from the immutable turn context for
 	// the same reason every write here does: a model that could name its
 	// own viewer could read as anybody.
-	q, err := t.deps.Reader.ExpandedQuery(ctx, params, actor.Handle,
+	// THE VIEWER IS THE SEAT AND ITS OWN PROJECT, because `preset=my_queue`
+	// asks two things about the reader: what they hold, and what is
+	// unclaimed in THEIR container.
+	q, err := t.deps.Reader.ExpandedQuery(ctx, params, tracker.Viewer{
+		Handle: actor.Handle, Project: t.deps.defaultProject(actor.Handle),
+	},
 		t.deps.now(), t.deps.zone())
 	if err != nil {
 		return failed(fmt.Sprintf("That filter is not one the tracker accepts: %v", err)), nil

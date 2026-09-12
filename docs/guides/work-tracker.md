@@ -39,7 +39,7 @@ what people paste into chat, so it can never be ambiguous.
 | **parent**, **subtasks** | a tree, with a depth cap. A query filters ROOTS by default and lets their subtrees ride along; `subtasks=separate` filters every task on its own. |
 | **start / due**, **estimate**, **points** | scheduling and sizing. |
 | **tags** | from a per-project tag set. |
-| **custom fields** | declared per project and at the workspace, typed, with option lists — see [the catalogue](#the-catalogue). Filter on one with `f.<slug>`. |
+| **custom fields** | declared per project and at the workspace, typed, with option lists — see [the catalogue](#the-catalogue). Filter on one with `f.<slug>`, and see [the operators](#filtering-a-custom-field). |
 | **checklist** | items with their own assignees. |
 | **relations**, **dependencies** | links between tasks, and blocking edges. |
 | **linked pages**, **references** | into the knowledge base and out to third-party systems. |
@@ -215,9 +215,53 @@ the two questions a sprint creates and neither is expressible as a default.
 **A view is a set of defaults, never a lock.** Opening one loads its
 parameters and every key you then set overrides them, so picking a different
 assignee on a saved board gives you that board with one key changed. A
-**preset** is the same mechanism for a question the engine's own indexes are
-named after — `my_queue`, `blocked`, `overdue` — and a view beats a preset,
-because somebody saved the view.
+**preset** is the same mechanism for a question people ask often enough that a
+screen puts it on a tab — and a view beats a preset, because somebody saved
+the view. There are five:
+
+| Preset | What it answers |
+|---|---|
+| `my_queue` | **what can I pick up** — a disjunction of the work you hold and the work in *your own project* nobody holds, open and unblocked, most important first. Both arms matter: written as "assigned to me" alone, a seat with an empty queue reads the company as having nothing for it while its project's unclaimed backlog sits there |
+| `priorities` | your own ordered list, open tasks only, **in the order somebody arranged it**. That order is the answer — it is what was decided — so there is no sort to override it, and a finished task drops out of the answer without the list being rewritten |
+| `triage` | the open work **nobody has picked up**. With one fixed status set there is no intake status to filter on, so this is the honest definition of "needs somebody to decide" |
+| `blocked` | open work that cannot move — the list a lead reads before a stand-up |
+| `overdue` | open work past its due date. Defined on the status **groups** rather than on `show_closed`, so a task delivered yesterday is not reported late for ever |
+
+`my_queue` and `priorities` both need to know who is asking, and the surface
+supplies that from its own credential — never the query. That is also what
+makes `f.<slug>=me` mean the reader rather than whoever saved the view.
+
+### Filtering a custom field
+
+`f.<slug>=<value>` compares a field, and the comparison a field admits is a
+property of its **type**:
+
+| Type | Operators |
+|---|---|
+| `text`, `url`, `email` | `eq` `ne` `contains` `startswith` `in` |
+| `textarea` | `contains` `startswith` |
+| `number`, `progress` | `eq` `ne` `lt` `lte` `gt` `gte` `range` |
+| `date` | `eq` `lt` `lte` `gt` `gte` `range` |
+| `dropdown` | `eq` `ne` `any` `not_any` |
+| `labels` | `any` `all` `not_any` `not_all` |
+| `checkbox` | `eq` |
+| `relationship` | `any` `all` `not_any` |
+| `people` | `any` `all` `not_any` `me` |
+| `rollup` | `lt` `gt` `range`, applied after the rows are read |
+
+`null` and `not_null` are on every type, because "is this set" is a question
+about the **row** rather than about the value. An operator a type does not
+admit is **refused naming the ones it does** — the failure that replaces is
+silent: `eq` on a `labels` field produced a clause that matched nothing, and a
+board that came back empty reads as "no task has this label".
+
+A bare `f.areas=api` is the type's natural comparison — `any` on a set,
+because naming a value is not claiming the set *is* it, and `eq` everywhere
+else. Written explicitly, `f.<slug>=<op>:<value>`; a set operator takes a
+comma-separated list (`any:api,ui`) and `range` takes both ends
+(`range:3..8`), because a range with one end is `gte` or `lte`. A value whose
+own text begins `<scheme>://` is a value rather than an operator call, so a
+`url` field can be filtered by what it holds.
 
 **A saved view's query is parsed when it is saved**, not when it is opened. A
 view that cannot be run is otherwise discovered by whoever opens it, weeks

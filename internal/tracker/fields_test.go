@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/statelog"
+
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -155,7 +157,15 @@ func TestAnUnresolvedFieldFilterIsRefused(t *testing.T) {
 		"a number that is not one": {"f.effort", "high",
 			"is not a number"},
 		"a date that is not one": {"f.ship", "soon", "is not one"},
-		"contains on a number":   {"f.effort", "contains:8", "is a text comparison"},
+		// THE REFUSAL NAMES WHAT THE TYPE DOES ADMIT, which is what a
+		// caller needs: told only that `contains` is wrong they guess
+		// again, and every guess is another round.
+		"contains on a number": {"f.effort", "contains:8",
+			"a number takes eq, ne, lt, lte, gt, gte, range"},
+		// AND AN `eq` ON A SET is refused too, because the value is one
+		// row per option: the comparison would ask whether the set
+		// CONTAINS one while looking like it asked whether it IS it.
+		"eq on a label set": {"f.areas", "eq:api", "a labels takes any, all"},
 		"an operator that is not one": {"f.owner", "roughly:platform",
 			"not a field comparison"},
 	} {
@@ -598,5 +608,194 @@ func TestAnOptionResolvesToItsIDOnTheWriteAsWellAsTheRead(t *testing.T) {
 		})); len(found) != 1 {
 			t.Errorf("f.areas=%s answers %v, want the task that set it", value, found)
 		}
+	}
+}
+
+// THE SET OPERATORS ARE WHAT A MULTI-VALUED FIELD IS ACTUALLY ASKED ABOUT.
+//
+// A `labels` field holds several options at once, stored one row per option,
+// so `eq` against it is a question with no useful answer — it matches a task
+// whose set contains that option while looking like it asked whether the set
+// IS it. `any`, `all`, `not_any` and `not_all` are the four questions there
+// are, and until they existed only the first was reachable and only by
+// accident.
+func TestTheSetOperatorsOverALabelField(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	seedFields(t, r)
+	seedWithFields(t, r, "both", map[string]any{"f-areas": []string{"api", "ui"}})
+	seedWithFields(t, r, "api-only", map[string]any{"f-areas": []string{"api"}})
+	seedWithFields(t, r, "ui-only", map[string]any{"f-areas": []string{"ui"}})
+	seedWithFields(t, r, "neither", map[string]any{"f-effort": 3})
+
+	for name, tc := range map[string]struct {
+		filter string
+		want   []string
+	}{
+		// ANY is "holds at least one of these".
+		"any of two": {"any:api,ui", []string{"both", "api-only", "ui-only"}},
+		"any of one": {"any:api", []string{"both", "api-only"}},
+		// ALL is "holds every one of these", which is a COUNT over the
+		// set rather than an intersection — written as chained clauses
+		// it would be one subquery per member for a question one answers.
+		"all of two": {"all:api,ui", []string{"both"}},
+		"all of one": {"all:ui", []string{"both", "ui-only"}},
+		// NOT_ANY is "holds NONE of these", never "some row is not one
+		// of these" — the second is true of `both` for either option.
+		//
+		// AND A TASK THAT SET THE FIELD TO NOTHING HOLDS NONE OF THEM,
+		// so it is in: an unset field is the absence of a row, and every
+		// negation here is over the membership as a whole rather than
+		// over the rows that happen to exist. That is the same reading
+		// `ne` takes beside it, and the alternative — silently requiring
+		// the field to be set — would make `not_any` and `null` overlap
+		// in a way nobody could see.
+		"not any": {"not_any:api", []string{"ui-only", "neither"}},
+		// NOT_ALL is "is missing at least one of these", which a task
+		// with none of them certainly is.
+		"not all": {"not_all:api,ui", []string{"api-only", "ui-only", "neither"}},
+		// AND THE BARE FORM IS `any`, because a caller writing a value
+		// is naming one rather than claiming the set IS it.
+		"the bare form": {"api", []string{"both", "api-only"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assertIDs(t, ids(r.ask(map[string]any{
+				"container": "project:ENG", "f.areas": tc.filter,
+			})), tc.want)
+		})
+	}
+
+	// A SET COMPARISON WITH NOTHING IN IT matches nothing and reads as a
+	// field nobody has set, so it is refused rather than answered.
+	if err := r.askErr(map[string]any{
+		"container": "project:ENG", "f.areas": "any:",
+	}); err == nil {
+		t.Error("`any:` with no values was answered")
+	}
+}
+
+// `range` IS TWO BOUNDS IN ONE FILTER, and the pairing is what a caller gets
+// wrong: a `gte` alone on a date field is the single most common way to ask
+// for "this quarter" and get everything since it.
+func TestRangeAndStartsWithAndIn(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	seedFields(t, r)
+	seedWithFields(t, r, "small", map[string]any{"f-effort": 2, "f-owner": "platform"})
+	seedWithFields(t, r, "middle", map[string]any{"f-effort": 5, "f-owner": "plat-api"})
+	seedWithFields(t, r, "large", map[string]any{"f-effort": 9, "f-owner": "storage"})
+
+	assertIDs(t, ids(r.ask(map[string]any{
+		"container": "project:ENG", "f.effort": "range:3..8",
+	})), []string{"middle"})
+
+	// STARTSWITH IS A PREFIX, which `contains` cannot express — and the
+	// difference is not cosmetic: a prefix is a RANGE over the column and
+	// an index can serve it, where a leading `%` can only be scanned.
+	assertIDs(t, ids(r.ask(map[string]any{
+		"container": "project:ENG", "f.owner": "startswith:plat",
+	})), []string{"small", "middle"})
+	assertIDs(t, ids(r.ask(map[string]any{
+		"container": "project:ENG", "f.owner": "contains:lat",
+	})), []string{"small", "middle"})
+	if got := ids(r.ask(map[string]any{
+		"container": "project:ENG", "f.owner": "startswith:lat",
+	})); len(got) != 0 {
+		t.Errorf("startswith:lat answers %v — it is a PREFIX, and `lat` is in "+
+			"the middle of both", got)
+	}
+
+	// `in` IS `any` OVER A SINGLE-VALUED COLUMN, spelled separately
+	// because the two read differently on the surfaces they apply to.
+	assertIDs(t, ids(r.ask(map[string]any{
+		"container": "project:ENG", "f.owner": "in:platform,storage",
+	})), []string{"small", "large"})
+
+	// A RANGE WITH ONE END is `gte` or `lte` and says so, rather than
+	// silently comparing against the literal "3..".
+	if err := r.askErr(map[string]any{
+		"container": "project:ENG", "f.effort": "range:3",
+	}); err == nil {
+		t.Error("a one-ended range was answered")
+	}
+}
+
+// A URL IS A VALUE, NOT AN OPERATOR CALL.
+//
+// Cutting on the first colon read the SCHEME of every URL as an operator, so
+// a `url` field could not be filtered by its value at all — and the refusal
+// named `https` as though the caller had typed a comparison.
+func TestAUrlValueIsNotReadAsAnOperator(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.writer.WriteFields(t.Context(), "op-url", []tracker.FieldDef{
+		{ID: "f-home", Slug: "home", Name: "Homepage", Type: tracker.FieldURL},
+	}); err != nil {
+		t.Fatalf("WriteFields: %v", err)
+	}
+	r.drain()
+	seedWithFields(t, r, "site", map[string]any{
+		"f-home": "https://example.com/docs",
+	})
+
+	assertIDs(t, ids(r.ask(map[string]any{
+		"container": "project:ENG", "f.home": "https://example.com/docs",
+	})), []string{"site"})
+
+	// AND A TYPO IS STILL REFUSED. The `//` is the whole exception, so
+	// anything else with a colon is carried through as an operator and
+	// named in the refusal rather than silently answered as a value
+	// nobody holds.
+	if err := r.askErr(map[string]any{
+		"container": "project:ENG", "f.home": "roughly:example",
+	}); err == nil {
+		t.Error("a typo'd operator was answered as a value")
+	}
+}
+
+// `me` IS RESOLVED BY THE SURFACE, before the query is parsed.
+//
+// A saved view carrying `me` means whoever opens it, which is only true if the
+// substitution happens per read — and a query that reached the compiler with
+// the literal would match the tasks whose people field holds somebody called
+// "me".
+func TestTheViewerKeywordIsResolvedPerRead(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.writer.WriteFields(t.Context(), "op-people", []tracker.FieldDef{
+		{ID: "f-rev", Slug: "reviewers", Name: "Reviewers", Type: tracker.FieldPeople},
+	}); err != nil {
+		t.Fatalf("WriteFields: %v", err)
+	}
+	r.drain()
+	seedWithFields(t, r, "hers", map[string]any{"f-rev": []string{"ana"}})
+	seedWithFields(t, r, "his", map[string]any{"f-rev": []string{"bob"}})
+
+	for viewer, want := range map[string]string{"ana": "hers", "bob": "his"} {
+		q, err := r.reader.ExpandedQuery(t.Context(), map[string]any{
+			"container": "project:ENG", "f.reviewers": "me",
+		}, tracker.Viewer{Handle: viewer}, wednesday, berlin)
+		if err != nil {
+			t.Fatalf("ExpandedQuery(%s): %v", viewer, err)
+		}
+		q.Level = statelog.ReadStale
+		answer, err := r.reader.Tasks(t.Context(), q, wednesday)
+		if err != nil {
+			t.Fatalf("Tasks(%s): %v", viewer, err)
+		}
+		got := ids(answer)
+		if len(got) != 1 || got[0] != want {
+			t.Errorf("f.reviewers=me for %s answers %v, want [%s] — one saved "+
+				"query has to mean the reader rather than whoever saved it",
+				viewer, got, want)
+		}
+	}
+
+	// AND WITH NOBODY it is refused naming the key, never answered: a
+	// read that cannot say whose "me" it is would answer everybody's.
+	if _, err := r.reader.ExpandedQuery(t.Context(), map[string]any{
+		"container": "project:ENG", "f.reviewers": "me",
+	}, tracker.Viewer{}, wednesday, berlin); err == nil {
+		t.Error("f.reviewers=me with no viewer was answered")
 	}
 }

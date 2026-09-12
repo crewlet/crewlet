@@ -105,7 +105,7 @@ func (f *fakeTracker) Views(context.Context, tracker.ViewQuery) (tracker.ViewLis
 }
 
 func (f *fakeTracker) ExpandedQuery(_ context.Context, params map[string]any,
-	_ string, now time.Time, loc *time.Location) (tracker.Query, error) {
+	_ tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error) {
 
 	return tracker.ParseQuery(tracker.MapParams(params), now, loc)
 }
