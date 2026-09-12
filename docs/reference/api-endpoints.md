@@ -728,6 +728,22 @@ document entirely — with `detail` naming the config path the value sits at,
 which is a fact about YAML rather than a state. It says the seat is waiting for
 the integration to be connected instead.
 
+**Nor is it `satisfied` when the reconcile loop has a finding about it.** What
+the document and the sealed store can establish is that a credential exists
+where the app looks for one — a real fact, and not the one a green row is read
+as. A key deleted at the third-party app leaves the pointer resolving perfectly
+while every call the agent makes is refused. The loop is the only thing that
+has asked the vendor, so a seat named by a finding on that surface's status row
+comes back unsatisfied, carrying the loop's own sentence as its `detail`.
+Advisory findings are skipped on their own verdict — a permission wider
+than the role asked for is a note on a working agent, and reporting it as a
+broken one would contradict the card's own tag.
+
+There is a window this cannot close: between a credential being destroyed at
+the vendor and the loop next looking, nothing anywhere knows. That window is
+`integrations.check_interval_seconds` (600 by default, floor 60), and
+`POST /setup/integrations/{kind}/check` is how to ask immediately.
+
 ### One agent's own GitHub App
 
 GitHub is the other per-seat case, and it is not a form. A

@@ -202,3 +202,95 @@ func TestASeatIsNotSatisfiedOnASurfaceTheCompanyDoesNotDeclare(t *testing.T) {
 			"rather than about a variable", detail)
 	}
 }
+
+// A SEAT THE LOOP HAS A FINDING ABOUT IS NOT SATISFIED, whatever the store says.
+//
+// The roster reads the document and the sealed store, so `satisfied` means "a
+// credential is sealed where this app looks for one" — a real fact and not the
+// one a green row is read as. A key deleted at the third-party app leaves the
+// pointer resolving perfectly while every call the agent makes is refused, and
+// the roster went on reporting it ready. The loop is the only thing that has
+// asked the vendor, so its answer is folded in here.
+func TestASeatTheLoopFoundBrokenIsNotSatisfied(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	status, _ := s.withPass(t, &recordingPass{})
+	res := s.do(t, http.MethodPut, "/config", identityDoc,
+		map[string]string{"X-Summary": "a provisioned company"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("import = %d: %s", res.Code, res.Body)
+	}
+	for name, value := range map[string]string{
+		"SRE_ATLASSIAN": "atlassian-token",
+		"SRE_EMAIL":     "crewlet-sre-lead@acme.invalid",
+	} {
+		if err := s.vault.Set(t.Context(), name, value, "op", "test", pinned); err != nil {
+			t.Fatalf("seal %s: %v", name, err)
+		}
+	}
+	if seat := seatRow(t, s, "jira", "sre-lead"); seat["satisfied"] != true {
+		t.Fatalf("precondition: a provisioned seat reads as %v", seat["satisfied"])
+	}
+
+	// WHAT A PASS FOUND AT THE VENDOR: the account is there and holds no
+	// usable credential. Nothing about the document or the store changed.
+	mustSaveStatus(t, status, integration.State{
+		Kind:   integration.KindJira,
+		Report: integration.Report{Phase: integration.PhaseProvisioning, Actor: integration.ActorEngine},
+		Findings: []integration.Finding{{
+			Kind: integration.FindingIdentityMissing, Subject: "sre-lead",
+			Detail: "sre-lead's account holds no application key",
+		}},
+	})
+
+	seat := seatRow(t, s, "jira", "sre-lead")
+	if seat["satisfied"] == true {
+		t.Error("the seat reads as satisfied over a credential the loop found broken")
+	}
+	if detail, _ := seat["detail"].(string); !strings.Contains(detail, "no application key") {
+		t.Errorf("detail = %q, want the loop's own sentence", detail)
+	}
+}
+
+// AND AN ADVISORY LEAVES IT ALONE. Two kinds are phase-ready by definition —
+// a permission wider than the role asked for, a registration this engine no
+// longer manages but which still delivers — and reporting either as a broken
+// agent would contradict the card's own tag.
+func TestAnAdvisoryFindingLeavesASeatSatisfied(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	status, _ := s.withPass(t, &recordingPass{})
+	res := s.do(t, http.MethodPut, "/config", identityDoc,
+		map[string]string{"X-Summary": "a provisioned company"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("import = %d: %s", res.Code, res.Body)
+	}
+	for name, value := range map[string]string{
+		"SRE_ATLASSIAN": "atlassian-token",
+		"SRE_EMAIL":     "crewlet-sre-lead@acme.invalid",
+	} {
+		if err := s.vault.Set(t.Context(), name, value, "op", "test", pinned); err != nil {
+			t.Fatalf("seal %s: %v", name, err)
+		}
+	}
+	mustSaveStatus(t, status, integration.State{
+		Kind:   integration.KindJira,
+		Report: integration.Report{Phase: integration.PhaseReady, Actor: integration.ActorAdmin},
+		Findings: []integration.Finding{{
+			Kind: integration.FindingGrantExcess, Subject: "sre-lead",
+			Detail: "sre-lead holds more access than its role asks for",
+		}},
+	})
+
+	if seat := seatRow(t, s, "jira", "sre-lead"); seat["satisfied"] != true {
+		t.Errorf("an advisory un-satisfied a working seat: %v", seat["satisfied"])
+	}
+}
+
+// mustSaveStatus seeds the fleet row a pass would have written.
+func mustSaveStatus(t *testing.T, status *statusStore, state integration.State) {
+	t.Helper()
+	if err := status.SaveIntegration(t.Context(), state); err != nil {
+		t.Fatalf("seed the status row: %v", err)
+	}
+}

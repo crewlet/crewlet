@@ -479,7 +479,7 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			continue
 		}
-		tools = append(tools, state)
+		tools = append(tools, withLoopFindings(state, s.loopFindings(r.Context(), kind)))
 	}
 	base := company.Integrations.WebhookBase(s.resolve)
 	present, resolved := setup.Resolution(company.Integrations.PublicBaseURL, s.resolve)
@@ -538,7 +538,7 @@ func (s *Service) one(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	state, ok := s.state(company, kind)
+	state, ok := s.stateFor(r.Context(), company, kind)
 	if !ok {
 		httpjson.FailWith(w, http.StatusNotFound, codeUnknownKind, map[string]string{
 			"detail": "this build serves no setup for " + string(kind),
@@ -903,6 +903,80 @@ func datadogAccess(cfg *config.Datadog) seatAccess {
 // calls and the tool server alike, with no child process to pass it to. A
 // roster that only knew the first shape listed no agents at all for the
 // second, which read as a company whose agents were not being provisioned.
+// withLoopFindings un-satisfies the seats the reconcile loop has a finding
+// about.
+//
+// # Why the roster cannot answer this on its own
+//
+// [credentialSeats] reads the company document and the sealed store, so
+// `satisfied` means "a credential is sealed where this app looks for one" —
+// which is a real fact and NOT the one a green row is read as. A key deleted
+// at the third-party app leaves the pointer resolving perfectly while every
+// call the agent makes is refused, and the roster went on reporting it ready.
+//
+// The loop is the only thing that has asked the vendor, and it records what it
+// found per seat on the surface's own status row. So that answer is folded in
+// here, at the one place every reader of this surface goes through, rather
+// than left to each of them: the dashboard applies the same rule to the badge
+// it draws, and two copies of it would be two answers to one question.
+//
+// ADVISORIES ARE SKIPPED, on the finding's own verdict rather than on a list
+// of kinds kept here. Two of them are phase-ready by definition — a
+// permission wider than the role asked for, a registration this engine no
+// longer manages but which still delivers — and reporting either as a broken
+// agent would contradict the card's own tag. A kind this build cannot name is
+// NOT skipped: a peer on a newer build can write one, and treating it as an
+// advisory would let it hide a dead agent.
+func withLoopFindings(state ToolState, found []integration.Finding) ToolState {
+	faults := make(map[string]integration.Finding, len(found))
+	for _, f := range found {
+		if f.Subject == "" {
+			continue
+		}
+		if phase, _ := f.Kind.Verdict(); phase == integration.PhaseReady {
+			continue
+		}
+		if _, seen := faults[f.Subject]; !seen {
+			faults[f.Subject] = f
+		}
+	}
+	if len(faults) == 0 {
+		return state
+	}
+	seats := make([]SeatState, 0, len(state.Seats))
+	for _, seat := range state.Seats {
+		if f, named := faults[seat.Handle]; named {
+			seat.Satisfied = false
+			seat.Detail = f.Detail
+		}
+		seats = append(seats, seat)
+	}
+	state.Seats = seats
+	return state
+}
+
+// loopFindings is what the loop last recorded about one surface, or nothing.
+//
+// BEST EFFORT BY CONSTRUCTION. A node with no coordination store, or one that
+// could not be read, has nothing to add to the roster — and failing the read
+// of a whole screen because the loop's row was briefly unavailable would
+// replace a slightly stale answer with no answer at all.
+func (s *Service) loopFindings(ctx context.Context, kind integration.Kind) []integration.Finding {
+	if s.status == nil {
+		return nil
+	}
+	state, err := s.currentState(ctx, kind)
+	if err != nil {
+		log.WarnContext(ctx, "setup_roster_without_loop_findings",
+			"integration", kind.String(), "error", err.Error(),
+			"detail", "the roster is answered from the document and the store "+
+				"alone, so a seat whose credential the loop found broken reads "+
+				"as satisfied until this can be read again")
+		return nil
+	}
+	return state.Findings
+}
+
 type seatCredentialAt struct {
 	// Find reports the value this seat holds for the app and the address it
 	// sits at, both empty when the seat holds none.
@@ -1519,7 +1593,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	state, ok := s.state(company, kind)
+	state, ok := s.stateFor(r.Context(), company, kind)
 	if !ok {
 		httpjson.FailWith(w, http.StatusNotFound, codeUnknownKind, map[string]string{
 			"hint": "one of " + kindList(),
@@ -1655,7 +1729,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	fresh := state
 	if after != nil {
 		if refreshed, ok := s.state(after, kind); ok {
-			fresh = refreshed
+			fresh = withLoopFindings(refreshed, s.loopFindings(r.Context(), kind))
 		}
 	}
 	httpjson.Write(w, http.StatusCreated, map[string]any{
@@ -1681,7 +1755,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	state, ok := s.state(company, kind)
+	state, ok := s.stateFor(r.Context(), company, kind)
 	if !ok {
 		httpjson.FailWith(w, http.StatusNotFound, codeUnknownKind, map[string]string{
 			"hint": "one of " + kindList(),
@@ -1971,4 +2045,20 @@ func githubOrgOf(company *config.Company) string {
 		return ""
 	}
 	return strings.TrimSpace(gh.Provisioning.Org)
+}
+
+// stateFor is [Service.state] with the loop's own per-seat findings folded in.
+//
+// EVERY SINGLE-SURFACE ANSWER GOES THROUGH IT, so a roster read on its own
+// cannot disagree with the same roster inside the list. See
+// [withLoopFindings] for why the document and the store are not enough on
+// their own.
+func (s *Service) stateFor(
+	ctx context.Context, company *config.Company, kind integration.Kind,
+) (ToolState, bool) {
+	state, ok := s.state(company, kind)
+	if !ok {
+		return state, false
+	}
+	return withLoopFindings(state, s.loopFindings(ctx, kind)), true
 }
