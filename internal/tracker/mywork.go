@@ -400,7 +400,7 @@ func readAsks(ctx context.Context, tx *sql.Tx, handle string,
 		out = append(out, AskRow{
 			TaskRow: row, Comment: a.comment, AskedBy: a.author,
 			AskedAt: store.DecodeTime(a.at),
-			Body:    textcut.Bytes(a.body, MaxExcerpt),
+			Body:    textcut.Within(a.body, MaxExcerpt),
 			// THE LITERAL CALL, composed here rather than described.
 			// A model handed a comment id still has to compose the
 			// answer, and every one it composes differently is a

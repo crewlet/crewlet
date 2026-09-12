@@ -143,9 +143,16 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if handle == "" {
 		handle = actor.Handle
 	}
-	// THE LEAD RELATION IS RESOLVED HERE and passed as a value, because
-	// the tracker has no chart — see the file head. A surface that wired
-	// no lookup resolves false, which degrades to "your own only".
+	// THE HANDLE IS RESOLVED AGAINST THE CHART, because a typo here writes
+	// a whole PERSON RECORD for somebody who does not exist — a queue
+	// nobody will ever read, and a wake routed to a handle Route drops in
+	// silence.
+	whose, unknown := t.deps.resolveHandle(tracker.SetPrioritiesTool,
+		"`handle`", handle)
+	if unknown != "" {
+		return failed(unknown), nil
+	}
+	handle = whose
 	authority := tracker.PersonAuthority{
 		// A HUMAN OR AN OPERATOR MAY WRITE ANYBODY'S, which is the
 		// design's own rule and the one the gate was missing. It matters

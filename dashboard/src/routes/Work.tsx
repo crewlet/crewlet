@@ -794,9 +794,13 @@ export function WorkItem({ id }: { id: string }) {
                             {field}
                           </span>
                         ))}
-                      {/* A COMMIT THAT WOKE NOBODY is a fact about the change
+                      {/* A COMMIT THAT ANNOUNCED NOTHING — one that carried
+                          no notification at all. A fact about the change
                           rather than about its importance: a bulk edit is
-                          quiet by construction. */}
+                          quiet by construction. A commit WITHOUT this marker
+                          announced something; whether it reached anybody is
+                          resolved against the live roster at wake time and is
+                          not what this says. */}
                       {change.quiet && <span className="dim">(quiet)</span>}
                       <span className="spacer" />
                       <span className="dim" title={fmtDateTime(change.at)}>

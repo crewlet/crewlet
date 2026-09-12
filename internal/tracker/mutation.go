@@ -994,6 +994,24 @@ type Notify struct {
 	Snapshot Snapshot `json:"snapshot"`
 }
 
+// Batched reports a record written as part of a BULK GESTURE.
+//
+// ONE SPELLING FOR BOTH SURFACES, and that is the whole reason it is a method
+// rather than the expression it wraps. [Candidates] is called twice for every
+// record — once by the applier, writing the notification rows, and once by the
+// parser, fanning the wake out — and its `batched` argument decides whether a
+// recipient is ADDRESSED. The applier derived it from this field and the
+// parser read a struct field on itself that NOTHING EVER ASSIGNED, so the two
+// agreed only because no writer sets a batch id yet: the first bulk verb to
+// land would have made one surface record thirty asks and the other thirty
+// facts to absorb, for the same thirty records, with nothing comparing them.
+//
+// A bulk gesture is thirty facts rather than thirty asks — a lead re-planning
+// a sprint is not thirty people each owing an answer — which is what the flag
+// suppresses, and why getting it wrong on one side only is worse than getting
+// it wrong on both.
+func (r MutationRecord) Batched() bool { return r.BatchID != nil }
+
 // Validate refuses a notification that would render wrong.
 func (n *Notify) Validate() error {
 	if n == nil {

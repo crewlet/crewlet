@@ -214,6 +214,21 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != "" {
 		return failed(refusal), nil
 	}
+	// THE DEFAULT ASSIGNEE IS RESOLVED AGAINST THE CHART, because it is
+	// where every unassigned task in the project lands: a typo there
+	// routes a whole project's triage to somebody who does not exist, and
+	// every wake to them is dropped in silence.
+	//
+	// THE EMPTY STRING IS NOT A HANDLE. It is a real setting here — it
+	// means triage — so it is left alone rather than resolved.
+	if edit.DefaultAssignee != nil && *edit.DefaultAssignee != "" {
+		who, unknown := t.deps.resolveHandle(tracker.WriteProjectTool,
+			"`default_assignee`", *edit.DefaultAssignee)
+		if unknown != "" {
+			return failed(unknown), nil
+		}
+		edit.DefaultAssignee = &who
+	}
 	if tagEdit.Empty() && edit.Empty() {
 		return failed("This call changes nothing. Send `tags_add`, " +
 			"`tags_rename`, `tags_archive`, `fields`, `sprints`, " +

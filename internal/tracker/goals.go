@@ -166,7 +166,12 @@ func (w *Writer) WriteGoal(ctx context.Context, opID string, goal Goal) (WriteRe
 			// second writer edit a colleague's assessment of how the
 			// quarter is going, and the timestamps would still read as
 			// theirs.
-			post.Updates = appendUpdates(current.Updates, goal.Updates, w.Actor, at)
+			updates, err := appendUpdates(current.Updates, goal.Updates,
+				w.Actor, at)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			post.Updates = updates
 			if !held {
 				post.CreatedAt, post.CreatedBy = at, w.Actor
 			} else {
@@ -285,7 +290,7 @@ func latestUpdateText(goal Goal) string {
 	} else if text == "" {
 		text = last.Health
 	}
-	return textcut.Bytes(text, MaxExcerpt)
+	return textcut.Within(text, MaxExcerpt)
 }
 
 // instantText and boolText render an optional instant and a flag for a delta.
@@ -321,22 +326,33 @@ func boolText(v bool) string {
 // THE OLDEST GO FIRST at the cap, because the newest update is the one a card
 // renders and the one anybody reads — a goal that stopped accepting updates at
 // a hundred would freeze its own health at whatever it was that day.
-func appendUpdates(stored, incoming []GoalUpdate, actor string, at time.Time) []GoalUpdate {
+func appendUpdates(stored, incoming []GoalUpdate, actor string, at time.Time) (
+	[]GoalUpdate, error) {
 	out := slices.Clone(stored)
 	for _, update := range incoming {
 		text := strings.TrimSpace(update.Text)
 		if text == "" && strings.TrimSpace(update.Health) == "" {
 			continue
 		}
+		if len(text) > MaxGoalUpdateText {
+			// REFUSED, NOT CUT. An update is the STORED value rather
+			// than a preview of one — there is nowhere to go and read
+			// the rest — so cutting it would silently discard the end
+			// of somebody's assessment and leave them believing they
+			// had filed it. Cutting is the last resort, and a value
+			// with a cap is refused naming the field.
+			return nil, fmt.Errorf("tracker: a goal update is %d bytes and at "+
+				"most %d are stored — say it shorter, or put the detail where "+
+				"the work is and link to it", len(text), MaxGoalUpdateText)
+		}
 		out = append(out, GoalUpdate{
-			At: at, Author: actor, Health: update.Health,
-			Text: textcut.Bytes(text, MaxGoalUpdateText),
+			At: at, Author: actor, Health: update.Health, Text: text,
 		})
 	}
 	if len(out) > MaxGoalUpdates {
 		out = out[len(out)-MaxGoalUpdates:]
 	}
-	return out
+	return out, nil
 }
 
 // goalProjects is the projects a stored goal's targets already count.

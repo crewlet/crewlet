@@ -640,3 +640,78 @@ func TestAGoalUpdateAppends(t *testing.T) {
 		t.Errorf("the newest update is %q", got.Goals[0].Updates[1].Text)
 	}
 }
+
+// AN EXCERPT SAYS WHEN IT WAS CUT, and the marker fits inside the cap.
+//
+// A card is the whole of what most recipients read, so a comment cut at
+// exactly MaxExcerpt and handed over unmarked reads as a comment that ENDED
+// there — a different message from the one somebody wrote. The marker has to
+// be counted against the budget rather than added outside it, because
+// [tracker.Notify.Validate] REFUSES an excerpt above the cap: an ellipsis that
+// pushed it three bytes over would turn every long comment into a failed write
+// instead of a marked one.
+func TestALongExcerptIsMarkedAndStillFits(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("x", tracker.MaxExcerpt*2)
+	wake := tracker.Wake{
+		Kind:    tracker.ChangeComment,
+		Comment: &tracker.Comment{ID: "c-1", Body: long, Author: "alice"},
+		After:   tracker.Task{ID: "t-1", Key: "ENG-1", Project: "ENG"},
+	}.Notify(nil)
+	if wake == nil {
+		t.Fatal("a comment produced no notification")
+	}
+	if len(wake.Excerpt) > tracker.MaxExcerpt {
+		t.Fatalf("the excerpt is %d bytes against a %d cap — Validate refuses "+
+			"that, so the write FAILS rather than the excerpt being marked",
+			len(wake.Excerpt), tracker.MaxExcerpt)
+	}
+	if err := wake.Validate(); err != nil {
+		t.Fatalf("the excerpt does not survive its own validation: %v", err)
+	}
+	if !strings.HasSuffix(wake.Excerpt, "…") {
+		t.Errorf("a cut excerpt does not say it was cut, so it reads as a "+
+			"comment that ended there: %q", clipForTest(wake.Excerpt))
+	}
+
+	// AND A SHORT ONE IS UNTOUCHED, or every comment in the company gains
+	// an ellipsis it did not earn.
+	short := "one line"
+	got := tracker.Wake{
+		Kind:    tracker.ChangeComment,
+		Comment: &tracker.Comment{ID: "c-2", Body: short, Author: "alice"},
+		After:   tracker.Task{ID: "t-1", Key: "ENG-1", Project: "ENG"},
+	}.Notify(nil)
+	if got == nil || got.Excerpt != short {
+		t.Errorf("a short comment's excerpt is %q, want it verbatim", got.Excerpt)
+	}
+}
+
+// A GOAL UPDATE PAST ITS CAP IS REFUSED RATHER THAN CUT.
+//
+// The updates are the STORED value rather than a preview of one — there is
+// nowhere to go and read the rest — so cutting would silently discard the end
+// of somebody's assessment and leave them believing they had filed it.
+func TestAnOversizedGoalUpdateIsRefused(t *testing.T) {
+	r := newRoundTrip(t)
+	_, err := r.writer.WriteGoal(t.Context(), "op-goal", tracker.Goal{
+		ID: "g-1", Name: "Ship it", Owners: []string{"alice"},
+		Updates: []tracker.GoalUpdate{{
+			Health: "at_risk",
+			Text:   strings.Repeat("y", tracker.MaxGoalUpdateText+1),
+		}},
+	})
+	if err == nil {
+		t.Fatal("an oversized goal update was silently cut and stored")
+	}
+	if !strings.Contains(err.Error(), "at most") {
+		t.Errorf("the refusal does not name the cap: %v", err)
+	}
+}
+
+func clipForTest(s string) string {
+	if len(s) <= 80 {
+		return s
+	}
+	return s[:80] + "..."
+}
