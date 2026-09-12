@@ -44,6 +44,14 @@ import (
 // folded into ONE run at the end of it, rather than skipped: a skipped
 // rebuild is exactly the state this mechanism exists to prevent, a credential
 // sealed and resolvable that nothing running has been rebuilt against.
+//
+// # Immediately, but never on the caller's goroutine
+//
+// "At once" and "before this call returns" are different things, and the
+// second one was spending a lease margin that belongs to somebody else. The
+// caller is a provisioning pass's Flush, holding the surface lease, and the
+// minute [setup.PassDeadline] leaves inside [setup.LeaseTTL] is the status
+// write's. See [republisher.request].
 type republisher struct {
 	mu sync.Mutex
 
@@ -57,6 +65,12 @@ type republisher struct {
 	// revision it writes is credited to whoever most recently caused it.
 	pending  *time.Timer
 	operator string
+
+	// inflight is the immediate run's timer, armed at zero delay so the
+	// caller does not block on it. Separate from pending because both are
+	// live at once: a burst arms the trailing run while this one is still
+	// going. See [republisher.request] for why the caller must not wait.
+	inflight *time.Timer
 
 	// stopped is set by [republisher.stop] so a timer that fires during
 	// shutdown does not re-activate a revision on a node that is leaving.
@@ -113,7 +127,37 @@ func (r *republisher) request(operator string, run func(context.Context, string)
 	if elapsed := now.Sub(r.last); r.last.IsZero() || elapsed >= r.every() {
 		r.last = now
 		r.mu.Unlock()
-		run(context.Background(), operator)
+		// AT ONCE, AND NOT ON THIS GOROUTINE, which are different things.
+		//
+		// # Why it must not run on the caller's goroutine
+		//
+		// The caller is [refreshingSink.Flush], which runs at the tail of a
+		// provisioning pass — INSIDE the surface lease. [setup.LeaseTTL] is five
+		// minutes, [setup.PassDeadline] stops the pass at four, and the minute
+		// between them is not slack: it is what the status write that RECORDS
+		// the pass has to complete in, under that same lease. This ran inline
+		// with a fresh [setup.RecordDeadline] of its own, detached from the
+		// pass's context and therefore not bounded by it — so a pass that used
+		// its four minutes and then sealed a credential spent that minute HERE,
+		// and the record went on to ask for another. The lease is gone by then:
+		// a peer may hold the surface, and the write the lease exists to protect
+		// lands outside it.
+		//
+		// Nothing about the reload needs the lease. It re-activates the current
+		// revision through the config plane's own compare-and-set — not a write
+		// at a third-party app, not a write to the surface's status row — so the
+		// fix is to stop charging the lease for it, not to shorten it.
+		//
+		// # And the goroutine is a timer's, which is already the engine's
+		//
+		// Same ownership as the windowed path and its own field, because the two
+		// are live at the same time: this run is in flight while the next burst
+		// is arming the trailing one. [republisher.stop] disarms both, so a
+		// re-activation is never written by a node that is leaving, and the run
+		// bounds itself ([Engine.rebuildForSealedSecrets]). A person who pressed
+		// Connect waits no longer than before — the reload starts now; what
+		// stops waiting for it is the pass.
+		r.startNow(run, operator)
 		return
 	}
 	// INSIDE THE WINDOW. The request is not dropped — it is what the run
@@ -125,6 +169,33 @@ func (r *republisher) request(operator string, run func(context.Context, string)
 	}
 	wait := r.every() - now.Sub(r.last)
 	r.pending = time.AfterFunc(wait, func() { r.fire(run) })
+	r.mu.Unlock()
+}
+
+// startNow performs one run off the caller's goroutine, crediting it to the
+// operator who asked at that moment.
+//
+// Its own timer rather than [republisher.pending], which the trailing run
+// needs: a burst arms that one while this is still in flight.
+func (r *republisher) startNow(run func(context.Context, string), operator string) {
+	r.mu.Lock()
+	if r.stopped {
+		r.mu.Unlock()
+		return
+	}
+	r.inflight = time.AfterFunc(0, func() {
+		r.mu.Lock()
+		if r.stopped {
+			r.mu.Unlock()
+			return
+		}
+		r.inflight = nil
+		r.mu.Unlock()
+		// DETACHED, like [republisher.fire]: there is no caller's context
+		// here at all, and [Engine.rebuildForSealedSecrets] gives it the
+		// deadline.
+		run(context.Background(), operator)
+	})
 	r.mu.Unlock()
 }
 
@@ -158,5 +229,9 @@ func (r *republisher) stop() {
 	if r.pending != nil {
 		r.pending.Stop()
 		r.pending = nil
+	}
+	if r.inflight != nil {
+		r.inflight.Stop()
+		r.inflight = nil
 	}
 }

@@ -33,6 +33,33 @@ const integrationDutyName = "integration-reconcile"
 // the duty leaves it unclaimable for this long instead of 45 seconds. Against a
 // settled cadence of ten minutes that delays a reconcile by less than half an
 // interval, which is the cheaper of the two.
+//
+// # The NAME does not change with it, and a rolling upgrade is why
+//
+// A lease two builds share is a peer contract, so raising a TTL under an
+// unchanged name looks like exactly the kind of change that needs a new key.
+// It is the opposite here, in both directions.
+//
+// A claim WRITES ITS EXPIRY: [coord.Lease.ExpiresAt] is the store's own
+// deadline, and every reader honours the record rather than recomputing from
+// its own constant — a heartbeat takes its next tick from it. So a 45-second
+// claim by an old node and a four-and-a-half-minute claim by a new one are two
+// hold durations and never two opinions about who holds it. Neither build can
+// see a lease the other holds as free.
+//
+// And a SECOND NAME is the failure this is accused of. Two names are two
+// locks: the old build would claim the old one, the new build the new one,
+// both would hold, and both would sweep every surface for the whole length of
+// the upgrade — which is the overlap, arrived at deliberately, rather than
+// the one the shared name is supposed to cause.
+//
+// What actually bounds the overlap is neither number. [integration.Worker]
+// re-claims before every surface it visits, and a claim by the owner that
+// already holds it doubles as a renew, so the TTL only ever has to cover ONE
+// pass rather than a whole sweep. An old node's 45 seconds is short for that
+// and its sweep can lapse mid-pass — which is the bug this constant fixes, and
+// it is the old build's to fix by being replaced, not something a rename
+// reaches.
 const integrationDutyTTL = setup.PassDeadline + 2*integration.Interval
 
 // startIntegrations arms the reconcile loop.

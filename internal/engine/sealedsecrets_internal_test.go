@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -122,13 +123,27 @@ func TestASealedSeatTokenReachesTheTrackerWithoutAConfigChange(t *testing.T) {
 	instance := jiraInstance(t, token, "agent-ceo")
 	e, company := sealingEngine(t, instance.URL)
 
+	// GUARDED AND AWAITED, because the re-activation runs off the goroutine
+	// that asked for it now: the asker is a pass holding the surface lease,
+	// and the minute inside it belongs to that pass's own status write.
+	var appliesMu sync.Mutex
 	var applies int
+	countApplies := func() int {
+		appliesMu.Lock()
+		defer appliesMu.Unlock()
+		return applies
+	}
 	apply := func(ctx context.Context) error {
-		applies++
 		e.refreshParties(company)
 		if _, err := e.startJira(ctx, company, company.Config.Integrations.Jira); err != nil {
 			return err
 		}
+		// COUNTED LAST, so a count of two means two applies that FINISHED.
+		// Counted first it meant two that had started, and the registry
+		// read below then raced the work it is the outcome of.
+		appliesMu.Lock()
+		applies++
+		appliesMu.Unlock()
 		return nil
 	}
 	e.UseConfigWriter(&reloadingWriter{reload: apply})
@@ -158,9 +173,12 @@ func TestASealedSeatTokenReachesTheTrackerWithoutAConfigChange(t *testing.T) {
 	if got := e.Resolve("${JIRA_AGENT_TOKEN}"); got != token {
 		t.Fatalf("the snapshot did not pick the sealed token up: %q", got)
 	}
-	if applies < 2 {
-		t.Errorf("applies = %d: sealing a credential rebuilt nothing, so "+
-			"everything holding the old value still holds it", applies)
+	for deadline := time.Now().Add(2 * time.Second); countApplies() < 2; {
+		if time.Now().After(deadline) {
+			t.Fatalf("applies = %d: sealing a credential rebuilt nothing, so "+
+				"everything holding the old value still holds it", countApplies())
+		}
+		time.Sleep(time.Millisecond)
 	}
 	party, ok := e.Registry().ByExternalID(jira.Backend, "agent-ceo")
 	if !ok {
@@ -207,9 +225,13 @@ func TestAPassThatSealedNothingDoesNotReactivateTheRevision(t *testing.T) {
 		t.Fatalf("flush: %v", err)
 	}
 
-	if w.calls != 0 {
+	// SETTLED BEFORE THE ABSENCE IS CLAIMED. The re-activation is
+	// asynchronous now, so reading the counter straight after Flush would
+	// pass whether or not one was asked for.
+	time.Sleep(50 * time.Millisecond)
+	if got := w.reloads(); got != 0 {
 		t.Errorf("Reload calls = %d: a converged pass re-activated the "+
-			"revision, which wakes the loop that runs the next pass", w.calls)
+			"revision, which wakes the loop that runs the next pass", got)
 	}
 }
 
@@ -233,14 +255,13 @@ func TestAFailedFlushStillRebuildsAndDoesNotRebuildTwice(t *testing.T) {
 	if err := sink.Flush(t.Context()); err == nil {
 		t.Fatal("precondition: this sink's Flush must fail")
 	}
-	if w.calls != 1 {
-		t.Fatalf("Reload calls = %d after a failed flush, want 1", w.calls)
-	}
+	w.awaitReloads(t, 1)
 	if err := sink.Flush(t.Context()); err == nil {
 		t.Fatal("precondition: this sink's Flush must fail")
 	}
-	if w.calls != 1 {
-		t.Errorf("Reload calls = %d after a second flush, want 1", w.calls)
+	time.Sleep(50 * time.Millisecond)
+	if got := w.reloads(); got != 1 {
+		t.Errorf("Reload calls = %d after a second flush, want 1", got)
 	}
 }
 
@@ -284,11 +305,9 @@ func TestTheRebuildSurvivesTheCancelledPassAndStaysBounded(t *testing.T) {
 		t.Fatalf("flush: %v", err)
 	}
 
-	if w.calls != 1 {
-		t.Errorf("Reload calls = %d, want 1", w.calls)
-	}
-	if w.err != nil {
-		t.Error(w.err)
+	w.awaitReloads(t, 1)
+	if err := w.failure(); err != nil {
+		t.Error(err)
 	}
 }
 
@@ -323,7 +342,14 @@ func TestSealingOnANodeWithNoConfigSurfaceIsLoggedRatherThanFatal(t *testing.T) 
 type reloadingWriter struct {
 	noopWriter
 	reload func(context.Context) error
-	calls  int
+
+	// mu guards everything below, because the re-activation no longer runs
+	// on the goroutine that asked for it: the caller is a pass inside the
+	// surface lease, and the minute [setup.PassDeadline] leaves inside
+	// [setup.LeaseTTL] belongs to that pass's own status write. See
+	// [republisher.request].
+	mu    sync.Mutex
+	calls int
 
 	// operator is who the last re-activation was credited to.
 	operator string
@@ -335,9 +361,49 @@ type reloadingWriter struct {
 	err error
 }
 
+// reloads is how many re-activations this writer has served, read under the
+// lock. [reloadingWriter.awaitReloads] is how a case waits for one.
+func (w *reloadingWriter) reloads() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.calls
+}
+
+// awaitReloads blocks until this writer has served n re-activations.
+//
+// A POLL RATHER THAN A CHANNEL, because the cases below also assert that a
+// second flush does NOT re-activate — a claim about an absence, which needs a
+// settle either way, and one idiom for both reads better than two.
+func (w *reloadingWriter) awaitReloads(t *testing.T, n int) {
+	t.Helper()
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+		if w.reloads() >= n {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("%d re-activation(s) served, want %d", w.reloads(), n)
+}
+
+// lastOperator is who the most recent re-activation was credited to.
+func (w *reloadingWriter) lastOperator() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.operator
+}
+
+// failure is what the reload reported, read under the lock.
+func (w *reloadingWriter) failure() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.err
+}
+
 func (w *reloadingWriter) Reload(ctx context.Context, summary, operator string) error {
+	w.mu.Lock()
 	w.calls++
 	w.operator = operator
+	w.mu.Unlock()
 	// The summary is what an operator reads on the revision this gesture
 	// creates, beside the ones a person wrote. A blank one is a revision
 	// nobody can account for.
@@ -347,8 +413,11 @@ func (w *reloadingWriter) Reload(ctx context.Context, summary, operator string) 
 	if w.reload == nil {
 		return nil
 	}
-	w.err = w.reload(ctx)
-	return w.err
+	err := w.reload(ctx)
+	w.mu.Lock()
+	w.err = err
+	w.mu.Unlock()
+	return err
 }
 
 // failingFlushSink records durably and fails to complete.

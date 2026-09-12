@@ -53,16 +53,58 @@ func (l *republishLog) waitFor(t *testing.T, n int) {
 // live without the operator doing anything else. Making them wait out a
 // coalescing window for the first one would trade the incident this bounds
 // for the one it was built to fix.
+//
+// AT ONCE IS NOT ON THE CALLER'S GOROUTINE. It used to be both, and the
+// second half was spending a lease margin that belongs to the status write —
+// see [republisher.request]. So the run is awaited rather than asserted
+// synchronously, which is the same claim about latency and a different one
+// about who blocks.
 func TestTheFirstRepublishRunsImmediately(t *testing.T) {
 	t.Parallel()
 	log := newRepublishLog()
 	r := &republisher{now: func() time.Time { return time.Unix(0, 0) }}
+	t.Cleanup(r.stop)
 
 	r.request("founder@example.com", log.run)
+	log.waitFor(t, 1)
 
 	if got := log.calls(); len(got) != 1 || got[0] != "founder@example.com" {
 		t.Fatalf("calls = %v, want one credited to the operator", got)
 	}
+}
+
+// AND THE CALLER DOES NOT WAIT FOR IT.
+//
+// The caller is a provisioning pass's Flush, inside the surface lease, and
+// the minute [setup.PassDeadline] leaves inside [setup.LeaseTTL] is what the
+// status write that records the pass has to complete in. Running the reload
+// inline spent that minute here and left the record asking for another, so it
+// landed with the lease already lapsed and a peer free to hold the surface.
+func TestTheCallerDoesNotWaitForTheRebuild(t *testing.T) {
+	t.Parallel()
+	log := newRepublishLog()
+	r := &republisher{now: func() time.Time { return time.Unix(0, 0) }}
+	t.Cleanup(r.stop)
+
+	// A RUN THAT DOES NOT RETURN, which is the shape that matters: a
+	// coordination store having a bad afternoon, or a config apply waiting
+	// on a peer.
+	blocked := make(chan struct{})
+	t.Cleanup(func() { close(blocked) })
+	done := make(chan struct{})
+	go func() {
+		r.request("founder@example.com", func(context.Context, string) { <-blocked })
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("request blocked on the rebuild: a pass that sealed a " +
+			"credential spends the lease margin its own status write needs, " +
+			"and the write then lands outside the lease")
+	}
+	_ = log
 }
 
 // A BURST IS ONE APPLY, AND NOTHING IN IT IS DROPPED.
@@ -98,6 +140,7 @@ func TestABurstOfSealsBecomesOneRepublish(t *testing.T) {
 	}
 
 	// One ran immediately; the other five are owed, not gone.
+	log.waitFor(t, 1)
 	if got := log.calls(); len(got) != 1 {
 		t.Fatalf("calls = %v during the window, want exactly the first", got)
 	}
@@ -138,6 +181,7 @@ func TestARunawayPassCannotOutrunTheWindow(t *testing.T) {
 	for range 100 {
 		r.request("runaway", log.run)
 	}
+	log.waitFor(t, 1)
 
 	if got := log.calls(); len(got) != 1 {
 		t.Errorf("%d re-activations from 100 seals inside one window, want 1: "+
@@ -160,6 +204,10 @@ func TestStoppingDisarmsAnOwedRepublish(t *testing.T) {
 	}
 
 	r.request("first", log.run)
+	// AWAITED BEFORE THE SECOND, so "the one that ran before the stop" is a
+	// fact rather than a race: the immediate run is no longer complete when
+	// request returns.
+	log.waitFor(t, 1)
 	r.request("owed", log.run)
 	r.stop()
 
@@ -194,10 +242,15 @@ func TestTheWindowReopensForALaterSeal(t *testing.T) {
 	t.Cleanup(r.stop)
 
 	r.request("first", log.run)
+	// AWAITED, so the clock only moves once the first run has happened: the
+	// immediate run is asynchronous now, and moving the clock under it would
+	// be asserting the reopened window against a race.
+	log.waitFor(t, 1)
 	mu.Lock()
 	clock = clock.Add(time.Hour + time.Second)
 	mu.Unlock()
 	r.request("much-later", log.run)
+	log.waitFor(t, 2)
 
 	got := log.calls()
 	if len(got) != 2 || got[1] != "much-later" {
