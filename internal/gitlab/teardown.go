@@ -162,7 +162,27 @@ func removeHooks(ctx context.Context, opts TeardownOptions, groupID int) []error
 		}
 	}
 
-	for _, project := range opts.Config.Provisioning.Projects {
+	// EVERY PROJECT IN THE GROUP, not only the ones the config names.
+	//
+	// The config is not a record of where the hooks ARE. A run that
+	// established per-project hooks wrote them on the projects named AT THE
+	// TIME, so a project dropped from `provisioning.projects` since — or a
+	// company that connected with the group alone and never named one —
+	// left them unreachable, and a teardown that visited only the current
+	// list reported success having walked past them.
+	//
+	// Measured on a live disconnect: two hooks still on a project in the
+	// group, pointing at dead tunnels from earlier runs, which nothing
+	// would ever visit again. A `trycloudflare` hostname is re-issued to
+	// whoever asks next, so those deliveries go on leaving the customer's
+	// GitLab for a stranger — signed with a secret that stranger does not
+	// have, so nothing can be forged INTO the engine, and the payloads
+	// still leave.
+	//
+	// The configured list is unioned in rather than replaced, because a
+	// project need not be in the group at all: `provisioning.projects`
+	// takes any path this credential can administer.
+	for _, project := range sweepable(ctx, opts, groupID, &failures) {
 		hooks, err := opts.Client.ProjectHooks(ctx, project)
 		if err != nil {
 			failures = append(failures, fmt.Errorf(
@@ -177,6 +197,42 @@ func removeHooks(ctx context.Context, opts TeardownOptions, groupID int) []error
 		}
 	}
 	return failures
+}
+
+// sweepable is every project a teardown should look for this engine's hooks
+// on: the group's own, subgroups included, plus whatever the config names.
+//
+// A FAILED ENUMERATION IS RECORDED AND THE CONFIGURED LIST STILL RUNS. The
+// group listing needs a credential that can read it, and a teardown that gave
+// up on the whole project sweep because the group could not be enumerated
+// would leave the hooks it CAN reach behind as well — the opposite of what
+// this function was added for.
+func sweepable(
+	ctx context.Context, opts TeardownOptions, groupID int, failures *[]error,
+) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(paths ...string) {
+		for _, path := range paths {
+			path = strings.TrimSpace(path)
+			if path == "" || seen[path] {
+				continue
+			}
+			seen[path] = true
+			out = append(out, path)
+		}
+	}
+	if groupID != 0 {
+		held, err := opts.Client.GroupProjects(ctx, groupID)
+		if err != nil {
+			*failures = append(*failures, fmt.Errorf(
+				"gitlab: list the group's projects to remove this engine's "+
+					"hooks from them: %w", err))
+		}
+		add(held...)
+	}
+	add(opts.Config.Provisioning.Projects...)
+	return out
 }
 
 // removeAccounts deletes the service account this engine made for each seat.

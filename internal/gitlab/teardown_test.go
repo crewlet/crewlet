@@ -270,3 +270,96 @@ func TestATokenThatCannotBeRevokedLeavesTheAccountIntact(t *testing.T) {
 			"which is the state that hides the live credential")
 	}
 }
+
+// A DISCONNECT REMOVES THIS ENGINE'S HOOKS FROM EVERY PROJECT IN THE GROUP.
+//
+// The config is not a record of where the hooks ARE: a run that established
+// per-project hooks wrote them on the projects named AT THE TIME, so a
+// project dropped from `provisioning.projects` since — or a company that
+// connected with the group alone and never named one — left them unreachable,
+// and a teardown that visited only the current list reported success having
+// walked past them.
+//
+// Measured on a live disconnect: two hooks still on a project in the group,
+// pointing at dead trycloudflare tunnels from earlier runs, which nothing
+// would ever visit again. That hostname is re-issued to whoever asks next, so
+// those deliveries go on leaving the customer's GitLab — signed with a secret
+// the stranger does not have, so nothing can be forged INTO the engine, and
+// the payloads still leave.
+func TestADisconnectSweepsEveryProjectTheGroupHolds(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	// IN THE GROUP AND NOT IN THE CONFIG, which is the shape that leaked.
+	f.groupProjects = []string{"nimbus/dropped", "nimbus/sub/deeper"}
+	f.projectHooks = map[string][]hookRow{}
+	f.projectHooks["nimbus/dropped"] = []hookRow{
+		// NAMELESS, as an older build wrote them, at an address that is
+		// gone. `ours` adopts a nameless hook at this path, so the name is
+		// not what made these unreachable — nothing ever visited the
+		// project.
+		foreignHook(701, "https://dead-tunnel.example.com/webhooks/gitlab"),
+	}
+	f.projectHooks["nimbus/sub/deeper"] = []hookRow{
+		namedHook(702, "crewlet", "https://also-dead.example.com/webhooks/gitlab"),
+		// AND SOMEBODY ELSE'S, which must survive.
+		foreignHook(703, "https://ci.example.com/hook"),
+	}
+
+	if _, err := tearDownAgainst(t, f, func(o *gitlab.TeardownOptions) {
+		// NO PROJECTS NAMED AT ALL: the group alone, which is how this
+		// company connected.
+		o.Config.Provisioning.Projects = nil
+	}); err != nil {
+		t.Fatalf("Teardown: %v", err)
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, project := range []string{"nimbus/dropped", "nimbus/sub/deeper"} {
+		for _, hook := range f.projectHooks[project] {
+			url, _ := hook.attrs["url"].(string)
+			if strings.HasSuffix(url, "/webhooks/gitlab") {
+				t.Errorf("%s still holds this deployment's hook at %s: the "+
+					"address is re-issuable and the payloads keep leaving",
+					project, url)
+			}
+		}
+	}
+	if len(f.projectHooks["nimbus/sub/deeper"]) != 1 {
+		t.Errorf("nimbus/sub/deeper holds %v, want the stranger's hook alone",
+			f.projectHooks["nimbus/sub/deeper"])
+	}
+}
+
+// AND A GROUP LISTING THAT FAILS STILL SWEEPS WHAT THE CONFIG NAMES.
+//
+// The group listing needs a credential that can read it. A teardown that gave
+// up on the whole project sweep because the group could not be enumerated
+// would leave the hooks it CAN reach behind as well, which is the opposite of
+// what walking the group was added for.
+func TestAGroupListingThatFailsStillSweepsTheNamedProjects(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.noGroupProjects = true
+	f.projectHooks = map[string][]hookRow{}
+	f.projectHooks["nimbus/api"] = []hookRow{
+		namedHook(801, "crewlet", "https://dead.example.com/webhooks/gitlab"),
+	}
+
+	_, err := tearDownAgainst(t, f, nil)
+	if err == nil {
+		t.Fatal("a teardown that could not enumerate the group reported success")
+	}
+	if !strings.Contains(err.Error(), "projects") {
+		t.Errorf("the error does not say what it could not read:\n%v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, hook := range f.projectHooks["nimbus/api"] {
+		url, _ := hook.attrs["url"].(string)
+		if strings.HasSuffix(url, "/webhooks/gitlab") {
+			t.Errorf("nimbus/api still holds %s, although the config names "+
+				"that project and it was reachable", url)
+		}
+	}
+}

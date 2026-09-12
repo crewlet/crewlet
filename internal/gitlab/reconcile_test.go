@@ -46,6 +46,16 @@ type adminInstance struct {
 	people map[string]bool         // usernames the instance treats as humans
 	tokens map[int][]*gitlab.Token // user id -> its token rows
 
+	// groupProjects is what /groups/7/projects answers, which a teardown
+	// walks in full. Empty by default: most cases are about the hooks on
+	// the projects a config names, and a fixture that always served the
+	// whole group would hide the difference.
+	groupProjects []string
+
+	// noGroupProjects makes the group's project listing refuse, which is a
+	// credential that can administer hooks and not read the group.
+	noGroupProjects bool
+
 	// blocked is what a service-account delete actually LEAVES BEHIND on
 	// the deployments this was measured against: the account is blocked
 	// and removed from the group, and its access tokens survive.
@@ -473,6 +483,25 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 			delete(f.tokens, id)
 		}
 		w.WriteHeader(http.StatusNoContent)
+
+	// THE GROUP'S PROJECTS, which a teardown now walks so a hook on a
+	// project the config no longer names is still removed. Seeded from
+	// [adminInstance.groupProjects] so a case can put a project in the group
+	// without naming it in provisioning.projects — which is exactly the
+	// shape that left two live hooks behind on a real instance.
+	case r.Method == http.MethodGet && path == "/groups/7/projects":
+		if f.noGroupProjects {
+			// A CREDENTIAL THAT MAY NOT READ THE GROUP'S PROJECTS, which
+			// GitLab answers 403 for.
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`{"message":"403 Forbidden"}`))
+			return
+		}
+		rows := make([]map[string]any, 0, len(f.groupProjects))
+		for _, project := range f.groupProjects {
+			rows = append(rows, map[string]any{"path_with_namespace": project})
+		}
+		json.NewEncoder(w).Encode(pageOf(rows, r.URL.Query()))
 
 	case r.Method == http.MethodGet && path == "/groups/nimbus":
 		// A GROUP THAT DOES NOT RESOLVE, which GitLab answers 404 for in

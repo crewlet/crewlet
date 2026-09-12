@@ -861,6 +861,86 @@ func (c *Client) GroupHooks(ctx context.Context, groupID int) ([]Hook, error) {
 	return hookPages(ctx, c, "/groups/"+strconv.Itoa(groupID)+"/hooks")
 }
 
+// GroupProjects is every project the group holds, subgroups included, as
+// `<namespace>/<path>` — the same spelling `provisioning.projects` uses and
+// every project route here takes.
+//
+// # Why a teardown needs it and a reconcile does not
+//
+// A disconnect has to remove every hook this engine registered ANYWHERE, and
+// the config is not a record of where they are: a run that established
+// per-project hooks wrote them on the projects named AT THE TIME, and a
+// project dropped from `provisioning.projects` since — or a company that
+// connected with the group alone — leaves them unreachable. Measured on a
+// live disconnect: two hooks left on a project in the group, pointing at dead
+// tunnels from earlier runs, which nothing would ever visit again. A
+// `trycloudflare` hostname is re-issued to whoever asks next, so those
+// deliveries go on leaving the customer's GitLab for a stranger.
+//
+// The steady-state reconcile deliberately does NOT walk this. It runs every
+// few minutes and is already O(seats × projects) over the projects a company
+// named; a group with a thousand projects would turn every tick into a
+// thousand hook listings to converge hooks on the handful the config asks
+// for. A teardown happens once, when somebody presses Disconnect, and is the
+// one moment the whole group is worth reading.
+//
+// SUBGROUPS INCLUDED, because a group's projects are not only its direct
+// children and a hook on a subgroup's project is exactly as live as one on a
+// direct child's.
+//
+// PAGED TO EXHAUSTION, for the reason every other enumeration here is: a
+// truncated listing is not a slow report, it is a wrong DECISION — here, a
+// project silently never swept.
+func (c *Client) GroupProjects(ctx context.Context, groupID int) ([]string, error) {
+	var out []string
+	path := "/groups/" + strconv.Itoa(groupID) + "/projects"
+	for page := 1; ; page++ {
+		var batch []struct {
+			PathWithNamespace string `json:"path_with_namespace"`
+		}
+		err := c.get(ctx, path, url.Values{
+			"per_page":          {strconv.Itoa(userPageSize)},
+			"page":              {strconv.Itoa(page)},
+			"include_subgroups": {"true"},
+			// ARCHIVED ONES TOO. An archived project keeps its webhooks
+			// and GitLab excludes it from this listing by default, so
+			// leaving it out is the same silent miss as a short page.
+			"archived": {"true"},
+			// The listing is only read for the path, so the cheapest
+			// ordering is fine and the default (created_at desc) is
+			// stable enough for a sweep that visits all of them.
+			"simple": {"true"},
+		}, &batch)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range batch {
+			if path := strings.TrimSpace(row.PathWithNamespace); path != "" {
+				out = append(out, path)
+			}
+		}
+		if len(batch) < userPageSize {
+			return out, nil
+		}
+		if len(out) >= projectWalkCeiling {
+			return nil, fmt.Errorf(
+				"gitlab: this group holds more than %d projects, which is not "+
+					"a group Crewlet can sweep in one disconnect — remove the "+
+					"hooks pointing at this deployment by hand",
+				projectWalkCeiling)
+		}
+	}
+}
+
+// projectWalkCeiling bounds [Client.GroupProjects].
+//
+// Same shape and the same reason as [userWalkCeiling], and a smaller number
+// because each project costs a HOOK LISTING afterwards rather than one row in
+// a page: two thousand projects is two thousand round trips inside one
+// disconnect, which is the point at which finishing by hand is faster than
+// waiting. Above it the teardown says so rather than grinding.
+const projectWalkCeiling = 2000
+
 // CreateGroupHook registers a webhook on a group.
 //
 // EVERY EVENT THE PARSER UNDERSTANDS, and no more: a hook subscribed to

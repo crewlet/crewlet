@@ -88,6 +88,13 @@ func (f *gitlabRoutes) serve(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode([]map[string]any{})
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/projects/"):
 		json.NewEncoder(w).Encode(map[string]any{"id": 11})
+	case r.Method == http.MethodGet && strings.HasSuffix(path, "/projects"):
+		// THE GROUP'S PROJECTS, which a teardown walks in full so a hook on
+		// a project the config no longer names is still removed. Empty
+		// here: this case is about which OWNER an account is addressed
+		// through, and a decode failure would fail the teardown before it
+		// reached that.
+		json.NewEncoder(w).Encode([]map[string]any{})
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/service_accounts"):
 		// A FRESH ACCOUNT, which is what a pass does for a seat that has
 		// none — and the route it creates through is the other half of
