@@ -202,7 +202,7 @@ integrations:
     url: "https://chat.nimbus.example"    # instance base URL (required)
     team: nimbus                          # team slug (required)
     typing_status: always                 # always (default) | addressed
-    provisioning:              # consumed ONLY by the CLI, ignored by the engine
+    provisioning:              # read by the reconcile loop AND by the CLI
       username_prefix: ""      # e.g. "agent-" if humans share the server
       channels: [town-square, engineering]   # channels every bot joins
       display_name_suffix: " (AI)"

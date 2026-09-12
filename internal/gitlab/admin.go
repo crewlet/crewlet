@@ -208,10 +208,15 @@ func (c *Client) InstanceServiceAccounts(ctx context.Context) ([]User, error) {
 			return out, nil
 		}
 		if len(out) >= userWalkCeiling {
+			// THE FIELD, NOT THE FLAG. This is reached by the engine's
+			// reconcile loop as well as by the provisioning command, and
+			// an operator reading it off a card has no command line to
+			// pass `-mode` on: the document is what they can change, and
+			// the flag is only that field's form on the CLI.
 			return nil, fmt.Errorf(
 				"gitlab: this instance has more than %d service accounts, "+
-					"which is not an instance Crewlet provisions into — "+
-					"use -mode group, or narrow "+
+					"which is not an instance Crewlet provisions into — set "+
+					"integrations.gitlab.provisioning.mode: group, or narrow "+
 					"provisioning.username_prefix", userWalkCeiling)
 		}
 	}

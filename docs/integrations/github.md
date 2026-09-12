@@ -426,6 +426,7 @@ pass and corrects the document from what it finds.
 | An installation the app has and the seat does not name | `installation_id` on the seat | The seat is finished |
 | A stored `installation_id` GitHub answers 404 to | `installation_id: 0` | Install it, with the link |
 | An app id GitHub answers 404 to | Clears `app_id`, `app_slug`, `installation_id`, `private_key` and `webhook_secret` | Create an app for this seat |
+| A **disconnect** uninstalled the app | `installation_id: 0` | Install it, with the link |
 
 Every one of these reads as **Action needed**, waiting on a person at GitHub.
 The engine cannot create an app or install one for anybody: both are acts in a

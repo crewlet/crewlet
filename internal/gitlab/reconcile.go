@@ -869,18 +869,27 @@ func modeError(mode Mode, err error) error {
 		}
 		return err
 	}
+	// THE FIELD FIRST, THE FLAG AFTER IT. Both of these are reached by the
+	// engine's reconcile loop as well as by the provisioning command, and an
+	// operator reading one off a card has no command line: the document is
+	// what they can change. The flag is named too, because it is that same
+	// field's form on the CLI and dropping it would leave somebody who did
+	// pass it with no sentence about what they passed.
 	switch {
 	case api.Forbidden():
 		return fmt.Errorf(
-			"%w — -mode instance creates service accounts the instance owns, "+
+			"%w — instance mode creates service accounts the instance owns, "+
 				"which only an INSTANCE ADMINISTRATOR may do. Use an admin "+
-				"PAT, or drop -mode instance to create them under "+
-				"provisioning.group instead", err)
+				"PAT, or set integrations.gitlab.provisioning.mode: group "+
+				"(drop -mode instance on the command line) to create them "+
+				"under provisioning.group instead", err)
 	case api.Status == http.StatusNotFound:
 		return fmt.Errorf(
 			"%w — this deployment does not serve the instance service-account "+
 				"route, which is how GitLab.com answers: instance service "+
-				"accounts are self-managed only. Drop -mode instance", err)
+				"accounts are self-managed only. Set "+
+				"integrations.gitlab.provisioning.mode: group, or drop "+
+				"-mode instance", err)
 	}
 	return err
 }
