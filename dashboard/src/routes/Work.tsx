@@ -51,6 +51,8 @@ import { fmtDateTime, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import type {
   WorkGroup,
+  WorkProjectDetail,
+  WorkProjectRow,
   WorkIncomplete,
   WorkStatus,
   WorkSummary,
@@ -144,6 +146,22 @@ export function Work() {
   // is the company's own vocabulary and changes about once a quarter, which
   // is why this poll is the slowest on the screen.
   const catalogue = useQuery("work_catalogue", undefined, { pollMs: 300_000 });
+  // THE PROJECT LIST IS THE COMPANY'S, never the page's. Derived from the
+  // rows it could only offer the projects that happen to be on screen, so a
+  // board filtered to one project offered no way back to another — and the
+  // counts beside each name are the MAINTAINED columns, three reads rather
+  // than an aggregate over every task in the company. A minute, because a
+  // project's shape changes at the pace somebody files work rather than at
+  // the pace a board is read.
+  const catalogueProjects = useQuery("work_projects", undefined, { pollMs: 60_000 });
+  // AND THE PROJECT'S OWN OVERVIEW, only while one is selected: its sprint,
+  // its lead and the unit that owns it are what a board scoped to a project
+  // cannot say from its rows.
+  const overview = useQuery(
+    "work_project",
+    project ? { key: project } : undefined,
+    { pollMs: 60_000 },
+  );
   const types = catalogue.data?.types ?? [];
   const views = strip.data?.views ?? [];
   // THE VIEW IS A SET OF DEFAULTS, never a lock: picking one puts its
@@ -167,16 +185,10 @@ export function Work() {
 
   const shown = useMemo(() => shownRows(rows, groups), [groups, rows]);
 
-  // FROM THE ROWS ALONE. The board used to take the project list from a
-  // minted-counter map the bucket carried; a task's counter is now arbitrated
-  // on its project's own subject and no listing carries it, so the filter
-  // offers what this page actually contains — which is also what a filter
-  // built from a page can honestly offer.
-  const projects = useMemo(() => {
-    const keys = new Set<string>();
-    for (const item of shown) keys.add(item.project);
-    return [...keys].sort();
-  }, [shown]);
+  const projects = useMemo(
+    () => projectKeys(catalogueProjects.data?.projects, shown),
+    [catalogueProjects.data, shown],
+  );
 
   const byStatus = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -299,6 +311,11 @@ export function Work() {
           </Chip>
         )}
       </div>
+
+      {/* THE PROJECT'S OWN OVERVIEW, only while one is selected. Its sprint,
+          its lead and the unit that owns it are facts about the CONTAINER,
+          and a board can say none of them from its rows. */}
+      {project && <ProjectOverview detail={overview.data} />}
 
       {loading && <Skeleton rows={6} />}
 
@@ -481,6 +498,79 @@ export function Work() {
  * a subgroup's rows are a slice of its own column's, so folding them in would
  * count the same task twice.
  */
+/** One project's overview strip — the container facts a board cannot show.
+ *
+ *  ABSENT RATHER THAN EMPTY while the read is in flight or a project has no
+ *  answer: an overview rendered with zeroes is a project that looks
+ *  unstaffed, unled and out of sprint, which is a conclusion somebody acts
+ *  on. */
+export function ProjectOverview({ detail }: { detail?: WorkProjectDetail | null }) {
+  if (!detail) return null;
+  const sprint = detail.sprints?.active;
+  const pending = detail.sprints?.pending_spillovers ?? [];
+  return (
+    <>
+      {/* A UNIT THE CHART NO LONGER HAS is a finding, not a blank: it is what
+          leaves a project's work routed to nobody. */}
+      {!detail.unit.resolved && (
+        <Banner tone="caution">
+          This project names the unit <span className="mono">{detail.unit.key}</span>, which the
+          current org chart does not have — work filed here routes to nobody.
+        </Banner>
+      )}
+      {/* A CLOSED SPRINT NOBODY HAS SETTLED. The work is neither carried
+          forward nor dropped until a lead says which. */}
+      {pending.length > 0 && (
+        <Banner tone="caution">
+          Sprint{pending.length === 1 ? "" : "s"} {pending.join(", ")} closed with the spillover
+          still undecided — the unfinished work is waiting on a lead.
+        </Banner>
+      )}
+      <StatRow cols={4}>
+        <Stat label="Open" value={detail.task_counts.open} sub={detail.name} />
+        <Stat label="Done" value={detail.task_counts.done} />
+        <Stat
+          label="Lead"
+          value={detail.lead.handle || "none"}
+          sub={detail.unit.name || detail.unit.key || "no unit"}
+        />
+        {/* THE MEASURE IS ON THE LABEL, because a bare "12 of 34" is points
+            to one team and minutes to another. */}
+        <Stat
+          label={sprint ? `Sprint ${sprint.number}` : "Sprint"}
+          value={sprint ? `${sprint.figures.done} / ${sprint.figures.committed +
+            sprint.figures.added}` : "none"}
+          sub={
+            sprint
+              ? `${sprint.figures.measure === "points" ? "points" : "minutes"} · ${
+                sprint.days_remaining
+              }d left`
+              : "this project runs none"
+          }
+        />
+      </StatRow>
+    </>
+  );
+}
+
+/** The project filter's options: the COMPANY's own listing, falling back to
+ *  whatever is on the page.
+ *
+ *  The listing is the honest set — a filter built from the rows can only offer
+ *  the projects that happen to be on them, so a board already narrowed to one
+ *  offered exactly one choice and no way back. The fallback is not decoration:
+ *  the listing is a separate poll, and a filter that empties while it is in
+ *  flight is a control that flickers every time the board is re-read. */
+export function projectKeys(
+  listed: WorkProjectRow[] | undefined,
+  shown: WorkSummary[],
+): string[] {
+  if (listed && listed.length > 0) return listed.map((p) => p.key);
+  const keys = new Set<string>();
+  for (const item of shown) keys.add(item.project);
+  return [...keys].sort();
+}
+
 export function shownRows(items: WorkSummary[], groups: WorkGroup[]): WorkSummary[] {
   if (groups.length === 0) return items;
   return groups.flatMap((group) => group.rows);

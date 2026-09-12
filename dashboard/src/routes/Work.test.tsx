@@ -10,8 +10,8 @@
  */
 
 import { expect, test } from "vitest";
-import { shownRows } from "./Work.tsx";
-import type { WorkGroup, WorkSummary } from "~/protocol/index.ts";
+import { projectKeys, shownRows } from "./Work.tsx";
+import type { WorkGroup, WorkProjectRow, WorkSummary } from "~/protocol/index.ts";
 
 const row = (id: string, over: Partial<WorkSummary> = {}): WorkSummary => ({
   id,
@@ -49,4 +49,29 @@ test("a subgroup's rows are not counted twice", () => {
     },
   ];
   expect(shownRows([], groups).map((r) => r.id)).toEqual(["a", "b"]);
+});
+
+// THE PROJECT FILTER OFFERS THE COMPANY'S PROJECTS, not the page's.
+//
+// Derived from the rows it could only ever offer what was already on screen,
+// so a board narrowed to one project offered exactly that one and no way back
+// to another — the filter became a one-way door.
+test("the project filter comes from the listing, not from the visible rows", () => {
+  const listed: WorkProjectRow[] = [
+    { key: "ENG", name: "Engineering", unit: { resolved: true }, lead: {},
+      task_counts: { open: 1, done: 0, closed: 0 }, version: 1 },
+    { key: "OPS", name: "Operations", unit: { resolved: true }, lead: {},
+      task_counts: { open: 0, done: 0, closed: 0 }, version: 1 },
+  ];
+  expect(projectKeys(listed, [row("a")])).toEqual(["ENG", "OPS"]);
+});
+
+// AND FALLS BACK RATHER THAN EMPTYING while the listing is in flight: a
+// control that disappears on every re-read is worse than one offering less.
+test("the filter falls back to the rows before the listing arrives", () => {
+  expect(projectKeys(undefined, [row("a"), row("b", { project: "OPS" })])).toEqual([
+    "ENG",
+    "OPS",
+  ]);
+  expect(projectKeys([], [row("a")])).toEqual(["ENG"]);
 });

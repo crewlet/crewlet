@@ -27,7 +27,36 @@ type stubWork struct {
 	goals       tracker.GoalListing
 	personQuery tracker.PersonQuery
 	person      tracker.PersonState
-	err         error
+
+	projectQuery tracker.ProjectQuery
+	projects     tracker.ProjectListing
+	detailQuery  tracker.ProjectDetailQuery
+	project      tracker.ProjectDetail
+	sprintQuery  tracker.SprintQuery
+	sprints      tracker.SprintListing
+
+	err error
+}
+
+func (s *stubWork) Projects(_ context.Context, q tracker.ProjectQuery,
+	_ time.Time) (tracker.ProjectListing, error) {
+
+	s.projectQuery = q
+	return s.projects, s.err
+}
+
+func (s *stubWork) Project(_ context.Context, q tracker.ProjectDetailQuery,
+	_ time.Time) (tracker.ProjectDetail, error) {
+
+	s.detailQuery = q
+	return s.project, s.err
+}
+
+func (s *stubWork) Sprints(_ context.Context, q tracker.SprintQuery,
+	_ time.Time) (tracker.SprintListing, error) {
+
+	s.sprintQuery = q
+	return s.sprints, s.err
 }
 
 func (s *stubWork) Views(_ context.Context, q tracker.ViewQuery) (tracker.ViewListing, error) {

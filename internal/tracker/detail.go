@@ -35,6 +35,14 @@ import (
 // it. The detail read distinguishes those — see [TaskDetail.Complete].
 var ErrNoTask = errors.New("tracker: no such task")
 
+// ErrNoProject reports a project this node has no row for.
+//
+// ITS OWN SENTINEL beside [ErrNoTask], for the same reason and with the same
+// caveat: a project reader that answered an empty listing for an unknown key
+// would tell a model the project is empty when what actually happened is that
+// it typed the key wrong.
+var ErrNoProject = errors.New("tracker: no such project")
+
 // DetailWants says which parts of the answer to assemble.
 //
 // EXPLICIT rather than "everything", because the parts have very different

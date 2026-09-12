@@ -119,6 +119,11 @@ type WorkDeps struct {
 	// no trace — the board simply has one fewer item on it.
 	TrashWriter func(actor Actor) TrashWriter
 
+	// Units resolves a project's chart-owned unit at READ time — the
+	// tracker holds no org, because the applier may not read one. Nil
+	// renders every unit unresolved, which is honest rather than empty.
+	Units tracker.Units
+
 	// Mentions resolves the handles a comment names, so a mention wakes
 	// the person the author meant. Nil resolves nothing, which degrades to
 	// a comment that notifies only the ordinary watchers.
@@ -1234,6 +1239,19 @@ func (d WorkDeps) now() time.Time {
 		return time.Now().UTC()
 	}
 	return d.Now()
+}
+
+// defaultProject is the seat's own, or empty where its unit owns none.
+//
+// ONE SPELLING, because three tools fall back to it and a second copy would
+// be the one that stopped matching — a create filing into the seat's project
+// while a describe answered about another is the shape that teaches a model
+// the wrong vocabulary for the container it is writing to.
+func (d WorkDeps) defaultProject(handle string) string {
+	if d.DefaultProject == nil {
+		return ""
+	}
+	return d.DefaultProject(handle)
 }
 
 func (d WorkDeps) zone() *time.Location {

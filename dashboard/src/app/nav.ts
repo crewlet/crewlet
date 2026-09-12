@@ -84,6 +84,13 @@ export const NAV: NavGroup[] = [
         hint: "Every item on the company's own tracker, and what moved it",
       },
       {
+        key: "sprints",
+        label: "Sprints",
+        icon: "calendar",
+        path: ["sprints"],
+        hint: "What each sprint took on, and what shipped inside its own window",
+      },
+      {
         key: "goals",
         label: "Goals",
         icon: "target",

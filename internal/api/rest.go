@@ -56,6 +56,9 @@ var namedRoutes = []struct {
 	// "counters" — net/http resolves the more specific pattern rather
 	// than the first registered.
 	{method: "GET", pattern: "/work/retention", what: "retention"},
+	{method: "GET", pattern: "/work/projects/{key}", what: "work_project", path: map[string]string{"key": "key"}},
+	{method: "GET", pattern: "/work/projects", what: "work_projects"},
+	{method: "GET", pattern: "/work/sprints", what: "work_sprints"},
 	{method: "GET", pattern: "/work/views", what: "work_views"},
 	{method: "GET", pattern: "/work/goals", what: "work_goals"},
 	{method: "GET", pattern: "/work/catalogue", what: "work_catalogue"},

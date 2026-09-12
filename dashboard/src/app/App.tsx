@@ -18,6 +18,7 @@ import { SeatScreen } from "~/routes/Seat.tsx";
 import { OrgScreen } from "~/routes/Org.tsx";
 import { Runs } from "~/routes/Runs.tsx";
 import { Work, WorkItem } from "~/routes/Work.tsx";
+import { Sprints } from "~/routes/Sprints.tsx";
 import { Pages, PageView } from "~/routes/Pages.tsx";
 import { Conversations } from "~/routes/Conversations.tsx";
 import { Schedules } from "~/routes/Schedules.tsx";
@@ -57,6 +58,11 @@ function Screen() {
       return id ? <WorkItem id={id} /> : <Work />;
     case "goals":
       return <Goals />;
+    // ITS OWN SCREEN rather than a tab of the board, for the reason the view
+    // strip is its own question: a sprint report is about the CONTAINER over
+    // time and the board is about the rows in it now.
+    case "sprints":
+      return <Sprints />;
     case "pages":
       return id ? <PageView id={id} /> : <Pages />;
     case "conversations":

@@ -331,3 +331,15 @@ func splitSprintID(id string) (project string, number int, err error) {
 	}
 	return project, number, nil
 }
+
+// ProjectKey normalises what somebody typed into what the column stores.
+//
+// ONE SPELLING of a rule three parsers already carried separately: a project
+// key is minted upper-case, every comparison against `project_key` is exact,
+// and a caller who pastes `eng` gets an EMPTY answer rather than a refusal —
+// the one failure shape a person acts on, by filing the duplicate or
+// concluding the migration lost their work. Lower-casing the column instead
+// would defeat every index that leads with it.
+func ProjectKey(raw string) string {
+	return strings.ToUpper(strings.TrimSpace(raw))
+}

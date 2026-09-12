@@ -316,6 +316,14 @@ func Register(r *Registry, s Sources) {
 		// `containers` is separate from `pages`: a screen draws the tab
 		// strip once and the rows in it on every filter change.
 		r.Register("work_views", s.workViews)
+		// A SEPARATE QUESTION from `work_items` for the reason
+		// `work_views` is: a home screen draws the project list once
+		// and its rows' tasks on every navigation, and the counts here
+		// are three MAINTAINED columns rather than an aggregate over
+		// every task in the company.
+		r.Register("work_projects", s.workProjects)
+		r.Register("work_project", s.workProject)
+		r.Register("work_sprints", s.workSprints)
 		r.Register("work_goals", s.workGoals)
 		r.Register("work_catalogue", s.workCatalogue)
 		r.Register("work_person", s.workPerson)

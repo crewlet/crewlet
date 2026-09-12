@@ -840,13 +840,76 @@ type SprintPolicy struct {
 
 	// ArchiveAfter is zero for off. The CLOSE is not a policy value at
 	// all: every sprint closes when its end arrives.
-	ArchiveAfter int       `json:"archive_after,omitempty"`
-	Next         int       `json:"next"`
-	NameFormat   string    `json:"name_format,omitempty"`
-	Measure      string    `json:"measure,omitempty"`
-	PointScale   []float64 `json:"point_scale,omitempty"`
+	ArchiveAfter int           `json:"archive_after,omitempty"`
+	Next         int           `json:"next"`
+	NameFormat   string        `json:"name_format,omitempty"`
+	Measure      SprintMeasure `json:"measure,omitempty"`
+	PointScale   []float64     `json:"point_scale,omitempty"`
 
 	Capacity map[string]Capacity `json:"capacity,omitempty"`
+}
+
+// SprintMeasure is what a sprint's figures are summed in.
+//
+// A NAMED TYPE rather than a string, because every figure a sprint report
+// carries — committed, added, removed, done, remaining, each assignee's total
+// and the capacity it is compared against — is a sum over ONE of two columns,
+// and an unrecognised spelling would silently pick neither. The zero value is
+// meaningful and is [MeasurePoints]: a project that says nothing about the
+// knob runs on points, which is what the applier's own default column already
+// says.
+type SprintMeasure string
+
+const (
+	// MeasurePoints sums `tracker_tasks.points`, the builtin float.
+	MeasurePoints SprintMeasure = "points"
+
+	// MeasureEstimate sums `tracker_tasks.estimate_min`, the builtin
+	// minute count. Named for the FIELD rather than for "time", because
+	// that is the column, the query grammar's own spelling and the
+	// capacity key beside it.
+	MeasureEstimate SprintMeasure = "estimate_min"
+)
+
+// SprintMeasures is every measure a project may run in.
+var SprintMeasures = []SprintMeasure{MeasurePoints, MeasureEstimate}
+
+// Valid reports whether a measure off the wire is one this build knows.
+//
+// THE EMPTY STRING IS VALID and means [MeasurePoints] — see the type doc. A
+// value that is neither is a value, not a panic: [SprintMeasure.Or] resolves
+// it, and the write side refuses it naming both spellings.
+func (m SprintMeasure) Valid() bool {
+	if m == "" {
+		return true
+	}
+	for _, known := range SprintMeasures {
+		if m == known {
+			return true
+		}
+	}
+	return false
+}
+
+// Or resolves a measure to the column a report sums.
+//
+// An UNKNOWN measure resolves to points rather than to nothing, because this
+// is a read path: a project whose policy carries a spelling a newer build
+// wrote must still report figures, and reporting them in the default measure
+// — which the answer NAMES — is better than reporting zero in silence.
+func (m SprintMeasure) Or() SprintMeasure {
+	if m == MeasureEstimate {
+		return MeasureEstimate
+	}
+	return MeasurePoints
+}
+
+// Column is the task column this measure sums.
+func (m SprintMeasure) Column() string {
+	if m.Or() == MeasureEstimate {
+		return "t.estimate_min"
+	}
+	return "t.points"
 }
 
 // Capacity is one person's sprint capacity.

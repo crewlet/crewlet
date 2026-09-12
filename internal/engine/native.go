@@ -890,6 +890,11 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 			})
 		},
 		Mentions: seatMentions{org: c.Org},
+		// AND THE UNIT SEAM, read per call for the reason the default
+		// project is: a seat's tools are cloned into its lease, an apply
+		// does not rebuild the clone, and a captured chart would render
+		// a project's unit against an org that has since moved.
+		Units: liveUnits{engine: e},
 		// PER CALL against the epoch current when the tool runs, not
 		// against the one that equipped it: a seat's tools are cloned
 		// into its lease and an apply does not rebuild the clone, so a
@@ -909,6 +914,47 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		Zone:  c.Config.Tracker.Native.Location(),
 		Await: e.WaitCommitted,
 	}
+}
+
+// ChartUnits is an org chart as the tracker's unit seam.
+//
+// THE ONE IMPLEMENTATION, here because this package is where a concrete thing
+// is matched to a seam: the tracker holds no org — the applier may not read
+// one, since two nodes briefly on different epochs would write different rows
+// — so a project's chart-owned unit is resolved at READ time, and every
+// surface that renders one has to reach the same answer.
+func ChartUnits(o *org.Organization) tracker.Units { return chartUnits{org: o} }
+
+type chartUnits struct{ org *org.Organization }
+
+func (c chartUnits) ResolveUnit(name string) (string, tracker.LeadRef, bool) {
+	if c.org == nil {
+		return "", tracker.LeadRef{}, false
+	}
+	unit := c.org.Unit(name)
+	if unit == nil {
+		return "", tracker.LeadRef{}, false
+	}
+	lead := tracker.LeadRef{}
+	// THE EFFECTIVE LEAD, which is the one inherited from an ancestor
+	// where this unit declares none — because that is who actually hears
+	// about the project's work, and rendering `none` beside a unit whose
+	// parent has a lead sends a founder looking for a gap there is not.
+	if role := c.org.EffectiveLead(unit); role != nil {
+		lead.Handle = org.Slugify(role.Name)
+		lead.Kind = tracker.AuthorAgent
+		if role.IsHuman() {
+			lead.Kind = tracker.AuthorHuman
+		}
+	}
+	return unit.Name, lead, true
+}
+
+// liveUnits resolves against the epoch current when the tool RUNS.
+type liveUnits struct{ engine *Engine }
+
+func (l liveUnits) ResolveUnit(name string) (string, tracker.LeadRef, bool) {
+	return ChartUnits(l.engine.Company().Org).ResolveUnit(name)
 }
 
 // liveLeads resolves a wake's two fallbacks against the CURRENT epoch.

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -54,6 +55,12 @@ type WorkReader interface {
 		now time.Time, loc *time.Location) (tracker.Query, error)
 	Goals(ctx context.Context, q tracker.GoalQuery) (tracker.GoalListing, error)
 	Catalogue(ctx context.Context, q tracker.CatalogueQuery) (tracker.CatalogueAnswer, error)
+	Projects(ctx context.Context, q tracker.ProjectQuery, now time.Time) (
+		tracker.ProjectListing, error)
+	Project(ctx context.Context, q tracker.ProjectDetailQuery, now time.Time) (
+		tracker.ProjectDetail, error)
+	Sprints(ctx context.Context, q tracker.SprintQuery, now time.Time) (
+		tracker.SprintListing, error)
 	Person(ctx context.Context, q tracker.PersonQuery, now time.Time) (tracker.PersonState, error)
 }
 
@@ -462,4 +469,91 @@ func RetryAfter(err error) time.Duration {
 		return refused.RetryAfter
 	}
 	return 0
+}
+
+// ---- projects and sprints ----------------------------------------------- //
+
+// workProjects answers the company's projects with their maintained counts.
+func (s Sources) workProjects(ctx context.Context, p Params) (any, error) {
+	listing, err := s.Work.Projects(ctx, tracker.ProjectQuery{
+		Q:        strings.TrimSpace(p.String("q")),
+		Unit:     strings.TrimSpace(p.String("unit")),
+		Archived: p.Bool("archived", false),
+		Limit:    p.Int("limit", 0),
+		Units:    s.chartUnits(),
+		// STALE, like every other dashboard poll — see
+		// [Sources.workItems] for the arithmetic.
+		Level: statelog.ReadStale,
+	}, time.Now().UTC())
+	if err != nil {
+		return nil, unavailableIfBehind(err)
+	}
+	return listing, nil
+}
+
+// workProject answers one project in full — the Overview tab, and the answer a
+// seat learns a project's vocabulary from.
+func (s Sources) workProject(ctx context.Context, p Params) (any, error) {
+	key := strings.TrimSpace(p.String("key"))
+	if key == "" {
+		key = strings.TrimSpace(p.String("project"))
+	}
+	if key == "" {
+		return nil, badParams("key", "", nil)
+	}
+	detail, err := s.Work.Project(ctx, tracker.ProjectDetailQuery{
+		Project: key,
+		ForType: strings.TrimSpace(p.String("for_type")),
+		Units:   s.chartUnits(),
+		Level:   statelog.ReadStale,
+	}, time.Now().UTC())
+	switch {
+	case errors.Is(err, tracker.ErrNoProject):
+		// NOT FOUND, NOT UNAVAILABLE, and the message survives the
+		// classification: the refusal names the nearest keys, which is
+		// what a caller who typed one wrong needs.
+		return nil, fmt.Errorf("%w: %w", ErrNotFound, err)
+	case err != nil:
+		return nil, unavailableIfBehind(err)
+	}
+	return detail, nil
+}
+
+// workSprints answers a project's sprints with every figure computed.
+func (s Sources) workSprints(ctx context.Context, p Params) (any, error) {
+	project := strings.TrimSpace(p.String("project"))
+	if project == "" {
+		return nil, badParams("project", "", nil)
+	}
+	listing, err := s.Work.Sprints(ctx, tracker.SprintQuery{
+		Project:  project,
+		Number:   p.Int("sprint", 0),
+		Sprints:  p.Int("sprints", 0),
+		Archived: p.Bool("archived", false),
+		Level:    statelog.ReadStale,
+	}, time.Now().UTC())
+	switch {
+	case errors.Is(err, tracker.ErrNoProject):
+		return nil, fmt.Errorf("%w: %w", ErrNotFound, err)
+	case err != nil:
+		return nil, unavailableIfBehind(err)
+	}
+	return listing, nil
+}
+
+// chartUnits is the running org as the tracker's unit seam.
+//
+// THE ADAPTER IS THE ENGINE'S, not a second copy: resolving a project's
+// chart-owned unit means deciding what an unresolvable one looks like and
+// which lead counts as this unit's, and two answers to that would render one
+// project orphaned on a screen and led on a tool call.
+//
+// NIL WHEN THERE IS NO CHART, which the reader renders as every unit
+// unresolved rather than as every project naming none — see [tracker.Units].
+func (s Sources) chartUnits() tracker.Units {
+	organization := s.organization()
+	if organization == nil {
+		return nil
+	}
+	return engine.ChartUnits(organization)
 }
