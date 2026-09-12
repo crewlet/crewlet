@@ -606,12 +606,29 @@ export function byConfiguredThenName(
  */
 export function disconnectOrder(
   entry: Entry,
+  rows: Map<string, IntegrationRow>,
   sections: { name: string; tool: SetupToolState }[],
 ): string[] {
+  // THE ROWS ARE THE FALLBACK, and dropping them made Disconnect a silent
+  // no-op.
+  //
+  // The button is rendered from the ROWS (`!absent && onDisconnect`), and
+  // `sections` comes from `GET /setup/integrations`, which is a separate
+  // request that can 401 for want of an operator token or fail transiently.
+  // With the key set taken from `sections` alone, that window rendered a
+  // Disconnect button whose dialog computed an EMPTY list, issued no DELETE
+  // at all, and then ran onDone() and closed exactly as it does after a real
+  // teardown — so an operator was told the integration was being removed
+  // while nothing had been asked of anything.
+  //
+  // A row means "this surface is configured" on the authority of the engine's
+  // own company document, which is the same claim `tool.configured` makes
+  // from the other endpoint, so the union is not a guess: it is the two
+  // readings of one fact, and either one alone can be missing.
   const configured = new Set(sections.filter((s) => s.tool.configured).map((s) => s.tool.key));
   return entry.surfaces
     .map((s) => s.key)
-    .filter((key) => configured.has(key))
+    .filter((key) => configured.has(key) || rows.has(key))
     .reverse();
 }
 
@@ -1316,10 +1333,32 @@ function seatFindings(present: Present[]): Map<string, ReconcileFinding> {
   const out = new Map<string, ReconcileFinding>();
   for (const p of present) {
     for (const f of p.row.reconcile?.findings ?? []) {
-      if (f.subject && !out.has(f.subject)) out.set(f.subject, f);
+      if (f.subject && !advisory(f) && !out.has(f.subject)) out.set(f.subject, f);
     }
   }
   return out;
+}
+
+/**
+ * A finding that describes something WORKING.
+ *
+ * Two of the engine's kinds have a verdict of `ready` — a permission wider
+ * than the role asked for, and a registration the engine no longer manages
+ * but which is still delivering correctly. Both are notes on a healthy
+ * integration, and `Classify` ranks them beneath every real problem for
+ * exactly that reason.
+ *
+ * Read off the finding's OWN phase, which the engine sends from its per-kind
+ * verdict table, rather than from a list of advisory kinds kept here: a
+ * second copy of a closed set is a copy that stops matching, and the failure
+ * direction is the bad one — a kind this build had not heard of would be
+ * treated as an advisory and could then hide a broken agent.
+ *
+ * An ABSENT phase is not an advisory. A node older than the field sends none,
+ * and "cannot say" must read as a fault so the badge stays honest.
+ */
+function advisory(f: ReconcileFinding): boolean {
+  return f.phase === "ready";
 }
 
 /**
@@ -1688,7 +1727,7 @@ export function Integrations() {
                     // removed, and the card still read Connected because
                     // Jira and Confluence were untouched. A person pressing
                     // Disconnect on a card means the card.
-                    kinds: disconnectOrder(entry, sectionsFor(entry, setup.byKey)),
+                    kinds: disconnectOrder(entry, rows, sectionsFor(entry, setup.byKey)),
                     stuck: stuckDisconnecting(entry, rows),
                     // WHAT THE ENGINE CANNOT DELETE ITSELF. A seat carries a
                     // manage link only where what it holds has to be removed

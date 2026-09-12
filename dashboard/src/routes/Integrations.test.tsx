@@ -1016,7 +1016,7 @@ test("disconnect takes every configured surface, provisioner last", () => {
   // The catalogue's dependency order reversed. What this asserts is the LAST
   // position; the two products are peers and either order between them takes
   // the same things away.
-  expect(disconnectOrder(atlassian, sections)).toEqual(["jira", "confluence", "atlassian"]);
+  expect(disconnectOrder(atlassian, new Map(), sections)).toEqual(["jira", "confluence", "atlassian"]);
 });
 
 // THE FORGE RELAY IS NOT A SURFACE ANYTHING CAN DISCONNECT, and it used to be
@@ -1038,7 +1038,7 @@ test("disconnect leaves out the relay, which is not a kind anything can delete",
     // NO SECTION FOR forge, which is what the engine actually serves: the
     // setup payload is built from integration.Kinds and the relay is not one.
   ];
-  const order = disconnectOrder(atlassian, sections);
+  const order = disconnectOrder(atlassian, new Map(), sections);
   expect(order).not.toContain("forge");
   expect(order).toEqual(["jira", "confluence", "atlassian"]);
 });
@@ -1057,7 +1057,7 @@ test("disconnect puts the account-creating surface last however many provision",
     { name: "Confluence", tool: toolState({ key: "confluence", can_provision: true }) },
     { name: "Jira", tool: toolState({ key: "jira", can_provision: true }) },
   ];
-  const order = disconnectOrder(atlassian, sections);
+  const order = disconnectOrder(atlassian, new Map(), sections);
   expect(order[order.length - 1]).toBe("atlassian");
   expect(order).toHaveLength(3);
 });
@@ -1068,7 +1068,7 @@ test("disconnect puts the account-creating surface last however many provision",
 test("disconnect skips the surfaces this company does not have", () => {
   const rows = rowsOf({ key: "jira", configured: true });
   const sections = [{ name: "Jira", tool: toolState({ key: "jira" }) }];
-  expect(disconnectOrder(atlassian, sections)).toEqual(["jira"]);
+  expect(disconnectOrder(atlassian, new Map(), sections)).toEqual(["jira"]);
 });
 
 // A DROP IS A PROBLEM, so it survives the counters being removed.
@@ -1217,7 +1217,7 @@ test("disconnect includes a configured surface that has no traffic row", () => {
     { name: "Confluence", tool: toolState({ key: "confluence", can_provision: true }) },
     { name: "Jira", tool: toolState({ key: "jira", can_provision: true }) },
   ];
-  const order = disconnectOrder(atlassian, sections);
+  const order = disconnectOrder(atlassian, new Map(), sections);
   expect(order).toContain("atlassian");
   // AND STILL LAST: the organization's credential is what removes the
   // accounts, so taking it first would strand them.
@@ -1233,7 +1233,7 @@ test("disconnect skips a surface this company never configured", () => {
     // Declared by the catalogue, never configured by this company.
     { name: "Forge relay", tool: toolState({ key: "forge", configured: false }) },
   ];
-  expect(disconnectOrder(atlassian, sections)).toEqual(["jira"]);
+  expect(disconnectOrder(atlassian, new Map(), sections)).toEqual(["jira"]);
 });
 
 // A CARD CANNOT BE CONNECTED AND OFFER TO CONNECT.
@@ -1822,4 +1822,131 @@ test("an agent no surface reports on is still badged ready", () => {
   );
   fireEvent.click(screen.getByRole("button", { name: /Show Atlassian details/ }));
   expect(screen.getByText("ready")).toBeTruthy();
+});
+
+// DISCONNECT IS NEVER A SILENT NO-OP, AND THE ROWS ARE WHAT KEEPS IT FROM
+// BEING ONE.
+//
+// The Disconnect button is rendered from the ROWS; `sections` comes from a
+// separate `GET /setup/integrations` that can 401 for want of an operator
+// token. With the key set taken from `sections` alone, that window rendered a
+// button whose dialog computed an empty list, issued no DELETE, and then
+// closed exactly as it does after a real teardown — an operator told the
+// integration was being removed while nothing had been asked of anything.
+test("a configured surface is disconnectable even when the setup listing is unreadable", () => {
+  const rows = rowsOf(
+    { key: "atlassian", configured: true },
+    { key: "jira", configured: true },
+  );
+  expect(disconnectOrder(atlassian, rows, [])).toEqual(["jira", "atlassian"]);
+});
+
+// AND A SURFACE NEITHER SOURCE KNOWS IS STILL NOT DISCONNECTED, so the
+// fallback does not turn the whole catalogue into a teardown list.
+test("an unconfigured surface stays out of the disconnect order", () => {
+  expect(disconnectOrder(atlassian, rowsOf({ key: "jira", configured: true }), [])).toEqual([
+    "jira",
+  ]);
+});
+
+// AN ADVISORY FINDING DOES NOT UN-READY A WORKING AGENT.
+//
+// Two of the engine's kinds carry a verdict of `ready` — a permission wider
+// than the role asked for, a registration it no longer manages but which is
+// still delivering. Both are notes on a healthy integration, and Classify
+// ranks them beneath every real problem for that reason. Badging the agent
+// amber contradicted the card's own Connected tag, on a seat with nothing
+// wrong with it.
+test("an advisory finding leaves the agent badged ready", () => {
+  render(
+    <EntryRow
+      entry={atlassian}
+      rows={rowsOf(
+        { key: "atlassian", configured: true },
+        {
+          key: "jira",
+          configured: true,
+          reconcile: {
+            phase: "ready",
+            actor: "admin",
+            findings: [
+              {
+                kind: "grant_excess",
+                subject: "sre-lead",
+                detail: "sre-lead holds more access than its role asks for",
+                phase: "ready",
+                actor: "admin",
+              },
+            ],
+          },
+        },
+      )}
+      sections={sectionsFor(
+        atlassian,
+        new Map([
+          [
+            "jira",
+            toolState({
+              key: "jira",
+              configured: true,
+              requirements: [],
+              can_provision: true,
+              seats: [
+                { handle: "sre-lead", name: "SRE Lead", requirements: [], satisfied: true },
+              ],
+            }),
+          ],
+        ]),
+      )}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Show Atlassian details/ }));
+  // "not ready" is the discriminating half: with the bug the roster row
+  // carried it. getAllByText for the positive half because a card whose
+  // surfaces are ready has more than one badge saying so.
+  expect(screen.queryByText("not ready")).toBeNull();
+  expect(screen.getAllByText("ready").length).toBeGreaterThan(0);
+});
+
+// AND A FINDING WHOSE VERDICT THIS BUILD CANNOT READ IS A FAULT, not an
+// advisory. A node older than the phase field sends none, and a kind a newer
+// peer wrote is one this build has never heard of — read as advisory, either
+// would hide a broken agent behind a green badge.
+test("a finding with no verdict still un-readies the agent", () => {
+  render(
+    <EntryRow
+      entry={atlassian}
+      rows={rowsOf(
+        { key: "atlassian", configured: true },
+        {
+          key: "jira",
+          configured: true,
+          reconcile: {
+            phase: "degraded",
+            actor: "admin",
+            findings: [{ kind: "something_newer", subject: "sre-lead", detail: "unknown" }],
+          },
+        },
+      )}
+      sections={sectionsFor(
+        atlassian,
+        new Map([
+          [
+            "jira",
+            toolState({
+              key: "jira",
+              configured: true,
+              requirements: [],
+              can_provision: true,
+              seats: [
+                { handle: "sre-lead", name: "SRE Lead", requirements: [], satisfied: true },
+              ],
+            }),
+          ],
+        ]),
+      )}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Show Atlassian details/ }));
+  expect(screen.getByText("not ready")).toBeTruthy();
 });
