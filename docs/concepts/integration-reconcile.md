@@ -33,6 +33,10 @@ Those findings fold into one **report**, which is what an operator reads:
 
 ### The advisories are always last
 
+**A finding about many things names three of them, and carries the rest beside the sentence.** A finding's detail is the card's one-line status, and the engine caps it at 500 characters — not for tidiness but because an oversized status row is **refused** by the coordination store rather than truncated, which would stop the surface recording anything at all. A finding that listed its subjects inline therefore arrived as a wall cut off mid-item: measured, 36 Datadog service accounts ending `…@agents.cr…`. So the sentence says the count and up to three examples, and the whole list travels in the finding's own `subjects`, which the screen folds away under the sentence. A finding about one thing names it and carries no list.
+
+**And a seat that needs a person shows action required, never a finished status.** Where an act belongs to somebody at the third-party app and the engine can never perform it — creating a GitHub App, installing one — the finding is `approval_required`, whose verdict is *awaiting_admin*, owed to an admin. `identity_missing` is the engine's own work and reads as *Setting up agents*, which over an act nobody is performing is a card waiting for a pass that will never change anything. The rule extends to the tool's own `satisfied`: a surface that requires per-seat identities and has no working seat at all is not satisfied, whatever its company block says.
+
 Two findings have a verdict of **ready**: `grant_excess` and `registration_orphaned`. Everything below is about the first, and applies to both.
 
 `grant_excess` is the older of the two. The engine did not grant that access and cannot revoke it: it comes from the operator's own scheme, usually inherited from a parent group or a second role. Agents keep working, so the integration is ready with a note rather than blocked.

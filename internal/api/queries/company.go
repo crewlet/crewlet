@@ -852,14 +852,25 @@ func reconcileFindings(findings []integration.Finding) []map[string]any {
 		// build can write a kind into the shared row, and rendering it as
 		// an advisory would let it hide a real problem.
 		phase, actor := f.Kind.Verdict()
-		out = append(out, map[string]any{
+		row := map[string]any{
 			"kind":       string(f.Kind),
 			"subject":    f.Subject,
 			"detail":     f.Detail,
 			"action_url": f.ActionURL,
 			"phase":      string(phase),
 			"actor":      string(actor),
-		})
+		}
+		// THE WHOLE LIST, where a finding is about many things and its own
+		// sentence names only a few. See [integration.Finding.Subjects]:
+		// the detail is the card's status line and is capped, so a finding
+		// that listed thirty-six addresses inline was a wall cut off
+		// mid-address. Absent rather than an empty array for the ordinary
+		// finding about one thing, so a view can ask whether there is a
+		// list at all.
+		if len(f.Subjects) > 0 {
+			row["subjects"] = f.Subjects
+		}
+		out = append(out, row)
 	}
 	return out
 }

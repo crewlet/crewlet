@@ -540,6 +540,20 @@ export interface ReconcileFinding {
    */
   phase?: string;
   actor?: string;
+  /**
+   * Everything this finding is about, when there are many and `subject`
+   * cannot name them all.
+   *
+   * `detail` is the card's status line and the engine caps it, so a finding
+   * that listed its subjects inline arrived as a wall cut off mid-item —
+   * thirty-six Datadog service accounts ending `…@agents.cr…`. The engine
+   * now puts the count and three examples in `detail` and the whole list
+   * here, so a reader with room can show all of them and one without is
+   * still correct.
+   *
+   * Absent on the ordinary finding about one thing.
+   */
+  subjects?: string[];
 }
 
 /**

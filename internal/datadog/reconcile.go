@@ -707,17 +707,25 @@ func (r *Result) Findings() []integration.Finding {
 		for _, user := range r.Orphaned {
 			addresses = append(addresses, user.Email)
 		}
+		// THROUGH [integration.Listed], because the detail is the card's
+		// one-line status and it is capped: written inline, thirty-six
+		// addresses were a 500-character wall cut off mid-address. The
+		// sentence names the count and three examples; the whole list
+		// travels beside it.
+		detail, all := integration.Listed(
+			fmt.Sprintf("%d service account(s) at this company's own email "+
+				"domain match no seat this engine provisions for — a renamed "+
+				"seat, a changed handle, or an older naming scheme",
+				len(addresses)),
+			addresses,
+			"Nothing here removes them: an account is a colleague at Datadog "+
+				"with history attached. Disable or delete the ones you do not "+
+				"want, at Datadog.")
 		out = append(out, integration.Finding{
-			Kind:    integration.FindingRegistrationOrphaned,
-			Subject: "datadog service accounts",
-			Detail: fmt.Sprintf(
-				"%d service account(s) at this company's own email domain "+
-					"match no seat this engine provisions for — a renamed seat, "+
-					"a changed handle, or an older naming scheme. Nothing here "+
-					"removes them: an account is a colleague at Datadog with "+
-					"history attached. Disable or delete the ones you do not "+
-					"want at Datadog: %s",
-				len(r.Orphaned), strings.Join(addresses, ", ")),
+			Kind:     integration.FindingRegistrationOrphaned,
+			Subject:  "datadog service accounts",
+			Detail:   detail,
+			Subjects: all,
 		})
 	}
 	return out

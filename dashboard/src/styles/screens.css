@@ -1443,3 +1443,17 @@ details > summary.int-summary::-webkit-details-marker {
   margin: var(--space-1) 0 0;
   padding-left: var(--space-4);
 }
+
+/* THE FULL SUBJECT LIST of a finding whose own sentence names three of them.
+   Scrolls rather than growing: thirty-six addresses is the measured case and
+   a card is not a page. */
+.int-subjects {
+  display: block;
+  margin-top: var(--space-1);
+}
+.int-subjects > ul {
+  max-height: 12rem;
+  overflow-y: auto;
+  /* The addresses and URLs this carries have no spaces to break at. */
+  overflow-wrap: anywhere;
+}

@@ -503,6 +503,11 @@ export function Reconcile({
   // A count suffix — Classify appends "(and 2 more)" when several findings
   // share the winning kind — is stripped from the report's side first.
   const others = withoutHeadline(status.findings ?? [], status.detail ?? "");
+  // AND THE ONE THE HEADLINE IS, which is whichever finding `others` left
+  // out: its sentence is already on screen, and what is not is its subject
+  // list. Derived by difference rather than by a second match, so the two
+  // cannot disagree about which finding the headline stands for.
+  const reported = (status.findings ?? []).find((f) => !others.includes(f));
 
   // A WORKING SURFACE SAYS NOTHING.
   //
@@ -520,6 +525,11 @@ export function Reconcile({
     <div className="int-row-note">
       <span className="int-row-note-text">
         {status.detail && <span>{status.detail}</span>}
+        {/* THE WHOLE LIST, for the finding the report is about. Its detail
+            names a count and three examples because the engine caps that
+            string — it is a status line — so without this the rest is
+            simply unreachable from the screen. */}
+        {reported && <FindingSubjects of={reported} />}
         {actor && <span className="int-row-note-when">{actor}</span>}
 
         {status.action_url && (
@@ -543,6 +553,7 @@ export function Reconcile({
               {others.map((f, i) => (
                 <li key={`${f.kind}:${f.subject ?? ""}:${i}`}>
                   {f.detail || `${f.kind.replace(/_/g, " ")}${f.subject ? `: ${f.subject}` : ""}`}
+                  <FindingSubjects of={f} />
                 </li>
               ))}
             </ul>
@@ -550,6 +561,38 @@ export function Reconcile({
         )}
       </span>
     </div>
+  );
+}
+
+/**
+ * Everything a finding is about, when there is more than its sentence names.
+ *
+ * The engine caps a finding's `detail` because that string is the card's
+ * status line and an oversized status row is refused by its store outright —
+ * so a finding about thirty-six things arrived as a wall cut off mid-item.
+ * It now sends the count and three examples in the sentence and the whole
+ * list separately, and this is where the rest of it goes: folded away, so a
+ * card with one healthy surface is not a page of addresses, and reachable,
+ * which it was not.
+ *
+ * Renders nothing for the ordinary finding about one thing, which sends no
+ * list at all.
+ */
+function FindingSubjects({ of }: { of: ReconcileFinding }) {
+  const all = of.subjects ?? [];
+  if (all.length === 0) return null;
+  return (
+    <details className="int-subjects">
+      <summary className="int-summary">
+        all {all.length} {of.subject || "item"}
+        {all.length === 1 ? "" : "s"}
+      </summary>
+      <ul className="col gap-1 int-findings">
+        {all.map((one) => (
+          <li key={one}>{one}</li>
+        ))}
+      </ul>
+    </details>
   );
 }
 
