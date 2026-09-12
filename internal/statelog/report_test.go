@@ -469,3 +469,79 @@ func TestEveryFieldOfTheRetentionDocumentIsSnakeCase(t *testing.T) {
 		}
 	}
 }
+
+// THE REPORT NAMES THE LEVEL IT WAS SERVED AT, and it is DERIVED from whether
+// this node could measure its own distance from the log.
+//
+// This is the one answer that has to keep working during the outage it
+// describes, so it never takes a barrier — the barrier is the instrument and
+// its health is the subject. But `stale` is a claim about AGE, and a document
+// assembled while the lag could not be read cannot make one: the broker was
+// unreachable, or coordination was, which is the ordinary signature of what
+// somebody opened this page to diagnose. Weakening one step and NAMING it is
+// what keeps this answer inside the read-level contract instead of exempt from
+// it — an answer that quietly stopped carrying a level would be the silent
+// downgrade wearing a different hat.
+func TestTheReportNamesTheLevelItCouldAnswerAt(t *testing.T) {
+	t.Parallel()
+	here := func(d statelog.DomainInputs) statelog.ReportInputs {
+		return statelog.ReportInputs{
+			NodeID:           "node-1",
+			At:               reportAt,
+			RegisterReadable: true,
+			Domains:          []statelog.DomainInputs{d},
+			Register: []coord.NodePositions{{
+				NodeID:  "node-1",
+				At:      reportAt,
+				Domains: map[string]coord.DomainPosition{"tracker": {Seq: 890, AppliedThrough: 890}},
+			}},
+		}
+	}
+	measured := statelog.NewReport(here(healthyDomain("tracker", true)))
+	if measured.ReadLevel != statelog.ReadStale {
+		t.Errorf("a node that measured its own lag served %q, want stale — "+
+			"the lag is on the answer, so the age is a claim it can make",
+			measured.ReadLevel)
+	}
+
+	blind := healthyDomain("tracker", true)
+	blind.StreamReadable = false
+	unmeasured := statelog.NewReport(here(blind))
+	if unmeasured.ReadLevel != statelog.ReadConsistentPrefix {
+		t.Errorf("a node that could not read the stream served %q — with no "+
+			"lag there is no age to claim, and `stale` claims one",
+			unmeasured.ReadLevel)
+	}
+
+	// AND A NODE WITH NO ROW OF ITS OWN IS NOT A MEASURED ONE. That is
+	// the state during exactly the coordination outage this document is
+	// opened for, and reading "no domains reported" as "nothing unknown"
+	// would claim an age with no evidence at all.
+	absent := here(healthyDomain("tracker", true))
+	absent.Register = nil
+	if got := statelog.NewReport(absent).ReadLevel; got != statelog.ReadConsistentPrefix {
+		t.Errorf("a node absent from its own register served %q — an empty "+
+			"node block is not a measurement", got)
+	}
+
+	// NOR IS A NODE THAT MEASURED SOME OF ITS DOMAINS. A document that
+	// could state an age for the tracker and not for the pages log is one
+	// whose `stale` claim is true of half its rows.
+	partial := statelog.NewReport(statelog.ReportInputs{
+		NodeID:           "node-1",
+		At:               reportAt,
+		RegisterReadable: true,
+		Domains: []statelog.DomainInputs{
+			healthyDomain("tracker", true), healthyDomain("pages", true),
+		},
+		Register: []coord.NodePositions{{
+			NodeID:  "node-1",
+			At:      reportAt,
+			Domains: map[string]coord.DomainPosition{"tracker": {Seq: 890, AppliedThrough: 890}},
+		}},
+	})
+	if partial.ReadLevel != statelog.ReadConsistentPrefix {
+		t.Errorf("a node that measured one domain of two served %q — the age "+
+			"claim would be true of half the document", partial.ReadLevel)
+	}
+}

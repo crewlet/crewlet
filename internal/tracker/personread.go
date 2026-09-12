@@ -72,6 +72,12 @@ type PersonQuery struct {
 	Session     statelog.Position
 	MinPosition statelog.Position
 	MaxLag      time.Duration
+
+	// MaxLagSeq is the same bound counted in RECORDS, which is what
+	// the broker actually answers — the duration above is derived
+	// from it through this node's own drain rate. Both may be set
+	// and the read refuses past whichever is reached first.
+	MaxLagSeq uint64
 }
 
 // Person answers one human's own state.
@@ -87,12 +93,13 @@ func (r *Reader) Person(ctx context.Context, q PersonQuery, now time.Time) (Pers
 
 	out := PersonState{Handle: q.Handle}
 	served, err := r.log.Read(ctx, statelog.Query{
-		Level:       q.Level,
-		Scope:       personScope(),
-		Session:     q.Session,
-		MinPosition: q.MinPosition,
-		MaxLag:      q.MaxLag,
-		Set:         true,
+		Level:           q.Level,
+		Scope:           personScope(),
+		Session:         q.Session,
+		MinPosition:     q.MinPosition,
+		MaxLag:          q.MaxLag,
+		MaxLagPositions: q.MaxLagSeq,
+		Set:             true,
 	}, func(tx *sql.Tx) error {
 		person, held, err := readPerson(ctx, tx, q.Handle)
 		if err != nil {

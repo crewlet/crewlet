@@ -14,7 +14,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { GateDialog, GateOutcome } from "./GateDialog.tsx";
-import { MaintenanceBanner, NodePositions, Terms } from "./Retention.tsx";
+import { MaintenanceBanner, NodePositions, ServedLevelBanner, Terms } from "./Retention.tsx";
 import type { RetentionNode, RetentionTerm } from "~/protocol/index.ts";
 
 afterEach(cleanup);
@@ -231,4 +231,32 @@ test("the evict gesture repeats the node id in the query the server checks", asy
 
   vi.unstubAllGlobals();
   localStorage.clear();
+});
+
+// A DOCUMENT THAT CANNOT CLAIM AN AGE SAYS SO, and one that can says nothing.
+//
+// The retention answer is the one a person opens DURING the outage it
+// describes, so it never takes a barrier. But `stale` is a claim about age,
+// and a node that could not read its own lag cannot make one — the broker was
+// unreachable, or coordination was. Without the banner the two render
+// identically: the same figures, read as fresh, in exactly the incident that
+// made them unmeasurable.
+test("a replication answer that cannot claim an age renders the reason", () => {
+  render(<ServedLevelBanner level="consistent_prefix" />);
+  expect(screen.getByText(/no statement about age/)).toBeTruthy();
+  expect(screen.getByText("consistent_prefix")).toBeTruthy();
+});
+
+// THE CONTROL, and it is the half that fails when somebody turns this into a
+// badge: a level rendered on every answer is a word nobody reads, and the one
+// case that matters then arrives as a changed word rather than as a banner.
+test("an answer served at stale renders no banner at all", () => {
+  const { container } = render(<ServedLevelBanner level="stale" />);
+  expect(container.textContent).toBe("");
+
+  cleanup();
+  // AND AN ABSENT LEVEL IS NOT AN ALARM. An older node that does not send the
+  // field must not paint this screen red.
+  const missing = render(<ServedLevelBanner />);
+  expect(missing.container.textContent).toBe("");
 });

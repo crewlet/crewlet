@@ -59,6 +59,20 @@ type Report struct {
 	NodeID string    `json:"node_id"`
 	At     time.Time `json:"at"`
 
+	// ReadLevel is the level this answer was SERVED at, which is what
+	// keeps a replication answer inside the read-level contract rather
+	// than exempt from it.
+	//
+	// It is DERIVED rather than chosen — by nobody, on any surface, the
+	// operator MCP included (see [SurfaceReplication]): `stale` while the
+	// lag is a number, and `consistent_prefix` when it is not, because
+	// `stale` is a claim about AGE and an unknown lag cannot make one.
+	// The moment somebody needs this document is the moment the broker or
+	// coordination may be unreachable, so the weaker answer is the one
+	// that gets delivered — named, rather than delivered under the
+	// stronger name.
+	ReadLevel ReadLevel `json:"read_level"`
+
 	// BackupOwner is `retention.backup_owner`, empty when unset. It is on
 	// the report rather than looked up beside it because the one place it
 	// matters is the backup term's remedy, and a remedy that named a
@@ -391,7 +405,42 @@ func NewReport(in ReportInputs) Report {
 	rep.Snapshots = in.snapshots()
 	rep.Alarms = in.alarms(rep.Domains)
 	rep.Maintenance = in.Maintenance
+	// THE LEVEL IS RESOLVED FROM THIS NODE'S OWN LAG, not from the
+	// fleet's: the document's every "this node" figure is a fact this
+	// process states about itself, and a peer whose row could not be read
+	// says nothing about whether THIS answer can claim an age.
+	rep.ReadLevel = ResolveReplicationLevel(rep.lagKnownHere())
 	return rep
+}
+
+// lagKnownHere reports whether this node's own distance from every domain's
+// log came back as a number.
+//
+// EVERY DOMAIN, not any: a document that could state an age for the tracker
+// and not for the knowledge base is one whose `stale` claim is true of half
+// its rows, and a reader bounding staleness against it would be bounding
+// nothing on the other half.
+//
+// A NODE WITH NO ROW IN THE REGISTER IS NOT A KNOWN LAG. That is the state
+// during exactly the coordination outage this document is opened for, and
+// reading it as "no domains reported, so nothing is unknown" would answer
+// `stale` with no evidence at all.
+func (r Report) lagKnownHere() bool {
+	for _, node := range r.Nodes {
+		if node.NodeID != r.NodeID {
+			continue
+		}
+		if len(node.Domains) != len(r.Domains) {
+			return false
+		}
+		for _, d := range node.Domains {
+			if d.Lag == nil {
+				return false
+			}
+		}
+		return len(r.Domains) > 0
+	}
+	return false
 }
 
 // ExitNonZero is the CLI's exit code, and the reason it is a method on the

@@ -245,8 +245,9 @@ the retention block. It does not silently delete old records to make room:
 shedding a record no node has applied is exactly the loss the whole gate
 exists to prevent.
 
-A full log costs `linearizable` reads, because those append a barrier. `stale`
-and `session` keep answering. See [Read consistency](consistency.md).
+A full log costs `linearizable` reads, because those append a barrier — which
+is every seat tool read. `stale` keeps answering, so the dashboard and the read
+API are unaffected. See [Read consistency](consistency.md).
 
 The refusal carries **no retry hint**, deliberately: the only thing that frees
 a byte is a fifteen-minute gated job, and the log is full precisely because

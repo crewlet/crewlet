@@ -38,6 +38,57 @@ import (
 // file the duplicate, they conclude the migration failed — and a node that has
 // not caught up must never be able to say it without saying so.
 
+// freshness is what THIS caller said about how old the answer may be,
+// resolved against this surface's own rules.
+//
+// # Why every question calls it, and why it is not a second parser
+//
+// Thirteen registered questions here take a level and a staleness bound, and
+// exactly one of them read either: `work_items`, because it is the one that
+// goes through the query grammar. The other twelve wrote a hardcoded `stale`
+// into the query and never looked at `read_level`, `max_lag_seconds` or
+// `max_lag_seq` at all — so a caller asking a project listing for a
+// linearizable answer was served this node's rows and told, in the answer's
+// own `read_level` field, that it came back linearizable.
+//
+// A NAMED CONSTANT WOULD NOT HAVE FIXED THAT. Replacing thirteen `stale`
+// literals with one `dashboardReadLevel` makes them agree, which they already
+// did — what was wrong is that they were literals AT ALL, on the one surface
+// whose caller is allowed to choose. So the function is the unit here, and
+// there is no level constant beside it to reach for by mistake.
+//
+// The rules themselves are [tracker.ParseFreshness]'s and not restated here.
+// One grammar serves the board, the socket, the REST route and a seat's own
+// tools, and a second reading of these keys would be the one place a freshness
+// key meant something slightly different.
+//
+// WHAT THIS ADDS is the SURFACE, which the grammar cannot know: an absent or
+// unpermitted level resolves to this surface's default through
+// [statelog.LevelFor], and a dashboard is the one caller allowed to choose at
+// all — it renders the level and the lag beside the rows, so a person who
+// asked for a weaker answer is shown the one they got.
+func freshness(p Params) (tracker.Freshness, error) {
+	got, err := tracker.ParseFreshness(p)
+	if err != nil {
+		return got, fmt.Errorf("%w: %s", ErrBadParams, err)
+	}
+	got.Level = statelog.LevelFor(statelog.SurfaceDashboard, got.Level)
+	// AND THE BOUND IS CHECKED AGAINST THE LEVEL THAT WILL BE SERVED,
+	// which the grammar could not do: it refuses a bound beside a level
+	// the caller NAMED, and a caller who named none has their level
+	// chosen here. A staleness bound is not a level of its own and it
+	// narrows nothing at the other three, so carrying one into a
+	// linearizable read would be a caller who believes they asked for
+	// something they did not — the same refusal, one step later, where
+	// the surface is finally known.
+	if got.Level != statelog.ReadStale && (got.MaxLag > 0 || got.MaxLagSeq > 0) {
+		return got, fmt.Errorf("%w: a staleness bound belongs to read_level="+
+			"stale and this read resolved to %s, which is not a staleness "+
+			"bound at all", ErrBadParams, got.Level)
+	}
+	return got, nil
+}
+
 // WorkReader is the tracker read side this surface calls. Declared here, by
 // the consumer, so the package depends on the shape rather than on the store.
 //
@@ -100,9 +151,11 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	// staleness the screen redraws through anyway — see the arithmetic in
 	// the dashboard section of the design: ten tabs at seven polls a
 	// minute is a 9x increase in barrier appends.
-	if q.Level == "" {
-		q.Level = statelog.ReadStale
-	}
+	//
+	// AND THE CALLER'S OWN ASK IS KEPT, which is true HERE and on no other
+	// surface: a screen renders the level and the lag beside the rows, so
+	// a person who asked for a stronger answer is shown the one they got.
+	q.Level = statelog.LevelFor(statelog.SurfaceDashboard, q.Level)
 	answer, err := s.Work.Tasks(ctx, q, now)
 	switch {
 	case errors.Is(err, tracker.ErrTooBroad):
@@ -175,9 +228,17 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 	if ref == "" {
 		return nil, badParams("id", "", nil)
 	}
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
+	// THE LEVEL ONLY, because [WorkReader.Task] takes one rather than a
+	// query: a single row's read has no set to be incomplete about, so
+	// the staleness bound has nowhere to be enforced and carrying it
+	// would be a promise nothing keeps.
 	detail, err := s.Work.Task(ctx, ref, tracker.DetailWants{
 		Comments: true, History: true, Links: true,
-	}, statelog.ReadStale)
+	}, fresh.Level)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
 		return nil, ErrNotFound
@@ -207,12 +268,17 @@ func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
 	listing, err := s.Work.Views(ctx, tracker.ViewQuery{
 		Container: container,
 		Viewer:    strings.TrimSpace(p.String("viewer")),
-		// STALE, like every other dashboard poll — see
-		// [Sources.workItems] for the arithmetic.
-		Level: statelog.ReadStale,
+		// THE CALLER'S OWN, resolved to this surface's default when they
+		// said nothing — which is `stale`, like every other dashboard
+		// poll. See [freshness] and [Sources.workItems].
+		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 	})
 	if err != nil {
 		return nil, unavailableIfBehind(err)
@@ -267,14 +333,17 @@ func viewContainer(p Params) (tracker.Container, error) {
 // the two drift the moment a task in a target closes without anybody editing
 // the goal.
 func (s Sources) workGoals(ctx context.Context, p Params) (any, error) {
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
 	listing, err := s.Work.Goals(ctx, tracker.GoalQuery{
 		ID:       strings.TrimSpace(p.String("id")),
 		Owner:    strings.TrimSpace(p.String("owner")),
 		Group:    strings.TrimSpace(p.String("group")),
 		Archived: p.Bool("archived", false),
-		// STALE, like every other dashboard poll — see
-		// [Sources.workItems] for the arithmetic.
-		Level: statelog.ReadStale,
+		// THE CALLER'S OWN — see [freshness].
+		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 	})
 	if err != nil {
 		return nil, unavailableIfBehind(err)
@@ -300,9 +369,15 @@ func (s Sources) workGoals(ctx context.Context, p Params) (any, error) {
 // which fields are required would file work that is refused on the next
 // breath.
 func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
 	answer, err := s.Work.Catalogue(ctx, tracker.CatalogueQuery{
-		Archived: p.Bool("archived", false),
-		Level:    statelog.ReadStale,
+		Archived:  p.Bool("archived", false),
+		Level:     fresh.Level,
+		MaxLag:    fresh.MaxLag,
+		MaxLagSeq: fresh.MaxLagSeq,
 	})
 	if err != nil {
 		return nil, unavailableIfBehind(err)
@@ -323,9 +398,15 @@ func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
 	if handle == "" {
 		return nil, badParams("handle", "", nil)
 	}
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
 	state, err := s.Work.Person(ctx, tracker.PersonQuery{
-		Handle: handle,
-		Level:  statelog.ReadStale,
+		Handle:    handle,
+		Level:     fresh.Level,
+		MaxLag:    fresh.MaxLag,
+		MaxLagSeq: fresh.MaxLagSeq,
 	}, time.Now().UTC())
 	if err != nil {
 		return nil, unavailableIfBehind(err)
@@ -361,10 +442,19 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 	}
 	f.Onboarding = p.Bool("onboarding", false)
 
-	// STALE, like every other dashboard poll: a screen that redraws every
-	// twenty seconds and took a quorum round trip to do it would put the
-	// fleet's whole read rate on the log. See [Sources.workItems].
-	list, err := s.Pages.List(ctx, f, statelog.ReadStale)
+	// THE CALLER'S OWN, defaulting to `stale` like every other dashboard
+	// poll: a screen that redraws every twenty seconds and took a quorum
+	// round trip to do it would put the fleet's whole read rate on the
+	// log. See [freshness] and [Sources.workItems].
+	//
+	// THE LEVEL ONLY, because [PageReader.List] takes one rather than a
+	// query. A staleness bound has nowhere to be enforced on this call,
+	// and carrying it would be a promise nothing keeps.
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
+	list, err := s.Pages.List(ctx, f, fresh.Level)
 	if err != nil {
 		return nil, unavailableIfBehind(err)
 	}
@@ -380,7 +470,11 @@ func (s Sources) page(ctx context.Context, p Params) (any, error) {
 	if ref == "" {
 		return nil, badParams("id", "", nil)
 	}
-	detail, err := s.Pages.Get(ctx, ref, statelog.ReadStale)
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
+	detail, err := s.Pages.Get(ctx, ref, fresh.Level)
 	switch {
 	case errors.Is(err, pages.ErrNotFound):
 		return nil, ErrNotFound
@@ -390,8 +484,12 @@ func (s Sources) page(ctx context.Context, p Params) (any, error) {
 	return detail, nil
 }
 
-func (s Sources) containers(ctx context.Context, _ Params) (any, error) {
-	list, err := s.Pages.Containers(ctx, statelog.ReadStale)
+func (s Sources) containers(ctx context.Context, p Params) (any, error) {
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
+	list, err := s.Pages.Containers(ctx, fresh.Level)
 	if err != nil {
 		return nil, unavailableIfBehind(err)
 	}
@@ -484,15 +582,18 @@ func RetryAfter(err error) time.Duration {
 
 // workProjects answers the company's projects with their maintained counts.
 func (s Sources) workProjects(ctx context.Context, p Params) (any, error) {
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
 	listing, err := s.Work.Projects(ctx, tracker.ProjectQuery{
 		Q:        strings.TrimSpace(p.String("q")),
 		Unit:     strings.TrimSpace(p.String("unit")),
 		Archived: p.Bool("archived", false),
 		Limit:    p.Int("limit", 0),
 		Units:    s.chartUnits(),
-		// STALE, like every other dashboard poll — see
-		// [Sources.workItems] for the arithmetic.
-		Level: statelog.ReadStale,
+		// THE CALLER'S OWN — see [freshness].
+		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 	}, time.Now().UTC())
 	if err != nil {
 		return nil, unavailableIfBehind(err)
@@ -510,11 +611,17 @@ func (s Sources) workProject(ctx context.Context, p Params) (any, error) {
 	if key == "" {
 		return nil, badParams("key", "", nil)
 	}
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
 	detail, err := s.Work.Project(ctx, tracker.ProjectDetailQuery{
-		Project: key,
-		ForType: strings.TrimSpace(p.String("for_type")),
-		Units:   s.chartUnits(),
-		Level:   statelog.ReadStale,
+		Project:   key,
+		ForType:   strings.TrimSpace(p.String("for_type")),
+		Units:     s.chartUnits(),
+		Level:     fresh.Level,
+		MaxLag:    fresh.MaxLag,
+		MaxLagSeq: fresh.MaxLagSeq,
 	}, time.Now().UTC())
 	switch {
 	case errors.Is(err, tracker.ErrNoProject):
@@ -534,12 +641,18 @@ func (s Sources) workSprints(ctx context.Context, p Params) (any, error) {
 	if project == "" {
 		return nil, badParams("project", "", nil)
 	}
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
 	listing, err := s.Work.Sprints(ctx, tracker.SprintQuery{
-		Project:  project,
-		Number:   p.Int("sprint", 0),
-		Sprints:  p.Int("sprints", 0),
-		Archived: p.Bool("archived", false),
-		Level:    statelog.ReadStale,
+		Project:   project,
+		Number:    p.Int("sprint", 0),
+		Sprints:   p.Int("sprints", 0),
+		Archived:  p.Bool("archived", false),
+		Level:     fresh.Level,
+		MaxLag:    fresh.MaxLag,
+		MaxLagSeq: fresh.MaxLagSeq,
 	}, time.Now().UTC())
 	switch {
 	case errors.Is(err, tracker.ErrNoProject):
@@ -579,8 +692,12 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 		Batch:    strings.TrimSpace(p.String("batch")),
 		Limit:    p.Int("limit", 0),
 		Cursor:   strings.TrimSpace(p.String("cursor")),
-		Level:    statelog.ReadStale,
 	}
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
+	q.Level, q.MaxLag, q.MaxLagSeq = fresh.Level, fresh.MaxLag, fresh.MaxLagSeq
 	if raw := strings.TrimSpace(p.String("container")); raw != "" {
 		container, err := viewContainer(p)
 		if err != nil {
@@ -652,12 +769,16 @@ func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
 	if handle == "" {
 		return nil, badParams("handle", "", nil)
 	}
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
 	out, err := s.Work.MyWork(ctx, tracker.MyWorkQuery{
 		Handle: handle,
-		// STALE. This is a POLL of somebody's day, not a read-back of a
-		// write they just made — see [Sources.workItems] for the
-		// arithmetic every dashboard read here shares.
-		Level: statelog.ReadStale,
+		// THE CALLER'S OWN, defaulting to `stale`: this is a POLL of
+		// somebody's day, not a read-back of a write they just made —
+		// see [freshness] and [Sources.workItems].
+		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 	}, time.Now().UTC())
 	if err != nil {
 		return nil, unavailableIfBehind(err)

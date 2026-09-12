@@ -8,7 +8,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -84,7 +83,7 @@ func (t *getWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	answer, err := t.deps.Reader.Catalogue(ctx, tracker.CatalogueQuery{
 		Archived: argBool(args, "archived"),
-		Level:    statelog.ReadSession,
+		Level:    seatReadLevel,
 	})
 	if err != nil {
 		return failed(readFailure(tracker.GetWorkCatalogueTool, err)), nil

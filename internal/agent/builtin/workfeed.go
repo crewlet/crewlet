@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -119,7 +118,7 @@ func (t *taskActivity) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Q:       strings.TrimSpace(argString(args, "q")),
 		Limit:   argInt(args, "limit", 0),
 		Cursor:  strings.TrimSpace(argString(args, "cursor")),
-		Level:   statelog.ReadSession,
+		Level:   seatReadLevel,
 	}
 	for _, kind := range strings.Split(argString(args, "kinds"), ",") {
 		if kind = strings.TrimSpace(kind); kind != "" {
@@ -198,7 +197,7 @@ func (t *myWork) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// they owe, handed to an agent nobody asked. The operator surface
 	// supplies its own identity the same way, through the actor seam.
 	out, err := reader.MyWork(ctx, tracker.MyWorkQuery{
-		Handle: actor.Handle, Level: statelog.ReadSession,
+		Handle: actor.Handle, Level: seatReadLevel,
 	}, t.deps.now())
 	if err != nil {
 		return failed(readFailure(tracker.MyWorkTool, err)), nil

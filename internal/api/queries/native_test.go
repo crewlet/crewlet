@@ -40,6 +40,9 @@ type stubWork struct {
 	myWorkQuery   tracker.MyWorkQuery
 	myWork        tracker.MyWork
 
+	catalogueQuery tracker.CatalogueQuery
+	taskLevel      statelog.ReadLevel
+
 	err error
 }
 
@@ -94,7 +97,10 @@ func (s *stubWork) Goals(_ context.Context, q tracker.GoalQuery) (tracker.GoalLi
 	return s.goals, s.err
 }
 
-func (s *stubWork) Catalogue(context.Context, tracker.CatalogueQuery) (tracker.CatalogueAnswer, error) {
+func (s *stubWork) Catalogue(_ context.Context,
+	q tracker.CatalogueQuery) (tracker.CatalogueAnswer, error) {
+
+	s.catalogueQuery = q
 	return tracker.CatalogueAnswer{}, nil
 }
 
@@ -109,8 +115,9 @@ func (s *stubWork) Tasks(_ context.Context, q tracker.Query, _ time.Time) (track
 }
 
 func (s *stubWork) Task(_ context.Context, _ string, _ tracker.DetailWants,
-	_ statelog.ReadLevel) (tracker.TaskDetail, error) {
+	level statelog.ReadLevel) (tracker.TaskDetail, error) {
 
+	s.taskLevel = level
 	return s.detail, s.err
 }
 
@@ -154,6 +161,18 @@ func askNative(t *testing.T, s queries.Sources, what string, params map[string]a
 	r := queries.NewRegistry()
 	queries.Register(r, s)
 	return r.Answer(t.Context(), what, params, "")
+}
+
+// askAsOperator is askNative with a token, for the questions RegisterOperator
+// guards. Separate rather than a parameter on the one above, so no case here
+// can hand itself a credential by accident.
+func askAsOperator(t *testing.T, s queries.Sources, what string,
+	params map[string]any) (any, error) {
+
+	t.Helper()
+	r := queries.NewRegistry()
+	queries.Register(r, s)
+	return r.Answer(t.Context(), what, params, "ops-1")
 }
 
 // A QUESTION WITH NO SOURCE IS UNREGISTERED, not registered-and-empty. A
@@ -457,5 +476,201 @@ func TestAGroupedAnswerReachesTheCaller(t *testing.T) {
 			t.Errorf("the payload carries no %q, so a board built from it "+
 				"renders a company with no work", key)
 		}
+	}
+}
+
+// EVERY QUESTION ON THIS SURFACE RESOLVES THE CALLER'S OWN FRESHNESS, and the
+// one that did not was twelve of the thirteen.
+//
+// `work_items` read `read_level` because it is the question that goes through
+// the query grammar. Every other one wrote a hardcoded `stale` into its query
+// and never looked at the key at all — so a caller asking a project listing
+// for a linearizable answer was served this node's rows and told, in the
+// answer's own `read_level` field, that it came back linearizable. A level
+// that never downgrades silently is the whole contract; a surface that
+// silently ignored the ask broke it through the other door.
+//
+// The case is written as a WALK over the questions rather than one assertion
+// per reader, because the defect was never in one of them: it was that adding
+// the fourteenth question would inherit whatever the thirteenth typed.
+func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		what  string
+		args  map[string]any
+		level func(*stubWork, *stubPages) statelog.ReadLevel
+	}{
+		{"work_items", map[string]any{},
+			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.query.Level }},
+		{"work_item", map[string]any{"id": "ENG-1"},
+			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.taskLevel }},
+		{"work_views", map[string]any{"container": "workspace"},
+			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.views.Level }},
+		{"work_goals", map[string]any{},
+			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.goalQuery.Level }},
+		{"work_catalogue", map[string]any{},
+			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.catalogueQuery.Level }},
+		{"work_person", map[string]any{"handle": "ana"},
+			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.personQuery.Level }},
+		{"work_projects", map[string]any{},
+			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.projectQuery.Level }},
+		{"work_project", map[string]any{"key": "ENG"},
+			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.detailQuery.Level }},
+		{"work_sprints", map[string]any{"project": "ENG"},
+			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.sprintQuery.Level }},
+		{"work_activity", map[string]any{"container": "workspace"},
+			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.activityQuery.Level }},
+		// OPERATOR-ONLY, and it is in this walk precisely because it
+		// is: `my_work` is somebody's whole day, and an operator
+		// reading it at a level nobody chose is the same defect with a
+		// credential in front of it.
+		{"work_my_work", map[string]any{"handle": "ana"},
+			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.myWorkQuery.Level }},
+		{"pages", map[string]any{},
+			func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level }},
+		{"page", map[string]any{"id": "p1"},
+			func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level }},
+		{"containers", map[string]any{},
+			func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level }},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			t.Parallel()
+			// THE DEFAULT FIRST: a caller who says nothing gets this
+			// surface's own level, not whatever the reader defaults to.
+			work, pages := &stubWork{}, &stubPages{}
+			src := queries.Sources{Work: work, Pages: pages}
+			ask := askNative
+			if tc.what == "work_my_work" {
+				ask = askAsOperator
+			}
+			if _, err := ask(t, src, tc.what, tc.args); err != nil {
+				t.Fatalf("%s: %v", tc.what, err)
+			}
+			want := statelog.DefaultReadLevel(statelog.SurfaceDashboard)
+			if got := tc.level(work, pages); got != want {
+				t.Errorf("%s read at %q with no ask, want this surface's "+
+					"default %q", tc.what, got, want)
+			}
+
+			// AND THE ASK IS HONOURED, which is the half twelve of these
+			// questions dropped on the floor.
+			work, pages = &stubWork{}, &stubPages{}
+			src = queries.Sources{Work: work, Pages: pages}
+			asked := map[string]any{"read_level": "linearizable"}
+			for k, v := range tc.args {
+				asked[k] = v
+			}
+			if _, err := ask(t, src, tc.what, asked); err != nil {
+				t.Fatalf("%s asking linearizable: %v", tc.what, err)
+			}
+			if got := tc.level(work, pages); got != statelog.ReadLinearizable {
+				t.Errorf("%s asked for linearizable and read at %q — a level "+
+					"the answer then reports back as the one asked for is a "+
+					"stale answer wearing a stronger name", tc.what, got)
+			}
+
+			// AND `session` IS REFUSED RATHER THAN QUIETLY SERVED. It
+			// waits for a position no HTTP caller can supply.
+			work, pages = &stubWork{}, &stubPages{}
+			src = queries.Sources{Work: work, Pages: pages}
+			bad := map[string]any{"read_level": "session"}
+			for k, v := range tc.args {
+				bad[k] = v
+			}
+			if _, err := ask(t, src, tc.what, bad); !errors.Is(err, queries.ErrBadParams) {
+				t.Errorf("%s accepted read_level=session, answering %v", tc.what, err)
+			}
+		})
+	}
+}
+
+// AND THE STALENESS BOUND REACHES THE READER, in both of its units.
+//
+// A bound refused where it is inconsistent and dropped where it is not is a
+// bound that never bounded anything — the defect `max_lag_seconds` was fixed
+// for on the board, and `max_lag_seq` was left in beside it, and which every
+// other question here had in both units because none of them read either key.
+// A tile declaring "at most twenty seconds behind" and rendering whatever came
+// back is a live screen showing an hour-old answer.
+func TestTheStalenessBoundsReachEveryQuestionThatCanHoldThem(t *testing.T) {
+	t.Parallel()
+	args := map[string]any{"max_lag_seconds": "30", "max_lag_seq": "250"}
+	bounds := func(lag time.Duration, seq uint64) func(*testing.T, string) {
+		return func(t *testing.T, what string) {
+			t.Helper()
+			if lag != 30*time.Second {
+				t.Errorf("%s carried max_lag_seconds as %s", what, lag)
+			}
+			if seq != 250 {
+				t.Errorf("%s carried max_lag_seq as %d — the record count is "+
+					"the reading the broker actually answers", what, seq)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		what  string
+		args  map[string]any
+		check func(*stubWork) func(*testing.T, string)
+	}{
+		{"work_items", nil, func(w *stubWork) func(*testing.T, string) {
+			return bounds(w.query.MaxLag, w.query.MaxLagSeq)
+		}},
+		{"work_views", map[string]any{"container": "workspace"},
+			func(w *stubWork) func(*testing.T, string) {
+				return bounds(w.views.MaxLag, w.views.MaxLagSeq)
+			}},
+		{"work_goals", nil, func(w *stubWork) func(*testing.T, string) {
+			return bounds(w.goalQuery.MaxLag, w.goalQuery.MaxLagSeq)
+		}},
+		{"work_catalogue", nil, func(w *stubWork) func(*testing.T, string) {
+			return bounds(w.catalogueQuery.MaxLag, w.catalogueQuery.MaxLagSeq)
+		}},
+		{"work_person", map[string]any{"handle": "ana"},
+			func(w *stubWork) func(*testing.T, string) {
+				return bounds(w.personQuery.MaxLag, w.personQuery.MaxLagSeq)
+			}},
+		{"work_projects", nil, func(w *stubWork) func(*testing.T, string) {
+			return bounds(w.projectQuery.MaxLag, w.projectQuery.MaxLagSeq)
+		}},
+		{"work_project", map[string]any{"key": "ENG"},
+			func(w *stubWork) func(*testing.T, string) {
+				return bounds(w.detailQuery.MaxLag, w.detailQuery.MaxLagSeq)
+			}},
+		{"work_sprints", map[string]any{"project": "ENG"},
+			func(w *stubWork) func(*testing.T, string) {
+				return bounds(w.sprintQuery.MaxLag, w.sprintQuery.MaxLagSeq)
+			}},
+		{"work_activity", map[string]any{"container": "workspace"},
+			func(w *stubWork) func(*testing.T, string) {
+				return bounds(w.activityQuery.MaxLag, w.activityQuery.MaxLagSeq)
+			}},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			t.Parallel()
+			work := &stubWork{}
+			all := map[string]any{}
+			for k, v := range args {
+				all[k] = v
+			}
+			for k, v := range tc.args {
+				all[k] = v
+			}
+			src := queries.Sources{Work: work, Pages: &stubPages{}}
+			if _, err := askNative(t, src, tc.what, all); err != nil {
+				t.Fatalf("%s: %v", tc.what, err)
+			}
+			tc.check(work)(t, tc.what)
+
+			// AND A BOUND AT A LEVEL THAT IS NOT STALE IS REFUSED
+			// rather than carried and ignored: it is not a level of its
+			// own and it narrows nothing at the other two, so passing
+			// it there is a caller who believes they asked for
+			// something they did not.
+			all["read_level"] = "linearizable"
+			if _, err := askNative(t, src, tc.what, all); !errors.Is(err, queries.ErrBadParams) {
+				t.Errorf("%s took a staleness bound at linearizable, answering %v",
+					tc.what, err)
+			}
+		})
 	}
 }

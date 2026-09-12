@@ -115,6 +115,8 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
         </Banner>
       )}
 
+      <ServedLevelBanner level={data?.read_level} />
+
       {(data?.alarms?.length ?? 0) > 0 && (
         <Panel title="Alarms" icon="alert" count={data?.alarms.length}>
           <div className="col gap-2">
@@ -352,6 +354,36 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
  * an operation with nobody outstanding is one waiting on its operator, and
  * that is the state that otherwise looks identical to one waiting on a node.
  */
+/**
+ * WHAT THIS DOCUMENT MAY CLAIM ABOUT ITS OWN AGE.
+ *
+ * A replication answer never takes a barrier: the barrier is the instrument
+ * and its own health is the subject, so `linearizable` here is not a stronger
+ * answer costing more — it is one that cannot be served, refusing in exactly
+ * the incident somebody opened this page for.
+ *
+ * But `stale` is still a claim about AGE, and a node that could not measure
+ * its distance from the log cannot make one — which is the ordinary signature
+ * of the broker or coordination being unreachable. Then the level weakens to
+ * `consistent_prefix` and this says so, because a document that cannot claim
+ * an age otherwise renders IDENTICALLY to one that can: the same figures, read
+ * as fresh, during the outage that made them unmeasurable.
+ *
+ * Nothing renders on the ordinary path. A badge that always drew the level
+ * would put a word nobody reads beside every healthy answer, and the one case
+ * that matters would arrive as a changed word rather than as a banner.
+ */
+export function ServedLevelBanner({ level }: { level?: string }) {
+  if (!level || level === "stale") return null;
+  return (
+    <Banner tone="caution" icon="alert">
+      This node could not measure its own distance from the log, so the figures below are a
+      coherent point in its order with no statement about age (read level{" "}
+      <code className="inline">{level}</code>).
+    </Banner>
+  );
+}
+
 export function MaintenanceBanner({ op, now }: { op: RetentionMaintenance; now: number }) {
   const missing = op.participants_missing ?? [];
   return (

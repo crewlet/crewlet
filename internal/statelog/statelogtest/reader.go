@@ -27,16 +27,44 @@ import (
 // and it is what stops this helper being mistaken for a way to test the
 // barrier. Those cases belong in internal/statelog, against a real broker.
 func LocalReader(domain statelog.Domain, db DB, at statelog.Position) (*statelog.Reader, error) {
+	return LocalReaderBehind(domain, db, at, 0)
+}
+
+// LocalReaderBehind is [LocalReader] over a node that reports itself `lag`
+// records behind the stream's end.
+//
+// # Why the lag is a parameter and not always zero
+//
+// Because a caller's staleness bound cannot be exercised against a node that
+// is caught up: `max_lag_seconds` and `max_lag_seq` are enforced by comparing
+// them against this figure, so at lag zero every bound passes and a domain
+// reader that dropped the caller's bound on the floor looks exactly like one
+// that carried it.
+//
+// That is not hypothetical. `max_lag_seconds` was validated against the level
+// and then never carried, so a tile polling every twenty seconds and declaring
+// a twenty-second bound was served an answer of any age and rendered it live;
+// `max_lag_seq` was fixed for one question and left in for nine more, because
+// nothing on either side of the call could tell. A test that sets a lag and a
+// tighter bound is what makes the last hop — the domain's query into
+// [statelog.Query] — observable at all.
+//
+// The node is still CAUGHT UP in every other sense: the floor reads, the
+// position is the one given, and nothing is deferred. The only thing this
+// changes is how far behind the node says it is.
+func LocalReaderBehind(domain statelog.Domain, db DB, at statelog.Position,
+	lag uint64) (*statelog.Reader, error) {
+
 	return statelog.NewReader(statelog.ReaderDeps{
 		Domain: domain,
 		DB:     db,
 		Waiter: localWaiter{at: at},
 		Health: func() statelog.Health {
-			lag, first, floor := uint64(0), uint64(1), uint64(0)
+			behind, first, floor := lag, uint64(1), uint64(0)
 			return statelog.Health{
-				Position: at, AppliedThrough: at.Seq, CaughtUp: true,
+				Position: at, AppliedThrough: at.Seq, CaughtUp: lag == 0,
 				Floor:     statelog.Floor{State: statelog.FloorOK, ReadAt: time.Now()},
-				Lag:       &lag,
+				Lag:       &behind,
 				FirstSeq:  &first,
 				TrimFloor: &floor,
 			}

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -107,9 +106,9 @@ func (t *listProjects) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Archived: argBool(args, "archived"),
 		Limit:    argInt(args, "limit", 0),
 		Units:    t.deps.Units,
-		// SESSION, like every other read a seat makes: a turn must see
-		// its own writes, and nothing weaker guarantees that.
-		Level: statelog.ReadSession,
+		// THE SEAT'S OWN LEVEL, like every other read here — see
+		// [seatReadLevel] for why it is a name and not a literal.
+		Level: seatReadLevel,
 	}, t.deps.now())
 	if err != nil {
 		return failed(readFailure(tracker.ListProjectsTool, err)), nil
@@ -182,7 +181,7 @@ func (t *describeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Project: project,
 		ForType: strings.TrimSpace(argString(args, "for_type")),
 		Units:   t.deps.Units,
-		Level:   statelog.ReadSession,
+		Level:   seatReadLevel,
 	}, t.deps.now())
 	if err != nil {
 		return failed(readFailure(tracker.DescribeProjectTool, err)), nil
@@ -253,7 +252,7 @@ func (t *sprintReport) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Project: project,
 		Number:  argInt(args, "sprint", 0),
 		Sprints: argInt(args, "sprints", 0),
-		Level:   statelog.ReadSession,
+		Level:   seatReadLevel,
 	}, t.deps.now())
 	if err != nil {
 		return failed(readFailure(tracker.SprintReportTool, err)), nil
