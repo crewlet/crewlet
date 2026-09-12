@@ -475,10 +475,24 @@ export function withoutHeadline(
 export function Reconcile({
   status,
   detail,
+  appName,
 }: {
   status: ReconcileStatus | null | undefined;
   /** The surface's own one-line summary, when the loop has nothing to add. */
   detail?: string | null;
+  /**
+   * The app this surface belongs to, for naming the link a finding carries.
+   *
+   * A LINK THAT SAYS WHERE IT GOES. The anchor here used to read "Open where
+   * this is fixed", which named nothing and sat under a sentence that already
+   * said where — and beside the agent row's own "Install on GitHub" button,
+   * pointing at the same address. It was removed for that. What a finding
+   * carries now is a place the engine DELIBERATELY will not act: an account
+   * somebody else disabled, which it reports rather than reversing. Telling
+   * somebody to do it at the app and handing them nothing is the other half
+   * of that decision left undone.
+   */
+  appName?: string;
 }) {
   if (!status) {
     // A surface with no loop still has a sentence worth showing, and dropping
@@ -522,12 +536,12 @@ export function Reconcile({
   // On a healthy surface that timestamp was the ONLY thing in the band, so
   // the card grew a grey stripe per surface saying nothing had happened.
   // The tag says the state; the band is for what a person has to act on.
-  // NO action_url CLAUSE, because nothing here renders one any more. It was
-  // an anchor reading "Open where this is fixed" under the finding's own
-  // sentence — which already says where — and directly beneath the seat row's
-  // own "Install on GitHub" button, which is the same address with a name on
-  // it. Two controls for one act, one of them unlabelled.
-  if (!status.detail && !status.last_error && others.length === 0) {
+  // THE REPORTED FINDING'S OWN LINK, named. See `appName`: a bare "Open
+  // where this is fixed" was removed, and an anchor that says which app it
+  // opens is the opposite case — a finding whose whole content is "a person
+  // has to do this at the app" needs somewhere to send them.
+  const where = reported?.action_url ?? "";
+  if (!status.detail && !status.last_error && others.length === 0 && !where) {
     return null;
   }
 
@@ -540,6 +554,11 @@ export function Reconcile({
             string — it is a status line — so without this the rest is
             simply unreachable from the screen. */}
         {reported && <FindingSubjects of={reported} />}
+        {where && (
+          <a href={where} target="_blank" rel="noreferrer">
+            Open {appName || "the app"}
+          </a>
+        )}
         {actor && <span className="int-row-note-when">{actor}</span>}
 
         {status.last_error && (
@@ -793,7 +812,7 @@ function SurfaceRow({
         </div>
       )}
 
-      <Reconcile status={row.reconcile} detail={row.detail} />
+      <Reconcile status={row.reconcile} detail={row.detail} appName={surface.name} />
     </li>
   );
 }

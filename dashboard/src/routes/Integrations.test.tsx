@@ -83,7 +83,45 @@ test("a blocked surface says what to do", () => {
   );
   expect(screen.getByText(/swe has no Jira account/)).toBeTruthy();
   expect(screen.queryByText(/at the third-party app/)).toBeNull();
+  // AND NO LINK, because this status carries an action_url on the REPORT
+  // rather than on a finding: the anchor belongs to the finding the headline
+  // is, so a row whose findings carry none offers none.
   expect(screen.queryByRole("link")).toBeNull();
+});
+
+// A FINDING THE ENGINE DELIBERATELY WILL NOT ACT ON SAYS WHERE TO GO, BY NAME.
+//
+// An account somebody else disabled is reported rather than reversed — the
+// engine must not undo a person's decision on every tick — and that leaves a
+// sentence telling them to do it at the app. Handing them nothing to press is
+// the other half of the decision left undone, over an engine that holds the
+// credentials and is declining to use them on purpose.
+//
+// NAMED, which is the difference from the anchor this replaced: "Open where
+// this is fixed" said nothing and duplicated a button beside it.
+test("a finding the engine will not act on links to the app by name", () => {
+  render(
+    <Reconcile
+      appName="Datadog"
+      status={{
+        phase: "degraded",
+        actor: "admin",
+        detail: "sre's Datadog service account is disabled and was not disabled by this engine",
+        findings: [
+          {
+            kind: "identity_failed",
+            subject: "sre",
+            detail:
+              "sre's Datadog service account is disabled and was not disabled by this engine",
+            action_url: "https://app.datadoghq.com/organization-settings/users?filter=disabled",
+          },
+        ],
+      }}
+    />,
+  );
+  const link = screen.getByRole("link");
+  expect(link.getAttribute("href")).toContain("app.datadoghq.com");
+  expect(link.textContent).toContain("Datadog");
 });
 
 // AN OPERATOR'S OWN FINDING NAMES NO PLACE.
