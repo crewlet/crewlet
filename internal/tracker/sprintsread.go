@@ -348,7 +348,7 @@ func readSprintRows(ctx context.Context, tx *sql.Tx, p Project, q SprintQuery,
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []SprintRow
+	out := []SprintRow{}
 	for rows.Next() {
 		var row SprintRow
 		var start, end int64

@@ -415,3 +415,21 @@ func byHandle(row tracker.SprintRow) map[string]tracker.AssigneeFigures {
 	}
 	return out
 }
+
+// A PROJECT WITH NO SPRINTS ANSWERS AN EMPTY LIST, never a null — the same
+// contract [TestAnEmptyDayCarriesEmptyCollectionsRatherThanNulls] states for
+// the compound answer, and for the same reason: a client reads `sprints.length`
+// to decide whether to draw the velocity chart, and a project that has not run
+// a sprint yet is the first state every new project is in.
+func TestAProjectWithNoSprintsAnswersAnEmptyList(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	got := r.sprints(tracker.SprintQuery{Project: "ENG"}, time.Now().UTC())
+	if got.Sprints == nil {
+		t.Fatal("sprints is nil, which marshals to null — a client doing " +
+			".length on it throws")
+	}
+	if len(got.Sprints) != 0 {
+		t.Errorf("sprints = %+v, want none", got.Sprints)
+	}
+}
