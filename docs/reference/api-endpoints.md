@@ -1445,8 +1445,8 @@ worked. A comment's `@handle` is resolved here too, against the company chart
 current when the comment is written, so mentioning somebody from your own
 assistant wakes them exactly as it does from a seat.
 
-Plus **eleven no seat is given**: `list_work_views`, `save_work_view`,
-`write_work_goal`, `write_work_catalogue`, `get_person`,
+Plus **twelve no seat is given**: `list_work_views`, `save_work_view`,
+`write_work_goal`, `write_work_catalogue`, `get_person`, `work_inbox`,
 `mark_inbox`, `set_pins`, `set_priorities`, `manage_sprint`,
 `remove_work_item` and `restore_work_item`. A view is furniture — a name, a shape
 and a filter, arranged so a person finds the same question tomorrow — and a

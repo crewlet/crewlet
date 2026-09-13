@@ -487,13 +487,27 @@ That is what makes the storage forecast a function of how much a company has
 ever done rather than of how much it is doing — and it is why the numbers below
 are worth reading before the fleet is large.
 
-The one exception is each domain's **operation ledger** — the table that
-answers "did the operation I published land here?" — which is swept per node at
-**30 days**. The horizon comes from the client that actually re-asks: a machine
-retry lives inside a two-second wait, but a seat carries an operation id
-forward and re-asks on its next wake, hours or a weekend later. An operation id
-older than that resolves `unknown` rather than `applied`, which is the honest
-answer once the row is gone.
+Two tables are the exception, and both are swept **per node** rather than once
+across the fleet — each node applies the log into its own copy, so a fleet
+singleton would tidy one node and let the table grow for ever on every other,
+which looks exactly like a sweep that works to whoever checks the node it ran
+on.
+
+Each domain's **operation ledger** — the table that answers "did the operation
+I published land here?" — is swept at **30 days**. The horizon comes from the
+client that actually re-asks: a machine retry lives inside a two-second wait,
+but a seat carries an operation id forward and re-asks on its next wake, hours
+or a weekend later. An operation id older than that resolves `unknown` rather
+than `applied`, which is the honest answer once the row is gone.
+
+A person's **inbox** — one row per routed change per recipient — is swept at
+`tracker.native.inbox_retention_days`, **365 days** by default and settable
+between 30 and 3650. It is the one horizon here that deletes something a person
+reads, and it deletes a *pointer* rather than the thing pointed at: the history
+row behind every notice is never swept, so "what was I told about in 2024" is
+still a `work_activity` question at any age. A month is the floor because below
+it an inbox stops being one — somebody away for four weeks would come back to
+nothing.
 
 ## The storage forecast
 

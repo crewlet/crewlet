@@ -293,6 +293,16 @@ type Incomplete struct {
 	// Direction is always "unknown", and it is a field rather than an
 	// omission so a reader meets the fact rather than inferring it.
 	Direction string
+
+	// Version is the record version this node could not read, which is
+	// the ONE number an operator needs to pick a build that can.
+	//
+	// It is already what the REFUSAL says on a point read — "a record at
+	// version %d it cannot decode" — and it was dropped on the set-read
+	// path, where the answer continues and the gap travels to a caller
+	// instead. Every surface rendering it therefore showed version 0,
+	// which is not a version any build ever wrote.
+	Version int
 }
 
 // Reader answers reads at a level, over one domain.
@@ -426,6 +436,7 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 				From:      gap.from,
 				Scope:     gap.scope,
 				Direction: "unknown",
+				Version:   gap.version,
 			}
 		}
 	}

@@ -370,7 +370,7 @@ func incompleteFrom(in *statelog.Incomplete) *Incomplete {
 	}
 	return &Incomplete{
 		Records: int(in.Records), From: in.From,
-		Scope: in.Scope.Closure(),
+		Scope: in.Scope.Closure(), Version: in.Version,
 	}
 }
 
@@ -927,7 +927,8 @@ func tagClause(filter TagFilter) (string, []any) {
 var dateColumns = map[string]string{
 	"due": "t.due_at", "start": "t.start_at", "created": "t.created_at",
 	"updated": "t.updated_at", "done": "t.done_at", "closed": "t.closed_at",
-	"finished": "t.finished_at", "status_entered": "t.status_entered_at",
+	"finished": "t.finished_at", "archived_at": "t.archived_at",
+	"status_entered": "t.status_entered_at",
 }
 
 func dateClause(key string, filter DateFilter) (string, []any, error) {
@@ -1646,23 +1647,22 @@ func readCheckpoint(ctx context.Context, tx *sql.Tx) (position, applied uint64, 
 	return packed, packed, nil
 }
 
-// coverage answers whether this node holds a record it cannot decode whose
-// scope could intersect the question.
+// coverageOf probes whether this node holds a record it cannot decode whose
+// scope could intersect one read.
 //
 // IT NAMES WHAT IS AFFECTED AND NOT IN WHICH DIRECTION, because this build
 // cannot compute the direction — that is what "cannot decode" means. Rows may
 // be missing, rows that should have left may still be present, and values on
 // the rows returned may be behind.
-func coverage(ctx context.Context, tx *sql.Tx, q Query) (*Incomplete, error) {
-	return coverageOf(ctx, tx, ReadScope(q))
-}
-
-// coverageOf is the same probe over a scope the caller built.
 //
-// SPLIT FROM THE QUERY, because a detail read's scope is one OBJECT and a
-// board's is a container — and running a board's probe for a single task
-// would put a permanent warning on every task in a company holding one
-// undecodable record about one other task.
+// A SCOPE THE CALLER BUILT rather than a query, because a detail read's scope
+// is one OBJECT and a board's is a container — and running a board's probe for
+// a single task would put a permanent warning on every task in a company
+// holding one undecodable record about one other task. The board's own probe
+// is the FRAMEWORK's (see [statelog.Reader]), and the query-shaped wrapper
+// this package kept beside it had no caller at all: a second coverage answer
+// that nothing asked for, and that nothing would have compared against the
+// one the answer actually carries.
 func coverageOf(ctx context.Context, tx *sql.Tx, scope statelog.ScopeSet) (*Incomplete, error) {
 	closure := scope.Closure()
 	roots := scope.Roots()

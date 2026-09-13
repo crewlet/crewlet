@@ -108,17 +108,11 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 		if err := decodePayload(c.record.Mutation, &project); err != nil {
 			return 0, fmt.Errorf("tracker: decode the project at %s: %w", c.position, err)
 		}
-		// THE PROJECT'S OWN FIELD DECLARATIONS, into the same union the
-		// workspace catalogue's go into. Without this the row set was
-		// half the truth — every workspace field and no project field —
-		// which is worse than an empty table: a reader joining it would
-		// have answered confidently and wrongly about exactly the
-		// projects that declare their own.
-		if extra, err = writeFieldDefs(ctx, tx, FieldScopeProject, key,
-			project.Fields); err != nil {
-
-			return 0, err
-		}
+		// A PROJECT'S OWN FIELD DECLARATIONS EXPLODE INTO NOTHING, on
+		// [Applier.explodeCatalogue]'s rule: a declaration is read
+		// through the project DOCUMENT, which this same upsert writes,
+		// and the relational copy that used to hold both scopes'
+		// declarations was rewritten per apply and read by nothing.
 		res, err = tx.ExecContext(ctx, `
 			INSERT INTO tracker_projects
 				(key, name, purpose, unit, chart_epoch, default_assignee,

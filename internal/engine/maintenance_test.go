@@ -87,6 +87,22 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// runs and a board that stays wrong.
 		"tracker_abandoned_merges",
 		"tracker_duplicate_ranks",
+		// AND A PERSON'S INBOX, which IS a range delete and is the one
+		// entry on this list that deletes something a person reads. The
+		// table shipped `tracker_notifications_swept_idx ON
+		// (created_at)` naming "the per-node inbox retention sweep",
+		// the horizon is a validated company setting with a default and
+		// bounds, and its own doc calls it "the one horizon here that
+		// deletes anything" — and nothing deleted anything, so every
+		// routed change kept a row per recipient for the life of the
+		// deployment, on every node.
+		//
+		// PER NODE, because the table is Divergent: what it holds
+		// depends on the epoch's own horizon, so two nodes legitimately
+		// hold different rows and a singleton would tidy one and let
+		// the rest grow. What ages out is a POINTER — the history row
+		// behind each notice is never swept.
+		"tracker_notifications",
 		// AND THE ONE-SIDED DEPENDENCY REPAIR, which is the same kind
 		// of thing: a dependency is two commits on two subjects, the
 		// mirror is best effort because the authored edge is durable

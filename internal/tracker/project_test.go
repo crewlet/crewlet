@@ -100,15 +100,28 @@ func TestPolicyVersionMovesOnlyForWhatATaskIsValidatedAgainst(t *testing.T) {
 	}
 }
 
-// TestProjectFieldsReachTheRows is the applier's half. The row set is a UNION
-// keyed on (scope_kind, scope_id), and it used to hold every workspace field
-// and no project field — which is worse than an empty table: a reader joining
-// it answers confidently and wrongly about exactly the projects that declare
-// their own.
-func TestProjectFieldsReachTheRows(t *testing.T) {
+// TestAProjectsOwnFieldsReachItsReaders is what the declaration is FOR: a
+// seat asks its project what it may file, and the answer is the workspace's
+// vocabulary with the project's own declarations laid over it. A project
+// declaration of an id the workspace also declares SHADOWS it and is named as
+// shadowed, because that is what a field halfway through a move between the
+// two scopes looks like and a reader that silently picked one would report
+// whichever it read second.
+func TestAProjectsOwnFieldsReachItsReaders(t *testing.T) {
 	r := newRoundTrip(t)
+	if _, err := r.writer.WriteFields(t.Context(), "op-workspace",
+		[]tracker.FieldDef{{
+			ID: "f-impact", Slug: "impact", Name: "Impact", Type: tracker.FieldText,
+		}, {
+			ID: "f-sev", Slug: "severity", Name: "Severity", Type: tracker.FieldText,
+		}}); err != nil {
+
+		t.Fatalf("declare the workspace's fields: %v", err)
+	}
+	r.drain()
+
 	fields := []tracker.FieldDef{{
-		ID: "f-sev", Slug: "severity", Name: "Severity",
+		ID: "f-sev", Slug: "urgency", Name: "Urgency",
 		Type: tracker.FieldDropdown,
 		Config: tracker.FieldConfig{Options: []tracker.Option{
 			{ID: "o-1", Slug: "sev1", Name: "Sev 1"},
@@ -123,26 +136,23 @@ func TestProjectFieldsReachTheRows(t *testing.T) {
 	}
 	r.drain()
 
-	if got := r.fieldRows(tracker.FieldScopeProject, "ENG"); !slices.Equal(
-		got, []string{"severity"}) {
-
-		t.Fatalf("the project's field rows are %v, want [severity]", got)
+	got := r.project(tracker.ProjectDetailQuery{Project: "ENG"})
+	if !slices.Equal(got.Shadowed, []string{"f-sev"}) {
+		t.Fatalf("the shadowed ids are %v, want [f-sev]", got.Shadowed)
 	}
-	if got := r.optionRows("f-sev"); !slices.Equal(got, []string{"sev1", "sev2"}) {
-		t.Fatalf("the field's option rows are %v", got)
+	declared := fieldSlugs(got.Fields)
+	if !slices.Equal(declared, []string{"impact", "urgency"}) {
+		t.Fatalf("the project declares %v, want [impact urgency]", declared)
+	}
+	if options := optionSlugs(got.Fields, "f-sev"); !slices.Equal(
+		options, []string{"sev1", "sev2"}) {
+
+		t.Fatalf("the project's field carries options %v", options)
 	}
 
-	// AND THE SCOPED DELETE LEAVES THE OTHER SCOPE ALONE, which is what
-	// makes one explosion safe for both: a project's edit that cleared the
-	// workspace's rows would retire the company's whole vocabulary.
-	if _, err := r.writer.WriteFields(t.Context(), "op-workspace",
-		[]tracker.FieldDef{{
-			ID: "f-impact", Slug: "impact", Name: "Impact", Type: tracker.FieldText,
-		}}); err != nil {
-
-		t.Fatalf("declare a workspace field: %v", err)
-	}
-	r.drain()
+	// AND THE PROJECT'S CLEAR LEAVES THE WORKSPACE'S ALONE, which is what
+	// makes the two scopes independent: a project's edit that cleared the
+	// workspace's declarations would retire the company's whole vocabulary.
 	shorter := []tracker.FieldDef{}
 	if _, err := r.writer.WriteProject(t.Context(), "op-clear", "ENG",
 		tracker.ProjectEdit{Fields: &shorter},
@@ -151,28 +161,46 @@ func TestProjectFieldsReachTheRows(t *testing.T) {
 		t.Fatalf("clear the project's fields: %v", err)
 	}
 	r.drain()
-	if got := r.fieldRows(tracker.FieldScopeProject, "ENG"); len(got) != 0 {
-		t.Fatalf("the project's rows survived its own clear: %v", got)
-	}
-	if got := r.fieldRows(tracker.FieldScopeWorkspace, ""); !slices.Equal(
-		got, []string{"impact"}) {
 
-		t.Fatalf("a project's edit reached the workspace's rows: %v", got)
+	got = r.project(tracker.ProjectDetailQuery{Project: "ENG"})
+	if len(got.Shadowed) != 0 {
+		t.Fatalf("a cleared project still shadows %v", got.Shadowed)
+	}
+	if declared := fieldSlugs(got.Fields); !slices.Equal(
+		declared, []string{"impact", "severity"}) {
+
+		t.Fatalf("a project's clear reached the workspace's fields: %v", declared)
 	}
 }
 
-// fieldRows reads one scope's declared slugs out of the union.
-func (r *roundTrip) fieldRows(kind, id string) []string {
-	r.t.Helper()
-	return r.strings(`SELECT slug FROM tracker_fields
-		WHERE scope_kind = ? AND scope_id = ? ORDER BY slug`, kind, id)
+// fieldSlugs is every slug the answer offers, across its groups and sorted, so
+// a comparison does not depend on how the reader grouped them.
+func fieldSlugs(groups []tracker.FieldGroup) []string {
+	var out []string
+	for _, group := range groups {
+		for _, field := range group.Fields {
+			out = append(out, field.Slug)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
-// optionRows reads one field's declared option slugs.
-func (r *roundTrip) optionRows(fieldID string) []string {
-	r.t.Helper()
-	return r.strings(`SELECT slug FROM tracker_field_options
-		WHERE field_id = ? ORDER BY ord`, fieldID)
+// optionSlugs is one declared field's option slugs, in declaration order.
+func optionSlugs(groups []tracker.FieldGroup, id string) []string {
+	for _, group := range groups {
+		for _, field := range group.Fields {
+			if field.ID != id {
+				continue
+			}
+			out := make([]string, 0, len(field.Config.Options))
+			for _, option := range field.Config.Options {
+				out = append(out, option.Slug)
+			}
+			return out
+		}
+	}
+	return nil
 }
 
 func (r *roundTrip) strings(query string, args ...any) []string {

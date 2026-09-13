@@ -169,11 +169,15 @@ func TestTheRollupSetsAndTheirPairings(t *testing.T) {
 			Config: FieldConfig{Rollup: &Rollup{Source: source, Field: field, Op: op}},
 		}})
 	}
-	if err := rollup("children", "points", "sum"); err != nil {
-		t.Fatalf("a plain rollup was refused: %v", err)
-	}
-	if err := rollup("children", "due", "earliest"); err != nil {
-		t.Fatalf("the earliest due date was refused: %v", err)
+	// A WELL-FORMED ROLLUP IS STILL REFUSED, and that is the point: this
+	// build gathers nothing, so a field naming itself gathered would hold
+	// whatever somebody last typed under a name that says otherwise. The
+	// pairing rules below run FIRST, so an operator dropping the block is
+	// told about their other mistakes in the same pass.
+	if err := rollup("children", "points", "sum"); err == nil {
+		t.Fatal("a rollup was accepted and nothing computes one")
+	} else if !strings.Contains(err.Error(), "gathers nothing") {
+		t.Errorf("the refusal is %q and does not say why", err)
 	}
 	for _, c := range []struct {
 		name              string
@@ -200,27 +204,32 @@ func TestTheRollupSetsAndTheirPairings(t *testing.T) {
 	}
 }
 
-// AN AUTOMATIC PROGRESS FIELD THAT COUNTS NOTHING reads zero for ever, which
-// renders as a bar that never moves and looks like work that never started.
-func TestAnAutomaticProgressFieldNamesWhatItCounts(t *testing.T) {
+// AN AUTOMATIC PROGRESS FIELD IS REFUSED, because nothing fills one.
+//
+// The value would be whatever somebody last typed into it under a name that
+// says it keeps itself up to date — which is worse than a manual field,
+// because nobody knows to maintain it. The sources it WOULD count are still a
+// closed set, so an operator who names one this build does not have is told
+// which mistake they made first.
+func TestAnAutomaticProgressFieldIsRefusedWhileNothingFillsOne(t *testing.T) {
 	t.Parallel()
 	err := checkFields([]FieldDef{{
 		ID: "f1", Slug: "done", Name: "Done", Type: FieldProgress,
-		Config: FieldConfig{Progress: "auto"},
+		Config: FieldConfig{Progress: "auto", Tracking: []string{"subtasks"}},
 	}})
 	if err == nil {
-		t.Fatal("an automatic progress field tracking nothing was declared")
+		t.Fatal("an automatic progress field was accepted and nothing fills one")
 	}
-	if !strings.Contains(err.Error(), "subtasks") {
-		t.Errorf("the refusal is %q and does not name what it could count", err)
+	if !strings.Contains(err.Error(), "computes no automatic progress") {
+		t.Errorf("the refusal is %q and does not say why", err)
 	}
-	// WITH A SOURCE IT LANDS, and an unknown source is refused naming the
-	// set.
+	// A MANUAL ONE STILL LANDS: the field type works, and it is the
+	// AUTOMATIC setting that promises what this build does not do.
 	if err := checkFields([]FieldDef{{
 		ID: "f1", Slug: "done", Name: "Done", Type: FieldProgress,
-		Config: FieldConfig{Progress: "auto", Tracking: []string{"subtasks"}},
+		Config: FieldConfig{Progress: "manual"},
 	}}); err != nil {
-		t.Errorf("a tracked progress field was refused: %v", err)
+		t.Errorf("a manual progress field was refused: %v", err)
 	}
 	if err := checkFields([]FieldDef{{
 		ID: "f1", Slug: "done", Name: "Done", Type: FieldProgress,

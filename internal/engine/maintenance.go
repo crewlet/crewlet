@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/a2a"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
@@ -98,6 +99,16 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 					// route by an org chart that has since moved.
 					Leads: liveLeads{engine: e},
 				})...)
+				// AND THE INBOX'S OWN SWEEP, which is a range
+				// delete rather than a repair and is therefore
+				// PER NODE — `tracker_notifications` is
+				// Divergent, so each node holds its own rows and
+				// a singleton would tidy one and let the rest
+				// grow for ever. Contributed here rather than in
+				// tracker.Jobs because that list runs under the
+				// duty and this one must not.
+				jobs = append(jobs, tracker.InboxJobs(
+					e.backends.Store, e.inboxRetention())...)
 			}
 			// AND THE STATE LOG'S OWN OPERATION LEDGERS, one per
 			// registered domain. Every `<domain>_ops` migration says
@@ -186,6 +197,21 @@ func (e *Engine) stopMaintenance() {
 // captured at wiring time, a company that moved its own zone would go on
 // minting sprints on the old one for the life of the process. UTC where there
 // is no company, which is the only answer a process with no epoch has.
+// inboxRetention is how long this company's inbox rows live.
+//
+// A NODE WITH NO COMPANY STATES NO HORIZON, for the reason
+// [Engine.ConversationRetention] gives: a literal zero duration read as
+// "retain nothing" would delete the inbox, so the shipped default is what an
+// unconfigured node sweeps on. Validation refuses a configured value outside
+// its own bounds and fills the default when it is unset.
+func (e *Engine) inboxRetention() time.Duration {
+	c := e.Company()
+	if c == nil {
+		return config.DefaultInboxRetentionDays * 24 * time.Hour
+	}
+	return c.Config.Tracker.Native.InboxRetention()
+}
+
 func (e *Engine) trackerZone() *time.Location {
 	c := e.Company()
 	if c == nil {

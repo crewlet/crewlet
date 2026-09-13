@@ -2,10 +2,13 @@ package builtin_test
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -137,6 +140,7 @@ type personSpy struct {
 	handle     string
 	priorities []string
 	authority  tracker.PersonAuthority
+	reasons    []tracker.Reason
 }
 
 func (p *personSpy) WritePriorities(_ context.Context, _, handle string,
@@ -158,8 +162,207 @@ func (p *personSpy) WritePins(_ context.Context, _, _ string, _ []string,
 }
 
 func (p *personSpy) WriteInbox(_ context.Context, _, _ string,
-	_, _, _ []tracker.InboxEntry, _ []tracker.Reason, _ tracker.Position) (
-	tracker.WriteResult, error) {
+	_, _, _ []tracker.InboxEntry, reasons []tracker.Reason,
+	_ tracker.Position) (tracker.WriteResult, error) {
 
+	p.reasons = reasons
 	return tracker.WriteResult{Outcome: statelog.OutcomeApplied}, nil
+}
+
+// TestMarkInboxCarriesThePrimarySplit is the finding on the write side.
+// [tracker.Person.PrimaryReasons] was validated, stored, replicated and
+// reported — and `mark_inbox` passed nil for it on every call, so the one
+// writer that could have set it CLEARED it instead. A preference nothing can
+// express is storage for a rule nobody wrote.
+func TestMarkInboxCarriesThePrimarySplit(t *testing.T) {
+	t.Parallel()
+	person := &personSpy{}
+	reg := personRegistry(t, person)
+
+	got := callWork(t, reg, tracker.MarkInboxTool, map[string]any{
+		"primary_reasons": []any{"mention", "asked"},
+	})
+	if got.Failed {
+		t.Fatalf("mark_inbox failed: %q", got.Output)
+	}
+	if !slices.Equal(person.reasons, []tracker.Reason{
+		tracker.ReasonMention, tracker.ReasonAsked,
+	}) {
+		t.Fatalf("the writer was given %v, want [mention asked] — the split "+
+			"has no other producer", person.reasons)
+	}
+
+	// AND AN UNKNOWN REASON IS REFUSED NAMING THE SET, rather than
+	// written and silently dropped by the validator behind it.
+	bad := callWork(t, reg, tracker.MarkInboxTool, map[string]any{
+		"primary_reasons": []any{"because-i-said-so"},
+	})
+	if !bad.Failed {
+		t.Fatal("an unknown wake reason was accepted")
+	}
+	if !strings.Contains(bad.Output, "mention") {
+		t.Fatalf("the refusal does not name the reasons that exist: %q",
+			bad.Output)
+	}
+}
+
+// TestWorkInboxIsServedAndNarrows keeps the read verb reachable and its two
+// narrowings apart: `reasons` returns fewer rows, the primary split labels
+// every row it returns.
+func TestWorkInboxIsServedAndNarrows(t *testing.T) {
+	t.Parallel()
+	reg := personRegistry(t, &personSpy{})
+
+	got := callPlain(t, reg, tracker.WorkInboxTool, map[string]any{
+		"handle": "alice",
+	})
+	if got.Failed {
+		t.Fatalf("work_inbox failed: %q", got.Output)
+	}
+	if !strings.Contains(got.Output, "ENG-1") {
+		t.Fatalf("the answer carries no notice: %q", got.Output)
+	}
+
+	if missing := callPlain(t, reg, tracker.WorkInboxTool,
+		map[string]any{}); !missing.Failed {
+
+		t.Fatal("an inbox read naming nobody was accepted")
+	}
+	bad := callPlain(t, reg, tracker.WorkInboxTool, map[string]any{
+		"handle": "alice", "reasons": []any{"because-i-said-so"},
+	})
+	if !bad.Failed {
+		t.Fatal("an unknown wake reason was accepted")
+	}
+	if !strings.Contains(bad.Output, "assignee") {
+		t.Fatalf("the refusal does not name the reasons that exist: %q",
+			bad.Output)
+	}
+}
+
+// callPlain calls a tool that takes no turn — a read whose authority is the
+// surface's rather than a seat's, which is what every operator read is.
+func callPlain(t *testing.T, reg *tools.Registry, name string,
+	args map[string]any) tools.Result {
+
+	t.Helper()
+	entry, held := reg.Lookup(name)
+	if !held {
+		t.Fatalf("%s is not registered", name)
+	}
+	got, err := entry.Tool.Call(t.Context(), args)
+	if err != nil {
+		t.Fatalf("%s: %v", name, err)
+	}
+	return got
+}
+
+// personRegistry is the operator surface with the person seams wired.
+func personRegistry(t *testing.T, person *personSpy) *tools.Registry {
+	t.Helper()
+	reg := tools.NewRegistry()
+	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
+		Work: builtin.WorkDeps{
+			Reader:       newFakeTracker(),
+			Writer:       newFakeTracker().as,
+			Inbox:        newFakeTracker(),
+			PersonWriter: func(builtin.Actor) builtin.PersonWriter { return person },
+			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
+				return builtin.Actor{
+					Handle: "alice", Kind: tracker.AuthorHuman,
+				}, nil
+			},
+		},
+	}) {
+		// WITH THE HINTS, which is what the operator surface itself
+		// serves now — registering without them would make the
+		// annotation case below assert nothing.
+		if err := reg.RegisterWith(tool, tools.OriginBuiltin,
+			builtin.AnnotationsFor(tool.Name())); err != nil {
+
+			t.Fatalf("register %s: %v", tool.Name(), err)
+		}
+	}
+	return reg
+}
+
+// TestEveryOperatorToolIsAnnotatedDeliberately closes the hole that classified
+// three reads as writes. `annotationsFor` is a switch with a FAIL-CLOSED
+// default — `ReadOnly: No` with `OpenWorld` unset, which is exactly what
+// [mcp.WritesToSharedSurface] reads as TRUE — so a tool added to the operator
+// surface and forgotten in the switch is silently reported to every MCP client
+// as a write to a surface a human reads, and refused to a sub-agent that was
+// granted it. Nothing failed; the tool just stopped working for one caller.
+//
+// The table is the DECISION, restated where a reviewer sees it: adding a tool
+// to the operator surface without deciding this fails here.
+func TestEveryOperatorToolIsAnnotatedDeliberately(t *testing.T) {
+	t.Parallel()
+	shared := map[string]bool{
+		// The reads. Asking twice costs a round and changes nothing.
+		tracker.ListWorkItemsTool:    false,
+		tracker.GetWorkItemTool:      false,
+		tracker.GetWorkCatalogueTool: false,
+		tracker.ListProjectsTool:     false,
+		tracker.DescribeProjectTool:  false,
+		tracker.SprintReportTool:     false,
+		tracker.TaskActivityTool:     false,
+		tracker.MyWorkTool:           false,
+		tracker.ListWorkGoalsTool:    false,
+		tracker.SearchWorkItemsTool:  false,
+		tracker.ListWorkViewsTool:    false,
+		tracker.GetPersonTool:        false,
+		tracker.WorkInboxTool:        false,
+
+		// The writes everybody sees.
+		tracker.CreateWorkItemTool:     true,
+		tracker.UpdateWorkItemTool:     true,
+		tracker.CommentOnWorkTool:      true,
+		tracker.MergeWorkItemTool:      true,
+		tracker.WriteProjectTool:       true,
+		tracker.WriteWorkGoalTool:      true,
+		tracker.WriteWorkCatalogueTool: true,
+		tracker.SaveWorkViewTool:       true,
+		tracker.ManageSprintTool:       true,
+		tracker.RemoveWorkItemTool:     true,
+		tracker.RestoreWorkItemTool:    true,
+
+		// A PERSON'S OWN STATE IS NOT A SHARED SURFACE. Each is written
+		// only on behalf of the person whose it is, so a second caller
+		// cannot be surprised by one — which is the question the flag
+		// asks, rather than "does this write".
+		tracker.MarkInboxTool: false,
+		tracker.SetPinsTool:   false,
+
+		// EXCEPT the one that reaches across people: a lead may set
+		// somebody else's queue, and that person sees it.
+		tracker.SetPrioritiesTool: true,
+	}
+
+	reg := personRegistry(t, &personSpy{})
+	snapshot := reg.Snapshot()
+	seen := 0
+	for _, name := range append(tracker.Tools(), tracker.OperatorOnlyTools()...) {
+		entry, held := snapshot.Lookup(name)
+		if !held {
+			continue
+		}
+		seen++
+		want, classified := shared[name]
+		if !classified {
+			t.Errorf("%q is on the operator surface and this table does not "+
+				"say whether it writes a surface somebody else reads — "+
+				"decide, then add it", name)
+			continue
+		}
+		if got := mcp.WritesToSharedSurface(entry.Annotations); got != want {
+			t.Errorf("WritesToSharedSurface(%q) = %v, want %v (annotations "+
+				"%+v) — the fail-closed default is how a read becomes a write",
+				name, got, want, entry.Annotations)
+		}
+	}
+	if seen == 0 {
+		t.Fatal("the operator surface registered nothing, so this asserts " +
+			"nothing")
+	}
 }

@@ -113,10 +113,18 @@ own slug is exactly what the override is for.
 checkbox, a time flag on a number, a rollup on a text field: each is a setting
 that would be stored, replicated and read by nothing, so the declaration is
 refused naming which types use it. A minimum above its maximum is refused at
-the declaration rather than at every write that then fails against it, and an
-automatic progress field that counts nothing is refused because it would read
-zero for ever — a bar that never moves, which looks like work that never
-started.
+the declaration rather than at every write that then fails against it.
+
+**Two settings are refused because nothing fills them.** A `rollup:` block and
+`progress: auto` both say a value keeps itself up to date, and this build
+computes neither — a rollup is a correlated aggregate over a relation and
+automatic progress is a per-task count of subtasks, checklist items or asked
+comments, and both are read-time work nothing does yet. Accepted, the field
+would hold whatever somebody last typed under a name saying otherwise, which
+is worse than a plain number because nobody knows to maintain it. The field
+TYPES still work: a `progress` or `rollup` field with `progress: manual` (or
+no configuration at all) is a number somebody writes, and every filter on this
+page applies to it.
 
 **An option is one value however it is written.** A choice field stores the
 option's *id*, and a write naming the option by its slug or its name resolves
@@ -406,6 +414,7 @@ property of its **type**:
 | `people` | `any` `all` `not_any` `me` |
 | `rollup` | `lt` `gt` `range`, applied after the rows are read |
 
+
 `null` and `not_null` are on every type, because "is this set" is a question
 about the **row** rather than about the value. An operator a type does not
 admit is **refused naming the ones it does** — the failure that replaces is
@@ -581,9 +590,9 @@ queries a seat's tools use, against this node's own copy. Every answer says how
 far behind that copy is.
 
 **Your own AI assistant** can reach the same tracker over MCP, at
-`/operator/mcp`. It serves the same work tools above, more no seat is
+`/operator/mcp`. It serves the same work tools above, twelve more no seat is
 given — `list_work_views`, `save_work_view`, `write_work_goal`,
-`write_work_catalogue`, `get_person`, `mark_inbox`, `set_pins`,
+`write_work_catalogue`, `get_person`, `work_inbox`, `mark_inbox`, `set_pins`,
 `set_priorities`, `manage_sprint`, `remove_work_item` and `restore_work_item`
 — the five page tools beside them and knowledge
 search — the seat's own implementations, with one
@@ -808,11 +817,36 @@ list is a write, and a read that performed one would change the fleet's state
 from a path with no operation id, no arbitration and no record. So a read says
 which snoozes are due and your next inbox write is what moves them.
 
-Read at `GET /work/people/{handle}`, and written through the operator MCP with
-`mark_inbox`, `set_pins` and `set_priorities` — never by a seat. A seat is not
-a human: it has a **mailbox**, which is the durable subscription the engine
-attaches when it acquires the seat, and nothing on a person's record describes
-one.
+**The feed and the marks are two reads.** `work_inbox` is what the company
+*asked of you*: one entry per routed change, newest first, carrying the single
+reason it reached you under, the subject, who made it, and an excerpt. It is
+written by the applier when the change lands — so it is there whether or not
+anybody was online, and a person who has marked nothing still has an inbox.
+`get_person` is your own *marks over that feed*: what you have read, what you
+snoozed, how far you have got. Neither is derived from the other, which is why
+an inbox entry carries a record id and a position and no content at all.
+
+**The primary half is yours to declare.** `mark_inbox` takes `primary_reasons`
+— which wake reasons are yours to act on — and `work_inbox` labels every notice
+with it, returning the rest as context rather than hiding it. Saying nothing
+takes the shipped default: `mention`, `asked`, `answered`, `assignee`,
+`unassigned`, `reporter`, `unblocked` and `prioritised`, which is every reason
+that changes what you should do next. An empty list means *you have not said*,
+never *nothing is primary* — the other reading gives a fresh company an inbox
+whose primary half is blank.
+
+**Inbox rows age out; the history does not.** `tracker.native.inbox_retention_days`
+(default 365, 30..3650) is how long an entry lives. A sweep on every node
+deletes what is past the horizon — per node rather than once across the fleet,
+because each node applies the log into its own copy. A notice is a *pointer* at
+a history row, and the history answers for ever: "what was I told about in
+2024" is a `work_activity` question, not an inbox one.
+
+Read at `GET /work/people/{handle}`, and through the operator MCP with
+`work_inbox`, `get_person`, `mark_inbox`, `set_pins` and `set_priorities` —
+never by a seat. A seat is not a human: it has a **mailbox**, which is the
+durable subscription the engine attaches when it acquires the seat, and nothing
+on a person's record describes one.
 
 ## Hand-offs are bounded on the task
 

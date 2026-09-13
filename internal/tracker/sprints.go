@@ -251,6 +251,19 @@ func (w *Writer) RolloverSprint(ctx context.Context, opID, project string,
 	number int, target RolloverTarget) (moved int, done bool, err error) {
 
 	project = ProjectKey(project)
+	// THE WALK TAKES ITS CLAIM, like every other walking sequence in this
+	// package — and unlike them it had one MINTED and never taken. Two
+	// callers reach here, the tracker duty's straggler sweep and
+	// `manage_sprint`, so two writers on one spillover is an ordinary
+	// Tuesday rather than a race a fleet has to lose first: each reads the
+	// open tasks still pointing at the closed sprint, both move the same
+	// batch, and both append the settle.
+	claim, err := w.hold(ctx, rolloverClaim(project, number))
+	if err != nil {
+		return 0, false, err
+	}
+	defer claim.release(ctx)
+
 	sprint, held, err := w.readSprintRow(ctx, project, number)
 	switch {
 	case err != nil:

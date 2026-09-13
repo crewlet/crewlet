@@ -2293,6 +2293,12 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 				return writer.As(actor.Handle, actor.Kind,
 					tracker.Provenance{OperatorID: actor.OperatorID})
 			},
+			// AND THE INBOX READ. It takes no actor for the reason
+			// Search takes none — it reads, and whose inbox is an
+			// argument rather than an identity — and it is this
+			// surface's alone beside the person writer, because a
+			// seat has a mailbox rather than an inbox.
+			Inbox: reader,
 			// AND THE TRASH. A removal takes an item off every board in
 			// the company and a restore puts it back at any age; neither
 			// destroys anything, which is what separates both from the

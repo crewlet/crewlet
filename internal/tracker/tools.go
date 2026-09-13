@@ -137,6 +137,14 @@ const (
 	SetPinsTool       = "set_pins"
 	MarkInboxTool     = "mark_inbox"
 
+	// WorkInboxTool is the other half of the inbox, and the two are
+	// deliberately separate verbs: `get_person` is somebody's own MARKS
+	// over the feed — what they read, what they snoozed, how far they got
+	// — and this is the FEED, written by the applier when each change
+	// landed. A single verb would have to read both on every call, and
+	// the common question is one or the other.
+	WorkInboxTool = "work_inbox"
+
 	// The TRASH tools. A removal hides a task from every list in the
 	// company, and a seat that could hide work it did not want to do would
 	// be marking its own homework in the one way nobody notices — the
@@ -170,6 +178,7 @@ func OperatorOnlyTools() []string {
 		ListWorkViewsTool, SaveWorkViewTool,
 		WriteWorkGoalTool, WriteWorkCatalogueTool,
 		GetPersonTool, SetPrioritiesTool, SetPinsTool, MarkInboxTool,
+		WorkInboxTool,
 		RemoveWorkItemTool, RestoreWorkItemTool, ManageSprintTool,
 	}
 }

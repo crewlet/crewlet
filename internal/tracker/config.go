@@ -155,12 +155,23 @@ func checkProgress(f *FieldDef) error {
 		}
 		seen[source] = true
 	}
-	if c.Progress == "auto" && len(c.Tracking) == 0 {
-		// AUTOMATIC FROM NOTHING IS ALWAYS ZERO, which renders as a bar
-		// that never moves and reads as work that never started.
-		return fmt.Errorf("tracker: field %s is filled automatically and tracks "+
-			"nothing, so it would read zero for ever — name what it counts, "+
-			"from: %s", f.Slug, strings.Join(TrackingSources, ", "))
+	if c.Progress == "auto" {
+		// AND THIS BUILD DOES NOT COMPUTE ONE, which is the same
+		// objection the refusal below this used to make about tracking
+		// nothing: an automatic field reads whatever was last written
+		// into it and calls itself automatic, which is worse than a
+		// manual field because nobody knows to keep it up to date.
+		//
+		// Refused rather than accepted and left empty, on the rule the
+		// tracking check already stated: a bar that never moves reads as
+		// work that never started. The sources it would count —
+		// subtasks, checklists, asked comments — are rows a READ would
+		// have to aggregate per task, which is a decision about a
+		// board's cost rather than a line of missing code.
+		return fmt.Errorf("tracker: field %s is filled automatically and this "+
+			"build computes no automatic progress — the value would be "+
+			"whatever somebody last typed into it. Set `progress: manual` "+
+			"and write the number, or leave the field out", f.Slug)
 	}
 	return nil
 }
@@ -175,6 +186,17 @@ func checkRollup(f *FieldDef) error {
 	if f.Type != FieldRollup {
 		return unusable(f, "a rollup", "rollup")
 	}
+	// AND THIS BUILD GATHERS NOTHING. A rollup is a correlated aggregate
+	// over a relation — read-time, per row, over a set the row does not
+	// contain — and none of that exists here: the declaration was
+	// validated, stored, replicated and snapshotted, and the value stayed
+	// whatever somebody typed. Refused for [checkProgress]'s reason: a
+	// field that calls itself gathered and is not is worse than a plain
+	// number, because nobody knows to maintain it.
+	//
+	// The checks below run FIRST, so an operator removing the block is
+	// told about its other mistakes at the same time rather than one per
+	// validate.
 	switch {
 	case r.Source == "":
 		return fmt.Errorf("tracker: field %s is a rollup and names nothing to "+
@@ -211,7 +233,10 @@ func checkRollup(f *FieldDef) error {
 			"which is a word — the only aggregation over words is `count`",
 			f.Slug, r.Op)
 	}
-	return nil
+	return fmt.Errorf("tracker: field %s declares a rollup and this build "+
+		"gathers nothing — the value would be whatever somebody last typed "+
+		"into it, under a name that says it was gathered. Drop the `rollup` "+
+		"block and write the number, or leave the field out", f.Slug)
 }
 
 // unusable is the shared refusal for a knob on a type that has none.

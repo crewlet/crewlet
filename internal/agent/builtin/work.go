@@ -170,6 +170,15 @@ type WorkDeps struct {
 	// describes one.
 	PersonWriter func(actor Actor) PersonWriter
 
+	// Inbox reads what the company asked of somebody — the applier's own
+	// notification rows.
+	//
+	// A VALUE rather than a function of the actor, for the reason
+	// [WorkDeps.Search] is: it reads, and the authority over WHOSE inbox
+	// is the surface's rather than this seam's. The operator surface's
+	// alone, beside [WorkDeps.PersonWriter] and for the same reason.
+	Inbox InboxReader
+
 	// ProjectWriter resolves a project's own settings for one actor.
 	//
 	// EVERY SURFACE HAS ONE, unlike the five above it, because one of its

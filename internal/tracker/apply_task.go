@@ -66,6 +66,15 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		return 0, err
 	}
 
+	// AND THE ARCHIVE STAMP, on the same rule and for a column that was
+	// written as NULL on every row: `archived` is a bool the patch
+	// carries, and when and by whom it was set had no writer at all —
+	// so a board filtered to the archive could order it by nothing and
+	// an operator asking who filed something away had no answer.
+	if err := stampArchive(&next, current, held, c); err != nil {
+		return 0, err
+	}
+
 	// AND THE SPRINT HISTORY IS THE APPLIER'S TOO, for the same reason:
 	// a stay is a pair of instants, and instants this engine derives come
 	// from the broker rather than from whoever wrote the record.
@@ -205,6 +214,32 @@ func stampFinish(task *Task, c applyContext) error {
 		// A REOPEN CLEARS BOTH, so "finished in the last week" agrees
 		// with the task's actual state rather than with a state it left.
 		task.DoneAt, task.ClosedAt = nil, nil
+	}
+	return nil
+}
+
+// stampArchive records a task being filed away, and by whom.
+//
+// ON THE EDGE, not on every commit: a task that is already archived and is
+// then edited keeps the instant it was archived at, which is what a reader
+// asking "when did this leave the board" means. Un-archiving clears both, on
+// [stampFinish]'s rule — a stamp that outlived the state it describes would
+// make "archived last Tuesday" true of a task sitting on the board.
+//
+// THE AUTHOR COMES FROM THE RECORD and the instant from the broker, which is
+// the same split every other derived stamp here uses: who did it is a fact
+// about the write, and when is a fact about the log.
+func stampArchive(task *Task, current Task, held bool, c applyContext) error {
+	was := held && current.Archived
+	switch {
+	case task.Archived && !was:
+		at, err := effectiveOf(c)
+		if err != nil {
+			return err
+		}
+		task.ArchivedAt, task.ArchivedBy = &at, c.record.Actor
+	case !task.Archived:
+		task.ArchivedAt, task.ArchivedBy = nil, ""
 	}
 	return nil
 }
@@ -1318,36 +1353,37 @@ func (a *Applier) settleDefaultView(ctx context.Context, tx *sql.Tx, id string,
 	return affected(res)
 }
 
-// explodeCatalogue writes the type or field rows a catalogue produces.
+// explodeCatalogue settles what a catalogue apply changes about the ROWS.
+//
+// # Why a type catalogue explodes into nothing at all
+//
+// Because nothing seeks a declaration. Every reader of one goes through the
+// DOCUMENT — one row, one decode — since a company has tens of fields rather
+// than thousands and the whole set is wanted at once. The relational copy this
+// used to keep (`tracker_types`, `tracker_fields`, `tracker_field_options`)
+// was a delete-and-rewrite of the entire catalogue per apply, per node, over
+// four maintained indexes, answering no question; migration 0010 drops it.
+// The `shadowed` column is what gave it away: inserted as a literal 0 on every
+// row, and the reader that reports shadowing derives it in Go from the two
+// declaration documents.
+//
+// What a catalogue apply DOES change about rows is the per-task VALUES, which
+// every `f.<ref>` filter seeks — and specifically their visibility.
 func (a *Applier) explodeCatalogue(ctx context.Context, tx *sql.Tx, name string,
 	c applyContext) (int, error) {
 
 	if name == CatalogueTypes {
-		var catalogue TypeCatalogue
-		if err := decodePayload(c.record.Mutation, &catalogue); err != nil {
-			return 0, err
-		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM tracker_types`); err != nil {
-			return 0, fmt.Errorf("tracker: clear the type catalogue: %w", err)
-		}
-		return insertMany(ctx, tx, `
-			INSERT INTO tracker_types
-				(slug, name, name_norm, plural, icon, description, builtin, archived)
-			VALUES (?,?,?,?,?,?,?,?)`,
-			catalogue.Types, func(t TaskType) []any {
-				return []any{t.Slug, t.Name, NormName(t.Name), t.Plural,
-					t.Icon, t.Description, boolInt(t.Builtin), boolInt(t.Archived)}
-			})
+		// A TYPE CATALOGUE TOUCHES NO ROW. A task's type is a column on
+		// the task itself, written by the task's own commit, so a type
+		// being renamed or archived changes nothing a query reads until
+		// somebody writes the task.
+		return 0, nil
 	}
 	var catalogue FieldCatalogue
 	if err := decodePayload(c.record.Mutation, &catalogue); err != nil {
 		return 0, err
 	}
-	written, err := writeFieldDefs(ctx, tx, FieldScopeWorkspace, "", catalogue.Fields)
-	if err != nil {
-		return 0, err
-	}
-	// AND THE VALUES FOLLOW THE DECLARATION'S ARCHIVE, in this same
+	// THE VALUES FOLLOW THE DECLARATION'S ARCHIVE, in this same
 	// transaction.
 	//
 	// `hidden` on a value row is the DECLARATION's archived state, and
@@ -1357,81 +1393,7 @@ func (a *Applier) explodeCatalogue(ctx context.Context, tx *sql.Tx, name string,
 	// that did not carry what it claimed. The filter is shielded anyway,
 	// because an archived field does not RESOLVE, but a row that lies
 	// about its own state is a trap for the next reader of it.
-	swept, err := a.settleFieldVisibility(ctx, tx, catalogue.Fields)
-	if err != nil {
-		return 0, err
-	}
-	return written + swept, nil
-}
-
-// The two SCOPES a field is declared at, as the rows spell them.
-//
-// CONSTANTS RATHER THAN LITERALS, because the string appears in an INSERT, in
-// a scoped DELETE and in every future read of the union — and three spellings
-// of "workspace" is a row set that deletes nothing and accumulates for ever.
-const (
-	FieldScopeWorkspace = "workspace"
-	FieldScopeProject   = "project"
-)
-
-// writeFieldDefs explodes one declaring document's fields into the rows.
-//
-// ONE FUNCTION FOR BOTH SCOPES. Fields are declared in two places — the
-// workspace catalogue and a project — and the row set is a union keyed on
-// `(scope_kind, scope_id)`, so a second copy of this explosion is how one
-// scope's rows come to carry a column the other's do not. The DELETE is scoped
-// the same way, which is what lets a project's edit leave the workspace's rows
-// alone and the reverse.
-func writeFieldDefs(ctx context.Context, tx *sql.Tx, scopeKind, scopeID string,
-	fields []FieldDef) (int, error) {
-
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM tracker_fields WHERE scope_kind = ? AND scope_id = ?`,
-		scopeKind, scopeID); err != nil {
-
-		return 0, fmt.Errorf("tracker: clear the %s field declarations: %w",
-			scopeKind, err)
-	}
-	written := 0
-	for _, field := range fields {
-		res, err := tx.ExecContext(ctx, `
-			INSERT INTO tracker_fields
-				(id, scope_kind, scope_id, slug, name, name_norm, description,
-				 type, applies_to_json, required, required_in_subtasks, archived,
-				 pinned, hide_from_agents, config_json, default_json, shadowed)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
-			field.ID, scopeKind, scopeID, field.Slug, field.Name,
-			NormName(field.Name), field.Description, string(field.Type),
-			jsonOf(field.AppliesTo), boolInt(field.Required),
-			boolInt(field.RequiredInSubtasks), boolInt(field.Archived),
-			boolInt(field.Pinned), boolInt(field.HideFromAgents),
-			jsonOf(field.Config), nullableRaw(field.Default))
-		if err != nil {
-			return 0, fmt.Errorf("tracker: write field %s: %w", field.Slug, err)
-		}
-		n, err := affected(res)
-		if err != nil {
-			return 0, err
-		}
-		written += n
-		if _, err := tx.ExecContext(ctx,
-			`DELETE FROM tracker_field_options WHERE field_id = ?`, field.ID); err != nil {
-			return 0, fmt.Errorf("tracker: clear the options of %s: %w", field.Slug, err)
-		}
-		options, err := insertMany(ctx, tx, `
-			INSERT INTO tracker_field_options
-				(field_id, option_id, slug, name, name_norm, color, ord, archived)
-			VALUES (?,?,?,?,?,?,?,?)`,
-			field.Config.Options, func(o Option) []any {
-				return []any{field.ID, o.ID, o.Slug, o.Name,
-					NormName(o.Name), o.Color, o.Order, boolInt(o.Archived)}
-			})
-		if err != nil {
-			return 0, fmt.Errorf("tracker: write the options of %s: %w", field.Slug, err)
-		}
-		written += options
-	}
-	return written, nil
+	return a.settleFieldVisibility(ctx, tx, catalogue.Fields)
 }
 
 // settleFieldVisibility makes every value row agree with its declaration.

@@ -380,7 +380,7 @@ type Params interface {
 // The one shape not in it is a custom field, `f.<ref>`, whose refs are a
 // company's own and cannot be enumerated here — see [Query.parseFields].
 var QueryKeys = []string{
-	"any", "archived", "asked_by", "asked_of", "assignee", "batch",
+	"any", "archived", "archived_at", "asked_by", "asked_of", "assignee", "batch",
 	"blocked", "blocking", "checklist_assignee", "closed", "collaborator",
 	"container", "created", "cursor", "done", "due", "estimate",
 	"finished", "flag", "goal", "group", "group_by", "group_by2",
@@ -643,15 +643,22 @@ func (q *Query) parseSubtasks(p Params) error {
 	return nil
 }
 
-// dateKeys are the eight columns a date filter may name.
+// dateKeys are the nine columns a date filter may name.
 //
 // `status_entered` reads the EFFECTIVE instant because it is the start of a
-// duration; the other seven read the AUTHORED one, because each is a
+// duration; the other eight read the AUTHORED one, because each is a
 // wall-clock bound the caller typed and a clamp would answer a different
 // question from the one on the screen.
+//
+// `archived_at` is the newest of them and it is what gave that column a
+// reader: the instant was stamped, stored and read by nothing at all, so the
+// one question the archive raises — what left the board, and when — had no way
+// to be asked. It is spelled in full because `archived` is already the
+// three-valued MODE that decides whether archived rows are in the answer at
+// all, and one key cannot be both.
 var dateKeys = []string{
 	"due", "start", "created", "updated", "done", "closed", "finished",
-	"status_entered",
+	"archived_at", "status_entered",
 }
 
 func (q *Query) parseDates(p Params, now time.Time, loc *time.Location) error {

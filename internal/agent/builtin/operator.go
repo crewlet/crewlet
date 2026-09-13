@@ -100,6 +100,7 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		{&setPriorities{deps: work, leads: deps.Leads}, work.PersonWriter != nil},
 		{&setPins{deps: work}, work.PersonWriter != nil},
 		{&markInbox{deps: work}, work.PersonWriter != nil},
+		{&workInbox{deps: work}, work.Inbox != nil},
 		{&writeProject{deps: work, leads: deps.LeadsProject},
 			work.ProjectWriter != nil},
 		{&manageSprint{deps: work, leads: deps.LeadsProject},

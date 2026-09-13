@@ -926,6 +926,7 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 			TrashWriter:     func(builtin.Actor) builtin.TrashWriter { return nil },
 			SprintWriter:    func(builtin.Actor) builtin.SprintWriter { return nil },
 			ProjectWriter:   func(builtin.Actor) builtin.ProjectWriter { return trk },
+			Inbox:           trk,
 			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
 				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
 			},
@@ -1030,6 +1031,22 @@ func TestEveryOperatorToolAnswersOutsideATurn(t *testing.T) {
 // THE COMPOSITION IS THE HALF THAT CAN BE WRONG HERE: the tool turns keys into
 // ids and a `{set}` gesture into the adds and removes a two-ended write needs,
 // and the sequence itself is certified against a real store elsewhere.
+// Inbox answers one notice, which is all the placement test needs: what it is
+// about is whether the surface SERVES the verb, never what the verb returns.
+func (f *fakeTracker) Inbox(_ context.Context, q tracker.InboxQuery,
+	_ time.Time) (tracker.InboxAnswer, error) {
+
+	return tracker.InboxAnswer{
+		Handle:         q.Handle,
+		PrimaryReasons: tracker.DefaultPrimaryReasons,
+		Notices: []tracker.InboxNotice{{
+			RecordID: "rec-1", SubjectID: "i1", SubjectKey: "ENG-1",
+			Reason: tracker.ReasonAssignee, Primary: true,
+		}},
+		Primary: 1, Unread: 1,
+	}, nil
+}
+
 func (f *fakeTracker) Depend(_ context.Context, _ string,
 	change tracker.DependencyChange, _ tracker.Leads) (tracker.DependencyResult, error) {
 

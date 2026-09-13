@@ -3,6 +3,7 @@ package builtin
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -269,10 +270,11 @@ func (t *markInbox) Name() string { return tracker.MarkInboxTool }
 
 func (t *markInbox) Description() string {
 	return "Move your own inbox on: what you have read, what is still unread, " +
-		"what is snoozed and how far you have read. Entries at or below the " +
-		"seen-through position are dropped, because nothing will render them " +
-		"again. Read it with get_person first — every list REPLACES the one " +
-		"it names."
+		"what is snoozed, how far you have read, and which wake reasons are " +
+		"yours to act on. Entries at or below the seen-through position are " +
+		"dropped, because nothing will render them again. Read it with " +
+		"get_person first — every list REPLACES the one it names, so an " +
+		"omitted one is CLEARED rather than left alone."
 }
 
 func (t *markInbox) Parameters() map[string]any {
@@ -301,8 +303,27 @@ func (t *markInbox) Parameters() map[string]any {
 					"from a recreated stream compares as current, which is " +
 					"why this travels with it.",
 			},
+			"primary_reasons": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string"},
+				"description": "Which wake reasons land in the PRIMARY half " +
+					"of `work_inbox`, the rest being context. One of: " +
+					reasonList() + ". An empty list takes the shipped " +
+					"default (" + defaultPrimaryList() + ") rather than " +
+					"making nothing primary.",
+			},
 		},
 	}
+}
+
+// defaultPrimaryList is the shipped split as one sentence, derived for the
+// reason [reasonList] is derived.
+func defaultPrimaryList() string {
+	names := make([]string, 0, len(tracker.DefaultPrimaryReasons))
+	for _, reason := range tracker.DefaultPrimaryReasons {
+		names = append(names, string(reason))
+	}
+	return strings.Join(names, ", ")
 }
 
 func (t *markInbox) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
@@ -328,9 +349,18 @@ func (t *markInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if bad != "" {
 		return failed(bad), nil
 	}
+	var reasons []tracker.Reason
+	for _, raw := range argStrings(args, "primary_reasons") {
+		reason := tracker.Reason(strings.TrimSpace(raw))
+		if !slices.Contains(tracker.Reasons, reason) {
+			return failed(fmt.Sprintf("%q is not a wake reason. The reasons "+
+				"are: %s.", raw, reasonList())), nil
+		}
+		reasons = append(reasons, reason)
+	}
 	result, err := writer.WriteInbox(ctx,
 		"inbox-"+actor.Handle+"-"+turnKeyOr(turn), actor.Handle,
-		read, unread, snoozed, nil, tracker.Position{
+		read, unread, snoozed, reasons, tracker.Position{
 			Stream: strings.TrimSpace(argString(args, "seen_through_stream")),
 			Seq:    uint64(argFloat(args, "seen_through")),
 		})
@@ -428,4 +458,131 @@ func personFavorites(args map[string]any) ([]tracker.Favorite, string) {
 		})
 	}
 	return out, ""
+}
+
+// InboxReader is the read side the inbox tool needs.
+//
+// DECLARED HERE, by the consumer, like every other seam in this tree — and
+// separately from [PersonReader] because they are different questions: one is
+// the person's own marks, the other is what the company asked of them.
+type InboxReader interface {
+	Inbox(ctx context.Context, q tracker.InboxQuery, now time.Time) (
+		tracker.InboxAnswer, error)
+}
+
+type workInbox struct{ deps WorkDeps }
+
+var _ tools.Callable = (*workInbox)(nil)
+
+func (t *workInbox) Name() string { return tracker.WorkInboxTool }
+
+func (t *workInbox) Description() string {
+	return "What the company has asked of somebody, newest first: every " +
+		"change routed to them, the one reason each reached them under, and " +
+		"whether they have read it. The PRIMARY half is what they have said " +
+		"is theirs to act on — mentions, questions, their own work — and the " +
+		"rest is context. This is the durable record the engine wrote when " +
+		"the change landed, so it is there whether or not anybody was online."
+}
+
+func (t *workInbox) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"handle": map[string]any{
+				"type":        "string",
+				"description": "Whose inbox to read.",
+			},
+			"reasons": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string"},
+				"description": "Narrow to these wake reasons. One of: " +
+					reasonList() + ". Omit for every reason, which is not " +
+					"the same as the primary half — that CLASSIFIES and this " +
+					"FILTERS.",
+			},
+			"primary_only": map[string]any{
+				"type": "boolean",
+				"description": "Drop the context half rather than labelling " +
+					"it, for a caller with room for one list.",
+			},
+			"unread": map[string]any{
+				"type": "boolean",
+				"description": "Drop what they have already read. Applied to " +
+					"the page, so use `since` for the cheap form.",
+			},
+			"include_snoozed": map[string]any{
+				"type": "boolean",
+				"description": "Keep what they snoozed. Off by default, " +
+					"because a snooze means `not now`. One whose time has " +
+					"come comes back either way.",
+			},
+			"since": map[string]any{
+				"type": "string",
+				"description": "A log position — `stream@generation:seq`. " +
+					"Pass the `seen_through` from a previous read to get " +
+					"only what has arrived since.",
+			},
+			"cursor": map[string]any{
+				"type":        "string",
+				"description": "The `next_cursor` of the previous page.",
+			},
+			"limit": map[string]any{
+				"type": "number",
+				"description": fmt.Sprintf("How many notices, at most %d.",
+					tracker.MaxInboxRows),
+			},
+		},
+		"required": []string{"handle"},
+	}
+}
+
+func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
+	if t.deps.Inbox == nil {
+		return unconfigured(tracker.WorkInboxTool), nil
+	}
+	handle := strings.TrimSpace(argString(args, "handle"))
+	if handle == "" {
+		return failed("Name whose inbox to read with `handle`."), nil
+	}
+	q := tracker.InboxQuery{
+		Handle:         handle,
+		PrimaryOnly:    argBool(args, "primary_only"),
+		Unread:         argBool(args, "unread"),
+		IncludeSnoozed: argBool(args, "include_snoozed"),
+		Cursor:         strings.TrimSpace(argString(args, "cursor")),
+		Limit:          int(argFloat(args, "limit")),
+		Level:          seatReadLevel,
+	}
+	for _, raw := range argStrings(args, "reasons") {
+		reason := tracker.Reason(strings.TrimSpace(raw))
+		if !slices.Contains(tracker.Reasons, reason) {
+			return failed(fmt.Sprintf("%q is not a wake reason. The reasons "+
+				"are: %s.", raw, reasonList())), nil
+		}
+		q.Reasons = append(q.Reasons, reason)
+	}
+	if since := strings.TrimSpace(argString(args, "since")); since != "" {
+		at, err := tracker.ParseLogPosition(since)
+		if err != nil {
+			return failed(err.Error()), nil
+		}
+		q.Since = at
+	}
+	answer, err := t.deps.Inbox.Inbox(ctx, q, t.deps.now())
+	if err != nil {
+		return failed(readFailure(tracker.WorkInboxTool, err)), nil
+	}
+	return jsonResult(answer)
+}
+
+// reasonList is the wake reasons as one sentence, DERIVED rather than typed
+// out: a reason added to the set has to reach the description, and a literal
+// list is the reader it would not reach.
+func reasonList() string {
+	names := make([]string, 0, len(tracker.Reasons))
+	for _, reason := range tracker.Reasons {
+		names = append(names, string(reason))
+	}
+	return strings.Join(names, ", ")
 }

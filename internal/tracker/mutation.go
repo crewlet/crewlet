@@ -1171,24 +1171,6 @@ type TurnSpend struct {
 // Tokens is the derived eighth counter, so nothing else adds the two halves.
 func (s TurnSpend) Tokens() int { return s.Input + s.Output }
 
-// InboxDelta is a person's inbox change, as a DELTA rather than the document.
-//
-// THE SECOND FOLD, and it is pure arithmetic. The person object holds read,
-// unread and snoozed at a cap of 256 each — about 2 KiB. At fifty people
-// marking twenty items a day, carrying the whole document is 365 000 × 2 KiB
-// = 730 MB a year; as a delta at ≈ 300 B it is 109.5 MB. The document is
-// still what the object IS: this is what a record carries about it.
-type InboxDelta struct {
-	// SeenThrough is the position everything at or below is pruned at, and
-	// it is what makes the delta safe to apply out of order: a stale delta
-	// re-adds nothing, because the prune runs on every write.
-	SeenThrough uint64 `json:"seen_through,omitempty"`
-
-	// ReadAdd and UnreadDrop are the two edges an inbox action moves.
-	ReadAdd    []string `json:"read_add,omitempty"`
-	UnreadDrop []string `json:"unread_drop,omitempty"`
-}
-
 // EncodeBarrier renders a read index's barrier as a record this domain's
 // applier decodes.
 //
