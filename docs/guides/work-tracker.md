@@ -301,6 +301,24 @@ what keeps a carry-over out of the backlog: a task pulled forward into the next
 sprint is in that sprint, while one pulled back out of every sprint is
 unplanned work again.
 
+### What a sprint report answers, and what a burndown adds
+
+`sprint_report` gives one row per sprint in a window: **committed** (what it
+started with), **added** (what arrived after the start), **removed** (what was
+pulled out and not carried), **done** (what was DELIVERED inside the sprint's
+own window) and **remaining**, all in whichever of `points` and
+`estimate_minutes` the project's `measure` names. Delivery is not membership,
+so a task can sit in a sprint the whole way through without finishing, or
+finish in one it joined an hour before the close.
+
+A **burndown** is the same sprint scored at every instant of its window rather
+than at its two ends, and the dashboard draws it over the running sprint. Its
+`remaining` is an **open status group** rather than "not delivered", which is
+the whole arithmetic: a task that was cancelled has stopped being work, so
+counting it as remaining makes a descoped sprint run flat and read as a team
+that shipped nothing. The series stops at the reader's own instant, because an
+unlived day is not a measurement.
+
 **Goals** are the tier above projects: a name, owners, dates, a health value
 and a free-text group label. A goal has **targets**, and a target references
 work — a project, a set of tasks, a number somebody moves by hand. Goals
