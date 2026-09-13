@@ -188,6 +188,22 @@ describe("templates", () => {
     ]);
   });
 
+  test("a unit whose lead seat took the next free name is led by that name", () => {
+    const { doc } = build({
+      template: "established_company",
+      charter: { name: "Acme" },
+      leads: "agents",
+      founder: { name: "Engineering Lead", identity: "github_login", value: "alex" },
+    });
+    const engineering = doc.units!.find((u) => u.name === "Engineering")!;
+    expect(engineering.roles!.map((r) => r.name)).toEqual(["Engineering Lead 2"]);
+    expect(engineering.lead).toBe("Engineering Lead 2");
+    // The chief executive's reports name the lead as it was finally named too.
+    expect(doc.roles!.find((r) => r.name === "Chief Executive")?.manages).toContain(
+      "Engineering Lead 2",
+    );
+  });
+
   test("a create form missing what a template needs is refused with what to do", () => {
     const keys = countingKeys();
     expect(templateIntent({ template: "new_company", charter: { name: " " } }, keys)).toMatchObject(

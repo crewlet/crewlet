@@ -12,7 +12,7 @@
 import { describe, expect, test } from "vitest";
 import type { CompanyDocument } from "~/protocol/index.ts";
 import { cloneJson, getPath } from "./json.ts";
-import { COMPANY_KEY, mintKey, seatPathKey, type NodeKey } from "./keys.ts";
+import { COMPANY_KEY, mintKey, seatPathKey, unitPathKey, type NodeKey } from "./keys.ts";
 import { locate, type Draft } from "./draft.ts";
 import { fromDocument, toDocument } from "./document.ts";
 import {
@@ -160,6 +160,22 @@ describe("removing", () => {
     expect(seat(removed.draft, "seat:ceo").manages).toBeUndefined();
   });
 
+  test("a root seat whose unit reference another unit of that name still resolves is not placed in the removed one", () => {
+    // Before unit names had to be unique: the engine resolves `unit:` to the
+    // FIRST unit of that name, so removing a later twin neither takes the
+    // seat with it nor clears its reference.
+    const base: CompanyDocument = {
+      name: "X",
+      roles: [{ name: "Floater", unit: "Platform" }],
+      units: [{ name: "Platform" }, { name: "Ops", children: [{ name: "Platform" }] }],
+    };
+    const draft = fixture(base);
+    const twin = unitPathKey("units[1].children[0]");
+    const { op, draft: next } = run(draft, { type: "remove", target: twin, placedSeats: "remove" });
+    expect(op).toMatchObject({ placed: [] });
+    expect(seat(next, "seat:floater").unit).toBe("Platform");
+  });
+
   test("an entry that named a removed SEAT is cleared even when a unit of that name remains", () => {
     const base: CompanyDocument = {
       name: "X",
@@ -280,6 +296,28 @@ describe("renaming", () => {
       name: "Operations",
     }).draft;
     expect(seat(renamed, "seat:boss").manages).toEqual(["Ops"]);
+  });
+
+  test("a seat renamed away from a name another seat still holds leaves the references to that name alone", () => {
+    // A stored revision from before seat names had to be unique: "Dup" in a
+    // lead or a manages entry still names the seat that keeps the name.
+    const base: CompanyDocument = {
+      name: "X",
+      roles: [
+        { name: "Dup", handle: "a" },
+        { name: "Dup", handle: "b" },
+        { name: "Boss", manages: ["Dup"] },
+      ],
+      units: [{ name: "U", lead: "Dup" }],
+    };
+    const { draft, report } = run(fixture(base), {
+      type: "renameSeat",
+      target: "seat:a",
+      name: "Solo",
+    });
+    expect(seat(draft, "seat:boss").manages).toEqual(["Dup"]);
+    expect(unit(draft, "unit:U").lead).toBe("Dup");
+    expect(report.followed).toEqual([]);
   });
 
   test("an unchanged name records nothing", () => {
