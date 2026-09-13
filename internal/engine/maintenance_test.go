@@ -1,10 +1,12 @@
 package engine_test
 
 import (
+	"context"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/schedule"
@@ -96,6 +98,45 @@ func TestTheEngineRegistersEverySeatMailboxWithTheFleet(t *testing.T) {
 	slices.Sort(seats)
 	if len(seats) == 0 || !slices.Equal(handles, seats) {
 		t.Fatalf("registered mailboxes %v, want every agent seat %v", handles, seats)
+	}
+}
+
+// A GRACEFUL STOP GIVES EVERY FLEET DUTY BACK, AND ONLY THE DUTIES.
+//
+// A duty is claimed per tick and its lease outlives several ticks (45 minutes
+// for this sweep, three hours for the skill curator), and a restarted process
+// is a new incarnation that cannot re-claim what the old one held. Kept, every
+// deploy that restarted the holder left the duty dark for its whole TTL. A
+// setup hold under the same prefix is different: it belongs to a pass that may
+// still be running, and giving it back would let a second writer in mid-pass.
+func TestAStoppedEngineGivesItsDutiesBackAndKeepsItsHolds(t *testing.T) {
+	t.Parallel()
+	e := newEngine(t, engine.Options{})
+	ctx := context.Background()
+	leases := e.Backends().Coord
+	owner := e.Node().Owner()
+
+	if _, err := e.Maintenance().Tick(ctx); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	duty := coord.WorkerResource("maintenance")
+	if held, err := leases.Get(ctx, duty); err != nil || held == nil || held.Owner != owner {
+		t.Fatalf("precondition: the sweep's tick did not leave %s held by this node: (%v, %v)", duty, held, err)
+	}
+	hold := coord.WorkerResource("setup-provision-github")
+	if _, err := leases.TryAcquire(ctx, hold, coord.AcquireOptions{
+		Owner: owner, TTL: 5 * time.Minute, Ungated: true,
+	}); err != nil {
+		t.Fatalf("precondition: take a setup hold: %v", err)
+	}
+
+	e.Stop(ctx)
+
+	if got, err := leases.Get(ctx, duty); err != nil || got != nil {
+		t.Fatalf("after a graceful stop %s reads (%v, %v), want it given back", duty, got, err)
+	}
+	if got, err := leases.Get(ctx, hold); err != nil || got == nil || got.Owner != owner {
+		t.Fatalf("after a graceful stop the setup hold reads (%v, %v), want it left to its pass", got, err)
 	}
 }
 

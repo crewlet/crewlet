@@ -272,8 +272,12 @@ it can talk to.
 ## Draining and rolling upgrades
 
 A node stops by draining: it stops taking new work, lets in-flight turns
-finish, releases each seat as it goes idle, and exits. Peers pick the
-seats up. Point load-balancer readiness at `/ready` (`503` while
+finish, releases each seat as it goes idle, gives back every fleet duty it
+holds once its duty loops have finished their last tick, and exits. Peers
+pick the seats and the duties up. A node that is killed instead releases
+nothing: its seats move after the lease TTL, and its duties after their own
+TTL, which for the retention sweep is 45 minutes and for the skill curator
+three hours. Point load-balancer readiness at `/ready` (`503` while
 draining) and liveness at `/health` (stays `200` through a drain), and
 give the orchestrator a termination grace period longer than your longest
 turn — the engine does not impose its own cutoff, because that would be a

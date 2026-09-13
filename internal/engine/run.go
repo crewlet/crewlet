@@ -66,6 +66,10 @@ type Engine struct {
 	// teardown all take it from here.
 	setupRunner func() *setup.Runner
 
+	// duties names every fleet duty this engine claims, so a graceful stop
+	// can give each one back. See [Engine.releaseDuties].
+	duties claimedDuties
+
 	// startedAt is when THIS engine started, which on a split deployment
 	// is a different process on a different clock from the API's own
 	// start. Carried on the presence heartbeat so a peer can tell a node
@@ -797,6 +801,9 @@ func (e *Engine) Stop(ctx context.Context) {
 	// paid summarisation against a closed database.
 	e.stopLearning()
 	e.stopScheduler()
+	// AFTER every duty loop above has stopped and waited out its tick, so no
+	// tick of this node runs once a peer can take the duty.
+	e.releaseDuties(ctx)
 	e.stopCooldownRefresh()
 	e.node.Stop(ctx)
 	// AFTER the seats are released, so a per-role child is normally
