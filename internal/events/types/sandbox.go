@@ -178,9 +178,11 @@ const (
 
 	// SandboxFailureSuspensionUnrecorded is a run whose turn suspended but
 	// whose conversation never reached the run's record: the runner
-	// recorded none, it would not serialize, the record could not be
-	// written, or the run was no longer launching. The job was already
-	// executing, so its box is reclaimed rather than left to its TTL.
+	// recorded none, it would not serialize, or the record could not be
+	// written and the run is still launching. The job was already
+	// executing, so its box is reclaimed rather than left to its TTL. A run
+	// that is no longer launching is not ended under this reason: its
+	// conversation landed after all, or somebody else already ended it.
 	SandboxFailureSuspensionUnrecorded = "suspension_unrecorded"
 
 	// SandboxFailureSeatRemoved is a run of a seat that was removed from the

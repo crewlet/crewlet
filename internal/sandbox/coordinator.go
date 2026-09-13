@@ -655,14 +655,20 @@ func (c *Coordinator) settleFailed(ctx context.Context, run PendingRun, reason, 
 // other lost turn, while this node still owns the seat: the box reclaimed, the
 // run finished, the seat freed and the loss announced.
 //
-// A run whose record is already gone has nothing left to settle. A record that
-// cannot be read is returned, because the box it names is then unknown.
+// ONLY A RUN STILL LAUNCHING is settled, because that is the one state the
+// failed suspension proves nothing else will act on. A run whose record is
+// gone was ended by somebody else. A run already running carries a
+// conversation after all: a write reported as failed can have landed, and that
+// run is an ordinary suspended one the completion poll resumes, so settling it
+// here would destroy a turn that is fine. Any other state belongs to a party
+// that has moved the run on. A record that cannot be read is returned, because
+// the box it names is then unknown.
 func (c *Coordinator) FailRun(ctx context.Context, turnID, reason, detail string) error {
 	run, found, err := c.pending.Get(ctx, turnID)
 	if err != nil {
 		return fmt.Errorf("sandbox: reading run %s to settle it: %w", turnID, err)
 	}
-	if !found {
+	if !found || run.Status != StatusLaunching {
 		return nil
 	}
 	c.settleFailed(ctx, run, reason, detail)

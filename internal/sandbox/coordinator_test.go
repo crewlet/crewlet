@@ -1088,6 +1088,30 @@ func TestFailingARunThatCouldNotSuspendReclaimsItsBox(t *testing.T) {
 	}
 }
 
+// A SUSPENSION REPORTED AS UNWRITTEN CAN HAVE LANDED. A store write that
+// times out after it committed leaves the run running with its conversation on
+// the record, which is an ordinary suspended run the completion poll resumes.
+// Only a run still launching is one nothing else will act on, so only that one
+// is settled; settling this one would destroy a turn that is fine.
+func TestFailingARunWhoseSuspensionLandedLeavesItAlone(t *testing.T) {
+	rig := newCoordRig(t)
+	run := rig.launch("t1")
+
+	if err := rig.coordinator.FailRun(t.Context(), "t1",
+		types.SandboxFailureSuspensionUnrecorded, "the write timed out"); err != nil {
+		t.Fatalf("FailRun: %v", err)
+	}
+	if got := rig.get("t1"); got.Status != StatusRunning || got.SandboxID != run.SandboxID {
+		t.Fatalf("the suspended run was disturbed: %+v", got)
+	}
+	if killed := rig.provider.KilledIDs(); len(killed) != 0 {
+		t.Fatalf("killed %v: a suspended run's box was reclaimed", killed)
+	}
+	if failed := rig.failures(); len(failed) != 0 {
+		t.Fatalf("announced %+v for a run that is still resumable", failed)
+	}
+}
+
 // A run that is already gone was settled by somebody else, who reclaimed its
 // box and said so.
 func TestFailingARunThatIsAlreadyGoneDoesNothing(t *testing.T) {

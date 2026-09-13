@@ -541,10 +541,13 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 // active is read by no recovery pass and polled by no waiter, so the box ran
 // to its provider's TTL, billed, with nothing left to reclaim it. The
 // coordinator settles it like every other lost turn, while this node still
-// owns the seat, and the loss is announced rather than left as silence.
+// owns the seat, and the loss is announced rather than left as silence. It
+// settles only a run still launching (see [sandbox.Coordinator.FailRun]): a
+// write reported as failed can have landed, and a run it moved to running is
+// one the completion poll resumes.
 func (e *Engine) failSuspension(ctx context.Context, turnID, event, detail string, cause error) {
 	args := []any{"turn_id", turnID,
-		"detail", detail + "; the run cannot be resumed, so its box is reclaimed and the run ended"}
+		"detail", detail + "; a run still launching cannot be resumed, so its box is reclaimed and the run ended"}
 	if cause != nil {
 		args = append(args, "error", cause)
 	}
