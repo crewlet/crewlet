@@ -106,6 +106,85 @@ func TestEnsuringALegacySubscriptionStampsItsPair(t *testing.T) {
 	}
 }
 
+// A PAIR IS LISTED ONLY WHEN IT ADDRESSES THE CONSUMER IT WAS READ FROM.
+//
+// A sweep acts on the pair, never on the consumer: it deletes
+// consumerName(topic, group). Metadata naming some other pair would send it to
+// delete a subscription it never looked at while the consumer it did find kept
+// its mail. And an ephemeral consumer is not a subscription at all, which is a
+// different answer from an unprovable one: the second is logged, and every
+// dashboard socket holds a consumer of the first kind.
+func TestPairOfListsOnlyAPairThatAddressesTheConsumer(t *testing.T) {
+	t.Parallel()
+	consumer := func(durable, filter string, meta map[string]string) *jetstream.ConsumerInfo {
+		return &jetstream.ConsumerInfo{Config: jetstream.ConsumerConfig{
+			Durable: durable, Name: durable, FilterSubject: filter, Metadata: meta,
+		}}
+	}
+	ephemeral := &jetstream.ConsumerInfo{Config: jetstream.ConsumerConfig{
+		Name: "Xy12ab", FilterSubject: topics.AgentInbox("alice"),
+	}}
+	for _, tc := range []struct {
+		name    string
+		info    *jetstream.ConsumerInfo
+		want    queue.Subscription
+		verdict pairVerdict
+	}{
+		{"no consumer", nil, queue.Subscription{}, pairNotSubscription},
+		{"an ephemeral consumer", ephemeral, queue.Subscription{}, pairNotSubscription},
+		{"metadata that derives the name, over a name that cannot prove it",
+			consumer(consumerName("t.x", "h.i"), "t.x", subscriptionMetadata("t.x", "h.i")),
+			queue.Subscription{Topic: "t.x", Group: "h.i"}, pairListed},
+		{"metadata naming another pair, over a name that cannot prove its own",
+			consumer(consumerName("t.x", "h.i"), "t.x", subscriptionMetadata("t.victim", "grp")),
+			queue.Subscription{}, pairUnprovable},
+		{"metadata naming another pair, over a name that proves its own",
+			consumer(consumerName("t.x", "g"), "t.x", subscriptionMetadata("t.victim", "grp")),
+			queue.Subscription{Topic: "t.x", Group: "g"}, pairListed},
+		{"no metadata, a provable name",
+			consumer(consumerName("t.x", "g"), "t.x", nil),
+			queue.Subscription{Topic: "t.x", Group: "g"}, pairListed},
+		{"no metadata, a lossy name",
+			consumer(consumerName("t.x", "h.i"), "t.x", nil),
+			queue.Subscription{}, pairUnprovable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, verdict := pairOf(tc.info)
+			if verdict != tc.verdict || got != tc.want {
+				t.Fatalf("pairOf = (%+v, %d), want (%+v, %d)", got, verdict, tc.want, tc.verdict)
+			}
+		})
+	}
+}
+
+// The same rule through the broker: a consumer whose metadata was rewritten to
+// name another subscription is never listed under that subscription.
+func TestAConsumerIsNeverListedUnderAPairThatDoesNotAddressIt(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	q := openForTest(t, Config{})
+	stream, err := q.streamFor(ctx, "moved.topic")
+	if err != nil {
+		t.Fatalf("streamFor: %v", err)
+	}
+	if _, err := q.js.CreateOrUpdateConsumer(ctx, stream, jetstream.ConsumerConfig{
+		Durable:       consumerName("moved.topic", "h.i"),
+		FilterSubject: "moved.topic",
+		Metadata:      subscriptionMetadata("moved.victim", "grp"),
+		AckPolicy:     jetstream.AckExplicitPolicy,
+	}); err != nil {
+		t.Fatalf("CreateOrUpdateConsumer: %v", err)
+	}
+	got, err := q.ListSubscriptions(ctx, "moved.>")
+	if err != nil {
+		t.Fatalf("ListSubscriptions: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("ListSubscriptions = %v, want nothing: the metadata names a pair that does not "+
+			"address this consumer, and its own name proves none", got)
+	}
+}
+
 func TestPairFromConsumerNameAcceptsOnlyWhatItCanProve(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("x", consumerNameMax)

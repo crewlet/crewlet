@@ -583,10 +583,12 @@ const streamNamePrefix = "CREWLET_"
 // several.
 //
 // An ephemeral consumer (a stream subscription, a peek, a memory replay) is not
-// a subscription and is skipped. A durable consumer that carries no pair in its
-// metadata was made by an older build and is recovered from its name when that
-// can be proven (see pairFromConsumerName); one that cannot be recovered is
-// logged and left out rather than listed under a guessed pair.
+// a subscription and is skipped. A durable consumer is listed under the pair
+// its metadata records when that pair derives its name; one whose metadata
+// carries no such pair (an older build made it, or something rewrote it) is
+// recovered from its name when that can be proven (see pairOf and
+// pairFromConsumerName), and one that cannot be is logged and left out rather
+// than listed under a guessed pair.
 func (q *Queue) ListSubscriptions(ctx context.Context, topicPattern string) ([]queue.Subscription, error) {
 	if q.isClosed() {
 		return nil, ErrClosed
@@ -641,24 +643,60 @@ func (q *Queue) ListSubscriptions(ctx context.Context, topicPattern string) ([]q
 }
 
 // subscriptionOf reads the pair a consumer was created for, reporting false for
-// a consumer that is not a durable subscription or whose pair cannot be known.
+// a consumer that is not a durable subscription or whose pair cannot be known,
+// and logging the second.
 func (q *Queue) subscriptionOf(ctx context.Context, stream string, info *jetstream.ConsumerInfo) (queue.Subscription, bool) {
-	if info == nil || info.Config.Durable == "" {
-		return queue.Subscription{}, false
+	sub, verdict := pairOf(info)
+	if verdict == pairUnprovable {
+		q.log.WarnContext(ctx, "jetstream_subscription_unnamed", "stream", stream,
+			"consumer", info.Config.Durable, "filter_subject", info.Config.FilterSubject,
+			"detail", "a durable consumer names no subscription pair that addresses it, so it is "+
+				"left out of the subscription listing; if nothing uses it, delete it with the "+
+				"nats CLI")
 	}
-	if topic, group := info.Config.Metadata[metaTopic], info.Config.Metadata[metaGroup]; topic != "" && group != "" {
-		return queue.Subscription{Topic: topic, Group: group}, true
+	return sub, verdict == pairListed
+}
+
+// pairVerdict is what a consumer's config says about the subscription it is.
+type pairVerdict int
+
+const (
+	// pairListed is a durable subscription whose pair is proven.
+	pairListed pairVerdict = iota
+	// pairNotSubscription is a consumer that is no subscription at all: an
+	// ephemeral stream subscription, a peek or a replay. Skipped silently,
+	// because every dashboard socket holds one and each is working as
+	// designed.
+	pairNotSubscription
+	// pairUnprovable is a durable consumer whose pair nothing proves.
+	pairUnprovable
+)
+
+// pairOf reads the pair a consumer was created for.
+//
+// A PAIR IS LISTED ONLY WHEN IT ADDRESSES THIS CONSUMER: the durable name the
+// pair derives (consumerName) must be this consumer's own. That holds for the
+// metadata as much as for a name recovered by pairFromConsumerName, because the
+// caller acts on the pair rather than on the consumer: a retirement sweep
+// deletes consumerName(topic, group), so metadata naming any other pair (edited
+// by a tool, or copied onto another consumer) would send it to delete a
+// subscription it never looked at while this one kept its mail. Metadata that
+// fails the check falls through to the name, which proves its own pair or
+// nothing.
+func pairOf(info *jetstream.ConsumerInfo) (queue.Subscription, pairVerdict) {
+	if info == nil || info.Config.Durable == "" {
+		return queue.Subscription{}, pairNotSubscription
+	}
+	name := info.Config.Durable
+	if topic, group := info.Config.Metadata[metaTopic], info.Config.Metadata[metaGroup]; topic != "" && group != "" &&
+		consumerName(topic, group) == name {
+		return queue.Subscription{Topic: topic, Group: group}, pairListed
 	}
 	topic := info.Config.FilterSubject
-	if group, ok := pairFromConsumerName(info.Config.Durable, topic); ok {
-		return queue.Subscription{Topic: topic, Group: group}, true
+	if group, ok := pairFromConsumerName(name, topic); ok {
+		return queue.Subscription{Topic: topic, Group: group}, pairListed
 	}
-	q.log.WarnContext(ctx, "jetstream_subscription_unnamed", "stream", stream,
-		"consumer", info.Config.Durable, "filter_subject", topic,
-		"detail", "a durable consumer carries no subscription pair and its name does not prove "+
-			"one, so it is left out of the subscription listing; if nothing uses it, delete it "+
-			"with the nats CLI")
-	return queue.Subscription{}, false
+	return queue.Subscription{}, pairUnprovable
 }
 
 // InFlightCount reports handler invocations currently mid-flight.
