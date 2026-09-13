@@ -346,19 +346,31 @@ type MaintenanceRegister interface {
 	MaintenanceAcks(ctx context.Context) ([]MaintenanceAck, error)
 }
 
-// MaintenanceKey, AdmissionKey and MaintenanceAckKey are the three key
-// classes, in the positions register beside the trim's own.
+// MaintenanceKey addresses one stream's capacity operation, which is to say
+// the exclusion itself: the key's existence is what keeps publishers off that
+// stream, so there is exactly one per stream and the delete is the release.
 //
-// IN THAT REGISTER because it is the one with no age at all, and every one of
-// these must outlive any clock: an expiring operation admits publishers, an
-// expiring admission hides one, and an expiring acknowledgement un-seals a
-// barrier that has already run.
+// It is the first of the three key classes the window is made of — with
+// [AdmissionKey] and [MaintenanceAckKey] — and all three live in the positions
+// register beside the trim's own. IN THAT REGISTER because it is the bucket
+// with no age at all, and every one of these must outlive any clock: an
+// expiring operation admits publishers, an expiring admission hides one, and
+// an expiring acknowledgement un-seals a barrier that has already run.
 func MaintenanceKey(stream string) string { return DocumentKey("maintenance", stream) }
 
-// AdmissionKey is a node's admission key.
+// AdmissionKey addresses one node's admission: its POSITIVE record that it
+// intends to publish, which is what a coordinator establishes exclusion
+// against. Per node rather than per stream, because the handshake is about
+// which processes are running and a node admits itself before it re-reads the
+// operation — see the ADMISSION note above for why an absence check is not the
+// same thing.
 func AdmissionKey(nodeID string) string { return DocumentKey("admitted", nodeID) }
 
-// MaintenanceAckKey is a node's acknowledgement key.
+// MaintenanceAckKey addresses one participant's acknowledgement that its
+// process restarted for the current attempt. Per node for the reason an
+// admission is: the seal is established from evidence each process leaves
+// about itself, never from a fleet-wide fact a coordinator could assert on
+// everyone's behalf.
 func MaintenanceAckKey(nodeID string) string { return DocumentKey("maintenance-ack", nodeID) }
 
 // MaintenanceResource is the coordinator lease's resource name.

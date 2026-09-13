@@ -70,6 +70,7 @@ var maintenanceCases = []fleetCase{
 		successor := opened
 		successor.Phase = coord.PhaseBaselined
 		successor.WriteIncarnations = map[string]string{"node-1": "node-1:a"}
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := h.f.UpdateMaintenance(h.ctx, successor); err != nil {
 			h.t.Fatalf("the successor's write: %v", err)
 		}
@@ -128,9 +129,11 @@ var maintenanceCases = []fleetCase{
 
 			moved := opened
 			moved.Phase = coord.PhaseBaselined
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := h.f.UpdateMaintenance(h.ctx, moved); err != nil {
 				h.t.Fatalf("UpdateMaintenance: %v", err)
 			}
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := h.f.CloseMaintenance(h.ctx, opened.Stream, "op-1", stale); !errors.Is(
 				err, coord.ErrMaintenanceMoved) {
 				h.t.Fatalf("a delete at a stale revision returned %v, want a "+
@@ -203,11 +206,13 @@ var maintenanceCases = []fleetCase{
 
 			// A LATE CLEANUP against the crashed process's identity
 			// must not remove the NEWER one's.
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := h.f.PutAdmission(h.ctx, coord.Admission{
 				NodeID: "node-1", Incarnation: "node-1:b",
 			}); err != nil {
 				h.t.Fatalf("the replacement process's admission: %v", err)
 			}
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := h.f.ForgetAdmission(h.ctx, "node-1", "node-1:a"); err != nil {
 				h.t.Fatalf("ForgetAdmission: %v", err)
 			}
