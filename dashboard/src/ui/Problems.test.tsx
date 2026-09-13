@@ -8,9 +8,9 @@
  */
 
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 
-import { Problems, marked, split } from "./Problems.tsx";
+import { Problems, marked, paths, split } from "./Problems.tsx";
 
 afterEach(cleanup);
 
@@ -115,4 +115,46 @@ test("several problems are one line each", () => {
   expect(container.querySelectorAll("li").length).toBe(2);
   // The route inside the second one is still picked out.
   expect(screen.getByText("/webhooks/confluence").tagName).toBe("CODE");
+});
+
+// A MAP KEY IS WRITTEN AS THE OPERATOR WROTE IT. A server name can carry a
+// hyphen and a variable name is upper snake case, and the three patterns that
+// find a path each missed both, in three slightly different ways: the path
+// rendered as prose, and a caller acting on `paths` never heard about it.
+describe("a path through map keys", () => {
+  const upper = "roles[2].mcp_env.tracker.TOKEN";
+  const hyphenated = "units[0].children[1].mcp_env.jira-cloud.API_TOKEN";
+
+  test("opens a problem line", () => {
+    expect(split(`${upper}: literal value is masked`)[0]?.path).toBe(upper);
+    expect(split(`${hyphenated}: literal value is masked`)[0]?.path).toBe(hyphenated);
+    expect(split("mcp_env.tracker.TOKEN: unresolved")[0]?.path).toBe("mcp_env.tracker.TOKEN");
+  });
+
+  test("is found inside a sentence, in the same shape as at the head", () => {
+    expect(paths(`the mask at ${hyphenated} could not be restored`)).toEqual([hyphenated]);
+    expect(paths(`${upper}: set it, or remove roles[2].mcp_env.tracker.TOKEN`)).toEqual([upper]);
+  });
+
+  test("is marked up as one path, not as a word and a fragment", () => {
+    render(<span>{marked(`restore ${hyphenated} before renaming`)}</span>);
+    expect(screen.getByText(hyphenated).tagName).toBe("CODE");
+  });
+
+  test("stops where the key does", () => {
+    // A trailing index, and a dash that belongs to the sentence.
+    expect(paths("remove roles[0].contact.emails[1] and retry")).toEqual([
+      "roles[0].contact.emails[1]",
+    ]);
+    expect(paths("check mcp_env.jira-cloud.API_TOKEN - then retry")).toEqual([
+      "mcp_env.jira-cloud.API_TOKEN",
+    ]);
+  });
+
+  test("an ordinary sentence is still prose", () => {
+    expect(paths("See crewlet.yaml, e.g. the API section.")).toEqual([]);
+    expect(split("The Engine refused: try again")).toEqual([
+      { text: "The Engine refused: try again" },
+    ]);
+  });
 });
