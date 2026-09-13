@@ -1,11 +1,11 @@
 # Tool Skills
 
-Tool Skills are modular prompt fragments that teach an agent *how to use* a particular tool or MCP server. Each skill lives as one page in a dedicated container of the knowledge backend — a Confluence **space** — is loaded into the engine's in-memory `PromptSkillRegistry` at boot, and is kept fresh by the backend's page webhooks at runtime.
+Tool Skills are modular prompt fragments that teach an agent *how to use* a particular tool or MCP server. Each skill lives as one page in a dedicated container of the knowledge backend (a Confluence **space**), is loaded into the node's in-memory `skills.Registry` at boot, and is kept fresh by the backend's page webhooks at runtime.
 
 **Two-tier consumption:**
 
 - A short **summary** (≤240 bytes) always appears in the per-phase prompt catalogue so the executor knows the skill exists.
-- A rich **body** (≤32 KB) loads on demand via the `load_tool_skill(key)` builtin, which is always available in Execute and Sub-agent.
+- A rich **body** (at most 32 KB) loads on demand via the `load_tool_skill(key)` builtin, which the executor always carries and a worker receives whenever its parent can reach it.
 
 This keeps the prompt prefix small (no eager body inlining) while still making rich skill content available the moment the agent decides it needs it.
 
@@ -27,8 +27,8 @@ This covers the *how-to* half of tool decoupling. The structural half — the en
 flowchart TD
     OP["(operator authors / edits)"]
     KB["Knowledge backend — 'Tool Skills' container<br/>(Confluence space TS)"]
-    SYNC["skill sync worker<br/>(one, per backend)"]
-    REG["PromptSkillRegistry<br/>(in-memory)"]
+    SYNC["skill sync<br/>(a full walk of the space)"]
+    REG["skills.Registry<br/>(in-memory, one per node)"]
     CAT["summary in per-phase catalogue"]
     LOAD["load_tool_skill(key) builtin<br/>(LLM-driven, always available)"]
     BODY["LLM sees the rich body only<br/>when it decides it's needed"]
@@ -39,24 +39,24 @@ flowchart TD
     REG --> LOAD --> BODY
 ```
 
-**No database row.** The registry is in-memory. Engine restart re-fetches every page in the container. Skill changes propagate via the same Atlassian page webhook the engine already uses for the backend's notification routing.
+**No database row.** The registry is in-memory and belongs to the node rather than to an epoch, so a config apply keeps it (an apply refreshes only the `skill_variables` map). A restart re-walks every page in the container. Skill changes propagate through the same Confluence page webhook the engine already uses for notification routing: any page change in the skills space, including a removal, re-walks the whole space and replaces the registry, because a page that is simply absent from the next walk is how a deleted skill goes away.
 
 **No code defaults.** The engine ships zero skill prose. An empty container → empty registry → just the tool catalogue. Operators seed it with `crewlet confluence import` (see below).
 
-**One sync worker, matching the single-homed knowledge backend** (see [Knowledge System](knowledge-system.md#the-knowledgesearcher-seam)). It applies the same **admission predicate** to every page, at boot and on each webhook alike: the page lives in the configured container *and* identifies as a skill (the `crewlet-skill` marker label + a decodable YAML macro). A previously admitted page that stops satisfying the predicate — deleted, moved out, or edited into a non-skill — is **evicted**, never left serving its last-good body.
+**One sync, matching the single-homed knowledge backend** (see [Knowledge System](knowledge-system.md#the-knowledgesearcher-seam)). Every walk applies the same **admission test** (`skills.Admit`), at boot and on each webhook alike: a page in the configured space is a skill when its leading YAML frontmatter block declares a `trigger:`. A page with no frontmatter, or frontmatter that names no trigger, is an ordinary page and is skipped quietly; a page that declares a trigger and does not parse is reported (`skill_page_undecodable`) and skipped. The replace is wholesale and all or nothing: a walk that cannot enumerate the whole space leaves the registry as it was, and a previously admitted page that stops being a skill (deleted, moved out, or edited into a non-skill) is gone after the next walk rather than left serving its last-good body.
 
 ---
 
 ## Skill file format
 
-Skills are authored as markdown files with YAML frontmatter — the same format the backend pages round-trip to via the per-backend codec ([below](#page-representation)). The repository ships eleven bundled examples under `examples/tool-skills/`.
+Skills are authored as markdown files with YAML frontmatter, the same format the backend pages round-trip to via the per-backend codec ([below](#page-representation)). The repository ships ten bundled examples under `examples/tool-skills/`.
 
 ```markdown
 ---
 key: skill:code_runtime
 trigger:
   mcp_server: gitlab
-phases: [plan]
+phases: [execute]
 required: false
 title: Running code work in the sandbox
 summary: |
@@ -86,7 +86,7 @@ Exactly one of these fields:
 | Trigger | Fires when |
 |---|---|
 | `tool: <name>` | `<name>` is in the phase's tool surface |
-| `mcp_server: <server>` | `<server>` is a key in the role's `mcp_env` |
+| `mcp_server: <server>` | `<server>` is a key in the role's resolved `mcp_env` (the servers the seat has credentials for) |
 | `any_of: [...]` | Any sub-trigger fires (logical OR) |
 | `all_of: [...]` | Every sub-trigger fires (logical AND) |
 
@@ -113,10 +113,10 @@ trigger:
 
 ### Body / summary caps
 
-- Body: **32 KB UTF-8** (`MAX_SKILL_BODY_BYTES`). Looser than a prompt-prefix cap because bodies load on demand, not on every turn. Skills bigger than this almost always want to be split.
-- Summary: **240 bytes UTF-8** (`MAX_SKILL_SUMMARY_BYTES`). The summary appears on every turn for every role triggering the skill — keep it tight.
+- Body: **32 KB UTF-8** (`skills.MaxBodyBytes`). Looser than a prompt-prefix cap because bodies load on demand, not on every turn. Skills bigger than this almost always want to be split.
+- Summary: **240 bytes UTF-8** (`skills.MaxSummaryBytes`). The summary appears on every turn for every role triggering the skill, so keep it tight.
 
-Both caps are enforced at file-parse time and at registry-load time as a small defence against accidental or malicious prompt-injection prose. The caps bound the **source** bytes; a skill that references skill variables (below) can render slightly longer.
+Both caps are enforced when a skill is validated, at parse time and again when the registry takes it (`skill_refused` names the skill and the cap), as a small defence against accidental or malicious prompt-injection prose. The caps bound the **source** bytes; a skill that references skill variables (below) can render slightly longer.
 
 ---
 
@@ -166,7 +166,7 @@ A skill is **catalogued** in a phase's prompt when its declared `phases` include
 |---|---|---|
 | **Execute** | every first-party tool plus whatever the executor has activated, and the role's MCP server names | The executor's live surface, so a skill for a tool it discovered mid-run is catalogued from the next round. |
 | **Review** | empty (Review has no domain tools) | MCP-server-keyed skills still appear when an operator scopes a skill to the Review phase (lists it in the skill's `phases`), even though Review has no domain-tool surface. |
-| **Sub-agent** | the delegated task's allowlist | Same matching as Execute, against the worker's narrower surface. `subagent` is the wire name of the worker phase |
+| **Sub-agent** | the worker's granted tools | Same matching as Execute, against the worker's narrower surface. `subagent` is the wire name of the worker phase |
 
 `execute`, `review` and `subagent` are the only names a skill's `phases:` accepts; an unrecognised one is a parse error rather than a skill offered in no phase.
 
@@ -178,15 +178,15 @@ Catalogue position: skills land **immediately before the `## Available tools` bl
 
 ## Body loading
 
-Catalogue entries carry only the summary. The full body reaches the LLM via `load_tool_skill(key)` — a built-in tool registered alongside `lookup_colleague` / `use_skill` / etc. The LLM calls it when the summary's hint suggests detail it needs:
+Catalogue entries carry only the summary. The full body reaches the LLM via `load_tool_skill(key)`, a built-in tool registered alongside `lookup_colleague`, `use_skill` and the rest whenever the node has a skill registry. The LLM calls it when the summary's hint suggests detail it needs:
 
 ```
 load_tool_skill(key="mcp:github") → returns the full body as a tool result
 ```
 
-Available in **Plan** (as a meta-tool — no `activate_tool` activation needed), **Execute** (always-on), and **Sub-agent** (same as Execute). Returns an error with the list of registered keys if the key doesn't exist, so the LLM can recover.
+Available in **Execute** (active from the first round) and **Sub-agent** (it rides along on a worker's grant whenever the parent can reach it, without the task naming it). Returns an error with the list of registered keys if the key doesn't exist, so the LLM can recover.
 
-Review intentionally doesn't have it — Review's contract is the decision enum, not domain action.
+Review intentionally doesn't have it: Review's contract is the decision enum, not domain action. Onboarding doesn't carry it active either, and needs no guard, because its surface is the fixed read, persist and mark workflow.
 
 The engine deliberately does **not** auto-inject skill bodies. All loads are LLM-driven so the prompt prefix stays small and the model's tool-call log is the complete record of what guidance it consulted.
 
@@ -242,8 +242,8 @@ Enforcement gates exactly the tools the trigger names:
 ### Discoverability and guardrails
 
 - Catalogued required skills carry a visible `(required — load before use)` marker plus a one-line enforcement note in the `## Tool skills` section, so the model learns the contract up front; the block message is the recovery path, not the discovery path. Review renders required skills *unmarked* — it has no domain tools and no `load_tool_skill`, so nothing is enforced there.
-- Engine plumbing is exempt (`load_tool_skill` itself, `activate_tool`, `list_mcp_server_tools`, `submit_work`, `submit_review`) — a misauthored trigger cannot brick a phase.
-- The guard only arms when the session can satisfy it: `load_tool_skill` is an Execute always-on and rides along on every worker surface that can reach it. A surface without it (e.g. a custom always-on override that removed the loader) disables enforcement for that session rather than soft-locking the LLM, with a `skill_guard_disabled_no_loader` warning.
+- Engine plumbing is exempt (`skills.ExemptTools`: `load_tool_skill` itself, `activate_tool`, `list_mcp_server_tools`, `submit_work`, `submit_review`, `mark_onboarded`), so a misauthored trigger cannot brick a phase.
+- The guard only arms when the session can satisfy it (`skills.NewGuard`): the executor always carries `load_tool_skill`, and it rides along on every worker surface that can reach it. A session whose surface lacks the loader, the reviewer's included, gets no guard at all rather than a soft-locked LLM.
 - A failed `load_tool_skill` call (wrong key, registry error) does **not** unlock anything.
 
 An enforced skill costs the session one extra tool round plus the body tokens, only in sessions that actually use a covered tool — cheap when triggers are narrow and bodies are sized to their blast radius (the tokens are the point: the practices end up in context before the call). When several enforced skills cover the same tool, the block message lists every missing key and the LLM can load them all in a single round of parallel `load_tool_skill` calls. **Most bundled examples ship enforced**: narrow practices like `skill:platform_mentions` gate only their exact tools, and the server-wide enforced skills (`mcp:github` / `mcp:gitlab`) keep their bodies to ~100-token orientation one-pagers so the per-session load is near-free. Three bundled skills are advisory (`required: false`): `skill:code_runtime` (a "plan a sandbox Execute for code work" hint, not markup correctness), and `skill:getting_unstuck` / `skill:retrieval_research` — each carries a server-wide `mcp_server: atlassian` leaf in its trigger, and *enforcing* advisory practice prose at that width would gate every Jira and Confluence read, inverting the trigger-width rule above.
@@ -252,23 +252,23 @@ An enforced skill costs the session one extra tool round plus the body tokens, o
 
 ## Operator workflow
 
-`crewlet confluence import` is a **unified publisher**: it routes every `.md` file by frontmatter and publishes both tool-skill pages **and** general [knowledge docs](knowledge-system.md#publishing-knowledge-docs) in one pass — a file with `trigger:` ⇒ a Tool Skill (this page, → the Tool Skills container); **otherwise** ⇒ a knowledge doc whose **container is its parent directory** and **title is its first `# H1`**. The two land in different containers with different encodings; everything below is the skill side.
+`crewlet confluence import` is a **unified publisher**: it routes every `.md` file by its frontmatter and publishes both tool-skill pages **and** general [knowledge docs](knowledge-system.md#publishing-knowledge-docs) in one pass. A file whose frontmatter declares `trigger:` is a Tool Skill and goes to the Tool Skills space; **any other file** is a knowledge doc whose **space is its parent directory** and whose **title is its first `# H1`**. The two land in different spaces with different encodings; everything below is the skill side.
 
 ### One-time seed at install
 
 ```
-crewlet confluence import company.yaml
+crewlet confluence import company.yaml examples/tool-skills
 ```
 
-The positional config is the **Tier B company YAML** — the importer reads the backend credentials from its `confluence:` block (the Tier A bootstrap has no such block and is rejected). Walks every `.md` file under `examples/` (or any path you pass, recursively), and for each skill file encodes it in the backend's page format and creates a page in the Tool Skills container. Idempotent: pages are matched by their `crewlet-skill-key-<key>` label — rename-stable, and skipped unless you pass `--update`.
+The first positional argument is the **Tier B company YAML**: the importer reads the Confluence credentials from its `integrations.confluence` block, resolving `${VAR}` references through the secret store when `-config` names a bootstrap file. The second is the directory to publish, walked recursively. Each skill file is encoded in the page format and written to the Tool Skills space. Re-running is safe: a page is identified by its **title within its space** (Confluence has no external id field), so an existing page is updated in place and Confluence keeps the prior version in page history; a page renamed in the UI is published again under its source title. Every skill page the importer writes is labelled `crewlet-skill`.
 
-Useful flags (see the [CLI reference](../reference/cli.md) for the full per-command tables):
+Flags (see the [CLI reference](../reference/cli.md) for the full per-command tables):
 
-- `--dry-run` — print what would be created/updated without making page writes.
-- `--update` — overwrite existing pages (Confluence keeps the prior version in page history for rollback).
-- `--prune` — after publishing, delete import-managed skill pages in the space whose source `.md` is gone (e.g. a renamed or removed bundled skill). Only touches pages the importer itself published — identified by the `crewlet-skill` marker + per-key label that no local file claims — never user-authored pages or knowledge docs. Combine with `--dry-run` to preview deletions.
-- `--space TS` — target a different Tool Skills space than the default `TS` (skill files only; knowledge docs take their container from their parent directory).
-- `--create-space` — auto-create any target space that doesn't exist (requires space-admin on the bot account). Without it, a missing space fails the pre-flight with remediation rather than publishing half a tree.
+- `-dry-run`: print the plan and write nothing.
+- `-prune`: after publishing, delete the skill pages in the Tool Skills space that carry the `crewlet-skill` label and parse as a skill whose key no local file published (for example a renamed or removed bundled skill). It never touches a page without the label, and a space it cannot enumerate completely stops the prune rather than shrinking it.
+- `-space KEY`: target a different Tool Skills space (skill files only; knowledge docs take their space from their parent directory). Empty reads `CREWLET_TOOL_SKILLS_SPACE`, then `integrations.confluence.skills_space`.
+
+The importer never creates a space: a plan that names a space the instance does not have publishes nothing and says which space to create.
 
 ### Publishing before the engine starts
 
@@ -286,7 +286,7 @@ engine's own boot-time sync picks up the pages that are already there.
 
 ### Edit at runtime
 
-Open the page in your browser, edit, save. The Atlassian page webhook fires and the sync worker re-fetches the page and updates the in-memory registry. The next agent turn sees the new body. No restart, no CLI invocation, no deploy.
+Open the page in your browser, edit, save. The Confluence page webhook fires, the engine checks the page is in the skills space, re-walks the space and replaces the in-memory registry. The next agent turn sees the new body. No restart, no CLI invocation, no deploy. The webhook reaches the node that receives it, so on a fleet a node that does not receive the delivery keeps its previous registry until its next restart or the next webhook it does receive.
 
 ### Drift recovery
 
@@ -296,7 +296,7 @@ If you suspect a webhook was missed during a long outage:
 crewlet confluence resync company.yaml
 ```
 
-Re-runs the boot-time full populate against a *temporary* registry and prints the loaded keys. `resync` is **skills-only** — knowledge docs are never loaded into a registry, so there is nothing to resync for them. Restart the engine (or wait for the next webhook) to apply changes to the running registry — the CLI doesn't reach into a live engine process.
+Runs the engine's own walk and admission test against a *throwaway* registry and prints the space's page count, the skills it admitted and any page that declares a trigger and did not parse (which also makes the command exit non-zero). `resync` is **skills-only**: knowledge docs are never loaded into a registry, so there is nothing to resync for them. Restart the engine (or wait for the next webhook) to apply changes to the running registry, because the CLI doesn't reach into a live engine process.
 
 ---
 
@@ -304,11 +304,11 @@ Re-runs the boot-time full populate against a *temporary* registry and prints th
 
 The shape is one idea: a machine-readable YAML frontmatter block at the top of the page (edit to change binding metadata — `key` / `trigger` / `phases` / `title`), followed by the guidance rendered as a normal page body (edit to change the prose). When the sync worker reads a page back, it parses the YAML and flattens the body HTML to plain text for the LLM. The conversion is intentionally lossy on formatting — bullets and headings flatten to text-with-newlines — because the body's only consumer is an LLM, not a human reader. Operators who want exact source-text fidelity should keep the `.md` files in version control and re-run the import with `--update` when they change.
 
-Every synced skill records the backend page it came from in `skills.Skill.SourcePageID` / `source_page_version` — used for logging and webhook eviction only. Confluence stamps its integer page version; a backend without one leaves `source_page_version = 0`.
+Every synced skill records the backend page it came from in `skills.Skill.SourcePageID` and `SourcePageVersion`, as provenance. Confluence stamps its integer page version; a backend without one leaves `SourcePageVersion` at 0.
 
 ### Confluence
 
-Each skill page combines a leading YAML frontmatter `code` **macro** (the small yellow box at the top of the page) with the markdown body rendered to Confluence storage XHTML. The boot-time walk uses a CQL search scoped to pages bearing the shared `crewlet-skill` marker label (stamped on every page by the import flow), so Confluence's auto-generated space home page and other non-skill content are filtered out server-side; the webhook path re-checks the same space + marker-label predicate on every fetched page and evicts pages that stop satisfying it.
+Each skill page combines a leading YAML frontmatter `code` **macro** (the small box at the top of the page) with the markdown body rendered to Confluence storage XHTML. The walk reads every page in the space (`Client.PagesIn`, refusing a space too large to be a skills container) and decodes the leading code macro back into frontmatter (`confluence.DecodeSkillPage`). Confluence's auto-generated space home page and other non-skill content carry no frontmatter with a trigger, so admission skips them as ordinary pages. The `crewlet-skill` label is the importer's provenance marker, read only by `-prune`; a skill page written by hand in the space loads without it.
 
 ---
 
@@ -326,7 +326,7 @@ Each skill page combines a leading YAML frontmatter `code` **macro** (the small 
 
 The Tool Skills container holds engine-managed scaffolding, not general knowledge. Crewlet does not maintain a synced knowledge index, so there is nothing for the container to pollute; just don't add it to the knowledge read scope (`knowledge.confluence_spaces`) and skill pages won't surface in the `## Relevant knowledge` query-time search — the searcher drops the skills space from results wholesale as well, since a skill page is machinery rather than knowledge.
 
-The container is also **excluded from notification routing**. Webhooks for tool-skill pages still drive the in-memory registry update via the engine's skill-sync callback, but both transports short-circuit the recipient-routing path (`set_notification_excluded_spaces` / `set_notification_excluded_projects`) so engine-managed pages don't surface as `notification_undeliverable` warnings or emit spurious `notification_skipped` events. Page edits in the Tool Skills container have no human or agent recipient by design — only the engine consumes them.
+The container is also **excluded from notification routing**. A webhook for a tool-skill page still drives the registry update, because the Confluence parser runs its page indexer (`ParserOptions.OnPage`) before any routing filter, and then returns no notification for a page in the skills space (`ParserOptions.SkillsSpace`), so engine-managed pages never wake a seat or surface as undeliverable. Page edits in the Tool Skills container have no human or agent recipient by design: only the engine consumes them.
 
 ---
 
@@ -334,21 +334,21 @@ The container is also **excluded from notification routing**. Webhooks for tool-
 
 | What happens | Effect |
 |---|---|
-| Knowledge backend unreachable at boot | A boot walk that cannot enumerate the container completely never seeds (a partial walk must not silently delete skills). The engine **retries the walk with exponential backoff** (5 attempts from 5 s — sized for the compose boot race where the backend's API comes up seconds after the engine), so the ordinary race self-heals without a restart; if every attempt fails it logs `tool_skill_resync_exhausted` (error) and the registry keeps whatever it holds — empty at boot, or the previous backend's skills after a live cut-over — until the operator fixes the backend and re-applies the integrations config (or restarts). Webhook events apply once the backend recovers. |
+| Knowledge backend unreachable at boot | The boot walk runs once, in the background, so a node never waits on its wiki to start taking work. A walk that cannot enumerate the space completely replaces nothing (a partial walk must not silently delete skills): it logs `tool_skill_sync_failed` (error) and the registry keeps what it holds, which at boot is empty. Nothing retries the walk on a timer, so the registry fills on the next page webhook from that space or the next restart. |
 | Webhook lost during a long outage | The next engine restart's boot-time full populate reconciles, and so does the next webhook for that page. `crewlet confluence resync` is **a read-only diagnostic**, not a way to fix it: it prints what the container holds so you can see the drift, and deliberately does not reach into a running engine — see [Drift recovery](#drift-recovery) above. |
-| Skill body over the 32 KB cap | Page is skipped at parse time with a `tool_skill_sync_invalid_skill` log line; other skills load normally. |
-| Page is missing the leading YAML frontmatter block | Logged with `tool_skill_sync_decode_failed` — and if the page was previously admitted, it is **evicted** rather than left serving its last-good body. Non-skill pages in the space (including the auto-generated home page) never reach the decoder, because the boot walk filters by the `crewlet-skill` marker label. |
+| Skill body over the 32 KB cap | The page fails validation and is skipped with `skill_page_undecodable`, which names the page and the cap; other skills load normally. |
+| Page is missing the leading YAML frontmatter block, or its frontmatter names no trigger | Not a skill: the walk counts it as an ordinary page and skips it without a warning, and a page that was previously a skill drops out of the registry on that walk. A page that declares a trigger and does not parse is logged as `skill_page_undecodable`. |
 | Misauthored skill body | Degrades every agent on the matching tool/MCP surface on the next webhook tick. Use Confluence's native page history to roll back, or re-push the source file with `crewlet confluence import --update`. |
 | Chronic `phase.tool_skill_blocked` events on one skill | The model keeps trying the tool before loading the required skill. Recovery works (the block message names the key), but each block wastes a round — rewrite the catalogue `summary` so the load happens proactively, or narrow the `trigger` if the skill is over-scoped. |
-| Required skill on a surface without `load_tool_skill` | The guard refuses to arm (logs `skill_guard_disabled_no_loader`) instead of soft-locking the session. Happens only with non-standard surfaces — Execute and Sub-agent both carry the loader by default. |
+| Required skill on a surface without `load_tool_skill` | The guard is not armed for that session instead of soft-locking it. Execute always carries the loader and a worker receives it whenever its parent can reach it, so this affects a worker whose parent lacks the loader and the reviewer, which has no domain tools to gate. |
 | Skill references a `${var}` missing from `skill_variables` | The literal `${name}` would only ever surface inside an LLM prompt, so the registry logs `skill_variable_unresolved` (skill key + variable + field) at skill seed/upsert and re-checks every skill on each config apply. |
-| Trigger names a tool that exists nowhere (e.g. an upstream MCP server renamed it) | Trigger matching is exact-string, so the skill silently stops cataloguing — and, if required, stops gating. The engine checks every skill after the boot-time populate, after each skill webhook upsert, and after a live MCP rewire: a **partially live** skill with a dangling tool name logs `skill_trigger_dangling_tools` (warning — near-certain name drift; carries `required` so operators can alert on guard holes), while a skill whose whole trigger matches nothing logs `skill_trigger_inert` (info — plausibly authored for a stack this org doesn't run). |
+| Trigger names a tool that exists nowhere (e.g. an upstream MCP server renamed it) | Trigger matching is exact-string, so the skill silently stops cataloguing and, if required, stops gating. The engine checks every skill against the epoch's tool surface after every walk (boot and webhook alike) and on every config apply, which is where an MCP server is added or removed (`skills.Registry.Audit`): a **partially live** skill with a dangling tool name logs `skill_trigger_partially_dangling` (warning: near-certain name drift), while a skill whose whole trigger matches nothing logs `skill_trigger_matches_nothing` (info: plausibly authored for a stack this org doesn't run). |
 
 ---
 
 ## See also
 
-- [Agent Runtime](agent-runtime.md) — where the per-phase prompt builders live; how the registry is threaded into the turn engine.
-- [Turn Engine](turn-engine.md) — phase contracts and the tool surface each one gets.
-- [CLI Reference](../reference/cli.md) — full flag reference for `crewlet confluence import` / `crewlet confluence resync`.
-- [Environment Variables](../reference/environment-variables.md) — `CREWLET_TOOL_SKILLS_SPACE` (import/resync flag default; the engine reads `integrations.confluence.skills_space`).
+- [Agent Runtime](agent-runtime.md): where the per-phase prompt builders live and how the registry reaches a turn.
+- [Turn Engine](turn-engine.md): phase contracts and the tool surface each one gets.
+- [CLI Reference](../reference/cli.md): full flag reference for `crewlet confluence import` and `crewlet confluence resync`.
+- [Environment Variables](../reference/environment-variables.md): `CREWLET_TOOL_SKILLS_SPACE` (the import and resync flag default; the engine reads `integrations.confluence.skills_space`).
