@@ -18,7 +18,7 @@ var slackOAuthPage = template.Must(template.New("slack-oauth").Parse(`<!doctype 
 <html>
   <head>
     <meta charset="utf-8">
-    <title>Crewlet — Slack app install</title>
+    <title>Crewlet: Slack app install</title>
     <style>
       body { font-family: system-ui, sans-serif; max-width: 40rem;
              margin: 4rem auto; padding: 0 1rem; line-height: 1.5; }
