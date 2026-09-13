@@ -266,6 +266,22 @@ func TestARecordLargerThanTheCapIsWrittenWhole(t *testing.T) {
 	if _, err := f.Write(huge); err != nil {
 		t.Fatalf("write: %v", err)
 	}
+	// ASSERTED BEFORE THE SECOND WRITE, which would mask it: nothing has
+	// rotated, because an EMPTY file takes the oversized record whole.
+	// That is the `f.size > 0` half of the guard, and without this the
+	// case could not fail on it — a sink that rotated the empty file first
+	// would still land the record whole in `.1` and spend one extra
+	// rotation per oversized line, shifting the backup stack out from
+	// under the history somebody is reading.
+	if _, err := os.Stat(path + ".1"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the empty live file was rotated before the oversized record: %v", err)
+	}
+	if body, err := os.ReadFile(path); err != nil {
+		t.Fatalf("reading the live file: %v", err)
+	} else if len(body) != len(huge) {
+		t.Fatalf("the live file holds %d bytes, not the %d written whole",
+			len(body), len(huge))
+	}
 	// And the next ordinary record rotates, because the file is over.
 	if _, err := f.Write(record(2, 512)); err != nil {
 		t.Fatalf("write: %v", err)
@@ -499,6 +515,8 @@ func TestWritingAfterCloseIsRefused(t *testing.T) {
 // unable to tell what their own document says.
 func TestImpossibleOptionsAreRefused(t *testing.T) {
 	zero, negative := 0, -1
+	// 1<<43 MB is where int64(mb)<<20 wraps; the ceiling sits far below it.
+	wraps, overSize, overBackups := 1<<43, MaxSizeMBCeiling+1, MaxBackupsCeiling+1
 	for _, tc := range []struct {
 		name string
 		opts FileOptions
@@ -508,6 +526,18 @@ func TestImpossibleOptionsAreRefused(t *testing.T) {
 		{"a zero size", FileOptions{Path: "x.log", MaxSizeMB: &zero}, "max_size_mb"},
 		{"a negative size", FileOptions{Path: "x.log", MaxSizeMB: &negative}, "max_size_mb"},
 		{"a negative backup count", FileOptions{Path: "x.log", MaxBackups: &negative}, "max_backups"},
+		// THE CEILINGS. A size at or above 1<<43 MB wraps the byte
+		// arithmetic to zero or negative, which makes the guard in Write
+		// true for every record and rotates on EVERY LINE — the exact
+		// inverse of the enormous number an operator wrote, and silent,
+		// because rotating is what success looks like. A backup count is
+		// a rename count per rotation, so a huge one stalls instead.
+		{"a size that wraps the byte arithmetic",
+			FileOptions{Path: "x.log", MaxSizeMB: &wraps}, "max_size_mb"},
+		{"a size one past the ceiling",
+			FileOptions{Path: "x.log", MaxSizeMB: &overSize}, "max_size_mb"},
+		{"a backup count that would stall the rotation",
+			FileOptions{Path: "x.log", MaxBackups: &overBackups}, "max_backups"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			opts := tc.opts
@@ -564,5 +594,89 @@ func TestAFileSinkCarriesTheEngineLog(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "seat_claimed") {
 		t.Errorf("the line did not reach the file: %q", body)
+	}
+}
+
+// THE CEILING IS BELOW THE WRAP, with room to spare.
+//
+// [MaxSizeMBCeiling] exists only to keep `int64(maxSizeMB) << 20` positive,
+// so the one thing that must stay true of it is the shift — and it is
+// arithmetic nobody should have to redo by hand when the constant moves.
+func TestTheSizeCeilingCannotWrapTheByteArithmetic(t *testing.T) {
+	bytes := int64(MaxSizeMBCeiling) << 20
+	if bytes <= 0 {
+		t.Fatalf("MaxSizeMBCeiling (%d) already wraps: %d bytes",
+			MaxSizeMBCeiling, bytes)
+	}
+	// And the value just past it is the one the refusal is protecting
+	// against, so a ceiling raised to a safe-looking number that is not
+	// safe fails here rather than in production.
+	if int64(MaxSizeMBCeiling)<<20 < int64(DefaultMaxSizeMB)<<20 {
+		t.Fatal("the ceiling is below the default, so no valid value exists")
+	}
+}
+
+// THE FAILURE NOTICE SAYS WHAT ACTUALLY BECOMES OF THE DROPPED LINES.
+//
+// It used to say "logging continues on stderr" unconditionally. Under
+// `logging.stderr: false` that is exactly backwards: the file is then the
+// only destination this node has, so a failure loses the log rather than
+// diverting it — and the single line reaching the operator told them it did
+// not. A notice that is wrong in the worst case is worse than none, because
+// the worst case is the one somebody acts on.
+func TestTheFailureNoticeKnowsWhetherAnythingElseIsInstalled(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		consoleOff bool
+		want, not  string
+	}{
+		{
+			name: "with the console still installed",
+			want: "logging continues on stderr", not: "LOST",
+		},
+		{
+			name: "with the file as the only destination", consoleOff: true,
+			want: "LOST", not: "logging continues on stderr",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "crewlet.log")
+			var report bytes.Buffer
+			size, backups := 1, 1
+			f, err := OpenFile(FileOptions{
+				Path: path, MaxSizeMB: &size, MaxBackups: &backups,
+			}, &report)
+			if err != nil {
+				t.Fatalf("OpenFile: %v", err)
+			}
+			t.Cleanup(func() { _ = f.Close() })
+
+			Configure(slog.LevelInfo, FormatText, io.Discard)
+			SetFile(FileSink{Writer: f, Format: FormatText})
+			t.Cleanup(func() {
+				SetConsole(true)
+				Configure(slog.LevelInfo, FormatConsole, io.Discard)
+			})
+			if tc.consoleOff {
+				SetConsole(false)
+			}
+
+			// Close the descriptor behind the sink's back, the shape of a
+			// file handle lost to something outside this package.
+			f.mu.Lock()
+			_ = f.f.Close()
+			f.mu.Unlock()
+			if _, err = f.Write([]byte("a_line\n")); err == nil {
+				t.Fatal("a write to a closed descriptor reported success")
+			}
+
+			got := report.String()
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("the notice does not say %q: %q", tc.want, got)
+			}
+			if strings.Contains(got, tc.not) {
+				t.Errorf("the notice claims %q, which is false here: %q", tc.not, got)
+			}
+		})
 	}
 }

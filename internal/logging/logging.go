@@ -15,6 +15,7 @@ package logging
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -284,7 +285,7 @@ func install(s settings) {
 	}
 
 	if !s.consoleOff {
-		add(handlerFor(s.format, s.console, s.level), s.level)
+		add(handlerFor(s.format, s.console, s.level, colorFromEnv()), s.level)
 	}
 	if s.file.Writer != nil {
 		format := s.file.Format
@@ -295,7 +296,16 @@ func install(s settings) {
 		if s.file.Level != nil {
 			level = *s.file.Level
 		}
-		add(handlerFor(format, s.file.Writer, level), level)
+		// NEVER COLOURED, whatever $CREWLET_LOG_COLOR says. `auto`
+		// declines on its own — the sink is a [File], not a terminal —
+		// but `always` is an instruction about a STREAM SOMEBODY IS
+		// WATCHING that a CI viewer renders without being a terminal,
+		// and nobody is watching a file. Honouring it here would put
+		// escape bytes in front of every line a shipper parses and every
+		// line `grep` prints — which is the exact failure [SetFile]'s own
+		// doc names as the reason these are two handlers rather than one
+		// io.MultiWriter.
+		add(handlerFor(format, s.file.Writer, level, ColorNever), level)
 	}
 	// A PROCESS WITH NO DESTINATION LOGS NOWHERE, which is never what
 	// anybody asked for — `logging.stderr: false` is a statement about the
@@ -304,7 +314,7 @@ func install(s settings) {
 	// backstop for the path neither of them sees, and it is loud.
 	silent := len(handlers) == 0
 	if silent {
-		add(handlerFor(s.format, s.console, s.level), s.level)
+		add(handlerFor(s.format, s.console, s.level, colorFromEnv()), s.level)
 	}
 
 	h := handlers[0]
@@ -316,14 +326,27 @@ func install(s settings) {
 	slog.SetDefault(l)
 
 	if silent {
-		l.Warn("console_kept_open",
-			"reason", "the console was switched off with no log file installed, "+
-				"which would leave this process logging nowhere")
+		// NOT THROUGH THE LOGGER. The handler just built filters by
+		// s.level, so at `logging.level: error` the one line explaining
+		// the override would itself be dropped and the backstop would
+		// fire in complete silence — which is the failure it exists to
+		// prevent, one level up. Printed directly for the same reason
+		// [File.note] and the CLI's stderr handover are.
+		fmt.Fprint(s.console, "crewlet: console_kept_open — the console was "+
+			"switched off with no log file installed, which would leave this "+
+			"process logging nowhere; keeping stderr\n")
 	}
 }
 
 // handlerFor builds the handler one format writes one destination through.
-func handlerFor(format Format, w io.Writer, level slog.Level) slog.Handler {
+//
+// THE COLOUR MODE IS THE CALLER'S, not this function's. It used to read
+// $CREWLET_LOG_COLOR for itself, which gave every destination the same
+// answer — and `always` means "colour this stream even though it is not a
+// terminal", which is true of a CI-captured stderr and false of a file on
+// disk. [install] passes the environment's mode for the console and
+// [ColorNever] for the file.
+func handlerFor(format Format, w io.Writer, level slog.Level, mode ColorMode) slog.Handler {
 	opts := &slog.HandlerOptions{Level: level}
 	switch format {
 	case FormatJSON:
@@ -334,8 +357,7 @@ func handlerFor(format Format, w io.Writer, level slog.Level) slog.Handler {
 		// CONSOLE IS THE FALLBACK as well as the default: an unset format
 		// reaches here from this package's own init, and a person is the
 		// likeliest reader of a stream nobody has said anything about.
-		// Whether it colours is decided from w — see [newConsoleHandler].
-		return newConsoleHandler(w, level, colorFromEnv())
+		return newConsoleHandler(w, level, mode)
 	}
 }
 

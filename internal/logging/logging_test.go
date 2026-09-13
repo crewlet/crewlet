@@ -327,11 +327,14 @@ func TestRemovingTheFileLeavesTheConsoleSink(t *testing.T) {
 	}
 }
 
-// ONE LEVEL, BOTH DESTINATIONS. There is deliberately no per-sink level:
-// "was this line written" must not depend on which file you look in, and
-// [lazy.Enabled] answers for the whole tree from the root handler's level
-// alone — a fan-out that disagreed with its children would filter different
-// lines depending on how a call site was spelled.
+// A FILE THAT ASKED FOR NO LEVEL OF ITS OWN SHARES THE PROCESS'S, on both
+// destinations and in both directions.
+//
+// This is the DEFAULT arrangement — a file may carry its own level (see
+// [TestEachDestinationCanCarryItsOwnLevel]), and when it does not, one
+// `-log-level` still means one thing. The fan-out's own level is then the
+// level both children hold, so [lazy.Enabled] answers for the whole tree
+// exactly as it does for a single destination.
 func TestBothDestinationsShareOneLevel(t *testing.T) {
 	var console, file bytes.Buffer
 	logging.Configure(slog.LevelWarn, logging.FormatText, &console)
@@ -586,7 +589,100 @@ func TestSilencingTheConsoleWithNoFileKeepsItAndSaysSo(t *testing.T) {
 	if !strings.Contains(console.String(), "console_kept_open") {
 		t.Errorf("the override was applied in silence: %q", console.String())
 	}
+	// AND IT SURVIVES A QUIET LEVEL, which is the whole reason it is
+	// printed rather than logged: a notice routed through the handler it
+	// has just repaired is filtered by the very level it is warning about,
+	// and at `logging.level: error` the backstop would fire in silence.
+	var quiet bytes.Buffer
+	logging.Configure(slog.LevelError, logging.FormatText, &quiet)
+	logging.SetConsole(false)
+	if !strings.Contains(quiet.String(), "console_kept_open") {
+		t.Errorf("at an error level the backstop fired in silence: %q", quiet.String())
+	}
 	if !strings.Contains(console.String(), "a_line") {
 		t.Errorf("the process was left logging nowhere: %q", console.String())
+	}
+}
+
+// AN EXPLICIT `info` IS A SETTING, and this is the case the pointer exists
+// for.
+//
+// [slog.LevelInfo] is 0, so a plain slog.Level could not tell "the operator
+// asked for info" from "nothing was said". Every other level in this suite
+// is non-zero and would pass either way: the mutation that reads a non-nil
+// info pointer as absent — `logging.level: warn` with `file.level: info`
+// silently giving a warn file — survives all of them and dies here.
+func TestAnExplicitInfoFileLevelIsNotAnAbsentOne(t *testing.T) {
+	var console, file bytes.Buffer
+	logging.Configure(slog.LevelWarn, logging.FormatText, &console)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
+
+	info := slog.LevelInfo
+	logging.SetFile(logging.FileSink{Writer: &file, Format: logging.FormatText, Level: &info})
+	logging.Get("explicit").Info("an_info_line")
+	logging.SetFile(logging.FileSink{})
+
+	if !strings.Contains(file.String(), "an_info_line") {
+		t.Errorf("an explicit `info` file level was read as \"nothing was said\", "+
+			"so the file inherited the warn console: %q", file.String())
+	}
+	if strings.Contains(console.String(), "an_info_line") {
+		t.Errorf("the warn console took an info line: %q", console.String())
+	}
+}
+
+// A FAILING CONSOLE DOES NOT STOP THE LOG FILE — the direction that actually
+// exercises "every destination is tried".
+//
+// [install] always puts the console handler first, so a broken FILE proves
+// only that a later handler's failure cannot undo an earlier handler's
+// write, which no implementation could get wrong. Broken CONSOLE first is
+// the arrangement in which a fan-out returning on the first error would lose
+// the file's copy — and it is the arrangement that matters, because the
+// console is the sink an operator is most likely to have pointed somewhere
+// broken.
+func TestAFailingConsoleDoesNotStopTheLogFile(t *testing.T) {
+	var file bytes.Buffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, brokenWriter{})
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
+
+	logging.SetFile(logging.FileSink{Writer: &file, Format: logging.FormatText})
+	logging.Get("resilient").Info("a_line")
+	logging.SetFile(logging.FileSink{})
+
+	if !strings.Contains(file.String(), "a_line") {
+		t.Errorf("a failing console sink took the log file down with it: %q",
+			file.String())
+	}
+}
+
+// A LOG FILE IS NEVER COLOURED, whatever $CREWLET_LOG_COLOR says.
+//
+// `auto` declines on its own because the sink is not a terminal, so the mode
+// that matters is `always` — which exists for a CI viewer that renders ANSI
+// without being a terminal, and is an instruction about a stream somebody is
+// WATCHING. Nobody watches a file, and escape bytes in front of every line
+// are what a shipper parses and what `grep` prints. This is the failure
+// [logging.SetFile]'s own doc names as the reason the two destinations get
+// separate handlers rather than one io.MultiWriter.
+func TestAlwaysColourNeverReachesTheLogFile(t *testing.T) {
+	t.Setenv("CREWLET_LOG_COLOR", "always")
+
+	var console, file bytes.Buffer
+	logging.Configure(slog.LevelInfo, logging.FormatConsole, &console)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
+
+	logging.SetFile(logging.FileSink{Writer: &file, Format: logging.FormatConsole})
+	logging.Get("coloured").Info("a_line")
+	logging.SetFile(logging.FileSink{})
+
+	if strings.ContainsRune(file.String(), 0x1b) {
+		t.Errorf("an escape byte reached the log file: %q", file.String())
+	}
+	// The console still gets what `always` was set for, or this case would
+	// pass by turning colour off everywhere.
+	if !strings.ContainsRune(console.String(), 0x1b) {
+		t.Errorf("CREWLET_LOG_COLOR=always stopped colouring the console too, "+
+			"so this case proves nothing: %q", console.String())
 	}
 }

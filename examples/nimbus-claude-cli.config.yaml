@@ -47,8 +47,8 @@
 #   - secrets     : optional encryption keyring — encrypts the whole
 #                   Tier B company config at rest (see below)
 #   - logging     : how loud this node is (level), in what shape (format)
-#                   and where it writes (file — stderr always, plus an
-#                   optional rotating file)
+#                   and where it writes (stderr, plus an optional rotating
+#                   file — and `stderr: false` hands the stream to that file)
 #
 # Everything else (roles, LLMs, MCP servers, integrations, policies,
 # budgets) lives in the Tier B company YAML — versioned in the store and

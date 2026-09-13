@@ -23,6 +23,32 @@ import (
 // report, which a multi-gigabyte log cannot.
 const DefaultMaxSizeMB = 100
 
+// MaxSizeMBCeiling is the largest max_size_mb that still means what it says.
+//
+// The cap is held in BYTES — `int64(maxSizeMB) << 20` — so a value at or
+// above 1<<43 MB wraps int64 to zero or negative. A non-positive cap makes
+// the guard in [File.Write] true for every record after the first, so the
+// sink rotates on EVERY LINE and the whole estate collapses to max_backups+1
+// single-record files: the exact inverse of what the number asked for, and
+// silent, because rotating is what success looks like.
+//
+// That is not an abstract worry. The documented way to run beside an
+// external logrotate(8) is to give this field "a size this engine will never
+// reach", so the one instruction in the guide is the one that walks toward
+// the cliff. 1<<30 MB is a pebibyte — past any filesystem this ships to
+// (ext4 caps a single file at 16 TiB) and 8192 times under the wrap.
+const MaxSizeMBCeiling = 1 << 30
+
+// MaxBackupsCeiling is the largest max_backups a rotation can honour.
+//
+// [File.rotate] renames max_backups-1 files each time it fires, so the value
+// is a syscall count as well as a history depth. Unbounded, a config typo of
+// a few billion does not wrap — it HANGS the first rotation for hours in
+// ENOENT renames, with the process still logging and nothing saying why.
+// A thousand rotated files is already far past what anybody reads back, and
+// bounds a rotation at a millisecond of metadata work.
+const MaxBackupsCeiling = 1000
+
 // DefaultMaxBackups is how many rotated files are kept beside the live one.
 //
 // Five plus the live file bounds the estate at 600 MB with the default size —
@@ -104,9 +130,14 @@ type FileOptions struct {
 // [File.Write] has nowhere to go by the ordinary route: a log disk that
 // filled would simply stop recording, silently, which is the failure mode
 // this project keeps finding in its own past. So the first failure of an
-// episode is announced on the report writer — stderr, the sink that is still
-// working — and the recovery is announced too. It is never reported through
-// slog itself: a logger logging about its own sink is a loop.
+// episode is announced on the report writer — stderr — and the recovery is
+// announced too. It is never reported through slog itself: a logger logging
+// about its own sink is a loop.
+//
+// The notice says what becomes of the dropped records, which is not always
+// the same thing — see [fateOfTheseLines]. Under `logging.stderr: false`
+// this file is the only destination the node has, so a failure here loses
+// the log rather than diverting it, and the notice says so in those words.
 type File struct {
 	path       string
 	maxSize    int64
@@ -165,14 +196,25 @@ func OpenFile(opts FileOptions, report io.Writer) (*File, error) {
 				"log file with no ceiling fills the disk the engine runs on",
 			maxSizeMB)
 	}
+	if maxSizeMB > MaxSizeMBCeiling {
+		return nil, fmt.Errorf(
+			"logging.file.max_size_mb is %d; it must be at most %d (a pebibyte). "+
+				"The cap is held in bytes, so a larger value wraps to zero or "+
+				"negative and the file would rotate on every single line — the "+
+				"opposite of what it asks for. To run beside logrotate(8), any "+
+				"size this host cannot fill will do",
+			maxSizeMB, MaxSizeMBCeiling)
+	}
 	maxBackups := DefaultMaxBackups
 	if opts.MaxBackups != nil {
 		maxBackups = *opts.MaxBackups
 	}
-	if maxBackups < 0 {
+	if maxBackups < 0 || maxBackups > MaxBackupsCeiling {
 		return nil, fmt.Errorf(
-			"logging.file.max_backups is %d; it must be 0 (keep no rotated "+
-				"files) or more", maxBackups)
+			"logging.file.max_backups is %d; it must be between 0 (keep no "+
+				"rotated files) and %d — each rotation renames every kept file, "+
+				"so a larger value stalls the rotation rather than keeping more "+
+				"history", maxBackups, MaxBackupsCeiling)
 	}
 
 	f := &File{
@@ -364,10 +406,34 @@ func (f *File) backup(i int) string { return fmt.Sprintf("%s.%d", f.path, i) }
 func (f *File) note(err error) error {
 	if !f.failed {
 		f.failed = true
-		fmt.Fprintf(f.report, "crewlet: log file %s: %v — logging continues on stderr\n",
-			f.path, err)
+		fmt.Fprintf(f.report, "crewlet: log file %s: %v — %s\n",
+			f.path, err, fateOfTheseLines())
 	}
 	return err
+}
+
+// fateOfTheseLines says what actually happens to the records this sink is
+// dropping, which depends on whether anything else is installed.
+//
+// It used to say "logging continues on stderr" unconditionally, and under
+// `logging.stderr: false` that was exactly backwards: the file is then the
+// ONLY destination, so a failure loses the log entirely — and the single
+// line reaching the operator told them it did not. A notice that is wrong in
+// the worst case is worse than no notice, because it is the case somebody
+// acts on.
+//
+// Reading [current] takes [mu] while [File.mu] is already held. That
+// ordering is safe and must stay one-directional: nothing under mu writes to
+// a log file — [install] builds handlers and prints its own backstop notice
+// to the CONSOLE writer — so mu is never taken before File.mu.
+func fateOfTheseLines() string {
+	mu.Lock()
+	defer mu.Unlock()
+	if current.consoleOff {
+		return "AND THESE LOG LINES ARE LOST: logging.stderr is false, so this " +
+			"file is the only destination this node has"
+	}
+	return "logging continues on stderr"
 }
 
 // recovered closes an episode, so the next failure is announced again and an

@@ -107,12 +107,14 @@
           "type": "string"
         },
         "max_backups": {
-          "description": "Rotated files kept beside the live one. Unset = 5; 0 keeps none.",
+          "description": "Rotated files kept beside the live one. Unset = 5; 0 keeps none. Each rotation renames every file it keeps, so the count is bounded.",
+          "maximum": 1000,
           "minimum": 0,
           "type": "integer"
         },
         "max_size_mb": {
-          "description": "Size the live file reaches before rotating. Unset = 100. Rotation cannot be disabled.",
+          "description": "Size the live file reaches before rotating. Unset = 100. Rotation cannot be disabled, and the cap is bounded above because the byte arithmetic wraps.",
+          "maximum": 1073741824,
           "minimum": 1,
           "type": "integer"
         },

@@ -808,6 +808,14 @@ journald plus a log file, or a container with a log driver plus a mounted
 volume — because there every line is otherwise stored twice. Without it the
 default stands: a file never silences stderr.
 
+**The tradeoff it buys you:** with stderr off the file is the node's *only*
+destination, so a file that becomes unwritable loses log lines rather than
+diverting them. The engine still says so on stderr — the notice names the
+file, the error, and that the lines are lost rather than continuing
+elsewhere — but the lines themselves are gone until the file takes writes
+again. Leave stderr on if a gap in the record is worse for you than storing
+it twice.
+
 **It is not `2>/dev/null`, and the difference is the point.** Three kinds of
 line reach stderr without passing through the configured handler, and this
 field keeps all three while a shell redirect throws them away:
@@ -861,7 +869,12 @@ needs a `chmod` you make deliberately.
 
 Already running `logrotate(8)`? Point it at the same path with
 `copytruncate` — which keeps the descriptor this process holds — and give
-`max_size_mb` a value this node will never reach. A rename-based logrotate
+`max_size_mb` a value this node will never reach. Both caps are bounded above
+as well as below (`max_size_mb` at 1 073 741 824, a pebibyte; `max_backups` at
+1000) and a value past either is refused by name: the size is held in bytes,
+so a larger one wraps and would rotate on *every line* — the exact inverse of
+what a huge number asks for — and the backup count is a rename per rotation,
+so a huge one stalls the rotation instead of keeping more history. A rename-based logrotate
 rule moves the file out from under the engine's open descriptor, and there is
 no reopen signal to send it: the engine owns its signals for the graceful
 drain (see [`crewlet run`](../reference/cli.md#crewlet-run)), and a third tier

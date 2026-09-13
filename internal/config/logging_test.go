@@ -517,3 +517,81 @@ func TestALogFileLevelWithNoPathIsRefused(t *testing.T) {
 		t.Fatalf("want %v, got %v", ErrMissing, err)
 	}
 }
+
+// AN EXPLICIT `info` FILE LEVEL IS A SETTING, not an absence — the case the
+// pointer in [logging.FileSink] exists for, at the config edge.
+//
+// slog.LevelInfo is 0, so a conversion that reported an explicit `info` as
+// nil would silently give a `logging.level: warn` node a warn file. Every
+// other level in this suite is non-zero and survives that mutation.
+func TestAnExplicitInfoFileLevelSurvivesTheConversion(t *testing.T) {
+	t.Parallel()
+	boot, err := ParseBootstrap([]byte(
+		"logging:\n  level: warn\n  file:\n    path: /tmp/c.log\n    level: info\n"),
+		EnvOnly())
+	if err != nil {
+		t.Fatalf("expected a valid document, got: %v", err)
+	}
+	settings, _ := boot.Logging.File.LogFileSettings()
+	if settings.Sink.Level == nil {
+		t.Fatal("an explicit `info` reached the sink as \"nothing was said\"")
+	}
+	if *settings.Sink.Level != slog.LevelInfo {
+		t.Errorf("file level = %v, want info", *settings.Sink.Level)
+	}
+}
+
+// THE ROTATION CAPS ARE BOUNDED AT BOTH ENDS, and the ceiling is the half
+// that is not obvious.
+//
+// `max_size_mb` is held in BYTES by the sink, so a value at or above 1<<43 MB
+// wraps int64 negative and the file rotates on EVERY line — the exact inverse
+// of the enormous number an operator wrote, and silent, because rotating is
+// what success looks like. `max_backups` is a rename count per rotation, so a
+// huge one stalls the rotation rather than keeping more history. The
+// deployment guide tells operators running logrotate(8) to write "a size this
+// node will never reach", so the ceiling is what keeps that advice from
+// having a cliff at the end of it.
+func TestTheRotationCapsAreBoundedAbove(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, yaml, path string
+	}{
+		{
+			"a size that wraps the byte arithmetic",
+			"logging:\n  file:\n    path: /tmp/c.log\n    max_size_mb: 8796093022208\n",
+			"logging.file.max_size_mb",
+		},
+		{
+			"a size one past the ceiling",
+			"logging:\n  file:\n    path: /tmp/c.log\n    max_size_mb: 1073741825\n",
+			"logging.file.max_size_mb",
+		},
+		{
+			"a backup count that would stall the rotation",
+			"logging:\n  file:\n    path: /tmp/c.log\n    max_backups: 1001\n",
+			"logging.file.max_backups",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := rejectsBootstrap(t, tc.yaml, tc.path)
+			if !errors.Is(err, ErrOutOfRange) {
+				t.Fatalf("want %v, got %v", ErrOutOfRange, err)
+			}
+		})
+	}
+}
+
+// AND THE CEILINGS THEMSELVES ARE ACCEPTED, so the bound is a range rather
+// than an off-by-one that refuses the value it documents.
+func TestTheRotationCapCeilingsAreThemselvesValid(t *testing.T) {
+	t.Parallel()
+	boot := DefaultBootstrap()
+	boot.Logging.File.Path = "/tmp/crewlet.log"
+	size, backups := logging.MaxSizeMBCeiling, logging.MaxBackupsCeiling
+	boot.Logging.File.MaxSizeMB, boot.Logging.File.MaxBackups = &size, &backups
+	if err := boot.Validate(); err != nil {
+		t.Errorf("the documented ceilings are refused by the validator: %v", err)
+	}
+}

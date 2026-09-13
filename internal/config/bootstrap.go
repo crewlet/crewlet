@@ -113,14 +113,19 @@ type Logging struct {
 
 // LogFile is the durable copy of this node's log.
 //
-// # It is a SECOND destination, never a replacement
+// # It is a SECOND destination by default
 //
-// stderr keeps everything it had: it is the only sink that exists before
-// this file has been read, it is what a container platform captures, and it
-// is where a boot failure is watched. A node that fell silent there the
-// moment a path was configured would look like one that had stopped. A
-// deployment that genuinely wants the file alone redirects stderr, which is
-// a thing it can do and this config cannot do for it.
+// Naming a file never silences stderr on its own: stderr is the only sink
+// that exists before this document has been read, it is what a container
+// platform captures, and it is where a boot failure is watched. A node that
+// fell silent there the moment a path was configured would look like one
+// that had stopped.
+//
+// A deployment whose platform already captures stderr is paying for every
+// line twice, and says so with [Logging.Stderr] — which hands this file the
+// stream and keeps the three kinds of line that never pass through a
+// configured handler at all. That is a deliberate choice made in the
+// document, not something a path silently implies.
 //
 // # Rotation is not optional, and there is no "never" spelling
 //
@@ -170,7 +175,7 @@ type LogFile struct {
 	// "apply the default": a file that rotates every zero bytes is not a
 	// setting, and silently substituting 100 MB for it is how an operator
 	// ends up unable to tell what their own file says.
-	MaxSizeMB *int `yaml:"max_size_mb,omitempty" json:"max_size_mb,omitempty" js:"min=1" desc:"Size the live file reaches before rotating. Unset = 100. Rotation cannot be disabled."`
+	MaxSizeMB *int `yaml:"max_size_mb,omitempty" json:"max_size_mb,omitempty" js:"min=1;max=1073741824" desc:"Size the live file reaches before rotating. Unset = 100. Rotation cannot be disabled, and the cap is bounded above because the byte arithmetic wraps."`
 
 	// MaxBackups is how many rotated files (`<path>.1` newest) are kept.
 	// Unset is logging.DefaultMaxBackups.
@@ -179,7 +184,7 @@ type LogFile struct {
 	// caps the estate at the live file alone, which is what a small disk
 	// with a shipper already tailing the file wants. Read as "unset" it
 	// would hand that deployment five files it asked not to have.
-	MaxBackups *int `yaml:"max_backups,omitempty" json:"max_backups,omitempty" js:"min=0" desc:"Rotated files kept beside the live one. Unset = 5; 0 keeps none."`
+	MaxBackups *int `yaml:"max_backups,omitempty" json:"max_backups,omitempty" js:"min=0;max=1000" desc:"Rotated files kept beside the live one. Unset = 5; 0 keeps none. Each rotation renames every file it keeps, so the count is bounded."`
 }
 
 func (l *Logging) validate(path string) error {
@@ -221,14 +226,28 @@ func (f *LogFile) validate(path string) error {
 	// `max_size_mb: 0` and no path is a half-written setting, and reporting
 	// it only once the path is filled in means the operator finds it on the
 	// deploy that was meant to turn the file on.
-	if f.MaxSizeMB != nil && *f.MaxSizeMB < 1 {
+	// BOUNDED AT BOTH ENDS. The floor is the obvious one; the CEILING is
+	// there because both numbers stop meaning what they say long before
+	// int64 does. The size cap is held in bytes, so a value at or above
+	// 1<<43 MB wraps negative and the file rotates on EVERY line — the
+	// precise opposite of the large number an operator wrote. The backup
+	// count is a rename count per rotation, so a huge one stalls the
+	// rotation instead of keeping more history. Refused here so
+	// `crewlet validate` catches it, and again in logging.OpenFile, which
+	// is what a `-log-file` run reaches.
+	if f.MaxSizeMB != nil && (*f.MaxSizeMB < 1 || *f.MaxSizeMB > logging.MaxSizeMBCeiling) {
 		p.add(at(path, "max_size_mb"), ErrOutOfRange,
-			"%d (want 1 or more; rotation cannot be disabled, because a log "+
-				"file with no ceiling fills the disk the store is on)", *f.MaxSizeMB)
+			"%d (want 1..%d). Rotation cannot be disabled — a log file with no "+
+				"ceiling fills the disk the store is on — and a cap above %d MB "+
+				"(a pebibyte) wraps in the byte arithmetic and rotates every line",
+			*f.MaxSizeMB, logging.MaxSizeMBCeiling, logging.MaxSizeMBCeiling)
 	}
-	if f.MaxBackups != nil && *f.MaxBackups < 0 {
+	if f.MaxBackups != nil && (*f.MaxBackups < 0 || *f.MaxBackups > logging.MaxBackupsCeiling) {
 		p.add(at(path, "max_backups"), ErrOutOfRange,
-			"%d (want 0 — keep no rotated files — or more)", *f.MaxBackups)
+			"%d (want 0..%d). 0 keeps no rotated files; each rotation renames "+
+				"every file it keeps, so a larger count stalls the rotation "+
+				"rather than keeping more history",
+			*f.MaxBackups, logging.MaxBackupsCeiling)
 	}
 	// A SHAPE, A LEVEL OR A CAP WITH NO PATH WRITES NOTHING, and reads in
 	// review as a node that logs to a file. Refused rather than ignored:
