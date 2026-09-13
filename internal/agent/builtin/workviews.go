@@ -46,8 +46,9 @@ func (t *listWorkViews) Description() string {
 	return "List the saved views on a project, unit, person or the whole " +
 		"workspace. Every container has a list, a board and a calendar " +
 		"without anybody saving one; what comes back beyond those is what " +
-		"somebody arranged. Use the `params` of a view with list_work_items " +
-		"to run it."
+		"somebody arranged. To run one, pass its `id` as `view` to " +
+		"list_work_items — its `params` are in the query grammar's own " +
+		"names and are not this tool's arguments."
 }
 
 func (t *listWorkViews) Parameters() map[string]any {
@@ -99,8 +100,10 @@ func (t *saveWorkView) Name() string { return tracker.SaveWorkViewTool }
 func (t *saveWorkView) Description() string {
 	return "Save a view — a named query with a shape — on a project, unit, " +
 		"person or the workspace. Pass an existing view's `id` to replace " +
-		"it, or omit it to create one. The parameters are list_work_items' " +
-		"own, so save what you just ran."
+		"it, or omit it to create one. `params` is the QUERY GRAMMAR, not " +
+		"this surface's arguments: four of list_work_items' arguments are " +
+		"spelled differently there, and the view is refused if any key " +
+		"does not parse."
 }
 
 func (t *saveWorkView) Parameters() map[string]any {
@@ -128,8 +131,16 @@ func (t *saveWorkView) Parameters() map[string]any {
 			"params": map[string]any{
 				"type":                 "object",
 				"additionalProperties": map[string]any{"type": "string"},
-				"description": "The query, in list_work_items' own parameter " +
-					"names. Refused if it does not parse.",
+				"description": "The query, in the grammar's own parameter " +
+					"names — which list_work_items spells differently for " +
+					"four of its arguments: " + AliasSentence() + ". A " +
+					"custom field is `f.<ref>`. Everything else — assignee, " +
+					"type, priority, due, updated, created, reporter, " +
+					"watcher, unit, goal, sprint, sort, limit, preset — is " +
+					"the same word. Refused if any key does not parse, and " +
+					"`view`, `cursor` and `read_level` are refused " +
+					"outright: they are about the reader rather than the " +
+					"rows.",
 			},
 			"owner": map[string]any{
 				"type": "string",
