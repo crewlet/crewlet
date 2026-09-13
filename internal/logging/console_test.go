@@ -353,7 +353,7 @@ func TestEveryDeclaredFormatInstallsItsOwnHandler(t *testing.T) {
 
 	byHandler := map[string]Format{}
 	for _, format := range Formats {
-		install(slog.LevelInfo, format, io.Discard)
+		install(settings{level: slog.LevelInfo, format: format, console: io.Discard})
 		name := fmt.Sprintf("%T", root.Load().Handler())
 		if other, dup := byHandler[name]; dup {
 			t.Errorf("formats %q and %q both install %s — install's switch "+
@@ -363,9 +363,35 @@ func TestEveryDeclaredFormatInstallsItsOwnHandler(t *testing.T) {
 		byHandler[name] = format
 	}
 
-	install(slog.LevelInfo, FormatConsole, io.Discard)
+	install(settings{level: slog.LevelInfo, format: FormatConsole, console: io.Discard})
 	if _, ok := root.Load().Handler().(*consoleHandler); !ok {
 		t.Errorf("the console format installed %T", root.Load().Handler())
+	}
+}
+
+// ONE DESTINATION IS INSTALLED UNWRAPPED, whichever one it is. A node that
+// silenced its console in favour of a file pays no fan-out indirection, the
+// same as the overwhelming majority of runs that have no file at all.
+func TestASingleDestinationIsNotWrappedInAFanout(t *testing.T) {
+	t.Cleanup(func() { Configure(slog.LevelInfo, FormatConsole, io.Discard) })
+
+	install(settings{level: slog.LevelInfo, format: FormatJSON, console: io.Discard})
+	if _, wrapped := root.Load().Handler().(fanout); wrapped {
+		t.Error("a console-only process was wrapped in a fan-out")
+	}
+	install(settings{
+		level: slog.LevelInfo, format: FormatJSON, console: io.Discard,
+		consoleOff: true, file: FileSink{Writer: io.Discard, Format: FormatText},
+	})
+	if _, wrapped := root.Load().Handler().(fanout); wrapped {
+		t.Error("a file-only process was wrapped in a fan-out")
+	}
+	install(settings{
+		level: slog.LevelInfo, format: FormatJSON, console: io.Discard,
+		file: FileSink{Writer: io.Discard, Format: FormatText},
+	})
+	if _, wrapped := root.Load().Handler().(fanout); !wrapped {
+		t.Errorf("two destinations did not install a fan-out: %T", root.Load().Handler())
 	}
 }
 

@@ -470,8 +470,11 @@ func TestBadRunOverridesAreRefused(t *testing.T) {
 	}
 }
 
-// parseOverrides builds the flag set runEngine builds, so the tests exercise
-// the same "was this flag given" logic the command does.
+// parseOverrides builds the three node-override flags runEngine builds, with
+// their own defaults, so the tests exercise the same "was this flag given"
+// logic the command does. The logging flags have [runFlags] beside them for
+// the same reason; neither helper is the whole flag set, because a helper
+// that claimed to be would have to be corrected on every flag `run` gains.
 func parseOverrides(t *testing.T, args []string) (*flag.FlagSet, string, string, int) {
 	t.Helper()
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)

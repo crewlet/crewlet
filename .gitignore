@@ -41,6 +41,25 @@ __pycache__/
 /nimbus-data/
 /acme-data/
 
+# The log file `logging.file.path` / `-log-file` writes, and the numbered
+# backups it rotates into (`crewlet.log.1` … `crewlet.log.5`). A deployment
+# points these at /var/log; a contributor diagnosing something points them at
+# the checkout, which is where the risk is -- this is a public repository, and
+# a log line carries seat handles, channel names, repository and issue
+# identifiers and whatever a vendor put in an error string. Redacted is not
+# the same as publishable, and git history keeps what a later commit drops.
+#
+# The numbered suffixes need their own pattern because `*.log` does not match
+# `crewlet.log.1`, which is exactly the file an operator attaches to a bug
+# report without looking at it twice.
+#
+# `[0-9]*` rather than one pattern per digit count: max_backups goes up to
+# 1000, so a fixed-width list would have to grow with the ceiling and would
+# silently stop covering `.100` the day it did not. Anchoring on a DIGIT is
+# what keeps an operator's own `crewlet.log.old` out of it.
+*.log
+*.log.[0-9]*
+
 .env
 # Minted-credential env files the provisioning CLIs write from the repo
 # root (.env.gitlab, .env.mattermost, any operator variant) — never

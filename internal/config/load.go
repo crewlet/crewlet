@@ -52,7 +52,8 @@ func ParseBootstrap(data []byte, r *Resolver) (*Bootstrap, error) {
 		return nil, err
 	}
 
-	LogUnresolved("bootstrap", r.Document(&doc))
+	missing := r.Document(&doc)
+	LogUnresolved("bootstrap", missing)
 
 	cfg := DefaultBootstrap()
 	if err := decodeKnown(&doc, &cfg); err != nil {
@@ -61,7 +62,43 @@ func ParseBootstrap(data []byte, r *Resolver) (*Bootstrap, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	if err := refuseUnresolvedLogFile(missing); err != nil {
+		return nil, err
+	}
 	return &cfg, nil
+}
+
+// refuseUnresolvedLogFile stops a boot whose log file was named by a `${VAR}`
+// nothing answered for.
+//
+// # Why this one field and not every unresolved reference
+//
+// Because an unresolved reference expands to the empty string, and what that
+// MEANS is the field's own business. Almost everywhere it is caught: an empty
+// `store.path` is refused as a missing store, an empty credential surfaces as
+// the authentication failure the resolver's warning predicts. `logging.file.path`
+// is the exception, and a dangerous one — empty is a legitimate, common
+// SETTING there, meaning "write no file". So `path: "${LOG_PATH}"` with the
+// variable unset does not fail, or warn twice, or look wrong: it silently
+// becomes the deployment that asked for no durable log at all.
+//
+// That is the precise failure this whole surface is arranged against. A path
+// that cannot be OPENED already stops the boot rather than running without
+// the record an operator configured; a path that never arrived has to do the
+// same, or the policy holds only for the failures that are easy to notice.
+func refuseUnresolvedLogFile(missing []Unresolved) error {
+	for _, u := range missing {
+		if u.Path != "logging.file.path" {
+			continue
+		}
+		return fault(u.Path, ErrMissing,
+			"nothing answered for %s, so the log file has no name and this node "+
+				"would start with no durable log at all. Set the variable, or "+
+				"write the path literally — an empty path means \"no file\" and "+
+				"cannot be told apart from this",
+			strings.Join(u.Names, ", "))
+	}
+	return nil
 }
 
 // LoadCompany reads and validates Tier B from a YAML file.

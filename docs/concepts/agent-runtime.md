@@ -302,7 +302,7 @@ duplicate — the [completion ledger](seat-ownership.md#the-completion-ledger)
 covers a turn that *finished*, and this one did not. That is the trade-off
 you opted into by sending the second signal.
 
-**Watching the drain.** Not on the dashboard: the embedded API server is stopped *first*, before the drain begins, so the dashboard, the REST API and `GET /health` all stop answering on the first Ctrl+C. **The logs are the drain's only live view** — the engine writes `drain_in_progress` with the in-flight count every 10 seconds until `drain_complete`.
+**Watching the drain.** Not on the dashboard: the embedded API server is stopped *first*, before the drain begins, so the dashboard, the REST API and `GET /health` all stop answering on the first Ctrl+C. **The logs are the drain's only live view** — the engine writes `drain_in_progress` with the in-flight count every 10 seconds until `drain_complete`. Set [`logging.file`](../guides/deployment.md#the-log-file) if you want that view to survive the terminal it was watched in: the file is closed last of everything, after the drain and after the trace flush, so `drain_complete` is in it.
 
 On a **split deployment** the standalone API process is a separate process and keeps serving while an engine node drains, but it has no engine reference, so it reports the fleet rather than that node's in-flight count.
 

@@ -84,9 +84,53 @@
       },
       "type": "object"
     },
+    "LogFile": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "description": "Shape written to the file. Empty follows logging.format; set json when a shipper reads it.",
+          "enum": [
+            "console",
+            "text",
+            "json"
+          ],
+          "type": "string"
+        },
+        "level": {
+          "description": "How loud the file is. Empty follows logging.level.",
+          "enum": [
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ],
+          "type": "string"
+        },
+        "max_backups": {
+          "description": "Rotated files kept beside the live one. Unset = 5; 0 keeps none. Each rotation renames every file it keeps, so the count is bounded.",
+          "maximum": 1000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_size_mb": {
+          "description": "Size the live file reaches before rotating. Unset = 100. Rotation cannot be disabled, and the cap is bounded above because the byte arithmetic wraps.",
+          "maximum": 1073741824,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "path": {
+          "description": "Log file written in addition to stderr. Empty writes no file. Missing directories are created.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "Logging": {
       "additionalProperties": false,
       "properties": {
+        "file": {
+          "$ref": "#/$defs/LogFile"
+        },
         "format": {
           "description": "console (default, columns and colour for a person), text (slog key=value) or json (for a log shipper).",
           "enum": [
@@ -105,6 +149,10 @@
             "error"
           ],
           "type": "string"
+        },
+        "stderr": {
+          "description": "Whether the ordinary log stream reaches stderr. Unset = true. false needs logging.file.path, and never silences a boot failure or the watchdog's exit notice.",
+          "type": "boolean"
         }
       },
       "type": "object"

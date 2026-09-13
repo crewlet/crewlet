@@ -81,6 +81,110 @@ type Logging struct {
 
 	// Format is the shape of a line. Empty is console.
 	Format logging.Format `yaml:"format,omitempty" json:"format,omitempty" js:"enum=console|text|json" desc:"console (default, columns and colour for a person), text (slog key=value) or json (for a log shipper)."`
+
+	// File is a log file this node writes IN ADDITION to stderr. Omit the
+	// block (or leave `path` empty) and there is no file at all, which is
+	// every deployment whose platform already captures stderr.
+	File LogFile `yaml:"file,omitempty" json:"file,omitempty"`
+
+	// Stderr is whether the ordinary log stream reaches stderr at all.
+	// Unset is true, and true is what every deployment without a log file
+	// must have — a node with neither writes its log nowhere, which this
+	// validator refuses by name.
+	//
+	// # Why this exists rather than `2>/dev/null`
+	//
+	// Because the shell redirect is not the same thing, and the
+	// difference is the whole point. Three kinds of line reach stderr
+	// without passing through the configured handler: everything emitted
+	// before this document had been read (the log file is named BY it, so
+	// it cannot be open yet), the seat watchdog's hard-exit notice, which
+	// goes to os.Stderr directly because a wedged process has not earned
+	// a configured handler, and the engine's own report that the log file
+	// cannot be written. A redirect throws all three away and they are
+	// the three an operator most needs; this field keeps them and
+	// silences only the stream the file already has.
+	//
+	// A POINTER because `false` is the setting and also the zero value:
+	// read as "nothing was said" it would silence the console of every
+	// node that wrote the field at all.
+	Stderr *bool `yaml:"stderr,omitempty" json:"stderr,omitempty" desc:"Whether the ordinary log stream reaches stderr. Unset = true. false needs logging.file.path, and never silences a boot failure or the watchdog's exit notice."`
+}
+
+// LogFile is the durable copy of this node's log.
+//
+// # It is a SECOND destination by default
+//
+// Naming a file never silences stderr on its own: stderr is the only sink
+// that exists before this document has been read, it is what a container
+// platform captures, and it is where a boot failure is watched. A node that
+// fell silent there the moment a path was configured would look like one
+// that had stopped.
+//
+// A deployment whose platform already captures stderr is paying for every
+// line twice, and says so with [Logging.Stderr] — which hands this file the
+// stream and keeps the three kinds of line that never pass through a
+// configured handler at all. That is a deliberate choice made in the
+// document, not something a path silently implies.
+//
+// # Rotation is not optional, and there is no "never" spelling
+//
+// A log file with no ceiling fills the disk the engine's own store is on,
+// and it does it on the deployments least likely to be watched. The caps
+// below have defaults rather than an off switch for that reason; an operator
+// who already runs logrotate(8) over this path with `copytruncate` sets a
+// size this process will never reach. See [logging.File].
+type LogFile struct {
+	// Path is the live log file. `${VAR}` works here as everywhere in
+	// Tier A, and a relative path is relative to the process's working
+	// directory, exactly as `store.path` is. Missing directories are
+	// created (0700); the file is 0600.
+	//
+	// EMPTY IS THE OFF SWITCH, and it is a meaningful zero: a file
+	// nobody named is a file nobody wants.
+	Path string `yaml:"path,omitempty" json:"path,omitempty" desc:"Log file written in addition to stderr. Empty writes no file. Missing directories are created."`
+
+	// Format is the shape written to the FILE, which is allowed to differ
+	// from the terminal's: the whole reason this is not an io.MultiWriter
+	// is that a person watching a boot wants columns while a shipper
+	// reading the file wants `json`. Empty follows `logging.format`, so a
+	// node that says nothing writes one log in two places.
+	Format logging.Format `yaml:"format,omitempty" json:"format,omitempty" js:"enum=console|text|json" desc:"Shape written to the file. Empty follows logging.format; set json when a shipper reads it."`
+
+	// Level is how loud the FILE is, which is allowed to differ from the
+	// terminal's for the same reason the shape is. Both directions are
+	// real: a `debug` file behind a `warn` console keeps the detail an
+	// incident needs without burying whoever is watching, and a `warn`
+	// file behind a `debug` console keeps a small durable record while
+	// somebody works.
+	//
+	// Empty follows `logging.level`, so `-log-level` and `-debug` move
+	// both destinations unless the file was given a level of its own.
+	// When they differ the process admits the LOUDER of the two and each
+	// destination filters — so the cost of a `debug` file is paid on every
+	// debug call site whatever the console says.
+	Level logging.Level `yaml:"level,omitempty" json:"level,omitempty" js:"enum=debug|info|warn|error" desc:"How loud the file is. Empty follows logging.level."`
+
+	// MaxSizeMB is the size the live file reaches before it rotates.
+	// Unset is logging.DefaultMaxSizeMB, which is where the number and
+	// its rationale live — the layer that enforces a limit is the one
+	// that gets to say what it is when nobody said, the same arrangement
+	// as node.max_concurrent.
+	//
+	// A POINTER, so an explicit 0 is refused by name rather than read as
+	// "apply the default": a file that rotates every zero bytes is not a
+	// setting, and silently substituting 100 MB for it is how an operator
+	// ends up unable to tell what their own file says.
+	MaxSizeMB *int `yaml:"max_size_mb,omitempty" json:"max_size_mb,omitempty" js:"min=1;max=1073741824" desc:"Size the live file reaches before rotating. Unset = 100. Rotation cannot be disabled, and the cap is bounded above because the byte arithmetic wraps."`
+
+	// MaxBackups is how many rotated files (`<path>.1` newest) are kept.
+	// Unset is logging.DefaultMaxBackups.
+	//
+	// A POINTER because 0 IS A SETTING here and it is the zero value: it
+	// caps the estate at the live file alone, which is what a small disk
+	// with a shipper already tailing the file wants. Read as "unset" it
+	// would hand that deployment five files it asked not to have.
+	MaxBackups *int `yaml:"max_backups,omitempty" json:"max_backups,omitempty" js:"min=0;max=1000" desc:"Rotated files kept beside the live one. Unset = 5; 0 keeps none. Each rotation renames every file it keeps, so the count is bounded."`
 }
 
 func (l *Logging) validate(path string) error {
@@ -93,8 +197,114 @@ func (l *Logging) validate(path string) error {
 		p.add(at(path, "format"), ErrUnknownValue, "%q (want %s)",
 			l.Format, names(logging.Formats))
 	}
+	p.wrap(l.File.validate(at(path, "file")))
+	// A NODE THAT LOGS NOWHERE. `stderr: false` is a statement about the
+	// file taking the stream over, so without a file it is a document that
+	// asks for silence — and silence is never what anybody meant by
+	// configuring logging. Refused here, by name, because an operator told
+	// what is wrong with their document can fix it and one whose setting
+	// was quietly overridden cannot.
+	if l.Stderr != nil && !*l.Stderr && l.File.Path == "" {
+		p.add(at(path, "stderr"), ErrConflict,
+			"false with no logging.file.path leaves this node writing its log "+
+				"nowhere; name a file, or leave stderr unset")
+	}
 	return p.err()
 }
+
+func (f *LogFile) validate(path string) error {
+	var p problems
+	if f.Format != "" && !f.Format.Valid() {
+		p.add(at(path, "format"), ErrUnknownValue, "%q (want %s)",
+			f.Format, names(logging.Formats))
+	}
+	if f.Level != "" && !f.Level.Valid() {
+		p.add(at(path, "level"), ErrUnknownValue, "%q (want %s)",
+			f.Level, names(logging.Levels))
+	}
+	// THE CAPS ARE CHECKED WHETHER OR NOT A PATH IS SET. A block carrying
+	// `max_size_mb: 0` and no path is a half-written setting, and reporting
+	// it only once the path is filled in means the operator finds it on the
+	// deploy that was meant to turn the file on.
+	// BOUNDED AT BOTH ENDS. The floor is the obvious one; the CEILING is
+	// there because both numbers stop meaning what they say long before
+	// int64 does. The size cap is held in bytes, so a value at or above
+	// 1<<43 MB wraps negative and the file rotates on EVERY line — the
+	// precise opposite of the large number an operator wrote. The backup
+	// count is a rename count per rotation, so a huge one stalls the
+	// rotation instead of keeping more history. Refused here so
+	// `crewlet validate` catches it, and again in logging.OpenFile, which
+	// is what a `-log-file` run reaches.
+	if f.MaxSizeMB != nil && (*f.MaxSizeMB < 1 || *f.MaxSizeMB > logging.MaxSizeMBCeiling) {
+		p.add(at(path, "max_size_mb"), ErrOutOfRange,
+			"%d (want 1..%d). Rotation cannot be disabled — a log file with no "+
+				"ceiling fills the disk the store is on — and a cap above %d MB "+
+				"(a pebibyte) wraps in the byte arithmetic and rotates every line",
+			*f.MaxSizeMB, logging.MaxSizeMBCeiling, logging.MaxSizeMBCeiling)
+	}
+	if f.MaxBackups != nil && (*f.MaxBackups < 0 || *f.MaxBackups > logging.MaxBackupsCeiling) {
+		p.add(at(path, "max_backups"), ErrOutOfRange,
+			"%d (want 0..%d). 0 keeps no rotated files; each rotation renames "+
+				"every file it keeps, so a larger count stalls the rotation "+
+				"rather than keeping more history",
+			*f.MaxBackups, logging.MaxBackupsCeiling)
+	}
+	// A SHAPE, A LEVEL OR A CAP WITH NO PATH WRITES NOTHING, and reads in
+	// review as a node that logs to a file. Refused rather than ignored:
+	// the same rule the retired `debug:` field is the scar from.
+	if f.Path == "" && (f.Format != "" || f.Level != "" || f.MaxSizeMB != nil || f.MaxBackups != nil) {
+		p.add(at(path, "path"), ErrMissing,
+			"the file block sets a shape, a level or a cap but names no file, so "+
+				"nothing is written; set path, or remove the block")
+	}
+	return p.err()
+}
+
+// LogFileSettings is what Tier A says about the log file destination: how to
+// open it, and how to write it once open.
+//
+// The two halves are separate because they belong to different layers —
+// [logging.OpenFile] takes the first and [logging.SetFile] the second — and
+// folding them into one bag would give the opener two fields it must ignore.
+type LogFileSettings struct {
+	// Open is the path and the rotation caps.
+	Open logging.FileOptions
+	// Sink is the shape and the level, with the writer still to be filled
+	// in by whoever opened the file.
+	Sink logging.FileSink
+}
+
+// LogFileSettings is what this block asks for, with ok false when no file was
+// configured at all.
+//
+// The CAPS ARE PASSED THROUGH AS WRITTEN, pointers included, rather than
+// defaulted here: internal/logging owns the numbers because it is the layer
+// that enforces them, and a default applied in two places is a default that
+// eventually disagrees with itself. The LEVEL is converted once, here, at the
+// edge — the operator's spelling becomes a [slog.Level] and nothing below
+// this line sees a string.
+func (f *LogFile) LogFileSettings() (LogFileSettings, bool) {
+	if f.Path == "" {
+		return LogFileSettings{}, false
+	}
+	var level *slog.Level
+	if f.Level != "" {
+		resolved := f.Level.Slog()
+		level = &resolved
+	}
+	return LogFileSettings{
+		Open: logging.FileOptions{
+			Path:       f.Path,
+			MaxSizeMB:  f.MaxSizeMB,
+			MaxBackups: f.MaxBackups,
+		},
+		Sink: logging.FileSink{Format: f.Format, Level: level},
+	}, true
+}
+
+// StderrEnabled is whether the ordinary log stream reaches stderr. Unset is
+// true — see [Logging.Stderr] for what it does not silence either way.
+func (l *Logging) StderrEnabled() bool { return l.Stderr == nil || *l.Stderr }
 
 // LogSettings is what this file asks the process to log at, and in what
 // shape, with every default applied.

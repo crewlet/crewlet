@@ -12,23 +12,25 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
-// runFlags rebuilds the three logging flags `crewlet run` declares, with the
+// runFlags rebuilds the four logging flags `crewlet run` declares, with the
 // same names and the same defaults, and parses args through them.
 //
 // The DEFAULTS ARE THE POINT: a flag carries its default whether or not
 // anyone typed it, so a test that constructed the values directly would
-// never exercise the thing [logSettings] exists to get right.
-func runFlags(t *testing.T, args ...string) (*flag.FlagSet, string, string, bool) {
+// never exercise the thing [logSettings] and [logFileSettings] exist to get
+// right.
+func runFlags(t *testing.T, args ...string) (*flag.FlagSet, string, string, string, bool) {
 	t.Helper()
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	level := fs.String("log-level", "info", "")
 	format := fs.String("log-format", "console", "")
+	logFile := fs.String("log-file", "", "")
 	debug := fs.Bool("debug", false, "")
 	if err := fs.Parse(args); err != nil {
 		t.Fatal(err)
 	}
-	return fs, *level, *format, *debug
+	return fs, *level, *format, *logFile, *debug
 }
 
 // THE COMMAND LINE WINS, BUT ONLY WHERE IT SPOKE.
@@ -109,7 +111,7 @@ func TestLogSettingsFlagsOverrideTheFileOnlyWhenGiven(t *testing.T) {
 			if err != nil {
 				t.Fatalf("expected a valid Tier A document, got: %v", err)
 			}
-			fs, level, format, debug := runFlags(t, tc.args...)
+			fs, level, format, _, debug := runFlags(t, tc.args...)
 			gotLevel, gotFormat := logSettings(boot, fs, level, format, debug)
 			if gotLevel != tc.wantLevel {
 				t.Errorf("level = %v, want %v", gotLevel, tc.wantLevel)
