@@ -46,7 +46,9 @@ function declared(): Set<string> {
     .map((f) => readFileSync(join(dir, f), "utf8"))
     .join("\n");
   const names = new Set<string>();
-  for (const m of css.matchAll(/\.(-?[_a-zA-Z][-\w]*)/g)) names.add(m[1]);
+  for (const [, name] of css.matchAll(/\.(-?[_a-zA-Z][-\w]*)/g)) {
+    if (name) names.add(name);
+  }
   return names;
 }
 
@@ -80,12 +82,12 @@ function uses(file: string, text: string): Use[] {
       if (m[3] !== undefined) {
         for (const arg of m[3].split(",")) {
           const bare = arg.match(/^\s*"([^"]*)"\s*$/);
-          if (bare) {
+          if (bare?.[1] !== undefined) {
             add(bare[1], i + 1);
             continue;
           }
           const guarded = arg.match(/&&\s*"([^"]*)"\s*$/);
-          if (guarded) add(guarded[1], i + 1);
+          if (guarded?.[1] !== undefined) add(guarded[1], i + 1);
         }
       }
     }
