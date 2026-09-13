@@ -57,10 +57,12 @@ without one inherits the organization's default.
 
 **A key is minted once.** Datadog returns an application key's value exactly
 once, so the pass mints only for a seat holding none. A seat whose account
-already has a key that the engine cannot read is **reported, not replaced** —
-replacing it would silently revoke whatever is using it. A sink the engine
-cannot read stops that seat rather than minting, because unknown is not "no
-key".
+already has a key **and whose `${VAR}` is empty** is repaired rather than
+reported: nobody in the company holds that key's value, so the pass deletes it
+and mints a replacement (see [below](#a-key-whose-value-nothing-holds-is-replaced-not-reported)).
+A sink the engine cannot read stops that seat rather than minting, because
+unknown is not "no key" — and that one is reported, since it is a fault on
+this side rather than at Datadog.
 
 The role is **refused rather than defaulted** if the organization does not have
 it: creating accounts under whatever role happened to match would grant an
@@ -245,7 +247,11 @@ each one leaving the surface reporting `ready` while alerts went nowhere:
 | A seat's service account exists but is **disabled**, with no Crewlet marker | `identity_failed` | re-enable it in Datadog — it was not disabled by this engine |
 | A seat's service account is disabled **by a Crewlet disconnect** | — | the next pass re-enables it |
 | A seat holds a sealed key and its account holds **no application key at all** | — | the next pass mints a replacement and seals it |
+| A seat's account holds an application key and its `${VAR}` is **empty** | — | the next pass deletes that key and mints a replacement |
+| The engine could not read its own secret store for a seat | `identity_failed` | fix the keyring on the engine — this one carries **no** Datadog link, because Datadog is not where it is settled |
 | **Enabled** service accounts at this company's own email domain that match **no seat** | `registration_orphaned` | disable or delete them in Datadog — nothing here touches them, and either one clears the finding |
+
+A finding a person settles **at Datadog** carries a link to the organization's user administration; one the engine owns carries none, because sending somebody to a vendor page over a fault on this side costs them the trip and teaches them the link means nothing.
 
 Two of those are worth knowing about in detail.
 
@@ -268,6 +274,14 @@ Which accounts count as this engine's is decided in two steps, and the domain al
 Reading the key list is what makes that possible, so it happens on every pass — one request per seat, the same shape Atlassian's own token count has — and it happens **whether or not this run may write**, which is what makes the Check button worth pressing. A check cannot read the sealed store, so it cannot ask whether the stored value is one of the account's keys; it can ask the account, and an account with no key is a seat that cannot act whatever is stored for it. It reports that as `identity_missing`, owed by the **engine**, because the engine's own next provisioning pass is what mints one.
 
 The check stays **three-valued** on the vendor's side: a listing Datadog could not answer changes nothing, because reading a blip as "no keys" would rotate every agent's credential on the loop's timer, which is an outage this engine would have caused itself.
+
+#### A key whose value nothing holds is replaced, not reported
+
+The other direction of the same mismatch — the account has a key and the seat's `${VAR}` is **empty** — means the value is one *nobody in the company has*: an agent authenticates from the `${VAR}`, and Datadog served that key's value once, to a store that no longer carries it. The seat cannot act, and no pass, retry or wait changes that. So a writing pass **deletes that key and mints a replacement**, and the card stays clean.
+
+It used to stop the whole card on *Action required* and tell an operator to "delete the key at Datadog and run this again" — an API call the engine is itself authenticated for, holding the very credentials it listed the key with. Asking a person to perform a write you are authorized for is not a safety property; it is the same write with a worse actor, and it left companies parked on *Action required* over one seat.
+
+Only the keys **this engine minted** are deleted, matched on the name every mint here writes (`crewlet`). That is narrower than what a [disconnect](#giving-each-agent-its-own-datadog-identity) does — a teardown revokes *every* key on the account — and the difference is the goal rather than an inconsistency: a teardown must leave no live credential on a decommissioned account, so a key it cannot attribute is exactly the hazard it exists to remove, while a repair only has to give this seat a working credential and minting is additive. A key somebody else put on the account is left alone and the seat is fixed regardless.
 
 A node with no keyring also no longer creates the accounts. It used to make a
 real Datadog service account per seat and then fail to record its key — so the

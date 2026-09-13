@@ -3,6 +3,7 @@ package datadog_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -443,5 +444,224 @@ func TestASeatRefusalNamesWhereToActOnIt(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("findings = %v, none about the disabled seat", res.Findings())
+	}
+}
+
+// A KEY THIS ENGINE CANNOT READ IS REPLACED, NOT REPORTED AT AN OPERATOR.
+//
+// Datadog serves a key's value once, so a key on a seat's own service account
+// with nothing sealed for the seat is a value NOBODY in the company holds: the
+// agent authenticates from the ${VAR} and the ${VAR} is empty. The pass used
+// to stop the whole surface on Action required and tell a person to "delete
+// the key at Datadog and run this again" — an API call it is itself
+// authenticated for, holding the very credentials it listed the key with.
+// Measured on a live company: the Datadog card sat at Action required over one
+// seat, indefinitely, with nothing retrying and nothing broken but this.
+//
+// The engine's own teardown already settles the question the refusal was
+// asking: revokeAppKeys takes EVERY key on an agent's account, because "the
+// account exists solely because this engine created it". Both cannot be right.
+func TestAnUnreadableKeyIsReplacedRatherThanReported(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"data":[{"id":"u1","attributes":{
+			"email":"crewlet-sre@agents.test.invalid","service_account":true}}]}`)
+	}
+	var deleted []string
+	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(
+		w http.ResponseWriter, r *http.Request,
+	) {
+		if r.Method == http.MethodPost {
+			_, _ = w.Write([]byte(
+				`{"data":{"id":"k2","attributes":{"key":"fresh-value","name":"crewlet"}}}`))
+			return
+		}
+		_, _ = w.Write([]byte(
+			`{"data":[{"id":"k1","attributes":{"name":"crewlet"}}]}`))
+	}
+	reg.handle["/api/v2/service_accounts/u1/application_keys/k1"] = func(
+		w http.ResponseWriter, r *http.Request,
+	) {
+		if r.Method == http.MethodDelete {
+			deleted = append(deleted, "k1")
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+
+	// THE SINK HOLDS NOTHING, which is the whole premise: the value is
+	// gone and the key it belongs to cannot be recovered from anywhere.
+	s := newSink()
+	res, err := datadog.Reconcile(context.Background(), datadog.Options{
+		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
+		Creds: pair, Sink: s,
+	})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(res.Seats) != 1 {
+		t.Fatalf("seats = %+v", res.Seats)
+	}
+	if res.Seats[0].Err != nil {
+		t.Fatalf("the seat was refused rather than repaired: %v", res.Seats[0].Err)
+	}
+	if !slices.Equal(deleted, []string{"k1"}) {
+		t.Errorf("deleted %v, want the unreadable key gone before a new one "+
+			"is minted: two keys where one is dead is the state this repairs",
+			deleted)
+	}
+	if !res.Seats[0].KeyMinted {
+		t.Error("no replacement was minted, so the seat still cannot act")
+	}
+	if got := s.held["SRE_DD_KEY"]; got != "fresh-value" {
+		t.Errorf("sealed %q, want the replacement recorded", got)
+	}
+	// AND THE CARD IS CLEAN. The whole point is that nothing is left for a
+	// person to do.
+	for _, f := range res.Findings() {
+		if f.Subject == "sre" {
+			t.Errorf("the repaired seat still reports %q", f.Detail)
+		}
+	}
+}
+
+// AND A KEY THIS ENGINE DID NOT WRITE IS LEFT ALONE.
+//
+// The repair is narrower than the teardown's sweep, and deliberately: a
+// teardown must leave NO live credential on a decommissioned account, so a key
+// it cannot attribute is exactly the hazard it exists to remove. A repair only
+// has to give this seat a working credential, and minting is ADDITIVE — so it
+// can spare a key somebody else put there and still fix the seat, which the
+// teardown has no way to do.
+func TestARepairSparesAKeyThisEngineDidNotWrite(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"data":[{"id":"u1","attributes":{
+			"email":"crewlet-sre@agents.test.invalid","service_account":true}}]}`)
+	}
+	var deleted []string
+	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(
+		w http.ResponseWriter, r *http.Request,
+	) {
+		if r.Method == http.MethodPost {
+			_, _ = w.Write([]byte(
+				`{"data":{"id":"k9","attributes":{"key":"fresh-value","name":"crewlet"}}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[
+			{"id":"k1","attributes":{"name":"crewlet"}},
+			{"id":"k2","attributes":{"name":"terraform"}}
+		]}`))
+	}
+	for _, id := range []string{"k1", "k2"} {
+		reg.handle["/api/v2/service_accounts/u1/application_keys/"+id] = func(
+			w http.ResponseWriter, r *http.Request,
+		) {
+			if r.Method == http.MethodDelete {
+				deleted = append(deleted, id)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}
+
+	s := newSink()
+	res, err := datadog.Reconcile(context.Background(), datadog.Options{
+		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
+		Creds: pair, Sink: s,
+	})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if !slices.Equal(deleted, []string{"k1"}) {
+		t.Errorf("deleted %v, want only the key this engine's own mint names",
+			deleted)
+	}
+	if res.Seats[0].Err != nil || !res.Seats[0].KeyMinted {
+		t.Errorf("the seat was not repaired: err=%v minted=%v",
+			res.Seats[0].Err, res.Seats[0].KeyMinted)
+	}
+}
+
+// A FAILURE THIS ENGINE CAUSED DOES NOT SEND SOMEBODY TO DATADOG.
+//
+// Every seat failure carried the console link once, on the reasoning that each
+// is something a person settles there. An unreadable secret store is not: it
+// is this engine's own fault, on this engine's own side, and a link to
+// somebody else's user administration under it costs the trip and teaches an
+// operator that the link means nothing.
+func TestAStoreFailureLinksNowhereAtTheVendor(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"data":[{"id":"u1","attributes":{
+			"email":"crewlet-sre@agents.test.invalid","service_account":true}}]}`)
+	}
+	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(
+		w http.ResponseWriter, _ *http.Request,
+	) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"k1","attributes":{"name":"crewlet"}}]}`))
+	}
+
+	s := newSink()
+	s.readErr = errors.New("seal: keyring unavailable")
+	res, err := datadog.Reconcile(context.Background(), datadog.Options{
+		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
+		Creds: pair, Sink: s,
+	})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	var found bool
+	for _, f := range res.Findings() {
+		if f.Subject != "sre" {
+			continue
+		}
+		found = true
+		if f.ActionURL != "" {
+			t.Errorf("a store failure this engine owns links to %q", f.ActionURL)
+		}
+	}
+	if !found {
+		t.Fatalf("findings = %v, none about the seat", res.Findings())
+	}
+}
+
+// AND THE VENDOR'S LINK IS THE PAGE, NOT A GUESSED FILTER.
+//
+// It carried `?filter=disabled` on the theory that a re-enable starts from the
+// disabled list — a parameter nothing here established Datadog honours, on a
+// link that serves several failures having nothing to do with a disabled
+// account. So it pointed at a filter that HIDES the account an operator came
+// to look at, which costs exactly the trip the link was added to save.
+func TestTheVendorLinkIsThePageItself(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"data":[{"id":"u1","attributes":{
+			"email":"crewlet-sre@agents.test.invalid","service_account":true,
+			"disabled":true,"title":""}}]}`)
+	}
+
+	res, err := datadog.Reconcile(context.Background(), datadog.Options{
+		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
+		Creds: pair, Sink: newSink(),
+	})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	for _, f := range res.Findings() {
+		if f.Subject != "sre" {
+			continue
+		}
+		if strings.Contains(f.ActionURL, "?") {
+			t.Errorf("action_url = %q, want the user administration itself: a "+
+				"query nothing has established the vendor honours can hide "+
+				"the account somebody followed the link to find", f.ActionURL)
+		}
 	}
 }

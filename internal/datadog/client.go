@@ -139,9 +139,17 @@ func (c *Client) Site() string { return c.site }
 // UsersURL is where a person goes to act on this organization's users.
 //
 // THE LISTING, NOT ONE ACCOUNT. Datadog addresses a user page by its internal
-// id, and the page a person needs is the one with the enable control on it —
-// the organization's user administration, filtered to the disabled ones,
-// which is where a re-enable is actually performed.
+// id, and the page a person needs is the organization's user administration:
+// the enable control, the roles and the service accounts are all on it, and
+// those are what every failure this link is attached to is settled with.
+//
+// AND NO QUERY STRING. It carried `?filter=disabled` on the theory that a
+// re-enable starts from the disabled list — a parameter nothing here has
+// established Datadog honours, on a link that now serves several failures
+// that have nothing to do with a disabled account, so it was pointing at
+// a filter that HIDES the account an operator came to look at. A link that
+// lands somewhere unexpected costs the trip it was added to save, and the
+// page's own controls do the filtering better than a guessed parameter.
 //
 // Built from the SITE rather than from the API host, because they differ:
 // every region serves its console at `app.<site>` and its API at
@@ -151,7 +159,7 @@ func (c *Client) UsersURL() string {
 	if site == "" {
 		return ""
 	}
-	return "https://app." + site + "/organization-settings/users?filter=disabled"
+	return "https://app." + site + "/organization-settings/users"
 }
 
 func (c *Client) endpoint(path string) string {
