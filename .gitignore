@@ -1,7 +1,9 @@
 # Build output. `crewlet` is what `go build ./cmd/crewlet` drops in the
-# working directory; dist/ is goreleaser's.
+# working directory; dist/ is goreleaser's, and build/ holds what its before
+# hook generates for the archives and the image (the Go notices file).
 /crewlet
 /dist/
+/build/
 
 # Python bytecode. This tree has not held a `.py` file since the Go rewrite,
 # which is exactly why the rule was missing and exactly why it is needed: the

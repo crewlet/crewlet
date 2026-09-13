@@ -102,6 +102,29 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 		}
 	}
 
+	// THE NOTICES TRAVEL WITH WHAT THEY COVER. The bundle redistributes React
+	// and the fonts, both under licenses that require their text alongside,
+	// and the release archives and image copy this file from here. Written by
+	// the build (vite.config.ts), so a build that lost `build.license` or the
+	// font step leaves a tree that serves perfectly and owes notices it no
+	// longer carries.
+	notices, err := os.ReadFile(filepath.Join(servedTree, "THIRD_PARTY_NOTICES.txt"))
+	if err != nil {
+		t.Errorf("no THIRD_PARTY_NOTICES.txt in the built tree; `npm run build` in "+
+			"dashboard/ writes it through build.license: %v", err)
+	}
+	for _, want := range []string{
+		"## react - ",               // a bundled package, from build.license
+		"## react-dom - ",           // and its renderer
+		"SIL OPEN FONT LICENSE",     // the font license, appended by fontNotice
+		"The Inter Project Authors", // naming both faces
+		"The JetBrains Mono Project Authors",
+	} {
+		if err == nil && !bytes.Contains(notices, []byte(want)) {
+			t.Errorf("THIRD_PARTY_NOTICES.txt does not carry %q", want)
+		}
+	}
+
 	// NOTHING external at runtime. The tree this replaces pulled three font
 	// families from a CDN, so an air-gapped engine — a supported deployment —
 	// rendered in a fallback face the design was never measured against.
@@ -188,6 +211,19 @@ func TestTheShellLoadsFromTheBinary(t *testing.T) {
 	// fails silently in a browser — the text simply renders in the fallback.
 	if fonts < 4 {
 		t.Errorf("only %d font faces reached from the stylesheet, want 4", fonts)
+	}
+}
+
+// TestTheNoticesAreServedAsText checks a running engine answers its notices,
+// from the binary, as text a browser shows.
+func TestTheNoticesAreServedAsText(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{})
+	for _, url := range []string{
+		"/static/dashboard/THIRD_PARTY_NOTICES.txt",
+		"/static/dashboard/fonts/OFL.txt",
+	} {
+		mustFetch(t, a, url, "text/plain; charset=utf-8")
 	}
 }
 

@@ -33,6 +33,9 @@ var contentTypes = map[string]string{
 	".ico":   "image/x-icon",
 	".woff":  "font/woff",
 	".woff2": "font/woff2",
+	// The third-party notices and the font license. Named so a browser shows
+	// them as text rather than downloading an octet stream nobody opens.
+	".txt": "text/plain; charset=utf-8",
 }
 
 // assets serves the embedded dashboard.

@@ -149,7 +149,10 @@ scripts/              # The two vendor dev-loop bootstraps, and the DCO gate:
                       #   check-signoff.sh, run by `make check` and by ci.yml's
                       #   `sign-off` / `sign-off (main)` jobs, plus its own
                       #   suite check-signoff_test.sh — no Go test can reach
-                      #   bash reading git history (bash)
+                      #   bash reading git history (bash). And notices/, the
+                      #   one Go program here: goreleaser's before hook, which
+                      #   writes the license and notice files of every module
+                      #   the binary links into the archives and the image
 ```
 
 ### The packages, and the one thing each is for

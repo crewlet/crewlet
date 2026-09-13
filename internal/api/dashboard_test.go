@@ -22,6 +22,7 @@ func tree() fstest.MapFS {
 		"dashboard/js/app.js":      {Data: []byte("export const app = 1")},
 		"dashboard/styles/app.css": {Data: []byte(":root{}")},
 		"dashboard/data.bin":       {Data: []byte{0x00, 0x01}},
+		"dashboard/NOTICES.txt":    {Data: []byte("notices")},
 	}
 }
 
@@ -93,6 +94,9 @@ func TestEachAssetKindGetsItsOwnType(t *testing.T) {
 		"/static/dashboard/styles/app.css": "text/css; charset=utf-8",
 		"/static/dashboard/index.html":     "text/html; charset=utf-8",
 		"/static/dashboard/favicon.ico":    "image/x-icon",
+		// A notice is read, so it is text a browser shows rather than a
+		// download.
+		"/static/dashboard/NOTICES.txt": "text/plain; charset=utf-8",
 		// Anything unrecognised is bytes, not a guess.
 		"/static/dashboard/data.bin": "application/octet-stream",
 	} {

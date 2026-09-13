@@ -8,12 +8,63 @@
 // (.github/workflows/ci.yml, the `dashboard` job) so a committed bundle that
 // does not match this source is a red build rather than a silent lie — the
 // same idiom `go mod tidy -diff` and the generated `schema/` already use.
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+// The notices for everything the built dashboard redistributes, served beside it
+// at /static/dashboard/THIRD_PARTY_NOTICES.txt and shipped in every release
+// archive and image.
+//
+// Two halves, one file. Vite's own `build.license` writes every npm package the
+// bundle contains, each with its license text, sorted by package, so the output
+// is as reproducible as the bundle the CI diff checks.
+// The fonts are not bundled (they are copied from public/ untouched), so the
+// license step never sees them, and `fontNotice` appends their SIL Open Font
+// License from the same OFL.txt that travels in fonts/.
+//
+// A `.txt` name rather than Vite's default `.vite/license.md`: the engine serves
+// this tree, and a notice under a dot directory with a Markdown type is one
+// nobody finds and a browser downloads rather than shows.
+const NOTICES = "THIRD_PARTY_NOTICES.txt";
+const FONT_LICENSE = fileURLToPath(new URL("./public/fonts/OFL.txt", import.meta.url));
+
+// fontNotice appends the font license to the notices the license step emitted.
+//
+// `order: "post"` is what makes the asset visible here at all: Vite registers
+// its license step among its own post-build plugins, which run after every user
+// plugin, so an ordinary generateBundle would look for the file before it
+// exists. Ordered handlers run after every unordered one, whatever the plugin
+// order. The second build (vite.protocol.config.ts) writes only protocol.js and
+// leaves this file as the first build wrote it.
+function fontNotice(): Plugin {
+  return {
+    name: "crewlet:font-notice",
+    apply: "build",
+    generateBundle: {
+      order: "post",
+      handler(_options, bundle) {
+        const notices = bundle[NOTICES];
+        if (notices?.type !== "asset") {
+          this.error(
+            `${NOTICES} was not emitted, so build.license no longer writes it and the ` +
+              "font notice has nothing to join. Restore build.license.fileName.",
+          );
+        }
+        const fonts = readFileSync(FONT_LICENSE, "utf-8").trim();
+        notices.source =
+          `${String(notices.source).trimEnd()}\n\n` +
+          "## Fonts: Inter and JetBrains Mono (OFL-1.1)\n\n" +
+          "The dashboard serves these font files from /static/dashboard/fonts/.\n\n" +
+          `${fonts}\n`;
+      },
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), fontNotice()],
   // The engine serves this tree from /static/dashboard/ and answers the shell
   // at both `/` and `/dashboard`. A relative base would resolve the shell's
   // own asset URLs against whichever of those the reader arrived at; an
@@ -31,6 +82,7 @@ export default defineConfig({
     sourcemap: false,
     target: "es2022",
     assetsDir: "assets",
+    license: { fileName: NOTICES },
     rollupOptions: {
       output: {
         // One vendor chunk, so a change to our own code does not invalidate

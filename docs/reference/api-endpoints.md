@@ -1371,6 +1371,12 @@ and filter in the URL, and one file per screen.  `/dashboard` serves the
 shell; `/static/{path}` serves its assets.  The build output is
 COMMITTED, so `go build ./...` needs no Node.
 
+`/static/dashboard/THIRD_PARTY_NOTICES.txt` (served as `text/plain`) is the
+license text of every npm package the bundle contains, written by Vite's
+`build.license`, followed by the SIL Open Font License of the embedded Inter
+and JetBrains Mono faces. The release archives and the container image carry
+the same file, beside the notices for the Go modules the binary links.
+
 A second build target, `/static/dashboard/protocol.js`, is the wire
 protocol alone as plain ESM: `internal/e2e` replays a real company's
 captured frames through it under `node`, so the client's understanding
