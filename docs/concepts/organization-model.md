@@ -6,73 +6,80 @@ The organization model (`internal/org`) is the foundational data structure repre
 
 ## Flexible Hierarchy
 
-The org structure uses a recursive `OrgUnit` model that can nest to any depth. This lets founders design their org however they want — flat teams, departments with sub-teams, divisions, squads, pods, or any custom structure.
+The org structure uses a recursive unit model (`org.Unit`) that can nest to any depth. This lets founders design their org however they want: flat teams, departments with sub-teams, divisions, squads, pods, or any custom structure.
+
+The runtime tree the engine builds from a revision (`org.Organization`, with the Go type of each field):
 
 ```
 Organization
-├── name, mission, vision, policies
-├── roles: Role[]                          (root-level org-wide agents)
-└── units: OrgUnit[]
-    ├── name, type, purpose, lead, goals, knowledge_refs
-    ├── channel: str                       (team channel on the company's chat
+├── Name, Mission, Vision string; Policies []string
+├── TokenBudget int                        (org-wide ceiling; 0 = unlimited)
+├── ConfluenceSpaces []string              (knowledge.confluence_spaces: the one
+│                                           org-wide knowledge read scope)
+├── Roles []*Role                          (root-level org-wide seats)
+└── Units []*Unit
+    ├── Name string; Type UnitType; Purpose, Lead string; Goals []string
+    ├── KnowledgeRefs []string
+    ├── Channel string                     (team channel on the company's chat
     │                                       surface, inherited by children)
-    ├── jira_project: str                  (integrations.jira.project — the unit's Jira
-    │                                       project identity: lead-fallback webhook
-    │                                       routing + the project the team files under)
-    ├── confluence_space: str              (integrations.confluence.space — the unit's
-    │                                       Confluence space: where its pages live and
+    ├── JiraProject string                 (integrations.jira.project: the unit's Jira
+    │                                       project identity, lead-fallback webhook
+    │                                       routing and the project the team files under)
+    ├── ConfluenceSpace string             (integrations.confluence.space: the unit's
+    │                                       Confluence space, where its pages live and
     │                                       where page activity routes. Does NOT scope
     │                                       knowledge reads)
-    ├── mcp_env: dict[server → env vars]  (per-agent tool creds, inherited by the
-    │                                       unit's direct agent roles; human seats
+    ├── MCPEnv MCPEnv                      (per-server tool credentials, inherited by
+    │                                       the unit's direct agent seats; human seats
     │                                       inherit none)
-    ├── roles: Role[]                      (agents directly in this unit)
-    ├── children: OrgUnit[]                (nested sub-units, recursive)
-    └── schedules: Schedule[]              (unit recurring work, NOT inherited;
+    ├── Roles []*Role                      (seats directly in this unit)
+    ├── Children []*Unit                   (nested sub-units, recursive)
+    └── Schedules []Schedule               (unit recurring work, NOT inherited;
                                             see Scheduling)
 
-Role (a SEAT — can live at root level OR inside an OrgUnit)
-├── kind: agent | human                (who holds the seat; default agent)
-├── name, responsibilities, behavioral_guidelines
-├── contact: {slack_user_id, mattermost_user_id, atlassian_account_id,
-│             github_login, gitlab_username}  (human seats — external
-│                                              identities)
-├── availability: str (human seats — rendered into rosters)
-├── backstory: str   (unique personality, background, expertise)
-├── goal: str        (individual mission)
-├── handle: str      (canonical identity slug, auto-derived if empty)
-├── email: str       (agent email for notifications & external tools)
-├── manages: str[]  (role names or unit names this role manages)
-├── mcp_env: dict[server → overrides] (per-agent tool credentials — env
-│                                      vars for stdio servers, http headers
-│                                      for http servers like the remote
-│                                      GitHub MCP. Tool creds only; the
-│                                      project/space identity is the
-│                                      integrations block below)
-├── jira_project: str  (root-level roles — integrations.jira.project;
-│                       the role's Jira project identity: lead-fallback
-│                       webhook routing + write home, NOT an MCP credential)
-├── confluence_space: str (root-level roles — integrations.confluence.space;
-│                          the role's Confluence space. Does NOT scope
-│                          knowledge reads — that is the org-wide
-│                          knowledge.confluence_spaces only)
-├── token_budget: int  (0 = unlimited)
-├── llm: str           (provider key, default = "default")
-├── llm_auxiliary: str (optional cheap-model key for reflection /
-│                       summarisation work)
-├── learning_enabled: bool? (per-role override for the agent-learning
-│                            subsystem)
-├── slack: dict        (role.integrations.slack — this seat's OWN Slack
-│                       app: bot_token + signing_secret, both required
-│                       together. Slack gives each agent its own app, so
-│                       there is no company-wide credential)
-└── schedules: Schedule[]  (role-scoped recurring work; see
-                            [Scheduling](scheduling.md))
+Role (a SEAT: can live at root level OR inside a unit)
+├── Kind RoleKind                      (agent | human; default agent)
+├── Name string; Responsibilities, BehavioralGuidelines []string
+├── Contact *HumanContact              (human seats: slack_user_id,
+│                                       mattermost_user_id, atlassian_account_id,
+│                                       github_login, gitlab_username)
+├── Availability string                (human seats: rendered into rosters)
+├── Backstory string                   (personality, background, expertise)
+├── Goal string                        (individual mission)
+├── DeclaredHandle string              (the `handle` override; Role.Handle()
+│                                       derives the slug when empty)
+├── Email string                       (indexed so an address resolves to the seat)
+├── Manages []string                   (seat names or unit names this seat manages)
+├── MCPEnv MCPEnv                      (per-server tool credentials: env vars for
+│                                       stdio servers, headers for http servers
+│                                       like the remote GitHub MCP. Tool creds
+│                                       only; the project/space identity is the
+│                                       integrations block)
+├── JiraProject string                 (integrations.jira.project on a root-level
+│                                       seat: lead-fallback webhook routing and
+│                                       write home, NOT an MCP credential)
+├── ConfluenceSpace string             (integrations.confluence.space on a
+│                                       root-level seat. Does NOT scope knowledge
+│                                       reads)
+├── TokenBudget int                    (0 = unlimited)
+├── LLM, LLMReview, LLMSubagent,
+│   LLMAuxiliary, LLMJudge,
+│   LLMSandbox ProviderKeys            (the executor's chain and the per-phase
+│                                       satellites; see Turn Engine)
+├── Workers []string                   (the worker templates this seat may use)
+├── LearningEnabled Toggle             (per-seat override for agent learning)
+├── Sandbox *RoleSandbox               (role.sandbox: the code-sandbox gate)
+├── Placement                          (role.placement: which nodes may run it)
+├── Slack SlackIdentity                (role.integrations.slack: this seat's OWN
+│                                       Slack app, bot_token and signing_secret)
+├── Mattermost MattermostIdentity      (role.integrations.mattermost: its bot)
+└── Schedules []Schedule               (role-scoped recurring work; see
+                                        [Scheduling](scheduling.md))
 ```
 
 Roles can live in two places:
 
-- **Inside an OrgUnit** (`units[].roles`) — scoped to that unit for MCP env inheritance and lead auto-management. The unit's [`integrations.jira.project`](../integrations/jira.md) gives the team its tracker "home" (webhook routing + write target), but does not scope what the role can *read*.
+- **Inside a unit** (`units[].roles`): scoped to that unit for MCP env inheritance and lead auto-management. The unit's [`integrations.jira.project`](../integrations/jira.md) gives the team its tracker "home" (webhook routing + write target), but does not scope what the role can *read*.
 - **At the root level** (`roles`) — org-wide agents that don't belong to any specific team. They participate in the `manages[]` hierarchy like any other role and are fully visible to task routing; a root-level role can carry its own `integrations.jira.project` identity. Knowledge **read** scope for every agent is the org-wide `org.Organization.ConfluenceSpaces` only.
 
 > Every one of these identities is consulted. Each tracker routes an item that names nobody to the lead of the unit that owns the project, and Confluence does the same for a page change nobody was mentioned in. Neither narrows what an agent can READ: knowledge scope is the org-wide `knowledge.confluence_spaces` only, because letting a unit's identity double as a read scope is how an agent ends up unable to read the page it was told to follow. See [Jira](../integrations/jira.md) and [Confluence](../integrations/confluence.md).
@@ -232,9 +239,9 @@ units:
 
 ---
 
-## OrgUnit Types
+## Unit Types
 
-The `type` field on an OrgUnit can be any string. These well-known types are provided for convenience:
+The `type` field on a unit can be any string. These well-known types are provided for convenience:
 
 | Type | Description | Typical Use |
 |------|-------------|-------------|
@@ -256,7 +263,7 @@ Custom types are welcome — use whatever fits your org. The type is information
 
 ### Role = Seat
 
-Each Role defines a unique **seat** with its own backstory, skills, personality, and domain expertise. A seat is held by an AI agent (`kind: agent`, the default) or a **human teammate** (`kind: human`). Agent seats map 1:1 to an AgentInstance; human seats participate in the same hierarchy (manages, unit lead, rosters, escalation) but are addressable-only — no runtime, no inbox, no LLM. The founder defines each seat individually — they are not interchangeable. See [Humans in the Org Chart](humans-in-the-org.md).
+Each Role defines a unique **seat** with its own backstory, skills, personality, and domain expertise. A seat is held by an AI agent (`kind: agent`, the default) or a **human teammate** (`kind: human`). Each agent seat is one agent, identified by an id derived from the company name and its handle; human seats participate in the same hierarchy (manages, unit lead, rosters, escalation) but are addressable-only: no runtime, no inbox, no LLM. The founder defines each seat individually, and seats are not interchangeable. See [Humans in the Org Chart](humans-in-the-org.md).
 
 ### Handle-Based Identity
 
@@ -348,11 +355,11 @@ If a name matches both a role and a unit, the **role takes priority** (no expans
 
 ### Unit Lead
 
-An OrgUnit may designate a lead via the `lead` field. The lead is responsible for:
+A unit may designate a lead via the `lead` field. The lead is responsible for:
 
 - Task routing and assignment within the unit
 - Acting as the single point of contact for the unit
-- Reasoning about members' properties (backstory, skills, knowledge) to assign tasks to the right individual
+- Reasoning about members' profiles (background, goal, responsibilities) to assign tasks to the right individual
 
 When a unit has direct roles and a lead is set, the lead **auto-manages** every direct member that no direct member of the same unit already manages. Three rules decide what counts as already managed, and all three read each `manages` entry the way [unit-name expansion](#managing-by-unit-name) resolves it, so a unit name counts for every seat it reaches:
 
@@ -381,7 +388,7 @@ Here VP Engineering auto-manages only `Tech Lead`. `Dev A` and `Dev B` report to
 
 The lead can be a **human seat** — a human manager running an AI team is a first-class pattern: agents escalate to the human with their own Slack/Jira tools (an @-mention), and the human assigns work in the PM tool. See [Humans in the Org Chart](humans-in-the-org.md).
 
-The lead's system prompt includes a **roster** of direct reports. Detailed per-member profiles (skills, backstory, responsibilities) render directly into the lead's executor prompt from the in-memory `Organization` model.
+The lead's system prompt includes a **roster** of direct reports. Each member's profile (background, goal, responsibilities, and for a human report its contact identities and availability) renders directly into the lead's executor prompt from the in-memory `Organization` model.
 
 #### Lead inheritance
 
@@ -417,7 +424,7 @@ Inherited leads work the same as explicit leads for auto-management, task routin
 
 ### Roles at Any Level
 
-Roles can be placed at the org root or directly in any OrgUnit. A department-level role (like a VP) can sit alongside child teams, and org-wide roles (like a CEO) can sit at the root:
+Roles can be placed at the org root or directly in any unit. A department-level role (like a VP) can sit alongside child teams, and org-wide roles (like a CEO) can sit at the root:
 
 ```yaml
 roles:
@@ -466,7 +473,7 @@ Each line also carries `epoch`, `revision` and a `detail` sentence saying what t
 
 ## Onboarding convention
 
-Each `OrgUnit` (and the organisation root) is expected to publish a page titled exactly **`Onboarding`** in its container of the knowledge base — its Confluence space.  When an agent spawns into a role, the engine writes nothing into the prompt itself — instead a dedicated first-turn onboarding pass runs before the executor, shown a short `## First-turn onboarding` block listing the unit chain (org → ancestor units → own unit).  The agent reads each `Onboarding` page using its knowledge backend's page-search / page-read MCP tools (`confluence_search` / `confluence_get_page`), captures the conventions that matter via `reflect_and_persist` (scope=agent), and calls `mark_onboarded` when done.  After that, the hint disappears from subsequent prompts.
+Each unit (and the organisation root) is expected to publish a page titled exactly **`Onboarding`** in its container of the knowledge base, its Confluence space. On an agent seat's first turn for its current org chain, a dedicated onboarding pass runs before the executor, with a short `## First-turn onboarding` block listing the unit chain (org → ancestor units → own unit). The agent reads each `Onboarding` page using its knowledge backend's page-search and page-read MCP tools (`confluence_search` / `confluence_get_page`), captures the conventions that matter via `reflect_and_persist`, and calls `mark_onboarded` when done. After that, the hint disappears from subsequent prompts.
 
 Re-onboarding fires automatically when the org structure changes (the role moves between units, a new ancestor unit is inserted, the role is renamed) — the engine recomputes a chain hash and the prior marker no longer matches.  Source-page content drift is **not** automatic: the agent re-reads at its own discretion, or in response to a page-update notification routed through the existing notification pipeline.
 
