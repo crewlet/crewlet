@@ -159,9 +159,9 @@ learning:                               # optional — agent-learning subsystem
     max_refreshes_per_turn: 3           # cap on distinct context_hint values per turn
                                         # (idempotent repeats of the same hint are free)
   episode_lifecycle:
-    # Trigger: per-agent raw count + amortised count(*) check on write.
+    # Trigger: the background pass counts each seat's raw rows on its own
+    # tick — one indexed query per seat — and compacts whoever is over.
     max_raw_episodes_per_agent: 500     # threshold that fires CompactionRequested
-    write_check_every_n: 10             # only run the count(*) on every Nth write
     # Action 1: drop non-terminal mid-state rows past this age.
     non_terminal_max_age_days: 14
     # Action 2: drop skill-consolidated rows past this grace.

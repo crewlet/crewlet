@@ -22,8 +22,15 @@ const (
 	// most-similar is rarely the one that helps.
 	recallHits = 3
 
-	// recallSummaryTokens caps the optional summary of those hits.
-	recallSummaryTokens = 400
+	// DefaultSummaryTokens caps the optional summary of those hits when
+	// the operator names no ceiling.
+	//
+	// Four hundred, which is what three two-sentence episodes compress
+	// into with room for the briefing sentence that ties them to the task
+	// — and the value [config.Reflect.SummarizeMaxTokens] has always
+	// defaulted to, which is why it was safe to hardcode and invisible
+	// that it had been: raising the config knob moved nothing.
+	DefaultSummaryTokens = 400
 
 	// maxRenderedTraits caps one counterparty's traits.
 	//
@@ -103,11 +110,19 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request) string {
 	summary, ok := f.auxCall(ctx, r.Seat, recallSummarySystemPrompt,
 		"Current task:\n"+r.Task+
 			"\n\nPast turns by this agent:\n"+raw+
-			"\n\nBriefing:", recallSummaryTokens)
+			"\n\nBriefing:", f.summaryTokens())
 	if !ok || strings.TrimSpace(summary) == "" {
 		return raw
 	}
 	return summary
+}
+
+// summaryTokens is the operator's cap on the episode summary, or the default.
+func (f *Fetcher) summaryTokens() int {
+	if f.src.SummarizeMaxTokens > 0 {
+		return f.src.SummarizeMaxTokens
+	}
+	return DefaultSummaryTokens
 }
 
 // renderEpisode renders one past turn.
