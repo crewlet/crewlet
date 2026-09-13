@@ -483,7 +483,7 @@ export function SeatScreen({ handle }: { handle: string }) {
               <Section title="Direct reports" hint={`${reports.length}`}>
                 <div className="seat-grid">
                   {reports.map((r) => (
-                    <a key={r.handle} className="seat-card" href={href(["seats", r.handle])}>
+                    <a key={r.key} className="seat-card" href={href(seatPath(r))}>
                       <div className="row">
                         <Avatar name={r.name} human={r.kind === "human"} />
                         <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
