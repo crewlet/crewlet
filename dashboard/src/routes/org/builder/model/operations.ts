@@ -547,6 +547,15 @@ export function malformedReason(op: Operation): string | null {
     case "addUnit":
     case "addSeat":
       return isMintedKey(op.key) ? null : "a created node has no minted key";
+    case "renameSeat":
+      // A pin keeps the handle the seat already had. A created seat has none
+      // to keep, and a seat keyed by its handle can only keep that one: any
+      // other pin would hand the seat a new identity under a rename.
+      if (op.pin === undefined) return null;
+      if (isMintedKey(op.target)) return "a created seat's rename pins a handle";
+      return handleOfKey(op.target) === undefined || handleOfKey(op.target) === op.pin
+        ? null
+        : "a rename pins a handle other than the seat's own";
     case "updateSeat":
       return op.changes.every((c) => seatFieldWritable(c.path, isMintedKey(op.target)))
         ? null
@@ -579,11 +588,27 @@ const refuse = (refusal: RecordRefusal, message: string): Recorded => ({
 });
 const recorded = (op: Operation): Recorded => ({ ok: true, op });
 
+/**
+ * The handle a seat declares, or `undefined` when it declares none.
+ *
+ * ONE READING FOR RECORD, EVALUATE AND APPLY. Whether a rename pins the handle
+ * is decided three times (when it is recorded, when its preconditions are
+ * checked, when it is applied), and the three must agree on what "declares a
+ * handle" means or an operation that just recorded fails to apply, which
+ * throws inside the reducer.
+ */
+function declaredHandle(data: ConfigRole): string | undefined {
+  return typeof data.handle === "string" && data.handle !== "" ? data.handle : undefined;
+}
+
+/** The kind a seat writes, or `undefined` when it writes none (read the same way everywhere). */
+function writtenKind(data: ConfigRole): string | undefined {
+  return typeof data.kind === "string" ? data.kind : undefined;
+}
+
 /** The handle of a seat in the draft: its key's, its declared one, or the last check's. */
 function seatHandle(seat: DraftSeat, ctx: RecordContext): string | undefined {
-  const declared =
-    typeof seat.data.handle === "string" && seat.data.handle !== "" ? seat.data.handle : undefined;
-  return declared ?? handleOfKey(seat.key) ?? ctx.handleOf?.(seat.key);
+  return declaredHandle(seat.data) ?? handleOfKey(seat.key) ?? ctx.handleOf?.(seat.key);
 }
 
 /** The access level entry for a handle in the draft, when there is one. */
@@ -835,10 +860,9 @@ export function record(
       const before = found.node.data.name;
       const after = intent.name.trim();
       if (after === before) return refuse("no_change", "The name is unchanged.");
-      const declared = typeof found.node.data.handle === "string" && found.node.data.handle !== "";
       const accessLevels: AccessLevelChange[] = [];
       let pin: string | undefined;
-      if (!declared) {
+      if (declaredHandle(found.node.data) === undefined) {
         if (isMintedKey(found.node.key)) {
           // A seat this draft created runs under whatever the engine derives
           // from its name, so the handle changes with it: an access level set
@@ -928,8 +952,8 @@ export function record(
       for (const key of intent.clearLeads ?? []) {
         const unit = unitAt(key);
         if (!unit) return missing(key);
-        const lead = unit.node.data.lead;
-        if (typeof lead === "string" && lead !== "") clearLeads.push({ unit: key, before: lead });
+        const lead = nonEmpty(unit.node.data.lead);
+        if (lead !== undefined) clearLeads.push({ unit: key, before: lead });
       }
       return recorded({
         type: "move",
@@ -1082,7 +1106,9 @@ export function record(
       return recorded({
         type: "changeKind",
         target: intent.target,
-        ...(typeof found.node.data.kind === "string" ? { before: found.node.data.kind } : {}),
+        ...(writtenKind(found.node.data) !== undefined
+          ? { before: writtenKind(found.node.data) }
+          : {}),
         after: intent.kind,
         stripped: forbiddenFor(found.node.data, intent.kind),
         ...(intent.kind === "human" && intent.contact
@@ -1396,11 +1422,22 @@ export function evaluate(draft: Draft, op: Operation): Outcome {
       if (found?.kind !== kind) return gone("It is no longer in the organization.");
       expect("name", op.before, found.node.data.name, op.after);
       if (op.type === "renameSeat") {
+        const declared = declaredHandle(found.node.data);
         if (op.pin !== undefined) {
-          const declared = found.node.data.handle;
           if (declared !== undefined && declared !== op.pin) {
             conflicts.push({ subject: "handle", base: undefined, theirs: declared, mine: op.pin });
           }
+        } else if (!isMintedKey(op.target) && declared === undefined) {
+          // Recorded without a pin because the seat declared its handle then.
+          // Somebody has since removed that declaration, so renaming it now
+          // would hand the seat a handle derived from the new name, and with
+          // it a new identity, memory and mailbox. Recording it again pins.
+          conflicts.push({
+            subject: "handle",
+            base: handleOfKey(op.target),
+            theirs: undefined,
+            mine: handleOfKey(op.target),
+          });
         }
         expectAccessLevels(op.accessLevels);
       }
@@ -1476,7 +1513,7 @@ export function evaluate(draft: Draft, op: Operation): Outcome {
     case "changeKind": {
       const found = locate(draft, op.target);
       if (found?.kind !== "seat") return gone("The seat is no longer in the organization.");
-      expect("kind", op.before, found.node.data.kind, op.after);
+      expect("kind", op.before, writtenKind(found.node.data), op.after);
       expect("fields the new kind removes", op.stripped, forbiddenFor(found.node.data, op.after));
       expectRouteTo(op.routeTo);
       return finish();
@@ -1608,8 +1645,7 @@ export function apply(draft: Draft, op: Operation): { draft: Draft; report: Appl
     case "renameSeat": {
       let next = updateSeatData(draft, op.target, (data) => {
         const renamed: ConfigRole = { ...data, name: op.after };
-        if (op.pin !== undefined && (data.handle === undefined || data.handle === ""))
-          renamed.handle = op.pin;
+        if (op.pin !== undefined && declaredHandle(data) === undefined) renamed.handle = op.pin;
         return renamed;
       });
       const cleared: ReferenceEffect[] = [];
@@ -1723,7 +1759,7 @@ export function apply(draft: Draft, op: Operation): { draft: Draft; report: Appl
       const update = <T extends ConfigRole | ConfigUnit>(data: T): T => ({
         ...data,
         schedules: (data.schedules ?? []).map((s) =>
-          s.name === op.schedule ? { ...s, enabled: op.after } : s,
+          s?.name === op.schedule ? { ...s, enabled: op.after } : s,
         ),
       });
       const found = locate(draft, op.target)!;

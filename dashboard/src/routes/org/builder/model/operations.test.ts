@@ -833,6 +833,36 @@ describe("an operation as data", () => {
     ).not.toBeNull();
     expect(
       malformedReason({
+        type: "renameSeat",
+        target: "seat:dev",
+        before: "Dev",
+        after: "Developer",
+        pin: "someone-else",
+        accessLevels: [],
+      }),
+    ).not.toBeNull();
+    expect(
+      malformedReason({
+        type: "renameSeat",
+        target: "new:a",
+        before: "A",
+        after: "B",
+        pin: "a",
+        accessLevels: [],
+      }),
+    ).not.toBeNull();
+    expect(
+      malformedReason({
+        type: "renameSeat",
+        target: "seat:dev",
+        before: "Dev",
+        after: "Developer",
+        pin: "dev",
+        accessLevels: [],
+      }),
+    ).toBeNull();
+    expect(
+      malformedReason({
         type: "addSeat",
         key: "seat:x",
         placement: { parent: COMPANY_KEY, after: null },
@@ -852,6 +882,70 @@ describe("an operation as data", () => {
       to: { parent: "unit:Sales", after: null },
     });
     expect(describeOperation(move, draft)).toBe("Moved Dev to Sales.");
+  });
+
+  test("an operation that records always applies to the draft it was recorded on, whatever odd values that draft holds", () => {
+    // Recording and evaluating read the same fields; where they read them
+    // differently, an operation that just recorded fails its own
+    // preconditions and applying it throws inside the reducer.
+    const odd: CompanyDocument = {
+      name: "Odd",
+      roles: [
+        { name: "Blank Handle", handle: "" },
+        { name: "Null Kind", kind: null as unknown as string },
+      ],
+      units: [
+        {
+          name: "Spaced",
+          lead: "  ",
+          schedules: [null as never, { name: "weekly", cron: "0 9 * * 1", task: "Review" }],
+          roles: [{ name: "Member" }],
+        },
+      ],
+    };
+    const draft = fixture(odd);
+    const intents: Intent[] = [
+      { type: "renameSeat", target: "seat:blank-handle", name: "Renamed" },
+      {
+        type: "changeKind",
+        target: "seat:null-kind",
+        kind: "human",
+        contact: { github_login: "x" },
+      },
+      {
+        type: "move",
+        target: "seat:member",
+        to: { parent: COMPANY_KEY, after: null },
+        clearLeads: ["unit:Spaced"],
+      },
+      { type: "setScheduleEnabled", target: "unit:Spaced", schedule: "weekly", enabled: false },
+    ];
+    for (const intent of intents) {
+      const op = recordOk(draft, intent);
+      expect(evaluate(draft, op), intent.type).toEqual({ kind: "applies" });
+      expect(() => apply(draft, op), intent.type).not.toThrow();
+    }
+    expect(seat(run(draft, intents[0]!).draft, "seat:blank-handle").handle).toBe("blank-handle");
+  });
+
+  test("a rename recorded while the seat declared its handle conflicts once that declaration is gone, and keeping it pins", () => {
+    const base: CompanyDocument = { name: "X", roles: [{ name: "Dev", handle: "dev" }] };
+    const op = recordOk(fixture(base), {
+      type: "renameSeat",
+      target: "seat:dev",
+      name: "Developer",
+    });
+    expect("pin" in op).toBe(false);
+
+    const theirs: CompanyDocument = { name: "X", roles: [{ name: "Dev" }] };
+    const upstream = fixture(theirs);
+    expect(evaluate(upstream, op)).toMatchObject({
+      kind: "conflict",
+      conflicts: [{ subject: "handle" }],
+    });
+    const again = recordOk(upstream, intentOf(op));
+    expect(again).toMatchObject({ pin: "dev" });
+    expect(seat(apply(upstream, again).draft, "seat:dev").handle).toBe("dev");
   });
 
   test("applying never mutates the draft it was given", () => {
