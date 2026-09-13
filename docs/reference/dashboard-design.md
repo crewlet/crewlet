@@ -898,7 +898,12 @@ rendered idle from the first phase to the last.
   open, and an open menu closes before the dialog it sits in. A modal traps
   Tab, moves focus in when it opens (honouring a field's `autoFocus`) and
   returns it to whatever opened it. A control that consumes Escape itself,
-  such as a completion list, keeps the key.
+  such as a completion list, keeps the key. A veil press closes its modal on
+  the press's click rather than on its first contact, so the tap that
+  dismisses a dialog never also lands on the control the veil was covering.
+  What happens inside an open menu stays there: its keys, presses and clicks
+  do not reach the card or row it was opened from, so Enter on "Delete" is
+  never also the card's Enter.
 - **A canvas never takes the page's scroll.** `ui/Canvas.tsx` fills the box
   its screen gives it and clips; `.screen` stays the only scroller. A plain
   wheel pans the canvas only while focus is inside it, and Ctrl or Command
