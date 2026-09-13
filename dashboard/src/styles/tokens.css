@@ -5,9 +5,9 @@
    THE RULE THIS FILE EXISTS TO ENFORCE: colour carries STATE, never IDENTITY.
 
    The dashboard this replaces assigned a hue per agent from a hash of the role
-   name, and when that was removed six more categorical maps were left behind —
-   phase, event category, integration brand, memory block, fleet node role,
-   message role, source badge — each drawing from one eight-family palette, and
+   name, and when that was removed six more categorical maps were left behind
+   (phase, event category, integration brand, memory block, fleet node role,
+   message role, source badge), each drawing from one eight-family palette, and
    several of them on screen at once. The Activity screen carried eight to ten
    chromatic families simultaneously, as 10px coloured type. A hash of a name
    carries no information: rename the seat and its colour changes, which is the
@@ -15,17 +15,17 @@
 
    So there are exactly four places colour is allowed to mean something:
 
-     1. STATUS   — positive / caution / critical / info. Four, fixed.
-     2. PHASE    — onboarding / execute / review. Three, fixed, because a phase
+     1. STATUS:   positive / caution / critical / info. Four, fixed.
+     2. PHASE:    onboarding / execute / review. Three, fixed, because a phase
                    is the one recurring categorical dimension a reader tracks
                    across every screen in the product.
-     3. ACCENT   — one brand violet, spent on the current selection and nothing
+     3. ACCENT:   one brand violet, spent on the current selection and nothing
                    else: the active nav row, the primary button, the focus ring.
-     4. VIZ      — five data hues plus a neutral residual, usable ONLY inside a
+     4. VIZ:      five data hues plus a neutral residual, usable ONLY inside a
                    chart that carries a legend.
 
-   Everything else — a seat, a unit, an event category, an integration, a node,
-   a tool origin — is neutral, and its identity is carried by its NAME, its icon
+   Everything else (a seat, a unit, an event category, an integration, a node,
+   a tool origin) is neutral, and its identity is carried by its NAME, its icon
    and its position, which are stable and legible and do not run out at eight.
 
    ORDER OF DEFINITION. Every token gets its value on bare `:root` first. The
@@ -50,18 +50,18 @@
 
   /* A nine-step scale, and the ONLY sizes in the product. The dashboard this
      replaces had 194 font-size declarations across 14 literal pixel values, of
-     which eight were off any ramp — so its "scale" was fiction, and so was the
+     which eight were off any ramp, so its "scale" was fiction, and so was the
      density control that resized three of its steps. rem, so a reader's own
      browser setting still moves the page. */
-  --fs-3xs: 0.6875rem; /* 11px — micro labels, table column heads */
-  --fs-2xs: 0.75rem; /*    12px — dense secondary text, badges */
-  --fs-xs: 0.8125rem; /*   13px — table cells, captions */
-  --fs-sm: 0.875rem; /*    14px — BODY */
-  --fs-md: 1rem; /*        16px — section leads */
-  --fs-lg: 1.125rem; /*    18px — panel titles */
-  --fs-xl: 1.375rem; /*    22px — screen titles */
-  --fs-2xl: 1.75rem; /*    28px — stat values */
-  --fs-3xl: 2.25rem; /*    36px — the one hero number per screen */
+  --fs-3xs: 0.6875rem; /* 11px: micro labels, table column heads */
+  --fs-2xs: 0.75rem; /*    12px: dense secondary text, badges */
+  --fs-xs: 0.8125rem; /*   13px: table cells, captions */
+  --fs-sm: 0.875rem; /*    14px: BODY */
+  --fs-md: 1rem; /*        16px: section leads */
+  --fs-lg: 1.125rem; /*    18px: panel titles */
+  --fs-xl: 1.375rem; /*    22px: screen titles */
+  --fs-2xl: 1.75rem; /*    28px: stat values */
+  --fs-3xl: 2.25rem; /*    36px: the one hero number per screen */
 
   --fw-normal: 400;
   --fw-medium: 500;
@@ -124,8 +124,8 @@
      every glyph at the sum of the two from the sidebar's edge.
 
      Splitting it is what lets the rows be widened without moving one glyph:
-     shrink the gutter, grow the pad by the same step, and the sum — the
-     vertical line the mark, the group labels and the item text all start on —
+     shrink the gutter, grow the pad by the same step, and the sum (the
+     vertical line the mark, the group labels and the item text all start on)
      does not move. Anything in the rail with no row of its own (the brand,
      the group labels) adds the two rather than carrying a literal, which is
      the drift that once put the mark 4px left of every nav label. */
@@ -192,7 +192,7 @@
   --text: #14181f; /*           14.5:1 on the worst surface */
   --text-secondary: #454c59; /*  7.3:1 */
   --text-muted: #565d6a; /*      5.9:1 */
-  --text-faint: #767e8c; /*      3.5:1 — DECORATION ONLY, never a fact */
+  --text-faint: #767e8c; /*      3.5:1, DECORATION ONLY, never a fact */
   --heading: #0a0d13; /*        16.7:1 */
   --text-on-fill: #ffffff;
 
@@ -204,7 +204,7 @@
      an `-ink` step clears 4.5:1 as TEXT on every surface including a hovered
      row inside a nested panel, while a fill step clears 3:1 as a MARK on the
      page surfaces a filled control actually sits on. Mixing them is exactly
-     how the screen this replaces shipped role badges at 1.63:1 — an inline
+     how the screen this replaces shipped role badges at 1.63:1: an inline
      `background:` with a hue token in it and the default text colour left on
      top. Only --accent is ever a fill behind text; a status is a soft tint
      plus its ink step, never a solid block with a label on it. */
@@ -241,7 +241,7 @@
      across the Model, Seat, Activity and Trace screens.
 
      Onboarding is a seat's first-turn pass and runs at most once per seat, so
-     its hue is rare on screen by design — but a turn that HAS one is exactly
+     its hue is rare on screen by design, but a turn that HAS one is exactly
      the turn a reader is trying to explain, and an unhued row would read as a
      phase the product does not know about. */
   --phase-onboarding: #12558f;
@@ -256,7 +256,7 @@
      and legal ONLY inside a chart that carries a legend.
 
      Five rather than eight because eight categorical hues cannot be kept
-     separable — the previous system had eight and its own design doc admitted
+     separable: the previous system had eight and its own design doc admitted
      they were "already doubled up in one order". Five can be, and every chart
      that would want more wants top-5-plus-other anyway, which is what
      --viz-other is. It is deliberately exempt from the separation rule: a
@@ -264,7 +264,7 @@
      one.
 
      ADJACENT pairs are what a legend reader actually distinguishes, so that is
-     what is measured — under normal, protan and deutan vision — and it is why
+     what is measured (under normal, protan and deutan vision), and it is why
      the order is not a rainbow: each step moves hue AND lightness. Every one
      also stays ΔE 14 clear of --critical, because red means "this broke"
      everywhere else in the product and a series that drifts into it is making
@@ -293,7 +293,7 @@
 /* ---- Dark ---------------------------------------------------------------
    The ground is deliberately NOT #000. An operator reads this page for hours,
    and pure black behind near-white text is the specific combination that
-   halates — the smear around small bright glyphs anyone with astigmatism sees.
+   halates: the smear around small bright glyphs anyone with astigmatism sees.
    Lifting it costs nothing visually and puts the text ramp in a comfort band
    instead of at the top of the contrast range.
 
@@ -322,7 +322,7 @@
     --text: #e9ebf0; /*           12.4:1 on the worst surface */
     --text-secondary: #b0b6c2; /*  7.2:1 */
     --text-muted: #9aa2b0; /*      5.1:1 */
-    --text-faint: #6a7280; /*      3.1:1 — DECORATION ONLY */
+    --text-faint: #6a7280; /*      3.1:1, DECORATION ONLY */
     --heading: #f6f7fa; /*        13.8:1 */
     --text-on-fill: #ffffff;
 

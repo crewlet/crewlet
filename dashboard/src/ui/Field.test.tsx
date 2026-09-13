@@ -79,7 +79,7 @@ test("a reference typed into a url field is left alone", () => {
 });
 
 // THE HALF-TYPED CASE IS THE ONE THAT BITES. A person types the reference one
-// character at a time, and `${CREWLET_PUBLIC` is not yet a whole reference —
+// character at a time, and `${CREWLET_PUBLIC` is not yet a whole reference,
 // so a rule that waited for one would prepend the affix on the first
 // keystroke and never take it off again.
 test("a reference still being typed into a url field is left alone", () => {

@@ -3,13 +3,13 @@
  * One recipe per thing, and every one of them reads tokens rather than
  * literals. The rule that keeps this file honest: a component may not
  * introduce a colour, a radius, a font size or a spacing step that is not a
- * token — if it needs one, the token is what gets added.
+ * token: if it needs one, the token is what gets added.
  */
 
 /* ---- Surface ------------------------------------------------------------
    Panel is THE surface. Everything on a screen is a panel, a row inside one,
    or a control. On dark the top hairline is the elevation; on light the shadow
-   is — one recipe, two grounds, no second component. */
+   is. One recipe, two grounds, no second component. */
 
 .panel {
   background: var(--surface-1);
@@ -64,8 +64,8 @@
 /* TIGHT IS VERTICAL ONLY. A panel has ONE left edge, and its head sets it:
    `--space-4`, the same inset the title sits on. Reducing the horizontal
    padding too put the body's content on a different vertical line from the
-   heading above it — content noticeably closer to the border than its own
-   title — and pushed a code block hard against the panel's right edge with
+   heading above it (content noticeably closer to the border than its own
+   title) and pushed a code block hard against the panel's right edge with
    nowhere for its scrollbar to sit. What `tight` is actually for is a panel
    whose rows carry their own vertical rhythm (a stack of cards, a footer
    strip), and that is a claim about height, not about the edge. */
@@ -126,9 +126,9 @@
 }
 /* A BUTTON IS NOT A LINK, WHATEVER ELEMENT IT IS.
 
-   Several of these controls are anchors — a step that leaves for a vendor's
+   Several of these controls are anchors (a step that leaves for a vendor's
    own site has to be a real href, so it opens in a tab and offers a context
-   menu — and base.css underlines `a:hover`, which is right for a link inside
+   menu) and base.css underlines `a:hover`, which is right for a link inside
    a sentence and wrong for something drawn as a filled button. "Install on
    GitHub" grew an underline the Create button beside it never had, so two
    controls that are the same act looked like two different kinds of thing.
@@ -329,7 +329,7 @@
    worker all run UNDER one of the three phases above, and giving them a hue
    of their own would put four or five categorical colours on one turn card
    and make the phase a reader is tracking harder, not easier to find. They
-   were previously unstyled rather than muted, which left them transparent —
+   were previously unstyled rather than muted, which left them transparent:
    the same tag rendered as a badge beside `execute` and as bare text beside
    `auxiliary`. */
 .phase-tag[data-phase="subagent"],
@@ -343,7 +343,7 @@
 /* ---- Avatar -------------------------------------------------------------
    A monogram, and it is NEUTRAL. The system this replaces coloured a seat by
    `PALETTE[hash(name) % 8]`, over the same eight families it also used for
-   phases and event categories — so one amber meant "the execute phase", "the
+   phases and event categories, so one amber meant "the execute phase", "the
    decision category" and "the Analyst" at once. A hash of a name carries no
    information: rename the seat and its colour changes, which is the proof it
    never meant anything. Identity is the monogram and the name. */
@@ -385,7 +385,7 @@
 }
 
 /* A link that IS a row takes the page's text colour, not the link colour.
-   Otherwise every seat name in every list renders in the accent — which is
+   Otherwise every seat name in every list renders in the accent, which is
    identity-colouring by accident, and the accent is reserved for saying where
    the reader IS. The affordance is the hover state and the cursor. */
 a.seat-card,
@@ -877,10 +877,10 @@ fieldset.field {
   padding-left: calc(var(--space-2) * 2 + 14px);
 }
 
-/* Select — a picker over a bounded set. Native <select> on purpose: it gets
+/* Select: a picker over a bounded set. Native <select> on purpose: it gets
    keyboard nav, type-ahead and the platform's own overlay for free, and a
    hand-built listbox would have to earn all three back. */
-/* `.picker`, NOT `.select` — that class is already the bare-element control
+/* `.picker`, NOT `.select`: that class is already the bare-element control
    above, and reusing it put its width:100% and its own border on this
    wrapper, so the picker stretched the whole toolbar and drew two boxes. */
 .picker {
@@ -912,7 +912,7 @@ fieldset.field {
   color: var(--accent);
 }
 
-/* Segmented control — lenses, tabs, ranges. One implementation; the system
+/* Segmented control: lenses, tabs, ranges. One implementation; the system
    this replaces had lens tabs, room tabs and filter pills as three. */
 .segmented {
   display: inline-flex;
@@ -953,7 +953,7 @@ fieldset.field {
   font-size: var(--fs-3xs);
 }
 
-/* Filter chips. Neutral until ON, when they take the accent — the one thing
+/* Filter chips. Neutral until ON, when they take the accent: the one thing
    that is currently narrowing the list is exactly the "current selection" the
    accent is reserved for. */
 .chip {
@@ -999,7 +999,7 @@ fieldset.field {
   min-width: 0;
 }
 
-/* Tabs — the in-page navigation a section owns. */
+/* Tabs: the in-page navigation a section owns. */
 .tabs {
   display: flex;
   align-items: center;
@@ -1083,7 +1083,7 @@ fieldset.field {
   color: var(--text-muted);
 }
 
-/* A proportional bar broken into segments — spend by phase, tools by origin.
+/* A proportional bar broken into segments: spend by phase, tools by origin.
    Always beside its own legend; a stacked bar with no legend is decoration. */
 .stack {
   display: flex;
@@ -1128,7 +1128,7 @@ fieldset.field {
   gap: var(--space-2);
   min-width: 0;
 }
-/* A stat's value takes a status ink when the number IS an outcome — a turn's
+/* A stat's value takes a status ink when the number IS an outcome: a turn's
    decision, a probe's verdict. Ink only, never a fill: the fill/ink split is
    what the palette test measures, and a tinted block behind a --fs-2xl number
    would read as a button. Most stats carry no tone at all; see Stat's prop. */
@@ -1304,7 +1304,7 @@ fieldset.field {
    Select-all is a DOCUMENT verb, so on a screen that is mostly one JSON
    record it selected the nav, the stat row and every phase card along with
    it. This block takes focus, and while it has focus select-all means "this
-   record" — which is the only thing anybody was reaching for. The ring is
+   record", which is the only thing anybody was reaching for. The ring is
    what says so: without a visible focus state a keyboard verb that changes
    meaning on click is a secret. */
 .code.selectable {

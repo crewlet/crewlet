@@ -90,7 +90,7 @@ export function Field({
   required?: boolean;
   /**
    * Say "(required)" beside the label, for a field whose requiredness is
-   * NEWS — one that appeared because of an answer above it. Required is the
+   * NEWS: one that appeared because of an answer above it. Required is the
    * unmarked default here; marking every required field is noise that
    * teaches a reader to skip the note.
    */
@@ -143,8 +143,8 @@ export function Field({
   const tight = kind === "url" || kind === "id" || kind === "email";
   const own = kind === "url" ? schemeOf(value) : "";
   // AND IT STEPS ASIDE FOR A REFERENCE, for the same reason it steps aside for
-  // http. `${VAR}` is a whole value this field accepts — the engine's own
-  // `hasHTTPScheme` admits `envref.Has` — so the scheme the affix stands in
+  // http. `${VAR}` is a whole value this field accepts (the engine's own
+  // `hasHTTPScheme` admits `envref.Has`), so the scheme the affix stands in
   // for is one the reference carries itself once it resolves. Prepending
   // produced `https://${VAR}`: a value no resolver reads, unenterable for
   // anyone setting one, and silently written over the first keystroke for
@@ -156,8 +156,8 @@ export function Field({
   // let go again.
   //
   // ONLY WHERE THE VALUE CARRIES NO SCHEME OF ITS OWN. Behind one, a `$` is
-  // just the rest of the address — `https://${JIRA_HOST}` is an ordinary
-  // value — and there the affix is CARRYING a scheme rather than offering
+  // just the rest of the address (`https://${JIRA_HOST}` is an ordinary
+  // value), and there the affix is CARRYING a scheme rather than offering
   // one, so it must stay.
   const refBase = own === "" && value.trimStart().startsWith("$");
   const affix = kind === "url" && own !== "http://" && !refBase ? "https://" : "";
@@ -171,7 +171,7 @@ export function Field({
   // WIRED TO THE PLAIN INPUT ONLY. A url field wears an affix, so the box
   // holds a different string from the value and every caret offset would
   // have to be translated through it; every field a reference actually goes
-  // in — a secret, an id, an email, a token — is a plain one.
+  // in (a secret, an id, an email, a token) is a plain one.
   const box = useRef<HTMLInputElement>(null);
   const [typing, setTyping] = useState<Typing | null>(null);
   const offered = typing && secrets?.length ? rank(secrets, typing.query) : [];
@@ -252,9 +252,9 @@ export function Field({
             note entirely.
             
             A field that just APPEARED because of an answer is the exception
-            to that. Its requiredness is new information — it was not on
+            to that. Its requiredness is new information: it was not on
             screen a moment ago and is now the one thing standing between the
-            answer above it and its working — so the caller that knows it is
+            answer above it and its working, so the caller that knows it is
             gated asks for the mark. See SetupDialog's `required_when`. */}
         {required === true && markRequired && <span className="faint"> (required)</span>}
       </label>
@@ -271,23 +271,23 @@ export function Field({
           {/* NO "CHOOSE ONE" OVER AN ANSWER THAT EXISTS.
               
               It was rendered unconditionally, so every dropdown opened with a
-              placeholder above the value it was already showing — a question
+              placeholder above the value it was already showing: a question
               mark over a field that had been answered, on every integration
               form. Every choice this product declares carries a default, so
               the empty option is only ever honest in two cases, and both are
               handled rather than papered over.
               
               NOTHING CHOSEN AT ALL is the first, and there the placeholder is
-              the truth. It should not be reachable — a requirement with
-              choices and no default would be one — and if it ever is, a
+              the truth. It should not be reachable (a requirement with
+              choices and no default would be one), and if it ever is, a
               silent first-option selection is a form answering somebody's
               question for them. */}
           {value === "" && <option value="">Choose one</option>}
           {/* AND A STORED ANSWER THIS LIST DOES NOT OFFER keeps its own
               option, rather than vanishing into a selection it is not.
               
-              A form may narrow its choices — GitHub's coverage question now
-              offers two of the three modes its config accepts — and a company
+              A form may narrow its choices (GitHub's coverage question now
+              offers two of the three modes its config accepts), and a company
               already holding the dropped one must not open the dialog to find
               a different answer selected, then save it. The value is shown as
               itself, so what is on screen is what is stored until somebody
