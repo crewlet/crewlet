@@ -133,7 +133,7 @@ test("search opened with a shortcut returns focus to what held it, and one Escap
 test("the search shortcut does not close search from beneath a token dialog raised over it", () => {
   mount(<p>screen</p>);
   press("k", { ctrlKey: true });
-  const input = screen.getByRole("textbox", { name: "Search" });
+  const input = screen.getByRole("combobox", { name: "Search" });
   expect(document.activeElement).toBe(input);
 
   // A guarded answer asks for a credential while search is open.

@@ -945,7 +945,10 @@ rendered idle from the first phase to the last.
   "Controls that mean what they look like". `ui/MultiPicker.tsx` exists
   because a multiple select cannot be searched and loses its selection to a
   stray click, and its keys are `ui/useListbox.ts`, the same ones the secret
-  completion in `Field` uses, so the two lists cannot drift apart.
+  completion in `Field` uses, so the two lists cannot drift apart. Search's
+  results take those keys too: its input is a combobox naming the highlighted
+  result, and the list is the modal's whole body rather than a popup over it
+  (`popup: false`), so Escape and the veil stay the modal's.
 - **The layout is measured, never assumed.** A chart card's width is the
   `--org-card-w` token; its height is measured in the browser
   (`ui/useMeasuredSizes.ts`) and fed to the pure tidy tree layout

@@ -14,6 +14,16 @@
  * do for every dialog and drawer. It used to close on its own Escape and on a
  * second, window-level one in the shell, and returned focus to nothing.
  *
+ * IT IS A COMBOBOX. Focus stays in the input and the arrows move a highlight
+ * through the results, which the input names with `aria-activedescendant`, so
+ * a screen reader hears each result as it is reached. The results used to be
+ * a listbox of buttons nothing pointed at: the highlight moved in silence, and
+ * Tab walked through up to forty of them before it came back to the input.
+ * The keys are the shared listbox's (`ui/useListbox.ts`), so the highlight
+ * wraps and survives a shrinking list here exactly as it does in every field
+ * that offers one; the list is the modal's whole body, so it is not a popup
+ * of its own (`popup: false`).
+ *
  * THE SHORTCUT THAT OPENED IT CLOSES IT, but only from inside it. The shell
  * listens on the window and only ever opens search; a chord pressed while
  * another surface raised over search holds the keyboard (a token dialog a
@@ -21,7 +31,7 @@
  * beneath it would change a page the reader cannot see.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { ALL_NAV } from "./nav.ts";
 import { useNavigator } from "./router.tsx";
 import { useAgents, useOrg, useTools } from "~/lib/store-hooks.ts";
@@ -29,6 +39,7 @@ import { indexOrg, seatPath } from "~/lib/seats.ts";
 import { ModalPanel } from "~/ui/Dialog.tsx";
 import { Icon, type IconName } from "~/ui/Icon.tsx";
 import { Kbd } from "~/ui/Kbd.tsx";
+import { useListbox } from "~/ui/useListbox.ts";
 import { useModal } from "~/ui/useModal.ts";
 
 interface Hit {
@@ -79,8 +90,8 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   const org = useOrg();
   const tools = useTools();
   const [q, setQ] = useState("");
-  const [cursor, setCursor] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
+  const id = useId();
   const modal = useModal({ onClose });
 
   const index = useMemo(() => indexOrg(org), [org]);
@@ -233,7 +244,20 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       .map((r) => r.hit);
   }, [q, index, agents, tools, nav]);
 
-  useEffect(() => setCursor(0), [q]);
+  function open(hit: Hit | undefined): void {
+    hit?.go();
+    onClose();
+  }
+
+  const listbox = useListbox({
+    id,
+    open: true,
+    count: hits.length,
+    popup: false,
+    onCommit: (at) => open(hits[at]),
+    onClose,
+  });
+
   // THE HIGHLIGHTED ROW STAYS IN VIEW, by scrolling the result list and
   // nothing else. `scrollIntoView` scrolls every scrollable ancestor it finds,
   // which is why the router scrolls `#screen-scroll` directly too, and it does
@@ -248,27 +272,13 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     const at = row.getBoundingClientRect();
     if (at.top < box.top) list.scrollTop -= box.top - at.top;
     else if (at.bottom > box.bottom) list.scrollTop += at.bottom - box.bottom;
-  }, [cursor, hits]);
+  }, [listbox.active, hits]);
 
   const groups = useMemo(() => {
     const map = new Map<string, Hit[]>();
     for (const hit of hits) map.set(hit.group, [...(map.get(hit.group) ?? []), hit]);
     return [...map.entries()];
   }, [hits]);
-
-  function onKeyDown(e: React.KeyboardEvent): void {
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setCursor((c) => Math.min(hits.length - 1, c + 1));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setCursor((c) => Math.max(0, c - 1));
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      hits[cursor]?.go();
-      onClose();
-    }
-  }
 
   let flat = -1;
   return (
@@ -288,41 +298,62 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         <input
           className="palette-input"
           value={q}
-          onChange={(e) => setQ(e.target.value)}
-          onKeyDown={onKeyDown}
+          onChange={(e) => {
+            setQ(e.target.value);
+            // A new query is a new list: the best match leads it.
+            listbox.setActive(0);
+          }}
+          onKeyDown={listbox.onKeyDown}
           placeholder="Search screens, seats, units, tools — or paste an event, trace or turn id"
+          role="combobox"
           aria-label="Search"
+          aria-expanded={true}
+          aria-controls={listbox.listId}
+          aria-autocomplete="list"
+          aria-activedescendant={listbox.active >= 0 ? listbox.optionId(listbox.active) : undefined}
           autoComplete="off"
           spellCheck={false}
         />
-        <div className="palette-results" ref={listRef} role="listbox">
-          {!hits.length && (
-            <div className="palette-item" style={{ color: "var(--text-muted)" }}>
-              Nothing matches “{q}”.
-            </div>
-          )}
-          {groups.map(([group, items]) => (
-            <div key={group}>
-              <div className="palette-group">{group}</div>
+        {/* Never empty, so there is no "nothing matches" state: with no query
+            every screen is listed, and any query offers the event log and the
+            knowledge base as the last two results. */}
+        <div
+          className="palette-results"
+          ref={listRef}
+          id={listbox.listId}
+          role="listbox"
+          aria-label="Results"
+        >
+          {groups.map(([group, items], g) => (
+            // By position, not by name: a group's name has spaces in it
+            // ("Open by id"), and `aria-labelledby` splits on them.
+            <div key={group} role="group" aria-labelledby={`${id}-group-${g}`}>
+              <div className="palette-group" id={`${id}-group-${g}`} role="presentation">
+                {group}
+              </div>
               {items.map((hit) => {
                 flat++;
                 const mine = flat;
                 return (
-                  <button
+                  // NOT A BUTTON: focus never leaves the input, so a result is
+                  // reached by the arrows and the pointer, and a tab stop per
+                  // result is forty stops between the input and itself.
+                  // Opened on CLICK rather than the shared list's mousedown:
+                  // nothing here closes on blur, and search gone on the press
+                  // would leave its release to land on the screen beneath.
+                  <div
                     key={hit.id}
+                    id={listbox.optionId(mine)}
                     className="palette-item"
                     role="option"
-                    aria-selected={mine === cursor}
-                    onMouseEnter={() => setCursor(mine)}
-                    onClick={() => {
-                      hit.go();
-                      onClose();
-                    }}
+                    aria-selected={mine === listbox.active}
+                    onMouseEnter={listbox.optionHandlers(mine).onMouseEnter}
+                    onClick={() => open(hit)}
                   >
                     <Icon name={hit.icon} size="sm" />
                     <span className="truncate">{hit.label}</span>
                     <span className="palette-hint truncate">{hit.hint}</span>
-                  </button>
+                  </div>
                 );
               })}
             </div>

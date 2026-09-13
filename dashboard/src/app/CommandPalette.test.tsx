@@ -1,13 +1,14 @@
 /**
  * Search is a launcher reached from anywhere, so what it must get right is
  * the keyboard: the highlighted row is the one Enter opens, and it has to be
- * on screen while the reader moves it.
+ * on screen while the reader moves it, and a screen reader has to hear it.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { CommandPalette } from "./CommandPalette.tsx";
-import { Router } from "./router.tsx";
+import { ALL_NAV } from "./nav.ts";
+import { Router, href } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 
@@ -51,6 +52,7 @@ function mount(onClose = () => {}) {
       </Router>
     </ClientContext.Provider>,
   );
+  return store;
 }
 
 /**
@@ -73,7 +75,7 @@ function layOut() {
 test("the highlighted result is scrolled into the list's view as the cursor moves", () => {
   layOut();
   mount();
-  const input = screen.getByRole("textbox", { name: "Search" });
+  const input = screen.getByRole("combobox", { name: "Search" });
   const list = document.querySelector<HTMLElement>(".palette-results")!;
   expect(list.scrollTop).toBe(0);
 
@@ -84,4 +86,78 @@ test("the highlighted result is scrolled into the list's view as the cursor move
   // Back to the top row: the list follows it up.
   for (let i = 0; i < 5; i++) fireEvent.keyDown(input, { key: "ArrowUp" });
   expect(list.scrollTop).toBe(0);
+});
+
+test("search is a combobox: the arrows move a highlight the input names, and Tab never walks the results", () => {
+  const onClose = vi.fn();
+  mount(onClose);
+  const input = screen.getByRole("combobox", { name: "Search" });
+  const list = screen.getByRole("listbox", { name: "Results" });
+  expect(input.getAttribute("aria-controls")).toBe(list.id);
+  expect(document.activeElement).toBe(input);
+
+  const highlighted = () => document.getElementById(input.getAttribute("aria-activedescendant")!);
+  const first = within(list).getAllByRole("option")[0]!;
+  expect(highlighted()).toBe(first);
+  expect(first.getAttribute("aria-selected")).toBe("true");
+
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  const second = within(list).getAllByRole("option")[1]!;
+  expect(highlighted()).toBe(second);
+  expect(second.getAttribute("aria-selected")).toBe("true");
+  expect(first.getAttribute("aria-selected")).toBe("false");
+  // Focus stayed where the reader types.
+  expect(document.activeElement).toBe(input);
+
+  // Each group is named by its heading.
+  const seats = within(list).getByRole("group", { name: "Seats" });
+  expect(within(seats).getAllByRole("option")[0]!.textContent).toContain("Engineer 1");
+
+  // No result is a tab stop, so Tab wraps straight back to the input.
+  expect(
+    within(list)
+      .queryAllByRole("option")
+      .some((o) => o.tabIndex >= 0),
+  ).toBe(false);
+  // The trap takes the press (it is the last stop) and puts focus back on it.
+  expect(fireEvent.keyDown(input, { key: "Tab" })).toBe(false);
+  expect(document.activeElement).toBe(input);
+
+  // Enter opens the highlighted result (with no query, the screens in the
+  // rail's order) and closes search.
+  expect(second.textContent).toContain(ALL_NAV[1]!.label);
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(location.hash).toBe(href(ALL_NAV[1]!.path));
+  expect(onClose).toHaveBeenCalledTimes(1);
+});
+
+test("a highlight past the end of results that shrank under it stays on a real result", () => {
+  const store = mount();
+  const input = screen.getByRole("combobox", { name: "Search" });
+  const count = screen.getAllByRole("option").length;
+  // Up from the first result wraps to the last, as every list's highlight does.
+  fireEvent.keyDown(input, { key: "ArrowUp" });
+  const options = screen.getAllByRole("option");
+  expect(input.getAttribute("aria-activedescendant")).toBe(options[count - 1]!.id);
+
+  // A push removes every seat while the highlight sits on the last of them.
+  act(() => store.applyOrg({ name: "Acme", roles: [] }));
+  const remaining = screen.getAllByRole("option");
+  expect(remaining.length).toBeLessThan(count);
+  const last = remaining[remaining.length - 1]!;
+  expect(input.getAttribute("aria-activedescendant")).toBe(last.id);
+  expect(last.getAttribute("aria-selected")).toBe("true");
+});
+
+test("a press on the veil closes search on its click, as every modal's veil does", () => {
+  const onClose = vi.fn();
+  mount(onClose);
+  const veil = document.querySelector(".veil")!;
+  // The results are the modal's body, not a popup above it: a popup would
+  // close on the press, before the click a tap ends with, and let that click
+  // land on the screen the veil was covering.
+  fireEvent.pointerDown(veil);
+  expect(onClose).not.toHaveBeenCalled();
+  fireEvent.click(veil);
+  expect(onClose).toHaveBeenCalledTimes(1);
 });
