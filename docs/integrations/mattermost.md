@@ -232,7 +232,7 @@ units:
         integrations:                              # per-agent transport identity
           mattermost:
             bot_token: "${MATTERMOST_TOKEN_ENGINEER}"
-            channel: engineering                   # optional default channel
+            channel: engineering                   # optional — a channel this bot is added to
         mcp_env:
           mattermost:
             MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_ENGINEER}"   # same token
@@ -262,7 +262,7 @@ Per role, under `integrations.mattermost`:
 |---|---|
 | `bot_token` | The bot's personal access token. `${VAR}` ⇒ provisionable. |
 | `username` | Bot username. Defaults to the handle (with the prefix applied). |
-| `channel` | Optional default channel name for outbound notifications. |
+| `channel` | Optional channel name this seat's bot is added to at provisioning, on top of `provisioning.channels`. It aims nothing: the engine's transport posts no message. |
 
 There is deliberately **no `status_phrases`** here: Mattermost's indicator
 wording belongs to the client, so no text the engine supplied would ever be
@@ -628,9 +628,12 @@ disconnect and a server hanging up on sight look identical otherwise.
 
 All Mattermost capabilities — messaging, threading, search, reactions — come
 from **MCP tools** powered by the agent's own bot token. Messages post with
-the agent's own bot identity. the Mattermost transport's send exists as the
-transport-agnostic fallback for notifications routed through the
-notification service.
+the agent's own bot identity.
+
+The engine's own transport never creates a post. It holds the same per-seat
+bot token for its own **reads** — the seat's identity, the instance's typing
+cadence and Site URL, and the REST re-read a reconnecting socket backfills
+from — and for exactly one write: the [typing indicator](#working-status).
 
 ---
 

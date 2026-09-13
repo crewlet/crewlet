@@ -141,7 +141,7 @@ func transport(t *testing.T, ws *workspace, mutate func(*slack.TransportOptions)
 	opts := slack.TransportOptions{
 		Config: slack.Config{
 			Status: notify.StatusAddressed,
-			Seats:  []slack.SeatConfig{{Handle: "swe", Token: "xoxb-swe", Channel: "C0DEFAULT"}},
+			Seats:  []slack.SeatConfig{{Handle: "swe", Token: "xoxb-swe"}},
 		},
 		Follows: newFollows(),
 		HTTP:    rewriting(ws.URL),
@@ -191,56 +191,6 @@ func TestARefusedTokenDropsThatSeatAndNoOther(t *testing.T) {
 	}
 	if len(tr.Handles()) != 0 {
 		t.Errorf("a seat with a refused token is running: %v", tr.Handles())
-	}
-}
-
-// A MESSAGE POSTS AS THE SEAT'S OWN APP, into the thread it names.
-func TestSendPostsAsTheSeatIntoItsThread(t *testing.T) {
-	t.Parallel()
-	ws := newWorkspace(t)
-	ws.replies["auth.test"] = `{"ok":true,"user_id":"` + botUser + `"}`
-	ws.replies["chat.postMessage"] = `{"ok":true,"ts":"1700000010.001000"}`
-	store := newFollows()
-
-	tr := transport(t, ws, func(o *slack.TransportOptions) { o.Follows = store })
-	if err := tr.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	ts, err := tr.Send(context.Background(), "swe", "C0ENG", "1700000000.000000", "on it")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ts != "1700000010.001000" {
-		t.Errorf("ts = %q", ts)
-	}
-	body := ws.lastBody("chat.postMessage")
-	if body["channel"] != "C0ENG" || body["thread_ts"] != "1700000000.000000" {
-		t.Errorf("posted %v", body)
-	}
-	// REPLYING SUBSCRIBES THE SEAT, which is what every chat client does
-	// when a person replies — the seat hears what comes back without
-	// being named again.
-	if store.reason("swe", "C0ENG", "1700000000.000000") != string(notify.FollowParticipated) {
-		t.Error("posting into a thread did not subscribe the seat to it")
-	}
-}
-
-// A SEAT WITH NO EXPLICIT CHANNEL FALLS BACK TO ITS OWN.
-func TestSendFallsBackToTheSeatsChannel(t *testing.T) {
-	t.Parallel()
-	ws := newWorkspace(t)
-	ws.replies["auth.test"] = `{"ok":true,"user_id":"` + botUser + `"}`
-	ws.replies["chat.postMessage"] = `{"ok":true,"ts":"1.1"}`
-
-	tr := transport(t, ws, nil)
-	if err := tr.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tr.Send(context.Background(), "swe", "", "", "hello"); err != nil {
-		t.Fatal(err)
-	}
-	if got := ws.lastBody("chat.postMessage")["channel"]; got != "C0DEFAULT" {
-		t.Errorf("channel = %v", got)
 	}
 }
 

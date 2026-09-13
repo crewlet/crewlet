@@ -26,7 +26,6 @@ type instance struct {
 	identities map[string]mattermost.User
 	mu         sync.Mutex
 	typing     []string
-	posts      []mattermost.PostRequest
 }
 
 func newInstance(t *testing.T, identities map[string]mattermost.User) *instance {
@@ -46,13 +45,6 @@ func newInstance(t *testing.T, identities map[string]mattermost.User) *instance 
 			inst.typing = append(inst.typing, r.URL.Path)
 			inst.mu.Unlock()
 			w.Write([]byte(`{}`))
-		case r.URL.Path == "/api/v4/posts" && r.Method == http.MethodPost:
-			var req mattermost.PostRequest
-			json.NewDecoder(r.Body).Decode(&req)
-			inst.mu.Lock()
-			inst.posts = append(inst.posts, req)
-			inst.mu.Unlock()
-			json.NewEncoder(w).Encode(map[string]any{"id": "sent-1"})
 		case strings.HasSuffix(r.URL.Path, "/users/me"):
 			me, ok := inst.identities[token]
 			if !ok {
@@ -74,12 +66,6 @@ func (i *instance) typings() int {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	return len(i.typing)
-}
-
-func (i *instance) sent() []mattermost.PostRequest {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	return append([]mattermost.PostRequest(nil), i.posts...)
 }
 
 func transport(t *testing.T, inst *instance, mutate func(*mattermost.TransportOptions)) *mattermost.Transport {
@@ -282,34 +268,6 @@ func TestTheIndicatorIsRaisedAndLapses(t *testing.T) {
 	// A seat this node does not run cannot be raised for.
 	if tr.SetStatus(t.Context(), "nobody", "C1", "", "") {
 		t.Fatal("an indicator was raised for a seat this node does not run")
-	}
-}
-
-// A shared identity would make every agent's message come from one account,
-// and a company whose members are indistinguishable is not a company.
-func TestASeatPostsAsItsOwnBot(t *testing.T) {
-	inst := newInstance(t, map[string]mattermost.User{
-		"tok-swe": {ID: "bot-swe", Username: "agent-swe"},
-	})
-	tr := transport(t, inst, nil)
-	if err := tr.Start(t.Context()); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-
-	if _, err := tr.Send(t.Context(), "swe", "C1", "root-1", "here you go"); err != nil {
-		t.Fatalf("Send: %v", err)
-	}
-	sent := inst.sent()
-	if len(sent) != 1 || sent[0].ChannelID != "C1" || sent[0].RootID != "root-1" {
-		t.Fatalf("sent %+v", sent)
-	}
-	// A reply that lost its thread becomes a new conversation in the
-	// channel rather than an answer.
-	if sent[0].Message != "here you go" {
-		t.Fatalf("the message was %q", sent[0].Message)
-	}
-	if _, err := tr.Send(t.Context(), "nobody", "C1", "", "hi"); err == nil {
-		t.Fatal("a seat this node does not run posted anyway")
 	}
 }
 

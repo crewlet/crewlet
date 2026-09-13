@@ -1476,7 +1476,7 @@
           "type": "string"
         },
         "channel": {
-          "description": "Default channel name for this seat.",
+          "description": "Channel this seat's bot is added to at provisioning, on top of provisioning.channels.",
           "type": "string"
         },
         "username": {
@@ -1576,10 +1576,6 @@
       "properties": {
         "bot_token": {
           "description": "Bot token for outbound Web API calls.",
-          "type": "string"
-        },
-        "channel": {
-          "description": "Default channel id for this seat.",
           "type": "string"
         },
         "signing_secret": {

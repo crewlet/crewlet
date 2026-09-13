@@ -427,10 +427,17 @@ func (g *RoleGitHub) TierOrDefault() string {
 // TRANSPORT only; the Slack tool server is a separate MCP entry whose token
 // is named again under mcp_env — two consumers, one secret, named twice on
 // purpose so an operator can split them.
+//
+// TWO FIELDS, and there is deliberately no third. A `channel` sat here as
+// long as the transport had a `Send` with a fallback target; that send had no
+// caller — an agent's every message goes out through the Slack MCP server, on
+// this same token — so the field named a channel nothing ever posted in. The
+// seat's room is [OrgUnit.Channel], which the executor prompt renders as the
+// team channel and which names one room per unit whatever chat backend the
+// company runs on.
 type RoleSlack struct {
 	BotToken      string `secret:"true" yaml:"bot_token,omitempty" json:"bot_token,omitempty" desc:"Bot token for outbound Web API calls."`
 	SigningSecret string `secret:"true" yaml:"signing_secret,omitempty" json:"signing_secret,omitempty" desc:"Verifies inbound webhooks for this seat's app."`
-	Channel       string `yaml:"channel,omitempty" json:"channel,omitempty" desc:"Default channel id for this seat."`
 }
 
 // validate checks a seat's Slack app.
@@ -475,7 +482,12 @@ type RoleMattermost struct {
 	// name.
 	Username string `yaml:"username,omitempty" json:"username,omitempty" js:"pattern=^[a-z0-9][a-z0-9._-]*$" desc:"Bot username; defaults to the seat handle."`
 
-	Channel string `yaml:"channel,omitempty" json:"channel,omitempty" desc:"Default channel name for this seat."`
+	// Channel is a PROVISIONING input, not a posting default: the reconcile
+	// adds this bot to it, on top of the company-wide
+	// `provisioning.channels`. Nothing aims a message with it — the engine's
+	// transport posts none, and an agent's messages are the Mattermost MCP
+	// server's calls on this same token, each naming its own channel.
+	Channel string `yaml:"channel,omitempty" json:"channel,omitempty" desc:"Channel this seat's bot is added to at provisioning, on top of provisioning.channels."`
 }
 
 func (m *RoleMattermost) validate(path string) error {
@@ -561,7 +573,6 @@ func (r *Role) Seat() *org.Role {
 		seat.Slack = org.SlackIdentity{
 			BotToken:      s.BotToken,
 			SigningSecret: s.SigningSecret,
-			Channel:       s.Channel,
 		}
 	}
 	if m := r.Integrations.Mattermost; m != nil {

@@ -2,10 +2,13 @@ package slack_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
 )
@@ -112,19 +115,82 @@ func TestTheTwoSlackCredentialsNameDifferentPages(t *testing.T) {
 	}
 }
 
-// A CHANNEL IS A NAME SOMEBODY CHOOSES, so it gets no walk. What it does
-// carry is the step that is invisible until the agent stays silent: a Slack
-// bot reads and posts only in channels it has been invited to.
-func TestTheDefaultChannelNamesTheInviteRatherThanAPath(t *testing.T) {
+// THE FORM ASKS FOR THE TWO CREDENTIALS AND NOTHING ELSE.
+//
+// A third box sat here, "Default channel", for as long as the transport had a
+// `Send` whose empty-channel fallback was the seat's configured one — and that
+// send had no caller anywhere in the tree. Every message an agent posts is the
+// Slack MCP server's call on this same token, and it names its own channel, so
+// the box collected a value nothing read: an operator typed a channel id, the
+// dialog reported the seat configured, and the agent went on posting exactly
+// where it was addressed. That is worse than not asking, because the answer
+// looks like configuration and is stored in the company document as though it
+// were. A seat's room is `units[].channel` on the org chart, which the
+// executor prompt renders as the team channel.
+//
+// The whole list rather than "no channel field", so the next value added
+// without a reader has to be argued for here first.
+func TestTheSlackSeatFormAsksOnlyForValuesThatAreRead(t *testing.T) {
 	t.Parallel()
-	channel := byField(slack.Requirements("sre-lead", nil, nil))["channel"]
+	var fields []string
+	for _, r := range slack.Requirements("sre-lead", nil, nil) {
+		fields = append(fields, r.Field)
+	}
+	if !slices.Equal(fields, []string{"bot_token", "signing_secret"}) {
+		t.Fatalf("the seat form asks for %v, and every field on it has to be "+
+			"read by something", fields)
+	}
+}
 
-	if strings.Contains(channel.Help, "](") {
-		t.Errorf("the channel sends a reader to a page that issues nothing: %q", channel.Help)
+// EVERY BOX ON THE FORM NAMES A FIELD THE SEAT ACTUALLY HAS.
+//
+// `ConfigPath` is where [setup] writes the answer, relative to the seat, and
+// it is a STRING — nothing connects it to the struct it addresses. A path
+// naming a field `config.Role` does not carry is a box an operator can fill in
+// and never submit: the company document is decoded with `KnownFields(true)`,
+// so the merged revision is refused whole at load rather than quietly dropping
+// the key. Walking the json tags is the only thing in the tree that ties the
+// two together.
+func TestEverySlackRequirementNamesAFieldTheSeatHas(t *testing.T) {
+	t.Parallel()
+	for _, r := range slack.Requirements("sre-lead", nil, nil) {
+		if r.ConfigPath == "" {
+			t.Errorf("%s says nowhere to write its answer", r.Field)
+			continue
+		}
+		if err := resolvePath(reflect.TypeFor[config.Role](), r.ConfigPath); err != nil {
+			t.Errorf("%s: %v", r.Field, err)
+		}
 	}
-	if !strings.Contains(channel.Help, "Invite") {
-		t.Errorf("the channel never mentions the invite the bot needs: %q", channel.Help)
+}
+
+// resolvePath walks a dotted config path through a struct's json tags, the
+// same names the seat document is written in.
+func resolvePath(t reflect.Type, path string) error {
+	for _, segment := range strings.Split(path, ".") {
+		for t.Kind() == reflect.Pointer {
+			t = t.Elem()
+		}
+		if t.Kind() != reflect.Struct {
+			return fmt.Errorf("%q: %s is not a struct", path, t)
+		}
+		field, found := fieldByJSONName(t, segment)
+		if !found {
+			return fmt.Errorf("%q: %s has no %q", path, t, segment)
+		}
+		t = field
 	}
+	return nil
+}
+
+func fieldByJSONName(t reflect.Type, name string) (reflect.Type, bool) {
+	for i := range t.NumField() {
+		f := t.Field(i)
+		if tag, _, _ := strings.Cut(f.Tag.Get("json"), ","); tag == name {
+			return f.Type, true
+		}
+	}
+	return nil, false
 }
 
 // THE MANIFEST IS THE ENGINE'S OWN, so the app a person builds by hand and

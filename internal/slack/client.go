@@ -26,9 +26,9 @@ const APIBase = "https://slack.com/api"
 
 // ClientTimeout bounds one ordinary request.
 //
-// Ten seconds: chat.postMessage and assistant.threads.setStatus are both
-// fast, and the status call runs on a heartbeat that must not pile up behind
-// a slow response. The manifest calls take their own, longer, budget — see
+// Ten seconds: auth.test and assistant.threads.setStatus are both fast, and
+// the status call runs on a heartbeat that must not pile up behind a slow
+// response. The manifest calls take their own, longer, budget — see
 // [ManifestTimeout].
 const ClientTimeout = 10 * time.Second
 
@@ -296,27 +296,6 @@ func (c *Client) AppOf(ctx context.Context, botID string) (string, error) {
 		return "", fmt.Errorf("slack: bots.info: %s named no app", botID)
 	}
 	return out.Bot.AppID, nil
-}
-
-// PostMessage sends a message, optionally into a thread.
-//
-// Returns the posted message's timestamp, which is its id — and is the
-// thread anchor for anything posted under it.
-func (c *Client) PostMessage(ctx context.Context, channel, thread, text string) (string, error) {
-	if channel == "" {
-		return "", fmt.Errorf("slack: chat.postMessage: no channel")
-	}
-	body := map[string]any{"channel": channel, "text": text}
-	if thread != "" {
-		body["thread_ts"] = thread
-	}
-	var out struct {
-		TS string `json:"ts"`
-	}
-	if err := call(ctx, c.http, "chat.postMessage", c.token, body, &out); err != nil {
-		return "", err
-	}
-	return out.TS, nil
 }
 
 // SetStatus raises, updates or clears the working indicator on a thread.

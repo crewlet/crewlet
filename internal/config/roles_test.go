@@ -189,7 +189,6 @@ roles:
       slack:
         bot_token: "${SLACK_SWE}"
         signing_secret: "${SIGN_SWE}"
-        channel: C123
 `)
 	seat := cfg.Roles[0].Seat()
 
@@ -197,8 +196,7 @@ roles:
 		t.Errorf("identities = %q %q", seat.Project, seat.Space)
 	}
 
-	if seat.Slack.BotToken != "${SLACK_SWE}" || seat.Slack.SigningSecret != "${SIGN_SWE}" ||
-		seat.Slack.Channel != "C123" {
+	if seat.Slack.BotToken != "${SLACK_SWE}" || seat.Slack.SigningSecret != "${SIGN_SWE}" {
 		t.Fatalf("slack = %+v", seat.Slack)
 	}
 }

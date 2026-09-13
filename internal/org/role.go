@@ -348,20 +348,21 @@ func (c *HumanContact) ResolvedIdentities(lookup EnvLookup) []Identity {
 	return out
 }
 
-// SlackIdentity is a seat's own Slack app: the credentials its transport
-// verifies inbound requests with and delivers outbound messages through.
-// Each agent has its own app, which is what makes an agent's messages come
-// from that agent rather than from a shared company bot.
+// SlackIdentity is a seat's own Slack app: the signing secret its transport
+// verifies inbound deliveries with, and the bot token it resolves the seat's
+// own Slack identity from. Each agent has its own app, which is what makes an
+// agent's messages come from that agent rather than from a shared company
+// bot.
 //
 // These drive the TRANSPORT only. The Slack tool server is a separate MCP
 // entry, and its bot token is named again under mcp_env.slack — two
 // consumers, one secret, named twice on purpose so an operator can split
-// them.
+// them. The engine's own transport posts no message: every message an agent
+// sends is the MCP server's call on this same token, which is also why
+// nothing here names a channel.
 type SlackIdentity struct {
 	BotToken      string `yaml:"bot_token,omitempty" json:"bot_token,omitempty"`
 	SigningSecret string `yaml:"signing_secret,omitempty" json:"signing_secret,omitempty"`
-	// Channel is an optional default channel id for this seat.
-	Channel string `yaml:"channel,omitempty" json:"channel,omitempty"`
 }
 
 // IsZero reports an unconfigured Slack identity.
@@ -374,7 +375,9 @@ type MattermostIdentity struct {
 	BotToken string `yaml:"bot_token,omitempty" json:"bot_token,omitempty"`
 	// Username defaults to the seat handle when empty.
 	Username string `yaml:"username,omitempty" json:"username,omitempty"`
-	// Channel is an optional default channel for this seat.
+	// Channel is a channel this seat's bot is added to at provisioning,
+	// beside the company-wide ones. It aims nothing: this backend's
+	// transport posts no message.
 	Channel string `yaml:"channel,omitempty" json:"channel,omitempty"`
 }
 
