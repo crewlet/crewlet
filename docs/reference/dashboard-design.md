@@ -825,10 +825,12 @@ rendered idle from the first phase to the last.
   params are an empty params object on the wire, not a skipped question, so
   `useQuery("work_project", project ? { key: project } : undefined)` reads like
   a guard and is not one: the engine refuses a question missing a parameter it
-  has no default for, the screen shows an error for something nobody asked, and
-  the engine logs `stream_query_failed` once per poll for as long as the screen
-  is open. The guard that works is `enabled`, and a test scans for the shape
-  that admits an empty parameter without one.
+  has no default for, and the screen shows an error for something nobody asked.
+  The engine classifies it as `bad_params` and logs it as `stream_query_refused`
+  at DEBUG — the caller's fault, not the node's, so it is not a warning and not
+  in an operator's log at all unless they went looking. The guard that works is
+  `enabled`, and a test scans for the shape that admits an empty parameter
+  without one.
 - **A refused credential is diagnosed over HTTP.** A handshake the engine
   answers 401 never reaches the page as `close(1008)` — a connection that never
   opened has no frames, so the browser reports 1006, the same code it gives for

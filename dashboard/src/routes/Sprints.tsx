@@ -58,7 +58,7 @@ export function Sprints() {
   // overview. `chosen` is empty while the catalogue is still loading and stays
   // empty for a company with no projects, and the engine refuses the question
   // without one, so the screen's own empty state is the honest rendering
-  // rather than a `query_failed` for a project nobody named.
+  // rather than a `bad_params` banner for a project nobody named.
   const report = useQuery("work_sprints", chosen ? { project: chosen } : undefined, {
     enabled: chosen !== "",
     pollMs: 60_000,
