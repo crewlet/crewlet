@@ -34,6 +34,14 @@
  *   `visibility: hidden` so it never flashes at the layer's corner, and a
  *   browser refuses focus to a hidden element. Anywhere else it is positioned
  *   by the stylesheet under its trigger.
+ * - WHAT HAPPENS IN THE MENU STAYS IN THE MENU. A key, a press or a click
+ *   inside it does not reach the element it was opened from. A portal carries
+ *   React events up the component tree, not the document, so without this the
+ *   Enter that activates "Delete" would also reach the card's own Enter
+ *   (edit), and ArrowDown would move the tree's focus as well as the menu's.
+ *   Escape and Tab still travel, because the layer stack acts on them at the
+ *   document, and so does a chord with Ctrl, Command or Alt, which is an
+ *   application shortcut rather than a key of the menu's.
  * - IT CAN BE OPENED FROM OUTSIDE (`open`, `onOpenChange`), because a tree item
  *   that holds focus opens its card's menu from the keyboard while the
  *   trigger itself is out of the tab order (`triggerTabIndex={-1}`).
@@ -230,6 +238,10 @@ export function Menu({
   }
 
   function onMenuKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    // The menu's own keys go no further: see the module doc.
+    if (e.key !== "Escape" && e.key !== "Tab" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.stopPropagation();
+    }
     const all = entries();
     const at = all.indexOf(document.activeElement as HTMLElement);
     const go = (index: number) => all[(index + all.length) % all.length]?.focus();
@@ -288,6 +300,8 @@ export function Menu({
       }}
       style={layer ? (place ?? { visibility: "hidden" }) : undefined}
       onKeyDown={onMenuKeyDown}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
     >
       {items.map((entry) =>
         entry.kind === "separator" ? (

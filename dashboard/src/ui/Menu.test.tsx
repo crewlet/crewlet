@@ -230,3 +230,59 @@ test("given a layer, it renders there, placed from the trigger's rectangle, and 
     layer.remove();
   }
 });
+
+test("keys, presses and clicks inside the menu do not reach the element it opened from", () => {
+  const card = { keys: [] as string[], clicks: 0, presses: 0 };
+  const onEdit = vi.fn();
+  const layer = document.createElement("div");
+  document.body.appendChild(layer);
+  function Card({ inLayer }: { inLayer: boolean }) {
+    return (
+      <div
+        role="treeitem"
+        aria-selected={false}
+        tabIndex={0}
+        onKeyDown={(e) => card.keys.push(e.key)}
+        onClick={() => card.clicks++}
+        onPointerDown={() => card.presses++}
+      >
+        Software Engineer
+        <Menu
+          label="Actions for Software Engineer"
+          items={entries({ onEdit })}
+          layer={inLayer ? layer : undefined}
+        />
+      </div>
+    );
+  }
+  try {
+    // Both routes a menu reaches its card by: the document (inline) and the
+    // component tree through a portal (in a layer).
+    for (const inLayer of [false, true]) {
+      card.keys = [];
+      card.clicks = 0;
+      card.presses = 0;
+      const { unmount } = render(<Card inLayer={inLayer} />);
+      fireEvent.click(trigger());
+      card.clicks = 0;
+      for (const key of ["ArrowDown", "Enter", " ", "Delete", "Backspace", "m"]) {
+        fireEvent.keyDown(item("Move to"), { key });
+      }
+      fireEvent.pointerDown(item("Edit"));
+      fireEvent.click(item("Edit"));
+      expect(onEdit).toHaveBeenCalled();
+      expect({ inLayer, ...card }).toEqual({ inLayer, keys: [], clicks: 0, presses: 0 });
+
+      // Escape and Tab still travel: the layer stack acts on them at the document.
+      fireEvent.click(trigger());
+      card.clicks = 0;
+      fireEvent.keyDown(item("Edit"), { key: "Tab" });
+      expect(card.keys).toEqual(["Tab"]);
+      unmount();
+      onEdit.mockClear();
+    }
+  } finally {
+    cleanup();
+    layer.remove();
+  }
+});
