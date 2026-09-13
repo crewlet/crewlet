@@ -75,25 +75,24 @@ func (e *Engine) WorkSearch() *tracker.Searcher {
 	return n.itemSearch
 }
 
-// workSearchOrNil is [Engine.WorkSearch] as the tool layer's seam, and it
-// answers a TYPED NIL for a node with no index rather than a non-nil
-// interface holding one — which is the shape that makes a
-// `deps.Search != nil` gate register a tool that can only fail.
-func workSearchOrNil(e *Engine) builtin.WorkSearcher {
+// WorkSearcher is [Engine.WorkSearch] as the tool layer's seam — the shape
+// both the seat tools and a surface assembled outside this package take, the
+// operator's MCP endpoint being the one that is.
+//
+// IT ANSWERS AN UNTYPED NIL for a node with no index, rather than a non-nil
+// interface holding a nil [tracker.Searcher], because that is the shape a
+// `deps.Search != nil` gate reads correctly: handed the other one it registers
+// a search tool that can only fail.
+//
+// ONE FUNCTION FOR BOTH CALLERS. It was two — an unexported one here and a
+// one-line exported wrapper around it — which is two places for the typed-nil
+// rule above to be stated and one of them to stop matching.
+func WorkSearcher(e *Engine) builtin.WorkSearcher {
 	if s := e.WorkSearch(); s != nil {
 		return s
 	}
 	return nil
 }
-
-// EngineWorkSearch is [Engine.WorkSearch] as the tool layer's seam, for a
-// surface built outside this package — the operator's MCP endpoint, which
-// assembles its own WorkDeps.
-//
-// IT ANSWERS A TYPED NIL rather than a non-nil interface holding one, for
-// [workSearchOrNil]'s reason: a `Search != nil` gate would otherwise register
-// a tool that can only fail.
-func EngineWorkSearch(e *Engine) builtin.WorkSearcher { return workSearchOrNil(e) }
 
 // indexedCorpora is which corpora a node with these two backends indexes, and
 // it is what the startup actually builds the index over.

@@ -163,7 +163,7 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		cfg:         boot.Stream.TrackerRetention,
 		backupOwner: boot.Retention.BackupOwner,
 		metrics:     e.metrics,
-		claim:       schedule.DutyFunc(e.workerDuty(retentionDutyName, retentionDutyTTL)),
+		claim:       e.workerDuty(retentionDutyName, retentionDutyTTL),
 		nodeID:      s.nodeID,
 		alarms:      statelog.NewTracker(e.metrics, nil),
 		coverage:    e.vectorCoverage,

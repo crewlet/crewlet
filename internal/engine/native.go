@@ -56,9 +56,13 @@ import (
 // exists to avoid.
 
 // native holds this node's native-backend runtime.
+//
+// EVERY FIELD IS WRITTEN ONCE, by [Engine.startNative], before the struct is
+// published to [Engine.native] — which is why there is no mutex here and why
+// adding one would be misleading rather than merely redundant. What the
+// running node mutates afterwards is the two fields that carry their own
+// synchronisation: the wait group, and the one-slot nudge channel.
 type native struct {
-	mu sync.Mutex
-
 	// nodeID is who this node is: the name its own domain consumer takes,
 	// the writer stamped on every record it publishes, and what the
 	// eviction gate compares against. Held here because three subsystems
@@ -676,6 +680,9 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 			defer e.native.done.Done()
 			// THE NATIVE RUNTIME'S OWN CONTEXT, never the caller's: this
 			// goroutine is joined by stopNative, which ends that one.
+			//nolint:contextcheck // e.native.run is [context.WithoutCancel] of
+			// the boot context: a feed started under the CALLER's would be one
+			// [native.shutdown] can never end, and its wait would block for ever.
 			if err := feed.Run(e.native.run); err != nil {
 				log.ErrorContext(ctx, "changefeed_stopped",
 					"source", translator.Source().Name, "error", err.Error(),
@@ -902,13 +909,6 @@ func containerLeads(o *org.Organization) pages.Leads {
 	return pages.Leads(leads)
 }
 
-// scopeOfSeat is the project or container a seat files into: its own, else
-// its unit's, else its nearest ancestor's.
-//
-// THE WALK IS UPWARD, so a seat in a team with no space of its own writes in
-// its department's rather than being told to name one. A seat with none
-// anywhere returns empty, and the tool refuses rather than guessing — which
-// is right: a page filed into a container nobody chose is one nobody finds.
 // ProjectOfSeat is one seat's home project, from a chart.
 //
 // EXPORTED because two surfaces need the same answer and a second walk is how
@@ -947,6 +947,13 @@ func UnitOfSeat(o *org.Organization, handle string) string {
 	return ""
 }
 
+// scopeOfSeat is the project or container a seat files into: its own, else
+// its unit's, else its nearest ancestor's.
+//
+// THE WALK IS UPWARD, so a seat in a team with no space of its own writes in
+// its department's rather than being told to name one. A seat with none
+// anywhere returns empty, and the tool refuses rather than guessing — which
+// is right: a page filed into a container nobody chose is one nobody finds.
 func scopeOfSeat(o *org.Organization, handle string, of func(*org.Unit) string,
 	own func(*org.Role) string) string {
 	if o == nil || handle == "" {
@@ -1063,7 +1070,7 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		// the corpus is the same for everybody and there is nothing to
 		// attribute. Nil where this node has no index, and the tool is
 		// then not advertised at all.
-		Search:   workSearchOrNil(e),
+		Search:   WorkSearcher(e),
 		Mentions: seatMentions{org: c.Org},
 		// THE ROSTER, read PER CALL for the reason the default project
 		// and the unit seam are: a seat's tools are cloned into its
@@ -1244,15 +1251,6 @@ func reservedContainers(cfg *config.Company) []string {
 // nobody can deliver.
 type seatMentions struct{ org *org.Organization }
 
-// LiveMentions resolves @-mentions against the chart CURRENT when the comment
-// is written, rather than the one that built the caller.
-//
-// The seat path captures its org deliberately — a seat's tools are cloned into
-// its lease and rebuilt on an apply — but a surface built once at startup has
-// no such rebuild, so it reads the engine per call. It is exported because the
-// OPERATOR MCP needs the same rule and there must not be a second copy of it:
-// built without one, that surface wrote comments whose @-mentions resolved to
-// nothing and woke nobody, while its own tool description promised otherwise.
 // LiveLeads and LiveUnits are the chart seams a surface outside this package
 // needs, resolved PER CALL against the epoch current when the tool runs.
 //
@@ -1266,6 +1264,15 @@ func LiveLeads(e *Engine) tracker.Leads { return liveLeads{engine: e} }
 // LiveUnits is the tracker's unit seam over the engine's current chart.
 func LiveUnits(e *Engine) tracker.Units { return liveUnits{engine: e} }
 
+// LiveMentions resolves @-mentions against the chart CURRENT when the comment
+// is written, rather than the one that built the caller.
+//
+// The seat path captures its org deliberately — a seat's tools are cloned into
+// its lease and rebuilt on an apply — but a surface built once at startup has
+// no such rebuild, so it reads the engine per call. It is exported because the
+// OPERATOR MCP needs the same rule and there must not be a second copy of it:
+// built without one, that surface wrote comments whose @-mentions resolved to
+// nothing and woke nobody, while its own tool description promised otherwise.
 func LiveMentions(e *Engine) builtin.MentionResolver {
 	return liveMentions{engine: e}
 }

@@ -2265,7 +2265,7 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 			// the corpus is the same for everybody and there is nothing
 			// to attribute — and without it the operator catalogue
 			// listed a verb this surface could never register.
-			Search: engine.EngineWorkSearch(e),
+			Search: engine.WorkSearcher(e),
 			// THE SAVED-VIEW WRITER, which only this surface has: a
 			// view is furniture a person arranges, and no seat is
 			// given the tools that reach it.

@@ -23,20 +23,16 @@ import (
 //
 // In a MAINTENANCE-MODE node, because the verb needs a broker and no
 // publisher, and on the default topology the broker binds no socket so there
-// is nowhere else it could run at all. Which maintenance-mode node is decided
-// by an ordinary lease, and it never decides whether a publisher may run —
-// that is the operation record's job, and the two have different lifetimes for
-// exactly that reason.
-
-// capacityLeaseTTL is how long a coordinator holds the drive without
-// re-claiming.
-//
-// A MINUTE, and it is short on purpose. What expiry costs here is a takeover,
-// which resumes the same operation id and the same immutable target — so a
-// coordinator that has stalled hands over quickly rather than holding a fleet
-// in maintenance while somebody works out whether it is alive. The state it
-// was driving has no TTL at all, which is what makes a fast handover safe.
-const capacityLeaseTTL = time.Minute
+// is nowhere else it could run at all. WHICH maintenance-mode node is not
+// decided anywhere, and that is the design rather than an omission: the
+// operation RECORD is both the operation and the exclusion, so two operators
+// calling two nodes contend on its compare-and-set create — one opens the
+// window, and the other is either told who holds it or handed the same one
+// back to resume, because the target is immutable and matching it IS the
+// resume. A coordinator lease beside that record would be a second thing to
+// hold, with an expiry of its own, over state that deliberately has none: an
+// interrupted drive is picked up by whoever calls next with the same target,
+// and nothing has to decide whether the previous caller is alive.
 
 // CapacityRequest is what an operator asked for.
 type CapacityRequest struct {
@@ -408,6 +404,7 @@ func (e *Engine) verify(ctx context.Context, running *runningDomain,
 		return op, fmt.Errorf("engine: read %s's ceiling to verify: %w", op.Stream, err)
 	}
 	if stats.MaxBytes != op.TargetMaxBytes {
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		next, err := statelog.NextAttempt(op, stats.MaxBytes, time.Now().UTC())
 		if writeErr := e.backends.Fleet.UpdateMaintenance(ctx, next); writeErr != nil {
 			return op, writeErr

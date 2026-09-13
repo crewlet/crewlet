@@ -68,10 +68,7 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (uint32, err
 			maintenanceStreams())
 	}
 
-	in, err := e.reanchorInputs(ctx, running)
-	if err != nil {
-		return 0, err
-	}
+	in := e.reanchorInputs(ctx, running)
 	gen, err := statelog.Reanchor(ctx, statelog.ReanchorDeps{
 		Domains: s.registered(),
 		DB:      e.backends.Store.Replicated(),
@@ -106,8 +103,15 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (uint32, err
 // EVERY ONE OF THEM IS READ HERE rather than inside the arithmetic, which is
 // what makes every refusal reachable in a table test: a permission that could
 // only be exercised against a recreated stream is one nobody re-checks.
-func (e *Engine) reanchorInputs(ctx context.Context, running *runningDomain) (
-	statelog.ReanchorInputs, error) {
+//
+// IT RETURNS NO ERROR, and that is the point of the shape rather than an
+// omission: every read that can fail here fails INTO a fact the permission
+// check already weighs — an unreadable stream leaves FirstSeq at zero, and an
+// unreadable register leaves RegisterReadable false, which [statelog.Reanchor]
+// refuses on unless the operator forces it. A read error returned instead
+// would abort the call before the refusal that names what is actually wrong.
+func (e *Engine) reanchorInputs(ctx context.Context,
+	running *runningDomain) statelog.ReanchorInputs {
 
 	in := statelog.ReanchorInputs{
 		StreamCreatedAt: running.createdAt,
@@ -124,7 +128,7 @@ func (e *Engine) reanchorInputs(ctx context.Context, running *runningDomain) (
 		// exactly the outage during which re-anchoring is most tempting
 		// and least justified, so the flag says so and the permission
 		// refuses on it.
-		return in, nil
+		return in
 	}
 	in.RegisterReadable = true
 	domain := running.domain.Name()
@@ -134,7 +138,7 @@ func (e *Engine) reanchorInputs(ctx context.Context, running *runningDomain) (
 		}
 	}
 	in.PeersHydrated = len(hydratedPeers(rows, domain, in.Generation, e.id))
-	return in, nil
+	return in
 }
 
 // ReanchorStatus is what an operator reads before running it: the stream's own

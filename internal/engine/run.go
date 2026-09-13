@@ -609,6 +609,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// A NODE IN A MAINTENANCE MODE SKIPS IT AND ACKNOWLEDGES INSTEAD: it
 	// is not admitting itself to publish, it is offering the evidence the
 	// capacity barrier is established from. See maintenance_mode.go.
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := e.admit(ctx, maintenanceStreams()); err != nil {
 		return nil, err
 	}

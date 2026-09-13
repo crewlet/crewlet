@@ -508,8 +508,16 @@ func (s *stateLog) readerFor(domain statelog.Domain, appendTo *jetstream.DomainL
 		// READ FRESH ON EVERY READ, because every one of its terms can
 		// change between two of them — and because a captured value
 		// would freeze the very refusals this seam exists to deliver.
+		//
+		// UNDER THIS NODE'S OWN CONTEXT, which is the only one that can
+		// be right here: [statelog.ReaderDeps.Health] takes none, and
+		// the closure is called on every read for the life of the node
+		// — so the boot context that built the reader would cancel the
+		// moment boot finished and turn every later read into a refusal.
+		// [stateLog.run] ends with the domain the health describes,
+		// which is what stops a probe outliving its own apply loop.
 		Health: func() statelog.Health {
-			h, err := s.health(context.Background(), running)
+			h, err := s.health(s.run, running)
 			if err != nil {
 				// AN UNREADABLE TERM REFUSES rather than serving. The
 				// health read reaches the broker and coordination, and
@@ -933,6 +941,9 @@ func freeSpace(path string) (int64, error) {
 	if err := unix.Statfs(dir, &fs); err != nil {
 		return 0, fmt.Errorf("engine: measure the free space on %s: %w", dir, err)
 	}
+	//nolint:unconvert // Statfs_t.Bsize is int64 on linux and uint32 on
+	// darwin, and both are release targets — the conversion is what makes
+	// this one expression compile on the whole matrix.
 	return int64(fs.Bavail) * int64(fs.Bsize), nil
 }
 
@@ -1214,8 +1225,14 @@ func (s *stateLog) registered() map[string]statelog.Registered {
 		entry := statelog.Registered{Domain: domain}
 		if running, held := s.domains[name]; held {
 			entry.StreamCreatedAt = running.createdAt
+			// THIS NODE'S OWN CONTEXT, for [stateLog.readerFor]'s
+			// reason: the snapshot loop and the adopter call this
+			// closure on their own cadence, long after whoever built
+			// the map returned, so there is no caller's context to
+			// inherit — and [stateLog.run] is the one that ends when
+			// the domain being vouched for does.
 			entry.Health = func() statelog.Health {
-				health, err := s.health(context.Background(), running)
+				health, err := s.health(s.run, running)
 				if err != nil {
 					// AN UNREADABLE HEALTH IS NOT A HEALTHY ONE:
 					// the zero value has CaughtUp false and no
@@ -1748,7 +1765,7 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 		row.Domains[name] = pos
 	}
 	stampSnapshot(&row, s.snapshot.Load())
-	s.positionGauges(row)
+	s.positionGauges(ctx, row)
 	s.deferralGauges(row.At)
 	if err := s.fleet.PutPositions(ctx, row); err != nil {
 		if ctx.Err() != nil {
@@ -1770,7 +1787,7 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 // now", and setting it per applied batch would make the answer a function of
 // how busy the log is — a quiet log would leave the last burst's lag standing
 // for as long as nothing was published.
-func (s *stateLog) positionGauges(row coord.NodePositions) {
+func (s *stateLog) positionGauges(ctx context.Context, row coord.NodePositions) {
 	if s.metrics == nil {
 		return
 	}
@@ -1791,7 +1808,7 @@ func (s *stateLog) positionGauges(row coord.NodePositions) {
 		// can say.
 		s.metrics.Set(metrics.StatelogDrainCommitsPerSecond,
 			running.runner.Commits(), attrs)
-		health, err := s.health(context.Background(), running)
+		health, err := s.health(ctx, running)
 		if err != nil || health.Lag == nil {
 			// UNREADABLE IS NOT ZERO, and a gauge has no third
 			// value — so the lag gauges are left at whatever they
