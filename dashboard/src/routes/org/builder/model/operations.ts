@@ -380,6 +380,7 @@ export type RecordRefusal =
   | "unknown_handle"
   | "no_schedule"
   | "no_datadog"
+  | "no_gitlab"
   | "not_empty"
   | "no_change";
 
@@ -591,6 +592,54 @@ function accessLevel(draft: Draft, handle: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+/** The GitLab provisioning block that holds the access levels. */
+const GITLAB_PROVISIONING = GITLAB_ACCESS_LEVELS.slice(0, -1);
+/** The Datadog block that holds the fallback seat. */
+const DATADOG_BLOCK = DATADOG_ROUTE_TO.slice(0, -1);
+
+const hasBlock = (company: CompanyDocument, block: readonly string[]) =>
+  isRecord(getPath(company, block));
+
+/**
+ * The company document with one value inside an integration block set or
+ * removed, never creating the block and never pruning it.
+ *
+ * AN INTEGRATION BLOCK IS A CONNECTION, NOT A CONTAINER. `integrations.gitlab`
+ * and `integrations.datadog` exist because an operator connected the tool
+ * from Integrations, and a seat edit only reaches one value inside each. So a
+ * value is written only into a block that is there (recording refuses one
+ * that is not), and removing the last access level leaves the provisioning
+ * block standing: [setPath] alone would prune the objects the removal
+ * emptied, all the way up to the block itself.
+ */
+function withinBlock(
+  company: CompanyDocument,
+  path: readonly string[],
+  blockLength: number,
+  value: unknown,
+): CompanyDocument {
+  const block = path.slice(0, blockLength);
+  const current = getPath(company, block);
+  if (!isRecord(current)) return company;
+  return setPath(
+    company,
+    block,
+    setPath(current, path.slice(blockLength), value),
+  ) as CompanyDocument;
+}
+
+function withAccessLevel(
+  company: CompanyDocument,
+  handle: string,
+  level: string | undefined,
+): CompanyDocument {
+  return withinBlock(company, [...GITLAB_ACCESS_LEVELS, handle], GITLAB_PROVISIONING.length, level);
+}
+
+function withRouteTo(company: CompanyDocument, handle: string | undefined): CompanyDocument {
+  return withinBlock(company, DATADOG_ROUTE_TO, DATADOG_BLOCK.length, handle);
+}
+
 /** The document JSON of a located node. */
 export function nodeJson(found: Located): unknown {
   return found.kind === "seat" ? found.node.data : unitJson(found.node);
@@ -731,6 +780,12 @@ export function record(
         const level = handle === undefined ? undefined : accessLevel(draft, handle);
         if (handle !== undefined && level !== undefined)
           accessLevels.push({ handle, before: level });
+      }
+      if (intent.routeTo !== undefined && !hasBlock(draft.company, DATADOG_BLOCK)) {
+        return refuse(
+          "no_datadog",
+          "Datadog is not connected, so there is no fallback seat to replace.",
+        );
       }
       const routeTo = routeToChange(draft, intent.routeTo);
       return recorded({
@@ -881,6 +936,12 @@ export function record(
         if (jsonEqual(before, set.value)) continue;
         changes.push(fieldChange(set.path, before, set.value));
       }
+      if (typeof intent.accessLevel === "string" && !hasBlock(draft.company, GITLAB_PROVISIONING)) {
+        return refuse(
+          "no_gitlab",
+          "GitLab provisioning is not connected. Connect it from Integrations before setting an access level.",
+        );
+      }
       if (intent.accessLevel !== undefined) {
         const renamed = intent.set.find((s) => jsonEqual(s.path, ["handle"]));
         const handle =
@@ -957,6 +1018,12 @@ export function record(
       if (!found) return missing(intent.target);
       if (kindOf(found.node.data) === intent.kind)
         return refuse("no_change", "The seat is already that kind.");
+      if (intent.routeTo !== undefined && !hasBlock(draft.company, DATADOG_BLOCK)) {
+        return refuse(
+          "no_datadog",
+          "Datadog is not connected, so there is no fallback seat to replace.",
+        );
+      }
       const routeTo = routeToChange(draft, intent.routeTo);
       return recorded({
         type: "changeKind",
@@ -993,7 +1060,7 @@ export function record(
     }
 
     case "setDatadogRouteTo": {
-      if (!isRecord(getPath(draft.company, ["integrations", "datadog"]))) {
+      if (!hasBlock(draft.company, DATADOG_BLOCK)) {
         return refuse("no_datadog", "Datadog is not connected.");
       }
       const current = getPath(draft.company, DATADOG_ROUTE_TO);
@@ -1182,8 +1249,12 @@ export function evaluate(draft: Draft, op: Operation): Outcome {
   const expect = (subject: string, base: unknown, theirs: unknown, mine?: unknown) => {
     if (!jsonEqual(base, theirs)) conflicts.push({ subject, base, theirs, mine });
   };
+  let goneReason: string | undefined;
   const expectAccessLevels = (changes: readonly AccessLevelChange[]) => {
     for (const change of changes) {
+      if (change.after !== undefined && !hasBlock(draft.company, GITLAB_PROVISIONING)) {
+        goneReason = "GitLab provisioning is no longer connected.";
+      }
       expect(
         `GitLab access level for ${change.handle}`,
         change.before,
@@ -1194,6 +1265,9 @@ export function evaluate(draft: Draft, op: Operation): Outcome {
   };
   const expectRouteTo = (change: RouteToChange | undefined) => {
     if (!change) return;
+    if (change.after !== undefined && !hasBlock(draft.company, DATADOG_BLOCK)) {
+      goneReason = "Datadog is no longer connected.";
+    }
     const current = getPath(draft.company, DATADOG_ROUTE_TO);
     expect(
       "Datadog fallback",
@@ -1222,7 +1296,12 @@ export function evaluate(draft: Draft, op: Operation): Outcome {
     }
     return undefined;
   };
-  const finish = (): Outcome => (conflicts.length > 0 ? { kind: "conflict", conflicts } : APPLIES);
+  const finish = (): Outcome =>
+    goneReason !== undefined
+      ? gone(goneReason)
+      : conflicts.length > 0
+        ? { kind: "conflict", conflicts }
+        : APPLIES;
 
   switch (op.type) {
     case "addUnit":
@@ -1359,8 +1438,7 @@ export function evaluate(draft: Draft, op: Operation): Outcome {
     }
 
     case "setDatadogRouteTo": {
-      if (!isRecord(getPath(draft.company, ["integrations", "datadog"])))
-        return gone("Datadog is no longer connected.");
+      if (!hasBlock(draft.company, DATADOG_BLOCK)) return gone("Datadog is no longer connected.");
       expectRouteTo(op.change);
       return finish();
     }
@@ -1466,14 +1544,10 @@ export function apply(draft: Draft, op: Operation): { draft: Draft; report: Appl
       const cleared: ReferenceEffect[] = [];
       next = clearReferences(next, new Set(removedSeatNames), new Set(removedUnitNames), cleared);
       for (const change of op.accessLevels) {
-        next = {
-          ...next,
-          company: setPath(next.company, [...GITLAB_ACCESS_LEVELS, change.handle], undefined),
-        };
+        next = { ...next, company: withAccessLevel(next.company, change.handle, undefined) };
         cleared.push({ kind: "gitlab_access_level", holder: COMPANY_KEY, from: change.handle });
       }
-      if (op.routeTo)
-        next = { ...next, company: setPath(next.company, DATADOG_ROUTE_TO, op.routeTo.after) };
+      if (op.routeTo) next = { ...next, company: withRouteTo(next.company, op.routeTo.after) };
       return { draft: next, report: { cleared, followed: [], stripped: [] } };
     }
 
@@ -1486,10 +1560,7 @@ export function apply(draft: Draft, op: Operation): { draft: Draft; report: Appl
       });
       const cleared: ReferenceEffect[] = [];
       for (const change of op.accessLevels) {
-        next = {
-          ...next,
-          company: setPath(next.company, [...GITLAB_ACCESS_LEVELS, change.handle], undefined),
-        };
+        next = { ...next, company: withAccessLevel(next.company, change.handle, undefined) };
         cleared.push({ kind: "gitlab_access_level", holder: COMPANY_KEY, from: change.handle });
       }
       const followed: ReferenceEffect[] = [];
@@ -1538,10 +1609,7 @@ export function apply(draft: Draft, op: Operation): { draft: Draft; report: Appl
         op.changes.reduce((acc, c) => setPath(acc, c.path, cloneJson(c.after)) as ConfigRole, data),
       );
       for (const change of op.accessLevels) {
-        next = {
-          ...next,
-          company: setPath(next.company, [...GITLAB_ACCESS_LEVELS, change.handle], change.after),
-        };
+        next = { ...next, company: withAccessLevel(next.company, change.handle, change.after) };
       }
       return { draft: next, report: NO_EFFECTS };
     }
@@ -1590,8 +1658,7 @@ export function apply(draft: Draft, op: Operation): { draft: Draft; report: Appl
         if (op.contact) out = setPath(out, ["contact"], cloneJson(op.contact)) as ConfigRole;
         return out;
       });
-      if (op.routeTo)
-        next = { ...next, company: setPath(next.company, DATADOG_ROUTE_TO, op.routeTo.after) };
+      if (op.routeTo) next = { ...next, company: withRouteTo(next.company, op.routeTo.after) };
       return {
         draft: next,
         report: { cleared: [], followed: [], stripped: op.stripped.map((f) => fieldName(f.path)) },
@@ -1617,7 +1684,7 @@ export function apply(draft: Draft, op: Operation): { draft: Draft; report: Appl
 
     case "setDatadogRouteTo":
       return {
-        draft: { ...draft, company: setPath(draft.company, DATADOG_ROUTE_TO, op.change.after) },
+        draft: { ...draft, company: withRouteTo(draft.company, op.change.after) },
         report: NO_EFFECTS,
       };
 

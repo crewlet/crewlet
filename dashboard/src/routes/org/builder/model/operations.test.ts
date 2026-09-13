@@ -537,6 +537,62 @@ describe("editing", () => {
   });
 });
 
+describe("integration blocks", () => {
+  const levels = (draft: Draft) =>
+    getPath(doc(draft), ["integrations", "gitlab", "provisioning", "access_levels"]);
+
+  test("an access level or a Datadog fallback is never written into a block that is not connected", () => {
+    const base = fixtureCompany();
+    delete (base.integrations as Record<string, unknown>).gitlab;
+    delete (base.integrations as Record<string, unknown>).datadog;
+    const draft = fixture(base);
+    expect(
+      record(draft, { type: "updateSeat", target: "seat:dev", set: [], accessLevel: "developer" }),
+    ).toMatchObject({ refusal: "no_gitlab" });
+    expect(record(draft, { type: "remove", target: "seat:sre", routeTo: "dev" })).toMatchObject({
+      refusal: "no_datadog",
+    });
+    expect(
+      record(draft, { type: "changeKind", target: "seat:sre", kind: "human", routeTo: "dev" }),
+    ).toMatchObject({ refusal: "no_datadog" });
+  });
+
+  test("removing the last access level or the fallback leaves the connected block standing", () => {
+    const base: CompanyDocument = {
+      name: "X",
+      integrations: {
+        gitlab: { provisioning: { access_levels: { solo: "developer" } } },
+        datadog: { route_to: "solo" },
+      },
+      roles: [{ name: "Solo" }],
+    };
+    const removed = run(fixture(base), { type: "remove", target: "seat:solo" }).draft;
+    expect(doc(removed).integrations).toEqual({
+      gitlab: { provisioning: {} },
+      datadog: { route_to: "solo" },
+    });
+    const cleared = run(fixture(base), { type: "setDatadogRouteTo" }).draft;
+    expect(doc(cleared).integrations).toMatchObject({ datadog: {} });
+    expect(levels(cleared)).toEqual({ solo: "developer" });
+  });
+
+  test("an access level recorded before GitLab was disconnected upstream is gone, not written back", () => {
+    const draft = fixture();
+    const op = recordOk(draft, {
+      type: "updateSeat",
+      target: "seat:account-executive",
+      set: [],
+      accessLevel: "developer",
+    });
+    const base = fixtureCompany();
+    delete (base.integrations as Record<string, unknown>).gitlab;
+    expect(evaluate(fixture(base), op)).toEqual({
+      kind: "gone",
+      reason: "GitLab provisioning is no longer connected.",
+    });
+  });
+});
+
 describe("changing kind", () => {
   test("becoming human strips every field a human seat may not carry, each recorded, and sets the contact", () => {
     const base = fixtureCompany();
