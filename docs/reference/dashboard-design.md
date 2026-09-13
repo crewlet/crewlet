@@ -883,6 +883,15 @@ rendered idle from the first phase to the last.
 - **One clock.** Every relative time on screen advances together and none of
   them is baked at render.
 
+### The component library stands alone
+
+- **`src/ui/` imports nothing outside itself.** A primitive names a package or
+  another file in `ui/`, and never `~/protocol`, `~/lib`, `~/routes` or any
+  other directory of this application. Engine data reaches a primitive as a
+  prop. That is what lets the library move into a shared design system without
+  an edit, and `ui/boundary.test.ts` fails the build on the first import that
+  would weld a screen's data model into it.
+
 ---
 
 ## Rules a change has to keep
