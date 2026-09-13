@@ -81,6 +81,68 @@ type Logging struct {
 
 	// Format is the shape of a line. Empty is console.
 	Format logging.Format `yaml:"format,omitempty" json:"format,omitempty" js:"enum=console|text|json" desc:"console (default, columns and colour for a person), text (slog key=value) or json (for a log shipper)."`
+
+	// File is a log file this node writes IN ADDITION to stderr. Omit the
+	// block (or leave `path` empty) and there is no file at all, which is
+	// every deployment whose platform already captures stderr.
+	File LogFile `yaml:"file,omitempty" json:"file,omitempty"`
+}
+
+// LogFile is the durable copy of this node's log.
+//
+// # It is a SECOND destination, never a replacement
+//
+// stderr keeps everything it had: it is the only sink that exists before
+// this file has been read, it is what a container platform captures, and it
+// is where a boot failure is watched. A node that fell silent there the
+// moment a path was configured would look like one that had stopped. A
+// deployment that genuinely wants the file alone redirects stderr, which is
+// a thing it can do and this config cannot do for it.
+//
+// # Rotation is not optional, and there is no "never" spelling
+//
+// A log file with no ceiling fills the disk the engine's own store is on,
+// and it does it on the deployments least likely to be watched. The caps
+// below have defaults rather than an off switch for that reason; an operator
+// who already runs logrotate(8) over this path with `copytruncate` sets a
+// size this process will never reach. See [logging.File].
+type LogFile struct {
+	// Path is the live log file. `${VAR}` works here as everywhere in
+	// Tier A, and a relative path is relative to the process's working
+	// directory, exactly as `store.path` is. Missing directories are
+	// created (0700); the file is 0600.
+	//
+	// EMPTY IS THE OFF SWITCH, and it is a meaningful zero: a file
+	// nobody named is a file nobody wants.
+	Path string `yaml:"path,omitempty" json:"path,omitempty" desc:"Log file written in addition to stderr. Empty writes no file. Missing directories are created."`
+
+	// Format is the shape written to the FILE, which is allowed to differ
+	// from the terminal's: the whole reason this is not an io.MultiWriter
+	// is that a person watching a boot wants columns while a shipper
+	// reading the file wants `json`. Empty follows `logging.format`, so a
+	// node that says nothing writes one log in two places.
+	Format logging.Format `yaml:"format,omitempty" json:"format,omitempty" js:"enum=console|text|json" desc:"Shape written to the file. Empty follows logging.format; set json when a shipper reads it."`
+
+	// MaxSizeMB is the size the live file reaches before it rotates.
+	// Unset is logging.DefaultMaxSizeMB, which is where the number and
+	// its rationale live — the layer that enforces a limit is the one
+	// that gets to say what it is when nobody said, the same arrangement
+	// as node.max_concurrent.
+	//
+	// A POINTER, so an explicit 0 is refused by name rather than read as
+	// "apply the default": a file that rotates every zero bytes is not a
+	// setting, and silently substituting 100 MB for it is how an operator
+	// ends up unable to tell what their own file says.
+	MaxSizeMB *int `yaml:"max_size_mb,omitempty" json:"max_size_mb,omitempty" js:"min=1" desc:"Size the live file reaches before rotating. Unset = 100. Rotation cannot be disabled."`
+
+	// MaxBackups is how many rotated files (`<path>.1` newest) are kept.
+	// Unset is logging.DefaultMaxBackups.
+	//
+	// A POINTER because 0 IS A SETTING here and it is the zero value: it
+	// caps the estate at the live file alone, which is what a small disk
+	// with a shipper already tailing the file wants. Read as "unset" it
+	// would hand that deployment five files it asked not to have.
+	MaxBackups *int `yaml:"max_backups,omitempty" json:"max_backups,omitempty" js:"min=0" desc:"Rotated files kept beside the live one. Unset = 5; 0 keeps none."`
 }
 
 func (l *Logging) validate(path string) error {
@@ -93,7 +155,56 @@ func (l *Logging) validate(path string) error {
 		p.add(at(path, "format"), ErrUnknownValue, "%q (want %s)",
 			l.Format, names(logging.Formats))
 	}
+	p.wrap(l.File.validate(at(path, "file")))
 	return p.err()
+}
+
+func (f *LogFile) validate(path string) error {
+	var p problems
+	if f.Format != "" && !f.Format.Valid() {
+		p.add(at(path, "format"), ErrUnknownValue, "%q (want %s)",
+			f.Format, names(logging.Formats))
+	}
+	// THE CAPS ARE CHECKED WHETHER OR NOT A PATH IS SET. A block carrying
+	// `max_size_mb: 0` and no path is a half-written setting, and reporting
+	// it only once the path is filled in means the operator finds it on the
+	// deploy that was meant to turn the file on.
+	if f.MaxSizeMB != nil && *f.MaxSizeMB < 1 {
+		p.add(at(path, "max_size_mb"), ErrOutOfRange,
+			"%d (want 1 or more; rotation cannot be disabled, because a log "+
+				"file with no ceiling fills the disk the store is on)", *f.MaxSizeMB)
+	}
+	if f.MaxBackups != nil && *f.MaxBackups < 0 {
+		p.add(at(path, "max_backups"), ErrOutOfRange,
+			"%d (want 0 — keep no rotated files — or more)", *f.MaxBackups)
+	}
+	// A SHAPE OR A CAP WITH NO PATH WRITES NOTHING, and reads in review as
+	// a node that logs to a file. Refused rather than ignored: the same
+	// rule the retired `debug:` field is the scar from.
+	if f.Path == "" && (f.Format != "" || f.MaxSizeMB != nil || f.MaxBackups != nil) {
+		p.add(at(path, "path"), ErrMissing,
+			"the file block sets a shape or a cap but names no file, so nothing "+
+				"is written; set path, or remove the block")
+	}
+	return p.err()
+}
+
+// Options is what this block asks [logging.OpenFile] for, and the format the
+// file is written in — with ok false when no file was configured at all.
+//
+// The CAPS ARE PASSED THROUGH AS WRITTEN, pointers included, rather than
+// defaulted here: internal/logging owns the numbers because it is the layer
+// that enforces them, and a default applied in two places is a default that
+// eventually disagrees with itself.
+func (f *LogFile) Options() (logging.FileOptions, logging.Format, bool) {
+	if f.Path == "" {
+		return logging.FileOptions{}, "", false
+	}
+	return logging.FileOptions{
+		Path:       f.Path,
+		MaxSizeMB:  f.MaxSizeMB,
+		MaxBackups: f.MaxBackups,
+	}, f.Format, true
 }
 
 // LogSettings is what this file asks the process to log at, and in what

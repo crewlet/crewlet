@@ -115,6 +115,19 @@ func run(args []string, stdout, stderr io.Writer) error {
 		warnUnrecognisedLogNames(logging.Get("cli"), "environment",
 			"CREWLET_LOG_LEVEL", os.Getenv("CREWLET_LOG_LEVEL"),
 			"CREWLET_LOG_FORMAT", os.Getenv("CREWLET_LOG_FORMAT"))
+		// AND THE SAME LEVER OVER WHERE THEY WRITE. $CREWLET_LOG_FILE is
+		// the third sibling of the two above and exists for the one
+		// reason they do: these commands take no logging flags, so a CI
+		// step that wants a `crewlet migrate` in the same durable record
+		// as the node it is migrating for has no other way to ask. The
+		// rotation caps are not env knobs — they belong to a deployment's
+		// file, and a one-shot command does not reach one of them.
+		detach, err := attachLogFile(
+			logging.FileOptions{Path: os.Getenv("CREWLET_LOG_FILE")}, "")
+		if err != nil {
+			return err
+		}
+		defer detach()
 	}
 
 	switch cmd {
@@ -690,6 +703,9 @@ func runEngine(args []string, stderr io.Writer) error {
 	logFormat := fs.String("log-format", "console",
 		"log format: console (columns and colour for a person), text or json")
 	debug := fs.Bool("debug", false, "shorthand for -log-level debug")
+	logFile := fs.String("log-file", "",
+		"also write the log to this file, overriding logging.file.path; "+
+			"an empty value writes no file")
 	roles := fs.String("roles", "",
 		"what this node runs, overriding node.roles: ingress, seats, workers")
 	apiHost := fs.String("api-host", "", "bind address, overriding api.host")
@@ -712,16 +728,19 @@ func runEngine(args []string, stderr io.Writer) error {
 	// nothing — without ever mentioning the file the operator named.
 	file, given := onePositional(fs, file)
 	if given > 1 {
-		// EVERY FLAG run REGISTERS, because this is the only synopsis an
-		// operator sees at the moment they got the arguments wrong, and a
-		// flag missing from it is one they do not reach for. It has been
-		// short twice: first the three logging flags, which are what
-		// somebody diagnosing exactly this reaches for, and then
+		// EVERY FLAG run REGISTERS BAR -config, whose value is the
+		// leading positional here and which naming a second time is the
+		// error being reported. This is the only synopsis an operator
+		// sees at the moment they got the arguments wrong, and a flag
+		// missing from it is one they do not reach for. It has been short
+		// three times: first the three logging flags, which are what
+		// somebody diagnosing exactly this reaches for, then
 		// -import-company, which is the flag an operator confused about
-		// which Tier B document wins most needs to be told exists.
+		// which Tier B document wins most needs to be told exists, and
+		// then -log-file.
 		fmt.Fprintln(stderr, "usage: crewlet run [<config.yaml>] "+
 			"[-company <company.yaml> | -import-company <company.yaml>] "+
-			"[-log-level …] [-log-format …] [-debug] "+
+			"[-log-level …] [-log-format …] [-log-file …] [-debug] "+
 			"[-roles …] [-api-host …] [-api-port …]")
 		return errors.New("name at most one config document")
 	}
@@ -763,6 +782,22 @@ func runEngine(args []string, stderr io.Writer) error {
 	// BEFORE this point came out under the flags alone, which is the best a
 	// process can do about a file it has not opened yet.
 	logging.SetVerbosity(logSettings(boot, fs, *logLevel, *logFormat, *debug))
+	// AND THE LOG FILE, the moment the document that names it has been
+	// read. Everything that can still fail below — a keyring that will not
+	// build, a store that will not open, a company that will not
+	// activate — is exactly what an operator goes to that file to read
+	// afterwards, so it is opened before any of them rather than once the
+	// engine is up.
+	//
+	// ITS DETACH IS DEFERRED FIRST, which under LIFO means it runs LAST.
+	// The trace flush below and the engine drain further down both log,
+	// and a file closed ahead of them would lose the shutdown it was
+	// opened to record.
+	detachLogFile, err := attachLogFile(logFileSettings(boot, fs, *logFile))
+	if err != nil {
+		return err
+	}
+	defer detachLogFile()
 	// THE FLAGS OVERRIDE THE FILE, and are applied AFTER it loads so a
 	// validation failure names the file's own value rather than one the
 	// command line put there. Each is applied only when it was actually
@@ -1620,6 +1655,72 @@ func logSettings(boot *config.Bootstrap, fs *flag.FlagSet,
 		level = slog.LevelDebug
 	}
 	return level, format
+}
+
+// logFileSettings resolves WHICH file this run writes, and in what shape,
+// from the two places that get to say.
+//
+// # The same rule as logSettings: the flag wins only where it spoke
+//
+// `-log-file` carries its own default — the empty string — whether or not
+// anyone typed it, so applying it unconditionally would make
+// `logging.file.path` in a deployment's own document dead on arrival behind
+// it. [isFlagSet] is what separates "the operator asked for no file" from
+// "nobody said anything", which matters in both directions here: an
+// EXPLICIT `-log-file ""` is how a node with a file in its Tier A document
+// is asked to write none for one invocation.
+//
+// The rotation caps stay the file's. They describe the disk this deployment
+// runs on rather than this invocation, which is the same line `-roles` and
+// `-api-host` are drawn along — see [overrideNode].
+func logFileSettings(boot *config.Bootstrap, fs *flag.FlagSet, logFile string,
+) (logging.FileOptions, logging.Format) {
+	file := boot.Logging.File
+	if isFlagSet(fs, "log-file") {
+		file.Path = logFile
+	}
+	opts, format, _ := file.Options()
+	return opts, format
+}
+
+// attachLogFile installs the log file beside stderr and returns the teardown
+// this process runs on its way out.
+//
+// # It fails the command rather than falling back to stderr alone
+//
+// Every other bad logging value in this binary resolves to a default,
+// because a misspelled log level must never be why a company will not boot.
+// A path is not one of those. An operator who configured a durable record
+// and silently did not get one has nothing anywhere pointing at why — the
+// exact shape of the retired `debug: true` field, which was declared for the
+// whole of its life and read by nothing. The error names the path and the
+// permission that has to change.
+//
+// # Detached before it is closed, in that order
+//
+// A line emitted after the close would otherwise meet a closed descriptor,
+// and the sink would report the process's own shutdown as a write failure on
+// every one of them.
+func attachLogFile(opts logging.FileOptions, format logging.Format) (func(), error) {
+	if opts.Path == "" {
+		return func() {}, nil
+	}
+	f, err := logging.OpenFile(opts, os.Stderr)
+	if err != nil {
+		return nil, err
+	}
+	logging.SetFile(f, format)
+	// THE FIRST LINE IN THE FILE SAYS WHICH FILE IT IS. A log an operator
+	// has to find by guessing at a relative path is one they read the
+	// wrong copy of.
+	logging.Get("cli").Info("log_file_opened", "path", f.Path())
+	return func() {
+		logging.SetFile(nil, "")
+		if closeErr := f.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "crewlet: closing log file %s: %v\n",
+				f.Path(), closeErr)
+		}
+	}, nil
 }
 
 // overrideNode applies the run flags that override Tier A.

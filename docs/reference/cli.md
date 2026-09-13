@@ -59,21 +59,28 @@ subcommand below is served by it.
 > diffed. That is a default, not a ceiling: export `CREWLET_LOG_LEVEL=debug`
 > (or `info` / `error`) to turn it up, which is exactly what a half-applied
 > migration or a failing deploy gate needs, and `CREWLET_LOG_FORMAT=json` to
-> change its shape for a collector. They are environment variables rather
+> change its shape for a collector. `CREWLET_LOG_FILE` is the third of them:
+> it appends what the command *logs* to a file, beside stderr, so a CI step
+> can keep a `crewlet migrate` in the same durable record as the node it is
+> migrating for. It never touches what a command *prints* — stdout is still
+> yours to pipe or diff. They are environment variables rather
 > than flags on a dozen commands because they belong to the *invocation* — a
 > CI step exports them once and everything it runs answers. A value this
 > build does not recognise resolves to the default (`warn`, `console`): a bad
 > log level must never be why an operator cannot run a migration, and it must
-> not quietly change the default either. `crewlet run` has its own
-> `-log-level` / `-log-format` / `-debug` flags, its own default of `info`,
-> and reads the `logging:` block from its Tier A file. Colour is
+> not quietly change the default either. A log file is the exception, because
+> a path is not an enum with a default: one that cannot be opened fails the
+> command. `crewlet run` has its own
+> `-log-level` / `-log-format` / `-log-file` / `-debug` flags, its own default
+> of `info`, and reads the `logging:` block from its Tier A file — it ignores
+> all three variables. Colour is
 > `CREWLET_LOG_COLOR` / `NO_COLOR` everywhere — see
 > [Environment Variables](environment-variables.md#logging).
 ## `crewlet run`
 
 ```
 crewlet run [<config.yaml>] [-company PATH | -import-company PATH] [-debug]
-            [-log-level LEVEL] [-log-format FORMAT]
+            [-log-level LEVEL] [-log-format FORMAT] [-log-file PATH]
             [-roles ROLE[,ROLE...]] [-api-host HOST] [-api-port PORT]
 ```
 
@@ -108,14 +115,15 @@ the wrong document on a machine that has both. Tier B is read from the `company_
 | `-import-company PATH` | Tier B to make the active revision **now**, over whatever the fleet is running. The deliberate "this file is the company again" gesture. Mutually exclusive with `-company`; both together is refused, because they ask for opposite things. |
 | `-log-level LEVEL` | `debug`, `info` (default), `warn` or `error`. Overrides `logging.level` in Tier A, and only when actually given. A typo resolves to `info` — a bad log level must never be why a company will not boot. |
 | `-log-format FORMAT` | `console` (default), `text` or `json`. Overrides `logging.format` in Tier A, and only when actually given. `console` is columns and colour for a person; `text` is slog's `key=value`; `json` is one object per line for a shipper. A typo resolves to `console`. |
+| `-log-file PATH` | Also write the log to this file, overriding `logging.file.path` in Tier A, and only when actually given. It is a **second** destination: stderr keeps every line. An explicit `-log-file ""` writes no file for one run, whatever the Tier A document says. It moves the path only — the file's shape and rotation caps stay Tier A's. A path that cannot be opened **fails the command** rather than resolving to a default: a durable record an operator did not get, with nothing saying why, is worse than not starting. |
 | `-debug` | Shorthand for `-log-level debug`; wins if both are given. It only ever *raises* — to quieten a file that sets `logging.level: debug`, pass `-log-level info`. |
 | `-api-host HOST` | Bind address, overriding `api.host` |
 | `-api-port PORT` | Bind port, overriding `api.port`. `0` serves **no HTTP at all** — no dashboard, no REST, no webhook endpoint, so every integration goes deaf. That is why leaving the flag off is not the same as passing `0`. |
 | `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all three — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. See [Running a Fleet](../guides/fleet.md). |
 
-The logging flags override the Tier A `logging:` block **only when they are actually given**: a flag carries its default whether or not anyone typed it, so applying them unconditionally would pin every node at `info` and make the file's own setting dead on arrival.
+The logging flags override the Tier A `logging:` block **only when they are actually given**: a flag carries its default whether or not anyone typed it, so applying them unconditionally would pin every node at `info` and make the file's own setting dead on arrival. `-log-file` needs that distinction in both directions — its default *is* the empty string, which is also how an operator says "no file for this run".
 
-The three overrides are the fields whose right value depends on *where the process is running* rather than on what the company is. Everything else in Tier A belongs in the file, where it can be reviewed.
+The four overrides — `-roles`, `-api-host`, `-api-port` and `-log-file` — are the fields whose right value depends on *where the process is running* rather than on what the company is: which job this node does, where its HTTP surface binds, and which path on this host its log lands on. Everything else in Tier A belongs in the file, where it can be reviewed — including the log file's own shape and rotation caps, which describe the disk rather than the invocation.
 
 Publishing knowledge and tool skills is its own command rather than a flag on `run`: an engine that published on every boot would rewrite a company's knowledge base from whatever tree the deploying machine happened to have. Use [`crewlet confluence import`](#crewlet-confluence-import), and [`crewlet config import`](#crewlet-config-import) to load the first company revision.
 

@@ -134,6 +134,10 @@ func TestBootstrapSchemaEnumsMatchTheValidators(t *testing.T) {
 	}{
 		{"Logging", "level", strs(logging.Levels)},
 		{"Logging", "format", strs(logging.Formats)},
+		// The file sink carries its own shape — the whole reason it is a
+		// second handler rather than a tee — so it has its own enum to
+		// drift.
+		{"LogFile", "format", strs(logging.Formats)},
 	} {
 		def, ok := defs[tc.def].(map[string]any)
 		if !ok {
@@ -245,6 +249,37 @@ func parityCases() []parityCase {
 		// operator's "empty" crewlet.yaml actually looks like.
 		{name: "empty bootstrap", tier: TierBootstrap, yaml: "{}\n"},
 		{name: "bootstrap logging block", tier: TierBootstrap, yaml: "logging:\n  level: warn\n  format: json\n"},
+		{
+			name: "bootstrap log file block",
+			tier: TierBootstrap,
+			yaml: "logging:\n  format: console\n  file:\n    path: /var/log/crewlet/crewlet.log\n" +
+				"    format: json\n    max_size_mb: 50\n    max_backups: 0\n",
+		},
+		// `max_backups: 0` above is the setting that must survive BOTH
+		// layers: it is the zero value of its own type, and a schema or a
+		// validator reading it as "unset" would hand a capped disk five
+		// files it asked not to have.
+		{
+			name:          "a log file that rotates every zero bytes",
+			tier:          TierBootstrap,
+			yaml:          "logging:\n  file:\n    path: /tmp/crewlet.log\n    max_size_mb: 0\n",
+			editorCatches: true,
+		},
+		{
+			name:          "a negative backup count",
+			tier:          TierBootstrap,
+			yaml:          "logging:\n  file:\n    path: /tmp/crewlet.log\n    max_backups: -1\n",
+			editorCatches: true,
+		},
+		// A SHAPE WITH NO FILE TO WRITE IT TO. A cross-field implication
+		// the schema is not asked to carry, so the validator is the only
+		// layer that refuses it.
+		{
+			name:          "a log file shape with no path",
+			tier:          TierBootstrap,
+			yaml:          "logging:\n  file:\n    format: json\n",
+			validatorOnly: true,
+		},
 		{
 			name: "a full company",
 			tier: TierCompany,

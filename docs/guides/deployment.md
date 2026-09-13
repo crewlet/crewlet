@@ -646,13 +646,18 @@ The dashboard API also provides `GET /events/trace/{trace_id}` which returns all
 
 ### Logging
 
-How loud a node is, and in what shape, is Tier A:
+How loud a node is, in what shape, and where it writes, is Tier A:
 
 ```yaml
 # crewlet.yaml (Tier A)
 logging:
   level: info       # debug, info (default), warn, error
   format: console   # console (default), text, json
+  file:             # optional: a durable copy, IN ADDITION to stderr
+    path: "/var/log/crewlet/crewlet.log"
+    format: json    # empty follows logging.format
+    max_size_mb: 100    # rotate at this size (default 100)
+    max_backups: 5      # rotated files kept beside the live one (default 5)
 ```
 
 That block is the only way the file says it. A `debug: true` boolean used to
@@ -667,6 +672,9 @@ The same settings, on the command line, for one run:
 crewlet run -debug                             # shorthand for -log-level debug
 crewlet run -log-level debug                   # what -debug is shorthand for
 crewlet run -log-level info -log-format json   # for a log shipper
+crewlet run -log-file /var/log/crewlet/crewlet.log   # a durable copy
+crewlet run -log-file ""                       # and no file, for one run,
+                                               #   whatever the Tier A says
 ```
 
 **A flag overrides the file only when it is actually given.** A flag carries
@@ -674,14 +682,23 @@ its default whether or not anyone typed it, so `crewlet run` distinguishes
 "the operator asked for `info`" from "nobody said anything" — otherwise
 `logging.level: warn` in a file would be dead on arrival behind the flag's own
 default. `-debug` only ever *raises*: to quieten a node whose file says
-`logging.level: debug`, pass `-log-level info`.
+`logging.level: debug`, pass `-log-level info`. `-log-file` obeys the same
+rule in both directions: it replaces `logging.file.path` for one run, and an
+explicit `-log-file ""` is how a node with a file configured is asked to write
+none. It moves only the *path* — the shape and the rotation caps describe the
+disk this deployment runs on rather than this invocation, so they stay the
+file's.
 
-**The first lines of a run come out in the flag's shape, not the file's.**
-The `${VAR}` warnings a Tier A document produces are emitted while it is being
-read, so a node configured `format: json` writes those few lines as `console`
-before switching. That is the best a process can do about a file it has not
-opened yet, and it is the right way round: `-debug` is turned on most often to
-watch the config load itself fail, so the flags have to take effect first.
+**The first lines of a run come out in the flag's shape, not the file's — and
+before any log file exists.** The `${VAR}` warnings a Tier A document produces
+are emitted while it is being read, so a node configured `format: json` writes
+those few lines as `console`, on stderr only, before switching. The log file is
+named *by* the document that is still being read, so it cannot be open yet.
+That is the best a process can do about a file it has not opened, and it is
+the right way round: `-debug` is turned on most often to watch the config load
+itself fail, so the flags have to take effect first. If a boot fails on the
+document itself, stderr is the only place it is recorded — start there before
+the log file.
 
 A value the build does not recognise is treated differently in the two
 places, on purpose. In a **flag** it resolves to the default — a bad log level
@@ -693,6 +710,19 @@ nobody looked. Either way the fallback is never *silent*: an unrecognised
 `-log-level` / `-log-format`, or `$CREWLET_LOG_LEVEL` / `$CREWLET_LOG_FORMAT`,
 logs a `log_level_unrecognised` / `log_format_unrecognised` warning naming what
 was written, what the build used instead, and what it accepts.
+
+**A log file is the one logging value that does not fall back at all.** A
+level is an enum with a sane default; a path is not. A node that could not
+open the file it was told to write *refuses to start*, naming the path and the
+error, rather than running on stderr alone — an operator who configured a
+durable record and silently did not get one has nothing anywhere pointing at
+why, which is exactly how the retired `debug:` field spent its life. The same
+applies to `$CREWLET_LOG_FILE` on the other commands. Once the node is up, a
+file that *becomes* unwritable — a full disk, a volume pulled away — is the
+opposite case and is handled the opposite way: the failure is announced on
+stderr once, the console sink keeps every line, and the engine keeps running.
+It is announced again when the file starts taking writes, so the gap has two
+ends.
 
 #### The three formats
 
@@ -708,6 +738,80 @@ redirected stream is read *later*, its lines carry the full date where a
 terminal's carry the wall-clock time alone. `CREWLET_LOG_COLOR=always|never`
 overrides the detection (for a CI viewer that renders ANSI without being a
 terminal), and `NO_COLOR` suppresses it the way it does for every other tool.
+A **log file is never a terminal**, so a `console`-format file is never
+coloured and always carries the full date, whatever `CREWLET_LOG_COLOR` says —
+the variable describes the screen someone is looking at, and nobody is looking
+at a file.
+
+#### The log file
+
+`logging.file.path` adds a durable copy of the log. It is a **second
+destination, not a redirect**: stderr keeps every line it had. That is
+deliberate — stderr is the only sink that exists before the document naming
+the file has been read, it is what a container platform captures, and it is
+where a boot failure and the [watchdog's exit
+notice](../concepts/seat-ownership.md) are written. A node that fell silent
+there the moment a path was configured would look exactly like one that had
+stopped. A deployment that genuinely wants the file alone redirects stderr in
+its unit file or its container spec.
+
+Because the two are separate destinations rather than one stream tee'd in two,
+each carries its own shape — which is the point:
+
+```yaml
+logging:
+  format: console     # columns and colour, for whoever is watching
+  file:
+    path: "/var/log/crewlet/crewlet.log"
+    format: json      # one object per line, for the shipper
+```
+
+Leave `file.format` out and the file follows `logging.format`, so a node that
+says nothing writes one log in two places.
+
+**Rotation is built in, and it cannot be turned off.** A log file with no
+ceiling fills the disk the store is on, and it does it on exactly the
+deployments nobody is watching — so there is no "never rotate" spelling, only
+a size you will not reach. The live file rotates at `max_size_mb` (default
+100) and the rotated ones are kept as `crewlet.log.1` (newest) through
+`crewlet.log.N`, `max_backups` of them (default 5). Together the defaults
+bound the estate at roughly 600 MB. `max_backups: 0` is a setting rather than
+an absence: it keeps no history at all, which is what a small disk with a
+shipper already tailing the live file wants.
+
+The size is checked *before* the record that would cross it, never after, so a
+record is never split across two files — half a JSON object at the end of one
+file and half at the start of the next is a parse error in whatever is
+shipping it. A single record larger than the whole cap is written whole into
+an empty file rather than rotating forever around something that can never
+fit.
+
+Restarting **appends**; it does not rotate. A restart loop is precisely when
+the previous incarnation's last lines are the evidence, and rotating on every
+boot would push the first failure off the end of the stack by morning.
+
+Missing directories are created, `0700`, and the file is `0600`. A log line is
+redacted but it is not a public document, so a shipper running as another user
+needs a `chmod` you make deliberately.
+
+Already running `logrotate(8)`? Point it at the same path with
+`copytruncate` — which keeps the descriptor this process holds — and give
+`max_size_mb` a value this node will never reach. A rename-based logrotate
+rule moves the file out from under the engine's open descriptor, and there is
+no reopen signal to send it: the engine owns its signals for the graceful
+drain (see [`crewlet run`](../reference/cli.md#crewlet-run)), and a third tier
+of signal handling is not worth a mechanism this file already has.
+
+**One file per node.** Two processes on one host — a split `ingress` / `seats`
+deployment, or a node beside a `crewlet migrate` — pointed at one path will
+interleave their lines and rotate each other's file, and nothing detects it.
+Put the node id in the path, which resolves like any other Tier A `${VAR}`:
+
+```yaml
+logging:
+  file:
+    path: "/var/log/crewlet/${CREWLET_NODE_ID}.log"
+```
 
 Every line is structured whichever format is installed, and carries a
 `component` attribute naming the subsystem that emitted it (`agent.turn`,
@@ -717,7 +821,13 @@ Every line is structured whichever format is installed, and carries a
 The operator commands are quiet by default: they open a store, which logs a
 line per migration, and that is noise on a one-shot command whose output is
 meant to be piped or diffed. They take no logging flags — only `crewlet run`
-does — so `CREWLET_LOG_LEVEL` and `CREWLET_LOG_FORMAT` are their levers. See
+does — so `CREWLET_LOG_LEVEL`, `CREWLET_LOG_FORMAT` and `CREWLET_LOG_FILE` are
+their levers: the third appends a `crewlet migrate` or a `crewlet validate` to
+the same durable record the node writes, which is the reason a CI step wants
+any of them. It writes only what the command *logs*; whatever the command
+prints for its caller still goes to stdout, so a piped or diffed output is
+untouched. `crewlet run` ignores all three — its level, shape and file come
+from Tier A and its own flags. See
 [Environment Variables](../reference/environment-variables.md#logging).
 Nothing silences a warning.
 

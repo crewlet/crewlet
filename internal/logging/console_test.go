@@ -353,7 +353,7 @@ func TestEveryDeclaredFormatInstallsItsOwnHandler(t *testing.T) {
 
 	byHandler := map[string]Format{}
 	for _, format := range Formats {
-		install(slog.LevelInfo, format, io.Discard)
+		install(settings{level: slog.LevelInfo, format: format, console: io.Discard})
 		name := fmt.Sprintf("%T", root.Load().Handler())
 		if other, dup := byHandler[name]; dup {
 			t.Errorf("formats %q and %q both install %s — install's switch "+
@@ -363,7 +363,7 @@ func TestEveryDeclaredFormatInstallsItsOwnHandler(t *testing.T) {
 		byHandler[name] = format
 	}
 
-	install(slog.LevelInfo, FormatConsole, io.Discard)
+	install(settings{level: slog.LevelInfo, format: FormatConsole, console: io.Discard})
 	if _, ok := root.Load().Handler().(*consoleHandler); !ok {
 		t.Errorf("the console format installed %T", root.Load().Handler())
 	}

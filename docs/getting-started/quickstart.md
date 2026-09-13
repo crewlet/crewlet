@@ -8,7 +8,8 @@ integrations one at a time.
 Crewlet uses a [two-tier config](../concepts/configuration.md):
 
 - **Tier A** — ops-owned `crewlet.yaml` on disk (where this node's stream,
-  store and leases live, API host/port/auth, logging). Restart to change.
+  store and leases live, API host/port/auth, logging — including where it
+  writes). Restart to change.
 - **Tier B** — founder-owned `company.yaml`, imported into the store
   (everything else: identity, roles, units, LLM providers, MCP servers,
   integrations, budgets). Versioned and live-editable.
@@ -39,6 +40,11 @@ logging:
                         #   are watching a terminal. Drop the block (or set
                         #   `info`) once the company runs
   format: console       # console (default), text, json
+  file:                 # optional, and worth it even here: a durable copy
+    path: "./acme-data/crewlet.log"   # IN ADDITION to what you are watching.
+                        #   It rotates itself at 100 MB, keeping five files,
+                        #   so scrolling past the interesting line costs
+                        #   nothing. See Deployment → Logging
 
 stream:
   type: embedded          # a JetStream server inside this process: no
@@ -317,9 +323,11 @@ nothing new arrives while it converges, which means you watch the drain in the
 logs rather than on a screen. Press it a **second** time to exit at once; the
 first press hands signal handling back to the OS precisely so that works.
 There is no third tier. See
-[Graceful shutdown](../concepts/agent-runtime.md#graceful-shutdown). Piping
-the output? Use `tee -i` (`crewlet run 2>&1 | tee -i run.log`) — a plain `tee`
-dies on the first Ctrl+C and the drain logs have nowhere to go.
+[Graceful shutdown](../concepts/agent-runtime.md#graceful-shutdown). Want to
+keep those logs? The `logging.file` block above already has them — the engine
+writes the file itself, so the drain is recorded whatever happens to the
+terminal. Piping instead? Use `tee -i` (`crewlet run 2>&1 | tee -i run.log`) —
+a plain `tee` dies on the first Ctrl+C and the drain logs have nowhere to go.
 
 ## 4. Watch the first turn
 

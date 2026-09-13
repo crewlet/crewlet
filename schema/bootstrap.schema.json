@@ -84,9 +84,41 @@
       },
       "type": "object"
     },
+    "LogFile": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "description": "Shape written to the file. Empty follows logging.format; set json when a shipper reads it.",
+          "enum": [
+            "console",
+            "text",
+            "json"
+          ],
+          "type": "string"
+        },
+        "max_backups": {
+          "description": "Rotated files kept beside the live one. Unset = 5; 0 keeps none.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_size_mb": {
+          "description": "Size the live file reaches before rotating. Unset = 100. Rotation cannot be disabled.",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "path": {
+          "description": "Log file written in addition to stderr. Empty writes no file. Missing directories are created.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "Logging": {
       "additionalProperties": false,
       "properties": {
+        "file": {
+          "$ref": "#/$defs/LogFile"
+        },
         "format": {
           "description": "console (default, columns and colour for a person), text (slog key=value) or json (for a log shipper).",
           "enum": [

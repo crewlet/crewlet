@@ -28,21 +28,33 @@ Two kinds of variable appear below. A few names are **read directly by the engin
 
 ## Logging
 
-Read directly by the engine and the CLI. All four describe the **invocation**
-rather than the company, which is why they are variables and not Tier A
-fields: the same `crewlet.yaml` is deployed to a container with no terminal
-and run on a laptop with one, and the level a CI step wants out of `crewlet
-migrate` has nothing to do with the node it is migrating.
+Read directly by the engine and the CLI. Each describes the **invocation**
+rather than the company: the same `crewlet.yaml` is deployed to a container
+with no terminal and run on a laptop with one, and the level a CI step wants
+out of `crewlet migrate` has nothing to do with the node it is migrating.
+
+Two of them are variables *because there is nowhere else for them to live*:
+`CREWLET_LOG_COLOR` and `NO_COLOR` describe the screen someone is looking at,
+which no deployment document can know, so colour has no Tier A field at all.
+The other three answer for **every command except `crewlet run`**, which takes
+no logging flags — `crewlet run` has `-log-level`, `-log-format`, `-log-file`
+and `-debug` of its own, reads the `logging:` block from its Tier A file, and
+ignores all three variables. So `CREWLET_LOG_LEVEL`, `CREWLET_LOG_FORMAT` and
+`CREWLET_LOG_FILE` do have Tier A counterparts; what they have no counterpart
+*for* is the one-shot commands, which read no `logging:` block.
 
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
 | `CREWLET_LOG_LEVEL` | The level **every command except `crewlet run`** logs at — `debug`, `info`, `warn` (the default) or `error`. Those commands are quiet by design (a store open logs a line per migration, which is noise on a one-shot command whose stdout is piped or diffed), and this is the escape hatch when a half-applied migration or a failing deploy gate is what you are looking at. A value this build does not recognise resolves to `warn`, so a typo can never be why an operator cannot run a migration. `crewlet run` ignores it and takes its level from `logging.level` in Tier A and its own `-log-level` / `-debug` flags | — |
 | `CREWLET_LOG_FORMAT` | The shape those same commands log in — `console` (the default), `text` or `json`. The sibling of `CREWLET_LOG_LEVEL`, and it exists for the same reason: these commands take no logging flags, so a CI step shipping a `crewlet migrate` run to a collector has no other way to ask for `json`. An unrecognised name resolves to `console` | — |
+| `CREWLET_LOG_FILE` | A file **every command except `crewlet run`** appends its log to, beside stderr — the third sibling of the two above, and it exists for the same reason: these commands take no logging flags, so a CI step that wants a `crewlet migrate` in the same durable record as the node it is migrating for has no other way to ask. It carries what the command *logs*; whatever it prints for its caller still goes to stdout, so a piped or diffed output is unchanged. Rotation is the same as a node's, at the defaults (100 MB, 5 backups) — the caps belong to a deployment's own `logging.file` block, and a one-shot command reads none. A path that cannot be opened **fails the command**: unlike a level, a path has no sane default to fall back to, and a record an operator asked for and silently did not get is worse than a refusal. `crewlet run` ignores it and takes its file from `logging.file` in Tier A and its own `-log-file` flag | — |
 | `CREWLET_LOG_COLOR` | Whether `console` output carries ANSI colour — `auto` (the default: colour only when the stream is a live terminal), `always` or `never`. `always` is for a CI log viewer that renders ANSI without being a terminal, which auto-detection cannot discover on its own. Applies to `crewlet run` and every other command | — |
 | `NO_COLOR` | Set to any non-empty value to suppress colour, following the [no-color.org](https://no-color.org) convention. It overrides `auto` — colour this program would have added on its own initiative — but **not** an explicit `CREWLET_LOG_COLOR=always`, which is an instruction about this program rather than initiative | — |
 
 `TERM=dumb` also disables colour: an editor's shell pane sets it precisely to
-say it cannot render escape sequences.
+say it cannot render escape sequences. None of the three colour levers reach a
+log file: a file is never a terminal, so a `console`-format file is never
+coloured and always carries the full date.
 
 ---
 

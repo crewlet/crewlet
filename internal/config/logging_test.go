@@ -216,3 +216,170 @@ func TestTheRetiredDriverHintIsScopedToItsBlock(t *testing.T) {
 		t.Errorf("an ordinary unknown key must read as one: %v", err)
 	}
 }
+
+// THE LOG FILE BLOCK IS REFUSED WHERE IT SAYS NOTHING USABLE, by the same
+// rule the level and the format follow: a file is written once and deployed
+// for months, so a value that quietly did something else would run that way
+// for as long as nobody looked.
+func TestLogFileValidatorRejections(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, yaml, path string
+		kind             error
+	}{
+		{
+			"an unknown shape for the file",
+			"logging:\n  file:\n    path: /tmp/c.log\n    format: pretty\n",
+			"logging.file.format", ErrUnknownValue,
+		},
+		// A FILE THAT ROTATES EVERY ZERO BYTES IS NOT A SETTING. It is
+		// also the zero value of `max_size_mb`, which is why the field is
+		// a pointer: read as "unset" this would silently become 100 MB
+		// and the operator would have no way to tell.
+		{
+			"a zero rotation size",
+			"logging:\n  file:\n    path: /tmp/c.log\n    max_size_mb: 0\n",
+			"logging.file.max_size_mb", ErrOutOfRange,
+		},
+		{
+			"a negative rotation size",
+			"logging:\n  file:\n    path: /tmp/c.log\n    max_size_mb: -5\n",
+			"logging.file.max_size_mb", ErrOutOfRange,
+		},
+		{
+			"a negative backup count",
+			"logging:\n  file:\n    path: /tmp/c.log\n    max_backups: -1\n",
+			"logging.file.max_backups", ErrOutOfRange,
+		},
+		// A SHAPE OR A CAP WITH NO FILE TO WRITE reads in review as a node
+		// that logs to a file and writes nothing at all — the retired
+		// `debug: true` failure, one block down.
+		{
+			"a shape with nothing to write it to",
+			"logging:\n  file:\n    format: json\n",
+			"logging.file.path", ErrMissing,
+		},
+		{
+			"caps with nothing to cap",
+			"logging:\n  file:\n    max_size_mb: 10\n    max_backups: 2\n",
+			"logging.file.path", ErrMissing,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := rejectsBootstrap(t, tc.yaml, tc.path)
+			if !errors.Is(err, tc.kind) {
+				t.Fatalf("want %v, got %v", tc.kind, err)
+			}
+		})
+	}
+}
+
+// AND ZERO BACKUPS IS ACCEPTED, because it IS a setting: cap the disk at one
+// file. It is the one number here whose zero value is meaningful, which is
+// the whole reason `max_backups` is a pointer rather than an int.
+func TestZeroBackupsIsASettingRatherThanAnAbsence(t *testing.T) {
+	t.Parallel()
+	boot, err := ParseBootstrap(
+		[]byte("logging:\n  file:\n    path: /tmp/c.log\n    max_backups: 0\n"), EnvOnly())
+	if err != nil {
+		t.Fatalf("max_backups: 0 was refused: %v", err)
+	}
+	opts, _, ok := boot.Logging.File.Options()
+	if !ok {
+		t.Fatal("a block with a path reported no file")
+	}
+	if opts.MaxBackups == nil {
+		t.Fatal("an explicit 0 reached the sink as \"nothing was said\"")
+	}
+	if *opts.MaxBackups != 0 {
+		t.Errorf("max_backups = %d, want 0", *opts.MaxBackups)
+	}
+}
+
+// NO FILE IS THE DEFAULT, and an empty path is how a block says so. Every
+// deployment whose platform already captures stderr writes no file, and that
+// has to be what a document saying nothing means.
+func TestNoLogFileIsTheDefault(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, yaml string }{
+		{"nothing at all", "{}\n"},
+		{"a logging block with no file", "logging:\n  level: debug\n"},
+		{"an empty file block", "logging:\n  file: {}\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			boot, err := ParseBootstrap([]byte(tc.yaml), EnvOnly())
+			if err != nil {
+				t.Fatalf("expected a valid document, got: %v", err)
+			}
+			if _, _, ok := boot.Logging.File.Options(); ok {
+				t.Error("a document that named no file asked for one")
+			}
+		})
+	}
+}
+
+// THE WHOLE BLOCK REACHES THE SINK, caps and shape included — the one thing
+// between an operator's document and what internal/logging actually opens.
+func TestLogFileOptionsCarryTheWholeBlock(t *testing.T) {
+	t.Parallel()
+	boot, err := ParseBootstrap([]byte("logging:\n  file:\n"+
+		"    path: /var/log/crewlet/crewlet.log\n    format: json\n"+
+		"    max_size_mb: 25\n    max_backups: 3\n"), EnvOnly())
+	if err != nil {
+		t.Fatalf("expected a valid document, got: %v", err)
+	}
+	opts, format, ok := boot.Logging.File.Options()
+	if !ok {
+		t.Fatal("a block with a path reported no file")
+	}
+	if opts.Path != "/var/log/crewlet/crewlet.log" {
+		t.Errorf("path = %q", opts.Path)
+	}
+	if format != logging.FormatJSON {
+		t.Errorf("format = %q, want json", format)
+	}
+	if opts.MaxSizeMB == nil || *opts.MaxSizeMB != 25 {
+		t.Errorf("max_size_mb = %v, want 25", opts.MaxSizeMB)
+	}
+	if opts.MaxBackups == nil || *opts.MaxBackups != 3 {
+		t.Errorf("max_backups = %v, want 3", opts.MaxBackups)
+	}
+}
+
+// EVERY FORMAT THE FILE BLOCK ACCEPTS IS ONE THE ENGINE CAN INSTALL — the
+// same assertion the process-wide format gets, one level down, because the
+// file sink has a shape of its own to drift.
+func TestEveryDeclaredFormatIsUsableForTheFile(t *testing.T) {
+	t.Parallel()
+	for _, format := range logging.Formats {
+		boot := DefaultBootstrap()
+		boot.Logging.File.Path = "/tmp/crewlet.log"
+		boot.Logging.File.Format = format
+		if err := boot.Validate(); err != nil {
+			t.Errorf("file format %q is in the closed set but refused: %v", format, err)
+		}
+		if _, got, _ := boot.Logging.File.Options(); got != format {
+			t.Errorf("file format %q resolved to %v", format, got)
+		}
+	}
+}
+
+// A `${VAR}` PATH RESOLVES like every other Tier A string, so a container
+// hands the node its log path the same way it hands it a node id.
+func TestALogFilePathTakesAnEnvReference(t *testing.T) {
+	t.Setenv("CREWLET_TEST_LOG_PATH", "/var/log/crewlet/from-env.log")
+	boot, err := ParseBootstrap(
+		[]byte("logging:\n  file:\n    path: \"${CREWLET_TEST_LOG_PATH}\"\n"), EnvOnly())
+	if err != nil {
+		t.Fatalf("expected a valid document, got: %v", err)
+	}
+	opts, _, ok := boot.Logging.File.Options()
+	if !ok {
+		t.Fatal("a block with a path reported no file")
+	}
+	if opts.Path != "/var/log/crewlet/from-env.log" {
+		t.Errorf("path = %q, want the resolved value", opts.Path)
+	}
+}

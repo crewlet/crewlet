@@ -8,7 +8,7 @@ Crewlet splits configuration into **two tiers** so a founder can evolve their co
 
 | Tier | Storage | Owner | Update model | Contents |
 |------|---------|-------|--------------|----------|
-| **A** | `crewlet.yaml` on disk | Ops / SRE | Restart-only | The store file, the stream and coordination slots, this node's identity and roles, API host/port and auth, the secret keyring, logging |
+| **A** | `crewlet.yaml` on disk | Ops / SRE | Restart-only | The store file, the stream and coordination slots, this node's identity and roles, API host/port and auth, the secret keyring, logging (level, shape and an optional rotating log file) |
 | **B** | The store (`company_config`, versioned) | Founder | Live, API-editable, validated, versioned | Everything else: name, mission, vision, policies, providers (LLM + embeddings), turn engine, learning, MCP servers, notification transports, integrations (Jira / Confluence / Slack / GitHub / GitLab / Forge), org roles & units, token budgets |
 
 **Tier A** controls *how the engine boots*. **Tier B** is *what the company is*.
@@ -19,6 +19,11 @@ Crewlet splits configuration into **two tiers** so a founder can evolve their co
 logging:
   level: info           # debug, info (default), warn, error
   format: console       # console (default), text, json
+  file:                 # optional — a durable copy, IN ADDITION to stderr
+    path: "/var/log/crewlet/${CREWLET_NODE_ID}.log"
+    format: json        # empty follows logging.format
+    max_size_mb: 100    # rotates here; there is no "never" (default 100)
+    max_backups: 5      # `.1` (newest) … `.5`; 0 keeps none (default 5)
 
 node:
   id: "node-0"          # optional; see below
@@ -114,18 +119,28 @@ The engine boots in this order:
 
 1. Read `crewlet.yaml` (Tier A only — the store path, the stream, coordination, api host/port/auth, secrets, logging)
 2. `logging.Configure(level, format, stderr)` — once, in `cmd/crewlet`, which is
-   the only thing that sets the destination; a later command changes how loud it
-   is with `SetVerbosity` and keeps the sink already installed. The level and
-   format come from the file's `logging:` block with any `-log-level` /
+   the only thing that sets the console destination; a later command changes how
+   loud it is with `SetVerbosity` and keeps the sink already installed. The level
+   and format come from the file's `logging:` block with any `-log-level` /
    `-log-format` / `-debug` flag layered on top, and only where the flag was
    actually given. Lines emitted *before* this — the file's own `${VAR}`
    warnings, a refused field — come out under the flags alone, which is the
    best a process can do about a file it has not opened yet
-3. Open the store file and start or dial the stream
-4. Run migrations — every file, in one pass. There is no lock and no phase ordering to serialize: this process owns its file, so nothing can be racing it, and no DDL depends on a value only the config knows. Embedding columns are declared as plain blobs and the vector width is validated in Go against the active revision at write time, so a schema step never has to read the config first (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)).
-5. Start the API process (or embedded API) bound to `api.host:api.port`, wire up auth middleware, register `/config/*` routes
-6. Start the [control plane](control-plane.md) — the reconcile loop that polls the activation pointer, plus a broadcast `crewlet.config.revision_activated` nudge that wakes it early
-7. `SELECT payload FROM company_config WHERE is_active <> 0`
+3. `logging.SetFile(…)` if `logging.file.path` (or `-log-file`) names one — a
+   **second** destination, never a replacement: stderr keeps every line, and
+   the file gets its own handler so it can carry `json` while the terminal
+   keeps its columns. It is opened here, before the store and the stream, so
+   the failures those can produce are in it. A path that cannot be opened
+   **stops the boot**, naming the path: every other bad logging value resolves
+   to a default, but a durable record an operator asked for and silently did
+   not get has nothing pointing at why. The same ordering has a corollary — a
+   boot that fails on the Tier A document itself never reaches this step, so
+   stderr is the only record of it
+4. Open the store file and start or dial the stream
+5. Run migrations — every file, in one pass. There is no lock and no phase ordering to serialize: this process owns its file, so nothing can be racing it, and no DDL depends on a value only the config knows. Embedding columns are declared as plain blobs and the vector width is validated in Go against the active revision at write time, so a schema step never has to read the config first (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)).
+6. Start the API process (or embedded API) bound to `api.host:api.port`, wire up auth middleware, register `/config/*` routes
+7. Start the [control plane](control-plane.md) — the reconcile loop that polls the activation pointer, plus a broadcast `crewlet.config.revision_activated` nudge that wakes it early
+8. `SELECT payload FROM company_config WHERE is_active <> 0`
    - **Row present**: apply the payload, which spawns the full company
    - **No row**: engine stays in the **unconfigured** state — the API keeps serving so an operator can push the first revision via `PUT /config` or `crewlet config import`
 

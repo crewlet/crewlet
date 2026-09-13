@@ -14,11 +14,13 @@ package logging
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 )
 
@@ -84,9 +86,32 @@ func (l Level) Slog() slog.Level { return ParseLevel(string(l)) }
 // already grabbed a logger) reaches loggers handed out earlier.
 var root atomic.Pointer[slog.Logger]
 
-// sink is where the process writes its logs, held so [SetVerbosity] can
-// rebuild the handler over the SAME writer.
-var sink atomic.Pointer[io.Writer]
+// settings is everything the three installers decide between them: how loud
+// this process is, in what shape, and WHERE it writes.
+type settings struct {
+	level   slog.Level
+	format  Format
+	console io.Writer
+	// file is the second destination, nil when none is configured, and
+	// fileFormat the shape written to it — empty meaning "follow format",
+	// so `-log-format json` reaches both sinks unless the file was given a
+	// shape of its own.
+	file       io.Writer
+	fileFormat Format
+}
+
+// current holds them, behind a mutex rather than an atomic pointer.
+//
+// Each of [Configure], [SetVerbosity] and [SetFile] is a READ-MODIFY-WRITE of
+// this value — SetFile keeps the level the flags chose, SetVerbosity keeps
+// the file the config named — and two of them racing on an atomic pointer
+// would silently drop whichever landed first. Nothing on the logging path
+// reads it: a record resolves [root], which stays an atomic pointer for
+// exactly that reason.
+var (
+	mu      sync.Mutex
+	current settings
+)
 
 func init() {
 	Configure(slog.LevelInfo, FormatConsole, os.Stderr)
@@ -96,10 +121,10 @@ func init() {
 //
 // # The writer is a property of the PROCESS, and this is the only way to set it
 //
-// Which is why the level and format have [SetVerbosity] of their own. A
-// command decides how loud it should be from its own flags; it does not
-// decide where a process's logs go, and one that installed a writer it had
-// been handed made the global depend on its caller.
+// Which is why the level and format have [SetVerbosity] of their own, and the
+// log file has [SetFile]. A command decides how loud it should be from its own
+// flags; it does not decide where a process's logs go, and one that installed
+// a writer it had been handed made the global depend on its caller.
 //
 // That is not a hypothetical tidiness argument. `crewlet`'s own `run` took
 // `stderr` as an argument — so it could be tested — and then installed that
@@ -109,49 +134,176 @@ func init() {
 // writes to it. Under -race it was a hard failure; without it, one test
 // asserting on another's output.
 //
+// IT ALSO CLEARS ANY LOG FILE, because it is the statement of what this
+// process's destinations ARE, not an adjustment to them. A caller adding a
+// file to the console sink wants [SetFile].
+//
 // Called once from the CLI entry point — and from a TestMain, which is the
 // other legitimate owner of a process.
 func Configure(level slog.Level, format Format, w io.Writer) {
-	sink.Store(&w)
-	install(level, format, w)
+	mu.Lock()
+	defer mu.Unlock()
+	current = settings{level: level, format: format, console: w}
+	install(current)
 }
 
 // SetVerbosity changes how much is logged and in what shape, on the
-// destination already installed.
+// destinations already installed.
 //
 // FORMAT TRAVELS WITH LEVEL because both are invocation properties: they come
 // off the same flags (`-log-level`, `-log-format`, `$CREWLET_LOG_LEVEL`) and
-// neither says anything about where the bytes go. The writer deliberately
+// neither says anything about where the bytes go. The writers deliberately
 // cannot be changed here — see [Configure] for what that cost.
+//
+// A file sink given no format of its own follows this one, so a node that
+// switches to `json` for a shipper switches on both sinks at once.
 //
 // A no-op before the first Configure, which cannot happen: this package's own
 // init installs os.Stderr.
 func SetVerbosity(level slog.Level, format Format) {
-	w := sink.Load()
-	if w == nil {
+	mu.Lock()
+	defer mu.Unlock()
+	if current.console == nil {
 		return
 	}
-	install(level, format, *w)
+	current.level, current.format = level, format
+	install(current)
 }
 
-func install(level slog.Level, format Format, w io.Writer) {
+// SetFile installs the log file as a SECOND destination beside the console
+// one, or removes it when w is nil.
+//
+// # Why a second sink rather than a replacement, or an io.MultiWriter
+//
+// A file is added to stderr, never instead of it: stderr is the only sink
+// that exists before the config has been read, it is what a container
+// platform captures and what an operator watching a boot is looking at, and
+// a node that went quiet there the moment a file was configured would look
+// like one that had stopped. A deployment that genuinely wants the file
+// alone redirects stderr, which is a decision it can make and this package
+// cannot.
+//
+// And two sinks rather than one io.MultiWriter over both, because the
+// console format decides its colour and its timestamp shape FROM the writer
+// (see [newConsoleHandler]): a MultiWriter is not a terminal, so tee-ing
+// would silently take the colour off an operator's terminal — or, forced
+// back on, write ANSI escapes into the file. Each destination gets its own
+// handler, which is also what lets the file carry `json` for a shipper while
+// the terminal keeps its columns.
+//
+// format empty means "whatever [SetVerbosity] last chose", which is what
+// makes `-log-format` reach both sinks.
+func SetFile(w io.Writer, format Format) {
+	mu.Lock()
+	defer mu.Unlock()
+	if current.console == nil {
+		return
+	}
+	current.file, current.fileFormat = w, format
+	install(current)
+}
+
+// install builds one handler per destination and publishes them.
+//
+// ONE SINK IS INSTALLED UNWRAPPED, deliberately: the overwhelming majority of
+// runs have no log file, and a fan-out around a single handler would put an
+// indirection on every record to no purpose — and would hide which handler a
+// format installed from the test that asserts each format has its own.
+func install(s settings) {
+	h := handlerFor(s.format, s.console, s.level)
+	if s.file != nil {
+		format := s.fileFormat
+		if format == "" {
+			format = s.format
+		}
+		h = fanout{level: s.level, handlers: []slog.Handler{
+			h, handlerFor(format, s.file, s.level),
+		}}
+	}
+	l := slog.New(h)
+	root.Store(l)
+	slog.SetDefault(l)
+}
+
+// handlerFor builds the handler one format writes one destination through.
+func handlerFor(format Format, w io.Writer, level slog.Level) slog.Handler {
 	opts := &slog.HandlerOptions{Level: level}
-	var h slog.Handler
 	switch format {
 	case FormatJSON:
-		h = slog.NewJSONHandler(w, opts)
+		return slog.NewJSONHandler(w, opts)
 	case FormatText:
-		h = slog.NewTextHandler(w, opts)
+		return slog.NewTextHandler(w, opts)
 	default:
 		// CONSOLE IS THE FALLBACK as well as the default: an unset format
 		// reaches here from this package's own init, and a person is the
 		// likeliest reader of a stream nobody has said anything about.
 		// Whether it colours is decided from w — see [newConsoleHandler].
-		h = newConsoleHandler(w, level, colorFromEnv())
+		return newConsoleHandler(w, level, colorFromEnv())
 	}
-	l := slog.New(h)
-	root.Store(l)
-	slog.SetDefault(l)
+}
+
+// fanout writes one record to every installed destination.
+//
+// # Enabled answers from the level and nothing else
+//
+// Which is the same contract every other handler this package installs
+// keeps, and for the same reason: [lazy.Enabled] consults the root handler
+// directly, without replaying the recorded attribute ops, so a handler whose
+// Enabled depended on anything but the level would filter different lines
+// depending on how the call site was spelled. Every destination shares one
+// level — there is deliberately no per-sink level, because "was this line
+// written" must not depend on which file you look in — so the answer here is
+// the same one each child would give.
+type fanout struct {
+	level    slog.Level
+	handlers []slog.Handler
+}
+
+func (f fanout) Enabled(_ context.Context, level slog.Level) bool {
+	return level >= f.level
+}
+
+// Handle writes the record to every destination, CLONING it for each.
+//
+// This is the case [slog.Record]'s own doc is about: "Copies of a Record
+// share state. Do not modify a Record after handing out a copy to it." One
+// record now reaches more than one handler, so the clone stopped being
+// defensive and became the contract — see [lazy.Handle], which says so.
+//
+// EVERY DESTINATION IS TRIED, and the failures are joined rather than
+// returned on the first: a full log disk must not be able to stop the same
+// line reaching the terminal.
+func (f fanout) Handle(ctx context.Context, r slog.Record) error {
+	var errs []error
+	for _, h := range f.handlers {
+		if !h.Enabled(ctx, r.Level) {
+			continue
+		}
+		if err := h.Handle(ctx, r.Clone()); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (f fanout) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return f.derive(func(h slog.Handler) slog.Handler { return h.WithAttrs(attrs) })
+}
+
+func (f fanout) WithGroup(name string) slog.Handler {
+	return f.derive(func(h slog.Handler) slog.Handler { return h.WithGroup(name) })
+}
+
+// derive builds a new fanout over the derived children, into a NEW slice —
+// the same aliasing rule [lazy.with] and [consoleHandler.clone] keep: slog
+// hands one handler to every logger derived from it, and writing a child in
+// place would put one derivation's attributes on another's lines.
+func (f fanout) derive(op func(slog.Handler) slog.Handler) slog.Handler {
+	next := make([]slog.Handler, len(f.handlers))
+	for i, h := range f.handlers {
+		next[i] = op(h)
+	}
+	return fanout{level: f.level, handlers: next}
 }
 
 // ParseLevel maps an operator-supplied level name onto a slog.Level.
@@ -266,10 +418,11 @@ func (l lazy) resolve() slog.Handler {
 // debug call in a loop pays it whether or not anything is emitted — and the
 // replay would allocate a handler per call to answer a question that does
 // not depend on attributes. Configure only ever builds slog's own text and
-// JSON handlers and this package's [consoleHandler], all three of which
-// answer Enabled from their level and nothing else. A HANDLER WHOSE Enabled
-// CONSULTED ITS ATTRIBUTES WOULD BREAK THIS, silently and only for the
-// lines it was supposed to filter.
+// JSON handlers, this package's [consoleHandler], and the [fanout] over them
+// when a log file is installed — all four of which answer Enabled from their
+// level and nothing else. A HANDLER WHOSE Enabled CONSULTED ITS ATTRIBUTES
+// WOULD BREAK THIS, silently and only for the lines it was supposed to
+// filter.
 func (l lazy) Enabled(ctx context.Context, level slog.Level) bool {
 	return root.Load().Handler().Enabled(ctx, level)
 }
@@ -295,13 +448,11 @@ func (l lazy) Enabled(ctx context.Context, level slog.Level) bool {
 // state. Do not modify a Record after handing out a copy to it. Use
 // Record.Clone to create a copy with no shared state."
 //
-// Be honest about what that buys TODAY: nothing observable. This handler
-// forwards to exactly one resolved chain, and the caller (slog.Logger.log)
-// discards its record afterwards, so mutating in place cannot currently be
-// seen — removing the Clone breaks no test, which was checked rather than
-// assumed. It is kept because it is the documented contract for this exact
-// operation and it costs one allocation on traced lines only; it becomes
-// load-bearing the moment anything hands the record to more than one place.
+// It costs one allocation on traced lines only, and it is no longer merely
+// the documented contract: with a log file installed the resolved chain is a
+// [fanout], which hands the record to more than one handler — the exact
+// situation that doc paragraph names. fanout clones again per destination,
+// for its own half of the same reason.
 func (l lazy) Handle(ctx context.Context, r slog.Record) error {
 	if attrs := attrsFor(ctx); len(attrs) > 0 {
 		r = r.Clone()

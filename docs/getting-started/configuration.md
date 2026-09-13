@@ -2,7 +2,7 @@
 
 Crewlet companies are defined across **two tiers** — see the [Configuration concept page](../concepts/configuration.md) for the full design.
 
-- **Tier A** (`crewlet.yaml`, restart-only): this node's identity and roles, the store file, the stream and coordination slots, API host/port/auth, the secret keyring, logging.
+- **Tier A** (`crewlet.yaml`, restart-only): this node's identity and roles, the store file, the stream and coordination slots, API host/port/auth, the secret keyring, logging (level, shape and an optional rotating log file).
 - **Tier B** (`company.yaml` imported into the store, live-editable): everything else — identity, providers, integrations, MCP servers, roles, units, turn engine, learning, budgets, scheduling.
 
 This page documents the **Tier B** fields below.  For Tier A see [Configuration concept page §"Tier A example"](../concepts/configuration.md#tier-a-example-crewletyaml).
@@ -426,6 +426,14 @@ logging:
   level: info       # debug, info (default), warn, error
   format: console   # console (default: columns and colour for a person),
                     #   text (slog key=value), json (for a log shipper)
+  file:             # optional — a durable copy, IN ADDITION to stderr
+    path: "/var/log/crewlet/${CREWLET_NODE_ID}.log"
+                    #   missing directories are created; empty writes no file
+    format: json    # the file's OWN shape — empty follows logging.format
+    max_size_mb: 100    # rotate here. There is no "never": an uncapped log
+                        #   file fills the disk the store is on (default 100)
+    max_backups: 5      # kept as <path>.1 (newest) … <path>.5.
+                        #   0 keeps none — one file, and no history (default 5)
 ```
 
 The event store (LLM observability) is a table in that same file, created by

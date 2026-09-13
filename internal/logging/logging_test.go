@@ -2,6 +2,7 @@ package logging_test
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"log/slog"
 	"strings"
@@ -205,5 +206,223 @@ func TestSetVerbosityChangesTheLevelAndNotTheDestination(t *testing.T) {
 	}
 	if other.Len() != 0 {
 		t.Errorf("something reached a writer nothing installed: %q", other.String())
+	}
+}
+
+// A LOG FILE IS A SECOND DESTINATION, NEVER A REPLACEMENT.
+//
+// stderr is the only sink that exists before the config naming the file has
+// been read, it is what a container platform captures, and it is where a
+// boot failure is watched. A node that went quiet there the moment a path
+// was configured would look exactly like one that had stopped.
+func TestAFileSinkDoesNotSilenceTheConsoleOne(t *testing.T) {
+	var console, file bytes.Buffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, &console)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
+
+	logging.SetFile(&file, "")
+	logging.Get("both").Info("a_line", "k", "v")
+	logging.SetFile(nil, "")
+
+	for name, got := range map[string]string{"console": console.String(), "file": file.String()} {
+		if !strings.Contains(got, "a_line") {
+			t.Errorf("the %s sink did not get the line: %q", name, got)
+		}
+	}
+}
+
+// AND IT CARRIES ITS OWN SHAPE. This is the whole reason the second
+// destination is a second handler rather than an io.MultiWriter: a person
+// watching a boot wants columns while the shipper reading the file wants
+// json, and one writer cannot be both.
+func TestTheFileSinkCarriesItsOwnFormat(t *testing.T) {
+	var console, file bytes.Buffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, &console)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
+
+	logging.SetFile(&file, logging.FormatJSON)
+	logging.Get("split").Info("a_line")
+	logging.SetFile(nil, "")
+
+	if !strings.HasPrefix(strings.TrimSpace(file.String()), "{") {
+		t.Errorf("the file is not JSON: %q", file.String())
+	}
+	if strings.HasPrefix(strings.TrimSpace(console.String()), "{") {
+		t.Errorf("the file's format reached the console sink: %q", console.String())
+	}
+}
+
+// A FILE GIVEN NO SHAPE FOLLOWS THE PROCESS'S, which is what makes
+// `-log-format json` mean one thing rather than two.
+func TestAFileWithNoFormatFollowsTheProcessFormat(t *testing.T) {
+	var console, file bytes.Buffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, &console)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
+
+	logging.SetFile(&file, "")
+	logging.SetVerbosity(slog.LevelInfo, logging.FormatJSON)
+	logging.Get("follow").Info("a_line")
+	logging.SetFile(nil, "")
+
+	if !strings.HasPrefix(strings.TrimSpace(file.String()), "{") {
+		t.Errorf("the file did not follow the process format: %q", file.String())
+	}
+}
+
+// SetVerbosity KEEPS THE FILE. The level and the shape are invocation
+// properties and the destinations are not, so turning a running node's
+// verbosity up must not quietly detach the durable copy of its log.
+func TestSetVerbosityKeepsTheFileDestination(t *testing.T) {
+	var console, file bytes.Buffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, &console)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
+
+	logging.SetFile(&file, logging.FormatText)
+	logging.SetVerbosity(slog.LevelDebug, logging.FormatText)
+	logging.Get("kept").Debug("a_debug_line")
+	logging.SetFile(nil, "")
+
+	if !strings.Contains(file.String(), "a_debug_line") {
+		t.Errorf("the file destination was lost to a verbosity change: %q", file.String())
+	}
+}
+
+// AND Configure CLEARS IT, because Configure is the statement of what this
+// process's destinations ARE rather than an adjustment to them — a TestMain
+// pointing the process at io.Discard must not leave a previous test's file
+// attached.
+func TestConfigureClearsTheFileDestination(t *testing.T) {
+	var first, file, second bytes.Buffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, &first)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
+	logging.SetFile(&file, logging.FormatText)
+
+	logging.Configure(slog.LevelInfo, logging.FormatText, &second)
+	logging.Get("cleared").Info("after_reconfigure")
+
+	if strings.Contains(file.String(), "after_reconfigure") {
+		t.Errorf("the file survived a Configure: %q", file.String())
+	}
+	if !strings.Contains(second.String(), "after_reconfigure") {
+		t.Errorf("the new console destination did not get the line: %q", second.String())
+	}
+}
+
+// REMOVING THE FILE LEAVES THE CONSOLE ALONE, which is what the CLI's
+// teardown does before closing the descriptor.
+func TestRemovingTheFileLeavesTheConsoleSink(t *testing.T) {
+	var console, file bytes.Buffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, &console)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
+
+	logging.SetFile(&file, logging.FormatText)
+	logging.SetFile(nil, "")
+	logging.Get("detached").Info("after_detach")
+
+	if strings.Contains(file.String(), "after_detach") {
+		t.Errorf("a detached file still received a line: %q", file.String())
+	}
+	if !strings.Contains(console.String(), "after_detach") {
+		t.Errorf("detaching the file silenced the console: %q", console.String())
+	}
+}
+
+// ONE LEVEL, BOTH DESTINATIONS. There is deliberately no per-sink level:
+// "was this line written" must not depend on which file you look in, and
+// [lazy.Enabled] answers for the whole tree from the root handler's level
+// alone — a fan-out that disagreed with its children would filter different
+// lines depending on how a call site was spelled.
+func TestBothDestinationsShareOneLevel(t *testing.T) {
+	var console, file bytes.Buffer
+	logging.Configure(slog.LevelWarn, logging.FormatText, &console)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
+
+	logging.SetFile(&file, logging.FormatText)
+	log := logging.Get("levelled")
+	if log.Enabled(t.Context(), slog.LevelInfo) {
+		t.Error("info is enabled at a warn level with a file attached")
+	}
+	log.Info("an_info_line")
+	log.Warn("a_warn_line")
+	logging.SetFile(nil, "")
+
+	for name, got := range map[string]string{"console": console.String(), "file": file.String()} {
+		if strings.Contains(got, "an_info_line") {
+			t.Errorf("the %s sink took a line below the level: %q", name, got)
+		}
+		if !strings.Contains(got, "a_warn_line") {
+			t.Errorf("the %s sink dropped a line at the level: %q", name, got)
+		}
+	}
+}
+
+// DERIVED LOGGERS STILL DO NOT LEAK, with two destinations under them. The
+// fan-out derives each child into a NEW slice for the same reason
+// [lazy.with] copies its ops: slog hands one handler to every logger derived
+// from it.
+func TestDerivedLoggersDoNotShareAttributesAcrossSinks(t *testing.T) {
+	var console, file bytes.Buffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, &console)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
+	logging.SetFile(&file, logging.FormatText)
+	t.Cleanup(func() { logging.SetFile(nil, "") })
+
+	base := logging.Get("shared")
+	base.With("side", "left").Info("left_line")
+	base.With("side", "right").Info("right_line")
+
+	for name, got := range map[string]string{"console": console.String(), "file": file.String()} {
+		for line := range strings.SplitSeq(strings.TrimSpace(got), "\n") {
+			switch {
+			case strings.Contains(line, "left_line") && strings.Contains(line, "right"):
+				t.Errorf("%s: the left logger carried the right one's attribute: %q", name, line)
+			case strings.Contains(line, "right_line") && strings.Contains(line, "left"):
+				t.Errorf("%s: the right logger carried the left one's attribute: %q", name, line)
+			}
+		}
+	}
+}
+
+// A SICK SINK DOES NOT SILENCE THE OTHER ONE. A full log disk must cost the
+// durable copy and nothing else: the fan-out tries every destination and
+// joins what failed rather than returning on the first.
+func TestAFailingDestinationDoesNotStopTheOthers(t *testing.T) {
+	var console bytes.Buffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, &console)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
+
+	logging.SetFile(brokenWriter{}, logging.FormatText)
+	logging.Get("resilient").Info("a_line")
+	logging.SetFile(nil, "")
+
+	if !strings.Contains(console.String(), "a_line") {
+		t.Errorf("a failing file sink took the console sink down with it: %q",
+			console.String())
+	}
+}
+
+// brokenWriter is a destination that is always full.
+type brokenWriter struct{}
+
+func (brokenWriter) Write([]byte) (int, error) { return 0, errors.New("no space left on device") }
+
+// A GROUP AND ITS ATTRIBUTES REACH BOTH DESTINATIONS. WithGroup and
+// WithAttrs are derived per child, so a fan-out that forwarded only to the
+// first would lose structure on the file and nothing would say so.
+func TestGroupsAndAttributesReachEveryDestination(t *testing.T) {
+	var console, file bytes.Buffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, &console)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
+
+	logging.SetFile(&file, logging.FormatText)
+	logging.Get("grouped").With("node", "n1").WithGroup("turn").Info("a_line", "id", "t1")
+	logging.SetFile(nil, "")
+
+	for name, got := range map[string]string{"console": console.String(), "file": file.String()} {
+		for _, want := range []string{"component=grouped", "node=n1", "turn.id=t1"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("the %s sink is missing %s: %q", name, want, got)
+			}
+		}
 	}
 }
