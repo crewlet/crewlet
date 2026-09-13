@@ -335,6 +335,46 @@ test("when the opener has gone from a modal that is still open, focus goes to th
   expect(document.activeElement).toBe(screen.getByRole("dialog", { name: "Editor" }));
 });
 
+test("an opener the confirmed action disabled hands focus on to the modal around it", () => {
+  // Confirming disables the control that asked (a request is now in flight)
+  // rather than removing it. It is still on the page, and it cannot take
+  // focus: stopping at it would leave focus on the body behind the editor.
+  function Disabled() {
+    const [busy, setBusy] = useState(false);
+    const [confirm, setConfirm] = useState(false);
+    return (
+      <>
+        <button>behind the veil</button>
+        <Dialog title="Editor" onClose={() => {}}>
+          <button>first</button>
+          <button disabled={busy} onClick={() => setConfirm(true)}>
+            Delete row
+          </button>
+        </Dialog>
+        {confirm && (
+          <Dialog
+            title="Delete this row?"
+            onClose={() => {
+              setBusy(true);
+              setConfirm(false);
+            }}
+          >
+            <button>Delete</button>
+          </Dialog>
+        )}
+      </>
+    );
+  }
+  render(<Disabled />);
+  const remove = screen.getByRole("button", { name: "Delete row" });
+  remove.focus();
+  fireEvent.click(remove);
+  press("Escape");
+  expect(screen.queryByRole("dialog", { name: "Delete this row?" })).toBeNull();
+  expect((remove as HTMLButtonElement).disabled).toBe(true);
+  expect(document.activeElement).toBe(screen.getByRole("dialog", { name: "Editor" }));
+});
+
 test("a modal that closes beneath another leaves focus in the one still open above it", () => {
   // Something other than a key closes the lower surface: a route change, a
   // data push, a shortcut. Focus is in the prompt above, and handing it back

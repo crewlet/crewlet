@@ -238,9 +238,10 @@ function useOpeningOrder(open: boolean): number {
  * dialog), so
  * by the time the new modal closes its opener has been unmounted, and focus
  * restored to a detached element lands on the page body. The chain carries on
- * from there: the host modal's panel, which is still connected only while the
- * host is still open (so focus never goes behind a veil that is still up),
- * and then wherever the host itself would have returned focus.
+ * from there: the host modal's panel, so focus never goes behind a veil that
+ * is still up, and then wherever the host itself would have returned focus.
+ * Focus goes to the first of them that accepts it (see the close in
+ * `useModal`), which is also what skips a panel whose host has closed.
  */
 function returnChain(opener: Element | null): Element[] {
   if (!opener) return [];
@@ -340,11 +341,17 @@ export function useModal({ onClose, dismissable = true, initialFocus }: ModalOpt
       // move it behind a veil that is still up.
       const holder = document.activeElement;
       if (holder && stack.some((entry) => entry.panel()?.contains(holder))) return;
-      const back = returnTo.find(
-        (el): el is HTMLElement =>
-          el instanceof HTMLElement && el.isConnected && el !== document.body,
-      );
-      back?.focus();
+      // THE FIRST THAT TAKES IT, not the first still on the page. Being
+      // connected does not make an element focusable: an opener can be
+      // disabled by the action its modal confirmed, and a host panel can
+      // outlive its modal (the sections drawer's panel is the rail, which
+      // stays mounted and is hidden when the drawer closes). `focus()` on
+      // either does nothing, and stopping there left focus on the body.
+      for (const el of returnTo) {
+        if (!(el instanceof HTMLElement) || !el.isConnected || el === document.body) continue;
+        el.focus();
+        if (document.activeElement === el) return;
+      }
     };
   }, [returnTo]);
 

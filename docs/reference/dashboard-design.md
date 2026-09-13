@@ -914,7 +914,9 @@ rendered idle from the first phase to the last.
   it. When that control has gone with a modal that closed as this one opened
   (a panel's "Set token" handing over to the token dialog), focus goes back
   where that modal would have sent it; when it has gone from a modal that is
-  still open, to that modal rather than behind its veil. A modal closed
+  still open, or is still there but can no longer take focus (disabled by the
+  action the modal confirmed), to that modal rather than behind its veil. A
+  modal closed
   beneath a surface still open above it (by a route change or a data push)
   leaves focus where it is. A control that consumes Escape itself, such as a
   completion list, keeps the key. A veil press closes its modal on the
