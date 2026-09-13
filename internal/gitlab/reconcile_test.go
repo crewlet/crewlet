@@ -99,6 +99,18 @@ type adminInstance struct {
 	// typo, or one the credential cannot see, which GitLab never tells
 	// apart.
 	noGroup bool
+	// namespacePlan is what GET /namespaces/:path reports, which on
+	// gitlab.com is the ONLY place a free group's tier appears: the group
+	// record omits it there exactly as a self-managed instance does. Empty
+	// serves a namespace with no plan, which is the self-managed shape.
+	namespacePlan string
+	// noNamespace answers 404 at that endpoint, which is what an instance
+	// that does not serve it at all looks like.
+	noNamespace bool
+	// namespaceFails answers 500, which is a question that could not be
+	// asked rather than an answer of "free".
+	namespaceFails bool
+
 	// plan is what GET /groups/:path reports as the subscription tier.
 	// Empty is a self-managed instance, which sends no such field at all;
 	// "free" is what gitlab.com answers for a group whose group webhooks
@@ -517,6 +529,26 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 			group["plan"] = f.plan
 		}
 		json.NewEncoder(w).Encode(group)
+
+	case r.Method == http.MethodGet && path == "/namespaces/nimbus":
+		// WHERE THE TIER ACTUALLY IS on gitlab.com. Asked only when the
+		// group said nothing, so a fixture that seeds a group plan never
+		// reaches this.
+		if f.namespaceFails {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"message": "500 Internal"})
+			return
+		}
+		if f.noNamespace {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{"message": "404 Namespace Not Found"})
+			return
+		}
+		ns := map[string]any{"id": 7, "full_path": "nimbus"}
+		if f.namespacePlan != "" {
+			ns["plan"] = f.namespacePlan
+		}
+		json.NewEncoder(w).Encode(ns)
 
 	case r.Method == http.MethodGet && path == "/users":
 		// A FILTER, NOT A LOOKUP — which is what /users?username= is on
@@ -987,8 +1019,13 @@ func mutatingRoute(call string) bool {
 	}
 	switch {
 	case path == "/user", // who does this credential authenticate as
-		path == "/users",            // the account lookup
-		path == "/groups/nimbus",    // the group, and the tier it is on
+		path == "/users",         // the account lookup
+		path == "/groups/nimbus", // the group, and the tier it may state
+		// THE NAMESPACE, which is where a gitlab.com group's tier is
+		// actually stated: the group record omits `plan` on the free tier
+		// exactly as a self-managed instance does. A read, and it costs one
+		// request only where the group said nothing. See [Client.TierOf].
+		path == "/namespaces/nimbus",
 		path == "/service_accounts", // the instance's own account listing
 		path == "/personal_access_tokens",
 		strings.HasSuffix(path, "/personal_access_tokens"),
@@ -4461,5 +4498,98 @@ func TestAnInstanceLinksItsUserAdmin(t *testing.T) {
 	}
 	if want := "https://gitlab.example.com/admin/users?filter=blocked"; got.ActionURL != want {
 		t.Errorf("action_url = %q, want %q", got.ActionURL, want)
+	}
+}
+
+// A FREE GITLAB.COM GROUP IS FOUND BY ASKING THE NAMESPACE.
+//
+// GET /groups/:path omits `plan` for a free group exactly as a self-managed
+// instance omits it, so the one deployment the fallback exists for was
+// indistinguishable from the one it must not touch. The group read as paid,
+// the fallback never ran, and the pass registered a group hook that GitLab
+// ACCEPTED and never delivered — the surface reporting ready with zero
+// delivery attempts in the hook's own log.
+//
+// Measured on a live free group: /groups/crewbed answered with no plan at
+// all, /namespaces/crewbed answered `plan: "free"` for the same path in the
+// same second, and a comment on an issue and a new issue both fired nothing.
+func TestAFreeGroupIsFoundWhenOnlyTheNamespaceSaysSo(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	// THE MEASURED SHAPE: the group says nothing, the namespace says free.
+	f.plan = ""
+	f.namespacePlan = "free"
+
+	res, err := reconcileAgainst(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(f.hooks) != 0 {
+		t.Errorf("a group hook was registered on a free group: %+v — GitLab "+
+			"accepts it and delivers nothing", f.hooks)
+	}
+	if len(f.projectHooks["nimbus/api"]) != 1 {
+		t.Fatalf("project hooks = %+v, want the fallback to have run",
+			f.projectHooks)
+	}
+	if got := res.HookedOn; len(got) != 1 || got[0] != "nimbus/api" {
+		t.Errorf("HookedOn = %v, want the project", got)
+	}
+}
+
+// AND AN INSTANCE THAT SAYS NOTHING ANYWHERE KEEPS THE GROUP HOOK.
+//
+// This is the direction the old bool got right and must not lose. A
+// self-managed instance answers with no plan at either endpoint, and reading
+// that silence as "free" would push every such deployment onto per-project
+// hooks it does not need — and which do not cover a project added later.
+func TestAnInstanceThatStatesNoTierKeepsTheGroupHook(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		setup func(*adminInstance)
+	}{
+		{"a namespace with no plan", func(f *adminInstance) { f.namespacePlan = "" }},
+		{"no namespace endpoint at all", func(f *adminInstance) { f.noNamespace = true }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newAdminInstance()
+			f.plan = ""
+			tc.setup(f)
+
+			if _, err := reconcileAgainst(t, f, newRecordingSink(),
+				map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			if len(f.hooks) != 1 {
+				t.Errorf("group hooks = %+v, want one: an instance that states "+
+					"no tier is not a free one", f.hooks)
+			}
+		})
+	}
+}
+
+// AND A TIER THE INSTANCE COULD NOT ANSWER FOR STOPS THE PASS.
+//
+// Unknown is not free. Concluding one from a failed request would move a
+// working group hook to per-project hooks over a blip, and back on the next
+// pass — somebody's webhooks rewritten on a timer, in both directions, for
+// as long as the instance is flaky.
+func TestATierThatCouldNotBeReadIsNotFree(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.plan = ""
+	f.namespaceFails = true
+
+	_, err := reconcileAgainst(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"})
+	if err == nil {
+		t.Fatal("a pass that could not read the tier carried on and decided")
+	}
+	if len(f.projectHooks["nimbus/api"]) != 0 {
+		t.Errorf("it fell back to project hooks over a failed read: %+v",
+			f.projectHooks)
 	}
 }

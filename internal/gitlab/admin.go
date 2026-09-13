@@ -272,17 +272,106 @@ type Group struct {
 	Plan string `json:"plan"`
 }
 
-// PaidPlan reports whether this group is on a tier that serves the Premium
-// features, as far as the instance is willing to say.
+// Tier is what a deployment says about a group's subscription, and it is
+// THREE-VALUED because the third answer is the one that matters.
 //
-// TRUE WHEN IT CANNOT TELL, which is the direction that matters: a
-// self-managed instance answers with no plan at all, and reading that as
-// "free" would send every self-managed deployment down a fallback it does not
-// need. The one case this exists to catch is a gitlab.com group that
-// answers, in so many words, that it is on the free tier.
-func (g Group) PaidPlan() bool {
-	plan := strings.ToLower(strings.TrimSpace(g.Plan))
-	return plan != "free" && plan != "default"
+// A bool collapsed "cannot tell" into "paid", and that default is right for a
+// self-managed instance — it answers with no plan at all, and reading silence
+// as free would push every such deployment down a fallback it does not need.
+// It is wrong for the case it was written to catch: GET /groups/:path on
+// gitlab.com omits `plan` for a FREE group as well, so the one deployment
+// this was protecting read as paid and took the group hook that GitLab
+// accepts and never delivers.
+//
+// Separating the answers is what lets a caller ask somewhere else before
+// concluding. See [Client.TierOf].
+type Tier string
+
+const (
+	// TierPaid serves the Premium features, group webhooks among them.
+	TierPaid Tier = "paid"
+	// TierFree is a deployment saying, in so many words, that group
+	// webhooks here are accepted and never delivered.
+	TierFree Tier = "free"
+	// TierUnknown is nothing said. Treated as paid by every caller, which
+	// is the self-managed default rather than a guess about gitlab.com.
+	TierUnknown Tier = "unknown"
+)
+
+// tierOf reads one plan string, or [TierUnknown] where there is none.
+func tierOf(plan string) Tier {
+	switch strings.ToLower(strings.TrimSpace(plan)) {
+	case "":
+		return TierUnknown
+	case "free", "default":
+		return TierFree
+	default:
+		return TierPaid
+	}
+}
+
+// Tier is what the GROUP record says, which on gitlab.com is frequently
+// nothing at all. See [Client.TierOf] for the answer a caller should act on.
+func (g Group) Tier() Tier { return tierOf(g.Plan) }
+
+// Namespace is the account a group belongs to, and the only place a
+// gitlab.com group's tier can be relied on to appear.
+//
+// GET /groups/:path omits `plan` on the free tier — measured on a live
+// gitlab.com group whose namespace answered `plan: "free"` for the same
+// path in the same second. The group record is not lying; it simply does
+// not carry the field unless the subscription is one, and "absent" is
+// indistinguishable there from the self-managed silence that must keep
+// reading as paid.
+type Namespace struct {
+	ID       int    `json:"id"`
+	FullPath string `json:"full_path"`
+	Plan     string `json:"plan"`
+}
+
+// NamespaceByPath resolves a namespace by its path.
+func (c *Client) NamespaceByPath(ctx context.Context, path string) (Namespace, bool, error) {
+	var out Namespace
+	err := c.get(ctx, "/namespaces/"+url.PathEscape(path), nil, &out)
+	if isNotFound(err) {
+		return Namespace{}, false, nil
+	}
+	if err != nil {
+		return Namespace{}, false, err
+	}
+	return out, true, nil
+}
+
+// TierOf is the subscription tier to ACT on, asked of both places that know.
+//
+// # Why two reads rather than one
+//
+// The group record is asked first because the caller already holds it and it
+// is right whenever it answers. Only its silence costs a second request, and
+// only on gitlab.com does that second request say anything: a self-managed
+// instance answers nothing at either endpoint and stays [TierUnknown], which
+// every caller reads as paid.
+//
+// A NAMESPACE THAT CANNOT BE READ IS NOT FREE. The error is returned rather
+// than folded into an answer, because concluding "free" from a request that
+// failed would move a working group hook to per-project hooks over a blip —
+// and back again on the next pass, rewriting somebody's webhooks on a timer.
+func (c *Client) TierOf(ctx context.Context, group Group) (Tier, error) {
+	if t := group.Tier(); t != TierUnknown {
+		return t, nil
+	}
+	path := strings.TrimSpace(group.FullPath)
+	if path == "" {
+		return TierUnknown, nil
+	}
+	ns, found, err := c.NamespaceByPath(ctx, path)
+	if err != nil {
+		return TierUnknown, fmt.Errorf("gitlab: read the tier of %s: %w", path, err)
+	}
+	if !found {
+		return TierUnknown, nil
+	}
+	return tierOf(ns.Plan), nil
 }
 
 // GroupByPath resolves a group by its path.

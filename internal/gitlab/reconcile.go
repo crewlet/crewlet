@@ -1292,11 +1292,30 @@ func ensureHooks(ctx context.Context, opts Options, group Group, projects []stri
 	// event log stays empty for ever. Measured on a live free group, where
 	// the pass reported ready and not one delivery had ever arrived.
 	//
-	// So the tier is READ rather than inferred from a refusal. Only
-	// gitlab.com answers with a plan at all, and [Group.PaidPlan] reads
-	// silence as "cannot tell": a self-managed instance keeps the behaviour
-	// it has, and the one case caught is a group that says it is free.
-	if mode == config.ContainerWebhookAuto && !group.PaidPlan() {
+	// So the tier is READ rather than inferred from a refusal — and read
+	// from BOTH places that know it, which is the half this got wrong.
+	//
+	// GET /groups/:path omits `plan` for a free gitlab.com group exactly as
+	// a self-managed instance omits it, so the one deployment this clause
+	// exists for was indistinguishable from the one it must not touch. The
+	// group read as paid, the fallback never ran, and the pass registered a
+	// group hook that GitLab accepted and never delivered — reporting
+	// ready, with zero delivery attempts in the hook's own log. Measured on
+	// a live free group whose /namespaces/:path answered `plan: "free"` for
+	// the same path in the same second.
+	//
+	// [Client.TierOf] asks the namespace only when the group says nothing,
+	// so a self-managed instance still answers unknown at both endpoints
+	// and keeps the behaviour it has.
+	tier, err := opts.Client.TierOf(ctx, group)
+	if err != nil {
+		// A TIER THAT COULD NOT BE READ IS NOT FREE. Concluding one from a
+		// failed request would move a working group hook to per-project
+		// hooks over a blip, and back on the next pass — somebody's
+		// webhooks rewritten on a timer.
+		return nil, nil, err
+	}
+	if mode == config.ContainerWebhookAuto && tier == TierFree {
 		hooked, err := ensureProjectHooks(ctx, opts.Client, projects, name, target, secret)
 		if err != nil {
 			return nil, nil, err
