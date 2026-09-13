@@ -110,10 +110,10 @@ seat is preserved; nothing crosses a seat or a turn.
 
 ```mermaid
 sequenceDiagram
-    participant P as Plan (seat A)
+    participant P as Executor (seat A)
     participant W as Workspace
-    participant S as Sub-agent (seat A)
-    participant B as Plan (seat B)
+    participant S as Worker (seat A)
+    participant B as Executor (seat B)
     P->>W: acquire(A) — in-flight 0→1
     W->>W: prune A/home, seed settings + credentials
     S->>W: acquire(A) — in-flight 1→2 (same home, no prune)
@@ -551,15 +551,15 @@ one — and only two of them are failures:
 |---|---|
 | A text path resolved to text | That text is the reply. |
 | A text path resolved and every one was **empty** | The CLI answered with nothing. **An answer, not a failure**: a completion with empty content and the round's real token usage attached, which is exactly what the `openai` and `anthropic` backends return for a model that spends its whole budget thinking. The [tool loop](agent-runtime.md) corrects it — see [When the CLI answers with nothing](#when-the-cli-answers-with-nothing). |
-| **No** text path resolved at all | The profile no longer matches the installed CLI. A retryable `SERVER` failure that names `text_paths`, points at `crewlet llm doctor`, and prints the **tail** of what the CLI output so you can write the override. |
-| The CLI printed **nothing at all** on a zero exit | Its own message, because neither of the two above can say anything true about output that does not exist. A retryable `SERVER` failure carrying whatever it wrote on stderr, which is the only clue there is. |
+| **No** text path resolved at all | The profile no longer matches the installed CLI. A retryable `server` failure that names `text_paths`, points at `crewlet llm doctor`, and prints the **tail** of what the CLI output so you can write the override. |
+| The CLI printed **nothing at all** on a zero exit | Its own message, because neither of the two above can say anything true about output that does not exist. A retryable `server` failure carrying whatever it wrote on stderr, which is the only clue there is. |
 
 Output that is not JSON at all is still an answer: a CLI that printed a
 banner, a warning, or the vendor's own sentence about a spent plan is
 read as prose rather than refused, which is what lets the
 [limit sentinels](#falling-back-to-a-metered-key) be recognised on a
 zero exit. Those sentinels are matched against the CLI's whole stdout
-and stderr, so a drifted profile still yields a real `RATE_LIMIT` with
+and stderr, so a drifted profile still yields a real `rate_limit` with
 the vendor's own reset instant rather than a server fault.
 
 **Why the last two are failures rather than answers.** They used to be
@@ -836,7 +836,7 @@ actually produced. See
 field fails visibly when it goes stale — a renamed flag is a non-zero exit
 `doctor` reports on the spot. A sentinel is matched *verbatim* against the
 CLI's own prose, so one the vendor has reworded simply never fires: a spent
-plan then classifies as a fatal error instead of `RATE_LIMIT`, the
+plan then classifies as a fatal error instead of `rate_limit`, the
 [fallback chain](#falling-back-to-a-metered-key) never carries the seat onto
 a metered key, and nothing says so until somebody hits their cap. If your
 CLI's wording differs from the built-in profile's, override it:
@@ -909,11 +909,11 @@ is an HTTP client timeout (default 120 s), while this covers a process
 launch — a Node runtime costs seconds before the first byte — plus the
 model call and the CLI's internal retries. On breach the process *group*
 is terminated (so the runtime's helpers go too) and the call is reported
-as `TIMEOUT`, which the role's fallback chain retries.
+as `timeout`, which the role's fallback chain retries.
 
 **`max_concurrent: 4`** keeps peak memory near 1.5 GB: each CLI is a
 full Node or Rust runtime at roughly 200–400 MB resident, and an
-unbounded fleet of seats entering Plan together can exhaust a small
+unbounded fleet of seats starting turns together can exhaust a small
 engine host. Subscription plans also throttle concurrency well below
 what an API key allows, so a much higher number mostly buys rate-limit
 errors. Raise it on a large host with a plan that permits it.
@@ -1006,7 +1006,7 @@ A spent subscription window arrives as prose on a *successful* exit
 ("Usage limit reached · continuing automatically"). Crewlet matches that
 wording — and, where the CLI relays the API's own error instead, the
 `"type":"rate_limit_error"` in it — and
-reports it as `RATE_LIMIT`, which is retryable — so the ordinary
+reports it as `rate_limit`, which is retryable, so the ordinary
 [provider chain](turn-engine.md#per-phase-llm-models) carries the role
 onto a metered key for the rest of the window and back again afterwards,
 with no operator intervention:
@@ -1028,7 +1028,7 @@ roles:
     llm: [subscription, metered]      # subscription first, key as backstop
 ```
 
-An expired login classifies as `AUTH`, which is also retryable — so the
+An expired login classifies as `auth`, which is also retryable, so the
 chain keeps the seat working while you re-run `crewlet llm login`.
 
 ### What a sentinel may be
@@ -1053,7 +1053,7 @@ it, so it simply never fires. Both are fixed the same way, with
 `cli.overrides.limit_markers`; see
 [CLI flags drift](#cli-flags-drift--and-thats-a-config-edit-not-a-release)
 for the shape, and take the wording from the sentence your CLI actually
-printed, which a `FATAL` failure carries verbatim so that you can.
+printed, which a `fatal` failure carries verbatim so that you can.
 
 ---
 
@@ -1127,7 +1127,7 @@ you:
   report and no smoke test to run. Keeping the proxy authenticated is a
   separate operational job.
 - **A spent window is not translated.** The [prose sentinel](#falling-back-to-a-metered-key)
-  that turns "Usage limit reached" into a retryable `RATE_LIMIT` is the
+  that turns "Usage limit reached" into a retryable `rate_limit` is the
   CLI backend's. Over HTTP you get whatever status the proxy returns, and
   only a 429 / 401 / 403 / 402 / 408 / 5xx is [retryable](turn-engine.md#per-phase-llm-models);
   anything else is fatal and the role's fallback chain will **not** walk
