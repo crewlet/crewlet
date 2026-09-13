@@ -173,7 +173,7 @@ meets their company first and the engine last.
 | **Operations** | Fleet | `#/fleet` | `fleet` — the lease table |
 | | Integrations | `#/integrations` | `integrations`, plus `/setup/integrations` over REST *(operator-gated)* |
 | | Tools | `#/tools?q=&origin=` | the pushed tool catalogue |
-| | Configuration | `#/config?lens=&revision=` | `config` / `config_audit` / `config_diff` *(operator-gated)* |
+| | Configuration | `#/config?lens=&revision=` | `config` / `config_audit` / `config_diff` *(operator-gated)*. It reads and writes nothing: every surface that reports no active configuration (the shell's banner, the attention row, this screen's empty state) links to `#/org?lens=builder` to create the company, and names `crewlet config import` beside it |
 | | Secrets | `#/secrets` | `/secrets` and `/config/references` over REST: the names the fleet holds, what reads each, and the writes that store, rotate and remove one — **never a value** *(operator-gated)* |
 | — | Trace | `#/traces/{id}` | `trace` — reached from a row or from search |
 | — | Turn | `#/turns/{id}` | `turn` — everything one unit of work published; `Copy turn` in the header assembles the record, the phases and the rest as one JSON object, and the Turn record panel copies itself and owns ⌘A |

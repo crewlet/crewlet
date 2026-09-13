@@ -60,7 +60,7 @@ class InertWebSocket {
   close(): void {}
 }
 
-function mount(hash: string) {
+function mount(hash: string, active: unknown = {}) {
   location.hash = hash;
   const store = new Store();
   const socket = new LiveSocket(store);
@@ -68,7 +68,15 @@ function mount(hash: string) {
   // server, because what is under test is the rendering of an answer whose
   // shape is already pinned by the Go side.
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
-    Promise.resolve(what === "config_audit" ? revisions : what === "config_diff" ? diff : {});
+    Promise.resolve(
+      what === "config_audit"
+        ? revisions
+        : what === "config_diff"
+          ? diff
+          : what === "config"
+            ? active
+            : {},
+    );
   return render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
@@ -114,4 +122,16 @@ test("a diff line carries the kind the server sends", async () => {
   // And the value column reads the side that exists for that kind.
   expect(screen.getByText('"sre-lead"')).toBeDefined();
   expect(screen.getByText('"a" → "b"')).toBeDefined();
+});
+
+// NULL IS "NOTHING IS ACTIVE", which is what `queries.configDocument` answers
+// before a company's first revision. The empty state used to name only the
+// command line; the one screen that can create a company is the org chart's
+// builder, and this is the first place an operator looks for one.
+test("with nothing active, the empty state leads to creating the company", async () => {
+  mount("#/config", null);
+  expect(await screen.findByText("No company configuration is active")).toBeDefined();
+  const links = screen.getAllByRole("link", { name: "Create the company" });
+  expect(links[0]?.getAttribute("href")).toBe("#/org?lens=builder");
+  expect(screen.getByText(/crewlet config import or PUT \/config/)).toBeDefined();
 });

@@ -1,17 +1,25 @@
 /**
  * Configuration: what the fleet is running, how it got here, and what changed.
  *
- * Read-only, deliberately. The previous editor was a bare JSON textarea with
- * no schema hints, no validation until Save, no diff before saving, and a
- * dirty flag that was set and never read — so navigating away lost the edit
- * silently. A config editor worth having is a real project; a config VIEWER
- * that shows the active revision, its history and its diffs is genuinely
- * useful today and cannot lose anybody's work.
+ * THIS SCREEN READS. It shows the active revision, the history of revisions
+ * and the difference between any one of them and the active document, and it
+ * writes nothing. The previous editor on this screen was a bare JSON textarea
+ * with no schema hints, no validation until Save, no diff before saving and a
+ * dirty flag that was set and never read, so navigating away lost the edit
+ * silently.
+ *
+ * WRITING HAPPENS WHERE THE THING BEING WRITTEN IS. The organization (its
+ * units, seats, leads, reporting lines and charter) is created and edited in
+ * the org chart's builder lens, `#/org?lens=builder`, which validates every
+ * change against the engine before it saves. An integration is connected from
+ * the Integrations screen and a credential is stored from Secrets. Anything
+ * else is `PUT` or `PATCH /config`, or `crewlet config import`. So an empty
+ * state here points at the builder, and names the command line beside it.
  */
 
 import { useId, useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
-import { useParam } from "~/app/router.tsx";
+import { href, useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import {
   Badge,
@@ -99,7 +107,12 @@ export function ConfigScreen() {
                 <Empty
                   icon="sliders"
                   title="No company configuration is active"
-                  hint="The engine is running with nothing to run: no seats are spawned and every inbound webhook is dropped. Import one with crewlet config import, or PUT /config."
+                  hint="The engine is running with nothing to run: no seats are spawned and every inbound webhook is dropped. Create the company from the org chart, or import one with crewlet config import or PUT /config."
+                  action={
+                    <a className="btn primary" href={href(["org"], { lens: "builder" })}>
+                      Create the company
+                    </a>
+                  }
                 />
               )}
             </QueryState>
@@ -237,8 +250,13 @@ export function ConfigScreen() {
         <Icon name="info" size="sm" />
         <span className="col" style={{ gap: 4 }}>
           <span>
-            This screen reads. Writing a revision is <code className="inline">PUT /config</code> or{" "}
-            <code className="inline">crewlet config import</code>, which validate against the
+            This screen reads. The organization is created and edited from the{" "}
+            <a className="t-link" href={href(["org"], { lens: "builder" })}>
+              org chart
+            </a>
+            ; any other revision is <code className="inline">PUT /config</code>,{" "}
+            <code className="inline">PATCH /config</code> or{" "}
+            <code className="inline">crewlet config import</code>, each validated against the
             generated schema before anything is stored.
           </span>
           <span className="t-caption">

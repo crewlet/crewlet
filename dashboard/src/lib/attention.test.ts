@@ -41,6 +41,11 @@ describe("what it surfaces", () => {
     expect(items[0]?.id).toBe("unconfigured");
     expect(items[0]?.severity).toBe("critical");
     expect(items[0]?.detail).toContain("webhook");
+    // And it leads to where a company can be created, keeping the CLI path in
+    // the words: the Configuration screen it used to open cannot write one.
+    expect(items[0]?.path).toEqual(["org"]);
+    expect(items[0]?.query).toEqual({ lens: "builder" });
+    expect(items[0]?.detail).toContain("crewlet config import");
   });
 
   test("a refused token and an unreachable engine are different items", () => {

@@ -8,7 +8,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { NAV, activeNavKey, titleFor } from "./nav.ts";
-import { href, useNavigator, useRoute } from "./router.tsx";
+import { href, useRoute } from "./router.tsx";
 import { CommandPalette } from "./CommandPalette.tsx";
 import { EnginePanel } from "./EnginePanel.tsx";
 import { TokenDialog } from "./TokenDialog.tsx";
@@ -31,7 +31,6 @@ import { onTokenRequested } from "~/protocol/index.ts";
 
 export function Shell({ children }: { children: ReactNode }) {
   const route = useRoute();
-  const nav = useNavigator();
   const { socket } = useClient();
   const { connected, authRejected, health } = useConnection();
   const agents = useAgents();
@@ -257,14 +256,24 @@ export function Shell({ children }: { children: ReactNode }) {
         ) : engine?.configured === false ? (
           <div className="degraded caution">
             <Icon name="sliders" size="sm" />
-            <span>
-              No company configuration is active: no seats are running and inbound webhooks are
-              being dropped.
+            <span className="col" style={{ gap: 2 }}>
+              <span>
+                No company configuration is active: no seats are running and inbound webhooks are
+                being dropped.
+              </span>
+              <span className="t-caption">
+                Create the company here, or import a company file with{" "}
+                <code className="inline">crewlet config import</code>.
+              </span>
             </span>
             <span className="spacer" />
-            <Button size="sm" onClick={() => nav.to(["config"])}>
-              Configuration
-            </Button>
+            {/* A LINK TO WHERE ONE CAN BE CREATED. It pointed at the
+                Configuration screen, which reads and cannot write, so the
+                banner reporting the problem sent the reader somewhere that
+                could not fix it. */}
+            <a className="btn sm" href={href(["org"], { lens: "builder" })}>
+              Create the company
+            </a>
           </div>
         ) : null}
 

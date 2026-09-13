@@ -96,6 +96,31 @@ describe("the shell", () => {
   });
 });
 
+describe("an engine with no active configuration", () => {
+  test("the banner leads to creating the company, and names the command line", async () => {
+    location.hash = "#/people";
+    const store = new Store();
+    // Connected: the banner below leads only when the socket is up, since an
+    // unreachable engine cannot say whether anything is configured.
+    store.applyHealth({ status: "ok" });
+    const socket = new LiveSocket(store);
+    // The `stream` query is what says whether a company is configured.
+    (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
+      Promise.resolve(what === "stream" ? { status: "ok", configured: false } : null);
+    render(
+      <ClientContext.Provider value={{ store, socket }}>
+        <Router>
+          <App />
+        </Router>
+      </ClientContext.Provider>,
+    );
+    const link = await screen.findByRole("link", { name: "Create the company" });
+    // Not the Configuration screen, which reads and cannot create one.
+    expect(link.getAttribute("href")).toBe("#/org?lens=builder");
+    expect(screen.getAllByText("crewlet config import").length).toBeGreaterThan(0);
+  });
+});
+
 describe("routing", () => {
   test("every nav route renders a screen rather than a blank", () => {
     for (const hash of [

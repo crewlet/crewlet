@@ -83,8 +83,12 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       icon: "sliders",
       title: "No company configuration is active",
       detail:
-        "The engine is running with nothing to run: no seats are spawned and every inbound webhook is dropped. Import a company revision.",
-      path: ["config"],
+        "The engine is running with nothing to run: no seats are spawned and every inbound webhook is dropped. Create the company from the org chart, or import a company file with crewlet config import.",
+      // Where one can be CREATED. The Configuration screen reads and cannot
+      // write, so a row sending the reader there named a problem and a place
+      // that could not fix it.
+      path: ["org"],
+      query: { lens: "builder" },
     });
   }
   if (engine?.posture && ["shed", "stuck", "isolated"].includes(engine.posture)) {
