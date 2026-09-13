@@ -825,6 +825,32 @@ func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 	}
 }
 
+// THE TWO-FLAG FORM CARRIES THE COMPANY'S WARNINGS TOO. It is the form a CI
+// step runs over a deployment's pair of files, and a dangling lead reported
+// by `crewlet validate company.yaml` but not by `crewlet validate -config
+// crewlet.yaml -company company.yaml` would be a misspelling the gate never
+// shows.
+func TestTheTwoFileFormCarriesWarnings(t *testing.T) {
+	t.Parallel()
+	doc := companyYAML + "units:\n  - name: Platform\n    lead: Ghost\n"
+	var out, errOut bytes.Buffer
+	args := append([]string{"validate", "-json"}, configPair(t, "", doc)...)
+	if err := run(args, &out, &errOut); err != nil {
+		t.Fatalf("validate: %v\n%s", err, out.String())
+	}
+	var got struct {
+		Valid    bool             `json:"valid"`
+		Warnings []config.Warning `json:"warnings"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("the -json output is not JSON: %v\n%s", err, out.String())
+	}
+	if !got.Valid || len(got.Warnings) != 1 || got.Warnings[0].Path != "units[0].lead" {
+		t.Errorf("valid = %v, warnings = %+v; want valid with the dangling lead at units[0].lead",
+			got.Valid, got.Warnings)
+	}
+}
+
 // A FAILED -json VALIDATION EXITS NON-ZERO, or every CI gate built on
 // `crewlet validate x.yaml -json || exit 1` passes unconditionally.
 func TestAFailedJSONValidationStillFails(t *testing.T) {
