@@ -353,8 +353,9 @@ draining, and rolling upgrades. The two things that bite hardest:
 > **A fleet needs shared coordination.**
 >
 > Seat leases live in the coordination slot. `coordination.type: local` is a
-> per-process store, so every node then believes it owns the whole company —
-> the engine logs `seat_placement_is_process_local` at boot. A fleet needs
+> per-process store, so every node would believe it owns the whole company,
+> which is why a Tier A file that pairs it with a clustered or external stream
+> is refused at load on `coordination.type`. A fleet needs
 > `coordination.type: embedded-kv`; see [Running a Fleet](fleet.md). The slot
 > governs the *leases* only — the fleet's shared records are on the KV
 > regardless, because they have to survive a restart as much as a peer, and
@@ -516,17 +517,17 @@ from that map — a guard test fails if the two drift.
 | `webhook` | *No event type.* The [webhook receiver](../reference/api-endpoints.md) writes the delivery's row itself, under its own id with the provider's exact bytes as the payload |
 
 **The map is also the admission list.** A type that is not in it is not written
-and does not reach the activity feed — so the three exclusions below are
+and does not reach the activity feed, so the five exclusions below are
 deliberate and each one says why, and a *new* type that nobody placed fails a
 test rather than vanishing quietly.
 
 | Excluded type | Why |
 |---|---|
 | `agent_turn_progress` | Fires once per LLM round as a live-only signal; the matching `agent_phase_completed` is its durable record, so persisting this would fill the log with intermediate states of rows it also holds finished. It still drives the live projection. |
-| `budget_reported` | A snapshot of **live**, in-memory meters whose values mean nothing outside the engine run that produced them. Persisting it lets a dashboard hydrate a dead process's counters and render them as the current ones — a number that is not merely stale but describes a different run. It still drives the live projection. |
+| `budget_reported` | A snapshot of **live**, in-memory meters whose values mean nothing outside the engine run that produced them. Persisting it lets a dashboard hydrate a dead process's counters and render them as the current ones, a number that is not merely stale but describes a different run. The live projection reads it, but nothing in this build publishes it. |
 | `raw_webhook` | The delivery is **already** a row (the `webhook` category above). This event is the wake the receiver publishes onto a seat's inbox, so categorising it too would store every delivery twice — once as what arrived and once as what was forwarded. |
 | `a2a_request` | The ask is **already** a row: `a2a_channel_opened` and `a2a_message_sent` record the same exchange under the ids the audit trail is keyed on. This event is the wake it puts on the target seat's inbox — same reason as `raw_webhook`. |
-| `a2a_message` | The answer is **already** a row (`a2a_message_sent`, plus `a2a_message_delivered` for the read). This event is the wake it puts on the requester's inbox. |
+| `a2a_message` | The answer is **already** a row (`a2a_message_sent`). This event is the wake it puts on the requester's inbox. |
 
 #### Querying events
 
@@ -551,7 +552,7 @@ flowchart TD
     A["<b>webhook.receive</b><br/>the delivery arrives, and roots the trace"]
     B["the wake is published to the seat's inbox<br/><i>trace rides in the event envelope</i>"]
     C["<b>agent.turn</b><br/>the dispatcher restores the trigger's trace"]
-    D["<b>agent.turn.plan / .execute / .review</b><br/>one span per phase"]
+    D["<b>agent.turn.onboarding / .execute / .review / .judge</b><br/>one span per phase"]
     E["<b>llm.round</b><br/>one per model round trip"]
     F["<b>tool.call</b><br/>one per call, including the refused ones"]
     G["<b>agent.turn.resume</b><br/>a suspended run re-entering, days later"]
@@ -938,8 +939,9 @@ Set budgets at two levels:
 - **Org-wide** — `token_budget` in the top-level YAML config
 - **Per-agent** — `token_budget` on each Role definition
 
-When exceeded, the shared tool loop emits a `BudgetExhausted` event, stops the
-turn and marks the task failed. The check is atomic: if the agent's budget
+When a charge would exceed a cap, the tool loop refuses it and stops the phase;
+the engine ends the turn as failed and publishes `budget_exhausted` beside its
+`agent_turn_completed`. The check is atomic: if the agent's budget
 fails, the org-level consumption it had already charged is rolled back. In a
 fleet the counters live in the coordination slot, so an org cap of 500 k is
 500 k across every node rather than per process.
@@ -950,16 +952,15 @@ Every significant operation emits structured log entries:
 
 ```json
 {
-  "timestamp": "2026-03-12T10:30:00Z",
-  "level": "info",
-  "component": "agent.turn",
-  "agent_id": "abc-123",
-  "role": "Senior Engineer",
-  "event": "turn_completed",
-  "task_id": "def-456",
-  "llm_input_tokens": 1200,
-  "llm_output_tokens": 647,
-  "duration_ms": 3200,
+  "time": "2026-03-12T10:30:00.412Z",
+  "level": "INFO",
+  "msg": "onboarding_phase_complete",
+  "component": "agent.onboarding",
+  "agent": "sarah-chen",
+  "turn_id": "9f3c1e70-…",
+  "marked": true,
+  "rounds": 6,
+  "chain": "…",
   "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
   "span_id": "00f067aa0ba902b7"
 }
@@ -971,9 +972,8 @@ shipper indexing them never sees an empty placeholder. They are the same ids the
 [tracing](#tracing) section exports, which is what lets you pivot from a slow
 span in Jaeger to the lines the engine wrote while it was open.
 
-Note the JSON key for the message is `msg`, slog's own; `event` above is
-illustrative of the *value* — the short, machine-parsable event name every line
-carries in place of a sentence.
+The JSON key for the message is `msg`, slog's own, and its *value* is the
+short, machine-parsable event name every line carries in place of a sentence.
 
 ### Reacting to events
 
