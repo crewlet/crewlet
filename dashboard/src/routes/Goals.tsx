@@ -25,6 +25,8 @@
  */
 
 import { useMemo } from "react";
+import { useOrg } from "~/lib/store-hooks.ts";
+import { indexOrg } from "~/lib/seats.ts";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Badge, Chip, Meter, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
@@ -49,6 +51,14 @@ const HEALTH: Record<
 
 export function Goals() {
   const now = useNow();
+  // A HANDLE IS THE DATABASE'S WORD FOR A PERSON, and every other surface in
+  // the tree resolves it through the chart before showing it. This screen
+  // printed the slug on a goal's owner chips, so a goal owned by "Ada
+  // Okonkwo" was attributed to `ada-okonkwo` beside a board that calls her
+  // by name — and the chip is a FILTER, so the value it sends must stay the
+  // handle while the word it shows is the name.
+  const org = useOrg();
+  const index = useMemo(() => indexOrg(org), [org]);
   const [group, setGroup] = useParam("group", "");
   const [owner, setOwner] = useParam("owner", "");
   const [archived, setArchived] = useParam("archived", "");
@@ -117,7 +127,7 @@ export function Goals() {
         </Chip>
         {owner && (
           <Chip on onClick={() => setOwner("")} title="Clear this filter">
-            {owner}
+            {index.byHandle.get(owner)?.name ?? owner}
           </Chip>
         )}
       </div>
@@ -137,21 +147,29 @@ export function Goals() {
         }
       >
         {goals.map((goal) => (
-          <GoalPanel key={goal.id} goal={goal} now={now} onOwner={setOwner} />
+          <GoalPanel
+            key={goal.id}
+            goal={goal}
+            now={now}
+            onOwner={setOwner}
+            seatName={(handle) => index.byHandle.get(handle)?.name ?? handle}
+          />
         ))}
       </QueryState>
     </>
   );
 }
 
-function GoalPanel({
+export function GoalPanel({
   goal,
   now,
   onOwner,
+  seatName,
 }: {
   goal: WorkGoal;
   now: number;
   onOwner: (h: string) => void;
+  seatName: (handle: string) => string;
 }) {
   const health = HEALTH[goal.health ?? ""];
   return (
@@ -171,8 +189,14 @@ function GoalPanel({
     >
       <div className="row gap-2 wrap" style={{ marginBottom: "var(--space-3)" }}>
         {goal.owners.map((handle) => (
-          <Chip key={handle} onClick={() => onOwner(handle)} title={`Only ${handle}'s goals`}>
-            {handle}
+          // THE CHIP SHOWS A NAME AND SENDS A HANDLE: the word is for the
+          // reader and the value is the filter's.
+          <Chip
+            key={handle}
+            onClick={() => onOwner(handle)}
+            title={`Only ${seatName(handle)}'s goals`}
+          >
+            {seatName(handle)}
           </Chip>
         ))}
         {goal.due_at && (
@@ -211,7 +235,7 @@ function GoalPanel({
   );
 }
 
-function TargetMeter({ target }: { target: WorkGoalTarget }) {
+export function TargetMeter({ target }: { target: WorkGoalTarget }) {
   if (target.progress === undefined) {
     return (
       <Meter
