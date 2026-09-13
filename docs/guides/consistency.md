@@ -162,7 +162,7 @@ rather than downgraded. Each code names a different thing to do.
 | `below_floor` | Records this node never applied have been trimmed. | Its rows are missing state no replay can supply. The node has to adopt a peer's snapshot; see [Retention](retention.md). |
 | `floor_unknown` | The published trim floor could not be read. | The third value blocks: guessing here keeps a node serving over a hole it cannot see. Check coordination. |
 | `evicted` | This node has been removed from the fleet. | Nothing it holds is authoritative. Readmit it, or route elsewhere. |
-| `wrong_stream` | The position this read was asked to reach is on another stream. | A caller bug, or a cursor from before a reanchor. |
+| `wrong_stream` | The position this read was asked to reach is on another stream — or this node's own checkpoint is past the log's end, which is a stream that is not the one it checkpointed against. | A caller bug, a cursor from before a reanchor, or a recreated stream; see [Retention](retention.md#re-anchoring-a-recreated-stream). |
 
 Four of them are worth coming back to **this** node for — `behind`,
 `no_quorum`, `broker_unreachable` and `stalled`. The rest are not, and the

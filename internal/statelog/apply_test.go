@@ -240,6 +240,14 @@ func newApplyHarness(t *testing.T, domain statelog.Domain) *applyHarness {
 // checkpoint and the retained records are what survive.
 func (h *applyHarness) upgrade(domain statelog.Domain) {
 	h.t.Helper()
+	h.rebuild(domain, time.Time{})
+}
+
+// rebuild is [applyHarness.upgrade] under a stream identity: the instant the
+// broker reports for the stream, which the loop compares against the instant
+// its checkpoint was committed under.
+func (h *applyHarness) rebuild(domain statelog.Domain, created time.Time) {
+	h.t.Helper()
 	h.applier = newProbeApplier()
 	h.fetch = newProbeFetch()
 	recorder, err := metrics.New()
@@ -248,12 +256,13 @@ func (h *applyHarness) upgrade(domain statelog.Domain) {
 	}
 	h.metrics = recorder
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain:     domain,
-		Applier:    h.applier,
-		Fetch:      h.fetch,
-		DB:         h.db.Replicated(),
-		Generation: 1,
-		Metrics:    recorder,
+		Domain:          domain,
+		Applier:         h.applier,
+		Fetch:           h.fetch,
+		DB:              h.db.Replicated(),
+		Generation:      1,
+		StreamCreatedAt: created,
+		Metrics:         recorder,
 	})
 	if err != nil {
 		h.t.Fatalf("NewRunner: %v", err)
@@ -1452,5 +1461,60 @@ func TestAReprocessKeepsWhatAnUnreadableRecordStillCovers(t *testing.T) {
 	seen = h.applier.seen()
 	if len(seen) != 2 || seen[0].Seq != 2 || seen[1].Seq != 3 {
 		t.Fatalf("the build reading 12 applied %v, want 2 then 3", seen)
+	}
+}
+
+// A RECREATED STREAM STOPS THE APPLIER, and it is the broker's own creation
+// instant that says so.
+//
+// A stream deleted and remade restarts its sequences at one. Every position
+// this node holds then names a number space that no longer exists, and a
+// consumer resumed from the checkpoint waits for a sequence the new stream
+// reaches only by coincidence — reporting nothing pending, looking perfectly
+// caught up, applying none of the new stream's records. The instant is the
+// only thing that can notice: the sequences are plausible and an empty stream
+// and an emptied one have the same count.
+//
+// Until the engine passed the LIVE instant, the loop compared the checkpoint
+// row's own recorded value against itself and this could never fire.
+func TestARecreatedStreamStopsTheApplier(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	born := time.Date(2026, 9, 10, 12, 0, 0, 123_456_789, time.UTC)
+	h.rebuild(probeDomain{}, born)
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+	h.fetch.offer(2, env(2, "edit", "b", "op-2", 1))
+	if err := h.run(2); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	// THE SAME STREAM, reported at nanosecond precision against a row that
+	// keeps microseconds: the same stream, and it must read as such.
+	h.rebuild(probeDomain{}, born.Add(100*time.Nanosecond))
+	if err := h.boot(0); err != nil {
+		t.Fatalf("the same stream, reported at a finer resolution, was refused: %v", err)
+	}
+	if err := h.runner.Stopped(); err != nil {
+		t.Fatalf("the same stream stopped the applier: %v", err)
+	}
+
+	// A DIFFERENT STREAM WEARING THE SAME NAME.
+	h.rebuild(probeDomain{}, born.Add(time.Hour))
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	err := h.runner.Run(ctx)
+	if !errors.Is(err, statelog.ErrStopped) || !errors.Is(err, statelog.ErrStreamRecreated) {
+		t.Fatalf("Run on a recreated stream returned %v, want a stop naming the "+
+			"recreation", err)
+	}
+	if stopped := h.runner.Stopped(); stopped == nil {
+		t.Fatal("the applier does not report itself stopped, so its health would " +
+			"not refuse and its seats would not move")
+	}
+	if !strings.Contains(err.Error(), "reanchor") {
+		t.Fatalf("the stop does not name the verb that repairs it: %v", err)
+	}
+	if got := h.runner.Committed().Seq; got != 2 {
+		t.Fatalf("the checkpoint moved to %d on a stopped applier", got)
 	}
 }

@@ -327,11 +327,33 @@ func (s *stateLog) start(ctx context.Context, host domainHost, domain statelog.D
 
 	spec := domain.Stream()
 
+	// THE BROKER SAYS WHICH STREAM THIS IS. Its creation instant is the
+	// detector for a recreated stream, and the applier compares it against
+	// the instant its checkpoint was committed under — so it has to be the
+	// LIVE one. The cursor row's own value was passed here once, and a
+	// value read out of the row is compared against itself: every recreated
+	// stream went undetected, the manifest carried a zero instant on every
+	// fresh node, and the reanchor verb asked an operator to confirm the
+	// year one.
+	stats, err := appendTo.Stats(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("engine: read %s's identity: %w — a node cannot "+
+			"resume a domain on a stream it cannot identify, because a recreated "+
+			"one is empty and would be applied from as though nothing were "+
+			"missing", domain.Name(), err)
+	}
+	created := stats.CreatedAt.UTC()
+	if created.IsZero() {
+		return nil, fmt.Errorf("engine: the broker reports no creation instant "+
+			"for %s, so this node cannot tell it from a recreated stream: %w",
+			spec.Name, statelog.ErrStreamRecreated)
+	}
+
 	// THE ROWS SAY WHERE THIS NODE IS. The checkpoint commits with them,
 	// so it is the only durable statement of it — and resuming a consumer
 	// anywhere else is either a hole (at the head) or a million
 	// redeliveries (at the beginning).
-	at, created, _, err := statelog.CursorFor(ctx, s.db.Replicated(), spec.Name)
+	at, _, _, err := statelog.CursorFor(ctx, s.db.Replicated(), spec.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -719,6 +741,10 @@ func (s *stateLog) health(ctx context.Context, running *runningDomain) (statelog
 		return health, err
 	}
 	health.FirstSeq = &first
+	// THE END ITSELF, beside the lag derived from it: the lag is clamped
+	// at zero, so a checkpoint PAST the end reads as caught up through
+	// it, and the end is what [statelog.Health.AheadOfLog] refuses on.
+	health.LastSeq = &end
 	lag := uint64(0)
 	if end > at.Seq {
 		lag = end - at.Seq
@@ -1273,6 +1299,18 @@ func (s *stateLog) Status(ctx context.Context) []ReplicationStatus {
 			// which is the one state this count exists to surface.
 			row.Detail = "this node cannot read the domain's own position: " +
 				err.Error()
+		case health.Err != "":
+			// A STOPPED APPLIER IS NOT READY, whatever its lag says: a
+			// loop halted on a recreated stream has a lag of zero and
+			// applies nothing, and the row read as ready for exactly as
+			// long as nobody looked at the error beside the number.
+			row.Detail = "the applier stopped: " + health.Err
+		case health.AheadOfLog():
+			row.Detail = fmt.Sprintf("this node's checkpoint %d is past the log's "+
+				"end %d, so it names a stream that is not this one — a recreated "+
+				"stream, or a broker restored from an older copy; `crewlet "+
+				"retention reanchor` follows the new one from its head",
+				health.Position.Seq, *health.LastSeq)
 		case !health.CaughtUp:
 			row.Detail = fmt.Sprintf("applying: %d record(s) behind the log's head",
 				lagOf(health))

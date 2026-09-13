@@ -92,8 +92,18 @@ type RunnerDeps struct {
 	Generation uint32
 
 	// StreamCreatedAt is the broker's own creation instant for this
-	// stream, stored beside the checkpoint as the DETECTOR: a recreated
-	// stream starts its sequences again, and this is what notices.
+	// stream, AS THE BROKER REPORTS IT NOW, stored beside the checkpoint as
+	// the DETECTOR: a recreated stream starts its sequences again, and this
+	// is what notices — the loop compares it against the instant the
+	// checkpoint was committed under and STOPS on a difference, because
+	// every position it holds names a number space that no longer exists.
+	//
+	// It must come from the broker, never from the checkpoint row: a
+	// value read back out of the row is compared against itself and
+	// detects nothing, which is exactly what the engine did until the
+	// wiring was tested. The zero value declares no identity at all, which
+	// skips the comparison; the engine never passes it, and a caller that
+	// cannot say which stream it is on is one that should refuse to run.
 	StreamCreatedAt time.Time
 
 	// Epoch is the per-epoch configuration the domain declared it reads.
@@ -376,6 +386,9 @@ func (r *Runner) Run(ctx context.Context) error {
 	}()
 
 	if err := r.loadCursor(ctx); err != nil {
+		if errors.Is(err, ErrStopped) {
+			return r.stop(ctx, err)
+		}
 		return err
 	}
 	// WHAT AN EARLIER BUILD RETAINED, THIS ONE MAY NOW READ. A retained
@@ -425,18 +438,33 @@ func (r *Runner) loadCursor(ctx context.Context) error {
 		defer r.mu.Unlock()
 		if found {
 			r.cursor = at
-			// A RECREATED STREAM IS DETECTED HERE and nowhere else. The
-			// generation is the response and this is what notices: the
-			// broker's own creation instant moving means every stored
-			// sequence is a number in a space it no longer belongs to.
-			if !r.created.IsZero() && !created.IsZero() && !created.Equal(r.created) {
-				r.logger.WarnContext(ctx, "statelog_stream_recreated",
-					"domain", r.domain.Name(), "stream", r.spec.Name,
-					"cursor_created_at", created, "stream_created_at", r.created,
-					"generation", r.gen)
-			}
 		}
 		r.deferred, r.hasDefer = d, hasDefer
+		// A RECREATED STREAM IS DETECTED HERE and nowhere else, and IT
+		// IS A STOP. The generation is the response and this is what
+		// notices: the broker's own creation instant moving means every
+		// stored sequence — the checkpoint, every anchor, every version —
+		// is a number in a space it no longer belongs to, and a consumer
+		// resumed from the checkpoint waits for a sequence that never
+		// arrives while reporting nothing pending. An operator reanchors;
+		// until then this node's rows are frozen and its health says so.
+		//
+		// Compared through [IdentityOf], at the resolution the row keeps,
+		// because the broker reports nanoseconds and the row keeps
+		// microseconds — compared exactly, every boot after the first
+		// would read as a recreation.
+		if !r.created.IsZero() {
+			if state := IdentityOf(created, r.created, found); state == StreamRecreated {
+				return fmt.Errorf("%w: %w — %s's checkpoint was committed against a "+
+					"stream created at %s and the broker's %s was created at %s, so "+
+					"every position this node holds names a sequence space that no "+
+					"longer exists; `crewlet retention reanchor -stream %s` is what "+
+					"follows the new stream from its head",
+					ErrStopped, ErrStreamRecreated, r.domain.Name(),
+					created.UTC().Format(time.RFC3339Nano),
+					r.spec.Name, r.created.UTC().Format(time.RFC3339Nano), r.spec.Name)
+			}
+		}
 		return nil
 	})
 }

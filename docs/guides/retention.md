@@ -382,8 +382,15 @@ position the fleet holds then names a number space that no longer exists: a
 stored version, a consumer cursor, an arbitration anchor. Nodes refuse to
 serve, which is correct.
 
-The engine detects this from the stream's own **creation instant**, and
-`reanchor` is the response:
+The engine detects this from the stream's own **creation instant**, which the
+broker reports and every applier compares at boot against the instant its
+checkpoint was committed under. On a difference the applier **stops** rather
+than resuming — the log line names both instants and this verb — the node's
+reads refuse `stalled` with that reason, its seats move to a peer, and
+`crewlet retention status` shows the domain as stopped. A checkpoint past the
+log's end is caught the same way, as `wrong_stream`, because a position the
+log has never reached is a position on another stream. `reanchor` is the
+response:
 
 ```
 crewlet retention reanchor -stream CREWLET_TRACKER_LOG
