@@ -525,6 +525,15 @@ func (a *App) answer(ctx context.Context, what string, params map[string]any, op
 		return nil, fmt.Errorf("%w: %s", stream.ErrUnauthorized, what)
 	case errors.Is(err, queries.ErrNotFound):
 		return nil, fmt.Errorf("%w: %s", stream.ErrNotFound, what)
+	case errors.Is(err, queries.ErrBadParams):
+		// TRANSLATED RATHER THAN LEFT TO THE DEFAULT, which is what it
+		// was: an untranslated refusal reached the socket as an
+		// unclassified error, so a caller that asked wrong was told the
+		// query FAILED and the node warned about its own health. REST
+		// already answered 400 here, and the two transports disagreeing
+		// about whose fault a request is is exactly what this mapping
+		// exists to prevent.
+		return nil, fmt.Errorf("%w: %s", stream.ErrBadParams, what)
 	case errors.Is(err, queries.ErrUnavailable):
 		return nil, fmt.Errorf("%w: %s", stream.ErrUnavailable, what)
 	default:
@@ -565,7 +574,10 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 	case errors.Is(err, queries.ErrUnauthorized):
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": stream.CodeUnauthorized})
 	case errors.Is(err, queries.ErrBadParams):
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": stream.CodeQueryFailed})
+		// 400 AND ITS OWN CODE. The status was already right; the code
+		// said `query_failed`, which names a fault of this node for a
+		// request the caller has to change.
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": stream.CodeBadParams})
 	case errors.Is(err, queries.ErrNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": stream.CodeNotFound})
 	case errors.Is(err, queries.ErrUnavailable):

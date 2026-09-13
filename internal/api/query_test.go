@@ -212,9 +212,22 @@ func TestABadParameterIsRefusedRatherThanGuessedAt(t *testing.T) {
 	a := seededApp(t, nil)
 	// A cursor missing half its key would skip or repeat whatever collided
 	// with it, silently.
-	status, _ := overREST(t, a, "events", url.Values{"before_id": {"ev1"}})
+	status, body := overREST(t, a, "events", url.Values{"before_id": {"ev1"}})
 	if status != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", status)
+	}
+	if got := body.(map[string]any)["error"]; got != "bad_params" {
+		t.Errorf("REST error = %v, want bad_params — `query_failed` names a "+
+			"fault of this node for a request the caller has to change", got)
+	}
+
+	// AND THE SOCKET SAYS THE SAME THING. It said `query_failed` — the
+	// code a client retries — so a screen polling a question it was
+	// malforming retried for ever, while this node logged a warning per
+	// tick about a request that was never its fault.
+	socket := overSocket(t, a, "events", map[string]any{"before_id": "ev1"})
+	if socket["kind"] != "error" || socket["error"] != "bad_params" {
+		t.Errorf("socket answer = %v, want bad_params", socket)
 	}
 }
 
