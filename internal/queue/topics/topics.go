@@ -171,6 +171,31 @@ func HandleFromInbox(subject string) (string, bool) {
 	return h, true
 }
 
+// MailboxHandle reports the seat whose mailbox a durable subscription is, for
+// the two subscriptions a seat's mailbox comprises: its inbox and its
+// sandbox-control subscription.
+//
+// The PAIR decides, never the topic alone: a subscription on a seat's inbox
+// subject under any other group is not that seat's mailbox, and deleting it as
+// one would destroy somebody else's consumer. It is the exact inverse of
+// [AgentInbox] with [AgentInboxGroup] and of [AgentControl] with
+// [AgentControlGroup], so it reports true only for a pair those could have
+// produced.
+func MailboxHandle(topic, group string) (string, bool) {
+	if h, ok := HandleFromInbox(topic); ok {
+		return h, group == AgentInboxGroup(h)
+	}
+	rest, ok := strings.CutPrefix(topic, AgentInboxPrefix)
+	if !ok {
+		return "", false
+	}
+	h, ok := strings.CutSuffix(rest, AgentControlSuffix)
+	if !ok || h == "" || strings.Contains(h, ".") || group != AgentControlGroup(h) {
+		return "", false
+	}
+	return h, true
+}
+
 // Event returns the fleet-wide routing subject for an event type. Each of
 // these has ONE fleet-wide consumer group, so the node that wins a delivery
 // is rarely the node running the recipient — which is why recipients are

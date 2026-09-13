@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -511,7 +513,13 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 	if _, err := q.js.CreateOrUpdateConsumer(ctx, stream, jetstream.ConsumerConfig{
 		Durable:       name,
 		FilterSubject: topic,
-		AckPolicy:     jetstream.AckExplicitPolicy,
+		// The pair, verbatim. The durable name cannot carry it (it is a
+		// lossy rewrite plus a digest), and ListSubscriptions has to hand
+		// back exactly what the caller created. Written on every ensure, so
+		// a consumer made before this field existed gains it the next time
+		// any node declares the subscription.
+		Metadata:  subscriptionMetadata(topic, group),
+		AckPolicy: jetstream.AckExplicitPolicy,
 		// Earliest, always. A consumer created at "latest" exists and
 		// still discards everything published before its first
 		// consumer — which is the whole failure this call prevents.
@@ -547,6 +555,110 @@ func (q *Queue) DeleteSubscription(ctx context.Context, topic, group string) (bo
 	default:
 		return false, fmt.Errorf("delete consumer for %s/%s: %w", topic, group, err)
 	}
+}
+
+// Consumer metadata keys recording the pair a durable consumer was created for.
+// Namespaced so they cannot collide with a key an operator or a tool adds.
+const (
+	metaTopic = "crewlet.topic"
+	metaGroup = "crewlet.group"
+)
+
+func subscriptionMetadata(topic, group string) map[string]string {
+	return map[string]string{metaTopic: topic, metaGroup: group}
+}
+
+// streamNamePrefix is what every stream this backend provisions is named
+// under, the engine's own and every derived namespace's alike. Coordination
+// buckets ride the same broker as KV_ streams and carry no subscriptions.
+const streamNamePrefix = "CREWLET_"
+
+// ListSubscriptions reports every durable consumer on this backend's streams
+// whose topic matches topicPattern, as the pair it was created for.
+//
+// EVERY STREAM, ENUMERATED, for the reason the backup takes the same shape: a
+// namespace stream exists only once something published to it, so a list of
+// known streams would miss exactly the mailboxes nobody remembers. A pattern is
+// not mapped onto one stream either, because a pattern like "crewlet.>" spans
+// several.
+//
+// An ephemeral consumer (a stream subscription, a peek, a memory replay) is not
+// a subscription and is skipped. A durable consumer that carries no pair in its
+// metadata was made by an older build and is recovered from its name when that
+// can be proven (see pairFromConsumerName); one that cannot be recovered is
+// logged and left out rather than listed under a guessed pair.
+func (q *Queue) ListSubscriptions(ctx context.Context, topicPattern string) ([]queue.Subscription, error) {
+	if q.isClosed() {
+		return nil, ErrClosed
+	}
+	if topicPattern == "" {
+		return nil, fmt.Errorf("%w: a subscription listing needs a topic pattern; pass \">\" for "+
+			"every subscription", ErrSubject)
+	}
+
+	// Collected before any consumer is listed, and each lister drained to
+	// its end: the client's listers publish on unbuffered channels from a
+	// goroutine of their own, so abandoning one part-way leaks it.
+	names := q.js.StreamNames(ctx)
+	var streams []string
+	for name := range names.Name() {
+		if strings.HasPrefix(name, streamNamePrefix) {
+			streams = append(streams, name)
+		}
+	}
+	if err := names.Err(); err != nil {
+		return nil, fmt.Errorf("list streams: %w", err)
+	}
+
+	var out []queue.Subscription
+	for _, name := range streams {
+		stream, err := q.js.Stream(ctx, name)
+		if errors.Is(err, jetstream.ErrStreamNotFound) {
+			// Deleted between the two reads; it holds nothing now.
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("open stream %s: %w", name, err)
+		}
+		consumers := stream.ListConsumers(ctx)
+		for info := range consumers.Info() {
+			sub, ok := q.subscriptionOf(ctx, name, info)
+			if ok && topics.Match(topicPattern, sub.Topic) {
+				out = append(out, sub)
+			}
+		}
+		if err := consumers.Err(); err != nil {
+			return nil, fmt.Errorf("list consumers of stream %s: %w", name, err)
+		}
+	}
+	slices.SortFunc(out, func(a, b queue.Subscription) int {
+		if c := strings.Compare(a.Topic, b.Topic); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Group, b.Group)
+	})
+	return out, nil
+}
+
+// subscriptionOf reads the pair a consumer was created for, reporting false for
+// a consumer that is not a durable subscription or whose pair cannot be known.
+func (q *Queue) subscriptionOf(ctx context.Context, stream string, info *jetstream.ConsumerInfo) (queue.Subscription, bool) {
+	if info == nil || info.Config.Durable == "" {
+		return queue.Subscription{}, false
+	}
+	if topic, group := info.Config.Metadata[metaTopic], info.Config.Metadata[metaGroup]; topic != "" && group != "" {
+		return queue.Subscription{Topic: topic, Group: group}, true
+	}
+	topic := info.Config.FilterSubject
+	if group, ok := pairFromConsumerName(info.Config.Durable, topic); ok {
+		return queue.Subscription{Topic: topic, Group: group}, true
+	}
+	q.log.WarnContext(ctx, "jetstream_subscription_unnamed", "stream", stream,
+		"consumer", info.Config.Durable, "filter_subject", topic,
+		"detail", "a durable consumer carries no subscription pair and its name does not prove "+
+			"one, so it is left out of the subscription listing; if nothing uses it, delete it "+
+			"with the nats CLI")
+	return queue.Subscription{}, false
 }
 
 // InFlightCount reports handler invocations currently mid-flight.

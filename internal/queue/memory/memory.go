@@ -772,6 +772,46 @@ func (q *Queue) DeleteSubscription(ctx context.Context, topic, group string) (bo
 	return true, nil
 }
 
+// ErrNoPattern refuses a listing that names no topic pattern. Reading an empty
+// pattern as "everything" would turn a caller's missing argument into the
+// widest possible answer; ">" is how a caller asks for everything.
+var ErrNoPattern = errors.New("memory: a subscription listing needs a topic pattern; pass \">\" for every subscription")
+
+// ListSubscriptions reports every durable subscription on this broker whose
+// topic matches topicPattern.
+//
+// The BROKER's subscriptions, not this client's: they are the fleet's shared
+// state, and a peer's mailbox is exactly what a sweep on another node has to
+// find. Sorted, so a caller walking the result sees the same order twice.
+func (q *Queue) ListSubscriptions(_ context.Context, topicPattern string) ([]queue.Subscription, error) {
+	if topicPattern == "" {
+		return nil, ErrNoPattern
+	}
+	q.broker.mu.Lock()
+	if q.notStartedLocked() {
+		q.broker.mu.Unlock()
+		return nil, ErrNotStarted
+	}
+	out := make([]queue.Subscription, 0, len(q.broker.subs))
+	for key := range q.broker.subs {
+		// topics.Match, the same matcher SubscribeStream uses, so a pattern
+		// means one thing on every verb that takes one.
+		if topics.Match(topicPattern, key.topic) {
+			out = append(out, queue.Subscription{Topic: key.topic, Group: key.group})
+		}
+	}
+	q.broker.mu.Unlock()
+	slices.SortFunc(out, compareSubscriptions)
+	return out, nil
+}
+
+func compareSubscriptions(a, b queue.Subscription) int {
+	if c := strings.Compare(a.Topic, b.Topic); c != 0 {
+		return c
+	}
+	return strings.Compare(a.Group, b.Group)
+}
+
 // --- broadcast streams ----------------------------------------------------
 
 // SubscribeStream creates an ephemeral per-caller broadcast subscription:

@@ -18,6 +18,10 @@
 //     unacked, stop consuming) — see Result.
 //   - Attachment has four verbs with different destructiveness: Quiesce,
 //     Unquiesce, Detach, DeleteSubscription.
+//   - The durable subscriptions a broker holds can be LISTED
+//     (ListSubscriptions). A mailbox outlives everything that knew its name,
+//     a removed seat's handle included, so the broker has to be able to say
+//     which mailboxes exist or a leaked one can never be found again.
 package queue
 
 import (
@@ -200,6 +204,17 @@ type BatchKeyFunc func(ev *events.Event) string
 // logged and never prevent the publish.
 type PublishListener func(ctx context.Context, topic string, ev *events.Event)
 
+// Subscription names one durable subscription by the (topic, group) pair it
+// was created with, exactly as the caller spelled both.
+//
+// The PAIR, because every backend keys a subscription on the pair and two
+// groups on one topic are two mailboxes; see topics.AgentControlGroupSuffix for
+// a pair of seats whose groups alone would collide.
+type Subscription struct {
+	Topic string
+	Group string
+}
+
 // Publisher is the write half of the queue.
 //
 // Declared here rather than in each consumer because several subsystems
@@ -275,6 +290,27 @@ type EventQueue interface {
 	// cannot depend on which node happened to run the seat.
 	DeleteSubscription(ctx context.Context, topic, group string) (bool, error)
 
+	// ListSubscriptions reports every durable subscription whose topic
+	// matches topicPattern (`*` one segment, `>` trailing segments, the
+	// grammar SubscribeStream takes), as the exact pair it was created
+	// with, in no promised order.
+	//
+	// EVERY one the broker holds, not this client's: one made through
+	// EnsureSubscription, Subscribe or SubscribeBatch, by any client of
+	// the broker, attached or not. A deleted subscription is not listed,
+	// and neither is an ephemeral SubscribeStream subscription, which is
+	// not a mailbox. An empty pattern is refused rather than read as
+	// "everything"; ">" asks for everything.
+	//
+	// It exists because a durable subscription outlives every record of
+	// its name. A seat's mailbox is named after its handle, a removed
+	// seat's handle is gone from the org every node derives names from,
+	// and a registry written beside the broker can miss one (a write that
+	// failed, a mailbox older than the registry). Without a listing, a
+	// mailbox that escaped the registry retains its mail for the life of
+	// the deployment and nothing can ever find it.
+	ListSubscriptions(ctx context.Context, topicPattern string) ([]Subscription, error)
+
 	// SubscribeStream creates an ephemeral per-caller broadcast
 	// subscription — every subscriber receives every matching event.
 	// topicPattern supports `*` (one segment) and `>` (trailing
@@ -294,12 +330,13 @@ type EventQueue interface {
 	// client live.
 	//
 	// What a backend may NOT do is answer DIFFERENTLY PER VERB. Before
-	// Start, all eleven of the publish, subscription and attachment verbs
+	// Start, all twelve of the publish, subscription and attachment verbs
 	// must give the same answer — Publish, Subscribe, SubscribeBatch,
 	// Quiesce, Unquiesce, Detach, EnsureSubscription, DeleteSubscription,
-	// SubscribeStream, PauseTopic and ResumeTopic. Either they all refuse,
-	// or none of them require it. Capabilities.RequiresStart says which,
-	// and queuetest sends all eleven to hold a backend to one answer.
+	// ListSubscriptions, SubscribeStream, PauseTopic and ResumeTopic.
+	// Either they all refuse, or none of them require it.
+	// Capabilities.RequiresStart says which, and queuetest sends all
+	// twelve to hold a backend to one answer.
 	//
 	// A caller cannot reason about a lifecycle whose rules change per
 	// method, and this is not hypothetical: a twin that refused Publish
@@ -351,7 +388,7 @@ type EventQueue interface {
 
 	// Stop closes the connection.
 	//
-	// AFTERWARDS EVERY ONE OF THE ELEVEN VERBS REFUSES. A requirement
+	// AFTERWARDS EVERY ONE OF THE TWELVE VERBS REFUSES. A requirement
 	// rather than a capability, and the asymmetry with the pre-Start rule
 	// is the point: "not connected yet" is a state a backend may
 	// legitimately not have — JetStream's Open connects, so there is

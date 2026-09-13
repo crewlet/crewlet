@@ -220,6 +220,44 @@ func TestHandleFromInboxIsTheInverseOfAgentInbox(t *testing.T) {
 	}
 }
 
+// A retirement sweep deletes what MailboxHandle names, so a false positive is a
+// consumer destroyed that belonged to nobody's mailbox.
+func TestMailboxHandleNamesOnlyAPairTheMailboxGrammarProduces(t *testing.T) {
+	t.Parallel()
+
+	for _, handle := range []string{"alice", "qa-lead", "release", "release-control", "inbox", "control"} {
+		for _, pair := range [][2]string{
+			{topics.AgentInbox(handle), topics.AgentInboxGroup(handle)},
+			{topics.AgentControl(handle), topics.AgentControlGroup(handle)},
+		} {
+			got, ok := topics.MailboxHandle(pair[0], pair[1])
+			if !ok || got != handle {
+				t.Errorf("MailboxHandle(%q, %q) = (%q, %v), want (%q, true)", pair[0], pair[1], got, ok, handle)
+			}
+		}
+	}
+
+	for _, tc := range []struct{ name, topic, group string }{
+		{"an inbox under another group", topics.AgentInbox("alice"), "agent-bob"},
+		{"an inbox under the control group", topics.AgentInbox("alice"), topics.AgentControlGroup("alice")},
+		{"a control subject under the inbox group", topics.AgentControl("alice"), topics.AgentInboxGroup("alice")},
+		// The collision TestGroupNamesAreNotUniqueOnTheirOwn describes, from
+		// the side that must NOT match: seat release's control group is seat
+		// release-control's inbox group, so that group on release's INBOX
+		// topic is neither seat's mailbox.
+		{"release-control's inbox group on release's inbox", topics.AgentInbox("release"),
+			topics.AgentInboxGroup("release-control")},
+		{"a control subject with a dotted handle", "crewlet.agent.a.b.control", "agent-a.b-control"},
+		{"an empty control handle", "crewlet.agent..control", "agent--control"},
+		{"a service subscription", topics.NotificationsInbound, "notify-inbound"},
+		{"an event subscription", topics.Event("task_created"), "agent-alice"},
+	} {
+		if got, ok := topics.MailboxHandle(tc.topic, tc.group); ok {
+			t.Errorf("%s: MailboxHandle(%q, %q) = (%q, true), want (\"\", false)", tc.name, tc.topic, tc.group, got)
+		}
+	}
+}
+
 // TestGroupNamesAreNotUniqueOnTheirOwn states an invariant that is currently
 // true by accident and that every backend already depends on.
 //
