@@ -24,8 +24,7 @@ node.
 
 **Shared coordination.** Seat leases live in the `coordination` slot.
 `coordination.type: local` holds them in this process, so every node
-believes it owns the whole company; the engine logs
-`seat_placement_is_process_local` at boot. It is *only* the leases: the
+would believe it owns the whole company. It is *only* the leases: the
 fleet's shared records — the token counter, the completion ledger, the
 delivery dedupe, agent-to-agent channels, scheduled-fire claims, detached
 sandbox runs — are on the KV whatever this setting says, because each of
@@ -312,8 +311,6 @@ Two consequences worth stating plainly:
 - **`seats_unplaceable`** — a seat nobody may run. Fix the selector, or
   start a node that matches.
 - **`seat_claims_blocked_by_older_protocol`** — an unfinished upgrade.
-- **`seat_placement_is_process_local`** — `coordination.type: local`, so
-  the leases never left this process. Every node thinks it owns everything.
 - **`/health`** carries this node's seats, its in-flight count and its
   config posture; the dashboard's **Fleet** screen puts every node's
   side by side, with seat ownership and per-node config epoch.
