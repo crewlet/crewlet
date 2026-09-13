@@ -3,6 +3,7 @@ package cliagent
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -61,6 +62,103 @@ func TestNoShippedProfileDeniesTheWeb(t *testing.T) {
 	}
 }
 
+// A BLANKET TOOL DENIAL IS ONLY HONEST WHERE THE VENDOR SHIPS NO WEB TOOL.
+//
+// `pi` is the one profile that switches every tool off rather than allowing
+// two, and it is correct there for a reason no other vendor has: this CLI's
+// built-in set is read, bash, powershell, edit, write, grep, find and ls —
+// there is no web tool in it to keep. Adopting the same flag on a CLI that
+// HAS one would cut the web silently, which is the rule this file exists for,
+// so the carve-out is named rather than left to whoever reads the argv next.
+func TestOnlyTheProfileWithNoWebToolDeniesEveryTool(t *testing.T) {
+	for _, name := range BuiltinNames() {
+		p, _ := Builtin(name)
+		for _, arg := range p.CompleteArgs {
+			if arg != "--no-tools" && arg != "-nt" {
+				continue
+			}
+			if name != "pi" {
+				t.Errorf("%s denies every tool with %q — web is the one local tool "+
+					"this backend never denies, and only a CLI that ships none "+
+					"may switch the lot off", name, arg)
+			}
+		}
+	}
+}
+
+// THE PI PROFILE SHUTS EVERY DISCOVERY PATH ITS CLI HAS.
+//
+// This vendor is unusually generous about it — one `--no-*` flag per path —
+// and that is exactly why a missing one is easy not to notice: each hole is a
+// separate silent admission of something from a host the engine does not
+// control, and an extension is EXECUTABLE.
+func TestThePiProfileAdmitsNothingFromTheHost(t *testing.T) {
+	t.Parallel()
+	p, ok := Builtin("pi")
+	if !ok {
+		t.Fatal("no built-in pi profile")
+	}
+	for flag, why := range map[string]string{
+		"-p":                    "print mode: answer and exit rather than opening the TUI",
+		"--no-tools":            "the tool denial itself",
+		"--no-context-files":    "AGENTS.md / CLAUDE.md discovery",
+		"--no-extensions":       "extension discovery — an extension executes",
+		"--no-skills":           "skill discovery",
+		"--no-prompt-templates": "prompt-template discovery",
+		"--no-themes":           "theme discovery",
+		"--no-approve":          "project-local trust, which otherwise falls back to the operator's defaultProjectTrust",
+		"--no-session":          "the session store: nothing of one turn reaches the next",
+	} {
+		if !slices.Contains(p.CompleteArgs, flag) {
+			t.Errorf("complete_args = %v, want %s (%s)", p.CompleteArgs, flag, why)
+		}
+	}
+	// --system-prompt REPLACES; --append-system-prompt is the other half of
+	// the pair and would leave the harness's own prompt in front of the
+	// seat's.
+	if joined := strings.Join(p.SystemPromptArgs, " "); strings.Contains(joined, "--append") {
+		t.Errorf("system_prompt_args = %v appends rather than replaces, so the "+
+			"harness's identity sits over the top of the seat's", p.SystemPromptArgs)
+	}
+	// `--` before the prompt: this is the only built-in whose vendor offers
+	// the separator, and without it a transcript that happens to begin with
+	// a dash is parsed as an unknown flag.
+	if got := strings.Join(p.PromptArgs, " "); got != "--" {
+		t.Errorf("prompt_args = %v, want [--] so a prompt beginning with a dash is "+
+			"a prompt", p.PromptArgs)
+	}
+}
+
+// THE PI PROFILE'S ARGV MUST PARSE, and only the real binary can say so.
+//
+// Nine flags of a vendor's own spelling, and a `--` whose meaning differs
+// between parsers. Skipped unless a `pi` is on PATH; it stops at the CLI's
+// own missing-credential failure, which is far enough to prove the flags were
+// understood.
+func TestThePiProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
+	binary, err := exec.LookPath("pi")
+	if err != nil {
+		t.Skip("no pi on PATH")
+	}
+	p, _ := Builtin("pi")
+	dir := t.TempDir()
+	args := append([]string(nil), p.CompleteArgs...)
+	for _, a := range p.ModelArgs {
+		args = append(args, strings.ReplaceAll(a, "{model}", "anthropic/claude-sonnet-4.6"))
+	}
+	for _, a := range p.SystemPromptArgs {
+		args = append(args, strings.ReplaceAll(a, "{system}", "You are Agent CTO."))
+	}
+	args = append(args, p.PromptArgs...)
+	args = append(args, "say hello")
+
+	cmd := exec.Command(binary, args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "HOME="+dir, "PI_CODING_AGENT_DIR="+dir+"/.pi/agent", "PI_OFFLINE=1")
+	combined, _ := cmd.CombinedOutput()
+	assertNoArgumentRefusal(t, string(combined), args)
+}
+
 // allowsAfterFlag reports whether every want follows flag before the next
 // flag begins.
 func allowsAfterFlag(args []string, flag string, want ...string) bool {
@@ -101,7 +199,10 @@ func TestEveryShippedProfileDeclaresItsLocalToolsStance(t *testing.T) {
 			t.Errorf("%s: vendor-default with no local_tools_note", name)
 		}
 	}
-	for _, name := range []string{"claude-code", "codex", "gemini-cli", "qwen-code", "opencode", "cursor-agent", "copilot", "muse-code"} {
+	for _, name := range []string{
+		"claude-code", "codex", "gemini-cli", "qwen-code", "opencode",
+		"cursor-agent", "copilot", "muse-code", "kimi-code", "hermes", "pi",
+	} {
 		p, _ := Builtin(name)
 		if p.LocalTools != LocalToolsDenied {
 			t.Errorf("%s: local_tools = %q, want denied", name, p.LocalTools)

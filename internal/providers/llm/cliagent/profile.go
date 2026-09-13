@@ -227,6 +227,54 @@ func (f SeedFile) scope() SeedScope {
 	return f.In
 }
 
+// SystemPromptFile shapes the file a `{file}` system-prompt channel writes,
+// for the vendors whose prompt channel takes a STRUCTURED file rather than a
+// bare one.
+//
+// Without it the file is the system prompt and nothing else, which is what
+// every other `{file}` profile wants. Kimi Code is the first that cannot take
+// that: its only per-call prompt channel is `--agent-file`, an agent
+// definition whose YAML frontmatter declares the agent's name, its
+// description — REQUIRED — and its tool allowlist, with the BODY as the
+// system prompt. Handed a bare prompt the CLI does not degrade: it "reports
+// the error and exits", so every call fails.
+//
+// Which makes the frontmatter load-bearing twice over. It is also the only
+// place that CLI can be told which of its own tools to keep, so the file is
+// where this backend's tool denial lives for it — and that is why a profile
+// declaring one passes the channel on EVERY call, including a request that
+// carries no system prompt at all (`crewlet llm doctor`'s isolation probes
+// are two). Passing it only when there is text to put in it would hand the
+// vendor's default agent, and every tool it has, to exactly the calls that
+// exist to prove the tools are off.
+type SystemPromptFile struct {
+	// Name is the file to write in the per-call working directory. Empty
+	// takes the default. A bare name, never a path: a vendor that keys on
+	// the extension (`--agent-file` wants `.md`) is the only reason to set
+	// it.
+	Name string `yaml:"name,omitempty"`
+
+	// Template is the file's content, with `{system}` substituted by the
+	// seat's system prompt. Empty writes the prompt alone.
+	Template string `yaml:"template,omitempty"`
+}
+
+// render returns the bytes to write for one call's system prompt.
+func (f *SystemPromptFile) render(system string) string {
+	if f == nil || f.Template == "" {
+		return system
+	}
+	return strings.ReplaceAll(f.Template, "{system}", system)
+}
+
+// fileName returns the name to write under.
+func (f *SystemPromptFile) fileName() string {
+	if f == nil || f.Name == "" {
+		return systemPromptFile
+	}
+	return f.Name
+}
+
 // AuthMarker recognises a login the CLI has stopped honouring.
 //
 // Same reasoning as [LimitMarker]: an expired OAuth login exits non-zero with
@@ -332,6 +380,11 @@ type Profile struct {
 	// the CLI its system prompt twice — and [Profile.validate] refuses it.
 	SystemPromptEnv string `yaml:"system_prompt_env,omitempty"`
 
+	// SystemPromptFile shapes the file either `{file}` channel writes —
+	// see [SystemPromptFile]. Nil writes the prompt alone, which is what
+	// every vendor but Kimi Code takes.
+	SystemPromptFile *SystemPromptFile `yaml:"system_prompt_file,omitempty"`
+
 	// PromptArgs introduces the prompt in argv mode, for a CLI that takes it
 	// as a FLAG'S VALUE rather than as a positional argument. Empty appends
 	// the prompt bare, which is what every other argv profile wants.
@@ -389,8 +442,28 @@ type Profile struct {
 	// exiting zero.
 	ErrorPaths []Path `yaml:"error_paths,omitempty"`
 
-	// Usage locates the token counts.
+	// Usage locates the token counts, in the CLI's stdout — or, where
+	// [Profile.UsageFileArgs] is set, in the report that field names.
 	Usage UsagePaths `yaml:"usage,omitempty"`
+
+	// UsageFileArgs asks the CLI to write its token counts to a FILE,
+	// carrying the path through the `{usage_file}` placeholder. Empty
+	// reads them out of stdout, which is what every other profile does.
+	//
+	// It exists because a CLI can report usage honestly and still not put
+	// it in the answer. Hermes's one-shot entry is `-z`, whose whole
+	// contract is "single prompt in, final response text out, NOTHING else
+	// on stdout or stderr" — so there is no envelope for a usage path to
+	// walk, and the counts ride `--usage-file` instead. Estimating them
+	// would be the alternative, and an estimate is what the budget cascade
+	// then spends against.
+	//
+	// The file is written in the per-call working directory and read after
+	// the process exits; when it is absent or unreadable the counts fall
+	// back to whatever stdout said, because the vendor writes it "even
+	// when the run fails" and a broken usage write must never mask the
+	// run's own outcome.
+	UsageFileArgs []string `yaml:"usage_file_args,omitempty"`
 
 	// ConfigEnv maps a vendor's own relocation variable to a directory
 	// under the seat's home. Without it a CLI reads the engine user's real
@@ -490,6 +563,33 @@ func IsCredentialName(name string) bool {
 	return false
 }
 
+// hasSystemChannel reports whether this profile carries the system prompt on
+// a channel of its own rather than leaving it in the transcript.
+func (p *Profile) hasSystemChannel() bool {
+	return len(p.SystemPromptArgs) > 0 || p.SystemPromptEnv != ""
+}
+
+// writesSystemPromptFile reports whether this profile's system-prompt channel
+// puts the text in a FILE — either `{file}` on argv, or the env-var channel,
+// which is a path by construction.
+func (p *Profile) writesSystemPromptFile() bool {
+	if p.SystemPromptEnv != "" {
+		return true
+	}
+	return slices.ContainsFunc(p.SystemPromptArgs, func(arg string) bool {
+		return strings.Contains(arg, "{file}")
+	})
+}
+
+// isBareFileName reports whether name is a single path element that stays put
+// when joined onto a directory.
+func isBareFileName(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	return !strings.ContainsRune(name, '/') && !strings.ContainsRune(name, filepath.Separator)
+}
+
 // validate reports what is wrong with a profile, naming the override field an
 // operator would edit rather than the Go field they cannot see.
 func (p *Profile) validate(name string) error {
@@ -569,6 +669,43 @@ func (p *Profile) validate(name string) error {
 		// business rather than something this profile can state.
 		add("system_prompt_args and system_prompt_env are both set — a CLI takes " +
 			"its system prompt on ONE channel; drop whichever this build does not use")
+	}
+	if p.SystemPromptFile != nil {
+		if !p.writesSystemPromptFile() {
+			// A template with no file to write is not a harmless
+			// extra: on a `{system}` profile the seat's identity goes
+			// on argv bare, and an operator who wrote frontmatter
+			// meant it to reach the CLI.
+			add("system_prompt_file is set but no system-prompt channel writes a " +
+				"file — set system_prompt_args with a {file} placeholder, or " +
+				"system_prompt_env")
+		}
+		if tpl := p.SystemPromptFile.Template; tpl != "" && !strings.Contains(tpl, "{system}") {
+			add("system_prompt_file.template has no {system} placeholder — every " +
+				"call would hand the CLI the same fixed file and no seat's identity")
+		}
+		if name := p.SystemPromptFile.Name; name != "" && !isBareFileName(name) {
+			// The path is joined onto the per-call working directory,
+			// and this field is operator-overridable.
+			add("system_prompt_file.name %q must be a plain file name, with no "+
+				"directory separator", name)
+		}
+	}
+	if len(p.UsageFileArgs) > 0 {
+		if !slices.ContainsFunc(p.UsageFileArgs, func(arg string) bool {
+			return strings.Contains(arg, "{usage_file}")
+		}) {
+			add("usage_file_args carries no {usage_file} placeholder — there is " +
+				`nothing to substitute the path into, e.g. ["--usage-file", "{usage_file}"]`)
+		}
+		if len(p.Usage.Input) == 0 && len(p.Usage.Output) == 0 &&
+			len(p.Usage.CacheRead) == 0 && len(p.Usage.CacheWrite) == 0 {
+			// The file would be written and then read by nothing, and
+			// the counts estimated anyway — which looks exactly like a
+			// profile that reports real usage.
+			add("usage_file_args is set but usage declares no paths — the report " +
+				"would be written and never read")
+		}
 	}
 	for i, m := range p.LimitMarkers {
 		if problem := sentinelProblem(m.Sentinel); problem != "" {
@@ -684,13 +821,22 @@ func sentinelProblem(sentinel string) string {
 // is a one-line override, and the JSON paths it inherits from the built-in
 // profile are simply inert afterwards.
 //
+// THE USAGE FILE IS THE EXCEPTION TO THE TEXT RULE, and it is the whole
+// reason that channel exists: a report the CLI writes to a path of its own is
+// decoded whatever stdout carries, so a `text` profile declaring
+// [Profile.UsageFileArgs] reports real counts. Reading the text rule first
+// would answer "estimated" for exactly the profile that went to the trouble.
+//
 // It exists so `crewlet llm doctor` and the extractor answer the same
 // question. Doctor asked a narrower one — "are usage paths declared" — and so
 // reported "reported by CLI" for a provider whose every call estimates, which
 // is precisely the question that report exists to settle.
 func (p *Profile) ReadsUsage() bool {
-	if p.output() == OutputText {
+	if len(p.Usage.Input) == 0 && len(p.Usage.Output) == 0 {
 		return false
 	}
-	return len(p.Usage.Input) > 0 || len(p.Usage.Output) > 0
+	if len(p.UsageFileArgs) > 0 {
+		return true
+	}
+	return p.output() != OutputText
 }

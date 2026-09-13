@@ -81,7 +81,7 @@ func TestPromptFileLandsBesideTheSystemPromptAndIsNotIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	systemArgv, err := systemArgs([]string{"--system-prompt-file", "{file}"}, "the identity", dir)
+	systemArgv, err := systemArgs([]string{"--system-prompt-file", "{file}"}, nil, "the identity", dir)
 	if err != nil {
 		t.Fatal(err)
 	}
