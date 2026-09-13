@@ -740,3 +740,31 @@ func TestTheOverdueFlagIsTheOverdueFilter(t *testing.T) {
 			"would pass against a reader that never sets the flag at all")
 	}
 }
+
+// A ROW CARRIES ITS TYPE, on a flat answer and in a board's column alike.
+//
+// The type was on the document and on no row, so a board could group BY a
+// value its cards could not SHOW: every card drew as the same kind of thing,
+// a column headed "bug" held rows that said nothing about being one, and the
+// only way to draw the icon was a document read per card.
+func TestARowCarriesItsType(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+	h.seed("bug", func(task *tracker.Task) { task.Type = "bug" })
+	h.seed("chore", func(task *tracker.Task) { task.Type = "chore" })
+
+	flat := h.ask(map[string]any{"container": "project:ENG"})
+	got := map[string]string{}
+	for _, row := range flat.Rows {
+		got[row.ID] = row.Type
+	}
+	if got["bug"] != "bug" || got["chore"] != "chore" {
+		t.Fatalf("the flat rows carry types %v, want each task's own", got)
+	}
+
+	board := h.ask(map[string]any{"container": "project:ENG", "group_by": "type"})
+	column := groupOf(t, board, "bug")
+	if len(column.Rows) != 1 || column.Rows[0].Type != "bug" {
+		t.Errorf("the bug column carries %+v, want one row typed bug", column.Rows)
+	}
+}

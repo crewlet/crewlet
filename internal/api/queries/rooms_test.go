@@ -176,6 +176,12 @@ func (emptyWork) Sprints(context.Context, tracker.SprintQuery, time.Time) (
 	return tracker.SprintListing{}, nil
 }
 
+func (emptyWork) Burndown(context.Context, tracker.BurndownQuery, time.Time) (
+	tracker.Burndown, error) {
+
+	return tracker.Burndown{}, nil
+}
+
 func (emptyWork) Activity(context.Context, tracker.ActivityQuery, time.Time) (
 	tracker.ActivityAnswer, error) {
 
