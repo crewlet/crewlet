@@ -24,11 +24,11 @@ A 1:1 is mechanically just a private agent-to-agent exchange, which
 `a2a_ask` already provides: the ask wakes the other participant for a fresh
 turn, that turn's answer wakes the asker back, and either side can open
 another channel to go a round deeper (see
-[A2A](event-system.md#ephemeral-a2a-channels-crewleta2a)). A `request_1on1`
-wrapper over `A2AService` would be a thin alias of the kind the project
-deliberately avoids (`slack_message`, `jira_comment`-style wrappers —
-see `internal/agent/builtin`); it would carry a different description
-and nothing else.
+[A2A](event-system.md#ephemeral-a2a-channels-internala2a)). A 1:1 tool
+wrapping `a2a.Service` would be a thin alias of the kind the project
+deliberately avoids (the same reason there are no engine-side
+`slack_message` or `jira_comment` wrappers over third-party MCP tools); it
+would carry a different description and nothing else.
 
 **One exchange is one channel.** Ask, answer, closed — the answering turn's
 final response *is* the reply, so there is no tool for a model to remember to
@@ -139,12 +139,15 @@ residue lands in the right place on its own:
   morning") → written to the report's private `agent_diary` as `LONG` /
   `SHORT`.
 - **Standing directives** ("always get review before merging") → classified
-  `DOC`: deliberately **not** memorised, but surfaced as a `DirectiveObserved`
-  observation that nudges a handoff to update the **team docs** (Confluence),
-  which every member then picks up via the
+  `DOC`: deliberately **not** memorised. The decider writes nothing and logs
+  the rule as `persist_decider_doc_observed`, with the model's hint for where
+  it belongs. A standing rule reaches the team when somebody puts it in the
+  **team docs** (Confluence), which every member then picks up via the
   [`## Relevant knowledge`](agent-learning.md#relevant-knowledge-prefetch)
-  prefetch. (Memory holds declarative facts, not instructions — see the
-  PersistDecider writing-style rule.)
+  prefetch; the bundled `skill:observed_directives` tool skill tells agents
+  to share a team-relevant directive on their broadcast surface. (Memory holds
+  declarative facts, not instructions: see the PersistDecider writing-style
+  rule.)
 
 So a 1:1 does not need its own memory machinery; it inherits the standard
 loop. The conversation itself stays private and ephemeral — the channel is a
@@ -164,7 +167,8 @@ Confluence policy — persist.
   channel refuses a second answer — so a volley cannot start on one channel
   at all. Across channels, each `a2a_ask` increments the delegation depth
   (the reply carries the ask's depth unchanged, so only asks are charged),
-  and the TurnEngine's cap stops the chain regardless of what the LLMs do.
+  and the turn loop's depth cap stops the chain regardless of what the LLMs
+  do.
 - **Scheduled timeout** bounds only the **kickoff** turn (the report opening
   the channel), *not* the whole conversation — each exchange is its own turn
   on each side, so `timeout_seconds` is not the convergence control.
@@ -191,7 +195,7 @@ every agent can read, and its `# Manager 1:1` H1 becomes the page title.
 Publish it with
 `crewlet confluence import <company.yaml> examples/nimbus-docs/`
 (it has no `trigger:`, so it imports as a [knowledge doc](knowledge-system.md#publishing-knowledge-docs)),
-against a company whose config carries a `confluence:` block —
+against a company whose config carries an `integrations.confluence` block:
 `examples/nimbus.company.yaml` does; the smaller
 `examples/nimbus-claude-cli.company.yaml` does not.
 Edit it in the page editor thereafter — no redeploy.
@@ -206,11 +210,10 @@ carries the shape of the conversation instead.
 
 ## What this is deliberately *not*
 
-- **No `request_1on1` tool, no `OneOnOneCompleted` event.** The
-  conversation rides `a2a_ask` and is observable through the existing
-  `A2AChannelOpened` / `A2AMessageSent` / `A2AChannelClosed` events;
-  scheduled 1:1s are additionally identifiable by their `ScheduledTaskFired`
-  `schedule_name`.
+- **No 1:1 tool and no 1:1 event.** The conversation rides `a2a_ask` and is
+  observable through the existing `a2a_channel_opened`, `a2a_message_sent`
+  and `a2a_channel_closed` events; scheduled 1:1s are additionally
+  identifiable by the `schedule_name` on their `scheduled_task_fired`.
 - **No memory reset.** Wiping a report's memory is a destructive operator
   break-glass action (memory poisoning, role repurposing), not a coaching
   move — it is tracked separately, not as part of the 1:1 pattern.
@@ -225,7 +228,7 @@ carries the shape of the conversation instead.
   delivery, catchup, the per-fire timeout.
 - [Agent Runtime](agent-runtime.md) — `a2a_ask`; built-in tools
   (`query_episodes`).
-- [Event System](event-system.md#ephemeral-a2a-channels-crewleta2a) — what an
+- [Event System](event-system.md#ephemeral-a2a-channels-internala2a) — what an
   A2A channel is, and why one exchange is one channel.
 - [Agent Learning](agent-learning.md) — the `PersistDecider` tiers and the
   `## Relevant knowledge` prefetch that surfaces the playbook.
