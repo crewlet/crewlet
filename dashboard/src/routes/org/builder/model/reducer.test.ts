@@ -257,6 +257,33 @@ describe("editing", () => {
     expect(hasChanges(next)).toBe(true);
   });
 
+  test("operations that cancel out leave nothing to save in edit mode, where an empty patch would still activate a revision", () => {
+    const state = keyedEdit();
+    const edited = run(state, {
+      type: "record",
+      intent: { type: "updateSeat", target: "seat:dev", set: [{ path: ["goal"], value: "Ship" }] },
+    });
+    expect(hasChanges(edited)).toBe(true);
+    const reverted = run(edited, {
+      type: "record",
+      intent: { type: "updateSeat", target: "seat:dev", set: [{ path: ["goal"], value: "Build" }] },
+    });
+    expect(reverted.log.ops).toHaveLength(2);
+    expect(hasChanges(reverted)).toBe(false);
+
+    // In create mode the base is nothing: a draft holding a company has changes.
+    const create = run(INITIAL_BUILDER, {
+      type: "load",
+      mode: "create",
+      document: null,
+      revision: null,
+    });
+    expect(hasChanges(create)).toBe(false);
+    const built = templateIntent({ template: "empty", charter: { name: "Acme" } }, countingKeys());
+    if (!built.ok) throw new Error(built.message);
+    expect(hasChanges(run(create, { type: "record", intent: built.intent }))).toBe(true);
+  });
+
   test("a refused intent changes nothing but the refusal", () => {
     const state = keyedEdit();
     const next = run(state, {

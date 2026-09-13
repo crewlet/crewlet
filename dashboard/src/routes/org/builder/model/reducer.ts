@@ -35,7 +35,13 @@
 
 import type { CompanyDocument, Derived } from "~/protocol/index.ts";
 import { allKeys, locate, type Draft, EMPTY_DRAFT } from "./draft.ts";
-import { fromDocument, handlesByKey, toDocument, type IndexedDocument } from "./document.ts";
+import {
+  buildPatch,
+  fromDocument,
+  handlesByKey,
+  toDocument,
+  type IndexedDocument,
+} from "./document.ts";
 import { COMPANY_KEY, type NodeKey } from "./keys.ts";
 import {
   apply,
@@ -231,9 +237,21 @@ export function checkTrigger(prev: BuilderState, next: BuilderState): "reset" | 
   return prev.generation !== next.generation ? "changed" : null;
 }
 
-/** Whether the draft has anything to save. */
+/**
+ * Whether the draft has anything to save.
+ *
+ * WHAT A SAVE WOULD WRITE, NOT HOW MANY OPERATIONS PRODUCED IT. Operations
+ * that cancel out (a goal edited and edited back, a seat added and removed)
+ * leave a log but no change, and in edit mode a save is a merge patch of what
+ * changed: an empty one still stores and activates a new revision, which
+ * every node applies exactly as it applies a credential rotation, and writes
+ * an audit entry for nothing. So the draft is compared with its base as the
+ * patch compares them. In create mode the base is nothing, so what is
+ * compared is whether the draft holds anything the builder writes at all.
+ */
 export function hasChanges(state: BuilderState): boolean {
-  return state.log.ops.length > 0;
+  const patch = buildPatch(state.base.document, toDocument(state.draft).document);
+  return Object.keys(patch).length > 0;
 }
 
 /** The engine's handles for the draft's seats, from a check of this very generation. */
