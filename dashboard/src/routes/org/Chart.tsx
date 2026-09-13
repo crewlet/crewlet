@@ -28,7 +28,7 @@ import { useAgents, useSandboxes } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { AgentRow, SandboxEntry } from "~/protocol/index.ts";
 import { Icon } from "~/ui/Icon.tsx";
-import { Avatar, Badge, Banner, Empty, Panel, cx } from "~/ui/primitives.tsx";
+import { Avatar, Badge, Banner, ButtonLink, Empty, Panel, cx } from "~/ui/primitives.tsx";
 
 /** The DOM id a unit block carries, which is what a reveal scrolls to. */
 export const unitElementId = (unit: Unit) => `org-unit-${unit.key}`;
@@ -87,9 +87,9 @@ export function Chart({ index }: { index: OrgIndex }) {
         }
         action={
           unconfigured ? (
-            <a className="btn primary" href={href(["org"], { lens: "builder" })}>
+            <ButtonLink variant="primary" href={href(["org"], { lens: "builder" })}>
               Create the company
-            </a>
+            </ButtonLink>
           ) : undefined
         }
       />

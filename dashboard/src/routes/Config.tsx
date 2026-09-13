@@ -24,6 +24,7 @@ import { QueryState } from "~/components/common.tsx";
 import {
   Badge,
   Button,
+  ButtonLink,
   Code,
   CopyButton,
   Empty,
@@ -109,9 +110,9 @@ export function ConfigScreen() {
                   title="No company configuration is active"
                   hint="The engine is running with nothing to run: no seats are spawned and every inbound webhook is dropped. Create the company from the org chart, or import one with crewlet config import or PUT /config."
                   action={
-                    <a className="btn primary" href={href(["org"], { lens: "builder" })}>
+                    <ButtonLink variant="primary" href={href(["org"], { lens: "builder" })}>
                       Create the company
-                    </a>
+                    </ButtonLink>
                   }
                 />
               )}

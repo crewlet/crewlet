@@ -25,7 +25,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Avatar, Badge, Button, Empty, Skeleton } from "~/ui/primitives.tsx";
+import { Avatar, Badge, Button, ButtonLink, Empty, Skeleton } from "~/ui/primitives.tsx";
 import { Icon, type IconName } from "~/ui/Icon.tsx";
 import { useRecheck } from "./recheck.ts";
 import { VendorMark, type Vendor } from "~/ui/VendorMark.tsx";
@@ -1126,9 +1126,9 @@ export function SeatStep({
       // that build a seat's app and they are the same kind of thing — the one
       // control on the row a person is meant to press — so drawing the second
       // as an ordinary button made the finished half look optional.
-      <a className="btn sm primary" href={seat.action_url} target="_blank" rel="noreferrer">
+      <ButtonLink size="sm" variant="primary" href={seat.action_url} external>
         Install on {app}
-      </a>
+      </ButtonLink>
     );
   }
   if (seat.step !== "create_app") return null;

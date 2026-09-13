@@ -938,13 +938,15 @@ rendered idle from the first phase to the last.
   `className` and `style`, so the variants stay the only way to style it.
   `ButtonLink` is the same recipe on an anchor, for an action that goes
   somewhere, and its `external` form opens a new tab without the referrer or
-  the opener.
+  the opener. `dashboard/src/ui/recipes.test.ts` fails on a `btn` class list
+  spelled anywhere but `ui/primitives.tsx`.
 - **A shortcut hint is `ui/Kbd.tsx`, never a hand-written `<kbd>`.** The
   command key is Command on Apple platforms and Control everywhere else, so a
   literal "⌘K" tells most readers to press a key they do not have. The glyphs
   are hidden from assistive technology, which reads the key names instead
   ("Control plus K"), because a screen reader reads "⌘" as "place of interest
-  sign". The shell's search button and the search footer use it too.
+  sign". The shell's search button and the search footer use it too, and the
+  same scan fails on a `<kbd>` drawn anywhere but `ui/Kbd.tsx`.
 - **A key an input method is composing with belongs to the input method.**
   Somebody typing Japanese, Chinese or Korean walks candidates with the
   arrows, accepts a word with Enter and abandons it with Escape, and every one
