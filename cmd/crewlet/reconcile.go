@@ -146,6 +146,19 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 		parent = active.ID
 	}
 
+	// THE FILE IS BEING WRITTEN, so it meets every rule a written document
+	// meets. It was loaded against the runnable rules only, because the
+	// frames above return without writing it: unchanged from the active
+	// revision, or a bootstrap the store's own company outranks. Past them
+	// this is a new revision, the same act as `crewlet config import`, and
+	// admitting a duplicate here would store exactly what every other
+	// write refuses. Nothing has been stored or activated yet.
+	if invalid := seed.Company.ValidateAdmission(); invalid != nil {
+		return fmt.Errorf("company config %s cannot be imported into the store: "+
+			"a document written as a new revision must meet every rule, and "+
+			"this one breaks an admission rule. Correct the file and start "+
+			"again: %w", seed.Path, invalid)
+	}
 	payload, err := secrets.Seal(cipher, document)
 	if err != nil {
 		return err

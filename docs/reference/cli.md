@@ -90,6 +90,12 @@ Reads Tier A bootstrap and starts the agent engine.
 revision the fleet's [activation pointer](../concepts/control-plane.md) names,
 so a Tier B file on this command line is only ever a way of getting a document
 *into* the store — and the two flags above are the two reasons to want that.
+The file is read against the rules a running company depends on, and against
+the [admission rules](../concepts/configuration.md#what-a-stored-revision-is-held-to)
+only when it is actually written as a new revision (`-company` into an empty
+store, `-import-company` over a different company): a file that is already the
+active revision, or a bootstrap the store's own company outranks, starts the
+node even when it carries a duplicate name stored before the rule existed.
 To change a **running** fleet with no restart at all, use
 [`crewlet config import`](#crewlet-config-import), which goes through the
 node's API. The path comes from the

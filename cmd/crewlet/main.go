@@ -351,8 +351,11 @@ func (c configFlags) resolveSeed(set *flag.FlagSet, importPath string) (tierBSee
 				"store, -import-company replaces what the fleet is running. " +
 				"Pass one")
 	}
+	// THE RUNNABLE RULES ONLY. The node is about to run this file, and most
+	// boots import nothing from it: see [config.LoadCompanyToRun]. Where the
+	// file IS imported, seedCompany holds it to the admission rules first.
 	if named != "" {
-		company, err := config.LoadCompany(named)
+		company, err := config.LoadCompanyToRun(named)
 		if err != nil {
 			return tierBSeed{}, err
 		}
@@ -360,7 +363,7 @@ func (c configFlags) resolveSeed(set *flag.FlagSet, importPath string) (tierBSee
 	}
 
 	path := *c.company
-	company, err := config.LoadCompany(path)
+	company, err := config.LoadCompanyToRun(path)
 	if err == nil {
 		return tierBSeed{Path: path, Company: company}, nil
 	}

@@ -43,7 +43,7 @@ func runConfluenceImport(args []string, stdout, stderr io.Writer) error {
 		return errors.New("name exactly one company document and one directory")
 	}
 
-	company, err := config.LoadCompany(companyPath)
+	company, err := config.LoadCompanyToRun(companyPath)
 	if err != nil {
 		return err
 	}
@@ -172,7 +172,7 @@ func runConfluenceResync(args []string, stdout, stderr io.Writer) error {
 		return errors.New("name exactly one company document")
 	}
 
-	company, err := config.LoadCompany(companyPath)
+	company, err := config.LoadCompanyToRun(companyPath)
 	if err != nil {
 		return err
 	}
@@ -267,7 +267,7 @@ func runConfluenceProvision(args []string, stdout, stderr io.Writer) error {
 		return errors.New("name exactly one company document")
 	}
 
-	company, err := config.LoadCompany(companyPath)
+	company, err := config.LoadCompanyToRun(companyPath)
 	if err != nil {
 		return err
 	}

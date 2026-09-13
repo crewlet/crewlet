@@ -113,11 +113,39 @@ func refuseUnresolvedLogFile(missing []Unresolved) error {
 // also what lets `crewlet validate` check a config on a laptop where no
 // credential exists.
 func LoadCompany(path string) (*Company, error) {
+	return loadCompanyFile(path, (*Company).Validate)
+}
+
+// LoadCompanyToRun reads Tier B from a YAML file that is RUN or acted on
+// rather than written into the store, and holds it to the RUNNABLE rules only.
+//
+// Its callers are `crewlet run`'s `-company` and `-import-company` seed, and
+// the vendor commands (`crewlet gitlab provision` and its siblings) that act
+// on the company the file describes. The difference from [LoadCompany] is
+// the admission rules (see [Company.ValidateRunnable]). A company file that
+// ran yesterday and breaks an admission rule added since must still start
+// the node that runs it and still be provisionable, or every upgrade of a
+// file-based deployment carrying an old duplicate is an outage. Most boots
+// never write the file anywhere: it is byte for byte the revision the store
+// already holds, or a bootstrap seed the store's own company outranks. The
+// admission rules apply where the file IS written as a revision, which the
+// seed decides and checks with [Company.ValidateAdmission] before it imports,
+// and `crewlet config import` and `crewlet validate` use [LoadCompany].
+func LoadCompanyToRun(path string) (*Company, error) {
+	return loadCompanyFile(path, (*Company).ValidateRunnable)
+}
+
+// loadCompanyFile reads and parses a Tier B file, then holds it to validate,
+// naming the file in every failure.
+func loadCompanyFile(path string, validate func(*Company) error) (*Company, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("company config %s: %w", path, err)
 	}
-	cfg, err := ParseCompany(data)
+	cfg, err := ParseCompanyDocument(data)
+	if err == nil {
+		err = validate(cfg)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("company config %s: %w", path, err)
 	}
