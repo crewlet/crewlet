@@ -167,18 +167,56 @@ describe("keying the base", () => {
     expect(keyed.generation).toBe(loaded.generation);
   });
 
-  test("a base with operations already recorded against it is not re-keyed", () => {
+  test("nothing is recorded before the base is keyed, so no log ever names a path key", () => {
+    // A base is re-keyed only while its log is empty, so an operation
+    // recorded against a path key would keep that key for good: a reload or
+    // an update would then find its target gone, and a seat removed under a
+    // path key has no handle to clear its GitLab access level by.
     const loaded = loadedEdit();
-    const edited = run(loaded, {
-      type: "record",
-      intent: { type: "updateCompany", set: [{ path: ["vision"], value: "v" }] },
-    });
-    const next = run(
-      edited,
-      checked(edited, { status: "clean", warnings: [], derived: fixtureDerived(fixtureCompany()) }),
+    const intents: Intent[] = [
+      { type: "remove", target: seatPathKey("roles[1]") },
+      { type: "updateCompany", set: [{ path: ["vision"], value: "v" }] },
+    ];
+    for (const intent of intents) {
+      const refused = run(loaded, { type: "record", intent });
+      expect(refused.refusal, intent.type).toMatchObject({ reason: "not_keyed" });
+      expect(refused.log).toBe(loaded.log);
+      expect(refused.draft).toBe(loaded.draft);
+      expect(refused.generation).toBe(loaded.generation);
+    }
+
+    const keyed = run(
+      loaded,
+      checked(loaded, { status: "clean", warnings: [], derived: fixtureDerived(fixtureCompany()) }),
     );
-    expect(next.base.derived).toBeNull();
-    expect(next.draft.roles[0]!.key).toBe(seatPathKey("roles[0]"));
+    const removed = run(keyed, { type: "record", intent: { type: "remove", target: "seat:sre" } });
+    expect(removed.refusal).toBeNull();
+    expect(removed.log.ops[0]).toMatchObject({
+      target: "seat:sre",
+      accessLevels: [{ handle: "sre", before: "maintainer" }],
+    });
+  });
+
+  test("before anything is loaded, neither an edit nor a template is recorded", () => {
+    const template = templateIntent(
+      { template: "new_company", charter: { name: "Acme" } },
+      countingKeys(),
+    );
+    if (!template.ok) throw new Error(template.message);
+    expect(run(INITIAL_BUILDER, { type: "record", intent: template.intent }).refusal).toMatchObject(
+      { reason: "mode" },
+    );
+    const added = run(INITIAL_BUILDER, {
+      type: "record",
+      intent: {
+        type: "addUnit",
+        key: "new:u",
+        placement: { parent: COMPANY_KEY, after: null },
+        data: { name: "Ops" },
+      },
+    });
+    expect(added.refusal).toMatchObject({ reason: "not_keyed" });
+    expect(added.log.ops).toEqual([]);
   });
 
   test("a check of another generation is ignored", () => {
@@ -376,25 +414,50 @@ describe("keeping the log", () => {
     ).toBe(true);
   });
 
-  test("a save makes the draft the base until the saved revision is loaded", () => {
+  test("a save makes the draft the base, keyed by the derivation the write answered with", () => {
     const create = run(INITIAL_BUILDER, {
       type: "load",
       mode: "create",
       document: null,
       revision: null,
     });
-    const built = templateIntent({ template: "empty", charter: { name: "Acme" } }, countingKeys());
+    const built = templateIntent(
+      { template: "new_company", charter: { name: "Acme" } },
+      countingKeys(),
+    );
     if (!built.ok) throw new Error(built.message);
     const edited = run(create, { type: "record", intent: built.intent });
-    const saved = run(edited, { type: "saved", revisionId: "rev-9", derived: null });
+    const sent = toDocument(edited.draft).document;
+    const saved = run(edited, {
+      type: "saved",
+      revisionId: "rev-9",
+      derived: fixtureDerived(sent),
+    });
     expect(saved).toMatchObject({
       mode: "edit",
       base: { revision: "rev-9" },
       log: { ops: [], undone: [] },
     });
-    expect(saved.draft).toBe(edited.draft);
-    expect(saved.baseDraft).toBe(edited.draft);
     expect(saved.generation).toBe(edited.generation + 1);
+    expect(saved.draft).toBe(saved.baseDraft);
+    expect(toDocument(saved.draft).document).toEqual(sent);
+    // The keys minted for the nodes the save created are gone: the seats it
+    // created are the engine's seats now, and are named as such.
+    const keys = [...allSeats(saved.draft)].map(({ seat }) => seat.key);
+    expect(keys).toContain("seat:chief-executive");
+    expect(keys.some((k) => k.startsWith("new:"))).toBe(false);
+    expect(isBaseKeyed(saved)).toBe(true);
+
+    // A write that answered with no derivation leaves a base to key, and
+    // nothing is recorded against it until a check does.
+    const unkeyed = run(edited, { type: "saved", revisionId: "rev-9", derived: null });
+    expect(isBaseKeyed(unkeyed)).toBe(false);
+    expect(
+      run(unkeyed, {
+        type: "record",
+        intent: { type: "updateCompany", set: [{ path: ["vision"], value: "v" }] },
+      }).refusal,
+    ).toMatchObject({ reason: "not_keyed" });
   });
 });
 

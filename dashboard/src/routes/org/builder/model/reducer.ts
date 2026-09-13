@@ -19,12 +19,18 @@
  * unit of a running company in one merge patch, and every seat's identity and
  * memory with them.
  *
- * THE BASE IS KEYED BY THE ENGINE. A document read from `GET /config` carries
- * no handles, so until the first check answers, a seat that declares no
- * handle can only be keyed by its path. The first check runs on the base with
- * an empty log, and its derivation re-keys the base by handle, which is safe
- * precisely because no operation refers to the old keys yet. A restore or an
- * update waits for a keyed base for the same reason (see [isBaseKeyed]).
+ * THE BASE IS KEYED BY THE ENGINE, AND NOTHING IS RECORDED BEFORE IT IS. A
+ * document read from `GET /config` carries no handles, so until the first
+ * check answers, a seat that declares no handle can only be keyed by its
+ * path. The first check runs on the base with an empty log, and its
+ * derivation re-keys the base by handle, which is safe precisely because no
+ * operation refers to the old keys yet. So an edit, a restore and an update
+ * all wait for a keyed base (see [isBaseKeyed]): an operation recorded against
+ * a path key would pin that key into the log for good, since a base is only
+ * re-keyed while its log is empty. Such a log names nothing once the base is
+ * read again (after a reload, or onto a newer revision, every one of its
+ * operations reports its target gone), and a seat removed under a path key
+ * has no handle to clear its GitLab access level by.
  */
 
 import type { CompanyDocument, Derived } from "~/protocol/index.ts";
@@ -142,9 +148,10 @@ export type BuilderAction =
   /** The operator token changed: the tab may have changed hands. */
   | { readonly type: "tokenChanged" }
   /**
-   * A save landed as `revisionId`. The draft becomes the base until the UI
-   * loads that revision, which it does next: the engine's stored document is
-   * the one to edit from, not the draft that was sent.
+   * A save landed as `revisionId`, and `derived` is the derivation its answer
+   * carried. The draft becomes the base, keyed by that derivation, until the
+   * UI loads that revision, which it does next: the engine's stored document
+   * is the one to edit from, not the draft that was sent.
    */
   | { readonly type: "saved"; readonly revisionId: string; readonly derived: Derived | null }
   /** Start updating the draft onto a newer revision (see `writes.readyToUpdate`). */
@@ -168,9 +175,17 @@ const EMPTY_CHECK: CheckView = {
   derived: null,
 };
 
-/** The state before anything is loaded. */
+/**
+ * The state before anything is loaded.
+ *
+ * AN EDIT OF A COMPANY NOBODY HAS DESCRIBED YET, deliberately not create
+ * mode. Before a load the builder knows neither whether a company exists nor
+ * who its seats are, so the doors stay shut on both counts: an edit waits for
+ * a keyed base, and a template, which only ever starts a company from
+ * nothing, is refused.
+ */
 export const INITIAL_BUILDER: BuilderState = {
-  mode: "create",
+  mode: "edit",
   base: { document: null, revision: null, derived: null },
   baseDraft: EMPTY_DRAFT,
   draft: EMPTY_DRAFT,
@@ -278,6 +293,13 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
           state,
           "mode",
           "A template starts a new company. It cannot be applied to a company that exists.",
+        );
+      }
+      if (!isBaseKeyed(state)) {
+        return refused(
+          state,
+          "not_keyed",
+          "The engine has not described this company yet. Wait for the check to finish, then make the change.",
         );
       }
       const handles = currentHandles(state);
@@ -399,16 +421,20 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
     case "tokenChanged":
       return { ...state, keep: false };
 
-    case "saved":
+    case "saved": {
+      // The saved document becomes the base, KEYED LIKE ANY BASE: by the
+      // derivation the write answered with, which describes exactly this
+      // document. Keeping the draft's own keys instead would carry the keys
+      // minted for the nodes this save created into every later operation,
+      // and those name nothing once the revision is read back.
+      const document = toDocument(state.draft).document;
+      const baseDraft = fromDocument(document, action.derived);
       return {
         ...state,
         mode: "edit",
-        base: {
-          document: toDocument(state.draft).document,
-          revision: action.revisionId,
-          derived: action.derived,
-        },
-        baseDraft: state.draft,
+        base: { document, revision: action.revisionId, derived: action.derived },
+        baseDraft,
+        draft: baseDraft,
         log: EMPTY_LOG,
         reports: [],
         generation: state.generation + 1,
@@ -418,9 +444,10 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
         last: null,
         refusal: null,
       };
+    }
 
     case "updateBegin": {
-      if (state.mode !== "edit")
+      if (state.mode !== "edit" || state.base.document === null)
         return refused(state, "mode", "Only a draft of an existing company can be updated.");
       const base: BaseCompany = {
         document: action.document,
