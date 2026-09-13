@@ -525,7 +525,17 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 		// None today. An entry is a decision somebody wrote down, e.g.
 		// "Thing.Env": "names of variables only; the values live elsewhere".
 	}
-	stringMap := reflect.TypeOf(map[string]string(nil))
+	// By SHAPE, not by type identity: a named `type EnvMap map[string]string`
+	// or a pointer to one carries a process's credentials exactly as the
+	// bare map does, and comparing against map[string]string itself would
+	// wave both through.
+	stringMap := func(rt reflect.Type) bool {
+		for rt.Kind() == reflect.Pointer {
+			rt = rt.Elem()
+		}
+		return rt.Kind() == reflect.Map && rt.Key().Kind() == reflect.String &&
+			rt.Elem().Kind() == reflect.String
+	}
 
 	var walk func(t reflect.Type, path string, seen map[reflect.Type]bool)
 	walk = func(rt reflect.Type, path string, seen map[reflect.Type]bool) {
@@ -544,7 +554,7 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 			}
 			name := strings.ToLower(field.Name)
 			tagged := field.Tag.Get(secretTag) == "true"
-			if field.Type == stringMap && credentialMaps[field.Name] && !tagged {
+			if stringMap(field.Type) && credentialMaps[field.Name] && !tagged {
 				if _, ok := exemptMaps[rt.Name()+"."+field.Name]; !ok {
 					t.Errorf("%s.%s is a map[string]string named %s and is not "+
 						"tagged secret:\"true\": a process's credentials are "+
