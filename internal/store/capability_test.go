@@ -231,25 +231,56 @@ func exerciseVectorIndex(t *testing.T, db *store.DB) {
 		errors.Join(errs...))
 }
 
+// exerciseFullText searches through WHICHEVER mechanism the probe measured.
+//
+// THE FALLBACK USED TO BE A SKIP, which made the arm most likely to be the one
+// that lands the least tested: the probe accepts an fts5 virtual table OR
+// Turso's own `USING fts` index method, and today only the second could
+// plausibly arrive — so the day the capability turns true, this reported a
+// pass having run no search at all. A skip inside an exercise is the exercise
+// admitting it does not know what it is testing.
 func exerciseFullText(t *testing.T, db *store.DB) {
+	t.Helper()
+	if _, err := db.SQL().ExecContext(t.Context(),
+		`CREATE VIRTUAL TABLE cap_fts USING fts5(body)`); err != nil {
+		// The MATCH is written against the indexed COLUMNS rather than
+		// the table, which is the whole difference between the two
+		// mechanisms at the query layer — so it is the half worth
+		// exercising.
+		exerciseNativeFullText(t, db)
+		return
+	}
+	exerciseMatch(t, db, "cap_fts", `cap_fts MATCH 'brown'`)
+}
+
+// exerciseNativeFullText is Turso's own index method, in the grammar the probe
+// builds and the query layer would have to write.
+func exerciseNativeFullText(t *testing.T, db *store.DB) {
+	t.Helper()
+	if _, err := db.SQL().ExecContext(t.Context(),
+		`CREATE TABLE cap_fts_native (body TEXT NOT NULL)`); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := db.SQL().ExecContext(t.Context(),
+		`CREATE INDEX cap_fts_native_idx ON cap_fts_native USING fts (body)`,
+	); err != nil {
+		t.Fatalf("the probe reports full text, but neither fts5 nor the fts "+
+			"index method builds an index: %v", err)
+	}
+	exerciseMatch(t, db, "cap_fts_native", `(body) MATCH 'brown'`)
+}
+
+// exerciseMatch inserts one row and searches for a word in it.
+func exerciseMatch(t *testing.T, db *store.DB, table, match string) {
 	t.Helper()
 	ctx := t.Context()
 	if _, err := db.SQL().ExecContext(ctx,
-		`CREATE VIRTUAL TABLE cap_fts USING fts5(body)`); err != nil {
-		// The other mechanism the probe accepts is Turso's own `USING
-		// fts` index method, whose MATCH is written against the indexed
-		// columns rather than the table; a driver that offers only that
-		// one still reports the capability, and the query layer would
-		// branch.
-		t.Skipf("full text is available through the non-fts5 mechanism: %v", err)
-	}
-	if _, err := db.SQL().ExecContext(ctx,
-		`INSERT INTO cap_fts (body) VALUES ('the quick brown fox')`); err != nil {
+		`INSERT INTO `+table+` (body) VALUES ('the quick brown fox')`); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 	var n int
 	if err := db.SQL().QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM cap_fts WHERE cap_fts MATCH 'brown'`).Scan(&n); err != nil {
+		`SELECT COUNT(*) FROM `+table+` WHERE `+match).Scan(&n); err != nil {
 		t.Fatalf("match: %v", err)
 	}
 	if n != 1 {

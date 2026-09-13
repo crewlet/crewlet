@@ -220,31 +220,54 @@ var (
 // with no code, no pragma and no capability flag behind it.
 const gateMarker = "experimental feature"
 
+// gateOutcome is what one gated probe found.
+//
+// A VALUE RATHER THAN A MUTATION, because a capability with ALTERNATIVE
+// spellings asks more than once and only the whole loop knows the answer: a
+// probe that recorded "gated" as it went marked the capability the moment its
+// first spelling turned out to be gated, and a second spelling that then
+// worked on the live pool left the reading claiming the capability was usable
+// AND unreachable at the same time. The caller decides once, at the end.
+type gateOutcome int
+
+// THE ORDER IS LOAD-BEARING: [probeVectorIndex] takes the max across a
+// capability's alternative spellings, so worst to best is what makes the best
+// answer win whichever spelling produced it. Insert a new outcome at its rank,
+// never at the end.
+const (
+	// gateAbsent — the engine does not implement it, flag or no flag.
+	gateAbsent gateOutcome = iota
+	// gateBehind — implemented, but served only to a connection that
+	// opted into an experimental feature this engine's pool does not.
+	gateBehind
+	// gateUsable — the live pool accepts it.
+	gateUsable
+)
+
 // probeGated answers a capability whose refusal may be Turso's experimental
-// GATE rather than an absent feature, recording the difference on caps.
+// GATE rather than an absent feature.
 //
 // Three outcomes, and the middle one is the whole reason this exists:
 //
-//   - the pool accepts the statements       -> usable, and nothing is gated.
+//   - the pool accepts the statements       -> gateUsable.
 //   - the pool refuses AT THE GATE, and a
-//     connection carrying the flag accepts  -> not usable here, and the
-//     capability joins [Capabilities.Gated].
-//   - anything else                         -> absent, which is now a
+//     connection carrying the flag accepts  -> gateBehind.
+//   - anything else                         -> gateAbsent, which is now a
 //     measurement rather than an assumption.
-func probeGated(ctx context.Context, db *sql.DB, caps *Capabilities,
+func probeGated(ctx context.Context, db *sql.DB,
 	capability gatedCapability, stmts []string,
-) bool {
+) gateOutcome {
 	ok, err := probeReporting(ctx, db, stmts)
 	if ok {
-		return true
+		return gateUsable
 	}
 	if err == nil || !strings.Contains(err.Error(), gateMarker) {
-		return false
+		return gateAbsent
 	}
 	behind, err := probeBehindGate(ctx, capability.Feature, stmts)
 	switch {
 	case behind:
-		markGated(caps, capability.Name)
+		return gateBehind
 	case err != nil && strings.Contains(err.Error(), gateMarker):
 		// THE ONE MISCONFIGURATION THAT CANNOT BE SEEN ANY OTHER WAY.
 		// The flag was set and the gate still refused, so the name this
@@ -259,7 +282,17 @@ func probeGated(ctx context.Context, db *sql.DB, caps *Capabilities,
 				"gate; correct the name in internal/store/caps.go against the "+
 				"driver's own --experimental-* flags")
 	}
-	return false
+	return gateAbsent
+}
+
+// record turns one capability's outcome into its boolean and, where the
+// feature exists but this engine cannot reach it, its entry in
+// [Capabilities.Gated].
+func record(caps *Capabilities, capability gatedCapability, got gateOutcome) bool {
+	if got == gateBehind {
+		markGated(caps, capability.Name)
+	}
+	return got == gateUsable
 }
 
 // probeBehindGate runs the same statements on a throwaway connection that
@@ -442,16 +475,23 @@ func probeVectorFunctions(ctx context.Context, db *sql.DB) bool {
 // not, and this measured neither until it asked behind the gate as well.
 // Today both answer `unknown module name` there: genuinely absent.
 func probeVectorIndex(ctx context.Context, db *sql.DB, caps *Capabilities) bool {
+	// THE BEST OUTCOME ACROSS THE SPELLINGS, decided after both have
+	// answered. One method being gated says nothing about the capability
+	// while another may still be usable on the pool, so the marking
+	// happens once, here, on what the whole loop found.
+	best := gateAbsent
 	for _, method := range []string{"vector", "diskann"} {
-		if probeGated(ctx, db, caps, capVectorIndex, []string{
+		got := probeGated(ctx, db, capVectorIndex, []string{
 			`CREATE TABLE crewlet_probe_vec (id TEXT PRIMARY KEY, e F32_BLOB(4))`,
 			`CREATE INDEX crewlet_probe_vec_idx ON crewlet_probe_vec USING ` +
 				method + ` (e)`,
-		}) {
-			return true
+		})
+		if got == gateUsable {
+			return record(caps, capVectorIndex, gateUsable)
 		}
+		best = max(best, got)
 	}
-	return false
+	return record(caps, capVectorIndex, best)
 }
 
 // probeWithoutRowid asks for the narrower table shape two of this engine's own
@@ -467,10 +507,10 @@ func probeVectorIndex(ctx context.Context, db *sql.DB, caps *Capabilities) bool 
 // which is the truth about the statement a migration would carry — and
 // [Capabilities.Gated] carries the name, which is the truth about the engine.
 func probeWithoutRowid(ctx context.Context, db *sql.DB, caps *Capabilities) bool {
-	return probeGated(ctx, db, caps, capWithoutRowid, []string{
+	return record(caps, capWithoutRowid, probeGated(ctx, db, capWithoutRowid, []string{
 		`CREATE TABLE crewlet_probe_wr (a TEXT NOT NULL, b TEXT NOT NULL, ` +
 			`PRIMARY KEY (a, b)) WITHOUT ROWID`,
-	})
+	}))
 }
 
 // probeFullText accepts either mechanism, because the capability the engine
@@ -499,10 +539,10 @@ func probeFullText(ctx context.Context, db *sql.DB, caps *Capabilities) bool {
 	}) {
 		return true
 	}
-	return probeGated(ctx, db, caps, capFullText, []string{
+	return record(caps, capFullText, probeGated(ctx, db, capFullText, []string{
 		`CREATE TABLE crewlet_probe_txt (body TEXT NOT NULL)`,
 		`CREATE INDEX crewlet_probe_txt_idx ON crewlet_probe_txt USING fts (body)`,
-	})
+	}))
 }
 
 // probeReporting is probeInRollback with the failure kept, for a probe whose
