@@ -101,15 +101,22 @@ func (idx *bufferIndex) pair(buffer, input *yaml.Node, key bool) {
 	}
 }
 
-// find returns the first node on a buffer line that match accepts and no
-// earlier failure claimed, so two failures on one line land on two nodes.
-func (idx *bufferIndex) find(line int, claimed map[*yaml.Node]bool, match func(placed) bool) (position, bool) {
+// find returns the first node on a buffer line that match accepts.
+//
+// NO NODE IS CLAIMED by the failure that found it, and that is deliberate. A
+// buffer is written in block style (see [blockStyle]), which puts one key and
+// at most one scalar value on a line, so two different failures never compete
+// for one node. The same failure reported twice does, and it is reported twice
+// whenever the block holding it is used through an alias: the decoder decodes
+// the anchor again at every use, at the same node. A claim would hand the
+// second report nothing to land on, and it would leave the parser as a problem
+// with no path and no line; unclaimed, both land on the one node the mistake
+// was written at, and [placeInDocument] reports it once.
+func (idx *bufferIndex) find(line int, match func(placed) bool) (position, bool) {
 	for _, candidate := range idx.lines[line] {
-		if claimed[candidate.node] || !match(candidate) {
-			continue
+		if match(candidate) {
+			return idx.input[positionOf(candidate.node, candidate.key)], true
 		}
-		claimed[candidate.node] = true
-		return idx.input[positionOf(candidate.node, candidate.key)], true
 	}
 	return position{}, false
 }
@@ -125,7 +132,7 @@ var (
 
 // typeFault translates one line of a yaml.TypeError into a fault on the node
 // it is about.
-func (idx *bufferIndex) typeFault(line string, retired map[string]string, claimed map[*yaml.Node]bool) *Fault {
+func (idx *bufferIndex) typeFault(line string, retired map[string]string) *Fault {
 	if f, ok := parseCarried(line); ok {
 		f.pos = idx.input[f.pos]
 		return f
@@ -133,7 +140,7 @@ func (idx *bufferIndex) typeFault(line string, retired map[string]string, claime
 	if m := unknownFieldRE.FindStringSubmatch(line); m != nil {
 		lineNo, _ := strconv.Atoi(m[1])
 		name := strings.Trim(m[2], `"`)
-		pos, _ := idx.find(lineNo, claimed, func(c placed) bool { return c.key && c.node.Value == name })
+		pos, _ := idx.find(lineNo, func(c placed) bool { return c.key && c.node.Value == name })
 		// A key that was REMOVED needs its own message. "debug is not a
 		// setting" is true and useless to someone reading a file the
 		// quickstart told them to write: they need the line that replaced
@@ -146,23 +153,24 @@ func (idx *bufferIndex) typeFault(line string, retired map[string]string, claime
 	}
 	if m := positionedLineRE.FindStringSubmatch(line); m != nil {
 		lineNo, _ := strconv.Atoi(m[1])
-		return &Fault{Kind: ErrShape, Detail: m[2], pos: idx.valueOn(lineNo, m[2], claimed)}
+		return &Fault{Kind: ErrShape, Detail: m[2], pos: idx.valueOn(lineNo, m[2])}
 	}
 	return &Fault{Kind: ErrShape, Detail: strings.TrimSpace(line)}
 }
 
 // valueOn finds the value node a failure reported by line alone is about. A
-// "cannot unmarshal !!map" names the tag of the node it refused, which picks
-// it out of a line such as `- name: [a, b]` that holds several.
-func (idx *bufferIndex) valueOn(line int, detail string, claimed map[*yaml.Node]bool) position {
+// "cannot unmarshal !!str" names the tag of the node it refused, which picks it
+// out of a line that holds several: in `- token_budget: abc` the list item's
+// mapping starts on the same line as the value, and the mapping comes first.
+func (idx *bufferIndex) valueOn(line int, detail string) position {
 	if m := cannotUnmarshalRE.FindStringSubmatch(detail); m != nil {
-		if pos, ok := idx.find(line, claimed, func(c placed) bool {
+		if pos, ok := idx.find(line, func(c placed) bool {
 			return !c.key && c.node.ShortTag() == m[1]
 		}); ok {
 			return pos
 		}
 	}
-	pos, _ := idx.find(line, claimed, func(c placed) bool { return !c.key })
+	pos, _ := idx.find(line, func(c placed) bool { return !c.key })
 	return pos
 }
 
@@ -170,7 +178,7 @@ func (idx *bufferIndex) valueOn(line int, detail string, claimed map[*yaml.Node]
 // encoded from. An error a custom decoder returned without being a fault is
 // made one: it is positioned when it follows yaml's own `line N:` form, and a
 // wrong shape either way, which is what every such decoder refuses.
-func (idx *bufferIndex) relocate(err error, claimed map[*yaml.Node]bool) error {
+func (idx *bufferIndex) relocate(err error) error {
 	var out problems
 	for _, leaf := range leafErrors(err) {
 		f, isFault := leafFault(leaf)
@@ -184,7 +192,7 @@ func (idx *bufferIndex) relocate(err error, claimed map[*yaml.Node]bool) error {
 		default:
 			if m := positionedLineRE.FindStringSubmatch(leaf.Error()); m != nil {
 				lineNo, _ := strconv.Atoi(m[1])
-				out = append(out, &Fault{Kind: ErrShape, Detail: m[2], pos: idx.valueOn(lineNo, "", claimed)})
+				out = append(out, &Fault{Kind: ErrShape, Detail: m[2], pos: idx.valueOn(lineNo, "")})
 				continue
 			}
 			out = append(out, &Fault{Kind: ErrShape, Detail: leaf.Error()})

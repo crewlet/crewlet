@@ -65,6 +65,14 @@ func TestAParserFailureIsReportedWhereItWasWritten(t *testing.T) {
 			},
 		},
 		{
+			// A list item's mapping starts on the line of its first key, so
+			// the line holds two value nodes and only the refused node's
+			// tag tells which one the failure is about.
+			name: "a value of the wrong type as the first key of a list item",
+			doc:  "name: Acme\nroles:\n  - token_budget: abc\n    name: Dev\n",
+			want: []found{{"roles[0].token_budget", 3, "shape"}},
+		},
+		{
 			name: "an llm field that is neither a key nor a list",
 			doc:  "name: Acme\nroles:\n  - name: Dev\n    llm_review: {a: b}\n",
 			want: []found{{"roles[0].llm_review", 4, "shape"}},
@@ -86,6 +94,15 @@ func TestAParserFailureIsReportedWhereItWasWritten(t *testing.T) {
 			name: "a typo inside an anchored block used twice",
 			doc:  "name: Acme\nroles:\n  - name: Dev\n    llm: &chain {pln: y}\n  - name: Ops\n    llm: *chain\n",
 			want: []found{{"roles[0].llm.pln", 4, "unknown_field"}},
+		},
+		{
+			// The same through the strict decoder itself rather than a
+			// custom one: the anchor is decoded again at the second use and
+			// reported again on the same line, and both reports are the one
+			// key the author wrote.
+			name: "a typo inside an anchored seat used twice",
+			doc:  "name: Acme\nroles:\n  - &seat {name: Dev, bogus: 1}\n  - *seat\n",
+			want: []found{{"roles[0].bogus", 3, "unknown_field"}},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

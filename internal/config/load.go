@@ -409,14 +409,13 @@ var retiredBootstrapFields = map[string]string{
 // buffer, which is moved onto the input without being wrapped again, since a
 // second wrap would bury the sentinel a caller branches on.
 func decodeError(err error, retired map[string]string, idx *bufferIndex) error {
-	claimed := map[*yaml.Node]bool{}
 	var typeErr *yaml.TypeError
 	if !errors.As(err, &typeErr) {
-		return idx.relocate(err, claimed)
+		return idx.relocate(err)
 	}
 	var out problems
 	for _, line := range typeErr.Errors {
-		out = append(out, idx.typeFault(line, retired, claimed))
+		out = append(out, idx.typeFault(line, retired))
 	}
 	return out.err()
 }
