@@ -16,6 +16,13 @@
  * own window — which is also why a sprint that closed last month does not
  * keep gaining velocity as its leftovers land.
  *
+ * # The two charts answer the two questions a sprint has
+ *
+ * ACROSS sprints: is this team's delivery steady — a ranked comparison, in
+ * sprint order, because the order is the content. WITHIN one: is this sprint
+ * going to land — a series, drawn to today rather than to the sprint's end so
+ * a running sprint is not a flat line into its own future.
+ *
  * # Read-only, like every other work screen
  *
  * A sprint is started, closed and rolled over by the engine's own duty or by
@@ -23,15 +30,20 @@
  * not a person and cannot be asked why.
  */
 
+import { useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
-import { useParam } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
-import { Badge, Banner, Empty, Panel, Stat, StatRow } from "~/ui/primitives.tsx";
+import { href, useParam } from "~/app/router.tsx";
+import { QueryState, SeatChip } from "~/components/common.tsx";
+import { Coverage } from "~/components/work.tsx";
+import { Badge, Banner, Empty, Meter, Panel, Stat, StatRow } from "~/ui/primitives.tsx";
 import { Select } from "~/ui/primitives.tsx";
+import { BarList, Legend, TimeSeries } from "~/ui/charts.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtDate } from "~/lib/format.ts";
-import type { WorkSprintRow } from "~/protocol/index.ts";
+import { useOrg } from "~/lib/store-hooks.ts";
+import { indexOrg } from "~/lib/seats.ts";
+import { fmtDate, tsKey } from "~/lib/format.ts";
+import type { WorkBurndown, WorkSprintRow } from "~/protocol/index.ts";
 
 /** The measure's own word, because a bare number is points to one team and
  *  minutes to another. */
@@ -46,6 +58,8 @@ const STATE_TONE: Record<string, "positive" | "caution" | "info" | "neutral"> = 
 };
 
 export function Sprints() {
+  const org = useOrg();
+  const index = useMemo(() => indexOrg(org), [org]);
   const [project, setProject] = useParam("project", "");
   // THE PROJECT LIST IS THE COMPANY'S, so this screen can be reached with no
   // project chosen and still offer one — a sprint report needs a project and
@@ -66,11 +80,30 @@ export function Sprints() {
   const sprints = report.data?.sprints ?? [];
   const measure = measureLabel(report.data?.measure ?? "points");
 
+  // THE ONE SPRINT WORTH A SERIES is the running one: a closed sprint's shape
+  // is history and its outcome is already the velocity bar above, where a
+  // running one is the question somebody opened this screen to ask.
+  const active = sprints.find((s) => s.state === "active");
+  const burndown = useQuery(
+    "work_burndown",
+    active ? { project: chosen, sprint: active.number } : undefined,
+    // FIVE MINUTES: a burndown moves by the day, and its own points are day
+    // boundaries — a faster poll would redraw an identical series.
+    { enabled: Boolean(active), pollMs: 300_000 },
+  );
+
+  const seatName = (handle: string) => index.byHandle.get(handle)?.name ?? handle;
+
   return (
     <>
       <ScreenHead
         title="Sprints"
         sub="What each sprint took on, what arrived after it started, and what actually shipped inside its own window."
+        actions={
+          <a className="t-link" href={href(["work"], chosen ? { project: chosen } : undefined)}>
+            Tracker →
+          </a>
+        }
       />
 
       <div className="toolbar">
@@ -81,6 +114,8 @@ export function Sprints() {
           anyLabel="Pick a project"
           options={keys}
         />
+        <span className="spacer" />
+        <Coverage answer={report.data} />
       </div>
 
       {!chosen && projects.data && (
@@ -127,8 +162,14 @@ export function Sprints() {
                 </Banner>
               )}
 
+              <Velocity sprints={sprints} measure={measure} />
+
+              {active && (
+                <Burndown data={burndown.data} loading={burndown.loading} sprint={active} />
+              )}
+
               {[...sprints].reverse().map((s) => (
-                <SprintPanel key={s.number} sprint={s} />
+                <SprintPanel key={s.number} sprint={s} seatName={seatName} />
               ))}
             </>
           )}
@@ -138,13 +179,168 @@ export function Sprints() {
   );
 }
 
+/**
+ * Delivery across the recent sprints.
+ *
+ * IN SPRINT ORDER, oldest first, and NOT sorted by size: this is a sequence
+ * rather than a ranking, and re-ordering it by how much each sprint delivered
+ * would destroy the one thing a reader is looking for — whether the team is
+ * steady, climbing or falling.
+ *
+ * ONE SERIES WITH ONE MEMBER HIGHLIGHTED, which is the emphasis form: the
+ * running sprint is a partial total and every closed one is final, so a single
+ * hue across all of them would invite the reader to compare an unfinished
+ * sprint against finished ones as though they were the same measurement. No
+ * legend, because a legend for one series is a box saying what the title says.
+ */
+export function Velocity({ sprints, measure }: { sprints: WorkSprintRow[]; measure: string }) {
+  if (sprints.length < 2) return null;
+  // THE SCALE IS THE LARGEST SPRINT'S WHOLE COMMITMENT, so a bar reads as a
+  // fraction of what that sprint took on rather than of what the best sprint
+  // delivered — the second makes an ordinary sprint beside an exceptional one
+  // look like a failure.
+  const max = Math.max(1, ...sprints.map((s) => s.figures.committed + s.figures.added));
+  return (
+    <Panel
+      title="Delivery by sprint"
+      icon="activity"
+      subtitle="the running sprint in colour; its total is still partial"
+    >
+      <BarList
+        max={max}
+        data={sprints.map((s) => ({
+          label: `${s.number} · ${s.name}`,
+          value: s.figures.done,
+          display: `${s.figures.done} of ${s.figures.committed + s.figures.added} ${measure}`,
+          color: s.state === "active" ? "var(--viz-1)" : "var(--viz-other)",
+          sub:
+            s.state === "closed"
+              ? `${fmtDate(s.start_at)} — ${fmtDate(s.closed_at ?? s.end_at)}${
+                  s.figures.remaining ? ` · ${s.figures.remaining} ${measure} carried out` : ""
+                }`
+              : `${fmtDate(s.start_at)} — ${fmtDate(s.end_at)}`,
+        }))}
+        emptyLabel="No sprint in this window has delivered anything yet."
+      />
+    </Panel>
+  );
+}
+
+/**
+ * The running sprint, day by day.
+ *
+ * THREE LINES AND ONLY ONE OF THEM IS A MEASUREMENT OF PROGRESS. Remaining is
+ * the question; scope is what makes it answerable, because a falling line over
+ * a rising scope is a team keeping up rather than a team finishing; and the
+ * ideal is a dashed REFERENCE, drawn so it cannot be mistaken for a series
+ * that happened to be linear.
+ *
+ * A FUTURE SPRINT DRAWS NOTHING and says why: its series is one point, and a
+ * chart of one point is a chart that invites a conclusion from nothing.
+ */
+export function Burndown({
+  data,
+  loading,
+  sprint,
+}: {
+  data?: WorkBurndown | null;
+  loading?: boolean;
+  sprint: WorkSprintRow;
+}) {
+  if (loading && !data) return null;
+  if (!data || data.points.length < 2) return null;
+  const measure = measureLabel(data.measure);
+  const from = tsKey(data.start_at);
+  const to = tsKey(data.end_at);
+  const last = data.points[data.points.length - 1];
+
+  return (
+    <Panel
+      title={`Sprint ${data.sprint} burndown`}
+      icon="activity"
+      subtitle={`${sprint.name} · in ${measure}`}
+      actions={
+        sprint.days_remaining !== undefined && <Badge outline>{sprint.days_remaining}d left</Badge>
+      }
+    >
+      {/* UNESTIMATED WORK IS NAMED ABOVE THE CHART, never folded in: a series
+          over a sprint half of whose tasks carry no value is a series about
+          half a sprint, and a reader who cannot see that quotes the number. */}
+      {data.unestimated > 0 && (
+        <Banner tone="info">
+          {data.unestimated} of {data.tasks} tasks carry no {measure}, so this chart describes only
+          the rest.
+        </Banner>
+      )}
+      <TimeSeries
+        from={from}
+        to={to}
+        height={160}
+        label={`Sprint ${data.sprint} burndown`}
+        format={(n) => `${n} ${measure}`}
+        series={[
+          {
+            name: "Scope",
+            color: "var(--viz-other)",
+            points: data.points.map((p) => ({ t: tsKey(p.at), v: p.scope })),
+          },
+          {
+            name: "Ideal",
+            color: "var(--border-strong)",
+            dashed: true,
+            points: [
+              { t: from, v: data.ideal },
+              { t: to, v: 0 },
+            ],
+          },
+          {
+            name: "Remaining",
+            color: "var(--viz-1)",
+            // THE ONE FILLED SERIES, because it is the one the chart is
+            // about: an area under every line would blend three translucent
+            // washes into a fourth colour nobody chose.
+            fill: true,
+            points: data.points.map((p) => ({ t: tsKey(p.at), v: p.remaining })),
+          },
+        ]}
+      />
+      <Legend
+        items={[
+          { label: "Remaining", color: "var(--viz-1)" },
+          { label: "Scope", color: "var(--viz-other)" },
+          { label: "Ideal", color: "var(--border-strong)" },
+        ]}
+      />
+      {last && (
+        <p className="t-caption">
+          {last.remaining} {measure} still to do of {last.scope} in the sprint; {last.delivered}{" "}
+          delivered.
+          {/* THE GAP IS ABANDONED WORK, and it is the one quantity two lines
+              cannot show: `cancelled` is finished and undelivered, so it
+              leaves the remaining line without joining the delivered one. */}
+          {last.scope - last.remaining - last.delivered > 0
+            ? ` ${(last.scope - last.remaining - last.delivered).toLocaleString()} ${measure} were cancelled rather than delivered.`
+            : ""}
+        </p>
+      )}
+    </Panel>
+  );
+}
+
 /** One sprint's figures, its breakdown and the two things a lead acts on.
  *
  *  Exported for its own tests: every number here has a wrong form that reads
  *  as a different fact rather than as a missing one. */
-export function SprintPanel({ sprint }: { sprint: WorkSprintRow }) {
+export function SprintPanel({
+  sprint,
+  seatName,
+}: {
+  sprint: WorkSprintRow;
+  seatName?: (handle: string) => string;
+}) {
   const f = sprint.figures;
   const measure = measureLabel(f.measure);
+  const committed = f.committed + f.added;
   return (
     <Panel
       title={`${sprint.number} · ${sprint.name}`}
@@ -162,6 +358,17 @@ export function SprintPanel({ sprint }: { sprint: WorkSprintRow }) {
         {sprint.days_remaining !== undefined && ` · ${sprint.days_remaining}d left`}
         {sprint.goal ? ` · ${sprint.goal}` : ""}
       </p>
+      {/* THE SPRINT'S OWN PROGRESS AS A SHAPE, beside the five numbers that
+          say what it is made of. The measure is on the bar's own right, so a
+          reader never has to find it in a column heading. */}
+      {committed > 0 && (
+        <Meter
+          used={f.done}
+          max={committed}
+          label="Delivered"
+          right={`${f.done} of ${committed} ${measure}`}
+        />
+      )}
       <StatRow cols={5}>
         <Stat label="Committed" value={f.committed} sub={measure} />
         <Stat label="Added" value={f.added} sub="arrived after the start" />
@@ -183,20 +390,32 @@ export function SprintPanel({ sprint }: { sprint: WorkSprintRow }) {
           rows={sprint.by_assignee}
           rowKey={(a) => a.handle}
           columns={[
-            { key: "handle", header: "Who", cell: (a) => a.handle },
+            {
+              key: "handle",
+              header: "Who",
+              cell: (a) => <SeatChip name={seatName?.(a.handle) ?? a.handle} handle={a.handle} />,
+            },
             { key: "total", header: "Holding", cell: (a) => a.total },
             { key: "done", header: "Done", cell: (a) => a.done },
             { key: "remaining", header: "Remaining", cell: (a) => a.remaining },
             {
               key: "capacity",
               header: "Capacity",
-              // AN UNDECLARED CAPACITY IS A DASH, never a zero: rendering
-              // zero would put every assignee permanently over.
+              // AN UNDECLARED CAPACITY IS A DASH, never a zero or a bar:
+              // rendering zero would put every assignee permanently over, and
+              // a bar with no maximum is a claim about a limit nobody set.
               cell: (a) =>
                 a.capacity === undefined ? (
                   "—"
                 ) : (
-                  <Badge tone={a.over_capacity ? "caution" : "neutral"}>{a.capacity}</Badge>
+                  <span style={{ minWidth: 120, display: "block" }}>
+                    <Meter
+                      used={a.total}
+                      max={a.capacity}
+                      right={`${a.total} / ${a.capacity}`}
+                      {...(a.over_capacity ? { tone: "critical" as const } : {})}
+                    />
+                  </span>
                 ),
             },
           ]}

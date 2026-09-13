@@ -28,7 +28,8 @@
 import { useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useParam } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
+import { QueryState, SeatChip } from "~/components/common.tsx";
+import { Coverage, RowList, type RowChrome } from "~/components/work.tsx";
 import { Badge, Banner, Empty, Panel, Select, Stat, StatRow } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -43,14 +44,23 @@ export function MyWork() {
   const [handle, setHandle] = useParam("handle", "");
   // EVERY SEAT AND EVERY PERSON the chart names, so the screen can be
   // reached with nobody chosen and still offer somebody.
+  const index = useMemo(() => indexOrg(org), [org]);
+  // THE PICKER OFFERS NAMES AND SENDS HANDLES. A list of slugs is the
+  // database's vocabulary; the person choosing knows their colleagues by name.
   const handles = useMemo(
     () =>
-      indexOrg(org)
-        .seats.map((s) => s.handle)
-        .sort(),
-    [org],
+      index.seats
+        .map((s) => ({ value: s.handle, label: s.name }))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+    [index],
   );
-  const whose = handle || handles[0] || "";
+  const chrome: RowChrome = {
+    seatName: (handle) => index.byHandle.get(handle)?.name ?? handle,
+  };
+  // THE PICKER'S FIRST ENTRY IS AN OBJECT, so the fallback takes its `value`:
+  // the option carries a label for the person reading and a handle for the
+  // engine, and the bare entry here would have sent `[object Object]`.
+  const whose = handle || handles[0]?.value || "";
   // NOT UNTIL SOMEBODY IS CHOSEN — the same guard the board and the sprint
   // report take. `whose` is empty until the chart has loaded, and the engine
   // refuses this question without a handle.
@@ -65,6 +75,11 @@ export function MyWork() {
       <ScreenHead
         title="My work"
         sub="Everything one person is expected to look at — their priorities, what they hold, the questions waiting on them, and what became workable while they were away."
+        actions={
+          <a className="t-link" href={href(["work"])}>
+            Tracker →
+          </a>
+        }
       />
 
       <div className="toolbar">
@@ -75,6 +90,8 @@ export function MyWork() {
           anyLabel="Pick somebody"
           options={handles}
         />
+        <span className="spacer" />
+        <Coverage answer={mine} />
       </div>
 
       {!whose && <Empty title="Nobody chosen" hint="A day belongs to somebody." />}
@@ -103,19 +120,21 @@ export function MyWork() {
                 <Stat label="Unblocked" value={mine.unblocked_recent.length} sub="newly workable" />
               </StatRow>
 
-              <Asks rows={mine.asked_of_me} now={now} />
+              <Asks rows={mine.asked_of_me} now={now} chrome={chrome} />
               <TaskBlock
                 title="Priorities"
                 hint="What somebody put at the top of this list, in the order they put it."
                 rows={mine.priorities}
                 now={now}
+                chrome={chrome}
               />
-              <TaskBlock title="Assigned" rows={mine.assigned} now={now} />
+              <TaskBlock title="Assigned" rows={mine.assigned} now={now} chrome={chrome} />
               <TaskBlock
                 title="Unblocked"
                 hint="Work whose blockers have all finished — the one block about a change rather than a state."
                 rows={mine.unblocked_recent}
                 now={now}
+                chrome={chrome}
               />
               <Checklist rows={mine.checklist_items} />
               <TaskBlock
@@ -123,8 +142,9 @@ export function MyWork() {
                 hint="Brought on without owning."
                 rows={mine.collaborating}
                 now={now}
+                chrome={chrome}
               />
-              <TaskBlock title="Watching" rows={mine.watching_recent} now={now} />
+              <TaskBlock title="Watching" rows={mine.watching_recent} now={now} chrome={chrome} />
             </>
           )}
         </QueryState>
@@ -140,27 +160,21 @@ export function TaskBlock({
   hint,
   rows,
   now,
+  chrome,
 }: {
   title: string;
   hint?: string;
   rows: WorkSummary[];
   now: number;
+  chrome?: RowChrome;
 }) {
   if (rows.length === 0) return null;
+  // THE TRACKER'S OWN ROW, so a task looks the same here as it does on the
+  // board it came from: this page used to render four of a row's facts and
+  // the board six, and only one of the two knew a task could be blocked.
   return (
-    <Panel title={title} subtitle={hint} count={rows.length}>
-      {rows.map((row) => (
-        <div key={row.id} className="row gap-2">
-          <a className="mono" href={href(["work", row.key])}>
-            {row.key}
-          </a>
-          <a href={href(["work", row.key])} className="truncate">
-            {row.title}
-          </a>
-          <Badge tone="neutral">{row.status}</Badge>
-          <span className="muted">{relTime(row.updated, now)}</span>
-        </div>
-      ))}
+    <Panel title={title} subtitle={hint} count={rows.length} padding="none">
+      <RowList rows={rows} now={now} chrome={chrome} hrefOf={(row) => href(["work", row.key])} />
     </Panel>
   );
 }
@@ -169,23 +183,40 @@ export function TaskBlock({
  *
  *  FIRST on the page, because an unanswered question is the only block where
  *  somebody else is blocked on THIS person rather than the other way round. */
-export function Asks({ rows, now }: { rows: WorkAskRow[]; now: number }) {
+export function Asks({
+  rows,
+  now,
+  chrome,
+}: {
+  rows: WorkAskRow[];
+  now: number;
+  chrome?: RowChrome;
+}) {
   if (rows.length === 0) return null;
   return (
-    <Panel title="Asked of you" count={rows.length} icon="alert">
-      {rows.map((ask) => (
-        <div key={ask.comment} className="col gap-1">
-          <div className="row gap-2">
-            <a className="mono" href={href(["work", ask.key])}>
-              {ask.key}
-            </a>
-            <span className="truncate">{ask.body}</span>
-            <span className="muted">
-              {ask.asked_by} · {relTime(ask.asked_at, now)}
-            </span>
+    <Panel title="Asked of you" count={rows.length} icon="help">
+      <div className="col gap-3">
+        {rows.map((ask) => (
+          // THE CAUTION RAIL, the same mark a question wears in a thread:
+          // this is the one block where somebody else is blocked on THIS
+          // person rather than the other way round.
+          <div key={ask.comment} className="comment work-ask">
+            <div className="row gap-2 wrap">
+              <a className="mono t-link" href={href(["work", ask.key])}>
+                {ask.key}
+              </a>
+              <span className="truncate">{ask.title}</span>
+              <span className="spacer" />
+              <SeatChip
+                name={chrome?.seatName?.(ask.asked_by) ?? ask.asked_by}
+                handle={ask.asked_by}
+              />
+              <span className="muted">{relTime(ask.asked_at, now)}</span>
+            </div>
+            <div className="prose">{ask.body}</div>
           </div>
-        </div>
-      ))}
+        ))}
+      </div>
     </Panel>
   );
 }
@@ -199,11 +230,12 @@ export function Checklist({ rows }: { rows: WorkChecklistRow[] }) {
   return (
     <Panel title="Checklist items" count={rows.length} subtitle="On other people's tasks.">
       {rows.map((item) => (
-        <div key={`${item.task}:${item.item}`} className="row gap-2">
-          <a className="mono" href={href(["work", item.task_key])}>
+        <div key={`${item.task}:${item.item}`} className={`work-check${item.done ? " done" : ""}`}>
+          <a className="mono t-link" href={href(["work", item.task_key])}>
             {item.task_key}
           </a>
-          <span className="truncate">{item.name}</span>
+          <span className="work-check-name">{item.name}</span>
+          <span className="spacer" />
           <span className="muted truncate">{item.task_title}</span>
         </div>
       ))}

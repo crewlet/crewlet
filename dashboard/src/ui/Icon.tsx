@@ -9,6 +9,11 @@
  *
  * Paths adapted from Feather Icons (https://feathericons.com) —
  * MIT License, Copyright (c) 2013-2023 Cole Bemis.
+ *
+ * `bug` and `columns` are compositions of this file's own, drawn to Feather's
+ * grid and stroke so they sit beside the rest: the tracker needs a mark per
+ * task type and per board shape, and a set that borrowed one icon for two
+ * meanings would be the categorical-colour mistake in another material.
  */
 
 import type { SVGProps } from "react";
@@ -50,6 +55,13 @@ const P = {
   search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14ZM16.5 16.5 21 21",
   filter: "M22 3H2l8 9.46V19l4 2v-8.54z",
   check: "m20 6-11 11-5-5",
+  // A ticked box: the ordinary task, and the one type a reader should not
+  // have to look twice at.
+  checkSquare: "M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11",
+  // A beetle from above — body, head, six legs and two antennae.
+  bug: "M12 20a5 5 0 0 0 5-5v-4a5 5 0 0 0-10 0v4a5 5 0 0 0 5 5zM9 8a3 3 0 0 1 6 0M7 11H4M20 11h-3M7 15H4M20 15h-3M12 20v-9M9.5 5.5 8 3.5M14.5 5.5 16 3.5",
+  // Three columns of falling height: a board, as distinct from a list.
+  columns: "M3 4h5v16H3zM9.5 4h5v11h-5zM16 4h5v7h-5z",
   x: "M18 6 6 18M6 6l12 12",
   plus: "M12 5v14M5 12h14",
   minus: "M5 12h14",
@@ -57,6 +69,9 @@ const P = {
   chevronDown: "m6 9 6 6 6-6",
   chevronLeft: "m15 18-6-6 6-6",
   chevronUp: "m18 15-6-6-6 6",
+  // A double chevron: urgent, which is one step past high and has to read as
+  // one step past it at a glance rather than by its colour alone.
+  chevronsUp: "m17 11-5-5-5 5M17 18l-5-5-5 5",
   arrowRight: "M5 12h14M12 5l7 7-7 7",
   arrowUpRight: "M7 17 17 7M8 7h9v9",
   external: "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3",

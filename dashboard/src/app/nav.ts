@@ -78,10 +78,10 @@ export const NAV: NavGroup[] = [
     items: [
       {
         key: "work",
-        label: "Work board",
+        label: "Tracker",
         icon: "check",
         path: ["work"],
-        hint: "Every item on the company's own tracker, and what moved it",
+        hint: "Every project, every item, and what moved it",
       },
       {
         key: "sprints",

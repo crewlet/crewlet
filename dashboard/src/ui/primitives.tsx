@@ -603,10 +603,20 @@ export function Select({
 }: {
   value: string;
   onChange: (v: string) => void;
-  options: string[];
+  /**
+   * A bare string is its own label, and a pair separates the two.
+   *
+   * The pair is not a convenience. Every value this control sends is a WIRE
+   * value — a status slug, a handle, a sprint number — and every one of them
+   * has a word a person uses instead: a picker offering `in_progress` and
+   * `ada` is a picker written in the database's vocabulary, and one that sent
+   * "In progress" would be refused by the engine's own closed set.
+   */
+  options: (string | { value: string; label: string })[];
   ariaLabel: string;
   anyLabel?: string;
 }) {
+  const rows = options.map((o) => (typeof o === "string" ? { value: o, label: o } : o));
   return (
     <div className={cx("picker", value && "on")}>
       <select
@@ -616,9 +626,9 @@ export function Select({
         onChange={(e) => onChange(e.target.value)}
       >
         <option value="">{anyLabel}</option>
-        {options.map((o) => (
-          <option key={o} value={o}>
-            {o}
+        {rows.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
           </option>
         ))}
       </select>
