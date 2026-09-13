@@ -46,6 +46,14 @@ var ErrNoTask = errors.New("tracker: no such task")
 // it typed the key wrong.
 var ErrNoProject = errors.New("tracker: no such project")
 
+// ErrNoComment reports a comment this node has no row for on that task.
+//
+// ITS OWN SENTINEL beside the two above, and the caller's answer differs
+// again: naming a comment that is not on the task the caller named is a
+// mistyped id rather than an empty thread, and a reader told "no comments"
+// would go looking for the wrong thing.
+var ErrNoComment = errors.New("tracker: no such comment")
+
 // DetailWants says which parts of the answer to assemble.
 //
 // EXPLICIT rather than "everything", because the parts have very different
@@ -69,6 +77,18 @@ type DetailWants struct {
 
 	// CommentCursor pages the thread. Empty starts at the newest.
 	CommentCursor string
+
+	// Comment names ONE comment to read WHOLE, and REPLACES the page.
+	//
+	// The thread page carries EXCERPTS — see [CommentBodyShown] — so this
+	// is the read that opens one. Without it the excerpt is not a pointer
+	// but a loss: a body is accepted at up to [MaxCommentBody] and there
+	// would be no read in the engine that ever returns the rest of it.
+	//
+	// It replaces the page rather than widening it, because a thread of
+	// twenty whole bodies is ten times the ceiling on one tool answer —
+	// which is the reason the page is excerpted in the first place.
+	Comment string
 }
 
 // DetailHistoryDefault is how many history rows a detail read returns when the
@@ -224,7 +244,16 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 			return err
 		}
 		out.Task = task
-		if want.Comments {
+		switch {
+		case want.Comment != "":
+			// READ WHETHER OR NOT `comments` WAS ASKED FOR: naming one
+			// comment IS asking for comments, and a caller that had to
+			// pass both would meet a silently empty thread when it
+			// forgot.
+			if out.Comments, err = readComment(ctx, tx, id, want.Comment); err != nil {
+				return err
+			}
+		case want.Comments:
 			out.Comments, out.CommentsCursor, err = readComments(ctx, tx, id,
 				want.CommentCursor)
 			if err != nil {
@@ -365,12 +394,19 @@ func readTaskDocument(ctx context.Context, tx *sql.Tx, id string) (Task, error) 
 // answer fits [ToolAnswerBytes] at all.
 const DetailComments = 20
 
-// CommentBodyShown is how much of each body a detail read carries.
+// CommentBodyShown is how much of each body a THREAD PAGE carries.
 //
 // 2 KiB, against [MaxCommentBody]'s 32 KiB — which is the whole point: twenty
 // comments at their full length is 640 KiB, ten times the ceiling on ONE tool
 // answer, for a thread nobody asked to read in full. The excerpt is what a
-// reader skims; `get_work_item(comment:)` is how they open one.
+// reader skims; [DetailWants.Comment] is how they open one.
+//
+// THAT SECOND HALF IS WHAT MAKES THE CUT LEGITIMATE, and it did not exist:
+// the excerpt was documented as a pointer to a read the engine did not have,
+// so a body written at more than 2 KiB — which every wake excerpt, every
+// `my_work` ask row and every detail read shortened further — could not be
+// recovered by any seat through any tool. A cut with no way back is not a
+// pointer, it is a silent loss of what somebody wrote.
 const CommentBodyShown = 2 << 10
 
 // readComments is a page of the thread, NEWEST FIRST.
@@ -446,6 +482,39 @@ func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string) (
 // not reach a model as a replacement character.
 func elideCommentBody(body string) string {
 	return textcut.Ellipsis(body, CommentBodyShown)
+}
+
+// readComment is ONE comment, WHOLE.
+//
+// The counterpart to the page above, and the reason its excerpt is honest:
+// what a reader skims is cut, what a reader OPENS is exactly what was
+// written. Nothing here elides — a single body is bounded by
+// [MaxCommentBody], which the write already refuses above, so the one value
+// this returns fits inside a tool answer with room to spare.
+//
+// SCOPED TO THE TASK, so a comment id from another item answers
+// [ErrNoComment] rather than quietly returning a thread the caller was not
+// reading. The id is the table's primary key; the task_id term is the check,
+// not the lookup.
+func readComment(ctx context.Context, tx *sql.Tx, taskID, commentID string) ([]Comment, error) {
+	commentID = strings.TrimSpace(commentID)
+	var body []byte
+	err := tx.QueryRowContext(ctx, `
+		SELECT document FROM tracker_comments
+		WHERE id = ? AND task_id = ?`, commentID, taskID).Scan(&body)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, fmt.Errorf("%w: %s on %s", ErrNoComment, commentID, taskID)
+	case err != nil:
+		return nil, fmt.Errorf("tracker: read comment %s on %s: %w",
+			commentID, taskID, err)
+	}
+	var comment Comment
+	if err := json.Unmarshal(body, &comment); err != nil {
+		return nil, fmt.Errorf("tracker: decode comment %s on %s: %w",
+			commentID, taskID, err)
+	}
+	return []Comment{comment}, nil
 }
 
 // The comment cursor is the pair the page is ordered by, because an instant

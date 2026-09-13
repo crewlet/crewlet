@@ -817,7 +817,9 @@ func (t *getWorkItem) Name() string { return GetWorkItemTool }
 func (t *getWorkItem) Description() string {
 	return "Read one work item: its description, status, assignee, labels, " +
 		"links in both directions, the most recent comments and its recent " +
-		"history. Take `task.version` from the result and pass it back as " +
+		"history. Comment bodies in the thread are EXCERPTS, ending in `…` " +
+		"where one was cut — pass `comment` with that comment's id to read " +
+		"it whole. Take `task.version` from the result and pass it back as " +
 		"`if_match` on update_work_item to make your edit conditional."
 }
 
@@ -847,6 +849,16 @@ func (t *getWorkItem) Parameters() map[string]any {
 				"description": "The `comments_cursor` from a previous read, " +
 					"to see the comments before that page.",
 			},
+			"comment": map[string]any{
+				"type": "string",
+				"description": "One comment's id, to read that comment ALONE " +
+					"with its body exactly as it was written. The thread " +
+					"page carries excerpts; this is how you open the one you " +
+					"need after seeing it end in `…`. On its own it answers " +
+					"the item and that comment and nothing else — name " +
+					"`include` as well if you also want the history, the " +
+					"links or the fields.",
+			},
 		},
 		"required": []any{"item"},
 	}
@@ -854,17 +866,30 @@ func (t *getWorkItem) Parameters() map[string]any {
 
 // detailWants reads the `include` argument, defaulting to all four.
 //
-// ALL THREE BY DEFAULT, because that is what this tool answered before the
+// ALL FOUR BY DEFAULT, because that is what this tool answered before the
 // argument existed and a model that never learned to pass it must keep getting
 // a whole item. What the argument buys is the caller who knows they want one
 // part: the answer is then smaller by the parts they did not ask for, rather
 // than by a cap the engine chose for them.
+//
+// `comment` IS ITS OWN DEFAULT, and that exception is what keeps the escape
+// hatch usable. Naming one comment says what the call is for, and the
+// argument is new enough to have no back-compatible default to honour — where
+// a whole item at its maximum is refused by [ToolAnswerBytes], one whole
+// comment plus fifty history rows plus sixty-four links would be too, so the
+// read that exists to recover a body would meet a refusal telling it to
+// narrow. An explicit `include` still wins: a caller that asks for the
+// comment AND the fields means it.
 func detailWants(args map[string]any) (tracker.DetailWants, string) {
 	want := tracker.DetailWants{
 		CommentCursor: strings.TrimSpace(argString(args, "comments_cursor")),
+		Comment:       strings.TrimSpace(argString(args, "comment")),
 	}
 	raw, held := args["include"]
 	if !held || raw == nil {
+		if want.Comment != "" {
+			return want, ""
+		}
 		want.Comments, want.History = true, true
 		want.Links, want.Fields = true, true
 		return want, ""
@@ -913,6 +938,10 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	case errors.Is(err, tracker.ErrNoTask):
 		return failed(fmt.Sprintf("There is no work item %q. Check the key, or "+
 			"use list_work_items to find it.", clip(id))), nil
+	case errors.Is(err, tracker.ErrNoComment):
+		return failed(fmt.Sprintf("Work item %q has no comment %q. Comment ids "+
+			"come from the `comments` in a read of the item itself — drop "+
+			"`comment` to see the thread.", clip(id), clip(want.Comment))), nil
 	case err != nil:
 		return failed(readFailure(GetWorkItemTool, err)), nil
 	}

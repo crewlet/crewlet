@@ -38,6 +38,11 @@ type fakeTracker struct {
 	// reads is every freshness the point readers were handed.
 	reads []statelog.Freshness
 
+	// wants is the last DetailWants a detail read was given, so a case can
+	// assert what a model's arguments BECAME rather than only that the call
+	// came back.
+	wants tracker.DetailWants
+
 	created []tracker.Task
 	merged  []mergeCall
 
@@ -139,11 +144,11 @@ func (f *fakeTracker) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tr
 	return answer, nil
 }
 
-func (f *fakeTracker) Task(_ context.Context, idOrKey string, _ tracker.DetailWants,
+func (f *fakeTracker) Task(_ context.Context, idOrKey string, want tracker.DetailWants,
 	fresh statelog.Freshness) (tracker.TaskDetail, error) {
 
 	f.reads = append(f.reads, fresh)
-
+	f.wants = want
 	if f.readErr != nil {
 		return tracker.TaskDetail{}, f.readErr
 	}
@@ -1226,5 +1231,64 @@ func TestAFieldsOnlyUpdateIsNotSilentlyDropped(t *testing.T) {
 					"unchanged on every node", name, got.Output)
 			}
 		})
+	}
+}
+
+// OPENING ONE COMMENT IS A READ A MODEL CAN REACH, AND A WRONG ID SAYS SO.
+//
+// The thread page carries EXCERPTS — twenty bodies at their full length is ten
+// times the ceiling on one tool answer — and that is only honest while the
+// rest is one call away. It was not: the excerpt was documented as a pointer
+// to a `comment:` argument this tool never had, so a body past 2 KiB could not
+// be recovered by any seat through any tool. These two cases are the argument
+// and the refusal that make the excerpt a pointer rather than a loss.
+func TestOneCommentCanBeOpenedWholeAndAWrongIDSaysHow(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk})
+
+	if got := callWork(t, reg, builtin.GetWorkItemTool, map[string]any{
+		"item": "ENG-1", "comment": "cm-9",
+	}); got.Failed {
+		t.Fatalf("opening one comment failed: %q", got.Output)
+	}
+	if trk.wants.Comment != "cm-9" {
+		t.Fatalf("the read was given Comment %q — the argument never reached "+
+			"the reader, so the excerpt has no way back", trk.wants.Comment)
+	}
+	// AND IT NARROWS THE ANSWER ON ITS OWN. A whole item is already over
+	// the ceiling at its maximum, so one whole comment carried beside the
+	// history, the links and the fields would meet the refusal that tells
+	// a caller to narrow — from the read that exists to recover a body.
+	if trk.wants.History || trk.wants.Links || trk.wants.Fields {
+		t.Errorf("opening one comment also asked for history=%v links=%v "+
+			"fields=%v, which can push the answer past the ceiling",
+			trk.wants.History, trk.wants.Links, trk.wants.Fields)
+	}
+	// AN EXPLICIT `include` STILL WINS: a caller asking for both means it.
+	callWork(t, reg, builtin.GetWorkItemTool, map[string]any{
+		"item": "ENG-1", "comment": "cm-9", "include": []any{"fields"},
+	})
+	if !trk.wants.Fields || trk.wants.Comment != "cm-9" {
+		t.Errorf("an explicit include beside `comment` gave fields=%v "+
+			"comment=%q", trk.wants.Fields, trk.wants.Comment)
+	}
+
+	// AND IT IS ITS OWN REFUSAL. A mistyped comment id is not an empty
+	// thread, and a reader told "no comments" goes looking for the wrong
+	// thing — so the message names where ids come from and how to get the
+	// thread back.
+	trk.readErr = fmt.Errorf("%w: cm-nope on i1", tracker.ErrNoComment)
+	got := callWork(t, reg, builtin.GetWorkItemTool, map[string]any{
+		"item": "ENG-1", "comment": "cm-nope",
+	})
+	if !got.Failed {
+		t.Fatal("a comment that is not on the item read back as a result")
+	}
+	for _, want := range []string{"cm-nope", "comment"} {
+		if !strings.Contains(got.Output, want) {
+			t.Errorf("the refusal is %q and does not name %q — a refusal a "+
+				"caller cannot act on is one they guess against", got.Output, want)
+		}
 	}
 }

@@ -37,6 +37,12 @@ func TestEveryToolAnswerFitsToolAnswerBytes(t *testing.T) {
 		{"get_work_item(include=comments)", onlyComments(whole)},
 		{"get_work_item(include=history)", onlyHistory(whole)},
 		{"get_work_item(include=links)", onlyLinks(whole)},
+		// THE READ THAT MAKES THE COMMENT EXCERPT HONEST. The page above
+		// carries excerpts precisely because twenty whole bodies is ten
+		// times this ceiling; that is only legitimate while opening ONE
+		// still fits, so a MaxCommentBody raised past this would leave
+		// what somebody wrote unreachable by any tool.
+		{"get_work_item(comment=…)", oneWholeComment(whole)},
 		{"get_work_catalogue", maximalCatalogue()},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -95,6 +101,18 @@ func onlyHistory(d tracker.TaskDetail) tracker.TaskDetail {
 
 func onlyLinks(d tracker.TaskDetail) tracker.TaskDetail {
 	d.Comments, d.History, d.CommentsCursor = nil, nil, ""
+	return d
+}
+
+// oneWholeComment is what `comment:` answers: that comment ALONE, at
+// [tracker.MaxCommentBody], with no page and no cursor behind it.
+func oneWholeComment(d tracker.TaskDetail) tracker.TaskDetail {
+	d.History, d.Links, d.CommentsCursor = nil, nil, ""
+	d.Comments = []tracker.Comment{{
+		ID: "c", Task: "id", Author: "ana",
+		Body:      strings.Repeat("c", tracker.MaxCommentBody),
+		CreatedAt: time.Date(2026, 3, 4, 9, 0, 0, 0, time.UTC),
+	}}
 	return d
 }
 
