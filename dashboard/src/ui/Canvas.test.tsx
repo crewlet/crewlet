@@ -245,6 +245,26 @@ test("a mouse drag pans, and the click it ends with does not reach the item", as
   expect(onItem).toHaveBeenCalledTimes(1);
 });
 
+test("the pointer is captured only once a press becomes a drag, so a plain click reaches its item", () => {
+  mount();
+  // jsdom has no pointer capture: this is the browser's, feature-detected.
+  const captured = vi.fn();
+  (viewport() as HTMLElement & { setPointerCapture: (id: number) => void }).setPointerCapture =
+    captured;
+  const mouse = { pointerId: 12, pointerType: "mouse", button: 0 };
+  const item = screen.getByRole("treeitem");
+
+  fireEvent.pointerDown(item, { ...mouse, clientX: 10, clientY: 10 });
+  fireEvent.pointerMove(window, { ...mouse, clientX: 12, clientY: 11 });
+  fireEvent.pointerUp(window, { ...mouse, clientX: 12, clientY: 11 });
+  expect(captured).not.toHaveBeenCalled();
+
+  fireEvent.pointerDown(item, { ...mouse, clientX: 10, clientY: 10 });
+  fireEvent.pointerMove(window, { ...mouse, clientX: 80, clientY: 10 });
+  expect(captured).toHaveBeenCalledWith(12);
+  fireEvent.pointerUp(window, { ...mouse, clientX: 80, clientY: 10 });
+});
+
 test("a press on a control inside the canvas never starts a pan", () => {
   const { container } = mount();
   const start = viewOf(container);

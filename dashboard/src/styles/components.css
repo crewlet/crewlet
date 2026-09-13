@@ -1526,6 +1526,7 @@ kbd {
 }
 .canvas[data-panning="true"] .canvas-viewport {
   cursor: grabbing;
+  user-select: none;
 }
 .canvas-world {
   position: absolute;

@@ -284,6 +284,21 @@ export function Canvas({
     setPanning(false);
   }, []);
 
+  // CAPTURED ONLY ONCE IT IS A GESTURE. A browser dispatches the click that
+  // ends a captured press at the capturing element, so capturing every press
+  // on arrival would turn a plain click on an item into a click on the
+  // viewport and the item would never hear it.
+  const capture = useCallback((id: number) => {
+    const el = viewport.current;
+    if (!el || typeof el.setPointerCapture !== "function") return;
+    try {
+      el.setPointerCapture(id);
+    } catch {
+      // A pointer the browser has already released cannot be captured; the
+      // window listeners still follow it.
+    }
+  }, []);
+
   useEffect(() => {
     function onMove(e: PointerEvent) {
       if (!pointers.current.has(e.pointerId)) return;
@@ -307,6 +322,10 @@ export function Canvas({
         }
         g.dragging = true;
         setPanning(true);
+        capture(g.id);
+        // A drag that began on a card's text has started a selection; the
+        // chart is moving, so nothing is being selected.
+        window.getSelection?.()?.removeAllRanges();
       }
       apply(panBy(g.view, at.x - g.start.x, at.y - g.start.y), false);
     }
@@ -336,7 +355,7 @@ export function Canvas({
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
     };
-  }, [apply, endGesture, local]);
+  }, [apply, capture, endGesture, local]);
 
   function onPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
     if (!ready) return;
@@ -345,18 +364,11 @@ export function Canvas({
     if (target?.closest(INTERACTIVE)) return;
     const at = local(e);
     pointers.current.set(e.pointerId, at);
-    const el = e.currentTarget;
-    if (typeof el.setPointerCapture === "function") {
-      try {
-        el.setPointerCapture(e.pointerId);
-      } catch {
-        // A pointer the browser has already released cannot be captured; the
-        // window listeners still follow it.
-      }
-    }
     const touches = [...pointers.current.entries()];
     if (e.pointerType === "touch" && touches.length >= 2) {
       const [a, b] = touches.slice(-2) as [[number, Point], [number, Point]];
+      capture(a[0]);
+      capture(b[0]);
       gesture.current = {
         kind: "pinch",
         ids: [a[0], b[0]],
