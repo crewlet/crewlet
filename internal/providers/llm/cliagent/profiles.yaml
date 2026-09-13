@@ -736,13 +736,11 @@ kimi-code:
   # search hit and whose print mode took `--input-format`/`--final-message-only`
   # flags this build does not have. `kimi migrate` is the seam between them.
   #
-  # WRITTEN FROM THE VENDOR'S PUBLISHED REFERENCE, not measured against an
-  # installed binary — unlike the profiles above it, whose flags were read off
-  # `--help`. Two things follow. `written_for` is what `crewlet llm doctor`
-  # prints beside the version you actually have, and the argv-shape test in
-  # this package runs against the real CLI the moment one is on PATH. If a
-  # flag here is wrong, it fails at argument parsing, loudly, on the first
-  # call — which is the failure mode to prefer.
+  # MEASURED AGAINST 0.42.0: the flags off `kimi --help`, the tool surface and
+  # the system prompt off the request body the CLI actually sent (a stub HTTP
+  # endpoint standing in for the model), and the failure classifications off
+  # real 401 and 429 responses. What is NOT measured is a spent Kimi
+  # subscription, which no profile here can produce on demand.
   written_for: "Kimi Code CLI 0.42.x (`kimi --version`) — MoonshotAI's OWN, from @moonshot-ai/kimi-code"
   version_args: ["--version"]
   # `--output-format stream-json` IS NOT OPTIONAL, and the reason is the
@@ -772,14 +770,29 @@ kimi-code:
   # warning" and matches nothing, so a stale entry costs one tool rather than
   # lifting the whole restriction.
   #
-  # `WebSearch` and `FetchURL` are the two kept, because web is the one local
-  # tool this backend never denies. Everything else goes with the empty rest
-  # of the list: `Bash`, `Read`, `Write`, `Edit`, `Grep`, `Glob`,
-  # `ReadMediaFile`, the plan-mode pair, `TodoList`, `Skill`, the background
-  # `Task*` family, the `Cron*` family, `AskUserQuestion`/`NotifyUser` — and
-  # `Agent`/`AgentSwarm`, which is what bounds the construct: with no `Agent`
-  # tool there is no sub-agent to delegate to, so `subagents` needs no entry
-  # of its own.
+  # MEASURED, by reading the tool array the CLI actually put on the wire:
+  # TWENTY-FIVE tools by default, ONE with this agent file. What goes is
+  # `Bash`, `Read`, `Write`, `Edit`, `Grep`, `Glob`, the plan-mode pair,
+  # `TodoList`, `Skill`, `AskUserQuestion`, the `Task*` background family, the
+  # `Cron*` family, an undocumented GOAL family (`CreateGoal`, `GetGoal`,
+  # `UpdateGoal`, `SetGoalBudget`) — and `Agent`/`AgentSwarm`, which is what
+  # bounds the construct: with no `Agent` tool there is no sub-agent to
+  # delegate to, so `subagents` needs no entry of its own.
+  #
+  # The goal family is the reason an allowlist is right here beyond the
+  # failure-direction argument: it is in the binary and not in the vendor's
+  # published tool table, so a denylist written from the docs would have
+  # admitted four tools nobody knew to name.
+  #
+  # `FetchURL` is the one that survives, and it is web — the one local tool
+  # this backend never denies. `WebSearch` is named beside it and was NOT in
+  # the measured baseline: it is registered only when the Moonshot search
+  # service is configured, which the OAuth login provisions
+  # (`[services.moonshot_search].oauth` is "injected automatically by the
+  # login flow") and a credential-less test does not. So the name is
+  # load-bearing on a real subscription seat and inert here, which is the
+  # opposite of muse-code's gated `web_fetch` — there, naming it admitted
+  # nothing ever.
   local_tools: denied
   model_args: ["--model", "{model}"]
   # `--agent-file`, and it is the tool denial AND the system prompt at once.
@@ -875,6 +888,23 @@ kimi-code:
     # denies), which is exactly why this costs nothing and covers the case
     # where the denial did not apply.
     KIMI_CODE_BACKGROUND_PRINT_BACKGROUND_MODE: "exit"
+    # THE RETRY CAP, and this one is MEASURED rather than reasoned. The
+    # default is ten attempts with exponential backoff, and against a stub
+    # returning 429 the CLI slept through nine retries before giving up:
+    #
+    #   default (10 attempts) ......... 2 min 24 s
+    #   this setting (3 attempts) ..... 5.4 s
+    #
+    # A spent plan is exactly when the seat's fallback chain must carry it
+    # onto a metered key, and at the default the CLI sits on the seat's
+    # concurrency slot for two and a half minutes first — on every call, until
+    # the plan resets — doing nothing but sleeping. Three keeps one real retry
+    # for a transient 500 or an overloaded engine (~1.8 s of backoff) and
+    # hands everything past that to the chain and the credential pool, which
+    # move to another model or another key rather than hammering a dependency
+    # that is already refusing. An auth failure is not retried at all, which
+    # this measured at 3.1 s either way.
+    KIMI_LOOP_MAX_ATTEMPTS_PER_STEP: "3"
   config_env:
     KIMI_CODE_HOME: ".kimi-code"
   # TWO FILES, because this CLI splits its login across them: `kimi login`
@@ -919,24 +949,34 @@ kimi-code:
   # none. A metered account is configured by writing the key into the
   # credential home's config.toml, which then travels to every seat.
   #
-  # THE SENTINELS ARE THE VENDOR'S OWN PUBLISHED SENTENCES, taken from its
-  # error reference rather than measured against a spent plan — which no
-  # profile here can do on demand. Each is quoted WITHOUT its leading
-  # apostrophe clause ("You've reached your …"): a sentinel is matched
-  # verbatim, and a vendor that renders a curly apostrophe would silently
-  # never match. If your plan's wording differs, override
-  # cli.overrides.limit_markers rather than letting a spent plan classify
-  # FATAL and strand the fallback chain.
+  # THE SENTINELS ARE THIS CLI'S OWN CLASSIFICATION, not the vendor's prose,
+  # and that is what a measurement bought. A real 429 exits 1 with
+  #
+  #   error: failed to run prompt: provider.rate_limit: 429 You have reached
+  #   your 5-hour usage limit. …
+  #
+  # and a real 401 with `provider.auth_error: 401 Invalid Authentication`.
+  # Everything after the colon is the UPSTREAM provider's message and changes
+  # with the plan, the endpoint and the vendor's wording; the
+  # `provider.<kind>:` prefix is the CLI's own and does not. Matching the
+  # prefix is therefore the sentinel that cannot go stale on a reworded error
+  # — which is exactly the drift limit_markers are shaped to survive.
+  #
+  # The plan-window phrases are kept BESIDE it, from the vendor's published
+  # error reference, for a failure that reaches the operator by some path
+  # that does not go through the provider classifier. Each is quoted without
+  # its leading "You've reached your", because a sentinel is matched verbatim
+  # and a vendor rendering a curly apostrophe would silently never match.
   limit_markers:
+    - sentinel: "provider.rate_limit"
     - sentinel: "5-hour usage limit"
     - sentinel: "weekly (7-day) usage limit"
     - sentinel: "monthly usage limit for this billing cycle"
     - sentinel: "concurrent request limit"
-    - sentinel: "receiving too many requests"
-    - sentinel: "engine is currently overloaded"
   auth_markers:
-    - sentinel: "appears to be invalid or may have expired"
+    - sentinel: "provider.auth_error"
     - sentinel: "Invalid Authentication"
+    - sentinel: "appears to be invalid or may have expired"
 
 hermes:
   binary: hermes
@@ -947,69 +987,53 @@ hermes:
   # about every entry that chose another; empty falls back to the coding-agent
   # catalogue's own default, which is the honest answer.
   vendor: ""
-  # WRITTEN FROM THE VENDOR'S PUBLISHED REFERENCE, not measured against an
-  # installed binary — unlike the profiles above it, whose flags were read off
-  # `--help`. Two things follow. `written_for` is what `crewlet llm doctor`
-  # prints beside the version you actually have, and the argv-shape test in
-  # this package runs against the real CLI the moment one is on PATH. If a
-  # flag here is wrong, it fails at argument parsing, loudly, on the first
-  # call — which is the failure mode to prefer.
+  # MEASURED AGAINST 0.21.2: the argv driven through the CLI's own argparse
+  # (hermes_cli/_parser.py), the toolset resolved through its own registry,
+  # the usage-report keys read off hermes_cli/oneshot.py, and the version
+  # line off its `--version` fast path. What is NOT measured is a live
+  # completion — this CLI's 183-package dependency tree would not install
+  # here — so the failure sentinels below are the weakest claim in this entry.
   written_for: "Hermes Agent 0.21.x (`hermes --version`)"
   version_args: ["--version"]
-  # `--ignore-rules` is the isolation flag, and it is a GLOBAL option so it
-  # applies to the `-z` entry point below: it skips the auto-injection of
+  # THE DENIAL IS ON ARGV, and `--toolsets` is the whole of it.
+  #
+  # It was nearly a seeded config.yaml, on the strength of the vendor's docs
+  # listing `--toolsets` under `hermes chat`. Read against the parser
+  # (hermes_cli/_parser.py) it is a TOP-LEVEL flag whose own help says
+  # "Applies to -z/--oneshot", and hermes_cli/oneshot.py states the rule:
+  # "Toolsets = explicit --toolsets, else the user's `cli` toolsets from
+  # `hermes tools`". So passing it REPLACES the set for the invocation and
+  # the config file is not consulted at all — a per-call denial rather than a
+  # file that can quietly stop applying.
+  #
+  # `web` resolves to exactly `web_search` and `web_extract` (toolsets.py),
+  # which is the surface this backend keeps and nothing else. Everything the
+  # default `hermes-cli` platform toolset carries goes with it: file,
+  # terminal, browser, code_execution, delegation, cronjob, memory, skills,
+  # vision, image_gen, todo, tts, session_search, computer_use and kanban.
+  #
+  # AND IT FAILS THE SAFE WAY, which is the opposite of grok's allowlist. An
+  # entry this build does not know is warned about and dropped; if NOTHING
+  # valid survives, the run stops on "--toolsets did not contain any valid
+  # toolsets" rather than falling back to every tool. A name that goes stale
+  # therefore costs the call, loudly, instead of the restriction.
+  #
+  # `--ignore-rules` is the other half: it skips the auto-injection of
   # AGENTS.md, SOUL.md, .cursorrules, persistent memory and preloaded skills.
-  # Two things follow from it, and this backend wants both — no context is
-  # admitted from a host the engine does not control, and the CLI keeps no
-  # second, invisible memory beside the seat's own.
+  # Two things follow, and this backend wants both — no context is admitted
+  # from a host the engine does not control, and the CLI keeps no second,
+  # invisible memory beside the seat's own.
   #
-  # NOT --ignore-user-config and NOT --safe-mode, although both look like more
-  # of the same: each ignores ~/.hermes/config.yaml, which is where the seeded
-  # toolset below lives, so either one would hand the run the full
-  # `hermes-cli` tool surface back.
+  # NOT --ignore-user-config and NOT --safe-mode. Neither is needed now that
+  # the tools are on argv, and each would discard an operator's own
+  # cli.overrides.seed_files if they ever add one.
   #
-  # AND NOT --yolo, which is where this profile departs from muse-code's
-  # --disable-approval. The reasoning there was that a held approval in a
-  # headless run stays unresolved and holds the seat's concurrency slot until
-  # the wall-clock cap fires — true here too. But this CLI has no flag that
-  # DENIES a tool, only the toolset file below, so --yolo would be an
-  # auto-approve with no denial behind it: a run whose seeded config failed to
-  # apply would get a shell on the engine host and approve its own commands.
-  # A wedge is bounded by cli.timeout_seconds and is loud; that is not.
-  complete_args: ["--ignore-rules"]
-  # DENIED BY REPLACING THE PLATFORM'S TOOLSET, which is the only mechanism
-  # this CLI has: `--toolsets` is an option of `hermes chat` rather than of
-  # the `-z` entry point, and there is no --deny-tool of any kind. The
-  # per-platform `toolsets:` list in config.yaml is what a headless run reads.
-  #
-  # `web` is a CORE toolset and it is exactly the surface this backend keeps:
-  # `web_search` and `web_extract`, and nothing else. Everything the default
-  # `hermes-cli` platform toolset carries goes with it — file, terminal,
-  # browser, code_execution, delegation, cronjob, memory, skills, vision,
-  # image_gen, todo, tts, session_search, computer_use and the kanban family.
-  #
-  # SAFE TO SEED, unlike kimi-code's config.toml, because this CLI keeps its
-  # credentials somewhere else entirely: secrets in .env and the OAuth pool in
-  # auth.json, both of which are credential_paths below. What a seeded
-  # config.yaml does cost is the operator's own non-secret settings — a model
-  # default, a custom provider base URL — so an entry that needs those
-  # replaces cli.overrides.seed_files with a file carrying them alongside the
-  # toolsets list.
-  #
-  # AND THIS IS THE ONE DENIAL IN THIS FILE THAT NOTHING HERE CAN PROVE.
-  # A flag that stopped being accepted fails at argument parsing and the
-  # doctor reports it on the spot; a settings KEY a vendor renamed is simply
-  # ignored, and the run then has the full surface with nothing to say so.
-  # What settles it is `crewlet llm doctor`'s shell probe, which asks the CLI
-  # to run a command and believes the answer only if the clock matches — so
-  # `local_tools: denied — probe: refused` is the line to read after an
-  # upgrade, and `probe: SHELL RAN` means this key no longer bites.
+  # AND NOT --yolo, which the vendor's own flag help makes unnecessary rather
+  # than merely unwise: `-z` already says "approvals are auto-bypassed". There
+  # is no prompt for a headless run to wedge on, so --yolo would grant
+  # something for nothing.
+  complete_args: ["--ignore-rules", "--toolsets", "web"]
   local_tools: denied
-  seed_files:
-    - path: .hermes/config.yaml
-      content: |
-        toolsets:
-          - web
   model_args: ["--model", "{model}"]
   # NO SYSTEM-PROMPT CHANNEL. This CLI's identity slot is SOUL.md, a file in
   # its home rather than a per-call argument — and --ignore-rules deliberately
@@ -1122,13 +1146,10 @@ pi:
   # `@mariozechner` scope to Earendil Works, so the older package name is a
   # different, frozen thing.
   #
-  # WRITTEN FROM THE VENDOR'S PUBLISHED REFERENCE, not measured against an
-  # installed binary — unlike the profiles above it, whose flags were read off
-  # `--help`. Two things follow. `written_for` is what `crewlet llm doctor`
-  # prints beside the version you actually have, and the argv-shape test in
-  # this package runs against the real CLI the moment one is on PATH. If a
-  # flag here is wrong, it fails at argument parsing, loudly, on the first
-  # call — which is the failure mode to prefer.
+  # MEASURED AGAINST 0.85.1: the flags off `pi --help`, the tool surface and
+  # the system prompt off the request body the CLI actually sent (a stub HTTP
+  # endpoint standing in for the model), and the error format off real 401
+  # and 429 responses.
   written_for: "Pi Coding Agent 0.85.x (`pi --version`)"
   version_args: ["--version"]
   # `-p` is print mode: answer and exit, no TUI. The rest is the isolation,
@@ -1144,10 +1165,13 @@ pi:
   #   --no-session        ephemeral: nothing written to the session store
   #
   # --no-tools AND NOT an allowlist, which is the opposite of every other
-  # profile here, because this CLI's built-in set is `read`, `bash`,
-  # `powershell`, `edit`, `write`, `grep`, `find` and `ls` — there is no web
-  # tool in it to keep. Web is the one local tool this backend never denies,
-  # and here there is simply none to deny.
+  # profile here, because there is no web tool to keep. MEASURED off the
+  # request body: the baseline this build advertises is FOUR tools — `bash`,
+  # `edit`, `read`, `write` — and `--no-tools` sends the tool array empty.
+  # (The vendor's README also lists `grep`, `find`, `ls` and a Windows
+  # `powershell`; none was registered here, so the four are what a Linux
+  # engine host actually faces.) Web is the one local tool this backend never
+  # denies, and on this CLI there is simply none to deny.
   #
   # --no-approve rather than trusting the per-call directory: non-interactive
   # modes never show a trust prompt and fall back to `defaultProjectTrust`
@@ -1170,6 +1194,12 @@ pi:
   # vendor notes that context files and skills are still appended to a
   # replaced prompt — which is why --no-context-files and --no-skills are in
   # complete_args rather than being merely tidy.
+  #
+  # MEASURED, and the replacement is not quite total: what reached the model
+  # was the seat's own prompt followed by one line, `Current working
+  # directory: <path>`. That is this backend's per-call scratch directory,
+  # it is true, and it is 60-odd characters rather than a coding-agent
+  # identity — so it is recorded here rather than fought.
   #
   # Inline, because this CLI takes a string and has no file variant. The one
   # file channel it does have is `~/.pi/agent/SYSTEM.md`, which is static per
@@ -1255,11 +1285,17 @@ pi:
   # there is no single key variable to name, exactly as for hermes. A metered
   # key goes in auth.json (which travels to every seat) or through `cli.env`.
   #
-  # THE SENTINELS ARE THE UPSTREAM VENDOR'S, not this CLI's, and that is the
-  # shape of the problem here: this harness passes a provider's error through
-  # rather than rewording it, and its subscription providers are Claude
-  # Pro/Max, ChatGPT and GitHub Copilot — so a spent plan arrives in
-  # Anthropic's or OpenAI's words. Both forms are listed. If your provider's
+  # THE SENTINELS ARE THE UPSTREAM VENDOR'S, not this CLI's, and a
+  # measurement is what settles that rather than a guess: a failing call
+  # writes `<status>: <the provider's error JSON, verbatim>` to stderr, e.g.
+  #
+  #   429: {"message":"…","type":"rate_limit_error","code":"rate_limit_exceeded"}
+  #
+  # So the only stable tokens are the provider's own `type` and `code`, which
+  # is what these are. The status prefix is deliberately NOT one: this file
+  # dropped a bare "429" sentinel once already, because three digits match
+  # ordinary prose. Pi's subscription providers are Claude Pro/Max, ChatGPT
+  # and GitHub Copilot, so both vendors' vocabularies are listed; if yours
   # differs, override cli.overrides.limit_markers.
   limit_markers:
     - sentinel: "Usage limit reached"

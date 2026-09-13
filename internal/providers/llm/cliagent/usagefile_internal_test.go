@@ -7,8 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
@@ -208,13 +206,12 @@ func TestTheHermesProfileDeniesItsToolsAndReadsItsRealTokens(t *testing.T) {
 				"this profile's tool denial lives in", forbidden)
 		}
 	}
-	// AND NOT --yolo. This CLI has no flag that denies a tool, only the
-	// toolset file, so an auto-approve would be an auto-approve with no
-	// denial behind it: a run whose seed failed to apply would get a shell
-	// on the engine host and approve its own commands.
+	// AND NOT --yolo, because `-z` already bypasses approvals — its own flag
+	// help says so. There is no prompt for a headless run to wedge on, so
+	// --yolo would widen what a run may do and buy nothing at all.
 	if strings.Contains(joined, "--yolo") {
-		t.Error("complete_args carries --yolo, which auto-approves with no tool " +
-			"denial behind it — a wedge is bounded by cli.timeout_seconds, this is not")
+		t.Error("complete_args carries --yolo, but `-z` already auto-bypasses " +
+			"approvals — this only widens what a run may do")
 	}
 	// `-p` selects a PROFILE on this CLI, not a prompt. `-z` is the
 	// one-shot entry point and takes the prompt as its value, so it has to
@@ -231,30 +228,27 @@ func TestTheHermesProfileDeniesItsToolsAndReadsItsRealTokens(t *testing.T) {
 			"the final response text and nothing else", p.mode(), p.output())
 	}
 
-	// The seeded toolset is the denial, and it must be YAML this CLI reads.
-	var seeded *SeedFile
-	for i := range p.SeedFiles {
-		if strings.HasSuffix(p.SeedFiles[i].Path, "config.yaml") {
-			seeded = &p.SeedFiles[i]
-		}
+	// THE DENIAL IS ON ARGV. `--toolsets` is a TOP-LEVEL flag whose own help
+	// says "Applies to -z/--oneshot", and passing it REPLACES the enabled set
+	// for the invocation rather than merging with the config file's — the
+	// CLI's own oneshot module states the rule ("Toolsets = explicit
+	// --toolsets, else the user's `cli` toolsets"). `web` resolves to
+	// web_search and web_extract and nothing else: no file, no terminal, no
+	// code execution, no delegation.
+	//
+	// It reads like the seeded settings files this file's other profiles use,
+	// and is deliberately not one: a flag fails at ARGUMENT PARSING when a
+	// vendor renames it, where a settings key a vendor renamed is ignored and
+	// the run quietly keeps every tool.
+	if !allowsAfterFlag(p.CompleteArgs, "--toolsets", "web") {
+		t.Errorf("complete_args = %v, want `--toolsets web`: without it every seat "+
+			"runs the full hermes-cli surface — a shell, a file editor and code "+
+			"execution on the engine host", p.CompleteArgs)
 	}
-	if seeded == nil {
-		t.Fatal("hermes seeds no config.yaml, so every seat runs the full hermes-cli " +
-			"toolset: a shell, a file editor and code execution on the engine host")
-	}
-	if seeded.scope() != SeedHome {
-		t.Errorf("the toolset file is seeded into %q, but HERMES_HOME points at the "+
-			"seat home", seeded.scope())
-	}
-	var settings struct {
-		Toolsets []string `yaml:"toolsets"`
-	}
-	if err := yaml.Unmarshal([]byte(seeded.Content), &settings); err != nil {
-		t.Fatalf("the seeded config is not YAML the CLI can read: %v\n%s", err, seeded.Content)
-	}
-	if len(settings.Toolsets) != 1 || settings.Toolsets[0] != "web" {
-		t.Errorf("toolsets = %v, want exactly [web] — the one core toolset that is "+
-			"web_search and web_extract and nothing else", settings.Toolsets)
+	if len(p.SeedFiles) > 0 {
+		t.Errorf("hermes seeds %d file(s), but its denial is on argv — a second, "+
+			"weaker copy of one policy is one more thing to keep in step",
+			len(p.SeedFiles))
 	}
 
 	// The counts come from the file, under the vendor's documented key

@@ -296,28 +296,90 @@ func TestTheKimiProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 
 // THE KIMI PROFILE READS ONE ANSWER OUT OF ITS MESSAGE STREAM.
 //
-// Its stdout is an OpenAI-shaped chat stream discriminated by `role`, so a
-// profile reading every line would splice the user's own prompt and any tool
-// result into the reply. This drives that shape through the shipped profile.
+// These are the BYTES THE REAL CLI EMITTED, captured from 0.42.0 driven
+// against a stub HTTP endpoint standing in for the model — not a stream
+// written to match the profile. Two of the three lines are the point.
+//
+// `session.resume_hint` carries its own `content` field, holding the CLI's
+// prose about how to resume. A profile reading `content` off every line would
+// have appended "To resume this session: kimi -r session_…" to the model's
+// reply, and the tool loop, the reviewer and the dashboard would all have
+// read it as a sentence the agent said. `system.version` is the same hazard
+// with no `content` to hit. The `role` discriminator is what keeps them out.
 func TestTheKimiProfileReadsOnlyTheAssistantsLines(t *testing.T) {
 	t.Parallel()
 	p, ok := Builtin("kimi-code")
 	if !ok {
 		t.Fatal("no built-in kimi-code profile")
 	}
-	stream := strings.Join([]string{
-		`{"role":"user","content":"## user\nsay hello"}`,
-		`{"role":"assistant","content":"","tool_calls":[{"type":"function","id":"tc_1",` +
-			`"function":{"name":"WebSearch","arguments":"{}"}}]}`,
-		`{"role":"tool","tool_call_id":"tc_1","content":"a search result nobody said"}`,
-		`{"role":"assistant","content":"the reply"}`,
-	}, "\n")
-	got := extract(p, stream)
+	const captured = `{"role":"meta","type":"system.version","version":"0.42.0"}
+{"role":"assistant","content":"THE-STUB-REPLY"}
+{"role":"meta","type":"session.resume_hint","session_id":"session_4e0d7ff8-5f9a-42be-ab76-cd7321b34e48","command":"kimi -r session_4e0d7ff8-5f9a-42be-ab76-cd7321b34e48","content":"To resume this session: kimi -r session_4e0d7ff8-5f9a-42be-ab76-cd7321b34e48"}`
+
+	got := extract(p, captured)
 	if !got.located {
-		t.Fatalf("the profile found no answer in its own CLI's stream:\n%s", stream)
+		t.Fatalf("the profile found no answer in its own CLI's real stream:\n%s", captured)
 	}
-	if got.text != "the reply" {
-		t.Errorf("text = %q, want the assistant's own words alone", got.text)
+	if got.text != "THE-STUB-REPLY" {
+		t.Errorf("text = %q, want the assistant's own words alone — a `meta` line's "+
+			"own `content` must not reach the conversation", got.text)
+	}
+}
+
+// A SPENT PLAN REACHES THE FALLBACK CHAIN, and these are the real words.
+//
+// The classification prefix is the CLI's own and survives the vendor
+// rewording the sentence after it; both were captured from 0.42.0 answering a
+// stubbed 429 and 401. A marker that stopped matching would classify a spent
+// plan FATAL, and the seat would never fall through to its metered key —
+// silent until somebody hits their cap.
+func TestTheKimiProfileClassifiesTheFailuresItsCLIActuallyPrints(t *testing.T) {
+	t.Parallel()
+	p, ok := Builtin("kimi-code")
+	if !ok {
+		t.Fatal("no built-in kimi-code profile")
+	}
+	for name, tc := range map[string]struct {
+		stderr string
+		want   llm.ErrorKind
+	}{
+		"a spent plan": {
+			stderr: "error: failed to run prompt: provider.rate_limit: 429 You have " +
+				"reached your 5-hour usage limit. Please try again later.",
+			want: llm.KindRateLimit,
+		},
+		"a dead login": {
+			stderr: "error: failed to run prompt: provider.auth_error: 401 Invalid Authentication",
+			want:   llm.KindAuth,
+		},
+		// THE MESSAGE REWORDED AND THE PREFIX KEPT, which is the whole
+		// case for matching the classification rather than the prose:
+		// everything after the colon belongs to the upstream provider
+		// and changes with the plan, the endpoint and the vendor's
+		// copy. Without these two entries the structural sentinels
+		// could be deleted and every assertion above would still pass
+		// on the plan wording alone.
+		"a spent plan the vendor reworded": {
+			stderr: "error: failed to run prompt: provider.rate_limit: 429 quota " +
+				"exhausted for this billing period",
+			want: llm.KindRateLimit,
+		},
+		"a dead login the vendor reworded": {
+			stderr: "error: failed to run prompt: provider.auth_error: 401 the " +
+				"credential presented is no longer accepted",
+			want: llm.KindAuth,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			hit, ok := classifyMarkers(p, "", tc.stderr)
+			if !ok {
+				t.Fatalf("no marker fired on what the CLI really printed:\n%s", tc.stderr)
+			}
+			if hit.Kind != tc.want {
+				t.Errorf("kind = %v, want %v", hit.Kind, tc.want)
+			}
+		})
 	}
 }
 

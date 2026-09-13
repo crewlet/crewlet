@@ -312,12 +312,15 @@ with no such flag can take.
 ### Which CLIs actually have one
 
 Checked by running each CLI's own `--help`, at the version named — not
-from vendor documentation, which lags. The three most recent rows
-(`kimi-code`, `hermes`, `pi`) are the exception and say so here rather than
-in a commit message: they were written from each vendor's **published
-reference** at the version named, because the binaries were not installed
-where the profile was written. `crewlet llm doctor` prints `written for`
-beside the version you actually have, and every field is a
+from vendor documentation, which lags. That distinction is not academic:
+every one of the three most recent rows was drafted from a vendor's published
+reference and then **corrected** by the installed binary. `hermes`'s docs
+list `--toolsets` under a subcommand it also accepts at the top level;
+`pi`'s README lists eight built-in tools where the Linux build registers
+four; `kimi-code`'s tool table lists a `WebSearch` its binary only registers
+once a search service is configured, and omits a whole `Goal` family it
+ships. `crewlet llm doctor` prints `written for` beside the version you
+actually have, and every field is a
 [config edit away](#cli-flags-drift--and-thats-a-config-edit-not-a-release):
 
 | `cli.agent` | version checked | flag | in the profile |
@@ -552,14 +555,17 @@ asking rather than the guard: OpenCode's seeded policy is all `allow` and
 `--disable-approval`, which is the posture its own vendor's headless
 guidance asks for — approval prompts off, the OS sandbox still on.
 
-**`hermes` is the deliberate exception, and the reason is that it has no
-denial to pair with an auto-approve.** It offers no `--deny-tool` of any
-kind: the only lever is the platform `toolsets:` list seeded into its
-`config.yaml`. So `--yolo` there would be an auto-approve with nothing
-behind it — a run whose seed failed to apply would get a shell on the engine
-host *and* approve its own commands. A wedge is bounded by
-`timeout_seconds` and is loud; that is not. The profile keeps the prompt and
-pays the timeout in the case that should never happen.
+**`hermes` needs neither, and reading its parser is what settled that.** Its
+one-shot flag documents its own posture — "approvals are auto-bypassed" — so
+there is no prompt to wedge on and `--yolo` would widen what a run may do for
+nothing. And `--toolsets`, which the vendor's prose lists under `hermes chat`,
+is a *top-level* flag whose own help says "Applies to -z/--oneshot": passing
+it **replaces** the enabled set for the invocation and the config file is not
+consulted. So the denial is `--toolsets web` on argv — `web_search` and
+`web_extract` and nothing else — rather than a seeded settings file. That is
+the better shape wherever a vendor offers it: a flag fails at argument
+parsing when it is renamed, where a settings *key* a vendor renamed is
+ignored and the run quietly keeps every tool.
 
 **Web is the one local tool that stays on.** A subscription seat must
 not have less reach than the same CLI at a terminal, and a fetch is a
@@ -573,11 +579,11 @@ of an unrecorded read, accepted. Seats on API models reach the web the
 way they reach everything external, through the MCP servers you configure.
 
 **`pi` is the one profile that denies every tool outright** (`--no-tools`),
-and it is honest there for a reason no other vendor gives it: its built-in
-set is `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find` and
-`ls` — there is no web tool in it to keep. Adopting the same flag on a CLI
-that *has* one would cut the web silently, so a test refuses it for every
-other profile.
+and it is honest there for a reason no other vendor gives it: measured off
+the request its CLI actually sent, the baseline is `bash`, `edit`, `read`
+and `write` — there is no web tool in it to keep, and `--no-tools` sends the
+tool array empty. Adopting the same flag on a CLI that *has* one would cut
+the web silently, so a test refuses it for every other profile.
 
 Both stances are profile fields, so an operator can override them like
 any other — `cli.overrides.local_tools`, `cli.overrides.local_tools_note`,
@@ -972,8 +978,8 @@ entirely.
 | `copilot` | `copilot` | GitHub Copilot seat | Prompt goes on argv, so very long transcripts are bounded by `ARG_MAX`. Authenticates with a GitHub token, so `GITHUB_TOKEN` is its `api_key_env` — reached via `auth.mode: api-key` or `inherit-env`, never forwarded silently. |
 | `grok` | `grok` | xAI | **xAI's own CLI** from [x.ai/cli](https://x.ai/cli), not the same-named npm package. Accepts `XAI_API_KEY` (the variable its own signed-out message names) through `auth.mode: api-key`. |
 | `muse-code` | `muse` | Muse Code subscription (Everyday / High / Power Usage), or pay-as-you-go | `muse login` / `muse logout`; the browser sign-in stores `~/.config/muse/auth.json`, which `-from-host` adopts. **No status command** — this CLI has none. Mints no headless token: `META_API_KEY` is a *metered* Model API key, reached through `auth.mode: api-key`. Runs `muse exec --json`, denies its tools through a seeded `run.toolset`, and puts the prompt in a **file** rather than on argv. Reports no token counts anywhere on its stream, so they are estimated. |
-| `kimi-code` | `kimi` | Kimi Code OAuth (Moonshot) | **MoonshotAI's own CLI**, `@moonshot-ai/kimi-code` — not the unscoped `kimi-code` package on npm, which wraps Claude Code behind a proxy and installs its own `kimi` (a `1.0.x` version is the other one). `kimi login` runs a device-code flow; there is no logout or status subcommand. Runs `--output-format stream-json`, because the default `text` output prefixes every line with `• ` and re-wraps it, which destroys the tool envelope. Its tools are denied in the **agent file** that also carries the system prompt. Reports no token counts on its stream, so they are estimated. |
-| `hermes` | `hermes` | Nous Portal, or any of 30+ providers it fronts | `hermes auth` for the credential wizard, `hermes status` for state; `hermes auth logout` needs a provider name, so no logout is declared. Runs `hermes -z`, whose contract is the final response text and nothing else — so the tokens come from `--usage-file` instead. Tools are denied by seeding `toolsets: [web]` into its `config.yaml`; **`-p` selects a profile on this CLI**, not a prompt. |
+| `kimi-code` | `kimi` | Kimi Code OAuth (Moonshot) | **MoonshotAI's own CLI**, `@moonshot-ai/kimi-code` — not the unscoped `kimi-code` package on npm, which wraps Claude Code behind a proxy and installs its own `kimi` (a `1.0.x` version is the other one). `kimi login` runs a device-code flow; there is no logout or status subcommand. Runs `--output-format stream-json`, because the default `text` output prefixes every line with `• ` and re-wraps it, which destroys the tool envelope. Its tools are denied in the **agent file** that also carries the system prompt — measured, that is 25 tools down to 1, and an 8.8 KB vendor system prompt replaced by the seat's own. Reports no token counts on its stream, so they are estimated. |
+| `hermes` | `hermes` | Nous Portal, or any of 30+ providers it fronts | `hermes auth` for the credential wizard, `hermes status` for state; `hermes auth logout` needs a provider name, so no logout is declared. Runs `hermes -z`, whose contract is the final response text and nothing else — so the tokens come from `--usage-file` instead. Tools are denied with `--toolsets web` on argv, which replaces the run's enabled set; **`-p` selects a profile on this CLI**, not a prompt. |
 | `pi` | `pi` | Claude Pro/Max, ChatGPT Plus/Pro, GitHub Copilot — whichever it is logged into | `@earendil-works/pi-coding-agent`. **No headless login**: `/login` is a slash command, so `crewlet llm login` starts its TUI in the credential directory and you type it there. Denies every tool with `--no-tools`, which is honest here because its built-in set ships no web tool at all. Prompt *and* system prompt both on argv. Tokens estimated — see [Token accounting](#token-accounting). |
 | `custom` | — | — | Ships nothing; declare everything under `overrides`. |
 
