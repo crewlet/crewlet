@@ -852,9 +852,13 @@ rendered idle from the first phase to the last.
   path to a REST route: `rest.request(method, path, options)` answers the
   status and the `ETag` beside the body, takes a caller's `AbortSignal`, never
   lets the browser cache a guarded answer, and resolves a 304 rather than
-  throwing it; the body-only wrappers sit on top of it. A screen that reads a
-  REST answer uses `lib/useRest.ts`, which aborts a superseded read, re-reads
-  when the operator token changes and, where asked, when the tab comes back.
+  throwing it; the body-only wrappers sit on top of it. The deadline and the
+  caller's abort cover reading the body as well as waiting for the headers,
+  and a body that breaks part way through is status 0 (an answer never fully
+  heard, so a write's outcome is unknown) rather than an empty success. A
+  screen that reads a REST answer uses `lib/useRest.ts`, which aborts a
+  superseded read, re-reads when the operator token changes and, where asked,
+  when the tab comes back.
   A refusal replaces what is on screen; a request that never reached the
   engine keeps the last answer with the error beside it.
 - **Subscriptions are per-slice.** `agents` is pushed twice per tool-loop

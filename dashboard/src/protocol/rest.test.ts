@@ -182,3 +182,70 @@ describe("cancellation", () => {
     expect(sent).toEqual([]);
   });
 });
+
+// THE HEADERS ARE NOT THE ANSWER. A fetch resolves on the status line, and the
+// body is read after it; everything that ends a request has to reach that
+// second half too, or a body that stalls or breaks is a request nothing ends
+// and nothing reports.
+describe("a body that never arrives whole", () => {
+  /**
+   * A fetch that answers `status` at once and then streams a body that
+   * `stall` decides the fate of. The stream errors when the request's own
+   * signal aborts, as a browser's does.
+   */
+  function headersThen(status: number, stall: (body: ReadableStreamDefaultController) => void) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async (_url: string, init?: RequestInit) =>
+          new Response(
+            new ReadableStream({
+              start(body) {
+                body.enqueue(new TextEncoder().encode('{"revision_id":'));
+                init?.signal?.addEventListener("abort", () =>
+                  body.error(new DOMException("aborted", "AbortError")),
+                );
+                stall(body);
+              },
+            }),
+            { status },
+          ),
+      ),
+    );
+  }
+
+  // A WRITE WHOSE BODY BROKE IS A WRITE WHOSE OUTCOME IS UNKNOWN. Read as an
+  // empty body it was a 201 with nothing in it, which a caller takes as done.
+  test("a connection that drops part way through is status 0, not an empty success", async () => {
+    headersThen(201, (body) => body.error(new TypeError("network error")));
+    const err = await rest
+      .request("PUT", "/config", { body: {} })
+      .catch((e: unknown) => e as unknown);
+    expect(err).toBeInstanceOf(RestError);
+    expect((err as RestError).status).toBe(0);
+    expect((err as RestError).code).toBe("unreachable");
+  });
+
+  test("the caller's abort still ends a request whose body is slow", async () => {
+    headersThen(200, () => {});
+    const controller = new AbortController();
+    const pending = rest
+      .request("GET", "/config", { signal: controller.signal })
+      .catch((e: unknown) => e);
+    // Let the headers land, so the abort arrives while the body is read.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controller.abort();
+    expect(isAbort(await pending)).toBe(true);
+  });
+
+  test("the deadline still ends a request whose body stalls", async () => {
+    vi.useFakeTimers();
+    headersThen(200, () => {});
+    const settled = rest.get("/config").catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);
+    const err = await settled;
+    expect(err).toBeInstanceOf(RestError);
+    expect((err as RestError).status).toBe(0);
+    expect((err as RestError).detail).toContain("did not answer");
+  });
+});

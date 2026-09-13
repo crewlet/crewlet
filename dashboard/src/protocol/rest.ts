@@ -201,9 +201,14 @@ async function request(
     ...(encoded === undefined ? {} : { body: encoded }),
   };
 
-  // ABORTED RATHER THAN AWAITED FOR EVER — see [REQUEST_TIMEOUT_MS]. The
+  // ABORTED RATHER THAN AWAITED FOR EVER, see [REQUEST_TIMEOUT_MS]. The
   // deadline and the caller's signal abort ONE controller, because a fetch
   // takes one signal; which of them fired decides what the rejection says.
+  //
+  // BOTH STAY ARMED UNTIL THE BODY HAS BEEN READ, not only until the headers
+  // arrive. A fetch resolves on the status line, and an engine that sends its
+  // headers and then stalls, or a connection that drops half way through a
+  // body, would otherwise leave a request no deadline and no caller could end.
   const controller = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => {
@@ -213,36 +218,54 @@ async function request(
   const forward = () => controller.abort(signal?.reason);
   signal?.addEventListener("abort", forward, { once: true });
 
-  let response: Response;
-  try {
-    response = await fetch(location.origin + withQuery(path, query), {
-      ...init,
-      signal: controller.signal,
-    });
-  } catch (err) {
-    if (signal?.aborted) throw signal.reason;
-    throw timedOut
+  // Why a request ended before it had an answer, as the one rejection a
+  // caller can act on: its own abort, the deadline, or an engine it never
+  // fully heard from.
+  const unanswered = (err: unknown): unknown => {
+    if (signal?.aborted) return signal.reason;
+    return timedOut
       ? new RestError(0, {
           error: "unreachable",
           detail: `the engine did not answer within ${REQUEST_TIMEOUT_MS / 1000} seconds`,
         })
       : offline(err);
+  };
+
+  let response: Response;
+  let text: string;
+  try {
+    try {
+      response = await fetch(location.origin + withQuery(path, query), {
+        ...init,
+        signal: controller.signal,
+      });
+    } catch (err) {
+      throw unanswered(err);
+    }
+    // A 204, a 304 and a body-less 200 are all real answers, and each reads
+    // as an empty string. A body that FAILS to read is not one of them: it is
+    // a connection that dropped part way through, which says nothing about
+    // what the engine did, so it is status 0 like any other request that was
+    // never fully answered. Reading it as an empty body turned a write whose
+    // outcome is unknown into a success with no body.
+    try {
+      text = await response.text();
+    } catch (err) {
+      throw unanswered(err);
+    }
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", forward);
   }
 
-  // A 204, a 304 and a body-less 200 are all real answers. Reading them as
-  // JSON would turn a success into a parse failure.
-  const text = await response.text().catch(() => "");
   let parsed: unknown = null;
   if (text !== "") {
     try {
       parsed = JSON.parse(text);
     } catch {
-      // A proxy's HTML error page, or a truncated body. On a refusal that is
-      // all the detail there is; on a success it is a broken answer either
-      // way, so both become an error rather than a silent null.
+      // A proxy's HTML error page, or a body the engine cut short. On a
+      // refusal that is all the detail there is; on a success it is a broken
+      // answer either way, so both become an error rather than a silent null.
       throw new RestError(response.ok ? 502 : response.status, {
         error: "unreadable_body",
         detail: "the engine answered something that is not JSON",
