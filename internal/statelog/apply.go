@@ -495,7 +495,7 @@ func (r *Runner) nextRun(ctx context.Context, tail []Record, buffer *reorderBuff
 		if err != nil {
 			return nil, err
 		}
-		ready, err := buffer.admit(records, r.Committed(), r.spec.Replay, len(run))
+		ready, err := buffer.admit(records, r.Committed(), r.spec.Replay, run)
 		if err != nil {
 			return nil, r.stop(ctx, err)
 		}
