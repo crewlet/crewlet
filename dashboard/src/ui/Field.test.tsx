@@ -413,3 +413,28 @@ test("a multiline field keeps newlines and spaces, and offers no reference compl
   expect(screen.queryByRole("listbox")).toBeNull();
   expect(box.getAttribute("spellcheck")).toBe("true");
 });
+
+test("a choice whose empty value is a real answer is shown by its own label, with no placeholder", () => {
+  function Lead() {
+    const [value, setValue] = useState("");
+    return (
+      <Field
+        label="Lead"
+        kind="choice"
+        value={value}
+        onChange={setValue}
+        choices={[
+          { value: "", label: "No lead (inherits Chief Executive)" },
+          { value: "Engineering Manager", label: "Engineering Manager" },
+        ]}
+      />
+    );
+  }
+  render(<Lead />);
+  const select = screen.getByLabelText("Lead") as HTMLSelectElement;
+  expect([...select.options].map((o) => o.textContent)).toEqual([
+    "No lead (inherits Chief Executive)",
+    "Engineering Manager",
+  ]);
+  expect(select.selectedOptions[0]?.textContent).toBe("No lead (inherits Chief Executive)");
+});

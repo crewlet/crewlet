@@ -281,8 +281,15 @@ export function Field({
               the truth. It should not be reachable (a requirement with
               choices and no default would be one), and if it ever is, a
               silent first-option selection is a form answering somebody's
-              question for them. */}
-          {value === "" && <option value="">Choose one</option>}
+              question for them.
+
+              UNLESS "NOTHING" IS ITSELF A CHOICE. A unit's lead offers "No
+              lead (inherits the parent's)" as the empty value, and a
+              placeholder drawn above that option would be a second, unlabelled
+              spelling of the same answer, selected in its place. */}
+          {value === "" && !(choices ?? []).some((c) => c.value === "") && (
+            <option value="">Choose one</option>
+          )}
           {/* AND A STORED ANSWER THIS LIST DOES NOT OFFER keeps its own
               option, rather than vanishing into a selection it is not.
               
