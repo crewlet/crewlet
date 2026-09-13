@@ -761,6 +761,12 @@ func (r MutationRecord) Encode() ([]byte, error) {
 // spillover by the delta, not by a second kind.
 type ChangeKind string
 
+// The thirty-two, and each constant IS its wire value: a kind is written into
+// every history row and onto every notification the log carries, so these
+// spellings are stored data in every company already running this build.
+// A kind added here goes into [ChangeKinds] in the same change: that slice is
+// what [ChangeKind.Valid] answers from and what every walk over the set reads,
+// so a constant missing from it is a kind the wire carries and nothing knows.
 const (
 	ChangeCreated         ChangeKind = "created"
 	ChangeFields          ChangeKind = "fields"

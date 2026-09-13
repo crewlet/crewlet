@@ -573,6 +573,7 @@ func readProjectDetail(ctx context.Context, tx *sql.Tx, key string,
 		return err
 	}
 	if !found {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		near, err := nearestProjects(ctx, tx, key)
 		if err != nil {
 			return err
@@ -594,6 +595,7 @@ func readProjectDetail(ctx context.Context, tx *sql.Tx, key string,
 	out.Unit, out.Lead = resolveUnit(q.Units, project.Unit)
 	out.SprintPolicy = project.Sprints
 
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := tx.QueryRowContext(ctx, `
 		SELECT open_count, done_count, closed_count FROM tracker_projects
 		WHERE key = ?`, key).Scan(&out.Counts.Open, &out.Counts.Done,
@@ -642,6 +644,7 @@ func readProjectDetail(ctx context.Context, tx *sql.Tx, key string,
 	}
 	out.Sprints = summary
 	if summary != nil {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		recent, _, err := readSprintRows(ctx, tx, project,
 			SprintQuery{Project: key}, SprintWindowDefault, now)
 		if err != nil {

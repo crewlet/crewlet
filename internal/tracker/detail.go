@@ -251,6 +251,7 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 		// THE SAME EXISTS THE BOARD ROW USES, in this same transaction,
 		// so the badge on the item and the badge on its row cannot
 		// disagree about one task at one instant.
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := tx.QueryRowContext(ctx,
 			`SELECT EXISTS (SELECT 1 FROM tracker_task_deps d
 			 WHERE d.task_id = ? AND d.blocker_open = 1)`,

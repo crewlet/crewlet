@@ -178,27 +178,61 @@ type Subject struct {
 	ID   string     `json:"id"`
 }
 
-// TaskSubject, ProjectSubject and the rest are the constructors.
-//
-// ONE PER KIND rather than a single Subject{Kind, ID} literal at every call
-// site, because half the ids are composed — a sprint's is "<PROJECT>.<n>",
-// an alias claim's is "<KEY>.<n>" — and a composition written twice is a
-// subject two writers disagree about.
-func TaskSubject(id string) Subject     { return Subject{Kind: KindTask, ID: id} }
+// The subject constructors, ONE PER KIND rather than a single
+// Subject{Kind, ID} literal at every call site, because half the ids are
+// composed — a sprint's is "<PROJECT>.<n>", an alias claim's is "<KEY>.<n>" —
+// and a composition written twice is a subject two writers disagree about.
+
+// TaskSubject names one work item by its id. It is the subject every change to
+// that task is published on, so two writers racing on one task contend at the
+// broker and writers on different tasks never contend at all.
+func TaskSubject(id string) Subject { return Subject{Kind: KindTask, ID: id} }
+
+// ProjectSubject names one project's settings, sprint policy and active-sprint
+// pointer by its key. Deliberately NOT the subject its key counter mints on —
+// see [CounterSubject].
 func ProjectSubject(key string) Subject { return Subject{Kind: KindProject, ID: key} }
+
+// CounterSubject names one project's key sequence by its key. Its own subject
+// so that minting "<KEY>-<n>" contends only with other mints in that project,
+// never with an edit to the project's settings.
 func CounterSubject(key string) Subject { return Subject{Kind: KindCounter, ID: key} }
-func TagsSubject(key string) Subject    { return Subject{Kind: KindTags, ID: key} }
-func ViewSubject(id string) Subject     { return Subject{Kind: KindView, ID: id} }
-func GoalSubject(id string) Subject     { return Subject{Kind: KindGoal, ID: id} }
+
+// TagsSubject names one project's tag declarations by its key. A subject of
+// its own, so declaring a tag and editing the project's settings are two
+// writes that never contend.
+func TagsSubject(key string) Subject { return Subject{Kind: KindTags, ID: key} }
+
+// ViewSubject names one saved view by its id.
+func ViewSubject(id string) Subject { return Subject{Kind: KindView, ID: id} }
+
+// GoalSubject names one goal and its targets by its id.
+func GoalSubject(id string) Subject { return Subject{Kind: KindGoal, ID: id} }
+
+// PersonSubject names one person's inbox, priorities and pins — keyed on the
+// HANDLE rather than on a uuid, because the handle is the identity every
+// caller that reaches this record already holds.
 func PersonSubject(handle string) Subject {
 	return Subject{Kind: KindPerson, ID: handle}
 }
+
+// RankOrderSubject names one project's manual order by its key. The object a
+// drag mutates is the order itself, which no single task owns and no single
+// task's version can protect — see [KindRankOrder].
 func RankOrderSubject(key string) Subject {
 	return Subject{Kind: KindRankOrder, ID: key}
 }
+
+// EvictionSubject names one node's eviction or readmission by its node id.
+// A record here installs an apply gate, which is why it is addressed to the
+// node rather than to anything the node wrote.
 func EvictionSubject(nodeID string) Subject {
 	return Subject{Kind: KindEviction, ID: nodeID}
 }
+
+// TurnSubject names one turn's spend by the turn's id. The one ADDITIVE kind:
+// it carries no expectation and bumps no object's version, so writers here
+// never contend — see [ObjectKind.Arbitrated].
 func TurnSubject(id string) Subject { return Subject{Kind: KindTurn, ID: id} }
 
 // SprintSubject names one sprint of one project.

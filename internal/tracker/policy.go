@@ -36,7 +36,6 @@ const (
 	StatusClosed Status = "closed"
 )
 
-// Statuses are the six, in the order a board renders them.
 // DefaultType is the type a task takes when nothing names one.
 //
 // A PLAIN STRING and not an enum, because the type catalogue is the
@@ -46,6 +45,7 @@ const (
 // caller that named no type at all.
 const DefaultType = "task"
 
+// Statuses are the six, in the order a board renders them.
 var Statuses = []Status{
 	StatusTodo, StatusInProgress, StatusInReview,
 	StatusDone, StatusCancelled, StatusClosed,
@@ -142,6 +142,10 @@ func Delivered(s Status) bool {
 // reconcile it against the board's own.
 type Priority string
 
+// The five, lowest first. THE DECLARATION ORDER IS THE SCALE: [Priority.Rank]
+// is an index into [Priorities], so every sort and every comparison reads the
+// ordering from that one list rather than from a second table that could drift
+// from it.
 const (
 	// PriorityNone is the default and is a real value rather than an
 	// absent one: "nobody has said" and "explicitly not urgent" are the

@@ -72,6 +72,7 @@ func purgeInbox(ctx context.Context, db *store.DB, cutoff time.Time) (int64, err
 
 	var swept int64
 	err = w.Tx(ctx, func(tx *sql.Tx) error {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := tx.ExecContext(ctx,
 			`DELETE FROM tracker_notifications WHERE created_at < ?`,
 			store.EncodeTime(cutoff))

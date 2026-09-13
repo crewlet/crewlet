@@ -105,6 +105,7 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 	switch table {
 	case "tracker_projects":
 		var project Project
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := decodePayload(c.record.Mutation, &project); err != nil {
 			return 0, fmt.Errorf("tracker: decode the project at %s: %w", c.position, err)
 		}
@@ -141,6 +142,7 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 			c.packed, []byte(c.record.Mutation))
 	case "tracker_sprints":
 		var sprint Sprint
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := decodePayload(c.record.Mutation, &sprint); err != nil {
 			return 0, fmt.Errorf("tracker: decode the sprint at %s: %w", c.position, err)
 		}
@@ -170,6 +172,7 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 			c.packed, []byte(c.record.Mutation))
 	case "tracker_tagsets":
 		var set TagSet
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := decodePayload(c.record.Mutation, &set); err != nil {
 			return 0, fmt.Errorf("tracker: decode the tag set at %s: %w", c.position, err)
 		}
@@ -191,6 +194,7 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 			key, c.packed, []byte(c.record.Mutation))
 	case "tracker_views":
 		var view View
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := decodePayload(c.record.Mutation, &view); err != nil {
 			return 0, fmt.Errorf("tracker: decode the view at %s: %w", c.position, err)
 		}
@@ -214,6 +218,7 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 			jsonOf(view.Params), c.packed, []byte(c.record.Mutation))
 	case "tracker_goals":
 		var goal Goal
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := decodePayload(c.record.Mutation, &goal); err != nil {
 			return 0, fmt.Errorf("tracker: decode the goal at %s: %w", c.position, err)
 		}
@@ -235,6 +240,7 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 			store.EncodeTime(goal.UpdatedAt), c.packed, []byte(c.record.Mutation))
 	case "tracker_persons":
 		var person Person
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := decodePayload(c.record.Mutation, &person); err != nil {
 			return 0, fmt.Errorf("tracker: decode the person at %s: %w", c.position, err)
 		}

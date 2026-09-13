@@ -371,11 +371,13 @@ func readAsks(ctx context.Context, tx *sql.Tx, handle string,
 	var pending []ask
 	for rows.Next() {
 		var a ask
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := rows.Scan(&a.comment, &a.task, &a.author, &a.body, &a.at); err != nil {
 			return nil, fmt.Errorf("tracker: scan an ask: %w", err)
 		}
 		pending = append(pending, a)
 	}
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("tracker: read the asks waiting on %s: %w",
 			handle, err)

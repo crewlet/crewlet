@@ -438,6 +438,7 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 				if patch.Project != nil {
 					home = *patch.Project
 				}
+				//nolint:govet // shadow: scoped to this block; see .golangci.yml
 				if err := declaredTags(ctx, tx, home, *patch.Tags); err != nil {
 					return statelog.Decision{}, err
 				}
@@ -464,6 +465,7 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 				// unchecked is how "about 7 hours" became 7 on a number
 				// field and a required field was emptied by an update
 				// the next create of the same shape would refuse.
+				//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 				coerced, warned, err := settleFields(ctx, tx, current.Project,
 					current.Type, *charged.Fields, w.World)
 				if err != nil {
@@ -493,6 +495,7 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			// rather than published under a scope that does not cover
 			// it. The caller re-runs and the second attempt enumerates
 			// the dependent that arrived.
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := scope.covers(current.Dependents); err != nil {
 				return statelog.Decision{}, err
 			}
@@ -1002,7 +1005,8 @@ func (w *Writer) placeBetween(ctx context.Context, project, taskID string,
 	}
 
 	var neighbours []Placement
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error { //nolint:govet // shadow: scoped to this block; see .golangci.yml (trailing: covers this line only, not the closure)
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		rows, err := tx.QueryContext(ctx, `
 			SELECT id, rank FROM tracker_tasks
 			WHERE project_key = ? AND rank > ? AND rank < ?

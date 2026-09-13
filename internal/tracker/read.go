@@ -306,6 +306,7 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 			// see [Answer.Groups] — so it reads the unpaged
 			// predicate, which is also what its per-column counts
 			// are over.
+			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			groups, err := readGroups(ctx, tx, q, fields, where, args, terms)
 			if err != nil {
 				return err
@@ -314,6 +315,7 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 			answer.GroupsDropped = groups.Dropped
 			answer.GroupsOverlap = groups.Overlap
 		} else {
+			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			rows, cursor, err := readTasks(ctx, tx, rowWhere, rowArgs, terms,
 				limit, q.DayStart)
 			if err != nil {

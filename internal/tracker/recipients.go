@@ -20,6 +20,12 @@ import "slices"
 // Reason is why one handle hears about a change.
 type Reason string
 
+// The twenty reasons, as they are written onto the log and into
+// `tracker_notifications`.
+//
+// THIS ORDER IS NOT THE PRECEDENCE — [Reasons] is, and it deliberately differs.
+// Re-sorting these declarations to match it would buy nothing and leave two
+// orderings in one file that a reader could mistake for one.
 const (
 	ReasonMention        Reason = "mention"
 	ReasonPrioritised    Reason = "prioritised"

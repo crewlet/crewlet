@@ -526,6 +526,7 @@ func (w *Writer) lowestFuture(ctx context.Context, project string) (
 
 	err = w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
 		var lowest sql.NullInt64
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := tx.QueryRowContext(ctx, `
 			SELECT MIN(number) FROM tracker_sprints
 			WHERE project_key = ? AND state = ? AND archived = 0`,

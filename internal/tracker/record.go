@@ -760,6 +760,9 @@ type DependentIntent struct {
 // FieldType is a custom field's type.
 type FieldType string
 
+// The thirteen, and each constant IS the wire value a declaration carries: a
+// field's type is stored on the catalogue document, and coerce.go's table —
+// the one place a value can be REFUSED — switches on exactly these strings.
 const (
 	FieldText         FieldType = "text"
 	FieldTextarea     FieldType = "textarea"
@@ -1134,6 +1137,10 @@ type Project struct {
 // SprintState is where a sprint is in its one-way life.
 type SprintState string
 
+// The three, in the one order a sprint moves through them. A sprint is minted
+// future, started once and closed once, and never goes back — which is what
+// lets a transition be refused against the state it read rather than against a
+// policy that could have changed underneath it.
 const (
 	SprintFuture SprintState = "future"
 	SprintActive SprintState = "active"
@@ -1196,6 +1203,9 @@ type TagSet struct {
 // ViewType is the three renderings, and there are no others.
 type ViewType string
 
+// The three, and each constant IS the wire value a saved view stores: the type
+// is what a client picks a renderer by, so these spellings are read by the
+// dashboard as well as by this package.
 const (
 	ViewList     ViewType = "list"
 	ViewBoard    ViewType = "board"

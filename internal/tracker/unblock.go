@@ -60,7 +60,9 @@ type Unblock struct {
 	ClearedAt int64
 }
 
-// An unassigned dependent is skipped, and that is not a narrowing of the
+// UnblockScan is one tick's worth of repair work, and the position it read to.
+//
+// AN UNASSIGNED DEPENDENT IS SKIPPED, and that is not a narrowing of the
 // repair — it is the repair declining to manufacture a record with no
 // recipient.
 //
@@ -77,8 +79,6 @@ type Unblock struct {
 // whether or not a row produced a notice, so a skipped dependent is simply
 // never found again rather than found repeatedly. Somebody assigned the task
 // afterwards reads its state when they pick it up.
-//
-// UnblockScan is one tick's worth of repair work, and the position it read to.
 type UnblockScan struct {
 	Pending []Unblock
 

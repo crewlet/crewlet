@@ -531,6 +531,7 @@ func coerceURL(field FieldDef, raw json.RawMessage) (coerced, error) {
 		return coerced{}, err
 	}
 	var text string
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := json.Unmarshal(got.Value, &text); err != nil {
 		return coerced{}, err
 	}
@@ -556,6 +557,7 @@ func coerceEmail(field FieldDef, raw json.RawMessage) (coerced, error) {
 		return coerced{}, err
 	}
 	var text string
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := json.Unmarshal(got.Value, &text); err != nil {
 		return coerced{}, err
 	}

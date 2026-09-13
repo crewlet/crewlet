@@ -357,6 +357,7 @@ func readSprintRows(ctx context.Context, tx *sql.Tx, p Project, q SprintQuery,
 		var rolloverTo sql.NullString
 		var rolloverDone, archived int
 		var state string
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := rows.Scan(&row.Number, &row.Name, &row.Goal, &start, &end,
 			&state, &closedAt, &closedBy, &rolloverTo, &rolloverDone,
 			&archived, &row.Version); err != nil {
@@ -381,6 +382,7 @@ func readSprintRows(ctx context.Context, tx *sql.Tx, p Project, q SprintQuery,
 		row.Archived = archived != 0
 		out = append(out, row)
 	}
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := rows.Err(); err != nil {
 		return nil, 0, fmt.Errorf("tracker: read the sprints of %s: %w", p.Key, err)
 	}
@@ -390,6 +392,7 @@ func readSprintRows(ctx context.Context, tx *sql.Tx, p Project, q SprintQuery,
 
 	measure := measureOf(p)
 	for i := range out {
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := scoreSprint(ctx, tx, p, &out[i], measure, now); err != nil {
 			return nil, 0, err
 		}

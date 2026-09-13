@@ -59,6 +59,11 @@ const (
 // this package refuses under another name.
 type GoalHealth string
 
+// The five verdicts, and they are the OWNER's vocabulary rather than a
+// computed scale — see [GoalHealth]. The zero value is [HealthUnset] for the
+// reason its own comment gives: a goal nobody has looked at and a goal
+// somebody has called on track are different facts, and a scale without the
+// first would make them one.
 const (
 	// HealthUnset is a goal nobody has judged yet, and it is a real state
 	// rather than a missing one: a fresh goal is not "on track".

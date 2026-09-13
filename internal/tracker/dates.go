@@ -179,6 +179,12 @@ func DateAlias(value string) (string, bool) {
 // DateOp is a comparison against a date column.
 type DateOp string
 
+// The five comparisons, and each constant IS the token a filter value carries:
+// [ParseDateFilter] cuts `lt:today` at the first colon, lowercases the prefix
+// and casts it to a [DateOp]. So these spellings are a wire format rather than
+// a naming choice — they are what a person or a model types, and what a saved
+// view's params hold, so renaming one turns every filter already spelling it
+// the old way into a refusal.
 const (
 	DateLT    DateOp = "lt"
 	DateLTE   DateOp = "lte"

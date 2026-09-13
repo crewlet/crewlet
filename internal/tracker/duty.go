@@ -330,6 +330,7 @@ func (d *duty) finishMerges(ctx context.Context, now, _ time.Time) (int64, error
 			d.deps.Logger.WarnContext(ctx, "tracker_merge_marker_without_target",
 				"task", id, "detail", "the marker is cleared and the task left "+
 					"open; the merge it names never linked anything")
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if _, err := d.deps.Writer.UpdateTask(ctx, opID, walk.task,
 				walk.project, NoIfMatch, TaskPatch{Merging: &done},
 				ChangeFields, nil); err != nil {

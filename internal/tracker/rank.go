@@ -359,6 +359,7 @@ func KeyBetween(a, b Rank) (Rank, error) {
 	}
 	fa, fb := string(a)[len(ia):], string(b)[len(ib):]
 	if ia == ib {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		mid, err := midpoint(fa, fb)
 		if err != nil {
 			return "", err

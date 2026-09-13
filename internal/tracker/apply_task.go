@@ -62,6 +62,7 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	// dependency edge is the one that matters most, because a blocker
 	// whose finish instant is null clears nothing and every dependent
 	// waits for ever on work that is done.
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := stampFinish(&next, c); err != nil {
 		return 0, err
 	}
@@ -71,6 +72,7 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	// carries, and when and by whom it was set had no writer at all —
 	// so a board filtered to the archive could order it by nothing and
 	// an operator asking who filed something away had no answer.
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := stampArchive(&next, current, held, c); err != nil {
 		return 0, err
 	}
@@ -78,6 +80,7 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	// AND THE SPRINT HISTORY IS THE APPLIER'S TOO, for the same reason:
 	// a stay is a pair of instants, and instants this engine derives come
 	// from the broker rather than from whoever wrote the record.
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := stampSprintStay(&next, current, held, c); err != nil {
 		return 0, err
 	}
@@ -1097,6 +1100,7 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		{`DELETE FROM tracker_status_spans WHERE task_id = ?`, []any{id}},
 		{`DELETE FROM tracker_tasks WHERE id = ?`, []any{id}},
 	} {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := tx.ExecContext(ctx, statement.sql, statement.args...)
 		if err != nil {
 			return 0, fmt.Errorf("tracker: purge %s at %s: %w", id, c.position, err)

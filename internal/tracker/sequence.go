@@ -67,10 +67,13 @@ const (
 	// descendants, a merge's children, a sprint rollover's spill.
 	WalkBatch = 64
 
-	// ClaimTTL and ClaimHeartbeat are the durable claim a walking sequence
-	// holds. The TTL is four heartbeats, so three consecutive misses are
+	// ClaimTTL is how long the durable claim a walking sequence holds
+	// survives unrenewed. FOUR HEARTBEATS, so three consecutive misses are
 	// survivable and the fourth hands the walk to the duty.
-	ClaimTTL       = 60 * time.Second
+	ClaimTTL = 60 * time.Second
+
+	// ClaimHeartbeat is how often the holder renews that claim — a quarter
+	// of [ClaimTTL], which is the arithmetic its own comment rests on.
 	ClaimHeartbeat = 15 * time.Second
 
 	// ClaimStale is when a duty may complete somebody else's abandoned
@@ -205,6 +208,7 @@ func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 	)
 	n, minted, err := w.mintKey(ctx, stepID(opID, "counter"), task.Project, 1,
 		func(tx *sql.Tx) error {
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			var err error
 			coerced, warnings, err = w.refuseCreate(ctx, tx, task)
 			return err
@@ -765,7 +769,8 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		return WriteResult{}, fmt.Errorf("tracker: this writer has no store, " +
 			"so it cannot read the subtree a cross-project move re-keys")
 	}
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error { //nolint:govet // shadow: scoped to this block; see .golangci.yml (trailing: covers this line only, not the closure)
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		current, held, err := readTask(ctx, tx, taskID)
 		switch {
 		case err != nil:
@@ -792,6 +797,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 			return fmt.Errorf("tracker: project %s is archived, so nothing "+
 				"moves into it", target)
 		}
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := requiredFields(ctx, tx, project, current); err != nil {
 			return err
 		}
@@ -807,6 +813,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 
 	at := w.Now()
 	if len(newTags) > 0 {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		set, err := w.tagsOf(ctx, target)
 		if err != nil {
 			return WriteResult{}, err
@@ -822,6 +829,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 
 	// THE ALIAS BEFORE THE RE-KEY, so a key somebody pastes into chat
 	// keeps resolving from the moment it stops being current.
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if _, err := w.claimAlias(ctx, stepID(opID, "alias"), root.Key, taskID, at); err != nil {
 		return WriteResult{}, err
 	}
@@ -984,7 +992,8 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 		return WriteResult{}, fmt.Errorf("tracker: this writer has no store, " +
 			"so it cannot read the children a merge re-parents")
 	}
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error { //nolint:govet // shadow: scoped to this block; see .golangci.yml (trailing: covers this line only, not the closure)
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		current, held, err := readTask(ctx, tx, duplicate)
 		switch {
 		case err != nil:
@@ -1207,6 +1216,7 @@ func (w *Writer) moveSprint(ctx context.Context, opID, project string, number in
 				// sprint AT THE MOMENT IT CLOSES: counted before, the
 				// rollover has not run; counted after, the rollover has
 				// already emptied it and the answer is always zero.
+				//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 				open, err := countOpenInSprint(ctx, tx, project, number)
 				if err != nil {
 					return statelog.Decision{}, err
