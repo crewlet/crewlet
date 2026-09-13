@@ -69,7 +69,7 @@
   font-weight: var(--fw-medium);
   letter-spacing: var(--track-wide);
   text-transform: uppercase;
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 /* The row is the click target and the active tint, so it takes as much of the
    rail's width as the gutter leaves it; its own padding, not the rail's, is
@@ -112,7 +112,7 @@
   margin-left: auto;
   font-size: var(--fs-3xs);
   font-variant-numeric: tabular-nums;
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 .nav-item.active .nav-badge {
   color: inherit;
@@ -338,7 +338,7 @@
   font-weight: var(--fw-medium);
   letter-spacing: var(--track-wide);
   text-transform: uppercase;
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 .palette-item {
   display: flex;
@@ -359,7 +359,7 @@
 .palette-item .palette-hint {
   margin-left: auto;
   font-size: var(--fs-2xs);
-  color: var(--text-faint);
+  color: var(--text-muted);
   white-space: nowrap;
 }
 .palette-foot {
@@ -369,7 +369,7 @@
   padding: var(--space-2) var(--space-3);
   border-top: 1px solid var(--border-subtle);
   font-size: var(--fs-3xs);
-  color: var(--text-faint);
+  color: var(--text-muted);
   background: var(--surface-2);
 }
 

@@ -86,6 +86,13 @@ What is measured, and the floor each clears:
 | the neutral ramp's chroma | ≤ 2.2 |
 | the accent's chroma against every other hue | the highest |
 
+**A measured token is only as good as where it is spent.** `--text-faint`
+clears its floor as decoration, and the shell once spent it on words a reader
+has to read: the search footer's instructions, each result's hint, the group
+headings and the rail's live count. Those take `--text-muted` now, and
+`dashboard/src/styles/shell.test.ts` fails when a rule in the shell's
+stylesheet gives `--text-faint` to anything but an icon.
+
 **The fill/ink split is enforced by that measurement, not by convention.** An
 `-ink` step is text; a fill step is a mark or a background. Mixing them is how
 the screen this replaces shipped role badges at 1.63:1 — an inline
