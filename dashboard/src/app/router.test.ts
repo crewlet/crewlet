@@ -121,7 +121,7 @@ describe("moved routes", () => {
   // was added to avoid, because a dead link is visible.
   //
   // It happened: `#/work` redirected to `#/runs` from when "work" meant a
-  // coding run, and the work board later took the name. The routing smoke
+  // coding run, and the tracker later took the name. The routing smoke
   // test did not catch it — it asserts a screen rendered, and the wrong
   // screen renders perfectly well.
   test("no redirect claims a path a live screen now owns", () => {

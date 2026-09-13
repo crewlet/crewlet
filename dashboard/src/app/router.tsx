@@ -161,7 +161,7 @@ const MOVED: Record<string, (path: string[], query: URLSearchParams) => string[]
   agents: (p) => (p.length > 1 ? ["seats", p[1] as string] : ["people"]),
   people: () => null, // already current — listed so the intent is explicit
   // NOT `work`. It redirected to `#/runs` back when "work" meant a coding
-  // run, and the work board took the name — so the entry would have sent
+  // run, and the tracker took the name — so the entry would have sent
   // every reader of a live route to a different screen, for ever, with the
   // address bar agreeing with them. A redirect whose old path is now a real
   // route is strictly worse than a dead link: the dead link is visible.
