@@ -195,7 +195,7 @@ func (s *CoordStore) ClaimOwnership(ctx context.Context, turnID, owner string, e
 
 // SetStatus moves a run to a new lifecycle state, fenced on the epoch.
 func (s *CoordStore) SetStatus(ctx context.Context, turnID, status string, fence Fence) error {
-	if !slices.Contains(allStatuses, status) {
+	if !slices.Contains(Active, status) {
 		return fmt.Errorf("sandbox: unknown status %q", status)
 	}
 	_, _, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
@@ -366,30 +366,30 @@ func (s *CoordStore) FindAwaitingByConversation(ctx context.Context, handle, con
 	return got[len(got)-1], true, nil
 }
 
-// Delete removes a run record.
+// Finish ends a run by deleting its record. See the contract on
+// [PendingStore].
 //
-// Conditional on the version it read, and retried: a terminal delete racing a
-// write that reopened the run must not take the reopened record with it.
-// Deleting a run that is already gone is not an error — both parties reaching
-// the end of one run is ordinary.
-func (s *CoordStore) Delete(ctx context.Context, turnID string) error {
+// A read-decide-delete under the record's version, like every flip here: the
+// fence is evaluated against what the store holds, and a lost race re-reads,
+// so a claim that moved the lease in between is seen rather than deleted over.
+func (s *CoordStore) Finish(ctx context.Context, turnID string, fence Fence) (bool, error) {
 	for range casRetries {
-		_, version, found, err := s.read(ctx, turnID)
+		run, version, found, err := s.read(ctx, turnID)
 		if err != nil {
-			return err
+			return false, err
 		}
-		if !found {
-			return nil
+		if !found || outranked(run, fence) {
+			return false, nil
 		}
 		gone, err := s.runs.DeleteSandboxRun(ctx, turnID, version)
 		if err != nil {
-			return fmt.Errorf("sandbox: delete run %s: %w", turnID, err)
+			return false, fmt.Errorf("sandbox: finish run %s: %w", turnID, err)
 		}
 		if gone {
-			return nil
+			return true, nil
 		}
 	}
-	return fmt.Errorf("sandbox: delete run %s: the record kept changing under the delete", turnID)
+	return false, fmt.Errorf("sandbox: finish run %s: the record kept changing under the delete", turnID)
 }
 
 // read decodes one record and the version it was read at.

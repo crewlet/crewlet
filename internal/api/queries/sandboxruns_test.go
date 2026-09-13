@@ -92,14 +92,14 @@ func TestTheDurableRecordAnswersForEveryActiveState(t *testing.T) {
 	}
 }
 
-// A terminal run is not something anybody can act on, and a board that showed
+// A settled run is not something anybody can act on, and a board that showed
 // them would grow without bound.
 func TestASettledRunLeavesTheBoard(t *testing.T) {
 	store := seedRuns(t, sandbox.PendingRun{
 		TurnID: "t1", AgentHandle: "swe", Status: sandbox.StatusRunning, CreatedAt: runBase,
 	})
-	if err := store.SetStatus(t.Context(), "t1", sandbox.StatusDone, sandbox.Fence{}); err != nil {
-		t.Fatalf("SetStatus: %v", err)
+	if _, err := store.Finish(t.Context(), "t1", sandbox.Fence{}); err != nil {
+		t.Fatalf("Finish: %v", err)
 	}
 	if rows := askRuns(t, store); len(rows) != 0 {
 		t.Fatalf("a finished run is still on the board: %v", rows)

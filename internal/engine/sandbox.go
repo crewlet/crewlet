@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -496,12 +497,12 @@ func resumeTask(in resumeInput) string {
 // collected against a row with nothing to resume into.
 //
 // EVERY WAY THIS CAN FAIL FAILS THE RUN rather than dropping the suspension: a
-// row with no state is one nothing can resume, and failing here — while the
+// row with no state is one nothing can resume, and failing here, while the
 // box is still in the engine's hands and the seat's owner is still this
-// process — is far better than leaving a launching row to hold a box until its
+// process, is far better than leaving a launching row to hold a box until its
 // seat happens to move.
 func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID string) {
-	if e.sandboxPending == nil {
+	if e.sandboxPending == nil || e.sandboxCoordinator == nil {
 		return
 	}
 	suspension, ok := r.Suspended()
@@ -532,20 +533,27 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 	}
 }
 
-// failSuspension marks a run unresumable and says why, in the one voice all
-// three failure paths share.
+// failSuspension settles a run whose suspension has nowhere to go, and says
+// why, in the one voice all four failure paths share.
+//
+// SETTLED, NOT MARKED. The job is already executing in its box, and writing a
+// failed status onto the record stranded that box: a record that is not
+// active is read by no recovery pass and polled by no waiter, so the box ran
+// to its provider's TTL, billed, with nothing left to reclaim it. The
+// coordinator settles it like every other lost turn, while this node still
+// owns the seat, and the loss is announced rather than left as silence.
 func (e *Engine) failSuspension(ctx context.Context, turnID, event, detail string, cause error) {
 	args := []any{"turn_id", turnID,
-		"detail", detail + "; the run cannot be resumed and is failed"}
+		"detail", detail + "; the run cannot be resumed, so its box is reclaimed and the run ended"}
 	if cause != nil {
 		args = append(args, "error", cause)
 	}
 	log.ErrorContext(ctx, event, args...)
-	// Unfenced: this node is the seat's owner by construction — it just ran
-	// the turn — and a fence read back from a row this write may not be able
-	// to read is a second failure mode for no gain.
-	if err := e.sandboxPending.SetStatus(ctx, turnID, sandbox.StatusFailed, sandbox.Fence{}); err != nil {
-		log.WarnContext(ctx, "sandbox_suspension_mark_failed", "turn_id", turnID, "error", err)
+	if err := e.sandboxCoordinator.FailRun(ctx, turnID,
+		types.SandboxFailureSuspensionUnrecorded, detail); err != nil {
+		log.WarnContext(ctx, "sandbox_suspension_settle_failed", "turn_id", turnID, "error", err,
+			"detail", "the run's record could not be read, so its box was not reclaimed; the "+
+				"seat's next recovery pass reaps a run left launching")
 	}
 }
 

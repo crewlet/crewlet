@@ -1613,6 +1613,11 @@ Every detached [coding run](../concepts/code-sandbox.md) the engine still
 holds, oldest first — `launching`, `running`, `awaiting_clarification`,
 `reseed`, and `resumed` run records.
 
+A run that has settled, whether its turn finished or it was lost, is not
+listed because it has no record: its record is deleted once its box is
+reclaimed. How it ended is on the event stream, in the resumed turn's own
+events or a `sandbox_run_failed` event naming the reason.
+
 A `launching` run is one whose coding job has started while the turn that
 started it is still unwinding, so the suspended conversation a resume
 re-enters is not on the row yet; it is listed but never polled, because a

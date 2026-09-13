@@ -4,7 +4,8 @@ import "github.com/crewlet/crewlet/internal/events"
 
 // Detached sandbox coding runs. The kick-off turn ends as soon as the job is
 // launched and the agent stays busy until the completion signal arrives, so
-// these three events are the only trace of work that outlives its turn.
+// these events are the only trace of work that outlives its turn: a run's own
+// record is deleted the moment it settles.
 
 func init() {
 	events.Register[SandboxRunStarted]()
@@ -129,14 +130,15 @@ func (e SandboxClarificationRequested) SummaryFor(actor string) string {
 // SandboxRunFailed records a detached coding run being settled without its
 // turn ever resuming.
 //
-// THE SILENT ENDING, given a voice. `settleFailed` marks the row, kills the
-// box and frees the seat — and published nothing, so a turn that had been
-// destroyed presented to the seat, the dashboard and the requester as an
-// identical silence. Three distinct conditions funnel into it, and the first
-// symptom of any of them was a wait that never ended: the run vanished from
-// the active board and the completion event that would have explained it had
-// already been acked. A failure has to be at least as loud as the question
-// [SandboxClarificationRequested] already announces.
+// THE SILENT ENDING, given a voice. `settleFailed` kills the box, deletes the
+// run's record and frees the seat, and it published nothing, so a turn that
+// had been destroyed presented to the seat, the dashboard and the requester as
+// an identical silence. Several distinct conditions funnel into it, and the
+// first symptom of any of them was a wait that never ended: the run vanished
+// from the active board and the completion event that would have explained it
+// had already been acked. A failure has to be at least as loud as the question
+// [SandboxClarificationRequested] already announces, and since a settled run
+// has no record, this event is the only account of how it ended.
 //
 // Reason is a closed set — see the SandboxFailure constants — because it is
 // the one field a reader acts on differently.
@@ -155,10 +157,11 @@ type SandboxRunFailed struct {
 
 // The reasons a detached run is settled without resuming its turn.
 //
-// A NAMED SET, because the three are not variations of one failure: an
+// A NAMED SET, because these are not variations of one failure: an
 // unreachable box is infrastructure, a missing conversation is a bug in this
-// engine, and an abandoned tail is a node that died. An operator seeing them
-// merged into "the sandbox failed" would chase the wrong one.
+// engine, a suspension that could not be recorded is the coordination store or
+// this engine, and an abandoned tail is a node that died. An operator seeing
+// them merged into "the sandbox failed" would chase the wrong one.
 const (
 	// SandboxFailureCollect — the job finished but its box could not be
 	// read back, so there is no result to splice in.
@@ -171,6 +174,13 @@ const (
 	// SandboxFailureAbandoned — a tail the previous owner of this seat left
 	// mid-flight, found by the recovery pass. Nothing will ever pick it up.
 	SandboxFailureAbandoned = "abandoned_tail"
+
+	// SandboxFailureSuspensionUnrecorded is a run whose turn suspended but
+	// whose conversation never reached the run's record: the runner
+	// recorded none, it would not serialize, the record could not be
+	// written, or the run was no longer launching. The job was already
+	// executing, so its box is reclaimed rather than left to its TTL.
+	SandboxFailureSuspensionUnrecorded = "suspension_unrecorded"
 )
 
 // EventType is the "sandbox_run_failed" wire type.
@@ -183,7 +193,7 @@ func (e SandboxRunFailed) Role() string { return e.RoleName }
 func (e SandboxRunFailed) AgentID() string { return e.Agent }
 
 // SummaryFor names the reason, because the whole point of this event is that
-// the three are told apart.
+// the reasons are told apart.
 func (e SandboxRunFailed) SummaryFor(actor string) string {
 	reason := e.Reason
 	if reason == "" {

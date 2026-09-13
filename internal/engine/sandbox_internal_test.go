@@ -6,12 +6,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -374,30 +377,82 @@ func TestTheDoubleAnswersEveryPlacement(t *testing.T) {
 }
 
 // A suspension with nowhere to go leaves a job running in a box nobody is
-// coming back for. Whichever of the three ways it happens — the runner never
-// recorded the conversation, it would not serialize, or the row was no longer
-// launching — the run has to be marked unresumable while the seat's owner is
-// still this process, so recovery reaps the box instead of stranding it.
-func TestAnUnrecordableSuspensionFailsTheRun(t *testing.T) {
+// coming back for. Whichever way it happens (the runner never recorded the
+// conversation, it would not serialize, the record could not be written, or the
+// run was no longer launching), the run is settled while the seat's owner is
+// still this process: its box reclaimed and its record deleted.
+//
+// Marking the record failed is what this used to do, and it stranded the box:
+// a record that is not active is read by no recovery pass and polled by no
+// waiter, so the job ran on in a box billed to its provider's TTL.
+func TestAnUnrecordableSuspensionReclaimsTheRunsBox(t *testing.T) {
 	store := sandbox.NewCoordStore(memory.NewFleet())
+	provider := sandbox.NewFakeProvider()
+	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
+		Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Direct: provider},
+		Runners:   map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	queue := &publishRecorder{}
+	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Queue: queue, Pending: store, Manager: manager,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	box, err := provider.Create(t.Context(), sandbox.Spec{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
 	if err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
 		TurnID: "t1", AgentHandle: "swe", Role: "SWE",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
-	e := &Engine{sandboxPending: store}
+	if err := store.AttachSandbox(t.Context(), "t1",
+		sandbox.BoxRef{SandboxID: box.ID(), CommandID: "1"}, sandbox.Fence{}); err != nil {
+		t.Fatalf("AttachSandbox: %v", err)
+	}
+	e := &Engine{sandboxPending: store, sandboxCoordinator: coordinator}
 
 	e.failSuspension(t.Context(), "t1", "sandbox_suspension_missing",
 		"the turn suspended but recorded no conversation", nil)
 
-	got, found, err := store.Get(t.Context(), "t1")
-	if err != nil || !found {
-		t.Fatalf("Get = %v, %v", found, err)
+	if got, found, err := store.Get(t.Context(), "t1"); err != nil || found {
+		t.Fatalf("Get = %+v, found %v, %v; want the run ended and its record gone", got, found, err)
 	}
-	if got.Status != sandbox.StatusFailed {
-		t.Fatalf("status = %q, want %q — a launching row holds a box nothing polls",
-			got.Status, sandbox.StatusFailed)
+	if killed := provider.KilledIDs(); len(killed) != 1 || killed[0] != box.ID() {
+		t.Fatalf("killed %v, want the running job's box %q reclaimed", killed, box.ID())
 	}
+	if !queue.published(types.SandboxRunFailed{}.EventType()) {
+		t.Fatal("the lost run was not announced")
+	}
+}
+
+// publishRecorder is the slice of the queue a coordinator publishes through.
+type publishRecorder struct {
+	mu     sync.Mutex
+	events []*events.Event
+}
+
+func (r *publishRecorder) Publish(_ context.Context, _ string, ev *events.Event) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, ev)
+	return nil
+}
+
+func (r *publishRecorder) published(eventType string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, ev := range r.events {
+		if ev.Type == eventType {
+			return true
+		}
+	}
+	return false
 }
 
 // The waiter duty must survive three of its OWN ticks, whatever the seat lease

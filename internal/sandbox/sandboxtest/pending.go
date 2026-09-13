@@ -41,7 +41,10 @@ func Run(t *testing.T, newStore func(t *testing.T) sandbox.PendingStore) {
 		{"AClaimIsExclusiveUnderContention", testAClaimIsExclusiveUnderContention},
 		{"AClaimReportsWhereItCameFrom", testAClaimReportsWhereItCameFrom},
 		{"AReseedIsStillClaimable", testAReseedIsStillClaimable},
-		{"ATerminalRunIsNotClaimable", testATerminalRunIsNotClaimable},
+		{"AFinishedRunIsGoneForEveryReader", testAFinishedRunIsGoneForEveryReader},
+		{"AFinishedRunIsNotRecreatedByALateWrite", testAFinishedRunIsNotRecreatedByALateWrite},
+		{"ARunIsFinishedExactlyOnce", testARunIsFinishedExactlyOnce},
+		{"AnEndingIsNotAStatus", testAnEndingIsNotAStatus},
 		{"ParkingCarriesTheBranch", testParkingCarriesTheBranch},
 		{"OwnershipIsNotStolenByAnOlderLease", testOwnershipIsNotStolenByAnOlderLease},
 		{"AStaleFenceCannotWrite", testAStaleFenceCannotWrite},
@@ -360,15 +363,130 @@ func testAReseedIsStillClaimable(t *testing.T, s sandbox.PendingStore) {
 	}
 }
 
-func testATerminalRunIsNotClaimable(t *testing.T, s sandbox.PendingStore) {
-	for _, status := range []string{sandbox.StatusDone, sandbox.StatusFailed} {
-		mustLaunched(t, s, run(status))
-		if err := s.SetStatus(t.Context(), status, status, sandbox.Fence{}); err != nil {
-			t.Fatalf("set %s: %v", status, err)
+// A FINISHED RUN HAS NO RECORD. The bucket is ageless and every completion
+// poll and seat recovery reads all of it, so a settled run that stayed behind
+// would be read on every one of those passes for the life of the deployment.
+// Nothing may still find it: not the tail claim, not the busy check, not an
+// answer matching a question it once asked.
+func testAFinishedRunIsGoneForEveryReader(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	park(t, s, "t1")
+
+	finished, err := s.Finish(ctx, "t1", sandbox.Fence{})
+	if err != nil || !finished {
+		t.Fatalf("Finish = %v, %v; want the record deleted", finished, err)
+	}
+	if got, found, err := s.Get(ctx, "t1"); err != nil || found {
+		t.Fatalf("Get after Finish = %+v, found %v, %v; want no record", got, found, err)
+	}
+	if active, err := s.ListActive(ctx); err != nil || len(active) != 0 {
+		t.Errorf("ListActive after Finish = %+v, %v; want none", active, err)
+	}
+	if seat, err := s.ListActiveForSeat(ctx, "swe"); err != nil || len(seat) != 0 {
+		t.Errorf("the seat's busy read still sees a finished run: %+v, %v", seat, err)
+	}
+	if _, found, err := s.FindAwaitingByConversation(ctx, "swe", "slack:C1"); err != nil || found {
+		t.Errorf("an answer matched the question of a finished run: found %v, %v", found, err)
+	}
+	if _, won, err := s.ClaimForResume(ctx, "t1"); err != nil || won {
+		t.Errorf("a finished run was claimed: won=%v err=%v", won, err)
+	}
+	// Two parties reaching the end of one run is ordinary, not an error.
+	if again, err := s.Finish(ctx, "t1", sandbox.Fence{}); err != nil || again {
+		t.Errorf("a second Finish = %v, %v; want false and no error", again, err)
+	}
+}
+
+// A write that arrives after the run ended is the ordinary shape of a box
+// shutting down or a peer a moment behind. Each is a conditional flip on an
+// existing record, so none of them may bring the record back: a resurrected
+// row is a run that nothing will ever settle again.
+func testAFinishedRunIsNotRecreatedByALateWrite(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	if _, err := s.Finish(ctx, "t1", sandbox.Fence{}); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	late := map[string]func() error{
+		"SetStatus": func() error { return s.SetStatus(ctx, "t1", sandbox.StatusRunning, sandbox.Fence{}) },
+		"AttachSandbox": func() error {
+			return s.AttachSandbox(ctx, "t1", sandbox.BoxRef{SandboxID: "box-1"}, sandbox.Fence{})
+		},
+		"MarkBoxPaused": func() error { return s.MarkBoxPaused(ctx, "t1", base) },
+		"ReleaseBox":    func() error { return s.ReleaseBox(ctx, "t1") },
+		"MarkAwaiting": func() error {
+			return s.MarkAwaiting(ctx, "t1", sandbox.Clarification{Question: "still there?"})
+		},
+		"MarkSuspended": func() error {
+			_, err := s.MarkSuspended(ctx, "t1", suspension())
+			return err
+		},
+		"ClaimOwnership": func() error {
+			_, err := s.ClaimOwnership(ctx, "t1", "node-b:2", 9)
+			return err
+		},
+		"ExpirePause": func() error {
+			_, err := s.ExpirePause(ctx, "t1")
+			return err
+		},
+		"AppendBridgeCall": func() error {
+			_, err := s.AppendBridgeCall(ctx, "t1", sandbox.BridgeCall{Name: "read_page"})
+			return err
+		},
+	}
+	for name, write := range late {
+		if err := write(); err != nil {
+			t.Errorf("%s on a finished run: %v; want the ordinary no-op", name, err)
 		}
-		if _, won, _ := s.ClaimForResume(t.Context(), status); won {
-			t.Errorf("a %s run was claimed", status)
+		if _, found, err := s.Get(ctx, "t1"); err != nil || found {
+			t.Fatalf("%s recreated a finished run's record (found %v, %v)", name, found, err)
 		}
+	}
+}
+
+// Every party that ends a run deletes a record it read. Racing ends must
+// agree that exactly one of them did it, so that whatever each does on the
+// strength of that answer, such as announcing a lost turn, happens once.
+func testARunIsFinishedExactlyOnce(t *testing.T, s sandbox.PendingStore) {
+	mustLaunched(t, s, run("t1"))
+	const racers = 10
+	var wins atomic.Int32
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for range racers {
+		wg.Go(func() {
+			<-start
+			finished, err := s.Finish(t.Context(), "t1", sandbox.Fence{})
+			if err != nil {
+				t.Errorf("Finish: %v", err)
+				return
+			}
+			if finished {
+				wins.Add(1)
+			}
+		})
+	}
+	close(start)
+	wg.Wait()
+	if got := wins.Load(); got != 1 {
+		t.Fatalf("%d of %d concurrent Finish calls reported deleting the record, want exactly 1", got, racers)
+	}
+}
+
+// Done and failed are not states a record can be written in, because a run
+// that reached either has no record. Refused at the write, so a caller that
+// reaches for the old terminal flip fails loudly instead of leaving a record
+// every listing skips and nothing ever deletes.
+func testAnEndingIsNotAStatus(t *testing.T, s sandbox.PendingStore) {
+	mustLaunched(t, s, run("t1"))
+	for _, status := range []string{"done", "failed", ""} {
+		if err := s.SetStatus(t.Context(), "t1", status, sandbox.Fence{}); err == nil {
+			t.Errorf("SetStatus(%q) was accepted", status)
+		}
+	}
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusRunning {
+		t.Errorf("a refused status changed the record to %q", got.Status)
 	}
 }
 
@@ -418,7 +536,7 @@ func testAStaleFenceCannotWrite(t *testing.T, s sandbox.PendingStore) {
 		t.Fatalf("claim: %v", err)
 	}
 	stale := sandbox.Fence{Owner: "node-a:1", Epoch: 3}
-	if err := s.SetStatus(t.Context(), "t1", sandbox.StatusFailed, stale); err != nil {
+	if err := s.SetStatus(t.Context(), "t1", sandbox.StatusReseed, stale); err != nil {
 		t.Fatalf("set status: %v", err)
 	}
 	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusRunning {
@@ -430,6 +548,17 @@ func testAStaleFenceCannotWrite(t *testing.T, s sandbox.PendingStore) {
 	}
 	if got := mustGet(t, s, "t1"); got.SandboxID != "" {
 		t.Errorf("a stale fence attached a box: %q", got.SandboxID)
+	}
+	// Nor may it END the run: a node whose lease moved deleting the record
+	// its successor recovered strands the successor's box.
+	if finished, err := s.Finish(t.Context(), "t1", stale); err != nil || finished {
+		t.Errorf("a stale fence finished the run: %v, %v", finished, err)
+	}
+	if _, found, err := s.Get(t.Context(), "t1"); err != nil || !found {
+		t.Fatalf("the record is gone after a stale Finish (found %v, %v)", found, err)
+	}
+	if finished, err := s.Finish(t.Context(), "t1", sandbox.Fence{Owner: "node-b:2", Epoch: 7}); err != nil || !finished {
+		t.Errorf("the owning lease could not finish its own run: %v, %v", finished, err)
 	}
 }
 
@@ -510,12 +639,12 @@ func testActiveIncludesResumed(t *testing.T, s sandbox.PendingStore) {
 		t.Errorf("active = %+v; a resumed tail must stay visible to recovery", got)
 	}
 
-	// A terminal run does not.
-	if err := s.SetStatus(t.Context(), "t1", sandbox.StatusDone, sandbox.Fence{}); err != nil {
-		t.Fatalf("set done: %v", err)
+	// A finished run does not.
+	if _, err := s.Finish(t.Context(), "t1", sandbox.Fence{}); err != nil {
+		t.Fatalf("finish: %v", err)
 	}
 	if got, _ := s.ListActive(t.Context()); len(got) != 0 {
-		t.Errorf("a done run is still active: %+v", got)
+		t.Errorf("a finished run is still active: %+v", got)
 	}
 }
 
@@ -636,8 +765,7 @@ func testAPauseExpiresExactlyOnce(t *testing.T, s sandbox.PendingStore) {
 // expiring one from the reaper would kill it out from under live work.
 func testOnlyAParkedRunCanExpire(t *testing.T, s sandbox.PendingStore) {
 	for _, status := range []string{
-		sandbox.StatusRunning, sandbox.StatusResumed,
-		sandbox.StatusDone, sandbox.StatusFailed, sandbox.StatusReseed,
+		sandbox.StatusRunning, sandbox.StatusResumed, sandbox.StatusReseed,
 	} {
 		mustLaunched(t, s, run(status))
 		if err := s.SetStatus(t.Context(), status, status, sandbox.Fence{}); err != nil {
