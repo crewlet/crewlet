@@ -93,6 +93,28 @@ const (
 	// So it is REPORTED. Somebody has to repoint the monitors and remove the
 	// old definition, and this is the only place they can learn it exists.
 	FindingRegistrationOrphaned FindingKind = "registration_orphaned"
+
+	// FindingCoveragePartial is an integration working exactly as it was
+	// asked to, over less than the whole of what it could reach.
+	//
+	// THE THIRD ADVISORY, and the mildest of the three: the other two are
+	// loose ends somebody may want to tidy, and this one is a DECISION
+	// already taken, reported so nobody has to infer it from silence.
+	// GitHub is the case it was added for — a company whose agents each
+	// carry their own app hears about the repositories those apps are
+	// installed on and nothing else in the organization, which is the
+	// arrangement the setup form recommends.
+	//
+	// IT EXISTS BECAUSE SILENCE WAS THE ONLY ALTERNATIVE. That coverage
+	// was reported two ways before, and both were wrong: as an
+	// ingress_blocked finding naming the organization token, which reads
+	// as Action required over agents that are receiving events perfectly
+	// well and sent an operator to install apps that can never carry the
+	// scope; or as a note the card does not render at all, which tells a
+	// person nothing about what their integration does and does not see.
+	// A working integration whose reach is narrower than a reader would
+	// assume is worth one sentence, and one sentence is what this is.
+	FindingCoveragePartial FindingKind = "coverage_partial"
 )
 
 // severity ranks the kinds from "nothing works" to "everything works, with a
@@ -166,10 +188,16 @@ func (f FindingKind) severity() int {
 		// a problem it hides.
 		return 11
 	case FindingRegistrationOrphaned:
-		// LAST, beneath the other advisory. Both report ready; this one
-		// is the more purely informational of the two, because what it
-		// names is still working.
+		// Beneath the other advisory. Both report ready; this one is the
+		// more purely informational of the two, because what it names is
+		// still working.
 		return 12
+	case FindingCoveragePartial:
+		// LAST OF ALL, because it is the only one naming nothing wrong.
+		// The two above it are loose ends somebody may want to tidy; this
+		// is a decision already taken, reported so a reader does not have
+		// to infer it from silence. Anything else present outranks it.
+		return 13
 	default:
 		// A kind this build does not know, ranked ABOVE the advisory and
 		// below every real problem. A peer on a newer build can write one
@@ -217,6 +245,14 @@ func (f FindingKind) Verdict() (Phase, Actor) {
 		// third-party app — repoint the monitors, then remove the
 		// definition nothing points at any more.
 		return PhaseReady, ActorAdmin
+	case FindingCoveragePartial:
+		// READY, and the OPERATOR's — which is the pairing that makes it
+		// honest. Ready because the integration is doing what it was
+		// asked; the operator's because widening it is a choice in this
+		// company's own configuration, not a grant somebody at the
+		// third-party app has to make. Reported as the admin's it would
+		// have sent a person to GitHub to fix a decision taken here.
+		return PhaseReady, ActorOperator
 	default:
 		// A kind this build does not know is reported as degraded rather
 		// than ready, and pointed at the person who can read the peer's
