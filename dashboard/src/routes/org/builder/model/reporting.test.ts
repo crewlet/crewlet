@@ -82,6 +82,14 @@ describe("reportingForest", () => {
     expect(members.cycle).toEqual([2, 3]);
     expect(members.reports.find((r) => r.seat.handle === "hanger")?.cycle).toBeUndefined();
     expect(forest.cycles[1]!.cycle).toEqual([4]);
+
+    // A seat hanging off the cycle can lead the walk into it at its LATER
+    // member; the break is still the member the engine lists first.
+    const entered = reportingForest(
+      derived([seat("root"), seat("hanger", "a"), seat("b", "a"), seat("a", "b")]),
+    );
+    expect(entered.cycles.map(shape)).toEqual([{ b: [{ a: ["hanger"] }] }]);
+    expect(entered.cycles[0]!.cycle).toEqual([2, 3]);
   });
 
   test("a handle listed twice is two nodes, and its reports hang under the first", () => {

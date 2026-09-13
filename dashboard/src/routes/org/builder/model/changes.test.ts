@@ -296,6 +296,28 @@ describe("reporting, leads, channels and routing", () => {
       ["Engineering", "VP Engineering", false, null],
       ["Platform", "VP Engineering", true, null],
     ]);
+    // The same seat leading, but now by inheritance rather than by its own
+    // declaration, is a change too: clearing the parent's lead would take it.
+    const inherited = changesOf(s, {
+      units: {
+        "units[0]": { lead: "vp-engineering", lead_inherited: true },
+        "units[0].children[0]": {
+          lead: "vp-engineering",
+          lead_inherited: true,
+          channel: "eng",
+          channel_inherited: true,
+        },
+      },
+    });
+    expect(
+      inherited.leads.map((l) => [
+        l.ref.name,
+        l.before?.name,
+        l.beforeInherited,
+        l.after?.name,
+        l.afterInherited,
+      ]),
+    ).toEqual([["Engineering", "VP Engineering", false, "VP Engineering", true]]);
     expect(changes.channels).toEqual([
       {
         ref: { key: "unit:Platform", kind: "unit", name: "Platform" },
@@ -334,6 +356,29 @@ describe("reporting, leads, channels and routing", () => {
         after: { key: "seat:vp-engineering", kind: "seat", name: "VP Engineering" },
         shared: false,
       },
+    ]);
+  });
+
+  test("a scope declared with different owners is marked shared, since the engine picks one and logs the ambiguity", () => {
+    const doc = fixtureCompany();
+    doc.units![0]!.children![0]!.integrations = { jira: { project: "OPS" } };
+    doc.units![1]!.integrations = { jira: { project: "ops" } };
+    doc.units![1]!.lead = "Account Executive";
+    const s = scenario([{ type: "setLead", target: "unit:Sales" }], doc, {
+      units: { "units[0].children[0]": { lead: "sre" } },
+    });
+    const changes = changesOf(s, {
+      units: { "units[0].children[0]": { lead: "sre" }, "units[1]": { lead: "" } },
+    });
+    expect(changes.routing).toEqual([
+      expect.objectContaining({
+        tool: "jira",
+        scope: "OPS",
+        holder: { key: "unit:Sales", kind: "unit", name: "Sales" },
+        before: { key: "seat:account-executive", kind: "seat", name: "Account Executive" },
+        after: null,
+        shared: true,
+      }),
     ]);
   });
 });

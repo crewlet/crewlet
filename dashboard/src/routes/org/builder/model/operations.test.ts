@@ -363,6 +363,20 @@ describe("moving", () => {
     expect(seat(nested.draft, "seat:account-executive").unit).toBeUndefined();
   });
 
+  test("a move recorded against a unit reference conflicts once that reference changed upstream", () => {
+    const op = recordOk(fixture(), {
+      type: "move",
+      target: "seat:designer",
+      to: { parent: "unit:Sales", after: null },
+    });
+    const theirs = fixtureCompany();
+    theirs.roles![1]!.unit = "Sales";
+    expect(evaluate(fixture(theirs), op)).toMatchObject({
+      kind: "conflict",
+      conflicts: [{ subject: "unit reference", base: "Platform", theirs: "Sales" }],
+    });
+  });
+
   test("a unit cannot move into itself, and a reorder cannot change parents", () => {
     const draft = fixture();
     expect(
