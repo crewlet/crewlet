@@ -592,6 +592,33 @@ function accessLevel(draft: Draft, handle: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+/** Whether the draft holds any GitLab access level entry at all. */
+function hasAccessLevels(draft: Draft): boolean {
+  const levels = getPath(draft.company, GITLAB_ACCESS_LEVELS);
+  return isRecord(levels) && Object.keys(levels).length > 0;
+}
+
+/**
+ * The refusal for an operation that would leave a seat's GitLab access level
+ * behind because the seat's handle is not known.
+ *
+ * A LEVEL NOBODY CAN FIND IS A GRANT WAITING FOR A SEAT. Access levels are
+ * keyed by handle, the client never derives one, and the handle of a seat this
+ * draft created is only known from a check of the draft as it stands, which
+ * any later edit makes stale until the next check answers. Removing or
+ * renaming such a seat in that window would clear nothing, and the entry it
+ * held would grant its level to the next seat the engine gives that handle.
+ * So while the draft holds access levels, an operation that must clear one by
+ * an unknown handle waits for the check instead of guessing; a draft with no
+ * access levels has nothing to leave behind and is not held up.
+ */
+function unknownHandleForLevels(action: string): Recorded {
+  return refuse(
+    "unknown_handle",
+    `The engine has not reported this seat's handle yet, and GitLab access levels are keyed by it. Wait for the check to finish, then ${action}.`,
+  );
+}
+
 /** The GitLab provisioning block that holds the access levels. */
 const GITLAB_PROVISIONING = GITLAB_ACCESS_LEVELS.slice(0, -1);
 /** The Datadog block that holds the fallback seat. */
@@ -777,9 +804,12 @@ export function record(
       const accessLevels: AccessLevelChange[] = [];
       for (const seat of removedSeats) {
         const handle = seatHandle(seat, ctx);
-        const level = handle === undefined ? undefined : accessLevel(draft, handle);
-        if (handle !== undefined && level !== undefined)
-          accessLevels.push({ handle, before: level });
+        if (handle === undefined) {
+          if (hasAccessLevels(draft)) return unknownHandleForLevels("remove it");
+          continue;
+        }
+        const level = accessLevel(draft, handle);
+        if (level !== undefined) accessLevels.push({ handle, before: level });
       }
       if (intent.routeTo !== undefined && !hasBlock(draft.company, DATADOG_BLOCK)) {
         return refuse(
@@ -815,9 +845,12 @@ export function record(
           // for the old handle would be left keyed to a seat that no longer
           // exists and grant its level to the next seat deriving that handle.
           const handle = ctx.handleOf?.(found.node.key);
-          const level = handle === undefined ? undefined : accessLevel(draft, handle);
-          if (handle !== undefined && level !== undefined)
-            accessLevels.push({ handle, before: level });
+          if (handle === undefined) {
+            if (hasAccessLevels(draft)) return unknownHandleForLevels("rename it");
+          } else {
+            const level = accessLevel(draft, handle);
+            if (level !== undefined) accessLevels.push({ handle, before: level });
+          }
         } else {
           // The key names the engine's handle for a seat of the base. A seat
           // keyed by its path (the base had not been checked when it was
@@ -913,6 +946,8 @@ export function record(
       if (!found) return missing(intent.target);
       const changes: FieldChange[] = [];
       const accessLevels: AccessLevelChange[] = [];
+      /** The level a handle change carries from the old handle to the new one. */
+      let carried: { readonly handle: string; readonly level: string } | undefined;
       for (const set of intent.set) {
         const head = set.path[0];
         if (!seatFieldWritable(set.path, isMintedKey(found.node.key))) {
@@ -924,12 +959,22 @@ export function record(
           );
         }
         if (head === "handle") {
-          // Choosing a handle moves a new seat's access level away from the
-          // handle it had, for the reason renameSeat gives.
+          // Choosing a handle takes a new seat's access level off the handle
+          // it had, for the reason renameSeat gives, and onto the handle it
+          // chose: the operator changed what the seat is called, not what it
+          // may do. With no handle chosen the engine derives one, which is
+          // not known until the next check, so the level is cleared and the
+          // review lists it.
           const old = seatHandle(found.node, ctx);
-          const level = old === undefined ? undefined : accessLevel(draft, old);
-          if (old !== undefined && level !== undefined && old !== set.value) {
-            accessLevels.push({ handle: old, before: level });
+          if (old === undefined) {
+            if (hasAccessLevels(draft)) return unknownHandleForLevels("choose its handle");
+          } else {
+            const level = accessLevel(draft, old);
+            if (level !== undefined && old !== set.value) {
+              accessLevels.push({ handle: old, before: level });
+              if (typeof set.value === "string" && set.value !== "")
+                carried = { handle: set.value, level };
+            }
           }
         }
         const before = getPath(found.node.data, set.path);
@@ -959,6 +1004,15 @@ export function record(
             handle,
             ...(before !== undefined ? { before } : {}),
             ...(after !== undefined ? { after } : {}),
+          });
+        }
+      } else if (carried !== undefined) {
+        const before = accessLevel(draft, carried.handle);
+        if (before !== carried.level) {
+          accessLevels.push({
+            handle: carried.handle,
+            ...(before !== undefined ? { before } : {}),
+            after: carried.level,
           });
         }
       }

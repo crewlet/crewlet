@@ -463,6 +463,73 @@ describe("editing", () => {
     expect(levels).not.toHaveProperty("qa");
   });
 
+  test("a created seat that only chooses a new handle keeps its access level under it", () => {
+    const added = run(fixture(), {
+      type: "addSeat",
+      key: "new:q",
+      placement: { parent: COMPANY_KEY, after: null },
+      data: { name: "QA" },
+    }).draft;
+    const leveled = run(
+      added,
+      { type: "updateSeat", target: "new:q", set: [], accessLevel: "developer" },
+      { handleOf: () => "qa" },
+    ).draft;
+    const intent: Intent = {
+      type: "updateSeat",
+      target: "new:q",
+      set: [{ path: ["handle"], value: "quality" }],
+    };
+    const { op, draft } = run(leveled, intent, { handleOf: () => "qa" });
+    const levels = getPath(doc(draft), ["integrations", "gitlab", "provisioning", "access_levels"]);
+    expect(levels).toMatchObject({ quality: "developer" });
+    expect(levels).not.toHaveProperty("qa");
+    // Recording it again from its intent says the same thing.
+    expect(recordOk(leveled, intentOf(op), { handleOf: () => "qa" })).toEqual(op);
+
+    // Removing the handle leaves the engine to derive one nobody knows yet:
+    // the level is cleared rather than guessed onto a handle.
+    const cleared = run(
+      leveled,
+      { type: "updateSeat", target: "new:q", set: [{ path: ["handle"] }] },
+      { handleOf: () => "qa" },
+    );
+    expect(cleared.op).toMatchObject({ accessLevels: [{ handle: "qa", before: "developer" }] });
+  });
+
+  test("a seat whose handle is unknown waits for the check before an operation that must clear its access level", () => {
+    const added = (company: CompanyDocument) =>
+      run(fixture(company), {
+        type: "addSeat",
+        key: "new:q",
+        placement: { parent: "unit:Sales", after: null },
+        data: { name: "QA" },
+      }).draft;
+    const withLevels = added(fixtureCompany());
+    const intents: Intent[] = [
+      { type: "remove", target: "new:q" },
+      { type: "remove", target: "unit:Sales" },
+      { type: "renameSeat", target: "new:q", name: "Quality" },
+      { type: "updateSeat", target: "new:q", set: [{ path: ["handle"], value: "quality" }] },
+    ];
+    for (const intent of intents) {
+      expect(record(withLevels, intent), intent.type).toMatchObject({
+        ok: false,
+        refusal: "unknown_handle",
+      });
+      // Once the check reports the handle, each one records.
+      expect(record(withLevels, intent, { handleOf: () => "qa" }).ok, intent.type).toBe(true);
+    }
+
+    // With no access levels there is nothing to leave behind.
+    const company = fixtureCompany();
+    delete (company.integrations as Record<string, unknown>).gitlab;
+    const withoutLevels = added(company);
+    for (const intent of intents) {
+      expect(record(withoutLevels, intent).ok, intent.type).toBe(true);
+    }
+  });
+
   test("an access level needs a handle the engine reported", () => {
     const added = run(fixture(), {
       type: "addSeat",
