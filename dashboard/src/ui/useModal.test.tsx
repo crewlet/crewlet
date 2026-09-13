@@ -15,9 +15,9 @@ import { usePopup } from "./useModal.ts";
 
 afterEach(cleanup);
 
-function press(key: string, init: Partial<KeyboardEventInit> = {}) {
+function press(key: string, init: Partial<KeyboardEventInit> = {}): boolean {
   const target = document.activeElement ?? document.body;
-  fireEvent.keyDown(target, { key, ...init });
+  return fireEvent.keyDown(target, { key, ...init });
 }
 
 /** A dialog with a button that opens a second one over it. */
@@ -193,6 +193,26 @@ test("a busy modal ignores its veil's click as well as its Escape", () => {
   fireEvent.click(veil);
   press("Escape");
   expect(onClose).not.toHaveBeenCalled();
+});
+
+test("Tab from a focused element that is not a tab stop, past the last one, wraps inside", () => {
+  render(
+    <Dialog title="Move to" onClose={() => {}}>
+      <button>first</button>
+      <button>last</button>
+      <div role="treeitem" aria-selected={false} tabIndex={-1}>
+        Engineering
+      </div>
+    </Dialog>,
+  );
+  const item = screen.getByRole("treeitem");
+  item.focus();
+  press("Tab");
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "first" }));
+
+  item.focus();
+  // Backwards there IS a stop before it, so the browser's own Shift+Tab is left alone.
+  expect(press("Tab", { shiftKey: true })).toBe(true);
 });
 
 test("focus returns to the opener even when a field in the dialog took autoFocus", () => {

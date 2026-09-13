@@ -142,7 +142,6 @@ function onKeyDown(e: KeyboardEvent): void {
     const active = document.activeElement;
     if (popup && popup.order > modal.order && active && popup.panel()?.contains(active)) return;
     const inside = focusables(panel);
-    const within = active instanceof Node && panel.contains(active);
     if (inside.length === 0) {
       e.preventDefault();
       panel.focus();
@@ -150,13 +149,21 @@ function onKeyDown(e: KeyboardEvent): void {
     }
     const first = inside[0]!;
     const last = inside[inside.length - 1]!;
-    if (!within) {
+    if (!(active instanceof Node) || !panel.contains(active)) {
       e.preventDefault();
       (e.shiftKey ? last : first).focus();
-    } else if (e.shiftKey && (active === first || active === panel)) {
+      return;
+    }
+    // BY DOCUMENT POSITION, not by identity with the first or last stop.
+    // Focus can rest inside on something Tab never stops at (the panel
+    // itself, a roving item with `tabindex="-1"`), and from one of those past
+    // the last stop the browser's own Tab would leave the modal.
+    const after = (el: HTMLElement) =>
+      (active.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    if (e.shiftKey && !inside.some((el) => el !== active && !after(el))) {
       e.preventDefault();
       last.focus();
-    } else if (!e.shiftKey && active === last) {
+    } else if (!e.shiftKey && !inside.some((el) => el !== active && after(el))) {
       e.preventDefault();
       first.focus();
     }
