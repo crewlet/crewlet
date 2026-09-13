@@ -7,9 +7,10 @@ team can hold an async standup at 9:30, a Knowledge-Base agent can audit
 Confluence weekly — all declared in the YAML org config.
 
 Schedules are a first-class part of the org model: they hang off a
-**Role** (`Role.schedules`) or an **OrgUnit** (`OrgUnit.schedules`), share
-one [`Schedule`](#the-schedule-model) model, and hot-reload with the rest
-of the org via `engine.reload_config()`.
+**role** (a `roles:` entry's `schedules`) or a **unit** (a `units:` entry's
+`schedules`), share one [`Schedule`](#the-schedule-model) model
+(`org.Schedule`), and change live with the rest of the organization when a
+config revision is applied.
 
 ---
 
@@ -17,8 +18,9 @@ of the org via `engine.reload_config()`.
 
 A single loop ticks on a short interval (default 10s). Each tick:
 
-1. Enumerates every `Schedule` across the **live** org (all roles and all
-   units — read fresh each tick, so hot-reload is free).
+1. Enumerates every `Schedule` across the **current** organization (all
+   roles and all units, read fresh each tick, so an applied revision takes
+   effect on the next tick with nothing to rewire).
 2. Works out which schedules are **due** since the previous tick.
 3. Resolves the **runner(s)** for each due fire.
 4. Claims the fire in the fleet's `fires` slot (at-most-once) and
@@ -30,21 +32,21 @@ path is **unchanged** — a scheduled turn runs executor → reviewer like
 any other, and the **full learning loop** (episodes, diary, reflection)
 runs on it. Periodic work is *more* worth learning from, not less.
 
-```
-Scheduler loop (every tick_seconds)
-   │  read live org via org_provider
-   ├── role.schedules ───────────────► run as that role
-   └── unit.schedules ──► target ──┬── each  → every direct agent member (default)
-                                   └── lead  → the unit's effective lead
-        │
-        ▼
-   claim the fire on the fleet (identity dedup)  ── already claimed? skip
-        │ claimed
-        ▼
-   publish TaskAssigned → crewlet.agent.{handle}.inbox  (+ ScheduledTaskFired)
-        │
-        ▼
-   normal executor → reviewer turn (with a hard wall-clock cap)
+```mermaid
+flowchart TD
+    T["Scheduler tick (every tick_seconds)<br/>reads the current organization"]
+    T --> RS["Role schedule"]
+    T --> US["Unit schedule"]
+    RS --> ROLE["Runs as that role"]
+    US -->|"target: each (default)"| EACH["Every direct agent member"]
+    US -->|"target: lead"| LEAD["The unit's effective lead"]
+    ROLE --> C
+    EACH --> C
+    LEAD --> C
+    C{"Claim the fire in the fleet's fires slot"}
+    C -->|"already claimed"| SKIP["Skip"]
+    C -->|"claimed"| P["Publish task_assigned to crewlet.agent.HANDLE.inbox<br/>and scheduled_task_fired"]
+    P --> TURN["An ordinary executor and reviewer turn<br/>under the schedule's wall-clock cap"]
 ```
 
 ---
@@ -75,8 +77,15 @@ schedules:
 | `timeout_seconds` | `180` | Hard wall-clock cap on the scheduled turn. |
 | `catchup` | `true` | Whether to fire a recent missed tick on (re)start. |
 
-Cron / timezone / target validity is checked at **config load**, so a bad
-expression fails `crewlet validate` rather than silently at 9am.
+Config load (and so `crewlet validate`) checks each schedule's shape: a
+non-empty `name` and `task`, a `cron` with exactly five fields, a
+`timezone` that loads, a non-negative `timeout_seconds`, a `target` of
+`each` or `lead`, and names unique within the owning role or unit. The
+cron **grammar** itself is parsed on every tick rather than at load, so an
+expression with five fields and an invalid value (`61 * * * *`) passes
+validation, and the schedule is skipped on every tick with
+`schedule_parse_failed` naming it. Watch for that line after adding a
+schedule.
 
 ### Cron syntax
 
@@ -133,7 +142,7 @@ Runners are resolved from the **org**, never from the agents running in
 the ticking process. A fire is addressed to the runner seat's inbox and
 consumed by whichever node owns that seat — which is rarely the node
 whose tick won the ledger claim. The seat's agent id comes from
-`org.Organization.AgentIDFor`, the same `uuid5` over `(org name, handle)`
+`org.Organization.AgentIDFor`, the same UUIDv5 over (company name, handle)
 every node derives, so the `TaskAssigned` a scheduler publishes names
 exactly the identity the turn will run under.
 
@@ -147,7 +156,7 @@ exactly the identity the turn will run under.
 | `target` | Runner(s) | Use it for |
 |----------|-----------|------------|
 | `each` (**default**) | every **direct** role of the unit | async standups, "everyone files their own status" |
-| `lead` | the unit's effective lead (`get_effective_lead`) | gather-and-post standups, weekly reports, "review overnight Jira for the team" |
+| `lead` | the unit's effective lead (`org.Organization.EffectiveLead`) | gather-and-post standups, weekly reports, "review overnight Jira for the team" |
 
 These are the only two unit-schedule targets. There is intentionally no
 "specific role" target: a static role pin is exactly what a **role
@@ -209,9 +218,10 @@ the retention sweep purges. It is the same split the token counter made
 when it moved to the shared `budgets` slot:
 what the fleet has to agree on is "may I start", and nothing more. Its
 `outcome` is `fired` or `skipped_catchup`; the downstream turn result
-(done / failed / timed-out) lives in the normal turn telemetry
-(`TaskStarted` / `TaskCompleted` / `TaskFailed`, `TurnGuardBreach`) keyed
-by the same trace.
+(done, failed or timed out) lives in the normal turn telemetry
+(`agent_turn_completed`, and `turn.guard_breach` when a guard fired) under
+the same trace, because every fire starts a trace of its own and the turn
+restores it.
 
 > A node with no database still schedules correctly — the guarantee lives
 > in the coordination store now, not in the node's file. What such a node
@@ -231,8 +241,9 @@ a schedule to opt out entirely.
 
 Each scheduled turn carries `timeout_seconds` (default 180), on the fire's own
 `task_assigned` payload. The turn engine checks it **between rounds**: a turn
-past the cap starts no further executor → reviewer round and ends `failed`
-with `error_kind: scheduled_timeout` on its `turn_completed` event, so a
+past the cap starts no further executor and reviewer round and ends `failed`,
+with a `turn.guard_breach` event of kind `scheduled_timeout` and
+`error_kind: scheduled_timeout` on its `agent_turn_completed` event, so a
 runaway loop can't monopolise the runner. A failing or timed-out run never
 blocks the next tick.
 
@@ -266,16 +277,16 @@ scheduling:
   catchup_max_seconds: 7200  # upper clamp on the catchup window
 ```
 
-The scheduler **auto-enables** when `enabled` is true, a database is
-configured, and the org actually declares at least one schedule — orgs
-with no schedules never spin up the tick loop.
+The scheduler **auto-enables** when `enabled` is not `false` and the org
+actually declares at least one schedule (see [When the loop runs](#when-the-loop-runs)):
+orgs with no schedules never spin up the tick loop.
 
 ### Thundering herd (jitter)
 
 When many schedules share a popular minute (everyone writes
-`0 9 * * *`), they all become due at once. The `ConcurrencyController`
-already queues the burst fairly, so this is a smoothing concern, not a
-correctness one. Set `scheduling.jitter_seconds` to a non-zero value to
+`0 9 * * *`), they all become due at once. Each node's turn concurrency
+gate (`node.max_concurrent`) already queues the burst, so this is a
+smoothing concern, not a correctness one. Set `scheduling.jitter_seconds` to a non-zero value to
 spread firing: each schedule gets a **deterministic** offset in
 `[0, jitter_seconds]` derived from its scope + name, so the 9am wave is
 fanned out across that window. The canonical fire minute still forms the
@@ -290,9 +301,12 @@ The engine arms the tick loop when three things hold, and re-checks all three
 on **every config apply**:
 
 1. `scheduling.enabled` is not `false`,
-2. this node has a store — the at-most-once claim ledger lives there, and a
-   scheduler with a process-local claim looks identical to a correct one until
-   there are two nodes, and then every company gets two standups,
+2. this node reaches the fleet's coordination store and the stream: the
+   at-most-once claim lives in the coordination store, because a scheduler
+   with a process-local claim looks identical to a correct one until there
+   are two nodes, and then every company gets two standups. The node's own
+   store is **not** a condition; without one the node only loses its local
+   dispatch history,
 3. the company actually declares at least one role or unit schedule.
 
 Because the third condition is re-evaluated live, adding the **first** schedule
@@ -301,8 +315,10 @@ disarms it and releases its fleet duty — neither needs a restart. The tick
 *knobs* (`tick_seconds`, the catchup clamps) are read when the loop is armed,
 so changing those lands at the next arm, like the retention sweep's horizons.
 
-Whether this node is ticking is visible on the engine as `SchedulerRunning`,
-and the `scheduler_armed` / `scheduler_disarmed` log lines say when it changed.
+Whether this node has the loop armed is visible on the engine as
+`Engine.SchedulerRunning`, and the `scheduler_armed` / `scheduler_disarmed`
+log lines say when it changed. An armed loop fires only on the node that
+holds the `scheduler` fleet duty.
 
 ---
 
@@ -311,9 +327,9 @@ and the `scheduler_armed` / `scheduler_disarmed` log lines say when it changed.
 - **Dashboard.** The **Schedules** screen lists every configured schedule —
   name, scope, cron, task, when it next fires and how it last went — and the
   recent dispatch ledger beside it, both sortable. It is backed by
-  `GET /schedules`, which serves the resolved schedule list (computed once at
-  startup), per-request next-run times, and the most recent `scheduled_runs`
-  rows. The next-fire times tick as you watch: every relative time in the
+  `GET /schedules`, which serves `schedules` (the resolved schedule list with
+  next-run times, projected from the current organization on each request)
+  and `recent_runs` (the 50 most recent `scheduled_runs` rows). The next-fire times tick as you watch: every relative time in the
   product reads one shared clock rather than being baked at render.
 - **`ScheduledTaskFired`** event (`crewlet.events.scheduled_task_fired`) is
   emitted per dispatch with `scope_type`, `scope_id`, `schedule_name`,
@@ -321,9 +337,11 @@ and the `scheduler_armed` / `scheduler_disarmed` log lines say when it changed.
   store.
 - The coordination store's `fires` slot is the at-most-once claim; the
   node's `scheduled_runs` table is its own dispatch history.
-- Structured logs: `scheduler_enabled`, `schedule_fired`,
-  `schedule_catchup_skipped`, `schedule_no_runners`,
-  `scheduled_task_timeout`.
+- Structured logs: `scheduler_armed`, `scheduler_disarmed`,
+  `schedule_fired`, `schedule_catchup_skipped`, `schedule_no_runners`,
+  `schedule_parse_failed`, `schedule_claim_failed` and
+  `schedule_publish_failed` (a claimed fire whose publish failed is not
+  retried, because the broker may already hold it).
 
 ---
 
