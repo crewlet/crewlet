@@ -76,7 +76,7 @@ const (
 	GroupByRowCeiling = 20_000
 )
 
-// Container is what a query is scoped to.
+// Scope is what a query is scoped to — the container a board is drawn over.
 type Scope struct {
 	// Workspace is the Everything level, and it is EXPLICIT — never
 	// implied by an absent container, because "everything" and "you did not
@@ -90,6 +90,10 @@ type Scope struct {
 // TagMode is how a tag list combines.
 type TagMode string
 
+// The three tag modes. `any` matches a task carrying at least one of the
+// named tags, `all` one carrying every one of them, and `none` one carrying
+// no member of the set — which is a filter over the ABSENT rather than a
+// negation of `any`, and is how "untagged work in this project" is asked.
 const (
 	TagAny  TagMode = "any"
 	TagAll  TagMode = "all"
@@ -105,6 +109,9 @@ type TagFilter struct {
 // NumOp is a comparison against a numeric column.
 type NumOp string
 
+// The numeric comparisons, spelled as words rather than as symbols because
+// they travel in a query string where `<` and `>` would have to be escaped by
+// every caller that builds one.
 const (
 	NumLT      NumOp = "lt"
 	NumLTE     NumOp = "lte"
@@ -137,12 +144,18 @@ type FieldFilter struct {
 type SubtaskMode string
 
 const (
-	// SubtasksCollapsed and SubtasksExpanded filter ROOT tasks and let
-	// their subtrees ride along unfiltered; SubtasksSeparate filters every
-	// task on its own.
+	// SubtasksCollapsed hides a subtree behind its root. It and
+	// SubtasksExpanded filter ROOT tasks and let their subtrees ride along
+	// unfiltered; SubtasksSeparate filters every task on its own.
 	SubtasksCollapsed SubtaskMode = "collapsed"
-	SubtasksExpanded  SubtaskMode = "expanded"
-	SubtasksSeparate  SubtaskMode = "separate"
+
+	// SubtasksExpanded shows a subtree under the root it rides along with,
+	// unfiltered — see [SubtasksCollapsed].
+	SubtasksExpanded SubtaskMode = "expanded"
+
+	// SubtasksSeparate files every task on its own row, each filtered in
+	// its own right.
+	SubtasksSeparate SubtaskMode = "separate"
 )
 
 // ShowClosed is how finished work is included.
@@ -159,6 +172,10 @@ type ShowClosed struct {
 // ArchivedMode is how archived work is included.
 type ArchivedMode string
 
+// The three archived modes, spelled `false` / `true` / `only` on the wire
+// because the parameter reads as a boolean to anybody who has not needed the
+// third answer yet — and `only` is what makes "what did we retire" a query
+// rather than a scan a caller filters afterwards.
 const (
 	ArchivedExclude ArchivedMode = "false"
 	ArchivedInclude ArchivedMode = "true"
@@ -333,12 +350,6 @@ type Query struct {
 	Cursor string
 }
 
-// ParseQuery reads one flat parameter map into one query.
-//
-// `now` and `loc` are ARGUMENTS rather than reads, because every relative date
-// resolves against the company's own clock and a parser that read a package
-// clock could not be tested at a boundary — and half the tokens in this grammar
-// are boundaries.
 // Params is the request's own parameters, as this parser reads them.
 //
 // DECLARED HERE, BY THE CONSUMER, and kept to the five methods the grammar
@@ -420,6 +431,12 @@ func checkKeys(p Params) error {
 	return nil
 }
 
+// ParseQuery reads one flat parameter map into one query.
+//
+// `now` and `loc` are ARGUMENTS rather than reads, because every relative date
+// resolves against the company's own clock and a parser that read a package
+// clock could not be tested at a boundary — and half the tokens in this
+// grammar are boundaries.
 func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
 	// FIRST, so a misspelling is named as unknown rather than reported by
 	// whichever parser its neighbour belongs to.
@@ -612,8 +629,8 @@ func (q *Query) parseTags(p Params) error {
 		case TagAny, TagAll, TagNone:
 			mode, value = TagMode(head), rest
 		default:
-			return fmt.Errorf("tracker: %q is not a tag mode — the three are "+
-				"any:, all: and none:", head)
+			return fmt.Errorf("tracker: %q is not a tag mode — the three "+
+				"are `any:`, `all:` and `none:`", head)
 		}
 	}
 	q.Tags = TagFilter{Mode: mode, Tags: csv(value)}
@@ -1183,6 +1200,13 @@ func (m MapParams) String(key string) string {
 	return fmt.Sprint(m[key])
 }
 
+// Int is one value as a number, or def when it is absent OR unparsable.
+//
+// A BAD VALUE READS AS ABSENT here, deliberately: this bag is filled from a
+// query string, and the parser above refuses an unknown KEY by name while a
+// malformed value for a known one is a caller's typo in a number. Every
+// numeric parameter this grammar takes has a documented default that is safe,
+// so falling back to it is a narrower answer rather than a wrong one.
 func (m MapParams) Int(key string, def int) int {
 	if raw := m.String(key); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil {
@@ -1192,6 +1216,9 @@ func (m MapParams) Int(key string, def int) int {
 	return def
 }
 
+// Bool is one value as a boolean, or def when it is absent or unparsable —
+// see [MapParams.Int] for why a malformed value falls back rather than
+// refusing.
 func (m MapParams) Bool(key string, def bool) bool {
 	if raw := m.String(key); raw != "" {
 		if b, err := strconv.ParseBool(raw); err == nil {
@@ -1201,6 +1228,11 @@ func (m MapParams) Bool(key string, def bool) bool {
 	return def
 }
 
+// Has reports whether a key was NAMED, however it was spelled.
+//
+// Separate from [MapParams.String] because "set to empty" and "not set" are
+// different requests: `assignee=` asks for the unassigned work and an absent
+// `assignee` asks for all of it.
 func (m MapParams) Has(key string) bool {
 	_, held := m[key]
 	return held

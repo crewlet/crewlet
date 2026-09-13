@@ -169,7 +169,14 @@ func (r *Reader) Views(ctx context.Context, q ViewQuery) (ViewListing, error) {
 		if err != nil {
 			return err
 		}
-		listing.Views = append(implicit, saved...)
+		// THE IMPLICIT ONES FIRST, then what somebody saved. Built into
+		// its own slice rather than appended onto `implicit`: appending
+		// to one slice and storing the result in another writes through
+		// whatever spare capacity the first has, which is a bug the day
+		// somebody reads `implicit` after this line.
+		listing.Views = make([]ViewRow, 0, len(implicit)+len(saved))
+		listing.Views = append(listing.Views, implicit...)
+		listing.Views = append(listing.Views, saved...)
 
 		position, applied, err := readCheckpoint(ctx, tx)
 		if err != nil {

@@ -336,7 +336,14 @@ func (s *ScopeSet) UnmarshalJSON(b []byte) error {
 	}
 	var terms []ScopeTerm
 	if err := json.Unmarshal(b, &terms); err != nil || len(terms) == 0 {
+		// A SCOPE THIS BUILD CANNOT DECODE WIDENS TO THE DOMAIN rather
+		// than failing the decode: a record from a newer peer carries a
+		// scope shape this build has never seen, and the whole point of
+		// the domain term is to be the answer that is never wrong — it
+		// defers against everything, which is slow and correct where a
+		// refused record is neither.
 		*s = ScopeSet{Terms: []ScopeTerm{{Kind: TermDomain}}}
+		//nolint:nilerr // Deliberate: the widened scope IS the answer.
 		return nil
 	}
 	*s = ScopeSet{Terms: terms}

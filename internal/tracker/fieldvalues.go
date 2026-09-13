@@ -228,6 +228,8 @@ func writeFieldValue(ctx context.Context, tx *sql.Tx, taskID string,
 		// the alternative — refusing the record — would let one
 		// malformed field value stop a task's every later change on
 		// every node in the fleet.
+		//nolint:nilerr // Deliberate: see the paragraph above — the
+		// applier salvages, because refusing here would wedge the task.
 		return 0, nil
 	}
 	if len(values) > MaxFieldValueSeq {

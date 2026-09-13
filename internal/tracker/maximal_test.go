@@ -27,7 +27,7 @@ func TestTheMaximalCommitFitsItsDesignMaximum(t *testing.T) {
 	// Control characters escape as \u00XX — six bytes for one — which is
 	// the worst case a body can reach and the multiplier the bound is
 	// derived from.
-	escaping := strings.Repeat("", tracker.MaxBody)
+	escaping := strings.Repeat("\x01", tracker.MaxBody)
 
 	fields := make(map[string]json.RawMessage, tracker.MaxFieldValues)
 	for i := range tracker.MaxFieldValues {

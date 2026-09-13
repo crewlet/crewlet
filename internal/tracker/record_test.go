@@ -2,6 +2,7 @@ package tracker_test
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"slices"
 	"strings"
@@ -60,11 +61,7 @@ func TestAnUnknownVersionStillYieldsAnEnvelope(t *testing.T) {
 }
 
 func asFuture(err error, target **tracker.ErrFutureVersion) bool {
-	e, ok := err.(*tracker.ErrFutureVersion)
-	if ok {
-		*target = e
-	}
-	return ok
+	return errors.As(err, target)
 }
 
 // A RECORD WITHOUT A VERSION IS REFUSED, and that is not the same refusal.

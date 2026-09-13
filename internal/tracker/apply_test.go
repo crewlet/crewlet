@@ -3,6 +3,7 @@ package tracker_test
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -271,11 +272,7 @@ func TestTheEvictionGateDropsOnlyWhatFollowsIt(t *testing.T) {
 }
 
 func asGate(err error, target **gateError) bool {
-	e, ok := err.(*gateError)
-	if ok {
-		*target = e
-	}
-	return ok
+	return errors.As(err, target)
 }
 
 // A PURGE'S MARKER IS PERMANENT, AND EVERY LATER RECORD ABOUT THE TASK IS

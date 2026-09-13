@@ -1434,6 +1434,7 @@ func (w *Writer) admit(ctx context.Context, rows int) (func(), error) {
 		// FAIL OPEN. See the doc above: the log is correct with two
 		// bulks in flight and merely slow, and refusing here on an
 		// unknown is a seat told a colleague is editing when nobody is.
+		//nolint:nilerr // Deliberate fail-open: see the paragraph above.
 		return func() {}, nil
 	case lease == nil:
 		remaining := time.Duration(0)

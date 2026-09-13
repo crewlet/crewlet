@@ -68,7 +68,7 @@ func purgeInbox(ctx context.Context, db *store.DB, cutoff time.Time) (int64, err
 	if err != nil {
 		return 0, fmt.Errorf("tracker: take the writer to sweep the inbox: %w", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	var swept int64
 	err = w.Tx(ctx, func(tx *sql.Tx) error {

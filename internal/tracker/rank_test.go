@@ -55,7 +55,7 @@ func TestAMintedKeyLandsStrictlyBetweenItsNeighbours(t *testing.T) {
 func TestTheHeadOrdersAcrossItsOwnBoundaries(t *testing.T) {
 	t.Parallel()
 	for _, pair := range [][2]string{{"Zz", "a0"}, {"azz", "b100"}, {"A0", "Zz"}} {
-		if !(pair[0] < pair[1]) {
+		if pair[0] >= pair[1] {
 			t.Errorf("%q does not sort below %q, so the magnitude head is not "+
 				"doing the one thing it exists for", pair[0], pair[1])
 		}
@@ -399,7 +399,7 @@ func TestRespreadKeysAreShortOrderedAndBounded(t *testing.T) {
 					"under — the walk would immediately need another",
 					n, len(key), tracker.RankRenormaliseAt)
 			}
-			if i > 0 && !(keys[i-1] < key) {
+			if i > 0 && keys[i-1] >= key {
 				t.Fatalf("re-spreading %d tasks minted %q at %d and %q at %d, "+
 					"which do not ascend — two tasks would share a position "+
 					"and the board's order would be undefined between them",

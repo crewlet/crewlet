@@ -387,7 +387,7 @@ func TagSlug(raw string) string {
 // TWO, which is the distance a typo travels: a transposition and a doubled
 // letter are one edit each, and `api`/`apis` — the pair the advisory rule
 // exists for — is one. Three would put every three-letter tag within reach of
-// every other, and one would miss `recieved` beside `received`.
+// every other, and one would miss `received` beside `received`.
 const NearTagDistance = 2
 
 // NearTagsNamed is how many a warning lists.

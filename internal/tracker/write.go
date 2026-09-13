@@ -423,7 +423,7 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 					"removed by %s at %s; restore it first",
 					id, current.Removed.By, current.Removed.At.Format(time.RFC3339))
 			}
-			if ifMatch != 0 && uint64(current.Version) != ifMatch {
+			if ifMatch != 0 && current.Version != ifMatch {
 				return statelog.Decision{}, fmt.Errorf("%w: task %s is at "+
 					"version %d and the edit was conditioned on %d — re-read "+
 					"it and decide again rather than re-sending this patch",

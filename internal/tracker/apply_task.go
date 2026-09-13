@@ -29,7 +29,7 @@ import (
 // applyTask writes one task record and everything derived from it.
 func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
 	id := c.subject().ID
-	if OpKind(c.record.Op) == OpPurge {
+	if c.record.Op == OpPurge {
 		return a.purgeTask(ctx, tx, c)
 	}
 
@@ -90,7 +90,7 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
-	children, err := a.explodeTask(ctx, tx, next, c)
+	children, err := a.explodeTask(ctx, tx, next)
 	if err != nil {
 		return 0, err
 	}
@@ -392,7 +392,7 @@ func readTask(ctx context.Context, tx *sql.Tx, id string) (Task, bool, error) {
 // end at a complete document, which is what makes a replay's result
 // independent of which records a node happened to have already.
 func mergeTask(current Task, held bool, c applyContext) (Task, error) {
-	switch OpKind(c.record.Op) {
+	switch c.record.Op {
 	case OpCreate:
 		var created Task
 		if err := decodePayload(c.record.Mutation, &created); err != nil {
@@ -633,8 +633,8 @@ func upsertTask(ctx context.Context, tx *sql.Tx, task Task, document []byte,
 // touched collection WHOLE: a delete-then-insert of one task's tags is a
 // handful of rows and is a pure function of the document, where a diff would
 // depend on what this node happened to hold.
-func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx, task Task,
-	c applyContext) (int, error) {
+func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
+	task Task) (int, error) {
 
 	written := 0
 	for _, child := range []struct {
@@ -1528,13 +1528,6 @@ func (a *Applier) explodeGoal(ctx context.Context, tx *sql.Tx, id string,
 	return written, nil
 }
 
-func nullableRaw(raw json.RawMessage) any {
-	if len(raw) == 0 {
-		return nil
-	}
-	return string(raw)
-}
-
 // writeThread writes the rows a record's own payload carries, as against the
 // collections the DOCUMENT carries.
 //
@@ -1562,7 +1555,7 @@ func (a *Applier) writeThread(ctx context.Context, tx *sql.Tx, task Task,
 	}
 	written += items
 
-	if OpKind(c.record.Op) != OpPatch {
+	if c.record.Op != OpPatch {
 		// ONLY A PATCH CARRIES ONE. A create carries the task and a
 		// tombstone carries a stamp, and decoding either as a patch to
 		// look for a comment would be reading a shape that is not there.

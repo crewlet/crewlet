@@ -467,7 +467,7 @@ func (d *duty) clearProbe(ctx context.Context, project string) error {
 		return fmt.Errorf("tracker: take the writer to clear %s's duplicate "+
 			"flag: %w", project, err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 	return w.Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
 			UPDATE tracker_projects SET rank_duplicate_pending = 0

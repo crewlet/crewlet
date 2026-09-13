@@ -398,8 +398,17 @@ func fieldClause(filter FieldFilter, field resolvedField) (string, []any, error)
 		if err != nil {
 			return "", nil, err
 		}
-		all := strings.Replace(clause, "SELECT v.task_id", "SELECT v.task_id", 1)
-		all = strings.TrimSuffix(all, ")") +
+		// THE GROUPING IS APPENDED TO THE SUBQUERY, which is why the
+		// closing paren comes off first: `inner` returns a complete
+		// `task_id IN (SELECT v.task_id … )` and what makes it a COUNT
+		// is a GROUP BY and a HAVING inside those same parentheses.
+		//
+		// A `strings.Replace` of the SELECT list with itself stood here,
+		// left over from a shape that widened it — a no-op that read as
+		// though the projection had to change for the count to work. It
+		// does not: COUNT(DISTINCT …) in the HAVING reads the column
+		// directly, so the select list is the task id either way.
+		all := strings.TrimSuffix(clause, ")") +
 			" GROUP BY v.task_id HAVING COUNT(DISTINCT " + column + ") = ?)"
 		args = append(args, len(values))
 		if filter.Op == FieldOpNotAll {

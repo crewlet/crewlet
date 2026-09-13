@@ -223,7 +223,7 @@ func (w *Writer) WritePriorities(ctx context.Context, opID, handle string,
 			// next by somebody above you is an instruction, and the one
 			// Addressed wake of the four — a seat takes it up or says
 			// why it cannot.
-			return w.prioritisedWake(ctx, tx, handle, priorities, at)
+			return w.prioritisedWake(ctx, tx, handle, priorities)
 		})
 }
 
@@ -238,7 +238,7 @@ func (w *Writer) WritePriorities(ctx context.Context, opID, handle string,
 // AN EMPTY LIST WAKES NOBODY. A lead clearing somebody's priorities is taking
 // an instruction back rather than giving one, and there is no task to name.
 func (w *Writer) prioritisedWake(ctx context.Context, tx *sql.Tx, handle string,
-	priorities []string, at time.Time) (*Notify, error) {
+	priorities []string) (*Notify, error) {
 
 	if len(priorities) == 0 {
 		return nil, nil
