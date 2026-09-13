@@ -9,20 +9,35 @@ import (
 	"testing"
 )
 
+// resolvedTempDir is a fresh temp directory under its RESOLVED name.
+//
+// SafeJoin returns the path it checked, which is the resolved one, so a test
+// comparing against the name t.TempDir hands out compares against a different
+// string wherever the temp directory runs through a symlink. macOS is the
+// ordinary case: $TMPDIR lives under /var, which is a link to /private/var.
+func resolvedTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolving the temp directory: %v", err)
+	}
+	return dir
+}
+
 func TestSafeJoinAcceptsPathsInsideTheRoot(t *testing.T) {
-	root := t.TempDir()
-	for _, rel := range []string{
-		".claude/.credentials.json",
-		"workspace/repo/file.txt",
-		"a/b/../c",
-		"./nested/file",
+	root := resolvedTempDir(t)
+	for rel, want := range map[string]string{
+		".claude/.credentials.json": ".claude/.credentials.json",
+		"workspace/repo/file.txt":   "workspace/repo/file.txt",
+		"a/b/../c":                  "a/c",
+		"./nested/file":             "nested/file",
 	} {
 		got, err := SafeJoin(root, rel)
 		if err != nil {
 			t.Fatalf("SafeJoin(%q): %v", rel, err)
 		}
-		if !strings.HasPrefix(got, root) {
-			t.Fatalf("SafeJoin(%q) = %q, want it under %q", rel, got, root)
+		if want := filepath.Join(root, filepath.FromSlash(want)); got != want {
+			t.Fatalf("SafeJoin(%q) = %q, want %q", rel, got, want)
 		}
 	}
 }
@@ -67,7 +82,7 @@ func TestSafeJoinAllowsASymlinkThatStaysInside(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlinks need a privilege on Windows")
 	}
-	root := t.TempDir()
+	root := resolvedTempDir(t)
 	inner := filepath.Join(root, "real")
 	if err := os.MkdirAll(inner, DirMode); err != nil {
 		t.Fatalf("mkdir: %v", err)

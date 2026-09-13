@@ -96,6 +96,14 @@ var ErrEscape = errors.New("hostbox: path escapes its root")
 // refuse every create, and a purely lexical Clean would miss a symlinked
 // ancestor entirely.
 //
+// The result is the RESOLVED path, with the symlinks in the root and in every
+// existing ancestor already followed, because that is the string the
+// containment check was made against: what the caller writes to is visibly
+// under the resolved root, rather than a join whose meaning depends on links
+// being read again. A caller comparing the result with the root it passed
+// compares against that root's resolved form, which on macOS differs for any
+// directory under /var or /tmp.
+//
 // The root itself is not a valid result: these callers always name a file
 // inside the box, so a rel that resolves back to the root is an escape that
 // happened to stop at the boundary.
