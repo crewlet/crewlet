@@ -1568,7 +1568,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 
 	log.InfoContext(ctx, "api_listening", "addr", listener.Addr().String(),
 		"anonymous_read", app.Guard().AnonymousRead(),
-		"tokens", app.Guard().Tokens())
+		"tokens", app.Guard().Tokens(),
+		// THE BROWSER POSTURE BESIDE THE CREDENTIAL ONE. Zero is
+		// same-origin only, which is what the dashboard this process
+		// serves needs and what every other site gets.
+		"cross_origin_sites", app.CORS().Origins())
 	if app.Guard().AnonymousRead() && !auth.BindIsLoopback(boot.API.Host) {
 		// Stated rather than assumed. The read surface carries LLM
 		// transcripts, diary entries and the whole event stream, and on a

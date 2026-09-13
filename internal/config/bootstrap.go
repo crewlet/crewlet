@@ -1310,12 +1310,62 @@ func (a *APIAuth) validate(path string) error {
 	// Checked HERE rather than at API startup, so `crewlet validate`
 	// catches it on a laptop rather than a deployment catching it at
 	// bind time.
+	for i, origin := range a.AllowedOrigins {
+		p.wrap(checkOrigin(idx(at(path, "allowed_origins"), i), origin))
+	}
+
 	if len(a.Tokens) == 0 && !a.AllowAnonymousRead {
 		p.add(at(path, "tokens"), ErrMissing,
 			"allow_anonymous_read is false and no tokens are configured, so "+
 				"every route is guarded by a token that does not exist and "+
 				"nothing is reachable. Configure at least one token, or leave "+
 				"allow_anonymous_read at its default to serve reads without one")
+	}
+	return p.err()
+}
+
+// checkOrigin refuses an origin a browser will never match.
+//
+// # Why each of these is refused rather than accepted and ignored
+//
+// A CORS allow-list is compared against the browser's `Origin` header
+// EXACTLY, and the header is always `scheme://host[:port]` with no path and
+// no trailing slash. Every shape below is a value an operator plausibly
+// writes and no browser can ever equal — so accepting it produces an
+// allow-list that looks configured, a fetch that fails in a console the
+// engine never sees, and nothing anywhere saying why.
+//
+// `*` is the sharpest of them, and it is refused rather than honoured: it was
+// this field's own previous default, and what it does is let any site a
+// logged-in operator visits read every unauthenticated endpoint — which on
+// this API means LLM transcripts, diary entries and the whole event stream.
+func checkOrigin(path, origin string) error {
+	var p problems
+	trimmed := strings.TrimSpace(origin)
+	switch {
+	case trimmed == "":
+		p.add(path, ErrMissing, "an empty origin matches nothing: remove the "+
+			"entry, or name a site as scheme://host[:port]")
+	case trimmed == "*":
+		p.add(path, ErrShape, "%q is not an origin and is refused rather "+
+			"than honoured: it would let any site a logged-in operator "+
+			"visits read this API — which carries LLM transcripts, diary "+
+			"entries and the whole event stream. Name each site, as "+
+			"https://ops.example.com", trimmed)
+	case !strings.HasPrefix(trimmed, "http://") && !strings.HasPrefix(trimmed, "https://"):
+		p.add(path, ErrShape, "%q has no scheme: a browser's Origin header "+
+			"is always scheme://host[:port], so this matches nothing. Write "+
+			"https://%s", trimmed, trimmed)
+	case strings.HasSuffix(trimmed, "/"):
+		p.add(path, ErrShape, "%q ends in a slash: a browser's Origin "+
+			"header carries no path, so this matches nothing. Write %q",
+			trimmed, strings.TrimRight(trimmed, "/"))
+	default:
+		if rest := strings.TrimPrefix(strings.TrimPrefix(trimmed, "https://"), "http://"); strings.Contains(rest, "/") {
+			p.add(path, ErrShape, "%q carries a path: a browser's Origin "+
+				"header is the scheme, host and port alone, so this matches "+
+				"nothing", trimmed)
+		}
 	}
 	return p.err()
 }

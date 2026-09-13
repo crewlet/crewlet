@@ -31,6 +31,7 @@ import (
 // App is the HTTP surface: the dashboard, the live socket and the REST routes.
 type App struct {
 	guard  *auth.Guard
+	cors   *auth.CORS
 	state  *livestate.LiveState
 	stream *stream.Service
 
@@ -356,7 +357,13 @@ func New(opts Options) *App {
 	// reads included — the list of which credentials a company has NOT
 	// configured is worth as much to an attacker as the ones it has.
 	opts.Setup.Routes(mux)
-	a.handler = a.guard.Middleware(mux)
+	// THE BROWSER POSTURE WRAPS THE CREDENTIAL ONE, because a preflight
+	// carries no credential: the browser sends it itself, before it will
+	// attach an Authorization header to anything. Inside the guard every
+	// preflight to a guarded route answers 401 and the real request is
+	// never sent. See [auth.CORS.Middleware].
+	a.cors = auth.NewCORS(opts.Bootstrap)
+	a.handler = a.cors.Middleware(a.guard.Middleware(mux))
 	return a
 }
 
@@ -441,6 +448,10 @@ func (a *App) State() *livestate.LiveState { return a.state }
 
 // Guard exposes the auth posture, for the startup line that states it.
 func (a *App) Guard() *auth.Guard { return a.guard }
+
+// CORS returns the browser-origin posture, for the startup line that states
+// it beside the anonymous-read one.
+func (a *App) CORS() *auth.CORS { return a.cors }
 
 // Configured reports whether a company revision is active.
 //
