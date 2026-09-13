@@ -21,6 +21,14 @@
  *
  * A check adds `dry_run=true` and no summary (the engine lifts one out but
  * does not require it on a dry run); a save adds `_summary` to the body.
+ *
+ * THE MISSING SUMMARY IS WHAT KEEPS A CHECK A CHECK on a node that predates
+ * dry runs. Such a build ignores a query parameter it does not know, so it
+ * would take `?dry_run=true` for a real write, and it refuses every write
+ * without an audit summary before doing anything else (`400
+ * summary_required`). A check that carried a summary, in the body or the
+ * `X-Summary` header, would be stored and activated by that node on every
+ * edit during a rolling upgrade.
  */
 
 import type { CompanyDocument } from "~/protocol/index.ts";
