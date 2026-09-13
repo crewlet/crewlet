@@ -163,12 +163,14 @@ meets their company first and the engine last.
 | **Company** | People | `#/people?group=&q=` | every seat and what it is doing — grouped by state, by unit, or flat |
 | | Org chart | `#/org?lens=chart\|directory\|charter` | the hierarchy, the directory, and the company's own mission, vision and policies |
 | | *a seat* | `#/seats/{handle}?tab=` | overview · model activity · memory · cost · access |
-| **Work** | Work board | `#/work?project=&status=&scope=&q=` | `work_items` — the company's own tracker, derived on this node from the fleet's own ordered log. Read-only: work is filed and moved by the seats themselves. The answer's coverage half is rendered, not swallowed — `read_level` as a badge, and `complete: false` as a banner above the rows naming what the node could not account for |
-| | *an item* | `#/work/{key\|id}` | `work_item` — description, thread, history and links |
-| | *the project strip* | `#/work?project=ENG` | `work_projects` — the COMPANY's projects, so the filter offers every one rather than only those on the page — plus `work_project` for the chosen one: its counts, its lead, the unit that owns it and the sprint that is running. A unit the chart no longer has is a BANNER rather than a blank, because it is what leaves a project's work routed to nobody |
+| **Work** | Tracker | `#/work?project=&view=&item=&…` | `work_items` — the company's own tracker, derived on this node from the fleet's own ordered log. A WORKSPACE rather than a table: a project rail, a head of facts, and five views over one answer — **List**, **Board**, **Calendar**, **Sprint** and **Backlog** — which differ only in how the rows are shaped and never in what was asked for. Read-only: work is filed and moved by the seats themselves. The answer's coverage half is rendered, not swallowed — `read_level` as a badge, and `complete: false` as a banner above the rows naming what the node could not account for |
+| | *a view* | `#/work?project=ENG&view=board&group_by=assignee` | the same `work_items` answer, grouped by the server on the axis the screen names. `view` and `item` are SECTIONS (they push history); every filter REPLACES, so a back gesture leaves a filter run rather than stepping back through each keystroke |
+| | *a peek* | `#/work?project=ENG&item=ENG-2` | `work_item` beside the rows, so reading one item never loses the board it was found on. A plain click peeks; ⌘-click and middle-click follow the anchor to the item's own page, because a card that cannot be opened in a tab is not a link |
+| | *an item* | `#/work/{key\|id}` | `work_item` — description, thread, history, links, sub-items, and every property the task carries: a custom field renders under its declared NAME with its option's own word, never the stored uuid |
+| | *the project rail* | `#/work?project=ENG` | `work_projects` — the COMPANY's projects, so the rail offers every one rather than only those on the page — plus `work_project` for the chosen one: its counts as a census bar, its lead resolved to the NAME that seat is called, the unit that owns it and the sprint that is running as a meter — and where none is, whether the project is BETWEEN sprints or does not run them at all, which are two different facts one sentence used to cover. A unit the chart no longer has is a BANNER rather than a blank, because it is what leaves a project's work routed to nobody |
 | | *the feed* | `#/work?project=ENG` | `work_activity` — what HAPPENED in the container, which is a different question from what is on the board: the feed is ordered by the log rather than by anything the rows sort on, so a change that moved nothing on screen is still visible. A change is rendered from its DELTAS (`status: todo → in_progress`), falling back to its excerpt and then to its kind — a row with neither is still a real commit, and rendering it blank would read as a bug |
-| | My work | `#/work/me` | `work_my_work` — one person's seven claims. NOT a nav entry, because route dispatch is a switch on the first path segment and `work` already owns it; it is reached from the Work board's own header |
-| **Sprints** | Sprint report | `#/sprints?project=` | `work_sprints` — what each sprint took on, what arrived after it started, what was pulled out and what shipped inside its own window, per sprint and per person in the project's own measure. An undeclared capacity renders as an em-dash rather than a zero, which would put every assignee permanently over; a velocity with no closed sprint behind it renders as "—" for the same reason |
+| | My work | `#/work/me` | `work_my_work` — one person's seven claims, each block drawn with the SAME row the tracker uses. NOT a nav entry, because route dispatch is a switch on the first path segment and `work` already owns it; it is reached from the tracker's own header |
+| **Sprints** | Sprint report | `#/sprints?project=` | `work_sprints` — what each sprint took on, what arrived after it started, what was pulled out and what shipped inside its own window, per sprint and per person in the project's own measure, plus a **velocity** bar list in sprint order and a **burndown** (`work_burndown`) over the running one. An undeclared capacity renders as an em-dash rather than a zero, which would put every assignee permanently over; a velocity with no closed sprint behind it renders as "—" for the same reason |
 | | Coding runs | `#/runs?run=` | the live `sandboxes` plus the durable `sandbox_runs` — including runs whose box has been reclaimed |
 | | Agent-to-agent | `#/conversations` | `a2a_channels` — who asked whom, how many messages, and when |
 | | Schedules | `#/schedules` | `schedules` — what fires, when it next fires, how it last went |
@@ -918,6 +920,51 @@ own two phases, and both the "N phases" badge and the token total disagreed
 with the feed's card for the same turn. The token tile now counts the turn's
 own phases and reports worker spend beside it, which is what the engine's own
 `total_tokens` / `subagent_tokens` split means.
+
+---
+
+### The tracker is a workspace, not a table
+
+Everything above about rows is why the tracker's own screen is not one. It
+began as a flat filter row over a plain table beside a "board" that was three
+`<div>`s, and it read as a dump of a database rather than as the place a
+company does its work. What replaced it is a WORKSPACE, and every part of it
+is one of the rules on this page applied to a tracker.
+
+- **The project is the rail, not a dropdown.** A company's projects are the
+  first division of its work, so they are always on screen with their open
+  counts beside them, and choosing one is a SECTION change rather than a
+  filter. `All work` is a real destination above them, because "what is the
+  whole company doing" is a question somebody asks.
+- **Five views over ONE answer.** List, Board, Calendar, Sprint and Backlog
+  differ in how rows are SHAPED and never in what was asked for — the board's
+  columns are the server's own grouping, and the calendar buckets rows the
+  server already returned. A view that fetched differently would be a second
+  idea of what the filters mean.
+- **A row is a table, and its columns belong to the LIST.** Every row was its
+  own grid container once, so `auto` tracks sized against that row's content
+  alone and a status badge landed at a different x on every line. The tracks
+  are declared on the list and each row takes them with `subgrid`, so a
+  column is as wide as the widest value in it. The row also keeps a CELL for
+  a value it does not have: an undated, unassigned, unestimated task lines
+  its status up with the task above it rather than pulling every later
+  column one place left.
+- **Nothing is drawn for the default.** `normal` priority is what a task gets
+  when nobody said, so it is most of a board — a mark on every card is a mark
+  that says nothing, and it buries the four that ARE urgent. A due date drops
+  the year it shares with the reader for the same reason: one year repeated
+  down forty rows is how the one row due next year goes unnoticed.
+- **Reading an item does not lose the board.** A plain click opens a PEEK
+  beside the rows; ⌘-click and middle-click follow the anchor to the item's
+  own page, because a card that cannot be opened in a tab is not a link.
+- **The charts answer the questions the numbers cannot.** A census bar says
+  the shape of a project where three counts say only their sizes; a velocity
+  bar list is read in SPRINT order, never sorted by size, because the
+  question is a trend; a burndown draws remaining against an ideal, where
+  remaining is an OPEN STATUS GROUP rather than "not delivered" — counting
+  cancelled work as remaining makes a descoped sprint run flat. All of them
+  wear STATUS tones rather than the categorical hues, so one fact is never
+  two colours on one screen.
 
 ---
 

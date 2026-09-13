@@ -353,7 +353,7 @@ each phase listing the rounds it took, the tools each round called, and the
 prompts the model actually saw. A phase that finishes updates in place rather
 than moving, so you can read one while the next is running.
 
-Follow the turn to the **Work board** and **Pages**. Both are the engine's own
+Follow the turn to the **Tracker** and **Pages**. Both are the engine's own
 — `tracker.backend` and `knowledge.backend` default to `native`, so your
 company has a tracker and a wiki from its first minute with nothing to set up.
 A seat files with `create_work_item` and writes with `write_page`; a board row

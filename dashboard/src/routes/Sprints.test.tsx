@@ -11,7 +11,8 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { SprintPanel } from "./Sprints.tsx";
-import { describeChange, ProjectOverview } from "./Work.tsx";
+import { describeChange } from "~/lib/work.ts";
+import { ProjectHead } from "./Work.tsx";
 import type { WorkProjectDetail, WorkSprintRow } from "~/protocol/index.ts";
 
 afterEach(cleanup);
@@ -38,9 +39,10 @@ const sprint = (over: Partial<WorkSprintRow> = {}): WorkSprintRow => ({
   ...over,
 });
 
-// AN UNDECLARED CAPACITY IS A DASH, never a zero. A policy that names nobody
-// would otherwise render every assignee as over capacity, which is a finding
-// a lead reorganises a sprint around.
+// AN UNDECLARED CAPACITY IS A DASH, never a zero and never a bar. A policy
+// that names nobody would otherwise render every assignee as over capacity,
+// which is a finding a lead reorganises a sprint around — and a bar with no
+// maximum is a claim about a limit nobody set.
 test("an assignee with no declared capacity renders an em-dash", () => {
   render(
     <SprintPanel
@@ -50,6 +52,7 @@ test("an assignee with no declared capacity renders an em-dash", () => {
     />,
   );
   expect(screen.getByText("—")).toBeTruthy();
+  expect(document.querySelector(".table .meter-fill")).toBeNull();
 });
 
 test("a declared capacity somebody is over is marked as such", () => {
@@ -71,12 +74,18 @@ test("a declared capacity somebody is over is marked as such", () => {
       })}
     />,
   );
-  // THE BADGE'S TONE IS THE SIGNAL. The number alone says nothing about
-  // whether it has been exceeded, and a capacity column that renders the
-  // same either way is a column nobody reads.
-  const badge = [...container.querySelectorAll(".badge")].find((el) => el.textContent === "21");
-  expect(badge).toBeTruthy();
-  expect(badge?.className).toMatch(/caution/);
+  // THE BAR'S TONE IS THE SIGNAL. The number alone says nothing about whether
+  // it has been exceeded, and a capacity column that renders the same either
+  // way is a column nobody reads. It is the SERVER's verdict rather than a
+  // comparison of our own, for the reason the overdue flag is: two places
+  // deriving one predicate is how one screen says over and another does not.
+  // INSIDE THE TABLE, because the panel now carries a delivery bar of its
+  // own: a selector that took the first meter on the screen would be
+  // asserting the sprint's own progress and calling it a capacity.
+  const fill = container.querySelector(".table .meter-fill");
+  expect(fill).toBeTruthy();
+  expect(fill?.getAttribute("data-tone")).toBe("critical");
+  expect(screen.getByText("8 / 21")).toBeTruthy();
   expect(screen.queryByText("—")).toBeNull();
 });
 
@@ -134,12 +143,12 @@ const project = (over: Partial<WorkProjectDetail> = {}): WorkProjectDetail => ({
 // a project's work routed to nobody, and a screen that renders it as an
 // ordinary unit hides exactly that.
 test("a project orphaned from the chart says so", () => {
-  render(<ProjectOverview detail={project({ unit: { key: "dissolved", resolved: false } })} />);
+  render(<ProjectHead detail={project({ unit: { key: "dissolved", resolved: false } })} />);
   expect(screen.getByText(/does not have/)).toBeTruthy();
 });
 
 test("a project whose unit resolves says nothing about it", () => {
-  render(<ProjectOverview detail={project()} />);
+  render(<ProjectHead detail={project()} />);
   expect(screen.queryByText(/does not have/)).toBeNull();
 });
 
@@ -148,7 +157,7 @@ test("a project whose unit resolves says nothing about it", () => {
 // twice as slow as it is.
 test("the overview's sprint figure says which unit it is in", () => {
   render(
-    <ProjectOverview
+    <ProjectHead
       detail={project({
         sprints: {
           active: {
@@ -167,18 +176,23 @@ test("the overview's sprint figure says which unit it is in", () => {
   expect(screen.queryByText(/points/)).toBeNull();
 });
 
-// A PROJECT THAT RUNS NO SPRINTS SAYS SO rather than rendering an empty one:
-// "this team does not work in sprints" and "this team has none right now" are
-// different facts.
-test("a project with no sprints renders none rather than a zeroed one", () => {
-  render(<ProjectOverview detail={project()} />);
-  expect(screen.getByText("this project runs none")).toBeTruthy();
+// A PROJECT THAT RUNS NO SPRINTS SAYS SO rather than rendering an empty one,
+// AND THE TWO REASONS READ DIFFERENTLY: "this team does not work in sprints"
+// and "this team is between sprints" send a reader to different places, and
+// one sentence over both told them nothing. The answer distinguishes them —
+// a project that runs sprints carries a POLICY whether or not one is open.
+test("a project with no sprints says which kind of none it is", () => {
+  render(<ProjectHead detail={project()} />);
+  expect(screen.getByText("not used")).toBeTruthy();
+  cleanup();
+  render(<ProjectHead detail={project({ sprint_policy: { length_days: 14 } })} />);
+  expect(screen.getByText("none running")).toBeTruthy();
 });
 
 // AND NOTHING AT ALL WHILE THE READ IS IN FLIGHT. An overview drawn with
 // zeroes is a project that looks unstaffed, unled and out of sprint.
 test("no overview is drawn before the answer arrives", () => {
-  const { container } = render(<ProjectOverview detail={null} />);
+  const { container } = render(<ProjectHead detail={null} />);
   expect(container.textContent).toBe("");
 });
 

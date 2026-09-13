@@ -1025,6 +1025,11 @@ export interface WorkSummary {
   key: string;
   project: string;
   title: string;
+  /** The slug a card is drawn under. On the ROW rather than only on the
+   *  document, because a board draws an icon per card and a column per type,
+   *  and a row that could be GROUPED BY a value it did not CARRY rendered
+   *  every card as the same kind of thing. */
+  type: WorkType;
   status: WorkStatus;
   status_group?: WorkStatusGroup;
   priority?: WorkPriority;
@@ -1335,6 +1340,51 @@ export interface WorkProjectDetail extends WorkProjectRow {
   incomplete?: WorkIncomplete;
 }
 
+/** One instant of a sprint's burndown. */
+export interface WorkBurndownPoint {
+  at: string;
+  /** Everything the sprint was carrying then — delivered, abandoned and
+   *  outstanding alike. Without it the remaining line cannot tell "we
+   *  finished eight points" from "somebody added eight and we finished
+   *  sixteen". */
+  scope: number;
+  /** The part still to do: a task whose status then was in an OPEN group.
+   *  NOT the negation of delivery — `cancelled` is finished and undelivered,
+   *  so a line written that way keeps counting work the team dropped. */
+  remaining: number;
+  /** The part that had landed. `cancelled` is in neither this nor
+   *  `remaining`, so the gap between their sum and `scope` IS the abandoned
+   *  work. */
+  delivered: number;
+}
+
+/** One sprint's day-by-day series. */
+export interface WorkBurndown {
+  project: string;
+  sprint: number;
+  name?: string;
+  measure: "points" | "estimate_min";
+  start_at: string;
+  end_at: string;
+  /** From the start to whichever of the sprint's end and now comes first: a
+   *  running sprint draws to today rather than flat into its own future. */
+  points: WorkBurndownPoint[];
+  /** The scope at the start, which is the height the reference line falls
+   *  from. The line itself is the renderer's — two points and a straight
+   *  edge is not something to send over a wire. */
+  ideal: number;
+  tasks: number;
+  /** How many of them carry no value in the measure — the honesty pair the
+   *  sprint figures already carry. */
+  unestimated: number;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
 export interface WorkSprintsAnswer {
   project: string;
   sprints: WorkSprintRow[];
@@ -1424,12 +1474,39 @@ export interface WorkTypeDef {
 }
 
 /** One custom-field declaration. */
+/** One choice on a `dropdown`, `labels` or `relationship` field.
+ *
+ *  A VALUE STORES THE ID, so rendering one means looking its name up here —
+ *  which is the whole reason the declaration travels beside the value. */
+export interface WorkFieldOption {
+  id: string;
+  slug: string;
+  name: string;
+  color?: string;
+  order?: number;
+  archived?: boolean;
+}
+
+/** What a field's type lets it be configured with. */
+export interface WorkFieldConfig {
+  options?: WorkFieldOption[];
+  unit?: string;
+  precision?: number;
+  min?: number;
+  max?: number;
+  /** A `date` field that holds a time of day as well as a day. */
+  time?: boolean;
+  progress?: string;
+  multi?: boolean;
+}
+
 export interface WorkFieldDef {
   id: string;
   slug: string;
   name: string;
   description?: string;
   type: string;
+  config?: WorkFieldConfig;
   applies_to?: string[];
   required?: boolean;
   required_in_subtasks?: boolean;
@@ -1504,6 +1581,12 @@ export interface WorkComment {
   author_kind?: string;
   body: string;
   reply_to?: string;
+  /** A colleague this comment is a QUESTION to, who owes it an answer — set
+   *  only at creation, because turning an old remark into a question would
+   *  wake somebody for a conversation that has moved on. */
+  ask?: string;
+  /** The comment id this one answers, which is what closes that question. */
+  answers?: string;
   mentions?: string[];
   resolved?: boolean;
   resolved_by?: string;
@@ -1599,10 +1682,79 @@ export interface WorkItem {
    *  reset by any human touch. Past its cap the engine refuses the next
    *  hand-off rather than letting the item circle. */
   reassignments?: number;
+  /** Keys this task used to answer to — a project rename or a merge leaves
+   *  them, and every one still resolves, which is why they are worth
+   *  showing beside the current one. */
+  former_keys?: string[];
+  /** What this task blocks: the MIRRORED half of a dependency, carried so a
+   *  close can say who it unblocks without scanning the company. */
+  dependents?: string[];
+  checklists?: WorkChecklist[];
+  spend?: WorkSpend;
+  body_author?: string;
+  body_at?: string;
+  /** When the task entered the status it is in — the EFFECTIVE instant, so
+   *  two nodes compute one duration. */
+  status_entered_at?: string;
+  done_at?: string;
+  closed_at?: string;
   created_at?: string;
   updated_at?: string;
   /** The composed log position this task was last written at. */
   version: number;
+}
+
+/** One sub-item of a checklist. It mints no object and appears on no board. */
+export interface WorkChecklistItem {
+  id: string;
+  name: string;
+  done?: boolean;
+  assignee?: string;
+  parent?: string;
+  order?: number;
+  /** The subtask this item BECAME, which renders it struck through with the
+   *  new key rather than deleted. */
+  promoted_to?: string;
+}
+
+export interface WorkChecklist {
+  id: string;
+  name: string;
+  items?: WorkChecklistItem[];
+}
+
+/** What a task has cost, in turns rather than in a seat's month.
+ *
+ *  A FUNCTION of the applied records rather than a separately transmitted
+ *  number, which is what makes it impossible for it to disagree with the
+ *  turns it summarises. */
+export interface WorkSpend {
+  turns?: number;
+  rounds?: number;
+  input?: number;
+  output?: number;
+  cache_read?: number;
+  cache_write?: number;
+  wall_ms?: number;
+  tokens?: number;
+}
+
+/** One custom-field value with the declaration that explains it.
+ *
+ *  The three marks are states a filter already excludes, and each is a
+ *  different fact: `hidden` is a value whose declaration was ARCHIVED,
+ *  `foreign` is one mirrored in from another tracker, and `undeclared` is one
+ *  this company explains nowhere. A panel that rendered all three as ordinary
+ *  fields would invite somebody to filter on a field that cannot be filtered. */
+export interface WorkFieldValue {
+  slug?: string;
+  name?: string;
+  id: string;
+  type?: string;
+  value: unknown;
+  hidden?: boolean;
+  foreign?: boolean;
+  undeclared?: boolean;
 }
 
 export interface WorkItemDetail {
@@ -1610,6 +1762,11 @@ export interface WorkItemDetail {
   comments?: WorkComment[];
   history?: WorkChange[];
   links?: WorkLink[];
+  /** The task's custom-field values, ANNOTATED — see [WorkFieldValue]. The
+   *  raw map stays on the task; this is the reader's view of it. */
+  fields?: WorkFieldValue[];
+  /** Pages the thread backwards, and is empty when this page is all of it. */
+  comments_cursor?: string;
   /** The SAME predicate WorkSummary.blocked carries — an open dependency edge
    *  — computed by the server in the same transaction as the task, so the
    *  badge here and the badge on the board row cannot disagree. It is on the
@@ -2254,6 +2411,7 @@ export interface QueryMap {
   work_projects: WorkProjectsAnswer;
   work_project: WorkProjectDetail;
   work_sprints: WorkSprintsAnswer;
+  work_burndown: WorkBurndown;
   work_activity: WorkActivityAnswer;
   work_my_work: WorkMyWork;
   work_goals: WorkGoalsAnswer;

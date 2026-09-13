@@ -1524,3 +1524,920 @@ details > summary.int-summary::-webkit-details-marker {
   color: var(--text);
   border-color: var(--text-faint);
 }
+
+/* ---- The work tracker ---------------------------------------------------
+   The rail, the head, the three shapes, the peek and the item page.
+
+   TWO RULES DECIDE MOST OF WHAT IS HERE.
+
+   A BOARD OVERFLOWS SIDEWAYS ON PURPOSE. A board grouped by assignee can have
+   a dozen columns, and wrapping them into rows loses the one thing a board is
+   for — every column visible at once, in the order the axis declares. So the
+   strip scrolls and each column keeps a readable width instead of being
+   squeezed to a fraction of one.
+
+   AND A COLUMN SCROLLS ON ITS OWN. A column carries up to fifty rows; stacked
+   into the page, one busy column would make the whole board a kilometre tall
+   and put the other eleven columns' cards below the fold. Bounding the column
+   is what keeps every column's head — which is where the counts are — on one
+   screen.
+
+   The depth cue is the kanban one and it is the only place this file spends
+   elevation: a column sits on the SUNKEN ground and its cards sit on the
+   PANEL, so a card reads as an object on a surface rather than as a box drawn
+   on a box. */
+
+.work-shell {
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+  min-width: 0;
+}
+
+/* ---- The project rail --------------------------------------------------- */
+
+.work-rail {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.work-rail-label {
+  padding: var(--space-3) var(--space-2) var(--space-1);
+  font-size: var(--fs-3xs);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.work-rail-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--row-h);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--r-sm);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  min-width: 0;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.work-rail-item:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+/* The active row is the accent, exactly as a nav row is: the accent says
+   WHERE THE READER IS, and a rail is a second navigation. */
+.work-rail-item.active {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+.work-rail-key {
+  font-family: var(--font-mono);
+  font-size: var(--fs-3xs);
+  font-weight: var(--fw-medium);
+  letter-spacing: 0.02em;
+  padding: 1px var(--space-1);
+  border-radius: var(--r-xs);
+  background: var(--surface-inset);
+  color: var(--text-muted);
+  flex: none;
+}
+.work-rail-item.active .work-rail-key {
+  background: transparent;
+  color: inherit;
+}
+.work-rail-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.work-rail-count {
+  margin-left: auto;
+  font-size: var(--fs-3xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+  flex: none;
+}
+.work-rail-item.active .work-rail-count {
+  color: inherit;
+}
+
+/* ---- The main column and the project head ------------------------------- */
+
+.work-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.work-crumb {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  min-width: 0;
+}
+/* The name is what a person calls the project; the key is how they address
+   it. Both belong here and only one of them is an identifier. */
+.work-crumb-name {
+  color: var(--text-secondary);
+}
+
+/* The head's facts sit in a fixed order at a fixed size, so moving between
+   two projects does not move the numbers — the same rule the phase header
+   keeps, and the reason a reader can scan a column instead of hunting. */
+.work-facts {
+  display: flex;
+  align-items: stretch;
+  flex-wrap: wrap;
+  gap: var(--space-4) var(--space-6);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-1), var(--inset-hairline);
+  min-width: 0;
+}
+.work-fact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.work-fact-label {
+  font-size: var(--fs-3xs);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.work-fact-value {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--heading);
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+}
+/* The sprint takes the remaining width, because it is the one fact with a
+   bar in it and a bar in a content-width column is a bar nobody can read. */
+.work-fact.wide {
+  flex: 1 1 260px;
+  min-width: 220px;
+}
+
+/* ---- The filter bar ----------------------------------------------------- */
+
+.work-filters {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: var(--space-2) 0;
+  background: var(--bg);
+  min-width: 0;
+}
+/* SEARCH IS THE WIDEST CONTROL IN THE BAR, because it is the one a person
+   types into: the selects beside it hold a word each and never grow. */
+.work-filters-search {
+  flex: 2 1 240px;
+  max-width: 380px;
+  min-width: 160px;
+}
+/* The coverage cluster ends the bar, so how fresh and how complete an answer
+   is sits beside the count it qualifies rather than above the rows. */
+.work-summary {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.work-coverage {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* ---- The body, and the peek beside it ----------------------------------- */
+
+.work-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+  min-width: 0;
+}
+.work-body[data-peek="true"] {
+  grid-template-columns: minmax(0, 1fr) 420px;
+}
+
+/* ---- The board ---------------------------------------------------------- */
+
+.work-board {
+  display: flex;
+  /* EVERY LANE IS THE SAME HEIGHT. A column is a LANE — the place work in
+     that state lives — and one that stopped at its single card read as a
+     panel that had finished rather than as a lane with room in it. The
+     body's own max-height is what bounds them all. */
+  align-items: stretch;
+  gap: var(--space-3);
+  overflow-x: auto;
+  padding-bottom: var(--space-2);
+  min-width: 0;
+  scroll-snap-type: x proximity;
+}
+/* A LANE IS A RECESS IN THE PAGE, and `--surface-inset` is the token whose
+   job that is — an overlay that darkens the ground in light and lifts it in
+   dark, so the lane reads as a surface under the cards in BOTH. `--bg-sunken`
+   was the wrong one: it is the app's own ground, BELOW the page in either
+   theme, and in dark that put the lane darker than what surrounds it — an
+   empty column became a hole nobody could see, so the one lane with room in
+   it was the one that looked absent. */
+.work-col {
+  flex: 0 0 auto;
+  width: min(292px, 82vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  scroll-snap-align: start;
+  min-width: 0;
+}
+.work-col-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  min-width: 0;
+}
+.work-col-head .count-chip {
+  margin-left: auto;
+}
+.work-col-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 0 var(--space-2) var(--space-2);
+  /* THE COLUMN SCROLLS, NOT THE PAGE — see the section head. */
+  overflow-y: auto;
+  max-height: min(62dvh, 620px);
+  /* Fills whatever height the tallest lane sets, so a short column is a
+     lane with space rather than a panel that ended. */
+  flex: 1 1 auto;
+}
+.work-col-foot {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  border-top: 1px solid var(--border-subtle);
+}
+.work-col-foot a {
+  color: var(--accent-ink);
+}
+.work-col-empty {
+  padding: var(--space-4) var(--space-3);
+  font-size: var(--fs-2xs);
+  color: var(--text-faint);
+  text-align: center;
+}
+
+/* ---- The card ----------------------------------------------------------- */
+
+.work-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-1);
+  min-width: 0;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+.work-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-2);
+}
+.work-card.selected {
+  border-color: var(--accent-line);
+  box-shadow: var(--shadow-2);
+}
+/* A BLOCKED CARD WEARS A RAIL, the same idiom a stopped seat's card does:
+   the badge says it in words and the rail makes a column of forty scannable
+   for the three that cannot move. */
+.work-card[data-blocked="true"] {
+  box-shadow:
+    inset 2px 0 0 var(--critical),
+    var(--shadow-1);
+}
+.work-card-top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.work-card-title {
+  font-size: var(--fs-xs);
+  line-height: var(--lh-snug);
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.work-card-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* ---- The marks a row and a card share ----------------------------------- */
+
+.work-key {
+  font-size: var(--fs-3xs);
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  flex: none;
+}
+.work-type {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-faint);
+  flex: none;
+}
+.work-prio {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--text-muted);
+  font-size: var(--fs-3xs);
+  flex: none;
+}
+.work-prio[data-priority="urgent"] {
+  color: var(--critical-ink);
+}
+.work-prio[data-priority="high"] {
+  color: var(--caution-ink);
+}
+.work-due {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--fs-3xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex: none;
+}
+.work-due.overdue {
+  color: var(--critical-ink);
+  font-weight: var(--fw-medium);
+}
+.work-size {
+  font-size: var(--fs-3xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex: none;
+}
+/* NOBODY IS A STATE, and the one worth seeing: an unassigned item routes to
+   the project's lead, and a project with no lead routes to nobody at all. A
+   dashed empty square rather than a blank, so a column of unclaimed work
+   reads as unclaimed rather than as a rendering that failed. */
+.work-nobody {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  width: 20px;
+  height: 20px;
+  border-radius: var(--r-xs);
+  border: 1px dashed var(--border);
+  color: var(--text-faint);
+  flex: none;
+}
+.work-nobody .muted {
+  margin-left: var(--space-2);
+  white-space: nowrap;
+}
+
+/* ---- The list ----------------------------------------------------------- */
+
+/* One grid, so a run of rows scans down its columns rather than as prose —
+   the same reason the event feed is one. The title track is the only elastic
+   one; everything else is content-width and never wraps.
+
+   THE COLUMNS BELONG TO THE LIST, NOT TO EACH ROW. Every `.work-row` was
+   its own grid container, so `auto` sized each row's tracks against that
+   row's own content alone — and a status badge landed at a different x on
+   every line, which is exactly what a table is for avoiding. The tracks are
+   declared here once and each row takes them with `subgrid`, so the column
+   is as wide as the widest value in the LIST and every row agrees. A group
+   is its own list, which is right: a grouped column is a table per group. */
+.work-rows {
+  display: grid;
+  grid-template-columns: 16px 74px minmax(0, 1fr) auto auto auto auto auto;
+  /* THE GUTTER BELONGS TO WHOEVER OWNS THE TRACKS. On a subgridded axis a
+     row's own `column-gap` is ignored and the parent's is used — so declared
+     on the row it silently became zero, and a type icon sat on top of the
+     key beside it. */
+  column-gap: var(--space-3);
+}
+.work-row {
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  min-height: var(--row-h);
+  font-size: var(--fs-xs);
+  min-width: 0;
+}
+/* A cell the row keeps even when its value is absent — see [WorkRow]. It
+   is right-aligned because these are the trailing columns, where a value
+   reads against the column's own edge rather than against the title. */
+.work-cell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+}
+/* The four are named so the narrow breakpoint can drop them by what they
+   ARE rather than by where they sit — a positional selector over a row
+   whose cells move is the rule that silently starts hiding the wrong one. */
+.work-cell-prio,
+.work-cell-due,
+.work-cell-who {
+  justify-content: flex-end;
+}
+/* THE STATUS PILL READS FROM ITS LEFT EDGE, which is where its dot is —
+   right-aligned, the dot moved with the word's length and a reader scanning
+   the column for a state followed a ragged edge. */
+.work-cell-status {
+  justify-content: flex-start;
+}
+.work-row:last-child {
+  border-bottom: none;
+}
+.work-row:hover {
+  background: var(--surface-hover);
+}
+.work-row.selected {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.work-row-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.work-row-when {
+  font-size: var(--fs-3xs);
+  color: var(--text-faint);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.work-group {
+  display: flex;
+  flex-direction: column;
+}
+.work-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.work-group-foot {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* ---- The calendar ------------------------------------------------------- */
+
+.work-cal {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.work-cal-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.work-cal-month {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-tight);
+  color: var(--heading);
+  min-width: 10ch;
+}
+.work-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+.work-cal-dow {
+  padding: var(--space-2);
+  font-size: var(--fs-3xs);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  text-align: center;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.work-cal-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-height: 116px;
+  padding: var(--space-1);
+  border-right: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  min-width: 0;
+}
+.work-cal-cell:nth-child(7n) {
+  border-right: none;
+}
+/* A DAY OF A NEIGHBOURING MONTH IS STILL A DAY — its work is really due then
+   — so it is drawn quieter rather than left out, which is what lets a task
+   due on the 1st be visible from the month before it. */
+.work-cal-cell.out {
+  background: var(--surface-2);
+}
+.work-cal-day {
+  align-self: flex-start;
+  font-size: var(--fs-3xs);
+  font-weight: var(--fw-medium);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  padding: 1px var(--space-1);
+  border-radius: var(--r-full);
+  min-width: 18px;
+  text-align: center;
+}
+.work-cal-cell.today .work-cal-day {
+  background: var(--accent);
+  color: var(--text-on-fill);
+}
+.work-cal-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px var(--space-1);
+  border-radius: var(--r-xs);
+  background: var(--surface-inset);
+  font-size: var(--fs-3xs);
+  color: var(--text-secondary);
+  min-width: 0;
+  transition: background var(--dur-fast) var(--ease);
+}
+.work-cal-chip:hover {
+  background: var(--surface-active);
+}
+.work-cal-chip[data-overdue="true"] {
+  background: var(--critical-soft);
+  color: var(--critical-ink);
+}
+/* FINISHED WORK IS QUIETER, not hidden: a calendar that dropped it would
+   answer "what is due" with a month that forgets what was delivered. */
+.work-cal-chip[data-done="true"] {
+  color: var(--text-faint);
+}
+.work-cal-chip .work-cal-key {
+  font-family: var(--font-mono);
+  flex: none;
+}
+.work-cal-more {
+  align-self: flex-start;
+  font-size: var(--fs-3xs);
+  color: var(--accent-ink);
+  padding: 0 var(--space-1);
+}
+.work-cal-note {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* ---- The peek, and the item page ---------------------------------------- */
+
+.work-peek {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-2), var(--inset-hairline);
+  max-height: calc(100dvh - var(--topbar-h) - var(--space-8));
+  overflow: hidden;
+  min-width: 0;
+}
+.work-peek-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  min-width: 0;
+}
+.work-peek-body {
+  overflow-y: auto;
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.work-peek-title {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-tight);
+  color: var(--heading);
+  line-height: var(--lh-snug);
+}
+
+.work-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: var(--space-4);
+  align-items: start;
+  min-width: 0;
+}
+.work-item-main,
+.work-item-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+.work-item-side {
+  position: sticky;
+  top: 0;
+}
+
+/* A metadata list, not a panel layout: two columns sized for compact pairs,
+   with the label track fixed so every value in the panel starts on one line. */
+.work-props {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: var(--space-2) var(--space-3);
+  font-size: var(--fs-xs);
+  align-items: baseline;
+  min-width: 0;
+}
+.work-props dt {
+  color: var(--text-muted);
+  font-size: var(--fs-2xs);
+  min-width: 0;
+}
+.work-props dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.work-props-section {
+  grid-column: 1 / -1;
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--fs-3xs);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.work-props-section:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+/* A value nothing in this company explains, or one a filter cannot reach.
+   Said in a word beside the value rather than by dimming it: "archived" and
+   "this build could not read it" are different facts and neither is a shade. */
+.work-field-state {
+  font-size: var(--fs-3xs);
+  color: var(--text-faint);
+  margin-left: var(--space-1);
+}
+
+.work-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  font-size: var(--fs-xs);
+  min-width: 0;
+}
+.work-check.done .work-check-name {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+.work-check-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A comment carrying a QUESTION wears the caution rail: somebody owes it an
+   answer, which is the one state in a thread that is about the reader. */
+.work-ask {
+  box-shadow: inset 2px 0 0 var(--caution);
+}
+.work-hist {
+  display: flex;
+  flex-direction: column;
+}
+.work-hist-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  font-size: var(--fs-2xs);
+  min-width: 0;
+}
+.work-hist-row > svg {
+  color: var(--text-faint);
+  align-self: center;
+}
+.work-hist-when {
+  color: var(--text-faint);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The activity feed's own grid: when, what, which item, who. */
+.work-feed-row {
+  display: grid;
+  grid-template-columns: 68px 96px 76px minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--fs-2xs);
+  min-width: 0;
+}
+.work-feed-row:last-child {
+  border-bottom: none;
+}
+.work-feed-when,
+.work-feed-who {
+  color: var(--text-faint);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.work-feed-what {
+  color: var(--text-secondary);
+  min-width: 0;
+}
+
+/* A ROW IS NOT AN INLINE LINK — see the rule in components.css. Every
+   row-shaped anchor the tracker adds joins the same set. */
+a.work-card,
+a.work-row,
+a.work-rail-item,
+a.work-cal-chip {
+  color: inherit;
+  text-decoration: none;
+}
+a.work-card:hover,
+a.work-row:hover,
+a.work-rail-item:hover,
+a.work-cal-chip:hover {
+  text-decoration: none;
+}
+
+/* ---- Responsive ---------------------------------------------------------
+   Two steps, and each is where one of the layout's own promises stops being
+   keepable: the peek stops fitting beside the body before the rail stops
+   fitting beside the main column. */
+
+@media (max-width: 1180px) {
+  .work-body[data-peek="true"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /* The peek becomes a drawer over the body rather than a column beside it,
+     on the shell's own veil — a panel squeezed to 200px is a panel nobody
+     can read, and hiding it would lose the reader's selection. */
+  .work-peek {
+    position: fixed;
+    inset: var(--topbar-h) 0 0 auto;
+    width: min(460px, 100%);
+    max-height: none;
+    border-radius: 0;
+    border-right: none;
+    border-top: none;
+    border-bottom: none;
+    z-index: var(--z-drawer);
+    box-shadow: var(--shadow-3);
+  }
+  .work-item {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .work-item-side {
+    position: static;
+  }
+}
+
+@media (max-width: 860px) {
+  .work-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /* The rail becomes a scrolling strip of chips above the head: a company
+     with nine projects still needs to reach all nine. */
+  .work-rail {
+    position: static;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-1);
+    overflow-x: auto;
+    padding-bottom: var(--space-1);
+  }
+  .work-rail-label {
+    display: none;
+  }
+  .work-rail-item {
+    flex: none;
+    border: 1px solid var(--border);
+    border-radius: var(--r-full);
+    padding: 0 var(--space-3);
+    min-height: var(--control-h);
+  }
+  .work-rail-count {
+    margin-left: 0;
+  }
+  /* FOUR COLUMNS ON A PHONE: type, key, title, status. The tracks are
+     re-declared on the LIST, since that is where they live — a row is a
+     subgrid of whatever the list has — and the three cells that are gone
+     are dropped rather than emptied, or they would each still hold a
+     column of nothing. */
+  .work-rows {
+    grid-template-columns: 16px 70px minmax(0, 1fr) auto;
+  }
+  .work-cell-prio,
+  .work-cell-due,
+  .work-cell-who,
+  .work-row .work-row-when {
+    display: none;
+  }
+  .work-cal-cell {
+    min-height: 76px;
+  }
+  .work-feed-row {
+    grid-template-columns: 62px minmax(0, 1fr) auto;
+  }
+  .work-feed-row .work-feed-kind {
+    display: none;
+  }
+}
