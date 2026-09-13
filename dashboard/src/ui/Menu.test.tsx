@@ -125,6 +125,22 @@ test("Tab closes it and hands focus back to the opener for the Tab to carry on f
   expect(document.activeElement).toBe(trigger());
 });
 
+test("Tab out of a menu that is the last control in a dialog stays inside the dialog", () => {
+  render(
+    <Dialog title="Edit seat" onClose={() => {}}>
+      <input aria-label="Name" />
+      <Menu label="Actions for Software Engineer" items={entries()} />
+    </Dialog>,
+  );
+  trigger().focus();
+  fireEvent.click(trigger());
+  press("Tab");
+  // Focus went back to the trigger, which is the dialog's last control, so
+  // the trap wraps the Tab to the first one instead of letting it leave.
+  expect(screen.queryByRole("menu")).toBeNull();
+  expect(document.activeElement).toBe(screen.getByLabelText("Name"));
+});
+
 test("opened from a focused tree item, it returns there rather than to its pointer-only trigger", () => {
   function Card() {
     const [open, setOpen] = useState(false);

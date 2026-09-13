@@ -131,12 +131,14 @@ function onKeyDown(e: KeyboardEvent): void {
     const modal = top("modal");
     const panel = modal?.panel();
     if (!modal || !panel) return;
-    // A popup above the modal decides Tab for itself (a menu closes on it);
-    // the trap only applies once focus is the modal's again.
+    // A popup above the modal that still holds focus decides Tab for itself.
+    // One that has just handed focus back (a menu closes on Tab and returns
+    // focus to its trigger before this listener runs) is still registered
+    // until React re-renders, and must not let that Tab walk out of the modal.
     const popup = top("popup");
-    if (popup && popup.order > modal.order) return;
-    const inside = focusables(panel);
     const active = document.activeElement;
+    if (popup && popup.order > modal.order && active && popup.panel()?.contains(active)) return;
+    const inside = focusables(panel);
     const within = active instanceof Node && panel.contains(active);
     if (inside.length === 0) {
       e.preventDefault();
