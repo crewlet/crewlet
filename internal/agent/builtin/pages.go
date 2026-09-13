@@ -601,6 +601,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// putting words on a page, and the guard that matters — only the author
 	// — lives in the store either way.
 	if edit := strings.TrimSpace(argString(args, "edit")); edit != "" {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		comment, written, err := t.deps.Writer.EditComment(ctx, actor, detail.Page.ID, edit, body)
 		if err != nil {
 			return failed(pageWriteFailure(CommentOnPageTool, err)), nil

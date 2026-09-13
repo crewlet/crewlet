@@ -246,8 +246,10 @@ func (t *writeWorkGoal) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		if raw == "" {
 			continue
 		}
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		at, err := time.Parse(time.RFC3339, raw)
 		if err != nil {
+			//nolint:nilerr // A tool failure is a RESULT the caller reads.
 			return failed(fmt.Sprintf("%s is a date and time in RFC3339, like "+
 				"2026-06-30T00:00:00Z — %q is not one.", spec.key, clip(raw))), nil
 		}

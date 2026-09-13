@@ -1498,6 +1498,10 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		// one: the roster is on the deps, and a patch builder that
 		// reached for it would need the whole surface threaded through
 		// it to validate one field.
+		//
+		// The outer refusal was checked empty above and is next WRITTEN
+		// by declareLabels, so nothing reads a stale one.
+		//nolint:govet // shadow: `x, refusal := f()` declares x too; see .golangci.yml
 		assignee, refusal := t.deps.resolveHandle(UpdateWorkItemTool,
 			"`assignee`", *patch.Assignee)
 		if refusal != "" {

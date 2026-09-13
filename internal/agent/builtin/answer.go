@@ -7,8 +7,8 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// What a tool answer may WEIGH, and why the ceiling is stated against its
-// reader rather than against the transport.
+// ToolAnswerBytes is the most ONE tool answer may weigh, and the ceiling is
+// stated against its reader rather than against the transport.
 //
 // # A tool answer is read by a model
 //
@@ -41,6 +41,12 @@ const ToolAnswerBytes = 64 << 10
 func jsonAnswer(v any, narrowWith string) (tools.Result, error) {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
+		// A tool failure is a RESULT the model reads: the surface's Go
+		// error aborts the whole tool loop (see internal/agent/toolloop),
+		// so returning one here would end a turn over a single answer
+		// that would not encode, instead of letting the model ask for a
+		// narrower one.
+		//nolint:nilerr // A tool failure is a RESULT the model reads, not a Go error.
 		return failed("The result could not be rendered."), nil
 	}
 	if len(data) > ToolAnswerBytes {

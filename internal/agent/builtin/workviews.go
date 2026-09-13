@@ -70,9 +70,9 @@ func (t *listWorkViews) Call(ctx context.Context, args map[string]any) (tools.Re
 	if t.deps.Reader == nil {
 		return unconfigured(tracker.ListWorkViewsTool), nil
 	}
-	container, err := parseContainerArg(argString(args, "container"))
-	if err != nil {
-		return failed(err.Error()), nil
+	container, refusal := parseContainerArg(argString(args, "container"))
+	if refusal != "" {
+		return failed(refusal), nil
 	}
 	listing, err := t.deps.Reader.Views(ctx, tracker.ViewQuery{
 		Container: container,
@@ -177,9 +177,9 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if t.deps.ViewWriter == nil {
 		return unconfigured(tracker.SaveWorkViewTool), nil
 	}
-	container, err := parseContainerArg(argString(args, "container"))
-	if err != nil {
-		return failed(err.Error()), nil
+	container, refusal := parseContainerArg(argString(args, "container"))
+	if refusal != "" {
+		return failed(refusal), nil
 	}
 	// THE CALLER'S ID WHEN IT HAS ONE, a fresh one when it does not. A
 	// verb that always minted would write a second view on every retry of
@@ -219,22 +219,30 @@ func containerParameter() map[string]any {
 	}
 }
 
-// parseContainerArg reads the container in the query grammar's own spelling.
-func parseContainerArg(raw string) (tracker.Container, error) {
+// parseContainerArg reads the container in the query grammar's own spelling,
+// or returns the refusal the model is shown.
+//
+// A REFUSAL STRING RATHER THAN AN ERROR, which is what every other argument
+// reader on this surface returns (`goalTargets`, `catalogueFields`,
+// `resolveHandle`): both callers render this straight into [failed] and
+// neither compares it, wraps it or propagates it, so the only reader is the
+// model. Shaped as an `error` it was prose no `errors.Is` would ever ask
+// about, written in a sentence style the error-string convention forbids.
+func parseContainerArg(raw string) (tracker.Container, string) {
 	raw = strings.TrimSpace(raw)
 	if raw == tracker.ContainerWorkspace {
-		return tracker.Container{Kind: tracker.ContainerWorkspace}, nil
+		return tracker.Container{Kind: tracker.ContainerWorkspace}, ""
 	}
 	kind, id, found := strings.Cut(raw, ":")
 	if !found || !tracker.ValidContainerKind(kind) || id == "" ||
 		kind == tracker.ContainerWorkspace {
 
-		return tracker.Container{}, fmt.Errorf("%q does not name a container. "+
+		return tracker.Container{}, fmt.Sprintf("%q does not name a container. "+
 			"Write `workspace`, `project:ENG`, `unit:engineering` or "+
 			"`person:ana`.", clip(raw))
 	}
 	if kind == tracker.ContainerProject {
 		id = strings.ToUpper(id)
 	}
-	return tracker.Container{Kind: kind, ID: id}, nil
+	return tracker.Container{Kind: kind, ID: id}, ""
 }

@@ -328,11 +328,7 @@ func projectPolicyEdit(args map[string]any) (tracker.ProjectEdit, string) {
 		if !ok {
 			return tracker.ProjectEdit{}, "`sprints` is the sprint policy, as an object."
 		}
-		policy, refusal := sprintPolicyArg(spec)
-		if refusal != "" {
-			return tracker.ProjectEdit{}, refusal
-		}
-		edit.Sprints = &tracker.SprintPolicyEdit{Policy: policy}
+		edit.Sprints = &tracker.SprintPolicyEdit{Policy: sprintPolicyArg(spec)}
 	}
 	if _, held := args["default_assignee"]; held {
 		who := strings.TrimSpace(argString(args, "default_assignee"))
@@ -346,13 +342,21 @@ func projectPolicyEdit(args map[string]any) (tracker.ProjectEdit, string) {
 }
 
 // sprintPolicyArg reads a sprint policy, or the deliberate absence of one.
-func sprintPolicyArg(spec map[string]any) (*tracker.SprintPolicy, string) {
+//
+// IT REFUSES NOTHING, and that is not an omission: every value a caller can
+// get wrong here — a length no sprint can run, a weekday outside the week, a
+// measure a sprint cannot sum — is refused by [tracker] at the WRITE
+// (`checkSprintPolicy`), which is the only place that sees the project the
+// policy is landing on and the only place a refusal can actually stop the
+// change. A second opinion at the edge would be a copy of that table, drifting
+// from it the first time either side moved.
+func sprintPolicyArg(spec map[string]any) *tracker.SprintPolicy {
 	if enabled, held := spec["enabled"]; held {
 		if on, ok := enabled.(bool); ok && !on {
 			// OFF IS A NIL POLICY, which is the state a project that
 			// never declared sprints is already in — so turning it off
 			// and never turning it on are the same row.
-			return nil, ""
+			return nil
 		}
 	}
 	policy := &tracker.SprintPolicy{
@@ -373,7 +377,7 @@ func sprintPolicyArg(spec map[string]any) (*tracker.SprintPolicy, string) {
 		// would otherwise earn teaches nothing.
 		policy.LengthDays = tracker.DefaultSprintDays
 	}
-	return policy, ""
+	return policy
 }
 
 // sprintMeasureNames renders the closed set for the tool schema.

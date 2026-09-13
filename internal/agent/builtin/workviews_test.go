@@ -80,3 +80,47 @@ func TestASavedViewCanBeRunByItsID(t *testing.T) {
 			"cannot open is a tab nobody can reach", got)
 	}
 }
+
+// A REFUSED `container` CARRIES THE VOCABULARY IT WOULD HAVE ACCEPTED.
+//
+// `container` is the one required argument of both view tools, and its grammar
+// is the TRACKER's rather than this surface's — so a caller reaching for the
+// project key it has been using all along (`ENG`) has nothing to derive
+// `project:ENG` from unless the refusal spells it out. A refusal that only
+// says no is one the next attempt repeats verbatim, which is why the four
+// spellings travel IN it rather than only in a schema description already read
+// past.
+//
+// The accepting case is here for the same reason: a parser that refused
+// everything would satisfy every assertion above it.
+func TestARefusedContainerNamesTheSpellingsItAccepts(t *testing.T) {
+	t.Parallel()
+	reg := operatorRegistry(t, newFakeTracker(), &personSpy{})
+	for _, raw := range []string{"", "ENG", "project:", "workspace:ENG", "team:eng"} {
+		t.Run("refused/"+raw, func(t *testing.T) {
+			t.Parallel()
+			got := callPlain(t, reg, tracker.ListWorkViewsTool,
+				map[string]any{"container": raw})
+			if !got.Failed {
+				t.Fatalf("%q was accepted as a container — the strip it "+
+					"renders is then somebody else's", raw)
+			}
+			for _, spelling := range []string{"workspace", "project:ENG",
+				"unit:engineering", "person:ana"} {
+
+				if !strings.Contains(got.Output, spelling) {
+					t.Errorf("the refusal does not name %s: %q — a caller "+
+						"told only that its container is wrong sends the "+
+						"same one again", spelling, got.Output)
+				}
+			}
+		})
+	}
+	t.Run("accepted", func(t *testing.T) {
+		t.Parallel()
+		if got := callPlain(t, reg, tracker.ListWorkViewsTool,
+			map[string]any{"container": "project:eng"}); got.Failed {
+			t.Fatalf("project:eng was refused: %s", got.Output)
+		}
+	})
+}

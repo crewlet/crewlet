@@ -138,6 +138,7 @@ func (t *taskActivity) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if since := strings.TrimSpace(argString(args, "since")); since != "" {
 		// A POSITION FIRST, because it is unambiguous and a timestamp is
 		// not — and a caller resuming a page holds a position.
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if at, err := tracker.ParseLogPosition(since); err == nil {
 			q.Since = at
 		} else if when, err := time.Parse(time.RFC3339, since); err == nil {
