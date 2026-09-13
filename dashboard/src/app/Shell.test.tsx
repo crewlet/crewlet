@@ -97,6 +97,17 @@ test("Escape with the token dialog over a drawer closes only the token dialog", 
   expect(screen.getByText("editor closed")).toBeDefined();
 });
 
+test("the token field keeps its label over a screen that has a field with the same id", () => {
+  // Not contrived: the dialog is raised over any screen, and "token" is the
+  // obvious id for a screen's own credential field.
+  mount(<input id="token" aria-label="Webhook token" />);
+  act(() => requestToken());
+  const dialog = screen.getByRole("dialog", { name: "API token" });
+  const field = within(dialog).getByLabelText("Token");
+  expect(field.getAttribute("type")).toBe("password");
+  expect(document.activeElement).toBe(field);
+});
+
 test("search opened from its button returns focus there on Escape", () => {
   mount(<p>screen</p>);
   const search = screen.getByRole("button", { name: /^Search/ });

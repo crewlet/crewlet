@@ -15,7 +15,7 @@
  * knows it opened last, so its Escape closes it alone and Tab stays inside it.
  */
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Dialog } from "~/ui/Dialog.tsx";
 import { Button } from "~/ui/primitives.tsx";
 import { Icon } from "~/ui/Icon.tsx";
@@ -30,6 +30,11 @@ export function TokenDialog({
 }) {
   const [value, setValue] = useState(() => apiToken());
   const [refused, setRefused] = useState(false);
+  // A MINTED ID, not a literal. The dialog opens over whatever screen raised
+  // it, and a label pointing at `id="token"` names the first element in the
+  // document with that id: a screen's own field would take the label, and
+  // the credential box would be announced with no name at all.
+  const fieldID = useId();
 
   // A credential you can set is one you must be able to drop, on a shared
   // machine especially, where the token outlives the person who typed it.
@@ -88,10 +93,10 @@ export function TokenDialog({
         <code className="inline">crewlet.yaml</code>.
       </p>
       <div className="field">
-        <label htmlFor="token">Token</label>
+        <label htmlFor={fieldID}>Token</label>
         {/* The first control, so the layer stack opens the dialog on it. */}
         <input
-          id="token"
+          id={fieldID}
           className="input"
           type="password"
           value={value}
