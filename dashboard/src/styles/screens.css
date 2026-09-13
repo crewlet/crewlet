@@ -2361,9 +2361,19 @@ a.work-cal-chip:hover {
 /* ---- Responsive ---------------------------------------------------------
    Two steps, and each is where one of the layout's own promises stops being
    keepable: the peek stops fitting beside the body before the rail stops
-   fitting beside the main column. */
+   fitting beside the main column.
 
-@media (max-width: 1180px) {
+   THE FIRST STEP IS MEASURED FROM THE BOARD, not guessed. Three panes are
+   the sidebar, the project rail and the peek, and what is left over is the
+   board. A column is 292px and the gap is 12, so two columns need 596 and
+   three need 900 — and at 1280, a perfectly ordinary laptop, what was left
+   was 316. One column beside a detail panel is not a board. The threshold is
+   therefore where TWO columns still fit beside everything else, which is
+   around 1500, rather than the 1180 this was first written at: below it the
+   peek overlays, which costs nothing, because the board underneath is
+   exactly what the reader came back to. */
+
+@media (max-width: 1500px) {
   .work-body[data-peek="true"] {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -2382,6 +2392,12 @@ a.work-cal-chip:hover {
     z-index: var(--z-drawer);
     box-shadow: var(--shadow-3);
   }
+}
+
+/* THE ITEM PAGE KEEPS ITS OWN THRESHOLD. It is a page rather than a pane
+   beside a board — there is no third column competing with it — so its
+   properties rail sits beside the body for as long as both are readable. */
+@media (max-width: 1180px) {
   .work-item {
     grid-template-columns: minmax(0, 1fr);
   }
