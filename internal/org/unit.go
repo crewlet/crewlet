@@ -227,20 +227,23 @@ func (u *Unit) hasDirectAgent() bool {
 // report instead.
 func (u *Unit) Validate() error {
 	var errs []error
+	add := func(field []any, err error) {
+		errs = append(errs, &UnitError{Unit: u, Field: field, Err: err})
+	}
 	name := strings.TrimSpace(u.Name)
 	if name == "" {
-		errs = append(errs, fmt.Errorf("unit: %w", ErrMissingName))
+		add([]any{"name"}, fmt.Errorf("unit: %w", ErrMissingName))
 	}
 
 	owner := fmt.Sprintf("unit %q", name)
-	if err := validateSchedules(owner, u.Schedules); err != nil {
-		errs = append(errs, err)
+	for _, f := range validateSchedules(owner, u.Schedules) {
+		add(f.field, f.err)
 	}
-	for _, s := range u.Schedules {
+	for i, s := range u.Schedules {
 		// A fan-out with nothing to fan out to can never fire. Failing at
 		// load beats a schedule that silently no-ops every minute it is due.
 		if s.IsEnabled() && !s.TargetsLead() && !u.hasDirectAgent() {
-			errs = append(errs, fmt.Errorf(
+			add([]any{"schedules", i}, fmt.Errorf(
 				"%s: schedule %q: %w: target each fans out to direct agent members only — never descendants, never human seats — and this unit has none",
 				owner, s.Name, ErrUnrunnableSchedule))
 		}

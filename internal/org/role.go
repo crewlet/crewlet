@@ -200,20 +200,29 @@ func (c *HumanContact) Normalize() {
 // contains a brace, so the broader read costs nothing and catches the near
 // miss.
 func (c *HumanContact) Validate() error {
+	return joinFieldErrors(c.faults())
+}
+
+// faults is [HumanContact.Validate] with each failure attached to the
+// identity field it is about, relative to the seat that carries the contact.
+func (c *HumanContact) faults() []fieldError {
 	if c == nil {
 		return nil
 	}
-	var errs []error
+	var out []fieldError
 	for _, f := range contactFields {
 		v := strings.TrimSpace(*f.value(c))
 		if !strings.Contains(v, "${") {
 			continue
 		}
 		if _, isRef := envref.Whole(v); !isRef {
-			errs = append(errs, fmt.Errorf("contact.%s: %w: %q", f.key, ErrEmbeddedEnvRef, v))
+			out = append(out, fieldError{
+				field: []any{"contact", f.key},
+				err:   fmt.Errorf("contact.%s: %w: %q", f.key, ErrEmbeddedEnvRef, v),
+			})
 		}
 	}
-	return errors.Join(errs...)
+	return out
 }
 
 // IsEmpty reports whether no identity is declared. A ${VAR} reference
@@ -570,22 +579,26 @@ func (r *Role) humanForbidden() []string {
 	return out
 }
 
-// Validate reports every rule this seat breaks, joined.
+// Validate reports every rule this seat breaks, joined. Each is a
+// [SeatError] naming this seat and the field the rule is about.
 //
 // It reports ALL of them rather than the first: a config author fixing one
 // field at a time through a validate-edit loop pays a round trip per
 // mistake, and the mistakes here are usually made together.
 func (r *Role) Validate() error {
 	var errs []error
+	add := func(field []any, err error) {
+		errs = append(errs, &SeatError{Seat: r, Field: field, Err: err})
+	}
 	name := strings.TrimSpace(r.Name)
 	if name == "" {
-		errs = append(errs, fmt.Errorf("role: %w", ErrMissingName))
+		add([]any{"name"}, fmt.Errorf("role: %w", ErrMissingName))
 	}
 
 	switch r.Kind {
 	case "", KindAgent, KindHuman:
 	default:
-		errs = append(errs, fmt.Errorf("role %q: %w: %q (want agent or human)", name, ErrUnknownKind, r.Kind))
+		add([]any{"kind"}, fmt.Errorf("role %q: %w: %q (want agent or human)", name, ErrUnknownKind, r.Kind))
 	}
 
 	switch {
@@ -594,26 +607,27 @@ func (r *Role) Validate() error {
 		if suggestion == "" {
 			suggestion = "my-handle"
 		}
-		errs = append(errs, fmt.Errorf(
+		add([]any{"handle"}, fmt.Errorf(
 			"role %q: %w: %q — e.g. %q",
 			name, ErrInvalidHandle, r.DeclaredHandle, suggestion))
 	case name != "" && r.Handle() == "":
 		// A name of nothing but punctuation slugifies to nothing, and a
 		// seat with no handle derives no agent id and owns no inbox — it
 		// would sit in the chart looking fine and never receive anything.
-		errs = append(errs, fmt.Errorf(
+		// Reported at the name, which is what yields nothing.
+		add([]any{"name"}, fmt.Errorf(
 			"role %q: %w: the name yields no handle, so set one explicitly",
 			name, ErrInvalidHandle))
 	}
 
 	if r.IsHuman() {
 		if offending := r.humanForbidden(); len(offending) > 0 {
-			errs = append(errs, fmt.Errorf(
+			add(fieldOf(offending), fmt.Errorf(
 				"role %q: %w: %s",
 				name, ErrHumanSeatField, strings.Join(offending, ", ")))
 		}
 		if r.Contact.IsEmpty() {
-			errs = append(errs, fmt.Errorf("role %q: %w", name, ErrNoContact))
+			add([]any{"contact"}, fmt.Errorf("role %q: %w", name, ErrNoContact))
 		}
 	} else {
 		var humanOnly []string
@@ -624,17 +638,33 @@ func (r *Role) Validate() error {
 			humanOnly = append(humanOnly, "availability")
 		}
 		if len(humanOnly) > 0 {
-			errs = append(errs, fmt.Errorf(
+			add(fieldOf(humanOnly), fmt.Errorf(
 				"role %q: %w: %s (did you mean kind: human?)",
 				name, ErrAgentSeatField, strings.Join(humanOnly, ", ")))
 		}
 	}
 
-	if err := r.Contact.Validate(); err != nil {
-		errs = append(errs, fmt.Errorf("role %q: %w", name, err))
+	for _, f := range r.Contact.faults() {
+		add(f.field, fmt.Errorf("role %q: %w", name, f.err))
 	}
-	if err := validateSchedules(fmt.Sprintf("role %q", name), r.Schedules); err != nil {
-		errs = append(errs, err)
+	for _, f := range validateSchedules(fmt.Sprintf("role %q", name), r.Schedules) {
+		add(f.field, f.err)
 	}
 	return errors.Join(errs...)
+}
+
+// fieldOf is where a rule about these authored fields is reported: at the
+// field itself when there is exactly one, and at the seat when there are
+// several, since one message names them all and belongs to none of them
+// alone. A name is dotted field names (integrations.slack), never a map key.
+func fieldOf(names []string) []any {
+	if len(names) != 1 {
+		return nil
+	}
+	parts := strings.Split(names[0], ".")
+	out := make([]any, len(parts))
+	for i, part := range parts {
+		out[i] = part
+	}
+	return out
 }

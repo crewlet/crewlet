@@ -1,7 +1,6 @@
 package org
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -116,57 +115,69 @@ const cronFields = 5
 // check is shape: whether it has a RUNNER is a question about the unit or
 // seat that owns it, answered there.
 func (s Schedule) Validate(owner string) error {
-	var errs []error
+	return joinFieldErrors(s.faults(owner))
+}
+
+// faults is [Schedule.Validate] with each failure still attached to the field
+// it is about, so the seat or unit owning the schedule can report where.
+func (s Schedule) faults(owner string) []fieldError {
+	var out []fieldError
+	add := func(field string, err error) {
+		out = append(out, fieldError{field: []any{field}, err: err})
+	}
 	name := strings.TrimSpace(s.Name)
 	if name == "" {
-		errs = append(errs, fmt.Errorf("%s: %w: name must not be empty", owner, ErrInvalidSchedule))
+		add("name", fmt.Errorf("%s: %w: name must not be empty", owner, ErrInvalidSchedule))
 	}
 	if strings.TrimSpace(s.Task) == "" {
-		errs = append(errs, fmt.Errorf("%s: schedule %q: %w: task must not be empty", owner, name, ErrInvalidSchedule))
+		add("task", fmt.Errorf("%s: schedule %q: %w: task must not be empty", owner, name, ErrInvalidSchedule))
 	}
 	if len(strings.Fields(s.Cron)) != cronFields {
-		errs = append(errs, fmt.Errorf(
+		add("cron", fmt.Errorf(
 			"%s: schedule %q: %w: cron %q needs %d fields (minute hour day-of-month month day-of-week)",
 			owner, name, ErrInvalidSchedule, s.Cron, cronFields))
 	}
 	if s.Timezone != "" {
 		if _, err := time.LoadLocation(s.Timezone); err != nil {
-			errs = append(errs, fmt.Errorf(
+			add("timezone", fmt.Errorf(
 				"%s: schedule %q: %w: unknown timezone %q",
 				owner, name, ErrInvalidSchedule, s.Timezone))
 		}
 	}
 	if s.TimeoutSeconds < 0 {
-		errs = append(errs, fmt.Errorf(
+		add("timeout_seconds", fmt.Errorf(
 			"%s: schedule %q: %w: timeout_seconds must be positive",
 			owner, name, ErrInvalidSchedule))
 	}
 	switch s.Target {
 	case "", TargetEach, TargetLead:
 	default:
-		errs = append(errs, fmt.Errorf(
+		add("target", fmt.Errorf(
 			"%s: schedule %q: %w: target %q must be each or lead — to run recurring work as one specific seat, define the schedule on that seat",
 			owner, name, ErrInvalidSchedule, s.Target))
 	}
-	return errors.Join(errs...)
+	return out
 }
 
-// validateSchedules checks a role's or unit's schedules and their names.
-// Names must be unique within their owner because the name is half the
-// idempotency key: two schedules sharing one would each suppress the
-// other's fire at the same minute.
+// validateSchedules checks a role's or unit's schedules and their names,
+// reporting each failure at the schedule and field it is about. Names must be
+// unique within their owner because the name is half the idempotency key: two
+// schedules sharing one would each suppress the other's fire at the same
+// minute.
 //
 // ONE MESSAGE PER DUPLICATED NAME, naming every schedule that carries it, the
 // same shape as every other duplicate rule in this package. The pairwise
 // check this replaced reported a name used three times as two collisions,
 // and counted every blank name as a duplicate of the others, repeating a
-// mistake [Schedule.Validate] had already reported once per schedule.
-func validateSchedules(owner string, schedules []Schedule) error {
-	var errs []error
+// mistake [Schedule.Validate] had already reported once per schedule. It is
+// reported at the owner's `schedules` list, since it is about several of its
+// elements at once.
+func validateSchedules(owner string, schedules []Schedule) []fieldError {
+	var out []fieldError
 	positions := make([]int, len(schedules))
 	for i, s := range schedules {
-		if err := s.Validate(owner); err != nil {
-			errs = append(errs, err)
+		for _, f := range s.faults(owner) {
+			out = append(out, f.at("schedules", i))
 		}
 		positions[i] = i
 	}
@@ -181,12 +192,12 @@ func validateSchedules(owner string, schedules []Schedule) error {
 		for i, position := range g.members {
 			places[i] = fmt.Sprintf("schedules[%d]", position)
 		}
-		errs = append(errs, fmt.Errorf(
+		out = append(out, fieldError{field: []any{"schedules"}, err: fmt.Errorf(
 			"%s: %w: duplicate schedule name %q: %d schedules carry it (%s). The "+
 				"name is half of each fire's idempotency key, so these would "+
 				"suppress each other's fire at the same minute; give each its "+
 				"own name",
-			owner, ErrInvalidSchedule, g.key, len(g.members), strings.Join(places, ", ")))
+			owner, ErrInvalidSchedule, g.key, len(g.members), strings.Join(places, ", "))})
 	}
-	return errors.Join(errs...)
+	return out
 }

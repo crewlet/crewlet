@@ -631,12 +631,15 @@ func (o *Organization) validateHandles() error {
 	groups := groupBy(o.placedSeats(), func(s placedSeat) string { return s.role.Handle() })
 	var errs []error
 	for _, g := range groups {
-		errs = append(errs, fmt.Errorf(
-			"%w %q: %d seats derive it (%s). The handle is the canonical seat "+
-				"identity, naming its inbox, its agent id and its external "+
-				"accounts, so give each of these seats a distinct name or an "+
-				"explicit handle",
-			ErrDuplicateHandle, g.key, len(g.members), describeSeats(g.members, true)))
+		errs = append(errs, &DuplicateError{
+			Kind: DuplicateHandle, Key: g.key, Seats: seatsOf(g.members),
+			Err: fmt.Errorf(
+				"%w %q: %d seats derive it (%s). The handle is the canonical seat "+
+					"identity, naming its inbox, its agent id and its external "+
+					"accounts, so give each of these seats a distinct name or an "+
+					"explicit handle",
+				ErrDuplicateHandle, g.key, len(g.members), describeSeats(g.members, true)),
+		})
 	}
 	return errors.Join(errs...)
 }
@@ -657,11 +660,14 @@ func (o *Organization) validateSeatNames() error {
 	})
 	var errs []error
 	for _, g := range groups {
-		errs = append(errs, fmt.Errorf(
-			"%w %q: %d seats carry it (%s). A unit's lead and every manages "+
-				"entry name exactly one seat, and resolve to the first seat of "+
-				"that name, so give each of these seats its own name",
-			ErrDuplicateSeatName, g.key, len(g.members), describeSeats(g.members, false)))
+		errs = append(errs, &DuplicateError{
+			Kind: DuplicateSeatName, Key: g.key, Seats: seatsOf(g.members),
+			Err: fmt.Errorf(
+				"%w %q: %d seats carry it (%s). A unit's lead and every manages "+
+					"entry name exactly one seat, and resolve to the first seat of "+
+					"that name, so give each of these seats its own name",
+				ErrDuplicateSeatName, g.key, len(g.members), describeSeats(g.members, false)),
+		})
 	}
 	return errors.Join(errs...)
 }
@@ -683,14 +689,19 @@ func (o *Organization) validateUnitNames() error {
 	var errs []error
 	for _, g := range groups {
 		places := make([]string, len(g.members))
+		units := make([]*Unit, len(g.members))
 		for i, m := range g.members {
 			places[i] = m.place
+			units[i] = m.unit
 		}
-		errs = append(errs, fmt.Errorf(
-			"%w %q: %d units carry it (%s). A manages entry and a seat's unit "+
-				"reference name exactly one unit, and resolve to the first unit "+
-				"of that name, so give each of these units its own name",
-			ErrDuplicateUnitName, g.key, len(g.members), strings.Join(places, "; ")))
+		errs = append(errs, &DuplicateError{
+			Kind: DuplicateUnitName, Key: g.key, Units: units,
+			Err: fmt.Errorf(
+				"%w %q: %d units carry it (%s). A manages entry and a seat's unit "+
+					"reference name exactly one unit, and resolve to the first unit "+
+					"of that name, so give each of these units its own name",
+				ErrDuplicateUnitName, g.key, len(g.members), strings.Join(places, "; ")),
+		})
 	}
 	return errors.Join(errs...)
 }
@@ -777,6 +788,15 @@ func groupBy[T any](members []T, key func(T) string) []duplicateGroup[T] {
 	return out
 }
 
+// seatsOf is the seats of a group, in the order they were met.
+func seatsOf(placed []placedSeat) []*Role {
+	out := make([]*Role, len(placed))
+	for i, s := range placed {
+		out[i] = s.role
+	}
+	return out
+}
+
 // describeSeats renders colliding seats for one grouped message. byName says
 // what tells them apart: their names when they share a handle, their handles
 // when they share a name.
@@ -803,13 +823,13 @@ func (o *Organization) validateLeadSchedules() error {
 		if lead == nil || !lead.IsHuman() {
 			continue
 		}
-		for _, s := range u.Schedules {
+		for i, s := range u.Schedules {
 			if !s.IsEnabled() || !s.TargetsLead() {
 				continue
 			}
-			errs = append(errs, fmt.Errorf(
+			errs = append(errs, &UnitError{Unit: u, Field: []any{"schedules", i}, Err: fmt.Errorf(
 				"unit %q: schedule %q: %w: it targets the unit lead, but the effective lead %q is a human seat — define the schedule on an agent seat instead",
-				u.Name, s.Name, ErrUnrunnableSchedule, lead.Name))
+				u.Name, s.Name, ErrUnrunnableSchedule, lead.Name)})
 		}
 	}
 	return errors.Join(errs...)
