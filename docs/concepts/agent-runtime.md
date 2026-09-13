@@ -1,60 +1,59 @@
 # Agent Runtime
 
-The agent runtime (`internal/agent`) manages agent lifecycle, execution, and memory.
+The agent runtime (`internal/agent`, wired together by `internal/engine`) runs a seat's turns: what wakes a seat, what a turn is handed, and how the process stops without abandoning one.
 
-> **Per-turn execution:** every agent turn runs through the two-stage **Executor → Reviewer** [Turn Engine](turn-engine.md). Every agent turn described on this page dispatches into `turn.Engine.Run`, which owns concurrency, OTel context restoration, phase dispatch with the iteration cap and stall detection, ephemeral sub-agent spawning, and the runtime invariants (delegation-depth cap, sub-agent tool allowlist, budget cascade). The sections below describe the surrounding lifecycle; the turn-engine doc describes what happens inside a turn.
+> **Per-turn execution:** every agent turn runs through the two-stage **Executor and Reviewer** [Turn Engine](turn-engine.md). A seat's inbox partition reaches `engine.Dispatcher.Dispatch`, which screens it (ownership, posture, duplicates, the completion ledger), merges a coalesced conversation, restores the trigger's trace and hands one request to the turn. The turn pins the epoch, builds the seat's runner, runs the onboarding pass when one is due, and then calls `turn.Run`, which owns the rounds: the delegation-depth check, the wall-clock cap, the engine's own delivery check, the stall guard and the iteration cap. The sections below describe the surrounding lifecycle; the turn-engine doc describes what happens inside a turn.
 
 ---
 
-## Agent Definition vs Agent Instance
+## Seat Definition and the Runner
 
-Each **agent seat** (`Role.kind == "agent"`) maps 1:1 to an AgentDefinition and a single AgentInstance. [Human seats](humans-in-the-org.md) are never spawned — they exist only in the `Organization` and resolve through the party-level `HandleRegistry` API.
+Each **agent seat** (`kind: agent`, the default) is one `roles:` entry, and there is no long-lived agent object behind it. The authored `config.Role` becomes an `org.Role` in the epoch's `Organization`, and every turn builds a fresh **runner** for that seat from the epoch it pinned. [Human seats](humans-in-the-org.md) are never run: they exist in the `Organization` and resolve through the party registry (`notify.Registry`).
 
-**Identity is deterministic.** `AgentInstance.id` is computed as
-`uuid5(AGENT_ID_NAMESPACE, f"{org.name}:{handle}")` (see
-`org.Organization.AgentIDFor`).  The same role in the same org
-always lands on the same `UUID` across processes, machines, and
-restarts.  Anything keyed by `agent.id` -- ``agent_diary`` rows,
-``agent_onboarding_markers`` rows, ``counterparty_profiles`` keyed
-by ``observer_handle`` -- therefore survives engine restarts.
+**Identity is deterministic.** A seat's agent id is `org.DeriveAgentID(company name, handle)`: a UUIDv5 over `"<company name>:<handle>"` in a fixed namespace (`org.Organization.AgentIDFor` applies it to an agent seat). The same seat in the same company lands on the same UUID across processes, machines and restarts, which is what lets any node address a seat another node is running. The seat's memory is keyed by that id or by the handle itself: `agent_diary` and `agent_onboarding_markers` rows by the agent id, `episodes` and `synthesized_skills` by the handle, and `counterparty_profiles` by the observing seat's handle. All of it survives engine restarts.
 
 > **Rename caveat.** *Both* inputs are part of the derived id: changing
-> a role's handle **or the organisation's `name`** creates a new derived
+> a seat's handle **or the company's `name`** creates a new derived
 > id and orphans the prior per-agent rows (diary, onboarding markers,
-> counterparty profiles).  The seat keeps working — it has simply lost
-> its memory.  A company rename does this to *every* seat at once, so
-> settle `name` and each `handle` before the company runs.  (An explicit
-> `handle` on each role pins half of it; nothing pins the org name.)
+> counterparty profiles). The seat keeps working; it has simply lost
+> its memory. A company rename does this to *every* seat at once, so
+> settle `name` and each `handle` before the company runs. (An explicit
+> `handle` on each role pins half of it; nothing pins the company name.)
 
 ```mermaid
 flowchart LR
-    R["<b>Role</b> (config)<br/>name, backstory<br/>goal, manages<br/>handle, email<br/>responsibilities<br/>behavioral_guidelines<br/>llm, slack, github<br/>mcp_env"]
-    D["<b>AgentDefinition</b><br/>role: Role<br/>org: Organization<br/>system_prompt"]
-    I["<b>AgentInstance</b> (runtime)<br/>id: UUID<br/>definition: AgentDefinition<br/>state: AgentState<br/>current_task_id: str<br/>handle, email<br/>token counters"]
-    R -->|builds| D --> I
+    R["<b>config.Role</b> (authored)<br/>name, handle, email<br/>goal, backstory, manages<br/>responsibilities<br/>behavioral_guidelines<br/>llm, integrations, mcp_env"]
+    S["<b>org.Role</b> (in the epoch)<br/>per-phase provider chains<br/>chat identities<br/>normalized manages and mcp_env"]
+    T["<b>runner.Runner</b> (one per turn)<br/>per-phase prompts<br/>the seat's tool registry<br/>provider chains, budget meter<br/>prefetched context blocks"]
+    R -->|"Role.Seat()"| S -->|"Company.RunnerFor"| T
 ```
 
-For team lead agents, the system prompt includes a **team roster** — a summary of each direct report's name and handle. Detailed per-member profiles (skills, backstory, tools) render directly into the lead's executor prompt from the in-memory `Organization` model when the lead needs to reason about assignment.
+For a seat with direct reports, the executor prompt includes a **team roster**: each report's name and handle with a compact profile (background, goal, responsibilities), rendered from the in-memory `Organization` so the lead can reason about who to assign work to.
 
 ---
 
 ## Agent States
 
+The engine keeps no per-seat state machine. What a seat is doing is derived from its events by the dashboard's live projection (`internal/api/livestate`), and the states it reports are these:
+
 ```mermaid
 stateDiagram-v2
-    [*] --> Created
-    Created --> Idle
-    Idle --> Working
-    Working --> Idle
-    Idle --> Terminated
-    Working --> Terminated
-    Terminated --> [*]
+    [*] --> Offline
+    Offline --> Idle: this node holds the seat
+    Idle --> Working: agent_phase_started
+    Working --> Idle: agent_turn_completed
+    Working --> Afk: llm_unavailable, turn.guard_breach, budget_exhausted
+    Afk --> Working: the next phase starts
 ```
 
-- **Created** — instantiated but not yet registered with the engine
-- **Idle** — listening for events, available for task assignment
-- **Working** — actively executing a task (LLM calls in progress)
-- **Terminated** — removed from the company
+- **Offline**: no node this API can see is serving the seat. The roster marks a seat idle only when this node holds its lease, so on a fleet a seat a peer is running reads as offline here; the fleet view answers who holds what.
+- **Idle**: the seat is held, its mailbox is attached, and no turn is running.
+- **Working**: a phase has started and the turn has not completed.
+- **Afk**: an engine-detected failure stopped the turn (no model answered, a turn guard fired, or the token budget ran out). The cause is kept until the seat does real work again.
+
+The dashboard adds one state of its own: a seat whose detached [sandbox run](code-sandbox.md) is still in flight reads as busy even though the turn that started the run has completed.
+
+How a seat comes to be held, and what happens when it is released, is [Seat Ownership](seat-ownership.md).
 
 ---
 
@@ -87,7 +86,7 @@ Each agent, when triggered (by event or task assignment), executes a **turn** th
    └── done | self_iterate (loop back, carrying the prior-work ledger
          so the next round does only the gap) | failed
 
-5. Emit events, update memory, return to Idle
+5. Publish agent_turn_completed and turn_completed; reflection consumes the latter
 ```
 
 The executor and the reviewer can run on different LLM models — see the [Turn Engine](turn-engine.md#per-phase-llm-models) doc.
@@ -125,7 +124,7 @@ flowchart TD
     S6 -->|"LLM responds without tool_calls"| DONE["phase ends"]
 ```
 
-Both builtin and MCP tools produce identical tool definition schemas. From the LLM's perspective, `lookup_colleague` (builtin) and `jira_create_issue` (MCP) look the same — a function it can request the engine to call.
+Both builtin and MCP tools produce identical tool definition schemas. From the LLM's perspective, `lookup_colleague` (builtin) and an MCP server's issue-creation tool look the same: a function it can ask the engine to call.
 
 ---
 
@@ -135,51 +134,55 @@ Under the two-stage [Turn Engine](turn-engine.md), each phase builds its own nar
 
 | Phase | What's in the prompt |
 |---|---|
-| **Executor** | Identity (role, unit, goal, manager, direct reports, chat channel), full policy text, role profile (backstory + responsibilities + behavioral guidelines), unit context (purpose + goals), team roster with per-member profile (leads only), the executor's contract, [Tool Skills](tool-skills.md) **catalogue** (one-line summary per triggered skill), **slim** tool catalogue (builtin tool names + MCP server names; MCP tool names hidden behind ``list_mcp_server_tools``). Plus the five learning prefetches: ``## Similar prior work`` (episodes), ``## Personal memory`` (diary), ``## Synthesized skills you've learned``, ``## Relevant knowledge`` (a knowledge-base search built from the trigger), ``## First-turn onboarding`` (until ``mark_onboarded`` fires). On rounds after the first, the user message also carries the [prior-work ledger](turn-engine.md#prior-work-ledger-across-self_iterate-rounds) as ``## Already done earlier in this turn``. |
+| **Executor** | Identity (role, unit, goal, manager, direct reports, team channel), company mission and vision, full policy text, role profile (backstory, responsibilities, behavioral guidelines), unit context (purpose, goals), team roster with per-member profile (leads only), the `## Human colleagues` note (only in a company with human seats), the executor's contract, [Tool Skills](tool-skills.md) **catalogue** (one-line summary per triggered skill), **slim** tool catalogue (builtin tool names + MCP server names; MCP tool names hidden behind ``list_mcp_server_tools``). Plus the five learning prefetches: ``## Similar prior work`` (episodes), ``## Personal memory`` (diary), ``## Synthesized skills you've learned``, ``## Relevant knowledge`` (a knowledge-base search built from the trigger), ``## First-turn onboarding`` (until ``mark_onboarded`` fires). On rounds after the first, the user message also carries the [prior-work ledger](turn-engine.md#prior-work-ledger-across-self_iterate-rounds) as ``## Already done earlier in this turn``. |
 | **Review** | One-line identity, the round's own account of what it set out to do, the outcome word (and who wrote it), the verbatim tool log, the text it produced, the decision-enum contract, and the [Tool Skills](tool-skills.md) catalogue for MCP-server-keyed skills (operator-scoped to the review phase). On rounds after the first, a `## Earlier rounds (already delivered)` section carries the [prior-work ledger](turn-engine.md#prior-work-ledger-across-self_iterate-rounds) so the duplicate-delivery rule holds turn-wide. No tool catalogue, no policies, no roster, no prefetch. |
-| **Sub-agent** | Parent-provided task prompt, [Tool Skills](tool-skills.md) catalogue scoped to the parent-passed tool allowlist, then the mandated runtime preamble (no further sub-agents, no colleague contact, concise final answer). |
+| **Worker** (`delegate`) | The worker's persona (a `workers:` template or the parent's inline prompt), the [Tool Skills](tool-skills.md) catalogue scoped to the tools the worker was granted, the slim tool catalogue, then the mandated runtime preamble (no further delegation, no colleague contact, read-only discovery only, and end by calling `submit_result`). |
 
 Why the split: the executor is the frame making every ownership / delegation / policy-sensitive decision AND acting on it, so it gets the whole picture — the two-prompt engine's real cost was never the tokens saved by splitting them, it was sending the identity scaffold twice and throwing away everything the planner had read. The reviewer's question is narrower: is this round's work right, given what the record says it did. Standing memory, the team's docs and the requester's traits are what the executor needed to DO the work; in front of a reviewer they compete with the evidence it is meant to judge.
 
 ### Built-in engine scaffolding
 
-Engine guardrails ("event triage framework", "escalation judgement", "tool usage instructions", "knowledge-system usage") are carried by tool descriptions (`search_knowledge`, colleague-surface tools) and by the executor/review contracts themselves — not by dedicated prompt prose. Each tool's one-line description tells the LLM when to use it; the per-phase contract tells the LLM what output shape is expected. There is no special escalation mechanism — when stuck, an agent reaches its manager with the same colleague-surface tools it uses for any other collaboration (a Slack mention, a Jira comment, `a2a_ask`); the reviewer routes a blocked turn back through `self_iterate` so the next round makes that outreach (no `escalate` tool, and no `ask_colleague` decision).
+Engine guardrails (event triage, escalation judgement, tool usage, knowledge-system usage) are carried by tool descriptions (`search_knowledge`, colleague-surface tools) and by the executor/review contracts themselves — not by dedicated prompt prose. Each tool's one-line description tells the LLM when to use it; the per-phase contract tells the LLM what output shape is expected. There is no special escalation mechanism — when stuck, an agent reaches its manager with the same colleague-surface tools it uses for any other collaboration (a Slack mention, a Jira comment, `a2a_ask`); the reviewer routes a blocked turn back through `self_iterate` so the next round makes that outreach (no `escalate` tool, and no `ask_colleague` decision).
 
 Tool- and MCP-server-specific guidance (when to call ``reflect_and_persist``, how to mention teammates on Jira vs Slack, when to author code via the [code sandbox](code-sandbox.md) and what the GitHub tools are for) lives in the [Tool Skills](tool-skills.md) registry — modular knowledge-base-sourced fragments (Confluence pages) where each skill carries a short **summary** (always inline in the per-phase catalogue) and a rich **body** that loads on demand via the always-on ``load_tool_skill`` builtin. The engine ships no skill prose; operators seed the skills container with ``crewlet confluence import`` and edit pages in the backend's editor thereafter.
 
-There is no single monolithic system prompt to read: `internal/agent/prompts` builds one PER PHASE (`BuildOnboarding`, `BuildExecutor`, `BuildReview`, `BuildSubagent`) from the same identity sections, and each phase sees only the guidance and the tool catalogue that phase is meant to act on.
+There is no single monolithic system prompt to read: `internal/agent/prompts` builds one per phase (`BuildOnboarding`, `BuildExecutor`, `BuildReview`, `BuildSubagent`) from the same identity sections, and each phase sees only the guidance and the tool catalogue that phase is meant to act on.
 
 ---
 
 ## Built-in Tools
 
-Every agent has access to these built-in tools (registered in the `ToolRegistry`):
+The engine ships these tools (`internal/agent/builtin`, registered in the epoch's `tools.Registry` with the origin `builtin`). A tool whose dependency is absent is **omitted** rather than registered and broken, so a company without a store, a knowledge backend or a sandbox gets exactly the tools it can serve, and the node logs the list it registered (`builtin_tools_registered`).
 
-| Tool | Purpose |
-|------|---------|
-| `lookup_colleague` | Resolve any agent identifier (handle, Slack user, Jira ID, etc.) — case-insensitive with substring / fuzzy fallback; returns a candidate list when ambiguous |
-| `use_skill` | Load one of the agent's own [synthesized skills](agent-learning.md#5-skillsynthesizer--skill-induction) on demand |
-| `load_tool_skill` | Load the full body of a [Tool Skill](tool-skills.md) by exact key (the catalogue carries only the summary). Required skills (the default; `required: false` opts out) must be loaded this way before the tools they cover can be called — the engine rejects earlier calls with a "load this skill first" error |
-| `refine_skill` | Patch a synthesized skill (append observation, replace body) |
-| `query_episodes` | Search the agent's own past turns by similarity |
-| `reflect_and_persist` | Capture a durable fact in the agent's private diary (LONG / SHORT) |
-| `refresh_memory` | Re-run the personal-memory filter mid-turn with a context hint |
-| `mark_onboarded` | Stamp the agent's onboarding marker after reading the relevant knowledge-base pages |
-| `search_knowledge` | Search the company knowledge base on a query the executor writes itself, over the same seam as the turn-start `## Relevant knowledge` prefetch. It is what a seat woken by a bare pointer uses once it knows what the task actually needs — the prefetch's own search is gated off on such a trigger, because a query built from "PR #42 got a comment" matches the wrong pages or none |
-| `delegate` | Hand narrowly-scoped work to one or more short-lived [workers](turn-engine.md#workers), optionally as a dependency graph. **Execute only**, and built per turn rather than registered once: it carries that turn's grant — the parent's own live tool set, minus the control tools and anything that writes to a shared surface — and that seat's visible worker templates, so it cannot be a shared registry entry. Absent when the seat's remaining token allowance cannot be read, because delegating with no readable ceiling is delegating with no ceiling |
+| Tool | Registered when | Purpose |
+|------|-----------------|---------|
+| `lookup_colleague` | always | Resolve any colleague identifier (handle, role name, a human's contact ID) to one seat, case-insensitively, with partial and fuzzy fallbacks; returns the candidate list when more than one seat matches |
+| `a2a_ask` | the node has a stream and a coordination store | Ask one AI colleague one question. The colleague is woken on its own inbox and answers in its own turn, so the call returns as soon as the question is sent |
+| `use_skill` | a learning store | Load one of the seat's own [synthesized skills](agent-learning.md#5-skillsynthesizer--skill-induction) on demand |
+| `refine_skill` | a learning store | Replace a synthesized skill's body with a corrected procedure; the previous version is kept |
+| `query_episodes` | a learning store | Recall the seat's own past turns: by meaning (`query`), by conversation, or most recent first |
+| `refresh_memory` | a learning store | Re-run the personal-memory filter mid-turn with a context hint |
+| `reflect_and_persist` | a learning store | Keep a durable fact in the seat's private diary (`kind`: `long`, the default, or `short`) |
+| `mark_onboarded` | a learning store | Stamp the seat's onboarding marker after reading the relevant knowledge-base pages (offered to the onboarding pass, not to the executor) |
+| `run_sandbox` | `providers.sandbox` is configured | Hand a code task to a coding agent in a [sandbox](code-sandbox.md); the executor suspends until the run reports |
+| `load_tool_skill` | the company publishes [Tool Skills](tool-skills.md) | Load the full body of a Tool Skill by exact key (the catalogue carries only the summary). Required skills (the default; `required: false` opts out) must be loaded this way before the tools they cover can be called, and the engine rejects earlier calls with a "load this skill first" error |
+| `search_knowledge` | a knowledge backend | Search the company knowledge base on a query the executor writes itself, over the same seam as the turn-start `## Relevant knowledge` prefetch. It is what a seat woken by a bare pointer uses once it knows what the task actually needs: the prefetch's own search is gated off on such a trigger, because a query built from "PR #42 got a comment" matches the wrong pages or none |
+| `delegate` | per turn, executor only | Hand narrowly-scoped work to one or more short-lived [workers](turn-engine.md#workers), optionally as a dependency graph. Built per turn rather than registered once: it carries that turn's grant (the parent's own live tool set, minus the control tools and anything that writes to a shared surface) and that seat's visible worker templates, so it cannot be a shared registry entry. Absent when the seat's remaining token allowance cannot be read, because delegating with no readable ceiling is delegating with no ceiling |
 
-Colleague outreach happens through the upstream MCP tools directly (on the common stack: `slack_conversations_postMessage`, `jira_add_comment`, `jira_update_issue`, `confluence_add_footer_comment`, `request_copilot_review` — these are *examples*, not engine-known names) — there are no thin engine-side wrappers (`slack_message`, `jira_comment`, etc.); `register_colleague_tools` registers only `a2a_ask`, the private agent-to-agent bus. Use whichever chat / issue-tracker / wiki / code-host tools your MCP servers expose for any collaboration a human teammate would reasonably want to see; `a2a_ask` is narrowly scoped to tight-loop / mechanical sync between agents. The engine prompts name none of these — they describe the *capability* and the LLM picks the tool from its catalogue (see [Tool Capabilities](tool-capabilities.md)). See [Turn Engine — Colleague-surface tools](turn-engine.md#colleague-surface-tools) for when to use each.
+The phase tools are not in the registry: the runner adds `submit_work`, `activate_tool` and `list_mcp_server_tools` to the executor's surface, `submit_review` to the reviewer's, and `submit_result` plus a discovery pair of its own to a worker's.
+
+Colleague outreach happens through the upstream MCP tools directly (on the common stack: a chat server's post-message tool, the tracker's comment and update tools, the wiki's comment tool, the code host's review tools; these are examples, not engine-known names). The engine ships no chat or tracker wrappers of its own; `a2a_ask` is the one colleague tool it registers, and it is narrowly scoped to tight-loop, mechanical sync between agents. Use whichever chat, issue-tracker, wiki or code-host tools your MCP servers expose for any collaboration a human teammate would reasonably want to see. The engine prompts name none of these: they describe the *capability* and the LLM picks the tool from its catalogue (see [Tool Capabilities](tool-capabilities.md)). See [Turn Engine: Colleague-surface tools](turn-engine.md#colleague-surface-tools) for when to use each.
 
 Decisions use the agent's Slack MCP tools and team channel — see [Decision Framework](decision-framework.md).
 
 ### MCP Tools
 
-MCP tools (Jira, Slack, GitHub, etc.) are dynamically discovered from configured MCP servers at engine boot and registered alongside builtins. The executor does **not** see every MCP tool name in its system prompt (a role with 50–150 MCP tools would push 15–25 KB of catalogue into every prompt); instead the prompt lists *MCP server names* and the LLM walks the discover-then-activate flow:
+MCP tools (Jira, Slack, GitHub, and so on) are discovered from the configured MCP servers and registered alongside builtins: a shared server's tools when an epoch is applied, and a `shared: false` server's tools into the seat's own registry when the node acquires that seat's lease. The executor does **not** see every MCP tool name in its system prompt (a role with 50–150 MCP tools would push 15–25 KB of catalogue into every prompt); instead the prompt lists *MCP server names* and the LLM walks the discover-then-activate flow:
 
 1. `list_mcp_server_tools(server)` — returns the `name: description` listing for one server.
 2. `activate_tool(name)` — promotes a tool from the catalogue into `tools=[...]` so the LLM can call it on the next round.
 
-Both meta-tools are available to the executor and to onboarding. Sub-agents have a fixed parent-chosen surface and cannot discover or activate tools (`activate_tool` / `list_mcp_server_tools` are on the sub-agent denylist).
+Both meta-tools are available to the executor and to the onboarding pass. A worker cannot use the parent's pair (`activate_tool` and `list_mcp_server_tools` are on the worker denylist, because they would activate tools onto the parent's surface); it gets a pair of its own, bound to its filtered grant, so it can discover and activate only read-only tools the parent could already reach.
 
 Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring goes through the [code sandbox](code-sandbox.md). See [GitHub Integration](../integrations/github.md).
 
@@ -187,12 +190,13 @@ Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the
 
 ## Agent Registry
 
-The `AgentPool` serves as a registry of all agent instances:
+There is no pool of agent instances. Three structures answer the questions a pool would:
 
-- Spawns one instance per agent seat (1:1 mapping; human seats are skipped)
-- Looks up agents by ID, email, or handle (for webhook routing)
-- Handles agent failures (restart with fresh instance, same identity)
-- Supports dynamic changes (add/remove agents at runtime via org hot-reload)
+- **Which seats exist**: the epoch's `Organization`. `Company.Seats()` lists its agent seats for placement; human seats are left out.
+- **Which seats this node runs**: the seat host (`internal/seat`), from the leases it holds. A node claims its fair share, attaches each seat's mailbox last, and releases a seat whose role an apply removed. See [Seat Ownership](seat-ownership.md).
+- **Who an event is for**: the party registry (`notify.Registry`), rebuilt on every apply, which resolves a handle, a role name, a derived agent id, an email or an external ID on any connected surface. Resolution is derived from the organization, so the node that consumes a delivery can route to a seat it is not running.
+
+A failure is scoped to a turn, not to an instance: a phase that breaks fails that turn (see [Turn Engine](turn-engine.md)), and a seat whose acquire hook fails is released and not re-attempted on that node for one lease TTL, which gives a peer a clear run at it.
 
 Since each agent is a unique individual, there is no load-balancing or role-based routing. Task assignment is a team lead decision, not an engine algorithm.
 
@@ -200,7 +204,7 @@ Since each agent is a unique individual, there is no load-balancing or role-base
 
 ## Execution Model
 
-Agents are **callback-driven** — the Engine subscribes a handler per agent on the EventQueue. When messages arrive on an agent's inbox topic (`crewlet.agent.{handle}.inbox`), the queue invokes the handler. No dedicated loop or polling.
+Agents are **callback-driven**. When a node acquires a seat it attaches a handler to the seat's durable subscription (`agent-{handle}`) on its inbox topic (`crewlet.agent.{handle}.inbox`), and the queue invokes that handler as messages arrive. There is no per-agent loop to run.
 
 Inbox delivery is **batched per conversation** (see [Event System — Inbox batching](event-system.md#inbox-batching--coalescing)): events that queued up while the agent was busy — or within the configured linger window — are drained together and partitioned by conversation key, so ten comments on one Jira issue or Slack thread reach the handler as ONE batch and trigger ONE digest turn instead of ten. Every partition — one event or several — reaches the same dispatcher and runs one [Turn Engine](turn-engine.md) turn; what differs is only the ask it is handed. A single-event partition is handed its own event, and a multi-event one is merged into a single coalesced notification first, so the third-party app's scaffolding renders once and the seat is told to treat the thread as one piece of work.
 
@@ -236,41 +240,45 @@ SIGINT / SIGTERM trigger a **close-the-door-then-drain** shutdown, designed so a
 ```mermaid
 flowchart TD
     SIG["Signal arrives (1st)<br/><i>signals handed back to the OS</i>"] --> S0
-    S0["1. Embedded API server stops<br/>dashboard · REST · webhooks"] --> S1
-    S1["2. Quiesce every held seat"] --> S2
-    S2["3. Stop work producers<br/>timers · scheduler"] --> S3
-    S3["4. Wait for in-flight handlers"] --> S4
-    S4["5. Release seats; stop sandbox,<br/>transports, maintenance"] --> S5
-    S5["6. Close stream + store"]
+    S0["1. HTTP surface stops<br/>dashboard · REST · webhooks"] --> S1
+    S1["2. Watchdog disarmed; the seat host starts draining<br/>close the concurrency gate · quiesce every held seat"] --> S2
+    S2["3. Wait for in-flight handlers"] --> S3
+    S3["4. Release every seat"] --> S4
+    S4["5. Stop the duties<br/>sandbox waiter · notifications · maintenance<br/>integrations · memory sync · learning · scheduler"] --> S5
+    S5["6. Reap shared MCP servers; close stream + store"]
     SIG -.->|"2nd signal:<br/>immediate exit"| X["Process dies"]
 ```
 
-1. **The API server stops** — the listener is closed before anything is
+1. **The HTTP surface stops.** The listener is closed before anything is
    drained, so no new webhook, REST call or dashboard socket can arrive to
    create work the drain would then have to wait for.
-2. **Quiesce every held seat** — the node stops taking new work while staying
-   attached. This is what makes the wait below terminate: without it the
-   mailbox keeps feeding this node work for as long as its peers keep
-   publishing, and "wait until nothing is running" never comes true.
-   Quiesce is also the *reversible* verb, so a drain that turns out to be a
-   shed can be undone.
-3. **Stop work producers** — deadline timers and the cron scheduler, and
-   close the concurrency gate. Turns still parked at it are released at
-   once and their deliveries deferred — left unacked, so a peer picks them
-   up rather than waiting out a redelivery timer — instead of starting
-   fresh LLM rounds mid-drain. The gate closes *before* the mailboxes
-   quiesce: quiescing stops new deliveries, but a turn already delivered
-   and parked behind a slot is past that point. Closing is reversible, so
-   a node that drained and then converged serves again rather than
+2. **The node starts draining.** The watchdog is disarmed first, because a
+   drain legitimately blocks for a long time and an armed watchdog would read
+   that as a wedge. The seat host stops claiming and gives up its presence
+   lease, and the concurrency gate closes: turns parked at it are released at
+   once and their deliveries deferred (left unacked, so a peer picks them up
+   rather than waiting out a redelivery timer) instead of starting fresh LLM
+   rounds mid-drain. Then every held seat is **quiesced**: it stays attached
+   and stops taking new deliveries. The gate closes *before* the quiesce,
+   because quiescing stops new deliveries while a turn already delivered and
+   parked behind a slot is past that point. Quiescing is what makes the wait
+   below terminate: without it the mailbox keeps feeding this node work for as
+   long as its peers keep publishing. Both steps are reversible, so a node that
+   drained on a config posture and then converged serves again rather than
    holding its seats and refusing every turn.
-4. **Wait for in-flight handlers** — indefinitely; running turns finish
-   their rounds until the count hits 0, with `drain_in_progress` logging the
+3. **Wait for in-flight handlers**, indefinitely: running turns finish their
+   rounds until the count hits 0, with `drain_in_progress` logging the
    in-flight count every 10 s.
-5. **Release the seats**, then stop the sandbox waiter, the notification
-   transports and the maintenance duties — the waiter last of the three to
-   start stopping, because its keepalive is what stops a running box being
-   reaped while turns are still finishing.
-6. **Close the backends** — the stream connection and the store file.
+4. **Release every seat**, on a bounded budget of one heartbeat interval, so
+   peers can claim them at once rather than waiting out the lease TTL. The
+   drain then logs `drain_complete`.
+5. **Stop the duties**: the sandbox waiter first (its keepalive is what stops
+   a running box being reaped while turns are still finishing), then the
+   notification transports, the maintenance duties, the integration reconcile
+   loop, memory sync, the learning passes, the cron scheduler and the
+   credential cooldown refresh.
+6. **Close the backends**: the shared MCP servers are reaped, then the
+   stream connection and the store file are closed.
 
 **Let LLMs finish their rounds — but only the running ones.** The drain distinguishes two kinds of in-flight turn. Turns already past the concurrency gate (model rounds under way) run to completion: they may have fired side effects, and abandoning that work buys a faster deploy by throwing away what was nearly done. Turns delivered before the quiesce but still *waiting* for a slot abort immediately — they have called no model and fired nothing, so their trigger is simply deferred. Without this split, a backlog parked behind `max_concurrent` would run full multi-minute executor → reviewer turns one after another during a shutdown that waits for them indefinitely.
 
@@ -306,12 +314,14 @@ you opted into by sending the second signal.
 
 On a **split deployment** the standalone API process is a separate process and keeps serving while an engine node drains, but it has no engine reference, so it reports the fleet rather than that node's in-flight count.
 
-The count is available programmatically up to the moment the surface closes:
+The same facts are on `GET /health` whenever the embedded API is still answering, which is the case when a node drains on a [config posture](control-plane.md) rather than on a signal:
 
-- the engine's in-flight turn count
-- `engine.shutting_down` — `True` from the first moment of `stop()` (unlike `is_running`, which only flips once teardown completes)
-- `GET /health` — JSON includes `in_flight` and `shutting_down`, and `status` reads `"shutting_down"` during the drain (embedded API only; the standalone API process omits these fields because it has no engine reference)
+- `in_flight`: the deliveries this node's handlers are working on
+- `shutting_down`: true from the moment the seat host starts draining
+- `status` reads `"shutting_down"` during the drain
+
+The standalone API process omits `in_flight` and `shutting_down`, because it has no engine to ask.
 
 The console shows the same story: the first Ctrl+C prints what is being waited for and how to escalate, and the engine logs `drain_in_progress` with the in-flight count every 10 seconds until the drain converges (`drain_complete`).
 
-Per-agent visibility is finer-grained: each working agent's row carries `current_phase` (`onboarding` / `execute` / `review`) plus the round number, derived from `AgentPhaseStarted` events the turn engine emits at the top of each phase.
+Per-agent visibility is finer-grained: each working agent's row carries `current_phase` (`onboarding`, `execute`, `review`, or `subagent` for a worker) plus the round number, derived from the `agent_phase_started` events the runner publishes at the top of each phase.
