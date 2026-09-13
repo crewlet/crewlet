@@ -477,8 +477,8 @@ CHANGE rather than about state:
 |---|---|
 | `list_work_items` | the query surface above, filtered any way a view can be — including `preset=my_queue`, which is the seat's own open work. Beside the obvious filters it takes `type`, `priority`, `parent` (an item's subtasks), `reporter`, `watcher`, `unit`, `goal`, the three date keys (`due`, `updated`, `created`), `sort`, `cursor` for the next page, and **`field_filters`** keyed by field slug — which is how a seat reaches the custom fields its company declares |
 | `get_work_item` | one task with its recent comments, history, links and **custom fields**. `include` narrows to the parts you need; `comments_cursor` pages back through a long thread; **`comment`** opens one comment by id with its body exactly as it was written; **`body: true`** returns the task's own description in full. Comment bodies in the thread are excerpts ending in `…`, because twenty at their full length is ten times what one tool answer may weigh — `comment` is how the rest is read, and on its own it answers the item and that comment and nothing else. The description is excerpted the same way and for the same reason, and `body` is its counterpart — each answers on its own, and naming both gets the comment, because it is the narrower ask. Each field value comes back with the slug, name and type that explain it, and says when it is **hidden** (its declaration was archived), **foreign** (mirrored in from another tracker) or **undeclared** (a value this company explains nowhere) |
-| `create_work_item` | file a task or a subtask. `fields` sets custom fields by **slug**, and the create is refused naming any the project requires and this call leaves out |
-| `update_work_item` | change any field, with an optional `if_match`. `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration |
+| `create_work_item` | file a task or a subtask. `fields` sets custom fields by **slug**, and the create is refused naming any the project requires and this call leaves out. It also takes the five **scheduling** arguments below |
+| `update_work_item` | change any field, with an optional `if_match`. `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the five **scheduling** arguments too, where `null` on any of them CLEARS it |
 | `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |
 | `comment_on_work_item` | add to the thread, optionally as a **question** somebody owes an answer to (`ask`) or as the **answer** that closes one (`answers`) |
 | `search_work_items` | find an item by what it **says** — ranked over every item's title *and description*, which no filter reaches. `list_work_items`' own `text` is a substring of the key or title and cannot see a description at all, so the two are different questions: one narrows a board, the other ranks a corpus. A node still building its index says so rather than answering empty, because "there is nothing" is what gets a duplicate filed |
@@ -491,6 +491,33 @@ CHANGE rather than about state:
 | `sprint_report` | how a project's recent sprints went — committed, added, removed, done and remaining, per sprint and per person, in the project's own measure |
 | `task_activity` | what HAPPENED, in the order the log made it happen: every change to one task or one project, with who made it and exactly which fields moved |
 | `my_work` | everything this seat is expected to look at, in one call — see below |
+
+### When a task is due, how big it is, and which sprint it is in
+
+Both write tools take five scheduling arguments, and every one of them is the
+input to something the tracker already reports:
+
+| Argument | What it sets |
+|---|---|
+| `due` | when the task is due. A date (`2031-04-16`), an instant, or one of the relative words the `due=` FILTER reads — `today`, `tomorrow`, `eow` (this Friday's end), `eom`, or an offset like `+7d`. One grammar for both, because a seat that can ask for "everything due this week" must be able to say "due this week" about one task. A token that named a DAY sets the all-day flag, so a renderer shows "16 April" rather than "16 April, 00:00" for a date nobody gave a time to. |
+| `start` | when work on it should start, in the same spellings. |
+| `estimate_minutes` | how long it is expected to take. |
+| `points` | how big it is on the team's own scale. |
+| `sprint` | the sprint number it is planned into. Setting it OPENS the task's membership of that sprint, which is what every sprint figure is derived from. |
+
+`estimate_minutes` and `points` are the two halves of a measure, and a sprint
+figure sums whichever one the project's own `measure` names — so setting the
+other leaves every figure at zero.
+
+On an **update**, passing `null` clears the value: "leave the due date alone"
+and "this task has no due date any more" are different edits, and a tool that
+could only express the first would make a date impossible to take back off. On
+a **create** there is nothing to clear, so `null` is ignored.
+
+A value this grammar cannot read is **refused naming the argument**, never
+dropped. Silently ignoring a due date is the worst of the three outcomes: the
+write succeeds, the answer says `applied`, and the task simply has no due date
+— which a model reads as having set one.
 
 `my_work` is the call a turn opens with, and it answers **seven lists** rather
 than one: the seat's priorities in the order somebody put them, the work it
