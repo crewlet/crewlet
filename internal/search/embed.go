@@ -31,9 +31,11 @@ import (
 // # What it costs, from the constants below
 //
 // EmbedBatchesPerTick × EmbedBatch = 1 024 sources a tick, on a one-minute
-// tick. A cold fill of 110 000 sources is ≈ 108 minutes and ≈ 860 batched
-// requests covering 110 000 inputs, billed once for the whole fleet — and
-// those three numbers do NOT move with the configured width, because the
+// tick — across EVERY corpus rather than each, divided between them round
+// robin by [Embedder.Tick], so the figures here are the company's and never
+// one corpus's. A cold fill of 110 000 sources is ≈ 108 minutes and ≈ 860
+// batched requests covering 110 000 inputs, billed once for the whole fleet —
+// and those three numbers do NOT move with the configured width, because the
 // provider bills per input TOKEN and `dimensions` is a truncation parameter it
 // already receives. The write rate IS a function of the width: 1 024 records ×
 // (4·D + envelope) per minute is ≈ 283 KB/s at 3 072, a factor of five under
@@ -56,6 +58,13 @@ const (
 	// trades cold-fill time against how much of a minute this job owns:
 	// eight puts a 110 000-source fill at under two hours while leaving
 	// the tick's wall clock dominated by the provider rather than by us.
+	//
+	// It is also the FAIRNESS FLOOR. [Embedder.Tick] hands these calls out
+	// one at a time, round robin over the corpora, so each of N corpora is
+	// guaranteed ⌊8/N⌋ of them however far behind its neighbours are — and
+	// [NewEmbedder] refuses a wiring with more corpora than there are calls
+	// to go round, because below one call apiece there is no per-tick share
+	// left to guarantee.
 	EmbedBatchesPerTick = 8
 
 	// EmbedInterval is how often the duty ticks.
@@ -84,17 +93,21 @@ const (
 	// refusing would remove it from the corpus entirely with nothing to
 	// say so.
 	EmbedInputBytes = 8 << 10
-
-	// EmbedStallWindow is how long the duty may make no progress before
-	// its alarm fires.
-	//
-	// THIRTY MINUTES, which is the threshold ANOTHER decision already
-	// made: it is well past the longest credential cooldown a rotating
-	// pool imposes and past any single provider outage a retry would ride
-	// out, so a duty that has embedded nothing for half an hour has a
-	// fault a person has to look at rather than one that is clearing.
-	EmbedStallWindow = 30 * time.Minute
 )
+
+// THERE IS NO STALL WINDOW HERE, deliberately, and the constant that used to
+// declare one is gone rather than wired up.
+//
+// It named thirty minutes of no progress as the point an alarm fires, and no
+// alarm read it — there is no progress timer on this duty at all, so the value
+// promised a surface that did not exist. Wiring one is what the alarm table's
+// own rule forbids: `recall_below_floor` already reports a duty that has
+// stopped, from the coverage the corpora themselves are counted at, and a
+// second threshold over the same event is a second opinion that drifts from
+// the first. A duty that embeds nothing shows up as coverage that stops
+// rising; a duty with nothing to embed shows up as coverage at one. A stall
+// window cannot tell those apart, which is why the reading is the fraction and
+// not the clock.
 
 // # Two corpora, and the seam is why there was ever one
 //
@@ -111,10 +124,11 @@ const (
 //
 // DECLARED BY THE CONSUMER, which is this file, and kept to what the duty
 // actually needs: the next batch of documents whose text has moved since the
-// vector was computed. Each source kind implements it over its own tables,
-// which is the seam that lets the page arm cross the estate boundary today —
-// pages are this node's own until they adopt the log — while the task arm is a
-// single anti-join in one file. Neither shape reaches the duty.
+// vector was computed. Each source kind implements it over its own tables, and
+// both are one anti-join in one file today — the page arm was the one that had
+// to cross the estate boundary, and the pages domain removed the boundary
+// rather than the seam. Neither shape reaches the duty, which is what let that
+// change cost this file nothing.
 type Corpus interface {
 	// Source is the kind this corpus supplies.
 	Source() Source
@@ -280,6 +294,28 @@ func NewEmbedder(d EmbedDeps) (*Embedder, error) {
 			"width %d", d.Embedder.Width())
 	case len(d.Corpora) == 0:
 		return nil, fmt.Errorf("search: the embed duty has no corpus")
+	case len(d.Corpora) > EmbedBatchesPerTick:
+		// REFUSED RATHER THAN SERVED UNFAIRLY. A tick divides
+		// EmbedBatchesPerTick provider calls round robin, so with more
+		// corpora than calls the ones past the eighth get none — not
+		// this tick and not any tick, because every tick starts the
+		// round at the front. That is the failure this whole file is
+		// written against: a source kind silently unsearchable by
+		// meaning, with a coverage gauge that sums the corpora
+		// reporting the company as merely behind. Refusing says so at
+		// the wiring, which is where the extra corpus was added.
+		//
+		// A CORPUS UNDER THE CEILING IS NOT FREE EITHER, and the bill
+		// is in [Embedder.Tick]: every corpus is selected at the whole
+		// tick's ceiling, so N of them read N x 1 024 whole documents
+		// — untruncated bodies and all — to embed 1 024. Read that
+		// paragraph before adding the third.
+		return nil, fmt.Errorf("search: the embed duty has %d corpora and a "+
+			"ceiling of %d provider calls a tick — every corpus must be "+
+			"guaranteed at least one call or the ones at the back of "+
+			"EmbedDeps.Corpora are never embedded at all; raise "+
+			"EmbedBatchesPerTick or embed fewer source kinds",
+			len(d.Corpora), EmbedBatchesPerTick)
 	}
 	if d.Logger == nil {
 		d.Logger = slog.New(slog.DiscardHandler)
@@ -300,29 +336,149 @@ func NewEmbedder(d EmbedDeps) (*Embedder, error) {
 // the first one would abandon the other seven batches and every corpus after
 // this one — so the corpus stops being embedded because of one document in it,
 // and the symptom is a search that quietly stops improving.
+//
+// # How the tick's provider calls are divided between the corpora
+//
+// ROUND ROBIN, ONE BATCH AT A TIME, and the shape it replaced is why: a single
+// budget spent corpus by corpus in order hands the whole tick to whoever is
+// first in [EmbedDeps.Corpora] whenever that corpus has [EmbedBatchesPerTick]
+// batches of backlog. A company writing tasks faster than 1 024 a minute — or
+// simply one still cold-filling a hundred thousand of them — never reached its
+// pages at all: not one page embedded, not one trashed page's vector
+// withdrawn, for as long as the task backlog refilled. And the symptom is the
+// one this file exists to prevent: page searches silently answering with the
+// lexical half only, while a coverage gauge that SUMS the corpora reports a
+// company that is merely behind.
+//
+// Round robin IS a reserved share plus the redistribution of what nobody used,
+// expressed as one rule rather than two. With every corpus behind, each gets
+// ⌊budget/N⌋ calls and the remainder goes to the ones at the front — an
+// advantage bounded by a single call. With any of them caught up or empty, its
+// turn is skipped and the rest take the calls it did not need, so the global
+// ceiling is still spent in full and a corpus with nothing to do wastes
+// nothing.
+//
+// The two alternatives, and what each costs:
+//
+//   - PROPORTIONAL TO BACKLOG is the other honest reading of "fair", and it
+//     re-creates the starvation with arithmetic in place of ordering: at a
+//     hundred tasks to one page, a page written this minute waits out the
+//     entire task backlog. Equal shares bound a corpus's worst-case staleness
+//     by ITS OWN size, which is the property a founder searching the wiki
+//     actually has to be able to reason about.
+//   - A ROTATING START INDEX fixes the starvation too, and needs memory across
+//     ticks that this duty does not have: the engine rebuilds it every tick
+//     because the provider and model are re-read on every config apply. It
+//     also makes each corpus's progress bursty — a whole tick for one, then a
+//     whole tick for the other — for identical throughput and a worse
+//     worst-case latency on both.
 func (e *Embedder) Tick(ctx context.Context) (int, error) {
 	dim := e.deps.Embedder.Width()
 	published := 0
-	budget := EmbedBatchesPerTick
 
-	for _, corpus := range e.deps.Corpora {
-		if budget <= 0 {
-			break
-		}
-		stale, gone, err := corpus.Stale(ctx, e.deps.Model, dim, budget*EmbedBatch)
+	// ONE SELECTION PER CORPUS PER TICK, ASKED FOR THE WHOLE TICK'S
+	// CEILING. Every batch a corpus is granted is sliced out of this one
+	// list and the corpus is never re-queried, because a record this tick
+	// published is not applied yet: a second selection inside the same tick
+	// returns the documents just embedded and pays the provider for them
+	// again. Asking for the ceiling rather than for the fair share is what
+	// lets a corpus take the calls its neighbours did not use — how many
+	// that is cannot be known until every corpus has answered.
+	//
+	// THE PRICE IS N SELECTIONS' WORTH OF ROWS TO SPEND ONE, and it is
+	// written as a function of N rather than of today's corpora because N
+	// is the term a later source kind moves: each corpus is asked for
+	// EmbedBatchesPerTick*EmbedBatch rows while the tick can embed that
+	// many in TOTAL, so with every corpus behind at once (N-1)/N of what
+	// was read is discarded — 1 024 documents at the two corpora shipped,
+	// 7 168 at the eight [NewEmbedder] allows. It is not only SQL work:
+	// [Document.Body] holds the UNTRUNCATED body, since the cut to
+	// EmbedInputBytes happens in [Document.text] at send time, so N x 1 024
+	// whole documents are live for the length of the tick and a third
+	// corpus is a 50 % rise in this duty's peak footprint before it embeds
+	// anything new. That is the figure to weigh when adding one. None of it
+	// is lost WORK — the selection is derived from the rows, so the next
+	// tick asks again.
+	//
+	// TWO SHAPES THAT WOULD BOUND THE READ WERE WEIGHED AND NOT TAKEN,
+	// because each buys it back with something load-bearing:
+	//
+	//   - A FAIR-SHARE FIRST PASS — ask each corpus for ceil(budget/N)
+	//     batches and top up whoever came back full — rations the FORGET
+	//     path by the same limit, because `gone` rides on this one
+	//     selection. Withdrawals are deliberately OUTSIDE the provider
+	//     budget (see the loop below), so rationing them by 1/N is exactly
+	//     the trade this file refuses: a page somebody deleted would stay
+	//     findable by meaning N times as long, to save rows on a tick whose
+	//     wall clock is eight provider round trips.
+	//   - A TOP-UP SELECTION for a corpus that exhausted its slice needs a
+	//     cursor the [Corpus] seam does not have. It would re-read the rows
+	//     it already took and filter them against an id set, since the
+	//     selection order is not promised to be total — a smaller bounded
+	//     waste plus a second query and an invariant nothing else here
+	//     depends on, rather than no waste.
+	stale := make([][]Document, len(e.deps.Corpora))
+	var failed []error
+	for i, corpus := range e.deps.Corpora {
+		docs, gone, err := corpus.Stale(ctx, e.deps.Model, dim,
+			EmbedBatchesPerTick*EmbedBatch)
 		if err != nil {
-			return published, fmt.Errorf("search: select stale %s sources: %w",
-				corpus.Source(), err)
+			// A SELECTION FAILURE COSTS ITS OWN CORPUS AND NOT THE
+			// TICK, for the same reason a batch failure costs its own
+			// batch — and here the reason is sharper: the corpora are
+			// visited in order, so returning on the first failure
+			// would let one corpus whose query cannot run starve every
+			// corpus behind it, tick after tick. That is the same
+			// starvation the round robin below exists to remove, and
+			// an ordering hazard is not less of one for arriving as an
+			// error. It is still reported: the tick returns every
+			// failure it carried.
+			e.deps.Logger.WarnContext(ctx, "search_embed_select_failed",
+				"source", string(corpus.Source()), "error", err.Error())
+			failed = append(failed, fmt.Errorf(
+				"search: select stale %s sources: %w", corpus.Source(), err))
+			continue
 		}
+		stale[i] = docs
+
+		// A FORGET COSTS NO PROVIDER CALL, so it is outside the budget
+		// the calls are rationed by: withdrawing the vector of a task
+		// somebody deleted is a correction the company has already paid
+		// for, and rationing it would leave deleted work findable by
+		// meaning for exactly as long as the corpus stayed behind. It is
+		// bounded all the same, by the selection limit above.
 		for _, id := range gone {
 			if err := e.forget(ctx, corpus.Source(), id); err != nil {
-				return published, err
+				// AND THIS ONE DOES STOP THE TICK, because it is
+				// not a fact about the corpus: an evicted node, an
+				// unreachable broker or a store that refuses the
+				// snapshot fails the next corpus's publishes
+				// identically, so carrying it would buy nothing
+				// and spend eight provider calls to find out.
+				failed = append(failed, err)
+				return published, errors.Join(failed...)
 			}
 			published++
 		}
-		for start := 0; start < len(stale) && budget > 0; start += EmbedBatch {
-			batch := stale[start:min(start+EmbedBatch, len(stale))]
+	}
+
+	for budget := EmbedBatchesPerTick; budget > 0; {
+		// ONE PASS OVER THE CORPORA, ONE BATCH EACH. A pass that hands
+		// out nothing means no corpus has work left, which is the only
+		// way out of this loop other than the budget: a caught-up
+		// company must cost one selection per corpus and stop.
+		spent := false
+		for i, corpus := range e.deps.Corpora {
+			if budget == 0 {
+				break
+			}
+			if len(stale[i]) == 0 {
+				continue
+			}
+			batch := stale[i][:min(EmbedBatch, len(stale[i]))]
+			stale[i] = stale[i][len(batch):]
 			budget--
+			spent = true
 			n, err := e.embed(ctx, corpus.Source(), dim, batch)
 			published += n
 			if err != nil {
@@ -336,8 +492,11 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 					"documents", len(batch), "error", err.Error())
 			}
 		}
+		if !spent {
+			break
+		}
 	}
-	return published, nil
+	return published, errors.Join(failed...)
 }
 
 // embed sends one batch and publishes a record per vector it got back.

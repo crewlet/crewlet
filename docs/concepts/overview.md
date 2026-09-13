@@ -16,7 +16,7 @@ The framework models the same structures found in real companies:
 - **Communication** — channels, direct messages, and external tools (Slack or self-hosted [Mattermost](../integrations/mattermost.md), the work-item tracker, the code host)
 - **Task management** — the engine's own work tracker by default (items, threads, hand-offs, a board and an MCP surface), or an external PM tool it deliberately mirrors none of (Jira, GitHub/GitLab issues) — see [The Tracker](task-engine.md)
 - **Code hosting** — agents read, review, and track code via GitHub or GitLab MCP tools, and author code through the [code sandbox](code-sandbox.md)
-- **Knowledge** — a shared knowledge base behind one seam, either the engine's own pages (BM25 over a per-node index) or a live Confluence search, plus a per-agent private diary (vector similarity computed by the database — hybrid vector ∪ recency candidate selection)
+- **Knowledge** — a shared knowledge base behind one seam, either the engine's own pages (BM25 over a per-node index; the semantic half is embedded and stored but not yet queried) or a live Confluence search, plus a per-agent private diary (vector similarity computed by the database — hybrid vector ∪ recency candidate selection)
 - **Decision-making** — structured DACI framework with clear authority
 
 ---
@@ -137,7 +137,7 @@ Built-in providers: **OpenAI**, **Anthropic** (using their official SDKs), and *
 
 ### Embedding Provider
 
-The `EmbeddingProvider` protocol defines `embed()` (batch text → vectors) and a `dimensions` property. Used by the [agent-learning subsystem](agent-learning.md) for vector-based retrieval over the agent's private `agent_diary` (the vector half of the `## Personal memory` prefetch's hybrid candidate selection) and `episodes` (the `## Similar prior work` prefetch and the `query_episodes` builtin). Knowledge-base content is searched live and is **not** embedded. Built-in provider: **OpenAI** (works with any OpenAI-compatible endpoint via `base_url`). Configured under `providers.embeddings` in YAML.
+The `EmbeddingProvider` protocol defines `embed()` (batch text → vectors) and a `dimensions` property. Used by the [agent-learning subsystem](agent-learning.md) for vector-based retrieval over the agent's private `agent_diary` (the vector half of the `## Personal memory` prefetch's hybrid candidate selection) and `episodes` (the `## Similar prior work` prefetch and the `query_episodes` builtin), **and** by the [knowledge system](knowledge-system.md#semantic-search-two-stages-no-index-no-new-dependency) for the semantic half of a native search — the company's own pages and work items are embedded once by a fleet-singleton duty and applied on every node, so the bill is paid once however many nodes run. A Confluence knowledge base is searched live and embeds nothing. Built-in provider: **OpenAI** (works with any OpenAI-compatible endpoint via `base_url`). Configured under `providers.embeddings` in YAML.
 
 ### Database
 

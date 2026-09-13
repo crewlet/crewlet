@@ -139,10 +139,49 @@ base's published pages. A **rename does not re-embed a page** — the vector is
 stored against the page's own edit number rather than the log version a rename
 also stamps.
 
+Those 8 calls are the **whole company's**, not each corpus's, and they are
+handed out **round robin** between the two. With both behind, each gets four a
+tick; with one caught up, the other takes all eight. So a tracker being
+cold-filled — or written to faster than 1 024 items a minute — **cannot stop
+the wiki being embedded**, which is the failure the division exists to prevent:
+a corpus that is never reached is not slow, it is permanently unsearchable by
+meaning, and the coverage figure below sums both corpora and would report it as
+merely behind. Equal shares rather than shares weighted by backlog, so how
+stale a corpus gets depends on *its own* size rather than on the size of the
+biggest corpus in the company.
+
 A cold fill of 110 000 sources is roughly **108 minutes and 860 batched
-requests**, and those numbers do not move with the configured width — providers
-bill per input *token*, and `dimensions` is a truncation parameter the request
-already carries.
+requests** — again across every corpus together — and those numbers do not move
+with the configured width: providers bill per input *token*, and `dimensions`
+is a truncation parameter the request already carries.
+
+**A batch response has to say which input each vector answers.** The duty sends
+128 texts in one request, and the API allows the results back in any order — so
+each one is filed by the `index` it carries rather than by where it arrived.
+The engine accepts only a response that maps onto the batch exactly once: as
+many results as inputs, every index inside the batch, no index twice, and
+either every result indexed or none of them. A response carrying no indices at
+all is read in arrival order, which is what keeps a compatible server that
+omits the field working; one that indexes only some of its results is refused,
+because position and index are two different claims about the same result and
+nothing in the response says which to believe.
+
+**“No index” means the field is absent, and only that.** An `index` that comes
+back `null`, or holding anything that is not a position in the batch, is
+refused rather than read as silence — it is a claim the server *did* make and
+the engine could not parse, and taking the arrival-order fallback there would
+file a batch somebody deliberately ordered onto whatever turned up first, which
+is the one outcome the index exists to prevent.
+
+That is a requirement on a self-hosted endpoint or a gateway rather than on
+OpenAI itself, and the refusal is why it is stated: a response that repeated an
+index would store one document's vector against another — a wrong search answer
+with nothing left to trace it to, since a stored vector carries no evidence of
+the text it came from — and leave a third document with no vector at all, which
+the duty reads as "nothing to embed" and re-selects on every pass for ever. So
+a non-conformant endpoint surfaces as coverage that never rises, the refusal
+named in the log, and eventually the alarm below; it never surfaces as a corpus
+that is quietly wrong.
 
 **How much of the corpus is covered is published**, as
 `crewlet.tracker.vector.coverage` — the fraction of sources carrying a current
@@ -208,13 +247,15 @@ flowchart TD
     DIARY["agent_diary<br/>vector index + agent_id + kind/ttl"]
     SEL["hybrid candidate selection:<br/>vector top-50 ∪ recency top-50,<br/>deduped by row id,<br/>then aux-LLM relevance filter"]
     PROMPT["Turn-start prefetch blocks<br/>'## Personal memory'<br/>'## Relevant knowledge'"]
-    KB["knowledge-base pages<br/>(live, query-time)"]
-    KS["KnowledgeSearcher<br/>aux-LLM → text query → backend search API,<br/>once per turn, per-agent auth<br/>(Confluence CQL)"]
+    KS["KnowledgeSearcher<br/>aux-LLM → one plain-text query,<br/>once per turn"]
+    NATIVE["native: this node's own rows<br/>BM25 index ∪ two-stage vectors,<br/>fused by reciprocal rank"]
+    CQL["confluence: live CQL at the site,<br/>as the seat's own user"]
     RP --> DIARY --> SEL --> PROMPT
-    KS --> KB --> PROMPT
+    KS --> NATIVE --> PROMPT
+    KS --> CQL --> PROMPT
 ```
 
-The two reads are independent: the diary is read by hybrid candidate selection (vector top-K ∪ recency top-K → aux-LLM relevance filter), scoped to the calling agent; the knowledge base is searched live, scoped to the role's accessible containers. Neither depends on the other, and each renders into its own block of the executor's prompt.
+The two reads are independent: the diary is read by hybrid candidate selection (vector top-K ∪ recency top-K → aux-LLM relevance filter), scoped to the calling agent; the knowledge base is read through whichever backend the company wired — this node's own applied rows natively, a live query at the site on Confluence — scoped to the role's accessible containers. Neither depends on the other, and each renders into its own block of the executor's prompt.
 
 ---
 
@@ -262,7 +303,9 @@ An empty `backend` **derives** rather than defaulting blindly: a company that de
 
 ### Native backend — the engine's own pages
 
-`internal/pages` + `internal/search`. The knowledge base is a [state-log domain](../guides/replication.md): every change is one record on `CREWLET_PAGES_LOG`, a deterministic applier writes it into every node's replicated database, and a lexical index is built behind those rows. A search is BM25 over the index — term-frequency saturation and length normalisation, so a long runbook that mentions a word thirty times does not outrank the short page that is about it.
+`internal/pages` + `internal/search`. The knowledge base is a [state-log domain](../guides/replication.md): every change is one record on `CREWLET_PAGES_LOG`, a deterministic applier writes it into every node's replicated database, and a lexical index is built behind those rows. A search is BM25 over that index — term-frequency saturation and length normalisation, so a long runbook that mentions a word thirty times does not outrank the short page that is about it.
+
+> **The semantic half is computed and stored, and not yet queried.** Every piece of it exists — the embedding duty fills a vector per document, the state-log domain replicates them, and `Quantize` / `TwoStage` / `Fuse` are the arithmetic a fused answer would use — but no caller computes a QUERY embedding: the two production callers of the fan-out pass text, sources and a limit and never a vector, so every live search skips the semantic slice and answers lexical-only. `knowledge.vectors` has no reader. Until a query embedding is wired, treat every statement about fusion in this document as describing the design rather than the running system.
 
 Two properties differ from the vendor path and both are visible:
 
@@ -274,6 +317,16 @@ Two properties differ from the vendor path and both are visible:
   and with runs of whitespace collapsed — so `ENG/deploy runbook` reaches a
   page called "Deploy  Runbook", and two people cannot create pages whose
   titles differ only in spacing or case.
+- **The address and the displayed title are two things, and a rename can move
+  either.** The page stores both: the address it is claimed at, and the title
+  as its author capitalised it — a link is resolved by the first and rendered
+  by the second. So renaming "Deploy Runbook" to "Deploy Guide" moves the
+  address (the old one is freed and can be taken again), while renaming it to
+  "DEPLOY RUNBOOK" leaves the address exactly where it is and changes only what
+  every reader sees. **Both are real changes**: each writes a revision to the
+  page's history and tells its watchers. Only a rename to the title the page
+  already displays does nothing — and it reports success, because it has
+  already happened.
 
 The tool-skills container is excluded from every result. A tool skill is machinery the engine injects into a phase, and a seat told to read one as knowledge would follow it as an instruction.
 
@@ -418,7 +471,7 @@ Key properties:
 
 There is no orchestrator object to construct. The two reads are wired independently by engine start:
 
-- **The `knowledge.Searcher`** is constructed from the configured knowledge integration — the Confluence searcher for `confluence` (see [the seam](#the-knowledgesearcher-seam)). It needs the backend connection and an LLM for query generation; it does **not** need a database or an embeddings provider. Without the integration, the `## Relevant knowledge` block stays empty.
+- **The `knowledge.Searcher`** is constructed from whichever backend `knowledge.backend` names (see [the seam](#the-knowledgesearcher-seam)): the Confluence searcher, which needs the site connection and nothing local; or the native one, which needs this node's own store and its lexical index. (It does not fuse the [semantic half](#semantic-search-two-stages-no-index-no-new-dependency) today — see the note under [the native backend](#native-backend): the vectors are written but nothing queries them.) Neither takes an LLM — writing the query text is the [prefetch's](#relevant-knowledge-prefetch) job, on the seat's auxiliary model, and `search_knowledge` has the executor's own words to search with. With `backend: none`, or a `confluence` company whose integration is missing, no searcher is wired and the `## Relevant knowledge` block stays empty.
 - **`learning.Diary`** is constructed when a real `Database` is available (reflection enabled) and takes an `EmbeddingProvider` so writes can be embedded for vector recall. In-memory mode (no DB) leaves it unwired; the `## Personal memory` block stays empty without error. Without an embeddings provider the diary degrades to a pure recency list — vector candidate selection becomes a no-op — but writes and recency reads still work.
 
 The two are independent: an org can have knowledge search without reflection, or reflection without knowledge search.
@@ -445,9 +498,9 @@ A dedicated table — `is_onboarded` answers with one indexed equality lookup in
 
 ## Configuration
 
-The knowledge system has no YAML configuration block of its own (beyond the `knowledge.*` scope lists). Two upstream configs determine how it behaves:
+The knowledge system has a block of its own — `knowledge.backend`, `knowledge.scope`, `knowledge.skills_container`, `knowledge.root_space` and `knowledge.vectors`, field by field in [Configuration](../getting-started/configuration.md#knowledge). Two upstream configs determine the rest:
 
-- **`confluence`** — required for the `knowledge.Searcher` to read shared knowledge. The query-time search authenticates with each role's per-agent token (`mcp_env.atlassian`), falling back to the org-level token (`confluence.token`). Without the integration the `## Relevant knowledge` block stays empty and only the agent's diary contributes.
-- **`providers.embeddings`** — required for the diary's vector candidate path (the vector half of the `## Personal memory` prefetch's hybrid selection, plus the diary write-side embedding step) **and** for `episodes` vector recall in the learning subsystem (`query_episodes` and the `## Similar prior work` prefetch). Knowledge search does **not** use embeddings. Without an embeddings provider the diary degrades to its recency-only path (still functional, just without semantic candidate matching) and episodic recall is disabled.
+- **`integrations.confluence`** — required by `backend: confluence`, and refused beside `backend: native` because pages would then live in two places with nothing keeping them in step. The query-time search authenticates with each role's per-agent token (`mcp_env.atlassian`), falling back to the org-level token (`confluence.token`); a `confluence` company missing it has no searcher at all, so the `## Relevant knowledge` block stays empty and only the agent's diary contributes. The native backend needs none of it — it searches as the engine, over this node's own applied rows.
+- **`providers.embeddings`** — required for the diary's vector candidate path (the vector half of the `## Personal memory` prefetch's hybrid selection, plus the diary write-side embedding step), for `episodes` vector recall in the learning subsystem (`query_episodes` and the `## Similar prior work` prefetch), **and** for the [semantic half](#semantic-search-two-stages-no-index-no-new-dependency) of the native knowledge search. `knowledge.vectors` is the switch that is MEANT to fuse that half into the query — it has no reader today, so it fuses nothing — and it **derives** from whether this block is configured — so a company already paying for embeddings for its diary gets the better search, and an explicit `vectors: true` with no provider is refused at validation rather than degrading quietly. Without an embeddings provider the native search is lexical only (BM25 over this node's own index), the diary degrades to its recency-only path (still functional, just without semantic candidate matching), and episodic recall is disabled. On `backend: confluence` the question does not arise: that search is a live CQL query against the site, which embeds nothing either way.
 
 See [Configuration](../getting-started/configuration.md) for the full YAML shape, [Confluence integration](../integrations/confluence.md) for setup, and [Agent Learning](agent-learning.md) for diary mechanics.

@@ -169,7 +169,7 @@ Each Role names its per-server credentials directly in `mcp_env`, so every agent
 roles:
   - name: Senior Engineer
     integrations:                          # per-agent transport identity (inbound webhook
-      slack:                               #   verification + outbound send() fallback)
+      slack:                               #   verification + the working indicator)
         bot_token: "${ALICE_SLACK_BOT}"
         signing_secret: "${ALICE_SLACK_SIGNING}"
     mcp_env:

@@ -501,7 +501,7 @@ Every telemetry write — `mark_used`, `SkillUsed` publish, `PrefetchSummary` pu
 | `counterparty_profiles` | One row per `(observer, subject, platform)` | composite |
 | `agent_onboarding_markers` | `mark_onboarded` bookkeeping | `agent_id` (PK) |
 
-Shared knowledge has no table — the knowledge base (Confluence) is searched live (see [Knowledge System](knowledge-system.md)).
+Shared knowledge has no table *here*: natively it is rows in the REPLICATED estate — the pages themselves, and the vectors derived from them — and on Confluence there is no local copy at all, only a live query (see [Knowledge System](knowledge-system.md)).
 
 ---
 

@@ -11,6 +11,7 @@ import (
 
 	sdk "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/packages/respjson"
 
 	"github.com/crewlet/crewlet/internal/providers/llm/httpapi"
 )
@@ -71,7 +72,13 @@ type Provider struct {
 	width  int
 }
 
-var _ Embedder = (*Provider)(nil)
+// BatchEmbedder RATHER THAN Embedder, because the embed duty in internal/engine
+// reaches EmbedBatch through a type assertion, and an assertion that fails does
+// not fail loudly — it silently declines to run the duty at all, leaving a
+// company's whole corpus unsearchable by meaning and nothing in the log to say
+// why. Asserting only the narrower interface here would let this signature and
+// that assertion drift apart with nothing to notice.
+var _ BatchEmbedder = (*Provider)(nil)
 
 // New builds the provider.
 func New(cfg Config) (*Provider, error) {
@@ -140,6 +147,11 @@ func (p *Provider) Width() int { return p.width }
 // rather than being dropped — dropping one would re-file every document after
 // it onto the wrong vector, silently, and the only symptom would be a search
 // that returns the wrong answers.
+//
+// WHICH input an item answers is the provider's own index wherever the
+// response carries one, since the API documents that results may come back
+// out of order — and the mapping those indices describe is refused outright
+// unless it covers every input exactly once. See [Provider.assignment].
 func (p *Provider) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
 	out := make([][]float32, len(texts))
 	// The inputs the provider is actually asked for, with the slot each
@@ -163,21 +175,14 @@ func (p *Provider) EmbedBatch(ctx context.Context, texts []string) ([][]float32,
 	if err != nil {
 		return nil, fmt.Errorf("embeddings: %s: %w", p.model, err)
 	}
-	if len(res.Data) != len(input) {
-		return nil, fmt.Errorf("embeddings: %s returned %d vectors for %d "+
-			"inputs — a caller matches them positionally, so a short answer "+
-			"is not a partial result but a re-filing of every document after "+
-			"the gap", p.model, len(res.Data), len(input))
+	// THE WHOLE MAPPING IS RESOLVED BEFORE ONE SLOT IS WRITTEN — see
+	// [Provider.assignment] for why a per-item decision cannot be made
+	// safely.
+	at, err := p.assignment(res.Data, len(input))
+	if err != nil {
+		return nil, err
 	}
 	for i, item := range res.Data {
-		// THE INDEX THE PROVIDER RETURNS IS AUTHORITATIVE where it is
-		// present: the API documents that results may come back out of
-		// order, and trusting position alone is the same silent
-		// re-filing as a short answer.
-		at := i
-		if idx := int(item.Index); idx >= 0 && idx < len(input) {
-			at = idx
-		}
 		raw := item.Embedding
 		vector := make([]float32, len(raw))
 		for j, v := range raw {
@@ -187,9 +192,122 @@ func (p *Provider) EmbedBatch(ctx context.Context, texts []string) ([][]float32,
 		if err != nil {
 			return nil, err
 		}
-		out[slot[at]] = checked
+		// at[i] is the INPUT this item answers; slot maps that back to
+		// the caller's own text, which is a different position whenever
+		// an empty input was skipped on the way out.
+		out[slot[at[i]]] = checked
 	}
 	return out, nil
+}
+
+// assignment resolves which input each item of a batch response answers.
+//
+// It returns one input position per item, in item order — a COMPLETE
+// one-to-one mapping onto the inputs — or an error, and there is no third
+// outcome: a response this cannot read as a bijection yields no vectors at
+// all rather than the ones it could place.
+//
+// # Why the mapping is verified whole rather than applied per item
+//
+// Counting the items says the answer is the right SIZE and says nothing about
+// where they go. Two items carrying the same index pass that count, and
+// writing each one as it arrives overwrites the first input's vector with the
+// second's and leaves some other input nil — a full-length slice with a hole
+// in it, which is the worst shape this can return. The embed duty that calls
+// this — search.Embedder — reads both halves of it as good news: it publishes
+// the overwritten vector as that document's own, which nothing can ever detect
+// afterwards because a stored vector carries no evidence of the text it came
+// from, and it reads the hole as "a document with nothing to embed", which
+// selects that document again on the next pass and every pass after it, for
+// ever. So the mapping is checked to be a bijection before it is used — every
+// index inside the batch, no index twice, and exactly as many items as inputs,
+// which together leave no input uncovered.
+//
+// # Why a MISSING index is a property of the response, not of an item
+//
+// The field is required by the API, but this backend also serves
+// OpenAI-compatible servers, and one that omits it decodes as index 0 on
+// every item — filing an entire batch onto the first input. The JSON
+// metadata is what separates "the server said 0" from "the server said
+// nothing", so presence is read there rather than from the value. It is then
+// read across the whole response: an item's arrival position and its index
+// are two different authorities about which input it answers, and a response
+// that offers one for some items and the other for the rest gives no way to
+// tell which of the two is lying, so it is refused rather than resolved.
+//
+// # And the field has THREE states, not two
+//
+// [respjson.Field.Valid] is false for a field that was OMITTED, one that came
+// back JSON `null`, and one whose value is not an index at all (an object, a
+// string that is not a number) — and only the first is a server making no
+// claim. Read as two states, a response whose every index is null or garbage
+// counts as "no indices at all" and silently takes the positional fallback:
+// the one outcome this whole function exists to refuse, arrived at by
+// reading a claim the server DID make and this code could not parse.
+// [respjson.Field.Raw] is what separates them — [respjson.Omitted] is the
+// empty string, `null` and an unreadable value are not — so a present index
+// that names no input is refused with the rest, and a server that simply
+// leaves the field out keeps working.
+func (p *Provider) assignment(data []sdk.Embedding, inputs int) ([]int, error) {
+	if len(data) != inputs {
+		return nil, fmt.Errorf("embeddings: %s returned %d vectors for %d "+
+			"inputs — a caller matches them positionally, so a short answer "+
+			"is not a partial result but a re-filing of every document after "+
+			"the gap", p.model, len(data), inputs)
+	}
+	indexed, unreadable := 0, 0
+	for _, item := range data {
+		switch {
+		case item.JSON.Index.Valid():
+			indexed++
+		case item.JSON.Index.Raw() != respjson.Omitted:
+			// PRESENT AND UNREADABLE: the item carries an index
+			// field whose value is not an input number — a JSON
+			// null, or something the decoder could not read as one.
+			unreadable++
+		}
+	}
+	if unreadable > 0 {
+		return nil, fmt.Errorf("embeddings: %s carried an index on %d of %d "+
+			"vectors that does not name an input — a null or a non-integer is "+
+			"still the server saying which input an item answers, and filing "+
+			"those items by arrival position instead is exactly the silent "+
+			"re-filing the index exists to prevent", p.model, unreadable,
+			len(data))
+	}
+	if indexed != 0 && indexed != len(data) {
+		return nil, fmt.Errorf("embeddings: %s gave %d of %d vectors an index "+
+			"— position and index are two different claims about which input "+
+			"an item answers, and a response that mixes them says nothing "+
+			"about which claim to believe", p.model, indexed, len(data))
+	}
+	at := make([]int, len(data))
+	taken := make([]bool, inputs)
+	for i, item := range data {
+		// int64 THROUGHOUT THE RANGE CHECK: int(item.Index) truncates on
+		// a 32-bit build, where an index of 2^32 would land inside the
+		// batch as 0 and be filed as a legitimate answer.
+		idx := int64(i)
+		if indexed > 0 {
+			idx = item.Index
+		}
+		if idx < 0 || idx >= int64(inputs) {
+			return nil, fmt.Errorf("embeddings: %s answered input %d of a "+
+				"%d-input batch — an index outside the batch names no "+
+				"document, and filing that item by its arrival position "+
+				"instead is exactly the silent re-filing the index exists "+
+				"to prevent", p.model, idx, inputs)
+		}
+		if taken[idx] {
+			return nil, fmt.Errorf("embeddings: %s answered input %d twice in "+
+				"one batch — one document would be stored holding another's "+
+				"vector and a third would be left with none, and neither is "+
+				"visible afterwards", p.model, idx)
+		}
+		taken[idx] = true
+		at[i] = int(idx)
+	}
+	return at, nil
 }
 
 // Embed implements [Embedder].

@@ -3,6 +3,7 @@ package search_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -160,6 +161,148 @@ func TestAFailedBatchDoesNotStopTheTick(t *testing.T) {
 	}
 }
 
+// A CORPUS THAT IS ALWAYS BEHIND DOES NOT STARVE THE ONE AFTER IT.
+//
+// The tick's provider calls are one budget shared by every corpus, and spent
+// corpus by corpus in order they all went to the first one that could take
+// them: a company writing tasks faster than the duty embeds them — or simply
+// one still cold-filling a hundred thousand — never reached its pages at all.
+// Not one page embedded, not one trashed page's vector withdrawn, for as long
+// as the backlog refilled, while the coverage gauge summed both corpora and
+// reported a company that was merely behind.
+func TestABackloggedCorpusDoesNotStarveTheOneAfterIt(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	h.embedder.blank = true
+	tasks := &scriptedCorpus{source: search.SourceTask, backlog: -1}
+	// THE SECOND CORPUS IS BEHIND TOO, and also carries a vector to
+	// withdraw: under the old scheduling its selection never ran at all,
+	// so the page somebody deleted stayed findable by meaning for ever.
+	pages := &scriptedCorpus{source: search.SourcePage, backlog: -1,
+		gone: []string{"p-deleted"}}
+
+	published, err := h.dutyOver(tasks, pages).Tick(t.Context())
+	if err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	calls := h.embedder.callsPerSource()
+	want := search.EmbedBatchesPerTick / 2
+	if calls[search.SourcePage] != want || calls[search.SourceTask] != want {
+		t.Fatalf("the tick spent %d call(s) on tasks and %d on pages; two "+
+			"corpora that are both behind divide the tick's %d evenly, and "+
+			"a page corpus at zero is a company whose wiki is unsearchable "+
+			"by meaning for as long as the task backlog refills",
+			calls[search.SourceTask], calls[search.SourcePage],
+			search.EmbedBatchesPerTick)
+	}
+	if total := calls[search.SourceTask] + calls[search.SourcePage]; total != search.EmbedBatchesPerTick {
+		t.Fatalf("the tick made %d provider calls against a ceiling of %d — "+
+			"the ceiling is what bounds the company's embedding bill, and "+
+			"sharing it fairly may not raise it", total, search.EmbedBatchesPerTick)
+	}
+	if published != 1 {
+		t.Fatalf("the tick published %d record(s); the provider embedded "+
+			"nothing, so the one record is the second corpus's withdrawal — "+
+			"and a corpus that is never selected withdraws nothing", published)
+	}
+}
+
+// AND A CORPUS WITH NOTHING TO DO WASTES NOTHING.
+//
+// The share is a floor, not a quota: reserving four calls for a caught-up
+// wiki would halve the rate a cold fill of the tracker proceeds at, for a
+// corpus with no work to put them to. What a corpus does not use is taken by
+// whoever still has a backlog, which is what makes the round robin a reserved
+// share and its redistribution in one rule.
+func TestAnIdleCorpusGivesItsShareToTheRest(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		pageBacklog int
+		wantTask    int
+		wantPage    int
+	}{
+		{name: "an empty wiki", pageBacklog: 0,
+			wantTask: search.EmbedBatchesPerTick, wantPage: 0},
+		{name: "one page behind", pageBacklog: 1,
+			wantTask: search.EmbedBatchesPerTick - 1, wantPage: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newEmbedHarness(t)
+			h.embedder.blank = true
+			tasks := &scriptedCorpus{source: search.SourceTask, backlog: -1}
+			pages := &scriptedCorpus{source: search.SourcePage, backlog: tc.pageBacklog}
+
+			if _, err := h.dutyOver(tasks, pages).Tick(t.Context()); err != nil {
+				t.Fatalf("tick: %v", err)
+			}
+			calls := h.embedder.callsPerSource()
+			if calls[search.SourceTask] != tc.wantTask || calls[search.SourcePage] != tc.wantPage {
+				t.Fatalf("the tick spent %d call(s) on tasks and %d on pages, "+
+					"want %d and %d — a call the second corpus has no work for "+
+					"belongs to the one that does, or the ceiling buys less "+
+					"than it costs", calls[search.SourceTask],
+					calls[search.SourcePage], tc.wantTask, tc.wantPage)
+			}
+		})
+	}
+}
+
+// AN UNREADABLE CORPUS COSTS ITSELF AND NOT THE TICK.
+//
+// This is the same starvation arriving as an error rather than as a backlog:
+// the corpora are visited in order, so a selection that fails and returns
+// stops every corpus behind it — this tick and every tick, because the failure
+// is a property of that corpus's own query. The tick still reports it, because
+// a corpus nobody can select is an operator's problem rather than a quiet one.
+func TestAnUnreadableCorpusDoesNotStopTheOnesAfterIt(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	h.embedder.blank = true
+	boom := errors.New("the anti-join timed out")
+	tasks := &scriptedCorpus{source: search.SourceTask, err: boom}
+	pages := &scriptedCorpus{source: search.SourcePage, backlog: -1}
+
+	_, err := h.dutyOver(tasks, pages).Tick(t.Context())
+	if !errors.Is(err, boom) {
+		t.Fatalf("a corpus whose selection failed answered %v — a tick that "+
+			"carries the failure must still report it", err)
+	}
+	calls := h.embedder.callsPerSource()
+	if calls[search.SourcePage] != search.EmbedBatchesPerTick {
+		t.Fatalf("the tick spent %d call(s) on the second corpus after the "+
+			"first one's selection failed, want the whole ceiling of %d",
+			calls[search.SourcePage], search.EmbedBatchesPerTick)
+	}
+}
+
+// MORE CORPORA THAN THERE ARE CALLS IS A REFUSED WIRING.
+//
+// Below one call apiece there is no share left to guarantee: every tick starts
+// its round at the front, so the corpora past the ceiling would be embedded
+// never rather than slowly. Refusing says so at the wiring, which is the one
+// place the extra corpus can be taken back out.
+func TestTheDutyRefusesMoreCorporaThanATickCanServe(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	corpora := make([]search.Corpus, search.EmbedBatchesPerTick+1)
+	for i := range corpora {
+		corpora[i] = &scriptedCorpus{source: search.SourceTask, backlog: -1}
+	}
+	_, err := search.NewEmbedder(search.EmbedDeps{
+		Publisher: h.publisher, Embedder: h.embedder, Model: embedModel,
+		Corpora: corpora,
+	})
+	if err == nil {
+		t.Fatalf("a duty with %d corpora and %d calls a tick was accepted — "+
+			"the ones past the ceiling are never embedded, and the coverage "+
+			"gauge sums them into a company that merely looks behind",
+			len(corpora), search.EmbedBatchesPerTick)
+	}
+}
+
 // A NON-FINITE COMPONENT NEVER REACHES THE STREAM.
 //
 // This is the one check that must happen at the WRITER rather than at the
@@ -244,14 +387,15 @@ func TestARetryOfTheSameWorkCarriesTheSameOperationID(t *testing.T) {
 const embedModel = "fake-embed"
 
 type embedHarness struct {
-	t        *testing.T
-	db       *store.DB
-	log      *js.DomainLog
-	duty     *search.Embedder
-	applier  search.Applier
-	embedder *scriptedEmbedder
-	consumed uint64
-	version  int64
+	t         *testing.T
+	db        *store.DB
+	log       *js.DomainLog
+	duty      *search.Embedder
+	publisher *statelog.Publisher
+	applier   search.Applier
+	embedder  *scriptedEmbedder
+	consumed  uint64
+	version   int64
 }
 
 func newEmbedHarness(t *testing.T) *embedHarness {
@@ -304,15 +448,25 @@ func newEmbedHarness(t *testing.T) *embedHarness {
 	if err != nil {
 		t.Fatalf("build the publisher: %v", err)
 	}
-	h.duty, err = search.NewEmbedder(search.EmbedDeps{
-		Publisher: publisher, Embedder: h.embedder, Model: embedModel,
-		Corpora: []search.Corpus{search.TaskCorpus{DB: db}},
+	h.publisher = publisher
+	h.duty = h.dutyOver(search.TaskCorpus{DB: db})
+	return h
+}
+
+// dutyOver builds a duty over the corpora a test dictates, on this harness's
+// own publisher — so a scheduling case reaches the same broker and the same
+// record path as the round trip above.
+func (h *embedHarness) dutyOver(corpora ...search.Corpus) *search.Embedder {
+	h.t.Helper()
+	duty, err := search.NewEmbedder(search.EmbedDeps{
+		Publisher: h.publisher, Embedder: h.embedder, Model: embedModel,
+		Corpora: corpora,
 		Now:     func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
 	})
 	if err != nil {
-		t.Fatalf("build the duty: %v", err)
+		h.t.Fatalf("build the duty: %v", err)
 	}
-	return h
+	return duty
 }
 
 // seedTasks writes tracker rows DIRECTLY, because this suite is about the
@@ -452,16 +606,28 @@ type scriptedEmbedder struct {
 	// poisonID is the index within a batch whose vector is made
 	// non-finite, or -1 for none.
 	poisonID int
+	// blank answers every input with no vector at all, which is a real
+	// state — an empty source — and is what lets a scheduling test spend
+	// the tick's provider calls without publishing a record for each of
+	// the thousand documents they carry.
+	blank bool
+	// batches is what each call was asked to embed, in order, so a test
+	// can see how the tick's calls were divided.
+	batches [][]string
 }
 
 func (s *scriptedEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
 	s.mu.Lock()
 	s.calls++
 	first := s.calls == 1
-	fail, poison := s.failFirst, s.poisonID
+	fail, poison, blank := s.failFirst, s.poisonID, s.blank
+	s.batches = append(s.batches, append([]string(nil), texts...))
 	s.mu.Unlock()
 	if fail && first {
 		return nil, fmt.Errorf("the provider refused this batch")
+	}
+	if blank {
+		return make([][]float32, len(texts)), nil
 	}
 	out, err := s.Fake.EmbedBatch(ctx, texts)
 	if err != nil || poison < 0 || poison >= len(out) {
@@ -471,6 +637,66 @@ func (s *scriptedEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]
 		v[0] = float32(nan())
 	}
 	return out, nil
+}
+
+// callsPerSource is how many provider calls each source's documents were sent
+// in, read back from the text itself — [scriptedCorpus] titles every document
+// with its own source.
+func (s *scriptedEmbedder) callsPerSource() map[search.Source]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[search.Source]int{}
+	for _, batch := range s.batches {
+		if len(batch) == 0 {
+			continue
+		}
+		out[search.Source(strings.SplitN(batch[0], " ", 2)[0])]++
+	}
+	return out
+}
+
+// scriptedCorpus is a corpus whose backlog a test dictates.
+//
+// It stands in for the real two deliberately: what the scheduling has to
+// survive is a corpus that is STILL behind after the duty has spent everything
+// on it, and seeding a million tracker rows to express that would be testing
+// the fixture. `backlog` of -1 is that corpus — every selection answers with a
+// full limit's worth, exactly as a company writing faster than the duty embeds
+// looks from here.
+type scriptedCorpus struct {
+	source  search.Source
+	backlog int
+	gone    []string
+	err     error
+}
+
+func (c *scriptedCorpus) Source() search.Source { return c.source }
+
+func (c *scriptedCorpus) Stale(_ context.Context, _ string, _, limit int) ([]search.Document, []string, error) {
+	if c.err != nil {
+		return nil, nil, c.err
+	}
+	n := c.backlog
+	if n < 0 || n > limit {
+		n = limit
+	}
+	docs := make([]search.Document, n)
+	for i := range docs {
+		docs[i] = search.Document{
+			ID:        fmt.Sprintf("%s-%05d", c.source, i),
+			Container: "ENG",
+			Version:   1,
+			// THE SOURCE IS THE FIRST WORD OF THE TEXT, which is
+			// what lets the embedder's record say which corpus a
+			// provider call was spent on.
+			Title: fmt.Sprintf("%s document %05d", c.source, i),
+		}
+	}
+	return docs, c.gone, nil
+}
+
+func (c *scriptedCorpus) Coverage(context.Context, string, int) (int, int, error) {
+	return 0, 0, nil
 }
 
 func nan() float64 { var zero float64; return zero / zero }

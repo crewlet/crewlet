@@ -724,7 +724,7 @@ units:
               mattermost:
                 bot_token: "${MATTERMOST_BOT_TOKEN_TL}"
                 username: tl-bot        # optional — the bot's Mattermost username
-                channel: backend        # optional — default channel
+                channel: backend        # optional — a channel this bot is added to
             mcp_env:                    # optional — per-agent MCP server credentials
               atlassian:
                 JIRA_USERNAME: "${TL_JIRA_USER}"
