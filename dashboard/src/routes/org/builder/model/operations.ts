@@ -1962,10 +1962,14 @@ export function describeOperation(op: Operation, before: Draft): string {
     case "remove": {
       const found = locate(before, op.target);
       if (found?.kind === "unit") {
-        const seats = subtreeKeys(found.node).filter(
-          (k) => locate(before, k)?.kind === "seat",
-        ).length;
-        return `Removed unit ${found.node.data.name} and ${plural(seats, "seat")} in it.`;
+        // The seats that go with it: its own subtree's, and the root seats its
+        // unit references place in it when the operator chose to remove those.
+        const seats =
+          subtreeKeys(found.node).filter((k) => locate(before, k)?.kind === "seat").length +
+          (op.placedSeats === "remove" ? op.placed.length : 0);
+        return seats === 0
+          ? `Removed unit ${found.node.data.name}.`
+          : `Removed unit ${found.node.data.name} and ${plural(seats, "seat")} in it.`;
       }
       return `Removed seat ${nameOf(op.target)}.`;
     }
@@ -1993,7 +1997,7 @@ export function describeOperation(op: Operation, before: Draft): string {
     case "setManages":
       return `Changed whom ${nameOf(op.target)} manages.`;
     case "changeKind":
-      return `Changed ${nameOf(op.target)} to a ${op.after} seat.`;
+      return `Changed ${nameOf(op.target)} to ${op.after === "human" ? "a human" : "an agent"} seat.`;
     case "setScheduleEnabled":
       return `${op.after ? "Enabled" : "Disabled"} schedule ${op.schedule} on ${nameOf(op.target)}.`;
     case "setDatadogRouteTo":

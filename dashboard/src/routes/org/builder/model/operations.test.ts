@@ -934,6 +934,30 @@ describe("an operation as data", () => {
       to: { parent: "unit:Sales", after: null },
     });
     expect(describeOperation(move, draft)).toBe("Moved Dev to Sales.");
+
+    const withPlaced = recordOk(draft, {
+      type: "remove",
+      target: "unit:Engineering",
+      placedSeats: "remove",
+    });
+    expect(describeOperation(withPlaced, draft)).toBe(
+      "Removed unit Engineering and 4 seats in it.",
+    );
+    const added = run(draft, {
+      type: "addUnit",
+      key: "new:legal",
+      placement: { parent: COMPANY_KEY, after: null },
+      data: { name: "Legal" },
+    }).draft;
+    expect(describeOperation(recordOk(added, { type: "remove", target: "new:legal" }), added)).toBe(
+      "Removed unit Legal.",
+    );
+
+    const human = recordOk(draft, { type: "changeKind", target: "seat:dev", kind: "human" });
+    expect(describeOperation(human, draft)).toBe("Changed Dev to a human seat.");
+    const humanDraft = apply(draft, human).draft;
+    const agent = recordOk(humanDraft, { type: "changeKind", target: "seat:dev", kind: "agent" });
+    expect(describeOperation(agent, humanDraft)).toBe("Changed Dev to an agent seat.");
   });
 
   test("an operation that records always applies to the draft it was recorded on, whatever odd values that draft holds", () => {
