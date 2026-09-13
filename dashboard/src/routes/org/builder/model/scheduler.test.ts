@@ -22,6 +22,7 @@ import {
   INITIAL_CHECK,
   backoffDelay,
   classifyCheck,
+  isCurrentAnswer,
   saveRules,
   transition,
   type CheckState,
@@ -216,14 +217,18 @@ describe("transition", () => {
   const loaded = transition(INITIAL_CHECK, { type: "reset", generation: 1, now: T0 });
 
   test("a reset checks at once, without waiting for the debounce", () => {
-    expect(loaded.effects).toEqual([{ type: "send", generation: 1 }]);
-    expect(loaded.state).toMatchObject({ generation: 1, status: "checking", inFlight: 1 });
+    expect(loaded.effects).toEqual([{ type: "send", generation: 1, request: 1 }]);
+    expect(loaded.state).toMatchObject({
+      generation: 1,
+      status: "checking",
+      inFlight: { generation: 1, request: 1 },
+    });
   });
 
   test("a change aborts the superseded request and waits out the debounce", () => {
     const changed = transition(loaded.state, { type: "changed", generation: 2, now: T0 + 10 });
     expect(changed.effects).toEqual([
-      { type: "abort", generation: 1 },
+      { type: "abort", request: 1 },
       { type: "wake", at: T0 + 10 + CHECK_DEBOUNCE_MS },
     ]);
     expect(changed.state).toMatchObject({ generation: 2, inFlight: null, status: "checking" });
@@ -231,25 +236,42 @@ describe("transition", () => {
     const early = transition(changed.state, { type: "timer", now: T0 + 100 });
     expect(early.effects).toEqual([{ type: "wake", at: T0 + 10 + CHECK_DEBOUNCE_MS }]);
     const due = transition(changed.state, { type: "timer", now: T0 + 10 + CHECK_DEBOUNCE_MS });
-    expect(due.effects).toEqual([{ type: "send", generation: 2 }]);
-    expect(due.state.inFlight).toBe(2);
+    expect(due.effects).toEqual([{ type: "send", generation: 2, request: 2 }]);
+    expect(due.state.inFlight).toEqual({ generation: 2, request: 2 });
   });
 
   test("an answer for a request that is no longer in flight is dropped", () => {
     const changed = transition(loaded.state, { type: "changed", generation: 2, now: T0 });
     const late = transition(changed.state, {
       type: "settled",
-      generation: 1,
+      request: 1,
       status: "clean",
       now: T0 + 5,
     });
     expect(late.state).toBe(changed.state);
   });
 
+  test("a reset of the same generation replaces the request in flight, and the old answer is not the new one", () => {
+    const again = transition(loaded.state, { type: "reset", generation: 1, now: T0 + 1 });
+    expect(again.effects).toEqual([
+      { type: "abort", request: 1 },
+      { type: "send", generation: 1, request: 2 },
+    ]);
+    expect(isCurrentAnswer(again.state, 1)).toBe(false);
+    expect(isCurrentAnswer(again.state, 2)).toBe(true);
+    const old = transition(again.state, {
+      type: "settled",
+      request: 1,
+      status: "guarded",
+      now: T0 + 2,
+    });
+    expect(old.state).toBe(again.state);
+  });
+
   test("the answer for the current generation settles the status", () => {
     const settled = transition(loaded.state, {
       type: "settled",
-      generation: 1,
+      request: 1,
       status: "problems",
       now: T0 + 5,
     });
@@ -269,7 +291,7 @@ describe("transition", () => {
     for (let failure = 1; failure <= 8; failure++) {
       const settled = transition(state, {
         type: "settled",
-        generation: state.generation,
+        request: state.inFlight!.request,
         status: "unreachable",
         now,
       });
@@ -291,13 +313,15 @@ describe("transition", () => {
 
       now = wake.at;
       const retried = transition(state, { type: "timer", now });
-      expect(retried.effects).toEqual([{ type: "send", generation: state.generation }]);
+      expect(retried.effects).toEqual([
+        { type: "send", generation: state.generation, request: state.requests + 1 },
+      ]);
       state = retried.state;
     }
     expect(delays).toEqual([1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000]);
     const recovered = transition(state, {
       type: "settled",
-      generation: state.generation,
+      request: state.inFlight!.request,
       status: "clean",
       now,
     });
@@ -306,13 +330,13 @@ describe("transition", () => {
 
   test("a conflict, a refused token and a read-only process halt checking until a reset", () => {
     for (const status of ["conflict", "guarded", "readonly"] as const) {
-      const halted = transition(loaded.state, { type: "settled", generation: 1, status, now: T0 });
+      const halted = transition(loaded.state, { type: "settled", request: 1, status, now: T0 });
       expect(halted.state.halted, status).toBe(true);
       const changed = transition(halted.state, { type: "changed", generation: 2, now: T0 + 1 });
       expect(changed.effects, status).toEqual([]);
       expect(changed.state.status, status).toBe(status);
       const reset = transition(changed.state, { type: "reset", generation: 3, now: T0 + 2 });
-      expect(reset.effects, status).toEqual([{ type: "send", generation: 3 }]);
+      expect(reset.effects, status).toEqual([{ type: "send", generation: 3, request: 2 }]);
       expect(reset.state.halted, status).toBe(false);
     }
   });
@@ -495,6 +519,18 @@ describe("CheckRunner", () => {
     clock.advance(1);
     expect(transport.pending).toHaveLength(2);
     expect(transport.pending[1]!.request.body).toEqual({ name: "generation 2" });
+  });
+
+  test("a reset of the same generation, as a token change sends, never delivers the replaced answer", async () => {
+    const { transport, settled, runner, reset } = harness();
+    reset();
+    const first = transport.pending[0]!;
+    runner.reset(1);
+    expect(first.signal.aborted).toBe(true);
+    first.resolve({ status: 401, body: { error: "unauthorized" } });
+    transport.pending[1]!.resolve({ status: 200, body: { valid: true } });
+    await flush();
+    expect(settled.map((s) => s.outcome.status)).toEqual(["clean"]);
   });
 
   test("a transport that rejects without an abort reports the check unanswered rather than stalling", async () => {

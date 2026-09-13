@@ -23,6 +23,7 @@ import type { CheckOutcome } from "./scheduler.ts";
 import { templateIntent } from "./templates.ts";
 import {
   builderReducer,
+  checkTrigger,
   hasChanges,
   INITIAL_BUILDER,
   isBaseKeyed,
@@ -340,6 +341,25 @@ describe("editing", () => {
     expect(discarded.draft).toBe(state.baseDraft);
     expect(discarded.log.ops).toEqual([]);
     expect(discarded.generation).toBe(edited.generation + 1);
+  });
+});
+
+describe("checkTrigger", () => {
+  test("a new base resets the check, a moved draft changes it, and keying the base does neither", () => {
+    const loaded = loadedEdit();
+    expect(checkTrigger(INITIAL_BUILDER, loaded)).toBe("reset");
+    const keyed = run(
+      loaded,
+      checked(loaded, { status: "clean", warnings: [], derived: fixtureDerived(fixtureCompany()) }),
+    );
+    expect(checkTrigger(loaded, keyed)).toBeNull();
+    const edited = run(keyed, { type: "record", intent: { type: "remove", target: "seat:dev" } });
+    expect(checkTrigger(keyed, edited)).toBe("changed");
+    expect(checkTrigger(edited, run(edited, { type: "undo" }))).toBe("changed");
+    expect(
+      checkTrigger(edited, run(edited, { type: "saved", revisionId: "rev-2", derived: null })),
+    ).toBe("reset");
+    expect(checkTrigger(edited, run(edited, { type: "tokenChanged" }))).toBeNull();
   });
 });
 

@@ -193,6 +193,28 @@ export function isBaseKeyed(state: BuilderState): boolean {
   return state.mode === "create" || state.base.derived !== null;
 }
 
+/**
+ * What the dry-run check should hear about a state change: `reset` when the
+ * draft now stands on a different base (a load, a save, an adopted update),
+ * which checks at once and lifts a halt; `changed` when only the draft moved;
+ * `null` when neither did. Keying the base from a check's answer changes
+ * neither the base document nor its revision, so it asks for nothing.
+ *
+ * A change of operator token moves no generation and no base, and resets the
+ * check all the same (every answer may differ): its owner calls the runner's
+ * `reset` directly when the token changes.
+ */
+export function checkTrigger(prev: BuilderState, next: BuilderState): "reset" | "changed" | null {
+  if (
+    prev.mode !== next.mode ||
+    prev.base.document !== next.base.document ||
+    prev.base.revision !== next.base.revision
+  ) {
+    return "reset";
+  }
+  return prev.generation !== next.generation ? "changed" : null;
+}
+
 /** Whether the draft has anything to save. */
 export function hasChanges(state: BuilderState): boolean {
   return state.log.ops.length > 0;

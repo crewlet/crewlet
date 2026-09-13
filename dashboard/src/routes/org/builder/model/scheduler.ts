@@ -197,12 +197,25 @@ export function classifyCheck(
 // The state machine
 // ---------------------------------------------------------------------------
 
+/** The one request in flight: which draft generation it checks, and its own number. */
+export interface InFlight {
+  readonly generation: number;
+  /**
+   * Numbered per request, not per generation: a reset checks the SAME
+   * generation again (a token change moves no generation), and the answer
+   * to the request it replaced must not be taken for the answer to the new
+   * one.
+   */
+  readonly request: number;
+}
+
 export interface CheckState {
   /** The draft generation the machine last heard of. */
   readonly generation: number;
   readonly status: CheckStatus;
-  /** The generation of the request in flight, if one is. */
-  readonly inFlight: number | null;
+  readonly inFlight: InFlight | null;
+  /** How many requests have been sent: the next request's number. */
+  readonly requests: number;
   /** When the next request is due, if one is scheduled. */
   readonly dueAt: number | null;
   /** Consecutive unanswered or failed checks. */
@@ -212,7 +225,11 @@ export interface CheckState {
 }
 
 export type CheckEvent =
-  /** A load, an updated draft or a token change: check this generation now, forgetting any halt. */
+  /**
+   * Check this generation now, whatever is in flight, forgetting any halt: a
+   * load, an updated draft, a save, or a token change (which moves no
+   * generation but may change every answer).
+   */
   | { readonly type: "reset"; readonly generation: number; readonly now: number }
   /** The draft changed. */
   | { readonly type: "changed"; readonly generation: number; readonly now: number }
@@ -221,14 +238,14 @@ export type CheckEvent =
   /** A request settled. */
   | {
       readonly type: "settled";
-      readonly generation: number;
+      readonly request: number;
       readonly status: Exclude<CheckStatus, "checking">;
       readonly now: number;
     };
 
 export type CheckEffect =
-  | { readonly type: "send"; readonly generation: number }
-  | { readonly type: "abort"; readonly generation: number }
+  | { readonly type: "send"; readonly generation: number; readonly request: number }
+  | { readonly type: "abort"; readonly request: number }
   /** Arm the one timer for `at`, replacing any armed one. */
   | { readonly type: "wake"; readonly at: number };
 
@@ -242,6 +259,7 @@ export const INITIAL_CHECK: CheckState = {
   generation: -1,
   status: "checking",
   inFlight: null,
+  requests: 0,
   dueAt: null,
   failures: 0,
   halted: false,
@@ -252,47 +270,35 @@ const HALTING: ReadonlySet<CheckStatus> = new Set(["conflict", "guarded", "reado
 /** The next state of the check, and what to do about it. */
 export function transition(state: CheckState, event: CheckEvent): Transition {
   const effects: CheckEffect[] = [];
-  const abortStale = (generation: number): number | null => {
-    if (state.inFlight !== null && state.inFlight !== generation) {
-      effects.push({ type: "abort", generation: state.inFlight });
-      return null;
-    }
-    return state.inFlight;
+  const abort = (keep: (inFlight: InFlight) => boolean): InFlight | null => {
+    if (state.inFlight === null || keep(state.inFlight)) return state.inFlight;
+    effects.push({ type: "abort", request: state.inFlight.request });
+    return null;
+  };
+  const send = (base: CheckState): Transition => {
+    const inFlight = { generation: base.generation, request: base.requests + 1 };
+    effects.push({ type: "send", ...inFlight });
+    return {
+      state: { ...base, status: "checking", inFlight, requests: inFlight.request, dueAt: null },
+      effects,
+    };
   };
 
   switch (event.type) {
     case "reset": {
-      const inFlight = abortStale(event.generation);
-      if (inFlight === event.generation) {
-        return {
-          state: {
-            ...state,
-            generation: event.generation,
-            status: "checking",
-            dueAt: null,
-            failures: 0,
-            halted: false,
-          },
-          effects,
-        };
-      }
-      effects.push({ type: "send", generation: event.generation });
-      return {
-        state: {
-          generation: event.generation,
-          status: "checking",
-          inFlight: event.generation,
-          dueAt: null,
-          failures: 0,
-          halted: false,
-        },
-        effects,
-      };
+      abort(() => false);
+      return send({
+        ...state,
+        generation: event.generation,
+        inFlight: null,
+        failures: 0,
+        halted: false,
+      });
     }
 
     case "changed": {
       if (event.generation === state.generation) return { state, effects };
-      const inFlight = abortStale(event.generation);
+      const inFlight = abort((f) => f.generation === event.generation);
       const base = { ...state, generation: event.generation, inFlight };
       if (state.halted) return { state: base, effects };
       if (state.failures > 0) {
@@ -313,16 +319,12 @@ export function transition(state: CheckState, event: CheckEvent): Transition {
         return { state, effects };
       }
       if (state.inFlight !== null) return { state: { ...state, dueAt: null }, effects };
-      effects.push({ type: "send", generation: state.generation });
-      return {
-        state: { ...state, status: "checking", inFlight: state.generation, dueAt: null },
-        effects,
-      };
+      return send(state);
     }
 
     case "settled": {
-      if (event.generation !== state.inFlight) return { state, effects };
-      if (event.generation !== state.generation) {
+      if (event.request !== state.inFlight?.request) return { state, effects };
+      if (state.inFlight.generation !== state.generation) {
         // Superseded while it was out: the change that superseded it has
         // already scheduled the check that counts.
         return { state: { ...state, inFlight: null }, effects };
@@ -356,6 +358,14 @@ export function transition(state: CheckState, event: CheckEvent): Transition {
       };
     }
   }
+}
+
+/**
+ * Whether the answer to `request` is the one the machine is waiting for, for
+ * the generation it is on: the only answer the reducer may be given.
+ */
+export function isCurrentAnswer(state: CheckState, request: number): boolean {
+  return state.inFlight?.request === request && state.inFlight.generation === state.generation;
 }
 
 // ---------------------------------------------------------------------------
@@ -456,13 +466,15 @@ export interface CheckRunnerOptions {
 
 /**
  * Performs the machine's effects: one timer, one request, one abort
- * controller. The owner calls [changed] or [reset] when the draft's
- * generation moves and [dispose] when the builder goes away.
+ * controller. The owner calls [changed] when the draft's generation moves,
+ * [reset] on a load, an adopted update, a save or a token change (see
+ * `reducer.checkTrigger`), and [dispose] when the builder goes away.
  */
 export class CheckRunner {
   private current: CheckState = INITIAL_CHECK;
   private cancelTimer: CancelTimer | null = null;
-  private controller: AbortController | null = null;
+  private inFlight: { readonly request: number; readonly controller: AbortController } | null =
+    null;
   private disposed = false;
 
   constructor(private readonly options: CheckRunnerOptions) {}
@@ -483,8 +495,8 @@ export class CheckRunner {
     this.disposed = true;
     this.cancelTimer?.();
     this.cancelTimer = null;
-    this.controller?.abort();
-    this.controller = null;
+    this.inFlight?.controller.abort();
+    this.inFlight = null;
   }
 
   private dispatch(event: CheckEvent): void {
@@ -507,68 +519,56 @@ export class CheckRunner {
         return;
       }
       case "abort":
-        this.controller?.abort();
-        this.controller = null;
+        if (this.inFlight?.request === effect.request) {
+          this.inFlight.controller.abort();
+          this.inFlight = null;
+        }
         return;
       case "send":
-        this.send(effect.generation);
+        this.send(effect.generation, effect.request);
         return;
     }
   }
 
-  private send(generation: number): void {
+  private send(generation: number, request: number): void {
     const prepared = this.options.prepare(generation);
     if (!prepared) {
-      // The draft moved on before the request left; the change that moved it
-      // schedules its own check. Clear the slot so that check can go.
+      // The draft moved on before the request left, so the change that moved
+      // it is already on its way to the machine. Settle this request as
+      // superseded rather than leave its slot taken, or that change's check
+      // could never go out.
       this.current = { ...this.current, inFlight: null };
       return;
     }
     const controller = new AbortController();
-    this.controller = controller;
-    this.options.transport.send(prepared.request, controller.signal).then(
-      (answer) => {
-        if (controller.signal.aborted || this.disposed) return;
-        if (this.controller === controller) this.controller = null;
-        const outcome = classifyCheck(answer, prepared.mode, prepared.baseRevision);
-        const now = this.options.clock.now();
-        const current =
-          this.current.inFlight === generation && this.current.generation === generation;
-        this.dispatch({ type: "settled", generation, status: outcome.status, now });
-        if (current) {
-          this.options.onSettled({
-            generation,
-            sent: prepared.sent,
-            baseRevision: prepared.baseRevision,
-            outcome,
-          });
-        }
-      },
-      (err: unknown) => {
-        if (this.controller === controller) this.controller = null;
-        // An aborted check is superseded, not unreachable: the machine
-        // already moved on. A transport that rejects for any other reason
-        // broke its contract, and the check is reported as unanswered rather
-        // than left in flight for ever, which would stop every later check.
-        if (controller.signal.aborted || this.disposed) return;
-        const detail = err instanceof Error ? err.message : String(err);
-        const current =
-          this.current.inFlight === generation && this.current.generation === generation;
-        this.dispatch({
-          type: "settled",
+    this.inFlight = { request, controller };
+    const settle = (outcome: CheckOutcome) => {
+      if (this.inFlight?.request === request) this.inFlight = null;
+      if (controller.signal.aborted || this.disposed) return;
+      const current = isCurrentAnswer(this.current, request);
+      this.dispatch({
+        type: "settled",
+        request,
+        status: outcome.status,
+        now: this.options.clock.now(),
+      });
+      if (current) {
+        this.options.onSettled({
           generation,
-          status: "unreachable",
-          now: this.options.clock.now(),
+          sent: prepared.sent,
+          baseRevision: prepared.baseRevision,
+          outcome,
         });
-        if (current) {
-          this.options.onSettled({
-            generation,
-            sent: prepared.sent,
-            baseRevision: prepared.baseRevision,
-            outcome: { status: "unreachable", detail },
-          });
-        }
-      },
+      }
+    };
+    this.options.transport.send(prepared.request, controller.signal).then(
+      (answer) => settle(classifyCheck(answer, prepared.mode, prepared.baseRevision)),
+      // An aborted check is superseded, not unreachable, and `settle` drops
+      // it. A transport that rejects for any other reason broke its contract,
+      // and the check is reported as unanswered rather than left in flight for
+      // ever, which would stop every later check.
+      (err: unknown) =>
+        settle({ status: "unreachable", detail: err instanceof Error ? err.message : String(err) }),
     );
   }
 }
