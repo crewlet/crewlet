@@ -572,7 +572,7 @@ func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.Doma
 		}
 		fence := tracker.NewFence(s.db, s.nodeID)
 		fence.Cursor = runner.Committed
-		fence.Floor = s.trimFloor(domain.Name())
+		fence.Floor = s.trimFloor(domain.Name(), func() uint32 { return runner.Committed().Generation })
 		deps.Rows, deps.Fence, deps.Gates = rows, fence, tracker.NewGates(s.db)
 		evicted = fence.Evicted
 	case search.Domain{}.Name():
@@ -592,7 +592,7 @@ func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.Doma
 		}
 		fence := pages.NewFence(s.db, s.nodeID)
 		fence.Cursor = runner.Committed
-		fence.Floor = s.trimFloor(domain.Name())
+		fence.Floor = s.trimFloor(domain.Name(), func() uint32 { return runner.Committed().Generation })
 		deps.Rows, deps.Fence, deps.Gates = rows, fence, pages.NewGates(s.db)
 		evicted = fence.Evicted
 	default:
@@ -684,36 +684,71 @@ func (s *stateLog) readerFor(domain statelog.Domain, appendTo *jetstream.DomainL
 	return reader, nil
 }
 
-// trimFloor is the published floor for one domain, as the write fence reads
-// it.
+// trimFloor is the published floor for one domain, as the write fence, the
+// readiness gate and the join read it: the first sequence the trim has NOT
+// licensed removing, at the generation the caller is on.
+//
+// # It is the trim's own decision, and it used to be something else
+//
+// The value here was the minimum over every node's published position —
+// including this node's own row. A minimum that includes the reader can never
+// exceed the reader, so every comparison made against it was decided before it
+// was made: the fence that verifies an expectation of zero is safe never
+// refused, the health arm that refuses a node below the floor never fired, and
+// the join's own "what must an artefact cover" was one heartbeat of this
+// node's own position. The floor theorem's second clause — F <= C verified
+// within the call — was verified against a number that could not fail it.
+//
+// The trim publishes what it concluded on every tick, blocked or not, and
+// that record is the floor: [coord.TrimFloor.TrimTo], the exclusive sequence
+// it may remove up to, which is exactly the first sequence a node has to hold.
+// An unreadable register is UNKNOWN and refuses; an absent record is a trim
+// that has never run and therefore licensed nothing.
 //
 // A READ THAT ANSWERS UNKNOWN MUST REFUSE, which is what the fence does with
 // the error: this is the one check where failing open is a lost update rather
 // than a duplicate.
-func (s *stateLog) trimFloor(domain string) func(context.Context) (uint64, error) {
+func (s *stateLog) trimFloor(domain string, generation func() uint32) func(context.Context) (uint64, error) {
 	return func(ctx context.Context) (uint64, error) {
-		rows, err := s.fleet.Positions(ctx)
+		floors, err := s.fleet.Floors(ctx)
 		if err != nil {
-			return 0, fmt.Errorf("engine: read the fleet's positions: %w", err)
+			return 0, fmt.Errorf("engine: read the fleet's published trim floors: %w", err)
 		}
-		// THE LOWEST COUNTED POSITION IS THE FLOOR THIS NODE MAY ASSUME.
-		// It is a conservative reading of the published floor rather
-		// than the floor itself: the trim's own decision is six terms
-		// wide and every one of them can only move the point DOWN, so a
-		// writer comparing against this can be too cautious and never
-		// too bold.
-		var floor uint64
-		for i, row := range rows {
-			at, ok := row.Domains[domain]
-			if !ok {
-				continue
-			}
-			if i == 0 || at.Seq < floor {
-				floor = at.Seq
-			}
-		}
-		return floor, nil
+		return floorFor(floors, domain, generation())
 	}
+}
+
+// floorFor is the floor's arithmetic over what the register holds, separated
+// from the register so every branch is reachable in a table test.
+//
+//   - No record for the domain: the trim has never concluded anything about
+//     this log, so nothing has been licensed for removal. Zero.
+//   - A record at a LOWER generation: it names a dead number space, and in
+//     this one the trim has concluded nothing yet. Zero — and the stream's
+//     own first sequence, which every reader takes as a maximum beside this,
+//     covers a purge that raced a reanchor. Reading it as unknown instead
+//     would refuse every write at an expectation of zero for a whole trim
+//     interval after every reanchor.
+//   - A record at a HIGHER generation: this node is the one on the dead
+//     number space. Unknown, which refuses.
+//   - Otherwise TrimTo, which is zero while the trim is blocked.
+func floorFor(floors []coord.TrimFloor, domain string, generation uint32) (uint64, error) {
+	for _, f := range floors {
+		if f.Domain != domain {
+			continue
+		}
+		switch {
+		case f.Generation < generation:
+			return 0, nil
+		case f.Generation > generation:
+			return 0, fmt.Errorf("engine: the published floor for %s is at generation "+
+				"%d and this node is on %d — this node's positions name a sequence "+
+				"space the fleet has left, so nothing it holds can be compared "+
+				"against the floor", domain, f.Generation, generation)
+		}
+		return f.TrimTo, nil
+	}
+	return 0, nil
 }
 
 // Domain answers one running domain by name, or nil.
@@ -877,7 +912,8 @@ func (s *stateLog) health(ctx context.Context, running *runningDomain) (statelog
 	}
 	health.Lag = &lag
 	health.CaughtUp = lag == 0
-	floor, err := s.trimFloor(running.domain.Name())(ctx)
+	floor, err := s.trimFloor(running.domain.Name(),
+		func() uint32 { return at.Generation })(ctx)
 	if err != nil {
 		return health, err
 	}
@@ -898,7 +934,7 @@ func (s *stateLog) health(ctx context.Context, running *runningDomain) (statelog
 	// has applied everything that was ever removed — the same test
 	// [statelog.Health.Established] and the join make, so the three
 	// cannot disagree at the boundary.
-	below := at.Seq < floor
+	below := at.Seq+1 < floor
 	if health.FirstSeq != nil && at.Seq+1 < *health.FirstSeq {
 		below = true
 	}
@@ -1335,11 +1371,11 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		floor, err := s.trimFloor(name)(ctx)
+		at, _, _, err := statelog.CursorFor(ctx, s.db.Replicated(), domain.Stream().Name)
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		at, _, _, err := statelog.CursorFor(ctx, s.db.Replicated(), domain.Stream().Name)
+		floor, err := s.trimFloor(name, func() uint32 { return at.Generation })(ctx)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -1396,7 +1432,7 @@ func (s *stateLog) stillUsable(ctx context.Context, logs map[string]*jetstream.D
 		if err != nil {
 			return err
 		}
-		floor, err := s.trimFloor(name)(ctx)
+		floor, err := s.trimFloor(name, func() uint32 { return at.Generation })(ctx)
 		if err != nil {
 			return err
 		}

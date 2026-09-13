@@ -181,11 +181,15 @@ func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) erro
 			"that cannot be read is not a floor that is low, and publishing at "+
 			"zero on the guess is a lost update nothing recovers", err)
 	}
-	if floor > cursor.Seq {
-		return fmt.Errorf("pages: the trim floor is at %d and this node has "+
-			"consumed through %d, so an absent anchor may be a claim trimmed "+
-			"beneath it rather than an address that was never taken: %w",
-			floor, cursor.Seq, statelog.ErrUnavailable)
+	// THE FLOOR IS THE FIRST SEQUENCE THE TRIM HAS NOT LICENSED REMOVING,
+	// so a node that has consumed through the one before it has consumed
+	// everything that may be gone — see the tracker's fence, which makes
+	// the same comparison for the same reason.
+	if floor > cursor.Seq+1 {
+		return fmt.Errorf("pages: the trim may have removed everything below %d "+
+			"and this node has consumed through %d, so an absent anchor may be a "+
+			"claim trimmed beneath it rather than an address that was never "+
+			"taken: %w", floor, cursor.Seq, statelog.ErrUnavailable)
 	}
 	return nil
 }
