@@ -911,6 +911,18 @@ rendered idle from the first phase to the last.
   opened from an item render in the canvas's untransformed overlay layer, so
   the zoom neither scales nor clips them. Fullscreen belongs to the screen,
   which must take its dialogs and toasts into the fullscreen element with it.
+- **There is one hand-built listbox, and it is for choosing many.** A single
+  choice stays a native `<select>` (`Field kind="choice"`) for the reasons in
+  "Controls that mean what they look like". `ui/MultiPicker.tsx` exists
+  because a multiple select cannot be searched and loses its selection to a
+  stray click, and its keys are `ui/useListbox.ts`, the same ones the secret
+  completion in `Field` uses, so the two lists cannot drift apart.
+- **The layout is measured, never assumed.** A chart card's width is the
+  `--org-card-w` token; its height is measured in the browser
+  (`ui/useMeasuredSizes.ts`) and fed to the pure tidy tree layout
+  (`ui/tidytree.ts`), because density and the reader's font size change every
+  card's height. Nothing is shown before the first measurement, and a relayout
+  keeps the node the operator acted on where it was on screen.
 
 ---
 
