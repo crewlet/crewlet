@@ -312,7 +312,7 @@ you opted into by sending the second signal.
 
 **Watching the drain.** Not on the dashboard: the embedded API server is stopped *first*, before the drain begins, so the dashboard, the REST API and `GET /health` all stop answering on the first Ctrl+C. **The logs are the drain's only live view** — the engine writes `drain_in_progress` with the in-flight count every 10 seconds until `drain_complete`. Set [`logging.file`](../guides/deployment.md#the-log-file) if you want that view to survive the terminal it was watched in: the file is closed last of everything, after the drain and after the trace flush, so `drain_complete` is in it.
 
-On a **split deployment** the standalone API process is a separate process and keeps serving while an engine node drains, but it has no engine reference, so it reports the fleet rather than that node's in-flight count.
+On a **split deployment** a node with the `ingress` role keeps serving while a seats node drains, but it answers for itself: its own `/health` carries its own in-flight count, and the draining node has already left the fleet view, because a drain gives up its presence lease at once. The draining node's logs are the view of its drain.
 
 The same facts are on `GET /health` whenever the embedded API is still answering, which is the case when a node drains on a [config posture](control-plane.md) rather than on a signal:
 
@@ -320,7 +320,7 @@ The same facts are on `GET /health` whenever the embedded API is still answering
 - `shutting_down`: true from the moment the seat host starts draining
 - `status` reads `"shutting_down"` during the drain
 
-The standalone API process omits `in_flight` and `shutting_down`, because it has no engine to ask.
+Every process that serves the API runs an engine beside it, so these fields are always present.
 
 The console shows the same story: the first Ctrl+C prints what is being waited for and how to escalate, and the engine logs `drain_in_progress` with the in-flight count every 10 seconds until the drain converges (`drain_complete`).
 

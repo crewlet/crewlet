@@ -1190,9 +1190,9 @@ reconnect restores every field without a second round trip.
 | `status` | `ok`, `unconfigured`, `shutting_down`, or the config posture when it is `shed`, `stuck` or `isolated`. A draining engine reports `shutting_down` whatever else is true of it. |
 | `node` | This process's `node.id`. |
 | `configured` | Whether a company revision is active. When `false` the engine accepts and **discards** every inbound webhook, so an operator watching empty screens needs to be told this rather than left to infer it. |
-| `engine` | Whether this process has an engine to ask. `false` on the [standalone API](../guides/deployment.md), where `in_flight` / `engine_started_at` / `shutting_down` are absent — the flag is what lets a client tell "nothing is running" from "this process cannot know", instead of rendering a confident zero for both. |
+| `engine` | Whether this process has an engine to ask. Always `true` from `crewlet run`, which runs the engine in every process that serves the API, the `ingress`-only node of a split deployment included. The API contract keeps the flag and leaves the engine's fields (`in_flight`, `shutting_down`, `posture`, `applied_epoch`, `engine_started_at`, `seats`) absent when it is `false`, so a client can tell "nothing is running" from "this process cannot know" instead of rendering a confident zero for both. |
 | `version` | The `crewlet` version this process is running. |
-| `started_at` | When the **API process** started. Deliberately separate from `engine_started_at`: on the standalone deployment those are two processes on two clocks, and one merged "uptime" would be wrong for at least one of them. |
+| `started_at` | When the **API** was built. Deliberately separate from `engine_started_at`: the listener binds before the engine starts, so the two differ even in one process, and one merged "uptime" would be wrong for at least one of them. |
 | `queue` | The event queue's backend — `jetstream-embedded` (a NATS server inside this process), `jetstream` (an external NATS cluster this node dialled), or `memory`. Read off the `EventQueue` contract's own `Backend()`, never sniffed from a type name. Display only; nothing may branch on it. |
 | `clients` | Dashboards currently connected to this API process. |
 | `in_flight` | Handler invocations mid-flight (embedded API only). |
@@ -1267,7 +1267,7 @@ up.
   prior figure is dead, so a consumer must **replace** what it holds
   rather than merge or take a maximum.
 - `seq` is monotonic within a `meter_id`. The feed it arrives on is
-  **best-effort**: the standalone API reads an ephemeral broadcast
+  **best-effort**: every node's projection reads an ephemeral broadcast
   subscription that takes no acks, starts at the stream's tail on every
   (re)connect, and lets a slow consumer miss frames rather than hold
   them. So a report at or below the held `seq` is dropped rather than
@@ -1276,8 +1276,8 @@ up.
   `used >= max`, is what "exhausted" means: a refused charge increments
   nothing, so the counter stops short of the cap by the size of the round
   that would not fit.
-- `{}` means no engine is reporting one (the standalone API has no meter
-  of its own). Per-agent, `budget: null` means the same, or that the seat
+- `{}` means no engine is reporting one, which in this build is always
+  the case (see the note above). Per-agent, `budget: null` means the same, or that the seat
   has no per-agent cap at all — the engine seeds one only for a non-zero
   `token_budget`.
 
@@ -1371,13 +1371,14 @@ REST route calls, so the two surfaces cannot diverge:
 
 ### Wiring
 
-Both deployment paths feed events into a single `stream.Service.Ingest`
-entry point.  The standalone API process subscribes to the engine's
-NATS JetStream event stream with an **ephemeral broadcast consumer** (it
-receives every event — this is a broadcast, not a work queue, because a
-dashboard served by one node must show turns that ran on another); the
-embedded API path (engine + API in the same process) wires `Ingest` as
-a publish listener directly, no queue round-trip required.  Each event
+Every node that serves the API feeds its projection through one entry
+point, `stream.Service.Ingest`, from an **ephemeral broadcast
+subscription** to the event stream (`observe.Projector`). It receives
+every event from every node, because a dashboard served by one node must
+show turns that ran on another, and that is why it is not a publish
+listener: a listener sees only what its own node published. The event
+store takes the other route, a publish listener inline on the publishing
+node, so no two nodes can write one row.  Each event
 updates the live-state projection *and* fans out to connected
 dashboards.  Backpressure is per-WebSocket: a stalled tab drops the
 oldest queued envelope so it cannot stall the publish path or other
