@@ -293,6 +293,24 @@ const build = (over: Partial<Parameters<typeof buildItemsParams>[0]> = {}) =>
     ...over,
   });
 
+// THE SCREEN'S OWN VOCABULARY NEVER REACHES THE WIRE. `scope` and `overdue`
+// are words this dashboard uses for two of its controls, and the engine's
+// grammar has neither — it asks for a status GROUP and for `due=overdue`.
+// The engine REFUSES a parameter it does not read rather than ignoring one,
+// which is right and which makes a leaked key fail the WHOLE read: the
+// answer is then empty, indistinguishable from an empty container. That is
+// exactly how an item page's subtask panel came to draw nothing at all.
+test("a control's own name is translated rather than sent", () => {
+  const params = build({
+    filters: { ...NO_FILTERS, scope: "closed", overdue: true },
+  });
+  expect(Object.keys(params)).not.toContain("scope");
+  expect(Object.keys(params)).not.toContain("overdue");
+  // The questions are still asked, in the engine's own words.
+  expect(params.status_group).toBe("done,closed");
+  expect(params.due).toBe("overdue");
+});
+
 // OPEN AND CLOSED ARE STATUS GROUPS, not a boolean, and the third segment
 // DELETES the key — including one a view brought with it. A control that
 // could not reach "everything" is how a board that never shows a closed item
