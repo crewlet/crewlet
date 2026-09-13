@@ -199,7 +199,7 @@ func (n *Node) Owner() string { return n.cfg.Owner }
 // Start begins claiming seats and consuming their mail.
 //
 // The mailboxes come up BEFORE the claiming, and that ordering is the point —
-// see [Node.ensureMailboxes].
+// see [Node.EnsureMailboxes].
 func (n *Node) Start(ctx context.Context) error {
 	if err := n.cfg.Queue.Start(ctx); err != nil {
 		return fmt.Errorf("node: start queue: %w", err)

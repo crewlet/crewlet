@@ -23,6 +23,19 @@
 // the same shape the sandbox waiter uses: a node that dies mid-sweep
 // releases it by lapsing, and a peer picks it up on its next tick with no
 // handoff protocol.
+//
+// # The one job that is not a range delete
+//
+// A removed seat's MAILBOX is retired here too, once the seat has been absent
+// from the active revision for [MailboxRetirementGrace]. It is the odd one out
+// in three ways, each written down in mailboxes.go: what it deletes is broker
+// state (the seat's durable subscriptions and the mail they hold) rather than
+// rows; it cannot be judged from a table, so every node records each seat's
+// mailbox in the coordination store before creating it, through
+// [Mailboxes.Register], which is why this package also serves the node; and a
+// delete that cannot be undone is not idempotent in the way a range delete is,
+// so it does not lean on the duty at all. Every write is a compare-and-set,
+// and the retirement claims the seat's own lease while it deletes.
 package maintenance
 
 import (
