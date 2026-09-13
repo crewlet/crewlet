@@ -192,13 +192,13 @@ func (r *Reader) Projects(ctx context.Context, q ProjectQuery, now time.Time) (
 
 	var listing ProjectListing
 	served, err := r.log.Read(ctx, statelog.Query{
-		Level:           q.Level,
-		Scope:           projectListScope(),
-		Session:         q.Session,
-		MinPosition:     q.MinPosition,
-		MaxLag:          q.MaxLag,
-		MaxLagPositions: q.MaxLagSeq,
-		Set:             true,
+		Level:       q.Level,
+		Scope:       projectListScope(),
+		Session:     q.Session,
+		MinPosition: q.MinPosition,
+		MaxLag:      q.MaxLag,
+		MaxLagSeq:   q.MaxLagSeq,
+		Set:         true,
 	}, func(tx *sql.Tx) error {
 		rows, total, err := readProjectRows(ctx, tx, q, limit, now)
 		if err != nil {
@@ -529,13 +529,13 @@ func (r *Reader) Project(ctx context.Context, q ProjectDetailQuery,
 
 	var out ProjectDetail
 	served, err := r.log.Read(ctx, statelog.Query{
-		Level:           q.Level,
-		Scope:           projectDetailScope(key),
-		Session:         q.Session,
-		MinPosition:     q.MinPosition,
-		MaxLag:          q.MaxLag,
-		MaxLagPositions: q.MaxLagSeq,
-		Set:             true,
+		Level:       q.Level,
+		Scope:       projectDetailScope(key),
+		Session:     q.Session,
+		MinPosition: q.MinPosition,
+		MaxLag:      q.MaxLag,
+		MaxLagSeq:   q.MaxLagSeq,
+		Set:         true,
 	}, func(tx *sql.Tx) error {
 		return readProjectDetail(ctx, tx, key, q, now, &out)
 	})

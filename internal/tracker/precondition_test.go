@@ -119,7 +119,7 @@ func TestTheHandOffBudgetIsChargedToTheItem(t *testing.T) {
 	r.drain()
 
 	detail, err := r.reader.Task(t.Context(), task.ID, tracker.DetailWants{},
-		statelog.ReadSession)
+		statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
 		t.Fatalf("read back: %v", err)
 	}

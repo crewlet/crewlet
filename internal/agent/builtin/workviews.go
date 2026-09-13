@@ -138,7 +138,8 @@ func (t *saveWorkView) Parameters() map[string]any {
 					"type, priority, due, updated, created, reporter, " +
 					"watcher, unit, goal, sprint, sort, limit, preset — is " +
 					"the same word. Refused if any key does not parse, and " +
-					"`view`, `cursor` and `read_level` are refused " +
+					"`view`, `cursor`, `read_level`, `max_lag_seconds`, " +
+					"`max_lag_seq` and `min_position` are refused " +
 					"outright: they are about the reader rather than the " +
 					"rows.",
 			},
@@ -206,7 +207,7 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	t.deps.settle(ctx, result.Position)
 	return jsonResult(map[string]any{
-		"id": id, "outcome": string(result.Outcome), "version": result.Version,
+		"id": id, "outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
 	})
 }
 

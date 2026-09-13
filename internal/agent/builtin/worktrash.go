@@ -98,7 +98,7 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if ref == "" {
 		return failed("remove_work_item needs an `item` — a key like ENG-42, or an id."), nil
 	}
-	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatReadLevel)
+	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
 		return failed(fmt.Sprintf("There is no work item %q.", clip(ref))), nil
@@ -125,7 +125,7 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	t.deps.settle(ctx, got.Position)
 	return jsonResult(map[string]any{
 		"key": before.Task.Key, "removed": true,
-		"outcome": string(got.Outcome), "version": got.Version,
+		"outcome": string(got.Outcome), "position": positionOf(got.Position), "version": got.Version,
 	})
 }
 
@@ -181,7 +181,7 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// is by definition out of every ordinary list, so the detail read is
 	// the only way to reach it — and it answers for a removed task, which
 	// is what makes the trash readable from both ends.
-	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatReadLevel)
+	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
 		return failed(fmt.Sprintf("There is no work item %q.", clip(ref))), nil
@@ -207,6 +207,6 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	t.deps.settle(ctx, got.Position)
 	return jsonResult(map[string]any{
 		"key": before.Task.Key, "restored": true,
-		"outcome": string(got.Outcome), "version": got.Version,
+		"outcome": string(got.Outcome), "position": positionOf(got.Position), "version": got.Version,
 	})
 }

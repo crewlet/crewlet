@@ -487,7 +487,7 @@ func TestAStaleReadRefusesPastTheBoundItAsksFor(t *testing.T) {
 	// node's drain rate, and a bound stated in records that was validated
 	// and then ignored is a bound that never bounded anything.
 	byRecords := pointQuery(statelog.ReadStale)
-	byRecords.MaxLagPositions = 100
+	byRecords.MaxLagSeq = 100
 	_, err = r.Read(t.Context(), byRecords, func(*sql.Tx) error { return nil })
 	if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseTooStale {
 		t.Fatalf("a stale read accepting 100 records behind, on a node 60000 "+
@@ -496,7 +496,7 @@ func TestAStaleReadRefusesPastTheBoundItAsksFor(t *testing.T) {
 	// AND A NODE INSIDE THAT BOUND IS SERVED, so the case above is not
 	// passing against a reader that refuses every record bound it is given.
 	within := pointQuery(statelog.ReadStale)
-	within.MaxLagPositions = 60_000
+	within.MaxLagSeq = 60_000
 	if _, err := r.Read(t.Context(), within, func(*sql.Tx) error { return nil }); err != nil {
 		t.Fatalf("a stale read accepting 60000 records behind, on a node "+
 			"exactly 60000 behind, = %v, want it served", err)
@@ -600,4 +600,69 @@ func (l *landsBetween) Read(ctx context.Context, fn func(*sql.Tx) error) error {
 		l.land()
 	}
 	return err
+}
+
+// THE CALLER'S FLOOR IS HONOURED AT EVERY LEVEL, not only at `session`.
+//
+// A write answers with the position its record landed at, and a caller that
+// hands it back as [statelog.Query.MinPosition] is served nothing from before
+// it — whatever else it asked for. It used to reach the reader at `session`
+// only: a `stale` read carrying a floor waited for nothing and served rows
+// from before the write the caller had just been told about, and a
+// `linearizable` one waited for its own barrier, which on the honest path is
+// past the floor and on the pasted-position path is not.
+func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	var appends atomic.Int64
+	index, err := statelog.NewReadIndex(probeDomain{},
+		&countingAppends{inner: h.log, n: &appends}, probeEncode, h.gen.Load, nil)
+	if err != nil {
+		t.Fatalf("NewReadIndex: %v", err)
+	}
+	// FAR PAST ANYTHING A BARRIER ESTABLISHES, so a level that waited for
+	// its own target instead of the floor is told apart from one that
+	// waited for the later of the two.
+	floor := statelog.Position{Stream: probeStream, Generation: 1, Seq: 1 << 30}
+
+	for _, level := range []statelog.ReadLevel{
+		statelog.ReadLinearizable, statelog.ReadSession,
+		statelog.ReadStale, statelog.ReadConsistentPrefix,
+	} {
+		w := &stubWaiter{at: healthy().Position}
+		r := newReader(t, &stubStore{}, healthy, w, index)
+		q := pointQuery(level)
+		q.MinPosition = floor
+		if _, err := r.Read(t.Context(), q, func(*sql.Tx) error { return nil }); err != nil {
+			t.Fatalf("%s read with a floor: %v", level, err)
+		}
+		if got := w.last.Load(); got != floor.Packed() {
+			t.Errorf("a %s read with a floor waited for packed %d, want the "+
+				"floor's %d — a caller handed a position by its own write was "+
+				"served rows from before it", level, got, floor.Packed())
+		}
+	}
+	// AND ONLY THE LINEARIZABLE READ APPENDED: the floor is a wait, never
+	// a barrier, so the three cheap levels stay cheap.
+	if got := appends.Load(); got != 1 {
+		t.Errorf("four floored reads appended %d barrier(s), want the "+
+			"linearizable one's alone", got)
+	}
+
+	// A FLOOR ON ANOTHER STREAM IS REFUSED, NOT WAITED FOR, at the level
+	// that never appends — the one where a wait for a foreign sequence
+	// would otherwise run out the whole budget.
+	w := &stubWaiter{at: healthy().Position}
+	r := newReader(t, &stubStore{}, healthy, w, index)
+	q := pointQuery(statelog.ReadStale)
+	q.MinPosition = statelog.Position{Stream: "SOME_OTHER_LOG", Generation: 1, Seq: 5}
+	_, err = r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
+	var refusal *statelog.Refused
+	if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseWrongStream {
+		t.Fatalf("a stale read with a floor on another stream = %v, want "+
+			"wrong_stream", err)
+	}
+	if got := w.waited.Load(); got != 0 {
+		t.Errorf("the wrong-stream read waited %d time(s) before refusing", got)
+	}
 }

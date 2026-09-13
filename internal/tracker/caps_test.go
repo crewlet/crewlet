@@ -216,7 +216,7 @@ func TestAnAutomaticWatchIsSkippedRatherThanRefusingTheWrite(t *testing.T) {
 
 	// THE COMMENT LANDED AND THE WATCH DID NOT.
 	detail, err := r.reader.Task(t.Context(), "t-1",
-		tracker.DetailWants{Comments: true}, statelog.ReadStale)
+		tracker.DetailWants{Comments: true}, statelog.Freshness{Level: statelog.ReadStale})
 	if err != nil {
 		t.Fatalf("read the task back: %v", err)
 	}

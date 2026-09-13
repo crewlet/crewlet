@@ -114,7 +114,7 @@ func TestAnItemWrittenToTheFleetLandsOnTheBoard(t *testing.T) {
 		t.Fatalf("wait for the applier: %v", err)
 	}
 	detail, err := n.engine.Tracker().Task(t.Context(), written.Key,
-		tracker.DetailWants{History: true}, statelog.ReadSession)
+		tracker.DetailWants{History: true}, statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
 		t.Fatalf("read %s back: %v", written.Key, err)
 	}
@@ -222,7 +222,7 @@ func TestAnOperatorWriteIsStillAnOperatorWriteOnTheBoard(t *testing.T) {
 		t.Fatalf("wait for the applier: %v", err)
 	}
 	detail, err := n.engine.Tracker().Task(t.Context(), written.Key,
-		tracker.DetailWants{History: true}, statelog.ReadSession)
+		tracker.DetailWants{History: true}, statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
 		t.Fatalf("read back: %v", err)
 	}

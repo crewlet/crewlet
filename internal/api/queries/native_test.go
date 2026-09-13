@@ -42,6 +42,7 @@ type stubWork struct {
 
 	catalogueQuery tracker.CatalogueQuery
 	taskLevel      statelog.ReadLevel
+	taskFresh      statelog.Freshness
 
 	err error
 }
@@ -115,9 +116,9 @@ func (s *stubWork) Tasks(_ context.Context, q tracker.Query, _ time.Time) (track
 }
 
 func (s *stubWork) Task(_ context.Context, _ string, _ tracker.DetailWants,
-	level statelog.ReadLevel) (tracker.TaskDetail, error) {
+	fresh statelog.Freshness) (tracker.TaskDetail, error) {
 
-	s.taskLevel = level
+	s.taskLevel, s.taskFresh = fresh.Level, fresh
 	return s.detail, s.err
 }
 
@@ -130,26 +131,30 @@ type stubPages struct {
 	// one is visible: an unset level is what made every page read on this
 	// surface a label rather than a guarantee.
 	level statelog.ReadLevel
+
+	// fresh is the whole ask, so a route that carried the level and
+	// dropped the bounds or the floor beside it is visible too.
+	fresh statelog.Freshness
 }
 
 func (s *stubPages) List(_ context.Context, f pages.Filter,
-	level statelog.ReadLevel,
+	fresh statelog.Freshness,
 ) (pages.Listing, error) {
-	s.filter, s.level = f, level
-	return pages.Listing{Pages: s.list, Level: level, Complete: true}, s.err
+	s.filter, s.level, s.fresh = f, fresh.Level, fresh
+	return pages.Listing{Pages: s.list, Level: fresh.Level, Complete: true}, s.err
 }
 
 func (s *stubPages) Get(_ context.Context, _ string,
-	level statelog.ReadLevel,
+	fresh statelog.Freshness,
 ) (pages.Detail, error) {
-	s.level = level
+	s.level, s.fresh = fresh.Level, fresh
 	return pages.Detail{}, s.err
 }
 
 func (s *stubPages) Containers(_ context.Context,
-	level statelog.ReadLevel,
+	fresh statelog.Freshness,
 ) ([]pages.Container, error) {
-	s.level = level
+	s.level, s.fresh = fresh.Level, fresh
 	return nil, s.err
 }
 
@@ -569,8 +574,8 @@ func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
 					"stale answer wearing a stronger name", tc.what, got)
 			}
 
-			// AND `session` IS REFUSED RATHER THAN QUIETLY SERVED. It
-			// waits for a position no HTTP caller can supply.
+			// AND A BARE `session` IS REFUSED RATHER THAN QUIETLY
+			// SERVED: it waits for a position, and none was named.
 			work, pages = &stubWork{}, &stubPages{}
 			src = queries.Sources{Work: work, Pages: pages}
 			bad := map[string]any{"read_level": "session"}
@@ -578,7 +583,27 @@ func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
 				bad[k] = v
 			}
 			if _, err := ask(t, src, tc.what, bad); !errors.Is(err, queries.ErrBadParams) {
-				t.Errorf("%s accepted read_level=session, answering %v", tc.what, err)
+				t.Errorf("%s accepted a bare read_level=session, answering %v",
+					tc.what, err)
+			}
+
+			// WITH THE POSITION IT IS HONOURED, which is the whole of
+			// read-your-writes over this wire: a write answered with
+			// where it landed and the caller hands that back.
+			work, pages = &stubWork{}, &stubPages{}
+			src = queries.Sources{Work: work, Pages: pages}
+			own := map[string]any{
+				"read_level": "session", "min_position": "CREWLET_TRACKER_LOG@1:4711",
+			}
+			for k, v := range tc.args {
+				own[k] = v
+			}
+			if _, err := ask(t, src, tc.what, own); err != nil {
+				t.Fatalf("%s asking session with a floor: %v", tc.what, err)
+			}
+			if got := tc.level(work, pages); got != statelog.ReadSession {
+				t.Errorf("%s asked for session with a floor and read at %q",
+					tc.what, got)
 			}
 		})
 	}
@@ -610,44 +635,70 @@ func TestTheStalenessBoundsReachEveryQuestionThatCanHoldThem(t *testing.T) {
 	for _, tc := range []struct {
 		what  string
 		args  map[string]any
-		check func(*stubWork) func(*testing.T, string)
+		check func(*stubWork, *stubPages) func(*testing.T, string)
 	}{
-		{"work_items", nil, func(w *stubWork) func(*testing.T, string) {
+		{"work_items", nil, func(w *stubWork, _ *stubPages) func(*testing.T, string) {
 			return bounds(w.query.MaxLag, w.query.MaxLagSeq)
 		}},
+		// THE POINT READ AND THE PAGE READS TOO. They handed over the
+		// level alone, on the claim that a single row has no set for a
+		// bound to be enforced against — but the bound is about this
+		// node's LAG, and a row is exactly as far behind as a board.
+		{"work_item", map[string]any{"id": "ENG-1"},
+			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
+				return bounds(w.taskFresh.MaxLag, w.taskFresh.MaxLagSeq)
+			}},
+		{"work_my_work", map[string]any{"handle": "ana"},
+			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
+				return bounds(w.myWorkQuery.MaxLag, w.myWorkQuery.MaxLagSeq)
+			}},
+		{"pages", nil, func(_ *stubWork, p *stubPages) func(*testing.T, string) {
+			return bounds(p.fresh.MaxLag, p.fresh.MaxLagSeq)
+		}},
+		{"page", map[string]any{"id": "p1"},
+			func(_ *stubWork, p *stubPages) func(*testing.T, string) {
+				return bounds(p.fresh.MaxLag, p.fresh.MaxLagSeq)
+			}},
+		{"containers", nil, func(_ *stubWork, p *stubPages) func(*testing.T, string) {
+			return bounds(p.fresh.MaxLag, p.fresh.MaxLagSeq)
+		}},
 		{"work_views", map[string]any{"container": "workspace"},
-			func(w *stubWork) func(*testing.T, string) {
+			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
 				return bounds(w.views.MaxLag, w.views.MaxLagSeq)
 			}},
-		{"work_goals", nil, func(w *stubWork) func(*testing.T, string) {
+		{"work_goals", nil, func(w *stubWork, _ *stubPages) func(*testing.T, string) {
 			return bounds(w.goalQuery.MaxLag, w.goalQuery.MaxLagSeq)
 		}},
-		{"work_catalogue", nil, func(w *stubWork) func(*testing.T, string) {
+		{"work_catalogue", nil, func(w *stubWork, _ *stubPages) func(*testing.T, string) {
 			return bounds(w.catalogueQuery.MaxLag, w.catalogueQuery.MaxLagSeq)
 		}},
 		{"work_person", map[string]any{"handle": "ana"},
-			func(w *stubWork) func(*testing.T, string) {
+			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
 				return bounds(w.personQuery.MaxLag, w.personQuery.MaxLagSeq)
 			}},
-		{"work_projects", nil, func(w *stubWork) func(*testing.T, string) {
+		{"work_projects", nil, func(w *stubWork, _ *stubPages) func(*testing.T, string) {
 			return bounds(w.projectQuery.MaxLag, w.projectQuery.MaxLagSeq)
 		}},
 		{"work_project", map[string]any{"key": "ENG"},
-			func(w *stubWork) func(*testing.T, string) {
+			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
 				return bounds(w.detailQuery.MaxLag, w.detailQuery.MaxLagSeq)
 			}},
 		{"work_sprints", map[string]any{"project": "ENG"},
-			func(w *stubWork) func(*testing.T, string) {
+			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
 				return bounds(w.sprintQuery.MaxLag, w.sprintQuery.MaxLagSeq)
 			}},
 		{"work_activity", map[string]any{"container": "workspace"},
-			func(w *stubWork) func(*testing.T, string) {
+			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
 				return bounds(w.activityQuery.MaxLag, w.activityQuery.MaxLagSeq)
 			}},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
 			t.Parallel()
-			work := &stubWork{}
+			work, pages := &stubWork{}, &stubPages{}
+			ask := askNative
+			if tc.what == "work_my_work" {
+				ask = askAsOperator
+			}
 			all := map[string]any{}
 			for k, v := range args {
 				all[k] = v
@@ -655,11 +706,11 @@ func TestTheStalenessBoundsReachEveryQuestionThatCanHoldThem(t *testing.T) {
 			for k, v := range tc.args {
 				all[k] = v
 			}
-			src := queries.Sources{Work: work, Pages: &stubPages{}}
-			if _, err := askNative(t, src, tc.what, all); err != nil {
+			src := queries.Sources{Work: work, Pages: pages}
+			if _, err := ask(t, src, tc.what, all); err != nil {
 				t.Fatalf("%s: %v", tc.what, err)
 			}
-			tc.check(work)(t, tc.what)
+			tc.check(work, pages)(t, tc.what)
 
 			// AND A BOUND AT A LEVEL THAT IS NOT STALE IS REFUSED
 			// rather than carried and ignored: it is not a level of its
@@ -667,9 +718,90 @@ func TestTheStalenessBoundsReachEveryQuestionThatCanHoldThem(t *testing.T) {
 			// it there is a caller who believes they asked for
 			// something they did not.
 			all["read_level"] = "linearizable"
-			if _, err := askNative(t, src, tc.what, all); !errors.Is(err, queries.ErrBadParams) {
+			if _, err := ask(t, src, tc.what, all); !errors.Is(err, queries.ErrBadParams) {
 				t.Errorf("%s took a staleness bound at linearizable, answering %v",
 					tc.what, err)
+			}
+		})
+	}
+}
+
+// AND THE FLOOR REACHES EVERY QUESTION, at every level it may be asked at.
+//
+// `min_position` is what a write's answer carries, handed back: a caller that
+// created a task through the operator MCP and redraws the board over this
+// surface names the position and is served nothing from before it. A question
+// that parsed the key and dropped it would answer identically — same rows,
+// same `read_level` — which is the shape the staleness bounds already shipped
+// in, so the walk is over every question rather than the one that goes
+// through the grammar.
+func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
+	t.Parallel()
+	want := statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 4711}
+	for _, tc := range []struct {
+		what  string
+		args  map[string]any
+		floor func(*stubWork, *stubPages) statelog.Position
+	}{
+		{"work_items", nil, func(w *stubWork, _ *stubPages) statelog.Position { return w.query.MinPosition }},
+		{"work_item", map[string]any{"id": "ENG-1"},
+			func(w *stubWork, _ *stubPages) statelog.Position { return w.taskFresh.MinPosition }},
+		{"work_views", map[string]any{"container": "workspace"},
+			func(w *stubWork, _ *stubPages) statelog.Position { return w.views.MinPosition }},
+		{"work_goals", nil, func(w *stubWork, _ *stubPages) statelog.Position { return w.goalQuery.MinPosition }},
+		{"work_catalogue", nil, func(w *stubWork, _ *stubPages) statelog.Position { return w.catalogueQuery.MinPosition }},
+		{"work_person", map[string]any{"handle": "ana"},
+			func(w *stubWork, _ *stubPages) statelog.Position { return w.personQuery.MinPosition }},
+		{"work_projects", nil, func(w *stubWork, _ *stubPages) statelog.Position { return w.projectQuery.MinPosition }},
+		{"work_project", map[string]any{"key": "ENG"},
+			func(w *stubWork, _ *stubPages) statelog.Position { return w.detailQuery.MinPosition }},
+		{"work_sprints", map[string]any{"project": "ENG"},
+			func(w *stubWork, _ *stubPages) statelog.Position { return w.sprintQuery.MinPosition }},
+		{"work_activity", map[string]any{"container": "workspace"},
+			func(w *stubWork, _ *stubPages) statelog.Position { return w.activityQuery.MinPosition }},
+		{"work_my_work", map[string]any{"handle": "ana"},
+			func(w *stubWork, _ *stubPages) statelog.Position { return w.myWorkQuery.MinPosition }},
+		{"pages", nil, func(_ *stubWork, p *stubPages) statelog.Position { return p.fresh.MinPosition }},
+		{"page", map[string]any{"id": "p1"},
+			func(_ *stubWork, p *stubPages) statelog.Position { return p.fresh.MinPosition }},
+		{"containers", nil, func(_ *stubWork, p *stubPages) statelog.Position { return p.fresh.MinPosition }},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			t.Parallel()
+			ask := askNative
+			if tc.what == "work_my_work" {
+				ask = askAsOperator
+			}
+			for _, level := range []string{"", "linearizable", "session", "stale", "consistent_prefix"} {
+				work, pages := &stubWork{}, &stubPages{}
+				src := queries.Sources{Work: work, Pages: pages}
+				args := map[string]any{"min_position": want.String()}
+				if level != "" {
+					args["read_level"] = level
+				}
+				for k, v := range tc.args {
+					args[k] = v
+				}
+				if _, err := ask(t, src, tc.what, args); err != nil {
+					t.Fatalf("%s at read_level=%q with a floor: %v", tc.what, level, err)
+				}
+				if got := tc.floor(work, pages); got != want {
+					t.Errorf("%s at read_level=%q carried the floor as %v, want %v "+
+						"— a floor the reader never sees is one nothing waits for",
+						tc.what, level, got, want)
+				}
+			}
+			// AND A MALFORMED ONE IS REFUSED AS BAD PARAMETERS, naming
+			// the key, rather than silently read as no floor.
+			work, pages := &stubWork{}, &stubPages{}
+			src := queries.Sources{Work: work, Pages: pages}
+			args := map[string]any{"min_position": "4711"}
+			for k, v := range tc.args {
+				args[k] = v
+			}
+			if _, err := ask(t, src, tc.what, args); !errors.Is(err, queries.ErrBadParams) ||
+				!strings.Contains(err.Error(), "min_position") {
+				t.Errorf("%s took min_position=4711, answering %v", tc.what, err)
 			}
 		})
 	}

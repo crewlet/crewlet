@@ -12,7 +12,7 @@ import (
 func oneTask(t *testing.T, r *roundTrip, id string) tracker.Task {
 	t.Helper()
 	detail, err := r.reader.Task(t.Context(), id, tracker.DetailWants{},
-		statelog.ReadStale)
+		statelog.Freshness{Level: statelog.ReadStale})
 	if err != nil {
 		t.Fatalf("read %s: %v", id, err)
 	}

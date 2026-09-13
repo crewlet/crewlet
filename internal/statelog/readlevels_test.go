@@ -117,7 +117,8 @@ func TestOnlyTheDashboardChoosesItsLevel(t *testing.T) {
 	t.Parallel()
 	for _, surface := range statelog.Surfaces {
 		settable := statelog.SettableLevels(surface)
-		if want := surface == statelog.SurfaceDashboard; (len(settable) > 0) != want {
+		want := surface == statelog.SurfaceDashboard
+		if (len(settable) > 0) != want {
 			t.Errorf("SettableLevels(%q) = %v, want a choice: %v",
 				surface, settable, want)
 		}
@@ -137,13 +138,15 @@ func TestOnlyTheDashboardChoosesItsLevel(t *testing.T) {
 					surface, asked, got)
 			}
 		}
-		// AND NO SURFACE OFFERS `session`, on which see
+		// AND ONLY THE SCREEN OFFERS `session`, on which see
 		// [statelog.SettableLevels]: it waits for a position the caller
-		// has to supply, and no caller out here can.
-		if slices.Contains(settable, statelog.ReadSession) {
-			t.Errorf("%q offers session, which it cannot honour — the read "+
-				"would wait for the zero position and label a stale answer "+
-				"`session`", surface)
+		// has to supply, the screen's grammar is the one that carries
+		// it (`min_position`, required beside the level), and a seat's
+		// tools carry none.
+		if got := slices.Contains(settable, statelog.ReadSession); got != want {
+			t.Errorf("%q offers session: %v, want %v — the level is honest "+
+				"exactly where the caller can name the position it waits "+
+				"for, and a wrong label everywhere else", surface, got, want)
 		}
 		// AND A LEVEL OFFERED IS A LEVEL THAT EXISTS.
 		for _, offered := range settable {

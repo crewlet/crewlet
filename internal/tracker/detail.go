@@ -191,7 +191,7 @@ type HistoryEntry struct {
 // it yet, and stops a completeness claim being made against state the rows
 // were not read from.
 func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
-	level statelog.ReadLevel) (TaskDetail, error) {
+	fresh statelog.Freshness) (TaskDetail, error) {
 
 	idOrKey = strings.TrimSpace(idOrKey)
 	if idOrKey == "" {
@@ -207,12 +207,14 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 	// resolved, which happens inside the transaction — so the framework
 	// read is given the object's own term once, from the reference, and
 	// the coverage probe inside the transaction is what catches an alias.
-	served, err := r.log.Read(ctx, statelog.Query{
-		Level: level,
-		Scope: statelog.ScopeSet{Paths: []string{ScopeTerm{
-			Kind: TermObject, ID: idOrKey,
-		}.Path()}}.Normalised(),
-	}, func(tx *sql.Tx) error {
+	//
+	// THE WHOLE FRESHNESS, not the level alone: a staleness bound is
+	// about this node's lag rather than about a set, so one row's read
+	// is exactly as far behind as a listing's, and a floor the caller
+	// named is the position its own write landed at.
+	served, err := r.log.Read(ctx, fresh.Query(statelog.ScopeSet{Paths: []string{ScopeTerm{
+		Kind: TermObject, ID: idOrKey,
+	}.Path()}}.Normalised(), false), func(tx *sql.Tx) error {
 		id, err := resolveTaskID(ctx, tx, idOrKey)
 		if err != nil {
 			return err

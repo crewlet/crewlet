@@ -349,7 +349,7 @@ func TestARecordOneNodeWritesReachesEveryNodesRows(t *testing.T) {
 		var last error
 		for time.Now().Before(deadline) {
 			detail, err := n.engine.Tracker().Task(t.Context(), written.Key,
-				tracker.DetailWants{}, statelog.ReadSession)
+				tracker.DetailWants{}, statelog.Freshness{Level: statelog.ReadSession})
 			if err == nil && detail.Task.Title == task.Title {
 				last = nil
 				break
@@ -804,7 +804,7 @@ func TestAFleetAgreesAboutOneCompany(t *testing.T) {
 	// would pass on a build with no barrier at all.
 	for i, n := range c.nodes {
 		detail, err := n.engine.Tracker().Task(t.Context(), written.Key,
-			tracker.DetailWants{}, statelog.ReadLinearizable)
+			tracker.DetailWants{}, statelog.Freshness{Level: statelog.ReadLinearizable})
 		if err != nil {
 			t.Fatalf("member %d refused a linearizable read of %s: %v — a read "+
 				"level that cannot be served on a healthy fleet is a promise "+
@@ -850,7 +850,7 @@ func TestAFleetAgreesAboutOneCompany(t *testing.T) {
 			t.Fatalf("member %d never applied the page: %v", i, err)
 		}
 		got, err := n.engine.Pages().Get(t.Context(), page.Page.ID,
-			statelog.ReadLinearizable)
+			statelog.Freshness{Level: statelog.ReadLinearizable})
 		if err != nil {
 			t.Fatalf("member %d cannot read a page member 0 wrote: %v", i, err)
 		}

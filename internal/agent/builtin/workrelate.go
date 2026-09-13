@@ -318,7 +318,7 @@ func (d WorkDeps) parentParty(ctx context.Context, task tracker.Task,
 	if task.StatusGroup.Finished() == patch.Status.Group().Finished() {
 		return nil
 	}
-	got, err := d.Reader.Task(ctx, *task.Parent, tracker.DetailWants{}, seatReadLevel)
+	got, err := d.Reader.Task(ctx, *task.Parent, tracker.DetailWants{}, seatRead)
 	if err != nil {
 		// BEST EFFORT, like every other routing lookup: a parent this
 		// node cannot read is a parent's assignee who is not told, and
@@ -355,7 +355,7 @@ func (d WorkDeps) resolveThread(ctx context.Context,
 		// comment an inference would apply to.
 		return d.inferOnly(ctx, q)
 	}
-	resolved, err := d.Reader.Thread(ctx, q, seatReadLevel)
+	resolved, err := d.Reader.Thread(ctx, q, seatRead)
 	if err != nil {
 		var ambiguous *tracker.ErrAmbiguousAnswer
 		if errors.As(err, &ambiguous) {
@@ -371,7 +371,7 @@ func (d WorkDeps) resolveThread(ctx context.Context,
 func (d WorkDeps) inferOnly(ctx context.Context,
 	q tracker.ThreadQuery) (tracker.ResolvedThread, string) {
 
-	resolved, err := d.Reader.Thread(ctx, q, seatReadLevel)
+	resolved, err := d.Reader.Thread(ctx, q, seatRead)
 	if err != nil {
 		var ambiguous *tracker.ErrAmbiguousAnswer
 		if errors.As(err, &ambiguous) {

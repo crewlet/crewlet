@@ -191,25 +191,28 @@ func ResolveReplicationLevel(lagKnown bool) ReadLevel {
 // argument: the level is not a model's to pick. A tool argument for it would
 // be a model trading correctness for latency it cannot perceive.
 //
-// # And `session` is on NOBODY's list
+// # And `session` is on the screen's list ONLY WITH A POSITION
 //
 // A session read waits for THE CALLER'S OWN high-water mark, which the caller
-// has to supply — [Query.Session]. Nothing outside this package can: a screen
-// is an HTTP request holding no position, and a seat's tools carry none
-// either. A surface that accepted `session` would hand the reader the zero
-// position, wait for nothing, serve this node's committed prefix and label the
-// answer `session` — which is not a weaker answer than the one asked for, it
-// is a WRONG LABEL on it, and it is the whole finding this file was written
-// for. So the level is honoured where a position exists (the write path's
-// snapshot wait, [Request.Session]) and offered to nobody who cannot name one.
+// has to supply. A surface that accepted the level bare would hand the reader
+// the zero position, wait for nothing, serve this node's committed prefix and
+// label the answer `session` — which is not a weaker answer than the one
+// asked for, it is a WRONG LABEL on it, and it is the whole finding this file
+// was written for. So the level is offered to the one surface whose grammar
+// can carry the position: a write answers with where its record landed, and
+// a screen or an operator's client hands it back as `min_position` beside
+// `read_level=session` — which the grammar REQUIRES, refusing the level
+// without it. A seat's tools carry none and choose nothing, so on that
+// surface it stays unreachable.
 func SettableLevels(s Surface) []ReadLevel {
 	if s != SurfaceDashboard {
 		return nil
 	}
-	// THE THREE THAT NEED NO POSITION FROM THE CALLER. `linearizable`
-	// establishes the log's end itself, and the two stale levels serve
-	// what this node holds — so each is a promise this surface can keep.
-	return []ReadLevel{ReadLinearizable, ReadStale, ReadConsistentPrefix}
+	// `linearizable` establishes the log's end itself, the two stale
+	// levels serve what this node holds, and `session` waits for the
+	// position the caller names — so each is a promise this surface can
+	// keep, and the grammar is what makes the last one honest.
+	return []ReadLevel{ReadLinearizable, ReadSession, ReadStale, ReadConsistentPrefix}
 }
 
 // LevelFor resolves what a read should use, given a surface and what the

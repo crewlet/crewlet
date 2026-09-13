@@ -169,7 +169,7 @@ func (stubWorkReader) Tasks(context.Context, tracker.Query, time.Time) (tracker.
 }
 
 func (stubWorkReader) Task(context.Context, string, tracker.DetailWants,
-	statelog.ReadLevel) (tracker.TaskDetail, error) {
+	statelog.Freshness) (tracker.TaskDetail, error) {
 
 	return tracker.TaskDetail{}, tracker.ErrNoTask
 }
@@ -197,7 +197,7 @@ func (stubWorkReader) Person(context.Context, tracker.PersonQuery, time.Time) (t
 }
 
 func (stubWorkReader) Thread(context.Context, tracker.ThreadQuery,
-	statelog.ReadLevel) (tracker.ResolvedThread, error) {
+	statelog.Freshness) (tracker.ResolvedThread, error) {
 	return tracker.ResolvedThread{}, nil
 }
 
@@ -230,12 +230,12 @@ func (stubWorkWriterT) UpdateTask(context.Context, string, string, string, uint6
 type stubPageReader struct{}
 
 func (stubPageReader) List(context.Context, pages.Filter,
-	statelog.ReadLevel) (pages.Listing, error) {
+	statelog.Freshness) (pages.Listing, error) {
 	return pages.Listing{}, nil
 }
 
 func (stubPageReader) Get(context.Context, string,
-	statelog.ReadLevel) (pages.Detail, error) {
+	statelog.Freshness) (pages.Detail, error) {
 	return pages.Detail{}, pages.ErrNotFound
 }
 

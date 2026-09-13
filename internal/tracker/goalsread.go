@@ -132,13 +132,13 @@ func (r *Reader) Goals(ctx context.Context, q GoalQuery) (GoalListing, error) {
 
 	var listing GoalListing
 	served, err := r.log.Read(ctx, statelog.Query{
-		Level:           q.Level,
-		Scope:           goalReadScope(),
-		Session:         q.Session,
-		MinPosition:     q.MinPosition,
-		MaxLag:          q.MaxLag,
-		MaxLagPositions: q.MaxLagSeq,
-		Set:             true,
+		Level:       q.Level,
+		Scope:       goalReadScope(),
+		Session:     q.Session,
+		MinPosition: q.MinPosition,
+		MaxLag:      q.MaxLag,
+		MaxLagSeq:   q.MaxLagSeq,
+		Set:         true,
 	}, func(tx *sql.Tx) error {
 		rows, err := readGoalRows(ctx, tx, q)
 		if err != nil {

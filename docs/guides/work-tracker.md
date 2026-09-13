@@ -440,9 +440,10 @@ does not parse, naming the key.
 are called. Four are spelled differently: `project` is `container` and takes
 `project:ENG` or `workspace`, `text` is `q`, `label` is `tag`, and `open_only`
 is `status_group=not_started,active`. Everything else is the same word, and a
-custom field is `f.<ref>`. A view may not carry `view`, `cursor` or
-`read_level` at all: those are about the caller's own read — where it resumes
-and how fresh it must be — rather than about the rows.
+custom field is `f.<ref>`. A view may not carry `view`, `cursor`,
+`read_level`, `max_lag_seconds`, `max_lag_seq` or `min_position` at all: those
+are about the caller's own read — where it resumes and how fresh it must be —
+rather than about the rows.
 
 **A saved view is run by its id**, passed as `view` to `list_work_items` or as
 `?view=` on the REST route. Anything else the caller passes overrides the
@@ -549,9 +550,12 @@ the follow-up — and the delivery gate knows that, so such a turn is not
 corrected and looped for "having done nothing". Reading is not delivering,
 which is exactly the turn the gate exists to catch.
 
-Seat tools read at the **`session`** level: a seat that files a task and then
-lists its project sees the task it just filed. See
-[Read consistency](consistency.md).
+Seat tools read at the **`linearizable`** level: a seat that files a task and
+then lists its project sees the task it just filed, because every read
+establishes the log's end before answering. Every write's answer also carries
+the `position` its record landed at, which a client outside the engine — the
+dashboard, an operator's assistant — hands back as `min_position` to read the
+write back at a cheaper level. See [Read consistency](consistency.md).
 
 ### Optimistic concurrency
 

@@ -32,7 +32,7 @@ func TestATaskReadsBackWholeAndByEveryNameItHasHad(t *testing.T) {
 
 	detail, err := r.reader.Task(t.Context(), created.Key, tracker.DetailWants{
 		History: true,
-	}, statelog.ReadSession)
+	}, statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
 		t.Fatalf("read by key: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestATaskReadsBackWholeAndByEveryNameItHasHad(t *testing.T) {
 
 	// THE PARTS NOT ASKED FOR ARE ABSENT.
 	bare, err := r.reader.Task(t.Context(), created.ID, tracker.DetailWants{},
-		statelog.ReadSession)
+		statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
 		t.Fatalf("read by id: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestAMissingTaskIsItsOwnAnswer(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	_, err := r.reader.Task(t.Context(), "ENG-9999", tracker.DetailWants{},
-		statelog.ReadSession)
+		statelog.Freshness{Level: statelog.ReadSession})
 	if err == nil {
 		t.Fatal("a task nobody has read back")
 	}
@@ -106,7 +106,7 @@ func TestAnUnrelatedDeferredRecordDoesNotFlagThisTask(t *testing.T) {
 	r.deferRecordOn(other.ID, other.Project)
 
 	detail, err := r.reader.Task(t.Context(), mine.ID, tracker.DetailWants{},
-		statelog.ReadSession)
+		statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestAnUnrelatedDeferredRecordDoesNotFlagThisTask(t *testing.T) {
 	}
 
 	flagged, err := r.reader.Task(t.Context(), other.ID, tracker.DetailWants{},
-		statelog.ReadSession)
+		statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
 		t.Fatalf("read the affected task: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestALinkComesBackFromBothEnds(t *testing.T) {
 	r.relate(blocked.ID, blocker.ID, tracker.RelationWaitingOn)
 
 	from, err := r.reader.Task(t.Context(), blocked.ID,
-		tracker.DetailWants{Links: true}, statelog.ReadSession)
+		tracker.DetailWants{Links: true}, statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
 		t.Fatalf("read the authoring end: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestALinkComesBackFromBothEnds(t *testing.T) {
 	}
 
 	to, err := r.reader.Task(t.Context(), blocker.ID,
-		tracker.DetailWants{Links: true}, statelog.ReadSession)
+		tracker.DetailWants{Links: true}, statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
 		t.Fatalf("read the other end: %v", err)
 	}
@@ -185,7 +185,7 @@ func (r *roundTrip) createTask(title string) tracker.Task {
 	}
 	r.drain()
 	detail, err := r.reader.Task(r.t.Context(), task.ID, tracker.DetailWants{},
-		statelog.ReadSession)
+		statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
 		r.t.Fatalf("read back %q: %v", title, err)
 	}
@@ -257,7 +257,7 @@ func TestACommentIsARowAndAnAnswerClosesItsAsk(t *testing.T) {
 	r.drain()
 
 	detail, err := r.reader.Task(t.Context(), created.ID,
-		tracker.DetailWants{Comments: true}, statelog.ReadStale)
+		tracker.DetailWants{Comments: true}, statelog.Freshness{Level: statelog.ReadStale})
 	if err != nil {
 		t.Fatalf("read the thread: %v", err)
 	}
@@ -311,7 +311,7 @@ func TestACommentIsARowAndAnAnswerClosesItsAsk(t *testing.T) {
 	}
 	r.drain()
 	edited, err := r.reader.Task(t.Context(), created.ID,
-		tracker.DetailWants{Comments: true}, statelog.ReadStale)
+		tracker.DetailWants{Comments: true}, statelog.Freshness{Level: statelog.ReadStale})
 	if err != nil {
 		t.Fatalf("read the thread: %v", err)
 	}

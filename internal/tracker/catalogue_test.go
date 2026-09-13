@@ -135,7 +135,7 @@ func TestATaskCannotInventItsOwnType(t *testing.T) {
 	}
 	r.drain()
 	detail, err := r.reader.Task(t.Context(), result.Key, tracker.DetailWants{},
-		statelog.ReadStale)
+		statelog.Freshness{Level: statelog.ReadStale})
 	if err != nil {
 		t.Fatalf("read it back: %v", err)
 	}
