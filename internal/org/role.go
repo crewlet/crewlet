@@ -535,7 +535,9 @@ func (r *Role) Handle() string {
 // one of these would be config that looks live and does nothing.
 //
 // The names are the ones an operator WROTE (integrations.jira, not
-// jira_project), because the error's job is to point at a line in a file.
+// jira_project), because the error's job is to point at a line in a file. A
+// seat's chat apps are written under `integrations:` too, and naming them
+// `slack` and `mattermost` sent an operator looking for a key no seat has.
 func (r *Role) humanForbidden() []string {
 	fields := []struct {
 		name string
@@ -552,8 +554,8 @@ func (r *Role) humanForbidden() []string {
 		{"workers", len(r.Workers) > 0},
 		{"learning_enabled", r.LearningEnabled.IsSet()},
 		{"schedules", len(r.Schedules) > 0},
-		{"slack", !r.Slack.IsZero()},
-		{"mattermost", !r.Mattermost.IsZero()},
+		{"integrations.slack", !r.Slack.IsZero()},
+		{"integrations.mattermost", !r.Mattermost.IsZero()},
 		{"integrations.jira", r.JiraProject != ""},
 		{"integrations.confluence", r.ConfluenceSpace != ""},
 		{"mcp_env", len(r.MCPEnv) > 0},

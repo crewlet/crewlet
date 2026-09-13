@@ -83,8 +83,11 @@ an agent lead's roster (so work goes to the person who owns it) and
 into `lookup_colleague` results (so any agent can learn what a human
 does, including a human lead). They also keep the hierarchy fields
 (`manages`, unit `lead`). Every runtime-only field is **rejected at
-validation time**: `llm*`, `token_budget`, `learning_enabled`,
-`schedules`, `slack` (bot credentials), `github` (token), `mcp_env`,
+validation time**, and the refusal names each one as it is written:
+`llm` and the per-phase `llm_*` chains, `sandbox`, `token_budget`,
+`workers`, `learning_enabled`, `schedules`, `integrations.slack` and
+`integrations.mattermost` (a seat's own chat app), `integrations.jira` and
+`integrations.confluence` (the project and space a seat owns), `mcp_env` and
 `behavioral_guidelines`.
 
 A unit's `mcp_env` is shared with its direct **agent** members only. A
