@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
@@ -55,9 +56,22 @@ func docKey(source, id string) string { return source + ":" + id }
 // 60 ms, so a batch is a little over a second of work — long enough to
 // amortise the transaction, short enough that the writer's own applies are
 // never behind an index batch for a noticeable time. A 5,000-page company
-// therefore takes about five minutes to index, which is why [Indexer.Ready]
+// therefore takes about five minutes to build, which is why [Indexer.Ready]
 // exists and reports false meanwhile.
 const IndexBatch = 20
+
+// ScanBatch is how many ids and versions one lap reads at a time.
+//
+// FIFTY TIMES [IndexBatch], because it is a different kind of work: the scan
+// reads two indexed columns and decides whether anything moved, where a batch
+// reads bodies and tokenises them. Sized so a lap over a corpus of any
+// realistic size is a handful of statements rather than a walk paced at the
+// tokeniser's speed — which is what made a saved page take a full lap to
+// become findable.
+//
+// It is also what bounds the `IN` list the index-side version lookup binds,
+// and a thousand is comfortably inside every engine's parameter limit.
+const ScanBatch = 1_000
 
 // Indexer maintains the lexical index behind this node's own applied rows.
 //
@@ -74,6 +88,21 @@ const IndexBatch = 20
 // side rather than a JOIN.
 type Indexer struct {
 	db *store.DB
+
+	// built is which sources have completed at least one lap since this
+	// process started, which is what [Indexer.Ready] answers.
+	//
+	// IN MEMORY, beside the cursors and for the same reason: it is a fact
+	// about THIS process's walk rather than about the index, and a
+	// restart honestly re-establishes it on its first lap.
+	//
+	// ATOMIC, unlike the cursors, and that is the one difference that
+	// matters: the cursors are read and written only inside [Indexer.Run],
+	// which is one loop, while this is READ BY EVERY SEARCH — the gate is
+	// asked on every empty answer, from whichever goroutine is serving a
+	// turn. The map itself is built once, at construction, so only the
+	// flags move.
+	built map[string]*atomic.Bool
 
 	// cursor and orphanCursor are where the two reconciliation walks are.
 	//
@@ -102,8 +131,13 @@ func NewIndexer(db *store.DB) *Indexer { return NewIndexerOver(db, DefaultLexica
 // NewIndexerOver builds one over the sources given, which is what a test that
 // is about ONE corpus uses.
 func NewIndexerOver(db *store.DB, sources []LexicalSource) *Indexer {
+	built := make(map[string]*atomic.Bool, len(sources))
+	for _, source := range sources {
+		built[source.Source()] = &atomic.Bool{}
+	}
 	return &Indexer{
 		db: db, sources: sources,
+		built:        built,
 		cursor:       map[string]string{},
 		orphanCursor: map[string]string{},
 	}
@@ -231,89 +265,122 @@ func (x *Indexer) Stale(ctx context.Context, limit int) ([]Doc, error) {
 	if limit <= 0 {
 		limit = IndexBatch
 	}
-	// A page is indexed only when it is PUBLISHED: a draft is somebody's
-	// unfinished thought and a trashed page is deleted as far as a reader
-	// is concerned, and surfacing either in a knowledge search would put
-	// content in front of an agent that no person considers current.
 	// ONE SOURCE PER CALL, in order, and the first with work wins. A pass
 	// that read every corpus would make a batch mean "twenty pages AND
 	// twenty items", which is two transactions of work behind one
 	// [IndexBatch] — and the loop calls this until it finds nothing, so
 	// nothing is starved by taking them in turn.
 	for _, source := range x.sources {
-		batch, err := x.nextBatch(ctx, source, limit)
+		docs, err := x.staleIn(ctx, source, limit)
 		if err != nil {
 			return nil, err
 		}
-		if len(batch) == 0 {
-			// THE WALK WRAPS. It is a cursor over ids rather than
-			// a watermark over versions, so reaching the end is
-			// the ordinary case rather than a failure.
-			x.cursor[source.Source()] = ""
-			continue
-		}
-		x.cursor[source.Source()] = batch[len(batch)-1].ID
-
-		indexed, err := x.versions(ctx, batch)
-		if err != nil {
-			return nil, err
-		}
-		out := make([]Doc, 0, len(batch))
-		for _, doc := range batch {
-			if held, ok := indexed[doc.ID]; ok && held == doc.Version {
-				continue
-			}
-			out = append(out, doc)
-		}
-		if len(out) > 0 {
-			return out, nil
+		if len(docs) > 0 {
+			return docs, nil
 		}
 	}
 	return nil, nil
 }
 
-// sources reads the next batch of indexable documents from the REPLICATED
-// estate.
+// staleIn laps one source until it finds documents to re-index, or wraps.
 //
-// # Why this is a walk rather than a join
+// # The lap is the unit, not the batch
 //
-// The source rows and the index rows are in DIFFERENT ESTATES — a page is
-// replicated state derived from a log, and the index is this node's own
-// derived copy — and no read joins across the two. So the comparison the old
-// LEFT JOIN made in SQL is made here in Go, over a batch bounded by an id
-// cursor.
+// It SCANS at [ScanBatch] and only reads bodies for what actually moved, so a
+// pass over an unchanged corpus is a handful of two-column statements rather
+// than a walk paced at the tokeniser's speed. That is the whole difference
+// between "a saved page is findable after an idle tick" and "after a full lap
+// of the corpus", which at ten thousand documents was about seventeen minutes.
 //
-// What that costs is a full walk per cycle even on a quiet corpus: at
-// [IndexBatch] a ten-thousand-page company re-reads its own ids every five
-// hundred steps. What it buys is a repair the version compare never had — an
-// index row that drifted for any reason at all is rebuilt on the next pass,
-// where a watermark over versions would only ever notice a source that moved.
-func (x *Indexer) nextBatch(ctx context.Context, source LexicalSource,
+// Returning inside the lap is what keeps the write side bounded: the scan is
+// cheap and unbounded in reach, the fetch is [IndexBatch] documents, and the
+// caller's loop comes straight back for the next one.
+func (x *Indexer) staleIn(ctx context.Context, source LexicalSource,
 	limit int) ([]Doc, error) {
 
-	var out []Doc
-	// THROUGH THE HANDLE, NOT ITS POOL. `DB.SQL()` answers a NIL pool on a
-	// replicated estate that is not open — which is a legitimate,
-	// documented state of that peer, not a fault — and a statement issued
-	// on it panics inside database/sql. [store.DB.Read] answers
-	// [store.ErrNoEstate] instead, which every caller here already reads
-	// as an empty index pass.
-	err := x.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-		batch, err := source.Next(ctx, tx, x.cursor[source.Source()], limit)
-		out = batch
-		return err
-	})
-	if err != nil {
-		return nil, fmt.Errorf("search: read the next documents to index: %w", err)
+	name := source.Source()
+	for {
+		var moved []string
+		var wrapped bool
+		// ONE TRANSACTION PER SCAN STEP, holding the scan and the fetch
+		// together: the walk's correctness argument is that a batch is
+		// compared against one snapshot of the other side, and reading
+		// the bodies in a second transaction would fetch a version the
+		// scan never saw.
+		//
+		// THROUGH THE HANDLE, NOT ITS POOL. `DB.SQL()` answers a NIL
+		// pool on a replicated estate that is not open — a legitimate,
+		// documented state of that peer — and a statement issued on it
+		// panics inside database/sql. [store.DB.Read] answers
+		// [store.ErrNoEstate] instead, which every caller here already
+		// reads as an empty index pass.
+		var out []Doc
+		if err := x.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+			scan, err := source.Versions(ctx, tx, x.cursor[name], ScanBatch)
+			if err != nil {
+				return err
+			}
+			if len(scan) == 0 {
+				// THE WALK WRAPS. It is a cursor over ids rather
+				// than a watermark over versions, so reaching the
+				// end is the ordinary case rather than a failure
+				// — and it is the moment this source is BUILT.
+				wrapped = true
+				return nil
+			}
+			x.cursor[name] = scan[len(scan)-1].ID
+			indexed, err := x.versions(ctx, name, scan)
+			if err != nil {
+				return err
+			}
+			for _, at := range scan {
+				if held, ok := indexed[at.ID]; ok && held == at.Version {
+					continue
+				}
+				moved = append(moved, at.ID)
+				if len(moved) == limit {
+					// THE CURSOR STOPS WHERE THE BATCH DOES,
+					// so the ids past it are read again on
+					// the next call rather than skipped:
+					// this scan reached further than one
+					// batch of bodies, and everything
+					// after this id is still to do.
+					x.cursor[name] = at.ID
+					break
+				}
+			}
+			if len(moved) == 0 {
+				return nil
+			}
+			out, err = source.Fetch(ctx, tx, moved)
+			return err
+		}); err != nil {
+			return nil, fmt.Errorf("search: read the next %s documents to "+
+				"index: %w", name, err)
+		}
+		if wrapped {
+			x.cursor[name] = ""
+			if flag := x.built[name]; flag != nil {
+				flag.Store(true)
+			}
+			return nil, nil
+		}
+		if len(out) > 0 {
+			return out, nil
+		}
+		if ctx.Err() != nil {
+			return nil, nil
+		}
 	}
-	return out, nil
 }
 
-// versions is what the index already holds for one batch of sources.
-func (x *Indexer) versions(ctx context.Context, batch []Doc) (map[string]uint64, error) {
-	ids := make([]any, 0, len(batch))
-	for _, doc := range batch {
-		ids = append(ids, docKey(doc.Source, doc.ID))
+// versions is what the index already holds for one scan batch.
+func (x *Indexer) versions(ctx context.Context, source string,
+	scan []DocVersion) (map[string]uint64, error) {
+
+	ids := make([]any, 0, len(scan))
+	for _, at := range scan {
+		ids = append(ids, docKey(source, at.ID))
 	}
 	rows, err := x.db.SQL().QueryContext(ctx,
 		`SELECT source_id, source_rev FROM kb_docs WHERE id IN (`+
@@ -322,7 +389,7 @@ func (x *Indexer) versions(ctx context.Context, batch []Doc) (map[string]uint64,
 		return nil, fmt.Errorf("search: read what the index holds: %w", err)
 	}
 	defer rows.Close()
-	out := make(map[string]uint64, len(batch))
+	out := make(map[string]uint64, len(scan))
 	for rows.Next() {
 		var id string
 		var version int64
@@ -419,6 +486,10 @@ func (x *Indexer) orphansOf(ctx context.Context, source LexicalSource,
 }
 
 // Pending is how many documents are waiting to be indexed.
+//
+// A REPORTING NUMBER rather than the gate — see [Indexer.Ready] for why it
+// stopped being one. It is what a fleet screen renders beside the index's
+// size, and it is one count per source per call.
 // TWO COUNTS AND A SUBTRACTION, because the sources and the index are in
 // different estates and no read joins them. It answers how many published
 // pages are NOT represented in the index — which is what the gate below needs
@@ -461,20 +532,41 @@ func (x *Indexer) Pending(ctx context.Context) (int, error) {
 	return max(published-indexed, 0), nil
 }
 
-// Ready reports whether the index has caught up with this node's own rows.
+// Ready reports whether this node's FIRST INDEX BUILD has finished.
 //
 // THE SEARCH GATE, and it exists because "no results" and "not indexed yet"
 // are different answers a person acts on differently. A seat on a freshly
 // joined node would otherwise be told the company has written nothing down,
-// for the five minutes the first index build takes — so the knowledge block
-// renders "index building" instead, and the searcher declines rather than
-// answering empty.
-func (x *Indexer) Ready(ctx context.Context) (bool, error) {
-	pending, err := x.Pending(ctx)
-	if err != nil {
-		return false, err
+// for the five minutes the first build takes — so the knowledge block renders
+// "index building" instead, and the searcher declines rather than answering
+// empty.
+//
+// # Why it is the first LAP and not "nothing is pending"
+//
+// Because "nothing is pending" is a state a company with people in it is
+// almost never in. It was read from [Indexer.Pending] — published documents
+// minus indexed ones — so a single page saved a moment ago made it false,
+// and every empty search on the whole node then answered "the index is still
+// building, try again" rather than "nothing matched". On a company writing
+// continuously it never recovered, and the turn-start knowledge block was
+// suppressed on every turn.
+//
+// The gate's own doc says what it is for: the FIRST build. After that, an
+// index a few documents behind is ordinary staleness — a search over it is a
+// true answer about slightly older rows, which is strictly better than
+// refusing — and a document that has not been indexed yet is exactly the
+// thing the caller is about to search for and would not have found anyway.
+//
+// NO I/O, which is the other half: it was one count per empty search, on a
+// path taken by every turn's knowledge block.
+func (x *Indexer) Ready() bool {
+	for _, source := range x.sources {
+		flag := x.built[source.Source()]
+		if flag == nil || !flag.Load() {
+			return false
+		}
 	}
-	return pending == 0, nil
+	return true
 }
 
 // Run indexes in batches until the context ends.
@@ -482,17 +574,31 @@ func (x *Indexer) Ready(ctx context.Context) (bool, error) {
 // It sleeps only when it finds nothing, so a catch-up runs flat out and a
 // steady state costs one indexed count per idle tick.
 func (x *Indexer) Run(ctx context.Context) {
+	announced := false
 	for {
 		worked, err := x.Sweep(ctx)
 		if ctx.Err() != nil {
 			return
+		}
+		// THE FIRST LAP IS ANNOUNCED ONCE, because it is the moment
+		// search on this node stops saying "still building" — which is
+		// otherwise a state an operator can only observe by asking a
+		// seat and reading its answer. The pending count rides it: zero
+		// is the healthy reading, and anything else names how far
+		// behind this node started serving.
+		if !announced && x.Ready() {
+			announced = true
+			pending, _ := x.Pending(ctx)
+			log.InfoContext(ctx, "lexical_index_built",
+				"sources", sourceNames(x.sources), "pending", pending)
 		}
 		switch {
 		case err != nil:
 			log.WarnContext(ctx, "lexical_index_step_failed",
 				"error", err.Error(),
 				"detail", "the lexical index is behind this node's own rows; "+
-					"search reports itself as building until it catches up")
+					"search reports itself as building until its first lap "+
+					"finishes, and answers over slightly older rows after that")
 		case worked:
 			continue
 		}
@@ -506,15 +612,23 @@ func (x *Indexer) Run(ctx context.Context) {
 
 // indexIdle is how long the indexer waits when it found nothing to do.
 //
-// Two seconds. The index is behind this node's own rows by at most this plus
-// one batch, which is the latency between saving a page and finding it in
-// search
-// — short enough that a person who saves and immediately searches finds their
-// own page, long enough that an idle node runs one cheap count every two
-// seconds rather than spinning.
+// Two seconds, and "nothing to do" now means a whole LAP found nothing — so
+// the index is behind this node's own rows by at most this plus one lap,
+// which is a handful of two-column scans plus whatever actually moved.
+//
+// That was not true while the lap was paced at [IndexBatch] per idle tick: a
+// ten-thousand-document company took about seventeen minutes to come round,
+// so a page saved just behind the cursor was unfindable for that long and
+// every empty search on the node reported itself as still building. The
+// constant did not change; what changed is that a lap no longer reads bodies
+// to establish that nothing moved.
 const indexIdle = 2 * time.Second
 
 // Sweep does ONE unit of index work, reporting whether it found any.
+//
+// A `false` means a whole LAP over every source found nothing — the walk
+// wraps inside [Indexer.staleIn] rather than returning between batches — so
+// it is the caller's licence to sleep rather than merely the end of a batch.
 //
 // EXPORTED because two callers need exactly this and neither should reach past
 // it: [Indexer.Run] is the loop, and a test drives the index to a fixed point

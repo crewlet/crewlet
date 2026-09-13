@@ -139,20 +139,10 @@ func (s *Searcher) CanSearch(*org.Role, *org.Organization) bool { return s.index
 // down". A seat on a freshly joined node would otherwise be told the second
 // for the whole first index build.
 //
-// It does I/O — one indexed count — which is why it is not the gate.
-func (s *Searcher) Building(ctx context.Context) bool {
-	if s.index == nil {
-		return false
-	}
-	ready, err := s.index.Ready(ctx)
-	if err != nil {
-		// UNKNOWN READS AS BUILDING. A caller that renders "still
-		// building" when the store hiccupped has told a seat something
-		// harmless; one that renders "nothing written down" has told it
-		// something false that it will act on.
-		return true
-	}
-	return !ready
+// It answers from the indexer's own walk and does no I/O: it is asked on
+// every empty search, which is a path every turn's knowledge block takes.
+func (s *Searcher) Building(_ context.Context) bool {
+	return s.index != nil && !s.index.Ready()
 }
 
 // Search returns up to Limit ranked hits. Best effort: every failure path is

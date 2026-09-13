@@ -178,21 +178,27 @@ func TestAPageBecomesSearchable(t *testing.T) {
 	if searcher == nil {
 		t.Fatal("no native searcher")
 	}
-	// THE INDEX CATCHES UP ON ITS OWN. Until it does the searcher says so
-	// — the assertion below is that the state ENDS, not that it never
-	// happened.
-	waitFor(t, "the index to catch up", func() bool {
-		return !searcher.Building(t.Context())
+	// THE INDEX CATCHES UP ON ITS OWN, and what has to end is the wait for
+	// the PAGE rather than the wait for the gate. The gate reports this
+	// node's first BUILD — one lap over every corpus — and not "nothing is
+	// pending": read the second way, a page saved a moment ago made every
+	// empty search on the node answer "still building, try again", which
+	// on a company with people in it never cleared.
+	var hits []knowledge.Hit
+	waitFor(t, "the page to become searchable", func() bool {
+		hits = searcher.Search(t.Context(), knowledge.Query{
+			Text: "rollback drain node", Org: n.engine.Company().Org, Limit: 5,
+		})
+		return len(hits) > 0
 	})
-
-	hits := searcher.Search(t.Context(), knowledge.Query{
-		Text: "rollback drain node", Org: n.engine.Company().Org, Limit: 5,
-	})
-	if len(hits) == 0 {
-		t.Fatal("a page written a moment ago is not findable by its own words")
-	}
 	if hits[0].Title != "Rollback runbook" {
 		t.Errorf("the top hit is %q", hits[0].Title)
+	}
+	// AND THE GATE HAS STOOD DOWN by the time a hit comes back. A searcher
+	// that answers a hit and still calls itself building tells a seat to
+	// discount the answer it just gave.
+	if searcher.Building(t.Context()) {
+		t.Error("the searcher answered a hit and still reports itself building")
 	}
 }
 

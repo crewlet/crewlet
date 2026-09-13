@@ -61,18 +61,8 @@ func (r itemRanker) RankItems(ctx context.Context, text string,
 }
 
 // Building implements [tracker.Ranker].
-func (r itemRanker) Building(ctx context.Context) bool {
-	if r.index == nil {
-		return false
-	}
-	ready, err := r.index.Ready(ctx)
-	if err != nil {
-		// UNKNOWN READS AS BUILDING, for [pages.Searcher.Building]'s
-		// reason: "still building" is harmless to hear and "nothing
-		// written down" is something a seat acts on.
-		return true
-	}
-	return !ready
+func (r itemRanker) Building(_ context.Context) bool {
+	return r.index != nil && !r.index.Ready()
 }
 
 // WorkSearch is this node's ranked item search, or nil when it has no index —

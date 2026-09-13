@@ -2,6 +2,7 @@ package search_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -205,29 +206,119 @@ func TestOnlyPublishedPagesAreIndexed(t *testing.T) {
 // "NOT INDEXED YET" AND "NOTHING MATCHED" ARE DIFFERENT ANSWERS. A seat on a
 // freshly joined node would otherwise be told the company has written nothing
 // down for the whole first index build.
+//
+// THE GATE IS THE FIRST LAP, not "nothing is pending", and the difference is
+// the whole of this case. Read from the pending count, a single page saved a
+// moment ago made it false — so every empty search on the node answered "the
+// index is still building, try again" rather than "nothing matched", and on a
+// company writing continuously it never recovered.
 func TestReadyDistinguishesABuildingIndexFromAnEmptyCompany(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	x := search.NewIndexer(db)
 
-	// An empty company is READY: there is nothing to index, so a search
-	// answering empty is the truth.
-	ready, err := x.Ready(t.Context())
-	if err != nil || !ready {
-		t.Fatalf("an empty company reported ready=%v err=%v", ready, err)
+	// A BUILD THAT HAS NOT RUN IS NOT READY, even over an empty company:
+	// this node has established nothing, and answering "nothing matched"
+	// from a walk that never ran is the claim the gate exists to prevent.
+	if x.Ready() {
+		t.Fatal("an indexer whose walk has never run reported ready")
 	}
-
 	page(t, db, "p.new", "ENG", "New", "something to index", 1)
-	if ready, _ := x.Ready(t.Context()); ready {
-		t.Error("a page waiting to be indexed reported ready")
-	}
 	if n, _ := x.Pending(t.Context()); n != 1 {
 		t.Errorf("pending = %d, want 1", n)
 	}
 	indexAll(t, x)
-	if ready, _ := x.Ready(t.Context()); !ready {
+	if !x.Ready() {
 		t.Error("the index never reported ready")
 	}
+
+	// AND A PAGE SAVED AFTER THE BUILD DOES NOT UN-READY IT. It is
+	// ordinary staleness: a search over the index is a true answer about
+	// slightly older rows, and the document that has not been indexed yet
+	// is exactly the one the caller would not have found anyway.
+	page(t, db, "p.later", "ENG", "Later", "written after the build", 1)
+	if n, _ := x.Pending(t.Context()); n != 1 {
+		t.Fatalf("pending = %d after a later save, want 1", n)
+	}
+	if !x.Ready() {
+		t.Error("one page saved after the first build turned every empty " +
+			"search on this node into \"still building, try again\" — which on " +
+			"a company with people in it never clears")
+	}
+}
+
+// A LAP DOES NOT READ BODIES TO ESTABLISH THAT NOTHING MOVED.
+//
+// This is what made freshness a function of corpus size: the walk's only
+// query selected the BODY, so it was paced at the tokeniser's speed — twenty
+// documents per idle tick — and a page saved just behind the cursor waited a
+// full lap, which at ten thousand documents is about seventeen minutes rather
+// than the "idle tick plus one batch" the pacing constant claims.
+//
+// Asserted on the SCAN COUNT rather than on a clock: what has to hold is that
+// a quiet corpus costs one cheap scan per lap and no fetch at all, and a
+// duration would measure this machine.
+func TestALapOverAQuietCorpusReadsNoBodies(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	counted := &countingSource{LexicalSource: search.PageSource{}}
+	x := search.NewIndexerOver(db, []search.LexicalSource{counted})
+	for i := range 45 { // more than one index batch
+		page(t, db, fmt.Sprintf("p.%d", i), "ENG", fmt.Sprintf("Page %d", i),
+			"shared vocabulary across the whole company", 1)
+	}
+	indexAll(t, x)
+
+	counted.scans, counted.fetches = 0, 0
+	worked, err := x.Sweep(t.Context())
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if worked {
+		t.Fatal("a sweep over an already-indexed corpus found work")
+	}
+	if counted.fetches != 0 {
+		t.Errorf("a lap over an unchanged corpus read bodies %d time(s) — "+
+			"that is what paced the walk at the tokeniser's speed and made a "+
+			"saved page wait a full lap to become findable", counted.fetches)
+	}
+	// One scan reaching the whole corpus, and one more that finds the end.
+	if counted.scans > 2 {
+		t.Errorf("a lap over 45 documents took %d scans, so the walk is still "+
+			"paced per index batch rather than per scan batch", counted.scans)
+	}
+
+	// AND THE NEXT SAVE IS PICKED UP BY THE LAP AFTER IT, wherever it
+	// sorts: the cursor wrapped, so there is no id it is already past.
+	page(t, db, "p.zzz", "ENG", "Late", "a distinctive marmalade phrase", 1)
+	indexAll(t, x)
+	hits, err := x.Search(t.Context(), search.SearchQuery{Text: "marmalade"})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(hits) != 1 || hits[0].ID != "p.zzz" {
+		t.Errorf("the page saved after the build is not findable: %v", titles(hits))
+	}
+}
+
+// countingSource counts what a lap actually asked the source for.
+type countingSource struct {
+	search.LexicalSource
+	scans, fetches int
+}
+
+func (c *countingSource) Versions(ctx context.Context, tx *sql.Tx, after string,
+	limit int) ([]search.DocVersion, error) {
+
+	c.scans++
+	return c.LexicalSource.Versions(ctx, tx, after, limit)
+}
+
+func (c *countingSource) Fetch(ctx context.Context, tx *sql.Tx,
+	ids []string) ([]search.Doc, error) {
+
+	c.fetches++
+	return c.LexicalSource.Fetch(ctx, tx, ids)
 }
 
 // THE INDEXER RUNS ITSELF, and reaching ready through Run is the path a node
@@ -244,8 +335,7 @@ func TestTheIndexerCatchesUpOnItsOwn(t *testing.T) {
 	defer cancel()
 	go x.Run(ctx)
 
-	waitFor(t, func() bool { ready, _ := x.Ready(t.Context()); return ready },
-		"the indexer never caught up on its own")
+	waitFor(t, x.Ready, "the indexer never caught up on its own")
 	hits, err := x.Search(t.Context(), search.SearchQuery{Text: "vocabulary", Limit: 5})
 	if err != nil {
 		t.Fatalf("search: %v", err)
@@ -560,26 +650,62 @@ func TestAWorkItemIsFoundByItsOwnWords(t *testing.T) {
 	}
 }
 
-// THE GATE COUNTS EVERY CORPUS. A node whose pages are indexed and whose items
-// are not is one that would report itself ready and answer an item search
-// empty — which is the "nothing written down" lie the gate exists to prevent,
-// moved one corpus over.
+// THE GATE WAITS FOR EVERY CORPUS. A node whose pages have been walked and
+// whose items have not is one that would report itself ready and answer an
+// item search empty — which is the "nothing written down" lie the gate exists
+// to prevent, moved one corpus over.
 func TestTheReadinessGateCountsEveryCorpus(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db)
+	pages := &countingSource{LexicalSource: search.PageSource{}}
+	// A SECOND CORPUS THIS NODE CANNOT WALK, which is what a node still
+	// building one while the other is done looks like from the gate.
+	x := search.NewIndexerOver(db, []search.LexicalSource{pages, unreachableSource{}})
 
-	item(t, db, "i.1", "ENG", "Something", "a body worth indexing", 1)
-	ready, err := x.Ready(t.Context())
-	if err != nil {
-		t.Fatalf("Ready: %v", err)
+	page(t, db, "p.1", "ENG", "Something", "a body worth indexing", 1)
+	if x.Ready() {
+		t.Fatal("the index reports itself ready with a corpus it has never " +
+			"walked, so a seat is told that corpus holds nothing")
 	}
-	if ready {
-		t.Fatal("the index reports itself ready with an unindexed work item " +
-			"in the company, so a seat is told the tracker holds nothing")
+	// The page corpus indexes what it has and then laps; the second one
+	// refuses every time it is reached.
+	var refused bool
+	for range 10 {
+		if _, err := x.Sweep(t.Context()); err != nil {
+			refused = true
+			break
+		}
 	}
-	indexAll(t, x)
-	if ready, err = x.Ready(t.Context()); err != nil || !ready {
-		t.Fatalf("Ready = %v (%v) after a full build", ready, err)
+	if !refused {
+		t.Fatal("the unreachable corpus was walked")
+	}
+	if pages.scans == 0 {
+		t.Fatal("the page corpus was never scanned")
+	}
+	if x.Ready() {
+		t.Error("one corpus finishing its lap made the whole index ready, so " +
+			"a seat searching the other is told it holds nothing")
 	}
 }
+
+// unreachableSource is a corpus this node cannot read — the estate is not
+// open, the table is not there yet — so its walk never laps.
+type unreachableSource struct{}
+
+func (unreachableSource) Source() string { return "unreachable" }
+
+func (unreachableSource) Versions(context.Context, *sql.Tx, string,
+	int) ([]search.DocVersion, error) {
+
+	return nil, errors.New("this corpus cannot be read on this node")
+}
+
+func (unreachableSource) Fetch(context.Context, *sql.Tx, []string) ([]search.Doc, error) {
+	return nil, nil
+}
+
+func (unreachableSource) Live(context.Context, *sql.Tx, []string) (map[string]bool, error) {
+	return map[string]bool{}, nil
+}
+
+func (unreachableSource) Count(context.Context, *sql.Tx) (int, error) { return 0, nil }

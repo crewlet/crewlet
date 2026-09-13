@@ -24,14 +24,28 @@ import (
 // nothing else; the walk, the cursors, the batching, the estate boundary and
 // the posting writes stay where they were.
 //
-// # Three queries, because the walk asks three questions
+// # Four queries, because the walk asks four questions
 //
 // The sources and the index are in DIFFERENT ESTATES and no read joins them
 // (see [Indexer]), so every comparison is a batch from each side. That makes
-// the questions: what is the next batch of documents, which of these indexed
-// ids still exist, and how many documents are there — the last being the
-// readiness gate's, which is a count rather than a walk because "not indexed
-// yet" and "nothing written down" are answers a person acts on differently.
+// the questions: which ids exist and at what version, what are the bodies of
+// these particular ones, which of these indexed ids still exist, and how many
+// documents are there.
+//
+// # Why the scan and the fetch are separate queries
+//
+// Because they cost three orders of magnitude apart, and a walk that asked
+// one question paid the expensive price on every step of a corpus that had
+// not changed. Reading id and version is an index-only read; reading the BODY
+// is tens of kilobytes per row. Fused, a quiet ten-thousand-document company
+// re-read its own bodies to establish that none of them had moved — so the
+// walk was paced to twenty documents per idle tick and a page saved just
+// behind the cursor waited a full lap, which at that size is about seventeen
+// minutes rather than the "idle tick plus one batch" the pacing constant
+// claims.
+//
+// Split, a lap over a quiet corpus is a handful of cheap scans and the bodies
+// are read only for the documents that actually moved.
 //
 // Each takes the replicated estate's own transaction, opened by the indexer:
 // a source that opened its own would be a second read at a second instant, and
@@ -42,15 +56,32 @@ type LexicalSource interface {
 	// makes one index table serve corpora whose ids can collide.
 	Source() string
 
-	// Next is the batch of documents after a cursor, ordered by id.
-	Next(ctx context.Context, tx *sql.Tx, after string, limit int) ([]Doc, error)
+	// Versions is the ids and versions after a cursor, ordered by id.
+	Versions(ctx context.Context, tx *sql.Tx, after string, limit int) ([]DocVersion, error)
+
+	// Fetch is the full documents for a set of ids, in any order. An id
+	// the source no longer has is simply absent.
+	Fetch(ctx context.Context, tx *sql.Tx, ids []string) ([]Doc, error)
 
 	// Live is which of these ids this source still has. An id absent from
 	// the answer is an orphan the index drops.
 	Live(ctx context.Context, tx *sql.Tx, ids []string) (map[string]bool, error)
 
-	// Count is how many documents this source offers, for the gate.
+	// Count is how many documents this source offers, for the reporting
+	// number a fleet screen renders.
 	Count(ctx context.Context, tx *sql.Tx) (int, error)
+}
+
+// DocVersion is one document's identity and version, with no body.
+//
+// THE SCAN'S OWN SHAPE. It exists so a lap over an unchanged corpus never
+// reads a body: what the walk needs to decide "has this moved" is two
+// columns, and what it needs to re-index is the whole row — asking one
+// question with the other's query is what made freshness a function of
+// corpus size.
+type DocVersion struct {
+	ID      string
+	Version uint64
 }
 
 // DefaultLexicalSources is what a node indexes.
@@ -69,19 +100,38 @@ type PageSource struct{}
 // Source implements [LexicalSource].
 func (PageSource) Source() string { return string(SourcePage) }
 
-// Next implements [LexicalSource].
+// Versions implements [LexicalSource].
 //
 // PUBLISHED ONLY: a draft is somebody's unfinished thought and a trashed page
 // is deleted as far as a reader is concerned, and surfacing either in a
 // knowledge search would put content in front of an agent that no person
-// considers current.
-func (PageSource) Next(ctx context.Context, tx *sql.Tx, after string, limit int) ([]Doc, error) {
+// considers current. A page that LEAVES the published set is dropped by the
+// orphan pass, which asks [PageSource.Live] the same question.
+func (PageSource) Versions(ctx context.Context, tx *sql.Tx, after string,
+	limit int) ([]DocVersion, error) {
+
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, container, title, body, MAX(version, scoped_through)
+		SELECT id, MAX(version, scoped_through)
 		  FROM pages_heads
 		 WHERE status = 'published' AND id > ?
 		 ORDER BY id
 		 LIMIT ?`, after, limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanVersions(rows)
+}
+
+// Fetch implements [LexicalSource].
+func (PageSource) Fetch(ctx context.Context, tx *sql.Tx, ids []string) ([]Doc, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, container, title, body, MAX(version, scoped_through)
+		  FROM pages_heads
+		 WHERE status = 'published' AND id IN (`+binds(len(ids))+`)`,
+		anyOf(ids)...)
 	if err != nil {
 		return nil, err
 	}
@@ -121,19 +171,39 @@ type TaskSource struct{}
 // Source implements [LexicalSource].
 func (TaskSource) Source() string { return string(SourceTask) }
 
-// Next implements [LexicalSource].
+// Versions implements [LexicalSource].
+func (TaskSource) Versions(ctx context.Context, tx *sql.Tx, after string,
+	limit int) ([]DocVersion, error) {
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, version FROM tracker_tasks
+		 WHERE removed_at IS NULL AND id > ?
+		 ORDER BY id
+		 LIMIT ?`, after, limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanVersions(rows)
+}
+
+// Fetch implements [LexicalSource].
 //
 // THE PROJECT IS THE CONTAINER, which is what a container-scoped search means
 // for a work item and what [TaskCorpus] already uses on the embedding side —
 // the two halves of one search have to agree about what scopes a document.
-func (TaskSource) Next(ctx context.Context, tx *sql.Tx, after string, limit int) ([]Doc, error) {
+//
+// AND THE BODY IS THE EXPENSIVE COLUMN, which is why it is only read here: it
+// is a `json_extract` over the whole record blob, per row.
+func (TaskSource) Fetch(ctx context.Context, tx *sql.Tx, ids []string) ([]Doc, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, project_key, title,
 		       COALESCE(json_extract(document, '$.body'), ''), version
 		  FROM tracker_tasks
-		 WHERE removed_at IS NULL AND id > ?
-		 ORDER BY id
-		 LIMIT ?`, after, limit)
+		 WHERE removed_at IS NULL AND id IN (`+binds(len(ids))+`)`,
+		anyOf(ids)...)
 	if err != nil {
 		return nil, err
 	}
@@ -172,6 +242,31 @@ func scanDocs(rows *sql.Rows, source string) ([]Doc, error) {
 	return out, rows.Err()
 }
 
+// scanVersions reads the two columns every source's scan query answers.
+func scanVersions(rows *sql.Rows) ([]DocVersion, error) {
+	defer func() { _ = rows.Close() }()
+	var out []DocVersion
+	for rows.Next() {
+		var at DocVersion
+		var version int64
+		if err := rows.Scan(&at.ID, &version); err != nil {
+			return nil, err
+		}
+		at.Version = uint64(version)
+		out = append(out, at)
+	}
+	return out, rows.Err()
+}
+
+// anyOf is a string slice as bind arguments.
+func anyOf(ids []string) []any {
+	out := make([]any, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, id)
+	}
+	return out
+}
+
 // liveIDs runs one source's existence query over a batch of ids.
 func liveIDs(ctx context.Context, tx *sql.Tx, query string,
 	ids []string) (map[string]bool, error) {
@@ -179,11 +274,7 @@ func liveIDs(ctx context.Context, tx *sql.Tx, query string,
 	if len(ids) == 0 {
 		return map[string]bool{}, nil
 	}
-	bound := make([]any, 0, len(ids))
-	for _, id := range ids {
-		bound = append(bound, id)
-	}
-	rows, err := tx.QueryContext(ctx, query, bound...)
+	rows, err := tx.QueryContext(ctx, query, anyOf(ids)...)
 	if err != nil {
 		return nil, err
 	}
