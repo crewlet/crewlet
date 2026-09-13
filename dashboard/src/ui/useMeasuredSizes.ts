@@ -29,7 +29,10 @@
  *
  * Sizes are border-box, unscaled by any transform: a card inside a zoomed
  * canvas reports the size it is laid out at, which is the size a layout
- * needs. A size is kept after its card unmounts, so a card that returns (an
+ * needs. The observer WATCHES the border box too, not the default content
+ * box: density scales a card's padding, and a change to padding alone moves
+ * the border box without touching the content box, so an observer left on
+ * the default would never report it and the cards would overlap. A size is kept after its card unmounts, so a card that returns (an
  * undo) is placed at its last size until the observer reports it again.
  */
 
@@ -93,7 +96,7 @@ export function useMeasuredSizes(): MeasuredSizes {
     (el: HTMLElement) => {
       if (typeof ResizeObserver === "undefined") return;
       observer.current ??= new ResizeObserver(onResize);
-      observer.current.observe(el);
+      observer.current.observe(el, { box: "border-box" });
     },
     [onResize],
   );

@@ -15,11 +15,13 @@ import { useLayoutAnchor, useMeasuredSizes } from "./useMeasuredSizes.ts";
 class FakeResizeObserver {
   static made: FakeResizeObserver[] = [];
   observed = new Set<Element>();
+  boxes = new Map<Element, ResizeObserverBoxOptions | undefined>();
   constructor(private callback: ResizeObserverCallback) {
     FakeResizeObserver.made.push(this);
   }
-  observe(el: Element) {
+  observe(el: Element, options?: ResizeObserverOptions) {
     this.observed.add(el);
+    this.boxes.set(el, options?.box);
   }
   unobserve(el: Element) {
     this.observed.delete(el);
@@ -90,6 +92,15 @@ test("every card shares one observer, and nothing counts as measured until all o
   observer.report([[card(container, "c"), 240, 60]]);
   expect(latest.measured(["a", "b", "c"])).toBe(true);
   expect(latest.sizes.get("b")).toEqual({ width: 240, height: 132 });
+});
+
+test("every card is watched at its border box, where a density change to padding alone shows", () => {
+  const { container } = render(<Cards ids={["a", "b"]} onRender={() => {}} />);
+  const observer = FakeResizeObserver.made[0]!;
+  // A browser reports only changes to the box it was asked to watch, and a
+  // padding change leaves the default content box exactly as it was.
+  expect(observer.boxes.get(card(container, "a"))).toBe("border-box");
+  expect(observer.boxes.get(card(container, "b"))).toBe("border-box");
 });
 
 test("a size change is applied synchronously, so a layout never paints a stale frame", () => {
