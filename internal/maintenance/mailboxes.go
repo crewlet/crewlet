@@ -348,9 +348,34 @@ func (m *Mailboxes) Register(ctx context.Context, handle string) error {
 		handle, mailboxCASRetries)
 }
 
+// sweepClock is one tick's clock: the instant the worker handed the tick,
+// carried forward by how long this process has spent on it since.
+//
+// A tick is not an instant. It walks every record in turn, and each retirement
+// may take up to its work limit, so on a slow broker a sweep that retires many
+// seats runs for minutes. A retirement MARK stamped with the tick's starting
+// instant would then look older to a peer than it is, and a mark that looks
+// stale is one a peer resumes or clears while this sweep is still deleting
+// under it: exactly the overlap the staleness threshold exists to rule out. So
+// a mark is stamped when it is written, and a peer's mark is judged against
+// the time it is read. The tick's own instant stays the base, so a clock a
+// caller injects into the worker still decides every comparison.
+type sweepClock struct {
+	at      time.Time
+	started time.Time
+}
+
+func newSweepClock(at time.Time) sweepClock {
+	return sweepClock{at: at, started: time.Now()}
+}
+
+// now is the tick's instant plus the monotonic time elapsed since it began.
+func (c sweepClock) now() time.Time { return c.at.Add(time.Since(c.started)) }
+
 // sweep is the job: register what the roster has, stamp what it lacks, and
 // retire what has been absent past the cutoff.
 func (m *Mailboxes) sweep(ctx context.Context, now, cutoff time.Time) (int64, error) {
+	clock := newSweepClock(now)
 	roster, err := m.roster(ctx)
 	if errors.Is(err, ErrNoActiveRevision) {
 		log.DebugContext(ctx, "seat_mailboxes_not_judged", "reason", err.Error())
@@ -375,12 +400,12 @@ func (m *Mailboxes) sweep(ctx context.Context, now, cutoff time.Time) (int64, er
 	for _, rec := range records {
 		registered[rec.Handle] = true
 		if present[rec.Handle] {
-			if err := m.keep(ctx, rec, now); err != nil {
+			if err := m.keep(ctx, rec, clock); err != nil {
 				errs = append(errs, err)
 			}
 			continue
 		}
-		done, err := m.judge(ctx, rec, now, cutoff)
+		done, err := m.judge(ctx, rec, clock, cutoff)
 		if err != nil {
 			errs = append(errs, err)
 		}
@@ -404,11 +429,11 @@ func (m *Mailboxes) sweep(ctx context.Context, now, cutoff time.Time) (int64, er
 }
 
 // keep handles a record whose seat is in the active revision.
-func (m *Mailboxes) keep(ctx context.Context, rec coord.MailboxRecord, now time.Time) error {
+func (m *Mailboxes) keep(ctx context.Context, rec coord.MailboxRecord, clock sweepClock) error {
 	switch {
 	case rec.Present():
 		return nil
-	case rec.Retiring() && now.Sub(rec.RetiringSince) < mailboxRetireStale:
+	case rec.Retiring() && clock.now().Sub(rec.RetiringSince) < mailboxRetireStale:
 		// A PEER'S RETIREMENT IN FLIGHT, started from a roster older than
 		// this one. Left to it: that sweep re-reads the roster when it
 		// finishes and restores the mailbox of a seat that came back, and
@@ -437,10 +462,10 @@ func (m *Mailboxes) keep(ctx context.Context, rec coord.MailboxRecord, now time.
 
 // judge handles a record whose seat is not in the active revision, reporting
 // whether this call retired its mailbox.
-func (m *Mailboxes) judge(ctx context.Context, rec coord.MailboxRecord, now, cutoff time.Time) (bool, error) {
+func (m *Mailboxes) judge(ctx context.Context, rec coord.MailboxRecord, clock sweepClock, cutoff time.Time) (bool, error) {
 	switch {
 	case rec.Retiring():
-		if now.Sub(rec.RetiringSince) < mailboxRetireStale {
+		if clock.now().Sub(rec.RetiringSince) < mailboxRetireStale {
 			// A peer sweep's retirement in flight. Two sweeps overlapping
 			// during a duty handoff must retire a mailbox once.
 			return false, nil
@@ -448,15 +473,18 @@ func (m *Mailboxes) judge(ctx context.Context, rec coord.MailboxRecord, now, cut
 		log.WarnContext(ctx, "seat_mailbox_retirement_resumed", "handle", rec.Handle,
 			"retiring_since", rec.RetiringSince,
 			"detail", "a previous sweep marked this mailbox for retirement and did not finish")
-		return m.retire(ctx, rec, now)
+		return m.retire(ctx, rec, clock)
 	case rec.AbsentSince.IsZero():
+		// THE TICK'S OWN INSTANT, not the clock's current reading: the
+		// roster that showed the seat missing was read when the tick began,
+		// and an absence is never observed later than the read that saw it.
 		stamped := rec
-		stamped.AbsentSince = now
+		stamped.AbsentSince = clock.at
 		if _, ok, err := m.records.UpdateMailbox(ctx, stamped); err != nil {
 			return false, fmt.Errorf("record the absence of seat %q: %w", rec.Handle, err)
 		} else if ok {
 			log.InfoContext(ctx, "seat_mailbox_absent", "handle", rec.Handle,
-				"retire_after", now.Add(MailboxRetirementGrace),
+				"retire_after", clock.at.Add(MailboxRetirementGrace),
 				"detail", "the seat is not in the active revision; its mailbox and the mail it "+
 					"holds are kept until the grace period ends, and a seat restored under the "+
 					"same handle before then finds both")
@@ -465,12 +493,12 @@ func (m *Mailboxes) judge(ctx context.Context, rec coord.MailboxRecord, now, cut
 	case rec.AbsentSince.After(cutoff):
 		return false, nil
 	default:
-		return m.retire(ctx, rec, now)
+		return m.retire(ctx, rec, clock)
 	}
 }
 
 // retire deletes a removed seat's subscriptions and then its record.
-func (m *Mailboxes) retire(ctx context.Context, rec coord.MailboxRecord, now time.Time) (bool, error) {
+func (m *Mailboxes) retire(ctx context.Context, rec coord.MailboxRecord, clock sweepClock) (bool, error) {
 	handle := rec.Handle
 
 	// THE BUDGET STARTS BEFORE THE CLAIM AND THE MARK, so a registering node
@@ -509,8 +537,9 @@ func (m *Mailboxes) retire(ctx context.Context, rec coord.MailboxRecord, now tim
 	}
 	defer m.releaseSeat(ctx, *lease)
 
+	// STAMPED AS IT IS WRITTEN, after the claim: see [sweepClock].
 	mark := rec
-	mark.RetiringSince = now
+	mark.RetiringSince = clock.now()
 	marked, ok, err := m.records.UpdateMailbox(work, mark)
 	if err != nil {
 		return false, fmt.Errorf("mark the mailbox of seat %q for retirement: %w", handle, err)

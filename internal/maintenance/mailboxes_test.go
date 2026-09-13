@@ -620,6 +620,70 @@ func TestARetirementEndsWhileItsSeatLeaseIsStillLive(t *testing.T) {
 	}
 }
 
+// slowSeatLeases makes the claim of one seat's lease take a while, standing in
+// for a broker that answers slowly while a sweep works through its records.
+type slowSeatLeases struct {
+	coord.Backend
+	resource string
+	delay    time.Duration
+}
+
+func (l *slowSeatLeases) TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, error) {
+	if resource == l.resource {
+		time.Sleep(l.delay)
+	}
+	return l.Backend.TryAcquire(ctx, resource, opts)
+}
+
+// markLog records every retirement mark written, by handle.
+type markLog struct {
+	maintenance.MailboxRecords
+	mu    sync.Mutex
+	marks map[string]time.Time
+}
+
+func (l *markLog) UpdateMailbox(ctx context.Context, rec coord.MailboxRecord) (coord.MailboxRecord, bool, error) {
+	if rec.Retiring() {
+		l.mu.Lock()
+		l.marks[rec.Handle] = rec.RetiringSince
+		l.mu.Unlock()
+	}
+	return l.MailboxRecords.UpdateMailbox(ctx, rec)
+}
+
+// A sweep is not an instant: it retires one seat after another, and a slow
+// broker stretches that to minutes. A mark stamped with the instant the tick
+// began looks older to a peer than it is, and a peer that judges it stale
+// resumes or clears a retirement still deleting. Each mark carries the time it
+// was written.
+func TestARetirementMarkCarriesTheTimeItWasWritten(t *testing.T) {
+	const delay = 50 * time.Millisecond
+	h := newMailboxHarness(t, nil)
+	marks := &markLog{MailboxRecords: h.records, marks: map[string]time.Time{}}
+	m := h.build(func(o *maintenance.MailboxOptions) {
+		o.Records = marks
+		// The first record in handle order is slow to claim, so the second
+		// is marked at least that long after the tick began.
+		o.Leases = &slowSeatLeases{Backend: h.leases, resource: coord.SeatResource("aaa"), delay: delay}
+	})
+	h.seat("aaa")
+	h.removed()
+
+	at := base.Add(grace + time.Minute)
+	n, err := h.tick(m, at)
+	if err != nil || n != 2 {
+		t.Fatalf("tick = (%d, %v), want both removed seats retired", n, err)
+	}
+	marked, ok := marks.marks["swe"]
+	if !ok {
+		t.Fatal("seat swe was retired without a mark")
+	}
+	if marked.Before(at.Add(delay)) {
+		t.Fatalf("seat swe was marked at %v, %v into a tick that had already spent %v on seat aaa: "+
+			"a peer would read the mark as older than it is", marked, marked.Sub(at), delay)
+	}
+}
+
 // A node applying a revision that adds a seat back while a sweep is deleting
 // that seat's previous mailbox must not create its inbox until the delete is
 // done, or the delete lands on the new inbox and the seat is deaf.
