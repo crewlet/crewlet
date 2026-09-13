@@ -899,6 +899,18 @@ rendered idle from the first phase to the last.
   Tab, moves focus in when it opens (honouring a field's `autoFocus`) and
   returns it to whatever opened it. A control that consumes Escape itself,
   such as a completion list, keeps the key.
+- **A canvas never takes the page's scroll.** `ui/Canvas.tsx` fills the box
+  its screen gives it and clips; `.screen` stays the only scroller. A plain
+  wheel pans the canvas only while focus is inside it, and Ctrl or Command
+  with the wheel zooms toward the cursor. On touch, one finger scrolls the page
+  until the canvas is tapped, after which it pans and a visible Done control
+  gives the finger back; two fingers pinch at any time. `+`, `-` and `0` zoom
+  and fit only while the viewport element itself holds focus, so an item's
+  own keys are never taken. The view fits once, on the first measured layout,
+  and after that moves only when the operator moves it. Menus and pickers
+  opened from an item render in the canvas's untransformed overlay layer, so
+  the zoom neither scales nor clips them. Fullscreen belongs to the screen,
+  which must take its dialogs and toasts into the fullscreen element with it.
 
 ---
 

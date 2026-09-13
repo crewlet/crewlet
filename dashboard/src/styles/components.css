@@ -1315,6 +1315,87 @@ kbd {
   }
 }
 
+/* ---- Canvas -------------------------------------------------------------
+   A bounded viewport (`ui/Canvas.tsx`). It fills the box it is given and
+   clips; the page's own scroller is never involved. */
+
+.canvas {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+}
+.canvas-viewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  cursor: grab;
+  /* Until it is tapped, one finger belongs to the page's vertical scroll. */
+  touch-action: pan-y;
+}
+/* Inset, because the canvas clips: an outset ring would be cut away. */
+.canvas-viewport:focus-visible {
+  outline-offset: -2px;
+}
+.canvas[data-touch-active="true"] .canvas-viewport {
+  touch-action: none;
+}
+.canvas[data-panning="true"] .canvas-viewport {
+  cursor: grabbing;
+}
+.canvas-world {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+}
+/* Nothing is shown before the first fit: a chart that appears at the origin
+   and then jumps into place reads as the page misbehaving. */
+.canvas[data-ready="false"] .canvas-world {
+  visibility: hidden;
+}
+.canvas[data-panning="true"] .canvas-world {
+  will-change: transform;
+}
+/* Eased only when asked for (a fit, a zoom button, a reveal), never while a
+   finger or a wheel is moving it. */
+.canvas[data-animate="true"] .canvas-world {
+  transition: transform var(--dur) var(--ease-out);
+}
+@media (prefers-reduced-motion: reduce) {
+  .canvas[data-animate="true"] .canvas-world {
+    transition: none;
+  }
+}
+/* Untransformed, over the viewport. Empty space passes presses through to
+   the viewport beneath; a popup inside takes its own. */
+.canvas-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+.canvas-overlay > * {
+  pointer-events: auto;
+}
+.canvas-controls {
+  position: absolute;
+  right: var(--space-3);
+  bottom: var(--space-3);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--surface-glass);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-1);
+}
+
 .popover {
   position: absolute;
   background: var(--surface-1);
