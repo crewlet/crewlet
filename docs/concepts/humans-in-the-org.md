@@ -2,9 +2,9 @@
 
 A Role in Crewlet is a **seat** in the org chart, held by either an AI
 agent (the default) or a **human teammate**. Human seats participate in
-the full hierarchy — they can manage agents, lead units, appear in
-rosters, and be escalation targets — but they are never executed:
-no `AgentInstance`, no inbox topic, no LLM, no learning rows.
+the full hierarchy (they can manage agents, lead units, appear in
+rosters, and be escalation targets), but they are never run: no seat
+lease, no mailbox, no LLM, no learning rows of their own.
 
 The design follows one observation: agents already collaborate through
 human-native surfaces (Slack, Jira, Confluence, GitHub). A human
@@ -27,7 +27,7 @@ units:
     roles:
       - name: Sarah Chen
         kind: human
-        email: sarah@acme.com     # informational (not a delivery channel)
+        email: sarah@example.com  # indexed for routing, not a delivery channel
         goal: "Keep the team unblocked and own final calls"
         backstory: "20 years in infrastructure"
         responsibilities:
@@ -49,12 +49,12 @@ units:
 |-------|----------|-------------|
 | `kind: human` | yes | Marks the seat as human |
 | `contact.slack_user_id` | one identity | Slack member ID (`U…`) — `<@…>` mentions and the channel an agent DMs on escalation |
-| `contact.mattermost_user_id` | one identity | [Mattermost](../integrations/mattermost.md) **username** — the name an agent writes as a literal `@username` mention, and the account it opens a DM channel with. Not the opaque 26-character user ID; normalized to lowercase |
-| `contact.atlassian_account_id` | one identity | Atlassian Cloud account ID — Jira assignments, Confluence `<ri:user>` mentions, webhook sender attribution |
-| `contact.github_login` | one identity | GitHub username — review requests, sender attribution |
-| `contact.gitlab_username` | one identity | GitLab username — assignment / review / mention routing + sender attribution |
-| `email` | no | Informational only — rendered in `lookup_colleague`; **not** a delivery channel (no agent has an email tool by default) |
-| `availability` | no | Free text rendered into rosters and `lookup_colleague` results (timezone, hours, response expectations) |
+| `contact.mattermost_user_id` | one identity | [Mattermost](../integrations/mattermost.md) **username**: the name an agent writes as a literal `@username` mention, and the account it opens a DM channel with. Not the opaque 26-character user ID. Stored as written, so write it in the case Mattermost shows |
+| `contact.atlassian_account_id` | one identity | Atlassian Cloud account ID. One ID covers Jira assignments, Confluence `<ri:user>` mentions and webhook sender attribution on both |
+| `contact.github_login` | one identity | GitHub username: review requests, sender attribution. Lowercased |
+| `contact.gitlab_username` | one identity | GitLab username: assignment, review and mention routing, sender attribution. Lowercased |
+| `email` | no | Indexed so a notification addressed to the address resolves to the seat. **Not** a delivery channel: no agent has an email tool by default |
+| `availability` | no | Free text rendered into a lead's roster (timezone, hours, response expectations) |
 
 A human seat needs **at least one `contact` identity** — that is how
 agents mention and reach them, and how inbound webhooks attribute their
@@ -62,29 +62,34 @@ activity by name. A seat with no contact would be inert (visible in the
 chart but unreachable), so it's rejected at validation.
 
 Every `contact` field accepts either a literal ID or exactly one
-whole-value `${VAR}` environment reference — e.g.
+whole-value `${VAR}` reference, for example
 `atlassian_account_id: "${ATLASSIAN_FOUNDER_ACCOUNT_ID}"` in a shipped
-example config, where the real id is instance-specific. Values are whitespace-stripped
-at validation; references are stored verbatim (never case-mangled) and
-resolved from the process environment wherever the identity is consumed:
-contact registration, roster / identity prompts, and `lookup_colleague`.
-For the case-normalized fields (`github_login`, `gitlab_username`) the
-*resolved* value is lowercased. A reference whose
-variable is unset counts as a declared identity for validation, but is
-omitted from registration and prompts (with a debug log) until the
-variable is exported — the raw `${VAR}` text is never emitted. A value
-that merely *embeds* a `${VAR}` inside a longer string
-(`"acme-${SUFFIX}"`) is rejected at validation — half-substituting it
-would silently register a wrong identity.
+example config, where the real ID is instance-specific. Values are
+whitespace-stripped when the organization is normalized. A literal
+`github_login` or `gitlab_username` is lowercased there; a reference is
+stored verbatim (never case-mangled) and its *resolved* value is
+lowercased instead. A reference whose variable is unset counts as a
+declared identity for validation, but the identity is omitted wherever it
+is consumed until the variable resolves, so the raw `${VAR}` text is never
+emitted. The count of unresolved identities is logged on every apply
+(`parties_indexed`, field `unresolved`). A value that merely *embeds* a
+`${VAR}` inside a longer string (`"acme-${SUFFIX}"`) is rejected at
+validation, because substituting part of it would register a wrong
+identity that matches nobody.
+
+Where a reference is resolved depends on the consumer. Sender attribution
+resolves it the way every other `${VAR}` in the company is resolved: the
+[secret store](secret-store.md) first, then the process environment. The
+lead's roster and `lookup_colleague` read the process environment only, so
+an identity whose value exists only in the secret store attributes inbound
+activity correctly but does not appear in those two places.
 
 Human seats keep the descriptive identity fields (`goal`, `backstory`,
-`responsibilities`) — they are the **routing context**: rendered into
-an agent lead's roster (so work goes to the person who owns it) and
-into `lookup_colleague` results (so any agent can learn what a human
-does, including a human lead). They also keep the hierarchy fields
-(`manages`, unit `lead`). Every runtime-only field is **rejected at
-validation time**, and the refusal names each one as it is written:
-`llm` and the per-phase `llm_*` chains, `sandbox`, `token_budget`,
+`responsibilities`). They are the **routing context** rendered into an
+agent lead's roster, so work goes to the person who owns it. They also keep
+the hierarchy fields (`manages`, unit `lead`). Every runtime-only field is
+**rejected at validation time**, and the refusal names each one as it is
+written: `llm` and every per-phase `llm_*` chain, `sandbox`, `token_budget`,
 `workers`, `learning_enabled`, `schedules`, `integrations.slack` and
 `integrations.mattermost` (a seat's own chat app), `integrations.jira` and
 `integrations.confluence` (the project and space a seat owns), `mcp_env` and
@@ -93,7 +98,8 @@ refused on a human seat as well, because a person acts on GitHub as their
 own `contact.github_login`. That refusal is an [admission
 rule](configuration.md#what-a-stored-revision-is-held-to): a stored company
 that already carries the block still runs, and the next write that keeps it
-is refused.
+is refused. The reverse holds too: `contact` or `availability` on an agent
+seat is refused with a hint to set `kind: human`.
 
 A unit's `mcp_env` is shared with its direct **agent** members only. A
 human member inherits none of it, so a human seat can sit in, and lead, a
@@ -101,66 +107,69 @@ unit whose agents share tool credentials; only an `mcp_env` written on the
 human seat itself is refused.
 
 Handles are validated for format (`[a-z0-9][a-z0-9-]*`) and org-wide
-uniqueness — they are the canonical seat identity, and an agent/human
-collision would silently misattribute the person's activity to the
-agent.
+uniqueness. They are the canonical seat identity, and an agent and a human
+sharing one would misattribute the person's activity to the agent.
 
 ---
 
 ## How Agents Know Humans Exist
 
-- **Identity prompt** — `Reports to: Sarah Chen (human)`; human direct
+- **Identity prompt**: `Reports to: Sarah Chen (human)`; human direct
   reports carry the same marker.
-- **Lead roster** — human members render as a distinct block: handle +
-  "human teammate" marker, contact IDs, availability, and hand-off
-  guidance (assign in the PM tool + mention; no engine turn expected).
-- **`## Human colleagues` contract block** — appears in the executor prompt
-  (and the monolithic introspection prompt) *only when the org contains
-  human seats*: reach humans on external surfaces, never via `a2a_ask`; they
-  reply asynchronously — leave full context and end the turn; their
-  reply re-triggers you.
-- **`lookup_colleague`** — resolves agents *and* humans; human results
-  carry `kind: human`, what the person owns (goal, background,
-  responsibilities), contact IDs, availability, and the interaction
-  note. This is how a report learns what its **human lead** does —
-  the roster only renders downward. Disambiguation rows mark human
-  candidates.
-- **Sender attribution** — inbound webhook prompts resolve actor IDs
-  through the party registry: a Jira comment from Sarah renders as
-  `Sarah Chen (sarah-chen, human colleague)` instead of an opaque
-  account ID. Counterparty profiles accrue for humans like anyone else
-  (they are keyed by handle).
+- **Lead roster**: a human member renders with its handle and a
+  **human teammate** marker, its background, goal and responsibilities,
+  its resolved contact IDs, its availability, and hand-off guidance
+  (assign in the PM tool and mention; no engine turn expected).
+- **`## Human colleagues` contract block**: appears in the executor prompt
+  *only when the org contains human seats*. Reach humans on external
+  surfaces, never through `a2a_ask`; they reply asynchronously, so leave
+  full context and end the turn; their reply re-triggers you.
+- **`lookup_colleague`**: resolves agents *and* humans, by handle, role
+  name or a human's contact ID. A match renders the seat's name, handle,
+  `kind` and its resolved contact IDs; a human match adds that a person is
+  reached with a mention and answers asynchronously, and that `a2a_ask`
+  will not reach them. Rows in an ambiguous result carry each candidate's
+  kind. It does not render goal, background, responsibilities or
+  availability, so a report learns what its **human lead** owns from the
+  lead's own messages rather than from this tool (the roster renders only
+  downward).
+- **Sender attribution**: an inbound notification names its actor through
+  the party registry, so a Jira comment from Sarah renders as
+  `Sarah Chen (sarah-chen, human colleague)` instead of an opaque account
+  ID. Counterparty profiles accrue for humans like anyone else (they are
+  keyed by handle).
 
 ---
 
 ## The Interaction Loop
 
-Agent → human and back needs **no new machinery** — it is the existing
-webhook pipeline:
+Agent to human and back needs **no new machinery**: it is the existing
+inbound notification pipeline.
 
-```
-agent mentions Sarah on Jira / DMs her on Slack (its own tools)
-        │
-        ▼
-Sarah reads it natively in Jira / Slack (the engine forwards nothing)
-        │  …hours later…
-        ▼
-Sarah replies → webhook → notifications inbound → agent inbox → digest turn
+```mermaid
+flowchart TD
+    A["The agent mentions Sarah on Jira or DMs her on Slack<br/>(its own tools)"]
+    B["Sarah reads it natively in Jira or Slack<br/>(the engine forwards nothing)"]
+    C["Sarah replies"]
+    D["Webhook or chat event<br/>crewlet.notifications.inbound"]
+    E["The agent's inbox"]
+    F["A turn for the agent"]
+    A --> B
+    B -->|"hours later"| C
+    C --> D --> E --> F
 ```
 
 Two consequences:
 
-1. **The engine never pushes to humans.** Internal task-lifecycle
-   events (`TaskCreated`, `TaskAssigned`, `TaskCompleted`,
-   `TaskDelegated`) exist to wake an *agent* into a turn — a human has
-   no turn to wake. When a recipient resolves to a human seat the event
-   is skipped quietly: the human is already notified natively by the PM
-   tool / Slack where the work lives (a Jira assignment emails the
-   assignee; a Slack mention pings them). Inbound external-surface
-   webhooks addressed to a human are likewise recorded as an info-level
-   skip ("notified natively by the external tool"), not an undeliverable
-   warning.
-2. **Agents must never wait.** The turn model is already asynchronous —
+1. **The engine never pushes to humans.** A seat's inbox exists to wake
+   an *agent* into a turn, and a human has no turn to wake. An inbound
+   notification whose recipient resolves to a human seat is skipped at
+   info level (`notification_skipped`, reason `human seat`) rather than
+   warned about as undeliverable: the person is already notified natively
+   by the tool where the work lives (a Jira assignment emails the
+   assignee; a Slack mention pings them). A schedule never fires into a
+   human seat either (see the table below).
+2. **Agents must never wait.** The turn model is already asynchronous:
    the prompts and tool errors steer the LLM to leave state on the
    surface and end the turn.
 
@@ -183,25 +192,26 @@ colleague-surface tools** during Execute, never via the engine:
 - **Jira / Confluence / GitHub** — the agent comments / requests review
   with its own tools and the mention markup; the target is the artifact
   (issue / page / PR), the human is mentioned in the body.
-- **A2A is not a human surface** — humans are not on the bus, so
-  `a2a_ask` against a human returns an actionable error pointing the
-  agent at Slack / Jira, and the `A2AService` refuses any non-agent
-  target so a typo or a stale `"human"` entry fails visibly
-  instead of waking a subscriber-less topic. The question the guard
+- **A2A is not a human surface.** Humans have no inbox, so `a2a_ask`
+  against a human returns a failed result telling the agent to mention
+  the person on a shared surface instead, and the A2A service itself
+  refuses any target that is not an agent seat in the org
+  (`a2a.ErrNotAnAgent`), so a typo or a human handle fails visibly
+  instead of opening a channel nothing answers. The question the guard
   asks is whether the target is an **agent seat in the org**, not
   whether it is running in the asking process: a colleague owned by
   another node is a normal A2A target, because the wake lands on its
   inbox and that node consumes it.
 
-When a turn only discovers it needs a human at Review, Review returns
-`self_iterate` with a note; the next Plan pass adds the outreach step and
-Execute makes the mention. If the agent genuinely **can't reach the
-human** — it has no Slack tool, or the human has no contact ID — that
-surfaces as a config gap to fix (give the agent the tool, or route the
-work through a colleague who has it). The engine never manufactures a
-sender to bridge the gap: there is no "Crewlet" DM, and no engine-side
-`fallback` chain — escalation is ordinary colleague-tool use, so a
-report reaches a human exactly the way it reaches an agent.
+When a turn only discovers it needs a human at review, the reviewer
+returns `self_iterate` with a note, and the executor's next round makes
+the mention. If the agent genuinely **can't reach the human** (it has no
+chat tool, or the human has no contact ID), that surfaces as a config gap
+to fix: give the agent the tool, or route the work through a colleague who
+has it. The engine never manufactures a sender to bridge the gap: there is
+no "Crewlet" DM and no engine-side fallback. Escalation is ordinary
+colleague-tool use, so a report reaches a human exactly the way it reaches
+an agent.
 
 ---
 
@@ -229,24 +239,24 @@ roles:
 
 What this buys, with no further config:
 
-- Top agents' prompts read `Reports to: Jane Founder (human)` — manager
+- Top agents' prompts read `Reports to: Jane Founder (human)`, so manager
   handoffs from your most senior agents terminate at a person instead
-  of `None (top-level)`. When the CEO is stuck it DMs you on Slack /
+  of `None (top-level)`. When the CEO is stuck it DMs you on Slack or
   mentions you on Jira with its own tools, and your reply re-triggers
   it.
-- Your Slack / Jira / GitHub activity is attributed by name — agents
+- Your Slack, Jira and GitHub activity is attributed by name, so agents
   know when the founder is speaking.
 - DACI: the Approver is "the driver's manager", so you become the
-  approver-of-last-resort for top-level decisions behaviorally.
+  approver of last resort for top-level decisions behaviorally.
 
 Two boundaries to keep in mind:
 
 - **The seat is the colleague hat, not the operator hat.** Config
   ownership (`PUT /config`, API auth tokens, the dashboard) stays an
-  API-auth concern — the seat makes agents know you; the token makes
+  API-auth concern: the seat makes agents know you; the token makes
   the engine obey you. Different hats, deliberately separate.
 - **Scope `manages` to the top roles.** A founder managing every unit
-  by name lists every seat in those units, and a root seat is walked
+  by name lists every seat in those units, and root seats are searched
   first when a seat's manager is resolved, so the founder becomes the
   primary manager and escalation terminus of every one of them, even
   where a unit lead also auto-manages the seat (see
@@ -265,36 +275,61 @@ the founder seat there carries a single `contact` identity
 
 | Subsystem | Behavior |
 |-----------|----------|
-| Agent pool / spawn | Never spawned; `spawn_role` rejects human seats |
-| Inbox topics | None — nothing ever publishes to a human "inbox" |
-| Engine notifications | None — the engine never sends as itself; agents reach humans with their own tools |
+| Seat placement | Never claimed: only agent seats enter the placement sweep, so a human seat has no lease, no mailbox and no per-role MCP children |
+| Inbox | None. A notification resolved to a human seat is skipped (`notification_skipped`, reason `human seat`) |
+| Engine notifications | None. The engine never sends as itself; agents reach humans with their own tools |
 | Scheduler | `target: each` fans out to agent members only; an enabled `target: lead` schedule under a (possibly inherited) human lead is a **config error**; human seats cannot define role schedules |
-| A2A channels | Not addressable; `a2a_ask` returns guidance |
+| A2A channels | Not addressable; `a2a_ask` returns guidance and the A2A service refuses the target |
 | Learning | No diary, no episodes, no synthesized skills (counterparty profiles *about* them still accrue) |
-| `GET /agents` | Excluded — they appear in `GET /org` with `"kind": "human"`; the dashboard org chart badges them `human` |
+| `GET /agents` | Excluded. They appear in `GET /org` with `"kind": "human"`, and the dashboard org chart badges them `human` |
 
 ## Hot Reload
 
-Seat kind flips are first-class in the config apply:
+A seat's kind is ordinary configuration, applied like any other change
+(see [Organization Model: Hot Reload](organization-model.md#hot-reload)):
 
-- `human → agent` spawns an instance (budget, inbox, per-role MCP).
-- `agent → human` decommissions the instance. Agent IDs are
-  deterministic (`derive_agent_id`), so flipping back later reattaches
-  the old diary and onboarding markers.
-- Contact / availability edits ride the org swap; human contact IDs
-  re-register on every swap.
+- `human` to `agent`: the seat joins the next epoch's seat list, so a node
+  claims it, creates its mailbox and starts its per-role MCP children the
+  way it would for a newly added seat.
+- `agent` to `human`: the seat leaves the seat list, so the node holding it
+  releases it, and its mailbox is retired after the grace period described
+  in [Seat Ownership: The removed seat](seat-ownership.md#the-removed-seat).
+  An agent's id is derived from the company name and its handle
+  (`org.DeriveAgentID`), so flipping the seat back to `agent` later
+  reattaches its diary, episodes and onboarding marker.
+- Contact and availability edits take effect with the next epoch: every
+  apply builds a new party registry and reconciles the human contact IDs
+  into it.
 
-## Identity Resolution (party API)
+## Identity Resolution (party registry)
 
-`HandleRegistry` resolves **parties** — agents and human seats — via
-`resolve_party`, `resolve_party_role_name`, `resolve_party_email`,
-`resolve_party_external`, and enumerates them via the party resolver. The
-agent-only methods keep their narrow signatures so inbox routing can
-never target a human. Human external IDs come straight from config
-(`contact`), **reconciled** into the registry at boot and on every org
-swap — stale pairs from contact edits, seat removals, and kind flips
-are unregistered, while an ID owned by an agent identity is never
-silently taken over. External-ID resolution is pure index lookups (it
-runs per webhook for sender attribution); for Slack it consults both
-namespaces — human member IDs under `slack`, agent bot-user IDs under
-`slack_bot` — so agent and human senders annotate alike.
+`notify.Registry` answers "who is this?" for one epoch of the company. It
+indexes every **party**, agent and human seats alike, and resolves one by
+handle (`ByHandle`), exact role name (`ByRole`), derived agent id
+(`ByAgentID`, which never matches a human seat because a human has no agent
+id), email (`ByEmail`, where a plus-address naming a handle wins over a
+seat's declared address), or an external ID on a surface (`ByExternalID`).
+Each `Party` carries a `Human` flag, and the notification spine reads it to
+skip a human recipient rather than wake it.
+
+The seat indexes are built from the organization and never change: an apply
+builds a new registry rather than editing the one a running turn may be
+reading. The external-identity map is the part written at runtime, under a
+lock, and it holds two kinds of entry:
+
+- **Human contact IDs** come from `contact` and are reconciled into each new
+  registry (`ReconcileHumanContacts`). A pair the previous reconciliation
+  registered and the current organization no longer declares (a contact
+  edit, a removed seat, a kind flip) is withdrawn, and an ID already held by
+  a different seat is never taken over: the conflict is logged as
+  `human_contact_id_conflict` naming both seats.
+- **Agent identities** are registered by the integrations: the code host's
+  and the tracker's are derived from each seat's credentials and rebuilt on
+  every apply, while the chat transports' bot IDs, resolved against the live
+  server at connect, are carried across into the new registry.
+
+External-ID resolution is plain index lookups, because it runs on every
+inbound notification for sender attribution. On each surface it consults
+two namespaces, the surface's own (a human's member ID under `slack`) and
+the companion bot namespace (an agent's bot user under `slack_bot`), so
+agent and human senders are annotated alike.
