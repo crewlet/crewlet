@@ -217,6 +217,98 @@ func TestEveryProblemHasAKind(t *testing.T) {
 	}
 }
 
+// EVERY ORG RULE HAS THE KIND THE CONTRACT NAMES. A consumer branches on the
+// kind (a form marks a missing value differently from two things that cannot
+// both hold), so a sentinel that fell out of the classification table would
+// arrive as `invalid` with nothing else wrong: the message would still read
+// right and every located-problem test would still pass. One document per
+// sentinel, and the kind of the problem that rule produced.
+func TestEveryOrgRuleHasTheKindTheContractNames(t *testing.T) {
+	t.Parallel()
+	human := "kind: human\n    contact: {slack_user_id: U0SARAH}\n"
+	for _, tc := range []struct {
+		rule, doc, kind string
+	}{
+		{"name must not be empty", "name: Acme\nroles:\n  - goal: ship\n", "missing"},
+		{"human seat needs at least one contact identity",
+			"name: Acme\nroles:\n  - name: Sarah\n    kind: human\n", "missing"},
+		{"unknown seat kind", "name: Acme\nroles:\n  - name: Dev\n    kind: robot\n", "unknown_value"},
+		{"handle must match", "name: Acme\nroles:\n  - name: Dev\n    handle: Dev!\n", "unknown_value"},
+		{"value embeds a ${VAR} reference",
+			"name: Acme\nroles:\n  - name: Sarah\n    kind: human\n    contact: {slack_user_id: \"U${S}\"}\n",
+			"unknown_value"},
+		{"duplicate handle",
+			"name: Acme\nroles:\n  - name: Dev\n  - name: Developer\n    handle: dev\n", "conflict"},
+		{"duplicate seat name",
+			"name: Acme\nroles:\n  - name: Dev\n    handle: a\n  - name: Dev\n    handle: b\n", "conflict"},
+		{"duplicate unit name", "name: Acme\nunits:\n  - name: Eng\n  - name: Eng\n", "conflict"},
+		{"agent-only field set on a human seat",
+			"name: Acme\nroles:\n  - name: Sarah\n    " + human + "    token_budget: 5\n", "conflict"},
+		{"human-only field set on an agent seat",
+			"name: Acme\nroles:\n  - name: Dev\n    availability: mornings\n", "conflict"},
+		{"schedule has no runner",
+			"name: Acme\nunits:\n  - name: Design\n    roles:\n      - name: Sarah\n        " +
+				strings.ReplaceAll(human, "\n    ", "\n        ") +
+				"    schedules:\n      - {name: digest, cron: \"0 9 * * *\", task: post}\n",
+			"conflict"},
+		{"unit reference on a seat inside another unit",
+			"name: Acme\nunits:\n  - name: Eng\n    roles:\n      - name: Dev\n        unit: Product\n" +
+				"  - name: Product\n",
+			"conflict"},
+		{"invalid schedule",
+			"name: Acme\nroles:\n  - name: Dev\n    schedules:\n      - {name: a, cron: \"x\", task: t}\n",
+			"shape"},
+	} {
+		t.Run(tc.rule, func(t *testing.T) {
+			t.Parallel()
+			var kinds []string
+			for _, p := range config.Problems(parsed(t, tc.doc).Validate()) {
+				if strings.Contains(p.Message, tc.rule) {
+					kinds = append(kinds, p.Kind)
+				}
+			}
+			if len(kinds) == 0 {
+				t.Fatalf("no problem reports %q for:\n%s", tc.rule, tc.doc)
+			}
+			for _, kind := range kinds {
+				if kind != tc.kind {
+					t.Errorf("%q is a %s problem, want %s", tc.rule, kind, tc.kind)
+				}
+			}
+		})
+	}
+}
+
+// A PARSER FAILURE'S MESSAGE IS THE WHOLE LINE, its line number included, and a
+// document that does not parse at all names no place: an empty path with a
+// null segment list, exactly as the wire contract states, rather than an empty
+// array a consumer would read as the document root.
+func TestAParserProblemCarriesItsLineAndNoSegmentsWhenUnplaced(t *testing.T) {
+	t.Parallel()
+	_, err := config.ParseCompanyDocument([]byte("name: Acme\n\nbackstroy: x\n"))
+	problems := config.Problems(err)
+	if len(problems) != 1 {
+		t.Fatalf("problems = %+v, want one", problems)
+	}
+	if want := `backstroy: unknown field: "backstroy" is not a setting: check the spelling, ` +
+		`or the block it belongs under (line 3)`; problems[0].Message != want {
+		t.Errorf("message = %q, want %q", problems[0].Message, want)
+	}
+
+	_, err = config.ParseCompanyDocument([]byte("name: Acme\nvision 2\npolicies: []\n"))
+	problems = config.Problems(err)
+	if len(problems) != 1 || problems[0].Path != "" {
+		t.Fatalf("problems = %+v, want one with no path", problems)
+	}
+	raw, err := json.Marshal(problems[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"path":"","segments":null,`) {
+		t.Errorf("an unplaced parser problem marshals as %s, want a null segment list", raw)
+	}
+}
+
 // A REFERENCE THAT RESOLVES TO NOTHING IS LOCATED WHERE IT WAS WRITTEN: a lead
 // at the unit's `lead`, a unit reference at the seat's `unit`, a manages entry
 // at the index it was written at (normalization rewrites the list, so the
