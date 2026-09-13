@@ -73,7 +73,7 @@ A body that does not arrive inside its deadline fails the read like any other tr
 | `GET` | `/agents` | List agent roles, each merged with live state from the in-memory projection (including the in-flight `live_call`). [Human seats](../concepts/humans-in-the-org.md) are excluded — they appear only in `/org` with `"kind": "human"` |
 | `GET` | `/agents/{id}` | Single agent — `role`, the live overlay (incl. `live_call`), and `llm_history`: the seat's finished phases newest first, capped at 50. `{id}` is the seat's **handle**, which is what every roster row carries as its `id`; a role name is accepted too |
 | `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills). Same `{id}` — the handle resolves to the derived agent id the diary is keyed by |
-| `GET` | `/org` | The company's identity and its full tree: `name`, `mission`, `vision`, `policies`, then `units` and `roles` (including human seats with `"kind": "human"`). The four identity fields are the founder-authored half of a company and are plain prose — no credentials, no `${VAR}` references; providers, MCP servers and integrations stay behind the operator-gated `/config` |
+| `GET` | `/org` | The company's charter and its seat and unit tree, in an explicit public shape that carries no contact identity, email, credential or deployment setting (see [below](#get-org)). Human seats appear with `"kind": "human"` |
 | `GET` | `/tools` | Registered tools, each tagged with the `source` that registered it — `builtin` or `mcp:<server>` (see [Where a tool comes from](../guides/tools-and-mcp.md#where-a-tool-comes-from)) |
 | `GET` | `/events` | Recent engine events from the event store (`limit` caps at 400; keyset-paged, see below) |
 | `GET` | `/events/{event_id}` | Single event incl. payload |
@@ -977,7 +977,7 @@ opens — before a single turn has run:
 | Section | What it is |
 |---|---|
 | `agents` | The company's agent seats, each merged with its live overlay. Every seat in the company, not the ones this node runs, because the dashboard is a view of the company. Human seats are excluded — they have no turn, no phase and no spend; they appear in `org` with `"kind": "human"` |
-| `org` | The role and unit tree, **verbatim** as the company document holds it: root-level `roles` plus `units` nesting to any depth. The client walks it and reads the config's own field names, so it is not reshaped on the way out |
+| `org` | The same public projection [`GET /org`](#get-org) answers: the charter, root-level `roles` and `units` nesting to any depth, with only the public fields of each |
 | `tools` | The catalogue this node serves, each entry tagged with the `source` that registered it — `builtin` or the MCP server's name. Absent on a standalone API, which has no engine to ask |
 | `events`, `sandboxes`, `tokens`, `budget`, `health` | The live projection: what has happened |
 
@@ -1344,6 +1344,82 @@ fixture.
 Its visual system — the token layer, the measured palette, and the rules
 a change has to keep — is documented in
 [Dashboard Design System](dashboard-design.md).
+
+---
+
+## Organization
+
+### `GET /org`
+
+The company's charter and its organization tree, as an anonymous reader may see
+it. The same object is the `org` section of the [handshake
+snapshot](#what-the-handshake-snapshot-carries) and the body of every `org`
+push, so all three surfaces carry exactly one shape.
+
+```json
+{
+  "name": "Nimbus",
+  "mission": "...",
+  "vision": "...",
+  "policies": ["..."],
+  "roles": [
+    {"name": "Founder", "kind": "human", "availability": "CET business hours"}
+  ],
+  "units": [
+    {
+      "name": "Engineering",
+      "type": "department",
+      "purpose": "...",
+      "lead": "CTO",
+      "goals": ["..."],
+      "channel": "engineering",
+      "knowledge": ["..."],
+      "roles": [
+        {
+          "name": "CTO",
+          "handle": "cto",
+          "goal": "...",
+          "backstory": "...",
+          "responsibilities": ["..."],
+          "behavioral_guidelines": ["..."],
+          "manages": ["Engineering"]
+        }
+      ],
+      "children": []
+    }
+  ]
+}
+```
+
+**What it carries, and nothing else.** The company's `name`, `mission`,
+`vision` and `policies`; for each seat its `name`, `kind`, `handle`, `goal`,
+`backstory`, `responsibilities`, `behavioral_guidelines`, `manages` and
+`availability`; for each unit its `name`, `type`, `purpose`, `lead`, `goals`,
+`channel`, `knowledge`, `roles` and `children`. Every value is the one the
+company document holds, as written: a seat with no declared `handle` has none
+here (the engine derives it from the name), and a unit that inherits its lead
+has no `lead` of its own. An empty field is omitted, and a node with no active
+company answers `{}`.
+
+**What it never carries.** A seat's `contact` identities, `email`, `unit`
+reference, `llm` and per-phase `llm_*` chains, `workers`, `token_budget`,
+`learning_enabled`, `mcp_env`, `sandbox`, `placement`, `integrations` and
+`schedules`; a unit's `mcp_env`, `integrations` and `schedules`; and every
+company block outside the charter (providers, MCP servers, integrations,
+knowledge, budgets). Those are read through the operator-gated `config` query
+or [`GET /config`](#config--live-config-management-auth-gated), which masks
+credentials.
+
+**Why an explicit shape.** `/org` is readable without a token under the
+default `api.auth.allow_anonymous_read: true`. Serialising the config's own
+seat and unit types would make every field added to a seat public the day it
+landed, whatever it held. The shape is declared field by field in
+`internal/api` instead, and a test fails when the config gains a seat or unit
+field nobody has classified as public or guarded.
+
+Founder prose is served as written. Nothing in the public fields is resolved as
+a `${VAR}`, so a reference typed into a goal is shown as the text it is; keep
+credentials in the fields built for them.
 
 ---
 
