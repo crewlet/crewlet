@@ -201,8 +201,8 @@ func (c *Company) ValidateRunnable() error {
 // ValidateAdmission reports only the ADMISSION rules: the rules a submitted
 // document is refused for and a stored revision is merely warned about.
 // Today they are the org's duplicate seat names and duplicate unit names (see
-// [org.Organization.ValidateAdmission]) and duplicate sandbox setup step
-// names within one list.
+// [org.Organization.ValidateAdmission]), duplicate sandbox setup step names
+// within one list, and a GitHub App on a human seat.
 func (c *Company) ValidateAdmission() error {
 	return c.validateAdmission(c.organization())
 }
@@ -210,7 +210,37 @@ func (c *Company) ValidateAdmission() error {
 // validateAdmission is [Company.ValidateAdmission] over an organization the
 // caller already built.
 func (c *Company) validateAdmission(o *org.Organization) error {
-	return errors.Join(o.ValidateAdmission(), c.validateSetupStepNames())
+	return errors.Join(o.ValidateAdmission(), c.validateSetupStepNames(),
+		c.validateHumanSeatApps())
+}
+
+// validateHumanSeatApps refuses a per-seat GitHub App on a human seat.
+//
+// A seat's `integrations.github` is the seat's OWN app: the bot identity an
+// agent acts as on GitHub. A person acts as their own login, which is
+// `contact.github_login`, and every engine path that creates, installs or
+// reconciles an app skips a human seat. The block therefore reads as a
+// working setting and does nothing, which is the silence the org model's
+// human-seat rule exists to end for every other agent-only field.
+//
+// CHECKED HERE rather than beside that rule in [org.Role.Validate], because
+// the org model carries no code-host identity for a seat and so cannot see
+// the block. And an ADMISSION rule rather than a runnable one: nothing
+// refused the block before, a stored company may carry it, and that company
+// runs exactly as it did.
+func (c *Company) validateHumanSeatApps() error {
+	var p problems
+	for role, path := range c.EachRole() {
+		if role.Kind != org.KindHuman || role.Integrations.GitHub == nil {
+			continue
+		}
+		p.add(at(path, "integrations.github"), ErrConflict,
+			"a human seat has no GitHub App of its own: an app is the identity "+
+				"an agent acts as, and a person acts as their own login, "+
+				"contact.github_login. Remove this block, or make the seat an "+
+				"agent seat")
+	}
+	return p.err()
 }
 
 // validateSetupStepNames refuses two sandbox setup steps of one name in the

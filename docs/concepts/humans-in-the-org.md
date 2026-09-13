@@ -88,7 +88,12 @@ validation time**, and the refusal names each one as it is written:
 `workers`, `learning_enabled`, `schedules`, `integrations.slack` and
 `integrations.mattermost` (a seat's own chat app), `integrations.jira` and
 `integrations.confluence` (the project and space a seat owns), `mcp_env` and
-`behavioral_guidelines`.
+`behavioral_guidelines`. A seat's own GitHub App (`integrations.github`) is
+refused on a human seat as well, because a person acts on GitHub as their
+own `contact.github_login`. That refusal is an [admission
+rule](configuration.md#what-a-stored-revision-is-held-to): a stored company
+that already carries the block still runs, and the next write that keeps it
+is refused.
 
 A unit's `mcp_env` is shared with its direct **agent** members only. A
 human member inherits none of it, so a human seat can sit in, and lead, a

@@ -371,3 +371,58 @@ roles:
 		t.Errorf("ValidateRunnable() = %v, want nil: duplicate step names are an admission rule", err)
 	}
 }
+
+// A GITHUB APP ON A HUMAN SEAT IS AN ADMISSION RULE.
+//
+// The block is the seat's own bot identity, and every path that creates or
+// reconciles an app skips a person, so on a human seat it reads as a setting
+// and does nothing. A submitted document is refused for it at the block, in a
+// unit as well as at the root; a stored one that already carries it runs as it
+// always did; and the same block on an agent seat is the ordinary case.
+func TestAGitHubAppOnAHumanSeatIsAnAdmissionRule(t *testing.T) {
+	t.Parallel()
+	const doc = `
+name: Acme
+roles:
+  - name: Founder
+    kind: human
+    contact: {github_login: founder}
+    integrations:
+      github: {tier: full_access}
+  - name: Builder
+    integrations:
+      github: {tier: full_access}
+units:
+  - name: Engineering
+    roles:
+      - name: Lead
+        kind: human
+        contact: {slack_user_id: U0LEAD}
+        integrations:
+          github: {tier: review}
+`
+	if _, err := config.ParseCompany([]byte(doc)); err == nil {
+		t.Fatal("a submitted document with a GitHub App on a human seat was accepted")
+	}
+	cfg, err := config.ParseCompanyDocument([]byte(doc))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	admission := cfg.ValidateAdmission()
+	if !errors.Is(admission, config.ErrConflict) {
+		t.Fatalf("ValidateAdmission() = %v, want the human seats' apps refused", admission)
+	}
+	for _, want := range []string{
+		"roles[0].integrations.github", "units[0].roles[0].integrations.github",
+	} {
+		if !strings.Contains(admission.Error(), want) {
+			t.Errorf("the refusal does not name %s: %v", want, admission)
+		}
+	}
+	if strings.Contains(admission.Error(), "roles[1]") {
+		t.Errorf("the agent seat's app was refused: %v", admission)
+	}
+	if err := cfg.ValidateRunnable(); err != nil {
+		t.Errorf("ValidateRunnable() = %v, want nil: the rule is an admission rule", err)
+	}
+}

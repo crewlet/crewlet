@@ -196,6 +196,13 @@ A human seat holds no tool credential. It is addressed by
 directly — so a person can be mentioned in a comment and reached by the
 engine's notification spine without ever holding a token here.
 
+A human seat carries no `integrations.github` block either. That block is a
+seat's own app, the identity an agent acts as, and nothing creates, installs
+or reconciles an app for a person. A document that gives one to a human seat
+is refused at that block; the rule is an [admission
+rule](../concepts/configuration.md#what-a-stored-revision-is-held-to), so a
+stored company that already carries one still runs.
+
 ## One GitHub App per agent
 
 A GitHub App has exactly one bot identity, derived from its slug, and nothing
