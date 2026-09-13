@@ -347,6 +347,7 @@ export function Overview() {
                 used={orgMeter.used}
                 max={orgMeter.max}
                 ariaLabel="Company budget meter"
+                fullMeans="spent"
                 label={
                   <span title="a process-lifetime meter — not comparable to the spend window above">
                     Company budget meter

@@ -859,6 +859,30 @@ facts are in the same places always. That is what lets a reader scan a list
 down a column instead of hunting each row, and a source is exactly the kind of
 thing somebody scans.
 
+### A bar has to be told which way full means
+
+`Meter` derived its tone from the fill alone — 75% caution, 100% critical —
+which is exactly right for a budget and exactly backwards for progress. A bar
+at 100% is two opposite pieces of news: a budget at 100% is refused charges, a
+goal at 100% is the goal reached. So a goal three-quarters of the way there
+rendered as a **warning**, and one fully achieved would have rendered as a
+**crisis**, on the one screen a founder reads to see how a quarter is going.
+
+`fullMeans` is therefore **required**, not defaulted. A default is the wrong
+answer half the time, silently — and the one call site that had noticed was
+passing `tone="accent"` to opt out of the rule rather than fixing it, which is
+the shape a wrong default always leaves behind.
+
+- `spent` — a budget, a capacity, a quota. Full is bad and the bar warns
+  before it gets there.
+- `achieved` — progress towards something wanted. Full is GOOD and says so;
+  nothing below it is a fault the bar can diagnose.
+
+An explicit `tone` still wins, for what a caller knows and a ratio does not: a
+budget already refusing charges is critical at any fill.
+
+---
+
 ### `KeyValue` is a metadata list, not a panel layout
 
 Its grid is `minmax(120px, max-content) 1fr`, sized for compact pairs — an id,

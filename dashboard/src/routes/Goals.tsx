@@ -220,6 +220,7 @@ export function GoalPanel({
         </p>
       ) : (
         <Meter
+          fullMeans="achieved"
           used={Math.round(goal.progress * 100)}
           max={100}
           ariaLabel={`${goal.name} — overall progress`}
@@ -239,6 +240,7 @@ export function TargetMeter({ target }: { target: WorkGoalTarget }) {
   if (target.progress === undefined) {
     return (
       <Meter
+        fullMeans="achieved"
         used={0}
         max={100}
         ariaLabel={`${target.name} — progress`}
@@ -250,6 +252,7 @@ export function TargetMeter({ target }: { target: WorkGoalTarget }) {
   }
   return (
     <Meter
+      fullMeans="achieved"
       used={Math.round(target.progress * 100)}
       max={100}
       ariaLabel={`${target.name} — progress`}

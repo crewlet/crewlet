@@ -788,7 +788,7 @@ export function ProjectHead({
                 used={sprint.figures.done}
                 max={Math.max(1, committed)}
                 right={`${sprint.figures.done} of ${committed} ${measure} · ${sprint.days_remaining}d left`}
-                tone="accent"
+                fullMeans="achieved"
               />
             </span>
           ) : (
