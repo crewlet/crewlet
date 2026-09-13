@@ -484,7 +484,7 @@ Instead the CLI is used strictly as a text model, and the tool channel
 rides in the prompt:
 
 1. The phase's messages flatten into a labelled transcript.
-2. The `tools=[…]` array renders as a JSON catalogue (name, description,
+2. The request's tool definitions (`llm.Request.Tools`) render as a JSON catalogue (name, description,
    JSON Schema).
 3. A response contract asks for one fenced JSON block:
 

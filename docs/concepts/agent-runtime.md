@@ -71,7 +71,7 @@ Each agent, when triggered (by event or task assignment), executes a **turn** th
    ├── The system prompt carries a slim catalogue: builtin tool names
    │     and MCP SERVER names, never the 50-150 MCP tool schemas
    ├── To use an MCP tool: list_mcp_server_tools(server) to discover
-   │     names, then activate_tool(name) to promote it into tools=[...]
+   │     names, then activate_tool(name) to promote it onto the surface
    │     so its schema arrives on the next round. Nothing is named in
    │     advance, so nothing has to be reconciled afterwards.
    └── Ends by calling submit_work: outcome, summary, deliveries,
@@ -180,7 +180,7 @@ Decisions use the agent's Slack MCP tools and team channel — see [Decision Fra
 MCP tools (Jira, Slack, GitHub, and so on) are discovered from the configured MCP servers and registered alongside builtins: a shared server's tools when an epoch is applied, and a `shared: false` server's tools into the seat's own registry when the node acquires that seat's lease. The executor does **not** see every MCP tool name in its system prompt (a role with 50–150 MCP tools would push 15–25 KB of catalogue into every prompt); instead the prompt lists *MCP server names* and the LLM walks the discover-then-activate flow:
 
 1. `list_mcp_server_tools(server)` — returns the `name: description` listing for one server.
-2. `activate_tool(name)` — promotes a tool from the catalogue into `tools=[...]` so the LLM can call it on the next round.
+2. `activate_tool(name)`: promotes a tool from the catalogue onto the phase's active tool list so the LLM can call it on the next round.
 
 Both meta-tools are available to the executor and to the onboarding pass. A worker cannot use the parent's pair (`activate_tool` and `list_mcp_server_tools` are on the worker denylist, because they would activate tools onto the parent's surface); it gets a pair of its own, bound to its filtered grant, so it can discover and activate only read-only tools the parent could already reach.
 
