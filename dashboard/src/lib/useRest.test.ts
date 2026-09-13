@@ -136,6 +136,29 @@ describe("what a failure does to the answer on screen", () => {
   });
 });
 
+describe("an answer belongs to the path it was read from", () => {
+  // A NEW PATH IS A NEW RESOURCE. The previous path's body, drawn while the
+  // new read is in flight, is one resource's content under another's name.
+  test("a changed path reports nothing until it answers, and never the old body", async () => {
+    const calls = manualFetch();
+    const { result, rerender } = renderHook(({ path }) => useRest<{ rev: string }>(path), {
+      initialProps: { path: "/config/revisions/01JA" },
+    });
+    await act(async () => calls[0]!.resolve(json({ rev: "a" }, 200, '"01JA"')));
+    expect(result.current.data).toEqual({ rev: "a" });
+
+    rerender({ path: "/config/revisions/01JB" });
+    expect(result.current).toMatchObject({ data: null, etag: null, status: null, loading: true });
+    expect(calls.map((c) => c.path)).toEqual(["/config/revisions/01JA", "/config/revisions/01JB"]);
+
+    // An engine unreachable for the NEW path keeps nothing from the old one.
+    await act(async () => calls[1]!.reject(new TypeError("Failed to fetch")));
+    expect(result.current.data).toBeNull();
+    expect(result.current.etag).toBeNull();
+    expect(result.current.status).toBe(0);
+  });
+});
+
 describe("when it is worth reading again", () => {
   // The banner on a guarded screen asks for a token; setting one has to land
   // on that same screen without a reload.

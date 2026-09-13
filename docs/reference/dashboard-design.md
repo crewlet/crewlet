@@ -860,7 +860,9 @@ rendered idle from the first phase to the last.
   superseded read, re-reads when the operator token changes and, where asked,
   when the tab comes back.
   A refusal replaces what is on screen; a request that never reached the
-  engine keeps the last answer with the error beside it.
+  engine keeps the last answer with the error beside it; and an answer belongs
+  to its path, so a read whose path changed reports nothing until the new path
+  answers.
 - **Subscriptions are per-slice.** `agents` is pushed twice per tool-loop
   round; a store that woke every listener on every envelope would re-render the
   application several times a second for the length of a turn.

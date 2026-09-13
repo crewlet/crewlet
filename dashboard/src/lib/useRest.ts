@@ -26,6 +26,10 @@
  *    never reached the engine (status 0) says nothing about the resource, so
  *    the last answer stays on screen with the error beside it, as [useQuery]
  *    keeps its last good answer through a failed poll.
+ *  - AN ANSWER BELONGS TO ITS PATH. A caller that changes the path is asking
+ *    about a different resource, so nothing read for the old path is reported
+ *    for the new one, not while the new read is in flight and not beside its
+ *    failure.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -68,6 +72,8 @@ export interface RestOptions {
 }
 
 interface State<T> {
+  /** The path every other field is an answer about. */
+  path: string;
   data: T | null;
   etag: string | null;
   status: number | null;
@@ -75,15 +81,18 @@ interface State<T> {
   loading: boolean;
 }
 
+const blank = <T>(path: string, loading: boolean): State<T> => ({
+  path,
+  data: null,
+  etag: null,
+  status: null,
+  error: null,
+  loading,
+});
+
 export function useRest<T>(path: string, options: RestOptions = {}): RestResult<T> {
   const { enabled = true, refetchOnFocus = false } = options;
-  const [state, setState] = useState<State<T>>({
-    data: null,
-    etag: null,
-    status: null,
-    error: null,
-    loading: enabled,
-  });
+  const [state, setState] = useState<State<T>>(() => blank(path, enabled));
 
   // Which read is allowed to write state, and the controller that cancels it.
   // Refs rather than effect-local variables, because reload() starts reads
@@ -97,12 +106,15 @@ export function useRest<T>(path: string, options: RestOptions = {}): RestResult<
       const mine = ++generation.current;
       const controller = new AbortController();
       inFlight.current = controller;
-      if (!quiet) setState((prev) => ({ ...prev, loading: true }));
+      if (!quiet) {
+        setState((prev) => (prev.path === path ? { ...prev, loading: true } : blank(path, true)));
+      }
       void (async () => {
         try {
           const answer = await rest.request("GET", path, { signal: controller.signal });
           if (generation.current !== mine) return;
           setState({
+            path,
             data: answer.body as T,
             etag: answer.etag,
             status: answer.status,
@@ -119,9 +131,9 @@ export function useRest<T>(path: string, options: RestOptions = {}): RestResult<
                   detail: err instanceof Error ? err.message : String(err),
                 });
           setState((prev) =>
-            refusal.status === 0
+            refusal.status === 0 && prev.path === path
               ? { ...prev, status: 0, error: refusal, loading: false }
-              : { data: null, etag: null, status: refusal.status, error: refusal, loading: false },
+              : { ...blank<T>(path, false), status: refusal.status, error: refusal },
           );
         } finally {
           if (inFlight.current === controller) inFlight.current = null;
@@ -137,7 +149,7 @@ export function useRest<T>(path: string, options: RestOptions = {}): RestResult<
     if (!enabled) {
       generation.current++;
       inFlight.current?.abort();
-      setState({ data: null, etag: null, status: null, error: null, loading: false });
+      setState(blank(path, false));
       return;
     }
     read(false);
@@ -148,7 +160,7 @@ export function useRest<T>(path: string, options: RestOptions = {}): RestResult<
       generation.current++;
       inFlight.current?.abort();
     };
-  }, [enabled, read]);
+  }, [enabled, path, read]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -167,5 +179,12 @@ export function useRest<T>(path: string, options: RestOptions = {}): RestResult<
     return () => document.removeEventListener("visibilitychange", wake);
   }, [enabled, refetchOnFocus, read]);
 
-  return { ...state, reload };
+  // AN ANSWER BELONGS TO ITS PATH. When the path changes, what is held is an
+  // answer about a different resource, and drawing it while the new read is
+  // in flight would put one resource's body under another's name (one
+  // revision's document under another revision's id). So until the new path
+  // answers, the hook reports nothing and loading, the same as a first read.
+  const current = state.path === path ? state : blank<T>(path, enabled);
+  const { path: _answeredFor, ...result } = current;
+  return { ...result, reload };
 }
