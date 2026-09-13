@@ -1366,7 +1366,10 @@ then took the level and dropped the bounds beside it, on the claim that a bound
 is enforced against a set's coverage and one row has no set. It is not: a bound
 is about **this node's lag**, checked before any row is read, and one row is
 exactly as far behind as a board on the same node. And `complete: false` — with `incomplete` naming the
-count, the affected objects and the record version — says rows may be missing,
+count, the lowest position among the records (`from`, as `{stream, generation,
+seq}` — the object form every position in an answer takes, `seen_through` and a
+listing's `position` included; a position in a *parameter* is the token
+`<stream>@<generation>:<sequence>`) and the record version — says rows may be missing,
 rows that should have gone may still be present, and the totals were computed
 over the incomplete set. That is a different fact from staleness, and a client
 that renders `read_level` and swallows `complete` looks confidently right.

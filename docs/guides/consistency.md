@@ -143,6 +143,13 @@ answer and the retention routes alike, and every read takes it back as
 
 A position on another domain's log is refused `wrong_stream`, not waited for.
 
+Two spellings, one triple: inside an answer a position is the object
+`{stream, generation, seq}` (`seen_through`, `incomplete.from`, a listing's
+`position`), and as a parameter — `min_position`, a cursor, `since` — it is the
+token `<stream>@<generation>:<sequence>`, because a query string carries no
+object. A tool answer's `position` is already the token, since that is what
+its reader pastes back.
+
 This is the wire's half of read-your-writes. A seat needs none of it, because
 its reads are `linearizable`; a person's assistant filing an item over the
 operator MCP and redrawing a board over the REST route holds nothing else it

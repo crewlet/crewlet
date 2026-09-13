@@ -66,9 +66,21 @@ var ErrWrongStream = errors.New("positions are on different streams")
 // second name for it. A Version() beside a Packed() is one value with two
 // spellings, and two spellings of one value is how a comparison in one place
 // stops meaning what it means in another.
+//
+// # On the wire
+//
+// A position travels in two forms and both name the same triple. Inside an
+// answer it is the object `{stream, generation, seq}` — the keys below, which
+// are what the dashboard's protocol types declare and what a reader of
+// `seen_through` or `incomplete.from` indexes. Untagged, the encoder used
+// Go's own field names, so the dashboard read `from.seq` and got `undefined`
+// while the Go side saw the same fields under `Seq` and compiled. As a
+// PARAMETER — a cursor, `since`, `min_position` — it is the token
+// [Position.String] renders, `<stream>@<generation>:<sequence>`, because a
+// query string carries no object.
 type Position struct {
 	// Stream is the stream this position is on.
-	Stream string
+	Stream string `json:"stream"`
 
 	// Generation is the estate's generation.
 	//
@@ -76,11 +88,11 @@ type Position struct {
 	// exponent inside an int64, which bounds it at 2^23 either way. A
 	// wider field would promise a range the packed form cannot carry, and
 	// the value that overflowed would be silently negative.
-	Generation uint32
+	Generation uint32 `json:"generation"`
 
 	// Seq is the broker's own sequence — a PubAck's, an applier's
 	// checkpoint, an object's version — in one number space.
-	Seq uint64
+	Seq uint64 `json:"seq"`
 }
 
 // Packed is the position as one integer: the SQL-facing form, and what every
