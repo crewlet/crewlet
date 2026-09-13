@@ -384,10 +384,16 @@ at 04:12" is a fact somebody can find later. `X-Summary` names it; unset, it
 records `reload configuration`.
 
 Answers `201 {"revision_id", "epoch"}`, `409 no_active_revision` when nothing
-is configured, `400 validation_error` when the active document does not pass
-this build's validation (a reload is an apply, so it re-publishes only a
+is configured, `400 validation_error` when the active document breaks a
+runnable rule of this build (a reload is an apply, so it re-publishes only a
 company every node can run; correct it with `PUT` or `PATCH`), and
-`503 no_control_plane` on a process that cannot activate.
+`503 no_control_plane` on a process that cannot activate. A document that
+breaks only an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to),
+such as a duplicate seat or unit name stored before the rule existed, reloads:
+that is how a credential rotation still reaches a company carrying one.
+
+The command-line equivalent is [`crewlet config activate <UUID>`](cli.md#crewlet-config-activate)
+naming the revision that is already current.
 
 #### Stored revisions are read as they are
 
@@ -397,18 +403,22 @@ from all open a stored revision as it is, even one this build's validator would
 refuse: a revision is valid under the build that wrote it, and a later build
 (or an older peer still activating during a rolling upgrade) can leave one in
 the store that this build refuses. What validates is whatever would RUN a
-document: every write validates the whole document it produces, and a reload
-or a revert validates what it re-activates. So a revision this build refuses is
-always readable, and a corrected `PUT` or `PATCH` always replaces it, while a
-write that leaves it uncorrected is refused with `400 validation_error`.
-A revert to such a revision answers `400 validation_error` naming the field; a
-revert to one sealed under a key this node does not hold answers
-`409 unreadable_revision`.
+document, and to the rules its question needs:
 
-The command-line equivalent is [`crewlet config activate <UUID>`](cli.md#crewlet-config-activate)
-naming the revision that is already current.
-
-
+- **A write** (`PUT`, `PATCH`, a per-entity `PUT`, a `/setup` submission that
+  changes the document) validates
+  the whole document it produces against every rule, admission rules
+  included. So a revision this build refuses is always readable, a corrected
+  `PUT` or `PATCH` always replaces it, and a write that leaves it uncorrected
+  is refused with `400 validation_error`, even when the write touched nothing
+  near the problem.
+- **A reload or a revert** (including a `/setup` submission that only rotates a
+  sealed credential, which reloads) validates what it re-activates against the
+  runnable rules only. A revert to a revision that breaks one answers
+  `400 validation_error` naming the field; a revert to one that breaks only an
+  admission rule is accepted, and each node logs `org_admission_warning` when it
+  applies it. A revert to a revision sealed under a key this node does not hold
+  answers `409 unreadable_revision`.
 
 ## Setting an integration up
 
