@@ -1013,9 +1013,22 @@ func (c *Client) GroupProjects(ctx context.Context, groupID int) ([]string, erro
 			"per_page":          {strconv.Itoa(userPageSize)},
 			"page":              {strconv.Itoa(page)},
 			"include_subgroups": {"true"},
-			// ARCHIVED ONES TOO. An archived project keeps its webhooks
-			// and GitLab excludes it from this listing by default, so
-			// leaving it out is the same silent miss as a short page.
+			// ARCHIVED ONES TOO, and `true` is how GitLab spells that.
+			//
+			// IT IS NOT A FILTER, which is the reading it invites and the
+			// one a review raised: `archived=true` would then return ONLY
+			// archived projects and this sweep would walk past every live
+			// one, leaving their hooks delivering to an address the company
+			// no longer has. What GitLab's own ProjectsFinder#by_archived
+			// does with a truthy value is return the collection UNFILTERED;
+			// the value that narrows to archived alone is the string
+			// `only`. Verified against gitlab-org/gitlab, not inferred.
+			//
+			// Sent explicitly although omitting it is documented to do the
+			// same, because an archived project keeps its webhooks and this
+			// is the one pass that has to see all of them: a default is a
+			// vendor's to change, and self-managed instances run versions
+			// this deployment does not choose.
 			"archived": {"true"},
 			// The listing is only read for the path, so the cheapest
 			// ordering is fine and the default (created_at desc) is

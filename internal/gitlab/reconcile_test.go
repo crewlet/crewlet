@@ -509,8 +509,21 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(`{"message":"403 Forbidden"}`))
 			return
 		}
+		// GITLAB'S OWN `archived` SEMANTICS, because a fake that ignored
+		// the parameter left this endpoint untestable on the one axis that
+		// decides whether a live project's hook is left behind.
+		// ProjectsFinder#by_archived: a TRUTHY value returns the collection
+		// unfiltered, `only` narrows to archived, and false narrows to the
+		// rest. So a sweep asking for `only` — the reading a review of this
+		// branch proposed — would see the archived project alone and walk
+		// past every live one.
+		archived := r.URL.Query().Get("archived")
 		rows := make([]map[string]any, 0, len(f.groupProjects))
 		for _, project := range f.groupProjects {
+			isArchived := strings.HasSuffix(project, "-archived")
+			if (archived == "only" && !isArchived) || (archived == "false" && isArchived) {
+				continue
+			}
 			rows = append(rows, map[string]any{"path_with_namespace": project})
 		}
 		json.NewEncoder(w).Encode(pageOf(rows, r.URL.Query()))

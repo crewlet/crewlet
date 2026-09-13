@@ -290,7 +290,15 @@ func TestADisconnectSweepsEveryProjectTheGroupHolds(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
 	// IN THE GROUP AND NOT IN THE CONFIG, which is the shape that leaked.
-	f.groupProjects = []string{"nimbus/dropped", "nimbus/sub/deeper"}
+	//
+	// ONE OF THEM ARCHIVED, because an archived project keeps its webhooks
+	// and GitLab's listing takes an `archived` parameter this sweep has to
+	// pass correctly — `true` means "do not filter", where `only` would
+	// narrow to this one project and walk past the two live ones. Both
+	// states in one fixture is what makes either mistake fail here.
+	f.groupProjects = []string{
+		"nimbus/dropped", "nimbus/sub/deeper", "nimbus/shut-archived",
+	}
 	f.projectHooks = map[string][]hookRow{}
 	f.projectHooks["nimbus/dropped"] = []hookRow{
 		// NAMELESS, as an older build wrote them, at an address that is
@@ -304,6 +312,12 @@ func TestADisconnectSweepsEveryProjectTheGroupHolds(t *testing.T) {
 		// AND SOMEBODY ELSE'S, which must survive.
 		foreignHook(703, "https://ci.example.com/hook"),
 	}
+	// AN ARCHIVED PROJECT'S HOOK IS AS LIVE AS ANY OTHER: GitLab goes on
+	// delivering from one, so a sweep that never lists it leaves the
+	// payloads leaving.
+	f.projectHooks["nimbus/shut-archived"] = []hookRow{
+		namedHook(704, "crewlet", "https://long-gone.example.com/webhooks/gitlab"),
+	}
 
 	if _, err := tearDownAgainst(t, f, func(o *gitlab.TeardownOptions) {
 		// NO PROJECTS NAMED AT ALL: the group alone, which is how this
@@ -315,7 +329,9 @@ func TestADisconnectSweepsEveryProjectTheGroupHolds(t *testing.T) {
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	for _, project := range []string{"nimbus/dropped", "nimbus/sub/deeper"} {
+	for _, project := range []string{
+		"nimbus/dropped", "nimbus/sub/deeper", "nimbus/shut-archived",
+	} {
 		for _, hook := range f.projectHooks[project] {
 			url, _ := hook.attrs["url"].(string)
 			if strings.HasSuffix(url, "/webhooks/gitlab") {
