@@ -1094,8 +1094,22 @@ func (p *githubPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 	if err != nil {
 		return nil, fmt.Errorf("engine: github pass: %w", err)
 	}
+	// EACH AGENT'S OWN APP, which is where identity on GitHub actually
+	// lives. The pass below reads the ORGANIZATION and registers hooks; it
+	// knows nothing about the app a person created for one seat. This half
+	// adopts the installation that person made, and it has to run on the
+	// loop rather than at connect time because installing an app is a click
+	// in a browser that tells the engine nothing.
+	//
+	// READ FIRST, because the organization pass needs to know these exist.
+	// Every app carries its own webhook, so a company holding some has
+	// coverage whatever is registered organization-wide — which is the
+	// difference between reporting the recommended arrangement and
+	// reporting a company that receives nothing. See [github.Options.SeatApps].
+	seats := p.seatApps(env)
 	res, err := github.Reconcile(ctx, github.Options{
 		Client: client, Config: cfg, Org: company.Org, Value: env.Value,
+		SeatApps: len(seats),
 		// THE TWO THE LOOP WITHHOLDS. A base is permission to register,
 		// a sink is permission to mint, and a person asked for both.
 		Sink:             in.Sink,
@@ -1106,14 +1120,6 @@ func (p *githubPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 		return nil, fmt.Errorf("engine: github pass: %w", err)
 	}
 	findings := res.Findings()
-
-	// EACH AGENT'S OWN APP, which is where identity on GitHub actually
-	// lives. The pass above reads the ORGANIZATION and registers hooks; it
-	// knows nothing about the app a person created for one seat. This half
-	// adopts the installation that person made, and it has to run on the
-	// loop rather than at connect time because installing an app is a click
-	// in a browser that tells the engine nothing.
-	seats := p.seatApps(env)
 	// AND THE AGENTS WITH NO APP AT ALL, which the list above cannot hold:
 	// it is built from the seats carrying an `integrations.github` block,
 	// because that block is where an app's id, slug and key are recorded.

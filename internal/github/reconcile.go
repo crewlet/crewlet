@@ -61,6 +61,22 @@ type Options struct {
 	// deployment whose secret is already set has nothing to record.
 	Sink provision.TokenSink
 
+	// SeatApps is how many of this company's agents carry their OWN GitHub
+	// App — each one with its own webhook baked into its own manifest.
+	//
+	// IT IS WHAT MAKES "NOTHING REGISTERED ORGANIZATION-WIDE" AN ANSWER
+	// RATHER THAN A GAP. This pass reads the organization; it cannot see
+	// an agent's app, which is private to that agent and recorded on the
+	// seat. So the same world — no org hook, no repository hooks — is the
+	// recommended arrangement when those apps exist and a company
+	// receiving nothing when they do not, and this is the only thing that
+	// tells the two apart.
+	//
+	// Counted rather than named, because nothing here has anything to say
+	// about WHICH seats: the question is whether the company's coverage
+	// comes from apps at all.
+	SeatApps int
+
 	// WebhookBase is this deployment's public base URL, or empty to skip
 	// webhook registration.
 	//
@@ -281,6 +297,18 @@ type Result struct {
 	// and the way out instead.
 	NoRegistrar string
 
+	// Coverage is what this company's agents hear about, when that is
+	// narrower than the organization and is the arrangement rather than a
+	// fault. Empty when nothing needs saying.
+	//
+	// A SENTENCE ON A WORKING INTEGRATION. It is reported as
+	// [integration.FindingCoveragePartial], whose verdict is ready, and the
+	// alternatives were both wrong: an ingress_blocked finding reads as
+	// Action required over agents receiving events perfectly well, and a
+	// note is dropped before anything renders it, so a person learns what
+	// their integration does not see only by noticing its absence.
+	Coverage string
+
 	// NoKeyring is a run that had to mint the webhook signing secret and
 	// had nowhere to seal one.
 	//
@@ -358,6 +386,12 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			},
 			NoIngress:   noIngressReason(opts),
 			NoRegistrar: noRegistrarReason(opts),
+			// AND THIS IS THE ARM THE RECOMMENDED ARRANGEMENT TAKES, which
+			// is why the coverage sentence has to be reachable from here
+			// and not only from [ensureWebhooks]: a company hooking each
+			// agent's own app has no organization credential by design, so
+			// the pass returns above ever registering anything.
+			Coverage: coverageFor(opts, nil),
 		}, nil
 	}
 	login, err := opts.Client.Me(ctx)
@@ -375,6 +409,10 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	res.Hooks = in.Hooks
 	res.Notes = append(res.Notes, in.Notes...)
 	res.NoKeyring = in.NoKeyring
+	// SAID ONCE, FROM WHAT IS ACTUALLY DELIVERING. Deciding it inside
+	// [ensureWebhooks] put it in one of the two arms that reach this state
+	// and missed the other — see the nil-client return above.
+	res.Coverage = coverageFor(opts, res.Hooks)
 	res.NoIngress = noIngressReason(opts)
 	if err == nil {
 		// AND AGAIN AT THE END, because a pass cancelled halfway does not
@@ -584,6 +622,17 @@ func noRegistrarReason(opts Options) string {
 	if pv == nil {
 		return ""
 	}
+	// AND AN AGENT'S OWN APP IS A REGISTRAR. This asked whether the
+	// company wanted something an organization credential must register,
+	// and stopped there — so a company whose agents each carry their own
+	// app, receiving events through them, was told it had no webhook and
+	// pointed at a token. Worse, the card that said so spent its time
+	// asking for the apps to be installed, and installing one can never
+	// produce `admin:org_hook`: an operator who did exactly as they were
+	// told watched nothing change. See [Options.SeatApps].
+	if opts.SeatApps > 0 {
+		return ""
+	}
 	var asked []string
 	if org := strings.TrimSpace(pv.Org); org != "" &&
 		pv.OrgWebhook == config.ContainerWebhookRequire {
@@ -610,6 +659,55 @@ type ingress struct {
 	Hooks     []HookState
 	Notes     []string
 	NoKeyring bool
+}
+
+// coverageNote is the sentence a company hears when its agents' own apps are
+// what carry its events.
+//
+// IT NAMES BOTH HALVES. Saying only what is covered reads as a complete
+// answer and leaves somebody surprised by the first repository nobody hears
+// about; saying only what is not reads as a fault. The remedy is the last
+// clause rather than the first, because nothing is broken.
+// coverageFor is the sentence for a company whose events arrive through its
+// agents' OWN apps, or "" when there is nothing to say.
+//
+// THE TEST IS WHAT IS DELIVERING, not what the config asked for. Nothing
+// organization-wide is carrying events — no org hook, no repository hook —
+// and the company's agents each have an app that is: that is one arrangement
+// however the mode field got there, so a company that chose it and a company
+// left on `org_webhook: true` with no token read the same, which is the point.
+// The second was reported as degraded over agents receiving events the whole
+// time.
+//
+// Both halves of the `if` are load-bearing. With no apps there is no
+// arrangement to describe, only a company receiving nothing — and the pass
+// says so elsewhere, through the roster's own "no app of its own" finding.
+// With a hook working, the organization is covered and there is nothing
+// narrower to report.
+func coverageFor(opts Options, hooks []HookState) string {
+	if opts.SeatApps == 0 {
+		return ""
+	}
+	for _, h := range hooks {
+		if h.Hooked() {
+			return ""
+		}
+	}
+	var org string
+	if pv := opts.Config.Provisioning; pv != nil {
+		org = strings.TrimSpace(pv.Org)
+	}
+	return coverageNote(org)
+}
+
+func coverageNote(org string) string {
+	where := "the rest of the organization"
+	if org != "" {
+		where = "the rest of " + org
+	}
+	return "covering the repositories your agents' apps are installed on. " +
+		"Not covering " + where + " — supply integrations.github.token to " +
+		"add one organization-wide hook"
 }
 
 // ensureWebhooks registers the inbound hooks, or converges the ones already
@@ -671,13 +769,25 @@ func ensureWebhooks(ctx context.Context, opts Options) (ingress, error) {
 						"was not hooked separately", org))
 				return ingress{Hooks: hooks, Notes: notes}, nil
 			}
+		case mode == config.ContainerWebhookRequire && opts.SeatApps > 0:
+			// ASKED FOR MORE THAN IT GOT, over agents that are hearing
+			// about their own repositories perfectly well. That is not a
+			// failure of the pass and it is not Action required: the
+			// company has coverage, narrower than it chose, and what
+			// closes the gap is a value in its own configuration.
+			//
+			// It used to be the error below, which stopped the pass and
+			// put the surface at degraded — over an integration
+			// delivering events the whole time.
+			return ingress{Hooks: hooks, Notes: notes}, nil
 		case mode == config.ContainerWebhookRequire:
 			return ingress{Hooks: hooks, Notes: notes}, fmt.Errorf(
 				"github: org_webhook: true demands one hook on %s and this "+
 					"credential cannot register it (%w) — a classic token needs "+
 					"the admin:org_hook scope, which a fine-grained token cannot "+
-					"carry at all. Set org_webhook: false to hook each "+
-					"repository instead", org, err)
+					"carry at all, and no app can carry it however it is "+
+					"installed. Supply integrations.github.token, or choose the "+
+					"coverage each agent's own app already gives", org, err)
 		default:
 			notes = append(notes, fmt.Sprintf(
 				"no organization hook on %s (%s) — falling back to one hook per "+
@@ -688,6 +798,21 @@ func ensureWebhooks(ctx context.Context, opts Options) (ingress, error) {
 
 	targets := TargetsOf(pv)
 	if len(targets) == 0 {
+		// NOTHING LEFT TO HOOK IS TWO DIFFERENT WORLDS, and this said the
+		// same thing about both. A company whose agents each carry their
+		// own app has exactly this shape by design — no org hook, no
+		// repository list — and telling it to "name the repositories whose
+		// events should reach the engine" describes a gap that is not
+		// there, over events already arriving.
+		//
+		// So the arrangement is reported as one, and the sentence about
+		// naming repositories is kept for the company it is true of: no
+		// app anywhere, and nothing registered.
+		if opts.SeatApps > 0 {
+			// THE ARRANGEMENT, not a gap — said by [coverageFor], which
+			// this only has to stop contradicting.
+			return ingress{Hooks: hooks, Notes: notes}, nil
+		}
 		notes = append(notes, "integrations.github.provisioning.repos is empty, "+
 			"so there is nothing left to hook — name the repositories whose "+
 			"events should reach the engine")

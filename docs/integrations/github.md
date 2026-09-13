@@ -34,11 +34,14 @@ same pass `crewlet github provision` runs with the same secret store behind
 it. The connect step asks for a personal access token nowhere — only the
 organization, which is the one answer nobody else has.
 
-The form opens on **one organization hook**, which keeps covering repositories
-created after the run. That needs an **organization token** (`admin:org_hook`),
-offered as an optional field beside the hook choice: leave it empty and switch
-the choice to *One hook per repository*, or to *Organization hook, falling back
-to each repository*, and each agent's own app carries its own hook instead.
+The form asks one question about coverage — *which GitHub activity should
+reach your agents* — with two answers. It opens on **repositories where an
+agent's app is installed**, which is what most companies want and needs
+nothing further: each app carries its own webhook, so connecting and
+installing is the whole setup. The other answer, **every repository in your
+organization including new ones**, needs an organization token with
+`admin:org_hook`; the form asks for it only under that answer, and requires it
+there. See [What a company hears about](#what-a-company-hears-about-said-out-loud).
 
 The loop keeps checking after that, so a grant you change at GitHub is
 reflected on the screen within a tick without anything to press.
@@ -115,13 +118,23 @@ integrations:
 
   **Installing an agent's App is not a substitute for it.** An
   organization-wide hook needs the `admin:org_hook` scope, which only a user
-  token carries — no App installation grants it, at any permission. So with
-  `org_webhook: true` and no token the finding naming this field never clears,
-  however many apps get installed, which is exactly what it looked like when
-  the dashboard offered no box for it: an operator did everything the card
-  asked and the warning stayed put.
+  token carries — no App installation grants it, at any permission. So an
+  operator who was told *no webhook on `<org>`* and installed the per-agent
+  app, exactly as the card was asking, watched the warning stay put. A card
+  must never prescribe an install as the remedy for a missing org hook, and
+  a company whose agents carry their own apps is not blocked at all — it has
+  coverage, narrower than the whole organization, reported
+  [as such](#what-a-company-hears-about-said-out-loud).
 
-  It is **offered but never on the connect step**. Asking every company for a
+  It is **offered but never on the connect step**, and it is required by an
+  ANSWER rather than in general: choose organization-wide coverage on the form
+  and it is the one thing standing between that answer and its being true;
+  choose the other and it is a credential the company never uses. The form
+  hides it until that choice is made and then requires it, and the API refuses
+  the same submission, so a caller that skips the form cannot store a choice
+  the engine could not carry out.
+
+  Asking every company for a
   hand-minted personal access token before anything works put a permanent note
   on cards with nothing wrong with them; having no field for it at all left the
   warning pointing at a setting the dashboard could not set. It now appears
@@ -559,12 +572,45 @@ at all and a classic token carries only if whoever minted it ticked the box.
 
 | `org_webhook` | Behaviour |
 |---|---|
-| `auto` (default) | Try one org hook; fall back to per-repository hooks if the credential may not, saying so in the run's notes |
+| `auto` (config default) | Try one org hook; fall back to per-repository hooks if the credential may not, saying so in the run's notes |
 | `true` | Demand the org hook. A credential that cannot register it **fails the run** — an operator who asked for this arrangement must not silently get the other one |
-| `false` | Always register per-repository hooks |
+| `false` | Register no org hook. Every repository in `repos` is hooked; with `repos` empty, each agent's own app carries its own webhook |
 
 A working org hook means the `repos` list is **not** hooked separately: two
 hooks on one repository deliver every event twice.
+
+**The dashboard form asks a different question, and offers two of these
+three.** It asks what should *reach your agents* rather than where a hook is
+registered, because that is the question an operator has:
+
+| Answer on the form | Writes | Needs |
+|---|---|---|
+| Repositories where an agent's app is installed *(default)* | `org_webhook: false` | nothing |
+| Every repository in your org, including new ones | `org_webhook: true` | `integrations.github.token` with `admin:org_hook` — **required for this answer** |
+
+`auto` is not offered there, because it is not an answer to that question: it
+means "try for the whole organization and quietly take less", which leaves a
+company believing it has one hook when it has several, none of them covering
+a repository created tomorrow. `false` **with a `repos` list** is not offered
+either — it is a real arrangement and a rare one, needing a list of
+repositories a form cannot help you build. Neither is removed: YAML keeps
+both, `org_webhook` still accepts all three values, and the pass still hooks
+every repository a company names. The form's job is deciding which questions
+are worth putting to somebody connecting from a dashboard.
+
+**`org_webhook: true` with no token does not block a company whose agents
+carry their own apps.** It used to: the finding said `ingress_blocked`, the
+card read *Action required*, and the remedy on screen was to install the
+agents' apps — which can never carry `admin:org_hook`, so doing exactly as
+the card asked changed nothing. Events were arriving through those apps the
+whole time. It now reports as coverage on a **ready** card (below), and the
+only thing that widens it is the token.
+
+**A company already holding `org_webhook: "true"` is not migrated.** The
+form's default is a suggestion and never a stored value, so changing it moves
+nobody who already answered — and rewriting an explicit answer would be the
+engine overruling a decision somebody may have made deliberately. What
+changed is the report, which is what was wrong.
 
 ---
 
@@ -714,7 +760,17 @@ So it does the two things GitHub genuinely allows:
 
 **A hook the company DEMANDED and could not get is reported; the fallback is not.** `integrations.github.token` is optional and the connect form does not ask for it, both deliberately — routing needs nothing from it, because each agent's own app answers who is participating in a thread. With no token the pass reads nothing and writes nothing at the organization, and it used to say so only in its *notes*, which are not findings, so a surface that had authenticated with nobody reported `ready` with an empty finding list. Measured on a live connect: `phase: ready`, `routes: true`, and exactly one webhook on the organization, belonging to a different deployment and never triggered. It is now `ingress_blocked` against `integrations.github.token`.
 
-**But only where the company actually asked for a hook this credential must register**, which is `org_webhook: true` (no fallback) or a non-empty `repos` list (no agent's own app covers a named repository). The form *requires* `provisioning.org` — that is where the agents' apps are installed — so reading "the block names an organization" as "this company wants an organization-wide webhook" put a permanent finding on every company that connects GitHub from the dashboard. Measured: it survived the operator installing an app and read as though the install had not taken. `auto` with no repositories, which is what the form writes, takes an organization hook if one can be had and per-agent app webhooks otherwise — and the second is the design, not a degradation.
+**But only where the company actually asked for a hook this credential must register, and has no other coverage.** Two clauses, and both were learned the same way. The first is `org_webhook: true` (no fallback) or a non-empty `repos` list (no agent's own app covers a named repository): the form *requires* `provisioning.org` — that is where the agents' apps are installed — so reading "the block names an organization" as "this company wants an organization-wide webhook" put a permanent finding on every company that connects GitHub from the dashboard.
+
+The second is that **an agent's own app is a registrar too**. Even a company that *did* ask for an organization-wide hook is receiving events if its agents carry their own apps, so the honest report there is coverage rather than a block. Measured: an operator connected GitHub, was told *Action required: no webhook on crewbed*, installed the per-agent app exactly as the card was asking, and the warning stayed — because no App installation carries `admin:org_hook` at any permission. The one instruction on screen could not clear the one warning on screen.
+
+### What a company hears about, said out loud
+
+A company whose events arrive through its agents' own apps gets one sentence on a **ready** card: *covering the repositories your agents' apps are installed on. Not covering the rest of `<org>` — supply `integrations.github.token` to add one organization-wide hook.*
+
+It is a `coverage_partial` finding, whose verdict is ready and whose actor is the **operator**: nothing is broken, and widening it is a value in this company's own configuration rather than a grant somebody at GitHub has to make. The two alternatives were both worse. Reported as `ingress_blocked` it read as Action required over agents that were working. Reported as a *note* it reached nobody at all — the engine's pass returns findings and discards notes, so a person would learn the limits of their coverage only by noticing the first repository nobody hears about.
+
+The same sentence covers the company that chose this arrangement and the one left on `org_webhook: true` with no token, because the two are the same arrangement whatever the mode field says. And it never prescribes installing an app: that cannot widen it.
 
 **A working secret is never reminted.** The engine is running with the old
 one, so re-registering with a fresh secret would have GitHub sign every

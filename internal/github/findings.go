@@ -96,6 +96,27 @@ func (r *Result) Findings() []integration.Finding {
 		})
 	}
 
+	// WHAT THE COMPANY'S AGENTS HEAR ABOUT, where that is narrower than the
+	// organization and is the ARRANGEMENT rather than a fault.
+	//
+	// An advisory, so the surface stays READY: these agents are receiving
+	// events. It was reported as ingress_blocked once, which put a card
+	// delivering events perfectly well at Action required and named the
+	// organization token as the fix — beside a roster asking for apps to be
+	// installed, which can never carry `admin:org_hook`. So the one
+	// instruction on screen could not clear the one warning on screen.
+	if r.Coverage != "" {
+		out = append(out, integration.Finding{
+			Kind:    integration.FindingCoveragePartial,
+			Subject: "github coverage",
+			Detail:  r.Coverage,
+			// NO REMEDY FIELD. The sentence's own last clause is the
+			// remedy, and it is optional — a second line telling somebody
+			// to do something would make a decision they already took
+			// read as work outstanding.
+		})
+	}
+
 	// AND A TARGET THIS RUN TRIED AND COULD NOT HOOK.
 	//
 	// Reported per target rather than once: a partial hook-up is the state

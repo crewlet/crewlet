@@ -1,8 +1,10 @@
 package github_test
 
 import (
+	"slices"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -88,28 +90,38 @@ func TestTheOrgTokenIsAskableWithoutLeadingTheForm(t *testing.T) {
 	}
 }
 
-// AND THE HOOK CHOICE OPENS ON ONE ORGANIZATION HOOK.
+// THE FORM ASKS ABOUT COVERAGE, AND OPENS ON THE ANSWER THAT NEEDS NOTHING.
 //
-// It covers repositories created after the run, which is the difference
-// between a new repository routing on day one and routing whenever somebody
-// remembers. `true` rather than `auto` because the two differ only in what
-// happens when the hook cannot be made, and a silent fall back to
-// per-repository hooks leaves a company believing it has one hook when it has
-// several.
+// It asked about registration topology — "Organization hook, falling back to
+// each repository" / "Organization hook only" / "One hook per repository" —
+// and opened on the strictest of the three, which demands a scope most
+// connectors do not have. So the ordinary dashboard connect produced Action
+// required at once, and the card's own instruction (install each agent's app)
+// could never clear it, because no app carries `admin:org_hook`.
 //
-// Affordable only because the token above is askable: defaulting to `true`
-// over a form with no box for it would put a permanent finding on every fresh
-// connect, which is the bug noRegistrarReason was narrowed to remove.
-func TestTheHookChoiceDefaultsToOneOrganizationHook(t *testing.T) {
+// Two answers now, named by what they COVER. The first is the arrangement
+// most companies are already in and needs nothing further; the second is the
+// one that needs the token, and says so.
+func TestTheCoverageChoiceOpensOnWhatNeedsNothing(t *testing.T) {
 	t.Parallel()
-	reqs := byField(github.Requirements(nil, nil))
-	hook := reqs["provisioning.org_webhook"]
-	if hook.Default != "true" {
-		t.Errorf("the hook choice opens on %q, want one organization hook",
-			hook.Default)
+	hook := byField(github.Requirements(nil, nil))["provisioning.org_webhook"]
+
+	if hook.Default != string(config.ContainerWebhookNever) {
+		t.Errorf("the coverage choice opens on %q, want the arrangement that "+
+			"needs no further credential", hook.Default)
 	}
-	// AND THE DEFAULT IS ONE OF THE OFFERED VALUES, or the form opens on a
-	// selection that is not in its own list.
+	if len(hook.Choices) != 2 {
+		t.Fatalf("the form offers %d answers: %+v", len(hook.Choices), hook.Choices)
+	}
+	// `auto` IS NOT AN ANSWER TO THIS QUESTION. It means "try for the whole
+	// organization and quietly take less", which leaves a company believing
+	// it has one hook when it has several.
+	for _, c := range hook.Choices {
+		if c.Value == string(config.ContainerWebhookAuto) {
+			t.Errorf("the form offers %q, whose outcome a person cannot "+
+				"predict from the answer they gave", c.Value)
+		}
+	}
 	var offered bool
 	for _, c := range hook.Choices {
 		if c.Value == hook.Default {
@@ -117,7 +129,58 @@ func TestTheHookChoiceDefaultsToOneOrganizationHook(t *testing.T) {
 		}
 	}
 	if !offered {
-		t.Errorf("the default %q is not among the choices %v", hook.Default, hook.Choices)
+		t.Errorf("the default %q is not among the choices %+v", hook.Default, hook.Choices)
+	}
+}
+
+// AND THE CONFIG KEEPS ALL THREE, which is the half a narrowed form must not
+// take with it.
+//
+// `auto` and a `repos` list under `false` are real arrangements that a YAML
+// company may hold and the pass still carries out. The form dropping a
+// question is a decision about what is worth asking somebody connecting from
+// a dashboard; it is not a decision about what the engine supports. And the
+// enum is SHARED — GitLab's `group_webhook` validates against the same list
+// and its reconcile branches on the same constants — so narrowing it here
+// would silently change another vendor.
+func TestNarrowingTheFormDoesNotNarrowTheConfig(t *testing.T) {
+	t.Parallel()
+	want := []config.ContainerWebhookMode{
+		config.ContainerWebhookAuto,
+		config.ContainerWebhookRequire,
+		config.ContainerWebhookNever,
+	}
+	if !slices.Equal(config.ContainerWebhookModes, want) {
+		t.Errorf("ContainerWebhookModes = %v, want %v: GitLab validates its "+
+			"own group_webhook against this list", config.ContainerWebhookModes, want)
+	}
+}
+
+// THE ORGANIZATION-WIDE ANSWER REQUIRES THE TOKEN, AND ONLY THAT ANSWER.
+//
+// Neither Required nor optional says this. Required blocked a connect that
+// needed nothing; optional let the API store a choice it could not carry out
+// — a company one apply later demanding an organization hook with nothing to
+// register it with.
+func TestTheOrgWideAnswerRequiresTheToken(t *testing.T) {
+	t.Parallel()
+	reqs := github.Requirements(nil, nil)
+	token := byField(reqs)["token"]
+
+	if token.RequiredWhen == nil {
+		t.Fatal("the organization token is gated on nothing, so it is either " +
+			"demanded of every connect or never demanded at all")
+	}
+	if token.RequiredWhen.Field != "provisioning.org_webhook" ||
+		token.RequiredWhen.Equals != string(config.ContainerWebhookRequire) {
+		t.Errorf("the token is gated on %+v, want the organization-wide "+
+			"coverage answer", token.RequiredWhen)
+	}
+	// AND THE GATE IS SHUT ON THE DEFAULT ANSWER, which is the whole point:
+	// a company taking the recommendation is asked for no credential.
+	if setup.Requirement.Needed(token, reqs) {
+		t.Error("the token is required of a company that has chosen nothing, " +
+			"so the recommended arrangement cannot be connected without one")
 	}
 }
 
