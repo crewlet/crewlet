@@ -515,7 +515,7 @@ on.
 
 Each domain's **operation ledger** — the table that answers "did the operation
 I published land here?" — is swept at **30 days**. The horizon comes from the
-client that actually re-asks: a machine retry lives inside a two-second wait,
+client that actually re-asks: a machine retry lives inside a five-second wait,
 but a seat carries an operation id forward and re-asks on its next wake, hours
 or a weekend later. An operation id older than that resolves `unknown` rather
 than `applied`, which is the honest answer once the row is gone.

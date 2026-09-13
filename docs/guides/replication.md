@@ -50,9 +50,13 @@ different with each.
   retry carries the same operation id so the ledger collapses a duplicate.
 
 `pending` is the outcome an ordinary busy fleet produces most often under load:
-the applier is 16 seconds into a bulk apply and a small write's two-second wait
-for its own record expires. The record is safe. A caller that treated `pending`
-as a failure would double every write it made during a burst.
+the applier is 16 seconds into a bulk apply and a small write's five-second wait
+for its own record expires. Five seconds is the applier's own stall grace
+divided by twelve — many times an ordinary batch commit and its linger, and
+short enough that a caller holding a request open learns "durable, unresolved
+here" rather than waiting out a node that has stopped applying. The record is
+safe. A caller that treated `pending` as a failure would double every write it
+made during a burst.
 
 ### `applied` is not permanent
 
@@ -148,7 +152,7 @@ One maximal bulk update is about 31 800 rows, which is **about 16 seconds of
 applier occupancy on every peer**. For those 16 seconds two things degrade
 fleet-wide without tripping any alarm:
 
-- an unrelated single-object write's two-second wait expires and returns
+- an unrelated single-object write's five-second wait expires and returns
   **`pending`** with its position and its lag — correct, and designed for;
 - a barriered read answers `behind` with a computed `retry_after_seconds` of
   about 16.

@@ -394,8 +394,9 @@ func (r *Runner) Anchor(ctx context.Context, subject string) (Position, error) {
 //
 // THIRTY DAYS, and it is derived from the client that actually retries rather
 // than from the machine one. The longest MACHINE retry is sixteen rounds
-// inside a two-second wait; but a SEAT is told to carry an op id forward and
-// re-ask, and it does that on its next wake — hours later, and after a weekend
+// inside a five-second wait ([DefaultResolveBudget]); but a SEAT is told to
+// carry an op id forward and re-ask, and it does that on its next wake —
+// hours later, and after a weekend
 // for a seat that only runs on a schedule. An op id that outlives its row
 // resolves `unknown` rather than `applied`, which sends a turn to re-decide
 // work it already did.
