@@ -1438,6 +1438,12 @@ func (e *Engine) snapshotLoop(s *stateLog, snap *statelog.Snapshotter,
 	// snapshotter reports every skip at info, which is right for the first
 	// case and much too quiet for the second.
 	var everTook bool
+	// AND THE REASON LAST REPORTED, because "much too quiet" was answered
+	// with a line on every tick, which is the other way to be unreadable: a
+	// state that has not changed is not news. A tick that changes nothing
+	// says nothing; the register is still stamped, so the fleet screen and
+	// the trim see every tick whether or not the log does.
+	var reported statelog.SkipReason
 	for {
 		wait := interval
 		m, err := snap.Take(ctx)
@@ -1451,20 +1457,22 @@ func (e *Engine) snapshotLoop(s *stateLog, snap *statelog.Snapshotter,
 		switch {
 		case err == nil:
 			everTook = true
+			reported = ""
 		case !isSkip(err):
+			// REPEATED DELIBERATELY, unlike a skip: this one RAN and
+			// errored, the error text is what says why, and a disk that
+			// went read-only is a fault an operator should keep seeing
+			// rather than a posture they have already been told about.
 			log.WarnContext(ctx, "statelog_snapshot_failed",
 				"error", err.Error(), "ever_took", everTook,
 				"detail", "this node's newest artefact is older than the "+
 					"interval, so a peer adopting from it replays further")
+			reported = statelog.SkipFailed
 			wait = min(snapshotSkipRetry, interval)
 		case !everTook:
 			reason, _ := statelog.Skipped(err)
-			log.WarnContext(ctx, "statelog_no_snapshot_yet",
-				"reason", string(reason), "retry_in", snapshotSkipRetry,
-				"detail", "this node has never taken a snapshot, so it can "+
-					"donate nothing to a peer that falls below the log's "+
-					"floor; the preconditions clear on their own as this node "+
-					"catches up and its peers publish their positions")
+			emitNoSnapshot(ctx, reportForSkip(reason, reported))
+			reported = reason
 			wait = min(snapshotSkipRetry, interval)
 		default:
 			wait = min(snapshotSkipRetry, interval)
@@ -1481,6 +1489,88 @@ func (e *Engine) snapshotLoop(s *stateLog, snap *statelog.Snapshotter,
 func isSkip(err error) bool {
 	_, skipped := statelog.Skipped(err)
 	return skipped
+}
+
+// noSnapshotReport is what one skipped tick puts in the log: which event, and
+// whether it is a warning. The zero value says nothing at all.
+type noSnapshotReport struct {
+	Event  string
+	Reason statelog.SkipReason
+	Warn   bool
+	Detail string
+}
+
+// reportForSkip decides what a tick that took no snapshot should say, given
+// why it skipped and what was last said.
+//
+// PURE OVER THE TWO REASONS, because the rule is the whole of the fix and
+// exercising it through a running snapshot loop would mean standing a fleet up
+// to assert a log level — which is how a rule ends up with no test at all.
+//
+// # Why sole_node is not a warning
+//
+// Every other reason here is a property of THIS NODE and clears by itself: it
+// catches up, it drains its deferred records, somebody frees disk. Warning is
+// right for those, because each one means a fleet that HAS peers currently has
+// no donor for them, and each one ends without anybody doing anything.
+//
+// `sole_node` is a property of the FLEET'S SHAPE, and it is the documented
+// default: one node is the whole supported topology for most companies, not a
+// degraded two. Nothing about it clears on its own — it ends when an operator
+// starts a second node — and there is nothing wrong while it holds, because a
+// single node's recovery artefact is a BACKUP, which [internal/backup] takes
+// and the trim's own backup term gates. So it is reported once, at info, as
+// the statement of posture it is.
+//
+// Warned on every tick it was the default topology's steady state: a line
+// every thirty seconds, for ever, on a healthy company — which is how an
+// operator learns to filter out the subsystem that also reports the four
+// conditions that are real. Its detail text made a claim that was false in
+// exactly this case, too: that the preconditions clear "as its peers publish
+// their positions", of a node that has no peers.
+//
+// The tick itself stays on the same retry, and cheaply: `sole_node` is the
+// FIRST term [statelog.Snapshotter] gates on, so a solo node's whole attempt
+// is one read of the positions register, and keeping it at that cadence is
+// what arms the donor within a tick of a second node appearing.
+func reportForSkip(reason, reported statelog.SkipReason) noSnapshotReport {
+	if reason == reported {
+		return noSnapshotReport{}
+	}
+	if reason == statelog.SkipSoleNode {
+		return noSnapshotReport{
+			Event:  "statelog_snapshot_sole_node",
+			Reason: reason,
+			Detail: "this node is the only member the fleet counts, so there " +
+				"is nobody to donate a snapshot to and none is taken; a single " +
+				"node's recovery artefact is a backup (retention.backup_owner) " +
+				"rather than a donor snapshot, and this ends when a second node " +
+				"joins",
+		}
+	}
+	return noSnapshotReport{
+		Event:  "statelog_no_snapshot_yet",
+		Reason: reason,
+		Warn:   true,
+		Detail: "this node has never taken a snapshot, so it can donate " +
+			"nothing to a peer that falls below the log's floor; the " +
+			"preconditions clear on their own as this node catches up and its " +
+			"peers publish their positions",
+	}
+}
+
+// emitNoSnapshot writes what [reportForSkip] decided, and nothing for the tick
+// it decided says nothing.
+func emitNoSnapshot(ctx context.Context, say noSnapshotReport) {
+	switch {
+	case say.Event == "":
+	case say.Warn:
+		log.WarnContext(ctx, say.Event, "reason", string(say.Reason),
+			"retry_in", snapshotSkipRetry, "detail", say.Detail)
+	default:
+		log.InfoContext(ctx, say.Event, "reason", string(say.Reason),
+			"recheck_in", snapshotSkipRetry, "detail", say.Detail)
+	}
 }
 
 // heldAfter is what a snapshot tick concluded this node holds.

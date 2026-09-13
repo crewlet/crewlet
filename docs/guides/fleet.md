@@ -360,10 +360,21 @@ Three things make that work, and all three are per node:
 deliberate — see [Backup and restore](backup.md). Until it trims, nothing can
 fall below the floor, and this path is never needed.
 
-Watch for **`statelog_no_snapshot_yet`**, which says a node has never
-successfully taken one and why. A fleet where every node logs it has no
+Watch for **`statelog_no_snapshot_yet`** (a warning), which says a node has
+never successfully taken one and why. A fleet where every node logs it has no
 recovery path: a member that falls behind will find nothing to adopt, months
 later, in the one situation where it matters.
+
+It is logged once per change of reason rather than on every retry, so the line
+appearing means the node's answer moved — and the absence of a repeat does not
+mean it recovered. `crewlet retention snapshots` is what says what each node
+holds right now; the log says when it changed.
+
+A **single node** is the one case that is not a warning at all. It skips for
+`sole_node` — there is nobody to donate to — and says so once, at info, as
+**`statelog_snapshot_sole_node`**. Nothing is wrong and nothing is pending: a
+solo deployment's recovery artefact is [`crewlet backup`](backup.md), and the
+skip ends by itself when a second node joins.
 
 ## See also
 

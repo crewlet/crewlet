@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -221,5 +222,107 @@ func writeTestSnapshot(t *testing.T, dir string, m statelog.Manifest) {
 	}
 	if err := os.WriteFile(base+".json", body, 0o600); err != nil {
 		t.Fatalf("write the manifest: %v", err)
+	}
+}
+
+// WHAT A SKIPPED TICK SAYS, which is the whole of [reportForSkip].
+//
+// The loop retries a skip every thirty seconds for as long as it holds, so
+// "report it" and "report it every time" are not the same instruction — and
+// the second one is what the default topology got. `sole_node` is the steady
+// state of a ONE-NODE company, which is the supported shape rather than a
+// degraded fleet, so warned per tick it is a line every thirty seconds for the
+// life of a healthy deployment.
+func TestASkippedTickSaysSomethingOnlyWhenTheReasonChanges(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		reason   statelog.SkipReason
+		reported statelog.SkipReason
+		event    string
+		warn     bool
+	}{
+		{
+			name:   "a solo node states its posture, at info",
+			reason: statelog.SkipSoleNode,
+			event:  "statelog_snapshot_sole_node",
+		},
+		{
+			name:     "and says it once, however long it holds",
+			reason:   statelog.SkipSoleNode,
+			reported: statelog.SkipSoleNode,
+		},
+		{
+			// A fleet WITH peers holding no donor is the condition the
+			// warning was written for, and it keeps it.
+			name:   "a node that cannot catch up warns",
+			reason: statelog.SkipUnhydrated,
+			event:  "statelog_no_snapshot_yet",
+			warn:   true,
+		},
+		{
+			name:     "and is not repeated either",
+			reason:   statelog.SkipUnhydrated,
+			reported: statelog.SkipUnhydrated,
+		},
+		{
+			// The reason MOVING is news in both directions: a fleet that
+			// gained a peer now has a real precondition to report, and
+			// one that lost its last peer is no longer in trouble.
+			name:     "a changed reason is reported again",
+			reason:   statelog.SkipDeferred,
+			reported: statelog.SkipSoleNode,
+			event:    "statelog_no_snapshot_yet",
+			warn:     true,
+		},
+		{
+			name:     "including back to sole_node",
+			reason:   statelog.SkipSoleNode,
+			reported: statelog.SkipLagging,
+			event:    "statelog_snapshot_sole_node",
+		},
+		{
+			// A hard failure stamps SkipFailed, so the next skip after
+			// one is news whatever it is.
+			name:     "and after a failure, whatever comes next",
+			reason:   statelog.SkipSoleNode,
+			reported: statelog.SkipFailed,
+			event:    "statelog_snapshot_sole_node",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			say := reportForSkip(tc.reason, tc.reported)
+			if say.Event != tc.event {
+				t.Errorf("event = %q, want %q", say.Event, tc.event)
+			}
+			if say.Warn != tc.warn {
+				t.Errorf("warn = %v, want %v — the level is the difference "+
+					"between a fleet with no donor and a company that needs "+
+					"none", say.Warn, tc.warn)
+			}
+			if tc.event != "" && say.Detail == "" {
+				t.Error("no detail: an operator reading this line has only " +
+					"the event name to go on")
+			}
+		})
+	}
+}
+
+// The sole-node line must not repeat the claim the warning makes, because on a
+// node with no peers it is false: nothing about being alone clears "as its
+// peers publish their positions".
+func TestTheSoleNodeLineDoesNotPromiseThatPeersWillFixIt(t *testing.T) {
+	t.Parallel()
+	say := reportForSkip(statelog.SkipSoleNode, "")
+	if strings.Contains(say.Detail, "peers publish") {
+		t.Errorf("sole-node detail claims peers will clear it: %q", say.Detail)
+	}
+	// It has to say what DOES cover a single node, or the reader is left
+	// believing their company has no recovery path at all.
+	if !strings.Contains(say.Detail, "backup") {
+		t.Errorf("sole-node detail does not name the artefact that covers a "+
+			"single node: %q", say.Detail)
 	}
 }
