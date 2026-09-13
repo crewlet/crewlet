@@ -39,6 +39,30 @@ var (
 	// activity attribution.
 	ErrDuplicateHandle = errors.New("duplicate handle")
 
+	// ErrDuplicateSeatName reports two seats carrying one name.
+	//
+	// A seat is referenced BY NAME: a unit's lead and every manages entry
+	// resolve to the first seat of that name, so a second one is silently
+	// unreachable through either. Two seats can differ in handle and still
+	// collide here, which is why the handle rule does not cover it.
+	//
+	// An ADMISSION rule (see [Organization.ValidateAdmission]): refused on
+	// a document somebody submits, reported as a warning on a stored
+	// revision that predates it.
+	ErrDuplicateSeatName = errors.New("duplicate seat name")
+
+	// ErrDuplicateUnitName reports two units carrying one name, anywhere in
+	// the tree.
+	//
+	// A unit is referenced BY NAME: a manages entry naming it expands to the
+	// first unit of that name, a root seat's unit reference moves the seat
+	// into it, and a masked credential is restored against it. Two teams
+	// called "Platform" under different departments read as distinct on
+	// every screen while each of those resolves one of them.
+	//
+	// An ADMISSION rule, like [ErrDuplicateSeatName].
+	ErrDuplicateUnitName = errors.New("duplicate unit name")
+
 	// ErrHumanSeatField reports a runtime-only field set on a human seat.
 	// Human seats are addressable but never spawned, so an LLM key or a
 	// budget on one is dead config at best and misleading at worst.

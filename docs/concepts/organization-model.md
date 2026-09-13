@@ -276,6 +276,30 @@ roles:
     handle: sr-eng        # Override auto-derived "senior-engineer"
 ```
 
+### Names and handles are unique
+
+Three identities must each name exactly one thing in the whole company:
+
+| Identity | Unique across | Why |
+|---|---|---|
+| Seat **handle** | Every seat, agent and human | It names the seat's inbox, its derived agent id and its external accounts. Two seats on one handle share an inbox, or an agent absorbs a person's activity. |
+| Seat **name** | Every seat, at any depth | A unit's `lead` and every `manages` entry name a seat and resolve to the first seat of that name. A second seat called the same is unreachable through either, even when its handle differs. |
+| Unit **name** | Every unit in the tree, not only siblings | A `manages` entry naming a unit and a root seat's `unit:` reference search the whole tree and resolve to the first match. Two teams called `Platform` under different departments read as distinct on every screen while each reference reaches only one of them. |
+
+Names are compared as the exact string, the same way a reference resolves them: `Platform` and `platform` are two different units. A seat or unit with no name (or a name that derives no handle) is refused by its own rule and is never reported as a duplicate of another. A refusal names every entity that shares the key, in one message per key, and where each one sits:
+
+```
+duplicate unit name "Platform": 2 units carry it (under unit "Engineering"; under unit "Product"). ...
+```
+
+#### Companies stored before the name rules
+
+Handle uniqueness has always been enforced. Seat name and unit name uniqueness are **admission rules**: they were added after companies existed, and a company that breaks one still runs exactly as it did before. So they are enforced where a document is *submitted* and reported where a stored one is *applied*:
+
+- **Refused on every write.** `PUT /config`, `PATCH /config`, a per-entity write, a `/setup` write, `crewlet config import` and `crewlet validate` all refuse a document with a duplicate seat or unit name, including a write to a company whose stored revision already carries one and a write that does not touch the duplicates. The write that corrects them is accepted.
+- **Applied with a warning.** A stored revision carrying a duplicate name (written by an earlier build, or activated by an older peer during a rolling upgrade) is applied by every node, a node boots on it, and `POST /config/reload` and a revert to it still work. Each node logs `org_admission_warning` once for every violation when it applies the epoch, naming the revision and the entities.
+- **Always readable.** `GET /config`, the revision reads, diffs, `crewlet config show` and `crewlet config export` serve the stored document as it is, so the duplicates can be seen and corrected.
+
 ### Management Hierarchy
 
 Hierarchy is encoded through `manages` relationships on roles. A Team Lead manages Engineers; a VP manages Team Leads. See [Agent Runtime](agent-runtime.md) for how the hierarchy drives agent execution.

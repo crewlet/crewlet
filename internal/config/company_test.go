@@ -426,6 +426,18 @@ roles:
 		rejects(t, "name: Acme\nroles:\n  - {name: \"Agent CEO\"}\n  - {name: \"agent ceo\"}\n", "duplicate handle")
 	})
 
+	t.Run("two seats sharing a name on distinct handles", func(t *testing.T) {
+		t.Parallel()
+		rejects(t, "name: Acme\nroles:\n  - {name: Dev, handle: dev-one}\n  - {name: Dev, handle: dev-two}\n",
+			"duplicate seat name")
+	})
+
+	t.Run("two units sharing a name in different branches", func(t *testing.T) {
+		t.Parallel()
+		rejects(t, "name: Acme\nunits:\n  - {name: Core, children: [{name: Platform}]}\n"+
+			"  - {name: Edge, children: [{name: Platform}]}\n", "duplicate unit name")
+	})
+
 	t.Run("a malformed explicit handle", func(t *testing.T) {
 		t.Parallel()
 		rejects(t, "name: Acme\nroles:\n  - {name: CEO, handle: \"Chief Exec\"}\n", "handle")

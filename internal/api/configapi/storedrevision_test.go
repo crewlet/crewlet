@@ -136,6 +136,138 @@ func TestReloadAndRevertRefuseARevisionThisBuildCannotRun(t *testing.T) {
 	}
 }
 
+// duplicateNamesDoc breaks both admission rules and no runnable one: two units
+// called "Platform" in different departments, each holding a seat called
+// "Engineer" on its own explicit handle. A build before those rules admitted
+// it, and a company running on it runs.
+const duplicateNamesDoc = companyDoc + `
+units:
+  - name: Engineering
+    children:
+      - name: Platform
+        roles:
+          - {name: Engineer, handle: platform-engineer, llm: zulu}
+  - name: Product
+    children:
+      - name: Platform
+        roles:
+          - {name: Engineer, handle: product-engineer, llm: zulu}
+`
+
+// correctedUnits is the same organization with every name unique.
+const correctedUnits = `{"units": [
+  {"name": "Engineering", "children": [{"name": "Engineering Platform",
+    "roles": [{"name": "Platform Engineer", "handle": "platform-engineer", "llm": "zulu"}]}]},
+  {"name": "Product", "children": [{"name": "Product Platform",
+    "roles": [{"name": "Product Engineer", "handle": "product-engineer", "llm": "zulu"}]}]}]}`
+
+// A STORED REVISION WITH DUPLICATE NAMES IS SERVED, AND A NEW WRITE KEEPING
+// THEM IS REFUSED, WHILE ONE CORRECTING THEM IS ACCEPTED.
+//
+// The admission rules are the rules a company written before them breaks.
+// Such a company has to stay readable and repairable, and nothing may add a
+// fresh duplicate or carry an old one forward through a write.
+func TestDuplicateNamesAreServedStoredAndRefusedOnAWrite(t *testing.T) {
+	t.Parallel()
+
+	t.Run("served", func(t *testing.T) {
+		t.Parallel()
+		s := newSurface(t, nil)
+		s.seedStored(t, duplicateNamesDoc, func(map[string]any) {})
+		for _, path := range []string{"/config", "/config?format=yaml", "/config/units/Platform"} {
+			if res := s.do(t, http.MethodGet, path, "", nil); res.Code != http.StatusOK {
+				t.Errorf("GET %s = %d, want 200: %s", path, res.Code, res.Body)
+			}
+		}
+	})
+
+	t.Run("a PUT keeping them is refused and a corrected one lands", func(t *testing.T) {
+		t.Parallel()
+		s := newSurface(t, nil)
+		s.seedStored(t, duplicateNamesDoc, func(map[string]any) {})
+
+		kept := s.do(t, http.MethodPut, "/config", duplicateNamesDoc, map[string]string{"X-Summary": "keep"})
+		if kept.Code != http.StatusBadRequest {
+			t.Fatalf("a PUT keeping duplicate names = %d, want 400: %s", kept.Code, kept.Body)
+		}
+		body := decode(t, kept)
+		detail, _ := body["detail"].(string)
+		if body["error"] != "validation_error" ||
+			!strings.Contains(detail, "duplicate unit name") || !strings.Contains(detail, "duplicate seat name") {
+			t.Errorf("the refusal does not name both rules: %v", body)
+		}
+
+		var corrected map[string]any
+		if err := json.Unmarshal([]byte(correctedUnits), &corrected); err != nil {
+			t.Fatal(err)
+		}
+		document := companyDoc + "\nunits: " + mustJSON(t, corrected["units"]) + "\n"
+		res := s.do(t, http.MethodPut, "/config", document, map[string]string{"X-Summary": "correct"})
+		if res.Code != http.StatusCreated {
+			t.Fatalf("a corrected PUT = %d, want 201: %s", res.Code, res.Body)
+		}
+	})
+
+	t.Run("a PATCH keeping them is refused and a correcting one lands", func(t *testing.T) {
+		t.Parallel()
+		s := newSurface(t, nil)
+		s.seedStored(t, duplicateNamesDoc, func(map[string]any) {})
+
+		kept := s.do(t, http.MethodPatch, "/config", `{"mission": "unrelated"}`, summaryHeader)
+		if kept.Code != http.StatusBadRequest {
+			t.Fatalf("a PATCH keeping duplicate names = %d, want 400: %s", kept.Code, kept.Body)
+		}
+		res := s.do(t, http.MethodPatch, "/config", correctedUnits, summaryHeader)
+		if res.Code != http.StatusCreated {
+			t.Fatalf("a correcting PATCH = %d, want 201: %s", res.Code, res.Body)
+		}
+		if document := s.activeDocument(t); !strings.Contains(document, "Engineering Platform") {
+			t.Errorf("the correction did not land: %s", document)
+		}
+	})
+
+	t.Run("a PUT introducing them is refused", func(t *testing.T) {
+		t.Parallel()
+		s := newSurface(t, nil)
+		s.seed(t, companyDoc, nil)
+		res := s.do(t, http.MethodPut, "/config", duplicateNamesDoc, map[string]string{"X-Summary": "add"})
+		if res.Code != http.StatusBadRequest {
+			t.Fatalf("a PUT introducing duplicate names = %d, want 400: %s", res.Code, res.Body)
+		}
+	})
+
+	// A reload and a revert are applies, held to the runnable rules only: a
+	// credential rotation on a company carrying an old duplicate must work.
+	t.Run("a reload and a revert of it are accepted", func(t *testing.T) {
+		t.Parallel()
+		s := newSurface(t, nil)
+		stored := s.seedStored(t, duplicateNamesDoc, func(map[string]any) {})
+		if res := s.do(t, http.MethodPost, "/config/reload", "", nil); res.Code != http.StatusCreated {
+			t.Fatalf("reload = %d, want 201: %s", res.Code, res.Body)
+		}
+		// Moved on through the API, so the fleet pointer and the store agree
+		// on what the revert is built over.
+		if res := s.do(t, http.MethodPut, "/config", companyDoc,
+			map[string]string{"X-Summary": "move on"}); res.Code != http.StatusCreated {
+			t.Fatalf("PUT = %d, want 201: %s", res.Code, res.Body)
+		}
+		res := s.do(t, http.MethodPost, "/config/revisions/"+stored+"/revert", "", nil)
+		if res.Code != http.StatusCreated {
+			t.Fatalf("revert = %d, want 201: %s", res.Code, res.Body)
+		}
+	})
+}
+
+// mustJSON renders a value as JSON, which is also valid YAML.
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
 // A PATCH OVER A PEER-EXTENDED DOCUMENT RESTORES ITS MASKS BEFORE VALIDATING.
 //
 // The strict reader refuses the merged document for the peer's field, and the

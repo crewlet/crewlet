@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -67,6 +70,72 @@ func TestARevisionThisBuildRefusesIsStillShownExportedAndDiffed(t *testing.T) {
 			t.Errorf("config %s did not show the stored document:\n%s",
 				strings.Join(args, " "), out)
 		}
+	}
+}
+
+// duplicateNamesRevision breaks both admission rules and no runnable one: two
+// units called "Platform", each with a seat called "Engineer" on its own
+// handle. A build before those rules admitted it.
+const duplicateNamesRevision = `{"name":"Nimbus",` +
+	`"providers":{"llm":{"main":{"type":"anthropic","model":"claude-sonnet-5",` +
+	`"api_keys":["${ANTHROPIC_API_KEY}"]}}},` +
+	`"units":[` +
+	`{"name":"Engineering","children":[{"name":"Platform",` +
+	`"roles":[{"name":"Engineer","handle":"platform-engineer","llm":"main"}]}]},` +
+	`{"name":"Product","children":[{"name":"Platform",` +
+	`"roles":[{"name":"Engineer","handle":"product-engineer","llm":"main"}]}]}]}`
+
+// duplicateNamesYAML is the same company as a person would write it.
+const duplicateNamesYAML = `
+name: Nimbus
+providers:
+  llm:
+    main: {type: anthropic, model: claude-sonnet-5, api_keys: ["${ANTHROPIC_API_KEY}"]}
+units:
+  - name: Engineering
+    children:
+      - name: Platform
+        roles: [{name: Engineer, handle: platform-engineer, llm: main}]
+  - name: Product
+    children:
+      - name: Platform
+        roles: [{name: Engineer, handle: product-engineer, llm: main}]
+`
+
+// A STORED COMPANY WITH DUPLICATE NAMES BOOTS AND EXPORTS, AND A FILE WITH
+// THEM IS NEITHER IMPORTED NOR VALIDATED.
+//
+// The two doors meet the same document differently on purpose: the store
+// holds what an older build admitted, and a file is somebody's new submission.
+func TestDuplicateNamesBootFromTheStoreAndAreRefusedFromAFile(t *testing.T) {
+	dir := t.TempDir()
+	cfg := bootstrapForStore(t, dir)
+	activateStored(t, cfg, duplicateNamesRevision)
+
+	company, err := companyFromStore(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("a node refused to boot on a stored company with duplicate names: %v", err)
+	}
+	if company == nil || len(company.Units) != 2 {
+		t.Fatalf("the booted company is not the stored one: %+v", company)
+	}
+	if out, errs, err := configCmd(t, cfg, "export"); err != nil {
+		t.Errorf("export refused a stored company with duplicate names: %v (%s)", err, errs)
+	} else if !strings.Contains(out, "product-engineer") {
+		t.Errorf("export did not print the stored company:\n%s", out)
+	}
+
+	file := filepath.Join(dir, "duplicates.yaml")
+	if err := os.WriteFile(file, []byte(duplicateNamesYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := configCmd(t, cfg, "import", file); err == nil ||
+		!strings.Contains(err.Error(), "duplicate unit name") {
+		t.Errorf("import of a file with duplicate names = %v, want a refusal naming the rule", err)
+	}
+	var out, errOut bytes.Buffer
+	if err := run([]string{"validate", "-config", cfg, "-company", file}, &out, &errOut); err == nil {
+		t.Errorf("validate accepted a file with duplicate names:\n%s%s", out.String(), errOut.String())
 	}
 }
 

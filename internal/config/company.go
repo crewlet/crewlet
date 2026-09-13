@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"iter"
 	"maps"
 	"regexp"
@@ -165,12 +166,50 @@ func DefaultCompany() Company {
 // rather than an error at load.
 var skillVariableKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// Validate reports every Tier B rule this config breaks, joined.
+// Validate reports every Tier B rule this config breaks, joined: the runnable
+// rules and the admission rules both.
+//
+// It is the check for a document somebody SUBMITS: a PUT, a PATCH, a
+// per-entity write, a setup write, `crewlet config import` and `crewlet
+// validate`. A stored revision is not held to it, because the admission rules
+// were added after companies existed; see [Company.ValidateRunnable].
 //
 // It validates the ORG as well: building the hierarchy is where duplicate
 // handles, unrunnable schedules and human-seat rule violations surface, and
 // a config that parses into a company nobody can run has not been validated.
 func (c *Company) Validate() error {
+	o := c.organization()
+	return errors.Join(c.validateRunnable(o), o.ValidateAdmission())
+}
+
+// ValidateRunnable reports only the RUNNABLE rules: everything a running
+// company depends on, which is every rule except the admission ones.
+//
+// It is the check for a revision about to be APPLIED (a node's reconcile
+// tick, a boot from the store, a reload and a revert) and for building an
+// epoch. A stored revision was admitted under the rules of the build that
+// wrote it, and one that breaks an admission rule added since still runs
+// exactly as it did before that rule existed. Refusing to apply it would take
+// a working company down on upgrade, or on the older half of a rolling one,
+// over a rule its author never saw. Its admission violations are reported by
+// [Company.ValidateAdmission] as warnings instead, and the next write that
+// keeps them is refused.
+func (c *Company) ValidateRunnable() error {
+	return c.validateRunnable(c.organization())
+}
+
+// ValidateAdmission reports only the ADMISSION rules: the rules a submitted
+// document is refused for and a stored revision is merely warned about.
+// Today they are the org's duplicate seat names and duplicate unit names; see
+// [org.Organization.ValidateAdmission].
+func (c *Company) ValidateAdmission() error {
+	return c.organization().ValidateAdmission()
+}
+
+// validateRunnable is [Company.ValidateRunnable] over an organization the
+// caller already built, so [Company.Validate] normalizes the tree once for
+// both classes.
+func (c *Company) validateRunnable(o *org.Organization) error {
 	var p problems
 
 	// An UNRESOLVED REDACTION MASK, first, because it is the one fault here
@@ -336,10 +375,10 @@ func (c *Company) Validate() error {
 		p.wrap(c.Units[i].validate(idx("units", i)))
 	}
 
-	// The hierarchy's own rules — duplicate handles, human seats carrying
-	// runtime fields, schedules with no runner — are the org model's, and
+	// The hierarchy's own rules (duplicate handles, human seats carrying
+	// runtime fields, schedules with no runner) are the org model's, and
 	// they only exist once the tree is built.
-	p.wrap(c.organization().Validate())
+	p.wrap(o.Validate())
 	return p.err()
 }
 

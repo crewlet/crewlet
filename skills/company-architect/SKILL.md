@@ -163,6 +163,14 @@ onboarding markers, and counterparty profiles. Its memory is gone.
 Settle `name` and each `handle` before the company runs, and warn the
 founder explicitly if they later ask to rename either.
 
+**Seat names and unit names are unique across the whole company.** A
+`lead` and a `manages` entry name a seat, a `manages` entry and a root
+seat's `unit:` name a unit, and each resolves to the first match anywhere
+in the tree. Two teams called `Platform` under different departments, or
+two seats called `Software Engineer` with different handles, are refused by
+`crewlet validate` and by every config write. Give each its own name
+(`Payments Platform`, `Software Engineer 2`).
+
 **Secrets are `${VAR}` references, never literals.** Every string field
 supports `${ENV_VAR}`. Put the reference in the YAML and the value in
 `.env`. Never write a token, key, or webhook secret into a config file,

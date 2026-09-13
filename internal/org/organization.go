@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"iter"
 	"slices"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -423,9 +424,25 @@ func (o *Organization) DanglingRefs() []DanglingRef {
 
 // ---- validation ------------------------------------------------------ //
 
-// Validate reports every rule the company breaks, joined. It assumes
+// Validate reports every RUNNABLE rule the company breaks, joined. It assumes
 // [Organization.Normalize] has run: the checks that need a fully wired
-// hierarchy — an inherited lead, a moved seat — cannot see it otherwise.
+// hierarchy, an inherited lead or a moved seat, cannot see it otherwise.
+//
+// # Two classes of rule
+//
+// RUNNABLE rules are what a running company depends on: a seat with no
+// handle owns no inbox, two seats on one handle share one, a lead-targeted
+// schedule on a human lead never fires. This method holds them, and nothing
+// may run a company that breaks one.
+//
+// ADMISSION rules were added after companies already existed, and a company
+// that breaks one still runs exactly as it did before the rule: two units
+// called "Platform" resolve references to the first of them today and did
+// yesterday. [Organization.ValidateAdmission] holds them. A document somebody
+// submits is refused for breaking one, while a STORED revision that breaks one
+// is applied with a warning, because refusing it would take a running company
+// down on upgrade (or on the older half of a rolling one) over a rule its
+// author never saw. The config layer decides which class a caller runs.
 func (o *Organization) Validate() error {
 	var errs []error
 	for _, r := range o.Roles {
@@ -447,27 +464,187 @@ func (o *Organization) Validate() error {
 	return errors.Join(errs...)
 }
 
+// ValidateAdmission reports every ADMISSION rule the company breaks, joined:
+// duplicate seat names and duplicate unit names. See the class note above
+// [Organization.Validate]. It assumes [Organization.Normalize] has run, so a
+// root seat moved into its unit is counted once, where it now sits.
+func (o *Organization) ValidateAdmission() error {
+	return errors.Join(o.validateSeatNames(), o.validateUnitNames())
+}
+
 // validateHandles enforces org-wide handle uniqueness.
 //
-// The handle is the canonical seat identity — inbox topic, party
-// resolution, external-id registration — so a collision makes one seat
-// silently unreachable. Two agents would share an inbox; an agent colliding
-// with a human would absorb that person's inbound activity. Fatal either
-// way.
+// The handle is the canonical seat identity (inbox topic, party resolution,
+// external-id registration), so a collision makes one seat silently
+// unreachable. Two agents would share an inbox; an agent colliding with a
+// human would absorb that person's inbound activity. Fatal either way.
+//
+// An EMPTY handle is skipped: a seat that derives none is already refused
+// by [Role.Validate], and counting every such seat as a collision with the
+// others reported one mistake two or three times over.
 func (o *Organization) validateHandles() error {
+	groups := groupBy(o.placedSeats(), func(s placedSeat) string { return s.role.Handle() })
 	var errs []error
-	owner := make(map[string]string)
-	for r := range o.AllRoles() {
-		h := r.Handle()
-		if first, dup := owner[h]; dup {
-			errs = append(errs, fmt.Errorf(
-				"%w %q: roles %q and %q — the handle is the canonical seat identity and must be unique",
-				ErrDuplicateHandle, h, first, r.Name))
-			continue
-		}
-		owner[h] = r.Name
+	for _, g := range groups {
+		errs = append(errs, fmt.Errorf(
+			"%w %q: %d seats derive it (%s). The handle is the canonical seat "+
+				"identity, naming its inbox, its agent id and its external "+
+				"accounts, so give each of these seats a distinct name or an "+
+				"explicit handle",
+			ErrDuplicateHandle, g.key, len(g.members), describeSeats(g.members, true)))
 	}
 	return errors.Join(errs...)
+}
+
+// validateSeatNames enforces org-wide seat name uniqueness.
+//
+// Compared as the EXACT string, because that is how [Organization.Role]
+// resolves a lead or a manages entry: two names differing only in case or
+// spacing are distinct references there, so they are distinct here. A name
+// that is empty or blank is skipped, since [Role.Validate] already refuses
+// it.
+func (o *Organization) validateSeatNames() error {
+	groups := groupBy(o.placedSeats(), func(s placedSeat) string {
+		if strings.TrimSpace(s.role.Name) == "" {
+			return ""
+		}
+		return s.role.Name
+	})
+	var errs []error
+	for _, g := range groups {
+		errs = append(errs, fmt.Errorf(
+			"%w %q: %d seats carry it (%s). A unit's lead and every manages "+
+				"entry name exactly one seat, and resolve to the first seat of "+
+				"that name, so give each of these seats its own name",
+			ErrDuplicateSeatName, g.key, len(g.members), describeSeats(g.members, false)))
+	}
+	return errors.Join(errs...)
+}
+
+// validateUnitNames enforces unit name uniqueness across the WHOLE tree, not
+// among siblings: every reference to a unit (a manages entry, a root seat's
+// unit reference) searches the entire tree and takes the first match.
+//
+// Compared as the exact string, which is the unit's identity key in the
+// config layer and what [Organization.Unit] matches on. An empty or blank
+// name is skipped, since [Unit.Validate] already refuses it.
+func (o *Organization) validateUnitNames() error {
+	groups := groupBy(o.placedUnits(), func(u placedUnit) string {
+		if strings.TrimSpace(u.unit.Name) == "" {
+			return ""
+		}
+		return u.unit.Name
+	})
+	var errs []error
+	for _, g := range groups {
+		places := make([]string, len(g.members))
+		for i, m := range g.members {
+			places[i] = m.place
+		}
+		errs = append(errs, fmt.Errorf(
+			"%w %q: %d units carry it (%s). A manages entry and a seat's unit "+
+				"reference name exactly one unit, and resolve to the first unit "+
+				"of that name, so give each of these units its own name",
+			ErrDuplicateUnitName, g.key, len(g.members), strings.Join(places, "; ")))
+	}
+	return errors.Join(errs...)
+}
+
+// placedSeat is a seat and where it sits, in words an operator can find in
+// their document.
+type placedSeat struct {
+	role  *Role
+	place string
+}
+
+// placedUnit is a unit and where it sits.
+type placedUnit struct {
+	unit  *Unit
+	place string
+}
+
+// placedSeats lists every seat in [Organization.AllRoles] order with its
+// place: "at the root", or the unit it is a direct member of.
+func (o *Organization) placedSeats() []placedSeat {
+	var out []placedSeat
+	for _, r := range o.Roles {
+		out = append(out, placedSeat{role: r, place: "at the root"})
+	}
+	for u := range o.AllUnits() {
+		for _, r := range u.Roles {
+			out = append(out, placedSeat{role: r, place: fmt.Sprintf("in unit %q", u.Name)})
+		}
+	}
+	return out
+}
+
+// placedUnits lists every unit depth-first, parents before children, with
+// its place: "at the top level", or the unit it is a child of.
+func (o *Organization) placedUnits() []placedUnit {
+	var out []placedUnit
+	var walk func(u *Unit, place string)
+	walk = func(u *Unit, place string) {
+		out = append(out, placedUnit{unit: u, place: place})
+		for _, c := range u.Children {
+			walk(c, fmt.Sprintf("under unit %q", u.Name))
+		}
+	}
+	for _, u := range o.Units {
+		walk(u, "at the top level")
+	}
+	return out
+}
+
+// duplicateGroup is every member sharing one key, in the order they were
+// met.
+type duplicateGroup[T any] struct {
+	key     string
+	members []T
+}
+
+// groupBy returns the keys carried by more than one member, each with all of
+// its members, in the order each key was first met. ONE GROUP PER KEY, so a
+// name used three times is one message naming all three rather than two
+// pairwise ones. An empty key is never a group: it is how a caller skips a
+// member whose missing identity another rule already reports.
+func groupBy[T any](members []T, key func(T) string) []duplicateGroup[T] {
+	index := make(map[string]int)
+	var all []duplicateGroup[T]
+	for _, m := range members {
+		k := key(m)
+		if k == "" {
+			continue
+		}
+		i, seen := index[k]
+		if !seen {
+			i = len(all)
+			index[k] = i
+			all = append(all, duplicateGroup[T]{key: k})
+		}
+		all[i].members = append(all[i].members, m)
+	}
+	var out []duplicateGroup[T]
+	for _, g := range all {
+		if len(g.members) > 1 {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
+// describeSeats renders colliding seats for one grouped message. byName says
+// what tells them apart: their names when they share a handle, their handles
+// when they share a name.
+func describeSeats(seats []placedSeat, byName bool) string {
+	parts := make([]string, len(seats))
+	for i, s := range seats {
+		if byName {
+			parts[i] = fmt.Sprintf("seat %q %s", s.role.Name, s.place)
+		} else {
+			parts[i] = fmt.Sprintf("handle %q %s", s.role.Handle(), s.place)
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 // validateLeadSchedules rejects an enabled lead-targeted schedule whose

@@ -307,7 +307,12 @@ func companyFromStore(ctx context.Context, bootstrapPath string) (*config.Compan
 	// the same rules again as it builds the epoch, but only this frame knows
 	// which revision it is and that an offline import is the way out: the
 	// node is not serving its API yet.
-	if err := company.Validate(); err != nil {
+	//
+	// The RUNNABLE rules only: a stored revision that breaks an admission
+	// rule added after it was written still runs, and the reconciler warns
+	// about it once it applies the epoch (see
+	// [config.Company.ValidateRunnable]).
+	if err := company.ValidateRunnable(); err != nil {
 		return nil, fmt.Errorf("the active revision %s cannot run on this build; "+
 			"import a corrected document with `crewlet config import` and start "+
 			"again: %w", active.ID, err)

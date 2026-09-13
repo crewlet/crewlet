@@ -645,7 +645,12 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	// Opening holds a stored revision to no rule, and a revert is an apply:
 	// an old revision this build can no longer run is refused naming the
 	// field, where the open used to fold it into the keyring hint above.
-	if invalid := company.Validate(); invalid != nil {
+	//
+	// The RUNNABLE rules only, like every apply: an old revision that breaks
+	// an admission rule added since still runs, and reverting to a working
+	// company must not be refused over a rule it predates. Each node warns
+	// about it when it applies the epoch.
+	if invalid := company.ValidateRunnable(); invalid != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "validation_error", "detail": invalid.Error(),
 			"hint": "revision " + target.ID + " does not pass this build's " +

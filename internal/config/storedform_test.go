@@ -2,12 +2,14 @@ package config_test
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // The stored form is the one an engine actually boots from: `crewlet config
@@ -178,6 +180,56 @@ func TestAStoredRevisionDecodesAndIsValidatedSeparately(t *testing.T) {
 	// which is the worst place to learn it.
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("a seat naming an unconfigured provider validated")
+	}
+}
+
+// THE ADMISSION RULES ARE A CLASS APART FROM THE RUNNABLE ONES.
+//
+// A document somebody submits is refused for a duplicate seat or unit name,
+// and a stored revision carrying one is applied: it was admitted before the
+// rule and runs as it always did. So Validate (the check for a submitted
+// document) must include them and ValidateRunnable (the check for applying a
+// revision) must not, and each class must be reachable on its own.
+func TestTheAdmissionRulesAreAClassApartFromTheRunnableOnes(t *testing.T) {
+	t.Parallel()
+	const doc = `
+name: Acme
+providers:
+  llm:
+    zulu: {type: anthropic, model: m, api_keys: ["${K}"]}
+units:
+  - name: Engineering
+    children:
+      - name: Platform
+        roles: [{name: Engineer, handle: platform-engineer, llm: zulu}]
+  - name: Product
+    children:
+      - name: Platform
+        roles: [{name: Engineer, handle: product-engineer, llm: zulu}]
+`
+	if _, err := config.ParseCompany([]byte(doc)); err == nil {
+		t.Fatal("a submitted document with duplicate names was accepted")
+	}
+	cfg, err := config.ParseCompanyDocument([]byte(doc))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	for _, sentinel := range []error{org.ErrDuplicateSeatName, org.ErrDuplicateUnitName} {
+		if err := cfg.Validate(); !errors.Is(err, sentinel) {
+			t.Errorf("Validate() = %v, want it to include %v", err, sentinel)
+		}
+		if err := cfg.ValidateAdmission(); !errors.Is(err, sentinel) {
+			t.Errorf("ValidateAdmission() = %v, want it to include %v", err, sentinel)
+		}
+	}
+	if err := cfg.ValidateRunnable(); err != nil {
+		t.Errorf("ValidateRunnable() = %v, want nil: duplicate names are admission rules", err)
+	}
+	// AND THE RUNNABLE CLASS STILL HOLDS ITS OWN. A split that lost the
+	// runnable rules would pass everything above.
+	cfg.Units[1].Children[0].Roles[0].LLM = config.PhaseLLM{Default: config.ProviderKeys{"nonexistent"}}
+	if err := cfg.ValidateRunnable(); err == nil {
+		t.Error("ValidateRunnable() accepted a seat naming an unconfigured provider")
 	}
 }
 

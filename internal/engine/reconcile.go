@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync/atomic"
 	"time"
 
@@ -89,6 +90,10 @@ type Reconciler struct {
 	// polling the pointer a second time.
 	onApply func(epoch int64, status configplane.ApplyStatus)
 
+	// log is where this loop reports. Every line the reconciler writes goes
+	// through it, so a caller that injects one sees all of them.
+	log *slog.Logger
+
 	now func() time.Time
 }
 
@@ -123,6 +128,15 @@ type ReconcilerOptions struct {
 
 	// OnApply observes every outcome.
 	OnApply func(epoch int64, status configplane.ApplyStatus)
+
+	// Log is where the reconciler reports, including the warnings it logs
+	// about an applied revision that does not meet this build's admission
+	// rules. Nil is the engine's own component logger. A FIELD rather than
+	// the package logger alone, because what a node warns about while it
+	// applies is part of the apply's contract, and a test asserting it
+	// through the process-wide logger would be racing every parallel test
+	// that logs.
+	Log *slog.Logger
 
 	// Now is injectable so a test can pin the freshness window.
 	Now func() time.Time
@@ -173,7 +187,12 @@ func (e *Engine) NewReconciler(opts ReconcilerOptions) (*Reconciler, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
+	logger := opts.Log
+	if logger == nil {
+		logger = log
+	}
 	return &Reconciler{
+		log:     logger,
 		nudged:  make(chan struct{}, 1),
 		engine:  e,
 		configs: opts.Store.Configs(),
@@ -248,7 +267,7 @@ func (r *Reconciler) Posture(ctx context.Context) configplane.Posture {
 		// answer to "am I behind?" is the one that keeps a working
 		// company working, because the alternative takes every node out
 		// of rotation on a database blip.
-		log.WarnContext(ctx, "posture_unknown", "error", err,
+		r.log.WarnContext(ctx, "posture_unknown", "error", err,
 			"detail", "cannot read the control plane; assuming this node is current")
 		return r.decide(configplane.PostureServe)
 	}
@@ -449,16 +468,67 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 	// before it builds anything, so a revision refused inside it has already
 	// mutated this node; refused here, it has touched nothing and the node
 	// is serving its previous epoch exactly as it was.
+	//
+	// The RUNNABLE rules only. A revision that breaks an admission rule was
+	// admitted by a build that did not have that rule (this node's own past,
+	// or an older peer mid-upgrade), and it runs exactly as it did before the
+	// rule existed; refusing it here is how a working company goes down on
+	// upgrade. It is applied, and warned about below.
 	cfg, err := config.DecodeCompany(document)
 	if err != nil {
 		return configplane.StatusError, nil, fmt.Errorf("engine: parse revision %s: %w",
 			target.RevisionID, err)
 	}
-	if invalid := cfg.Validate(); invalid != nil {
+	if invalid := cfg.ValidateRunnable(); invalid != nil {
 		return configplane.StatusError, nil, fmt.Errorf("engine: revision %s is not a "+
 			"runnable company; activate a corrected revision: %w", target.RevisionID, invalid)
 	}
-	return r.engine.Apply(ctx, cfg)
+	status, applied, err := r.engine.Apply(ctx, cfg)
+	if status == configplane.StatusOK {
+		r.warnAdmission(ctx, target, cfg)
+	}
+	return status, applied, err
+}
+
+// warnAdmission logs each admission rule an APPLIED revision breaks, once per
+// node per applied epoch.
+//
+// Once, without a record of what was already said: a tick returns before
+// applying an epoch this node has applied, so this runs once for each epoch
+// a node applies, and again only when a new epoch (a reload, a revert, the
+// next write) or a restart makes the node apply one. After a successful
+// apply, because a refused revision is reported by its refusal and a warning
+// beside it would be noise.
+//
+// One line per violation, and each carries what to do: the violation stays
+// in place while the revision is active, and the next write that keeps it is
+// refused, so an operator reading the log learns that before the write does.
+func (r *Reconciler) warnAdmission(ctx context.Context, target coord.Activation, cfg *config.Company) {
+	for _, violation := range leaves(cfg.ValidateAdmission()) {
+		r.log.WarnContext(ctx, "org_admission_warning",
+			"revision", target.RevisionID, "epoch", target.Epoch,
+			"detail", violation.Error(),
+			"hint", "the revision is applied as it stands, and any configuration "+
+				"write that keeps this is refused; correct it with PUT /config "+
+				"or PATCH /config")
+	}
+}
+
+// leaves flattens a joined error into the errors it joins, depth first, so
+// each violation is reported on its own.
+func leaves(err error) []error {
+	if err == nil {
+		return nil
+	}
+	joined, ok := err.(interface{ Unwrap() []error })
+	if !ok {
+		return []error{err}
+	}
+	var out []error
+	for _, inner := range joined.Unwrap() {
+		out = append(out, leaves(inner)...)
+	}
+	return out
 }
 
 // fetchRevision pulls the target's payload off the coordination store and
@@ -489,7 +559,7 @@ func (r *Reconciler) fetchRevision(ctx context.Context, target coord.Activation)
 		Summary: target.Summary, Payload: payload, CreatedAt: target.At,
 	}
 	if err := r.configs.Adopt(ctx, revision); err != nil {
-		log.WarnContext(ctx, "revision_not_cached", "revision", target.RevisionID,
+		r.log.WarnContext(ctx, "revision_not_cached", "revision", target.RevisionID,
 			"error", err, "detail", "the revision is applied; this node's config "+
 				"history will not show it and it will be re-fetched next time")
 	}
@@ -528,7 +598,7 @@ func (r *Reconciler) record(ctx context.Context, target coord.Activation,
 		NodeID: r.nodeID, Epoch: target.Epoch, RevisionID: target.RevisionID,
 		Status: string(status), Error: message, UpdatedAt: r.now(),
 	}); err != nil {
-		log.WarnContext(ctx, "apply_status_write_failed", "epoch", target.Epoch,
+		r.log.WarnContext(ctx, "apply_status_write_failed", "epoch", target.Epoch,
 			"error", err, "detail", "peers will read this node as stale")
 	}
 	r.publishApplied(ctx, target, status, applied, message)
@@ -565,7 +635,7 @@ func (r *Reconciler) publishApplied(ctx context.Context, target coord.Activation
 	// payload deliberately does not repeat it (see the type's own doc).
 	ev.Source = r.nodeID
 	if err := r.queue.Publish(ctx, topics.ConfigRevisionApplied, ev); err != nil {
-		log.WarnContext(ctx, "apply_event_publish_failed", "epoch", target.Epoch,
+		r.log.WarnContext(ctx, "apply_event_publish_failed", "epoch", target.Epoch,
 			"error", err, "detail", "this apply leaves no durable trail; "+
 				"the fleet view still has it for the next minute")
 	}
@@ -624,7 +694,7 @@ func (r *Reconciler) Run(ctx context.Context) {
 			timer.Stop()
 		}
 		if err := r.Tick(ctx); err != nil {
-			log.WarnContext(ctx, "reconcile_tick_failed", "error", err)
+			r.log.WarnContext(ctx, "reconcile_tick_failed", "error", err)
 		}
 		// RE-DECIDE AFTER EVERY TICK, so the admission gate moves on this
 		// loop rather than on whichever other caller happens to ask. The
@@ -658,7 +728,7 @@ func (r *Reconciler) listen(ctx context.Context) func() {
 	}
 	unsubscribe, err := r.queue.SubscribeStream(ctx, topics.ConfigRevisionActivated,
 		func(_ context.Context, _ string, ev *events.Event) {
-			log.DebugContext(ctx, "config_activation_nudge", "revision", nudgeRevision(ev))
+			r.log.DebugContext(ctx, "config_activation_nudge", "revision", nudgeRevision(ev))
 			select {
 			case r.nudged <- struct{}{}:
 			default:
@@ -668,7 +738,7 @@ func (r *Reconciler) listen(ctx context.Context) func() {
 			}
 		})
 	if err != nil {
-		log.WarnContext(ctx, "activation_nudge_unavailable", "error", err,
+		r.log.WarnContext(ctx, "activation_nudge_unavailable", "error", err,
 			"detail", "this node converges on its reconcile interval instead")
 		return func() {}
 	}
@@ -677,7 +747,7 @@ func (r *Reconciler) listen(ctx context.Context) func() {
 		// teardown that inherited it would leave the subscription behind
 		// on the broker.
 		if err := unsubscribe(context.WithoutCancel(ctx)); err != nil {
-			log.WarnContext(ctx, "activation_nudge_unsubscribe_failed", "error", err)
+			r.log.WarnContext(ctx, "activation_nudge_unsubscribe_failed", "error", err)
 		}
 	}
 }

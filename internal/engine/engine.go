@@ -89,7 +89,13 @@ func newCompany(c *config.Company, env *config.Resolver) (*Company, error) {
 	// It is also what lets everything below rely on the invariants instead
 	// of re-checking them: a validated role always yields a handle, so the
 	// seat walk needs no empty-handle guard.
-	if err := c.Validate(); err != nil {
+	//
+	// The RUNNABLE rules only. An epoch is built from stored revisions, and
+	// one that breaks an admission rule added after it was stored still runs
+	// as it always did; refusing to build it would take a working company
+	// down on upgrade. A submitted document met the admission rules at the
+	// door it came through. See [config.Company.ValidateRunnable].
+	if err := c.ValidateRunnable(); err != nil {
 		return nil, fmt.Errorf("engine: invalid company config: %w", err)
 	}
 	organization, err := c.Organization()

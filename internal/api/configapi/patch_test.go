@@ -406,10 +406,10 @@ func seedWithPeerField(t *testing.T, s *surface) {
 // It is how a test holds what this build could not have written itself: a
 // field only a newer peer knows, or a document the validator refuses, which
 // an older build or a later rule leaves in a store. Nothing here validates
-// the result, which is the point. It returns the revision id.
+// the document or the result, which is the point. It returns the revision id.
 func (s *surface) seedStored(t *testing.T, doc string, mutate func(map[string]any)) string {
 	t.Helper()
-	cfg, err := config.ParseCompany([]byte(doc))
+	cfg, err := config.ParseCompanyDocument([]byte(doc))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}

@@ -362,7 +362,11 @@ func (s *Service) Reload(ctx context.Context, summary, operator string) (Applied
 	// rule (see [config.DecodeCompany]), and re-publishing one this build
 	// cannot run would move every node onto a refusal. The answer names the
 	// field, and PUT or PATCH is how it is corrected.
-	if invalid := company.Validate(); invalid != nil {
+	//
+	// The RUNNABLE rules only. A reload is the credential-rotation gesture,
+	// and refusing it for an admission rule the stored document predates
+	// would make a rotation impossible until somebody restructured the org.
+	if invalid := company.ValidateRunnable(); invalid != nil {
 		return Applied{}, &ValidationError{Err: invalid}
 	}
 	if summary == "" {
