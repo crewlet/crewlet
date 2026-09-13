@@ -21,22 +21,23 @@ type resumeSpy struct {
 	requests []ResumeRequest
 	err      error
 
-	// relaunch makes the resumed Execute call run_sandbox again, which is
-	// the box-reuse branch.
-	relaunch func(ctx context.Context, run PendingRun)
+	// during runs inside the resumed Execute, before any error is returned:
+	// the turn calling run_sandbox again (the box-reuse branch), or an event
+	// redelivered to the seat while the turn runs.
+	during func(ctx context.Context, run PendingRun)
 }
 
 func (s *resumeSpy) Resume(ctx context.Context, req ResumeRequest) error {
 	s.mu.Lock()
-	err, relaunch := s.err, s.relaunch
+	err, during := s.err, s.during
 	if err == nil {
 		s.requests = append(s.requests, req)
 	}
 	s.mu.Unlock()
 	// Before the error, as a real turn does: a resumed executor can call
 	// run_sandbox again and break later in the same round.
-	if relaunch != nil {
-		relaunch(ctx, req.Run)
+	if during != nil {
+		during(ctx, req.Run)
 	}
 	return err
 }
@@ -235,6 +236,35 @@ func TestACompletionResumesTheSuspendedLoop(t *testing.T) {
 	rig.finished("t1")
 }
 
+// A START EVENT REDELIVERED WHILE THE RESUME RUNS must not park the seat for
+// good. At-least-once delivery can hand the seat its run's start again at any
+// moment, and the busy count it recomputes from the store counts the run as
+// holding the seat, because a claimed run is. The count was freed before the
+// resume and nothing touched it after the settle, so the seat stayed parked on
+// a run that no longer existed until the seat changed hands.
+func TestARedeliveredStartDuringAResumeDoesNotParkTheSeatForGood(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.coordinator.markBusy("swe")
+	rig.resumer.during = func(ctx context.Context, r PendingRun) {
+		if err := rig.coordinator.OnStarted(ctx, types.SandboxRunStarted{
+			AgentHandle: r.AgentHandle, TurnID: r.TurnID,
+		}); err != nil {
+			t.Errorf("OnStarted: %v", err)
+		}
+	}
+	rig.runner.Finish(Result{Success: true, Text: "done"})
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	rig.finished("t1")
+	if rig.coordinator.AwaitingSandbox("swe") {
+		t.Fatal("the seat stayed parked on a run that settled while its start was redelivered")
+	}
+}
+
 // Successive poll ticks can both fire before the first claim lands, and queue
 // delivery is at-least-once.
 func TestADuplicateCompletionResumesOnlyOnce(t *testing.T) {
@@ -367,7 +397,7 @@ func TestAResumeThatBrokeAfterActingKeepsItsClaim(t *testing.T) {
 func TestAResumeThatRelaunchedAndThenBrokeReclaimsTheRelaunchedBox(t *testing.T) {
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
-	rig.resumer.relaunch = func(ctx context.Context, r PendingRun) {
+	rig.resumer.during = func(ctx context.Context, r PendingRun) {
 		req := launchReq(r.TurnID)
 		req.ReuseBox = r.SandboxID
 		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
@@ -499,7 +529,7 @@ func TestCollectPausesTheBoxRatherThanTearingItDown(t *testing.T) {
 	// did — so it certified a branch the engine could never reach, while
 	// the real relaunch left the row in `resumed` and the settle below tore
 	// down the box the second job was running in.
-	rig.resumer.relaunch = func(ctx context.Context, r PendingRun) {
+	rig.resumer.during = func(ctx context.Context, r PendingRun) {
 		req := launchReq(r.TurnID)
 		req.ReuseBox = r.SandboxID
 		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {

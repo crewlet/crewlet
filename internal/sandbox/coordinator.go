@@ -585,6 +585,13 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		return nil
 	}
 	c.finish(ctx, latest, fenceOf(run))
+	// RECOUNTED, not assumed free. The count was cleared before the resume,
+	// but a start event redelivered while the turn ran recomputes it from
+	// the store, where this run, claimed, still held the seat; with no
+	// recount here that seat stayed parked on a run that no longer exists
+	// until the seat changed hands. The store now has no record of this run,
+	// so the recount keeps only the seat's other live runs.
+	c.syncBusy(ctx, run.AgentHandle)
 	return nil
 }
 
