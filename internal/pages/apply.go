@@ -260,6 +260,13 @@ type applyContext struct {
 	// brokerAt is the broker's own instant for this record. THE APPLIER
 	// NEVER READS A CLOCK: this is what makes an effective instant
 	// byte-identical on every node.
+	//
+	// It is also the ONLY instant this domain writes, which is why the
+	// record's authored one reaches no row here. The tracker keeps both,
+	// because it orders its history on a clamp it derives; this domain has
+	// no clamp and orders on `created_at` itself, so filling that column
+	// from a writer's own clock would let a skewed node file a change
+	// before one that provably preceded it on the log.
 	brokerAt time.Time
 
 	epoch map[string]any
@@ -267,10 +274,6 @@ type applyContext struct {
 
 // subject is the record's own subject.
 func (c applyContext) subject() Subject { return c.record.Subject }
-
-// authored is the writer's own instant, which is REPORTED and never ordered
-// on.
-func (c applyContext) authored() time.Time { return c.record.CreatedAt }
 
 // applyEviction records a node's removal from this log, or its readmission.
 //
@@ -291,6 +294,7 @@ func (a *Applier) applyEviction(ctx context.Context, tx *sql.Tx, at applyContext
 		return 0, fmt.Errorf("pages: the eviction at %s names no node", at.position)
 	}
 	if e.Readmitted {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := tx.ExecContext(ctx, `
 			UPDATE pages_evictions
 			SET readmitted_position = ?, version = ?

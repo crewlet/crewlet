@@ -343,6 +343,7 @@ func (s *Store) Rename(ctx context.Context, actor Actor, pageID string,
 		MintedAt: at,
 		Pattern:  statelog.PatternCreate,
 		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			current, _, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
 				return statelog.Decision{}, err

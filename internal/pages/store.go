@@ -118,17 +118,44 @@ func newTimeOrderedID() string {
 //
 // THE THREE OUTCOMES TRAVEL UNCHANGED. What this adds is the one thing the
 // framework cannot know: which of its refusals a caller can act on. A refused
-// create is a NAME ALREADY TAKEN, which is the only refusal here a person can
-// do something about without reading a log.
+// create is a NAME ALREADY TAKEN and a write that ran out of compare-and-set
+// rounds is A PAGE SOMEBODY ELSE KEPT MOVING — two different instructions to
+// whoever hit them, and the only two refusals here a person can act on without
+// reading a log.
+//
+// The conflict carries the framework's error along with this package's, so a
+// caller reasoning in either vocabulary matches. A taken title does not: "that
+// name is held in this container" is the whole of what happened, while the
+// framework's wording for it — the object already exists — names an object
+// nobody asked about.
 func (s *Store) publish(ctx context.Context, req statelog.Request) (statelog.Result, error) {
 	result, err := s.publisher.Publish(ctx, req)
+	return result, refusal(err, req.Subject.ID)
+}
+
+// refusal is that translation, as a function over values.
+//
+// Separate from the append because the append needs a broker, a store and a
+// log, and the two refusals that reach a person are reachable through none of
+// them on demand: an exhausted compare-and-set is sixteen lost races, which no
+// test can stage. A rule that can only be exercised by a race is a rule nobody
+// re-reads — and the branch a seat is told to act on had no producer at all
+// until this function existed, so [ErrConflict] was a sentinel the tool
+// surface matched on and nothing ever returned.
+func refusal(err error, subject string) error {
 	switch {
 	case err == nil:
-		return result, nil
+		return nil
 	case errors.Is(err, statelog.ErrExists):
-		return result, fmt.Errorf("%w: %s", ErrTitleTaken, req.Subject.ID)
+		return fmt.Errorf("%w: %s", ErrTitleTaken, subject)
+	case errors.Is(err, statelog.ErrConflict):
+		// The retry bound lives in the framework, which is where the
+		// rounds are counted; what does not live there is that a page is
+		// a thing a PERSON is editing, so the answer a seat needs is
+		// "read it again", not "the append failed".
+		return fmt.Errorf("%w: %s: %w", ErrConflict, subject, err)
 	}
-	return result, err
+	return err
 }
 
 // decide builds one record inside the snapshot's own transaction.
@@ -200,9 +227,6 @@ func (s ScopeSet) Validate() error {
 	}
 	return nil
 }
-
-// casRounds bounds a read-decide-write retry, on [tracker]'s reasoning.
-const casRounds = 16
 
 // The sentinels. Each is a fact a caller acts on differently, which is why
 // they are separate: a title somebody else holds is a rename to negotiate, a

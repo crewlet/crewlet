@@ -348,6 +348,7 @@ func encode(record any, extra map[string]json.RawMessage) ([]byte, error) {
 		return data, nil
 	}
 	var merged map[string]json.RawMessage
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := json.Unmarshal(data, &merged); err != nil {
 		return nil, fmt.Errorf("pages: encode: %w", err)
 	}

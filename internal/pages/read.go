@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -221,14 +222,12 @@ func (r *Reader) List(ctx context.Context, f Filter, level statelog.ReadLevel) (
 	if limit > MaxLimit {
 		limit = MaxLimit
 	}
-	args = append(args, limit, max(f.Offset, 0))
-
 	var out []Summary
 	served, err := r.log.Read(ctx, statelog.Query{
 		Level: level, Scope: ReadScope(f.Container, ""), Set: true,
 	}, func(tx *sql.Tx) error {
 		var err error
-		out, err = r.list(ctx, tx, where, args, limit)
+		out, err = r.list(ctx, tx, where, args, limit, max(f.Offset, 0))
 		return err
 	})
 	if err != nil {
@@ -242,9 +241,15 @@ func (r *Reader) List(ctx context.Context, f Filter, level statelog.ReadLevel) (
 
 // list is the listing inside one transaction, so [Reader.Get] can take the
 // children it reports from the same snapshot as the page itself.
+//
+// THE BOUND IS BOUND HERE, not by the caller. The placeholders are positional,
+// so a caller that appended the page window to `args` itself would be one
+// reordering away from paging the listing by a filter value — and the caller
+// that got it right would still be stating the same two numbers twice.
 func (r *Reader) list(ctx context.Context, tx *sql.Tx, where []string,
-	args []any, limit int) ([]Summary, error) {
+	args []any, limit, offset int) ([]Summary, error) {
 
+	args = append(slices.Clip(args), limit, offset)
 	rows, err := tx.QueryContext(ctx, `
 		SELECT p.id, p.container, p.parent_id, p.title, p.status, p.author,
 		       p.edit_version, COALESCE(k.skill, 0), COALESCE(k.onboarding, 0),
@@ -383,8 +388,8 @@ func (r *Reader) Get(ctx context.Context, ref string, level statelog.ReadLevel) 
 			return err
 		}
 		if detail.Children, err = r.list(ctx, tx,
-			[]string{"1 = 1", "p.parent_id = ?"}, []any{id, DefaultLimit, 0},
-			DefaultLimit); err != nil {
+			[]string{"1 = 1", "p.parent_id = ?"}, []any{id},
+			DefaultLimit, 0); err != nil {
 			return err
 		}
 		detail.Ancestors, err = r.ancestors(ctx, tx, page.ParentID)

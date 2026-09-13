@@ -219,6 +219,11 @@ func (s *ScopeSet) UnmarshalJSON(b []byte) error {
 	var terms []ScopeTerm
 	if err := json.Unmarshal(b, &terms); err != nil || len(terms) == 0 {
 		*s = ScopeSet{Terms: []ScopeTerm{{Kind: TermDomain}}}
+		//nolint:nilerr // WIDEST-ON-UNREADABLE IS THE CONTRACT, per the
+		// paragraph above: this runs on a node decoding a record a newer
+		// build wrote, and returning the decode error here would fail the
+		// envelope pass that exists precisely so such a record can be
+		// filed, gated and reprocessed rather than dropped.
 		return nil
 	}
 	*s = ScopeSet{Terms: terms}

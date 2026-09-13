@@ -175,6 +175,7 @@ func (p *Parser) directed(base notify.Inbound, targets []target, actor string, r
 	return out
 }
 
+// leadCopy is the fallback: the lead of the unit that owns the container.
 func (p *Parser) leadCopy(base notify.Inbound, container, actor string, reg *notify.Registry) []notify.Routed {
 	if container == "" {
 		return nil
@@ -188,6 +189,21 @@ func (p *Parser) leadCopy(base notify.Inbound, container, actor string, reg *not
 	// A lead writing in their own container must not wake themselves.
 	if lead == actor {
 		return nil
+	}
+	// AND THE LEAD IS CHECKED AGAINST THE ROSTER LIKE EVERY OTHER RECIPIENT.
+	// The lead map is built from one epoch's org and this parser outlives
+	// that epoch, so a lead whose seat was removed or whose handle was
+	// renamed is a handle the company no longer employs — and routing to one
+	// produces a delivery that resolves to nobody at the far end of the
+	// notification service, reported there as an undeliverable recipient
+	// rather than here, where the container that reached nobody is named.
+	// [Parser.directed] drops the same handles for the same reason.
+	if reg != nil {
+		if _, known := reg.ByHandle(lead); !known {
+			log.Debug("pages_lead_is_not_a_seat", "container", container,
+				"lead", lead, "page", base.Metadata[MetaTitle])
+			return nil
+		}
 	}
 	return []notify.Routed{{
 		Inbound: withVia(base, ViaLeadFallback),

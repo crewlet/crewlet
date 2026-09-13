@@ -27,6 +27,7 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext,
 	// the broker and claim another in its payload, and every node would
 	// write the second while the first was the one nobody else could
 	// have.
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := addressMatches(at, container, token, p.Container, p.Title); err != nil {
 		return 0, err
 	}
@@ -91,6 +92,7 @@ func (a *Applier) applyRename(ctx context.Context, tx *sql.Tx, at applyContext,
 	if err != nil {
 		return 0, fmt.Errorf("pages: the rename at %s: %w", at.position, err)
 	}
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := addressMatches(at, container, token, p.Container, p.Title); err != nil {
 		return 0, err
 	}
@@ -287,6 +289,7 @@ func (a *Applier) applyPatch(ctx context.Context, tx *sql.Tx, at applyContext,
 		// version except the newest.
 		head.Body = *p.Body
 		head.Version++
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		written, err := a.writeRevision(ctx, tx, at, head.ID, head.Version,
 			head.Title, head.Body, deref(p.Message), at.record.Actor)
 		if err != nil {
@@ -312,6 +315,7 @@ func (a *Applier) applyPatch(ctx context.Context, tx *sql.Tx, at applyContext,
 		changed = ChangeWatchers
 	}
 	if p.Comment != nil {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		written, kind, err := a.applyComment(ctx, tx, at, head.ID, *p.Comment)
 		if err != nil {
 			return 0, err
@@ -330,6 +334,7 @@ func (a *Applier) applyPatch(ctx context.Context, tx *sql.Tx, at applyContext,
 	// THE PRUNE RIDES THE COMMIT as the record's own list, so every node
 	// deletes exactly the same rows at exactly the same position.
 	for _, version := range p.RetiredRevisions {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := tx.ExecContext(ctx,
 			`DELETE FROM pages_revisions WHERE page_id = ? AND edit_version = ?`,
 			head.ID, version)
@@ -367,7 +372,7 @@ func (a *Applier) applyStatusChange(ctx context.Context, tx *sql.Tx,
 				"below this position", at.record.Op, at.position, id)
 		}
 		kind := ChangeRemoved
-		head.Status, kind = StatusTrashed, ChangeRemoved
+		head.Status = StatusTrashed
 		trashed := at.brokerAt
 		head.TrashedAt = &trashed
 		if at.record.Op == OpRestore {
@@ -421,6 +426,7 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext,
 		{"pages_titles", "page_id"},
 		{"pages_skills", "page_id"},
 	} {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := tx.ExecContext(ctx,
 			`DELETE FROM `+stmt.table+` WHERE `+stmt.column+` = ?`, id)
 		if err != nil {

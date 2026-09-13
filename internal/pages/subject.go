@@ -140,18 +140,34 @@ type Subject struct {
 	ID   string     `json:"i,omitempty"`
 }
 
-// ContainerSubject and the rest are the constructors.
+// ContainerSubject names one container, which is what a container's own
+// settings — its name, its purpose, its removal — arbitrate on.
 //
-// ONE PER KIND rather than a Subject{Kind, ID} literal at every call site,
-// because the title's id is COMPOSED — "<CONTAINER>.<normalised title>" — and
-// a composition written twice is a subject two writers disagree about.
+// There is a constructor per kind rather than a Subject{Kind, ID} literal at
+// every call site, because the title's id is COMPOSED —
+// "<CONTAINER>.<normalised title>" — and a composition written twice is a
+// subject two writers disagree about.
 func ContainerSubject(key string) Subject {
 	return Subject{Kind: KindContainer, ID: key}
 }
+
+// PageSubject names one page by its own id, which is what every change to a
+// page that is not an ADDRESS change contends on: a save, a status move, a
+// comment, a retitle. A page's id never moves, so two writers editing one page
+// always meet at the broker however often it has been renamed.
 func PageSubject(id string) Subject { return Subject{Kind: KindPage, ID: id} }
+
+// EvictionSubject names one node's standing in this log, so an eviction and
+// the readmission that inverts it arbitrate against each other and against
+// nothing else — a fleet shedding two nodes at once writes two independent
+// subjects rather than serialising on one.
 func EvictionSubject(nodeID string) Subject {
 	return Subject{Kind: KindEviction, ID: nodeID}
 }
+
+// GenerationSubject names one generation of the stream, which a reanchor
+// claims create-only: the generation number IS the arbitration unit, so two
+// nodes reacting to the same recreated stream cannot both install it.
 func GenerationSubject(gen uint32) Subject {
 	return Subject{Kind: KindGeneration, ID: fmt.Sprintf("%d", gen)}
 }

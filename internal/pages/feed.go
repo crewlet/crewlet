@@ -75,7 +75,7 @@ func (t *Translator) Translate(ctx context.Context, rec changefeed.Record) (chan
 		return changefeed.Delivery{}, false, fmt.Errorf(
 			"pages: read the envelope on %s: %w", rec.Key, err)
 	}
-	if !wakesAnybody(ObjectKind(envelope.Subject.Kind)) {
+	if !wakesAnybody(envelope.Subject.Kind) {
 		return changefeed.Delivery{}, false, nil
 	}
 

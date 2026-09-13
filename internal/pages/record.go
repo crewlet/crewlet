@@ -53,10 +53,18 @@ const (
 	// another by an applier or by an operator reading the log.
 	OpRetitle OpKind = "retitle"
 
-	// OpTombstone trashes a page, and OpRestore takes it back. Both are
-	// reversible and neither removes a row.
+	// OpTombstone trashes a page: it moves the head's status and stamps
+	// when, and it removes no row — which is what makes it reversible and
+	// what keeps the title claim held, so nobody takes the name of a page
+	// somebody may put back.
 	OpTombstone OpKind = "tombstone"
-	OpRestore   OpKind = "restore"
+
+	// OpRestore takes a trashed page back, clearing the stamp OpTombstone
+	// set. The pair is TWO OPS rather than one carrying a direction,
+	// because the op is both what the applier dispatches on and what an
+	// operator reads in the log — one op would leave the effect and the
+	// audit line to be reconstructed from a field inside the payload.
+	OpRestore OpKind = "restore"
 
 	// OpPurge removes a page permanently, and INSTALLS A GATE by its op
 	// rather than by its kind: its subject is an ordinary page.
@@ -107,10 +115,12 @@ type RecordEnvelope struct {
 	// Op is what the record does.
 	Op OpKind `json:"op"`
 
-	// CreatedAt is THE AUTHORED INSTANT, the writer's own clock. Reported,
-	// never ORDERED ON, and differenced against exactly one thing — the
-	// broker's stored instant, to publish a skew. Empty on a barrier,
-	// because nothing renders one.
+	// CreatedAt is THE AUTHORED INSTANT, the writer's own clock. It rides
+	// the record so an operator reading the log can see when a write was
+	// decided, and it is NEVER ORDERED ON and never written to a row: every
+	// instant this domain stores is the broker's, which is what makes one
+	// node's copy of a page byte-identical to another's. Empty on a
+	// barrier, because nothing renders one.
 	CreatedAt time.Time `json:"created_at,omitzero"`
 
 	// Gen is the generation. It is what makes an object's version a pure

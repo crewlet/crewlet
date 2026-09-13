@@ -2,6 +2,7 @@ package pages_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -9,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
 )
 
@@ -149,9 +151,66 @@ func (r *roundTrip) recordAt(seq uint64) []byte {
 	return payload
 }
 
+// A LEAD WHO IS NO LONGER A SEAT IS NOT THE ANSWER TO "nobody was named".
+//
+// The lead map is built from one epoch's org and a parser outlives that epoch,
+// so a lead whose seat was deleted or whose handle was renamed is a handle the
+// company no longer employs. Routing to one produces a wake that resolves to
+// nobody three layers away, in the notification service, where the log line
+// names a recipient rather than the container whose page activity reached no
+// one — and [pages.Parser] already drops exactly these handles when they are
+// mentions or watchers.
+func TestTheLeadFallbackDropsAHandleTheCompanyNoLongerEmploys(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+	create := r.recordAt(1)
+
+	// THE CONTROL FIRST: the same record, the same lead map, and a roster
+	// that still has the lead on it. Without this the case below passes
+	// identically if the record simply stopped waking anybody.
+	employed := r.routeVia(create, pages.Leads{"ENG": "lead"}, registry(t, "jane", "lead"))
+	if len(employed) != 1 || employed[0].To.Handle != "lead" {
+		t.Fatalf("control: a create in a container whose lead is on the roster "+
+			"woke %+v, want the lead", employed)
+	}
+
+	gone := r.routeVia(create, pages.Leads{"ENG": "lead"}, registry(t, "jane"))
+	if len(gone) != 0 {
+		t.Errorf("a create fell back to %+v, and that handle is not a seat — "+
+			"the wake can only be reported as undeliverable somewhere that "+
+			"cannot name the container it came from", gone)
+	}
+}
+
+// registry is the company roster, holding exactly these handles.
+func registry(t *testing.T, handles ...string) *notify.Registry {
+	t.Helper()
+	o := &org.Organization{Name: "nimbus"}
+	for _, handle := range handles {
+		o.Roles = append(o.Roles, &org.Role{
+			Name: strings.ToUpper(handle), DeclaredHandle: handle,
+		})
+	}
+	o.Normalize()
+	return notify.NewRegistry(o)
+}
+
 // route runs one committed record through BOTH halves — the feed's translator
 // and the parser — because the contract under test is that they agree.
+//
+// A NIL REGISTRY admits every handle, which is the honest answer for a
+// deployment with no organization loaded — and keeps these cases about the two
+// halves agreeing rather than about who is on the roster.
 func (r *roundTrip) route(payload []byte, leads pages.Leads) []notify.Routed {
+	r.t.Helper()
+	return r.routeVia(payload, leads, nil)
+}
+
+// routeVia is the same path against a named roster.
+func (r *roundTrip) routeVia(payload []byte, leads pages.Leads,
+	reg *notify.Registry) []notify.Routed {
+
 	r.t.Helper()
 	delivery, wake, err := pages.NewTranslator(nil).Translate(r.t.Context(),
 		changefeed.Record{Payload: payload, Key: "k"})
@@ -163,10 +222,7 @@ func (r *roundTrip) route(payload []byte, leads pages.Leads) []notify.Routed {
 			"notification")
 	}
 	parser := pages.NewParser(pages.ParserOptions{Leads: leads})
-	// A NIL REGISTRY admits every handle, which is the honest answer for a
-	// deployment with no organization loaded — and keeps this about the two
-	// halves agreeing rather than about who is on the roster.
-	routed, err := parser.Parse(r.t.Context(), types.RawWebhook{Body: delivery.Body}, nil)
+	routed, err := parser.Parse(r.t.Context(), types.RawWebhook{Body: delivery.Body}, reg)
 	if err != nil {
 		r.t.Fatalf("parse: %v", err)
 	}
