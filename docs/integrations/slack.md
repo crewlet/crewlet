@@ -32,6 +32,29 @@ app is a copy, a paste into Slack's **From an app manifest** flow, an install,
 and the two values pasted back. See the [manual setup](#manual-setup) for the
 same steps done entirely by hand.
 
+### Disconnecting
+
+Disconnect removes `integrations.slack` from the company document, which
+retires the transport: the engine stops talking to Slack and the per-seat
+webhook routes stop turning deliveries into work.
+
+**Tick *also remove the accounts Crewlet created* and each agent's
+`integrations.slack` block goes too, along with the sealed values it named** —
+`SLACK_BOT_TOKEN_*`, `SLACK_SIGNING_SECRET_*`, whatever the `${VAR}`s are
+called. That is safe here in a way it would not be elsewhere: Slack shows both
+values on the app's own settings page on every visit, so anything deleted can
+be read back by whoever owns the app. Leave it unticked and every credential
+stays where it is.
+
+**Deleting the apps is yours to do**, either way. Slack's `apps.manifest.delete`
+authenticates with an app-configuration token Slack issues only by hand — the
+same credential this surface exists because you may not have — so the
+disconnect names each agent's app and links to the page it is deleted from:
+**Settings › Basic Information › Delete App**.
+
+Until an app is deleted it can still post as that agent to anyone holding its
+bot token, which is the reason the handover is a list rather than a sentence.
+
 ## Configure in YAML
 
 `integrations.slack: {}` (org-level) is a marker that enables the outbound Slack **transport**; its one setting is [`typing_status`](#working-status-is-thinking). The Slack **MCP tool** server is a separate `mcp_servers` entry (`shared: false`). Per agent, the Slack identity has two consumers: the **transport** reads `role.integrations.slack` (`bot_token`, `signing_secret`, optional `channel`), and the **Slack MCP subprocess** reads `role.mcp_env.slack.SLACK_MCP_XOXB_TOKEN`. Name the same `${VAR}` in both — one credential, two readers, no secret duplicated:

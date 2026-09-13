@@ -31,10 +31,19 @@ import "slices"
 //
 // # And only what is genuinely dead
 //
-// A seat is named here only where the vendor can say its account is gone AND
-// its credential with it. A merely DISABLED account does not qualify: a token
-// on one is a credential that works again the moment anybody re-enables it, so
-// reporting it would delete the company's only record of a live secret.
+// A seat is named here only where its credential cannot strand the company: an
+// account the vendor says is gone takes its credential with it. A merely
+// DISABLED account does not qualify — a token on one works again the moment
+// anybody re-enables it, so reporting it would delete the company's only
+// record of a live secret.
+//
+// "Gone at the vendor" is the usual way to be sure, not the only one. Slack's
+// teardown names seats whose apps it cannot delete at all — only a person
+// holding an app-configuration token can — because Slack shows a bot token and
+// a signing secret on the app's own settings page on every visit, so the
+// person who owns the app can read back anything deleted here. The test is
+// whether the value can be recovered, and a show-once credential like
+// Datadog's application key fails it where Slack's passes.
 
 // Removal is one seat whose account a teardown removed.
 type Removal struct {

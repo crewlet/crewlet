@@ -75,8 +75,20 @@ func (e *Engine) configWriterOrNil() ConfigWriter {
 type vendorDisconnect struct {
 	engine *Engine
 	kind   integration.Kind
-	// pass is nil for a third-party app that registers nothing at all.
-	pass setup.Teardowner
+	// pass is nil for a surface with nothing to remove anywhere.
+	pass teardown
+}
+
+// teardown is the one method a disconnect calls, declared where it is called.
+//
+// NARROWER THAN [setup.Teardowner], which is a [setup.Pass] as well — a
+// reconcile, and the transient credential that reconcile needs. A disconnect
+// asks for neither, and requiring them meant the only step that removes
+// something WITHOUT a vendor to reconcile against, Slack's, could not be
+// expressed here at all: it would have had to carry a Run and a Needs that
+// nothing would ever call. Every real pass still satisfies this.
+type teardown interface {
+	Teardown(ctx context.Context, in setup.TeardownInput) (provision.Removed, error)
 }
 
 func (d vendorDisconnect) Disconnect(
@@ -85,14 +97,18 @@ func (d vendorDisconnect) Disconnect(
 	var removed provision.Removed
 	err := d.engine.dropBlock(ctx, d.kind, func(ctx context.Context) error {
 		if d.pass == nil {
-			// NOTHING REGISTERED AT THE VENDOR. Slack is the only
-			// surface here with no pass at all — its apps are made from
-			// the command line — so it is the only one that reaches
-			// this branch, and there is nothing this engine put at
-			// Slack for a teardown to take away. Dropping the block is
-			// the whole disconnect, and a third-party app with no
-			// teardown must still HAVE a disconnector or the intent
-			// sits on the row for ever.
+			// NOTHING TO REMOVE ANYWHERE, which no surface in this
+			// build is: every kind has a step, seven at a vendor and
+			// Slack's on the company document itself. It is kept
+			// because a kind added with a read-only pass would reach
+			// it, and a surface with no teardown must still HAVE a
+			// disconnector or the intent sits on the row for ever.
+			//
+			// IT USED TO BE SLACK'S WHOLE DISCONNECT, on the reading
+			// that a surface with no vendor pass has nothing to tear
+			// down. What it had was every seat's sealed app
+			// credentials, and leaving them drew the card as paused
+			// for ever. See [slackTeardown].
 			return nil
 		}
 		var err error
@@ -226,24 +242,35 @@ func (e *Engine) dropBlock(
 	return nil
 }
 
-// disconnectors pairs every pass this build can tear down with the seam the
-// loop removes it through.
+// disconnectors pairs every surface with the seam the loop removes it
+// through, and with the step that removes what it holds.
 //
-// EVERY SURFACE, not only the ones with something to remove. A third-party app
-// with no teardown still has a BLOCK, and a disconnect for it that no node
-// could complete would leave the intent on the fleet row for ever with the
-// screen reporting Disconnecting and nothing moving. Slack is that case, and
-// the only one: it is the single kind with no pass, so it is the single kind
-// with nothing this engine registered to take away. Datadog was in this
-// sentence and is not any more — it registers its own webhook and tears it
-// down again.
+// EVERY SURFACE, not only the ones with a vendor pass. A surface with no
+// teardown still has a BLOCK, and a disconnect for it that no node could
+// complete would leave the intent on the fleet row for ever with the screen
+// reporting Disconnecting and nothing moving.
+//
+// SLACK IS NOT THAT CASE, though it was written as the only one. It is the
+// single kind with no pass — its apps are created from the command line, and
+// only a person can delete one — which was read as "nothing this engine put
+// anywhere". What it put is a sealed bot token and signing secret on every
+// seat, in the company's own document, which is exactly where a disconnect
+// can reach. Its step is [slackTeardown] and it joins the same seam as the
+// other seven.
 func (e *Engine) disconnectors() map[integration.Kind]integration.Disconnector {
-	tearers := map[integration.Kind]setup.Teardowner{}
+	tearers := map[integration.Kind]teardown{}
 	for _, pass := range e.setupPasses() {
 		if tearer, ok := pass.(setup.Teardowner); ok {
 			tearers[pass.Kind()] = tearer
 		}
 	}
+	// THE ONE STEP THAT IS NOT A PASS. A type assertion over the passes
+	// cannot find it, because there is no Slack pass to assert on: nothing
+	// at Slack can be read or reconciled with the credentials a company
+	// holds. Registered by name for that reason, and it is the only such
+	// entry — an assertion that finds nothing is how the defect it fixes
+	// went unnoticed.
+	tearers[integration.KindSlack] = slackTeardown{engine: e}
 	out := map[integration.Kind]integration.Disconnector{}
 	for _, kind := range integration.Kinds {
 		out[kind] = vendorDisconnect{engine: e, kind: kind, pass: tearers[kind]}
