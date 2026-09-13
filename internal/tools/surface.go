@@ -228,6 +228,30 @@ func (s *Surface) Active() []string {
 	return slices.Clone(s.active)
 }
 
+// AnnotationsOf is one active tool's behavioural hints, as the registry holds
+// them.
+//
+// SEPARATE FROM [Surface.ToolDefs], because the two answer different clients:
+// a [llm.ToolDef] is what a MODEL is given — a name, a description and a
+// schema, and a model has no use for a destructive hint — while an MCP client
+// is a program that may ask a person before an irreversible call, and the hint
+// is the only thing it has to ask on.
+//
+// It exists because the bridge advertised none. A sandboxed coding agent was
+// handed a seat's whole grant with every tool unannotated, so its own client
+// could not tell `get_work_item` from `remove_work_item` — while the registry
+// behind it had carried both decisions the whole time.
+//
+// A name that is not in the universe answers the zero set, which is the
+// correct reading of "nothing was advertised" rather than four false hints.
+func (s *Surface) AnnotationsOf(name string) Annotations {
+	e, held := s.universe.Lookup(name)
+	if !held {
+		return Annotations{}
+	}
+	return e.Annotations
+}
+
 // ToolDefs renders what the model is offered this round.
 func (s *Surface) ToolDefs() []llm.ToolDef {
 	s.mu.Lock()

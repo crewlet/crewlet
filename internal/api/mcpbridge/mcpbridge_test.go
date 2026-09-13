@@ -14,6 +14,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -133,9 +134,21 @@ func newFixture(t *testing.T, offer ...string) *fixture {
 	t.Helper()
 	reg := tools.NewRegistry()
 	byName := map[string]*stubTool{}
+	// REGISTERED WITH THEIR HINTS, because that is what the bridge now
+	// advertises — and with two different shapes, so a case can tell a
+	// read from a write on the wire rather than only in the registry.
+	hints := map[string]tools.Annotations{
+		"read_page": {ReadOnly: crewletmcp.Yes, Idempotent: crewletmcp.Yes},
+		"post_message": {
+			ReadOnly: crewletmcp.No, Destructive: crewletmcp.No,
+			OpenWorld: crewletmcp.Yes,
+		},
+	}
 	for _, name := range []string{"read_page", "post_message"} {
 		tool := &stubTool{name: name}
-		if err := reg.Register(tool, tools.OriginBuiltin); err != nil {
+		if err := reg.RegisterWith(tool, tools.OriginBuiltin,
+			hints[name]); err != nil {
+
 			t.Fatalf("Register(%s): %v", name, err)
 		}
 		byName[name] = tool
@@ -807,4 +820,48 @@ func (f *fixture) token(t *testing.T, runID string) string {
 	tok := strings.TrimPrefix(url, f.server.URL+mcpbridge.PathPrefix)
 	f.bridge.Close(runID)
 	return tok
+}
+
+// TestTheBridgeAdvertisesTheHintsTheRegistryHolds is the finding. Every tool
+// the bridge served carried a name, a description and a schema and nothing
+// else — so a coding agent's own MCP client saw `read_page` and
+// `post_message` as identically unannotated, with nothing to ask a person on
+// before an irreversible call. The registry had carried both decisions the
+// whole time; the edge that hands the catalogue out dropped them.
+func TestTheBridgeAdvertisesTheHintsTheRegistryHolds(t *testing.T) {
+	t.Parallel()
+	sess := dial(t, newFixture(t).open(t))
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	listed, err := sess.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+
+	seen := map[string]*mcp.ToolAnnotations{}
+	for _, tool := range listed.Tools {
+		seen[tool.Name] = tool.Annotations
+	}
+	read, held := seen["read_page"]
+	if !held {
+		t.Fatal("read_page was not advertised")
+	}
+	if read == nil || !read.ReadOnlyHint {
+		t.Fatalf("read_page advertises %+v — a client cannot tell it from a "+
+			"write, which is the only thing it has to ask a person on", read)
+	}
+	write, held := seen["post_message"]
+	if !held {
+		t.Fatal("post_message was not advertised")
+	}
+	switch {
+	case write == nil:
+		t.Fatal("post_message advertises no hints at all")
+	case write.ReadOnlyHint:
+		t.Fatal("a write advertises read-only")
+	case write.OpenWorldHint == nil || !*write.OpenWorldHint:
+		t.Fatalf("post_message's open-world hint is %v — an absent one is "+
+			"what makes a private write read as a shared one",
+			write.OpenWorldHint)
+	}
 }

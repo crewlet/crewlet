@@ -48,7 +48,46 @@ BIN := crewlet
 # parallelism and CI runs the WHOLE suite under the detector, so a `make test`
 # without it would pass where CI fails. `make test-norace` is the escape
 # hatch, and says what it costs.
-GOTEST := $(GO) test -race -count=1
+#
+# -timeout IS NOT A BUDGET, it is a HANG DETECTOR, and it has to be stated
+# because go's own default is 10 minutes PER PACKAGE and internal/e2e does not
+# fit in it: that package starts a real engine, a real broker and the real API
+# per test, and measured 776s here under -race. Left at the default the gate
+# does not merely flap — it cannot pass on a machine this speed, and the
+# failure reads as a hung test rather than as a budget nobody set.
+#
+# Thirty minutes is 2.3x the measured run, which is enough for a runner half
+# this fast, and still kills a real deadlock twelve times sooner than the CI
+# job's own limit. It applies to every package because the flag is per test
+# BINARY: a unit package that hangs now dies in thirty minutes rather than ten,
+# which is the cost of having a gate that can pass at all.
+#
+# TEST_TIMEOUT is ci.yml's value, and the two must not drift: the Makefile is
+# the same command CI runs or it is a lie. It is defined BEFORE GOTEST, and
+# that is load-bearing rather than tidy: `:=` expands immediately, so with the
+# assignment below the reference the flag was handed an EMPTY value and `go
+# test` parsed the package list as its argument — `invalid value "./..." for
+# flag -timeout`. `make test` and therefore `make check` could not run at all.
+TEST_TIMEOUT := 30m
+
+GOTEST := $(GO) test -race -count=1 -timeout $(TEST_TIMEOUT)
+
+# The packages `test` runs: everything EXCEPT internal/e2e, which has its own
+# target and its own CI job.
+#
+# NOT A COVERAGE CUT — `check` depends on both, and ci.yml runs both. It is a
+# CONTENTION cut, and the measurement is unambiguous: on one commit, the
+# dedicated job (`go test ./internal/e2e/... -race`, alone on its runner)
+# passed in 5m24s, while the same cases inside `go test ./...` failed on all
+# three of their cluster-start attempts with `context deadline exceeded`
+# creating streams and KV buckets. internal/e2e stands up N engines, each
+# embedding its own NATS server, in ONE process; `./...` runs packages in
+# parallel; a two-core runner under the race detector cannot form a two-member
+# JetStream quorum inside the 30s provisioning budget while doing that.
+#
+# Running it in both places bought nothing — the same suite, twice, and only
+# the contended copy was red.
+TEST_PKGS = $(shell $(GO) list ./... | grep -v '/internal/e2e\(/\|$$\)')
 
 # The release targets, cross-compiled. Nothing else builds for anything but
 # the machine you are on, so a build tag or a platform-gated file that only
@@ -67,7 +106,7 @@ COMPANY ?=
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build crewlet install fmt tidy schema \
+.PHONY: help build crewlet install fmt tidy schema metrics-doc alarms-doc \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
         check fmt-check tidy-check signoff-check signoff-test vet lint test test-norace test-cross test-e2e \
         require-npm \
@@ -158,7 +197,7 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard is not what dash
 
 ##@ Gates — `make check` is all of them
 
-check: fmt-check tidy-check signoff-check signoff-test vet lint build test test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
+check: fmt-check tidy-check signoff-check signoff-test vet lint build test test-e2e test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
 	@echo
 	@echo "All local gates passed. One thing this did NOT cover, because it"
 	@echo "needs a service CI starts for itself:"
@@ -260,13 +299,14 @@ lint: ## run golangci-lint (ci: golangci-lint)
 # This includes ./internal/e2e/... — the end-to-end gates are ordinary Go
 # tests, so `make test-e2e` is the same suite again with -v, for when one of
 # them is what you are debugging.
-test: require-node ## the full suite under the race detector (ci: test (race))
-	$(GOTEST) ./...
+test: require-node ## the suite minus e2e, under the race detector (ci: test (race))
+	@test -n "$(TEST_PKGS)" || { echo "TEST_PKGS is empty - go list failed" >&2; exit 1; }
+	$(GOTEST) $(TEST_PKGS)
 
 # The suite without the detector. It is roughly twice as fast and it is NOT
 # what CI runs: a data race it cannot see is a data race that lands.
 test-norace: require-node ## the full suite without -race (faster; not a gate)
-	$(GO) test -count=1 ./...
+	$(GO) test -count=1 -timeout $(TEST_TIMEOUT) ./...
 
 # Every target reports in one run rather than stopping at the first failure —
 # ci.yml sets `fail-fast: false` on this matrix for the same reason: when a
@@ -340,6 +380,20 @@ gitlab-down: ## stop the GitLab stack
 schema: ## regenerate schema/*.schema.json from the config models
 	$(GO) run ./cmd/crewlet schema bootstrap -o schema/bootstrap.schema.json
 	$(GO) run ./cmd/crewlet schema company -o schema/company.schema.json
+
+# docs/reference/metrics.md is generated from the instrument catalogue for the
+# same reason and with the same guard — internal/statelog/metrics regenerates
+# it and compares, so an instrument added without running this is a failing
+# test rather than a reference an operator cannot find their metric in.
+metrics-doc: ## regenerate docs/reference/metrics.md from the instrument catalogue
+	$(GO) run ./internal/statelog/metrics/gen > docs/reference/metrics.md
+
+# docs/reference/alarms.md is generated from the alarm table, and diffed by
+# internal/statelog for the same reason: an operator meets an alarm for the
+# first time in a log line at an inconvenient hour, and the page is where they
+# look it up.
+alarms-doc: ## regenerate docs/reference/alarms.md from the alarm table
+	$(GO) run ./internal/statelog/alarmgen > docs/reference/alarms.md
 
 # The whole release pipeline, without a tag and without touching GitHub —
 # the same two commands release.yml's snapshot job runs, in the same order.

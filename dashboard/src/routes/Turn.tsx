@@ -738,7 +738,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                       // {thread}" — which external thread this turn was
                       // answering — and it used to be an unexplained
                       // truncated string under the seat's name.
-                      <span className="row gap-2" style={{ alignItems: "baseline" }}>
+                      <span className="row gap-2 baseline">
                         <code className="inline">{conversation}</code>
                         <span className="t-caption">the external thread this turn served</span>
                       </span>,

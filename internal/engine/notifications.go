@@ -35,7 +35,27 @@ import (
 type notifications struct {
 	mu       sync.Mutex
 	registry *notify.Registry
-	admits   notify.Admitter
+
+	// registryFor is the company [notifications.registry] was built from.
+	//
+	// IT IS THE RACE'S ONLY WITNESS. A seat's third-party identity is
+	// resolved from one revision's credentials and then WRITTEN into the
+	// live registry — by [Engine.refreshParties] on the apply, and by the
+	// reconcile loop's identity retry (see routing.go) on its own tick,
+	// which reads whatever company was current when it started. Nothing
+	// orders those two: a retry that began before an apply can finish
+	// after it, and it then registers the PREVIOUS revision's account
+	// over the one the apply just installed. A rotated credential then
+	// routes to nobody until the next tick happens to run cleanly, which
+	// is a delivery gap with no error anywhere.
+	//
+	// Comparing the pointer is exact rather than a heuristic: an apply
+	// publishes a new *Company and a new *Registry together under this
+	// mutex, so "the registry I am about to write was built from the
+	// company I resolved against" is a single identity test.
+	registryFor *Company
+
+	admits notify.Admitter
 
 	service    *notify.Service
 	mattermost *mattermost.Transport
@@ -88,6 +108,28 @@ type notifications struct {
 func (e *Engine) Registry() *notify.Registry {
 	e.notify.mu.Lock()
 	defer e.notify.mu.Unlock()
+	return e.notify.registry
+}
+
+// registryOf is the live registry, but only if it was built from c.
+//
+// WHAT IT IS FOR is stated on [notifications.registryFor]: an identity
+// resolved from one revision may only be written into the registry built for
+// that same revision. A caller that resolved against a company an apply has
+// since replaced gets nil and writes nothing — its work is stale, and the
+// apply that replaced it has already registered the identities its own
+// revision declares.
+//
+// NIL IS NOT A FAILURE, which is why this answers one value rather than the
+// three-valued shape a lookup would take. The caller's work was simply
+// superseded; the surface's own next pass re-resolves against the current
+// revision, and the apply it lost to has already done the registration.
+func (e *Engine) registryOf(c *Company) *notify.Registry {
+	e.notify.mu.Lock()
+	defer e.notify.mu.Unlock()
+	if c == nil || e.notify.registryFor != c {
+		return nil
+	}
 	return e.notify.registry
 }
 
@@ -177,7 +219,7 @@ func (e *Engine) refreshParties(c *Company) {
 	}
 
 	e.notify.mu.Lock()
-	e.notify.registry = reg
+	e.notify.registry, e.notify.registryFor = reg, c
 	chat := e.notify.mattermost
 	hosted := e.notify.slack
 	e.notify.mu.Unlock()
@@ -316,6 +358,15 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 			e.startConfluenceSkillSync(ctx, c)
 		}
 	}
+
+	// THE NATIVE BACKENDS' OWN EDGE, last so a company running both a
+	// vendor tracker and the native one keeps the vendor's parser first —
+	// the parsers are tried in order and the two answer different sources,
+	// so the order is cosmetic, but a stable one is what makes two boots
+	// of one config log the same thing.
+	nativeParsers, nativePrompts := e.nativeParsers(c)
+	parsers = append(parsers, nativeParsers...)
+	prompts = append(prompts, nativePrompts...)
 
 	svc, err := notify.New(notify.Options{
 		Queue:    e.backends.Queue,
@@ -674,7 +725,7 @@ func chatFingerprint(url, team, status string, seats []mattermost.SeatConfig) st
 	}
 	write(url, team, status)
 	for _, seat := range seats {
-		write(seat.Handle, seat.Token, seat.Username, seat.Channel)
+		write(seat.Handle, seat.Token, seat.Username)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

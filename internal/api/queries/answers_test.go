@@ -40,7 +40,7 @@ func seedEvents(t *testing.T, log *store.EventLog, n int, mutate func(int, *stor
 	for i := range n {
 		rec := store.EventRecord{
 			ID:       "e" + string(rune('a'+i%26)) + string(rune('0'+i/26)),
-			Type:     "task_started",
+			Type:     "agent_phase_started",
 			Source:   "engine",
 			Time:     base.Add(time.Duration(i) * time.Second),
 			Category: "task",
@@ -146,7 +146,7 @@ func TestAgentAnswersOneSeatsLiveState(t *testing.T) {
 	t.Parallel()
 	state := livestate.New()
 	state.Apply(&livestate.Envelope{
-		ID: "e1", Type: "task_started", Timestamp: "2026-06-14T12:00:00Z",
+		ID: "e1", Type: "agent_phase_started", Timestamp: "2026-06-14T12:00:00Z",
 		Category: "task", Payload: map[string]any{"role": "Lead", "task_id": "t-1"},
 	})
 	r := registryOver(t, queries.Sources{State: state})
@@ -411,19 +411,19 @@ func TestTheStoresOwnFiltersArePassedThrough(t *testing.T) {
 	db := openStore(t)
 	seedEvents(t, db.Events(), 6, func(i int, rec *store.EventRecord) {
 		if i%2 == 0 {
-			rec.Type = "task_completed"
+			rec.Type = "agent_turn_completed"
 			rec.Actor = "CTO"
 		}
 	})
 	r := registryOver(t, queries.Sources{Events: db.Events()})
 
-	got := ask(t, r, "events", map[string]any{"type": "task_completed"})
+	got := ask(t, r, "events", map[string]any{"type": "agent_turn_completed"})
 	rows, _ := got["events"].([]store.EventRecord)
 	if len(rows) == 0 {
 		t.Fatal("the type filter matched nothing")
 	}
 	for _, row := range rows {
-		if row.Type != "task_completed" {
+		if row.Type != "agent_turn_completed" {
 			t.Errorf("the type filter let %q through", row.Type)
 		}
 	}

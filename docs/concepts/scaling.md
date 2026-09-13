@@ -62,6 +62,27 @@ replicate between them (`stream.cluster.*`, `stream.replicas: 3`) — and
 somebody else runs. One estate either way, carrying both slots — see
 [what the fleet shares](#what-the-fleet-shares).
 
+**Every node is a full replica, and there is no thin-node role.** A node that
+runs the native tracker holds the whole corpus — every task, page, comment and
+turn the company has ever recorded — in its own database, applied from the same
+ordered log as every other node's. There is no cache tier, no thin replica, and
+no way to run a node that holds part of it.
+
+The knowledge index is the one place the *work* is divided, and only the work:
+every indexed document carries a
+[search shard](knowledge-system.md#every-document-carries-a-bucket), and above
+10 000 documents a fleet splits those 64 buckets between its live nodes so each
+scans a range rather than the whole corpus. Every node still **holds** every
+document — what is divided is CPU, so a node that does not answer costs the
+result a slice of relevance rather than a slice of the company, and the answer
+says so. See [Search](../guides/search.md).
+
+That is a deliberate trade and it is the reason the read path is simple: every
+answer can be served locally, a search scans one node's complete tables, and
+there is no routing decision to get wrong. What it costs is that the corpus is
+held N times, so the storage forecast scales with the fleet — see
+[Retention](../guides/retention.md).
+
 **The node id must be distinct and stable across restarts.** It comes from the
 deployment (`CREWLET_NODE_ID`, or `node.id` in the Tier A file) rather than
 being generated, because a fresh value per boot orphans whatever the previous

@@ -136,7 +136,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		t.Parallel()
 		backlog := s.needBacklog(t)
 		q := s.start(ctx, t)
-		const topic = "crewlet.events.task_created"
+		const topic = "crewlet.events.agent_phase_started"
 		const doomed, neighbour = "doomed-grp", "neighbour-grp"
 
 		for _, group := range []string{doomed, neighbour} {

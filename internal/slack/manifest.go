@@ -18,10 +18,11 @@ import (
 
 // BotScopes are the token scopes every agent app gets.
 //
-// TWO CONSUMERS SHARE THE TOKEN: the notification transport
-// (chat.postMessage, auth.test, assistant.threads.setStatus) and the Slack
-// MCP server the agent's tools run against. Most of the list is the second
-// one's.
+// TWO CONSUMERS SHARE THE TOKEN: the notification transport (auth.test,
+// assistant.threads.setStatus) and the Slack MCP server the agent's tools
+// run against. Almost the whole list is the second one's — the transport
+// resolves an identity and raises an indicator, and every message an agent
+// sends is the MCP server's call on this same token.
 //
 // The groups:* and mpim:* scopes are required EVEN IF agents never join a
 // private channel. The MCP server's startup channel-cache refresh is one
@@ -32,7 +33,7 @@ var BotScopes = []string{
 	"app_mentions:read",  // app_mention events — the thread-follow trigger
 	"channels:history",   // read public-channel messages
 	"channels:read",      // list public channels
-	"chat:write",         // post, and set the working indicator
+	"chat:write",         // MCP posts with it; the working indicator needs it too
 	"files:read",         // read shared files
 	"groups:history",     // read private-channel messages
 	"groups:read",        // list private channels — see the cache note above

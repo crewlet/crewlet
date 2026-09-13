@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -61,7 +62,7 @@ func TestPendingWithABrokenLibraryCacheInAChildProcess(t *testing.T) {
 	if os.Getenv(pendingChildEnv) == "" {
 		t.Skip("not a child process; see TestPendingReportsABrokenLibraryCacheInsteadOfPanicking")
 	}
-	_, _, err := Pending(t.Context(), filepath.Join(t.TempDir(), "state.db"), Options{})
+	_, err := Pending(t.Context(), filepath.Join(t.TempDir(), "state.db"), Options{})
 	if err == nil {
 		t.Fatal("Pending succeeded against a library cache that cannot exist")
 	}
@@ -95,7 +96,7 @@ func TestPendingRefusesADatabaseAnotherProcessHolds(t *testing.T) {
 		locksHeld.mu.Unlock()
 	}()
 
-	_, _, err = Pending(t.Context(), path, Options{})
+	_, err = Pending(t.Context(), path, Options{})
 	if !errors.Is(err, ErrLocked) {
 		t.Fatalf("Pending on a held database = %v, want ErrLocked — reading a "+
 			"file a live engine is writing is the case the lock exists for", err)
@@ -115,9 +116,9 @@ func TestPendingReleasesTheLockForTheMigrationThatFollows(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "seq.db")
 
-	if _, pending, err := Pending(t.Context(), path, Options{}); err != nil {
+	if schemas, err := Pending(t.Context(), path, Options{}); err != nil {
 		t.Fatalf("Pending: %v", err)
-	} else if len(pending) == 0 {
+	} else if len(estateOf(t, schemas, EstateNode).Pending) == 0 {
 		t.Fatal("a fresh database reported nothing pending")
 	}
 
@@ -144,12 +145,13 @@ func TestPendingPredictsWhatOpenApplies(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "agree.db")
 
-	applied, pending, err := Pending(t.Context(), path, Options{})
+	schemas, err := Pending(t.Context(), path, Options{})
 	if err != nil {
 		t.Fatalf("Pending: %v", err)
 	}
-	if len(applied) != 0 {
-		t.Errorf("a fresh database reports %d applied, want none", len(applied))
+	before := estateOf(t, schemas, EstateNode)
+	if len(before.Applied) != 0 {
+		t.Errorf("a fresh database reports %d applied, want none", len(before.Applied))
 	}
 
 	db, err := Open(t.Context(), path, Options{})
@@ -161,20 +163,34 @@ func TestPendingPredictsWhatOpenApplies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AppliedMigrations: %v", err)
 	}
-	if len(now) != len(pending) {
-		t.Fatalf("Open applied %d migrations, Pending predicted %d", len(now), len(pending))
+	if len(now) != len(before.Pending) {
+		t.Fatalf("Open applied %d migrations, Pending predicted %d", len(now), len(before.Pending))
 	}
 
 	// And afterwards there is nothing left to do, which is the answer the
 	// deploy gate exits 0 on.
 	_ = db.Close()
-	applied, pending, err = Pending(t.Context(), path, Options{})
+	schemas, err = Pending(t.Context(), path, Options{})
 	if err != nil {
 		t.Fatalf("second Pending: %v", err)
 	}
-	if len(pending) != 0 || len(applied) != len(now) {
-		t.Fatalf("after migrating: %d applied, %d pending", len(applied), len(pending))
+	after := estateOf(t, schemas, EstateNode)
+	if len(after.Pending) != 0 || len(after.Applied) != len(now) {
+		t.Fatalf("after migrating: %d applied, %d pending",
+			len(after.Applied), len(after.Pending))
 	}
+}
+
+// estateOf picks one estate's report out of Pending's answer.
+func estateOf(t *testing.T, schemas []Schema, want Estate) Schema {
+	t.Helper()
+	for _, s := range schemas {
+		if s.Estate == want {
+			return s
+		}
+	}
+	t.Fatalf("Pending reported no %s estate: %+v", want, schemas)
+	return Schema{}
 }
 
 // THE POOL BOUNDS REACH EVERY OPENER. Open used to apply them and Pending did
@@ -198,10 +214,41 @@ func TestOpenPreparedAppliesThePoolBounds(t *testing.T) {
 		t.Fatalf("openPrepared: %v", err)
 	}
 	defer func() { _ = unset.Close() }()
-	if got := unset.Stats().MaxOpenConnections; got != defaultMaxOpenConns {
+	if got := unset.Stats().MaxOpenConnections; got != defaultReaderConns {
 		t.Errorf("max open conns = %d, want the store default %d — an unset "+
 			"bound must reach the pool as \"you choose\", not as unbounded",
-			got, defaultMaxOpenConns)
+			got, defaultReaderConns)
+	}
+
+	// AND A DECLARED PIN WIDENS THE ESTATE THAT HOLDS IT, rather than being
+	// taken out of the readers' share. The whole reason PinnedWriters
+	// exists is that a pin counts against MaxOpenConns like any other
+	// connection, so a handle running three statelog domains on a fixed
+	// four leaves one connection for every reader on the node.
+	//
+	// AND ONLY THAT ESTATE. An applier writes to the replicated estate, so
+	// widening the node estate for its pins would be headroom nothing ever
+	// takes on the file that is not being written.
+	pinned, err := openPrepared(t.Context(), filepath.Join(t.TempDir(), "p.db"),
+		Options{PinnedWriters: 3}.forEstate(EstateReplicated))
+	if err != nil {
+		t.Fatalf("openPrepared: %v", err)
+	}
+	defer func() { _ = pinned.Close() }()
+	if got, want := pinned.Stats().MaxOpenConnections, defaultReaderConns+3; got != want {
+		t.Errorf("max open conns with 3 pinned writers = %d, want %d: a pin "+
+			"has to be ADDED to the readers' bound, not carved out of it",
+			got, want)
+	}
+	node, err := openPrepared(t.Context(), filepath.Join(t.TempDir(), "n.db"),
+		Options{PinnedWriters: 3}.forEstate(EstateNode))
+	if err != nil {
+		t.Fatalf("openPrepared: %v", err)
+	}
+	defer func() { _ = node.Close() }()
+	if got := node.Stats().MaxOpenConnections; got != defaultReaderConns {
+		t.Errorf("the node estate widened to %d for pins it never holds, want %d",
+			got, defaultReaderConns)
 	}
 	var busyMS int
 	if err := unset.QueryRowContext(t.Context(), `PRAGMA busy_timeout`).Scan(&busyMS); err != nil {
@@ -210,5 +257,64 @@ func TestOpenPreparedAppliesThePoolBounds(t *testing.T) {
 	if busyMS != int(defaultBusyTimeout.Milliseconds()) {
 		t.Errorf("busy_timeout = %dms, want the store default %dms",
 			busyMS, defaultBusyTimeout.Milliseconds())
+	}
+}
+
+// A MIGRATION'S NUMBER IS ITS ORDER, so two files may not share one.
+//
+// # Why this is a guard rather than a convention
+//
+// The prefix IS the ordering — [schemaVersions] sorts filenames and there is
+// no second source of truth — so two files at one number are ordered by
+// whatever follows the underscore, alphabetically. That is not an ordering
+// anybody chose, and it is not one anybody reading the directory would
+// predict: `0022_a…` runs before `0022_z…` for a reason nothing states.
+//
+// Nothing else notices. Both files apply, both get their own row in
+// `schema_migrations` (which keys on the base filename), and a fresh database
+// ends up identical to one that applied them in the other order — right up
+// until the day the two touch the same table, when one estate has a column
+// the other does not and the difference is a build artefact.
+//
+// The numbers are also CONTIGUOUS from 1, which is the half that catches the
+// other mistake: a gap is a migration somebody wrote, numbered, and never
+// committed — or one that was deleted after it had already been applied
+// somewhere, which is a divergence no later file can repair.
+func TestEveryMigrationHasItsOwnNumberAndNoneAreMissing(t *testing.T) {
+	t.Parallel()
+	for _, estate := range Estates {
+		t.Run(string(estate), func(t *testing.T) {
+			seen := map[int]string{}
+			for _, name := range SchemaVersions(estate) {
+				prefix, _, ok := strings.Cut(name, "_")
+				if !ok {
+					t.Errorf("%q has no numeric prefix, so its place in the "+
+						"order is whatever sorting says", name)
+					continue
+				}
+				n, err := strconv.Atoi(prefix)
+				if err != nil || n < 1 {
+					t.Errorf("%q is prefixed %q, which is not a migration "+
+						"number", name, prefix)
+					continue
+				}
+				if first, held := seen[n]; held {
+					t.Errorf("%q and %q are both migration %d — the prefix is "+
+						"the ordering, so these two run in alphabetical order "+
+						"of what follows it, which is an order nobody chose",
+						first, name, n)
+					continue
+				}
+				seen[n] = name
+			}
+			for n := 1; n <= len(seen); n++ {
+				if _, held := seen[n]; !held {
+					t.Errorf("the %s estate has %d migrations and none numbered "+
+						"%d — a gap is a file that was written and never "+
+						"committed, or one deleted after it had already run",
+						estate, len(seen), n)
+				}
+			}
+		})
 	}
 }

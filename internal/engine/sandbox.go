@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -1068,7 +1069,60 @@ func (e *Engine) prepareSeat(ctx context.Context, handle string, epoch int64, ow
 		}); err != nil {
 		return fmt.Errorf("attaching the sandbox control topic: %w", err)
 	}
-	return e.sandboxCoordinator.RecoverSeat(ctx, handle, owner, epoch)
+	if err := e.sandboxCoordinator.RecoverSeat(ctx, handle, owner, epoch); err != nil {
+		return err
+	}
+	// THE SEAT IS LIVE HERE, which is the fact the live projection has
+	// always had a branch for and nothing ever published: an
+	// `agent_spawned` is what clears a stale `terminated`, `offline` or
+	// `afk` from a seat that has moved to this node, so without it a seat
+	// whose last owner went away renders as broken until it happens to do
+	// some work.
+	e.publishSeatLifecycle(ctx, handle, types.AgentSpawned{})
+	return nil
+}
+
+// publishSeatLifecycle announces a seat arriving on or leaving this node.
+//
+// LIVE-ONLY, and deliberately: placement moves seats between nodes on every
+// rebalance, so a durable row per claim would fill the audit log with a fact
+// about scheduling rather than about the company — which is why neither type
+// is in [events.Category]'s map. What reads them is the live seat state, where
+// "this seat is running here now" is exactly the question.
+//
+// THE ROLE, NOT THE HANDLE, because every other event the projection keys on
+// carries the role name and a seat under two spellings is two rows.
+func (e *Engine) publishSeatLifecycle(ctx context.Context, handle string,
+	payload events.Payload) {
+
+	if e.backends == nil || e.backends.Queue == nil {
+		return
+	}
+	role := e.seatRole(handle)
+	if role == nil {
+		// A HANDLE THIS EPOCH NO LONGER HAS, which is the ordinary way a
+		// seat is released: the revision that removed it is already
+		// current. There is no role to key the row on, and inventing one
+		// from the handle would make a second row for the same seat.
+		return
+	}
+	var ev *events.Event
+	switch p := payload.(type) {
+	case types.AgentSpawned:
+		p.RoleName, p.Agent = role.Name, handle
+		ev = events.New(p, tracing.TraceOf(ctx))
+	case types.AgentTerminated:
+		p.RoleName, p.Agent = role.Name, handle
+		ev = events.New(p, tracing.TraceOf(ctx))
+	default:
+		return
+	}
+	ev.Source = role.Name
+	if err := e.backends.Queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
+		log.WarnContext(ctx, "seat_lifecycle_not_published", "type", ev.Type,
+			"seat", handle, "error", err.Error(),
+			"detail", "the live seat state keeps whatever this seat last showed")
+	}
 }
 
 // releaseSeat is the node's SeatDone hook.
@@ -1077,6 +1131,12 @@ func (e *Engine) prepareSeat(ctx context.Context, handle string, epoch int64, ow
 // while the seat is between owners must be held for its successor, and the box
 // it refers to is still real.
 func (e *Engine) releaseSeat(ctx context.Context, handle string) {
+	// FIRST, while the queue is still reachable and before anything this
+	// release tears down: a seat that went away with no event left its
+	// last state standing on every dashboard — stuck "working" in a phase
+	// that ended, because `terminated` was a state nothing could reach.
+	e.publishSeatLifecycle(ctx, handle,
+		types.AgentTerminated{Reason: "the seat was released by this node"})
 	// The seat's children die with its lease. The credentials in one ARE
 	// that seat's identity, so a child left running would let this node go
 	// on acting as a seat a peer has taken over — and the surface goes

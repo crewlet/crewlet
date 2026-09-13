@@ -678,15 +678,22 @@ func TestAClaimNeedsAPositiveTTL(t *testing.T) {
 
 func TestWhyTheClaimIsOneStatement(t *testing.T) {
 	t.Parallel()
-	// The measurement behind Claim's single conditional upsert. store.Tx
-	// begins DEFERRED, so two claimants doing read-then-write both take
-	// their snapshot before either writes. What the driver does next is safe
-	// but unusable: one commits and the other is REFUSED — turso with
-	// "database snapshot is stale". The loser therefore learns it lost
-	// through an error,
-	// indistinguishable from the store being down, which is the distinction
-	// Onboarded and Claim exist to keep. The upsert form gives that loser a
-	// definite answer instead.
+	// The measurement behind Claim's single conditional upsert.
+	//
+	// The driver's BeginTx always issues a plain BEGIN, so two claimants
+	// doing read-then-write both take their snapshot before either writes,
+	// and the loser's write is REFUSED with "database snapshot is stale".
+	// [store.DB.Tx] retries that on a fresh snapshot, which is what turns
+	// the refusal into a correct answer rather than an error the caller
+	// cannot tell from an outage: the loser RE-READS, sees the lease the
+	// winner took, and declines. So the claim never goes to two seats.
+	//
+	// That recovery is why the upsert form is still the right shape rather
+	// than a redundant one. It survives the race in ONE statement with no
+	// re-decision, so it does not depend on fn being safe to run twice —
+	// and a body doing read-then-write must re-read inside fn, never cache
+	// the first read, or the retry rewrites the winner's lease with a
+	// decision taken against a snapshot that no longer exists.
 	_, db := onboarding(t)
 	if _, err := db.SQL().ExecContext(t.Context(),
 		`INSERT INTO agent_onboarding_markers (agent_id, chain_hash, created_at, updated_at)
@@ -697,12 +704,19 @@ func TestWhyTheClaimIsOneStatement(t *testing.T) {
 	var (
 		mu      sync.Mutex
 		outcome []error
+		reads   atomic.Int64
 		read    sync.WaitGroup
 		done    sync.WaitGroup
 	)
 	read.Add(2)
 	for i := range 2 {
 		done.Go(func() {
+			// ONCE, because Tx may run fn again on a stale snapshot and a
+			// second Done takes the counter negative. The barrier belongs
+			// to the goroutine, not to the attempt — it exists to make both
+			// claimants read before either writes, which is a fact about
+			// the FIRST pass through.
+			var barrier sync.Once
 			err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 				var lease sql.NullInt64
 				if err := tx.QueryRowContext(t.Context(),
@@ -710,9 +724,10 @@ func TestWhyTheClaimIsOneStatement(t *testing.T) {
 					Scan(&lease); err != nil {
 					return err
 				}
+				reads.Add(1)
 				// Both readers are through before either writes — which is
 				// the whole race, made deterministic.
-				read.Done()
+				barrier.Do(read.Done)
 				read.Wait()
 				if lease.Valid {
 					return nil
@@ -729,22 +744,32 @@ func TestWhyTheClaimIsOneStatement(t *testing.T) {
 	}
 	done.Wait()
 
-	failures := 0
 	for _, err := range outcome {
 		if err != nil {
-			failures++
+			t.Errorf("a claimant got an error it cannot tell from an outage: %v — "+
+				"the retry is what stops a lost race being reported as one", err)
 		}
 	}
-	if failures == 0 {
-		t.Fatal("both transactions committed a claim on the same free lease — " +
-			"read-then-write in a deferred transaction is a lost update here")
+	if got := reads.Load(); got != 3 {
+		// Two first reads plus the loser's re-read. Exactly three, because
+		// this is the property: the loser ran fn again, and it ran it after
+		// the winner had committed.
+		t.Errorf("fn read %d times, want 3 (two claimants, one retry) — "+
+			"with no retry the loser would surface the conflict as an error, "+
+			"and with more the race is not what this test set up", got)
 	}
-	if failures == 2 {
-		t.Errorf("neither transaction claimed the free lease: %v", outcome)
+
+	// ONE LEASE, the winner's. The loser saw it on its re-read and declined,
+	// which is the answer a caller can act on.
+	var lease sql.NullInt64
+	if err := db.SQL().QueryRowContext(t.Context(),
+		`SELECT in_progress_until FROM agent_onboarding_markers WHERE agent_id='seat-1'`).
+		Scan(&lease); err != nil {
+		t.Fatalf("read back: %v", err)
 	}
-	// One winner, and one loser holding an error it cannot tell from an
-	// outage. That is the whole finding.
-	t.Logf("read-then-write in store.Tx: %d of 2 transactions refused (%v)", failures, outcome)
+	if !lease.Valid || (lease.Int64 != 100 && lease.Int64 != 101) {
+		t.Errorf("lease = %v, want exactly one claimant's", lease)
+	}
 }
 
 // --- a broken write path --------------------------------------------------

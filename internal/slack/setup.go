@@ -39,13 +39,23 @@ import (
 // seats it wants and submits one at a time, which is also what keeps each
 // write addressed by a handle rather than by a position in a list.
 func Requirements(handle string, seat *config.Role, resolve func(string) (string, bool)) []setup.Requirement {
-	var botToken, signingSecret, channel string
+	var botToken, signingSecret string
 	if seat != nil {
 		if block := seat.Integrations.Slack; block != nil {
-			botToken, signingSecret, channel = block.BotToken, block.SigningSecret, block.Channel
+			botToken, signingSecret = block.BotToken, block.SigningSecret
 		}
 	}
 
+	// TWO BOXES, AND THERE WAS A THIRD. A "Default channel" sat here while
+	// the transport had a `Send` whose empty-channel fallback was the seat's
+	// configured one — and that send had no caller in the tree. Every message
+	// an agent posts is the Slack MCP server's call on this same token, and
+	// it names its own channel, so the field this form asked for was read by
+	// nothing: an operator typed a channel id and the agent went on posting
+	// wherever it was addressed. A form that collects a value nothing reads is
+	// worse than one that does not ask, because the answer LOOKS like
+	// configuration. Where a seat's room genuinely belongs is `units[].channel`
+	// on the org chart, which the executor prompt renders as the team channel.
 	reqs := []setup.Requirement{
 		{
 			Field:   "bot_token",
@@ -110,25 +120,10 @@ func Requirements(handle string, seat *config.Role, resolve func(string) (string
 			// that has been followed.
 			Blocks: integration.FindingCredentialMissing,
 		},
-		{
-			Field:      "channel",
-			Label:      "Default channel",
-			Kind:       setup.KindText,
-			ConfigPath: "integrations.slack.channel",
-			Seat:       handle,
-			Required:   false,
-			// NO PATH, because there is nothing to fetch: this is a name the
-			// operator chooses. What it does carry is the step that is
-			// invisible until the agent stays silent, which is that a Slack
-			// bot reads and posts only in channels it has been invited to.
-			Help: "The channel this agent posts in when nothing else says. " +
-				"Invite its bot to that channel in Slack, or it cannot post there.",
-		},
 	}
 
 	reqs[0].Present, reqs[0].Resolved, reqs[0].Stored = setup.Held(botToken, resolve)
 	reqs[1].Present, reqs[1].Resolved, reqs[1].Stored = setup.Held(signingSecret, resolve)
-	reqs[2].Present, reqs[2].Resolved, reqs[2].Stored = setup.Plain(channel)
 	return reqs
 }
 

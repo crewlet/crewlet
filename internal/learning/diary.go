@@ -340,10 +340,10 @@ func (d *Diary) MarkRetrieved(ctx context.Context, ids []string, at time.Time) {
 // quarter. Expiring them by age would delete exactly what the kind exists to
 // protect.
 //
-// But they cannot be unbounded either: recall scans and cosines every
-// embedded row a seat owns, once per turn, at ~62 µs a row (the same
-// measurement the episode threshold is set from). Five hundred is that
-// threshold's budget — about 32 ms on the Plan phase of every turn — and a
+// But they cannot be unbounded either: recall scans every embedded row a seat
+// owns, once per turn, at 7.5 µs a row (the same measurement the episode
+// threshold is set from, re-measured at the pin). Five hundred is that
+// threshold's budget — about 3.9 ms on the Plan phase of every turn — and a
 // seat holding five hundred durable facts about its own work is already far
 // past what a person would.
 //

@@ -176,11 +176,19 @@ type searcher struct {
 	hits    []knowledge.Hit
 	queries []knowledge.Query
 	cannot  bool
+
+	// building reports the backend's index as still catching up. A real
+	// one that keeps no index does not implement this at all, which is
+	// why the fetcher reaches it through an optional interface — the
+	// method is here unconditionally because a fake cannot be two types.
+	building bool
 }
 
 func (s *searcher) Backend() string { return "fake" }
 
 func (s *searcher) CanSearch(*org.Role, *org.Organization) bool { return !s.cannot }
+
+func (s *searcher) Building(context.Context) bool { return s.building }
 
 func (s *searcher) Search(_ context.Context, q knowledge.Query) []knowledge.Hit {
 	s.mu.Lock()
@@ -996,5 +1004,38 @@ func TestARecallIsMarkedEvenWhenTheTurnsContextIsDone(t *testing.T) {
 	}
 	if !slices.Contains(ids, "m1") {
 		t.Errorf("marked %v, want the entry the filter picked", ids)
+	}
+}
+
+// A NODE STILL INDEXING SAYS SO, and says something different from "nothing
+// surfaced".
+//
+// The two sentences send a seat to opposite places: "nothing surfaced"
+// invites a focused re-search, which on a building index will also find
+// nothing; this one says the search cannot answer yet, so ask a colleague.
+// A seat on a freshly joined node reads the wrong one for the whole first
+// index build — and then acts on it, by writing a page that already exists.
+func TestABuildingIndexIsNotAnEmptyCompany(t *testing.T) {
+	t.Parallel()
+	model := &aux{answers: []string{"a query"}}
+	pages := &searcher{building: true, hits: []knowledge.Hit{{Title: "a real page"}}}
+	got := fetch(t, prefetch.Sources{
+		Knowledge: pages, Models: models{provider: model},
+	}, request(t)).RelevantKnowledge
+
+	if got != prefetch.BuildingKnowledgeHint {
+		t.Errorf("a building index rendered %q", got)
+	}
+	if got == prefetch.EmptyKnowledgeHint {
+		t.Error("a building index is indistinguishable from an empty company")
+	}
+	// AND THE QUERY CALL IS NOT SPENT. The auxiliary round trip would
+	// produce a query nothing can match, which is the same waste
+	// CanSearch's gate exists to avoid.
+	if model.calls() != 0 {
+		t.Errorf("a search against a building index spent %d model calls", model.calls())
+	}
+	if len(pages.asked()) != 0 {
+		t.Error("a building index was searched anyway")
 	}
 }

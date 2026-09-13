@@ -103,12 +103,20 @@ live-editable, so the first version does not need to be the last.
    sentence of backstory each. This is 90% of the config.
 3. **Where does the founder sit?** They should be *in* the chart — see
    the founder seat under invariants.
-4. **What surfaces does the work live on?** Tracker, knowledge base,
-   chat, code host. Point them at
+4. **What surfaces does the work live on?** Chat and the code host are
+   the ones to ask about; the tracker and the knowledge base **ship with
+   the engine and are on by default**, so a founder needs a positive
+   reason to bring Jira and Confluence rather than a reason not to. The
+   reason is usually about their people — a team already living in Jira
+   should not be asked to watch a second board — and never about the
+   agents, who cannot tell the difference. Say so, then point them at
    [Choosing your stack](https://docs.crewlet.ai/getting-started/choosing-your-stack)
-   rather than re-deriving the trade-offs; it covers hosted vs
-   self-hosted for each. **Do not wire integrations in the first pass**
-   — see the sequencing rule below.
+   rather than re-deriving the trade-offs. **Do not wire integrations in
+   the first pass** — see the sequencing rule below.
+
+   Give each unit a `project` and a `space` in the first pass regardless:
+   on the default backends that is the whole setup, and it is what gives
+   a team somewhere to file work and write things down.
 5. **What model, and what budget?** One `providers.llm` entry is enough
    to start. Ask whether they want a cost ceiling (`token_budget`).
 
@@ -121,9 +129,15 @@ A company with no integrations only reacts to schedules. That is the
 right first milestone, because it proves the engine, the model, and the
 config all work before any external credential is in play.
 
+It is not a hollow one: the tracker and the knowledge base are on by
+default, so that first turn can already file work and write pages, and
+the founder can watch it happen on the Work board and Pages screens. The
+integrations that come later are about where their PEOPLE are, not about
+what the company can do.
+
 **First pass** — no `integrations`, no `mcp_servers`, one LLM provider,
-the org chart, and one schedule on the top seat so a turn actually
-fires:
+the org chart with a `project` and `space` per unit, and one schedule on
+the top seat so a turn actually fires:
 
 ```yaml
 roles:
@@ -177,19 +191,31 @@ distinct variable per seat. Atlassian and GitHub mint nothing: create
 those accounts and tokens by hand, and their commands report which
 account each credential turned out to be.
 
-**The knowledge backend is single-homed.** The engine wires exactly one
-`knowledge.Searcher`, and Confluence is the backend behind it. Put the
-org-wide read scope in `knowledge.confluence_spaces` — and note a scope
-naming a backend the config does not configure is refused, because it
-reads as a working narrowing and narrows nothing.
+**The knowledge base and the tracker are each single-homed, and each is
+named.** `knowledge.backend` is `native` (the default), `confluence` or
+`none`; `tracker.backend` is `native`, `jira` or `none`. Two knowledge
+bases would make an agent's answer to "what do we already know about
+this" depend on which was asked, so naming `native` beside an
+`integrations.confluence` block is refused — and the same for the
+tracker. Leaving a backend unset **derives** it from whether the vendor
+block is there, so an existing config keeps what it had. The two axes are
+independent: a native tracker against a Confluence wiki is ordinary. Put
+the org-wide read scope in `knowledge.scope`, and note a scope on a
+backend switched off is refused, because it reads as a working narrowing
+and narrows nothing.
 
-**`integrations.*.project` / `.space` is identity, not read scope, and
-not a credential.** On a unit or root role it means "this team's home":
-where inbound activity with no better recipient routes, and where the
-team files work. It does **not** widen what agents can read (only the
-org-wide `knowledge.*` list does) and it is **not** an MCP credential
-(those live in `role.mcp_env`). This is the single most-confused part of
-the config — get it right and say which one you mean.
+**`project` / `space` on a unit or root role is identity, not read scope,
+and not a credential.** It means "this team's home": where inbound
+activity with no better recipient routes, and where the team files work
+and writes pages. It does **not** widen what agents can read (only
+`knowledge.scope` does) and it is **not** an MCP credential (those live
+in `role.mcp_env`). This is the single most-confused part of the config —
+get it right and say which one you mean. The keys are **vendor-neutral**
+by design: the same `project: ENG` names a native project and a Jira one,
+so switching backends never rewrites the org chart. Shape them as an
+upper-case letter plus 1–9 upper-case letters or digits (`ENG`, `PROD`),
+which is what every backend accepts, and never use the reserved `TS` or
+`HOME`.
 
 **`mcp_env` is per-agent tool credentials, keyed by MCP server name** —
 env vars for `stdio` servers, HTTP headers for `http` ones. A unit's
@@ -246,7 +272,9 @@ workers:
     system_prompt: |
       You research a narrow question against the team's knowledge base.
       Report only what you can point at.
-    tools: [confluence_search, confluence_get_page]
+    # On the default backends these are the engine's own. Swap them for
+    # the vendor's MCP tool names if the company runs Confluence.
+    tools: [search_knowledge, get_page, list_pages]
     output:
       type: object
       properties:

@@ -12,34 +12,10 @@ import (
 // worked.
 
 func init() {
-	events.Register[MessageSent]()
 	events.Register[ExternalNotification]()
 	events.Register[TurnTriggerSkipped]()
 	events.Register[NotificationsCoalesced]()
 	events.Register[NotificationSkipped]()
-}
-
-// MessageSent records a message the org put on a channel.
-type MessageSent struct {
-	Channel string `json:"channel"`
-	Sender  string `json:"sender"`
-	Content string `json:"content"`
-}
-
-// EventType is the "message_sent" wire type.
-func (MessageSent) EventType() string { return "message_sent" }
-
-// SummaryFor prefers the message's own sender: a message published by the
-// notification service on someone's behalf is still that person's message.
-func (e MessageSent) SummaryFor(actor string) string {
-	who := e.Sender
-	if who == "" {
-		who = actor
-	}
-	if e.Channel != "" {
-		return lead(who, "sent a message to "+e.Channel)
-	}
-	return lead(who, "sent a message")
 }
 
 // CoalescedMessage is one constituent inbound message inside a coalesced

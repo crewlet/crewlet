@@ -36,26 +36,13 @@ func TestSummaries(t *testing.T) {
 		payload: OrgStarted{OrgName: "Acme"},
 		want:    "Organization 'Acme' started",
 	}, {
-		name:    "a spawned seat is named by its role",
-		payload: AgentSpawned{RoleName: "Engineer"},
-		source:  "pool",
-		want:    "Engineer joined the organization",
+		name:    "a stop mirrors the start",
+		payload: OrgStopped{OrgName: "Acme"},
+		want:    "Organization 'Acme' stopped",
 	}, {
-		name:    "a termination carries its reason",
-		payload: AgentTerminated{RoleName: "Dev", Reason: "shutdown"},
-		want:    "Dev was terminated: shutdown",
-	}, {
-		name:    "a completed task names the seat and the task",
-		payload: TaskCompleted{RoleName: "Dev", TaskID: "T-42"},
-		want:    "Dev completed task T-42",
-	}, {
-		name:    "a failed task appends the error",
-		payload: TaskFailed{RoleName: "Dev", TaskID: "T-42", Error: "timeout"},
-		want:    "Dev failed task T-42: timeout",
-	}, {
-		name:    "a message names its sender and channel",
-		payload: MessageSent{Sender: "PM", Channel: "#backend"},
-		want:    "PM sent a message to #backend",
+		name:    "an assignment names the seat and what it is for",
+		payload: TaskAssigned{RoleName: "Dev", TaskID: "T-42"},
+		want:    "Dev was assigned task T-42",
 	}, {
 		name:    "a turn reports its model and token total",
 		payload: AgentTurnCompleted{RoleName: "CTO", Model: "gpt-4o", TotalTokens: 500},
@@ -287,19 +274,19 @@ func TestActorChain(t *testing.T) {
 		want:   "Dana",
 	}, {
 		name:    "the payload's role beats the publisher",
-		payload: TaskCompleted{RoleName: "Engineer", Agent: "a1"},
+		payload: TaskAssigned{RoleName: "Engineer", Agent: "a1"},
 		source:  "task_engine",
 		want:    "Engineer",
 	}, {
 		name:    "the publisher beats the agent id",
-		payload: TaskCompleted{Agent: "a1"},
+		payload: TaskAssigned{Agent: "a1"},
 		source:  "task_engine",
 		want:    "task_engine",
 	}, {
 		// The tail. A seat whose role and publisher are both unset is still
 		// attributable, which is the whole reason the chain has a fourth link.
 		name:    "the agent id answers when role and publisher are both empty",
-		payload: TaskCompleted{Agent: "a1"},
+		payload: TaskAssigned{Agent: "a1"},
 		want:    "a1",
 	}, {
 		name:    "an override that names nobody defers to the chain",
@@ -312,7 +299,7 @@ func TestActorChain(t *testing.T) {
 		want:    "a1",
 	}, {
 		name:    "nothing at all is the engine itself",
-		payload: TaskCreated{Title: "x"},
+		payload: ScheduledTaskFired{},
 		want:    "system",
 	}}
 
@@ -336,25 +323,30 @@ func TestSummaryLeadsWithTheResolvedActor(t *testing.T) {
 		want    string
 	}{{
 		name:    "from the payload's role",
-		payload: TaskCompleted{RoleName: "Dev", TaskID: "T-42"},
+		payload: TaskAssigned{RoleName: "Dev", TaskID: "T-42"},
 		source:  "task_engine",
-		want:    "Dev completed task T-42",
+		want:    "Dev was assigned task T-42",
 	}, {
-		// The event that has no role of its own: the creator is the
-		// publisher, and the summary names it.
+		// The event that has no role of its own: the publisher is what
+		// the chain resolves to, and the summary names it.
 		name:    "from the publisher",
-		payload: TaskCreated{Title: "Build API", TargetRole: "Engineer"},
-		source:  "PM",
-		want:    "PM created task 'Build API' for Engineer",
+		payload: OrgStarted{},
+		source:  "Acme",
+		want:    "Organization 'Acme' started",
 	}, {
 		name:    "from the agent id, when nothing else names anyone",
-		payload: TaskCompleted{Agent: "a1", TaskID: "T-42"},
-		want:    "a1 completed task T-42",
+		payload: TaskAssigned{Agent: "a1", TaskID: "T-42"},
+		want:    "a1 was assigned task T-42",
 	}, {
-		name:    "from the override",
-		payload: MessageSent{Sender: "PM", Channel: "#backend"},
-		source:  "notification_service.slack",
-		want:    "PM sent a message to #backend",
+		// The payload's OWN sender beats the publisher, because a
+		// message the bus published on somebody's behalf is still that
+		// person's message.
+		name: "from the payload's own sender",
+		payload: A2AMessageSent{
+			ChannelID: "chan-1", Sender: "PM", Recipient: "Dev",
+		},
+		source: "a2a_service",
+		want:   "PM sent A2A message on chan-1 → Dev",
 	}}
 
 	for _, tc := range cases {

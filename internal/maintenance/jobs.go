@@ -2,6 +2,7 @@ package maintenance
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/a2a"
@@ -128,6 +129,51 @@ func StoreJobs(db *store.DB) []Job {
 		// every tick would only report that it had.
 		Purge("chat_thread_follows", FollowRetention, db.ThreadFollows().Purge),
 	}
+}
+
+// OpsLedger is the slice of a state-log applier this sweep calls. Declared
+// here, by the consumer, like every other seam in this tree.
+type OpsLedger interface {
+	// PurgeOps deletes this node's operation rows applied before cutoff,
+	// reporting how many went.
+	PurgeOps(ctx context.Context, cutoff time.Time) (int64, error)
+}
+
+// StatelogJobs sweeps each registered domain's operation ledger.
+//
+// PER NODE, and that is what this job is FOR. Every `<domain>_ops` migration
+// says the table is swept and ships `<domain>_ops_swept_idx` for the range
+// delete — and nothing swept them, so a row was written for every applied
+// record and never deleted, on every node, for the life of the deployment. On
+// the census rate that is 357 MB a year of a table whose only reader asks
+// "did my operation land", a question nobody asks about a month-old op id.
+//
+// It is per node rather than a fleet singleton because each node owns its own
+// copy: the rows record which operations THIS applier wrote. Swept under the
+// singleton it would be tidied on one node and grow for ever on the others —
+// which looks exactly like a sweep that is working, to the operator who checks
+// the node it ran on.
+func StatelogJobs(ledgers map[string]OpsLedger, retention time.Duration) []Job {
+	names := make([]string, 0, len(ledgers))
+	for name := range ledgers {
+		names = append(names, name)
+	}
+	// SORTED, so the log's job order is the same on every node and every
+	// tick. A map's iteration order would make one node's sweep line look
+	// like a different sweep from its peer's.
+	slices.Sort(names)
+
+	jobs := make([]Job, 0, len(names))
+	for _, name := range names {
+		ledger := ledgers[name]
+		jobs = append(jobs, Job{
+			Name: name + "_ops", Horizon: retention, PerNode: true,
+			Run: func(ctx context.Context, _, cutoff time.Time) (int64, error) {
+				return ledger.PurgeOps(ctx, cutoff)
+			},
+		})
+	}
+	return jobs
 }
 
 // CounterpartyStore is the slice of the counterparty profiles this sweep

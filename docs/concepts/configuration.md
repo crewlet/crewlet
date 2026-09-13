@@ -149,6 +149,18 @@ The engine boots in this order:
    - **Row present**: apply the payload, which spawns the full company
    - **No row**: engine stays in the **unconfigured** state — the API keeps serving so an operator can push the first revision via `PUT /config` or `crewlet config import`
 
+**A boot that fails leaves nothing running.** Any step above can fail — an
+unreachable broker, a keyring the node cannot open, a provider whose model is a
+`${VAR}` nothing sets — and when one does the node unwinds everything the steps
+before it started, in the order a shutdown uses: the state log's apply loops and
+its snapshot donor, the shared MCP child processes, every duty loop, this node's
+publish admission, and the store file and stream it opened itself. So a
+supervised `crewlet run` retries onto a clean host rather than contending with
+its own previous attempt — which matters most for the store, since one process
+owns that file exclusively and a second open behind a leaked handle fails with
+a message about locking that names neither the original failure nor the file.
+The `engine_boot_abandoned` line is what says the unwind finished.
+
 ### Two equivalent bootstrap entry points
 
 **Option 1 — bootstrap before run (CLI):**
@@ -480,7 +492,24 @@ Two combinations are worth calling out:
 **CORS** defaults to same-origin. The dashboard is served by this process so it
 needs no entry; list any other browser origin explicitly in
 `api.auth.allowed_origins`. The previous `*` default let any site a logged-in
-operator happened to visit read every endpoint.
+operator happened to visit read every endpoint, so `*` is now **refused at
+boot** rather than honoured — name each site.
+
+An entry is compared against the browser's `Origin` header exactly, which is
+always `scheme://host[:port]`: an entry with no scheme, a trailing slash or a
+path matches nothing and is refused for that reason, because an allow-list that
+looks configured and never matches fails in a browser console this engine never
+sees. A permitted origin's response carries `Access-Control-Allow-Origin` and
+`Vary: Origin`; an unlisted one carries neither and the browser blocks it — it
+is not refused with a status, because a same-origin `POST` carries an `Origin`
+too and the default allow-list is empty.
+
+Preflights are answered **before** the auth guard, and deliberately: a browser
+sends the `OPTIONS` itself with no `Authorization` header, so answering it
+behind the guard would be a `401` on every cross-origin write and the real
+request would never be sent. Only `Authorization` and `Content-Type` are
+permitted as request headers, and a preflight is cacheable for ten minutes —
+short enough that removing an origin takes effect within one.
 
 The auth middleware uses `hmac.compare_digest` for constant-time comparison.
 Failed attempts log at WARNING (never the candidate token value); successes log

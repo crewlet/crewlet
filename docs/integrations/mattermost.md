@@ -232,7 +232,7 @@ units:
         integrations:                              # per-agent transport identity
           mattermost:
             bot_token: "${MATTERMOST_TOKEN_ENGINEER}"
-            channel: engineering                   # optional default channel
+            channel: engineering                   # optional — a channel this bot is added to
         mcp_env:
           mattermost:
             MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_ENGINEER}"   # same token
@@ -262,7 +262,7 @@ Per role, under `integrations.mattermost`:
 |---|---|
 | `bot_token` | The bot's personal access token. `${VAR}` ⇒ provisionable. |
 | `username` | Bot username. Defaults to the handle (with the prefix applied). |
-| `channel` | Optional default channel name for outbound notifications. |
+| `channel` | Optional channel name this seat's bot is added to at provisioning, on top of `provisioning.channels`. It aims nothing: the engine's transport posts no message. |
 
 There is deliberately **no `status_phrases`** here: Mattermost's indicator
 wording belongs to the client, so no text the engine supplied would ever be
@@ -628,9 +628,12 @@ disconnect and a server hanging up on sight look identical otherwise.
 
 All Mattermost capabilities — messaging, threading, search, reactions — come
 from **MCP tools** powered by the agent's own bot token. Messages post with
-the agent's own bot identity. the Mattermost transport's send exists as the
-transport-agnostic fallback for notifications routed through the
-notification service.
+the agent's own bot identity.
+
+The engine's own transport never creates a post. It holds the same per-seat
+bot token for its own **reads** — the seat's identity, the instance's typing
+cadence and Site URL, and the REST re-read a reconnecting socket backfills
+from — and for exactly one write: the [typing indicator](#working-status).
 
 ---
 
@@ -792,20 +795,25 @@ COMPANY=my_company.yaml scripts/mattermost-dev-bootstrap.sh
 The example org in [`examples/nimbus-claude-cli.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus-claude-cli.company.yaml)
 **is** the shortest way to try this. It is the same seven-seat company as
 [`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml)
-beside it — the full-stack reference, on Jira, Confluence, GitLab and a
-metered key — with everything but chat taken out.
+beside it — the full-stack reference, on GitLab and a metered key — with
+everything but chat taken out.
 
 Its only integration is Mattermost and its only model is a coding CLI you
-already subscribe to, so there is no Atlassian site to stand up, no code
-host, no metered API key, and nothing that has to reach the engine from
-outside. Its three engineering seats still run code: their executor *is* the
+already subscribe to, so there is no code host to stand up, no metered API
+key, and nothing that has to reach the engine from outside. It still has a
+work tracker and a knowledge base: both are the engine's own, so its seats
+file work and publish pages from the first turn with nothing to sign up
+for. Its three engineering seats still run code: their executor *is* the
 coding CLI's own agentic loop, in a [sandbox](../concepts/code-sandbox.md)
 box on the engine host that reuses the same CLI login — so that costs nothing
 extra to set up either, beyond one environment variable in step 5.
 
-Add a tracker, a wiki or a code host afterwards, once you have seen the loop
-work; each has its own page, `examples/nimbus.company.yaml` shows them all
-already wired, and nothing here has to be undone first.
+Add a code host afterwards, once you have seen the loop work; it has its own
+page, `examples/nimbus.company.yaml` shows it already wired, and nothing here
+has to be undone first. Moving the tracker or the wiki to Atlassian is the
+one change that is not purely additive — [Jira](jira.md) and
+[Confluence](confluence.md) REPLACE the native halves rather than joining
+them, so each means changing the matching `backend` in the same edit.
 
 Two things the config expects of you, both once:
 

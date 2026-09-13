@@ -75,11 +75,13 @@ type BudgetMeter struct {
 
 // BudgetReported is a snapshot of every live token meter, for the dashboard.
 //
-// Published on a fixed tick whenever a counter moved. It exists because the
-// counters live nowhere but in the engine's own budget manager: they are not
-// derivable from any other event, and the two figures a dashboard already has —
-// the 7-day per-agent total and the 24-hour spend rollup — cover different spans
-// and cannot substitute.
+// Published on a fixed tick by every node, from the fleet's SHARED counter.
+// It exists because the dashboard's header renders the company's headroom
+// from a websocket push: a screen open while a company works has to move as
+// the company spends, and the two figures it already has — the 7-day
+// per-agent total and the 24-hour spend rollup — cover different spans and
+// cannot substitute. `GET /budgets` answers the same counters on demand, for
+// a screen that is read rather than watched.
 //
 // Deliberately NOT persisted. It is a LIVE meter, so replaying one out of
 // history would show a dead engine's counters as the current ones. Being an

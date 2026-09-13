@@ -12,10 +12,15 @@ import { Shell } from "./Shell.tsx";
 import { ToastProvider } from "~/ui/Toast.tsx";
 import { useRoute } from "./router.tsx";
 import { Overview } from "~/routes/Overview.tsx";
+import { Goals } from "~/routes/Goals.tsx";
 import { People } from "~/routes/People.tsx";
 import { SeatScreen } from "~/routes/Seat.tsx";
 import { OrgScreen } from "~/routes/Org.tsx";
 import { Runs } from "~/routes/Runs.tsx";
+import { Work, WorkItem } from "~/routes/Work.tsx";
+import { Sprints } from "~/routes/Sprints.tsx";
+import { MyWork } from "~/routes/MyWork.tsx";
+import { Pages, PageView } from "~/routes/Pages.tsx";
 import { Conversations } from "~/routes/Conversations.tsx";
 import { Schedules } from "~/routes/Schedules.tsx";
 import { ModelActivity } from "~/routes/Model.tsx";
@@ -46,6 +51,25 @@ function Screen() {
       return <OrgScreen />;
     case "runs":
       return <Runs />;
+    // A key or an id BOTH resolve, because the reader has whichever they were
+    // shown: a person pastes ENG-42 out of chat, and every internal link
+    // carries the id. The engine's own Get takes either, so the route does
+    // not have to know which it was handed.
+    case "work":
+      // `me` IS NOT A TASK. Keys are `<PROJECT>-<n>` and ids are uuids, so
+      // neither can collide with it — and `#/work/me` is the address this
+      // screen has had since it was designed.
+      if (id === "me") return <MyWork />;
+      return id ? <WorkItem id={id} /> : <Work />;
+    case "goals":
+      return <Goals />;
+    // ITS OWN SCREEN rather than a tab of the board, for the reason the view
+    // strip is its own question: a sprint report is about the CONTAINER over
+    // time and the board is about the rows in it now.
+    case "sprints":
+      return <Sprints />;
+    case "pages":
+      return id ? <PageView id={id} /> : <Pages />;
     case "conversations":
       return <Conversations />;
     case "schedules":

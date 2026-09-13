@@ -30,9 +30,8 @@ know a single concrete tool name.
 ## Tool annotations
 
 The [MCP spec](https://modelcontextprotocol.io) lets a server advertise
-behavioural *hints* per tool. Crewlet captures them
-(`crewlet.tools.capabilities.ToolAnnotations`) and exposes them on every
-bridged tool (`MCPToolWrapper.annotations`):
+behavioural *hints* per tool. Crewlet captures them, carries them on every
+registry entry, and advertises them again on the two MCP surfaces it *serves*:
 
 | Field | MCP hint | Meaning |
 |---|---|---|
@@ -42,25 +41,41 @@ bridged tool (`MCPToolWrapper.annotations`):
 | `open_world` | `openWorldHint` | The tool touches entities outside the local system (the network, external services, shared surfaces a human can see) |
 | `title` | `title` | Human-friendly name |
 
-Every field is **tri-state** — `True` / `False` / `None` (the server
-didn't say). `None` is never coerced to `False`: "unknown" and
-"explicitly safe" are different, and the classifiers depend on the
-distinction.
+Every field is **tri-state** — yes / no / **unknown** (the server didn't say).
+Unknown is never coerced to "no": "unknown" and "explicitly safe" are different
+facts, and every classifier below depends on the distinction. The MCP Go SDK's
+own struct cannot hold it — two of its four hint fields are plain booleans — so
+Crewlet reads a server's annotations off the wire rather than out of the
+decoded struct, and trusts only an explicit `true`.
 
-First-party builtins declare their own annotations in code (registered
-via `tools.Registry.RegisterWith` and read back with
-`annotations_for`), so the same classification works for them.
+First-party builtins declare their own hints in code, and the same
+classification works for them.
 
-### Where annotations come from
+### Where annotations come from, and where they go
 
 ```mermaid
 flowchart TD
-    MCP["MCP server"] -->|advertises| ANN["ToolAnnotations.from_mcp(...)"]
-    ANN --> OVR["operator config override (optional)<br/>.merge(...)"]
-    OVR --> WRAP["MCPToolWrapper.annotations"]
-    WRAP --> RES["resolve_annotations(tool, registry.annotations_for)"]
-    RES --> Q["engine capability questions<br/>(e.g. writes_to_shared_surface)"]
+    MCP["an MCP server Crewlet dials"] -->|advertises| ANN["wire annotations"]
+    ANN --> OVR["operator config override (optional)<br/>mcp_servers[].tool_annotations"]
+    BI["a first-party builtin"] -->|declared in code| REG
+    OVR --> REG["the tool registry entry"]
+    REG --> Q["engine capability questions<br/>e.g. writes_to_shared_surface"]
+    REG --> OUT["the surfaces Crewlet SERVES<br/>/operator/mcp and the sandbox bridge"]
 ```
+
+**The outbound half is not optional.** Both MCP surfaces this engine serves —
+`/operator/mcp`, which hands a company's tracker and knowledge base to an
+operator's own assistant, and the sandbox bridge, which hands a seat's tools to
+a coding agent — advertise each tool's hints alongside its schema. A surface
+that published only names and schemas would give those clients no way to tell
+`search_work_items` from `remove_work_item`: a client that asks a person before
+an irreversible call would have nothing to ask on, and one that skips the
+prompt for a read would prompt on every one.
+
+A tool the engine has **not** classified advertises no annotations at all,
+rather than four "false" hints it would be read as having asserted. Only an
+explicit yes ever sets a hint on the wire, in the same direction and for the
+same reason as the inbound rule above.
 
 ---
 
@@ -72,12 +87,11 @@ agent's identity?* A sub-agent posting to a channel or commenting on an
 issue as its parent would leak identity onto a transcript, so the
 [sub-agent guard](turn-engine.md#runtime-invariants) denies such tools.
 
-`writes_to_shared_surface(ann)` answers it, conservatively about
-unknowns:
+The classifier answers it, conservatively about unknowns:
 
-- `read_only is True` → **no** (a pure read).
-- `destructive is True` → **yes**.
-- `read_only is False` and `open_world` not explicitly `False` → **yes**
+- read-only is **yes** → **no** (a pure read).
+- destructive is **yes** → **yes**.
+- read-only is **no** and open-world is not explicitly **no** → **yes**
   (a write to the outside world).
 - everything unknown → **no**. The engine does not block what it cannot
   classify; the task's (or its template's) explicit allowlist already
@@ -95,8 +109,8 @@ with nothing to resume into.
 
 ### `open_world` is a tri-state, and unset is not `false`
 
-Read the third rule again: `read_only is False` **and** `open_world` *not
-explicitly* `False`. A tool that writes only *private* state — an agent's
+Read the third rule again: read-only is **no** *and* open-world is *not
+explicitly* **no**. A tool that writes only *private* state — an agent's
 own diary, its own learned skills, its own onboarding marker — is not a
 write to a surface a human reads, but saying so takes an explicit
 `open_world: false`. Leaving the hint unset classifies it with the public
@@ -108,15 +122,21 @@ server's annotations off the wire because the MCP Go SDK flattens the absent cas
 `readOnlyHint` and `idempotentHint`, which would otherwise make every
 under-annotated tool look exactly like a public write.
 
-It is a trap for **first-party** tools, and Crewlet fell into it: three
+It is a trap for **first-party** tools, and Crewlet fell into it twice. Three
 builtins that write nothing but the agent's own memory (`reflect_and_persist`,
-`refine_skill`, `mark_onboarded`) declared `read_only: false` and said
-nothing about `open_world`, so the guard denied them to workers their
-parent had explicitly granted them — blaming a write to a shared surface
-that never happens. They say `open_world: false` now. The same applies to
-`tool_annotations`: a server tool that genuinely stays inside your network
-needs the key written out, because omitting it is a claim in the other
-direction.
+`refine_skill`, `mark_onboarded`) declared `read_only: false` and said nothing
+about `open_world`, so the guard denied them to workers their parent had
+explicitly granted them — blaming a write to a shared surface that never
+happens. The three person tools (`mark_inbox`, `set_pins`, `set_priorities`)
+did the same: each is written only on behalf of the person whose it is, so
+there is no second party to be surprised by one. All six say what they mean
+now, and `set_priorities` is the one that genuinely *is* open-world — a lead
+may set the queue of somebody in their line, and that person opens their day on
+work they did not choose.
+
+The same applies to `tool_annotations`: a server tool that genuinely stays
+inside your network needs the key written out, because omitting it is a claim
+in the other direction.
 
 ---
 

@@ -57,7 +57,7 @@ bot token, which is the reason the handover is a list rather than a sentence.
 
 ## Configure in YAML
 
-`integrations.slack: {}` (org-level) is a marker that enables the outbound Slack **transport**; its one setting is [`typing_status`](#working-status-is-thinking). The Slack **MCP tool** server is a separate `mcp_servers` entry (`shared: false`). Per agent, the Slack identity has two consumers: the **transport** reads `role.integrations.slack` (`bot_token`, `signing_secret`, optional `channel`), and the **Slack MCP subprocess** reads `role.mcp_env.slack.SLACK_MCP_XOXB_TOKEN`. Name the same `${VAR}` in both — one credential, two readers, no secret duplicated:
+`integrations.slack: {}` (org-level) is a marker that enables the Slack **transport**; its one setting is [`typing_status`](#working-status-is-thinking). The Slack **MCP tool** server is a separate `mcp_servers` entry (`shared: false`). Per agent, the Slack identity has two consumers: the **transport** reads `role.integrations.slack` (`bot_token` and `signing_secret`, both required together), and the **Slack MCP subprocess** reads `role.mcp_env.slack.SLACK_MCP_XOXB_TOKEN`. Name the same `${VAR}` in both — one credential, two readers, no secret duplicated:
 
 ```yaml
 integrations:
@@ -81,7 +81,6 @@ units:
           slack:
             bot_token: "${SLACK_BOT_TOKEN_ENGINEER}"
             signing_secret: "${SLACK_SIGNING_SECRET_ENGINEER}"
-            channel: C0123456789                          # optional default channel
         mcp_env:
           slack:
             SLACK_MCP_XOXB_TOKEN: "${SLACK_BOT_TOKEN_ENGINEER}"   # same token, the Slack MCP
@@ -95,9 +94,9 @@ units:
             SLACK_MCP_XOXB_TOKEN: "${SLACK_BOT_TOKEN_DESIGNER}"
 ```
 
-The `bot_token` drives the transport (inbound webhook verification + the outbound `send()` fallback); the same value, named as `SLACK_MCP_XOXB_TOKEN`, drives the Slack MCP tools — two independent subsystems, one credential referenced in two places. `signing_secret` and `channel` are transport-only and belong on `role.integrations.slack`.
+The `bot_token` drives the transport (the seat's own identity at start, and the working indicator); the same value, named as `SLACK_MCP_XOXB_TOKEN`, drives the Slack MCP tools — two independent subsystems, one credential referenced in two places. `signing_secret` is transport-only — it verifies this seat's inbound deliveries and nothing else reads it — and belongs on `role.integrations.slack`. There is no per-seat channel setting: the engine's transport posts no message, so it has nothing to aim, and the room a seat talks in is [`units[].channel`](../concepts/organization-model.md) on the org chart, which the executor prompt renders as the team channel for whichever chat backend the company runs.
 
-Write this block **first**, with `${VAR}` placeholders — the automated provisioning below reads the placeholder names out of the YAML and fills exactly those variables in `.env`. Whole-value placeholders are required (`"${SLACK_BOT_TOKEN_ENGINEER}"`, not a literal token) so the provisioner knows which env vars to write. When both credentials are set they must be the **same kind** — both placeholders (provisionable) or both literals (a manually managed app, reported and left untouched); a mixed pair is rejected at config validation, since it would always leave one credential dead. A `bot_token`-only identity (outbound-only, no webhooks) is legal but not provisionable; a `signing_secret`-only identity is rejected (the app is never registered without a token).
+Write this block **first**, with `${VAR}` placeholders — the automated provisioning below reads the placeholder names out of the YAML and fills exactly those variables in `.env`. Whole-value placeholders are required (`"${SLACK_BOT_TOKEN_ENGINEER}"`, not a literal token) so the provisioner knows which env vars to write. Declaring the block at all means declaring **both** credentials: a seat with only a `bot_token` receives messages it can never answer, and one with only a `signing_secret` answers 503 to every delivery while the app's own settings page reports a healthy request URL — so config validation rejects either half on its own, naming the missing field. Whether each one is a placeholder or a literal is a separate question, and config validation has no opinion on it: a literal marks a credential you manage by hand, so `crewlet slack provision` reports that half and leaves it alone rather than editing your company document. A **mixed** pair therefore loads and runs, but the seat is only half provisionable — the run says which half and why, and the other value stays yours to paste in.
 
 ---
 
@@ -203,7 +202,7 @@ The single source of truth is `internal/slack` (`BotScopes` / `BotEvents`); the 
 |-------|---------|
 | `app_mentions:read` | `app_mention` events (thread-follow trigger) |
 | `channels:history`, `channels:read` | public channels — thread routing + MCP `conversations_history` / `conversations_replies` / `channels_list` |
-| `chat:write` | transport `send()` + MCP `conversations_add_message` |
+| `chat:write` | the working indicator (`assistant.threads.setStatus`) + MCP `conversations_add_message` |
 | `files:read` | shared-file notifications |
 | `groups:history`, `groups:read` | private channels — **required**, see the note below |
 | `im:history`, `im:read`, `im:write` | DMs, incl. escalation DMs to human seats |
@@ -345,7 +344,7 @@ An agent's own reply in a thread **subscribes it to that thread**, exactly as re
 
 All Slack capabilities an agent uses deliberately — messaging, threading, search, reactions — are **MCP tools** powered by that agent's own bot token via [slack-mcp-server](https://github.com/korotovsky/slack-mcp-server), so a message comes from the agent rather than from a shared company bot.
 
-The engine's own transport posts only where the engine itself is speaking, and it uses the same per-seat token. Its one visible use is the [working indicator](#working-status-is-thinking).
+The engine's own transport posts no messages at all. It holds the same per-seat token for two calls of its own: `auth.test`, which resolves the seat's identity at start, and the [working indicator](#working-status-is-thinking).
 
 ---
 
@@ -510,8 +509,7 @@ By default, agents only receive thread replies in threads they are **following**
 
 1. **Direct mention** — `<@BOT_USER_ID>` or `app_mention` event
 2. **Collective address** — `<!channel>` or `<!here>`
-3. **Outbound participation** — the agent sends a reply in the thread
-4. **Outbound send** — the agent posts its reply into the thread
+3. **Participation** — the agent replies in the thread. Because the reply goes out through the Slack MCP tools rather than the engine, the follow is recorded from Slack's own **echo** of that message: the parser writes it on the way past as it suppresses the seat's own post, which is also what lets a node record a follow for a seat it is not running.
 
 Thread tracking state is persisted in the store (``chat_thread_follows`` table, rows keyed ``backend = 'slack'``) so it survives engine restarts. Bot messages are automatically ignored to prevent loops.
 

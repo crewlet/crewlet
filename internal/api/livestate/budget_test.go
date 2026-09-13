@@ -130,7 +130,7 @@ func TestNoMeterReportsAsNoMeter(t *testing.T) {
 	// reporting at all. Either way a bar drawn without one would be a
 	// claim nobody measured.
 	s := livestate.New()
-	s.Apply(env("task_started", map[string]any{"role": "Lead", "task_id": "t-1"}))
+	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead", "phase": "execute"}))
 
 	if got := overlayOf(t, s, "Lead").Budget; got != nil {
 		t.Errorf("budget = %+v, want none", got)

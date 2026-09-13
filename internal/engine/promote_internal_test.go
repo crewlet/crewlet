@@ -36,8 +36,7 @@ func TestPromotionUnitsCarryTheirSeatsAndContainer(t *testing.T) {
 	e := engineOver(t)
 	setEpoch(e, promotionCompany(t, `units:
   - name: Platform
-    integrations:
-      confluence: {space: ENG}
+    space: ENG
     roles:
       - name: Engineer
         handle: eng
@@ -79,7 +78,7 @@ func TestAUnitWithNoContainerCarriesItsRemediation(t *testing.T) {
 	if units[0].Container != "" {
 		t.Fatalf("Container = %q, want empty", units[0].Container)
 	}
-	for _, want := range []string{"integrations.confluence.space", "Platform"} {
+	for _, want := range []string{"has no `space`", "Platform"} {
 		if !strings.Contains(units[0].Hint, want) {
 			t.Fatalf("the hint omits %q: %q", want, units[0].Hint)
 		}
@@ -94,16 +93,14 @@ func TestAParentUnitDoesNotPoolItsChildrensSeats(t *testing.T) {
 	e := engineOver(t)
 	setEpoch(e, promotionCompany(t, `units:
   - name: Engineering
-    integrations:
-      confluence: {space: ORG}
+    space: ORG
     roles:
       - name: VP
         handle: vp
         llm: gateway
     children:
       - name: Platform
-        integrations:
-          confluence: {space: ENG}
+        space: ENG
         roles:
           - name: Engineer
             handle: eng
@@ -130,9 +127,8 @@ func TestTheContainerIsTheWikiSpaceNotTheTrackerProject(t *testing.T) {
 	e := engineOver(t)
 	setEpoch(e, promotionCompany(t, `units:
   - name: Platform
-    integrations:
-      confluence: {space: WIKI}
-      jira: {project: TRACKER}
+    space: WIKI
+    project: TRACKER
     roles:
       - name: Engineer
         handle: eng
@@ -158,8 +154,7 @@ func TestTheHintNamesTheWikiSpaceField(t *testing.T) {
 	e := engineOver(t)
 	setEpoch(e, promotionCompany(t, `units:
   - name: Platform
-    integrations:
-      jira: {project: TRACKER}
+    project: TRACKER
     roles:
       - name: Engineer
         handle: eng
@@ -170,10 +165,10 @@ func TestTheHintNamesTheWikiSpaceField(t *testing.T) {
 	if len(units) != 1 || units[0].Container != "" {
 		t.Fatalf("unit = %+v, want no container under a Confluence backend", units)
 	}
-	if !strings.Contains(units[0].Hint, "confluence") {
+	if !strings.Contains(units[0].Hint, "`space`") {
 		t.Fatalf("the hint does not name the field that would fix it: %q", units[0].Hint)
 	}
-	if strings.Contains(units[0].Hint, "jira") {
+	if strings.Contains(units[0].Hint, "project") {
 		t.Fatalf("the hint points at an identity a draft cannot go to: %q", units[0].Hint)
 	}
 }
@@ -196,8 +191,7 @@ func TestPromotionIsBuiltWhenThereIsSomewhereToDraft(t *testing.T) {
 			e := engineOver(t)
 			c := promotionCompany(t, tc.block+`units:
   - name: Platform
-    integrations:
-      confluence: {space: ENG}
+    space: ENG
     roles:
       - name: Engineer
         handle: eng
@@ -224,8 +218,7 @@ func TestAPromoterArmedBeforeTheKnowledgeBaseStillFindsIt(t *testing.T) {
 	e := engineOver(t)
 	c := promotionCompany(t, `units:
   - name: Platform
-    integrations:
-      confluence: {space: ENG}
+    space: ENG
     roles:
       - name: Engineer
         handle: eng
@@ -261,8 +254,7 @@ func TestPromotionIsArmedBeforeTheKnowledgeBaseIsWired(t *testing.T) {
 	e := engineOver(t)
 	c := promotionCompany(t, `units:
   - name: Platform
-    integrations:
-      confluence: {space: ENG}
+    space: ENG
     roles:
       - name: Engineer
         handle: eng
@@ -293,8 +285,7 @@ learning:
     enabled: false
 units:
   - name: Platform
-    integrations:
-      confluence: {space: ENG}
+    space: ENG
     roles:
       - name: Engineer
         handle: eng

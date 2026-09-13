@@ -1658,15 +1658,22 @@ func (c compactionFaultConn) BeginTx(ctx context.Context, opts driver.TxOptions)
 
 // BenchmarkRecallScan is where defaultThreshold comes from. Recall is a brute
 // scan of every embedded row a seat owns and it runs in the Plan phase of every
-// turn, so the raw-row count IS a per-turn latency budget:
+// turn, so the raw-row count IS a per-turn latency budget. Re-measured at the
+// pin, 30 iterations per cell, 1 536 dimensions:
 //
-//	100 rows    6.0 ms
-//	250 rows   16.0 ms
-//	500 rows   31.7 ms   <- defaultThreshold
-//	1000 rows  63.2 ms
-//	2000 rows 122.4 ms
+//	100 rows    1.9 ms
+//	250 rows    2.8 ms
+//	500 rows    3.9 ms   <- defaultThreshold
+//	1000 rows   7.3 ms
+//	2000 rows  15.2 ms
 //
-// Linear at ~62 µs per row, with nothing else in the system bounding it.
+// Linear at 7.5 µs per row on the 500 → 2 000 slope, over a fixed ~1.1 ms per
+// query, with nothing else in the system bounding it.
+//
+// THE FIGURES THIS REPLACES WERE 8× HIGHER and were taken before the ordering
+// moved into the database: they described a Go loop that decoded every vector
+// across the driver boundary, which this package deleted. A stale anchor on a
+// tuning knob is the number the next person raises the knob from.
 func BenchmarkRecallScan(b *testing.B) {
 	const dim = 1536
 	for _, n := range []int{100, 250, 500, 1000, 2000} {

@@ -367,10 +367,10 @@ func (s *suite) runFleet(t *testing.T) {
 
 		watching := newJournal()
 		streamTo(ctx, t, a, "crewlet.events.>", watching)
-		publish(ctx, t, b, "crewlet.events.task_created", newEvent("task_created"))
+		publish(ctx, t, b, "crewlet.events.agent_phase_started", newEvent("agent_phase_started"))
 
 		watching.awaitLabels(t, "a peer's publish to reach the stream",
-			"crewlet.events.task_created/task_created")
+			"crewlet.events.agent_phase_started/agent_phase_started")
 	})
 
 	t.Run("a_peer_can_delete_a_subscription_it_never_consumed", func(t *testing.T) {

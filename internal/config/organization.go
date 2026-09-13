@@ -30,12 +30,12 @@ func (c *Company) Organization() (*org.Organization, error) {
 // the first.
 func (c *Company) organization() *org.Organization {
 	o := &org.Organization{
-		Name:             c.Name,
-		Mission:          c.Mission,
-		Vision:           c.Vision,
-		Policies:         append([]string(nil), c.Policies...),
-		TokenBudget:      c.TokenBudget,
-		ConfluenceSpaces: append([]string(nil), c.Knowledge.ConfluenceSpaces...),
+		Name:           c.Name,
+		Mission:        c.Mission,
+		Vision:         c.Vision,
+		Policies:       append([]string(nil), c.Policies...),
+		TokenBudget:    c.TokenBudget,
+		KnowledgeScope: append([]string(nil), c.Knowledge.KnowledgeScope...),
 	}
 	for i := range c.Roles {
 		o.Roles = append(o.Roles, c.Roles[i].Seat())

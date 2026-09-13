@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
@@ -15,8 +16,11 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // memorySandbox is a pending-run store with nothing in it: this sweep is
@@ -112,7 +116,94 @@ func everySeam(t *testing.T) queries.Sources {
 		Budget:   coordmemory.NewFleet(),
 		Sandbox:  memorySandbox{},
 		Config:   surface,
+		Work:     emptyWork{},
+		Pages:    emptyPages{},
+		// THE RETENTION DOCUMENT, which the Fleet screen's replication
+		// panels read. A pass-through on the real surface, so the seam is
+		// a function rather than a reader — and this sweep is about which
+		// names exist, so what it answers is nothing.
+		Retention: func(context.Context) any { return nil },
 	}
+}
+
+// emptyWork and emptyPages are the native readers with nothing in them, on
+// fakeChannels' terms: this sweep is about which NAMES exist.
+type emptyWork struct{}
+
+func (emptyWork) Tasks(context.Context, tracker.Query, time.Time) (tracker.Answer, error) {
+	return tracker.Answer{}, nil
+}
+
+func (emptyWork) Task(context.Context, string, tracker.DetailWants,
+	statelog.ReadLevel) (tracker.TaskDetail, error) {
+
+	return tracker.TaskDetail{}, nil
+}
+
+func (emptyWork) Views(context.Context, tracker.ViewQuery) (tracker.ViewListing, error) {
+	return tracker.ViewListing{}, nil
+}
+
+func (emptyWork) ExpandedQuery(_ context.Context, params map[string]any,
+	_ tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error) {
+
+	return tracker.ParseQuery(tracker.MapParams(params), now, loc)
+}
+
+func (emptyWork) Goals(context.Context, tracker.GoalQuery) (tracker.GoalListing, error) {
+	return tracker.GoalListing{}, nil
+}
+
+func (emptyWork) Catalogue(context.Context, tracker.CatalogueQuery) (tracker.CatalogueAnswer, error) {
+	return tracker.CatalogueAnswer{}, nil
+}
+
+func (emptyWork) Projects(context.Context, tracker.ProjectQuery, time.Time) (
+	tracker.ProjectListing, error) {
+
+	return tracker.ProjectListing{}, nil
+}
+
+func (emptyWork) Project(context.Context, tracker.ProjectDetailQuery, time.Time) (
+	tracker.ProjectDetail, error) {
+
+	return tracker.ProjectDetail{}, nil
+}
+
+func (emptyWork) Sprints(context.Context, tracker.SprintQuery, time.Time) (
+	tracker.SprintListing, error) {
+
+	return tracker.SprintListing{}, nil
+}
+
+func (emptyWork) Activity(context.Context, tracker.ActivityQuery, time.Time) (
+	tracker.ActivityAnswer, error) {
+
+	return tracker.ActivityAnswer{}, nil
+}
+
+func (emptyWork) MyWork(context.Context, tracker.MyWorkQuery, time.Time) (
+	tracker.MyWork, error) {
+
+	return tracker.MyWork{}, nil
+}
+
+func (emptyWork) Person(context.Context, tracker.PersonQuery, time.Time) (tracker.PersonState, error) {
+	return tracker.PersonState{}, nil
+}
+
+type emptyPages struct{}
+
+func (emptyPages) List(context.Context, pages.Filter, statelog.ReadLevel) (pages.Listing, error) {
+	return pages.Listing{}, nil
+}
+
+func (emptyPages) Get(context.Context, string, statelog.ReadLevel) (pages.Detail, error) {
+	return pages.Detail{}, nil
+}
+
+func (emptyPages) Containers(context.Context, statelog.ReadLevel) ([]pages.Container, error) {
+	return nil, nil
 }
 
 // fakeChannels is an A2A channel reader with nothing in it: this sweep is

@@ -219,8 +219,17 @@ func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (
 // openStore opens this node's local database.
 func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*store.DB, error) {
 	opts := store.Options{
-		MaxOpenConns: b.Store.MaxOpenConns,
-		BusyTimeout:  b.Store.BusyTimeout(),
+		MaxOpenConns:   b.Store.MaxOpenConns,
+		ReplicatedPath: b.Store.ReplicatedPath,
+		BusyTimeout:    b.Store.BusyTimeout(),
+		// ONE PINNED CONNECTION PER STATE-LOG DOMAIN. Each domain's apply
+		// loop holds one for its life — it is the single writer of that
+		// domain's tables, and a loop that had to reacquire one per batch
+		// would be competing with the readers it is applying for. The
+		// count is DECLARED rather than discovered so the pool is sized
+		// for them: an undeclared pin is a reader starved out of the pool
+		// by a writer that never gives its connection back.
+		PinnedWriters: len(registeredDomains()),
 	}
 	// Nil embeddings means no vector recall is configured, which the store
 	// reads as width 0: no DECLARED width, so it checks nothing against it
@@ -268,16 +277,25 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 		return nil, fmt.Errorf("engine: stream: %w", err)
 	}
 	cfg := jetstream.Config{
-		URL:         b.Stream.URL,
-		StoreDir:    b.Stream.StoreDir,
-		ClusterName: b.Stream.Cluster.Name,
-		ClusterURLs: b.Stream.Cluster.Peers,
-		ClusterPort: b.Stream.Cluster.Port,
-		ServerName:  nodeID,
-		Replicas:    b.Stream.Replicas,
-		Credentials: b.Stream.Credentials,
-		Token:       b.Stream.Token,
-		TLS:         streamTLS(b.Stream.TLS),
+		URL:              b.Stream.URL,
+		StoreDir:         b.Stream.StoreDir,
+		ClusterName:      b.Stream.Cluster.Name,
+		ClusterURLs:      b.Stream.Cluster.Peers,
+		ClusterPort:      b.Stream.Cluster.Port,
+		ClusterHost:      b.Stream.Cluster.Host,
+		ClusterAdvertise: b.Stream.Cluster.Advertise,
+		ServerName:       nodeID,
+		Replicas:         b.Stream.Replicas,
+		Credentials:      b.Stream.Credentials,
+		Token:            b.Stream.Token,
+		TLS:              streamTLS(b.Stream.TLS),
+
+		// Through the accessors for the same reason EventRetention goes
+		// through one: the field is a STRING with two meanings, and a
+		// second place deciding which is which is a second place to get
+		// "always" wrong.
+		SyncAlways:   b.Stream.SyncAlways(),
+		SyncInterval: b.Stream.SyncInterval(),
 	}
 	// Through the accessor, so the seconds-to-duration conversion happens
 	// once at the edge rather than being re-derived here — one slip from

@@ -16,7 +16,7 @@ func TestTransportRidesTheSharedTransport(t *testing.T) {
 	t.Parallel()
 	tr, err := NewTransport(TransportOptions{
 		Config: Config{Seats: []SeatConfig{{
-			Handle: "ceo", Token: "xoxb-not-a-real-token", Channel: "general",
+			Handle: "ceo", Token: "xoxb-not-a-real-token",
 		}}},
 	})
 	if err != nil {

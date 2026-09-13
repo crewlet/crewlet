@@ -235,7 +235,10 @@ func (t *queryEpisodes) Parameters() map[string]any {
 			"outcome_filter": map[string]any{
 				"type": "string",
 				"description": "Optional: keep only turns that ended this " +
-					"way — done, self_iterate, escalate, failed",
+					"way — done or failed. Those are the only two a turn " +
+					"is remembered for: a turn that looped back on itself " +
+					"is remembered as its own reattempt, and one where " +
+					"nobody was asking writes no episode at all",
 			},
 			"limit": map[string]any{
 				"type": "integer",

@@ -90,11 +90,20 @@ type Sources struct {
 		OpenChannels(ctx context.Context) ([]coord.Channel, error)
 	}
 
-	// Knowledge is the company's ONE knowledge backend, behind the same
-	// seam a seat's Plan phase searches through — so an operator asking
-	// "what would an agent find" gets the answer an agent would get,
-	// rather than one from an index somebody has to keep fresh.
-	Knowledge knowledge.Searcher
+	// Knowledge resolves the company's ONE knowledge backend, behind the
+	// same seam a seat's Plan phase searches through — so an operator
+	// asking "what would an agent find" gets the answer an agent would
+	// get, rather than one from an index somebody has to keep fresh.
+	//
+	// A FUNCTION, not a value, for the reason [Sources.Company] is one: an
+	// apply REPLACES the searcher. A credential rotation, a retired
+	// integration block, a knowledge backend repaired after a failed boot
+	// — each rebuilds it, and a value captured when the API was assembled
+	// keeps searching with the credential that was revoked, against the
+	// wiki that was removed, or answers "no backend" forever for a company
+	// that has had one since its second minute. Nil, and a nil answer from
+	// it, both mean the same thing and leave the question unregistered.
+	Knowledge func() knowledge.Searcher
 
 	// Budget is the DURABLE token counter — what the engine actually
 	// enforces against, across every node and every restart. Nil answers
@@ -149,6 +158,18 @@ type Sources struct {
 	// unchecked.
 	Reconciles func(ctx context.Context) []integration.State
 
+	// Work and Pages are this node's projections of the company's own
+	// tracker and knowledge base. Nil leaves their questions unregistered,
+	// which is the honest answer for a company on Jira and Confluence:
+	// there is no native record for this node to have a copy of.
+	//
+	// Consumer-defined interfaces rather than the concrete readers, like
+	// every other seam here — and the READ side only. Nothing on this
+	// surface writes: a board's edit goes through a seat's tools or the
+	// operator MCP, both of which are attributed to somebody.
+	Work  WorkReader
+	Pages PageReader
+
 	// PublicBase is where third-party apps reach this deployment, RESOLVED,
 	// or nil when this process cannot say.
 	//
@@ -163,6 +184,18 @@ type Sources struct {
 	// cannot read the value must not be the reason a screen calls a healthy
 	// registration stale.
 	PublicBase func() string
+	// Retention is this node's answer about the state log's own history:
+	// how far each domain's log may be trimmed, what is stopping it, and
+	// what this node costs to replace.
+	//
+	// A FUNCTION rather than a value, for the reason [Sources.Company] is
+	// one: the answer is assembled per call from coordination and from
+	// this node's own loops, and a document captured when the API was
+	// assembled would name a fleet from before every node it describes
+	// had reported. Nil leaves the question unregistered, which is honest
+	// for a process running no state log — a standalone API has no
+	// applier and no stream to say anything about.
+	Retention func(ctx context.Context) any
 
 	// NodeID names this node in the fleet answer, so a reader can tell
 	// which row is the one they are talking to.
@@ -196,6 +229,15 @@ func (s Sources) clock() time.Time {
 // that drew "no events" for "this node has no event log" would report a quiet
 // company during a misconfiguration.
 var ErrUnavailable = errors.New("queries: not available on this node")
+
+// ErrNotFound is a question this surface understood, about a record it does
+// not hold.
+//
+// Distinct from [ErrUnavailable] and from a plain failure, because a client
+// acts on all three differently: a dead link to show the person, a retry in a
+// moment, and a bug to report. Folding the first into the third is how a
+// mistyped item key reads to an operator as the server being broken.
+var ErrNotFound = errors.New("queries: no such record")
 
 // Register wires every question these sources can answer.
 //
@@ -254,6 +296,56 @@ func Register(r *Registry, s Sources) {
 	}
 	if s.Sandbox != nil {
 		r.Register("sandbox_runs", s.sandboxRuns)
+	}
+	if s.Retention != nil {
+		// OPERATOR-ONLY. The answer names every node in the fleet, its
+		// position, its disk and its snapshot repository — a map of
+		// which machine to take out to lose the company's history — and
+		// it is read by a person or their cron, never by the dashboard's
+		// anonymous shell.
+		r.RegisterOperator("retention", s.retention)
+	}
+	// The NATIVE backends, each gated on its own reader: a company can run
+	// the native tracker on Confluence, or the native knowledge base on
+	// Jira, and registering the pair together would offer one screen a
+	// question its half of the company cannot answer.
+	if s.Work != nil {
+		r.Register("work_items", s.workItems)
+		r.Register("work_item", s.workItem)
+		// A SEPARATE QUESTION from `work_items`, for the reason
+		// `containers` is separate from `pages`: a screen draws the tab
+		// strip once and the rows in it on every filter change.
+		r.Register("work_views", s.workViews)
+		// A SEPARATE QUESTION from `work_items` for the reason
+		// `work_views` is: a home screen draws the project list once
+		// and its rows' tasks on every navigation, and the counts here
+		// are three MAINTAINED columns rather than an aggregate over
+		// every task in the company.
+		r.Register("work_projects", s.workProjects)
+		r.Register("work_project", s.workProject)
+		r.Register("work_sprints", s.workSprints)
+		// THE FEED IS ITS OWN QUESTION, because it is ordered by the
+		// LOG rather than by anything a board sorts on: one durable
+		// table at any age, with a cursor that is a position.
+		r.Register("work_activity", s.workActivity)
+		// AND ONE PERSON'S DAY. Operator-only, because it is seven
+		// lists ABOUT somebody — their priorities, the questions
+		// waiting on them, the sub-items they claimed — and a surface
+		// that answered it anonymously would render anybody's day to
+		// anybody who asked.
+		r.RegisterOperator("work_my_work", s.workMyWork)
+		r.Register("work_goals", s.workGoals)
+		r.Register("work_catalogue", s.workCatalogue)
+		r.Register("work_person", s.workPerson)
+	}
+	if s.Pages != nil {
+		r.Register("pages", s.pageList)
+		r.Register("page", s.page)
+		// A SEPARATE QUESTION from `pages`, not a facet of it: a browser
+		// draws the container list once and the page list on every
+		// navigation, and folding them together would ship every
+		// container's record with every page listing.
+		r.Register("containers", s.containers)
 	}
 	if s.Diary != nil || s.Episodes != nil || s.Skills != nil {
 		r.Register("agent_memory", s.agentMemory)
@@ -586,4 +678,15 @@ func (s Sources) trace(ctx context.Context, p Params) (any, error) {
 		"events":    rows,
 		"truncated": len(rows) >= store.MaxTraceEvents,
 	}, nil
+}
+
+// retention answers what the state log's history costs and what is stopping it
+// from shrinking.
+//
+// A PASS-THROUGH, deliberately: the document is assembled by the node that
+// runs the appliers, because half its fields are facts only that node can
+// state. Re-shaping it here would be a second definition of the answer, and
+// `crewlet retention status` reads exactly these bytes.
+func (s Sources) retention(ctx context.Context, _ Params) (any, error) {
+	return s.Retention(ctx), nil
 }

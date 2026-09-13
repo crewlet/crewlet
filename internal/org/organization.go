@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"iter"
 	"slices"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -42,15 +43,15 @@ type Organization struct {
 	// layer could not be shown beside the meter that enforces it.
 	TokenBudget int `yaml:"token_budget,omitempty" json:"token_budget,omitempty"`
 
-	// ConfluenceSpaces is the org-wide knowledge READ scope — the only
+	// KnowledgeScope is the org-wide knowledge READ scope — the only
 	// thing that narrows a knowledge search. Empty means unscoped, bounded
 	// by whatever the backend's own ACLs allow.
 	//
-	// Deliberately org-wide rather than per-seat: a unit's Confluence space
-	// is an identity (where it writes, where its webhooks route), and
+	// Deliberately org-wide rather than per-seat: a unit's own space is an
+	// identity (where it writes, where its page activity routes), and
 	// letting an identity double as a read scope is how an agent ends up
 	// unable to read the page it was told to follow.
-	ConfluenceSpaces []string `yaml:"confluence_spaces,omitempty" json:"confluence_spaces,omitempty"`
+	KnowledgeScope []string `yaml:"scope,omitempty" json:"scope,omitempty"`
 }
 
 // AllRoles iterates every seat in the company: root seats first, then each
@@ -140,6 +141,30 @@ func (o *Organization) AgentSeatByHandle(handle string) *Role {
 	}
 	for r := range o.AllRoles() {
 		if r.IsAgent() && r.Handle() == handle {
+			return r
+		}
+	}
+	return nil
+}
+
+// SeatByHandle returns the seat with this handle, of EITHER kind, or nil.
+//
+// The counterpart to [Organization.AgentSeatByHandle], and the distinction is
+// the caller's purpose rather than a convenience. That one answers "who can I
+// publish an inbox event to", so it must never return a human seat — a human
+// has no inbox and the publish would be dropped. This one answers "is this
+// handle somebody in the company", which is what a MENTION asks: a person
+// named on a work item is notified through the contact transports their seat
+// declares, exactly like a person named in a chat message, and a resolver
+// that skipped them would silently drop every mention of a human colleague.
+//
+// Handles are unique across both kinds, so there is no ambiguity to resolve.
+func (o *Organization) SeatByHandle(handle string) *Role {
+	if handle == "" {
+		return nil
+	}
+	for r := range o.AllRoles() {
+		if r.Handle() == handle {
 			return r
 		}
 	}
@@ -441,10 +466,101 @@ func (o *Organization) Validate() error {
 	if err := o.validateHandles(); err != nil {
 		errs = append(errs, err)
 	}
+	if err := o.validateUnitKeys(); err != nil {
+		errs = append(errs, err)
+	}
 	if err := o.validateLeadSchedules(); err != nil {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
+}
+
+// validateUnitKeys enforces chart-wide uniqueness of a unit's identity.
+//
+// # What a collision costs
+//
+// [Unit.Key] is what work, routing and pages are filed under, and
+// [Organization.Unit] resolves a name to the FIRST unit carrying it. So two
+// units answering to one key do not conflict loudly — one of them simply
+// receives the other's work, for ever, and the chart looks correct.
+//
+// # Why an id may not collide with another unit's NAME either
+//
+// Key falls back to the name, so a company that gives one unit the id
+// "platform" while another is NAMED "Platform" has exactly the collision
+// above. It arrives by a door nobody is watching: adding an id that is
+// already some other unit's name.
+//
+// The comparison is case-insensitive on the name side because a name is prose
+// and "Platform" and "platform" are one team; an id is already lowercase.
+func (o *Organization) validateUnitKeys() error {
+	var errs []error
+	owner := make(map[string]unitPath)
+	claim := func(key string, by unitPath) {
+		key = strings.ToLower(strings.TrimSpace(key))
+		if key == "" {
+			return
+		}
+		// POINTER IDENTITY, not the key's text: a unit whose id equals
+		// its own name claims the same key twice and collides with
+		// nobody.
+		if first, taken := owner[key]; taken && first.unit != by.unit {
+			errs = append(errs, fmt.Errorf(
+				"%w %q: %s and %s — a unit's key is what work, routing and pages "+
+					"are filed under, and two units answering to one key send a "+
+					"team's work to whichever one a reader resolved first",
+				ErrDuplicateUnit, key, first.path, by.path))
+			return
+		}
+		owner[key] = by
+	}
+
+	// EVERY NAME IS CLAIMED BEFORE ANY ID, so an id colliding with a name
+	// is reported against the id — which is the field somebody just added,
+	// and the one they can change without renaming a team.
+	units := slices.Collect(o.unitsWithPaths())
+	for _, c := range units {
+		claim(c.unit.Name, c)
+	}
+	for _, c := range units {
+		if strings.TrimSpace(c.unit.ID) != "" {
+			claim(c.unit.ID, c)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// unitPath is a unit and where it sits in the chart. The path is the only
+// thing that tells two units of the SAME NAME apart in a message.
+type unitPath struct {
+	unit *Unit
+	path string
+}
+
+// unitsWithPaths walks the chart yielding each unit with its slash-joined
+// ancestry, depth-first and parents before children — the same order
+// [Organization.AllUnits] uses, so a message names units in the order they
+// appear in the document.
+func (o *Organization) unitsWithPaths() iter.Seq[unitPath] {
+	return func(yield func(unitPath) bool) {
+		var walk func(prefix string, units []*Unit) bool
+		walk = func(prefix string, units []*Unit) bool {
+			for _, u := range units {
+				path := u.Name
+				if prefix != "" {
+					path = prefix + "/" + u.Name
+				}
+				if !yield(unitPath{unit: u, path: path}) {
+					return false
+				}
+				if !walk(path, u.Children) {
+					return false
+				}
+			}
+			return true
+		}
+		walk("", o.Units)
+	}
 }
 
 // validateHandles enforces org-wide handle uniqueness.

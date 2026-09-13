@@ -248,7 +248,39 @@ jobs:
       # concurrency model changed from one cooperative event loop to real
       # parallelism, so every "atomic because asyncio" assumption the
       # Python code made is a potential data race in the port.
-      - run: go test ./... -race -count=1
+      #
+      # -timeout is a HANG DETECTOR rather than a budget, and it is stated
+      # because go's own default is 10 minutes PER PACKAGE. Thirty minutes is
+      # well inside this job's own limit, and the Makefile's TEST_TIMEOUT
+      # carries the same value.
+      #
+      # internal/e2e IS EXCLUDED, and runs in the `end-to-end gates` job
+      # below with a runner to itself. That is not a coverage cut — CI runs
+      # both jobs and `make check` depends on both targets — it is a
+      # CONTENTION cut, and the measurement is unambiguous. On one commit the
+      # dedicated job passed in 5m24s while these same cases, inside
+      # `go test ./...`, failed on all three cluster-start attempts with
+      # `context deadline exceeded` creating streams and KV buckets:
+      #
+      #   cluster attempt 1/3 lost a race at member 1: engine.New: engine:
+      #   stream client: ensure stream CREWLET_AGENT: context deadline exceeded
+      #
+      # internal/e2e stands up N engines, each embedding its OWN NATS server,
+      # in one process; `./...` runs packages in parallel; and a two-core
+      # runner under the race detector cannot form a two-member JetStream
+      # quorum inside the 30s provisioning budget while doing that. Running
+      # the suite in both places bought nothing — the same cases, twice, and
+      # only the contended copy was ever red.
+      #
+      # The exclusion is a `go list` filter because `go test` has no negative
+      # package form, and it is GUARDED: an empty list would silently test
+      # the current directory and report a pass over nothing.
+      - name: the suite, minus the fleet cases that need a whole runner
+        run: |
+          set -euo pipefail
+          pkgs="$(go list ./... | grep -v '/internal/e2e\(/\|$\)')"
+          test -n "$pkgs"
+          go test $pkgs -race -count=1 -timeout 30m
 
   gates:
     name: end-to-end gates
@@ -273,7 +305,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: latest
-      - run: go test ./internal/e2e/... -race -count=1 -v
+      - run: go test ./internal/e2e/... -race -count=1 -v -timeout 30m
 
   # THERE IS NO SEPARATE "stores" JOB ANY MORE. One existed, running the store
   # contract suites twice over CREWLET_STORE_DRIVER=turso|sqlite, because

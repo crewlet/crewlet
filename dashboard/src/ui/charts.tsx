@@ -159,9 +159,9 @@ export function StackedBar({
   height?: number;
 }) {
   const total = segments.reduce((n, s) => n + s.value, 0);
-  if (total <= 0) return <div className="stack" style={{ height }} />;
+  if (total <= 0) return <div className="stackbar" style={{ height }} />;
   return (
-    <div className="stack" style={{ height }}>
+    <div className="stackbar" style={{ height }}>
       {segments.map((s, i) => (
         <span
           key={s.label}

@@ -18,10 +18,48 @@ These tools are registered globally and available to all agents:
 | `refine_skill` | Append a bullet to a synthesized skill (or replace its body) |
 | `mark_onboarded` | Stamp the agent's onboarding marker after reading the relevant onboarding pages |
 | `a2a_ask` | Tight-loop synchronous handoff to a colleague (see [Turn Engine § Colleague-surface tools](../concepts/turn-engine.md#colleague-surface-tools)) |
+| `search_knowledge` | Re-run the shared-knowledge search mid-turn, once the agent knows what the task actually needs. Registered wherever the company has a knowledge backend at all |
 
-Note the deliberate split between personal and shared writes: `reflect_and_persist` is **personal-only** (it writes to the agent's private `agent_diary`), while team-shared content lives in the knowledge backend (Confluence) — written through that backend's own MCP tools and searched live at query time (see [Knowledge System](../concepts/knowledge-system.md)). `use_skill` resolves the agent's own synthesized skills; shared procedures are knowledge-backend pages.
+### The native tracker and knowledge base
 
-Task-management tools (`create_task`, `assign_task`, `update_task`, `list_tasks`, `delegate`) are **not** registered as builtins — agents interact with the external PM tool (Jira, GitLab issues, etc.) via MCP tools instead.
+Twelve more, registered **only where the company runs the engine's own backends**
+(`tracker.backend: native` / `knowledge.backend: native`, which are the
+defaults). A company on Jira and Confluence gets none of them, and that is the
+point: a seat offered a tool against a tracker its company does not run would
+reach for it and fail at the call, and a model shown a tool that always fails
+learns to distrust the whole catalogue.
+
+| Tool | Description |
+|------|-------------|
+| `list_work_items` | The board, filtered — what you are assigned, what is open in a project, whether something was already filed |
+| `get_work_item` | One item's description, thread, history and links, by key or id |
+| `create_work_item` | File one. `project` defaults to the seat's own unit's, and is required when the unit owns none |
+| `update_work_item` | Move it — status, assignee, priority, labels, links — with an optional `if_match` that refuses on a concurrent edit |
+| `comment_on_work_item` | Post to the thread. Mentions wake the seats they name; the turn's own key makes a re-run turn post once |
+| `merge_work_item` | Fold a duplicate into the item that survives — linked, its subtasks re-parented, and closed as `cancelled` |
+| `search_work_items` | Find an item by what it says, ranked over titles and descriptions |
+| `list_pages` | Browse the knowledge base by container, parent or title |
+| `get_page` | One page's body, breadcrumb, children and history |
+| `write_page` | Create one. Titles are addresses and are unique per container |
+| `save_page` | Edit one, stating the version you read — there is no per-field merge that makes overwriting prose safe |
+| `comment_on_page` | Remark on a page, or replace one of your own with `edit` |
+
+The writes on each side count as a **delivery** for the turn's own
+did-this-reach-anybody gate, and each waits for its own write to reach this
+node's projection before answering — so a turn that files an item and then
+lists the project sees what it just filed.
+
+The same fifteen tools are served to **your** AI assistant over
+[`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant),
+with the writes attributed to your token rather than to a seat.
+
+Note the deliberate split between personal and shared writes: `reflect_and_persist` is **personal-only** (it writes to the agent's private `agent_diary`), while team-shared content is a knowledge-base page — `write_page` on the native backend, or the vendor's own MCP tools on Confluence (see [Knowledge System](../concepts/knowledge-system.md)). `use_skill` resolves the agent's own synthesized skills; shared procedures are knowledge-base pages.
+
+**On a vendor tracker there are still no task builtins.** `create_task`,
+`assign_task`, `update_task` and `list_tasks` are not registered against Jira
+or GitLab issues — an agent works those through the vendor's own MCP tools, so
+the engine mirrors no state it would have to keep in step. See
+[The Tracker](../concepts/task-engine.md).
 
 ### Per-Role MCP Servers (GitHub)
 
@@ -66,10 +104,11 @@ Two things MCP does not cover, and what to do instead:
   a parser, and that is an in-tree Go interface — the
   [notification spine](../concepts/event-system.md) is backend-neutral by
   design, but a third-party app contributes a client, a parser and a transport as code.
-  That is a pull request, not a config entry. The six this build serves are
+  That is a pull request, not a config entry. The eight this build serves are
   [Mattermost](../integrations/mattermost.md), [Slack](../integrations/slack.md),
   [Jira](../integrations/jira.md), [Confluence](../integrations/confluence.md),
-  [GitLab](../integrations/gitlab.md) and [GitHub](../integrations/github.md) —
+  [GitLab](../integrations/gitlab.md), [GitHub](../integrations/github.md) and
+  [Datadog](../integrations/datadog.md), plus Atlassian's own Forge relay —
   every one of them routes end to end (see
   [Design Decisions](../reference/design-decisions.md#every-third-party-app-is-served)).
 - **Company-wide periodic work.** An MCP server is called by an agent; it does
@@ -130,7 +169,7 @@ Each Role names its per-server credentials directly in `mcp_env`, so every agent
 roles:
   - name: Senior Engineer
     integrations:                          # per-agent transport identity (inbound webhook
-      slack:                               #   verification + outbound send() fallback)
+      slack:                               #   verification + the working indicator)
         bot_token: "${ALICE_SLACK_BOT}"
         signing_secret: "${ALICE_SLACK_SIGNING}"
     mcp_env:

@@ -108,30 +108,7 @@ func (c *Client) UserByUsername(ctx context.Context, username string) (User, err
 	return out, err
 }
 
-// PostRequest is a message to send.
-type PostRequest struct {
-	ChannelID string `json:"channel_id"`
-	Message   string `json:"message"`
-	// RootID replies in a thread. Empty posts at top level, which starts
-	// one — so a reply that loses this becomes a new conversation in the
-	// channel rather than an answer.
-	RootID string `json:"root_id,omitempty"`
-}
-
-// CreatePost sends a message.
-//
-// NOT repeatable: every call creates a post, so a retry on anything but a
-// proven-rejected failure would double-post into a channel people read.
-func (c *Client) CreatePost(ctx context.Context, req PostRequest) (Post, error) {
-	var out Post
-	if req.ChannelID == "" {
-		return out, fmt.Errorf("mattermost: a post needs a channel")
-	}
-	_, err := c.request(ctx, http.MethodPost, "/posts", req, &out, false)
-	return out, err
-}
-
-// postList is the wire shape of every list-of-posts endpoint: a map plus an
+// postList is the wire shape of a list-of-posts response: a map plus an
 // ordering, because JSON objects have none.
 type postList struct {
 	Order []string        `json:"order"`
@@ -140,7 +117,7 @@ type postList struct {
 
 // ordered returns the posts oldest-first.
 //
-// Mattermost's `order` is NEWEST FIRST, and every consumer here wants a
+// Mattermost's `order` is NEWEST FIRST, and [Client.PostsSince] wants a
 // conversation in the order it happened — a backfill replayed newest-first
 // would hand a seat the answer before the question.
 func (l postList) ordered() []Post {
@@ -171,19 +148,6 @@ func (c *Client) PostsSince(ctx context.Context, channelID string, since time.Ti
 	path := "/channels/" + url.PathEscape(channelID) + "/posts?since=" +
 		strconv.FormatInt(since.UnixMilli(), 10)
 	var out postList
-	if _, err := c.request(ctx, http.MethodGet, path, nil, &out, false); err != nil {
-		return nil, err
-	}
-	return out.ordered(), nil
-}
-
-// Thread reads a whole conversation, oldest first.
-func (c *Client) Thread(ctx context.Context, rootID string) ([]Post, error) {
-	if rootID == "" {
-		return nil, fmt.Errorf("mattermost: no thread")
-	}
-	var out postList
-	path := "/posts/" + url.PathEscape(rootID) + "/thread"
 	if _, err := c.request(ctx, http.MethodGet, path, nil, &out, false); err != nil {
 		return nil, err
 	}

@@ -97,7 +97,7 @@ func convergedCompany() *org.Organization {
 			// and one under a Jira-only one, because both are real
 			// configs and a walk that knew one name would report the
 			// other seat as holding nothing.
-			{Name: "Eng Lead", DeclaredHandle: "lead", JiraProject: "ENG",
+			{Name: "Eng Lead", DeclaredHandle: "lead", Project: "ENG",
 				MCPEnv: map[string]map[string]string{
 					"atlassian": {"JIRA_API_TOKEN": "lead-token"},
 				}},
@@ -299,7 +299,7 @@ func outstandingCompany() *org.Organization {
 	o := &org.Organization{
 		Name: "nimbus",
 		Roles: []*org.Role{
-			{Name: "Eng Lead", DeclaredHandle: "lead", JiraProject: "ENG",
+			{Name: "Eng Lead", DeclaredHandle: "lead", Project: "ENG",
 				MCPEnv: map[string]map[string]string{
 					"atlassian": {"JIRA_API_TOKEN": "rotated-token"},
 				}},

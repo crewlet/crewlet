@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -38,7 +39,10 @@ type Company struct {
 	// different blocks because they are different directions.
 	Integrations Integrations `yaml:"integrations,omitempty" json:"integrations"`
 
-	// Knowledge is the org-wide read scope for the shared-knowledge
+	// Tracker is which work tracker this company runs.
+	Tracker Tracker `yaml:"tracker,omitempty" json:"tracker,omitempty"`
+
+	// Knowledge is which knowledge base this company runs, and the read
 	// search.
 	Knowledge Knowledge `yaml:"knowledge,omitempty" json:"knowledge"`
 
@@ -269,6 +273,16 @@ func (c *Company) Validate() error {
 					"[A-Za-z_][A-Za-z0-9_]*: a key like %q would never be "+
 					"substituted into a skill's ${name} reference", key)
 		}
+		if key == ReservedBaseURLVariable {
+			p.add(at("skill_variables", key), ErrConflict,
+				"%s is reserved: the engine sets it from "+
+					"integrations.public_base_url, which is where this "+
+					"deployment's address belongs — write a whole ${VAR} "+
+					"there and staging and production answer at their own "+
+					"addresses off one revision. Set it there and delete "+
+					"this line",
+				ReservedBaseURLVariable)
+		}
 	}
 
 	if c.TokenBudget < 0 {
@@ -296,6 +310,7 @@ func (c *Company) Validate() error {
 	p.wrap(c.Scheduling.validate("scheduling"))
 	p.wrap(c.Integrations.validate("integrations"))
 	p.wrap(c.validateKnowledgeBackend())
+	p.wrap(c.validateContainerKeys())
 	p.wrap(c.validateProviderKeys())
 	p.wrap(c.validateWorkers())
 	p.wrap(c.validateSandboxPlacement())
@@ -335,6 +350,22 @@ func (c *Company) Validate() error {
 	for i := range c.Units {
 		p.wrap(c.Units[i].validate(idx("units", i)))
 	}
+	p.wrap(c.Tracker.Native.validate("tracker.native"))
+	// A NATIVE BLOCK ON A COMPANY THAT IS NOT NATIVE describes nothing,
+	// and the failure that produces is silence: an operator sets working
+	// days and a timezone, nothing reads either, and the calendar keeps
+	// shading Saturday.
+	//
+	// The check is against the DERIVED backend rather than the literal
+	// field, because an empty `backend` with no Jira integration IS
+	// native — refusing the default configuration would be the opposite of
+	// the intent.
+	if c.Tracker.Native != nil && c.TrackerBackendFor() != TrackerNative {
+		p.add("tracker.native", ErrConflict,
+			"this company's tracker is %q, and `tracker.native` is the engine's "+
+				"own tracker's policy — nothing would read it. Remove the block, "+
+				"or run the native tracker", c.TrackerBackendFor())
+	}
 
 	// The hierarchy's own rules — duplicate handles, human seats carrying
 	// runtime fields, schedules with no runner — are the org model's, and
@@ -342,6 +373,14 @@ func (c *Company) Validate() error {
 	p.wrap(c.organization().Validate())
 	return p.err()
 }
+
+// ReservedBaseURLVariable is the skill variable carrying this deployment's
+// public base URL, so a skill can compose a link a person can click.
+//
+// The engine sets it from integrations.public_base_url and this package
+// refuses a company that declares it: two sources for one address is how a
+// skill comes to link at the deployment the company used to run on.
+const ReservedBaseURLVariable = "crewlet_base_url"
 
 // validateKnowledgeBackend holds the rule that a read scope needs the
 // backend it narrows.
@@ -357,26 +396,425 @@ func (c *Company) Validate() error {
 // defaults to empty (which means unscoped) and so cannot be the signal.
 func (c *Company) validateKnowledgeBackend() error {
 	var p problems
-	if len(c.Knowledge.ConfluenceSpaces) > 0 && c.Integrations.Confluence == nil {
-		p.add("knowledge.confluence_spaces", ErrConflict,
-			"a Confluence read scope needs integrations.confluence")
+
+	if b := c.Knowledge.Backend; b != "" && !b.Valid() {
+		p.add("knowledge.backend", ErrShape,
+			"knowledge.backend must be native, confluence or none")
+	}
+	if b := c.Tracker.Backend; b != "" && !b.Valid() {
+		p.add("tracker.backend", ErrShape,
+			"tracker.backend must be native, jira or none")
+	}
+
+	// A BACKEND AND ITS VENDOR TOGETHER IS THE MIRROR THE DOCTRINE FORBIDS.
+	// Both would route, both would answer a search, and the company would
+	// have two places its work lives with nothing keeping them in step —
+	// which is precisely the cache with no invalidation story that the
+	// no-task-engine decision was written against. Refused at the authored
+	// path so the message names what to delete.
+	if c.Knowledge.Backend == KnowledgeNative && c.Integrations.Confluence != nil {
+		p.add("knowledge.backend", ErrConflict,
+			"a native knowledge base and integrations.confluence cannot both run: "+
+				"pages would live in two places and nothing would keep them in "+
+				"step. Remove one")
+	}
+	if c.Knowledge.Backend == KnowledgeConfluence && c.Integrations.Confluence == nil {
+		p.add("knowledge.backend", ErrConflict,
+			"knowledge.backend: confluence needs integrations.confluence")
+	}
+	if c.Tracker.Backend == TrackerNative && c.Integrations.Jira != nil {
+		p.add("tracker.backend", ErrConflict,
+			"a native tracker and integrations.jira cannot both run: work would "+
+				"be filed in two places and a unit's project key would name two "+
+				"trackers. Remove one")
+	}
+	if c.Tracker.Backend == TrackerJira && c.Integrations.Jira == nil {
+		p.add("tracker.backend", ErrConflict,
+			"tracker.backend: jira needs integrations.jira")
+	}
+
+	// A setting for a backend that is switched off reads as configuration
+	// and configures nothing — the silence this whole rule exists to end.
+	if c.KnowledgeBackendFor() == KnowledgeNone {
+		if len(c.Knowledge.KnowledgeScope) > 0 {
+			p.add("knowledge.scope", ErrConflict,
+				"a read scope needs a knowledge backend")
+		}
+		// VECTORS NEED SOMETHING TO SEARCH, and a knowledge base is not
+		// the only thing there is: the engine's own tracker is a corpus
+		// too, and a company that keeps its knowledge in Confluence's
+		// competitor's head and its work here is entitled to semantic
+		// recall over the work.
+		if c.Knowledge.Vectors != nil && *c.Knowledge.Vectors &&
+			c.TrackerBackendFor() != TrackerNative {
+			p.add("knowledge.vectors", ErrConflict,
+				"vectors need a knowledge backend or a native tracker — with "+
+					"neither there is no corpus to embed")
+		}
+	}
+	if c.Knowledge.Vectors != nil && *c.Knowledge.Vectors && c.Providers.Embeddings == nil {
+		p.add("knowledge.vectors", ErrConflict,
+			"vector recall needs providers.embeddings — there is nothing to "+
+				"compute an embedding with")
 	}
 	return p.err()
 }
 
-// Knowledge is the org-wide read scope for the shared-knowledge search.
+// Knowledge is which knowledge base the company runs and how much of it a
+// search may read.
 //
-// It is the ONLY thing that narrows the query-time search, and it is
-// role-independent on purpose: a unit's own space is integration IDENTITY
-// (where its webhooks route, where it files work) and letting an
-// identity double as a read scope is how an agent ends up unable to read
-// the page it was told to follow.
+// The scope is the ONLY thing that narrows the query-time search, and it is
+// role-independent on purpose: a unit's own space is IDENTITY (where its page
+// activity routes, where it writes) and letting an identity double as a read
+// scope is how an agent ends up unable to read the page it was told to
+// follow.
 //
-// Empty is unscoped, and unscoped is bounded by the backend's own ACLs —
-// an agent searching with its own credentials sees every space its account
-// can read. Set this only to NARROW to a curated floor.
+// Empty is unscoped. On the native backend that means the whole company,
+// because the engine IS the boundary — every reader is a seat of one company
+// and there is no second account to launder a read through. On Confluence it
+// means whatever the asking seat's own account can read, which is why a
+// credential-less seat searching unscoped there gets nothing: an unscoped
+// query on a shared admin token would show one seat pages its own user never
+// could.
 type Knowledge struct {
-	ConfluenceSpaces []string `yaml:"confluence_spaces,omitempty" json:"confluence_spaces,omitempty" desc:"Org-wide Confluence read scope. Empty = unscoped, bounded by each seat's own ACLs. Requires integrations.confluence."`
+	// Backend is which knowledge base this company runs.
+	//
+	// Empty DERIVES, and the derivation is the compatible half of a rename:
+	// a company that declares integrations.confluence gets `confluence`,
+	// and one that declares nothing gets `native` — so a quickstart company
+	// has a wiki without asking for one, and an Atlassian company that has
+	// not read this note keeps the backend it had.
+	Backend KnowledgeBackend `yaml:"backend,omitempty" json:"backend,omitempty" js:"enum=native|confluence|none" desc:"Which knowledge base: native, confluence, or none. Empty derives from integrations.confluence."`
+
+	// KnowledgeScope narrows the search to these containers. Empty is
+	// unscoped — see the type doc for what that means per backend.
+	KnowledgeScope []string `yaml:"scope,omitempty" json:"scope,omitempty" desc:"Org-wide read scope. Empty = unscoped. Was knowledge.confluence_spaces."`
+
+	// SkillsContainer is where tool-skill pages live.
+	//
+	// THREE-VALUED, and the empty string is an answer: absent takes the
+	// reserved default, a name takes that container, and an explicit ""
+	// turns tool skills off — no sync, no routing exclusion, no search
+	// exclusion. The off switch exists because the default reserves a real
+	// key, and a company whose ordinary work container happens to be it
+	// would otherwise have it silently dropped from every search.
+	SkillsContainer *string `yaml:"skills_container,omitempty" json:"skills_container,omitempty" desc:"Container holding tool-skill pages. Absent takes the default; \"\" turns tool skills off."`
+
+	// RootSpace is the container holding the ORGANISATION's own pages —
+	// the root Onboarding page every seat's chain starts at.
+	//
+	// A unit writes in its own space and the org root had nowhere, so the
+	// convention that every scope publishes an Onboarding page had a hole
+	// at the top of the chain exactly where a new seat starts reading.
+	RootSpace *string `yaml:"root_space,omitempty" json:"root_space,omitempty" desc:"Container for org-level pages such as the root Onboarding. Absent takes the default."`
+
+	// Vectors adds semantic recall to the knowledge search.
+	//
+	// A POINTER because the zero value is a real setting and the absent
+	// value is a different one: unset DERIVES from whether the company
+	// configured an embeddings provider (it already has one for the diary,
+	// so a company that pays for embeddings gets the better search), and an
+	// explicit false keeps the search purely lexical on a company that has
+	// one for its diary and does not want its pages embedded.
+	Vectors *bool `yaml:"vectors,omitempty" json:"vectors,omitempty" desc:"Fuse semantic recall into knowledge search. Unset derives from providers.embeddings."`
+}
+
+// KnowledgeBackend is which knowledge base a company runs.
+type KnowledgeBackend string
+
+// The knowledge backends.
+const (
+	// KnowledgeNative is the engine's own: pages held as fleet documents
+	// and projected into every node.
+	KnowledgeNative KnowledgeBackend = "native"
+
+	// KnowledgeConfluence is Confluence, read live at query time.
+	KnowledgeConfluence KnowledgeBackend = "confluence"
+
+	// KnowledgeNone is a company with no knowledge base. The prefetch
+	// block stays empty and search_knowledge is not registered.
+	KnowledgeNone KnowledgeBackend = "none"
+)
+
+// Valid reports whether b is a backend this build serves.
+func (b KnowledgeBackend) Valid() bool {
+	switch b {
+	case KnowledgeNative, KnowledgeConfluence, KnowledgeNone:
+		return true
+	}
+	return false
+}
+
+// Tracker is which work tracker the company runs.
+//
+// SEPARATE FROM THE KNOWLEDGE AXIS, because they are two products with
+// separate routing and separate lead maps: a company running a native tracker
+// against a Confluence wiki, or Jira against native pages, is an ordinary
+// arrangement rather than a mixture to refuse.
+type Tracker struct {
+	// Backend is which tracker this company runs. Empty derives: `jira`
+	// when integrations.jira is declared, `native` otherwise.
+	Backend TrackerBackend `yaml:"backend,omitempty" json:"backend,omitempty" js:"enum=native|jira|none" desc:"Which work tracker: native, jira, or none. Empty derives from integrations.jira."`
+
+	// Native is the engine's own tracker's policy — the settings that
+	// exist because the company owns the tracker rather than renting one.
+	//
+	// PRESENT ONLY ON A NATIVE COMPANY, and refused otherwise: a block of
+	// working days and an inbox horizon on a company running Jira is
+	// config that describes nothing, and the failure it produces is
+	// silence.
+	Native *TrackerNativeConfig `yaml:"native,omitempty" json:"native,omitempty"`
+}
+
+// TrackerNativeConfig is the founder's policy over the engine's own tracker.
+//
+// # Why these three and nothing else
+//
+// Everything else a tracker could be told is either a fact about the operator
+// (which is Tier A, under `stream.`) or a decision the engine makes once for
+// everybody. What is left is genuinely a company's own: which days it works,
+// which clock its dates mean, and how long a person's inbox keeps a row.
+type TrackerNativeConfig struct {
+	// NonWorkingWeekdays are the days this company does not work.
+	//
+	// USED FOR THE CALENDAR AND THE BURNDOWN AND NOTHING ELSE. It shades a
+	// chart and shapes a guideline; it does not stop work being filed, due
+	// or done on a Sunday, because a company that says so is describing
+	// its own rhythm rather than issuing a rule.
+	NonWorkingWeekdays []string `yaml:"non_working_weekdays,omitempty" json:"non_working_weekdays,omitempty" desc:"Days this company does not work — used by the calendar and the burndown guideline. Full English names, e.g. saturday."`
+
+	// Timezone is the company's ONE clock, as an IANA name.
+	//
+	// It resolves a relative date ("next Friday"), places an all-day date
+	// at midnight, and decides where a sprint's window starts and ends. It
+	// is a clock for AUTHORED INSTANTS AND CALENDAR BOUNDARIES ONLY — no
+	// duration is measured against it, because a duration measured against
+	// a wall clock changes length twice a year.
+	Timezone string `yaml:"timezone,omitempty" json:"timezone,omitempty" desc:"IANA timezone for authored dates and sprint boundaries (default UTC)."`
+
+	// InboxRetentionDays is how long a person's inbox keeps a row.
+	//
+	// THE ONE HORIZON HERE THAT DELETES ANYTHING, and it deletes a row
+	// DERIVED from a record rather than the record: the history those rows
+	// point at is untouched and answers for ever. A year because it is a
+	// MAILBOX rather than an archive — the vendors' own defaults are a
+	// quarter of that — and because the question "what was I told about in
+	// 2024" is answered by the history, not by the inbox.
+	InboxRetentionDays int `yaml:"inbox_retention_days,omitempty" json:"inbox_retention_days,omitempty" js:"min=0;max=3650" desc:"How long a person's inbox keeps a row (default 365, 30..3650). The history it points at is untouched."`
+}
+
+// The inbox horizon's default and bounds.
+const (
+	// DefaultInboxRetentionDays is a year.
+	DefaultInboxRetentionDays = 365
+
+	// MinInboxRetentionDays is a month, below which an inbox stops being
+	// one: a person away for four weeks would come back to nothing.
+	MinInboxRetentionDays = 30
+
+	// MaxInboxRetentionDays is ten years, past which the field is not a
+	// mailbox horizon but a second copy of the history.
+	MaxInboxRetentionDays = 3650
+)
+
+// InboxRetention is how long an inbox row lives, with the default applied.
+func (t *TrackerNativeConfig) InboxRetention() time.Duration {
+	days := DefaultInboxRetentionDays
+	if t != nil && t.InboxRetentionDays > 0 {
+		days = t.InboxRetentionDays
+	}
+	return time.Duration(days) * 24 * time.Hour
+}
+
+// Location is the company's clock, or UTC. Validation has already established
+// that a configured name loads.
+func (t *TrackerNativeConfig) Location() *time.Location {
+	if t == nil || strings.TrimSpace(t.Timezone) == "" {
+		return time.UTC
+	}
+	loc, err := time.LoadLocation(strings.TrimSpace(t.Timezone))
+	if err != nil {
+		return time.UTC
+	}
+	return loc
+}
+
+// NonWorking is the set of weekdays this company does not work.
+func (t *TrackerNativeConfig) NonWorking() map[time.Weekday]bool {
+	if t == nil || len(t.NonWorkingWeekdays) == 0 {
+		return nil
+	}
+	out := make(map[time.Weekday]bool, len(t.NonWorkingWeekdays))
+	for _, name := range t.NonWorkingWeekdays {
+		if day, ok := weekdayNamed(name); ok {
+			out[day] = true
+		}
+	}
+	return out
+}
+
+// weekdayNamed resolves a weekday name, case-insensitively.
+func weekdayNamed(name string) (time.Weekday, bool) {
+	for day := time.Sunday; day <= time.Saturday; day++ {
+		if strings.EqualFold(strings.TrimSpace(name), day.String()) {
+			return day, true
+		}
+	}
+	return 0, false
+}
+
+func (t *TrackerNativeConfig) validate(path string) error {
+	var p problems
+	if t == nil {
+		return nil
+	}
+	seen := map[time.Weekday]string{}
+	for i, name := range t.NonWorkingWeekdays {
+		day, ok := weekdayNamed(name)
+		if !ok {
+			p.add(idx(at(path, "non_working_weekdays"), i), ErrUnknownValue,
+				"%q is not a weekday — write the full English name, e.g. saturday", name)
+			continue
+		}
+		if first, dup := seen[day]; dup {
+			p.add(idx(at(path, "non_working_weekdays"), i), ErrConflict,
+				"%q repeats %q", name, first)
+			continue
+		}
+		seen[day] = name
+	}
+	if tz := strings.TrimSpace(t.Timezone); tz != "" {
+		if _, err := time.LoadLocation(tz); err != nil {
+			p.add(at(path, "timezone"), ErrUnknownValue,
+				"%q is not an IANA timezone (e.g. Europe/Berlin, America/New_York): %v",
+				tz, err)
+		}
+	}
+	if d := t.InboxRetentionDays; d != 0 && (d < MinInboxRetentionDays || d > MaxInboxRetentionDays) {
+		p.add(at(path, "inbox_retention_days"), ErrOutOfRange,
+			"%d is outside %d..%d — below a month an inbox stops being one, and "+
+				"past ten years it is a second copy of the history it points at",
+			d, MinInboxRetentionDays, MaxInboxRetentionDays)
+	}
+	return p.err()
+}
+
+// TrackerBackend is which work tracker a company runs.
+type TrackerBackend string
+
+// The trackers.
+const (
+	// TrackerNative is the engine's own: work items held as fleet
+	// documents and projected into every node.
+	TrackerNative TrackerBackend = "native"
+
+	// TrackerJira is Jira, whose state the engine reads through a seat's
+	// own tools and never mirrors.
+	TrackerJira TrackerBackend = "jira"
+
+	// TrackerNone is a company with no tracker at all — schedules and chat
+	// are the only things that wake a seat.
+	TrackerNone TrackerBackend = "none"
+)
+
+// Valid reports whether b is a tracker this build serves.
+func (b TrackerBackend) Valid() bool {
+	switch b {
+	case TrackerNative, TrackerJira, TrackerNone:
+		return true
+	}
+	return false
+}
+
+// DefaultSkillsContainer is the container tool-skill pages live in when the
+// config names none.
+//
+// "TS" is the key the publishing CLI writes into and the docs name, so a
+// company that follows the guide works with nothing configured. It is a
+// RESERVED key on either backend: excluded from knowledge search and from
+// routing alike, because those pages are machinery and a seat told to read
+// one would follow an instruction written for a different phase of a
+// different turn.
+const DefaultSkillsContainer = "TS"
+
+// DefaultRootSpace is the container the ORGANISATION's own pages live in —
+// the root Onboarding page every seat's reading chain starts at.
+//
+// Reserved for the same reason [DefaultSkillsContainer] is: a unit writes in
+// its own space, the org root had nowhere, and a company that happened to name
+// a unit's space HOME would have the two collide.
+const DefaultRootSpace = "HOME"
+
+// SkillsContainerKey is the container tool skills live in, or "" for a company
+// that has turned them off — or has no knowledge base to hold them.
+//
+// UPPER, because every container comparison is case-insensitive and a config
+// written in lower case must not silently mean a different container from the
+// same word written in upper.
+//
+// # The empty string is an ANSWER, not an absence
+//
+// A company whose ordinary work container happens to be `TS` would otherwise
+// have it silently dropped from every knowledge search and every routing
+// decision, with no way to say so — the default reserving a real key is the
+// cost of having a default at all. `skills_container: ""` is how an operator
+// says "no container is reserved": every consumer already reads "" as "no
+// exclusion and no sync", so the switch is this accessor and nothing else.
+//
+// ON THE COMPANY rather than on the block, because the answer depends on
+// whether there is a knowledge base at all: `backend: none` has no container
+// to name, and answering "TS" would have the engine watching a container
+// nothing holds.
+func (c *Company) SkillsContainerKey() string {
+	if c.KnowledgeBackendFor() == KnowledgeNone {
+		return ""
+	}
+	if c.Knowledge.SkillsContainer == nil {
+		return DefaultSkillsContainer
+	}
+	return strings.ToUpper(strings.TrimSpace(*c.Knowledge.SkillsContainer))
+}
+
+// RootSpaceKey is the container org-level pages live in, on the same three
+// values and the same terms as [Company.SkillsContainerKey].
+func (c *Company) RootSpaceKey() string {
+	if c.KnowledgeBackendFor() == KnowledgeNone {
+		return ""
+	}
+	if c.Knowledge.RootSpace == nil {
+		return DefaultRootSpace
+	}
+	return strings.ToUpper(strings.TrimSpace(*c.Knowledge.RootSpace))
+}
+
+// KnowledgeBackendFor resolves the backend, deriving an empty one.
+func (c *Company) KnowledgeBackendFor() KnowledgeBackend {
+	if c.Knowledge.Backend != "" {
+		return c.Knowledge.Backend
+	}
+	if c.Integrations.Confluence != nil {
+		return KnowledgeConfluence
+	}
+	return KnowledgeNative
+}
+
+// TrackerBackendFor resolves the tracker, deriving an empty one.
+func (c *Company) TrackerBackendFor() TrackerBackend {
+	if c.Tracker.Backend != "" {
+		return c.Tracker.Backend
+	}
+	if c.Integrations.Jira != nil {
+		return TrackerJira
+	}
+	return TrackerNative
+}
+
+// VectorsEnabled reports whether knowledge search fuses semantic recall.
+func (c *Company) VectorsEnabled() bool {
+	if c.Knowledge.Vectors != nil {
+		return *c.Knowledge.Vectors
+	}
+	return c.Providers.Embeddings != nil
 }
 
 // validateProviderKeys holds the rule that a seat may only name a model the

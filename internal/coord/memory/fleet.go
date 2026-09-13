@@ -41,6 +41,14 @@ type Fleet struct {
 	runs         map[string]coord.Record
 	secrets      map[string]coord.SecretRecord
 	integrations map[string][]byte
+	positions    map[string]coord.NodePositions
+	holds        map[string]coord.TrimHold
+	floors       map[string]coord.TrimFloor
+	backups      map[string]coord.BackupPoint
+	maintenance  map[string]coord.MaintenanceOperation
+	admissions   map[string]coord.Admission
+	maintAcks    map[string]coord.MaintenanceAck
+	maintRev     uint64
 
 	epoch   int64
 	target  coord.Activation

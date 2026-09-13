@@ -272,6 +272,20 @@ const (
 	// this node must stop serving the seat now, not when its turn happens
 	// to end.
 	ReasonPosture ReleaseReason = "posture"
+
+	// ReasonUnserviceable is this node's copy of the company's records
+	// being WRONG rather than behind — a halted applier, an eviction, a
+	// position below the trim floor, or a record it has been unable to
+	// decode past the deferral grace. See [Config.Serviceable].
+	//
+	// VOLUNTARY, unlike ReasonPosture, and the difference is what is
+	// actually lost. A shedding posture means this node may be running a
+	// company revision the fleet has moved off, so what it is doing right
+	// now is suspect and must stop at once. This means its ROWS are wrong
+	// while its lease is perfectly good — so the turn in flight, which is
+	// already running against those rows, is better finished than
+	// abandoned, and the seat leaves the moment it goes idle.
+	ReasonUnserviceable ReleaseReason = "unserviceable"
 )
 
 // Fenced reports whether this release has lost exclusivity — whether a peer
@@ -417,6 +431,12 @@ type SweepResult struct {
 	// mixed-version gate is indistinguishable from one whose peers simply
 	// hold every seat.
 	BlockedByProtocol int
+	// Withheld says this node declined to claim because it is not ready to
+	// run new seats — see [Config.Ready]. Distinct from every other reason
+	// a pass claims nothing, and the one that is otherwise invisible: a
+	// node at capacity, a node whose peers hold everything and a node
+	// waiting on its own projection all report an identical empty sweep.
+	Withheld bool
 }
 
 // Blocked reports whether the mixed-version gate is what stopped this pass

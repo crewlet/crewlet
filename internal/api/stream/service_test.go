@@ -45,7 +45,7 @@ func TestIngestPushesTheResultOfApplyingAnEvent(t *testing.T) {
 	// the raw event stream. Every tab used to keep its own copy of the
 	// projection, and each drifted its own way.
 	s, c := newService(t, stream.Options{})
-	s.Ingest(envelope("task_started", map[string]any{"role": "Lead", "task_id": "t-1"}))
+	s.Ingest(envelope("agent_phase_started", map[string]any{"role": "Lead", "task_id": "t-1"}))
 
 	got := drain(c)
 	var agents *stream.Envelope
@@ -86,7 +86,7 @@ func TestTheEventArrivesBeforeItsConsequences(t *testing.T) {
 	// A derived push arriving before the event that caused it would
 	// briefly show a consequence with no cause in the feed beside it.
 	s, c := newService(t, stream.Options{})
-	s.Ingest(envelope("task_started", map[string]any{"role": "Lead", "task_id": "t-1"}))
+	s.Ingest(envelope("agent_phase_started", map[string]any{"role": "Lead", "task_id": "t-1"}))
 
 	kinds := kindsOf(c)
 	if len(kinds) < 2 {
@@ -216,7 +216,7 @@ func TestASnapshotIsBuiltFromMemoryAlone(t *testing.T) {
 	// thirty-day scan per tab, and would lose any call mid-flight while it
 	// did.
 	s, _ := newService(t, stream.Options{})
-	s.Ingest(envelope("task_started", map[string]any{"role": "Lead", "task_id": "t-1"}))
+	s.Ingest(envelope("agent_phase_started", map[string]any{"role": "Lead", "task_id": "t-1"}))
 
 	snap := s.Snapshot()
 	for _, key := range []string{"health", "agents", "events", "sandboxes", "tokens", "budget"} {

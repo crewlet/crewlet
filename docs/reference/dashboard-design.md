@@ -163,12 +163,20 @@ meets their company first and the engine last.
 | **Company** | People | `#/people?group=&q=` | every seat and what it is doing — grouped by state, by unit, or flat |
 | | Org chart | `#/org?lens=chart\|directory\|charter` | the hierarchy, the directory, and the company's own mission, vision and policies |
 | | *a seat* | `#/seats/{handle}?tab=` | overview · model activity · memory · cost · access |
-| **Work** | Coding runs | `#/runs?run=` | the live `sandboxes` plus the durable `sandbox_runs` — including runs whose box has been reclaimed |
+| **Work** | Work board | `#/work?project=&status=&scope=&q=` | `work_items` — the company's own tracker, derived on this node from the fleet's own ordered log. Read-only: work is filed and moved by the seats themselves. The answer's coverage half is rendered, not swallowed — `read_level` as a badge, and `complete: false` as a banner above the rows naming what the node could not account for |
+| | *an item* | `#/work/{key\|id}` | `work_item` — description, thread, history and links |
+| | *the project strip* | `#/work?project=ENG` | `work_projects` — the COMPANY's projects, so the filter offers every one rather than only those on the page — plus `work_project` for the chosen one: its counts, its lead, the unit that owns it and the sprint that is running. A unit the chart no longer has is a BANNER rather than a blank, because it is what leaves a project's work routed to nobody |
+| | *the feed* | `#/work?project=ENG` | `work_activity` — what HAPPENED in the container, which is a different question from what is on the board: the feed is ordered by the log rather than by anything the rows sort on, so a change that moved nothing on screen is still visible. A change is rendered from its DELTAS (`status: todo → in_progress`), falling back to its excerpt and then to its kind — a row with neither is still a real commit, and rendering it blank would read as a bug |
+| | My work | `#/work/me` | `work_my_work` — one person's seven claims. NOT a nav entry, because route dispatch is a switch on the first path segment and `work` already owns it; it is reached from the Work board's own header |
+| **Sprints** | Sprint report | `#/sprints?project=` | `work_sprints` — what each sprint took on, what arrived after it started, what was pulled out and what shipped inside its own window, per sprint and per person in the project's own measure. An undeclared capacity renders as an em-dash rather than a zero, which would put every assignee permanently over; a velocity with no closed sprint behind it renders as "—" for the same reason |
+| | Coding runs | `#/runs?run=` | the live `sandboxes` plus the durable `sandbox_runs` — including runs whose box has been reclaimed |
 | | Agent-to-agent | `#/conversations` | `a2a_channels` — who asked whom, how many messages, and when |
 | | Schedules | `#/schedules` | `schedules` — what fires, when it next fires, how it last went |
 | **Intelligence** | Model activity | `#/model?role=&phase=&failed=` | `phases` — one row per phase across the fleet; the transcript is on the seat |
 | | Event log | `#/activity?category=&actor=&q=&failed=` | the live feed, then `events` for older pages |
-| | Knowledge | `#/knowledge?q=` | `knowledge` — the company's own live search |
+| | Knowledge | `#/knowledge?q=` | `knowledge` — search, ranked, through the same seam a seat's own `search_knowledge` uses |
+| | Pages | `#/pages?container=&title=&kind=` | `pages` + `containers` — the same knowledge base BROWSED rather than searched. Two screens because they answer different questions: "show me what the platform team wrote down" should not be a search for a word somebody has to guess |
+| | *a page* | `#/pages/{id}` | `page` — body, breadcrumb, children, comments and revision metadata |
 | **Cost** | Spend & budgets | `#/spend?window=` | the pushed spend rollup, the `tokens` query for other windows, and `budgets` |
 | **Operations** | Fleet | `#/fleet` | `fleet` — the lease table |
 | | Integrations | `#/integrations` | `integrations`, plus `/setup/integrations` over REST *(operator-gated)* |
@@ -181,10 +189,17 @@ meets their company first and the engine last.
 | — | Engine | the pill in the sidebar footer | the `health` push plus the `stream` query |
 
 **Old routes redirect, with their query strings intact.** `#/agents`,
-`#/agents/{id}`, `#/work`, `#/tokens`, `#/events`, `#/company`, `#/audit` and
+`#/agents/{id}`, `#/tokens`, `#/events`, `#/company`, `#/audit` and
 `#/org?lens=seats` all resolve to their new homes. Those links are in bookmarks
 and in chat threads; a redirect costs one navigation, a dead link costs the
 reader the thing they were looking for.
+
+**A redirect is removed the moment a live screen takes its path.** `#/work`
+redirected to the coding runs back when "work" meant a coding run; the work
+board then took the name, and the entry would have sent every reader of a live
+route somewhere else, permanently, with the address bar agreeing with them.
+That is strictly worse than the dead link a redirect exists to avoid, because
+a dead link is visible. `router.test.ts` holds the rule against the nav.
 
 ### Moving, and going back
 
