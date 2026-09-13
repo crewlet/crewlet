@@ -130,7 +130,7 @@ playbook, same durability.
 ## Durability — nothing new to build
 
 Every round of the report's 1:1 is a normal turn, so the post-turn
-[`PersistDecider`](agent-learning.md#1-persistdecider--post-turn-personal-memory)
+[`PersistDecider`](agent-learning.md#1-persistdecider-post-turn-personal-memory)
 runs on each one automatically — it even sees *who* spoke and *what* they
 said (the inbound message + sender are in its prompt). The conversation's
 residue lands in the right place on its own:

@@ -14,7 +14,7 @@ These tools are registered globally and available to all agents:
 | `reflect_and_persist` | Capture a durable fact in the agent's private diary (LONG / SHORT) |
 | `refresh_memory` | Re-run the personal-memory filter mid-turn after gathering richer context |
 | `query_episodes` | Search the agent's own past completed turns by similarity |
-| `use_skill` | Load one of the agent's own [synthesized skills](../concepts/agent-learning.md#5-skillsynthesizer--skill-induction) on demand |
+| `use_skill` | Load one of the agent's own [synthesized skills](../concepts/agent-learning.md#5-synthesizer-skill-induction) on demand |
 | `refine_skill` | Append a bullet to a synthesized skill (or replace its body) |
 | `mark_onboarded` | Stamp the agent's onboarding marker after reading the relevant onboarding pages |
 | `a2a_ask` | Tight-loop synchronous handoff to a colleague (see [Turn Engine § Colleague-surface tools](../concepts/turn-engine.md#colleague-surface-tools)) |
