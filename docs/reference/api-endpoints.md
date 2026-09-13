@@ -1659,7 +1659,7 @@ letting it write again are not reads, whatever a laptop deployment allows.
 
 | Route | What it does |
 |---|---|
-| `POST /work/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, and `503` when the fleet's generation cannot be established — a bare sequence at the wrong generation pins a position on a log that no longer exists. |
+| `POST /work/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, `404` when the stream is not one this node runs, and `503` on a process running no state log. The point is stamped with **that stream's own generation**, read from the running log: a bare sequence at another log's generation names a number space the copy does not cover. |
 | `POST /work/retention/evict/{node}?confirm={node}` | Installs the eviction gate. |
 | `POST /work/retention/readmit/{node}?confirm={node}` | The inverse commit. |
 

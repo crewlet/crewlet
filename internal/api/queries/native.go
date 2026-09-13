@@ -70,7 +70,7 @@ import (
 func freshness(p Params) (tracker.Freshness, error) {
 	got, err := tracker.ParseFreshness(p)
 	if err != nil {
-		return got, fmt.Errorf("%w: %s", ErrBadParams, err)
+		return got, fmt.Errorf("%w: %w", ErrBadParams, err)
 	}
 	got.Level = statelog.LevelFor(statelog.SurfaceDashboard, got.Level)
 	// AND THE BOUND IS CHECKED AGAINST THE LEVEL THAT WILL BE SERVED,
@@ -143,7 +143,7 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 		Project: s.projectOf(strings.TrimSpace(p.String("viewer"))),
 	}, now, time.UTC)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s", ErrBadParams, err)
+		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
 	}
 	// THIS SURFACE'S OWN DEFAULT, applied where an absent level resolves.
 	// A dashboard tile polls, and a poll that took a quorum round trip
@@ -163,7 +163,7 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 		// [ErrUnavailable]: the caller narrows and asks again, where
 		// "unavailable" tells a polling screen to send the identical
 		// query back every few seconds for ever.
-		return nil, fmt.Errorf("%w: %s", ErrBadParams, err)
+		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
 	case err != nil:
 		return nil, unavailableIfBehind(err)
 	}
@@ -700,6 +700,7 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 	}
 	q.Level, q.MaxLag, q.MaxLagSeq = fresh.Level, fresh.MaxLag, fresh.MaxLagSeq
 	if raw := strings.TrimSpace(p.String("container")); raw != "" {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		container, err := viewContainer(p)
 		if err != nil {
 			return nil, err
@@ -724,6 +725,7 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 	// the wall-clock bound a person typed. Tried as a position first,
 	// because a position is unambiguous and a timestamp is not.
 	if since := strings.TrimSpace(p.String("since")); since != "" {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if at, err := tracker.ParseLogPosition(since); err == nil {
 			q.Since = at
 		} else {

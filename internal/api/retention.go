@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -46,8 +45,6 @@ import (
 // eventually be given a reason to.
 type retentionWriter interface {
 	PutBackupPoint(ctx context.Context, p coord.BackupPoint) error
-	Positions(ctx context.Context) ([]coord.NodePositions, error)
-	Floors(ctx context.Context) ([]coord.TrimFloor, error)
 }
 
 // NodeGate is the eviction half, which is a RECORD on the log rather than a
@@ -100,6 +97,15 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 			map[string]string{"error": "no_coordination_store"})
 		return
 	}
+	if a.capacity == nil {
+		// AND THE OTHER HALF OF THE GESTURE. The generation a point is
+		// stamped with belongs to the RUNNING log — see [App.generationOf]
+		// — so a process holding no state log has nothing to stamp it
+		// from, and 503 rather than 404 for the reason above it.
+		writeJSON(w, http.StatusServiceUnavailable,
+			map[string]string{"error": "no_state_log"})
+		return
+	}
 	stream := r.URL.Query().Get("stream")
 	position, err := strconv.ParseUint(r.URL.Query().Get("position"), 10, 64)
 	if stream == "" || err != nil || position == 0 {
@@ -116,10 +122,16 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 		// A BARE SEQUENCE NAMES A NUMBER SPACE. Publishing one at the
 		// wrong generation pins a position on a log that no longer
 		// exists, which the trim reads as no acknowledgement at all —
-		// so a generation nobody could read is refused rather than
-		// assumed to be the current one.
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"error":  "generation_unknown",
+		// so a stream this node does not run is refused rather than
+		// acknowledged at some other log's generation.
+		//
+		// 404 AND NOT 503, which is the classification GET
+		// /work/retention/reanchor already gives the same refusal from
+		// the same call: nothing here is transient, and a 503 tells an
+		// operator who typed the stream name wrong to wait and try the
+		// identical request again.
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"error":  "unknown_stream",
 			"detail": err.Error(),
 		})
 		return
@@ -149,47 +161,50 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// generationOf is the generation this fleet's own records are at for one
-// stream, read from the published floors and then from the register.
+// generationOf is the generation the NAMED stream's log stands at, taken from
+// the domain this node is running rather than from the fleet's registers.
 //
-// TWO SOURCES BECAUSE EITHER CAN BE THE ONLY ONE. The floor is written by the
-// trim duty and is absent on a fleet whose duty has not run; the register is
-// written by every node's heartbeat and is keyed by DOMAIN rather than by
-// stream, so it answers only once something has published a position carrying
-// this stream's own name.
+// # The question is per stream, and neither register can be asked per stream
+//
+// An acknowledgement is filed under a STREAM — [coord.BackupPoint.Streams] is
+// what the trim's backup term looks its reach up in — while the published
+// floors are keyed by DOMAIN and every node's positions heartbeat by domain
+// too, and neither record carries a stream name at all. So there was no lookup
+// to perform in them, and what the two sources here actually did was take the
+// FIRST row of whichever one answered. That is not "the fleet's generation":
+// a reanchor moves ONE domain's, so on an estate where the tracker has been
+// re-anchored and the pages log has not, the two numbers differ and which one
+// came back was whichever key the store happened to list first.
+//
+// # And a generation that is too HIGH is not a refused acknowledgement
+//
+// The trim discards a backup point BELOW its own generation and reads one at
+// or above it as covering the log (see [statelog.TrimInputs]'s backup term).
+// So a point stamped with a re-anchored neighbour's higher generation counts —
+// at a sequence belonging to a number space that is not this log's — and the
+// trim then deletes records the acknowledged copy does not contain. The one
+// failure this whole route exists to prevent.
+//
+// # Why the running domain is the right source
+//
+// It is the SAME number the trim compares against: both read that stream's
+// applier committed cursor. A node that has not yet applied a reanchor answers
+// LOW, which the trim's own guard refuses — the safe direction, and a visible
+// one, because the acknowledgement echoes back the generation it recorded.
+//
+// A stream this build does not run has no such cursor and is REFUSED, where
+// the register sources answered it confidently with some other log's number:
+// a mistyped stream name used to read back as a successful acknowledgement
+// that nothing would ever count.
 func (a *App) generationOf(ctx context.Context, stream string) (uint32, error) {
-	// THE PUBLISHED FLOOR FIRST. The trim writes it from the running
-	// applier's own generation, and it is the fleet's single answer — one
-	// row per domain, written by whichever node holds the duty.
-	floors, err := a.retention.Floors(ctx)
+	// The instant is the reanchor confirmation's business and not this
+	// route's; the generation beside it is this node's own answer for the
+	// stream, which is exactly what has to be stamped on the point.
+	_, generation, err := a.capacity.ReanchorStatus(ctx, stream)
 	if err != nil {
 		return 0, err
 	}
-	if len(floors) > 0 {
-		return floors[0].Generation, nil
-	}
-
-	// THEN ANY NODE'S OWN REPORT, for the fleet whose trim duty has not
-	// ticked yet — a company in its first fifteen minutes, or one whose
-	// nodes all declare `roles: [seats]`. Every node publishes the
-	// generation it is applying at, and they agree: a generation changes
-	// only by a reanchor, which is one committed record every node reads.
-	rows, err := a.retention.Positions(ctx)
-	if err != nil {
-		return 0, err
-	}
-	for _, row := range rows {
-		for _, at := range row.Domains {
-			return at.Generation, nil
-		}
-	}
-
-	// NOT ZERO-BY-DEFAULT. Generation zero is a real value — a fleet that
-	// has never reanchored — and it is indistinguishable here from "nobody
-	// has published anything yet", which is a fleet whose acknowledgement
-	// would name a log nothing is following.
-	return 0, errors.New("no node has published a position and no trim floor " +
-		"has been written, so this fleet's generation cannot be established")
+	return generation, nil
 }
 
 // mountRetention registers the write half of the retention surface.
