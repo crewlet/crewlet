@@ -50,6 +50,22 @@ export interface QueryOptions {
   pollMs?: number;
   /** Ask again when the socket reconnects. Default true. */
   refetchOnReconnect?: boolean;
+  /**
+   * Ask again when the tab becomes visible after being hidden.
+   *
+   * FOR THE ANSWERS A PERSON CHANGES SOMEWHERE ELSE. Setting an integration
+   * up means leaving for the third-party app, doing something there, and
+   * coming back — and coming back is the strongest signal in the system that
+   * the answer may have moved, stronger than any interval. Without it the
+   * screen holds whatever it read before they left until its poll comes
+   * round: at a minute's cadence an operator who finished installing a
+   * GitHub App in eight seconds returned to a card still asking them to
+   * install it, and reloaded the page to find out why.
+   *
+   * Default off, because most answers are not changed from outside this
+   * screen and a tab switch is not a reason to re-ask them.
+   */
+  refetchOnFocus?: boolean;
 }
 
 export function useQuery<K extends QueryName>(
@@ -59,7 +75,7 @@ export function useQuery<K extends QueryName>(
 ): QueryResult<QueryMap[K]> {
   const { socket } = useClient();
   const { connected } = useConnection();
-  const { enabled = true, pollMs, refetchOnReconnect = true } = options;
+  const { enabled = true, pollMs, refetchOnReconnect = true, refetchOnFocus = false } = options;
 
   const [state, setState] = useState<{
     data: QueryMap[K] | null;
@@ -124,6 +140,25 @@ export function useQuery<K extends QueryName>(
     // socket blip.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket, what, key, enabled, pollMs, asked, refetchOnReconnect && connected]);
+
+  // A TAB COMING BACK ASKS AGAIN.
+  //
+  // `visibilitychange` rather than window focus: focus fires for a click
+  // back into a window that was never hidden, which is several re-asks a
+  // minute for somebody switching between this screen and their editor,
+  // while this fires only for a tab that was actually away — which is
+  // exactly the round trip to a third-party app that this is for.
+  //
+  // Its own effect, so it does not join the dependency list above and
+  // re-run the query on every toggle of the flag.
+  useEffect(() => {
+    if (!enabled || !refetchOnFocus) return;
+    const wake = () => {
+      if (document.visibilityState === "visible") refetch();
+    };
+    document.addEventListener("visibilitychange", wake);
+    return () => document.removeEventListener("visibilitychange", wake);
+  }, [enabled, refetchOnFocus, refetch]);
 
   return { ...state, refetch };
 }

@@ -1662,7 +1662,17 @@ export function Integrations() {
     loading,
     error,
     refetch: reread,
-  } = useQuery("integrations", undefined, { pollMs: settling ? 4_000 : 60_000 });
+  } = useQuery("integrations", undefined, {
+    pollMs: settling ? 4_000 : 60_000,
+    // AND WHENEVER THIS TAB COMES BACK. Setting an integration up means
+    // leaving for the third-party app and returning, and returning is the
+    // strongest signal there is that the answer moved — stronger than any
+    // interval, and the only one that covers the half of the work done
+    // somewhere this screen never sees. Measured: a GitHub App installed in
+    // about eight seconds, then a card still asking for the install, reloaded
+    // by hand to find out why.
+    refetchOnFocus: true,
+  });
   const setup = useSetup();
   // READ AGAIN AFTER A WRITE, because the first read can land before the
   // engine has applied the revision it just stored. See [useRecheck].
