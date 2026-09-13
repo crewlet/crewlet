@@ -824,6 +824,12 @@ rendered idle from the first phase to the last.
   field arrives as one whole `${VAR}` reference, shown as the name it is, or
   as the engine's mask, shown as "A literal value is set (hidden)". The mask is
   never printed as if it were a value.
+- **A screen that throws takes only itself down.** `app/App.tsx` wraps the
+  routed screen in an error boundary, so a malformed field renders "This
+  screen could not be drawn" with the error's message and a Try again button,
+  inside a shell whose navigation still works. Without it React unmounts the
+  whole application on a render error, which is what a seat whose `llm` was a
+  per-phase mapping once did. The boundary resets when the reader navigates.
 - **One REST transport, one REST loader.** `protocol/rest.ts` is the only
   path to a REST route: `rest.request(method, path, options)` answers the
   status and the `ETag` beside the body, takes a caller's `AbortSignal`, never
