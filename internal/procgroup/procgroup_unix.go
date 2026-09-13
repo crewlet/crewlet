@@ -37,13 +37,25 @@ func detach(cmd *exec.Cmd) {
 	cmd.SysProcAttr.Setsid = true
 }
 
+// addressable reports whether kill(2) reads -pid as ONE process group.
+//
+// Two values do not, and both are refused rather than signalled. Zero and
+// below would address the caller's own group, which is every process in the
+// engine's session. One is the sharper case: kill(-1, sig) is the BROADCAST
+// form, delivered to every process the caller has permission to signal, so a
+// SIGKILL "to the group led by pid 1" takes down the engine, every coding job
+// and, on a workstation, the operator's whole login. No child this package
+// addresses can be pid 1: init holds it for the life of the pid namespace,
+// the engine's own included when it runs as a container's first process.
+func addressable(pid int) bool { return pid > 1 }
+
 // exists probes the group without touching it.
 //
 // EPERM counts as alive: the group is there and belongs to somebody else,
 // which under a recycled pid is exactly the case a caller checking identity
 // has to handle. Reporting it as dead would be the more dangerous lie.
 func exists(pid int) bool {
-	if pid <= 0 {
+	if !addressable(pid) {
 		return false
 	}
 	err := syscall.Kill(-pid, 0)
@@ -52,7 +64,7 @@ func exists(pid int) bool {
 
 // signal delivers sig to the whole group led by pid.
 func signal(pid int, sig syscall.Signal) error {
-	if pid <= 0 {
+	if !addressable(pid) {
 		return nil
 	}
 	err := syscall.Kill(-pid, sig)
