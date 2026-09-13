@@ -149,6 +149,21 @@ test("a highlight past the end of results that shrank under it stays on a real r
   expect(last.getAttribute("aria-selected")).toBe("true");
 });
 
+test("a press on a result keeps focus in the search box, and its click opens the result", () => {
+  const onClose = vi.fn();
+  mount(onClose);
+  const input = screen.getByRole("combobox", { name: "Search" });
+  expect(document.activeElement).toBe(input);
+  const option = screen.getAllByRole("option")[2]!;
+  // Prevented: a press on something that is not a control moves focus to
+  // the nearest focusable ancestor, the dialog, which jsdom does not model.
+  expect(fireEvent.mouseDown(option)).toBe(false);
+  expect(onClose).not.toHaveBeenCalled();
+  fireEvent.click(option);
+  expect(location.hash).toBe(href(ALL_NAV[2]!.path));
+  expect(onClose).toHaveBeenCalledTimes(1);
+});
+
 test("a press on the veil closes search on its click, as every modal's veil does", () => {
   const onClose = vi.fn();
   mount(onClose);

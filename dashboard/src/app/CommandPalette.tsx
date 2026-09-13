@@ -342,6 +342,10 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
                   // Opened on CLICK rather than the shared list's mousedown:
                   // nothing here closes on blur, and search gone on the press
                   // would leave its release to land on the screen beneath.
+                  // The press itself is prevented all the same, so it does
+                  // not move focus to the dialog around the list: a combobox
+                  // that loses its input to a press dragged off a row names
+                  // no highlight, and typing reaches nothing.
                   <div
                     key={hit.id}
                     id={listbox.optionId(mine)}
@@ -349,6 +353,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
                     role="option"
                     aria-selected={mine === listbox.active}
                     onMouseEnter={listbox.optionHandlers(mine).onMouseEnter}
+                    onMouseDown={(e) => e.preventDefault()}
                     onClick={() => open(hit)}
                   >
                     <Icon name={hit.icon} size="sm" />
