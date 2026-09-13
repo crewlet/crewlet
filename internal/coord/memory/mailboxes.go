@@ -86,8 +86,8 @@ func (f *Fleet) DeleteMailbox(_ context.Context, handle string, version uint64) 
 // zone. A zero stamp stays zero: it is the "not absent" and "not retiring"
 // value, and converting it would move it off the zero instant.
 func (f *Fleet) storeMailboxLocked(rec coord.MailboxRecord) coord.MailboxRecord {
-	f.mailboxVersion++
-	rec.Version = f.mailboxVersion
+	f.version++
+	rec.Version = f.version
 	rec.AbsentSince = utcUnlessZero(rec.AbsentSince)
 	rec.RetiringSince = utcUnlessZero(rec.RetiringSince)
 	f.mailboxes[rec.Handle] = rec

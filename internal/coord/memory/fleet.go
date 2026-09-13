@@ -43,12 +43,13 @@ type Fleet struct {
 	integrations map[string][]byte
 	mailboxes    map[string]coord.MailboxRecord
 
-	// mailboxVersion is the one version counter every mailbox write draws
-	// from. Store-wide rather than per record, as a KV revision is, so a
-	// record deleted and created again never hands back a version an older
-	// incarnation of it already used: a caller still holding that version
-	// must lose, not win against a record it never read.
-	mailboxVersion uint64
+	// version is the one counter every versioned write draws from, sandbox
+	// runs and mailbox records alike. Store-wide rather than per record, as
+	// a KV revision is, so a record deleted and created again never hands
+	// back a version an older incarnation of it already used: a caller still
+	// holding that version must lose, not win against a record it never
+	// read. A per-record counter restarting at 1 was exactly that bug.
+	version uint64
 
 	epoch   int64
 	target  coord.Activation
@@ -563,7 +564,8 @@ func (f *Fleet) CreateSandboxRun(_ context.Context, turnID string, value []byte)
 	}
 	// Versions start at 1 so a zero version is always a lost race, which
 	// is what a caller that forgot to read one deserves.
-	f.runs[turnID] = coord.Record{Key: turnID, Value: slices.Clone(value), Version: 1}
+	f.version++
+	f.runs[turnID] = coord.Record{Key: turnID, Value: slices.Clone(value), Version: f.version}
 	return true, nil
 }
 
@@ -575,7 +577,8 @@ func (f *Fleet) UpdateSandboxRun(_ context.Context, turnID string, value []byte,
 	if !ok || record.Version != version {
 		return false, nil
 	}
-	f.runs[turnID] = coord.Record{Key: turnID, Value: slices.Clone(value), Version: version + 1}
+	f.version++
+	f.runs[turnID] = coord.Record{Key: turnID, Value: slices.Clone(value), Version: f.version}
 	return true, nil
 }
 

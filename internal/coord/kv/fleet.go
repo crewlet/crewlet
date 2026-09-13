@@ -1464,6 +1464,13 @@ func (f *FleetStore) CreateSandboxRun(ctx context.Context, turnID string, value 
 
 // UpdateSandboxRun writes at a version, reporting whether that version held.
 func (f *FleetStore) UpdateSandboxRun(ctx context.Context, turnID string, value []byte, version uint64) (bool, error) {
+	if version == 0 {
+		// NO VERSION IS A LOST RACE, never an unconditional write. The
+		// client reads an expected revision of 0 as "the key must not exist
+		// yet", so passing one through CREATED a run for a caller that never
+		// read one, where the contract and the memory twin both refuse.
+		return false, nil
+	}
 	_, err := f.runs.Update(ctx, encodeKey(turnID), value, version)
 	switch {
 	case err == nil:
@@ -1484,6 +1491,12 @@ func (f *FleetStore) UpdateSandboxRun(ctx context.Context, turnID string, value 
 // a tombstone revision, and a bucket with no TTL keeps every one of them for
 // the life of the deployment.
 func (f *FleetStore) DeleteSandboxRun(ctx context.Context, turnID string, version uint64) (bool, error) {
+	if version == 0 {
+		// The client drops a LastRevision of 0 and purges unconditionally,
+		// so a caller that never read a version deleted whatever was there:
+		// a live run, and with it the only record that its box exists.
+		return false, nil
+	}
 	err := f.runs.Purge(ctx, encodeKey(turnID), jetstream.LastRevision(version))
 	switch {
 	case err == nil:

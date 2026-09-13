@@ -1514,6 +1514,52 @@ var runCases = []fleetCase{{
 		}
 	},
 }, {
+	// A caller that never read a run has no version to offer. A store that
+	// read zero as "unconditional" would let it create a run nobody launched,
+	// or delete a live one, where the contract says it must lose.
+	name: "a write carrying no version is a lost race",
+	fn: func(h *fleetHarness) {
+		if h.updateRun("turn-1", `{"status":"running"}`, 0) {
+			h.t.Error("an update with no version created a run")
+		}
+		if _, found := h.run("turn-1"); found {
+			h.t.Fatal("an update with no version left a run behind")
+		}
+		h.createRun("turn-1", `{"status":"running"}`)
+		gone, err := h.f.DeleteSandboxRun(h.ctx, "turn-1", 0)
+		if err != nil {
+			h.t.Fatalf("DeleteSandboxRun: %v", err)
+		}
+		if gone {
+			h.t.Error("a delete with no version removed a live run")
+		}
+		if _, found := h.run("turn-1"); !found {
+			h.t.Error("a delete with no version removed a live run, and its box leaks")
+		}
+	},
+}, {
+	// A version belongs to one incarnation of a record. A writer still
+	// holding the version of a run that was deleted must lose against a run
+	// created under the same turn id afterwards, as it does against a KV
+	// revision, which never repeats.
+	name: "a version from a deleted run never acts on its successor",
+	fn: func(h *fleetHarness) {
+		h.createRun("turn-1", `{"status":"done"}`)
+		first, _ := h.run("turn-1")
+		gone, err := h.f.DeleteSandboxRun(h.ctx, "turn-1", first.Version)
+		if err != nil || !gone {
+			h.t.Fatalf("DeleteSandboxRun = (%v, %v), want (true, nil)", gone, err)
+		}
+		h.createRun("turn-1", `{"status":"running"}`)
+		second, _ := h.run("turn-1")
+		if second.Version == first.Version {
+			h.t.Errorf("the new run reused version %d of the one deleted before it", first.Version)
+		}
+		if h.updateRun("turn-1", `{"status":"stale"}`, first.Version) {
+			h.t.Error("a version from the deleted run overwrote its successor")
+		}
+	},
+}, {
 	// Every listing this serves filters on fields coordination cannot see —
 	// the seat, the status, the conversation key, the pause instant — so
 	// there is one read and the caller decodes. Ordering by turn id is part
