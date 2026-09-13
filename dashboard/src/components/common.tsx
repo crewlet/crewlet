@@ -15,7 +15,15 @@ import { href } from "~/app/router.tsx";
 import { fmtDateTime, fmtTime, humanize, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { requestToken } from "~/protocol/index.ts";
-import { runState, seatTone, stateLabel, statusLine, toneOf, type Seat } from "~/lib/seats.ts";
+import {
+  runState,
+  seatPath,
+  seatTone,
+  stateLabel,
+  statusLine,
+  toneOf,
+  type Seat,
+} from "~/lib/seats.ts";
 import type { AgentRow, FeedRow, SandboxEntry } from "~/protocol/index.ts";
 import type { Attention } from "~/lib/attention.ts";
 
@@ -77,12 +85,12 @@ export function SeatCard({
   const tone = seat.kind === "human" ? "quiet" : seatTone(agent, sandboxes);
   const call = agent?.live_call;
   return (
-    <a className="seat-card" data-tone={tone} href={href(["seats", seat.handle])}>
+    <a className="seat-card" data-tone={tone} href={href(seatPath(seat))}>
       <div className="row">
         <Avatar name={seat.name} size="lg" human={seat.kind === "human"} />
         <div className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
           <strong className="truncate t-body">{seat.name}</strong>
-          <span className="truncate t-caption mono">@{seat.handle}</span>
+          {seat.handle && <span className="truncate t-caption mono">@{seat.handle}</span>}
         </div>
         {seat.kind === "human" ? (
           <Badge outline>human</Badge>

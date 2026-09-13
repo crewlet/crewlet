@@ -162,7 +162,7 @@ meets their company first and the engine last.
 | — | **Overview** | `#/` | what needs a person · what the company is doing · what it has cost. The snapshot's `agents` / `events` / `sandboxes` / `org` / `tokens` / `budget`, plus the `stream` query |
 | **Company** | People | `#/people?group=&q=` | every seat and what it is doing — grouped by state, by unit, or flat |
 | | Org chart | `#/org?lens=chart\|directory\|charter` | the hierarchy, the directory, and the company's own mission, vision and policies |
-| | *a seat* | `#/seats/{handle}?tab=` | overview · model activity · memory · cost · access |
+| | *a seat* | `#/seats/{handle}?tab=` | overview · model activity · memory · cost · access. Identity and reporting lines from the `org` projection; email, model, token budget, schedules, contact identities, integrations and tool credential names from the `config` query *(operator-gated)* |
 | **Work** | Coding runs | `#/runs?run=` | the live `sandboxes` plus the durable `sandbox_runs` — including runs whose box has been reclaimed |
 | | Agent-to-agent | `#/conversations` | `a2a_channels` — who asked whom, how many messages, and when |
 | | Schedules | `#/schedules` | `schedules` — what fires, when it next fires, how it last went |
@@ -797,6 +797,21 @@ rendered idle from the first phase to the last.
   an 85-line reimplementation of the token aggregation — and three copies of
   that logic meant a refresh routinely disagreed with what had been on screen a
   moment earlier.
+- **The hierarchy is the engine's, too.** A seat's handle, the unit a root
+  seat's `unit:` reference moved it into, a unit's inherited lead, what a unit
+  name in `manages` expands to, automatic management by a lead and which of
+  several managers is primary are all rules of the engine, and the `org`
+  projection carries their result in its `derived` block. `lib/seats.ts`
+  indexes that block over the authored tree and implements none of the rules:
+  its earlier TypeScript copy derived a different handle than Go for a name
+  like "İlker Demir", and a handle keys a seat's memory. A projection with no
+  `derived` block (an older engine) is indexed as the document wrote it, and
+  every screen reports reporting lines and inherited leads as unknown rather
+  than computing them.
+- **What a redacted document holds is shown as what it is.** A credential
+  field arrives as one whole `${VAR}` reference, shown as the name it is, or
+  as the engine's mask, shown as "A literal value is set (hidden)". The mask is
+  never printed as if it were a value.
 - **Subscriptions are per-slice.** `agents` is pushed twice per tool-loop
   round; a store that woke every listener on every envelope would re-render the
   application several times a second for the length of a turn.

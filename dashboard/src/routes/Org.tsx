@@ -16,8 +16,7 @@ import { Avatar, Badge, Empty, Panel, Segmented } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
-import { indexOrg, statusLine, type Seat } from "~/lib/seats.ts";
-import type { OrgUnit } from "~/protocol/index.ts";
+import { indexOrg, seatPath, statusLine, type Seat, type Unit } from "~/lib/seats.ts";
 
 type Lens = "chart" | "directory" | "charter";
 
@@ -30,14 +29,13 @@ export function OrgScreen() {
 
   const seatFor = (name: string) => agents.find((a) => a.role === name);
 
-  function UnitBlock({ unit, depth }: { unit: OrgUnit; depth: number }) {
-    const seats = index.seats.filter((s) => s.unit === unit);
+  function UnitBlock({ unit, depth }: { unit: Unit; depth: number }) {
+    const seats = unit.seats;
     // A unit with no lead of its own inherits the nearest ancestor's, and the
     // chart says which it is: an inherited lead behaves identically to an
     // explicit one everywhere in the engine, and hiding the difference is how
     // an operator comes to think a unit is unmanaged.
-    const explicitLead = unit.lead;
-    const effectiveLead = seats[0]?.unitLead ?? explicitLead ?? "";
+    const effectiveLead = unit.lead?.name ?? "";
     return (
       <div className="org-unit">
         <div className="org-unit-head">
@@ -48,10 +46,10 @@ export function OrgScreen() {
             <Badge
               tone="neutral"
               icon="crown"
-              title={explicitLead ? "explicit lead" : "inherited from the parent unit"}
+              title={unit.leadInherited ? "inherited from the parent unit" : "explicit lead"}
             >
               {effectiveLead}
-              {!explicitLead && <span className="faint"> (inherited)</span>}
+              {unit.leadInherited && <span className="faint"> (inherited)</span>}
             </Badge>
           )}
           <span className="spacer" />
@@ -62,9 +60,9 @@ export function OrgScreen() {
           <div className="org-seats" style={{ marginTop: "var(--space-2)" }}>
             {seats.map((seat) => (
               <a
-                key={seat.handle}
+                key={seat.key}
                 className={`org-node${seat.kind === "human" ? " human" : ""}`}
-                href={href(["seats", seat.handle])}
+                href={href(seatPath(seat))}
               >
                 <Avatar name={seat.name} human={seat.kind === "human"} />
                 <span className="col" style={{ gap: 0, minWidth: 0, flex: 1 }}>
@@ -80,10 +78,10 @@ export function OrgScreen() {
             ))}
           </div>
         )}
-        {(unit.children?.length ?? 0) > 0 && (
+        {unit.children.length > 0 && (
           <div className="org-children">
-            {unit.children!.map((child) => (
-              <UnitBlock key={child.name} unit={child} depth={depth + 1} />
+            {unit.children.map((child) => (
+              <UnitBlock key={child.key} unit={child} depth={depth + 1} />
             ))}
           </div>
         )}
@@ -91,7 +89,7 @@ export function OrgScreen() {
     );
   }
 
-  const rootSeats = index.seats.filter((s) => !s.unit);
+  const rootSeats = index.rootSeats;
 
   return (
     <>
@@ -119,9 +117,9 @@ export function OrgScreen() {
               <div className="org-seats">
                 {rootSeats.map((seat) => (
                   <a
-                    key={seat.handle}
+                    key={seat.key}
                     className={`org-node${seat.kind === "human" ? " human" : ""}`}
-                    href={href(["seats", seat.handle])}
+                    href={href(seatPath(seat))}
                   >
                     <Avatar name={seat.name} human={seat.kind === "human"} />
                     <span className="col" style={{ gap: 0, minWidth: 0, flex: 1 }}>
@@ -139,10 +137,10 @@ export function OrgScreen() {
             </Panel>
           )}
           <div className="org-tree">
-            {(org?.units ?? []).map((unit) => (
-              <UnitBlock key={unit.name} unit={unit} depth={0} />
+            {index.topUnits.map((unit) => (
+              <UnitBlock key={unit.key} unit={unit} depth={0} />
             ))}
-            {!(org?.units ?? []).length && !rootSeats.length && (
+            {!index.units.length && !rootSeats.length && (
               <Empty
                 icon="sitemap"
                 title="No organisation is loaded"
@@ -157,7 +155,7 @@ export function OrgScreen() {
         <Panel padding="none">
           <DataTable<Seat>
             rows={index.seats}
-            rowKey={(s) => s.handle}
+            rowKey={(s) => s.key}
             defaultSort={{ key: "name", dir: "asc" }}
             empty={{ title: "No seats", hint: "Roles come from the company configuration." }}
             columns={[
@@ -185,9 +183,9 @@ export function OrgScreen() {
               {
                 key: "manager",
                 header: "Reports to",
-                sortValue: (s) => index.managerOf.get(s.name)?.name ?? "",
+                sortValue: (s) => s.manager?.name ?? "",
                 cell: (s) => {
-                  const m = index.managerOf.get(s.name);
+                  const m = s.manager;
                   return m ? (
                     <SeatChip name={m.name} handle={m.handle} />
                   ) : (
@@ -199,9 +197,8 @@ export function OrgScreen() {
                 key: "reports",
                 header: "Manages",
                 align: "right",
-                sortValue: (s) => index.reportsOf.get(s.name)?.length ?? 0,
-                cell: (s) =>
-                  index.reportsOf.get(s.name)?.length || <span className="faint">—</span>,
+                sortValue: (s) => s.reports.length,
+                cell: (s) => s.reports.length || <span className="faint">—</span>,
               },
               {
                 key: "state",
@@ -266,9 +263,9 @@ export function OrgScreen() {
           <Section title="Unit goals" hint="what each team is for">
             <div className="grid grid-auto">
               {index.units.map((u) => (
-                <Panel key={u.name} title={u.name} subtitle={u.type}>
+                <Panel key={u.key} title={u.name} subtitle={u.type}>
                   {u.purpose && <p className="t-caption">{u.purpose}</p>}
-                  {u.goals?.length ? (
+                  {u.goals.length ? (
                     <ul
                       className="col gap-1"
                       style={{ paddingLeft: "var(--space-4)", margin: "var(--space-2) 0 0" }}

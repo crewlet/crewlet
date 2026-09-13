@@ -14,7 +14,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ALL_NAV } from "./nav.ts";
 import { useNavigator } from "./router.tsx";
 import { useAgents, useOrg, useTools } from "~/lib/store-hooks.ts";
-import { indexOrg } from "~/lib/seats.ts";
+import { indexOrg, seatPath } from "~/lib/seats.ts";
 import { Icon, type IconName } from "~/ui/Icon.tsx";
 
 interface Hit {
@@ -128,15 +128,15 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       const live = agents.find((a) => a.role === seat.name);
       push(
         {
-          id: `seat-${seat.handle}`,
+          id: `seat-${seat.key}`,
           group: "Seats",
           icon: seat.kind === "human" ? "user" : "users",
           label: seat.name,
           hint:
             seat.kind === "human"
               ? "human teammate"
-              : `@${seat.handle}${live?.state ? ` · ${live.state}` : ""}`,
-          go: () => nav.to(["seats", seat.handle]),
+              : [seat.handle && `@${seat.handle}`, live?.state].filter(Boolean).join(" · "),
+          go: () => nav.to(seatPath(seat)),
         },
         s + 1,
       );
@@ -147,11 +147,11 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       if (s < 0 || !Number.isFinite(s)) continue;
       push(
         {
-          id: `unit-${unit.name}`,
+          id: `unit-${unit.key}`,
           group: "Units",
           icon: "sitemap",
           label: unit.name,
-          hint: `${unit.type ?? "unit"}${unit.lead ? ` · lead ${unit.lead}` : ""}`,
+          hint: `${unit.type || "unit"}${unit.lead ? ` · lead ${unit.lead.name}` : ""}`,
           go: () => nav.to(["org"], { unit: unit.name }),
         },
         s + 2,

@@ -22,7 +22,7 @@ import type {
   EventEnvelope,
   HealthPush,
   OrgBudget,
-  OrgTree,
+  OrgProjection,
   Overlay,
   Rollup,
   SandboxEntry,
@@ -85,7 +85,7 @@ export interface StoreState {
    */
   phases: EventEnvelope[];
   sandboxes: SandboxEntry[];
-  org: OrgTree;
+  org: OrgProjection;
   tools: ToolRow[];
   health: HealthPush;
   tokens: Rollup | null;
@@ -272,7 +272,7 @@ export class Store {
     this.emit("schedules");
   }
 
-  applyOrg(org: OrgTree | null | undefined): void {
+  applyOrg(org: OrgProjection | null | undefined): void {
     this.state.org = org ?? {};
     this.emit("org");
   }

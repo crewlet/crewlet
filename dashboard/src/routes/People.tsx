@@ -151,14 +151,14 @@ export function People() {
           <Section key={g.key} title={g.label} hint={`${g.rows.length}`}>
             <div className="seat-grid">
               {g.rows.map(({ seat, agent }) => (
-                <SeatCard key={seat.handle} seat={seat} agent={agent} sandboxes={sandboxes} />
+                <SeatCard key={seat.key} seat={seat} agent={agent} sandboxes={sandboxes} />
               ))}
             </div>
           </Section>
         ) : (
           <div className="seat-grid" key={g.key}>
             {g.rows.map(({ seat, agent }) => (
-              <SeatCard key={seat.handle} seat={seat} agent={agent} sandboxes={sandboxes} />
+              <SeatCard key={seat.key} seat={seat} agent={agent} sandboxes={sandboxes} />
             ))}
           </div>
         ),

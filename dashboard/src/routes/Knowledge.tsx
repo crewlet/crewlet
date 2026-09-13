@@ -21,7 +21,7 @@ import { Badge, Button, Empty, Panel, SearchInput, Skeleton } from "~/ui/primiti
 import { Icon } from "~/ui/Icon.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { indexOrg } from "~/lib/seats.ts";
+import { indexOrg, seatPath } from "~/lib/seats.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { useMemo } from "react";
 
@@ -179,9 +179,9 @@ export function Knowledge() {
             .slice(0, 12)
             .map((seat) => (
               <a
-                key={seat.handle}
+                key={seat.key}
                 className="seat-card"
-                href={href(["seats", seat.handle], { tab: "memory" })}
+                href={href(seatPath(seat), { tab: "memory" })}
               >
                 <div className="row">
                   <span className="attention-icon" data-severity="info">
@@ -189,7 +189,7 @@ export function Knowledge() {
                   </span>
                   <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
                     <strong className="truncate t-cell">{seat.name}</strong>
-                    <span className="truncate t-caption mono">@{seat.handle}</span>
+                    {seat.handle && <span className="truncate t-caption mono">@{seat.handle}</span>}
                   </span>
                   <Icon name="arrowRight" size="sm" />
                 </div>

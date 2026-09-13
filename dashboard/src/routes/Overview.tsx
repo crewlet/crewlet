@@ -270,7 +270,7 @@ export function Overview() {
           {live.length ? (
             <div className="seat-grid">
               {live.map(({ seat, agent }) => (
-                <SeatCard key={seat.handle} seat={seat} agent={agent} sandboxes={sandboxes} />
+                <SeatCard key={seat.key} seat={seat} agent={agent} sandboxes={sandboxes} />
               ))}
             </div>
           ) : (

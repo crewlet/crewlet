@@ -10,7 +10,10 @@
 
 import { describe, expect, test } from "vitest";
 import {
+  configValueKind,
   elapsedMs,
+  formatPhaseLLM,
+  REDACTED,
   fmtCount,
   fmtDuration,
   fmtPct,
@@ -193,5 +196,57 @@ describe("a live counter reads as a clock, not as a glitch", () => {
     expect(fmtElapsed(null)).toBe("—");
     expect(fmtElapsed(undefined)).toBe("—");
     expect(fmtElapsed(NaN)).toBe("—");
+  });
+});
+
+describe("a seat's model setting, in all three shapes the engine writes", () => {
+  test("one key and one chain are a single row for every phase", () => {
+    expect(formatPhaseLLM("fast")).toEqual([{ phase: "", chain: "fast" }]);
+    // THE ORDER IS THE MEANING of a chain, so it reads as one, not as a set.
+    expect(formatPhaseLLM(["fast", "backup"])).toEqual([{ phase: "", chain: "fast, then backup" }]);
+  });
+
+  test("a per-phase mapping is one row per phase, in the engine's phase order", () => {
+    // Rendered as a React child, this shape threw and blanked the whole page.
+    expect(formatPhaseLLM({ review: "big", default: ["fast", "backup"], judge: "cheap" })).toEqual([
+      { phase: "default", chain: "fast, then backup" },
+      { phase: "review", chain: "big" },
+      { phase: "judge", chain: "cheap" },
+    ]);
+  });
+
+  test("a phase this build does not know is kept, after the known ones", () => {
+    expect(formatPhaseLLM({ planner: "big", default: "fast" })).toEqual([
+      { phase: "default", chain: "fast" },
+      { phase: "planner", chain: "big" },
+    ]);
+  });
+
+  test("nothing configured, or a shape nobody sends, is no rows rather than a throw", () => {
+    expect(formatPhaseLLM(undefined)).toEqual([]);
+    expect(formatPhaseLLM(null)).toEqual([]);
+    expect(formatPhaseLLM("")).toEqual([]);
+    expect(formatPhaseLLM([])).toEqual([]);
+    expect(formatPhaseLLM(42)).toEqual([]);
+    expect(formatPhaseLLM({ default: 7, review: [" ", 3] })).toEqual([]);
+  });
+});
+
+describe("a value read from the redacted document", () => {
+  test("the mask is a literal that is set and hidden, never a value to print", () => {
+    expect(configValueKind(REDACTED)).toBe("hidden");
+  });
+
+  test("only a whole reference is a reference", () => {
+    expect(configValueKind("${SLACK_BOT_TOKEN}")).toBe("reference");
+    expect(configValueKind("Bearer ${TOKEN}")).toBe("literal");
+    expect(configValueKind("${TOKEN}${OTHER}")).toBe("literal");
+    expect(configValueKind("${TOKEN")).toBe("literal");
+  });
+
+  test("an unset field is empty, and an identity is a literal", () => {
+    expect(configValueKind("")).toBe("empty");
+    expect(configValueKind(undefined)).toBe("empty");
+    expect(configValueKind("U0FOUNDER")).toBe("literal");
   });
 });

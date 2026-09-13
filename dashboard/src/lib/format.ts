@@ -250,3 +250,90 @@ export function splitConversationKey(key: string): { source: string; local: stri
 export function plural(n: number, one: string, many?: string): string {
   return `${n.toLocaleString()} ${n === 1 ? one : (many ?? `${one}s`)}`;
 }
+
+// ---------------------------------------------------------------------------
+// Configuration values
+// ---------------------------------------------------------------------------
+
+/**
+ * The order the engine declares a seat's per-phase chains in
+ * (`config.PhaseLLM`), so a mapping renders in the order its reader wrote it
+ * against rather than in whatever order a JSON object happened to arrive.
+ */
+const PHASE_ORDER = ["default", "review", "subagent", "auxiliary", "judge", "sandbox"];
+
+/** One row of a seat's model setting: which phase, and the chain it runs on. */
+export interface PhaseChain {
+  /** The mapping key, or "" when one chain covers every phase. */
+  phase: string;
+  /** The provider keys, first choice first, joined for reading. */
+  chain: string;
+}
+
+/**
+ * A seat's `llm:` field as rows a person reads.
+ *
+ * THREE SHAPES, ONE READING. A key and a chain are one row covering every
+ * phase; a per-phase mapping is one row per phase it names. The seat screen
+ * used to render the field as a React child, which drew a chain as its keys
+ * glued together and threw on the mapping, taking the whole page with it.
+ *
+ * A fallback chain reads as "first, then second": the order is the whole
+ * meaning of a chain, and a bare comma list reads as a set.
+ *
+ * `unknown` in, because this is the one reader standing between a field a
+ * newer engine may shape differently and a render that must not throw.
+ */
+export function formatPhaseLLM(llm: unknown): PhaseChain[] {
+  const chain = (keys: unknown): string => {
+    if (typeof keys === "string") return keys.trim();
+    if (!Array.isArray(keys)) return "";
+    return keys
+      .filter((k): k is string => typeof k === "string" && k.trim() !== "")
+      .map((k) => k.trim())
+      .join(", then ");
+  };
+  if (typeof llm === "string" || Array.isArray(llm)) {
+    const only = chain(llm);
+    return only ? [{ phase: "", chain: only }] : [];
+  }
+  if (!llm || typeof llm !== "object") return [];
+  const rank = (phase: string) => {
+    const at = PHASE_ORDER.indexOf(phase);
+    return at < 0 ? PHASE_ORDER.length : at;
+  };
+  return Object.entries(llm as Record<string, unknown>)
+    .map(([phase, keys], i) => ({ phase, chain: chain(keys), i }))
+    .filter((row) => row.chain !== "")
+    .sort((a, b) => rank(a.phase) - rank(b.phase) || a.i - b.i)
+    .map(({ phase, chain: joined }) => ({ phase, chain: joined }));
+}
+
+/**
+ * The mask the engine writes in place of a credential it will not send.
+ *
+ * `config.Redacted` in Go. A redacted document carries this in every
+ * credential field that holds a literal; a field holding one whole `${VAR}`
+ * reference carries the reference, which names a secret rather than being one.
+ */
+export const REDACTED = "__redacted__";
+
+/** How a value read from the redacted document may be shown. */
+export type ConfigValueKind = "empty" | "hidden" | "reference" | "literal";
+
+/**
+ * What a value read from the redacted document is, for rendering.
+ *
+ * `hidden` is the mask: a literal is set and its value is not on the wire. A
+ * `reference` is ONE whole `${NAME}`, the only form the engine sends unmasked
+ * in a credential field. Anything else is a plain literal from a field that
+ * is not a credential, such as a contact identity.
+ */
+export function configValueKind(value: string | null | undefined): ConfigValueKind {
+  if (value == null || value === "") return "empty";
+  if (value === REDACTED) return "hidden";
+  // The grammar and the trim are `envref.Whole`'s, so what this calls a
+  // reference is exactly what the engine resolves as one.
+  if (/^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(value.trim())) return "reference";
+  return "literal";
+}

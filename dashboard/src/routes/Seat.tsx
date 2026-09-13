@@ -3,9 +3,19 @@
  *
  * Tabs are SECTIONS — they push a history entry, because the reader called
  * them — and the tab is in the URL so a colleague can be sent the exact view.
+ *
+ * TWO SOURCES, AND THE PAGE SAYS WHICH IS WHICH. Who a seat is and where it
+ * sits in the hierarchy come from the anonymous org projection, whose
+ * reporting lines the engine derived. How it is configured (email, model,
+ * token budget, schedules, contact identities, integrations and tool
+ * credential names) is in the operator-gated company document, read through
+ * the `config` query: the projection stopped carrying those fields because
+ * they include identities and credential references an anonymous reader has
+ * no business seeing. Without a token that half of the page is the guarded
+ * banner rather than a blank, and a credential is never on the wire at all.
  */
 
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, type ReactNode } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip, Section, StateBadge } from "~/components/common.tsx";
@@ -29,11 +39,23 @@ import { DataTable } from "~/ui/DataTable.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useAgents, useOrg, usePhaseEvents, useSandboxes, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { indexOrg, statusLine, afkReason, runState } from "~/lib/seats.ts";
 import {
+  indexOrg,
+  seatPath,
+  seatSettings,
+  statusLine,
+  afkReason,
+  runState,
+  type Seat,
+  type SeatSettings,
+} from "~/lib/seats.ts";
+import {
+  configValueKind,
   fmtCount,
   fmtDateTime,
   fmtDuration,
+  formatPhaseLLM,
+  humanize,
   plural,
   relTime,
   splitConversationKey,
@@ -47,7 +69,7 @@ import {
   streamedPhases,
   type PhaseRecord,
 } from "~/lib/phases.ts";
-import type { EventRecord } from "~/protocol/index.ts";
+import type { CompanyDocument, ConfigRole, EventRecord } from "~/protocol/index.ts";
 
 type Tab = "overview" | "model" | "memory" | "cost" | "access";
 
@@ -92,6 +114,16 @@ export function SeatScreen({ handle }: { handle: string }) {
     "tokens",
     { agent_role: seat?.name ?? "", since_days: 7, recent_turns: 50 },
     { enabled: tab === "cost" && !!seat },
+  );
+  // The operator-gated half of the page. Only on the tabs that render it:
+  // the whole company document is not something to ask for while a reader
+  // watches a turn run.
+  const config = useQuery("config", undefined, {
+    enabled: !!seat && (tab === "overview" || tab === "cost" || tab === "access"),
+  });
+  const settings = useMemo<SeatSettings | null>(
+    () => (seat && config.data ? seatSettings(config.data, seat) : null),
+    [seat, config.data],
   );
 
   const phases = useMemo<PhaseRecord[]>(() => {
@@ -149,9 +181,11 @@ export function SeatScreen({ handle }: { handle: string }) {
     );
   }
 
-  const manager = index.managerOf.get(seat.name);
-  const reports = index.reportsOf.get(seat.name) ?? [];
+  const manager = seat.manager;
+  const reports = seat.reports;
+  const hierarchy = index.hierarchy;
   const human = seat.kind === "human";
+  const configRole = settings?.state === "found" ? settings.role : null;
   const state = runState(agent, sandboxes);
   const seatSpend = tokens?.by_agent?.find((a) => a.role === seat.name);
 
@@ -264,8 +298,14 @@ export function SeatScreen({ handle }: { handle: string }) {
               <Stat
                 icon="users"
                 label="Direct reports"
-                value={reports.length}
-                sub={manager ? `reports to ${manager.name}` : "no manager in the chart"}
+                value={hierarchy ? reports.length : "Not reported"}
+                sub={
+                  !hierarchy
+                    ? "this engine did not report the hierarchy"
+                    : manager
+                      ? `reports to ${manager.name}`
+                      : "no manager in the chart"
+                }
               />
             </StatRow>
           </Panel>
@@ -277,49 +317,84 @@ export function SeatScreen({ handle }: { handle: string }) {
                   ["Role", seat.name],
                   [
                     "Handle",
-                    <code key="h" className="inline">
-                      @{seat.handle}
-                    </code>,
+                    seat.handle ? (
+                      <code key="h" className="inline">
+                        @{seat.handle}
+                      </code>
+                    ) : (
+                      <span className="faint">not reported by this engine</span>
+                    ),
                   ],
-                  ["Kind", human ? "human teammate — never spawned by the engine" : "agent seat"],
+                  ["Kind", human ? "Human teammate, never run by the engine" : "Agent seat"],
                   ["Goal", seat.goal || <span className="faint">not set</span>],
-                  ["Email", seat.email || <span className="faint">not set</span>],
                   [
                     "Unit",
                     seat.unitChain.length ? (
-                      seat.unitChain.map((u) => u.name).join(" › ")
+                      <span key="u" className="col" style={{ gap: 2 }}>
+                        <span>{seat.unitChain.map((u) => u.name).join(" › ")}</span>
+                        {seat.placedByRef && (
+                          <span className="t-caption">
+                            Placed by its <code className="inline">unit</code> reference
+                          </span>
+                        )}
+                      </span>
                     ) : (
                       <span className="faint">org-wide</span>
                     ),
                   ],
                   [
                     "Unit lead",
-                    seat.unitLead ? (
-                      <SeatChip
-                        name={seat.unitLead}
-                        handle={index.byName.get(seat.unitLead)?.handle}
-                      />
-                    ) : (
+                    !seat.unit ? (
                       <span className="faint">none</span>
+                    ) : seat.unit.lead ? (
+                      <span key="l" className="row gap-1">
+                        <SeatChip name={seat.unit.lead.name} handle={seat.unit.lead.handle} />
+                        {seat.unit.leadInherited && (
+                          <span className="t-caption">inherited from a parent unit</span>
+                        )}
+                      </span>
+                    ) : hierarchy ? (
+                      <span className="faint">none</span>
+                    ) : (
+                      <span className="faint">not reported by this engine</span>
                     ),
                   ],
                   [
                     "Reports to",
                     manager ? (
                       <SeatChip name={manager.name} handle={manager.handle} />
-                    ) : (
+                    ) : hierarchy ? (
                       <span className="faint">nobody</span>
-                    ),
-                  ],
-                  ["Model", seat.llm || <span className="faint">default provider</span>],
-                  [
-                    "Auxiliary model",
-                    seat.llmAuxiliary || (
-                      <span className="faint">none — reflection uses the default</span>
+                    ) : (
+                      <span className="faint">not reported by this engine</span>
                     ),
                   ],
                 ]}
               />
+            </Panel>
+
+            <Panel title="Configuration" icon="sliders" subtitle="from the company document">
+              <SettingsState
+                error={config.error}
+                loading={config.loading}
+                doc={config.data}
+                settings={settings}
+                seat={seat}
+              >
+                {configRole && (
+                  <KeyValue
+                    items={[
+                      ["Email", configRole.email || <span className="faint">not set</span>],
+                      ["Model", <Model key="m" llm={configRole.llm} />],
+                      ...phaseOverrides(configRole),
+                      [
+                        "Token budget",
+                        configRole.token_budget ? fmtCount(configRole.token_budget) : "Unlimited",
+                      ],
+                    ]}
+                  />
+                )}
+              </SettingsState>
             </Panel>
 
             <Panel title="Profile" icon="book">
@@ -390,15 +465,15 @@ export function SeatScreen({ handle }: { handle: string }) {
             </Section>
           )}
 
-          {seat.schedules.length > 0 && (
+          {(configRole?.schedules?.length ?? 0) > 0 && (
             <Panel
               title="Recurring work"
               icon="calendar"
-              count={seat.schedules.length}
+              count={configRole?.schedules?.length ?? 0}
               padding="none"
             >
               <DataTable
-                rows={seat.schedules}
+                rows={configRole?.schedules ?? []}
                 rowKey={(s) => s.name}
                 columns={[
                   { key: "name", header: "Name", cell: (s) => s.name, sortValue: (s) => s.name },
@@ -682,11 +757,21 @@ export function SeatScreen({ handle }: { handle: string }) {
               <Stat
                 icon="target"
                 label="Configured budget"
-                value={seat.tokenBudget ? fmtCount(seat.tokenBudget) : "unlimited"}
+                value={
+                  configRole
+                    ? configRole.token_budget
+                      ? fmtCount(configRole.token_budget)
+                      : "unlimited"
+                    : "Unknown"
+                }
                 sub={
-                  seat.tokenBudget
-                    ? "token_budget on this role in the company config"
-                    : "token_budget is 0 or unset on this role"
+                  configRole
+                    ? configRole.token_budget
+                      ? "token_budget on this role in the company config"
+                      : "token_budget is 0 or unset on this role"
+                    : config.error === "unauthorized"
+                      ? "reading the company config needs an operator token"
+                      : "the company config does not say for this seat"
                 }
               />
             </StatRow>
@@ -720,9 +805,11 @@ export function SeatScreen({ handle }: { handle: string }) {
             <div className="banner neutral">
               <Icon name="info" size="sm" />
               <span>
-                {seat.tokenBudget
-                  ? "This role has a token_budget in the config, but no engine is currently reporting a meter for it — so there is nothing measured to draw."
-                  : "No per-seat budget meter. This role has no token_budget, so its spend is bounded only by the company-wide one."}
+                {!configRole
+                  ? "No engine is reporting a budget meter for this seat, so there is nothing measured to draw."
+                  : configRole.token_budget
+                    ? "This role has a token_budget in the config, but no engine is currently reporting a meter for it, so there is nothing measured to draw."
+                    : "No per-seat budget meter. This role has no token_budget, so its spend is bounded only by the company-wide one."}
               </span>
             </div>
           )}
@@ -797,71 +884,302 @@ export function SeatScreen({ handle }: { handle: string }) {
       )}
 
       {tab === "access" && (
-        <div className="col gap-4">
-          <Panel title="Identity on other surfaces" icon="link">
-            {Object.keys(seat.contact).length ? (
-              <KeyValue
-                items={Object.entries(seat.contact).map(([k, v]) => [
-                  k.replace(/_/g, " "),
-                  <code key={k} className="inline">
-                    {v}
-                  </code>,
-                ])}
-              />
-            ) : (
-              <Empty
-                inline
-                icon="link"
-                title="No contact identities"
-                hint="A human seat needs at least one so inbound activity can be attributed to them. An agent seat's identities are derived from its handle and email."
-              />
-            )}
-          </Panel>
+        <SettingsState
+          error={config.error}
+          loading={config.loading}
+          doc={config.data}
+          settings={settings}
+          seat={seat}
+        >
+          {configRole && settings?.state === "found" && (
+            <div className="col gap-4">
+              <Panel title="Identity on other surfaces" icon="link">
+                {Object.keys(configRole.contact ?? {}).length ? (
+                  <KeyValue
+                    items={Object.entries(configRole.contact ?? {}).map(([k, v]) => [
+                      humanize(k),
+                      <ConfigValue key={k} value={v} />,
+                    ])}
+                  />
+                ) : (
+                  <Empty
+                    inline
+                    icon="link"
+                    title="No contact identities"
+                    hint="A human seat needs at least one so inbound activity can be attributed to them. An agent seat's identities are derived from its handle and email."
+                  />
+                )}
+              </Panel>
 
-          <Panel
-            title="Tool credentials"
-            icon="key"
-            subtitle="merged down the unit chain, this seat's own entries winning"
-            count={Object.keys(seat.mcpEnv).length}
-          >
-            {Object.keys(seat.mcpEnv).length ? (
-              <div className="col gap-3">
-                {Object.entries(seat.mcpEnv).map(([server, vars]) => (
-                  <div key={server} className="col gap-1">
-                    <div className="t-label">{server}</div>
-                    <KeyValue
-                      items={Object.entries(vars).map(([k, v]) => [
-                        <code key={k} className="inline">
-                          {k}
-                        </code>,
-                        // Values are `${VAR}` POINTERS in the config and are
-                        // stored verbatim; the engine resolves them only where
-                        // a transport is constructed. A literal here would be a
-                        // secret in a config, which the API redacts server-side.
-                        <code key={`${k}v`} className="inline">
-                          {v}
-                        </code>,
-                      ])}
-                    />
-                  </div>
-                ))}
-                <p className="t-caption">
-                  These are the <code className="inline">${"{VAR}"}</code> references the config
-                  carries, not resolved values — the engine resolves them when it builds this seat's
-                  MCP children, and the API redacts anything literal.
-                </p>
-              </div>
-            ) : (
-              <Empty
-                inline
+              <Panel title="Integrations" icon="plug" subtitle="this seat's own settings">
+                <SeatIntegrations role={configRole} />
+              </Panel>
+
+              <Panel
+                title="Tool credentials"
                 icon="key"
-                title="No per-seat tool credentials"
-                hint="This seat uses whatever the shared MCP servers were configured with."
-              />
-            )}
-          </Panel>
-        </div>
+                subtitle="names only: a credential value never reaches this page"
+              >
+                <ToolCredentials seat={seat} role={configRole} unit={settings.unit} />
+              </Panel>
+            </div>
+          )}
+        </SettingsState>
       )}
     </>
+  );
+}
+
+/**
+ * The operator-gated half of a seat, said precisely when it cannot be shown.
+ *
+ * `QueryState` covers a refused or failed read, which includes the guarded
+ * banner with its Set token button. The three states after it are this
+ * page's own: no configuration is active, the document has no seat by this
+ * name (the projection and the document can disagree for a moment either
+ * side of an apply), and a name held by two seats in a revision stored before
+ * names had to be unique.
+ */
+function SettingsState({
+  error,
+  loading,
+  doc,
+  settings,
+  seat,
+  children,
+}: {
+  error: string | null;
+  loading: boolean;
+  doc: CompanyDocument | null;
+  settings: SeatSettings | null;
+  seat: Seat;
+  children: ReactNode;
+}) {
+  if (loading && !doc && !error) return <Skeleton rows={3} />;
+  if (error) return <QueryState error={error} loading={loading} />;
+  if (!doc) {
+    return (
+      <Empty
+        inline
+        icon="sliders"
+        title="No company configuration is active"
+        hint="This seat's settings live in the company document, and none is active on this engine."
+      />
+    );
+  }
+  if (settings?.state === "missing") {
+    return (
+      <Empty
+        inline
+        icon="sliders"
+        title={`The active configuration has no seat named ${seat.name}`}
+        hint="The org chart and the configuration can disagree for a moment while a new revision is applied."
+      />
+    );
+  }
+  if (settings?.state === "ambiguous") {
+    return (
+      <Empty
+        inline
+        icon="sliders"
+        title={`More than one seat is named ${seat.name}`}
+        hint="This revision was stored before seat names had to be unique, so its settings cannot be attributed to one of them. Rename one of the seats to fix it."
+      />
+    );
+  }
+  return <>{children}</>;
+}
+
+/**
+ * A value from the redacted document, in the form it may be shown.
+ *
+ * NEVER A CREDENTIAL: a literal in a credential field arrives as the mask and
+ * says only that something is set, a whole `${VAR}` names an entry in the
+ * secret store, and a plain literal is a field that is not a credential.
+ */
+function ConfigValue({ value }: { value: string | undefined }) {
+  switch (configValueKind(value)) {
+    case "hidden":
+      return <span className="t-caption">A literal value is set (hidden)</span>;
+    case "reference":
+      return <code className="inline is-reference">{value}</code>;
+    case "literal":
+      return <code className="inline">{value}</code>;
+    default:
+      return <span className="faint">not set</span>;
+  }
+}
+
+/** A seat's `llm:` field, as a chain or as one chain per phase. */
+function Model({ llm }: { llm: unknown }) {
+  const rows = formatPhaseLLM(llm);
+  if (!rows.length) return <span className="faint">the company default provider</span>;
+  const only = rows[0];
+  if (rows.length === 1 && only && only.phase === "")
+    return <code className="inline">{only.chain}</code>;
+  return (
+    <span className="col" style={{ gap: 2 }}>
+      {rows.map((row) => (
+        <span key={row.phase}>
+          {humanize(row.phase)}: <code className="inline">{row.chain}</code>
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/**
+ * The flat `llm_<phase>` fields a seat sets, each of which wins over `llm:`
+ * for its phase. Listed as written rather than resolved against `llm:`, since
+ * which chain a phase finally runs on is the engine's decision.
+ */
+function phaseOverrides(role: ConfigRole): [ReactNode, ReactNode][] {
+  const fields = [
+    "llm_review",
+    "llm_subagent",
+    "llm_auxiliary",
+    "llm_judge",
+    "llm_sandbox",
+  ] as const;
+  return fields.flatMap((field): [ReactNode, ReactNode][] => {
+    const rows = formatPhaseLLM(role[field]);
+    if (!rows.length) return [];
+    return [
+      [
+        <code key={field} className="inline">
+          {field}
+        </code>,
+        <code key={`${field}-v`} className="inline">
+          {rows.map((r) => r.chain).join("; ")}
+        </code>,
+      ],
+    ];
+  });
+}
+
+/** The integration blocks written on this seat, and nothing it does not have. */
+function SeatIntegrations({ role }: { role: ConfigRole }) {
+  const i = role.integrations ?? {};
+  const text = (value: string | undefined) =>
+    value ? <code className="inline">{value}</code> : <span className="faint">not set</span>;
+  const items: [ReactNode, ReactNode][] = [];
+  if (i.github) {
+    items.push(
+      ["GitHub tier", text(i.github.tier)],
+      [
+        "GitHub repositories",
+        i.github.repos?.length ? (
+          <span className="col" style={{ gap: 2 }}>
+            {i.github.repos.map((repo) => (
+              <code key={repo} className="inline">
+                {repo}
+              </code>
+            ))}
+          </span>
+        ) : (
+          <span className="faint">every repository the installation covers</span>
+        ),
+      ],
+      ["GitHub App", text(i.github.app_slug)],
+      ["GitHub App key", <ConfigValue key="gk" value={i.github.private_key} />],
+      ["GitHub webhook secret", <ConfigValue key="gw" value={i.github.webhook_secret} />],
+    );
+  }
+  if (i.slack) {
+    items.push(
+      ["Slack channel", text(i.slack.channel)],
+      ["Slack bot token", <ConfigValue key="sb" value={i.slack.bot_token} />],
+      ["Slack signing secret", <ConfigValue key="ss" value={i.slack.signing_secret} />],
+    );
+  }
+  if (i.mattermost) {
+    items.push(
+      ["Mattermost username", text(i.mattermost.username)],
+      ["Mattermost channel", text(i.mattermost.channel)],
+      ["Mattermost bot token", <ConfigValue key="mb" value={i.mattermost.bot_token} />],
+    );
+  }
+  if (i.jira) items.push(["Owns Jira project", text(i.jira.project)]);
+  if (i.confluence) items.push(["Owns Confluence space", text(i.confluence.space)]);
+  if (!items.length) {
+    return (
+      <Empty
+        inline
+        icon="plug"
+        title="No per-seat integration settings"
+        hint="This seat uses the company's integrations as they are configured on the Integrations screen."
+      />
+    );
+  }
+  return <KeyValue items={items} />;
+}
+
+/**
+ * The tool credentials a seat names, and the ones its home unit gives it.
+ *
+ * NOT MERGED HERE. The unit's entries reach its direct agent members with a
+ * seat's own entries winning, and that is the engine's rule to apply: this
+ * lists both as the document writes them, each under where it is written.
+ */
+function ToolCredentials({
+  seat,
+  role,
+  unit,
+}: {
+  seat: Seat;
+  role: ConfigRole;
+  unit: { name: string; mcp_env?: Record<string, Record<string, string>> } | null;
+}) {
+  const own = Object.entries(role.mcp_env ?? {});
+  const inherited = seat.kind === "agent" && unit ? Object.entries(unit.mcp_env ?? {}) : [];
+  const group = (entries: [string, Record<string, string>][]) => (
+    <div className="col gap-3">
+      {entries.map(([server, vars]) => (
+        <div key={server} className="col gap-1">
+          <div className="t-label">{server}</div>
+          <KeyValue
+            items={Object.entries(vars).map(([name, value]) => [
+              <code key={name} className="inline">
+                {name}
+              </code>,
+              <ConfigValue key={`${name}-v`} value={value} />,
+            ])}
+          />
+        </div>
+      ))}
+    </div>
+  );
+  if (!own.length && !inherited.length) {
+    return (
+      <Empty
+        inline
+        icon="key"
+        title="No per-seat tool credentials"
+        hint="This seat uses whatever the shared MCP servers were configured with."
+      />
+    );
+  }
+  return (
+    <div className="col gap-4">
+      {own.length > 0 && (
+        <div className="col gap-2">
+          <span className="t-caption">Set on this seat</span>
+          {group(own)}
+        </div>
+      )}
+      {inherited.length > 0 && (
+        <div className="col gap-2">
+          <span className="t-caption">
+            Set on its unit, {unit?.name}, for every agent seat directly in it. An entry this seat
+            sets itself wins.
+          </span>
+          {group(inherited)}
+        </div>
+      )}
+      <p className="t-caption">
+        A reference names an entry in the secret store and is resolved only when the engine starts
+        this seat's tool servers.
+      </p>
+    </div>
   );
 }
