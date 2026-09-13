@@ -103,8 +103,14 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 	// the two have opposite directions: readiness withholds CLAIMS and
 	// deliberately keeps what is held, and this gives back what is held
 	// whether or not anything is claimable. See [Config.Serviceable].
-	unfit, unfitReason := false, ""
+	// THE TWO ARE SCOPED DIFFERENTLY ON PURPOSE. `unfit` outlives this
+	// block — the readiness gate below reads it — so it needs a zero value
+	// on the draining path, where nothing evaluates it. The REASON is only
+	// ever the text of the line logged here, so declaring it out there gave
+	// it an empty initialiser nothing could read.
+	var unfit bool
 	if !draining {
+		var unfitReason string
 		if unfit, unfitReason = h.unserviceable(ctx); unfit {
 			for _, handle := range h.Held() {
 				if h.Release(ctx, handle, ReasonUnserviceable) {

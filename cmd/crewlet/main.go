@@ -692,6 +692,7 @@ func validateBoth(cfg configFlags, asJSON bool, stdout io.Writer) error {
 	// two-flag form exists: neither tier can see the other, so a
 	// configuration that is valid twice over and unrecoverable together is
 	// only refusable here.
+	//nolint:govet // shadow: scoped to this block, which returns; see .golangci.yml
 	if err := config.CheckTiers(boot, company); err != nil {
 		res.Errors = faultsOf(err)
 		return report(stdout, res, asJSON)
@@ -1441,7 +1442,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// call, because half of it is coordination that changes
 			// under the answer and the other half is this node's own
 			// loops.
-			Retention: nativeRetention(e),
+			Retention: nativeRetention(ctx, e),
 			NodeID:    nodeID,
 		},
 		// The inbound edge. It republishes onto THIS node's queue and
@@ -2458,8 +2459,16 @@ func (k operatorKnowledge) Search(ctx context.Context, q knowledge.Query) []know
 // follows: a process running no state log has no applier, no stream and no
 // floor, and a report of zeros would claim a fleet whose log is perfectly
 // trimmed. The question is simply unregistered instead.
-func nativeRetention(e *engine.Engine) func(context.Context) any {
-	if _, runs := e.RetentionReport(context.Background()); !runs {
+// nativeRetention is the retention half of the API's node runtime, or nil on a
+// node that runs no state log.
+//
+// IT TAKES THE CALLER'S CONTEXT FOR THE PROBE and not one of its own: the
+// probe is a coordination read, so on a node whose store cannot be reached it
+// is exactly as slow as every other one — and a `context.Background()` here
+// made the ONE call that decides whether this surface exists at all the one
+// call a shutting-down process could not abandon.
+func nativeRetention(ctx context.Context, e *engine.Engine) func(context.Context) any {
+	if _, runs := e.RetentionReport(ctx); !runs {
 		return nil
 	}
 	return func(ctx context.Context) any {

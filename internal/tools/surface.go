@@ -228,7 +228,6 @@ func (s *Surface) Active() []string {
 	return slices.Clone(s.active)
 }
 
-// ToolDefs renders what the model is offered this round.
 // AnnotationsOf is one active tool's behavioural hints, as the registry holds
 // them.
 //
@@ -253,6 +252,7 @@ func (s *Surface) AnnotationsOf(name string) Annotations {
 	return e.Annotations
 }
 
+// ToolDefs renders what the model is offered this round.
 func (s *Surface) ToolDefs() []llm.ToolDef {
 	s.mu.Lock()
 	active := slices.Clone(s.active)

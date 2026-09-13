@@ -33,6 +33,12 @@ type estate struct {
 	pending []queued
 	waiting chan struct{}
 	acked   map[string]int
+	// naked counts a record's refusals. It is read only to CAP the
+	// redeliveries below, never as a witness: this queue blocks
+	// head-of-line, so a naked record sits at the front until its delay
+	// expires and every case that naks one already fails on the change
+	// that never arrived. A reader for it would be a check nothing can
+	// make fail.
 	naked   map[string]int
 	group   string
 	openErr error
@@ -139,10 +145,4 @@ func (e *estate) acks(id string) int {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.acked[id]
-}
-
-func (e *estate) naks(id string) int {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.naked[id]
 }

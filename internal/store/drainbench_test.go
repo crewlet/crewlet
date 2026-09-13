@@ -116,7 +116,7 @@ func BenchmarkLogApplyDrain(b *testing.B) {
 			started := time.Now()
 			for i := 0; b.Loop(); i++ {
 				b.StopTimer()
-				resetBench(b, w, ctx)
+				resetBench(ctx, b, w)
 				b.StartTimer()
 				if err := arm.run(ctx, w, db, items); err != nil {
 					b.Fatalf("apply: %v", err)
@@ -231,7 +231,7 @@ func BenchmarkApplyTxUnderForeignCommits(b *testing.B) {
 			started := time.Now()
 			for b.Loop() {
 				b.StopTimer()
-				resetBench(b, w, ctx)
+				resetBench(ctx, b, w)
 				b.StartTimer()
 				// COUNTED BY ATTEMPTS. Writer.Tx retries a stale
 				// snapshot internally, so the abort count is how many
@@ -388,7 +388,7 @@ func TestTheMultiRowApplyIsTheFastestShape(t *testing.T) {
 
 	timeArm := func(run func(context.Context, *store.Writer, *store.DB, []benchItem) error) time.Duration {
 		t.Helper()
-		resetBenchT(t, w, ctx)
+		resetBenchT(ctx, t, w)
 		started := time.Now()
 		if err := run(ctx, w, db, items); err != nil {
 			t.Fatalf("apply: %v", err)
@@ -591,14 +591,14 @@ func openApplierStore(tb testing.TB, path string) (*store.DB, *store.Writer) {
 	return db, w
 }
 
-func resetBench(b *testing.B, w *store.Writer, ctx context.Context) {
+func resetBench(ctx context.Context, b *testing.B, w *store.Writer) {
 	b.Helper()
 	if err := clearBench(ctx, w); err != nil {
 		b.Fatalf("reset: %v", err)
 	}
 }
 
-func resetBenchT(t *testing.T, w *store.Writer, ctx context.Context) {
+func resetBenchT(ctx context.Context, t *testing.T, w *store.Writer) {
 	t.Helper()
 	if err := clearBench(ctx, w); err != nil {
 		t.Fatalf("reset: %v", err)

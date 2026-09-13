@@ -994,3 +994,101 @@ func digestRows(rendered []string) string {
 	sum := sha256.Sum256([]byte(strings.Join(ordered, "\x1e")))
 	return fmt.Sprintf("%x (%d rows)", sum[:8], len(ordered))
 }
+
+// A MEMBER THAT CANNOT BE REACHED FALLS SILENT WITHIN THE BUDGET, AND COMES
+// BACK WHEN THE NETWORK DOES.
+//
+// # Why this needs a real partition
+//
+// [search]'s partial answer — `buckets_answered`, `buckets_missing` and the
+// nodes it names in `Absent` — is arithmetic over which peers replied, and
+// `internal/search`'s own cases pin that arithmetic against a fake peer that
+// returns nothing. What they cannot show is the thing that makes a peer return
+// nothing in production: a route that is down. A fake that answers instantly
+// with an empty slice and a member that is unreachable are the same value and
+// completely different failures, and only one of them can hang a search.
+//
+// So this is the network half, and the only case in this package that takes
+// [startPartitionableCluster]. Two claims, in the one order that can prove
+// either:
+//
+//  1. THE SCATTER RETURNS RATHER THAN WAITING OUT THE CALLER. A search whose
+//     coordinator blocks on an absent member is worse than a partial answer —
+//     it is a fleet where losing one node stops every search on every node,
+//     which is precisely what holding the whole corpus on each member is meant
+//     to prevent.
+//  2. THE SILENCE IS THE PARTITION. The same scatter is run BEFORE the cut and
+//     must come back full, or an empty answer afterwards would prove only that
+//     nobody was ever listening.
+//
+// The scatter rides core NATS request/reply — no stream, no consumer, no ack,
+// per [queue]'s `Ask`/`Serve` — so cutting a member's routes is exactly what
+// makes it unreachable, and quorum, which a two-member cluster loses here, is
+// not what this measures.
+func TestAPartitionedMemberIsSilentRatherThanSlow(t *testing.T) {
+	noParallel(t)
+	c := startPartitionableCluster(t, fleetSize)
+	c.hydrated(t)
+
+	self := c.nodes[0].id
+	var peers []search.Assigned
+	for _, a := range search.Divide(c.nodeIDs()) {
+		if a.Node != self {
+			peers = append(peers, a)
+		}
+	}
+	if len(peers) != fleetSize-1 {
+		t.Fatalf("a fleet of %d left %d peers to ask", fleetSize, len(peers))
+	}
+
+	query := search.FanQuery{Text: "rollback drain node", Sources: []string{"page"}}
+	scatter := func(budget time.Duration) ([]search.Slice, time.Duration) {
+		t.Helper()
+		started := time.Now()
+		deadline, cancel := context.WithTimeout(t.Context(), budget)
+		defer cancel()
+		// AN ERROR AND AN EMPTY ANSWER ARE THE SAME FACT HERE — nothing
+		// came back — and [search.FanOut] treats them identically: a
+		// scatter that fails costs the answer its peers' buckets and is
+		// reported as missing rather than as a failed search. So the
+		// count is what this asserts, and the error is not.
+		out, _ := search.Broker{Queue: c.nodes[0].engine.Backends().Queue}.
+			Scatter(deadline, query, peers)
+		return out, time.Since(started)
+	}
+
+	// EVERY PEER ANSWERS FIRST. Without this the silence below is
+	// unfalsifiable: a responder that never registered looks the same.
+	waitFor(t, "every peer to answer a scatter", func() bool {
+		got, _ := scatter(clusterSettle)
+		return len(got) == len(peers)
+	})
+
+	c.relays.Partition(t, 1)
+
+	// A BUDGET WELL UNDER clusterSettle, because what is being measured is
+	// that the wait ENDS at the caller's deadline rather than at the
+	// broker's own timeout — a scatter that returned only after the
+	// default would pass a generous assertion while still holding a real
+	// search open for far longer than its caller allowed.
+	const cut = 2 * time.Second
+	got, took := scatter(cut)
+	if len(got) != 0 {
+		t.Errorf("a partitioned member answered %d slices — the cut route did "+
+			"not stop the request, so this case measures nothing", len(got))
+	}
+	if took > cut+cut/2 {
+		t.Errorf("the scatter took %s against a %s budget — a coordinator that "+
+			"waits out an absent member turns one lost node into every node's "+
+			"search stalling", took, cut)
+	}
+
+	// AND THE DEGRADATION IS NOT ONE-WAY. A fleet that never readmitted a
+	// member after a blip would answer partially for ever, and the partial
+	// report would be a permanent state rather than a passing one.
+	c.relays.Heal(t, 1)
+	waitFor(t, "the healed member to answer again", func() bool {
+		back, _ := scatter(clusterSettle)
+		return len(back) == len(peers)
+	})
+}

@@ -397,6 +397,7 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 		// artefact is debris carrying the reader's own umask rather
 		// than this directory's deliberate 0700, and a restore script
 		// looking for a set of named files finds one it does not know.
+		//nolint:govet // shadow: scoped to this block, which returns; see .golangci.yml
 		if err := store.QuiesceCopy(ctx, path); err != nil {
 			return Manifest{}, err
 		}

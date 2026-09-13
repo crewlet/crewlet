@@ -308,7 +308,7 @@ func retentionStatus(args []string, stdout, stderr io.Writer) error {
 	if report.BackupOwner != "" {
 		fmt.Fprintf(stdout, "\nBACKUP OWNER  %s\n", report.BackupOwner)
 	}
-	return retentionAlarms(stdout, stderr, report)
+	return retentionAlarms(stderr, report)
 }
 
 // retentionDomains prints one row per registered domain.
@@ -389,7 +389,11 @@ func retentionReplica(w io.Writer, report retentionReport) {
 }
 
 // retentionAlarms prints every active condition and decides the exit code.
-func retentionAlarms(stdout, stderr io.Writer, report retentionReport) error {
+//
+// STDERR ONLY, so it takes no stdout: the report itself has already gone to
+// stdout by the time this runs, and a second writer here would be a parameter
+// whose only honest value is the one nothing writes to.
+func retentionAlarms(stderr io.Writer, report retentionReport) error {
 	if len(report.Alarms) == 0 {
 		return nil
 	}
