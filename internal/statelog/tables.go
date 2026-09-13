@@ -325,6 +325,59 @@ func (t tables) retain(ctx context.Context, tx *sql.Tx, rec Record, compacted bo
 	return nil
 }
 
+// retained is one retained record as the reprocess reads it back: the bytes as
+// published, at the position they were published at.
+type retained struct {
+	position int64
+	version  int
+	payload  []byte
+	storedAt time.Time
+}
+
+// deferredAfter reads the retained records above a position, oldest first,
+// bounded so a long-stalled upgrade's backlog is walked in pages rather than
+// loaded whole.
+func (t tables) deferredAfter(ctx context.Context, tx *sql.Tx, after int64, limit int) ([]retained, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT position, version, payload, stored_at FROM `+t.deferred+`
+		 WHERE position > ? ORDER BY position LIMIT ?`, after, limit)
+	if err != nil {
+		return nil, fmt.Errorf("statelog: read the retained records: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []retained
+	for rows.Next() {
+		var r retained
+		var version, stored int64
+		if err := rows.Scan(&r.position, &version, &r.payload, &stored); err != nil {
+			return nil, fmt.Errorf("statelog: scan a retained record: %w", err)
+		}
+		r.version = int(version)
+		r.storedAt = store.DecodeTime(stored)
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("statelog: iterate the retained records: %w", err)
+	}
+	return out, nil
+}
+
+// release drops a retained record and its scope index, in this transaction —
+// the child first, for the reason [tables.retain] gives about the supersede:
+// there is no foreign key, and a scope row that outlives its record is a
+// deferral this node reports and can never clear.
+func (t tables) release(ctx context.Context, tx *sql.Tx, p Position) error {
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM `+t.scope+` WHERE position = ?`, p.Packed()); err != nil {
+		return fmt.Errorf("statelog: release the scope of %s: %w", p, err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM `+t.deferred+` WHERE position = ?`, p.Packed()); err != nil {
+		return fmt.Errorf("statelog: release the record at %s: %w", p, err)
+	}
+	return nil
+}
+
 // deferredIn answers whether this node holds a record it cannot decode whose
 // declared scope intersects s.
 //
@@ -336,22 +389,40 @@ func (t tables) retain(ctx context.Context, tx *sql.Tx, rec Record, compacted bo
 // only the first is blind to exactly the neighbour whose row a deferred record
 // left stale, and that is silent data loss rather than a wrong answer.
 func (t tables) deferredIn(ctx context.Context, tx *sql.Tx, s ScopeSet) (Deferral, bool, error) {
+	return t.deferredBelow(ctx, tx, s, nil)
+}
+
+// deferredBelow is [tables.deferredIn] over the retained records BELOW a
+// position only.
+//
+// It is what the reprocess asks: whether a record this build can now read is
+// still covered by one it cannot, and only a record EARLIER in the log can
+// cover it — the live loop retained it against what the table held at the
+// time, and the table held nothing above it then. A probe over the whole
+// table would let a later retained record hold an earlier one back for ever.
+// nil is the whole table.
+func (t tables) deferredBelow(ctx context.Context, tx *sql.Tx, s ScopeSet, below *Position) (Deferral, bool, error) {
 	closure := s.Closure()
 	roots := s.Roots()
 	if len(closure) == 0 {
 		return Deferral{}, false, nil
 	}
 
-	args := make([]any, 0, len(closure)+len(roots)*2)
+	args := make([]any, 0, len(closure)+len(roots)*2+1)
 	for _, p := range closure {
 		args = append(args, p)
 	}
 	q := `SELECT d.position, d.version FROM ` + t.scope + ` s
 	      JOIN ` + t.deferred + ` d ON d.position = s.position
-	      WHERE s.path IN (` + placeholders(len(closure)) + `)`
+	      WHERE (s.path IN (` + placeholders(len(closure)) + `)`
 	for _, r := range roots {
 		q += ` OR s.path = ? OR s.path LIKE ? ESCAPE '\'`
 		args = append(args, r, store.LikePrefix(r+ScopeSeparator))
+	}
+	q += `)`
+	if below != nil {
+		q += ` AND d.position < ?`
+		args = append(args, below.Packed())
 	}
 	q += ` ORDER BY d.position LIMIT 1`
 

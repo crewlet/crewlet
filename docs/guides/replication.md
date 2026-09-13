@@ -169,6 +169,14 @@ half-done leaves the old nodes holding records they cannot apply and refusing
 reads about the objects those records touched — with `deferred` naming exactly
 what to do, which is finish the upgrade.
 
+**The upgraded node applies what it retained at its next boot**, before its
+applier consumes anything new: every retained record it can now read, in log
+order, each released in the transaction that applied it. A record whose scope
+met a retained one is applied after it, which is what makes the objects' rows
+a prefix of their history again rather than a hole. A record still above the
+new build's version stays retained, with everything it covers, until a build
+that reads it boots.
+
 ## The five capacity ceilings
 
 1. **The log's byte ceiling** — `stream.tracker_log_max_bytes`. A full log

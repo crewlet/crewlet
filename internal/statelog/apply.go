@@ -378,6 +378,13 @@ func (r *Runner) Run(ctx context.Context) error {
 	if err := r.loadCursor(ctx); err != nil {
 		return err
 	}
+	// WHAT AN EARLIER BUILD RETAINED, THIS ONE MAY NOW READ. A retained
+	// record is applied by the build that can decode it, and the only
+	// moment a build changes is a boot — so this is where the promise is
+	// kept, before the loop consumes anything above it.
+	if err := r.reprocess(ctx, w); err != nil {
+		return err
+	}
 	r.logger.InfoContext(ctx, "statelog_applier_started",
 		"domain", r.domain.Name(), "stream", r.spec.Name,
 		"protocol", string(r.spec.Replay), "position", r.Committed().String())
@@ -432,6 +439,136 @@ func (r *Runner) loadCursor(ctx context.Context) error {
 		r.deferred, r.hasDefer = d, hasDefer
 		return nil
 	})
+}
+
+// ReprocessPage bounds how many retained records one read of the table takes,
+// so a node that sat out a long upgrade walks its backlog in pages rather than
+// loading it whole.
+const ReprocessPage = 256
+
+// reprocess applies every retained record this build can now decode, in
+// position order, and releases each one in the transaction that applied it.
+//
+// # The rule is the live loop's, replayed over the table
+//
+// The loop retained a record for one of two reasons: its version was above
+// what the build could read, or its scope met a record already retained. The
+// second is why order matters here and why a probe below the current position
+// is the one question asked: a record this build can read stays retained
+// while a record EARLIER in the log that covers its scope is still retained,
+// and applying it first would produce state no other node holds — the same
+// state the retain rule refused to produce live. Walked oldest first with each
+// applied record released as it goes, that check is exactly the live one.
+//
+// A record still above this build's version is left where it is, and so is
+// everything it covers, however many builds it waits through.
+//
+// # The checkpoint does not move and the anchor does not move
+//
+// Both advanced when the record was retained: the log CONSUMED it then, and
+// the anchor is a MAX so a replay at the original position is a no-op on it.
+// What a reprocess writes is the rows, the operation id and the release, in
+// one transaction per record — a transaction per record rather than one over
+// the whole backlog, because a retained record's own apply is the ordinary
+// one and holds the writer for exactly as long as it would have.
+//
+// Until this existed nothing read the retained table to apply from it. A node
+// that deferred a record on a rolling upgrade kept the deferral after it was
+// upgraded, refused every read and write about the objects it covered for the
+// life of the deployment, and reported the version it needed — which it was
+// already running.
+func (r *Runner) reprocess(ctx context.Context, w *store.Writer) error {
+	var after int64
+	var applied, kept int
+	for {
+		var page []retained
+		if err := r.db.Read(ctx, func(tx *sql.Tx) error {
+			var err error
+			page, err = r.tables.deferredAfter(ctx, tx, after, ReprocessPage)
+			return err
+		}); err != nil {
+			return err
+		}
+		if len(page) == 0 {
+			break
+		}
+		for _, row := range page {
+			after = row.position
+			if row.version > r.domain.RecordVersion() {
+				kept++
+				continue
+			}
+			env, err := r.domain.Envelope(row.payload)
+			if err != nil {
+				return fmt.Errorf("statelog: %s could not read the envelope of a "+
+					"retained record at packed position %d, which every build must "+
+					"be able to: %w", r.domain.Name(), row.position, err)
+			}
+			rec := Record{
+				Envelope: env,
+				Position: Position{
+					Stream:     r.spec.Name,
+					Generation: uint32(row.position / GenerationStride),
+					Seq:        uint64(row.position % GenerationStride),
+				},
+				Payload:  row.payload,
+				StoredAt: row.storedAt,
+			}
+			landed, err := r.reprocessOne(ctx, w, rec)
+			if err != nil {
+				return err
+			}
+			if landed {
+				applied++
+				r.applier.Committed(ctx)
+			} else {
+				kept++
+			}
+		}
+	}
+	if applied == 0 && kept == 0 {
+		return nil
+	}
+	if err := r.refreshDeferred(ctx); err != nil {
+		return err
+	}
+	r.logger.InfoContext(ctx, "statelog_retained_reprocessed",
+		"domain", r.domain.Name(), "applied", applied, "kept", kept,
+		"build_reads", r.domain.RecordVersion())
+	if applied > 0 && r.metrics != nil {
+		r.metrics.Add(metrics.StatelogApplyRecords, uint64(applied),
+			metrics.Attrs{"domain": r.domain.Name(), "result": "reprocessed"})
+	}
+	return nil
+}
+
+// reprocessOne applies one retained record unless an earlier retained record
+// still covers it, reporting whether it landed.
+func (r *Runner) reprocessOne(ctx context.Context, w *store.Writer, rec Record) (bool, error) {
+	landed := false
+	err := w.Tx(ctx, func(tx *sql.Tx) error {
+		landed = false
+		if _, covered, err := r.tables.deferredBelow(ctx, tx, rec.Scope, &rec.Position); err != nil {
+			return err
+		} else if covered {
+			return nil
+		}
+		opts := r.opts
+		opts.Now = r.now()
+		if _, _, err := r.applyOne(ctx, tx, rec, opts); err != nil {
+			return err
+		}
+		if err := r.tables.release(ctx, tx, rec.Position); err != nil {
+			return err
+		}
+		landed = true
+		return nil
+	})
+	if err != nil {
+		return false, fmt.Errorf("statelog: reprocess the retained record at %s: %w",
+			rec.Position, err)
+	}
+	return landed, nil
 }
 
 // nextRun fills a run toward the transaction budget, starting from whatever

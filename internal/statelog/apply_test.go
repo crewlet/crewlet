@@ -234,6 +234,77 @@ func newApplyHarness(t *testing.T, domain statelog.Domain) *applyHarness {
 		fetch: fetch, metrics: recorder}
 }
 
+// upgrade rebuilds the runner over the SAME database under another domain —
+// the shape of a node restarting on a newer build. The applier, the fetch and
+// the recorder are fresh, because a new process has new ones; the rows, the
+// checkpoint and the retained records are what survive.
+func (h *applyHarness) upgrade(domain statelog.Domain) {
+	h.t.Helper()
+	h.applier = newProbeApplier()
+	h.fetch = newProbeFetch()
+	recorder, err := metrics.New()
+	if err != nil {
+		h.t.Fatalf("recorder: %v", err)
+	}
+	h.metrics = recorder
+	runner, err := statelog.NewRunner(statelog.RunnerDeps{
+		Domain:     domain,
+		Applier:    h.applier,
+		Fetch:      h.fetch,
+		DB:         h.db.Replicated(),
+		Generation: 1,
+		Metrics:    recorder,
+	})
+	if err != nil {
+		h.t.Fatalf("NewRunner: %v", err)
+	}
+	h.runner = runner
+}
+
+// retainedCount is how many records this node still holds that it could not
+// decode.
+func (h *applyHarness) retainedCount() int64 {
+	h.t.Helper()
+	var count int64
+	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(h.t.Context(),
+			`SELECT COUNT(*) FROM probe_log_deferred`).Scan(&count)
+	}); err != nil {
+		h.t.Fatalf("count the retained records: %v", err)
+	}
+	return count
+}
+
+// boot runs the loop with nothing queued until the retained table holds want
+// records, or fails. It is how a reprocess is observed: the checkpoint does
+// not move, so [applyHarness.run] has nothing to wait on.
+func (h *applyHarness) boot(want int64) error {
+	h.t.Helper()
+	ctx, cancel := context.WithTimeout(h.t.Context(), 20*time.Second)
+	defer cancel()
+	errs := make(chan error, 1)
+	go func() { errs <- h.runner.Run(ctx) }()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if h.retainedCount() == want {
+			// Settle: the release and the applier's Committed hook
+			// run in that order, and the count moves first.
+			time.Sleep(20 * time.Millisecond)
+			cancel()
+			<-errs
+			return nil
+		}
+		select {
+		case err := <-errs:
+			return err
+		case <-time.After(2 * time.Millisecond):
+		}
+	}
+	cancel()
+	<-errs
+	return fmt.Errorf("%d record(s) are still retained, want %d", h.retainedCount(), want)
+}
+
 // counter is one instrument's total across every attribute set.
 func (h *applyHarness) counter(name string) uint64 {
 	h.t.Helper()
@@ -1250,5 +1321,136 @@ func TestAPartialRunCommitsWhenTheBrokerHandsOverNothing(t *testing.T) {
 	if got != 3 {
 		t.Fatalf("the checkpoint is at %d after the broker released the third "+
 			"record, want 3", got)
+	}
+}
+
+// upgradedDomain is the probe domain as a newer build reads it.
+type upgradedDomain struct {
+	probeDomain
+	reads int
+}
+
+func (d upgradedDomain) RecordVersion() int { return d.reads }
+
+// A RETAINED RECORD IS APPLIED BY THE BUILD THAT CAN READ IT, at its next
+// boot, in log order, and released in the transaction that applied it.
+//
+// This is the second half of the retain rule and the half that had no code:
+// a record this build cannot decode is kept byte for byte so that a build
+// which can decode it applies it later. Without the later, a node that sat
+// through a rolling upgrade kept its deferrals after it was upgraded — refusing
+// every read and write about the objects they covered, for ever, and naming a
+// record version it was already running.
+//
+// The record retained BECAUSE its scope met the undecodable one is applied
+// too, and after it: it was decodable all along, and what kept it back was
+// order.
+func TestARetainedRecordIsAppliedByTheBuildThatCanReadIt(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	// THE ARBITRATED KIND, so the records carry an anchor to check.
+	h.fetch.offer(1, env(1, "object", "a", "op-1", 1))
+	h.fetch.offer(2, env(2, "object", "b", "op-2", 9)) // above this build
+	h.fetch.offer(3, env(3, "object", "b", "op-3", 1)) // on the rows 2 left stale
+	h.fetch.offer(4, env(4, "object", "c", "op-4", 1))
+	if err := h.run(4); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := h.retainedCount(); got != 2 {
+		t.Fatalf("the old build retained %d record(s), want 2", got)
+	}
+
+	// THE UPGRADE. Same database, a build that reads version 9.
+	h.upgrade(upgradedDomain{reads: 9})
+	if err := h.boot(0); err != nil {
+		t.Fatalf("the upgraded build's boot: %v", err)
+	}
+
+	seen := h.applier.seen()
+	if len(seen) != 2 || seen[0].Seq != 2 || seen[1].Seq != 3 {
+		t.Fatalf("the upgraded build applied %v, want the retained records at 2 "+
+			"then 3 — in log order, and the one held back by scope after the one "+
+			"that held it", seen)
+	}
+	if _, held := h.runner.Deferred(); held {
+		t.Fatal("the runner still reports a deferred record after applying them all")
+	}
+	if got := h.runner.Committed().Seq; got != 4 {
+		t.Fatalf("the checkpoint moved to %d — a reprocess applies at the "+
+			"original positions and the log consumed them long ago", got)
+	}
+	var ops, orphans int64
+	var anchor int64
+	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		if err := tx.QueryRowContext(t.Context(),
+			`SELECT COUNT(*) FROM probe_ops WHERE op_id IN ('op-2', 'op-3')`).
+			Scan(&ops); err != nil {
+			return err
+		}
+		if err := tx.QueryRowContext(t.Context(),
+			`SELECT COUNT(*) FROM probe_deferred_scope`).Scan(&orphans); err != nil {
+			return err
+		}
+		return tx.QueryRowContext(t.Context(),
+			`SELECT anchor FROM statelog_anchor WHERE subject = ?`,
+			probePrefix+".object.b").Scan(&anchor)
+	}); err != nil {
+		t.Fatalf("read the tables: %v", err)
+	}
+	if ops != 2 {
+		t.Fatalf("%d operation row(s) for the reprocessed records, want 2 — a "+
+			"caller resolving op-2 would read its absence as somebody else winning", ops)
+	}
+	if orphans != 0 {
+		t.Fatalf("%d scope row(s) outlived their records", orphans)
+	}
+	if want := (statelog.Position{Stream: probeStream, Generation: 1, Seq: 3}).Packed(); anchor != want {
+		t.Fatalf("the anchor on object.b is %d, want %d — a replay at the original "+
+			"position must not move it backwards", anchor, want)
+	}
+	if got := h.counter(metrics.StatelogApplyRecords); got != 2 {
+		t.Fatalf("the apply counter recorded %d, want the 2 reprocessed", got)
+	}
+}
+
+// A REPROCESS STOPS AT WHAT IT STILL CANNOT READ, and keeps everything that
+// record covers — however many builds it waits through.
+func TestAReprocessKeepsWhatAnUnreadableRecordStillCovers(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 9))  // readable at 9
+	h.fetch.offer(2, env(2, "edit", "b", "op-2", 12)) // not yet
+	h.fetch.offer(3, env(3, "edit", "b", "op-3", 1))  // covered by 2
+	h.fetch.offer(4, env(4, "edit", "a", "op-4", 1))  // covered by 1
+	if err := h.run(4); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := h.retainedCount(); got != 4 {
+		t.Fatalf("the old build retained %d record(s), want 4", got)
+	}
+
+	h.upgrade(upgradedDomain{reads: 9})
+	if err := h.boot(2); err != nil {
+		t.Fatalf("the build reading 9: %v", err)
+	}
+	seen := h.applier.seen()
+	if len(seen) != 2 || seen[0].Seq != 1 || seen[1].Seq != 4 {
+		t.Fatalf("the build reading 9 applied %v, want 1 then 4: 2 is still above "+
+			"it and 3 is covered by 2", seen)
+	}
+	d, held := h.runner.Deferred()
+	if !held || d.Position.Seq != 2 || d.Version != 12 {
+		t.Fatalf("the runner reports %+v held=%v, want the record at 2 needing "+
+			"version 12", d, held)
+	}
+
+	// AND THE NEXT UPGRADE FINISHES IT.
+	h.upgrade(upgradedDomain{reads: 12})
+	if err := h.boot(0); err != nil {
+		t.Fatalf("the build reading 12: %v", err)
+	}
+	seen = h.applier.seen()
+	if len(seen) != 2 || seen[0].Seq != 2 || seen[1].Seq != 3 {
+		t.Fatalf("the build reading 12 applied %v, want 2 then 3", seen)
 	}
 }
