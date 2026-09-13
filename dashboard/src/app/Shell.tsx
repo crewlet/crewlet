@@ -13,6 +13,7 @@ import { CommandPalette } from "./CommandPalette.tsx";
 import { EnginePanel } from "./EnginePanel.tsx";
 import { TokenDialog } from "./TokenDialog.tsx";
 import { Icon } from "~/ui/Icon.tsx";
+import { Kbd } from "~/ui/Kbd.tsx";
 import { Badge, Button, Segmented, cx } from "~/ui/primitives.tsx";
 import {
   useAgents,
@@ -229,7 +230,7 @@ export function Shell({ children }: { children: ReactNode }) {
           <button className="omni" onClick={() => setPaletteOpen(true)}>
             <Icon name="search" size="sm" />
             <span className="omni-label">Search</span>
-            <kbd>⌘K</kbd>
+            <Kbd keys={["Mod", "k"]} />
           </button>
         </header>
 

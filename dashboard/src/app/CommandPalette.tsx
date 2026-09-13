@@ -22,6 +22,7 @@ import { useAgents, useOrg, useTools } from "~/lib/store-hooks.ts";
 import { indexOrg, seatPath } from "~/lib/seats.ts";
 import { ModalPanel } from "~/ui/Dialog.tsx";
 import { Icon, type IconName } from "~/ui/Icon.tsx";
+import { Kbd } from "~/ui/Kbd.tsx";
 import { useModal } from "~/ui/useModal.ts";
 
 interface Hit {
@@ -293,13 +294,13 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         </div>
         <div className="palette-foot">
           <span>
-            <kbd>↑</kbd> <kbd>↓</kbd> move
+            <Kbd keys={["ArrowUp"]} /> <Kbd keys={["ArrowDown"]} /> move
           </span>
           <span>
-            <kbd>↵</kbd> open
+            <Kbd keys={["Enter"]} /> open
           </span>
           <span>
-            <kbd>esc</kbd> close
+            <Kbd keys={["Escape"]} /> close
           </span>
         </div>
       </ModalPanel>

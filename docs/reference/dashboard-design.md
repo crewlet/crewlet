@@ -911,6 +911,12 @@ rendered idle from the first phase to the last.
   What happens inside an open menu stays there: its keys, presses and clicks
   do not reach the card or row it was opened from, so Enter on "Delete" is
   never also the card's Enter.
+- **A shortcut hint is `ui/Kbd.tsx`, never a hand-written `<kbd>`.** The
+  command key is Command on Apple platforms and Control everywhere else, so a
+  literal "⌘K" tells most readers to press a key they do not have. The glyphs
+  are hidden from assistive technology, which reads the key names instead
+  ("Control plus K"), because a screen reader reads "⌘" as "place of interest
+  sign". The shell's search button and the search footer use it too.
 - **A canvas never takes the page's scroll.** `ui/Canvas.tsx` fills the box
   its screen gives it and clips; `.screen` stays the only scroller. A plain
   wheel pans the canvas only while focus is inside it, and Ctrl or Command

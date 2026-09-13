@@ -130,6 +130,25 @@ test("search opened with a shortcut returns focus to what held it, and one Escap
   expect(document.activeElement).toBe(retry);
 });
 
+test("the shortcut hints name the keys the reader's own keyboard prints, in words", () => {
+  // Not an Apple platform under the suite, so the command key is Control: a
+  // hand-written "⌘K" told everybody else to press a key they do not have.
+  mount(<p>screen</p>);
+  const search = screen.getByRole("button", { name: /^Search/ });
+  expect([...search.querySelectorAll("kbd")].map((k) => k.textContent)).toEqual(["Ctrl", "K"]);
+  expect(within(search).getByText("Control plus K")).toBeDefined();
+
+  fireEvent.click(search);
+  const palette = screen.getByRole("dialog", { name: "Search" });
+  // The sentence each hint reads: a glyph such as "↵" or "esc" is hidden from
+  // assistive technology, which hears the key's name instead.
+  const spoken = [...palette.querySelectorAll(".kbd-combo .sr-only")].map((s) => s.textContent);
+  expect(spoken).toEqual(["Up arrow", "Down arrow", "Enter", "Escape"]);
+  expect(
+    [...palette.querySelectorAll(".kbd-keys")].every((k) => k.getAttribute("aria-hidden")),
+  ).toBe(true);
+});
+
 test("one Escape closes search raised over the engine panel, and leaves the panel", () => {
   mount(<p>screen</p>);
   const pill = screen.getByRole("button", { name: /engine unreachable/ });

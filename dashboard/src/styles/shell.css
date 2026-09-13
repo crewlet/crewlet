@@ -220,7 +220,9 @@
   border-color: var(--border-strong);
   color: var(--text);
 }
-.omni kbd {
+/* The shortcut hint (`ui/Kbd.tsx`) as a whole, so its keys stay together at
+   the end of the box. */
+.omni .kbd-combo {
   margin-left: auto;
 }
 
@@ -419,7 +421,7 @@
     min-width: 0;
   }
   .omni .omni-label,
-  .omni kbd {
+  .omni .kbd-combo {
     display: none;
   }
 }
