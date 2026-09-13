@@ -31,7 +31,17 @@ the agent's own identity.
 Connect GitHub on the Integrations screen. The engine generates the webhook
 secret and the reconcile loop registers the hook on its next tick, running the
 same pass `crewlet github provision` runs with the same secret store behind
-it. Nothing on that form asks for a personal access token.
+it. The connect step asks for a personal access token nowhere — only the
+organization, which is the one answer nobody else has.
+
+The form asks one question about coverage — *which GitHub activity should
+reach your agents* — with two answers. It opens on **repositories where an
+agent's app is installed**, which is what most companies want and needs
+nothing further: each app carries its own webhook, so connecting and
+installing is the whole setup. The other answer, **every repository in your
+organization including new ones**, needs an organization token with
+`admin:org_hook`; the form asks for it only under that answer, and requires it
+there. See [What a company hears about](#what-a-company-hears-about-said-out-loud).
 
 The loop keeps checking after that, so a grant you change at GitHub is
 reflected on the screen within a tick without anything to press.
@@ -106,16 +116,38 @@ integrations:
   the organization pass reads nothing and says so as a note, which is not a
   fault: there is nothing it was going to do for such a company.
 
-  It is not on the connect form. Asking every company for a hand-minted
-  personal access token, for a credential no agent ever acts as, put a
-  permanent note on cards with nothing wrong with them.
+  **Installing an agent's App is not a substitute for it.** An
+  organization-wide hook needs the `admin:org_hook` scope, which only a user
+  token carries — no App installation grants it, at any permission. So an
+  operator who was told *no webhook on `<org>`* and installed the per-agent
+  app, exactly as the card was asking, watched the warning stay put. A card
+  must never prescribe an install as the remedy for a missing org hook, and
+  a company whose agents carry their own apps is not blocked at all — it has
+  coverage, narrower than the whole organization, reported
+  [as such](#what-a-company-hears-about-said-out-loud).
+
+  It is **offered but never on the connect step**, and it is required by an
+  ANSWER rather than in general: choose organization-wide coverage on the form
+  and it is the one thing standing between that answer and its being true;
+  choose the other and it is a credential the company never uses. The form
+  hides it until that choice is made and then requires it, and the API refuses
+  the same submission, so a caller that skips the form cannot store a choice
+  the engine could not carry out.
+
+  Asking every company for a
+  hand-minted personal access token before anything works put a permanent note
+  on cards with nothing wrong with them; having no field for it at all left the
+  warning pointing at a setting the dashboard could not set. It now appears
+  with the finding that needs it.
 - **`provisioning:`** says where hooks are registered and which organization
   these agents work in, and it is read by the engine's own pass as well as by
   the CLI. `org` is the GitHub organization holding the repositories, and it is
   also the account a [per-agent app](#one-github-app-per-agent) is registered
   under; `repos` are `owner/repo` entries to hook individually; `org_webhook`
-  is `auto` (default) / `true` / `false`, described under
-  [Webhooks](#webhooks).
+  is `auto` / `true` / `false`, described under [Webhooks](#webhooks). The
+  config default is `auto`; the **dashboard form** opens on `true`, because a
+  fallback nobody was told about leaves a company believing it has one hook
+  when it has several.
 
 ### Seat identity is derived, never declared
 
@@ -141,6 +173,21 @@ GitHub may be rate-limiting — and the engine says so per seat
 until the next apply re-resolves it. A company with **no** resolved seats
 logs `github_has_no_seat_identities`, because the integration is completely
 inert in that state and nothing else would say so.
+
+**A seat with no token here is not a broken seat.** On the current design each
+agent carries its own [GitHub App](#one-github-app-per-agent), and a seat that names
+no `mcp_env.github` credential is acting through it — so the reconcile reports
+that seat as *unclaimed* rather than as a failed identity, and the provisioning
+command prints it under "act through their own GitHub App" rather than under a
+list of things to fix. The three outcomes a seat can have are therefore
+**resolved** (a token named an account), **unclaimed** (no token, which is
+expected) and **refused** (a token this run could not turn into an account,
+and the only one that becomes a finding).
+
+That distinction was missing, and its absence was loud: every agent seat in a
+company on the app design was reported as a failed identity, permanently
+degraded, with the integration card saying each of them could receive no
+GitHub events while all of them were working.
 
 ### Human seats
 
@@ -202,6 +249,19 @@ sequenceDiagram
     Op->>GH: install the app on the organization
     GH->>CL: GET /webhooks/github-app?installed=senior-engineer
 ```
+
+### The card catches up immediately, not on a cadence
+
+An agent's App is **private**, so GitHub sends this engine nothing when you install it — there is no webhook for it to arrive on, and the reconcile loop is what finds the installation, by listing the App's own installations with the App's own key.
+
+That discovery used to wait out the loop's admin backoff, which runs from fifteen seconds to **ten minutes**, and the backoff is longest exactly when you have just done the thing it is waiting for. Measured: an install completed in about eight seconds, then several minutes of a card still asking for it, reloaded by hand, reasonably read as the install not having worked.
+
+Two things now close that gap:
+
+- **GitHub's return brings the next pass forward.** The install redirect lands at `/webhooks/github-app`, and that arrival asks the loop to look now. It is not a write and nothing in the redirect is believed — no installation id travels with the ask — so the pass that runs is the same verified listing as always, and adopting anything from an unauthenticated query stays out of the question. See [the cadence](../concepts/integration-reconcile.md#the-cadence-follows-who-has-to-act) for the rate limit on that route and why it is where it is.
+- **The Integrations screen re-asks when you come back to the tab.** Setting an integration up means leaving for GitHub and returning, and returning is a stronger signal that the answer moved than any poll interval can be. The screen held its pre-departure reading for up to a minute otherwise, which is the other half of what made this look broken.
+
+Together the card is normally correct by the time you switch back to it. If it is not — an engine built without the loop wired, or a second install inside the rate-limited window — the return page says so plainly instead of promising a wait it is not taking, and **Recheck** on the Integrations screen runs the pass on demand.
 
 ### What has to be in place first
 
@@ -411,6 +471,11 @@ pass and corrects the document from what it finds.
 | An installation the app has and the seat does not name | `installation_id` on the seat | The seat is finished |
 | A stored `installation_id` GitHub answers 404 to | `installation_id: 0` | Install it, with the link |
 | An app id GitHub answers 404 to | Clears `app_id`, `app_slug`, `installation_id`, `private_key` and `webhook_secret` | Create an app for this seat |
+| A **disconnect** uninstalled the app | `installation_id: 0` | Install it, with the link |
+
+**An agent with no app at all is reported too, and it used to be invisible.** The loop builds its seat list from the seats carrying an `integrations.github` block, because that block is where an app's id, slug and key are recorded — so a seat that has never had one was absent from the pass's input and produced no finding. Measured on a live connect: a company with one agent, no app, `phase: ready`, `findings: []`, and the seat's own row three screens away saying "no app of its own yet, so this agent acts as nobody on GitHub". They are reported as **one** `approval_required` naming the count and up to three handles, because creating an app is the same act for every one of them and a fifty-agent company does not need fifty rows saying it; the whole list travels beside the sentence. `approval_required` rather than `identity_missing` because the engine can never do it — an app is created by a form POST from a page carrying your own GitHub session — so a card reading *Setting up agents* would wait for an act nobody is performing.
+
+**And the card is not Connected while no agent can act.** One GitHub App is one bot identity, so an agent without its own app acts as nobody there. The satisfaction check asks only about seats that have *started*, which is what lets a company running GitHub for three of its ten agents be finished when those three are — and a company where nobody had started passed it vacuously: `satisfied: true` beside `seats_required: true`, over an agent that could do nothing.
 
 Every one of these reads as **Action needed**, waiting on a person at GitHub.
 The engine cannot create an app or install one for anybody: both are acts in a
@@ -507,12 +572,45 @@ at all and a classic token carries only if whoever minted it ticked the box.
 
 | `org_webhook` | Behaviour |
 |---|---|
-| `auto` (default) | Try one org hook; fall back to per-repository hooks if the credential may not, saying so in the run's notes |
+| `auto` (config default) | Try one org hook; fall back to per-repository hooks if the credential may not, saying so in the run's notes |
 | `true` | Demand the org hook. A credential that cannot register it **fails the run** — an operator who asked for this arrangement must not silently get the other one |
-| `false` | Always register per-repository hooks |
+| `false` | Register no org hook. Every repository in `repos` is hooked; with `repos` empty, each agent's own app carries its own webhook |
 
 A working org hook means the `repos` list is **not** hooked separately: two
 hooks on one repository deliver every event twice.
+
+**The dashboard form asks a different question, and offers two of these
+three.** It asks what should *reach your agents* rather than where a hook is
+registered, because that is the question an operator has:
+
+| Answer on the form | Writes | Needs |
+|---|---|---|
+| Repositories where an agent's app is installed *(default)* | `org_webhook: false` | nothing |
+| Every repository in your org, including new ones | `org_webhook: true` | `integrations.github.token` with `admin:org_hook` — **required for this answer** |
+
+`auto` is not offered there, because it is not an answer to that question: it
+means "try for the whole organization and quietly take less", which leaves a
+company believing it has one hook when it has several, none of them covering
+a repository created tomorrow. `false` **with a `repos` list** is not offered
+either — it is a real arrangement and a rare one, needing a list of
+repositories a form cannot help you build. Neither is removed: YAML keeps
+both, `org_webhook` still accepts all three values, and the pass still hooks
+every repository a company names. The form's job is deciding which questions
+are worth putting to somebody connecting from a dashboard.
+
+**`org_webhook: true` with no token does not block a company whose agents
+carry their own apps.** It used to: the finding said `ingress_blocked`, the
+card read *Action required*, and the remedy on screen was to install the
+agents' apps — which can never carry `admin:org_hook`, so doing exactly as
+the card asked changed nothing. Events were arriving through those apps the
+whole time. It now reports as coverage on a **ready** card (below), and the
+only thing that widens it is the token.
+
+**A company already holding `org_webhook: "true"` is not migrated.** The
+form's default is a suggestion and never a stored value, so changing it moves
+nobody who already answered — and rewriting an explicit answer would be the
+engine overruling a decision somebody may have made deliberately. What
+changed is the report, which is what was wrong.
 
 ---
 
@@ -660,13 +758,37 @@ So it does the two things GitHub genuinely allows:
 | `-recreate-webhooks` | Delete and remake every hook to mint a fresh secret. **Destructive**: it invalidates the secret every other deployment of this company holds |
 | `-dry-run` | Read and report; register nothing, and do not open the secret store |
 
+**A hook the company DEMANDED and could not get is reported; the fallback is not.** `integrations.github.token` is optional and the connect form does not ask for it, both deliberately — routing needs nothing from it, because each agent's own app answers who is participating in a thread. With no token the pass reads nothing and writes nothing at the organization, and it used to say so only in its *notes*, which are not findings, so a surface that had authenticated with nobody reported `ready` with an empty finding list. Measured on a live connect: `phase: ready`, `routes: true`, and exactly one webhook on the organization, belonging to a different deployment and never triggered. It is now `ingress_blocked` against `integrations.github.token`.
+
+**But only where the company actually asked for a hook this credential must register, and has no other coverage.** Two clauses, and both were learned the same way. The first is `org_webhook: true` (no fallback) or a non-empty `repos` list (no agent's own app covers a named repository): the form *requires* `provisioning.org` — that is where the agents' apps are installed — so reading "the block names an organization" as "this company wants an organization-wide webhook" put a permanent finding on every company that connects GitHub from the dashboard.
+
+The second is that **an agent's own app is a registrar too**. Even a company that *did* ask for an organization-wide hook is receiving events if its agents carry their own apps, so the honest report there is coverage rather than a block. Measured: an operator connected GitHub, was told *Action required: no webhook on crewbed*, installed the per-agent app exactly as the card was asking, and the warning stayed — because no App installation carries `admin:org_hook` at any permission. The one instruction on screen could not clear the one warning on screen.
+
+### What a company hears about, said out loud
+
+A company whose events arrive through its agents' own apps gets one sentence on a **ready** card: *covering the repositories your agents' apps are installed on. Not covering the rest of `<org>` — supply `integrations.github.token` to add one organization-wide hook.*
+
+It is a `coverage_partial` finding, whose verdict is ready and whose actor is the **operator**: nothing is broken, and widening it is a value in this company's own configuration rather than a grant somebody at GitHub has to make. The two alternatives were both worse. Reported as `ingress_blocked` it read as Action required over agents that were working. Reported as a *note* it reached nobody at all — the engine's pass returns findings and discards notes, so a person would learn the limits of their coverage only by noticing the first repository nobody hears about.
+
+The same sentence covers the company that chose this arrangement and the one left on `org_webhook: true` with no token, because the two are the same arrangement whatever the mode field says. And it never prescribes installing an app: that cannot widen it.
+
 **A working secret is never reminted.** The engine is running with the old
 one, so re-registering with a fresh secret would have GitHub sign every
 delivery with a key the running engine does not hold — every webhook refused
 at the edge, from a command whose whole promise is that it is safe to re-run.
 A secret that already resolves is used as it is; one that resolves to nothing
 is minted into the `${VAR}` the config already points at, and the run says
-where it went.
+where it went — **unless this deployment has already sealed** a value under
+that variable, which is read back and reused instead. That read-back matters
+to the reconcile loop rather than to this command: a `${VAR}` resolves from a
+snapshot taken at apply time, so in the window between a pass sealing a secret
+and something rebuilding that snapshot the resolver answers empty for a
+variable the fleet already holds — and without the read-back the loop minted
+again on every tick, rotating the key GitHub signs with until the snapshot
+caught up. On a node with **no keyring** at all (`secrets.keys` unset) nothing
+is minted and no hook is registered: the surface reports `ingress_blocked`
+against `integrations.github.webhook_secret`, naming `secrets.keys`, rather
+than failing every pass as though the engine were working on it.
 
 **A repository that cannot be hooked is reported, not raised.** A company's
 list will contain one that was renamed, archived, or made private to a team

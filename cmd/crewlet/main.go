@@ -1257,6 +1257,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Publisher: e.Backends().Queue,
 			Claims:    e.Backends().Fleet,
 			AppFlow:   appFlow,
+			Recheck:   e,
 		},
 	})
 	// NOT SET HERE ANY MORE. This used to be an unconditional
@@ -1724,6 +1725,13 @@ func (w engineConfigWriter) Apply(ctx context.Context, patch []byte, summary, op
 	_, err := w.surface.Apply(ctx, configapi.ApplyRequest{
 		Patch: patch, Summary: summary, Operator: operator,
 	})
+	return err
+}
+
+// Reload re-activates the current document, which is how a pass that sealed a
+// credential gets everything built at apply time rebuilt against it.
+func (w engineConfigWriter) Reload(ctx context.Context, summary, operator string) error {
+	_, err := w.surface.Reload(ctx, summary, operator)
 	return err
 }
 

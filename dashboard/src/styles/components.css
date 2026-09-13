@@ -124,6 +124,22 @@
     border-color var(--dur-fast) var(--ease),
     color var(--dur-fast) var(--ease);
 }
+/* A BUTTON IS NOT A LINK, WHATEVER ELEMENT IT IS.
+
+   Several of these controls are anchors — a step that leaves for a vendor's
+   own site has to be a real href, so it opens in a tab and offers a context
+   menu — and base.css underlines `a:hover`, which is right for a link inside
+   a sentence and wrong for something drawn as a filled button. "Install on
+   GitHub" grew an underline the Create button beside it never had, so two
+   controls that are the same act looked like two different kinds of thing.
+
+   Stated on the class rather than at the one call site, because the next
+   anchor-as-button would arrive with the same defect and no reason to
+   suspect it. */
+.btn,
+.btn:hover {
+  text-decoration: none;
+}
 .btn:hover:not(:disabled) {
   background: var(--surface-3);
   border-color: var(--border-strong);

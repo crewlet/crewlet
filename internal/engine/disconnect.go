@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
@@ -33,6 +34,16 @@ type ConfigWriter interface {
 	// installation and records it against that one seat.
 	Seat(ctx context.Context, handle string) ([]byte, error)
 	SetSeat(ctx context.Context, handle string, body []byte, summary, operator string) error
+
+	// Reload re-activates the CURRENT document unchanged, which advances the
+	// epoch and makes every node apply again.
+	//
+	// The control plane's documented credential-rotation gesture, and the
+	// reason its activation pointer is append-only rather than keyed on a
+	// revision id: a pointer that deduplicated would rebuild nothing on
+	// precisely this operation. See [Engine.rebuildForSealedSecrets] for why
+	// a provisioning pass needs it.
+	Reload(ctx context.Context, summary, operator string) error
 }
 
 // UseConfigWriter installs the surface a disconnect removes a block through.
@@ -64,25 +75,103 @@ func (e *Engine) configWriterOrNil() ConfigWriter {
 type vendorDisconnect struct {
 	engine *Engine
 	kind   integration.Kind
-	// pass is nil for a third-party app that registers nothing at all.
-	pass setup.Teardowner
+	// pass is nil for a surface with nothing to remove anywhere.
+	pass teardown
 }
 
-func (d vendorDisconnect) Disconnect(ctx context.Context, removeSeats bool) error {
-	return d.engine.dropBlock(ctx, d.kind, func(ctx context.Context) error {
+// teardown is the one method a disconnect calls, declared where it is called.
+//
+// NARROWER THAN [setup.Teardowner], which is a [setup.Pass] as well — a
+// reconcile, and the transient credential that reconcile needs. A disconnect
+// asks for neither, and requiring them meant the only step that removes
+// something WITHOUT a vendor to reconcile against, Slack's, could not be
+// expressed here at all: it would have had to carry a Run and a Needs that
+// nothing would ever call. Every real pass still satisfies this.
+type teardown interface {
+	Teardown(ctx context.Context, in setup.TeardownInput) (provision.Removed, error)
+}
+
+func (d vendorDisconnect) Disconnect(
+	ctx context.Context, removeSeats bool,
+) (provision.Removed, error) {
+	var removed provision.Removed
+	err := d.engine.dropBlock(ctx, d.kind, func(ctx context.Context) error {
 		if d.pass == nil {
-			// NOTHING REGISTERED AT THE VENDOR. Slack is the only
-			// surface here with no pass at all — its apps are made from
-			// the command line — so it is the only one that reaches
-			// this branch, and there is nothing this engine put at
-			// Slack for a teardown to take away. Dropping the block is
-			// the whole disconnect, and a third-party app with no
-			// teardown must still HAVE a disconnector or the intent
-			// sits on the row for ever.
+			// NOTHING TO REMOVE ANYWHERE, which no surface in this
+			// build is: every kind has a step, seven at a vendor and
+			// Slack's on the company document itself. It is kept
+			// because a kind added with a read-only pass would reach
+			// it, and a surface with no teardown must still HAVE a
+			// disconnector or the intent sits on the row for ever.
+			//
+			// IT USED TO BE SLACK'S WHOLE DISCONNECT, on the reading
+			// that a surface with no vendor pass has nothing to tear
+			// down. What it had was every seat's sealed app
+			// credentials, and leaving them drew the card as paused
+			// for ever. See [slackTeardown].
 			return nil
 		}
-		return d.pass.Teardown(ctx, setup.TeardownInput{RemoveSeats: removeSeats})
+		var err error
+		removed, err = d.pass.Teardown(ctx, setup.TeardownInput{RemoveSeats: removeSeats})
+		if err != nil {
+			return err
+		}
+		// THE CREDENTIALS THOSE ACCOUNTS HELD, deleted here and in no
+		// vendor package. See [Engine.forgetRemoved].
+		return d.engine.forgetRemoved(ctx, d.kind, removed)
 	})
+	return removed, err
+}
+
+// forgetRemoved deletes the sealed values whose accounts a teardown removed.
+//
+// # One writer, and it is this one
+//
+// A vendor package's only sanctioned write seam is [provision.TokenSink],
+// which deliberately has no "delete an arbitrary name" verb until now — so no
+// teardown or decommission path anywhere ever deleted a secret, and a
+// disconnect that removed every agent's service account left every agent's
+// credential sealed and resolving.
+//
+// Measured: disconnecting Atlassian with "remove accounts" deleted the service
+// accounts and left SRE_ATLASSIAN_TOKEN and SRE_ATLASSIAN_EMAIL behind. On
+// reconnect the tracker mapped the seat to the account that no longer existed
+// — its identity cache is keyed on the CREDENTIAL, and the credential had not
+// changed — and reported a 401 as the operator's problem, at a third-party
+// app, for about thirty-five seconds.
+//
+// # Inside the vendor step, before the block is dropped
+//
+// [Engine.dropBlock] runs this closure and only then removes the block, which
+// is the order this needs: every name here was derived from a `${VAR}` that is
+// still in the company document. It also means a failure holds the surface in
+// PhaseDisconnecting and the next tick tries again, which is why it returns an
+// error rather than logging one — a swallowed failure drops the block with the
+// credentials still sealed, and the retry that would have caught it never runs.
+//
+// A NODE WITH NO KEYRING CANNOT DELETE A SEALED ROW. It says so, naming the
+// values, rather than reporting a completeness it did not achieve.
+func (e *Engine) forgetRemoved(
+	ctx context.Context, kind integration.Kind, removed provision.Removed,
+) error {
+	names := removed.Secrets()
+	if len(names) == 0 {
+		return nil
+	}
+	sink, err := e.SetupSink(reconcileOperator)
+	if err != nil {
+		log.WarnContext(ctx, "removed_credentials_not_deleted",
+			"integration", kind.String(), "error", err, "secrets", names,
+			"detail", "the accounts are gone and these values are dead; this "+
+				"node has no keyring, so remove them with `crewlet secrets unset`")
+		return nil
+	}
+	if err := sink.Forget(ctx, names...); err != nil {
+		return fmt.Errorf("engine: %s teardown: %w", kind, err)
+	}
+	log.InfoContext(ctx, "removed_credentials_deleted",
+		"integration", kind.String(), "accounts", removed.Handles(), "secrets", names)
+	return nil
 }
 
 // dropBlock runs the third-party app step and then removes the block, in that order.
@@ -131,23 +220,15 @@ func (e *Engine) dropBlock(
 		return fmt.Errorf("%w: no config surface is wired on this node",
 			integration.ErrDisconnectUnavailable)
 	}
-	// AND NOT WHILE SOMETHING ELSE IS WRITING AT THIS SURFACE. A teardown
-	// and a provisioning pass are the two operations that write at the
-	// third-party app, and letting them overlap is how a disconnect deletes
-	// the webhook the pass beside it is registering. [setup.Runner.Hold] is
-	// the one guard all three writers take, so a teardown reached through
-	// the Disconnector takes it here rather than inventing a second one.
-	release, held, err := e.holdSurface(ctx, kind)
-	switch {
-	case err != nil:
-		return fmt.Errorf("%w: this node could not check whether %s is "+
-			"being provisioned right now: %w",
-			integration.ErrDisconnectUnavailable, kind, err)
-	case !held:
-		return fmt.Errorf("%w: a provisioning pass for %s is running",
-			integration.ErrDisconnectUnavailable, kind)
-	}
-	defer release()
+	// NO GUARD IS TAKEN HERE. The loop's worker holds it around the whole
+	// teardown — this call and the status write that records how far it got —
+	// through the Guard wired in `startIntegrations`, so ctx is already the
+	// guard's and is bounded by [setup.PassDeadline].
+	//
+	// Taking it again would deadlock rather than double-lock: [setup.Runner]'s
+	// in-process claim is not reentrant, so this node would answer
+	// ErrDisconnectUnavailable on every tick and the disconnect would never
+	// finish. See the same note in `passConverger.Reconcile`.
 	if err := vendor(ctx); err != nil {
 		return fmt.Errorf("engine: %s teardown: %w", kind, err)
 	}
@@ -161,24 +242,35 @@ func (e *Engine) dropBlock(
 	return nil
 }
 
-// disconnectors pairs every pass this build can tear down with the seam the
-// loop removes it through.
+// disconnectors pairs every surface with the seam the loop removes it
+// through, and with the step that removes what it holds.
 //
-// EVERY SURFACE, not only the ones with something to remove. A third-party app
-// with no teardown still has a BLOCK, and a disconnect for it that no node
-// could complete would leave the intent on the fleet row for ever with the
-// screen reporting Disconnecting and nothing moving. Slack is that case, and
-// the only one: it is the single kind with no pass, so it is the single kind
-// with nothing this engine registered to take away. Datadog was in this
-// sentence and is not any more — it registers its own webhook and tears it
-// down again.
+// EVERY SURFACE, not only the ones with a vendor pass. A surface with no
+// teardown still has a BLOCK, and a disconnect for it that no node could
+// complete would leave the intent on the fleet row for ever with the screen
+// reporting Disconnecting and nothing moving.
+//
+// SLACK IS NOT THAT CASE, though it was written as the only one. It is the
+// single kind with no pass — its apps are created from the command line, and
+// only a person can delete one — which was read as "nothing this engine put
+// anywhere". What it put is a sealed bot token and signing secret on every
+// seat, in the company's own document, which is exactly where a disconnect
+// can reach. Its step is [slackTeardown] and it joins the same seam as the
+// other seven.
 func (e *Engine) disconnectors() map[integration.Kind]integration.Disconnector {
-	tearers := map[integration.Kind]setup.Teardowner{}
+	tearers := map[integration.Kind]teardown{}
 	for _, pass := range e.setupPasses() {
 		if tearer, ok := pass.(setup.Teardowner); ok {
 			tearers[pass.Kind()] = tearer
 		}
 	}
+	// THE ONE STEP THAT IS NOT A PASS. A type assertion over the passes
+	// cannot find it, because there is no Slack pass to assert on: nothing
+	// at Slack can be read or reconciled with the credentials a company
+	// holds. Registered by name for that reason, and it is the only such
+	// entry — an assertion that finds nothing is how the defect it fixes
+	// went unnoticed.
+	tearers[integration.KindSlack] = slackTeardown{engine: e}
 	out := map[integration.Kind]integration.Disconnector{}
 	for _, kind := range integration.Kinds {
 		out[kind] = vendorDisconnect{engine: e, kind: kind, pass: tearers[kind]}

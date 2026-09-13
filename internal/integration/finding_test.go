@@ -12,7 +12,9 @@ import (
 // advisories are the kinds whose verdict is READY: a note on a working
 // integration rather than something blocking it. They are listed rather than
 // derived so a kind added without deciding whether it blocks fails a test.
-var advisories = []FindingKind{FindingGrantExcess, FindingRegistrationOrphaned}
+var advisories = []FindingKind{
+	FindingGrantExcess, FindingRegistrationOrphaned, FindingCoveragePartial,
+}
 
 // isAdvisory reports a kind from the list above.
 func isAdvisory(kind FindingKind) bool { return slices.Contains(advisories, kind) }
@@ -30,6 +32,7 @@ var knownKinds = []FindingKind{
 	FindingGrantShort,
 	FindingGrantExcess,
 	FindingRegistrationOrphaned,
+	FindingCoveragePartial,
 }
 
 // A pass that found nothing is ready. This is the whole success path: a
@@ -330,6 +333,7 @@ func TestTheSeverityOrderIsPinned(t *testing.T) {
 		FindingGrantShort,
 		FindingGrantExcess,
 		FindingRegistrationOrphaned,
+		FindingCoveragePartial,
 	}
 	if len(want) != len(knownKinds) {
 		t.Fatalf("this list has %d kinds and the package defines %d: a kind was "+

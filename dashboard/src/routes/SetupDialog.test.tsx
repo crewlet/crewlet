@@ -10,7 +10,16 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 import { ToastProvider } from "~/ui/Toast";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { HELD, SetupDialog, fieldsFor, fillTemplate, vendorLink } from "./SetupDialog.tsx";
+import {
+  HELD,
+  SetupDialog,
+  fieldsFor,
+  fillTemplate,
+  gateOpen,
+  neededField,
+  shownField,
+  vendorLink,
+} from "./SetupDialog.tsx";
 import type { SetupRequirement, SetupToolState } from "~/protocol/index.ts";
 
 function req(over: Partial<SetupRequirement>): SetupRequirement {
@@ -55,7 +64,14 @@ const tool: SetupToolState = {
       kind: "handle",
       config_path: "integrations.datadog.route_to",
       blocks: "credential_missing",
-      choices: [{ value: "sre-lead", label: "sre-lead" }],
+      // THE DEFAULT THE ENGINE ACTUALLY DECLARES. Every choice field ships
+      // one (TestEveryChoiceOpensOnAnAnswer pins it), so a fixture without
+      // one describes a form this product cannot render.
+      default: "none",
+      choices: [
+        { value: "none", label: "None: dismiss alerts nobody owns" },
+        { value: "sre-lead", label: "sre-lead" },
+      ],
     }),
     req({
       field: "handle_tag",
@@ -390,14 +406,33 @@ test("a templated vendor link waits for the field it needs", () => {
   expect(vendorLink("https://example.com/keys", {}, same)).toBe("https://example.com/keys");
 });
 
-// A FIX NARROWS TO THE FIELDS THAT CLEAR THE FINDING, which is what the
-// blocks field on a requirement is for.
-test("a finding narrows the form to what clears it", () => {
-  const shown = fieldsFor(tool.requirements, "credential_missing");
-  expect(shown.map((r) => r.field)).toEqual(["webhook_token", "route_to"]);
-  // And a finding nothing clears falls back to the whole list rather than an
-  // empty dialog.
-  expect(fieldsFor(tool.requirements, "grant_short").length).toBe(tool.requirements.length);
+// CONNECT FIELDS COME FIRST, AND NOTHING IS HIDDEN.
+//
+// This used to assert the opposite half — that a finding narrowed the form to
+// the fields clearing it — over an argument nothing ever passed, because the
+// Fix control that would have passed it was removed. What the function
+// actually promises is an ordering: the person pasting an API key finds it at
+// the top, and the person changing a fallback seat can still reach it.
+test("connect fields come first and every field survives", () => {
+  // DECLARED OUT OF ORDER ON PURPOSE, and not read off the shared fixture.
+  // That fixture already lists its connect fields first, so asserting against
+  // its own order passes whatever this function does — the first version of
+  // this test did exactly that and stayed green when the partition was
+  // deleted. A list the partition has to actually move is the only one that
+  // can fail.
+  const reqs = [
+    req({ field: "handle_tag", connect: false }),
+    req({ field: "webhook_token", connect: true }),
+    req({ field: "route_to", connect: false }),
+    req({ field: "site", connect: true }),
+  ];
+
+  const shown = fieldsFor(reqs);
+
+  expect(shown.map((r) => r.field)).toEqual(["webhook_token", "site", "handle_tag", "route_to"]);
+  // AND THE ORDER WITHIN EACH GROUP SURVIVES, which is the other half: a
+  // stable partition, so an app's own declared sequence is not reshuffled.
+  expect(shown.length).toBe(reqs.length);
 });
 
 // THE SUBMISSION SENDS A MINT REQUEST, NOT A VALUE, and sends nothing for a
@@ -426,10 +461,14 @@ test("submitting asks for the mint and sends only what was filled in", async () 
   // The toggle defaults on, because connecting something and leaving it off
   // is not what the button says.
   expect(body.values.enabled).toBe("true");
-  // Nothing was typed into these, so nothing is sent: a field sent back
+  // Nothing was typed into this, so nothing is sent: a field sent back
   // unchanged is a field rewritten for no reason.
-  expect(body.values.route_to).toBeUndefined();
   expect(body.values.handle_tag).toBeUndefined();
+  // A SEEDED DEFAULT IS SENT, THOUGH, and that is the contract rather than an
+  // exception to it: a default is offered on screen, so it is submitted as
+  // what was on screen. Withheld, the form would show an answer and store a
+  // different one — see `seed`.
+  expect(body.values.route_to).toBe("none");
 });
 
 // A LITERAL REFUSAL LANDS ON THE FIELD, not in a banner nobody connects to an
@@ -571,6 +610,11 @@ test("connecting and managing render one identical form", () => {
       required: false,
       present,
       value: present ? "datadoghq.com" : undefined,
+      // AND THE REGION'S OWN DEFAULT, which is what makes the two sides of
+      // this test identical rather than one of them opening on a
+      // placeholder: a connect form seeds the default, a settings form the
+      // stored value, and with no default the first has nothing to show.
+      default: "datadoghq.com",
       choices: [{ value: "datadoghq.com", label: "datadoghq.com" }],
     }),
     req({
@@ -599,7 +643,17 @@ test("connecting and managing render one identical form", () => {
       kind: "handle",
       present,
       value: present ? "sre-lead" : undefined,
-      choices: [{ value: "sre-lead", label: "SRE Lead (sre-lead)" }],
+      // THE DEFAULT THE ENGINE DECLARES. Both picker kinds ship one —
+      // TestEveryChoiceOpensOnAnAnswer pins it across every vendor — and
+      // without it the connect side of this comparison opens on a "Choose
+      // one" the settings side does not have, which is precisely the "the
+      // settings form is a different screen" divergence this test exists to
+      // catch. A fixture with no default describes a form that cannot exist.
+      default: "none",
+      choices: [
+        { value: "none", label: "None: dismiss alerts nobody owns" },
+        { value: "sre-lead", label: "SRE Lead (sre-lead)" },
+      ],
     }),
   ];
 
@@ -1909,4 +1963,341 @@ test("saving a connected app does not say it connected", async () => {
 
   await vi.waitFor(() => expect(screen.getByText(/Datadog settings saved/)).toBeTruthy());
   expect(screen.queryByText(/Datadog connected/)).toBeNull();
+});
+
+// A REFUSAL NEVER HIDES BEHIND THE FOLD.
+//
+// The disclosure is closed in both directions on purpose — a settings form
+// that sprang open because a field inside it was unset would differ from the
+// connect form — and it opens when a submission is refused for something
+// inside it. That was true of exactly one error code. The ordinary refusal, a
+// config validation listing the values it will not accept, went to the banner
+// with the fold shut: a Datadog operator read
+// `integrations.datadog.route_to required value missing` over a form with no
+// such input on it, because the field is real, required, and behind "More
+// settings" with nothing saying so.
+test("a refusal opens the fold hiding the field it names", async () => {
+  stubFetch(
+    () =>
+      new Response(
+        JSON.stringify({
+          error: "invalid_config",
+          detail:
+            "integrations.datadog.route_to required value missing: name the " +
+            "handle of the seat an alert should wake when no monitor tag " +
+            "names an owner",
+        }),
+        { status: 422 },
+      ),
+  );
+  const { baseElement } = render(
+    <SetupDialog
+      sections={[
+        {
+          name: "Datadog",
+          tool: {
+            ...tool,
+            requirements: [
+              req({
+                field: "site",
+                label: "Datadog region",
+                kind: "choice",
+                connect: true,
+                config_path: "integrations.datadog.site",
+              }),
+              req({
+                field: "api_key",
+                label: "API key",
+                kind: "secret",
+                connect: true,
+                config_path: "integrations.datadog.api_key",
+              }),
+              // FOLDED, because it declares no `connect`, and required. The
+              // config path is what the refusal is joined on, so it has to be
+              // the one the engine really sends.
+              req({
+                field: "route_to",
+                label: "Fallback seat",
+                kind: "handle",
+                config_path: "integrations.datadog.route_to",
+              }),
+            ],
+          },
+        },
+      ]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+
+  const more = baseElement.querySelector("details.int-form-more") as HTMLDetailsElement;
+  expect(more.open).toBe(false);
+
+  // Something to submit, which is what an operator filling the connect fields
+  // leaves behind: with nothing changed the dialog never reaches the engine.
+  fireEvent.change(screen.getByLabelText(/API key/), { target: { value: "dd-api-key" } });
+  fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
+  expect(await screen.findByText(/names an owner/)).toBeDefined();
+
+  const after = baseElement.querySelector("details.int-form-more") as HTMLDetailsElement;
+  expect(after.open).toBe(true);
+  // AND THE FIELD IT NAMES IS THE ONE NOW REACHABLE.
+  expect(after.contains(screen.getByText("Fallback seat").closest(".field"))).toBe(true);
+});
+
+// AND A REFUSAL ABOUT SOMETHING ON THE FORM LEAVES IT SHUT, or "open it
+// whenever anything is refused" would be the settings form differing from the
+// connect form again, by another route.
+test("a refusal naming a visible field leaves the fold shut", async () => {
+  stubFetch(
+    () =>
+      new Response(
+        JSON.stringify({
+          error: "invalid_config",
+          detail: "integrations.datadog.api_key required value missing: give a key",
+        }),
+        { status: 422 },
+      ),
+  );
+  const { baseElement } = render(
+    <SetupDialog
+      sections={[
+        {
+          name: "Datadog",
+          tool: {
+            ...tool,
+            requirements: [
+              req({
+                field: "api_key",
+                label: "API key",
+                kind: "secret",
+                connect: true,
+                config_path: "integrations.datadog.api_key",
+              }),
+              req({
+                field: "route_to",
+                label: "Fallback seat",
+                kind: "handle",
+                config_path: "integrations.datadog.route_to",
+              }),
+            ],
+          },
+        },
+      ]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  fireEvent.change(screen.getByLabelText(/API key/), { target: { value: "dd-api-key" } });
+  fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
+  expect(await screen.findByText(/give a key/)).toBeDefined();
+
+  const more = baseElement.querySelector("details.int-form-more") as HTMLDetailsElement;
+  expect(more.open).toBe(false);
+});
+
+// A FIELD REQUIRED BY AN ANSWER IS HIDDEN UNTIL THAT ANSWER IS GIVEN.
+//
+// GitHub's organization token is the pair this exists for. Stated `required`
+// it blocked a connect that needed nothing — a hand-minted personal access
+// token demanded before anything worked. Stated optional it let the API store
+// "cover every repository in the organization" with nothing able to register
+// the hook, which is a company one apply later holding a demand it cannot
+// meet.
+const gated: SetupRequirement = {
+  field: "token",
+  label: "Organization token",
+  kind: "secret",
+  config_path: "integrations.github.token",
+  required: false,
+  present: false,
+  required_when: { field: "provisioning.org_webhook", equals: "true" },
+};
+
+test("a gated field is hidden until its answer is chosen", () => {
+  expect(shownField(gated, () => "false")).toBe(false);
+  expect(shownField(gated, () => "true")).toBe(true);
+});
+
+test("a gated field is required exactly when it is shown", () => {
+  // THE TWO ARE ONE DECISION. A field shown under an answer that needs it is
+  // a field that needs it, and splitting them would allow "visible but
+  // optional" — a form asking a question whose answer it will ignore.
+  expect(neededField(gated, () => "false")).toBe(false);
+  expect(neededField(gated, () => "true")).toBe(true);
+  // AND AN UNGATED FIELD ANSWERS TO `required` ALONE.
+  expect(neededField({ ...gated, required_when: undefined, required: true }, () => "")).toBe(true);
+});
+
+// AN UNGATED FIELD IS UNAFFECTED BY WHAT THE FORM HOLDS.
+//
+// The resolver is REQUIRED rather than optional, which is not a style choice:
+// optional, it defaulted to "no answers, so the gate is shut", and one render
+// site asked whether to draw a field without passing any — reading its own
+// gate as closed while the list deciding the fold, a metre away, had the
+// answers and said show it. The organization token never appeared, however
+// the choice beside it was set. Required, every caller is a compile error
+// until it says what the form holds.
+test("an ungated field ignores the answers", () => {
+  const plain = { ...gated, required_when: undefined };
+  expect(gateOpen(plain, () => "")).toBe(true);
+  expect(shownField(plain, () => "")).toBe(true);
+});
+
+// SELECTING THE ANSWER REVEALS THE FIELD THAT ANSWER NEEDS.
+//
+// The whole point of the gate, and the thing a unit test of the predicate
+// cannot prove: the predicate said yes while the field stayed off screen.
+test("choosing the gated answer reveals its field", () => {
+  const coverage: SetupToolState = {
+    ...tool,
+    key: "github",
+    configured: true,
+    requirements: [
+      {
+        field: "provisioning.org_webhook",
+        label: "Which GitHub activity should reach your agents",
+        kind: "choice",
+        config_path: "integrations.github.provisioning.org_webhook",
+        required: false,
+        present: true,
+        value: "false",
+        choices: [
+          { value: "false", label: "Repositories where an agent's app is installed" },
+          { value: "true", label: "Every repository in acme, including new ones" },
+        ],
+      },
+      { ...gated },
+    ],
+  };
+  render(
+    <SetupDialog
+      sections={[{ name: "GitHub", tool: coverage }]}
+      title="GitHub"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect(screen.queryByText("Organization token")).toBeNull();
+
+  const choice = screen.getByLabelText(/Which GitHub activity/);
+  fireEvent.change(choice, { target: { value: "true" } });
+
+  // VISIBLE, not merely present in the requirement list: a field revealed
+  // into a collapsed fold is a field somebody still cannot see.
+  const revealed = screen.queryByText("Organization token");
+  expect(revealed).not.toBeNull();
+  expect(revealed?.closest("details")?.open ?? true).toBe(true);
+});
+
+// NO PLACEHOLDER OVER AN ANSWER THAT EXISTS.
+//
+// "Choose one" was rendered unconditionally, so every dropdown on every
+// integration form opened with a question mark above the value it was already
+// showing. Every choice this product declares carries a default, so the empty
+// option is never the truth on a form somebody has opened.
+test("a dropdown holding an answer offers no placeholder", () => {
+  const { container } = render(
+    <SetupDialog
+      sections={[{ name: "Datadog", tool }]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  for (const select of container.querySelectorAll("select")) {
+    expect(select.value).not.toBe("");
+    const empty = [...select.options].filter((o) => o.value === "");
+    expect(empty).toHaveLength(0);
+  }
+});
+
+// AND A STORED ANSWER THE LIST NO LONGER OFFERS KEEPS ITS OWN OPTION.
+//
+// A form may narrow its choices — GitHub's coverage question offers two of
+// the three modes its config accepts — and a company already holding the
+// dropped one must not open the dialog to find a different answer selected,
+// and then save it. Without this the select matches nothing, and dropping the
+// placeholder would silently show the first option instead.
+test("a value the choices do not contain is shown as itself", () => {
+  const narrowed: SetupToolState = {
+    ...tool,
+    key: "github",
+    configured: true,
+    requirements: [
+      {
+        field: "provisioning.org_webhook",
+        label: "Which GitHub activity should reach your agents",
+        kind: "choice",
+        config_path: "x",
+        required: false,
+        present: true,
+        value: "auto",
+        choices: [
+          { value: "false", label: "Repositories where an agent's app is installed" },
+          { value: "true", label: "Every repository in acme, including new ones" },
+        ],
+      },
+    ],
+  };
+  const { container } = render(
+    <SetupDialog
+      sections={[{ name: "GitHub", tool: narrowed }]}
+      title="GitHub"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  const select = container.querySelector("select");
+  expect(select?.value).toBe("auto");
+});
+
+// A GATED FIELD SAYS IT IS REQUIRED, AND SITS UNDER THE ANSWER THAT REVEALED
+// IT.
+//
+// Required is the unmarked default on this form, which is right — most fields
+// are required and marking them all is noise. A field that appeared because
+// of an answer is the exception: its requiredness is news, and it is the one
+// thing standing between that answer and its working.
+test("a revealed field is marked required and follows its question", () => {
+  const coverage: SetupToolState = {
+    ...tool,
+    key: "github",
+    configured: true,
+    requirements: [
+      {
+        field: "provisioning.org_webhook",
+        label: "Which GitHub activity should reach your agents",
+        kind: "choice",
+        config_path: "x",
+        required: false,
+        present: true,
+        value: "false",
+        choices: [
+          { value: "false", label: "Apps" },
+          { value: "true", label: "Every repository" },
+        ],
+      },
+      { ...gated },
+    ],
+  };
+  const { container } = render(
+    <SetupDialog
+      sections={[{ name: "GitHub", tool: coverage }]}
+      title="GitHub"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  fireEvent.change(container.querySelector("select")!, { target: { value: "true" } });
+
+  const labels = [...container.querySelectorAll("label")].map((l) => l.textContent ?? "");
+  const token = labels.findIndex((t) => t.startsWith("Organization token"));
+  const choice = labels.findIndex((t) => t.startsWith("Which GitHub activity"));
+  expect(token).toBeGreaterThan(-1);
+  expect(token).toBeGreaterThan(choice);
+  expect(labels[token]).toContain("(required)");
+  expect(labels[token]).not.toContain("(optional)");
 });

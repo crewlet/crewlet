@@ -85,11 +85,11 @@ func PlanFor(o *org.Organization, cfg *config.GitLab) (*provision.Plan, error) {
 				handle, key, provision.Shape(stripScheme(value)))
 			continue
 		}
+		// NO EMAIL, and that omission is the whole of the fix below.
 		plan.Add(provision.Seat{
 			Handle:   handle,
 			Role:     seat.Name,
 			TokenVar: name,
-			Email:    accountEmail(cfg.Provisioning, handle),
 		})
 	}
 	return plan, nil
@@ -116,28 +116,32 @@ func stripScheme(value string) string {
 	return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(value), "Bearer "))
 }
 
-// accountEmail is the address a seat's service account is created with.
+// GITLAB NAMES THE ADDRESS, AND A SEAT PLAN MUST NOT.
 //
-// DERIVED rather than configured, because GitLab requires one and it must be
-// unique per account — an operator supplying them by hand would be
-// maintaining a second copy of the roster whose only job is to stay in step
-// with the first.
-func accountEmail(p *config.GitLabProvisioning, handle string) string {
-	prefix := strings.TrimSpace(p.UsernamePrefix)
-	if prefix == "" {
-		prefix = "crewlet"
-	}
-	return fmt.Sprintf("%s-%s@%s", prefix, handle, serviceAccountDomain)
-}
-
-// serviceAccountDomain is the domain service-account addresses are formed
-// under.
+// A service account was created with a derived `crewlet-<handle>@
+// noreply.crewlet.invalid`, on the reasoning that GitLab requires an address,
+// that it must be unique per account, and that `noreply.` says "this mailbox
+// does not exist" — which is right for a robot. Two of those three are false
+// and the third is what broke it.
 //
-// `noreply.` is a convention every code host understands as "this mailbox
-// does not exist", which is exactly right here: the account is a robot, and
-// an address that looked deliverable would eventually have somebody's
-// notification sent to it.
-const serviceAccountDomain = "noreply.crewlet.invalid"
+// GitLab does NOT require one: `email` is optional on both service-account
+// routes, and omitting it has GitLab generate an address under its own noreply
+// domain. What its documentation adds is the sentence that matters — "custom
+// email addresses require confirmation before the account is active, unless
+// the group has a matching verified domain". `crewlet.invalid` is a reserved
+// TLD (RFC 2606), so no confirmation mail can ever be delivered and no domain
+// can ever be verified: every account this created was permanently inactive.
+//
+// GitLab then refuses every token such an account holds, with
+// `403 Your primary email address is not confirmed`. Measured: a seat's token
+// was minted, sealed, refused on the next pass's check, and minted again —
+// 144 live tokens with `api` scope over one connect, and 164 in total. That
+// loop is fixed at three points (see [Client.Tokens] and the mint in
+// [Reconcile]); THIS is the point at which it stops starting.
+//
+// A GENERATED ADDRESS IS STILL A ROBOT'S. GitLab's own is
+// `service_account_group_…@noreply.<instance>`, which is the same promise the
+// derived one was making and is one the instance can actually keep.
 
 // Username is the service-account name for a seat.
 func Username(p *config.GitLabProvisioning, handle string) string {

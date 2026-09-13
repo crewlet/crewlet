@@ -55,6 +55,68 @@ func (r *Result) Findings() []integration.Finding {
 		})
 	}
 
+	// AND NO KEY TO SIGN WITH IS THE OTHER WAY TO HAVE NO INGRESS, said
+	// against the field that fixes it.
+	//
+	// INGRESS RATHER THAN CREDENTIAL, on Jira's reasoning: a webhook secret
+	// is not how this engine authenticates AT GitHub — it is what makes a
+	// delivery verifiable when it arrives here, and a route with nothing to
+	// verify with answers 503. It is also what [Requirements] declares:
+	// `webhook_secret` says Blocks: FindingIngressBlocked, and that
+	// declaration is the join the setup screen uses to offer the field that
+	// clears this.
+	if r.NoKeyring {
+		out = append(out, integration.Finding{
+			Kind:    integration.FindingIngressBlocked,
+			Subject: "integrations.github.webhook_secret",
+			Detail: "no webhook was registered because this deployment has no " +
+				"secret to sign deliveries with and this node has no keyring " +
+				"to seal a fresh one into: set secrets.keys in the bootstrap " +
+				"configuration so a pass can mint it, or set the variable " +
+				"integrations.github.webhook_secret points at and register the " +
+				"hooks on the next pass",
+		})
+	}
+
+	// AND NO CREDENTIAL TO REGISTER THE HOOK THE COMPANY ASKED FOR.
+	//
+	// The organization credential is optional and the form does not ask for
+	// it, both deliberately — routing needs nothing from it, because each
+	// agent's own app answers who is participating. What it IS still needed
+	// for is the one thing `provisioning` asks for: a hook on an
+	// organization or on a list of repositories. Without it the pass reads
+	// nothing and writes nothing, and it said so in NOTES, which are not
+	// findings — so a surface that had authenticated with nobody reported
+	// READY with an empty finding list. See [Result.NoRegistrar].
+	if r.NoRegistrar != "" {
+		out = append(out, integration.Finding{
+			Kind:    integration.FindingIngressBlocked,
+			Subject: "integrations.github.token",
+			Detail:  r.NoRegistrar,
+		})
+	}
+
+	// WHAT THE COMPANY'S AGENTS HEAR ABOUT, where that is narrower than the
+	// organization and is the ARRANGEMENT rather than a fault.
+	//
+	// An advisory, so the surface stays READY: these agents are receiving
+	// events. It was reported as ingress_blocked once, which put a card
+	// delivering events perfectly well at Action required and named the
+	// organization token as the fix — beside a roster asking for apps to be
+	// installed, which can never carry `admin:org_hook`. So the one
+	// instruction on screen could not clear the one warning on screen.
+	if r.Coverage != "" {
+		out = append(out, integration.Finding{
+			Kind:    integration.FindingCoveragePartial,
+			Subject: "github coverage",
+			Detail:  r.Coverage,
+			// NO REMEDY FIELD. The sentence's own last clause is the
+			// remedy, and it is optional — a second line telling somebody
+			// to do something would make a decision they already took
+			// read as work outstanding.
+		})
+	}
+
 	// AND A TARGET THIS RUN TRIED AND COULD NOT HOOK.
 	//
 	// Reported per target rather than once: a partial hook-up is the state
@@ -77,15 +139,32 @@ func (r *Result) Findings() []integration.Finding {
 		})
 	}
 
+	// AND A SEAT WHOSE OWN CREDENTIAL DOES NOT AUTHENTICATE.
+	//
+	// ONLY THAT SEAT. A seat with no login used to be one finding whether
+	// or not it had ever asked for a credential, and on the shape this
+	// integration actually ships — each agent acting as its OWN GitHub App,
+	// with no `mcp_env.github` token anywhere by design — that was every
+	// agent seat, for ever, in [integration.PhaseDegraded], saying "no
+	// review request or mention reaches it" about seats whose mentions
+	// resolve perfectly well through their app's slug ([SeatLookup] and
+	// the identity registration that reads [BotLogin]).
+	//
+	// The sentence changed with it. What a personal access token actually
+	// buys a seat is that its TOOLS act as somebody, so that is what a
+	// refused one costs — claiming the seat is unreachable was a second
+	// false statement, true only of a seat with no app either, which this
+	// run cannot see and [ReconcileSeatApps] reports on.
 	for _, seat := range r.Seats {
-		if seat.Routes() {
+		if !seat.Refused() {
 			continue
 		}
 		out = append(out, integration.Finding{
 			Kind:    integration.FindingIdentityFailed,
 			Subject: seat.Handle,
-			Detail: fmt.Sprintf("%s has no GitHub login, so no review request or "+
-				"mention reaches it: %s",
+			Detail: fmt.Sprintf("%s's own GitHub credential does not authenticate, "+
+				"so every call its tools make is refused and anything routed on "+
+				"that account reaches nobody: %s",
 				seat.Handle, detailOr(seat.Reason, "its credential resolved to nothing")),
 		})
 	}

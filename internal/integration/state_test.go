@@ -137,3 +137,59 @@ func TestTheDisconnectIntentIsVisibleBeforeAPassHasRun(t *testing.T) {
 		t.Error("a connected surface reports itself tearing down")
 	}
 }
+
+// A SURFACE BEING TAKEN AWAY REPORTS THE TEARDOWN, NOT THE LAST RECONCILE.
+//
+// The findings on a row are statements about a world the operator is
+// dismantling, and an actor is not owed a step in it. Measured: pressing
+// Disconnect on Datadog left the card carrying that pass's "re-enable it at
+// Datadog: this pass will not" underneath the word Disconnecting — so the one
+// thing on the screen told the operator they had work to do at a third-party
+// app they had just asked to be let go of.
+//
+// [ObserveTeardown] already erases them on every pass after the first, which
+// is what makes leaving them on the first a divergence rather than a policy.
+func TestAskingForATeardownDropsWhatTheLastPassFound(t *testing.T) {
+	t.Parallel()
+	settled := State{
+		Kind: KindDatadog,
+		Findings: []Finding{{
+			Kind:   FindingApprovalRequired,
+			Detail: "re-enable it at Datadog: this pass will not",
+		}},
+		LastError:     "the last pass could not read the organization",
+		Attempts:      4,
+		NextAttemptAt: time.Now().Add(9 * time.Minute),
+		Report: Report{
+			Phase: PhaseDegraded, Actor: ActorAdmin,
+			Detail: "re-enable it at Datadog: this pass will not",
+		},
+	}
+
+	got := AskTeardown(settled, KindDatadog, true)
+
+	if len(got.Findings) != 0 {
+		t.Errorf("findings = %+v, which describe a world being taken apart", got.Findings)
+	}
+	if got.LastError != "" {
+		t.Errorf("last error = %q, from a pass that is no longer what is happening", got.LastError)
+	}
+	if got.Report.Phase != PhaseDisconnecting {
+		t.Errorf("phase = %s, want disconnecting", got.Report.Phase)
+	}
+	// NOBODY IS OWED A STEP. The actor decides whether the card draws amber
+	// with an alert icon, which over a disconnect asks a person to act on an
+	// integration they are removing.
+	if got.Report.Actor.WaitsOnAPerson() {
+		t.Errorf("actor = %s: a teardown in progress is the engine's work", got.Report.Actor)
+	}
+	if !got.Disconnecting || !got.RemoveSeats {
+		t.Errorf("the intent was not recorded: disconnecting=%v remove_seats=%v",
+			got.Disconnecting, got.RemoveSeats)
+	}
+	// DUE NOW, rather than inheriting a backoff nobody asked it to serve.
+	if got.Attempts != 0 || !got.NextAttemptAt.IsZero() {
+		t.Errorf("attempts=%d next=%v, so the disconnect waits out a backoff",
+			got.Attempts, got.NextAttemptAt)
+	}
+}

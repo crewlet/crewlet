@@ -776,10 +776,20 @@ type Integrations interface {
 	// update — a disconnect an operator asked for, overwritten by a tick
 	// that read the row just before it.
 	//
-	// So every writer takes the surface's own provisioning lease first, and
-	// one that cannot take it does not write. That is the same lease the
-	// pass itself runs under, which is why it is a lease and not a version:
-	// the writes here are the tail of work already serialized by it.
+	// So every writer takes the surface's own provisioning lease AND STILL
+	// HOLDS IT WHEN IT WRITES, and one that cannot take it does not write.
+	//
+	// The second clause is the one that had to be added, because "first" was
+	// satisfied by the shape that lost the update: both writers took the
+	// lease, ran the pass, RELEASED it, and wrote afterwards from a row read
+	// before the pass began. An operator's disconnect landing in that window
+	// was overwritten by a reconcile tick, the card went from Disconnecting
+	// back to connected, and they pressed the button again.
+	//
+	// It is the same lease the pass itself runs under, which is why it is a
+	// lease and not a version: the writes here are the tail of work already
+	// serialized by it, and the row each writer folds into is re-read while
+	// that lease is held.
 	PutIntegrationStatus(ctx context.Context, kind string, value []byte) error
 
 	// DeleteIntegrationStatus drops a surface's status once its block has

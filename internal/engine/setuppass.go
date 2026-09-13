@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
@@ -124,7 +124,7 @@ func (p *atlassianPass) Run(ctx context.Context, in setup.PassInput) ([]integrat
 		return nil, fmt.Errorf("engine: atlassian pass: %w", err)
 	}
 	findings := res.Findings()
-	if note := p.recordSite(ctx, company, res.Site, in.Sink != nil); note != "" {
+	if note := p.recordSite(ctx, company, res.Site, provision.CanMint(in.Sink)); note != "" {
 		findings = append(findings, integration.Finding{
 			Kind: integration.FindingGrantShort, Detail: note,
 		})
@@ -139,6 +139,12 @@ func (p *atlassianPass) Run(ctx context.Context, in setup.PassInput) ([]integrat
 // the products and their host, so asking an operator for a site address, a
 // cloud id and a link address is asking them to copy three values out of a
 // console this engine is already reading.
+//
+// WHAT "writing" MEANS HERE IS provision.CanMint, not "a sink was supplied".
+// The test was `in.Sink != nil`, and the reconcile loop hands every pass a
+// non-nil READ-ONLY sink — so a node explicitly told it cannot seal anything
+// still advanced the company's config epoch, from a timer, on every pass until
+// the field happened to stick.
 //
 // The CLOUD ID is the load-bearing one: a provisioned service account's token
 // is refused by the site host and accepted only at the API gateway, so a
@@ -180,23 +186,46 @@ func (p *atlassianPass) recordSite(
 }
 
 // Teardown deletes the accounts this pass created, when asked.
-func (p *atlassianPass) Teardown(ctx context.Context, in setup.TeardownInput) error {
+//
+// It reports both of the variables each removed seat's credentials live in:
+// Atlassian assigns the account's address at creation and its products
+// authenticate base64(address:token), so a pass seals two values per agent.
+func (p *atlassianPass) Teardown(ctx context.Context, in setup.TeardownInput) (provision.Removed, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.Atlassian
 	if cfg == nil || !in.RemoveSeats {
 		// Atlassian holds no webhook this engine registered (Cloud events
 		// arrive through the Forge relay), so with the accounts staying
 		// there is nothing to do at all.
-		return nil
+		return provision.Removed{}, nil
 	}
 	env := p.engine.resolver()
 	key := strings.TrimSpace(env.Value(cfg.APIKey))
 	if key == "" {
-		return nil
+		// REFUSED, WHERE THIS REPORTED SUCCESS. Reaching here means the
+		// operator asked for the accounts to be removed and the
+		// organization key did not resolve — so nothing can be removed,
+		// and answering nil says it was.
+		//
+		// [Engine.dropBlock] takes that answer and removes the
+		// `integrations.atlassian` block, which carries the very ${VAR}
+		// pointing at this key. Every service account this engine created
+		// is then orphaned at Atlassian with nothing left in the document
+		// to authenticate a second attempt, while the operator is told
+		// remove_seats succeeded. The credential each of those accounts
+		// holds is still live and still sealed.
+		//
+		// gitlabPass and mattermostPass both refuse here, naming the
+		// credential. Atlassian was the outlier.
+		return provision.Removed{}, fmt.Errorf(
+			"engine: atlassian teardown: the organization key %q resolved to "+
+				"nothing, so the agents' accounts cannot be removed — set that "+
+				"variable, or disconnect without removing accounts and delete "+
+				"them at Atlassian by hand", cfg.APIKey)
 	}
 	plan, err := atlassian.PlanFor(company.Org)
 	if err != nil {
-		return fmt.Errorf("engine: atlassian teardown: %w", err)
+		return provision.Removed{}, fmt.Errorf("engine: atlassian teardown: %w", err)
 	}
 	return atlassian.Teardown(ctx, atlassian.TeardownOptions{
 		Client: atlassian.NewClient(atlassian.ClientOptions{}),
@@ -233,24 +262,33 @@ func (e *Engine) newSetupRunner() *setup.Runner {
 	return setup.NewRunner(e.setupPasses(), e.setupDuty, nil)
 }
 
-// holdSurface takes the one guard every writer at a surface passes through.
+// holdSurface takes the one guard every writer at a surface passes through,
+// and hands back the context the work must run on.
 //
-// The loop's tick and a disconnect's teardown reach a third-party app without
-// going through [setup.Runner.Start], so they take the guard here instead —
-// the same in-process claim and the same fleet lease an operator's pass takes,
-// which is what makes the three mutually exclusive rather than merely
-// serialized in pairs.
+// The reconcile loop's worker takes it around a whole visit — the row re-read,
+// the pass and the status write that records it — and a disconnect's teardown
+// takes it around its own. Both reach a third-party app without going through
+// [setup.Runner.Execute], so they take the guard here instead: the same
+// in-process claim and the same fleet lease an operator's pass takes, which is
+// what makes the three mutually exclusive rather than merely serialized in
+// pairs.
+//
+// THE CONTEXT IS THE POINT OF THE RETURN VALUE. The lease is never renewed
+// mid-pass, so work that outlived it would be writing at a third-party app with
+// nothing left excluding a peer. The returned context carries
+// [setup.PassDeadline], which is strictly inside [setup.LeaseTTL], so that
+// cannot happen by construction rather than by measurement.
 //
 // A node with no runner has no keyring to mint into and therefore nothing to
-// serialize: it reads and reports. held is true there, and release is a no-op.
+// serialize: it reads and reports. held is true there, the deadline still
+// applies, and release is the cancel.
 func (e *Engine) holdSurface(
 	ctx context.Context, kind integration.Kind,
-) (func(), bool, error) {
-	runner := e.SetupRunner()
-	if runner == nil {
-		return func() {}, true, nil
-	}
-	return runner.Hold(ctx, kind)
+) (context.Context, func(), bool, error) {
+	// A nil runner goes through [setup.Runner.Hold]'s own nil-receiver branch
+	// rather than a second copy of that decision here: there is one rule for
+	// what an unguarded hold means and it lives with the guard.
+	return e.SetupRunner().Hold(ctx, kind)
 }
 
 // setupDutyName is the ONE name a surface's provisioning is serialized under.
@@ -276,42 +314,54 @@ func setupDutyName(kind integration.Kind) string {
 // pass because it is a BACKSTOP for a node that died mid-run rather than a
 // deadline for the work: the lease is given back when the work ends.
 func (e *Engine) setupDuty(kind integration.Kind) setup.Duty {
-	hold := e.workerHold(setupDutyName(kind), setupLeaseTTL)
+	hold := e.workerHold(setupDutyName(kind), setup.LeaseTTL)
 	if hold == nil {
 		return nil
 	}
 	return setup.Duty(hold)
 }
 
-// setupLeaseTTL bounds how long one pass may hold its third-party app.
-//
-// Five minutes against passes measured in seconds: the value is a backstop
-// for a node that died mid-run, not a deadline for the work. Shorter would
-// risk a live pass losing its lease; much longer would leave a third-party app locked
-// out after a crash for no benefit.
-const setupLeaseTTL = 5 * time.Minute
-
 // Teardown removes the webhooks this pass registered, at both the
 // organization and the repository level.
-func (p *githubPass) Teardown(ctx context.Context, in setup.TeardownInput) error {
+//
+// IT REPORTS NO REMOVED ACCOUNT, and this is the one that has to be argued
+// rather than assumed. It UNINSTALLS each seat's App, which revokes its access
+// — but GitHub has no API to delete an App, so the registration and the
+// `private_key` behind it stay valid and re-installable. Naming that key in a
+// [provision.Removed] would delete a company's only copy of a working key for
+// an App that still exists, which no API anywhere can undo. See
+// [Engine.ForgetGitHubApp], which states the same rule for the same reason.
+// The sealed values are REPORTED to the operator instead, by the disconnect
+// route, off the seat roster — which is where every company-level credential
+// that survives a disconnect is already named.
+//
+// WHAT IT DOES RECORD IS THE INSTALLATION, and that is not a credential.
+// `installation_id` names something this teardown has just removed at GitHub,
+// so a record that keeps it claims an installation that is gone: the seat
+// reads as a finished agent, the roster reports it satisfied, and the
+// integrations row stays alive on the strength of an app that reaches
+// nothing. Measured on a live disconnect — the card sat on Connecting with a
+// `routes nowhere` badge permanently, because every reader keyed on the
+// record rather than on what GitHub holds.
+func (p *githubPass) Teardown(ctx context.Context, in setup.TeardownInput) (provision.Removed, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.GitHub
 	if cfg == nil {
-		return nil
+		return provision.Removed{}, nil
 	}
 	env := p.engine.resolver()
 	client, err := githubReconcileClient(cfg, env)
 	if err != nil {
-		return fmt.Errorf("engine: github teardown: %w", err)
+		return provision.Removed{}, fmt.Errorf("engine: github teardown: %w", err)
 	}
 	if err := github.Teardown(ctx, github.Options{
 		Client: client, Config: cfg, Org: company.Org, Value: env.Value,
 		WebhookBase: company.Config.Integrations.WebhookBase(env.LookupOK),
 	}); err != nil {
-		return err
+		return provision.Removed{}, err
 	}
 	if !in.RemoveSeats {
-		return nil
+		return provision.Removed{}, nil
 	}
 
 	// UNINSTALLING IS WHAT ACTUALLY REVOKES ACCESS, and it is the half the
@@ -331,44 +381,60 @@ func (p *githubPass) Teardown(ctx context.Context, in setup.TeardownInput) error
 			APIBase: apiBase,
 		}, seat); err != nil {
 			failures = append(failures, fmt.Errorf("%s: %w", seat.Handle, err))
+			continue
+		}
+		// AND THE RECORD FOLLOWS THE WORLD. Zero is the value
+		// [Engine.RecordGitHubInstallation] already has for an
+		// installation somebody removed at GitHub, and this is the same
+		// fact arrived at deliberately.
+		//
+		// A failure here is a failure of the teardown rather than a note:
+		// the block stays, the surface holds in PhaseDisconnecting, and
+		// the next attempt uninstalls nothing (already gone) and writes
+		// the record again. Swallowing it drops the block with every seat
+		// still claiming an installation that no longer exists, and
+		// nothing ever looks again.
+		if err := p.engine.RecordGitHubInstallation(ctx, seat.Handle, 0); err != nil {
+			failures = append(failures, fmt.Errorf("%s: %w", seat.Handle, err))
 		}
 	}
 	if len(failures) > 0 {
-		return fmt.Errorf(
-			"engine: github teardown: some agents' apps are still installed and "+
-				"can still act, so the block stays until they are not: %w",
+		return provision.Removed{}, fmt.Errorf(
+			"engine: github teardown: some agents' apps are still installed, or "+
+				"still recorded as installed, so the block stays until they are "+
+				"not: %w",
 			errors.Join(failures...))
 	}
-	return nil
+	return provision.Removed{}, nil
 }
 
 // Teardown disables the bots this pass created, when asked. Mattermost has no
 // inbound registration to withdraw, so there is nothing to do otherwise.
-func (p *mattermostPass) Teardown(ctx context.Context, in setup.TeardownInput) error {
+func (p *mattermostPass) Teardown(ctx context.Context, in setup.TeardownInput) (provision.Removed, error) {
 	if !in.RemoveSeats {
-		return nil
+		return provision.Removed{}, nil
 	}
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.Mattermost
 	if cfg == nil {
-		return nil
+		return provision.Removed{}, nil
 	}
 	env := p.engine.resolver()
 	admin := mattermostAdminToken(cfg, env, in.Operator)
 	if admin == "" {
-		return fmt.Errorf(
+		return provision.Removed{}, fmt.Errorf(
 			"engine: mattermost teardown: no admin token resolved, and the " +
 				"bots' own tokens cannot disable them")
 	}
 	plan, err := mattermost.PlanFor(company.Org, cfg)
 	if err != nil {
-		return fmt.Errorf("engine: mattermost teardown: %w", err)
+		return provision.Removed{}, fmt.Errorf("engine: mattermost teardown: %w", err)
 	}
 	client, err := mattermost.NewClient(mattermost.ClientOptions{
 		URL: env.Value(cfg.URL), Token: admin,
 	})
 	if err != nil {
-		return fmt.Errorf("engine: mattermost teardown: %w", err)
+		return provision.Removed{}, fmt.Errorf("engine: mattermost teardown: %w", err)
 	}
 	return mattermost.Teardown(ctx, mattermost.TeardownOptions{
 		Client: client, Config: cfg, Plan: plan, RemoveSeats: in.RemoveSeats,
@@ -458,23 +524,23 @@ func (p *datadogPass) Run(ctx context.Context, in setup.PassInput) ([]integratio
 }
 
 // Teardown disables the accounts this pass created, when asked.
-func (p *datadogPass) Teardown(ctx context.Context, in setup.TeardownInput) error {
+func (p *datadogPass) Teardown(ctx context.Context, in setup.TeardownInput) (provision.Removed, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.Datadog
 	if cfg == nil || cfg.Provisioning == nil {
-		return nil
+		return provision.Removed{}, nil
 	}
 	env := p.engine.resolver()
 	client, err := datadog.NewClient(datadog.ClientOptions{Site: cfg.Provisioning.Site})
 	if err != nil {
-		return fmt.Errorf("engine: datadog teardown: %w", err)
+		return provision.Removed{}, fmt.Errorf("engine: datadog teardown: %w", err)
 	}
 	// THE PLAN IS ONLY THE ACCOUNTS' HALF, so a company whose roster
 	// cannot be planned still has its webhook withdrawn: the definition is
 	// named by the config alone.
 	plan, err := datadog.PlanFor(company.Org, cfg)
 	if err != nil && in.RemoveSeats {
-		return fmt.Errorf("engine: datadog teardown: %w", err)
+		return provision.Removed{}, fmt.Errorf("engine: datadog teardown: %w", err)
 	}
 	return datadog.Teardown(ctx, datadog.TeardownOptions{
 		Client: client, Config: cfg, Plan: plan,
@@ -504,11 +570,18 @@ func (e *Engine) SetupSink(operator string) (provision.TokenSink, error) {
 	return &refreshingSink{
 		TokenSink: provision.NewSecretStoreSink(
 			fleetsecrets.New(e.backends.Fleet, e.cipher), operator),
-		engine: e,
+		engine:   e,
+		operator: operator,
 	}, nil
 }
 
-// refreshingSink rebuilds the resolver's snapshot after a run seals anything.
+// refreshingSink republishes what a run sealed, so the credentials it minted
+// are the ones this company runs on.
+//
+// TWO STEPS, AND THE SECOND ONE IS THE ONE THAT WAS MISSING. Refreshing the
+// snapshot makes the new value RESOLVABLE; re-activating the revision makes
+// everything that already resolved the old one resolve again. See
+// [Engine.rebuildForSealedSecrets].
 //
 // # A SECRET NOBODY CAN SEE IS A PASS THAT DID NOTHING
 //
@@ -527,10 +600,31 @@ func (e *Engine) SetupSink(operator string) (provision.TokenSink, error) {
 // previous snapshot standing, which is the same posture an apply takes.
 type refreshingSink struct {
 	provision.TokenSink
-	engine  *Engine
+	engine *Engine
+
+	// operator is who this run is for, and it reaches the REVISION the
+	// rebuild writes. [configapi.Service.Reload] writes a new revision
+	// rather than re-pointing the old one precisely so "the credentials
+	// were reloaded at 04:12" is a fact somebody can find later, and a
+	// revision attributed to a constant answers half of that: an operator
+	// who connected an integration from the dashboard saw the resulting
+	// revision credited to the reconcile loop. The sink already stamps this
+	// name on every secret record it writes; spending it here costs
+	// nothing and is the same name.
+	operator string
+
 	sealed  bool
 	flushed bool
 }
+
+// Mints forwards the wrapped sink's answer, because an embedded INTERFACE
+// contributes no method to this type's method set: without this,
+// [provision.CanMint]'s type assertion misses a [provision.ReadOnly] inside
+// and every pass gated on it would create accounts on a node that can seal
+// nothing. It is true for every sink this type is built over today —
+// [Engine.SetupSink] refuses without a keyring — which is exactly why a
+// wrapper that silently claims it is a trap rather than a bug.
+func (s *refreshingSink) Mints() bool { return provision.CanMint(s.TokenSink) }
 
 func (s *refreshingSink) Record(ctx context.Context, name, value string) error {
 	if err := s.TokenSink.Record(ctx, name, value); err != nil {
@@ -548,8 +642,110 @@ func (s *refreshingSink) Flush(ctx context.Context) error {
 	if s.sealed && !s.flushed {
 		s.flushed = true
 		s.engine.refreshSecrets(ctx)
+		// NO CONTEXT ON PURPOSE, and contextcheck is reading the shape
+		// rather than the reason. This ctx is the PASS's: it is bounded by
+		// [setup.PassDeadline] and it is inside the surface lease, and the
+		// re-activation must be neither — it outlives the pass and needs no
+		// lease. [republisher.startNow] runs it on a timer's goroutine with
+		// a background context that [Engine.rebuildForSealedSecrets] bounds
+		// itself. Handing this one over is the defect that made a pass which
+		// used its four minutes spend the lease's last minute here.
+		//nolint:contextcheck // detached by design; see [republisher.request]
+		s.engine.republish.request(s.operator, s.engine.rebuildForSealedSecrets)
 	}
 	return err
+}
+
+// rebuildForSealedSecrets re-activates the current revision so that everything
+// built at apply time is rebuilt against the credentials a pass just sealed.
+//
+// # Refreshing the snapshot is not enough, and the gap is invisible
+//
+// `${VAR}` resolves from a snapshot, and [Engine.refreshSecrets] replaces it —
+// so anything that resolves a pointer FROM NOW ON sees the new value. What it
+// cannot touch is everything that already resolved one: the seat identities,
+// parsers, transports, provider clients and MCP children are built during an
+// apply, out of values read at that moment, and they are not rebuilt by a
+// snapshot swap. Every one of the seven vendor reconcilers is called from one
+// place, the apply in `epoch.go`, and nothing else calls them at all.
+//
+// Measured, on a fresh single-node install: connecting Atlassian created the
+// agent's service account and sealed its API token, the Jira reconcile then
+// reported the surface READY from its own independent check, and Jira's live
+// routing held `seat_identities=0` — resolved minutes earlier against the
+// token that did not exist yet, and refused with a 401. Every Jira event
+// naming that agent fell through to the project lead, indefinitely, while the
+// card said the integration was fine. `POST /config/reload` fixed it, which is
+// what this does automatically.
+//
+// # Why re-activating, rather than calling the reconcilers again
+//
+// Calling them here would fix this node and no other. A credential is sealed
+// in the FLEET's store, and every peer built its own parsers at its own apply
+// out of its own snapshot — so a local rebuild leaves every other node exactly
+// as wrong, with nothing to say so. Re-activating moves the activation
+// pointer, which is the one thing every node already watches.
+//
+// It is also not a new mechanism: re-activating an unchanged revision IS the
+// control plane's credential-rotation gesture, and the pointer is append-only
+// precisely so that this operation rebuilds rather than deduplicating.
+//
+// # Why this is rate-bounded, and why believing it could not spin was wrong
+//
+// An apply marks the reconcile loop stale, which brings a pass forward, which
+// can seal again. This used to argue that it would not, because every
+// reconciler is certified against integrationtest's "a converged pass writes
+// nothing" and `sealed` is set only by an actual Record.
+//
+// That argument holds over a CONVERGED world and says nothing about any other,
+// which is the half that matters: a pass that can never converge writes on
+// every tick by construction. One did. GitLab minted a token for an account
+// whose address could not be confirmed, GitLab refused it, the next pass read
+// the refusal as a stale credential and minted another — and before this
+// rebuild existed that loop ran at the reconcile cadence, while afterwards it
+// ran as fast as an apply could complete. Measured: every five seconds, 144
+// live year-long `api`-scoped tokens from a single connect. The vendor fault is
+// fixed where it lives, but the amplification was this function's.
+//
+// So requests are COALESCED rather than performed inline — see
+// [republisher]. A burst of seals becomes one apply, which is what an
+// operator connecting a third-party app produces anyway (the setup dialog
+// writes one request per surface), and the rebuild rate is bounded by
+// something other than a promise about somebody else's code.
+func (e *Engine) rebuildForSealedSecrets(ctx context.Context, operator string) {
+	writer := e.configWriterOrNil()
+	if writer == nil {
+		// A node with no config surface — a worker-only one, or the few
+		// hundred milliseconds before the API is wired. The snapshot is
+		// refreshed and the values are durable; what is missing is the
+		// rebuild, and the next apply from anywhere performs it.
+		log.WarnContext(ctx, "sealed_credentials_not_republished",
+			"detail", "this node cannot re-activate the revision, so anything "+
+				"built at the last apply keeps the credential it resolved then; "+
+				"POST /config/reload once a node with the config surface is up")
+		return
+	}
+	// DETACHED AND BOUNDED. This runs at the tail of a pass, on a context
+	// carrying that pass's deadline — which may be all but spent, and which
+	// is cancelled the moment the pass ends. The credentials are already
+	// durable; abandoning the rebuild because the work that produced it
+	// finished is how the stale wiring survives.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), setup.RecordDeadline)
+	defer cancel()
+	if operator == "" {
+		operator = reconcileOperator
+	}
+	if err := writer.Reload(ctx,
+		"reload after provisioning sealed a credential", operator); err != nil {
+		log.ErrorContext(ctx, "sealed_credentials_not_republished", "error", err,
+			"detail", "the credentials are sealed and resolvable, but the seat "+
+				"identities, parsers and tool children built at the last apply "+
+				"still hold what they resolved then; POST /config/reload")
+		return
+	}
+	log.InfoContext(ctx, "sealed_credentials_republished",
+		"detail", "the revision was re-activated so every node rebuilds against "+
+			"the credentials this pass sealed")
 }
 
 // jiraPass adapts jira.Reconcile to the pass contract.
@@ -590,6 +786,11 @@ func (p *jiraPass) Run(ctx context.Context, in setup.PassInput) ([]integration.F
 	res, err := jira.Reconcile(ctx, jira.Options{
 		Client: client, Config: cfg, Org: company.Org, Value: env.Value,
 		Sink: in.Sink, WebhookBase: in.WebhookBase,
+		// AND WHEN EACH SEAT'S ATLASSIAN CREDENTIAL WAS SEALED, which is
+		// the only thing that separates "Atlassian has not finished
+		// granting this brand new account" from "this credential is
+		// wrong". Both are a 401 from the instance, byte for byte.
+		CredentialSealed: p.engine.atlassianCredentialSealed(company),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: jira pass: %w", err)
@@ -602,19 +803,24 @@ func (p *jiraPass) Run(ctx context.Context, in setup.PassInput) ([]integration.F
 // The third-party app function is the same one a decommission from the command line
 // would call, exactly as [jiraPass.Run] uses the same Reconcile the loop
 // does. Nothing about removal is reimplemented for the API.
-func (p *jiraPass) Teardown(ctx context.Context, in setup.TeardownInput) error {
+// It removes nothing this engine has to forget a credential for.
+//
+// The tracker creates no account and mints no seat credential — an agent
+// works in Jira as the Atlassian account that package made — so a Jira
+// teardown strands nothing and this is always empty.
+func (p *jiraPass) Teardown(ctx context.Context, in setup.TeardownInput) (provision.Removed, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.Jira
 	if cfg == nil {
 		// The block already left the document, so there is nothing to
 		// authenticate with and nothing this engine still holds.
-		return nil
+		return provision.Removed{}, nil
 	}
 	env := p.engine.resolver()
 	base := jiraBaseURL(cfg, env)
 	token := strings.TrimSpace(env.Value(cfg.Token))
 	if base == "" || token == "" {
-		return fmt.Errorf(
+		return provision.Removed{}, fmt.Errorf(
 			"engine: jira teardown: the site address or the org token did not " +
 				"resolve, so the webhook cannot be removed: fix the credential " +
 				"or force the disconnect and remove the hook by hand")
@@ -623,9 +829,9 @@ func (p *jiraPass) Teardown(ctx context.Context, in setup.TeardownInput) error {
 		URL: base, Email: env.Value(cfg.Email), Token: token,
 	})
 	if err != nil {
-		return fmt.Errorf("engine: jira teardown: %w", err)
+		return provision.Removed{}, fmt.Errorf("engine: jira teardown: %w", err)
 	}
-	return jira.Teardown(ctx, jira.Options{
+	return provision.Removed{}, jira.Teardown(ctx, jira.Options{
 		Client: client, Config: cfg,
 		WebhookBase: company.Config.Integrations.WebhookBase(env.LookupOK),
 	})
@@ -671,17 +877,22 @@ func (p *confluencePass) Run(ctx context.Context, in setup.PassInput) ([]integra
 }
 
 // Teardown removes the hooks this pass registered.
-func (p *confluencePass) Teardown(ctx context.Context, in setup.TeardownInput) error {
+// It removes nothing this engine has to forget a credential for.
+//
+// The wiki creates no account either, for the reason the tracker does not:
+// both products authenticate as the Atlassian service account, and
+// [atlassianPass.Teardown] is what removes it.
+func (p *confluencePass) Teardown(ctx context.Context, in setup.TeardownInput) (provision.Removed, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.Confluence
 	if cfg == nil {
-		return nil
+		return provision.Removed{}, nil
 	}
 	env := p.engine.resolver()
 	base := confluenceBaseURL(cfg, env)
 	token := strings.TrimSpace(env.Value(cfg.Token))
 	if base == "" || token == "" {
-		return fmt.Errorf(
+		return provision.Removed{}, fmt.Errorf(
 			"engine: confluence teardown: the site address or the org token did " +
 				"not resolve, so the hooks cannot be removed: fix the credential " +
 				"or force the disconnect and remove them by hand")
@@ -690,9 +901,9 @@ func (p *confluencePass) Teardown(ctx context.Context, in setup.TeardownInput) e
 		URL: base, Email: env.Value(cfg.Email), Token: token,
 	})
 	if err != nil {
-		return fmt.Errorf("engine: confluence teardown: %w", err)
+		return provision.Removed{}, fmt.Errorf("engine: confluence teardown: %w", err)
 	}
-	return confluence.Teardown(ctx, confluence.Options{Client: client, Config: cfg})
+	return provision.Removed{}, confluence.Teardown(ctx, confluence.Options{Client: client, Config: cfg})
 }
 
 // gitlabPass adapts gitlab.Reconcile to the pass contract.
@@ -752,6 +963,11 @@ func (p *gitlabPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 		// left the config cannot be told apart from a company mid-edit.
 		// Both stay deliberate gestures on the command line.
 		Rotate: in.Recreate,
+		// WHERE THE ACCOUNTS ARE OWNED, from the company document. It was
+		// absent, so every pass this engine ran assumed the group route —
+		// and against a company provisioned with `-mode instance` it minted
+		// through a group that does not own the account and was refused.
+		Mode: gitlab.Mode(cfg.Provisioning.ModeOrDefault()),
 	})
 	// A NAME GITLAB HAS NOT RELEASED YET IS WORK IN PROGRESS, not a failure
 	// to read the integration.
@@ -782,33 +998,38 @@ func (p *gitlabPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 // creating it did. A teardown with none can still be attempted (the hooks
 // may come out under a weaker credential), so this refuses only when there is
 // nothing at all to authenticate with.
-func (p *gitlabPass) Teardown(ctx context.Context, in setup.TeardownInput) error {
+func (p *gitlabPass) Teardown(ctx context.Context, in setup.TeardownInput) (provision.Removed, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.GitLab
 	if cfg == nil {
-		return nil
+		return provision.Removed{}, nil
 	}
 	env := p.engine.resolver()
 	admin := gitlabAdminToken(cfg, env, in.Operator)
 	if admin == "" {
-		return fmt.Errorf(
+		return provision.Removed{}, fmt.Errorf(
 			"engine: gitlab teardown: no group Owner token resolved, and the " +
 				"seats' own tokens cannot remove what created them")
 	}
 	plan, err := gitlab.PlanFor(company.Org, cfg)
 	if err != nil {
-		return fmt.Errorf("engine: gitlab teardown: %w", err)
+		return provision.Removed{}, fmt.Errorf("engine: gitlab teardown: %w", err)
 	}
 	client, err := gitlab.NewClient(gitlab.ClientOptions{
 		URL: env.Value(cfg.URL), Token: admin,
 	})
 	if err != nil {
-		return fmt.Errorf("engine: gitlab teardown: %w", err)
+		return provision.Removed{}, fmt.Errorf("engine: gitlab teardown: %w", err)
 	}
 	return gitlab.Teardown(ctx, gitlab.TeardownOptions{
 		Client: client, Config: cfg, Plan: plan,
-		WebhookBase: company.Config.Integrations.WebhookBase(env.LookupOK),
 		RemoveSeats: in.RemoveSeats,
+		// AND DOWN THE ROUTE THAT OWNS THEM. The group delete answers 404
+		// as success — "unknown or already removed; both are the state the
+		// caller asked for" — so an instance-owned account sent down it
+		// reported itself deleted and stayed live with every credential it
+		// held.
+		Mode: gitlab.Mode(cfg.Provisioning.ModeOrDefault()),
 	})
 }
 
@@ -882,8 +1103,22 @@ func (p *githubPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 	if err != nil {
 		return nil, fmt.Errorf("engine: github pass: %w", err)
 	}
+	// EACH AGENT'S OWN APP, which is where identity on GitHub actually
+	// lives. The pass below reads the ORGANIZATION and registers hooks; it
+	// knows nothing about the app a person created for one seat. This half
+	// adopts the installation that person made, and it has to run on the
+	// loop rather than at connect time because installing an app is a click
+	// in a browser that tells the engine nothing.
+	//
+	// READ FIRST, because the organization pass needs to know these exist.
+	// Every app carries its own webhook, so a company holding some has
+	// coverage whatever is registered organization-wide — which is the
+	// difference between reporting the recommended arrangement and
+	// reporting a company that receives nothing. See [github.Options.SeatApps].
+	seats := p.seatApps(env)
 	res, err := github.Reconcile(ctx, github.Options{
 		Client: client, Config: cfg, Org: company.Org, Value: env.Value,
+		SeatApps: len(seats),
 		// THE TWO THE LOOP WITHHOLDS. A base is permission to register,
 		// a sink is permission to mint, and a person asked for both.
 		Sink:             in.Sink,
@@ -894,14 +1129,15 @@ func (p *githubPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 		return nil, fmt.Errorf("engine: github pass: %w", err)
 	}
 	findings := res.Findings()
-
-	// EACH AGENT'S OWN APP, which is where identity on GitHub actually
-	// lives. The pass above reads the ORGANIZATION and registers hooks; it
-	// knows nothing about the app a person created for one seat. This half
-	// adopts the installation that person made, and it has to run on the
-	// loop rather than at connect time because installing an app is a click
-	// in a browser that tells the engine nothing.
-	seats := p.seatApps(env)
+	// AND THE AGENTS WITH NO APP AT ALL, which the list above cannot hold:
+	// it is built from the seats carrying an `integrations.github` block,
+	// because that block is where an app's id, slug and key are recorded.
+	// So a seat that has never had one was absent from the pass's input and
+	// produced no finding — a company with one agent and no app reported
+	// ready with an empty finding list. See [github.SeatsWithNoApp].
+	if missing := p.seatsWithoutApps(company); missing != nil {
+		findings = append(findings, *missing)
+	}
 	if len(seats) > 0 {
 		apiBase, webBase := cfg.Bases(env.LookupOK)
 		apps, appsErr := github.ReconcileSeatApps(ctx, github.SeatAppOptions{
@@ -962,6 +1198,33 @@ func (p *githubPass) forgetApp(in setup.PassInput) func(context.Context, string)
 	}
 }
 
+// seatsWithoutApps is the finding for this company's agents that have no
+// GitHub App recorded, or nil when every one of them has.
+//
+// READ OFF THE ORG MODEL rather than off [Engine.githubSeatApps], which
+// answers the other question: which seats this pass has an app to RECONCILE.
+// A seat with no app is exactly the one that list cannot carry.
+func (p *githubPass) seatsWithoutApps(company *Company) *integration.Finding {
+	if company == nil {
+		return nil
+	}
+	var missing []string
+	for role := range company.Config.EachRole() {
+		seat := role.Seat()
+		if !seat.IsAgent() {
+			// A HUMAN SEAT HAS ITS OWN GITHUB ACCOUNT. Creating an app
+			// for a person would be a second identity for somebody who
+			// already has one.
+			continue
+		}
+		if app := role.Integrations.GitHub; app != nil && app.AppID != 0 {
+			continue
+		}
+		missing = append(missing, seat.Handle())
+	}
+	return github.SeatsWithNoApp(missing)
+}
+
 // githubOrg is the organization these apps are installed on.
 func githubOrg(cfg *config.GitHub) string {
 	if cfg == nil || cfg.Provisioning == nil {
@@ -1014,4 +1277,58 @@ func mattermostAdminToken(cfg *config.Mattermost, env *config.Resolver, override
 		return ""
 	}
 	return strings.TrimSpace(env.Value(cfg.Provisioning.AdminToken))
+}
+
+// atlassianCredentialSealed answers when a seat's Atlassian credential was
+// written into this company's secret store.
+//
+// # Why the tracker is handed this rather than looking it up
+//
+// A product refusing a seat's credential means one of two opposite things,
+// and the only fact that separates them is the credential's AGE — see
+// [atlassian.GrantPropagation]. That fact is in the fleet's secret store,
+// which internal/jira must not import: it would put the tracker in the
+// coordination layer's graph to answer a question about Atlassian.
+//
+// NIL WHERE NOTHING CAN SAY, which is what a node with no keyring is, and
+// the tracker then reports a refusal as the failure it may well be. The
+// alternative — guessing "still propagating" — would tell an operator not to
+// act on every genuinely broken seat, for ever.
+//
+// THE VARIABLE COMES FROM THE SAME PLAN THE PROVISIONING USES, so the name
+// read here is the name the token was sealed under. A second derivation
+// would be a second spelling, and a seat whose name did not match would read
+// as one whose credential was never sealed — which is the safe direction
+// only by accident.
+func (e *Engine) atlassianCredentialSealed(
+	company *Company,
+) func(context.Context, string) (time.Time, bool) {
+	if e.cipher == nil || e.backends == nil || e.backends.Fleet == nil {
+		return nil
+	}
+	plan, err := atlassian.PlanFor(company.Org)
+	if err != nil {
+		return nil
+	}
+	vars := make(map[string]string, len(plan.Seats))
+	for _, seat := range plan.Seats {
+		if seat.TokenVar != "" {
+			vars[seat.Handle] = seat.TokenVar
+		}
+	}
+	store := fleetsecrets.New(e.backends.Fleet, e.cipher)
+	return func(ctx context.Context, handle string) (time.Time, bool) {
+		name, planned := vars[handle]
+		if !planned {
+			// NOT A SEAT THIS ENGINE PROVISIONS. Its credential was put
+			// there by a person, so there is no grant of this engine's to
+			// be waiting on and a refusal is exactly what it looks like.
+			return time.Time{}, false
+		}
+		rec, found, err := store.Describe(ctx, name)
+		if err != nil || !found {
+			return time.Time{}, false
+		}
+		return rec.UpdatedAt, true
+	}
 }

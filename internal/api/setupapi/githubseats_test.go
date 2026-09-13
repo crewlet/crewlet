@@ -221,6 +221,83 @@ func TestAGitHubSeatWithWorkOutstandingHoldsTheCardOpen(t *testing.T) {
 	}
 }
 
+// THE DELETE LINK OPENS THE PAGE THE DELETE CONTROL IS ON.
+//
+// GitHub has no API for deleting an App at any permission, so a disconnect
+// uninstalls each agent's App — which is what revokes its access — and hands
+// the operator a link for the rest. That link is the whole of what the engine
+// can do about it, so landing on the wrong tab wastes the one gesture it
+// offers: the settings root opens on General, and the delete control lives
+// only under Advanced, at the bottom, under a heading named nothing like
+// "delete".
+//
+// PINNED HERE, at the seam, and not only at [github.ManageURL]. The builder
+// has had its own test since the page was corrected; what had none was this —
+// which of the builders this roster calls. Nothing would have caught
+// `InstallURL` here, or a bare settings root, and the failure is silent: the
+// link works, opens, and shows the operator a page without the control they
+// came for.
+func TestTheAppDeleteLinkOpensTheAdvancedPage(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seedGitHubApps(t)
+	s.seedGitHub(t)
+
+	state := decode(t, s.do(t, http.MethodGet, "/setup/integrations/github", "", nil))
+	seats, _ := state["seats"].([]any)
+	var found bool
+	for _, entry := range seats {
+		seat, _ := entry.(map[string]any)
+		if seat["handle"] != "builder" {
+			continue
+		}
+		found = true
+		want := "https://github.com/organizations/acme/settings/apps/acme-builder/advanced"
+		got, _ := seat["manage_url"].(string)
+		if got != want {
+			t.Errorf("manage_url = %q, want %q: the delete control is only on "+
+				"the Advanced page, so every other page is a wasted trip",
+				got, want)
+		}
+	}
+	if !found {
+		t.Fatalf("no seat named builder in %v", seats)
+	}
+	// AND WHAT IS LEFT TO CLICK IS SAID, because the control is at the
+	// bottom of that page under a heading that does not say delete.
+	if state["manage_path"] != "Delete GitHub App" {
+		t.Errorf("manage_path = %v, so the link lands them somewhere with no "+
+			"word about what to press", state["manage_path"])
+	}
+
+	// AND THE LISTING CARRIES IT, which is the route that matters: the
+	// disconnect dialog is drawn from GET /setup/integrations, not from the
+	// single-kind read above. The two share one builder today and this is
+	// what keeps that true — a listing that dropped its seats, or built
+	// them its own way, would take the link out of the one screen that
+	// offers it while every single-kind test went on passing.
+	listing := decode(t, s.do(t, http.MethodGet, "/setup/integrations", "", nil))
+	tools, _ := listing["tools"].([]any)
+	var linked string
+	for _, entry := range tools {
+		tool, _ := entry.(map[string]any)
+		if tool["key"] != "github" {
+			continue
+		}
+		rows, _ := tool["seats"].([]any)
+		for _, row := range rows {
+			seat, _ := row.(map[string]any)
+			if seat["handle"] == "builder" {
+				linked, _ = seat["manage_url"].(string)
+			}
+		}
+	}
+	if want := "https://github.com/organizations/acme/settings/apps/acme-builder/advanced"; linked != want {
+		t.Errorf("the listing the disconnect dialog reads carries %q, want %q",
+			linked, want)
+	}
+}
+
 // fakeGitHub answers the one call the app flow makes: the manifest
 // conversion. It records what it was asked to convert so a test can assert
 // the code reached it, and answers with what GitHub answers with: a private
@@ -576,5 +653,135 @@ func TestAFinishedGitHubSeatNamesItsLogin(t *testing.T) {
 	// say nothing.
 	if strings.Contains(detail, "Every repository") {
 		t.Errorf("detail = %q repeats the scope the install already settled", detail)
+	}
+}
+
+// A GITHUB CARD IS NOT SATISFIED WHILE NO AGENT CAN ACT.
+//
+// One GitHub App is one bot identity, so an agent without its own app acts as
+// nobody there. The satisfaction check asked only about seats that had
+// STARTED — which is what lets a company running GitHub for three of its ten
+// agents be finished when those three are — and a company where NOBODY had
+// started passed it vacuously.
+//
+// Measured on a live connect: one agent seat with no app, `satisfied: true`
+// and `seats_required: true` on the same answer, the card reading Connected,
+// and the seat's own row saying "no app of its own yet, so this agent acts as
+// nobody on GitHub".
+func TestAGitHubToolWithNoWorkingAgentIsNotSatisfied(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	// A COMPANY WHERE NOBODY HAS STARTED: the org block is complete and no
+	// seat has an app.
+	res := s.do(t, http.MethodPut, "/config", `{
+	  "name": "Acme",
+	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
+	  "integrations": {
+	    "public_base_url": "https://engine.example.com",
+	    "github": {"enabled": true, "webhook_secret": "${GH_SIGN}",
+	               "provisioning": {"org": "crewbed"}}
+	  },
+	  "roles": [{"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"}]
+	}`, map[string]string{"X-Summary": "github connected for nobody"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("import = %d: %s", res.Code, res.Body)
+	}
+	if err := s.vault.Set(t.Context(), "GH_SIGN", "s", "test", "test", pinned); err != nil {
+		t.Fatal(err)
+	}
+
+	state := decode(t, s.do(t, http.MethodGet, "/setup/integrations/github", "", nil))
+	if state["seats_required"] != true {
+		t.Fatalf("the premise is wrong: seats_required = %v", state["seats_required"])
+	}
+	if state["satisfied"] == true {
+		t.Error("a GitHub card with no agent able to act reported satisfied, " +
+			"which is what a person reads as done")
+	}
+}
+
+// AND A COMPANY RUNNING GITHUB FOR SOME OF ITS AGENTS IS STILL FINISHED.
+//
+// The clause above must not turn the opt-in model into a permanent block: a
+// company whose three enrolled agents are done is done, whatever the other
+// seven chose.
+func TestAGitHubToolWithOneWorkingAgentIsSatisfied(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seedGitHubApps(t)
+	res := s.do(t, http.MethodPatch, "/config",
+		`{"integrations":{"public_base_url":"https://engine.example.com",
+		  "github":{"enabled":true,"webhook_secret":"${GH_SIGN}"}}}`,
+		map[string]string{"X-Summary": "connect github"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("connect = %d: %s", res.Code, res.Body)
+	}
+	if err := s.vault.Set(t.Context(), "GH_SIGN", "s", "test", "test", pinned); err != nil {
+		t.Fatal(err)
+	}
+
+	// The fixture's `reviewer` seat is installed with a key that resolves,
+	// and `sre-lead` has no app at all.
+	seats := githubSeats(t, s)
+	if seats["reviewer"]["satisfied"] != true {
+		t.Fatalf("the premise is wrong: reviewer = %v", seats["reviewer"])
+	}
+	if seats["sre-lead"]["satisfied"] == true {
+		t.Fatalf("the premise is wrong: sre-lead = %v", seats["sre-lead"])
+	}
+	state := decode(t, s.do(t, http.MethodGet, "/setup/integrations/github", "", nil))
+	// NOT satisfied, because `builder` and `stray` are ENROLLED and
+	// unfinished — which is the pre-existing clause, still working.
+	if state["satisfied"] == true {
+		t.Error("a company with enrolled unfinished agents reported satisfied")
+	}
+}
+
+// THE ORGANIZATION-WIDE ANSWER IS REFUSED WITHOUT ITS TOKEN, AT THE ROUTE.
+//
+// The form checks the same thing and that is a courtesy; this is the
+// boundary. A submission choosing coverage of the whole organization and
+// sending no token would otherwise store a choice the engine cannot carry
+// out, leaving a company one apply later demanding an organization hook with
+// nothing able to register it.
+//
+// AGAINST THE SUBMITTED VALUES, never the stored ones — this request is what
+// changes the answer, so every gate read against the document would see the
+// value being replaced and wave it through.
+func TestTheOrgWideAnswerIsRefusedWithoutItsToken(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seedGitHubApps(t)
+	s.seedGitHub(t)
+
+	res := s.do(t, http.MethodPost, "/setup/integrations/github/inputs",
+		`{"values":{"provisioning.org_webhook":"true"}}`, nil)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("got %d: %s", res.Code, res.Body)
+	}
+	// NAMING THE FIELD, because a refusal that says only "invalid" leaves
+	// somebody guessing which of the answers they gave was the problem.
+	if body := res.Body.String(); !strings.Contains(body, "token") ||
+		!strings.Contains(body, "provisioning.org_webhook") {
+		t.Errorf("the refusal names neither the field nor the answer asking "+
+			"for it:\n%s", body)
+	}
+}
+
+// AND THE ANSWER THAT NEEDS NOTHING IS ACCEPTED WITH NOTHING.
+//
+// The whole point of the gate: a company taking the recommendation connects
+// without a credential it will never use. Required in general, this was a
+// personal access token demanded before anything worked.
+func TestTheRecommendedAnswerNeedsNoToken(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seedGitHubApps(t)
+	s.seedGitHub(t)
+
+	res := s.do(t, http.MethodPost, "/setup/integrations/github/inputs",
+		`{"values":{"provisioning.org_webhook":"false"}}`, nil)
+	if res.Code < 200 || res.Code >= 300 {
+		t.Fatalf("the recommended answer was refused: %d %s", res.Code, res.Body)
 	}
 }

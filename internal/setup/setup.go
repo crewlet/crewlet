@@ -137,6 +137,29 @@ type Requirement struct {
 	// a KindSecret. Empty means derive it; see [SecretNameFor].
 	SecretName string `json:"secret_name,omitempty"`
 
+	// RequiredWhen gates this requirement on another field's answer: it is
+	// neither shown nor required until that field holds that value, and
+	// once it does it is both.
+	//
+	// # Why one field rather than a Shown flag beside Required
+	//
+	// The pair it exists for is GitHub's: choose "every repository in the
+	// organization" and an organization token becomes the one thing
+	// standing between that answer and its being true; choose "wherever an
+	// agent's app is installed" and the same token is a credential the
+	// company never uses. There is no honest static answer — [Required]
+	// says yes and blocks a connect that needed nothing, no says nothing
+	// and lets the API store an answer it cannot carry out.
+	//
+	// Showing and requiring are ONE decision here and not two, because a
+	// field shown under a choice that needs it is a field that needs it. A
+	// separate Shown flag would let the two drift into "visible but
+	// optional", which is a form asking a question whose answer it will
+	// ignore.
+	//
+	// Nil is the ordinary requirement, answering to [Required] alone.
+	RequiredWhen *Gate `json:"required_when,omitempty"`
+
 	// Required reports whether the integration can work without this.
 	// A false one is still worth showing: it is usually the difference
 	// between working and working well.
@@ -404,11 +427,45 @@ func (r Requirement) Satisfied() bool {
 func Outstanding(reqs []Requirement) []Requirement {
 	out := []Requirement{}
 	for _, r := range reqs {
-		if r.Required && !r.Satisfied() {
+		if r.Needed(reqs) && !r.Satisfied() {
 			out = append(out, r)
 		}
 	}
 	return out
+}
+
+// Gate is "when this other field holds this value". See
+// [Requirement.RequiredWhen].
+type Gate struct {
+	// Field is another requirement's [Requirement.Field] in the same list.
+	Field string `json:"field"`
+	// Equals is the value that opens the gate.
+	Equals string `json:"equals"`
+}
+
+// Needed reports whether this requirement must be answered, given what the
+// rest of the list currently holds.
+//
+// ONE IMPLEMENTATION, because three readers ask it — the form deciding
+// whether to draw a required marker, [Outstanding] deciding whether a pass
+// may run, and the submission path deciding whether to store an answer — and
+// a gate honoured by two of the three is a rule the third quietly breaks. It
+// is the API's copy that matters most: a form is a courtesy and a route is
+// the boundary.
+//
+// A gate naming a field that is not in the list is CLOSED. The alternative
+// reads a typo as "always required", which turns a vendor's mistake into
+// every company's blocked connect.
+func (r Requirement) Needed(among []Requirement) bool {
+	if r.RequiredWhen == nil {
+		return r.Required
+	}
+	for _, other := range among {
+		if other.Field == r.RequiredWhen.Field {
+			return strings.TrimSpace(other.Stored) == r.RequiredWhen.Equals
+		}
+	}
+	return false
 }
 
 // nameRule is the whole-reference grammar, and it is envref's own: a value

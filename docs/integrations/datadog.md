@@ -57,10 +57,12 @@ without one inherits the organization's default.
 
 **A key is minted once.** Datadog returns an application key's value exactly
 once, so the pass mints only for a seat holding none. A seat whose account
-already has a key that the engine cannot read is **reported, not replaced** —
-replacing it would silently revoke whatever is using it. A sink the engine
-cannot read stops that seat rather than minting, because unknown is not "no
-key".
+already has a key **and whose `${VAR}` is empty** is repaired rather than
+reported: nobody in the company holds that key's value, so the pass deletes it
+and mints a replacement (see [below](#a-key-whose-value-nothing-holds-is-replaced-not-reported)).
+A sink the engine cannot read stops that seat rather than minting, because
+unknown is not "no key" — and that one is reported, since it is a fault on
+this side rather than at Datadog.
 
 The role is **refused rather than defaulted** if the organization does not have
 it: creating accounts under whatever role happened to match would grant an
@@ -86,6 +88,47 @@ engine has no basis for claiming how much a role it has never seen grants.
 Disconnecting **disables** these accounts when you tick "also remove the
 accounts Crewlet created". Disabled rather than deleted, because deleting a
 Datadog user detaches it from everything it authored.
+
+It also **deletes each account's application keys** — the value sealed in that
+seat's `${VAR}` — before disabling it, and records that *this engine* is the one
+disabling it, in Datadog's own `title` field on the account. Both matter:
+
+- A live key on a disabled account is a credential that **works again the moment
+  anybody re-enables the account**, and the engine now does exactly that (below),
+  so that moment is one button press away rather than hypothetical.
+- **Connecting again re-enables an account this engine disabled**, and only one
+  it disabled. Re-enabling used to be refused outright: undoing a decommission is
+  somebody's decision, and a pass that quietly reversed it would fight that
+  gesture on every tick. That reasoning holds for an account a *person* disabled
+  and not for one Crewlet's own teardown turned off — and with nothing recording
+  which was which, both were the same ambiguous bit and both were refused, so a
+  disconnect-and-reconnect cycle could never complete without manual work. One
+  deployment accumulated about thirty-seven dead accounts that way. An account
+  with no marker is still reported and never touched.
+
+> The marker lives on the **account** rather than on the surface's status row,
+> because that row is forgotten the moment the disconnect succeeds — destroyed on
+> the success path of the very operation that would write it. A field on the
+> account survives the disconnect, a fleet losing its coordination store, and a
+> restore from backup. Accounts disabled before this shipped carry no marker and
+> stay manual.
+
+**The marker is written unconditionally, and before the disable.** It used to be
+written inside the same branch as the disable — only when the account was still
+enabled — which made an already-disabled account permanently unrecoverable. Two
+ordinary situations reach one: a disconnect retried after a partial failure, and
+a disconnect over an account somebody had already disabled at Datadog. Either
+way the teardown found `disabled: true`, skipped the whole branch, wrote no
+marker, and reported the seat removed; the next connect then read an unmarked
+disabled account, correctly refused to touch it, and the seat sat at *degraded /
+admin* with no remedy but a hand edit at Datadog. Measured:
+`crewlet-sre-lead@agents.crewlet.invalid`, `disabled: true`, `title: ""`, six
+retry attempts deep. Marking first also means a teardown interrupted between the
+two steps leaves an account **marked but still enabled**, which the next connect
+simply clears — the harmless direction of the same race.
+
+This is the rule every app that disables rather than deletes follows; see
+[three apps disable rather than delete](../concepts/integration-reconcile.md#three-apps-disable-rather-than-delete-and-one-rule-covers-all-three).
 
 
 ## Configuration
@@ -143,6 +186,8 @@ flowchart TD
 
 **`route_to` is required, and that is deliberate.** An alert is the one delivery that can legitimately name no party, because a monitor is not addressed to anyone. Without a floor those alerts would be accepted, verified, counted on the dashboard and delivered to nobody, which is the worst state an alerting integration can be in: it looks exactly like coverage. `crewlet validate` refuses an enabled block without one.
 
+**The dashboard form opens on `none`**, and required is still required — the default makes the question answerable, not optional. Every other choice on that field is one of *this company's* seats, and picking one for you is picking whose phone rings for every alert nobody labelled: a decision about somebody's working life, made by a form, from a roster it has no basis for ranking. Of the two ways to be wrong it is also the recoverable one — an alert that wakes nobody is a gap you close later, where an alert waking the wrong agent is work already misrouted.
+
 **`none` is an answer, and it is not the same as leaving the field blank.** A company may want only the monitors it has labelled to wake anybody, and everything else to stay with whatever Datadog already does about it — that is a decision, and `route_to: none` is how it is written down. Blank is a question nobody answered, and an alert reaching nobody through it is a silent hole in the coverage. Because `none` means nobody, **no seat may be handled `none`**: one that was would be silenced by its own name, on a screen reporting the configuration exactly as written, so `crewlet validate` refuses it.
 
 **And it has to name somebody who can be woken.** A handle no seat has resolves to nothing, and one naming a **human** seat resolves fine and is then dropped as a self-action — both leave the configuration reading as correct on every screen while every untagged alert lands nowhere, which is the state the requirement exists to prevent. So validation checks the value against the company's own roster: it must be `none`, or the handle of an agent seat this company declares. A monitor **tag** naming an unknown handle is different and stays visible as an undeliverable notification, because a tag is somebody's typo in Datadog rather than a line in this document.
@@ -188,7 +233,62 @@ What is left is naming it on the monitors you care about:
 
 You can see what the engine wrote under **Integrations → Webhooks**. Editing it
 there is temporary: the next pass restores the definition above, which is what
-keeps the address correct when the deployment moves.
+keeps the address correct when the deployment moves. A definition that already
+matches is left alone rather than rewritten, so a converged pass writes nothing
+at Datadog at all.
+
+### What the reconcile reports
+
+Three states the pass reaches and, until recently, could say nothing about —
+each one leaving the surface reporting `ready` while alerts went nowhere:
+
+| What it found | What it reports | What clears it |
+|---|---|---|
+| No webhook was registered because this deployment has no inbound address | `ingress_blocked` | set `integrations.public_base_url` |
+| No webhook was registered because `webhook_token` resolved to nothing, or because this node has no keyring to seal one with | `credential_missing` | set `integrations.datadog.webhook_token`, or install `secrets.keys` |
+| A seat's service account exists but is **disabled**, with no Crewlet marker | `identity_failed` | re-enable it in Datadog — it was not disabled by this engine |
+| A seat's service account is disabled **by a Crewlet disconnect** | — | the next pass re-enables it |
+| A seat holds a sealed key and its account holds **no application key at all** | — | the next pass mints a replacement and seals it |
+| A seat's account holds an application key and its `${VAR}` is **empty** | — | the next pass deletes that key and mints a replacement |
+| The engine could not read its own secret store for a seat | `identity_failed` | fix the keyring on the engine — this one carries **no** Datadog link, because Datadog is not where it is settled |
+| **Enabled** service accounts at this company's own email domain that match **no seat** | `registration_orphaned` | disable or delete them in Datadog — nothing here touches them, and either one clears the finding |
+
+A finding a person settles **at Datadog** carries a link to the organization's user administration; one the engine owns carries none, because sending somebody to a vendor page over a fault on this side costs them the trip and teaches them the link means nothing.
+
+Two of those are worth knowing about in detail.
+
+#### Accounts this engine made and no longer manages
+
+A live organization accumulates them: a seat renamed, a handle changed, an older naming scheme. They are absent from the plan by construction, so no seat's row mentions them and the card read **Connected** over an organization full of them.
+
+**Only the enabled ones.** An account that is already disabled has reached the end state this advisory asks for — its remedy is *disable or delete the ones you do not want* — so reporting it asks an operator for work somebody has done. Mostly this engine had done it: a disconnect with account removal **disables** the accounts it removes, so the ordinary reconnect-with-a-smaller-roster cycle turned every correct teardown into a row on the card. That is what the measured pile was: **36 accounts under `agent-cs-…@agents.crewlet.invalid`, every one of them disabled and inert**, burying whatever else the card had to say. Skipping them also makes the instruction work — the filter looked only at the address, so an operator who read the note and disabled an account watched the finding come back unchanged on the next tick; now either half of *disable or delete* clears it. The **enabled** orphan is the genuine finding and still reports: that is an identity which can still act, matching nothing any pass will ask for again. Disabled ones are visible where they belong, in Datadog's own user list filtered to disabled — nothing here has anything to add about them.
+
+They are reported in **one** finding, with the addresses in the detail: the decision is the same for all of them, it is a person's, and a row each would bury everything else on the card. It is an **advisory** — phase `ready`, owed to an admin — because nothing is broken and nothing this engine runs will ever change it, so reporting it as a wait would leave somebody watching a retry with nothing to retry.
+
+**Nothing removes them.** An account is a colleague at Datadog with history attached, so deleting one because a handle changed is not a decision a timer makes — the same rule a disconnect follows when it declines to delete a company's credentials.
+
+Which accounts count as this engine's is decided in two steps, and the domain alone is not enough: Datadog's user filter is a free-text substring match, so a listing under a real domain carries the company's own people. A **`.invalid`** domain (the default, reserved by [RFC 2606](https://www.rfc-editor.org/rfc/rfc2606) precisely so nothing can deliver there) is conclusive — no person has a mailbox at one. Under any other domain the **`crewlet-` prefix** is the marker, so a service account somebody else created at a domain you own is left alone. The prefixes this engine *no longer writes* are deliberately not enumerated: that list would grow for ever and be wrong the moment `email_domain` changed, and the `.invalid` clause catches them all without naming any.
+
+**An account this engine disabled is re-enabled, and one a person disabled is not.** Disabling is exactly how a disconnect with account removal decommissions an account, so a company that had run that and then reconnected looked fully provisioned while no seat could act. The disconnect writes a marker — the account's `title` becomes `crewlet:disconnected` — *before* it disables, so an interrupted teardown leaves a marked live account rather than an unmarked dead one, and connecting again re-enables only accounts carrying that marker. An account somebody disabled in Datadog's own console is reported and never touched: undoing an operator's explicit decision from a timer is not a decision this loop gets to make.
+
+**A sealed key is checked against the account, not trusted because it is there.** Datadog shows an application key's value exactly once, so nothing can prove the stored string is one of the account's keys. What *can* be proved is the negative: an account holding **no** keys cannot be the owner of whatever is sealed for that seat. The way to reach that state is for the key to be **deleted at Datadog** — by an administrator, or by a teardown that removed the account, after which a value put back by hand points at nothing. (A disconnect that *keeps* the accounts does not touch them at all: it withdraws the webhook and stops, so the key and the sealed value both survive it, consistent with each other. A disconnect that *removes* them revokes the keys and deletes the sealed values together.) The next pass mints a replacement, re-seals it, and logs `datadog_seat_key_replaced`.
+
+Reading the key list is what makes that possible, so it happens on every pass — one request per seat, the same shape Atlassian's own token count has — and it happens **whether or not this run may write**, which is what makes the Check button worth pressing. A check cannot read the sealed store, so it cannot ask whether the stored value is one of the account's keys; it can ask the account, and an account with no key is a seat that cannot act whatever is stored for it. It reports that as `identity_missing`, owed by the **engine**, because the engine's own next provisioning pass is what mints one.
+
+The check stays **three-valued** on the vendor's side: a listing Datadog could not answer changes nothing, because reading a blip as "no keys" would rotate every agent's credential on the loop's timer, which is an outage this engine would have caused itself.
+
+#### A key whose value nothing holds is replaced, not reported
+
+The other direction of the same mismatch — the account has a key and the seat's `${VAR}` is **empty** — means the value is one *nobody in the company has*: an agent authenticates from the `${VAR}`, and Datadog served that key's value once, to a store that no longer carries it. The seat cannot act, and no pass, retry or wait changes that. So a writing pass **deletes that key and mints a replacement**, and the card stays clean.
+
+It used to stop the whole card on *Action required* and tell an operator to "delete the key at Datadog and run this again" — an API call the engine is itself authenticated for, holding the very credentials it listed the key with. Asking a person to perform a write you are authorized for is not a safety property; it is the same write with a worse actor, and it left companies parked on *Action required* over one seat.
+
+Only the keys **this engine minted** are deleted, matched on the name every mint here writes (`crewlet`). That is narrower than what a [disconnect](#giving-each-agent-its-own-datadog-identity) does — a teardown revokes *every* key on the account — and the difference is the goal rather than an inconsistency: a teardown must leave no live credential on a decommissioned account, so a key it cannot attribute is exactly the hazard it exists to remove, while a repair only has to give this seat a working credential and minting is additive. A key somebody else put on the account is left alone and the seat is fixed regardless.
+
+A node with no keyring also no longer creates the accounts. It used to make a
+real Datadog service account per seat and then fail to record its key — so the
+account existed, nothing could authenticate as it, and the next pass made
+another one.
 
 ### The payload template
 

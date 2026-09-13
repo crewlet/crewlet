@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -67,6 +68,62 @@ type Integrations struct {
 	// pointing at the wrong host is worse than no hook, and a subcommand's
 	// `-public-url` still overrides it for a one-off run.
 	PublicBaseURL string `yaml:"public_base_url,omitempty" json:"public_base_url,omitempty" desc:"HTTPS base a vendor reaches this deployment on, e.g. https://crewlet.example.com. Empty means no inbound address."`
+
+	// CheckIntervalSeconds is how long a CONVERGED integration is trusted
+	// before the loop reads it back, and therefore how long access somebody
+	// revoked by hand at the third-party app goes unnoticed.
+	//
+	// # Why this is a company's choice rather than one number for everybody
+	//
+	// It is the only thing that finds a revoked credential at all — nothing
+	// tells this engine, and every other cadence in the loop is a retry of
+	// something already known to be wrong. So it is a straight trade against
+	// what a converged pass COSTS at the vendor, and that cost is the
+	// company's own size: a pass asks each seat's credential who it is and
+	// reads the memberships and hooks per seat and per project, so it is
+	// O(seats x projects) requests per surface per interval — tens for a
+	// small company, a few hundred for a large one on GitLab or Mattermost.
+	//
+	// Ten minutes is the default because it is affordable at the large end.
+	// At the small end it is simply slow, and measured as such: an operator
+	// who deleted an agent's token by hand watched the card say Connected
+	// for eight minutes. A five-seat company can afford one minute; a
+	// two-hundred-seat one should probably lengthen it.
+	//
+	// # Zero is the default, not "never"
+	//
+	// A settled surface that is never read back is one this engine would
+	// report healthy for the life of the deployment, which is the state the
+	// whole subsystem exists to refuse — so there is no "off". Zero takes
+	// the default and anything below [MinCheckInterval] is refused naming
+	// the field, rather than silently clamped: a value typed in seconds when
+	// the writer meant minutes should say so.
+	CheckIntervalSeconds int `yaml:"check_interval_seconds,omitempty" json:"check_interval_seconds,omitempty" desc:"How often a converged integration is read back, in seconds. 0 takes the default of 600; the floor is 60."`
+}
+
+// MinCheckInterval is the floor under [Integrations.CheckIntervalSeconds].
+//
+// One minute, which is four of the loop's own ticks — below that the interval
+// stops being a schedule and becomes the tick rate, and a converged company
+// would spend O(seats x projects) requests a minute at every vendor for ever
+// to shorten a detection window nobody is watching.
+const MinCheckInterval = time.Minute
+
+// DefaultCheckInterval is what an unset [Integrations.CheckIntervalSeconds]
+// means.
+//
+// Restated here rather than imported from internal/integration for the reason
+// [Datadog.HandleTagOrDefault] gives — config is the leaf every other package
+// depends on — and asserted equal to integration.DefaultSchedule.Settled by a
+// test.
+const DefaultCheckInterval = 10 * time.Minute
+
+// CheckInterval is how long a converged integration is trusted.
+func (i *Integrations) CheckInterval() time.Duration {
+	if i == nil || i.CheckIntervalSeconds <= 0 {
+		return DefaultCheckInterval
+	}
+	return time.Duration(i.CheckIntervalSeconds) * time.Second
 }
 
 // WebhookBase is the base every inbound path is built on, without a trailing
@@ -126,6 +183,22 @@ func (i *Integrations) validate(path string) error {
 				"an address the third-party app accepts and never reaches", i.PublicBaseURL)
 	}
 
+	// A CHECK INTERVAL BELOW THE FLOOR IS REFUSED RATHER THAN CLAMPED.
+	// Silently raising it would leave a document saying one thing and a loop
+	// doing another, and the likeliest way to get here is a value typed in
+	// seconds by somebody who meant minutes — which a clamp hides and this
+	// says out loud. Zero is not a value: it is the field being unset.
+	if secs := i.CheckIntervalSeconds; secs != 0 {
+		if d := time.Duration(secs) * time.Second; d < MinCheckInterval {
+			p.add(at(path, "check_interval_seconds"), ErrUnknownValue,
+				"%d is below the floor of %d: a converged pass costs one read "+
+					"per seat and per project at every vendor, so an interval "+
+					"this short spends that every minute for ever. Leave it "+
+					"unset for the default of %d",
+				secs, int(MinCheckInterval.Seconds()), int(DefaultCheckInterval.Seconds()))
+		}
+	}
+
 	// THE ORGANIZATION HAS NO BLOCK VALIDATOR of its own: it is two fields,
 	// and the only rule either carries is that neither is a phrase. A space
 	// in the organization id is sent to Atlassian as the subject of every
@@ -149,13 +222,13 @@ func (i *Integrations) validate(path string) error {
 		}
 	}
 	if i.Jira != nil {
-		p.wrap(i.Jira.validate(at(path, "jira")))
+		p.wrap(i.Jira.validate(at(path, "jira"), i.DiscoversAtlassianSite()))
 	}
 	if i.Datadog != nil {
 		p.wrap(i.Datadog.validate(at(path, "datadog")))
 	}
 	if i.Confluence != nil {
-		p.wrap(i.Confluence.validate(at(path, "confluence")))
+		p.wrap(i.Confluence.validate(at(path, "confluence"), i.DiscoversAtlassianSite()))
 	}
 	if i.Mattermost != nil {
 		p.wrap(i.Mattermost.validate(at(path, "mattermost")))
@@ -267,7 +340,7 @@ func (j *Jira) ShareableBaseURL() string {
 // moved from Data Center to Cloud and left the old url behind would keep
 // looking correct while every read went to the new place and every link to
 // the old one.
-func (j *Jira) validate(path string) error {
+func (j *Jira) validate(path string, discovers bool) error {
 	var probs problems
 	noSpaces(&probs, at(path, "url"), j.URL)
 	noSpaces(&probs, at(path, "cloud_id"), j.CloudID)
@@ -275,6 +348,13 @@ func (j *Jira) validate(path string) error {
 	noSpaces(&probs, at(path, "email"), j.Email)
 	url, cloud := strings.TrimSpace(j.URL), strings.TrimSpace(j.CloudID)
 	switch {
+	case url == "" && cloud == "" && discovers:
+		// NOTHING OUTSTANDING. The Atlassian organization supplies the site
+		// and its cloud id on the first pass, which is why the form does not
+		// ask — see [Integrations.DiscoversAtlassianSite]. Until it has, the
+		// surface reports itself unconverged through the reconcile status,
+		// which is where a state that fixes itself belongs. Refusing the
+		// document instead blocked the write that starts the pass.
 	case url == "" && cloud == "":
 		probs.add(path, ErrMissing,
 			"give url (a Data Center instance or a Cloud site) or cloud_id "+
@@ -298,7 +378,17 @@ func (j *Jira) validate(path string) error {
 			"required: the org account is what reads an issue's watchers, "+
 				"which is the one routing input a Jira webhook never carries")
 	}
-	if strings.TrimSpace(j.WebhookSecret) == "" && cloud == "" && !IsAtlassianCloud(url) {
+	// AN UNIDENTIFIED INSTANCE IS NOT A DATA CENTER ONE, which is what the
+	// missing `url != ""` used to make it. With neither url nor cloud_id the
+	// deployment is unknown — the problem above says exactly that — and this
+	// fired anyway, telling an operator who had just chosen Atlassian Cloud in
+	// the connect dialog that a signing secret was "required for a Data Center
+	// instance". Two problems where there is one, and the second one asking
+	// for a field Cloud is explicitly exempt from, on a form that offers
+	// neither. Naming the deployment is the only thing outstanding until it is
+	// named.
+	if strings.TrimSpace(j.WebhookSecret) == "" && url != "" && cloud == "" &&
+		!IsAtlassianCloud(url) {
 		// CLOUD IS EXEMPT, and stays exempt now that it can register an
 		// admin webhook of its own. The reason changed rather than
 		// disappearing: a Cloud company may take EITHER route, and one
@@ -427,7 +517,7 @@ func DefaultSkillsSpaceFor(c *Confluence) string {
 // ambiguity silently would let a company that moved from Data Center to
 // Cloud keep looking correct while every read went to one place and every
 // link to the other.
-func (c *Confluence) validate(path string) error {
+func (c *Confluence) validate(path string, discovers bool) error {
 	var probs problems
 	noSpaces(&probs, at(path, "url"), c.URL)
 	noSpaces(&probs, at(path, "cloud_id"), c.CloudID)
@@ -435,6 +525,8 @@ func (c *Confluence) validate(path string) error {
 	noSpaces(&probs, at(path, "email"), c.Email)
 	url, cloud := strings.TrimSpace(c.URL), strings.TrimSpace(c.CloudID)
 	switch {
+	case url == "" && cloud == "" && discovers:
+		// NOTHING OUTSTANDING — see the same arm on [Jira.validate].
 	case url == "" && cloud == "":
 		probs.add(path, ErrMissing,
 			"give url (a Data Center instance or a Cloud site) or cloud_id "+
@@ -460,7 +552,10 @@ func (c *Confluence) validate(path string) error {
 				"tool-skill walk reads with")
 	}
 	sharedToken(&probs, at(path, "webhook_token"), c.WebhookToken)
-	if strings.TrimSpace(c.WebhookSecret) == "" && cloud == "" && !IsAtlassianCloud(url) {
+	// AN UNIDENTIFIED INSTANCE IS NOT A DATA CENTER ONE — see the same guard
+	// on [Jira.validate], which had the same bug for the same reason.
+	if strings.TrimSpace(c.WebhookSecret) == "" && url != "" && cloud == "" &&
+		!IsAtlassianCloud(url) {
 		// CLOUD IS EXEMPT, on either of its routes. The Forge relay is
 		// verified by the app's invocation token and the token-bearing
 		// hook by webhook_token, and neither carries an HMAC, so requiring
@@ -636,9 +731,12 @@ type Mattermost struct {
 	// no text this backend accepts would ever be rendered.
 	TypingStatus WorkingStatus `yaml:"typing_status,omitempty" json:"typing_status,omitempty" js:"enum=always|addressed" desc:"When to show the typing indicator (default always); it costs a request every few seconds per thinking seat."`
 
-	// Provisioning is read ONLY by the provisioning CLI. The engine never
-	// looks at it; it is here so a provisioning-ready config validates.
-	Provisioning *MattermostProvisioning `yaml:"provisioning,omitempty" json:"provisioning,omitempty" desc:"Inputs for the provisioning CLI; ignored by the engine."`
+	// Provisioning is read by the engine's own reconcile loop AND by the
+	// provisioning CLI, which is a reversal this field's doc outlived: it
+	// said the engine "never looks at it", and it was true until the loop
+	// started provisioning. A reader who believed it would put a value here
+	// expecting nothing to act on it.
+	Provisioning *MattermostProvisioning `yaml:"provisioning,omitempty" json:"provisioning,omitempty" desc:"Inputs the reconcile loop and the provisioning CLI both read."`
 }
 
 // Status is the indicator mode, applying the always default.
@@ -811,17 +909,29 @@ type GitHub struct {
 	// anyone's POST.
 	WebhookSecret string `secret:"true" yaml:"webhook_secret,omitempty" json:"webhook_secret,omitempty" desc:"HMAC secret for inbound deliveries; required when enabled."`
 
-	// Token is an optional READ credential for participant fan-out.
+	// Token is the optional ORGANIZATION credential, and it now has one
+	// job rather than two.
 	//
-	// A webhook payload carries the author, the assignees and the
-	// requested reviewers, but not who has COMMENTED or REVIEWED — which
-	// is most of the set GitHub itself would notify. Recovering it costs
-	// one REST call per issue event and two per pull request. When empty,
-	// routing degrades to the payload-derived targets; directed events are
-	// unaffected.
-	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"Read token for participant fan-out; empty degrades thread routing."`
+	// IT IS THE WHOLE ORGANIZATION-LEVEL CLIENT. Empty, the reconcile pass
+	// builds none and registers nothing at GitHub — no organization hook,
+	// no repository hook — which is what `org_webhook: true` with no token
+	// reports. Installing an agent's App does not substitute for it: an
+	// organization-wide hook needs `admin:org_hook`, a user-token scope
+	// that no App installation carries.
+	//
+	// ITS OTHER JOB IS GONE. It was also the READ credential for
+	// participant fan-out — a webhook payload carries the author, the
+	// assignees and the requested reviewers, but not who has COMMENTED or
+	// REVIEWED, which is most of the set GitHub itself would notify. Each
+	// agent's own App answers that now ([github.SeatLookup]), scoped to
+	// what that agent may see rather than to whatever the person who
+	// minted this token could reach.
+	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"Organization token with admin:org_hook, for one organization-wide hook. Empty means each agent's own app carries its own."`
 
-	Provisioning *GitHubProvisioning `yaml:"provisioning,omitempty" json:"provisioning,omitempty" desc:"Inputs for the provisioning CLI; ignored by the engine."`
+	// Provisioning is read by the engine's own reconcile loop as well as by
+	// the provisioning CLI — see [Mattermost.Provisioning], whose doc made
+	// the same claim about the same reversal.
+	Provisioning *GitHubProvisioning `yaml:"provisioning,omitempty" json:"provisioning,omitempty" desc:"Inputs the reconcile loop and the provisioning CLI both read."`
 }
 
 // githubAPIHost is github.com's API, which is a different host from its web
@@ -977,7 +1087,39 @@ type GitLab struct {
 	// payload-derived targets; directed events are unaffected.
 	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"Read PAT for participants-based routing; empty degrades routing."`
 
-	Provisioning *GitLabProvisioning `yaml:"provisioning,omitempty" json:"provisioning,omitempty" desc:"Inputs for the provisioning CLI; ignored by the engine."`
+	// WebhookName is the name every hook this engine registers carries,
+	// and therefore WHICH HOOKS ON THIS INSTANCE ARE THIS DEPLOYMENT'S.
+	//
+	// The reconcile converges the hooks carrying this name whatever
+	// address they currently point at, which is what stops a change of
+	// public base leaving live orphans behind — one group hook and one
+	// per project per change, all enabled, all delivering to somewhere
+	// that no longer answers. Measured on a real deployment behind a
+	// tunnel: three.
+	//
+	// So it has to differ between two deployments watching ONE instance:
+	// staging and production of the same company share this document, and
+	// with one name each pass would repoint the other's hooks and only the
+	// last one to run would receive anything. The same knob exists on Jira
+	// and on Datadog for the same reason.
+	WebhookName string `yaml:"webhook_name,omitempty" json:"webhook_name,omitempty" desc:"Name every hook the engine registers on this instance carries; give two deployments watching one instance two names (default crewlet)."`
+
+	// Provisioning is read by the engine's own reconcile loop as well as by
+	// the provisioning CLI — see [Mattermost.Provisioning]. [GitLabMode] is
+	// what that reversal cost while this said otherwise.
+	Provisioning *GitLabProvisioning `yaml:"provisioning,omitempty" json:"provisioning,omitempty" desc:"Inputs the reconcile loop and the provisioning CLI both read."`
+}
+
+// WebhookNameOrDefault is the name this engine's hooks carry at GitLab.
+//
+// Restated here rather than imported from internal/gitlab for the reason
+// [Datadog.HandleTagOrDefault] gives — config is the leaf the vendor packages
+// depend on — and asserted equal by a test.
+func (g *GitLab) WebhookNameOrDefault() string {
+	if name := strings.TrimSpace(g.WebhookName); name != "" {
+		return name
+	}
+	return "crewlet"
 }
 
 // APIBase is the REST base derived from URL.
@@ -1025,8 +1167,74 @@ type GitLabProvisioning struct {
 
 	GroupWebhook ContainerWebhookMode `yaml:"group_webhook,omitempty" json:"group_webhook,omitempty" js:"enum=auto|true|false" desc:"auto (one group hook if the plan allows), true, or false."`
 
+	// Mode is WHERE A SERVICE ACCOUNT IS OWNED, and therefore which route
+	// creates one, mints its tokens and deletes it.
+	//
+	// # Why it is in the document rather than only on the command line
+	//
+	// It was `-mode` on `crewlet gitlab provision` and nowhere else, which
+	// made it a fact only the person who typed it knew — and the engine
+	// provisions now. Its passes read no flag, so they assumed "group" for
+	// every company: against accounts created with `-mode instance` the
+	// engine minted through the group route and was refused, and its
+	// DISCONNECT deleted through the group route, which answers 404 for an
+	// account that route has never heard of — read as success, so every one
+	// of those accounts was reported removed and stayed live with every
+	// credential it held.
+	//
+	// Empty is [GitLabModeGroup], which is the only shape GitLab.com has.
+	// The flag is still there and still overrides, for one invocation, the
+	// way `-public-url` overrides `integrations.public_base_url`.
+	Mode GitLabMode `yaml:"mode,omitempty" json:"mode,omitempty" js:"enum=group|instance" desc:"Where service accounts are owned: group (default, and all GitLab.com offers) or instance (self-managed only; needs an instance-administrator token)."`
+
 	// TokenScopes are minted on each service-account token.
 	TokenScopes []string `yaml:"token_scopes,omitempty" json:"token_scopes,omitempty" desc:"Scopes minted on each service-account token."`
+}
+
+// GitLabMode is where this company's GitLab service accounts are owned.
+//
+// Restated here rather than imported from internal/gitlab for the reason
+// [Datadog.HandleTagOrDefault] gives — config is the leaf the vendor packages
+// depend on — and asserted equal to gitlab.Modes() by a test.
+type GitLabMode string
+
+const (
+	// GitLabModeGroup owns service accounts from provisioning.group, which
+	// is the only shape GitLab.com offers.
+	GitLabModeGroup GitLabMode = "group"
+	// GitLabModeInstance owns them from the instance itself. Self-managed
+	// only, and it needs an instance-administrator token.
+	GitLabModeInstance GitLabMode = "instance"
+)
+
+// GitLabModes is every mode, for an error that has to name them.
+func GitLabModes() []string {
+	return []string{string(GitLabModeGroup), string(GitLabModeInstance)}
+}
+
+// Valid reports a mode this build serves. Empty is [GitLabModeGroup].
+func (m GitLabMode) Valid() bool {
+	switch m {
+	case "", GitLabModeGroup, GitLabModeInstance:
+		return true
+	}
+	return false
+}
+
+// Or resolves the empty value.
+func (m GitLabMode) Or() GitLabMode {
+	if m == "" {
+		return GitLabModeGroup
+	}
+	return m
+}
+
+// ModeOrDefault is where this company's service accounts are owned.
+func (p *GitLabProvisioning) ModeOrDefault() GitLabMode {
+	if p == nil {
+		return GitLabModeGroup
+	}
+	return p.Mode.Or()
 }
 
 func (g *GitHub) validate(path string) error {
@@ -1122,6 +1330,15 @@ func (g *GitLab) validate(path string) error {
 	}
 	pv := g.Provisioning
 	pp := at(path, "provisioning")
+	// REFUSED HERE rather than discovered from a 404 half way through a run.
+	// This one input decides which endpoint every account is created on,
+	// which tokens are minted through and which a disconnect deletes down —
+	// and the delete route answers 404 as success, so a typo here is an
+	// account reported removed and still live.
+	if !pv.Mode.Valid() {
+		p.add(at(pp, "mode"), ErrUnknownValue, "%q is not one of %s",
+			pv.Mode, strings.Join(GitLabModes(), ", "))
+	}
 	if pv.AccessLevel != "" && !slices.Contains(GitLabAccessLevels, pv.AccessLevel) {
 		p.add(at(pp, "access_level"), ErrUnknownValue, "%q (want %s)",
 			pv.AccessLevel, names(GitLabAccessLevels))
@@ -1175,6 +1392,33 @@ func (a *Atlassian) DeploymentOrDefault() string {
 
 // IsCloud reports the deployment this engine can provision.
 func (a *Atlassian) IsCloud() bool { return a.DeploymentOrDefault() == AtlassianCloud }
+
+// DiscoversAtlassianSite reports whether this company's Atlassian organization
+// will supply the Jira and Confluence site addresses, so nobody has to give one.
+//
+// THE PREDICATE THE SETUP FORM ALREADY ACTS ON, written down so validation can
+// act on the same one. `cloud_id` is declared Hidden on both products —
+// "DISCOVERED, NOT ASKED", because the organization key reads every site this
+// company has along with its cloud id — and on Cloud the site `url` is hidden
+// beside it, since an address typed there is used INSTEAD of the gateway and a
+// provisioned account's token authenticates only at the gateway.
+//
+// Validation did not know that and demanded one of them anyway, so connecting
+// Atlassian on Cloud could not succeed: the form deliberately asks for neither,
+// the write is refused for both, and the pass that would have discovered them
+// never runs because the write is what starts it. The operator is told to fill
+// in a field that is not on the screen.
+//
+// NIL IS NOT CLOUD HERE, although [Atlassian.IsCloud] answers true for it. That
+// answer is right for "which deployment is this" and wrong for this question: a
+// company with no organization block has nothing to discover a site WITH, so it
+// must still name one. Via the dashboard that shape does not arise — Atlassian
+// is one card covering the organization and both products, so connecting it
+// always writes the organization — and a hand-written document that omits it is
+// asked for a url, correctly.
+func (i Integrations) DiscoversAtlassianSite() bool {
+	return i.Atlassian != nil && i.Atlassian.IsCloud()
+}
 
 // DatadogIgnore is the route_to value that means "wake nobody".
 //

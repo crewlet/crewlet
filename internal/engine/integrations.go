@@ -2,8 +2,8 @@ package engine
 
 import (
 	"context"
-	"fmt"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/datadog"
@@ -19,11 +19,48 @@ const integrationDutyName = "integration-reconcile"
 
 // integrationDutyTTL is how long the duty survives without a re-claim.
 //
-// Three ticks, matching the retention sweep's and the sandbox waiter's ratio.
-// The reason here is the sharper one: two nodes reconciling one surface at
-// the same moment can both create an identity for one seat, so a single
-// missed tick must not hand the duty to a peer.
-const integrationDutyTTL = 3 * integration.Interval
+// DERIVED FROM THE LONGEST PASS IT ADMITS, plus a tick to renew in. It was
+// three ticks — 45 seconds — chosen to match the retention sweep's ratio, and
+// that number cannot be right beside a pass allowed [setup.PassDeadline]: one
+// surface's pass blows a 45-second TTL five times over, so the duty lapses
+// mid-sweep, a peer claims it, and both nodes sweep the surfaces the other has
+// not reached. Nothing UNSAFE follows from that — the surface's own lease is
+// what stops two writers at one third-party app — but the sweep stops being
+// deterministic and `integration_duty_lost` becomes routine noise on a healthy
+// fleet.
+//
+// The cost is on the other side and is worth naming: a node that dies holding
+// the duty leaves it unclaimable for this long instead of 45 seconds. Against a
+// settled cadence of ten minutes that delays a reconcile by less than half an
+// interval, which is the cheaper of the two.
+//
+// # The NAME does not change with it, and a rolling upgrade is why
+//
+// A lease two builds share is a peer contract, so raising a TTL under an
+// unchanged name looks like exactly the kind of change that needs a new key.
+// It is the opposite here, in both directions.
+//
+// A claim WRITES ITS EXPIRY: [coord.Lease.ExpiresAt] is the store's own
+// deadline, and every reader honours the record rather than recomputing from
+// its own constant — a heartbeat takes its next tick from it. So a 45-second
+// claim by an old node and a four-and-a-half-minute claim by a new one are two
+// hold durations and never two opinions about who holds it. Neither build can
+// see a lease the other holds as free.
+//
+// And a SECOND NAME is the failure this is accused of. Two names are two
+// locks: the old build would claim the old one, the new build the new one,
+// both would hold, and both would sweep every surface for the whole length of
+// the upgrade — which is the overlap, arrived at deliberately, rather than
+// the one the shared name is supposed to cause.
+//
+// What actually bounds the overlap is neither number. [integration.Worker]
+// re-claims before every surface it visits, and a claim by the owner that
+// already holds it doubles as a renew, so the TTL only ever has to cover ONE
+// pass rather than a whole sweep. An old node's 45 seconds is short for that
+// and its sweep can lapse mid-pass — which is the bug this constant fixes, and
+// it is the old build's to fix by being replaced, not something a rename
+// reaches.
+const integrationDutyTTL = setup.PassDeadline + 2*integration.Interval
 
 // startIntegrations arms the reconcile loop.
 //
@@ -136,8 +173,45 @@ func (e *Engine) startIntegrations(ctx context.Context) {
 			}
 			return datadog.WebhookNameOf(cfg)
 		},
+		// AND HOW LONG A CONVERGED SURFACE IS TRUSTED, which is the only
+		// thing that ever finds access somebody revoked by hand at the
+		// third-party app. A company's own field, read fresh on every pass
+		// for the reason the endpoint is: it is edited live, and a value
+		// captured here would make an operator who shortened the interval
+		// wait out the one they had just replaced.
+		SettledInterval: func() time.Duration {
+			company := e.Company()
+			if company == nil {
+				return 0
+			}
+			return company.Config.Integrations.CheckInterval()
+		},
 		ClaimDuty: integration.DutyFunc(
 			e.workerDuty(integrationDutyName, integrationDutyTTL)),
+		// THE ONE GUARD EVERY WRITER AT A SURFACE TAKES, held by the worker
+		// across the row re-read, the pass and the status write alike. See
+		// [Engine.holdSurface], and the note in `passConverger.Reconcile` for
+		// why the pass no longer takes it itself.
+		Guard: integration.Guard(e.holdSurface),
+		// AND THE POSTURE GATE. Every reconciler reads the live company
+		// document, so a node the fleet has already moved past would converge
+		// third-party apps to a revision that has been replaced. Asked before
+		// the duty is claimed, so a shedding node's lease lapses and a peer
+		// holding the current revision takes the loop over.
+		Admits: integration.AdmitsFunc(e.admits),
+		// WHAT THE DOCUMENT STILL DECLARES, for the teardown-only surfaces
+		// that have no pass to answer it. See [integration.Options].Configured.
+		Configured: func(kind integration.Kind) bool {
+			company := e.Company()
+			if company == nil {
+				// No active revision is not "the document declares
+				// nothing" — it is a node that cannot say, and forgetting
+				// every row on that would delete the whole fleet's status
+				// during a boot.
+				return true
+			}
+			return company.Config.DeclaresIntegration(kind.String())
+		},
 	})
 	if err != nil {
 		// NOT FATAL. A company whose reconcile loop could not be built
@@ -250,6 +324,30 @@ type passConverger struct {
 func (c *passConverger) Kind() integration.Kind { return c.pass.Kind() }
 
 func (c *passConverger) Reconcile(ctx context.Context) ([]integration.Finding, error) {
+	// A CANCELLED PASS IS A FAULT, AND THIS CHECK COMES FIRST FOR A REASON.
+	//
+	// Every arm below can answer without touching the network, and two of them
+	// answer in ways a dead context makes actively destructive: an empty
+	// finding list is read by the loop as "this integration is ready" and
+	// trusted for a full settled interval, and ErrNotConfigured makes it
+	// FORGET the surface's status row. A node draining during shutdown would
+	// walk its surfaces and delete the fleet's whole integration status on the
+	// way out.
+	//
+	// Guarded here rather than in each of the seven [setup.Pass]
+	// implementations because this is the one frame every one of them reaches
+	// the LOOP through. It is not the only frame they are reached through:
+	// [setup.Runner.Execute] serves the dashboard's own pass and carries the
+	// same guard for the same reason. Each third-party app's own Reconcile
+	// checks too, which is what its conformance harness drives.
+	//
+	// The passes in setuppass.go deliberately carry none. Every one of them
+	// reaches a vendor call within a few statements, and a check at each would
+	// be seven copies of a rule that has two honest homes: the frame the loop
+	// uses, and the frame the dashboard uses.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	company := c.engine.Company()
 	if company == nil {
 		// NO COMPANY, NOTHING TO CONVERGE. A node runs with no active
@@ -279,40 +377,70 @@ func (c *passConverger) Reconcile(ctx context.Context) ([]integration.Finding, e
 			"detail", "this pass reads and reports; it will mint nothing")
 		sink = provision.ReadOnly()
 	}
-	// UNDER THE SURFACE'S OWN GUARD, the same one an operator's pass takes.
+	// NO GUARD IS TAKEN HERE, and that is the fix rather than an omission.
 	//
-	// This tick and that button run THE SAME [setup.Pass] with the same sink
-	// and the same webhook base, so they create the same accounts, mint the
-	// same tokens and register the same hooks. Two of them at once is the
-	// collision the worker's own singleton exists to rule out — both read a
-	// surface with no account for a seat, both create one — and it is
-	// reachable between the loop and the dashboard ON ONE NODE, which is
-	// why the fleet lease alone does not close it. [setup.Runner.Hold] is
-	// both halves.
+	// It used to be taken at this line and released the moment this function
+	// returned — which put the write that RECORDS the pass outside it. The
+	// loop then folded the outcome into a row it had read before the pass
+	// began, and an operator's disconnect landing in that window was silently
+	// overwritten: the card went from Disconnecting back to connected and they
+	// pressed the button again. coord.Integrations says that cannot happen
+	// because every writer takes the lease first; every writer did, and then
+	// gave it back too early.
 	//
-	// The loop's own `integration-reconcile` duty covers neither: that one
-	// answers "which node runs the loop", which is a different question
-	// from "who is writing at this surface", and a lease keyed on a
-	// different name excludes nobody.
-	release, held, err := c.engine.holdSurface(ctx, c.pass.Kind())
-	switch {
-	case err != nil:
-		// UNKNOWN IS NOT FREE. A coordination store that could not
-		// answer has not said the surface is idle, and the whole point
-		// of the guard is that acting on that guess is what creates the
-		// duplicate.
-		return nil, fmt.Errorf("%w: %w", integration.ErrReconcileUnavailable, err)
-	case !held:
-		// SOMEBODY IS ALREADY DOING THIS. Nothing is recorded and no
-		// attempt is counted — see [integration.ErrReconcileUnavailable].
-		return nil, integration.ErrReconcileUnavailable
-	}
-	defer release()
-
-	return c.pass.Run(ctx, setup.PassInput{
+	// So [integration.Worker] takes it around the whole visit — the row
+	// re-read, this pass, and the status write — through the Guard wired in
+	// `startIntegrations`. Taking it again here would not merely be redundant:
+	// [setup.Runner]'s in-process claim is NOT reentrant, so this would answer
+	// not-held on every tick, for ever, deterministically. The coord lease IS
+	// reentrant for the same owner, which is exactly what makes that mistake
+	// easy to reason your way into.
+	//
+	// ctx is already the guard's: bounded by [setup.PassDeadline], strictly
+	// inside the lease the worker is holding.
+	findings, err := c.pass.Run(ctx, setup.PassInput{
 		Sink:        sink,
 		WebhookBase: company.Config.Integrations.WebhookBase(c.engine.resolver().LookupOK),
 	})
+	if err != nil {
+		return nil, err
+	}
+	// AND WHAT THIS NODE'S OWN WIRING COULD NOT RESOLVE, which no vendor
+	// pass can see: a seat's tracker or code-host ACCOUNT is read with that
+	// seat's own credential by the engine, not by the pass, and a lookup
+	// that failed had nothing that would ever ask again. See
+	// [Engine.resolveRouting] — this visit is the retry, and the finding is
+	// what keeps the visits coming and stops the card reading ready over a
+	// seat that receives nothing.
+	return append(findings,
+		c.engine.resolveRouting(ctx, c.pass.Kind(), reported(findings))...), nil
+}
+
+// reported is the set of seats the surface's own pass has already said
+// something about.
+//
+// ONE CAUSE, ONE FINDING. Both halves resolve the SAME seats with the SAME
+// credential against the SAME instance — the pass through its own
+// resolveSeats, this node's wiring through its registry — so a seat whose
+// lookup fails produces two findings about one fact, and they do not even
+// agree about who has to act: the tracker's classifies as degraded and owed
+// by an ADMIN, the wiring's as provisioning and owed by the ENGINE. The
+// engine's outranks the admin's, so the card put "the engine is working on
+// it" in the headline and "a person must act at Atlassian" underneath it,
+// about one seat, for one transient reason.
+//
+// THE PASS'S ANSWER WINS because it is the one with the vendor's own words in
+// it. What the wiring adds is the seats the pass said NOTHING about — every
+// seat on a surface whose pass reports no per-seat identity at all, which is
+// both code hosts — and that is exactly what is kept.
+func reported(findings []integration.Finding) map[string]bool {
+	seen := make(map[string]bool, len(findings))
+	for _, f := range findings {
+		if f.Subject != "" {
+			seen[f.Subject] = true
+		}
+	}
+	return seen
 }
 
 // reconcileOperator is who the loop's writes are attributed to, so an audit

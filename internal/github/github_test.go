@@ -1274,6 +1274,116 @@ func TestEachSeatIsResolvedToTheAccountItsOwnCredentialHolds(t *testing.T) {
 	}
 }
 
+// A SEAT THAT NAMES NO CREDENTIAL IS NOT A SEAT WITH A BROKEN ONE.
+//
+// Identity on this host is each agent's OWN GitHub App, so a company on the
+// shape this integration actually ships has no `mcp_env.github` token
+// anywhere at all — by design, not by oversight. Reported as one state with a
+// credential that failed, every agent seat of such a company became an
+// identity_failed finding, which is [integration.PhaseDegraded] owed by an
+// admin: a healthy company permanently degraded, retried on the admin
+// backoff for ever, over a credential the design had deliberately removed.
+//
+// And the sentence was false twice over. It said no mention reaches the seat,
+// when mentions resolve through the app's slug; it said no review request
+// does, when the payload carries the app's own bot login.
+func TestASeatThatNamesNoCredentialIsNotAFinding(t *testing.T) {
+	t.Parallel()
+	client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[]`))
+	})
+	res, err := github.Reconcile(context.Background(), github.Options{
+		Client: client,
+		Config: &config.GitHub{Enabled: true, WebhookSecret: "s3cret"},
+		Org: &org.Organization{
+			Name:  "Acme",
+			Roles: []*org.Role{{Name: "SRE Lead", DeclaredHandle: "sre-lead"}},
+		},
+		Value: func(v string) string { return v }, WebhookBase: "https://x",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if findings := res.Findings(); len(findings) != 0 {
+		t.Fatalf("a seat that acts through its own app produced %+v", findings)
+	}
+	// AND IT SAYS WHY IN THE REPORT, because `crewlet github provision`
+	// still prints every seat and silence there is indistinguishable from
+	// a seat the walk missed.
+	if len(res.Seats) != 1 || res.Seats[0].Refused() {
+		t.Fatalf("seats = %+v, want one seat reported and not as a fault", res.Seats)
+	}
+	if !strings.Contains(res.Seats[0].Reason, "GitHub App") {
+		t.Errorf("the reason does not say where this seat's identity comes "+
+			"from instead: %q", res.Seats[0].Reason)
+	}
+}
+
+// AND A SEAT THAT NAMES ONE STILL IS, or the rule above would be a way of
+// never reporting a broken credential at all.
+//
+// A slot the operator wrote and nothing came out of is a variable somebody
+// has to set: this seat's tools authenticate as nobody until they do, and
+// GitHub says so only at the call site.
+func TestASeatWhoseNamedCredentialResolvesToNothingIsAFinding(t *testing.T) {
+	t.Parallel()
+	client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[]`))
+	})
+	res, err := github.Reconcile(context.Background(), github.Options{
+		Client: client,
+		Config: &config.GitHub{Enabled: true, WebhookSecret: "s3cret"},
+		Org: &org.Organization{
+			Name: "Acme",
+			Roles: []*org.Role{{
+				Name: "SRE Lead", DeclaredHandle: "sre-lead",
+				MCPEnv: map[string]map[string]string{
+					github.SeatEnv: {"GITHUB_TOKEN": "${GH_SRE_TOKEN}"},
+				},
+			}},
+		},
+		// The variable is unset, which is the whole case: the document
+		// names a credential and the environment does not answer.
+		Value: func(string) string { return "" }, WebhookBase: "https://x",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings := res.Findings()
+	if len(findings) != 1 || findings[0].Kind != integration.FindingIdentityFailed {
+		t.Fatalf("findings = %+v, want the named-and-empty credential reported", findings)
+	}
+	// NAMING THE FIELD, which is the whole of what an operator does about
+	// it — and never the value, because one way to reach this line is a
+	// LITERAL somebody pasted into the slot.
+	if detail := findings[0].Detail; !strings.Contains(detail, "mcp_env.github.GITHUB_TOKEN") {
+		t.Errorf("the finding does not name the field to fix: %q", detail)
+	}
+}
+
+// AND A SEAT NOTHING CONCLUDED ABOUT IS STILL REPORTED, which is the
+// direction a silent branch has to fall in.
+//
+// The walk names an outcome on every path it has, so this is unreachable
+// today — and it is the shape a NEW early return arrives in, because an early
+// return sets Detail and forgets the enum. On a walk whose whole output is
+// "which seats are broken", reading silence as fine is the reading that loses
+// the finding, so [github.SeatIdentity.Refused] asks what was established
+// rather than comparing against one value.
+func TestASeatNothingConcludedAboutIsStillReported(t *testing.T) {
+	t.Parallel()
+	res := &github.Result{Seats: []github.SeatIdentity{{Handle: "sre-lead"}}}
+	findings := res.Findings()
+	if len(findings) != 1 || findings[0].Kind != integration.FindingIdentityFailed {
+		t.Fatalf("findings = %+v, want the seat nothing was concluded about", findings)
+	}
+	// AND IT STILL SAYS SOMETHING, because a finding owed by a person that
+	// renders as a bare subject sends them to read logs.
+	if strings.TrimSpace(findings[0].Detail) == "" {
+		t.Error("the finding says nothing about what to do")
+	}
+}
+
 // AN ORG HOOK COVERS EVERY REPOSITORY, so the repos are not hooked again:
 // two hooks on one repository deliver every event twice.
 func TestOneOrgHookReplacesThePerRepositoryOnes(t *testing.T) {
@@ -1507,7 +1617,7 @@ func TestAnUnsetSecretIsMintedIntoItsOwnVariable(t *testing.T) {
 	if sink.recorded["GH_SECRET"] == "" {
 		t.Fatalf("nothing was minted into the variable the config names: %v", sink.recorded)
 	}
-	if !sink.flushed {
+	if sink.flushes == 0 {
 		t.Error("the minted secret was never flushed, so it exists at GitHub " +
 			"and nowhere else")
 	}
@@ -1549,9 +1659,33 @@ func TestALiteralSecretWithNoValueIsRefused(t *testing.T) {
 }
 
 // recordingSink is a [provision.TokenSink] that remembers what it was given.
+//
+// It counts FLUSHES rather than holding a bool, and keeps the context each
+// one arrived on. Both are what the failure path needs: a pass that fails
+// after minting used to return without flushing at all, and flushing on the
+// pass's own dead context is the same bug reached from the other side — the
+// call returns having done nothing, and the sealed value stays invisible to
+// the running engine while the next pass mints another one.
 type recordingSink struct {
+	// forgotten is what a teardown asked this sink to delete.
+	forgotten []string
+
 	recorded map[string]string
-	flushed  bool
+	flushes  int
+
+	// flushCtxErr is what ctx.Err() said at the last Flush.
+	flushCtxErr error
+
+	// flushErr is what Flush answers with. A sealed value that cannot be
+	// made durable is the one failure a caller must not swallow: the
+	// credential then exists in neither place an operator would look for
+	// it.
+	flushErr error
+
+	// cancelOnSeal, when set, kills the pass at the moment it mints —
+	// which is where a lease expiring mid-pass most expensively lands: a
+	// fresh secret exists and nothing has been registered with it yet.
+	cancelOnSeal func()
 }
 
 func (s *recordingSink) Record(_ context.Context, name, value string) error {
@@ -1559,6 +1693,9 @@ func (s *recordingSink) Record(_ context.Context, name, value string) error {
 		s.recorded = map[string]string{}
 	}
 	s.recorded[name] = value
+	if s.cancelOnSeal != nil {
+		s.cancelOnSeal()
+	}
 	return nil
 }
 
@@ -1567,10 +1704,23 @@ func (s *recordingSink) Value(_ context.Context, name string) (string, bool, err
 	return value, held, nil
 }
 
+// Forget implements [provision.TokenSink]: it records what a teardown
+// asked to be deleted, so a case can assert the deletion happened.
+func (s *recordingSink) Forget(_ context.Context, names ...string) error {
+	s.forgotten = append(s.forgotten, names...)
+	return nil
+}
+
 func (s *recordingSink) Discard(context.Context) error { clear(s.recorded); return nil }
-func (s *recordingSink) Flush(context.Context) error   { s.flushed = true; return nil }
-func (s *recordingSink) Describe() string              { return "a test sink" }
-func (s *recordingSink) NextStep() string              { return "export it" }
+
+func (s *recordingSink) Flush(ctx context.Context) error {
+	s.flushes++
+	s.flushCtxErr = ctx.Err()
+	return s.flushErr
+}
+
+func (s *recordingSink) Describe() string { return "a test sink" }
+func (s *recordingSink) NextStep() string { return "export it" }
 
 var _ provision.TokenSink = (*recordingSink)(nil)
 
@@ -1647,10 +1797,14 @@ func TestOnlyAnAskAddressesTheSeat(t *testing.T) {
 // thread, and the agents' own apps answer that. What is left for it is the
 // organization-level reconcile, which a company that wants one org-wide hook
 // opts into and every other company never had a reason for.
+//
+// The deployment's own address is passed in, because it is the one thing a
+// credential-less run still knows and the next test is what happens without
+// it: leaving it out here would test two rules at once and pass on either.
 func TestAPassWithNoOrgTokenReportsNothing(t *testing.T) {
 	t.Parallel()
 	res, err := github.Reconcile(t.Context(), github.Options{
-		Config: &config.GitHub{Enabled: true},
+		Config: &config.GitHub{Enabled: true}, WebhookBase: "https://x",
 	})
 	if err != nil {
 		t.Fatalf("a pass with no credential failed: %v", err)
@@ -1672,6 +1826,36 @@ func TestAPassWithNoOrgTokenReportsNothing(t *testing.T) {
 	// reporting on something it never looked at.
 	if res.Login != "" || len(res.Seats) != 0 || len(res.Hooks) != 0 {
 		t.Errorf("a credential-less run reported %+v", res)
+	}
+}
+
+// AND WITH NO PUBLIC BASE IT REPORTS EXACTLY ONE THING, which is that.
+//
+// The token being absent is not a degradation; the ADDRESS being absent is,
+// and it is a fact about the company document rather than about GitHub — no
+// credential is needed to establish it and none makes it less true. The
+// credential-less arm returned before [Result.NoIngress] was ever set, which
+// is an accident of control flow rather than a decision, and it landed on
+// precisely the companies most likely to have no org token: nothing at GitHub
+// had an address to deliver to, every seat app's own webhook pointed nowhere,
+// and the card said Ready.
+func TestAPassWithNoOrgTokenStillReportsAMissingPublicBase(t *testing.T) {
+	t.Parallel()
+	res, err := github.Reconcile(t.Context(), github.Options{
+		Config: &config.GitHub{Enabled: true},
+	})
+	if err != nil {
+		t.Fatalf("a pass with no credential failed: %v", err)
+	}
+	findings := res.Findings()
+	if len(findings) != 1 || findings[0].Kind != integration.FindingIngressBlocked {
+		t.Fatalf("findings = %+v, want one ingress block on the public base", findings)
+	}
+	// NAMING THE FIELD, because that is the whole of what an operator does
+	// about it.
+	if findings[0].Subject != "integrations.public_base_url" {
+		t.Errorf("the finding's subject is %q, which is not the field to set",
+			findings[0].Subject)
 	}
 }
 

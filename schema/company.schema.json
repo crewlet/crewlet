@@ -449,10 +449,10 @@
         },
         "provisioning": {
           "$ref": "#/$defs/GitHubProvisioning",
-          "description": "Inputs for the provisioning CLI; ignored by the engine."
+          "description": "Inputs the reconcile loop and the provisioning CLI both read."
         },
         "token": {
-          "description": "Read token for participant fan-out; empty degrades thread routing.",
+          "description": "Organization token with admin:org_hook, for one organization-wide hook. Empty means each agent's own app carries its own.",
           "type": "string"
         },
         "url": {
@@ -501,7 +501,7 @@
         },
         "provisioning": {
           "$ref": "#/$defs/GitLabProvisioning",
-          "description": "Inputs for the provisioning CLI; ignored by the engine."
+          "description": "Inputs the reconcile loop and the provisioning CLI both read."
         },
         "signing_secret": {
           "description": "Standard-Webhooks signing token; required when enabled.",
@@ -513,6 +513,10 @@
         },
         "url": {
           "description": "Instance base URL, e.g. https://gitlab.com.",
+          "type": "string"
+        },
+        "webhook_name": {
+          "description": "Name every hook the engine registers on this instance carries; give two deployments watching one instance two names (default crewlet).",
           "type": "string"
         }
       },
@@ -550,6 +554,14 @@
             "auto",
             "true",
             "false"
+          ],
+          "type": "string"
+        },
+        "mode": {
+          "description": "Where service accounts are owned: group (default, and all GitLab.com offers) or instance (self-managed only; needs an instance-administrator token).",
+          "enum": [
+            "group",
+            "instance"
           ],
           "type": "string"
         },
@@ -601,6 +613,10 @@
         "atlassian": {
           "$ref": "#/$defs/Atlassian",
           "description": "Atlassian organization and its unscoped API key, used to create one service account per agent. Absent = accounts are made by hand."
+        },
+        "check_interval_seconds": {
+          "description": "How often a converged integration is read back, in seconds. 0 takes the default of 600; the floor is 60.",
+          "type": "integer"
         },
         "confluence": {
           "$ref": "#/$defs/Confluence",
@@ -965,7 +981,7 @@
         },
         "provisioning": {
           "$ref": "#/$defs/MattermostProvisioning",
-          "description": "Inputs for the provisioning CLI; ignored by the engine."
+          "description": "Inputs the reconcile loop and the provisioning CLI both read."
         },
         "team": {
           "description": "Team slug the agent bots belong to.",

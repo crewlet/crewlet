@@ -190,6 +190,12 @@ func TestEachSeatIsDialledWithItsOwnToken(t *testing.T) {
 		}
 		srv.issue("user-swe", "tok-swe")
 		srv.issue("user-ceo", "tok-ceo")
+		// AND EACH IS IN A CHANNEL, which is a separate question from
+		// authenticating: the fixture derives a bot's channel list from
+		// what it actually joined, so a seat nobody joined is reported
+		// deaf however healthy its credential is.
+		srv.join("eng", "user-swe")
+		srv.join("leadership", "user-ceo")
 	})
 	for _, handle := range []string{"swe", "ceo"} {
 		if f := finding(t, report, "seat "+handle); !f.OK {
@@ -243,6 +249,8 @@ func TestOneSeatsRefusedSocketDoesNotHideTheOthers(t *testing.T) {
 		}
 		srv.issue("user-swe", "tok-swe")
 		srv.issue("user-ceo", "tok-ceo")
+		srv.join("eng", "user-swe")
+		srv.join("leadership", "user-ceo")
 	})
 	if f := finding(t, report, "seat swe"); f.OK {
 		t.Error("a refused seat socket passed")
@@ -368,6 +376,7 @@ func TestTheChecksRunOnASeatTokenWhenNoOperatorOneIsGiven(t *testing.T) {
 	t.Parallel()
 	srv := newChatServer()
 	srv.issue("user-swe", "tok-swe")
+	srv.join("eng", "user-swe")
 	client := chatClientWithout(t, srv)
 	cfg := enabledChat()
 	cfg.URL = client.URL()
@@ -423,7 +432,9 @@ func TestWithNoCredentialTheUnauthenticatedChecksStillRun(t *testing.T) {
 func TestASeatInNoChannelIsReported(t *testing.T) {
 	t.Parallel()
 	srv := newChatServer()
-	srv.channelsOf = nil
+	// NOTHING IS JOINED, which is the whole case: the fixture answers a
+	// bot's channel list from what it actually joined, so a seat that
+	// never joined anything is the bot this check exists to find.
 	report := doctorAgainst(t, srv, func(o *mattermost.DoctorOptions) {
 		o.Org = &org.Organization{Name: "Nimbus", Roles: []*org.Role{
 			chatSeat("SWE", "${MM_TOKEN_SWE}", "eng"),

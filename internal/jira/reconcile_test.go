@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,6 +32,13 @@ type instance struct {
 
 	// accounts maps an Authorization header to the account it is.
 	accounts map[string]string
+	// unanswered are the credentials this instance DOES NOT ANSWER FOR:
+	// the connection closes with no response at all, which is what a dead
+	// instance, a dropped network and a cancelled request all look like
+	// from the client. Deliberately distinct from an absent account, which
+	// is a 401 — the instance answering — because the two are opposite
+	// facts and the reconcile owes them opposite treatment.
+	unanswered map[string]bool
 	// onLookup, when set, runs on each /myself request OUTSIDE the
 	// instance lock, so a test can observe how many are in flight at once.
 	onLookup func()
@@ -39,16 +49,37 @@ type instance struct {
 	// answering, and everything else is it failing to.
 	projectStatus map[string]int
 	hooks         []map[string]any
-	created       []map[string]any
-	updated       []map[string]any
-	deleted       []string
+	// hookWriteStatus, when non-zero, is the status this instance refuses
+	// every webhook WRITE with — a create, an update or a delete.
+	//
+	// A refusal the instance ANSWERS, deliberately, and distinct from
+	// [instance.unanswered]: what it expresses is a pass that got as far as
+	// the one thing it changes and was told no (an org account without
+	// Administer Jira is the everyday cause). That is the window in which a
+	// pass has already minted and sealed a signing secret, which is what
+	// makes the sink's completion visible at all.
+	hookWriteStatus int
+	created         []map[string]any
+	updated         []map[string]any
+	deleted         []string
+	// nextHook numbers the registrations this instance issues, so two
+	// hooks created against one instance are two different hooks.
+	nextHook int
+
+	// writes counts the requests that CHANGED this instance — see
+	// [instance.mutations], which is what a conformance harness hands
+	// integrationtest as its write counter. ATOMIC, because it is
+	// incremented before the lock is taken: /myself is deliberately served
+	// outside it.
+	writes atomic.Int64
 }
 
 func newInstance(t *testing.T) *instance {
 	t.Helper()
 	inst := &instance{
-		accounts: map[string]string{},
-		projects: map[string]string{},
+		accounts:   map[string]string{},
+		unanswered: map[string]bool{},
+		projects:   map[string]string{},
 	}
 	inst.Server = httptest.NewServer(http.HandlerFunc(inst.serve))
 	t.Cleanup(inst.Close)
@@ -63,7 +94,42 @@ func (i *instance) account(auth string) (string, bool) {
 	return account, ok
 }
 
+// drops reports a credential this instance will not answer for at all.
+func (i *instance) drops(auth string) bool {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.unanswered[auth]
+}
+
+// mutations is how many requests this instance received that a person would
+// have to UNDO.
+//
+// COUNTED BY ROUTE, which is what [integrationtest.Reconciler.Mutations]
+// asks for and is not the same question as the HTTP method. This instance
+// serves four routes and each was classified on its own:
+//
+//   - GET /rest/api/N/myself — a read, and the only route the seat walk
+//     touches.
+//   - GET /rest/api/N/project/{key} — a read.
+//   - GET /rest/webhooks/1.0/webhook — a LISTING. It is the route that makes
+//     the distinction matter for other third-party apps (Atlassian models its
+//     workspace discovery as a POST), and here it is an ordinary GET.
+//   - POST /rest/webhooks/1.0/webhook, and PUT and DELETE on .../{id} — the
+//     three writes. Registering, repointing or removing an inbound hook is
+//     the whole of what a Jira pass can change at an instance: it creates no
+//     account, issues no credential and edits no project.
+//
+// So on THIS third-party app the two rules coincide, and that is a fact about
+// Jira's admin API established route by route above rather than a shortcut.
+// Anything that is not a GET counts, including a write onto a route this fake
+// does not model, so a pass that grew a new write shows up as a mutation
+// rather than as silence.
+func (i *instance) mutations() int { return int(i.writes.Load()) }
+
 func (i *instance) serve(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodGet {
+		i.writes.Add(1)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	path := req.URL.Path
 
@@ -73,6 +139,13 @@ func (i *instance) serve(w http.ResponseWriter, req *http.Request) {
 	// no matter what it does, so a test of the fan-out's bound could not
 	// fail. Everything below is provisioning, which is sequential anyway.
 	if strings.HasSuffix(path, "/myself") {
+		if i.drops(req.Header.Get("Authorization")) {
+			// NO RESPONSE AT ALL. ErrAbortHandler closes the connection
+			// without writing anything and without a stack trace, which
+			// is the only way to express an instance that did not answer
+			// — every status, 401 included, is an answer.
+			panic(http.ErrAbortHandler)
+		}
 		account, ok := i.account(req.Header.Get("Authorization"))
 		if i.onLookup != nil {
 			i.onLookup()
@@ -119,50 +192,107 @@ func (i *instance) serveHooks(w http.ResponseWriter, req *http.Request, path str
 	id := strings.TrimPrefix(path, "/rest/webhooks/1.0/webhook")
 	id = strings.TrimPrefix(id, "/")
 
+	// The listing is exempt: it is a read, and a fixture that could not be
+	// listed would never reach the write this knob is about.
+	if i.hookWriteStatus != 0 && req.Method != http.MethodGet {
+		w.WriteHeader(i.hookWriteStatus)
+		_, _ = w.Write([]byte(`{"errorMessages":["You do not have permission"]}`))
+		return
+	}
+
 	switch req.Method {
 	case http.MethodGet:
-		body := "["
-		for n, hook := range i.hooks {
-			if n > 0 {
-				body += ","
-			}
-			// THE HOOK'S OWN NAME, because the name is what says whose a
-			// hook is. It was hardcoded to crewlet, so this fake could not
-			// express somebody else's hook at all and agreed with any
-			// matching rule it was asked about.
-			name, _ := hook["name"].(string)
-			if name == "" {
-				name = "crewlet"
-			}
-			// AND ITS EVENTS, for the same reason: a hook that listed
-			// none could not express a CONVERGED registration at all, so
-			// a fake with no events agreed that every hook needed
-			// rewriting.
-			events, _ := hook["events"].([]string)
-			if events == nil {
-				events = jira.WebhookEvents
-			}
-			encoded, err := json.Marshal(events)
-			if err != nil {
-				panic(err)
-			}
-			body += `{"self":"` + i.URL + `/rest/webhooks/1.0/webhook/` +
-				hook["id"].(string) + `","name":"` + name + `","url":"` +
-				hook["url"].(string) + `","enabled":true,"events":` +
-				string(encoded) + `}`
+		rows := make([]map[string]any, 0, len(i.hooks))
+		for _, hook := range i.hooks {
+			rows = append(rows, i.wire(hook))
 		}
-		_, _ = w.Write([]byte(body + "]"))
+		encoded, err := json.Marshal(rows)
+		if err != nil {
+			panic(err)
+		}
+		_, _ = w.Write(encoded)
 	case http.MethodPost:
-		i.created = append(i.created, decode(req))
-		_, _ = w.Write([]byte(`{"self":"` + i.URL + `/rest/webhooks/1.0/webhook/99"}`))
+		body := decode(req)
+		i.created = append(i.created, body)
+		i.nextHook++
+		id := strconv.Itoa(i.nextHook)
+		// KEPT, so the NEXT pass over this instance sees what this one
+		// registered. It was not: every pass found an empty instance and
+		// created another hook, so a test of what a re-run does to a hook
+		// this engine itself made could not fail.
+		i.hooks = append(i.hooks, registration(id, body))
+		_, _ = w.Write([]byte(`{"self":"` + i.URL + `/rest/webhooks/1.0/webhook/` + id + `"}`))
 	case http.MethodPut:
 		body := decode(req)
 		body["id"] = id
 		i.updated = append(i.updated, body)
+		for n, hook := range i.hooks {
+			if hook["id"] == id {
+				i.hooks[n] = registration(id, body)
+			}
+		}
 		_, _ = w.Write([]byte(`{"self":"` + i.URL + `/rest/webhooks/1.0/webhook/` + id + `"}`))
 	case http.MethodDelete:
 		i.deleted = append(i.deleted, id)
+		i.hooks = slices.DeleteFunc(i.hooks, func(hook map[string]any) bool {
+			return hook["id"] == id
+		})
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// wire is one stored hook as the instance reports it.
+func (i *instance) wire(hook map[string]any) map[string]any {
+	// THE HOOK'S OWN NAME, because the name is what says whose a hook is.
+	// It was hardcoded to crewlet, so this fake could not express somebody
+	// else's hook at all and agreed with any matching rule it was asked
+	// about.
+	name, _ := hook["name"].(string)
+	if name == "" {
+		name = "crewlet"
+	}
+	// AND ITS EVENTS, for the same reason: a hook that listed none could
+	// not express a CONVERGED registration at all, so a fake with no
+	// events agreed that every hook needed rewriting.
+	events, _ := hook["events"].([]string)
+	if events == nil {
+		events = jira.WebhookEvents
+	}
+	// AND WHETHER IT IS SWITCHED ON. This was hardcoded true, so a hook an
+	// administrator had disabled could not be expressed — and the enabled
+	// arm of jira's own converged() was a guard no test could make fail.
+	// A seeded hook that says nothing is enabled, which is what an
+	// instance's own default is.
+	enabled, ok := hook["enabled"].(bool)
+	if !ok {
+		enabled = true
+	}
+	return map[string]any{
+		"self":    i.URL + "/rest/webhooks/1.0/webhook/" + hook["id"].(string),
+		"name":    name,
+		"url":     hook["url"],
+		"enabled": enabled,
+		"events":  events,
+	}
+}
+
+// registration is a hook as the instance keeps it, from the body that
+// created or updated it.
+func registration(id string, body map[string]any) map[string]any {
+	raw, _ := body["events"].([]any)
+	events := make([]string, 0, len(raw))
+	for _, event := range raw {
+		if name, ok := event.(string); ok {
+			events = append(events, name)
+		}
+	}
+	enabled, ok := body["enabled"].(bool)
+	if !ok {
+		enabled = true
+	}
+	return map[string]any{
+		"id": id, "name": body["name"], "url": body["url"],
+		"events": events, "enabled": enabled,
 	}
 }
 
@@ -454,6 +584,42 @@ func TestAHookMissingAnEventIsRewritten(t *testing.T) {
 	}
 }
 
+// AND SO IS ONE SOMEBODY SWITCHED OFF. A disabled hook is the quietest
+// failure this integration has: the registration is still there, still
+// pointing here, still carrying every event — and the instance delivers
+// nothing at all, so the pass has to re-enable it rather than read it as
+// converged.
+func TestADisabledHookIsRewritten(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	inst.hooks = []map[string]any{{
+		"id":      "7",
+		"url":     "https://engine.example.com/webhooks/jira",
+		"enabled": false,
+	}}
+
+	if _, err := run(t, inst, func(opts *jira.Options) {
+		opts.Sink = newSink()
+		opts.WebhookBase = "https://engine.example.com"
+		opts.Value = func(v string) string {
+			if v == "${JIRA_WEBHOOK_SECRET}" {
+				return "the-live-secret"
+			}
+			return v
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(inst.updated) != 1 {
+		t.Fatalf("a hook the instance was not delivering through was left "+
+			"alone: updated %v", inst.updated)
+	}
+	if enabled, _ := inst.updated[0]["enabled"].(bool); !enabled {
+		t.Errorf("the hook was rewritten still disabled: %v", inst.updated[0])
+	}
+}
+
 // RECREATING IS DESTRUCTIVE AND ASKED FOR: it is the only recovery for a
 // secret that was lost, because the value cannot be read back off the hook.
 func TestRecreatingTheWebhookMintsAFreshSecret(t *testing.T) {
@@ -684,8 +850,33 @@ func TestALiteralSecretWithNoValueIsRefused(t *testing.T) {
 
 // sink is the reconcile's recorder.
 type sink struct {
+	// forgotten is what a teardown asked this sink to delete.
+	forgotten []string
+
 	mu     sync.Mutex
 	values map[string]string
+	// sealed counts the Records this sink has taken, which is the OTHER
+	// half of what integrationtest calls a mutation: "a pass that re-seals
+	// a credential through the fleet's sealed store on every converged run
+	// is writing just as surely" as one that calls a third-party app. A
+	// count rather than the length of values, because re-sealing one name
+	// over and over is exactly the write that has to be visible.
+	sealed int
+	// flushes counts the completions this sink was given.
+	//
+	// COUNTED BECAUSE THE LOOP'S OWN SINK DOES WORK HERE: engine's
+	// refreshingSink rebuilds the `${VAR}` snapshot in Flush and nowhere
+	// else, so a pass that sealed a value and never flushed leaves the
+	// running engine unable to resolve what it just sealed. A fake whose
+	// Flush merely returned nil could not tell that pass from a correct
+	// one. See TestAPassThatMintedAndThenFailedStillCompletesTheSink.
+	flushes int
+	// liveOnFlush is whether the context the LAST Flush was given was still
+	// alive. See TestAPassCancelledAfterMintingCompletesTheSinkAnyway.
+	liveOnFlush bool
+	// flushErr is what Flush answers, so a sink this deployment can no
+	// longer seal into is expressible.
+	flushErr error
 }
 
 func newSink() *sink { return &sink{values: map[string]string{}} }
@@ -694,11 +885,48 @@ func (s *sink) Record(_ context.Context, name, value string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.values[name] = value
+	s.sealed++
 	return nil
 }
 
+// records is how many values this sink was asked to seal.
+func (s *sink) records() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sealed
+}
+
 func (s *sink) Discard(context.Context) error { return nil }
-func (s *sink) Flush(context.Context) error   { return nil }
+
+// Forget implements [provision.TokenSink]: it records what a teardown
+// asked to be deleted, so a case can assert the deletion happened.
+func (s *sink) Forget(_ context.Context, names ...string) error {
+	s.forgotten = append(s.forgotten, names...)
+	return nil
+}
+
+func (s *sink) Flush(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.flushes++
+	s.liveOnFlush = ctx.Err() == nil
+	return s.flushErr
+}
+
+// flushes is how many times this sink was completed.
+func (s *sink) flushed() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.flushes
+}
+
+// flushedAlive reports the last completion having been given a context that
+// was still live.
+func (s *sink) flushedAlive() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.liveOnFlush
+}
 
 func (s *sink) Value(_ context.Context, name string) (string, bool, error) {
 	s.mu.Lock()
@@ -1130,4 +1358,119 @@ func TestTheDefaultHookNameMatchesTheConfigModel(t *testing.T) {
 	if got := (&config.Jira{}).WebhookNameOrDefault(); got != jira.DefaultWebhookName {
 		t.Errorf("config says %q, jira says %q", got, jira.DefaultWebhookName)
 	}
+}
+
+// A REFUSAL INSIDE THE GRANT WINDOW IS THE ORGANIZATION STILL WORKING, NOT AN
+// AGENT SOMEBODY HAS TO FIX.
+//
+// Atlassian applies a new service account's product access over about a
+// minute, and for that minute the instance answers 401 for a credential this
+// engine minted seconds earlier — byte for byte what a wrong credential looks
+// like. Reported as one, the card said "Action required, you, at the
+// third-party app" about a seat that worked a minute later, and said it on
+// every reconnect because a reconnect creates a new account.
+func TestASeatRefusedInsideTheGrantWindowIsTheProvidersWait(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	inst.accounts["Bearer lead-token"] = acctLead
+	// swe-token is refused; its credential was sealed moments ago.
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	res, err := run(t, inst, func(o *jira.Options) {
+		o.Now = func() time.Time { return now }
+		o.CredentialSealed = func(context.Context, string) (time.Time, bool) {
+			return now.Add(-10 * time.Second), true
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := findingFor(t, res, "swe")
+	if got.Kind != integration.FindingGrantPending {
+		t.Errorf("swe is reported as %q, want %q — the grant is the provider's "+
+			"to finish and nobody else has anything to do",
+			got.Kind, integration.FindingGrantPending)
+	}
+}
+
+// AND OUTSIDE IT, IT IS THE FAILURE IT LOOKS LIKE. A credential sealed an
+// hour ago and still refused is not a grant landing; calling it one would
+// tell an operator to wait for something that already finished, for ever,
+// under the provider's own cadence.
+func TestASeatRefusedOutsideTheGrantWindowIsStillAFailure(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	inst.accounts["Bearer lead-token"] = acctLead
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	res, err := run(t, inst, func(o *jira.Options) {
+		o.Now = func() time.Time { return now }
+		o.CredentialSealed = func(context.Context, string) (time.Time, bool) {
+			return now.Add(-time.Hour), true
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findingFor(t, res, "swe"); got.Kind != integration.FindingIdentityFailed {
+		t.Errorf("swe is reported as %q, want %q", got.Kind, integration.FindingIdentityFailed)
+	}
+}
+
+// AND WITH NOTHING TO ASK, IT IS THE FAILURE TOO. "Cannot say" must not
+// become "still propagating": that would report every genuinely broken seat
+// as a wait nobody should act on, which is the state this whole distinction
+// exists to leave.
+//
+// BOTH SHAPES OF "CANNOT SAY", because they arrive by different routes and
+// only one of them is a node with no keyring: a seat this engine does not
+// provision — its credential was pasted in by a person — has no grant of ours
+// to be waiting on, and the seam answers false for it while answering for
+// every other seat.
+func TestASeatRefusedWithNoSealTimeIsStillAFailure(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		sealed func(context.Context, string) (time.Time, bool)
+	}{
+		{"nothing can say at all", nil},
+		{"this seat is not one we provision", func(context.Context, string) (time.Time, bool) {
+			return time.Time{}, false
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			inst := newInstance(t)
+			inst.accounts["Bearer org-token"] = "acct-org"
+			inst.accounts["Bearer lead-token"] = acctLead
+
+			res, err := run(t, inst, func(o *jira.Options) { o.CredentialSealed = tc.sealed })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := findingFor(t, res, "swe"); got.Kind != integration.FindingIdentityFailed {
+				t.Errorf("swe is reported as %q, want %q",
+					got.Kind, integration.FindingIdentityFailed)
+			}
+		})
+	}
+}
+
+// findingFor is the one finding about a seat, failing when there is not
+// exactly one: two findings about one seat is the contradiction this change
+// removed, so a test that took the first would stop noticing it came back.
+func findingFor(t *testing.T, res *jira.Result, handle string) integration.Finding {
+	t.Helper()
+	var found []integration.Finding
+	for _, f := range res.Findings() {
+		if f.Subject == handle {
+			found = append(found, f)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("%d finding(s) about %s, want exactly one: %+v", len(found), handle, found)
+	}
+	return found[0]
 }

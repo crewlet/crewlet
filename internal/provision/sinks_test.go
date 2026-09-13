@@ -3,6 +3,7 @@ package provision_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -447,5 +448,40 @@ func TestTheEnvFileStaysPrivateAcrossRewrites(t *testing.T) {
 			names = append(names, e.Name())
 		}
 		t.Fatalf("the directory holds %v, want only the .env", names)
+	}
+}
+
+// refusingValues is a secret store that will not delete.
+type refusingValues struct{ provision.SecretStore }
+
+func (refusingValues) Unset(context.Context, string) (bool, error) {
+	return false, errors.New("the store is unreachable")
+}
+
+// FORGETTING IS NOT BEST EFFORT, where discarding is.
+//
+// Discard is a ROLLBACK and carries on over what it cannot remove: the failure
+// it is cleaning up after is already worse. This is the other direction — a
+// teardown deleted the accounts, and these values are dead — and its caller
+// runs INSIDE the vendor step, before the block is dropped. So a failure has
+// to be returned: it holds the surface in PhaseDisconnecting and the next tick
+// tries again. Swallowed, the block drops with the credentials still sealed
+// and the retry that would have caught it never runs.
+func TestForgettingReportsWhatItCouldNotDelete(t *testing.T) {
+	t.Parallel()
+	sink := provision.NewSecretStoreSink(refusingValues{}, "operator")
+
+	err := sink.Forget(t.Context(), "SRE_ATLASSIAN_TOKEN", "SRE_ATLASSIAN_EMAIL")
+
+	if err == nil {
+		t.Fatal("a refused deletion was swallowed, so the disconnect finishes " +
+			"with the credentials still sealed and still resolving")
+	}
+	// THE NAMES, so an operator can finish by hand. Without them the message
+	// says something went wrong and not what is still live.
+	for _, name := range []string{"SRE_ATLASSIAN_TOKEN", "SRE_ATLASSIAN_EMAIL"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("Forget = %v, which does not name %s", err, name)
+		}
 	}
 }

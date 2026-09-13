@@ -183,10 +183,23 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 			// reason: null means this node could not read the outcome
 			// events, and reporting that as 0 would say every delivery
 			// woke a seat on a node that cannot tell.
-			"skipped":      countOrNil(seen.skipped, kind),
-			"coalesced":    countOrNil(seen.coalesced, kind),
-			"inbound_kind": map[bool]string{true: "websocket", false: "webhook"}[kind == "mattermost"],
-			"inbound_path": inboundPath(kind),
+			"skipped":   countOrNil(seen.skipped, kind),
+			"coalesced": countOrNil(seen.coalesced, kind),
+		}
+		// WHERE A DELIVERY ARRIVES, and null where none ever does.
+		//
+		// The default used to be `webhook` at `/webhooks/<kind>`, which is
+		// the route for five of the eight and a fabrication for the rest.
+		// Atlassian is the one it fabricated: the organization receives
+		// nothing at all, so the row advertised `/webhooks/atlassian` — a
+		// path webhooks.go does not register and never has — for an
+		// operator to check their settings page against. See
+		// [integration.Kind.Ingests].
+		row["inbound_kind"], row["inbound_path"] = nil, nil
+		if integration.Kind(kind).Ingests() {
+			row["inbound_kind"] = map[bool]string{
+				true: "websocket", false: "webhook"}[kind == "mattermost"]
+			row["inbound_path"] = inboundPath(kind)
 		}
 		// Rendered as a relative time, so an absent one has to be absent
 		// rather than the zero instant — which would print as 1970.
@@ -195,8 +208,10 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		} else {
 			row["last_at"] = nil
 		}
-		if known {
-			row["routes"] = slices.Contains(routed, kind)
+		if sources := deliversAs(kind); known && len(sources) > 0 {
+			row["routes"] = slices.ContainsFunc(sources, func(source string) bool {
+				return slices.Contains(routed, source)
+			})
 		} else {
 			row["routes"] = nil
 		}
@@ -278,27 +293,38 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		out = append(out, row)
 	}
 
-	// Slack is reported when EITHER half is present, because they turn on
-	// different things and an operator needs to see the half they forgot.
-	// The org block is the TRANSPORT marker; the per-seat apps are what
-	// the inbound route verifies with. A company with seat apps and no
-	// block answers webhooks and sends nothing; one with the block and no
-	// apps refuses every delivery.
-	if seats := seatSecrets(company, "slack"); in.Slack != nil || seats > 0 {
-		add("slack", in.Slack != nil, boolPtr(seats > 0), nil)
+	// Slack's org block is the TRANSPORT MARKER, so it is what says this
+	// surface exists at all; the per-seat apps are what the inbound route
+	// verifies with, and the row reports whether any seat holds one.
+	//
+	// A company with seat apps and NO block is not a half-configured Slack,
+	// which is how this read until a disconnect produced one: the engine
+	// retires the transport when the block goes (`slack_retired`), so every
+	// delivery is verified at the route and then routes to no seat. Reported
+	// as a row it was a surface with nothing enabled — which the dashboard
+	// draws as Paused, a word for a state an operator chose, over the residue
+	// of a disconnect that had removed the block and left the seats.
+	if in.Slack != nil {
+		add("slack", true, boolPtr(seatSecrets(company, "slack") > 0), nil)
 	}
 	if in.Mattermost != nil {
 		add("mattermost", true, nil, map[string]any{"url": in.Mattermost.URL})
 	}
-	// GitHub, on the same terms as Slack and for the same reason: a
-	// per-agent app is an app of its own, with its own signing secret, and
-	// a company can hold nothing but those. Reported on the org block
-	// alone, such a company had no GitHub row at all while five agents
-	// were receiving deliveries.
-	if seats := seatSecrets(company, "github"); in.GitHub != nil || seats > 0 {
-		org := in.GitHub != nil
-		add("github", org && in.GitHub.Enabled,
-			boolPtr(seats > 0 || (org && in.GitHub.WebhookSecret != "")), nil)
+	// GitHub, on the same terms as Slack and for the same reason: the org
+	// block is what turns the surface on, and a company whose agents each
+	// have their own app still needs one — [Engine.reconcileGitHub] retires
+	// the parser on `cfg == nil || !cfg.Enabled`, so without it the seats'
+	// apps deliver to a route that verifies them and routes them nowhere.
+	//
+	// The clause this was widened for — a company holding nothing but
+	// per-agent apps, which had no GitHub row at all while its agents were
+	// receiving deliveries — is answered by [seatSecrets] instead, which
+	// counts a seat app only where the org block enables the surface it
+	// arrives on. Widened here as well, the row outlived a disconnect that
+	// removed every installation, and the card sat on Paused.
+	if in.GitHub != nil {
+		add("github", in.GitHub.Enabled,
+			boolPtr(seatSecrets(company, "github") > 0 || in.GitHub.WebhookSecret != ""), nil)
 	}
 	if in.GitLab != nil {
 		add("gitlab", in.GitLab.Enabled, boolPtr(in.GitLab.SigningSecret != ""),
@@ -347,8 +373,18 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		// beside it: the block carries no `enabled` switch, because an
 		// organization key is either there to create accounts with or it
 		// is not.
-		add("atlassian", true,
-			boolPtr(strings.TrimSpace(in.Atlassian.APIKey) != ""),
+		// NO DELIVERY SECRET, AND NOTHING TO ROUTE. The organization key is
+		// a PROVISIONING credential — it creates accounts — and `secret`
+		// here means the value an inbound delivery is verified with, which
+		// this surface has because it receives no delivery at all. Passed as
+		// the key, the row reported `secret_usable: false` (nothing verifies
+		// atlassian, because nothing needs to) and `routes: false` (no parser
+		// routes it, because nothing arrives), which the dashboard drew as
+		// "secret unresolved — every delivery is refused" and "routes
+		// nowhere" over an organization whose key had just created every
+		// agent's account. Mattermost, the other surface with no inbound
+		// address, has passed nil here all along.
+		add("atlassian", true, nil,
 			map[string]any{
 				"deployment": in.Atlassian.DeploymentOrDefault(),
 				"org_id":     in.Atlassian.OrgID,
@@ -381,10 +417,43 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	return body, nil
 }
 
+// deliversAs names the sources a verified delivery at this surface arrives
+// under. For six of the nine rows it is the surface itself, and the other
+// three are the whole reason it exists rather than a `slices.Contains`.
+//
+// The question `routes` answers is whether a verified delivery would WAKE A
+// SEAT, and only a registered parser can. A surface is therefore asked about
+// the source its deliveries are published as, which is not always its own
+// name.
+func deliversAs(kind string) []string {
+	switch {
+	case kind == "forge":
+		// AN INGRESS PATH, NOT A SOURCE. A Cloud event relayed by the
+		// Forge app is republished as the PRODUCT it belongs to — jira or
+		// confluence, from forgeEvents — and parsed by that product's
+		// parser. So no parser is ever registered under "forge", and the
+		// relay answered `routes: false` on every Cloud deployment for
+		// ever. The dashboard groups it under the Atlassian row, so a
+		// tenant whose relay was feeding both products correctly carried a
+		// permanent "Forge relay — routes nowhere" beside them.
+		return []string{"jira", "confluence"}
+	case !integration.Kind(kind).Ingests():
+		// Nothing arrives, so there is nothing to route and `false` —
+		// "verified deliveries reach nobody" — is a fault report about a
+		// question this surface is not asked. See [integration.Kind.Ingests].
+		return nil
+	default:
+		return []string{kind}
+	}
+}
+
 // inboundPath is where a third-party app's deliveries arrive, so an operator can check
 // what they pasted into the third-party app's settings page against what this engine
 // actually serves. Static per integration: these are the routes webhooks.go
 // registers, and a disagreement between the two is a route nothing reaches.
+//
+// Asked only of a surface that INGESTS, which is what lets the default stand:
+// a kind reaching it has a `/webhooks/<kind>` route unless it is named above.
 func inboundPath(kind string) string {
 	switch kind {
 	case "mattermost":
@@ -548,23 +617,65 @@ func seatsFor(company *config.Company, kind string) []string {
 }
 
 // seatSecrets counts the per-seat apps of one kind that carry a verification
-// credential.
+// credential AND can do anything with it.
 //
 // Counted as well as listed by [seatsFor]: the COUNT is what says whether the
 // route can verify anything at all, since an app with no signing secret
 // cannot, and an app without one is exactly the half-finished state an
 // operator needs to see.
+//
+// # A sealed value is not a surface
+//
+// Each arm below adds the thing that makes the secret MEAN something, and
+// both were learned the same way — from a disconnect that removed the
+// meaningful half and left the secret, so the row outlived the integration
+// and the card sat on a state nobody had chosen.
+//
+// A count this reports is therefore a claim that deliveries reach a seat, not
+// that a `${VAR}` is written down somewhere. What is left over after a
+// half-finished teardown is reported by the SETUP screen's seat roster, which
+// is where an operator acts on a seat, and — with what only a person can
+// finish — by the disconnect itself.
 func seatSecrets(company *config.Company, kind string) int {
 	n := 0
 	for r := range company.EachRole() {
 		var secret string
 		switch kind {
 		case "slack":
-			if slack := r.Integrations.Slack; slack != nil {
+			// AND THE TRANSPORT MARKER. Declaring `integrations.slack` at
+			// all is what turns Slack on; without it the engine retires
+			// the transport (`slack_retired`) and unregisters the parser,
+			// so a delivery to a seat's app is verified at the route and
+			// then turned into work for nobody.
+			//
+			// Counted without it, a disconnect that dropped the block and
+			// left the seats kept the surface alive on two sealed values.
+			if slack := r.Integrations.Slack; slack != nil && company.Integrations.Slack != nil {
 				secret = slack.SigningSecret
 			}
 		case "github":
-			if app := r.Integrations.GitHub; app != nil {
+			// AN INSTALLATION, and the organization block that enables
+			// the surface the delivery arrives on.
+			//
+			// A seat app that is not installed on the organization sees no
+			// repository, mints no token and receives no delivery — so
+			// counting its signing secret reported a surface that is
+			// receiving events on the strength of an app that reaches
+			// nothing. It survived a disconnect for exactly that reason:
+			// the org block went, every installation was removed at
+			// GitHub, and the row stayed alive on two sealed values,
+			// rendering the card as Connecting with a `routes nowhere`
+			// badge permanently.
+			//
+			// The block is the other half of the same fact and was
+			// missing: [Engine.reconcileGitHub] retires the parser on
+			// `cfg == nil || !cfg.Enabled`, so an installed app whose
+			// company has no enabled block delivers to a route that
+			// verifies it and routes it nowhere — which a disconnect with
+			// the installations left in place produces exactly.
+			org := company.Integrations.GitHub
+			if app := r.Integrations.GitHub; app != nil && app.InstallationID != 0 &&
+				org != nil && org.Enabled {
 				secret = app.WebhookSecret
 			}
 		}
@@ -761,12 +872,50 @@ func reconcileRow(state integration.State) map[string]any {
 func reconcileFindings(findings []integration.Finding) []map[string]any {
 	out := make([]map[string]any, 0, len(findings))
 	for _, f := range findings {
-		out = append(out, map[string]any{
+		// THE VERDICT TRAVELS WITH THE FINDING, from
+		// [integration.FindingKind.Verdict] — the one table in the tree
+		// that says what a kind MEANS.
+		//
+		// Without it a reader has only the kind string, and the only way to
+		// tell a real problem from an advisory is to keep a second copy of
+		// the closed set wherever the question is asked. The dashboard did
+		// exactly that by accident: it treated any finding naming an agent
+		// as that agent not working, which is wrong for the two kinds whose
+		// verdict is PhaseReady — grant_excess and registration_orphaned
+		// both describe something that is working — so one spare permission
+		// on a GitHub app badged a healthy agent amber underneath a card
+		// reading Connected.
+		//
+		// A kind this build does not know still gets a verdict here,
+		// because Verdict's default arm answers for one: a peer on a newer
+		// build can write a kind into the shared row, and rendering it as
+		// an advisory would let it hide a real problem.
+		phase, actor := f.Kind.Verdict()
+		row := map[string]any{
 			"kind":       string(f.Kind),
 			"subject":    f.Subject,
 			"detail":     f.Detail,
 			"action_url": f.ActionURL,
-		})
+			"phase":      string(phase),
+			"actor":      string(actor),
+		}
+		// WHAT TO DO, SEPARATE FROM WHAT IS WRONG, so a card can lay the
+		// two out rather than render one paragraph carrying both. Absent
+		// where a surface honestly has no instruction to give.
+		if f.Remedy != "" {
+			row["remedy"] = f.Remedy
+		}
+		// THE WHOLE LIST, where a finding is about many things and its own
+		// sentence gives only the count. See [integration.Finding.Subjects]:
+		// the detail is the card's status line and is capped, so a finding
+		// that listed thirty-six addresses inline was a wall cut off
+		// mid-address. Absent rather than an empty array for the ordinary
+		// finding about one thing, so a view can ask whether there is a
+		// list at all.
+		if len(f.Subjects) > 0 {
+			row["subjects"] = f.Subjects
+		}
+		out = append(out, row)
 	}
 	return out
 }

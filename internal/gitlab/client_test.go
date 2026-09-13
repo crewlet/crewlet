@@ -193,3 +193,39 @@ func TestTheAdapterWithNoClientReportsRatherThanPanics(t *testing.T) {
 		t.Fatalf("a lookup with no client answered %v", got)
 	}
 }
+
+// EVERY STATE GITLAB HAS THAT IS NOT `active` MEANS NO CREDENTIAL WILL WORK,
+// and an absent state means the listing did not say.
+//
+// The predicate is written as "anything but active" rather than as a list of
+// the states that refuse, and that is the invariant: GitLab has added states
+// across versions and an enumeration would go stale silently — minting into
+// whichever one was added last, every tick, forever. The empty case is the
+// other direction and the more dangerous one: older listings and the
+// service-account creation response omit `state` entirely, and reading that
+// as blocked would report every seat on such an instance as failed while
+// provisioning nothing at all.
+func TestOnlyAnActiveAccountCanHoldACredential(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		state   string
+		blocked bool
+	}{
+		{"active", false},
+		{"", false},
+		{"   ", false},
+		{"Active", false},
+		{"blocked", true},
+		{"deactivated", true},
+		{"ldap_blocked", true},
+		{"banned", true},
+	} {
+		t.Run("state="+tc.state, func(t *testing.T) {
+			t.Parallel()
+			if got := (gitlab.User{State: tc.state}).Blocked(); got != tc.blocked {
+				t.Errorf("User{State: %q}.Blocked() = %v, want %v",
+					tc.state, got, tc.blocked)
+			}
+		})
+	}
+}

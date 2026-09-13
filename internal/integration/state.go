@@ -230,6 +230,23 @@ type Store interface {
 	// anything about a company it cannot see.
 	LoadIntegrations(ctx context.Context) ([]State, error)
 
+	// LoadIntegration reads ONE surface's state, reporting whether there is
+	// one to read.
+	//
+	// Separate from the plural read because the two are asked at different
+	// moments and only one of them may be stale. [Worker.Tick] reads every
+	// row once to decide what is DUE, which is a cheap filter and tolerates
+	// being a few seconds old. What it must not tolerate is folding a pass's
+	// outcome into a row it read before the pass began: an operator's
+	// disconnect landing in that window is silently overwritten. So the row
+	// the fold is built on is re-read here, under the surface's own guard,
+	// with every other writer excluded.
+	//
+	// found is false for a surface nobody has recorded anything about, which
+	// is an ordinary answer and not an error: it is what every surface looks
+	// like before its first pass.
+	LoadIntegration(ctx context.Context, kind Kind) (state State, found bool, err error)
+
 	// SaveIntegration records one integration's state.
 	SaveIntegration(ctx context.Context, state State) error
 
@@ -335,6 +352,50 @@ func Observe(state State, kind Kind, findings []Finding, err error, now time.Tim
 	}
 	state.Outcome = state.Report.Outcome()
 	return state, false
+}
+
+// AskTeardown records that an operator asked for this surface to be taken
+// away, before any pass has run.
+//
+// A NAMED FOLD, beside [Observe] and [ObserveTeardown], because this package
+// owns every transition of a row — so that a row cannot mean one thing when a
+// tick wrote it and another when a button did. This transition was the one
+// still written inline, at the API, and it set three fields and forgot three.
+//
+// IT CLEARS WHAT THE LAST RECONCILE OBSERVED, which is the half that was
+// missing. A surface being dismantled reports what the teardown is doing and
+// nothing else: the findings are statements about a world the operator is
+// taking apart, and an actor is not owed a step in it. Measured: pressing
+// Disconnect on Datadog left the card carrying that pass's "re-enable it at
+// Datadog: this pass will not" underneath the word Disconnecting, so the one
+// thing on the screen said the operator had work to do at a third-party app
+// they had just asked to be let go of.
+//
+// [ObserveTeardown] already erases them on every pass after the first, so
+// leaving them on the first was the divergence rather than a policy.
+//
+// NOTHING IS LOST BY CLEARING THEM. Nothing anywhere sets Disconnecting back
+// to false — a disconnecting row only ever ends by being forgotten — so there
+// is no path on which these findings become relevant again.
+//
+// DUE NOW. The zero NextAttemptAt is already in the past, but a row that has
+// been reconciled carries a future one, and inheriting it would leave the
+// disconnect waiting out a backoff nobody asked it to serve.
+func AskTeardown(state State, kind Kind, removeSeats bool) State {
+	state.Kind = kind
+	state.Disconnecting = true
+	state.RemoveSeats = removeSeats
+	state.NextAttemptAt = time.Time{}
+	state.Attempts = 0
+
+	state.Findings = nil
+	state.LastError = ""
+	state.Report = Report{
+		Phase: PhaseDisconnecting, Actor: ActorEngine,
+		Detail: "the engine is removing what this integration holds",
+	}
+	state.Outcome = state.Report.Outcome()
+	return state
 }
 
 // ObserveTeardown records what a TEARDOWN pass concluded, and reports whether

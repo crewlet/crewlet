@@ -44,6 +44,13 @@ than leaving a disabled account quietly holding a live credential; repeating
 the disconnect resumes there. The sealed `${VAR}` is left in the secret store
 holding the now-dead value, which the next connect overwrites.
 
+It also **records that this engine is the one disabling the bot**, in
+Mattermost's own `description` field on the bot record, written before the
+disable. That marker is what a later connect reads to tell its own disconnect
+apart from an administrator switching an agent off — see below, and
+[three apps disable rather than delete](../concepts/integration-reconcile.md#three-apps-disable-rather-than-delete-and-one-rule-covers-all-three)
+for why the same rule holds at Datadog and GitLab.
+
 This is the one integration that needs **no public address at all**. The
 engine dials out to your server and holds one websocket per seat, so nothing
 has to reach the engine and there is no webhook secret, no shared token and no
@@ -202,7 +209,7 @@ integrations:
     url: "https://chat.nimbus.example"    # instance base URL (required)
     team: nimbus                          # team slug (required)
     typing_status: always                 # always (default) | addressed
-    provisioning:              # consumed ONLY by the CLI, ignored by the engine
+    provisioning:              # read by the reconcile loop AND by the CLI
       username_prefix: ""      # e.g. "agent-" if humans share the server
       channels: [town-square, engineering]   # channels every bot joins
       display_name_suffix: " (AI)"
@@ -285,13 +292,27 @@ For every Mattermost-enabled agent seat the command:
 
 1. **finds or creates the bot account** at a deterministic username
    (`{username_prefix}{handle}`, or an explicit `username`);
-2. **re-enables it** if a previous decommission disabled it — a disabled bot
-   still owns its username, so creating over it fails with a conflict nothing
-   else would explain;
+2. **re-enables it if this engine's own disconnect disabled it**, and only
+   then — a disabled bot still owns its username, so creating over it fails
+   with a conflict nothing else would explain. The test is the
+   `crewlet:disconnected` marker the teardown writes on the bot's
+   `description`: with it, the bot is enabled and the marker cleared; without
+   it, the bot is **left alone** and the seat reported as `identity_failed`
+   for an administrator to decide about. It used to re-enable anything it
+   found disabled, so switching an agent off in the System Console lasted
+   until the next reconcile tick — the engine overruling an administrator on a
+   timer, with no way for them to make it stick. Clearing the marker is best
+   effort and noted rather than fatal: the bot is already working again, and
+   failing a pass over a cosmetic field would be worse than the stale marker
+   it avoids. Bots disabled before this shipped carry no marker and stay
+   manual;
 3. keeps its **display name** current (`{role name}{display_name_suffix}`) — read from the bot record rather than its user, because the display name lives on the bot and comparing against the user's nickname would report drift on every run;
 4. adds it to the **team** and to every configured **channel** — a bot only
    receives messages from channels it is a member of, so this is the step
-   that makes the integration work at all;
+   that makes the integration work at all. Membership is **read first**, so a
+   bot already in a team or a channel costs no request: this ran
+   unconditionally once, three writes per seat on every pass for ever, each
+   one answered with a duplicate error and discarded;
 5. mints its **personal access token** into the config's own `${VAR}`,
    write-through (Mattermost returns a token's value exactly once).
 
@@ -308,9 +329,13 @@ finish: a credential that is not a system admin, a team that does not exist,
 **false** on a fresh install, and both fail *late* — every bot created and
 joined, then nothing minted), and a loopback [Site URL](#the-site-url) on a
 server reached at a real address, which would leave every browser without
-live updates. Membership is **verified**, never inferred from a status code:
-Mattermost answers an add for an existing member with success, so a 4xx
-there is a real failure.
+live updates. Membership is **read**, never inferred from a status code. The second half
+of that sentence used to say Mattermost answers an add for an existing
+member with success, so a 4xx there is a real failure — which was never
+true: it answers `400 "This user is already a team member."` and the code
+swallowed it, which is exactly why nothing noticed the pass was writing on
+every run. The membership lists are now read and compared, so a duplicate
+add is not sent at all.
 
 A configured channel that **does not exist** is the one case that is a note
 rather than a failure. Half a fleet of bots joined and the run stopped is a

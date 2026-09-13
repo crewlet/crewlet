@@ -32,31 +32,65 @@ type TeardownOptions struct {
 // credential that is being refused: with the key rejected, every remaining
 // call would fail the same way and the report would name every agent as a
 // separate failure of the same one thing.
-func Teardown(ctx context.Context, opts TeardownOptions) error {
+// # What it reports
+//
+// Every planned seat whose account is now absent from the organization, with
+// BOTH of the variables that seat's credentials live in: Atlassian assigns the
+// account's address at creation and its products authenticate
+// base64(address:token), so a pass seals two values per agent and a deletion
+// strands two.
+//
+// AN END STATE, not a delta — see [setup.Teardowner]. A seat whose account is
+// not in the listing at all is reported as removed: either an earlier attempt
+// deleted it, or somebody did it by hand, and in both cases the credential
+// sealed for it is dead. A retry that reported only what THIS call deleted
+// would find nothing to do and let the block drop with the values still
+// resolving, which is the defect reached through the recovery path.
+func Teardown(ctx context.Context, opts TeardownOptions) (provision.Removed, error) {
+	var removed provision.Removed
 	if opts.Client == nil {
-		return errors.New("atlassian: no client")
+		return removed, errors.New("atlassian: no client")
 	}
 	if opts.OrgID == "" || opts.Key == "" {
-		return errors.New("atlassian: the organization id and its API key are both needed")
+		return removed, errors.New("atlassian: the organization id and its API key are both needed")
 	}
 	accounts, err := opts.Client.ListServiceAccounts(ctx, opts.Key, opts.OrgID)
 	if err != nil {
-		return fmt.Errorf("atlassian: list service accounts: %w", err)
+		return removed, fmt.Errorf("atlassian: list service accounts: %w", err)
 	}
-	wanted := map[string]bool{}
+	wanted := map[string]provision.Seat{}
 	if opts.Plan != nil {
 		for _, seat := range opts.Plan.Seats {
-			wanted[seat.Handle] = true
+			wanted[seat.Handle] = seat
 		}
 	}
 	for _, account := range accounts {
 		handle := HandleFrom(account.DisplayName)
-		if handle == "" || !wanted[handle] {
+		seat, planned := wanted[handle]
+		if handle == "" || !planned {
 			continue
 		}
 		if err := opts.Client.DeleteServiceAccount(ctx, opts.Key, account.ID); err != nil {
-			return fmt.Errorf("atlassian: delete the account for %s: %w", handle, err)
+			return removed, fmt.Errorf("atlassian: delete the account for %s: %w", handle, err)
+		}
+		removed.Add(removalFor(seat, account.Email))
+		delete(wanted, handle)
+	}
+	// WHAT WAS ALREADY GONE. Everything still in `wanted` has no account in
+	// the organization, so its credentials are dead whoever removed it.
+	for _, seat := range wanted {
+		removed.Add(removalFor(seat, ""))
+	}
+	return removed, nil
+}
+
+// removalFor is one seat's removal, naming both credential slots.
+func removalFor(seat provision.Seat, account string) provision.Removal {
+	out := provision.Removal{Handle: seat.Handle, Role: seat.Role, Account: account}
+	for _, name := range []string{seat.TokenVar, seat.EmailVar} {
+		if name != "" {
+			out.Secrets = append(out.Secrets, name)
 		}
 	}
-	return nil
+	return out
 }

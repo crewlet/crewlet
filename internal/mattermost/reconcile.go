@@ -30,7 +30,17 @@ type Result struct {
 	// between a reconnect that works and one that reports ready over an
 	// agent that cannot sign in.
 	Enabled []string
-	Rotated []string
+
+	// Deactivated names the bots that are OFF and were not turned off by
+	// this engine, which it leaves exactly as it found them.
+	//
+	// Its own list because it is the opposite outcome to Enabled and has
+	// the opposite owner: somebody deactivated this agent at Mattermost on
+	// purpose, so the pass reports it and does not fight the gesture. See
+	// [Client.DisconnectedDescription] for how the two are told apart, and
+	// why "disabled" alone could not be.
+	Deactivated []string
+	Rotated     []string
 	// Kept names the seats whose existing token was left alone — the
 	// SUCCESSFUL outcome of a re-run, said out loud because a silent
 	// report reads as a run that did nothing.
@@ -39,6 +49,16 @@ type Result struct {
 	// part an operator most needs to see: a bot hears only what it has
 	// joined, so a seat with an empty list is one that will never wake.
 	Joined map[string][]string
+
+	// NotAdmin is the sentence naming a provisioning account this run
+	// CONFIRMED holds no system_admin role. Empty when it holds one, and
+	// empty when this run could not ask — "cannot tell" must never report
+	// the same as "confirmed wrong". See [preflight].
+	NotAdmin string
+	// Disabled names the instance settings this run read as an explicit
+	// false, each one something an administrator has to switch on before
+	// any of this works.
+	Disabled []DisabledSetting
 
 	// NoKeyring is a pass this node could not run at all because it has
 	// nowhere to seal what provisioning creates.
@@ -105,8 +125,38 @@ type Options struct {
 // works is not replaced. See [Options.Rotate] for why the last of those is
 // the default rather than the flag.
 func Reconcile(ctx context.Context, opts Options) (*Result, error) {
+	// A CANCELLED PASS HAS OBSERVED NOTHING, and it has to say so BEFORE
+	// the two returns below that answer without looking: an empty plan
+	// and a node with no keyring are both decided from the arguments
+	// alone, so a cancelled pass took either branch and reported a
+	// converged surface it never read. The reconcile loop treats "no
+	// findings, no error" as ready and trusts it for a full settled
+	// interval, so a node shutting down mid-pass recorded every
+	// integration as healthy on its way out and the next node to hold
+	// the duty believed it.
+	//
+	// An empty plan is not a rare shape either: a company that enables
+	// the mattermost block before any seat carries a whole ${VAR} bot
+	// token has one on every pass.
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("mattermost: %w", err)
+	}
 	if opts.Client == nil {
 		return nil, errors.New("mattermost: no client")
+	}
+	// REFUSED RATHER THAN DEREFERENCED. Both are read without a nil check
+	// further down — the team off the config, the seat's own channel off
+	// the org — and a panic in a pass is not the same failure as an
+	// error: the reconcile worker is a fleet singleton, so a nil here
+	// takes the node down where an error is a fault the loop retries and
+	// reports.
+	if opts.Config == nil {
+		return nil, errors.New("mattermost: no company mattermost block")
+	}
+	if opts.Org == nil {
+		return nil, errors.New(
+			"mattermost: no organization — a bot is joined to the channel its " +
+				"own seat names, so the company is not optional here")
 	}
 	if opts.Sink == nil {
 		// THE COMMAND LINE'S CASE, and it stays a refusal: a run with
@@ -153,7 +203,11 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	// it was working — and the message names an endpoint rather than the
 	// setting an administrator has to change. Checked, not assumed, because
 	// all three are invisible from the config.
-	preflight := checkPreflight(ctx, opts)
+	//
+	// NAMED `pre` rather than `preflight`, which would shadow the type: the
+	// struct it hands back is what carries this to BOTH readers — the notes
+	// the command line prints and the findings the reconcile loop reads.
+	pre := checkPreflight(ctx, opts)
 
 	// THE NOTES ARE COLLECTED AT THE END, not copied here: the run adds
 	// its own — a channel that does not exist, a bot that joined nothing
@@ -190,18 +244,59 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			return nil, rollback(ctx, opts, minted,
 				fmt.Errorf("mattermost: %s: %w", seat.Handle, err))
 		}
-		// A DISABLED BOT IS ONE THIS ENGINE TURNED OFF, and reconnecting
-		// has to turn it back on. The teardown disables rather than
-		// deletes so an agent keeps its history, which means the account
-		// is still here to be found: without this the pass joins it,
-		// mints it a token, reports ready, and every socket that token
-		// opens is refused because the account is deactivated.
+		// A DISABLED BOT THIS ENGINE TURNED OFF IS TURNED BACK ON, and one
+		// somebody else turned off is REPORTED.
+		//
+		// The teardown disables rather than deletes so an agent keeps its
+		// history, which means the account is still here to be found:
+		// without the re-enable the pass joins it, mints it a token,
+		// reports ready, and every socket that token opens is refused
+		// because the account is deactivated.
+		//
+		// WHICH OF THE TWO DISABLED IT is the part that was missing. This
+		// re-enabled either, unconditionally, so an administrator who
+		// deactivated an agent at Mattermost had that reversed on the next
+		// tick — the engine fighting a person's gesture for ever, which is
+		// precisely the risk datadog's marker was added to avoid and which
+		// this had no way even to see. The marker
+		// ([Client.DisconnectedDescription]) is written by the teardown
+		// before it disables, and read here.
+		//
+		// ASKED ONLY OF A DEACTIVATED SEAT, so a converged pass makes no
+		// extra call: the bot's own record is a second request, and the
+		// question it answers has no meaning for a bot that is running.
 		if exists && user.DeleteAt != 0 {
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
+			record, err := opts.Client.BotRecord(ctx, user.ID)
+			if err != nil {
+				return nil, rollback(ctx, opts, minted, fmt.Errorf(
+					"mattermost: %s: read whether this engine disabled the bot: %w",
+					seat.Handle, err))
+			}
+			if strings.TrimSpace(record.Description) != DisconnectedDescription {
+				// SOMEBODY ELSE'S DECISION. Reported and left alone, on
+				// the same terms datadog reports one: a deliberate act at
+				// the instance, which a pass that reversed it would undo
+				// on every tick.
+				res.Deactivated = append(res.Deactivated, seat.Handle)
+				continue
+			}
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := opts.Client.EnableBot(ctx, user.ID); err != nil {
 				return nil, rollback(ctx, opts, minted, fmt.Errorf(
 					"mattermost: %s: re-enable the bot a disconnect disabled: %w",
 					seat.Handle, err))
+			}
+			// AND THE MARKER GOES WITH IT, or a live bot still described
+			// as disconnected would be re-enabled again on every pass.
+			// Best effort: the bot is back, which is what the seat needed,
+			// and a description that could not be cleared costs one
+			// no-op enable next tick rather than the agent.
+			if err := opts.Client.ClearDisconnected(ctx, user.ID); err != nil {
+				res.Notes = append(res.Notes, fmt.Sprintf(
+					"%s is enabled again and its bot description still reads "+
+						"%q, which this engine will try to clear on the next "+
+						"pass: %v", seat.Handle, DisconnectedDescription, err))
 			}
 			res.Enabled = append(res.Enabled, seat.Handle)
 		}
@@ -215,25 +310,61 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			}
 			user = User{ID: bot.UserID, Username: bot.Username}
 			res.Created = append(res.Created, seat.Handle)
-		} else if want := BotDisplayName(opts.Config.Provisioning, seat.Role); want != "" &&
-			managed[strings.ToLower(username)].DisplayName != want {
+		} else if want := BotDisplayName(opts.Config.Provisioning, seat.Role); want != "" {
 			// A RENAMED ROLE REACHES THE BOT. Provisioning is a reconcile,
 			// and a create-only display name means the roster in Mattermost
 			// drifts from the org chart it mirrors, with no way back but
 			// editing every bot by hand.
-			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			if err := opts.Client.PatchBot(ctx, user.ID, want); err != nil {
-				res.Notes = append(res.Notes, fmt.Sprintf(
-					"%s: could not update the bot's display name to %q: %v",
-					seat.Handle, want, err))
-			} else {
-				res.Renamed = append(res.Renamed, seat.Handle)
+			//
+			// COMPARED ONLY AGAINST A LISTING THAT ANSWERED, which is what
+			// `known` is for. The bot record is the only thing carrying the
+			// current display name, so a listing that failed does not know
+			// the name is already right — and as a plain map lookup, which
+			// is what this was, a missing entry reads as an EMPTY display
+			// name. An unreachable /bots therefore became a PUT on every
+			// seat on every pass, rewriting names that were already correct,
+			// from the same run whose note says display names are not
+			// checked this time.
+			if current, known := managed[strings.ToLower(username)]; known &&
+				current.DisplayName != want {
+				//nolint:govet // shadow: scoped to this block; see .golangci.yml
+				if err := opts.Client.PatchBot(ctx, user.ID, want); err != nil {
+					res.Notes = append(res.Notes, fmt.Sprintf(
+						"%s: could not update the bot's display name to %q: %v",
+						seat.Handle, want, err))
+				} else {
+					res.Renamed = append(res.Renamed, seat.Handle)
+				}
 			}
 		}
 
-		if err = opts.Client.AddTeamMember(ctx, team.ID, user.ID); err != nil {
-			return nil, rollback(ctx, opts, minted,
-				fmt.Errorf("mattermost: %s: join team: %w", seat.Handle, err))
+		// READ BEFORE JOINING, and the same rule governs the channels
+		// below. AddTeamMember tolerates a duplicate, and that tolerance
+		// made an unconditional POST look free — it is not. This pass is
+		// what the reconcile loop runs every few minutes for the life of
+		// the deployment, so an unconditional join is a membership write
+		// to somebody's instance for ever on a company that needs
+		// nothing.
+		//
+		// A MEMBERSHIP THIS RUN CANNOT READ IS JOINED ANYWAY, which is
+		// the opposite of how the token check treats "cannot tell" and
+		// deliberately so: re-minting a credential destroys one that
+		// works, where a duplicate join is a no-op the server itself
+		// absorbs. The cost of the wrong guess is asymmetric here, and a
+		// seat left out of the team is an agent that sees no channel at
+		// all.
+		inTeam, err := opts.Client.TeamMember(ctx, team.ID, user.ID)
+		if err != nil {
+			opts.Plan.Note("%s: could not read whether the bot is already in "+
+				"team %q, so it was joined again rather than left out: %v",
+				seat.Handle, opts.Config.Team, err)
+			inTeam = false
+		}
+		if !inTeam {
+			if err = opts.Client.AddTeamMember(ctx, team.ID, user.ID); err != nil {
+				return nil, rollback(ctx, opts, minted,
+					fmt.Errorf("mattermost: %s: join team: %w", seat.Handle, err))
+			}
 		}
 		joined, err := joinChannels(ctx, opts, team.ID, user.ID, seat.Handle)
 		if err != nil {
@@ -333,53 +464,130 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		res.Notes = append(res.Notes, notes...)
 	}
 
-	res.Notes = append(notesOf(opts.Plan), append(preflight, res.Notes...)...)
+	// CONCAT rather than append: notesOf hands back the PLAN's own slice,
+	// and appending to it writes into the plan's spare capacity — so the
+	// Result a caller is holding shares a backing array with a plan that
+	// is still being written to. The next Plan.Note then overwrites a
+	// note in a report somebody has already been given.
+	res.Notes = slices.Concat(notesOf(opts.Plan), pre.notes(), res.Notes)
+
+	// AND TO THE LOOP, not only to the terminal. The reconcile loop reads
+	// [Result.Findings] and nothing else, so an instance this pass has
+	// already proved it cannot write to has to say so in the shared
+	// vocabulary or it is reported ready. See [preflight].
+	res.NotAdmin, res.Disabled = pre.notAdmin, pre.disabled
 	return res, nil
+}
+
+// preflight is what this run learned about the instance before its first
+// write, in the shape BOTH readers of it need.
+//
+// There are two, and they are not the same reader. `crewlet mattermost
+// provision` prints [Result.Notes] to whoever ran it, and the reconcile loop
+// reads [Result.Findings] and NOTHING ELSE — engine.mattermostPass returns
+// `res.Findings()` and drops the notes on the floor. So a preflight that
+// spoke only in notes told the operator at the terminal that this credential
+// cannot write, and told the loop that Mattermost was ready: a company whose
+// administrator token has lost its role reports READY for ever, and the first
+// thing anybody learns is that adding the tenth seat fails.
+//
+// ONE SENTENCE PER FINDING, built once here and used for both, because this
+// text was already the operator's whole explanation and two spellings of it
+// would drift the moment one of them was edited.
+type preflight struct {
+	// unreadable is the account this run could not ask about.
+	//
+	// A NOTE AND NEVER A FINDING: "cannot tell" is not "confirmed wrong",
+	// and the run is about to make real calls that report the same
+	// reachability problem with far more context. Reporting it would put
+	// a company behind a blinking instance into a blocked phase a person
+	// is asked to go and fix.
+	unreadable string
+
+	// notAdmin is the sentence naming an account this run CONFIRMED is not
+	// a system administrator, empty when it is one or could not be asked.
+	//
+	// The sentence rather than the roles, because the roles can legitimately
+	// be empty — orNone renders that "(none)" — and a field keyed on them
+	// would then read as "fine" for the worst account of all.
+	notAdmin string
+
+	// disabled names the instance settings this run read as an EXPLICIT
+	// false, in the order they are checked.
+	disabled []DisabledSetting
+}
+
+// DisabledSetting is one instance setting an administrator has switched off
+// that this engine needs on.
+type DisabledSetting struct {
+	// Key is the ServiceSettings key, which is what somebody types into
+	// the System Console's search box to find it.
+	Key string
+	// Stops is what it prevents, as the second half of Detail's sentence.
+	Stops string
+}
+
+// Detail is the one sentence both the printed note and the finding carry.
+func (d DisabledSetting) Detail() string {
+	return fmt.Sprintf(
+		"ServiceSettings.%s is false on this instance, so %s — an "+
+			"administrator has to enable it in the System Console", d.Key, d.Stops)
+}
+
+// notes is what the command line prints, in the order it always printed them.
+func (p preflight) notes() []string {
+	var out []string
+	if p.unreadable != "" {
+		out = append(out, p.unreadable)
+	}
+	if p.notAdmin != "" {
+		out = append(out, p.notAdmin)
+	}
+	for _, setting := range p.disabled {
+		out = append(out, setting.Detail())
+	}
+	return out
 }
 
 // checkPreflight reports what would make this run fail on its first write.
 //
-// NOTES, not errors, and the distinction is deliberate: the two settings are
-// read from a config endpoint whose exact key set varies by server version,
-// so an absent key means "this server did not say", not "it is off". Refusing
-// on silence would make the provisioner unusable against a version this
-// engine has not seen; warning loudly on an explicit false is the honest
-// half.
+// NOT ERRORS, and the distinction is deliberate: the two settings are read
+// from a config endpoint whose exact key set varies by server version, so an
+// absent key means "this server did not say", not "it is off". Refusing on
+// silence would make the provisioner unusable against a version this engine
+// has not seen; reporting an explicit false is the honest half.
 //
 // The admin role IS checked hard enough to be worth naming, because a token
 // without it fails every single write.
-func checkPreflight(ctx context.Context, opts Options) []string {
-	var notes []string
+func checkPreflight(ctx context.Context, opts Options) preflight {
+	var out preflight
 	if me, err := opts.Client.Me(ctx); err != nil {
-		notes = append(notes, fmt.Sprintf(
-			"could not confirm the provisioning account: %v", err))
+		out.unreadable = fmt.Sprintf(
+			"could not confirm the provisioning account: %v", err)
 	} else if !me.SystemAdmin() {
-		notes = append(notes, fmt.Sprintf(
+		out.notAdmin = fmt.Sprintf(
 			"%s is not a system administrator (roles: %s) — creating a bot, "+
 				"minting an access token and adding a team member all require "+
 				"it, so this run will fail on its first write",
-			me.Username, orNone(me.Roles)))
+			me.Username, orNone(me.Roles))
 	}
 
 	cfg, err := opts.Client.ClientConfig(ctx)
 	if err != nil {
 		// Not worth a note of its own: the run is about to make real calls
 		// that will report the same reachability problem with more context.
-		return notes
+		return out
 	}
-	for _, setting := range []struct{ key, why string }{
+	for _, setting := range []DisabledSetting{
 		{"EnableBotAccountCreation", "no bot account can be created"},
 		{"EnableUserAccessTokens", "no bot can be given a token, so none of " +
 			"them can connect"},
 	} {
-		if cfg[setting.key] == "false" {
-			notes = append(notes, fmt.Sprintf(
-				"ServiceSettings.%s is false on this instance, so %s — "+
-					"an administrator has to enable it in the System Console",
-				setting.key, setting.why))
+		if cfg[setting.Key] == "false" {
+			out.disabled = append(out.disabled, setting)
 		}
 	}
-	return notes
+	return out
 }
 
 // decommission disables managed bots whose seats have left the config.
@@ -402,8 +610,19 @@ func decommission(ctx context.Context, opts Options, managed map[string]Bot) ([]
 		keep[strings.ToLower(BotUsername(opts.Config.Provisioning, seat.Handle))] = true
 	}
 	var disabled, notes []string
-	for _, bot := range managed {
-		username := strings.ToLower(bot.Username)
+	// SORTED, because managed is a MAP and this loop's output is what the
+	// command line prints. Ranged over the map, two -decommission runs
+	// over one unchanged company printed the same departed seats in
+	// different orders, so an operator diffing two runs saw a change
+	// neither run made and could not tell a re-run from a new sweep.
+	//
+	// It used to matter twice over: [Result.Findings] turned this same
+	// slice straight into one finding per departed seat, and an order that
+	// moved made the reconcile loop see the surface change on every pass.
+	// That mapping is gone — a successful decommission is not outstanding
+	// work — and the printed order is reason enough on its own.
+	for _, username := range slices.Sorted(maps.Keys(managed)) {
+		bot := managed[username]
 		if !strings.HasPrefix(username, prefix) || keep[username] {
 			continue
 		}
@@ -421,6 +640,19 @@ func decommission(ctx context.Context, opts Options, managed map[string]Bot) ([]
 				"%s matches the managed prefix and its tokens could not be "+
 					"revoked, so it was left enabled rather than disabled "+
 					"holding a live credential: %v", bot.Username, err))
+			continue
+		}
+		// MARKED BEFORE IT IS DISABLED, the same rule the teardown
+		// follows and for the same reason: "disabled" is an ambiguous bit,
+		// and a bot this engine turned off with nothing recording that is
+		// one it can never bring back. Written first, so a run interrupted
+		// between the two leaves a marked, live bot.
+		if err := opts.Client.MarkDisconnected(ctx, bot.UserID); err != nil {
+			notes = append(notes, fmt.Sprintf(
+				"%s matches the managed prefix and this engine could not "+
+					"record that it is decommissioning it, so it was left "+
+					"enabled rather than disabled with no provenance: %v",
+				bot.Username, err))
 			continue
 		}
 		if err := opts.Client.DisableBot(ctx, bot.UserID); err != nil {
@@ -529,11 +761,48 @@ func joinChannels(ctx context.Context, opts Options, teamID, userID, handle stri
 
 	names := slices.Sorted(maps.Keys(wanted))
 
+	// WHAT THIS BOT IS ALREADY IN, read ONCE for the whole seat.
+	//
+	// AddChannelMember tolerates a duplicate, which made an unconditional
+	// join per wanted channel look free. It is not: this pass is what the
+	// reconcile loop runs every few minutes for the life of the
+	// deployment, so on a company that needs nothing every one of those
+	// requests is a write to somebody's instance. The tolerance stays as
+	// the backstop it should always have been — the window between this
+	// read and the join below, and two writers racing.
+	//
+	// One listing also replaces a name lookup AND a join per channel, so
+	// the steady state is strictly fewer requests rather than merely
+	// fewer writes.
+	//
+	// A LISTING THAT FAILS IS AN EMPTY SET, not a failure: every name
+	// then takes the resolve-and-join path below, which is exactly what
+	// this pass did before the read existed. A duplicate join is a no-op
+	// the server absorbs; a channel left unjoined is an agent that never
+	// wakes.
+	member := map[string]struct{}{}
+	if channels, err := opts.Client.Channels(ctx, userID, teamID); err != nil {
+		opts.Plan.Note("%s: could not read which channels the bot is already "+
+			"in, so each one was joined again rather than skipped: %v", handle, err)
+	} else {
+		for _, channel := range channels {
+			member[channel.Name] = struct{}{}
+		}
+	}
+
 	var joined []string
 	for _, name := range names {
+		if _, in := member[name]; in {
+			// ALREADY IN IT IS STILL JOINED. Joined is what an operator
+			// reads to see which channels a seat can hear — not a list of
+			// what this run changed — so a converged company must not
+			// report a fleet of bots joined to nothing.
+			joined = append(joined, name)
+			continue
+		}
 		channel, err := opts.Client.ChannelByName(ctx, teamID, name)
 		if err != nil {
-			if isStatus(err, 404) {
+			if isStatus(err, http.StatusNotFound) {
 				opts.noteMissingChannel(handle, name)
 				continue
 			}

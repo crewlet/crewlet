@@ -17,9 +17,10 @@ func tearDown(t *testing.T, srv *chatServer, roles []*org.Role, removeSeats bool
 	if err != nil {
 		t.Fatalf("PlanFor: %v", err)
 	}
-	return mattermost.Teardown(context.Background(), mattermost.TeardownOptions{
+	_, err = mattermost.Teardown(context.Background(), mattermost.TeardownOptions{
 		Client: chatClient(t, srv), Config: cfg, Plan: plan, RemoveSeats: removeSeats,
 	})
+	return err
 }
 
 // tokensOn names the descriptions of the tokens an account still holds.

@@ -3,6 +3,8 @@ package gitlab
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -124,6 +126,28 @@ type User struct {
 	Username string `json:"username"`
 	Name     string `json:"name"`
 	Email    string `json:"email"`
+	// State is GitLab's own word for whether the account may sign in —
+	// active, blocked, deactivated, ldap_blocked, banned. It is served on
+	// the listing and it is the only thing that distinguishes an account
+	// this engine can mint into from one it must only report on: see
+	// [User.Blocked].
+	State string `json:"state"`
+}
+
+// Blocked reports an account GitLab will not let sign in.
+//
+// ANYTHING BUT active, rather than an enumeration of the states that mean
+// no. GitLab has five and has added to them across versions — blocked,
+// deactivated, ldap_blocked, banned — and each one refuses every token the
+// account holds; a list would go stale silently, minting into whichever
+// state was added last.
+//
+// AN EMPTY STATE IS NOT BLOCKED, which is the other half. The field is
+// absent from some older listings and from the service-account creation
+// response, and reading absence as "cannot sign in" would report every seat
+// on such an instance as failed while provisioning nothing.
+func (u User) Blocked() bool {
+	return strings.TrimSpace(u.State) != "" && !strings.EqualFold(u.State, "active")
 }
 
 // UserByUsername finds an account, reporting whether it exists.
@@ -155,11 +179,14 @@ func (c *Client) UserByUsername(ctx context.Context, username string) (User, boo
 // in, and is owned by the group rather than by a person — which is what
 // makes it removable when a seat is decommissioned without touching
 // anybody's real account.
-func (c *Client) CreateServiceAccount(ctx context.Context, groupID int, name, username, email string) (User, error) {
+// NO EMAIL IS SENT, and the field is not a parameter: see the note in
+// provision.go. A custom address is refused until it is confirmed, and every
+// address this tool could derive is undeliverable by construction.
+func (c *Client) CreateServiceAccount(ctx context.Context, groupID int, name, username string) (User, error) {
 	var out User
 	err := c.send(ctx, http.MethodPost,
 		"/groups/"+strconv.Itoa(groupID)+"/service_accounts",
-		map[string]string{"name": name, "username": username, "email": email}, &out)
+		map[string]string{"name": name, "username": username}, &out)
 	return out, err
 }
 
@@ -173,10 +200,12 @@ func (c *Client) CreateServiceAccount(ctx context.Context, groupID int, name, us
 // group route is satisfied by a group Owner — and that nothing scopes a
 // decommission sweep except the username prefix and the fact that the
 // instance service-account listing holds no people.
-func (c *Client) CreateInstanceServiceAccount(ctx context.Context, name, username, email string) (User, error) {
+// It sends no email either, for the reason [Client.CreateServiceAccount]
+// gives: the confirmation rule is the account's, not the route's.
+func (c *Client) CreateInstanceServiceAccount(ctx context.Context, name, username string) (User, error) {
 	var out User
 	err := c.send(ctx, http.MethodPost, "/service_accounts",
-		map[string]string{"name": name, "username": username, "email": email}, &out)
+		map[string]string{"name": name, "username": username}, &out)
 	return out, err
 }
 
@@ -201,10 +230,15 @@ func (c *Client) InstanceServiceAccounts(ctx context.Context) ([]User, error) {
 			return out, nil
 		}
 		if len(out) >= userWalkCeiling {
+			// THE FIELD, NOT THE FLAG. This is reached by the engine's
+			// reconcile loop as well as by the provisioning command, and
+			// an operator reading it off a card has no command line to
+			// pass `-mode` on: the document is what they can change, and
+			// the flag is only that field's form on the CLI.
 			return nil, fmt.Errorf(
 				"gitlab: this instance has more than %d service accounts, "+
-					"which is not an instance Crewlet provisions into — "+
-					"use -mode group, or narrow "+
+					"which is not an instance Crewlet provisions into — set "+
+					"integrations.gitlab.provisioning.mode: group, or narrow "+
 					"provisioning.username_prefix", userWalkCeiling)
 		}
 	}
@@ -238,17 +272,106 @@ type Group struct {
 	Plan string `json:"plan"`
 }
 
-// PaidPlan reports whether this group is on a tier that serves the Premium
-// features, as far as the instance is willing to say.
+// Tier is what a deployment says about a group's subscription, and it is
+// THREE-VALUED because the third answer is the one that matters.
 //
-// TRUE WHEN IT CANNOT TELL, which is the direction that matters: a
-// self-managed instance answers with no plan at all, and reading that as
-// "free" would send every self-managed deployment down a fallback it does not
-// need. The one case this exists to catch is a gitlab.com group that
-// answers, in so many words, that it is on the free tier.
-func (g Group) PaidPlan() bool {
-	plan := strings.ToLower(strings.TrimSpace(g.Plan))
-	return plan != "free" && plan != "default"
+// A bool collapsed "cannot tell" into "paid", and that default is right for a
+// self-managed instance — it answers with no plan at all, and reading silence
+// as free would push every such deployment down a fallback it does not need.
+// It is wrong for the case it was written to catch: GET /groups/:path on
+// gitlab.com omits `plan` for a FREE group as well, so the one deployment
+// this was protecting read as paid and took the group hook that GitLab
+// accepts and never delivers.
+//
+// Separating the answers is what lets a caller ask somewhere else before
+// concluding. See [Client.TierOf].
+type Tier string
+
+const (
+	// TierPaid serves the Premium features, group webhooks among them.
+	TierPaid Tier = "paid"
+	// TierFree is a deployment saying, in so many words, that group
+	// webhooks here are accepted and never delivered.
+	TierFree Tier = "free"
+	// TierUnknown is nothing said. Treated as paid by every caller, which
+	// is the self-managed default rather than a guess about gitlab.com.
+	TierUnknown Tier = "unknown"
+)
+
+// tierOf reads one plan string, or [TierUnknown] where there is none.
+func tierOf(plan string) Tier {
+	switch strings.ToLower(strings.TrimSpace(plan)) {
+	case "":
+		return TierUnknown
+	case "free", "default":
+		return TierFree
+	default:
+		return TierPaid
+	}
+}
+
+// Tier is what the GROUP record says, which on gitlab.com is frequently
+// nothing at all. See [Client.TierOf] for the answer a caller should act on.
+func (g Group) Tier() Tier { return tierOf(g.Plan) }
+
+// Namespace is the account a group belongs to, and the only place a
+// gitlab.com group's tier can be relied on to appear.
+//
+// GET /groups/:path omits `plan` on the free tier — measured on a live
+// gitlab.com group whose namespace answered `plan: "free"` for the same
+// path in the same second. The group record is not lying; it simply does
+// not carry the field unless the subscription is one, and "absent" is
+// indistinguishable there from the self-managed silence that must keep
+// reading as paid.
+type Namespace struct {
+	ID       int    `json:"id"`
+	FullPath string `json:"full_path"`
+	Plan     string `json:"plan"`
+}
+
+// NamespaceByPath resolves a namespace by its path.
+func (c *Client) NamespaceByPath(ctx context.Context, path string) (Namespace, bool, error) {
+	var out Namespace
+	err := c.get(ctx, "/namespaces/"+url.PathEscape(path), nil, &out)
+	if isNotFound(err) {
+		return Namespace{}, false, nil
+	}
+	if err != nil {
+		return Namespace{}, false, err
+	}
+	return out, true, nil
+}
+
+// TierOf is the subscription tier to ACT on, asked of both places that know.
+//
+// # Why two reads rather than one
+//
+// The group record is asked first because the caller already holds it and it
+// is right whenever it answers. Only its silence costs a second request, and
+// only on gitlab.com does that second request say anything: a self-managed
+// instance answers nothing at either endpoint and stays [TierUnknown], which
+// every caller reads as paid.
+//
+// A NAMESPACE THAT CANNOT BE READ IS NOT FREE. The error is returned rather
+// than folded into an answer, because concluding "free" from a request that
+// failed would move a working group hook to per-project hooks over a blip —
+// and back again on the next pass, rewriting somebody's webhooks on a timer.
+func (c *Client) TierOf(ctx context.Context, group Group) (Tier, error) {
+	if t := group.Tier(); t != TierUnknown {
+		return t, nil
+	}
+	path := strings.TrimSpace(group.FullPath)
+	if path == "" {
+		return TierUnknown, nil
+	}
+	ns, found, err := c.NamespaceByPath(ctx, path)
+	if err != nil {
+		return TierUnknown, fmt.Errorf("gitlab: read the tier of %s: %w", path, err)
+	}
+	if !found {
+		return TierUnknown, nil
+	}
+	return tierOf(ns.Plan), nil
 }
 
 // GroupByPath resolves a group by its path.
@@ -267,6 +390,12 @@ func (c *Client) GroupByPath(ctx context.Context, path string) (Group, bool, err
 }
 
 // AddGroupMember adds an account to a group at an access level.
+//
+// A LAST RESORT RATHER THAN THE PASS'S FIRST MOVE. The reconcile reads
+// [Client.GroupMembers] before the seat loop and only calls this for an
+// account the group does not have — see [ensureGroupMember]. The 409 arm
+// below is what remains: two nodes reconciling one surface can both find the
+// membership absent, and the loser must not fail on what the winner did.
 func (c *Client) AddGroupMember(ctx context.Context, groupID, userID, accessLevel int) error {
 	err := c.send(ctx, http.MethodPost, "/groups/"+strconv.Itoa(groupID)+"/members",
 		map[string]int{"user_id": userID, "access_level": accessLevel}, nil)
@@ -279,6 +408,9 @@ func (c *Client) AddGroupMember(ctx context.Context, groupID, userID, accessLeve
 }
 
 // AddProjectMember adds an account to a project at an access level.
+//
+// The same race guard as [Client.AddGroupMember], reached the same way: only
+// for an account [Client.ProjectMembers] did not report.
 func (c *Client) AddProjectMember(ctx context.Context, project string, userID, accessLevel int) error {
 	err := c.send(ctx, http.MethodPost,
 		"/projects/"+url.PathEscape(project)+"/members",
@@ -287,6 +419,37 @@ func (c *Client) AddProjectMember(ctx context.Context, project string, userID, a
 		return nil
 	}
 	return err
+}
+
+// SetGroupMember moves an existing membership to an access level.
+//
+// # The half of "reconcile the memberships" that was missing entirely
+//
+// GitLab answers a second POST to /members with a 409 and changes nothing,
+// and the add above treats that as success — so for as long as adding was the
+// only thing this client could do, editing provisioning.access_level or an
+// access_levels override had NO effect on a seat that already had a
+// membership. The company document said maintainer, the instance kept
+// developer, and every pass reported converged. The only way to notice was to
+// read the group's member list by hand.
+//
+// PUT rather than POST is the route GitLab serves for an edit, and it 404s
+// for a user with no DIRECT membership — which is why the caller decides from
+// the listing rather than trying this first and falling back.
+func (c *Client) SetGroupMember(ctx context.Context, groupID, userID, accessLevel int) error {
+	return c.send(ctx, http.MethodPut,
+		"/groups/"+strconv.Itoa(groupID)+"/members/"+strconv.Itoa(userID),
+		map[string]int{"access_level": accessLevel}, nil)
+}
+
+// SetProjectMember moves an existing project membership to an access level.
+//
+// The project counterpart of [Client.SetGroupMember], and it carried the same
+// silent drift for the same reason.
+func (c *Client) SetProjectMember(ctx context.Context, project string, userID, accessLevel int) error {
+	return c.send(ctx, http.MethodPut,
+		"/projects/"+url.PathEscape(project)+"/members/"+strconv.Itoa(userID),
+		map[string]int{"access_level": accessLevel}, nil)
 }
 
 // ProjectExists reports whether a project path resolves on this instance.
@@ -388,16 +551,58 @@ func tokenPath(groupID, userID int) string {
 // THROUGH THE GROUP where one owns the account: `/personal_access_tokens` is
 // an admin listing, and asking it as a group Owner answers 401. See
 // [tokenPath].
+//
+// PAGED TO EXHAUSTION, which is the same lesson [Client.members] and
+// [Client.InstanceServiceAccounts] already carry and this listing did not: it
+// took whatever one default page held, which is TWENTY rows. Both callers make
+// a destructive decision from it — [retirePrevious] revokes this tool's
+// earlier tokens and [Client.RevokeTokens] empties an account being
+// decommissioned — so a truncated read is not a slow report but a credential
+// left live while the run says it cleaned up.
+//
+// Measured: an account had accumulated 164 tokens, of which the oldest 20 were
+// already revoked. Every pass read exactly those 20, retired nothing, minted
+// another, and reported a successful rotation. The 144 live `api`-scoped
+// tokens behind page one were invisible to the only code that could have
+// removed them.
+//
+// The ceiling is a runaway guard rather than a policy limit, which is why it
+// is generous and why it is an error rather than a truncation: a service
+// account Crewlet manages holds one token, a badly broken one holds hundreds,
+// and a server answering a full page for ever is not something to keep asking.
 func (c *Client) Tokens(ctx context.Context, groupID, userID int) ([]Token, error) {
-	var tokens []Token
+	path, params := "/personal_access_tokens", url.Values{"user_id": {strconv.Itoa(userID)}}
 	if groupID != 0 {
-		err := c.get(ctx, tokenPath(groupID, userID), nil, &tokens)
-		return tokens, err
+		path, params = tokenPath(groupID, userID), url.Values{}
 	}
-	err := c.get(ctx, "/personal_access_tokens",
-		url.Values{"user_id": {strconv.Itoa(userID)}}, &tokens)
-	return tokens, err
+	var out []Token
+	for page := 1; ; page++ {
+		params.Set("per_page", strconv.Itoa(userPageSize))
+		params.Set("page", strconv.Itoa(page))
+		var batch []Token
+		if err := c.get(ctx, path, params, &batch); err != nil {
+			return nil, err
+		}
+		out = append(out, batch...)
+		if len(batch) < userPageSize {
+			return out, nil
+		}
+		if len(out) >= tokenWalkCeiling {
+			return nil, fmt.Errorf(
+				"gitlab: user %d holds more than %d access tokens, which is not "+
+					"an account Crewlet can reason about — revoke them at GitLab",
+				userID, tokenWalkCeiling)
+		}
+	}
 }
+
+// tokenWalkCeiling bounds a token walk at twenty pages.
+//
+// NOT A LIMIT ANYONE SHOULD REACH: an account this tool manages holds one
+// token, and the worst real account seen held 164. It is here so that a server
+// answering a full page for ever — a paging parameter it ignores, a proxy
+// replaying one response — ends the walk instead of the process.
+const tokenWalkCeiling = 2000
 
 // CreateToken mints a personal access token for a service account.
 //
@@ -477,22 +682,70 @@ func (c *Client) RevokeTokens(ctx context.Context, groupID, userID int) error {
 	return nil
 }
 
+// Member is an account's membership of a group or a project.
+//
+// # The access level is the field, and it is why this is not a [User]
+//
+// A membership is not an account: the same account holds different levels in
+// different places, and "at what level" is the only question a reconcile can
+// ask that tells a converged membership from one that has drifted. Decoding
+// only the account left this package able to see THAT a seat was a member and
+// never AT WHAT, so the pass had nothing to compare against and re-added
+// every seat on every run for ever.
+type Member struct {
+	User
+	// AccessLevel is GitLab's numeric role — see [gitlabDeveloper] and
+	// [gitlabMaintainer]. Zero means the listing did not say, which no
+	// GitLab version does; it compares unequal to every configured level,
+	// so the safe direction is a write.
+	AccessLevel int `json:"access_level"`
+}
+
 // GroupMembers lists a group's members.
 //
 // The enumeration decommission targets from: an account is "managed" only
 // if it is in the group this company provisions into, so a service account
-// somebody else made elsewhere on the instance is never a candidate.
+// somebody else made elsewhere on the instance is never a candidate. It is
+// ALSO what the seat loop compares against before it adds anybody.
+//
+// DIRECT MEMBERS, not `/members/all`. What the pass writes is a direct
+// membership and what it can edit is a direct membership — GitLab refuses a
+// PUT for an account whose only membership is inherited from a parent group —
+// so reading the inherited listing would report a seat as converged at a
+// level this pass has no way to change.
 //
 // PAGED TO EXHAUSTION. It asked for one page of 100 and took whatever came
 // back, which is silent truncation on the one listing a destructive decision
 // is made from: on a group with more members than that, every managed
 // account past the first page was invisible to a decommission sweep and
 // stayed live for ever, with the run reporting success.
-func (c *Client) GroupMembers(ctx context.Context, groupID int) ([]User, error) {
-	var out []User
+func (c *Client) GroupMembers(ctx context.Context, groupID int) ([]Member, error) {
+	return c.members(ctx, "/groups/"+strconv.Itoa(groupID)+"/members",
+		fmt.Sprintf("group %d", groupID))
+}
+
+// ProjectMembers lists a project's members.
+//
+// The counterpart of [Client.GroupMembers] and read for the same reason: it
+// is what the seat loop compares against before it adds anybody to a
+// `provisioning.projects` entry. Direct members only, for the reason stated
+// there — and it matters more here, because every seat is a member of the
+// group that contains these projects and the inherited listing would
+// therefore report every one of them as already converged.
+func (c *Client) ProjectMembers(ctx context.Context, project string) ([]Member, error) {
+	return c.members(ctx, "/projects/"+url.PathEscape(project)+"/members", project)
+}
+
+// members walks one membership listing to exhaustion.
+//
+// ONE WALK for both surfaces rather than two copies of the paging: the
+// truncation bug the group listing carried is exactly the one a second
+// hand-written loop would reintroduce, and the two differ only in the path.
+func (c *Client) members(ctx context.Context, path, subject string) ([]Member, error) {
+	var out []Member
 	for page := 1; ; page++ {
-		var batch []User
-		err := c.get(ctx, "/groups/"+strconv.Itoa(groupID)+"/members", url.Values{
+		var batch []Member
+		err := c.get(ctx, path, url.Values{
 			"per_page": {strconv.Itoa(userPageSize)},
 			"page":     {strconv.Itoa(page)},
 		}, &batch)
@@ -505,10 +758,19 @@ func (c *Client) GroupMembers(ctx context.Context, groupID int) ([]User, error) 
 		}
 		if len(out) >= userWalkCeiling {
 			return nil, fmt.Errorf(
-				"gitlab: group %d has more than %d members, which is not a "+
-					"group Crewlet provisions into", groupID, userWalkCeiling)
+				"gitlab: %s has more than %d members, which is not a "+
+					"%s Crewlet provisions into", subject, userWalkCeiling,
+				kindOfMembership(path))
 		}
 	}
+}
+
+// kindOfMembership names what a walk gave up on, for its own error.
+func kindOfMembership(path string) string {
+	if strings.HasPrefix(path, "/groups/") {
+		return "group"
+	}
+	return "project"
 }
 
 // DeleteServiceAccount removes a group service account.
@@ -527,10 +789,49 @@ func (c *Client) DeleteServiceAccount(ctx context.Context, groupID, userID int) 
 	return err
 }
 
-// Hook is a registered webhook.
+// Hook is a registered webhook, as GitLab's listing serves it.
+//
+// DECODE-ONLY, and deliberately: [Events] is assembled from the flat event
+// booleans GitLab sends rather than from a nested object, so this type does
+// not round-trip through [encoding/json.Marshal] and nothing here marshals
+// one. What goes the other way is [hookBody], which is the single statement
+// of what a crewlet hook should be.
 type Hook struct {
 	ID  int    `json:"id"`
 	URL string `json:"url"`
+
+	// Name is what says a hook is THIS deployment's, and it is the only
+	// field that survives a change of public base.
+	//
+	// GitLab has taken a name on a group or project hook since 17.1, which
+	// every instance this engine can talk to already exceeds: a signing
+	// token needs 19.1 (see [Hook.SigningTokenPresent]), so there is no
+	// version that can serve this integration and not store this.
+	//
+	// EMPTY IS A REAL ANSWER and it is not "somebody else's". GitLab sends
+	// `null` for a hook registered without one, which decodes to the zero
+	// string — and every hook an earlier build of this engine made is in
+	// exactly that state. See [ours], which adopts one rather than
+	// stranding it.
+	Name string `json:"name"`
+
+	// Description is where this engine records WHICH signing key the hook
+	// holds, because GitLab will not say.
+	//
+	// It is a digest and never the key: [HookDigest] over the secret, which
+	// is one-way and truncated. What it buys is the one fact
+	// [SigningTokenPresent] cannot give — a hook signs with SOME key, and
+	// whether it is the key the fleet currently holds was unknowable. A
+	// secret rotated outside a reconcile run (`crewlet secrets set`, or the
+	// signing-secret field on the setup form) therefore never reached the
+	// hook: the pass found it converged, wrote nothing, and GitLab went on
+	// signing with the previous key while the engine verified with the new
+	// one and refused every delivery — on a surface reporting ready.
+	//
+	// Empty on a hook an older build registered, which compares unequal and
+	// is rewritten once. That is the correct direction: a hook this engine
+	// cannot place is one it should re-key.
+	Description string `json:"description"`
 
 	// SigningTokenPresent is the ONLY thing GitLab will say about a hook's
 	// signing token: the token itself is never returned, by design. It is
@@ -543,33 +844,245 @@ type Hook struct {
 	// direction: setting a token that was already right costs a write,
 	// while skipping one that was missing costs every delivery.
 	SigningTokenPresent bool `json:"signing_token_present"`
+
+	// EnableSSLVerification is whether GitLab checks this deployment's
+	// certificate before delivering. Read back because it is part of what
+	// [hookBody] asserts, and a hook somebody turned it off on carries a
+	// signing secret over a connection nothing authenticates.
+	EnableSSLVerification bool `json:"enable_ssl_verification"`
+
+	// Events is which subscriptions the hook actually holds, keyed by the
+	// names in [hookEvents].
+	//
+	// A MAP RATHER THAN NINETEEN FIELDS, so the list of event names exists
+	// once — beside the body that writes them — and a version that adds a
+	// twentieth is one line in [hookEvents] rather than two places to keep
+	// in step. A name this hook's GitLab did not send is absent and reads
+	// as off, which is the safe direction on both sides: an event the
+	// engine routes then compares unequal and the hook is re-written,
+	// while one it does not route compares equal and nothing is.
+	Events map[string]bool
 }
 
-// GroupHooks lists a group's webhooks.
-func (c *Client) GroupHooks(ctx context.Context, groupID int) ([]Hook, error) {
-	var out []Hook
-	err := c.get(ctx, "/groups/"+strconv.Itoa(groupID)+"/hooks", nil, &out)
-	return out, err
+// UnmarshalJSON reads a hook, folding GitLab's flat event booleans into
+// [Hook.Events].
+//
+// Two passes over the same bytes rather than a struct with nineteen tagged
+// fields: the second pass is keyed on [hookEvents], which is the same list
+// [hookBody] writes from, so the two cannot drift into a reconcile that
+// writes a subscription it then cannot see.
+func (h *Hook) UnmarshalJSON(raw []byte) error {
+	// An alias to borrow the field tags without recursing into this method.
+	type hook Hook
+	var row hook
+	if err := json.Unmarshal(raw, &row); err != nil {
+		return err
+	}
+	var flags map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &flags); err != nil {
+		return err
+	}
+	*h = Hook(row)
+	h.Events = nil
+	for _, event := range hookEvents {
+		encoded, present := flags[event]
+		if !present {
+			continue
+		}
+		var on bool
+		if err := json.Unmarshal(encoded, &on); err != nil {
+			// NOT A FAILURE OF THE WHOLE LISTING. A version that answers
+			// something other than a bool here leaves the flag absent,
+			// which reads as off — and off against a routed event is a
+			// difference, so the hook is re-written rather than trusted.
+			continue
+		}
+		if h.Events == nil {
+			h.Events = make(map[string]bool, len(hookEvents))
+		}
+		h.Events[event] = on
+	}
+	return nil
 }
+
+// Converged reports a hook that already carries what [hookBody] would write,
+// so writing it again would change nothing at the instance.
+//
+// THE NAME, THE ADDRESS AND THE KEY'S DIGEST ARE PART OF IT, because
+// [hookBody] writes all three.
+// They used to be the caller's business, which worked only while the caller
+// SELECTED on the address: now that [ours] selects on the name, a hook this
+// pass has to re-point — or a nameless one it has just adopted — would
+// otherwise answer "converged" and be left exactly as it was found.
+//
+// # How the key is compared at all
+//
+// GitLab never returns a hook's `signing_token` or its legacy plaintext
+// `token`, so a direct comparison is impossible and this used to settle for
+// "it holds SOME token", with the caller supplying the other half from its
+// own run: a pass that had just minted knew the hook could not be carrying
+// the new value and wrote regardless. That was blind to every rotation
+// another process made — `crewlet secrets set`, the setup form's
+// signing-secret field, a peer's apply — and the consequence was silent and
+// permanent: the pass found the hook converged, wrote nothing, GitLab went on
+// signing with the previous key, the engine verified with the new one, and
+// every delivery was refused by a surface reporting ready.
+//
+// So the digest is compared instead. [hookBody] writes [HookDigest] of the
+// secret into the description, which is the one field this engine controls
+// and GitLab gives back, and the answer is then read off the same listing as
+// every other clause here — the same on every node, with nothing carried down
+// from whichever process happened to mint.
+//
+// The legacy plaintext token is covered by the same reasoning rather than
+// left out of it. A hook an older Crewlet created holds the signing key in
+// `token` and has NO signing token, so [Hook.SigningTokenPresent] is false,
+// so it is never converged and the first pass after the upgrade re-writes it
+// — which is what clears the plaintext field. There is no state where a hook
+// both reports a signing token and still carries the old cleartext one,
+// because the write that produced the first also cleared the second.
+func (h Hook) Converged(name, target, digest string) bool {
+	if h.Name != name || h.URL != target || h.Description != digest {
+		return false
+	}
+	if !h.SigningTokenPresent || !h.EnableSSLVerification {
+		return false
+	}
+	for _, event := range hookEvents {
+		if h.Events[event] != routedEvents[event] {
+			return false
+		}
+	}
+	return true
+}
+
+// GroupHooks lists a group's webhooks, PAGED TO EXHAUSTION.
+//
+// For the reason [Client.Tokens] and [Client.InstanceServiceAccounts] are: a
+// truncated listing is not a slow report, it is a wrong DECISION. Every hook
+// choice this package makes is made out of this listing — [ours] selects this
+// deployment's hooks from it, [ensureGroupHook] decides converged-or-create
+// and deletes the extras from it, and [sweepGroupHooks] and the teardown's
+// removeHooks delete from it. Unpaged it returned GitLab's default first page
+// of twenty, so on a container already carrying twenty hooks this engine's own
+// sat past the boundary, was invisible, and every pass registered another —
+// which is the duplicate-hook failure the name matching exists to stop, with
+// the disconnect reporting success and leaving the real hook live and signed.
+func (c *Client) GroupHooks(ctx context.Context, groupID int) ([]Hook, error) {
+	return hookPages(ctx, c, "/groups/"+strconv.Itoa(groupID)+"/hooks")
+}
+
+// GroupProjects is every project the group holds, subgroups included, as
+// `<namespace>/<path>` — the same spelling `provisioning.projects` uses and
+// every project route here takes.
+//
+// # Why a teardown needs it and a reconcile does not
+//
+// A disconnect has to remove every hook this engine registered ANYWHERE, and
+// the config is not a record of where they are: a run that established
+// per-project hooks wrote them on the projects named AT THE TIME, and a
+// project dropped from `provisioning.projects` since — or a company that
+// connected with the group alone — leaves them unreachable. Measured on a
+// live disconnect: two hooks left on a project in the group, pointing at dead
+// tunnels from earlier runs, which nothing would ever visit again. A
+// `trycloudflare` hostname is re-issued to whoever asks next, so those
+// deliveries go on leaving the customer's GitLab for a stranger.
+//
+// The steady-state reconcile deliberately does NOT walk this. It runs every
+// few minutes and is already O(seats × projects) over the projects a company
+// named; a group with a thousand projects would turn every tick into a
+// thousand hook listings to converge hooks on the handful the config asks
+// for. A teardown happens once, when somebody presses Disconnect, and is the
+// one moment the whole group is worth reading.
+//
+// SUBGROUPS INCLUDED, because a group's projects are not only its direct
+// children and a hook on a subgroup's project is exactly as live as one on a
+// direct child's.
+//
+// PAGED TO EXHAUSTION, for the reason every other enumeration here is: a
+// truncated listing is not a slow report, it is a wrong DECISION — here, a
+// project silently never swept.
+func (c *Client) GroupProjects(ctx context.Context, groupID int) ([]string, error) {
+	var out []string
+	path := "/groups/" + strconv.Itoa(groupID) + "/projects"
+	for page := 1; ; page++ {
+		var batch []struct {
+			PathWithNamespace string `json:"path_with_namespace"`
+		}
+		err := c.get(ctx, path, url.Values{
+			"per_page":          {strconv.Itoa(userPageSize)},
+			"page":              {strconv.Itoa(page)},
+			"include_subgroups": {"true"},
+			// ARCHIVED ONES TOO, and `true` is how GitLab spells that.
+			//
+			// IT IS NOT A FILTER, which is the reading it invites and the
+			// one a review raised: `archived=true` would then return ONLY
+			// archived projects and this sweep would walk past every live
+			// one, leaving their hooks delivering to an address the company
+			// no longer has. What GitLab's own ProjectsFinder#by_archived
+			// does with a truthy value is return the collection UNFILTERED;
+			// the value that narrows to archived alone is the string
+			// `only`. Verified against gitlab-org/gitlab, not inferred.
+			//
+			// Sent explicitly although omitting it is documented to do the
+			// same, because an archived project keeps its webhooks and this
+			// is the one pass that has to see all of them: a default is a
+			// vendor's to change, and self-managed instances run versions
+			// this deployment does not choose.
+			"archived": {"true"},
+			// The listing is only read for the path, so the cheapest
+			// ordering is fine and the default (created_at desc) is
+			// stable enough for a sweep that visits all of them.
+			"simple": {"true"},
+		}, &batch)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range batch {
+			if path := strings.TrimSpace(row.PathWithNamespace); path != "" {
+				out = append(out, path)
+			}
+		}
+		if len(batch) < userPageSize {
+			return out, nil
+		}
+		if len(out) >= projectWalkCeiling {
+			return nil, fmt.Errorf(
+				"gitlab: this group holds more than %d projects, which is not "+
+					"a group Crewlet can sweep in one disconnect — remove the "+
+					"hooks pointing at this deployment by hand",
+				projectWalkCeiling)
+		}
+	}
+}
+
+// projectWalkCeiling bounds [Client.GroupProjects].
+//
+// Same shape and the same reason as [userWalkCeiling], and a smaller number
+// because each project costs a HOOK LISTING afterwards rather than one row in
+// a page: two thousand projects is two thousand round trips inside one
+// disconnect, which is the point at which finishing by hand is faster than
+// waiting. Above it the teardown says so rather than grinding.
+const projectWalkCeiling = 2000
 
 // CreateGroupHook registers a webhook on a group.
 //
 // EVERY EVENT THE PARSER UNDERSTANDS, and no more: a hook subscribed to
 // something nothing routes is delivery this engine answers with a 200 and
 // drops, which looks from the instance's side like a healthy integration.
-func (c *Client) CreateGroupHook(ctx context.Context, groupID int, target, secret string) (Hook, error) {
+func (c *Client) CreateGroupHook(ctx context.Context, groupID int, name, target, secret string) (Hook, error) {
 	var out Hook
 	err := c.send(ctx, http.MethodPost, "/groups/"+strconv.Itoa(groupID)+"/hooks",
-		hookBody(target, secret), &out)
+		hookBody(name, target, secret), &out)
 	return out, err
 }
 
 // UpdateGroupHook re-points an existing hook, which is what a rotation of the
 // signing secret needs.
-func (c *Client) UpdateGroupHook(ctx context.Context, groupID, hookID int, target, secret string) error {
+func (c *Client) UpdateGroupHook(ctx context.Context, groupID, hookID int, name, target, secret string) error {
 	return c.send(ctx, http.MethodPut,
 		"/groups/"+strconv.Itoa(groupID)+"/hooks/"+strconv.Itoa(hookID),
-		hookBody(target, secret), nil)
+		hookBody(name, target, secret), nil)
 }
 
 // DeleteGroupHook removes a group hook, which is what a disconnect does with
@@ -579,11 +1092,37 @@ func (c *Client) DeleteGroupHook(ctx context.Context, groupID, hookID int) error
 		"/groups/"+strconv.Itoa(groupID)+"/hooks/"+strconv.Itoa(hookID), nil, nil)
 }
 
-// ProjectHooks lists a project's webhooks.
+// ProjectHooks lists a project's webhooks, paged for the reason
+// [Client.GroupHooks] gives — and this is the likelier of the two to overflow,
+// because a project is where CI, chat and scanner integrations all register.
 func (c *Client) ProjectHooks(ctx context.Context, project string) ([]Hook, error) {
+	return hookPages(ctx, c, "/projects/"+url.PathEscape(project)+"/hooks")
+}
+
+// hookPages walks one container's hooks to exhaustion.
+//
+// NO CEILING, unlike the token and account walks beside it. Those bound a pile
+// this engine's own bug created — 164 tokens on one account — where a number
+// that large means something is wrong and refusing is safer than acting. A
+// container's hooks are other people's integrations, a couple of dozen at
+// worst, and refusing to read them would turn a busy project into a surface
+// this engine cannot converge at all.
+func hookPages(ctx context.Context, c *Client, path string) ([]Hook, error) {
 	var out []Hook
-	err := c.get(ctx, "/projects/"+url.PathEscape(project)+"/hooks", nil, &out)
-	return out, err
+	for page := 1; ; page++ {
+		var batch []Hook
+		err := c.get(ctx, path, url.Values{
+			"per_page": {strconv.Itoa(userPageSize)},
+			"page":     {strconv.Itoa(page)},
+		}, &batch)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, batch...)
+		if len(batch) < userPageSize {
+			return out, nil
+		}
+	}
 }
 
 // CreateProjectHook registers a webhook on one project.
@@ -591,10 +1130,10 @@ func (c *Client) ProjectHooks(ctx context.Context, project string) ([]Hook, erro
 // The path for an instance whose tier has no group hooks — Premium on
 // gitlab.com, absent from Community Edition — where this is the only way a
 // hook exists at all. See [config.ContainerWebhookMode].
-func (c *Client) CreateProjectHook(ctx context.Context, project, target, secret string) (Hook, error) {
+func (c *Client) CreateProjectHook(ctx context.Context, project, name, target, secret string) (Hook, error) {
 	var out Hook
 	err := c.send(ctx, http.MethodPost, "/projects/"+url.PathEscape(project)+"/hooks",
-		hookBody(target, secret), &out)
+		hookBody(name, target, secret), &out)
 	return out, err
 }
 
@@ -605,10 +1144,12 @@ func (c *Client) DeleteProjectHook(ctx context.Context, project string, hookID i
 }
 
 // UpdateProjectHook re-points an existing project hook.
-func (c *Client) UpdateProjectHook(ctx context.Context, project string, hookID int, target, secret string) error {
+func (c *Client) UpdateProjectHook(
+	ctx context.Context, project string, hookID int, name, target, secret string,
+) error {
 	return c.send(ctx, http.MethodPut,
 		"/projects/"+url.PathEscape(project)+"/hooks/"+strconv.Itoa(hookID),
-		hookBody(target, secret), nil)
+		hookBody(name, target, secret), nil)
 }
 
 // hookBody is the subscription every crewlet hook carries.
@@ -624,9 +1165,17 @@ func (c *Client) UpdateProjectHook(ctx context.Context, project string, hookID i
 // So the list below is exhaustive over what GitLab's hook API accepts, and a
 // future version that flips a default cannot quietly sign this deployment up
 // for traffic nothing reads.
-func hookBody(target, secret string) map[string]any {
+func hookBody(name, target, secret string) map[string]any {
 	body := map[string]any{
 		"url": target,
+		// THE NAME IS THE IDENTITY, and it is what a moved public base
+		// leaves intact. See [Hook.Name] and [ours]: matching on the URL
+		// alone made every change of address create a hook and abandon the
+		// one before it.
+		"name": name,
+		// AND WHICH KEY THIS HOOK HOLDS, which GitLab answers about in no
+		// other way. See [Hook.Description] and [HookDigest].
+		"description": HookDigest(secret),
 		// THE SIGNING TOKEN, and the field name is the whole feature.
 		//
 		// GitLab takes two different secrets on a hook and they are not
@@ -735,4 +1284,39 @@ func isConflict(err error) bool {
 // that should simply have created the thing.
 func asAPIError(err error, target **APIError) bool {
 	return errors.As(err, target)
+}
+
+// HookDigest is how a hook records which signing key it was written with.
+//
+// # Why a digest is published at all
+//
+// GitLab never returns a hook's signing token, and answers exactly one
+// question about it: whether one is set ([Hook.SigningTokenPresent]). That
+// leaves "does this hook hold the key the fleet currently holds" unanswerable,
+// and the consequence is silent: a secret rotated outside a reconcile run is
+// never written to the hook, GitLab goes on signing with the previous key, the
+// engine verifies with the new one, and every delivery is refused while the
+// surface reports ready.
+//
+// The only field this engine controls and GitLab gives back is the
+// description, so the answer goes there. It is a HASH, truncated, and never
+// the key: SHA-256 over a domain string and the secret, cut to 48 bits. That
+// is far more than enough to notice a change and useless for recovering
+// anything — the secret is 32 random bytes, so there is no dictionary to run
+// and nothing shorter to guess. The engine publishes no other property of it.
+//
+// THE DOMAIN STRING IS NOT DECORATION. It stops this digest ever matching one
+// computed over the same bytes for another purpose, which is the rule
+// internal/runtoken already applies to its own key derivation and for the same
+// reason.
+//
+// An empty secret digests to nothing rather than to the hash of the empty
+// string: a hook whose key this run does not know must not be reported as
+// carrying it.
+func HookDigest(secret string) string {
+	if strings.TrimSpace(secret) == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte("crewlet/gitlab/hook-signing-key\x00" + secret))
+	return "crewlet:" + hex.EncodeToString(sum[:6])
 }

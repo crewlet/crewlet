@@ -17,15 +17,20 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
+	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/confluence"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/datadog"
+	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/slack"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/whsec"
 )
@@ -636,15 +641,25 @@ type statusStore struct {
 	mu     sync.Mutex
 	states map[integration.Kind]integration.State
 	forgot []integration.Kind
+
+	// onSave runs inside every write, which is how a case observes what
+	// was TRUE at the moment the row was written — the lease being held,
+	// most of all. Nothing else can see that: the write is the last thing
+	// a pass does and the lease is released a frame later.
+	onSave func(integration.State)
 }
 
 func (s *statusStore) SaveIntegration(_ context.Context, state integration.State) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.states == nil {
 		s.states = map[integration.Kind]integration.State{}
 	}
 	s.states[state.Kind] = state
+	hook := s.onSave
+	s.mu.Unlock()
+	if hook != nil {
+		hook(state)
+	}
 	return nil
 }
 
@@ -674,10 +689,20 @@ func (s *statusStore) get(kind integration.Kind) (integration.State, bool) {
 }
 
 // withPass rebuilds the surface with a provisioning pass wired in.
-func (s *surface) withPass(t *testing.T, pass *recordingPass) (*statusStore, *setup.Runner) {
+// PASSES, PLURAL. A card can cover more than one surface — Atlassian is an
+// organization and two products — and a disconnect now reads the SIBLING
+// surfaces' own rows to decide whether a shared credential is orphaned. A
+// harness that could wire only one made every sibling unreconciled.
+func (s *surface) withPass(
+	t *testing.T, passes ...*recordingPass,
+) (*statusStore, *setup.Runner) {
 	t.Helper()
 	status := &statusStore{}
-	runner := setup.NewRunner([]setup.Pass{pass}, nil, func() time.Time { return pinned })
+	wired := make([]setup.Pass, 0, len(passes))
+	for _, pass := range passes {
+		wired = append(wired, pass)
+	}
+	runner := setup.NewRunner(wired, nil, func() time.Time { return pinned })
 	s.mux = http.NewServeMux()
 	setupapi.New(setupapi.Options{
 		Company: s.company, Config: s.config, Secrets: s.vault,
@@ -768,8 +793,18 @@ func TestAProvisionPassGetsASinkAndABase(t *testing.T) {
 	}
 }
 
-// A CHECK IS THE SAME PASS WITH NEITHER. It answers "is it working now"
-// without the engine writing anything at the third-party app.
+// A CHECK IS THE SAME PASS WITH NO SINK — and WITH the address.
+//
+// THE SINK IS THE PERMISSION TO WRITE, which is what it has always actually
+// been: every vendor gates its registration on having one. The address is a
+// FACT, and withholding it made a check report the wrong one. A vendor reads
+// an empty base as "this deployment has no public base URL" and emits
+// ingress_blocked against integrations.public_base_url owed by an admin, and
+// a check persists its findings through the same fold the loop uses — so
+// pressing Check on a healthy company wrote "every monitor that fires reaches
+// nobody" into the live status row and flipped the card to Action required
+// over a value that was already set. Measured against a running deployment
+// behind a working tunnel.
 func TestACheckRunsTheSamePassReadOnly(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
@@ -786,9 +821,50 @@ func TestACheckRunsTheSamePassReadOnly(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("the pass ran %d times", calls)
 	}
-	if in.Sink != nil || in.WebhookBase != "" {
-		t.Fatalf("a check was given permission to write: sink=%v base=%q",
-			in.Sink != nil, in.WebhookBase)
+	if in.Sink != nil {
+		t.Fatalf("a check was given a sink, which is the permission to write")
+	}
+	if in.WebhookBase != "https://engine.example.com" {
+		t.Fatalf("a check was given base %q, so the vendor cannot tell "+
+			"\"no address\" from \"not allowed to register\" and reports the "+
+			"first about a deployment that has one", in.WebhookBase)
+	}
+}
+
+// AND A CHECK OVER A COMPANY THAT GENUINELY HAS NO ADDRESS IS NOT REFUSED.
+//
+// The refusal is the WRITING route's, because a pass that registers nothing
+// while reporting success is the failure it exists to stop. A check has
+// nothing to register, so it runs and reports the absence — which is a true
+// finding, and the one an operator needs.
+func TestACheckWithNoPublicBaseRunsAndReportsIt(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	pass := &recordingPass{}
+	s.withPass(t, pass)
+	res := s.do(t, http.MethodPatch, "/config",
+		`{"integrations":{"github":{"enabled":true,"webhook_secret":"${GH_SECRET}","provisioning":{"org":"acme"}}}}`,
+		map[string]string{
+			"Content-Type": "application/merge-patch+json", "X-Summary": "no base",
+		})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("seed = %d: %s", res.Code, res.Body)
+	}
+	if err := s.vault.Set(t.Context(), "GH_SECRET", "s", "test", "test", pinned); err != nil {
+		t.Fatal(err)
+	}
+
+	got := s.do(t, http.MethodPost, "/setup/integrations/github/check", `{}`, nil)
+	if got.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", got.Code, got.Body)
+	}
+	in, calls := pass.last()
+	if calls != 1 {
+		t.Fatalf("the check ran %d times", calls)
+	}
+	if in.WebhookBase != "" {
+		t.Errorf("base = %q, want empty: the company really has none", in.WebhookBase)
 	}
 }
 
@@ -1525,5 +1601,147 @@ func TestACredentialFindingIsClearedByACredentialField(t *testing.T) {
 					"reporting one offers nothing that clears it", tc.kind)
 			}
 		})
+	}
+}
+
+// EVERY DROPDOWN OPENS ON AN ANSWER, which is what makes "Choose one"
+// unreachable rather than merely unwanted.
+//
+// The form used to render an empty placeholder above every choice control
+// unconditionally, so each one opened with a question mark over the value it
+// was already showing. Removing it is only honest if a choice field always
+// has something to show — and that is a property of the VENDOR's declaration,
+// not of the screen, so it is checked here rather than hoped for.
+//
+// It also holds up an older promise. A connect form and a settings form are
+// meant to be one form, and a defaultless choice breaks that on its own: with
+// nothing stored the connect side would render a placeholder the settings
+// side does not, which is exactly the "the settings form is a different
+// screen" bug that invariant exists to stop.
+//
+// A DEFAULT IS A SUGGESTION, NEVER A STORED VALUE, so this costs a company
+// nothing: what it already answered still wins, and a default that turns out
+// to be wrong is one somebody changes rather than one they have to discover.
+func TestEveryChoiceOpensOnAnAnswer(t *testing.T) {
+	t.Parallel()
+	resolve := func(string) (string, bool) { return "", false }
+	for _, tc := range []struct {
+		kind string
+		reqs []setup.Requirement
+	}{
+		{"atlassian", atlassian.Requirements(nil, resolve)},
+		{"confluence", confluence.Requirements(nil, true, resolve)},
+		{"datadog", datadog.Requirements(nil, resolve)},
+		{"github", github.Requirements(nil, resolve)},
+		{"gitlab", gitlab.Requirements(nil, resolve)},
+		{"jira", jira.Requirements(nil, true, resolve)},
+		{"mattermost", mattermost.Requirements(nil, resolve)},
+		{"slack", slack.Requirements("ceo", nil, resolve)},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			for _, req := range tc.reqs {
+				// BOTH KINDS THAT RENDER AS A DROPDOWN. A handle field is a
+				// picker whether or not the vendor declares any choices —
+				// the screen appends this company's own seat roster — so
+				// gating on a declared list would miss exactly the field
+				// whose options the vendor cannot see.
+				if req.Hidden ||
+					(req.Kind != setup.KindChoice && req.Kind != setup.KindHandle) {
+					continue
+				}
+				if strings.TrimSpace(req.Default) == "" {
+					t.Errorf("%s.%s offers choices and suggests none, so its "+
+						"dropdown opens on an empty placeholder over a question "+
+						"nobody has been asked", tc.kind, req.Field)
+					continue
+				}
+				// AND THE SUGGESTION IS ONE OF THEM, or the control opens on
+				// a selection absent from its own list — which renders as the
+				// same empty box by another route.
+				// A HANDLE'S OPTIONS ARE MOSTLY NOT HERE, so only a
+				// declared list can be checked against.
+				if len(req.Choices) == 0 {
+					continue
+				}
+				var offered bool
+				for _, c := range req.Choices {
+					if c.Value == req.Default {
+						offered = true
+					}
+				}
+				if !offered {
+					t.Errorf("%s.%s suggests %q, which is not among its own "+
+						"choices", tc.kind, req.Field, req.Default)
+				}
+			}
+		})
+	}
+}
+
+// A GATED FIELD IS DECLARED AFTER THE ANSWER THAT REVEALS IT.
+//
+// The form renders a vendor's list in the order the vendor wrote it, so a
+// field gated on a choice BELOW it appears above the question — it pops into
+// existence somewhere the reader has already scrolled past, which is the same
+// as not appearing at all for the one person it is addressed to.
+//
+// Checked here rather than on the screen, because the screen's own test can
+// only prove the renderer preserves an order: which order it is handed is
+// this list's decision. Moving GitHub's organization token back above its
+// coverage question left every rendering test passing.
+//
+// It also catches a gate naming a field that is not there at all, which
+// [setup.Requirement.Needed] reads as SHUT — a field nobody can ever reveal,
+// and silent, because one demanded for no reason looks exactly like one
+// genuinely needed.
+func TestAGatedFieldFollowsTheAnswerThatRevealsIt(t *testing.T) {
+	t.Parallel()
+	resolve := func(string) (string, bool) { return "", false }
+	for _, tc := range []struct {
+		kind string
+		reqs []setup.Requirement
+	}{
+		{"atlassian", atlassian.Requirements(nil, resolve)},
+		{"confluence", confluence.Requirements(nil, true, resolve)},
+		{"datadog", datadog.Requirements(nil, resolve)},
+		{"github", github.Requirements(nil, resolve)},
+		{"gitlab", gitlab.Requirements(nil, resolve)},
+		{"jira", jira.Requirements(nil, true, resolve)},
+		{"mattermost", mattermost.Requirements(nil, resolve)},
+		{"slack", slack.Requirements("ceo", nil, resolve)},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			at := map[string]int{}
+			for i, req := range tc.reqs {
+				at[req.Field] = i
+			}
+			for i, req := range tc.reqs {
+				if req.RequiredWhen == nil {
+					continue
+				}
+				gate, declared := at[req.RequiredWhen.Field]
+				if !declared {
+					t.Errorf("%s.%s is gated on %q, which this app declares "+
+						"nowhere — so the gate is shut for ever and the field "+
+						"can never appear", tc.kind, req.Field, req.RequiredWhen.Field)
+					continue
+				}
+				if gate > i {
+					t.Errorf("%s.%s is gated on %q and is declared above it, "+
+						"so it appears where the reader has already been",
+						tc.kind, req.Field, req.RequiredWhen.Field)
+				}
+			}
+		})
+	}
+}
+
+// forget drops values, which is what a teardown does to the credentials of an
+// account it removed.
+func (v *vault) forget(names ...string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	for _, name := range names {
+		delete(v.values, name)
 	}
 }

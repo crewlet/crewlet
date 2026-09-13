@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -114,6 +115,15 @@ type Options struct {
 	// that arrives.
 	AppFlow AppCompleter
 
+	// Recheck asks the reconcile loop to look at GitHub immediately, for
+	// the moment a person finishes installing an agent's app there.
+	//
+	// Nil waits out the cadence, which is what happened before this
+	// existed: an admin-owed surface backs off from fifteen seconds to ten
+	// minutes ([integration.Schedule]), so the instant somebody DOES the
+	// thing the card is asking for is the instant the wait is longest.
+	Recheck GitHubRechecker
+
 	// Claims is the FLEET-WIDE dedupe. Nil handles every delivery, which
 	// is what a single node without coordination already does.
 	//
@@ -151,6 +161,14 @@ type Receiver struct {
 	now        func() time.Time
 	forge      *forgeVerifier
 	appFlow    AppCompleter
+
+	// recheck asks the reconcile loop to look at GitHub now, and
+	// recheckedAt is when this route last did. See [recheckEvery]: the
+	// route is unauthenticated, so the ask is rate limited here rather
+	// than at the loop, which cannot tell who asked.
+	recheck     GitHubRechecker
+	recheckMu   sync.Mutex
+	recheckedAt time.Time
 }
 
 // New assembles the receiver.
@@ -159,6 +177,7 @@ func New(opts Options) *Receiver {
 		secrets:    opts.Secrets,
 		publisher:  opts.Publisher,
 		appFlow:    opts.AppFlow,
+		recheck:    opts.Recheck,
 		events:     opts.Events,
 		claims:     opts.Claims,
 		stream:     opts.Stream,

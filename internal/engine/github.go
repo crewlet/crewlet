@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 
@@ -89,8 +90,9 @@ func (g *githubIdentities) resolve(ctx context.Context, api, web string, tokens 
 		login, err := client.Me(ctx)
 		if err != nil {
 			log.WarnContext(ctx, "github_seat_identity_unresolved", "error", err.Error(),
-				"detail", "this seat receives no code-host events until "+
-					"the next apply re-resolves it")
+				"detail", "this seat receives no code-host events until a lookup "+
+					"succeeds; the reconcile loop retries it on this surface's "+
+					"own pass, so nothing has to be applied")
 			return
 		}
 		found[i] = login
@@ -224,13 +226,8 @@ func (e *Engine) startGitHub(ctx context.Context, c *Company, cfg *config.GitHub
 	// company runs on without its code host. That is the honest outcome,
 	// because the integration IS unavailable — the alternative is one that
 	// reports itself enabled and is inert.
-	if strings.TrimSpace(env.Value(cfg.WebhookSecret)) == "" {
-		// NAMES ONLY, never the value: this line goes to a log file.
-		return nil, fmt.Errorf(
-			"engine: github: webhook_secret resolved empty (%q) — nothing "+
-				"would verify an inbound delivery, so every webhook GitHub "+
-				"sends would be refused; set that variable in the environment "+
-				"or this node's secret store", cfg.WebhookSecret)
+	if err := githubWirable(cfg, env); err != nil {
+		return nil, err
 	}
 
 	// WHO ELSE IS TAKING PART, read through the agents' OWN apps.
@@ -361,3 +358,60 @@ func (e *Engine) githubSeatApps(company *Company, env *config.Resolver) []github
 // githubPrompt is the hosted code host's trigger builder. A value, held by
 // nothing.
 func githubPrompt() notify.Prompt { return github.Prompt{} }
+
+// githubWirable reports whether this revision's code host can be wired at all.
+//
+// ONE IMPLEMENTATION for the two callers, on the terms [gitlabWirable] states:
+// the boot and apply wiring, and the reconcile loop's identity retry. A retry
+// that skipped it would resolve seat identities behind a route answering 503
+// to every delivery, and report the agents as wired.
+func githubWirable(cfg *config.GitHub, env *config.Resolver) error {
+	if strings.TrimSpace(env.Value(cfg.WebhookSecret)) == "" {
+		// NAMES ONLY, never the value: this line goes to a log file.
+		return fmt.Errorf(
+			"engine: github: webhook_secret resolved empty (%q) — nothing "+
+				"would verify an inbound delivery, so every webhook GitHub "+
+				"sends would be refused; set that variable in the environment "+
+				"or this node's secret store", cfg.WebhookSecret)
+	}
+	return nil
+}
+
+// unresolved names the seats holding a code-host credential that resolves to
+// no account.
+//
+// A SEAT WITH ITS OWN APP IS NEVER HERE, and that is the one way this differs
+// from the other two: GitHub derives an app's account from its slug, which
+// this engine wrote down when it created the app, so such a seat is routable
+// with no lookup at all. Reporting it as unresolved because its leftover token
+// happened not to answer would put a working seat on the card as broken.
+//
+// See [jiraIdentities.unresolved] for the rest of the contract.
+func (g *githubIdentities) unresolved(c *Company, env *config.Resolver) []string {
+	g.mu.Lock()
+	known := maps.Clone(g.byToken)
+	g.mu.Unlock()
+
+	byApp := map[string]bool{}
+	for role := range c.Config.EachRole() {
+		seat := role.Seat()
+		if app := role.Integrations.GitHub; seat.IsAgent() && app != nil &&
+			github.NormalizeLogin(app.AppSlug) != "" {
+			byApp[seat.Handle()] = true
+		}
+	}
+
+	var out []string
+	for seat := range c.Org.AllRoles() {
+		handle := seat.Handle()
+		if byApp[handle] {
+			continue
+		}
+		token := github.CredentialOf(seat, env.Value)
+		if token != "" && known[token] == "" {
+			out = append(out, handle)
+		}
+	}
+	slices.Sort(out)
+	return out
+}

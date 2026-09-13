@@ -51,7 +51,7 @@ below.
 |---|---|---|
 | **Shared memory** | A CLI keeps sessions, history, todos, and project notes under one home. Seven seats on one subscription would read each other's transcripts. | [Isolation](#isolation-the-part-that-actually-matters) |
 | **One model per entry** | A CLI takes `--model`, so per-phase models mean several entries — which must not mean several logins. | [Per-phase models](#per-phase-models) |
-| **No tool channel** | The tool loop needs `tool_calls` back. A CLI prints prose. | [Tool calls](#tool-calls) |
+| **No tool channel** | The tool loop needs `tool_calls` back. A CLI prints prose. | [Tool calls](#tool-calls-in-text-mode) |
 | **Browser-only auth** | Vendor logins are OAuth (PKCE) with MFA — no password grant to script. | [Authentication](#authentication) |
 
 ---
@@ -1109,7 +1109,7 @@ would to any other.
 ### What you gain, and what becomes yours
 
 Against the `cli-agent` backend you get a real HTTP provider back: native
-tool calls instead of the [in-prompt JSON envelope](#tool-calls), no
+tool calls instead of the [in-prompt JSON envelope](#tool-calls-in-text-mode), no
 process launch per call, and whatever token accounting the endpoint
 reports. Against a metered key you get flat-rate cost.
 

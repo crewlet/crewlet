@@ -69,6 +69,34 @@ func CredentialOf(seat *org.Role, value func(string) string) string {
 	return ""
 }
 
+// credentialSlot names the key a seat writes its code-host credential into,
+// and reports whether it writes one at all.
+//
+// THE OTHER HALF OF [CredentialOf], and the half that separates a broken
+// credential from an absent one. CredentialOf answers with the RESOLVED
+// value, so a seat that names `${GITHUB_TOKEN}` against an unset variable and
+// a seat that names nothing come back identically empty — and they are
+// opposite facts: the first is a variable somebody has to set, the second is
+// a seat whose identity is its own app. See [IdentityOutcome] for what
+// conflating them cost.
+//
+// It reads the RAW config value, because "did the operator write something
+// here" is a question about the document rather than about the environment,
+// and it returns the KEY so a caller can name the field without ever handling
+// what is in it.
+func credentialSlot(seat *org.Role) (string, bool) {
+	if seat == nil || seat.IsHuman() {
+		return "", false
+	}
+	block := seat.MCPEnv[SeatEnv]
+	for _, key := range CredentialKeys {
+		if strings.TrimSpace(block[key]) != "" {
+			return key, true
+		}
+	}
+	return "", false
+}
+
 // SeatCredentials are the distinct credentials the company's agent seats
 // hold, sorted.
 //

@@ -1,6 +1,8 @@
 package github
 
 import (
+	"strings"
+
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -20,26 +22,30 @@ import (
 // against, and a route with nothing to check against answers 503 rather than
 // accepting one. It is mintable because both ends of it belong to the engine.
 //
-// THE ORG TOKEN IS NOT ASKED FOR AT ALL, which is the end of a road it spent
-// two versions being demoted along: it led the form, then it was optional,
-// and now nothing here wants it. Its one job in routing was the list of who
-// is participating in a thread, and the agents' own apps answer that
-// ([SeatLookup]), scoped to what each may see rather than to whatever the
-// person who minted the token could reach.
+// THE ORG TOKEN IS ASKED FOR, AND ONLY FOR THE HOOK. It led the form once,
+// for a job it no longer has: participant fan-out — the list of who is in a
+// thread — is answered by each agent's own app now ([SeatLookup]), scoped to
+// what that agent may see rather than to whatever the person who minted the
+// token could reach. So it was demoted to optional, and then removed from
+// the form entirely.
 //
-// The FIELD remains on the config block, because a company that wants one
-// organization-wide hook still reconciles through it. It is not a question
-// worth putting to everyone connecting GitHub, though: the flow this form
-// serves gives each agent its own app, with its own hook baked into its own
-// manifest, and asks nobody for a personal access token at any point.
+// Removing it went one step too far. The field kept its OTHER job, which is
+// the whole organization-level client: with none, the pass registers nothing
+// at GitHub, and `org_webhook: true` says so in a finding naming
+// `integrations.github.token`. A form with no box for that field left the
+// warning pointing at a setting the dashboard could not set — so an operator
+// installed every agent's app, as the card had been asking, and watched it
+// sit there, because an App installation carries no `admin:org_hook` and
+// never will. It is back, optional, declaring the finding it clears, so the
+// screen offers it to whoever is reading that warning and to nobody else.
 
 // Requirements says what this company still needs for GitHub.
 func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setup.Requirement {
-	var secret, url, org, orgHook string
+	var secret, url, org, orgHook, token string
 	var enabled bool
 	if in != nil {
 		enabled = in.Enabled
-		secret, url = in.WebhookSecret, in.URL
+		secret, url, token = in.WebhookSecret, in.URL, in.Token
 		// The provisioning block is a POINTER and is absent on every
 		// company that has not run a pass, which is precisely the
 		// company this list is being built for.
@@ -71,7 +77,13 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			// value minted here, and nobody has to copy anything.
 			Mintable: true,
 			Help:     "Signs every delivery. Without it the route refuses all of them.",
-			Blocks:   integration.FindingCredentialMissing,
+			// INGRESS, NOT CREDENTIAL, which jira and confluence already
+			// declare for the same field. It said credential_missing, and
+			// this pass emits that kind nowhere for the webhook secret —
+			// every ingress state it reports is ingress_blocked — so the
+			// join was dangling and the screen offered this field for
+			// nothing that could ever ask for it.
+			Blocks: integration.FindingIngressBlocked,
 		},
 		{
 			Field: "url",
@@ -97,55 +109,173 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 		},
 		{
 			Field:      "provisioning.org_webhook",
-			Label:      "Where to register the hook",
+			Label:      "Which GitHub activity should reach your agents",
 			Kind:       setup.KindChoice,
 			ConfigPath: "integrations.github.provisioning.org_webhook",
 			Required:   false,
 			// THE VENDOR'S OWN CLOSED SET, so a form cannot offer a
 			// value the config validator refuses.
-			Choices: choices(),
-			Help:    "One hook for the organization, or one per repository.",
+			Choices: choices(org),
+			// ONE ORGANIZATION HOOK IS WHAT MOST COMPANIES WANT, and it is
+			// the one that keeps covering repositories created after this
+			// run — the difference between a new repository routing on day
+			// one and routing whenever somebody remembers.
+			//
+			// `true` rather than `auto`, which differs only in what
+			// happens when the hook cannot be made: auto falls back to
+			// per-repository hooks silently, and a fallback nobody was
+			// told about is a company that thinks it has one hook and has
+			// several, each needing the same maintenance. This one says
+			// so. That visibility is only affordable because the token
+			// above is now askable — defaulting to `true` over a form with
+			// no box for it would have put a permanent finding on every
+			// fresh connect, which is the bug [noRegistrarReason] was
+			// narrowed to remove.
+			// THE ARRANGEMENT MOST COMPANIES ARE ALREADY IN, and the one
+			// that needs nothing further: each agent's app carries its own
+			// webhook, so connecting and installing is the whole setup.
+			//
+			// It was `true` — the strictest value, demanding a scope most
+			// connectors do not have — which is what produced a permanent
+			// Action required on the ordinary connect. The operator was
+			// then told to install the agents' apps, which can never carry
+			// admin:org_hook, so doing exactly as the card asked changed
+			// nothing.
+			Default: string(config.ContainerWebhookNever),
+			Help: "Each agent's own app already delivers what happens in the " +
+				"repositories it is installed on.",
+		},
+		{
+			// THE TOKEN THE COVERAGE ANSWER ABOVE NEEDS, and it sits under
+			// that answer rather than above it: a field revealed by a
+			// choice belongs beneath the choice that revealed it, or it
+			// appears somewhere a reader has already scrolled past. Asked
+			// for at all because
+			// the warning about it named a field the dashboard had no box
+			// for.
+			//
+			// An organization-wide hook needs `admin:org_hook`, which only
+			// a user token carries: an App installation grants nothing of
+			// the sort, so installing every agent's app — the thing the
+			// card spends its time asking for — cannot clear it, and an
+			// operator who did exactly as they were told watched the same
+			// finding sit there. Measured, and reported as the install not
+			// having worked.
+			//
+			// OPTIONAL, because it genuinely is for the default shape: a
+			// company hooking each agent's own app needs none. It blocks
+			// the same finding the warning carries, so the form puts this
+			// field in front of whoever is reading that warning rather
+			// than every connect.
+			Field:      "token",
+			Label:      "Organization token",
+			Kind:       setup.KindSecret,
+			ConfigPath: "integrations.github.token",
+			SecretName: "GITHUB_TOKEN",
+			// NEITHER REQUIRED NOR OPTIONAL: required BY AN ANSWER. It is
+			// the one thing standing between "every repository in the
+			// organization" and that being true, and a credential the
+			// other answer never uses. Stated as Required it blocked a
+			// connect that needed nothing; stated as optional it let the
+			// API store a choice it could not carry out.
+			RequiredWhen: &setup.Gate{
+				Field: "provisioning.org_webhook", Equals: string(config.ContainerWebhookRequire),
+			},
+			Help: "GitHub only lets a user token register an organization-wide " +
+				"hook, and it needs the admin:org_hook scope. No app can carry " +
+				"this, however it is installed.",
+			Blocks: integration.FindingIngressBlocked,
 		},
 	}
 
-	reqs[0].Present, reqs[0].Resolved, reqs[0].Stored = setup.Toggle(enabled)
-	reqs[1].Present, reqs[1].Resolved, reqs[1].Stored = setup.Held(secret, resolve)
-	reqs[2].Present, reqs[2].Resolved, reqs[2].Stored = setup.Plain(url)
-	reqs[3].Present, reqs[3].Resolved, reqs[3].Stored = setup.Plain(org)
-	reqs[4].Present, reqs[4].Resolved, reqs[4].Stored = setup.Plain(orgHook)
+	// RESOLVED BY FIELD, not by position, which datadog's own list says at
+	// length and this one had not been given yet. Five index writes against
+	// a literal above them means inserting a field — the organization token
+	// here — silently pairs every later field's value with the row before
+	// it: the hook choice would have reported the organization's presence,
+	// and nothing would have failed to compile.
+	values := map[string]struct {
+		raw    string
+		sealed bool
+		toggle bool
+	}{
+		"enabled":                  {toggle: true},
+		"webhook_secret":           {raw: secret, sealed: true},
+		"url":                      {raw: url},
+		"provisioning.org":         {raw: org},
+		"token":                    {raw: token, sealed: true},
+		"provisioning.org_webhook": {raw: orgHook},
+	}
+	for i := range reqs {
+		v, ok := values[reqs[i].Field]
+		if !ok {
+			continue
+		}
+		switch {
+		case v.toggle:
+			// Present when it is ON: reporting `false` as written down
+			// would make a paused integration look complete.
+			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Toggle(enabled)
+		case v.sealed:
+			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Held(v.raw, resolve)
+		default:
+			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Plain(v.raw)
+		}
+	}
 	return reqs
 }
 
-// choices are the org-webhook modes, read from the config package's own list
-// so a value it accepts and a value this offers can never diverge.
-func choices() []setup.Choice {
-	labels := map[config.ContainerWebhookMode]setup.Choice{
-		"auto": {
-			Label: "Organization hook, falling back to each repository",
-			Hint:  "One hook for everything, where the token may create one.",
+// choices are the two coverage arrangements this form offers, named by what
+// they COVER rather than by where a hook is registered.
+//
+// # Two answers, from three modes, deliberately
+//
+// It offered the config's own closed set, worded as registration topology:
+// "Organization hook, falling back to each repository" / "Organization hook
+// only" / "One hook per repository". Every one of those is true and none of
+// them is the question an operator has — which is whose activity their agents
+// hear about. And the arrangement most dashboard connects actually land in
+// was named by NONE of them, because it is not a hook at all: each agent's
+// own app carries its own webhook, and that is expressed by
+// `integrations.github.token` being empty, a different field, described in
+// its help text.
+//
+// `auto` IS ABSENT because it is not an answer to this question. It means
+// "try for the whole organization and quietly take less if you cannot", which
+// leaves a company believing it has one hook when it has several — each one
+// its own thing to maintain, and none of them covering a repository made
+// tomorrow. Every state it reaches is reachable by picking one of these two
+// and knowing which one you picked.
+//
+// `false` WITH A `repos` LIST is absent for a different reason: it is a real
+// arrangement and a rare one, it needs a list of repositories this form has
+// no way to help somebody build, and it is not narrowed away — YAML keeps it,
+// [config.ContainerWebhookModes] still accepts all three, and the pass still
+// hooks every repository a company names. What this list decides is which
+// questions are worth putting to somebody connecting from a dashboard.
+//
+// THE VALUES ARE STILL THE CONFIG'S OWN, so a form cannot offer something the
+// validator refuses, and a company that set `auto` by hand keeps it: nothing
+// here rewrites a stored answer, because [setup.Requirement.Default] is a
+// suggestion for a company that has none.
+func choices(org string) []setup.Choice {
+	where := "your organization"
+	if org = strings.TrimSpace(org); org != "" {
+		where = org
+	}
+	return []setup.Choice{
+		{
+			Value: string(config.ContainerWebhookNever),
+			Label: "Repositories where an agent's app is installed",
+			Hint: "Recommended. Nothing else to set up — each agent hears " +
+				"about its own repositories.",
 		},
-		"true": {
-			Label: "Organization hook only",
-			Hint:  "Fails rather than falling back, so a missing grant is visible.",
-		},
-		"false": {
-			Label: "One hook per repository",
-			Hint:  "For a token that may not administer the organization.",
+		{
+			Value: string(config.ContainerWebhookRequire),
+			Label: "Every repository in " + where + ", including new ones",
+			Hint:  "Needs a user token with admin:org_hook.",
 		},
 	}
-	out := make([]setup.Choice, 0, len(config.ContainerWebhookModes))
-	for _, mode := range config.ContainerWebhookModes {
-		choice := labels[mode]
-		choice.Value = string(mode)
-		if choice.Label == "" {
-			// A mode this file has no words for is still offered, by its
-			// own name: refusing to show it would hide a setting the
-			// config accepts.
-			choice.Label = string(mode)
-		}
-		out = append(out, choice)
-	}
-	return out
 }
 
 // Summary is the sentence the connect form opens with.

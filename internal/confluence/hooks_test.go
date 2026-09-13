@@ -1,17 +1,23 @@
 package confluence_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/provision"
 )
 
 // cloudSite is a Confluence Cloud webhook administration endpoint behaving
@@ -23,9 +29,18 @@ type cloudSite struct {
 	*httptest.Server
 	hooks map[string]map[string]any
 	next  int
-	// refuse names an event whose registration this site rejects, so a
-	// partial hook-up is representable.
+	// refuse names an event this site will not let this credential
+	// register: any registration SUBSCRIBING to it is answered 403, so both
+	// a partially hooked-up Cloud site and a Data Center instance that
+	// refuses its one all-events hook are representable. See
+	// [cloudSite.refuses].
 	refuse string
+	// refuseDelete makes the site refuse to REMOVE a hook, which the event
+	// knob above cannot express: a delete carries no body, so there is no
+	// event list to match it on. It is the credential that may list and
+	// register but not remove — the shape that decides whether a -recreate
+	// run leaves one registration or two.
+	refuseDelete bool
 	// writes counts every mutation, for the converged-pass-writes-nothing
 	// property.
 	writes int
@@ -46,8 +61,26 @@ func (s *cloudSite) serve(w http.ResponseWriter, req *http.Request) {
 
 	path := req.URL.Path
 	switch {
-	case strings.HasSuffix(path, "/rest/api/user/current"):
+	case strings.HasSuffix(path, "/rest/api/user/current") && req.Method == http.MethodGet:
 		_, _ = w.Write([]byte(`{"accountId":"acct-org"}`))
+	case strings.HasSuffix(path, "/rest/api/user/current"):
+		// THE METHOD CHECK IS PART OF THE COUNTER, and this arm is where
+		// it is kept honest.
+		//
+		// [cloudSite.writes] counts by ROUTE, which is the rule
+		// integrationtest's package doc sets: some third-party apps model a
+		// listing as a POST, so a method-keyed counter makes the
+		// converged-pass-writes-nothing clause impossible to satisfy. The
+		// price of that rule is that a route declared read-only has to
+		// actually BE read-only — this one matched on the path alone, so a
+		// mutating call here would have been served as a read and counted as
+		// nothing at all, which is that same hole inverted.
+		//
+		// Nothing in the pass does that today (it only GETs here), and a 405
+		// is what keeps it that way: the day somebody reaches this route with
+		// a write, they get a failure to read rather than a silent pass.
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_, _ = w.Write([]byte(`{"message":"the identity route is read-only"}`))
 	case strings.HasSuffix(path, "/rest/webhooks/1.0/webhook") && req.Method == http.MethodGet:
 		out := make([]map[string]any, 0, len(s.hooks))
 		for _, h := range s.hooks {
@@ -57,10 +90,8 @@ func (s *cloudSite) serve(w http.ResponseWriter, req *http.Request) {
 	case strings.HasSuffix(path, "/rest/webhooks/1.0/webhook") && req.Method == http.MethodPost:
 		var in map[string]any
 		_ = json.NewDecoder(req.Body).Decode(&in)
-		if events, ok := in["events"].([]any); ok && s.refuse != "" &&
-			len(events) == 1 && events[0] == s.refuse {
-			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(`{"message":"this token may not register that event"}`))
+		if s.refuses(in) {
+			s.refusal(w)
 			return
 		}
 		s.writes++
@@ -76,22 +107,62 @@ func (s *cloudSite) serve(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(h)
 	case strings.Contains(path, "/rest/webhooks/1.0/webhook/") && req.Method == http.MethodPut:
-		s.writes++
 		id := path[strings.LastIndex(path, "/")+1:]
 		var in map[string]any
 		_ = json.NewDecoder(req.Body).Decode(&in)
+		// REFUSED BEFORE IT IS COUNTED, and refusable at all because an
+		// instance that will not let this credential register an event will
+		// not let it re-point one either. A site that refused only the POST
+		// would make a re-pointed hook succeed where a fresh one was
+		// forbidden, which no real permission model does.
+		if s.refuses(in) {
+			s.refusal(w)
+			return
+		}
+		s.writes++
 		h := s.hooks[id]
 		h["name"], h["url"], h["events"] = in["name"], in["url"], in["events"]
 		// An update re-asserts enabled, which is what both writers send.
 		h["enabled"] = true
 		_ = json.NewEncoder(w).Encode(h)
 	case strings.Contains(path, "/rest/webhooks/1.0/webhook/") && req.Method == http.MethodDelete:
+		if s.refuseDelete {
+			s.refusal(w)
+			return
+		}
 		s.writes++
 		delete(s.hooks, path[strings.LastIndex(path, "/")+1:])
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
+}
+
+// refuses reports a registration this site will not accept: one that
+// subscribes to [cloudSite.refuse], whether on its own or among others.
+//
+// BY MEMBERSHIP RATHER THAN BY EQUALITY, which is what makes the two
+// deployments refusable by one knob. A Cloud registration names exactly one
+// event, so the two rules agree there; Data Center registers every event in a
+// single call, and an equality check made that call unrefusable — which left
+// that branch with no world in which it reports anything at all, so the whole
+// findings half of the contract was certified over Cloud alone.
+func (s *cloudSite) refuses(in map[string]any) bool {
+	if s.refuse == "" {
+		return false
+	}
+	events, ok := in["events"].([]any)
+	if !ok {
+		return false
+	}
+	return slices.Contains(events, any(s.refuse))
+}
+
+// refusal is what the instance answers a registration it will not accept: the
+// 403 an account without the permission to administer webhooks gets.
+func (*cloudSite) refusal(w http.ResponseWriter) {
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = w.Write([]byte(`{"message":"this token may not register that event"}`))
 }
 
 func (s *cloudSite) urls() []string {
@@ -102,6 +173,47 @@ func (s *cloudSite) urls() []string {
 		out = append(out, h["url"].(string))
 	}
 	return out
+}
+
+// resubscribe rewrites one named hook's event list, standing in for an
+// administrator editing the subscription at the instance.
+//
+// It is the third thing a listing reports and the only one neither the name
+// nor the address covers, so it is the only way to stand up a hook that is
+// this engine's, at the right address, and subscribed to the wrong thing.
+func (s *cloudSite) resubscribe(name string, events ...string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, h := range s.hooks {
+		if h["name"] != name {
+			continue
+		}
+		list := make([]any, 0, len(events))
+		for _, event := range events {
+			list = append(list, event)
+		}
+		h["events"] = list
+		return true
+	}
+	return false
+}
+
+// eventsOf reads one named hook's subscription back.
+func (s *cloudSite) eventsOf(name string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, h := range s.hooks {
+		if h["name"] != name {
+			continue
+		}
+		raw, _ := h["events"].([]any)
+		out := make([]string, 0, len(raw))
+		for _, event := range raw {
+			out = append(out, event.(string))
+		}
+		return out
+	}
+	return nil
 }
 
 // disableAll turns every registered hook off, which is what an administrator
@@ -169,11 +281,38 @@ func itoa(n int) string {
 
 // recordingSink remembers what a run minted.
 type recordingSink struct {
+	// forgotten is what a teardown asked this sink to delete.
+	forgotten []string
+
 	mu   sync.Mutex
 	vals map[string]string
+	// flushes counts completions. It is what a value being VISIBLE to a
+	// running engine costs: the sink the engine hands in rebuilds the
+	// resolver's snapshot inside Flush and nowhere else, so a minted value
+	// that was never flushed is sealed and unreadable.
+	flushes int
 }
 
 func newSink() *recordingSink { return &recordingSink{vals: map[string]string{}} }
+
+// value reads one sealed value, failing loudly rather than answering empty:
+// every caller uses it as a precondition, and "" would read as a pass in a
+// case that never ran.
+func (s *recordingSink) value(t *testing.T, name string) string {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.vals[name]
+}
+
+// clear drops a sealed value, which is what the engine sees when a variable
+// was never flushed into its resolver snapshot, when a peer's apply has not
+// caught up, or when somebody cleared it.
+func (s *recordingSink) clear(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.vals, name)
+}
 
 func (s *recordingSink) Record(_ context.Context, name, value string) error {
 	s.mu.Lock()
@@ -182,7 +321,25 @@ func (s *recordingSink) Record(_ context.Context, name, value string) error {
 	return nil
 }
 func (s *recordingSink) Discard(context.Context) error { return nil }
-func (s *recordingSink) Flush(context.Context) error   { return nil }
+
+// Forget implements [provision.TokenSink]: it records what a teardown
+// asked to be deleted, so a case can assert the deletion happened.
+func (s *recordingSink) Forget(_ context.Context, names ...string) error {
+	s.forgotten = append(s.forgotten, names...)
+	return nil
+}
+func (s *recordingSink) Flush(context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.flushes++
+	return nil
+}
+
+func (s *recordingSink) flushed() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.flushes
+}
 func (s *recordingSink) Value(_ context.Context, name string) (string, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -646,5 +803,845 @@ func TestADataCenterHookStoredWithATrailingSlashIsConverged(t *testing.T) {
 	if got := site.mutations(); got != before {
 		t.Errorf("a hook stored with a trailing slash was rewritten (%d write(s))",
 			got-before)
+	}
+}
+
+// cuttingTransport delivers the instance's answers and then CANCELS the
+// pass's own context, which is what a node shutting down — or the lease
+// deadline the loop bounds a pass with — does to a pass mid-walk.
+//
+// THE RESPONSE IS BUFFERED BEFORE THE CANCELLATION. A cancellation reaches an
+// in-flight body read, so cutting the context before the caller has read the
+// listing would fail the READ, and the scenario worth standing up is the
+// opposite one: the pass got its answer, and everything it does afterwards is
+// on a context that is already dead.
+type cuttingTransport struct {
+	base      http.RoundTripper
+	remaining atomic.Int64
+	cancel    context.CancelFunc
+	// inFlight cuts the context as the request goes OUT rather than once
+	// it has been answered, which is the other half of what a deadline
+	// does: it expires wherever the pass happens to be, and half the time
+	// that is inside a registration rather than between two of them.
+	inFlight bool
+	// attempts counts every request the pass STARTED, including the ones a
+	// dead context refuses before they reach the instance. The site itself
+	// cannot see those, and they are the whole evidence of a walk carrying
+	// on past the point where it could do anything.
+	attempts atomic.Int64
+}
+
+func (c *cuttingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	c.attempts.Add(1)
+	if c.inFlight && c.remaining.Add(-1) == 0 {
+		c.cancel()
+	}
+	resp, err := c.base.RoundTrip(req)
+	if err != nil {
+		return resp, err
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	if !c.inFlight && c.remaining.Add(-1) == 0 {
+		c.cancel()
+	}
+	return resp, nil
+}
+
+// cut says WHEN the pass's context dies: once the instance has answered
+// `after` requests, or — with inFlight — as the `after`th request goes out.
+//
+// Both happen, and they are different code paths through the walk: one is
+// noticed before an event is looked at, the other comes back as that event's
+// own write failing.
+type cut struct {
+	after    int
+	inFlight bool
+}
+
+// cancellableSink refuses to complete on a context that has already been
+// cancelled, exactly as a store write does.
+//
+// It is the only way to tell a flush that happened from one that happened on
+// a context which could not carry it: [recordingSink] takes no notice of the
+// context at all, so without this a pass could "flush" a minted value into a
+// call that a real sealed store would have refused.
+type cancellableSink struct{ *recordingSink }
+
+func (s *cancellableSink) Flush(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return errors.New("the sink was flushed on a context that had already been cancelled")
+	}
+	return s.recordingSink.Flush(ctx)
+}
+
+// cuttingClient talks to the site through the transport that ends the pass.
+func cuttingClient(
+	t *testing.T, site *cloudSite, deployment confluence.Deployment,
+	transport *cuttingTransport,
+) *confluence.Client {
+	t.Helper()
+	base, email := site.URL, ""
+	if deployment == confluence.Cloud {
+		base, email = site.URL+"/wiki", "org@example.com"
+	}
+	c, err := confluence.NewClient(confluence.ClientOptions{
+		URL: base, Email: email, Token: "org-token", Deployment: deployment,
+		HTTP: &http.Client{Transport: transport},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// cutPass runs one pass whose context dies where `when` says, and returns
+// what that pass reported — which is exactly what the engine's own adapter
+// hands the loop — together with the transport that counted its requests.
+func cutPass(
+	t *testing.T, site *cloudSite, sink provision.TokenSink,
+	deployment confluence.Deployment, when cut,
+) (*confluence.Result, *cuttingTransport, error) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	transport := &cuttingTransport{
+		base: site.Client().Transport, cancel: cancel, inFlight: when.inFlight,
+	}
+	transport.remaining.Store(int64(when.after))
+
+	cfg := &config.Confluence{
+		URL: site.URL, Token: "t", WebhookSecret: "${CONFLUENCE_WEBHOOK_SECRET}",
+	}
+	variable := "CONFLUENCE_WEBHOOK_SECRET"
+	if deployment == confluence.Cloud {
+		cfg = &config.Confluence{
+			URL: site.URL + "/wiki", Token: "t",
+			WebhookToken: "${CONFLUENCE_WEBHOOK_TOKEN}",
+		}
+		variable = "CONFLUENCE_WEBHOOK_TOKEN"
+	}
+	res, err := confluence.Reconcile(ctx, confluence.Options{
+		Client: cuttingClient(t, site, deployment, transport),
+		Config: cfg,
+		Value: func(v string) string {
+			if v != "${"+variable+"}" {
+				return v
+			}
+			held, _, _ := sink.Value(context.Background(), variable)
+			return held
+		},
+		Sink:        sink,
+		WebhookBase: "https://engine.example.com",
+	})
+	return res, transport, err
+}
+
+// A CLOUD PASS CUT SHORT REPORTS A FAULT, NOT A CONVERGED SITE.
+//
+// This is the failure that hides behind the steady state. Over a converged
+// site the walk makes no request at all, so a context that died after the
+// listing produced no error and no findings — and those two together are the
+// loop's word for "this integration is ready". A node shutting down recorded
+// every Confluence as healthy on its way out, and the next node to hold the
+// duty trusted that for a full settled interval.
+func TestACancelledCloudPassOverAConvergedSiteReportsAFaultRatherThanHealth(t *testing.T) {
+	t.Parallel()
+	site := newCloudSite(t)
+	sink := newSink()
+	run(t, site, sink, nil)
+
+	// Cut after the identity probe and the listing, which is every request
+	// a converged pass makes.
+	res, _, err := cutPass(t, site, sink, confluence.Cloud, cut{after: 2})
+	if err == nil && len(res.Findings()) == 0 {
+		t.Fatal("a pass whose context died after the listing reported a converged " +
+			"site it had stopped reading; the loop records that as ready")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("the fault does not name the cancellation behind it: %v", err)
+	}
+}
+
+// AND IT DOES NOT BLAME THE INSTANCE FOR ITS OWN CANCELLATION.
+//
+// A per-event refusal is recorded and the walk carries on, which is right
+// when Confluence refused that registration. A dead context refuses all eight
+// identically, and recording it eight times reports FindingIngressBlocked —
+// degraded, owed by an ADMINISTRATOR — so a node shutting down sent somebody
+// to grant a permission that was never missing.
+func TestACancelledCloudPassDoesNotBlameTheInstance(t *testing.T) {
+	t.Parallel()
+	for _, when := range []struct {
+		name string
+		cut  cut
+		// requests is every request the pass may start: the identity
+		// probe, the listing, and — where the cut lands inside one — the
+		// registration that carried it.
+		requests int64
+	}{
+		{"between two events", cut{after: 2}, 2},
+		{"while a registration is in flight", cut{after: 3, inFlight: true}, 3},
+	} {
+		t.Run(when.name, func(t *testing.T) {
+			t.Parallel()
+			site := newCloudSite(t)
+			sink := newSink()
+
+			// Nothing is registered yet, so every one of the eight
+			// events is a write this pass will not get to make.
+			res, transport, err := cutPass(t, site, sink, confluence.Cloud, when.cut)
+			if err == nil {
+				t.Fatalf("a pass whose context died before it could register "+
+					"anything returned no error; it reported %+v", res.Findings())
+			}
+			for _, finding := range res.Findings() {
+				if finding.Kind == integration.FindingIngressBlocked {
+					t.Errorf("the cancellation was reported as the instance "+
+						"blocking %q: %s", finding.Subject, finding.Detail)
+				}
+			}
+			// AND IT STOPPED WORKING, rather than walking the remaining
+			// events into a context that refuses every one of them.
+			if extra := transport.attempts.Load() - when.requests; extra > 0 {
+				t.Errorf("the pass started %d more request(s) after its context died",
+					extra)
+			}
+		})
+	}
+}
+
+// THE DATA CENTER HALF OF THE SAME CLAUSE, which is its own code: the branch
+// answers a converged instance by returning from inside the listing walk, so
+// nothing below it could have noticed the context either.
+func TestACancelledDataCenterPassOverAConvergedInstanceReportsAFault(t *testing.T) {
+	t.Parallel()
+	site := newCloudSite(t)
+	sink := newSink()
+	runDataCenter(t, site, sink, "https://engine.example.com")
+
+	res, _, err := cutPass(t, site, sink, confluence.DataCenter, cut{after: 2})
+	if err == nil && len(res.Findings()) == 0 {
+		t.Fatal("a pass whose context died after the listing reported a converged " +
+			"instance it had stopped reading; the loop records that as ready")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("the fault does not name the cancellation behind it: %v", err)
+	}
+}
+
+// A VALUE THIS PASS MINTED IS FLUSHED EVEN WHEN THE PASS THEN FAILS.
+//
+// The token is sealed BEFORE the hooks that carry it are registered, and the
+// sink the engine hands in rebuilds the resolver's snapshot only inside
+// Flush. Returning from the failure without one left the value sealed and
+// INVISIBLE: the next pass resolved nothing, minted a second value, failed at
+// the same place, and did that for as long as the failure lasted — which is
+// the exact runaway the refreshing sink exists to prevent.
+//
+// And flushed on a context that can carry it, because the failure being
+// cleaned up after is often the cancellation itself.
+func TestAValueMintedBeforeAFailureIsStillFlushed(t *testing.T) {
+	t.Parallel()
+	site := newCloudSite(t)
+	sink := &cancellableSink{recordingSink: newSink()}
+
+	// Cut after the identity probe: the pass mints, and then the listing
+	// it needs before it can register anything fails.
+	_, _, err := cutPass(t, site, sink, confluence.Cloud, cut{after: 1})
+	if err == nil {
+		t.Fatal("the pass did not fail, so there is no failure path here to test")
+	}
+	token, ok, _ := sink.Value(context.Background(), "CONFLUENCE_WEBHOOK_TOKEN")
+	if !ok || token == "" {
+		t.Fatal("nothing was minted, so this is not the mint-then-fail path")
+	}
+	if sink.flushed() == 0 {
+		t.Error("a minted token was left sealed and unflushed, so the running " +
+			"engine still holds the snapshot from before it and the next pass " +
+			"mints another one")
+	}
+	if strings.Contains(err.Error(), "already been cancelled") {
+		t.Errorf("the sink was flushed on the pass's own dead context: %v", err)
+	}
+}
+
+// A DATA CENTER REFUSAL IS A BLOCKED INGRESS, NOT A PASS FAULT.
+//
+// Every write on this branch returned an error, so an instance that refused
+// the registration — a 403, which is what an org account without the
+// Confluence Administrator global permission gets here — came out of
+// Reconcile as a fault. The loop reads a fault as the engine still working on
+// it and retries it on the waiting backoff for ever; FindingIngressBlocked is
+// degraded and owed by the ADMINISTRATOR who can grant that permission. So on
+// the deployment where missing admin rights are most likely, the one person
+// who could fix it was never told. The Cloud half of this same file has
+// answered correctly since it was written.
+func TestARefusedDataCenterRegistrationIsBlockedIngressRatherThanAFault(t *testing.T) {
+	t.Parallel()
+	site := newCloudSite(t)
+	site.refuse = "page_created"
+	sink := newSink()
+
+	res, err := confluence.Reconcile(context.Background(), confluence.Options{
+		Client: dataCenterClient(t, site),
+		Config: &config.Confluence{
+			URL: site.URL, Token: "t",
+			WebhookSecret: "${CONFLUENCE_WEBHOOK_SECRET}",
+		},
+		Value:       func(v string) string { return v },
+		Sink:        sink,
+		WebhookBase: "https://engine.example.com",
+	})
+	if err != nil {
+		t.Fatalf("the instance refusing one registration failed the whole pass, "+
+			"so the loop waits on it instead of telling an administrator: %v", err)
+	}
+	findings := res.Findings()
+	if len(findings) != 1 || findings[0].Kind != integration.FindingIngressBlocked {
+		t.Fatalf("findings = %+v, want one ingress block", findings)
+	}
+	if _, actor := findings[0].Kind.Verdict(); !actor.WaitsOnAPerson() {
+		t.Errorf("the refusal is owed by %s rather than by a person", actor)
+	}
+	// AND IT SAYS WHAT WAS LOST. This branch's single hook carries every
+	// event, so a refusal is total rather than one event class.
+	if !strings.Contains(findings[0].Detail, "NO Confluence event") {
+		t.Errorf("the finding does not say that nothing reaches the engine: %q",
+			findings[0].Detail)
+	}
+	if !strings.Contains(findings[0].Detail, "403") {
+		t.Errorf("the finding does not carry the instance's own refusal: %q",
+			findings[0].Detail)
+	}
+}
+
+// AND THE PASS THAT MADE IT IS STILL QUIET ABOUT THE REST.
+//
+// A refusal recorded on the state must not also leave a half-written
+// registration behind, and two passes over the same refusing instance must
+// report the same thing — a finding that churned would flap the reported
+// phase and reset the backoff every few minutes.
+func TestTwoPassesOverARefusingDataCenterInstanceAgree(t *testing.T) {
+	t.Parallel()
+	site := newCloudSite(t)
+	site.refuse = "page_created"
+	sink := newSink()
+
+	first := runDataCenter(t, site, sink, "https://engine.example.com")
+	second := runDataCenter(t, site, sink, "https://engine.example.com")
+
+	if got := len(site.snapshot()); got != 0 {
+		t.Errorf("a refused registration left %d hook(s) at the instance", got)
+	}
+	if !integration.SameAll(first.Findings(), second.Findings()) {
+		t.Fatalf("two passes disagree:\n first: %+v\nsecond: %+v",
+			first.Findings(), second.Findings())
+	}
+}
+
+// A PASS WITH NO BASE IS A FAULT ON A DEAD CONTEXT, like every other exit.
+//
+// The empty-WebhookBase return was the ONE path that did not fold ctx.Err():
+// it answered (no findings, no error) — the loop's word for ready — from a
+// pass that had already run out of context. [Client.Me] running first makes a
+// CANCELLATION unreachable there and says nothing about a DEADLINE, which is
+// what actually bounds a pass: the lease that protects it. So the context is
+// cut with a deadline that has already expired by the time the pass returns
+// from the identity probe.
+func TestAPassWithNoBaseOnADeadContextIsAFaultRatherThanHealth(t *testing.T) {
+	t.Parallel()
+	site := newCloudSite(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	transport := &cuttingTransport{base: site.Client().Transport, cancel: cancel}
+	// After the identity probe — the only request a pass with no base
+	// makes — and before it returns.
+	transport.remaining.Store(1)
+
+	res, err := confluence.Reconcile(ctx, confluence.Options{
+		Client:      cuttingClient(t, site, confluence.Cloud, transport),
+		Config:      &config.Confluence{URL: site.URL + "/wiki", Token: "t"},
+		Value:       func(v string) string { return v },
+		WebhookBase: "",
+	})
+	if err == nil {
+		t.Fatalf("a pass whose context died reported a company with no public "+
+			"base URL as ready: %+v", res)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("the fault does not name the cancellation behind it: %v", err)
+	}
+}
+
+// A CLOUD HOOK SUBSCRIBED TO THE WRONG EVENT IS RE-SUBSCRIBED.
+//
+// The event list is the third thing a listing reports, and it is the one that
+// decides what actually arrives. The engine registers ONE HOOK PER EVENT
+// because the Cloud payload names none — the route stamps the event back onto
+// the body from the PATH — so a hook at the crewlet:page_created address
+// subscribed to comment_created does not merely deliver the wrong thing: it
+// delivers comment payloads STAMPED as page creations, and every seat woken by
+// one is woken about work that does not exist. A pass that compared only the
+// name and the address called that converged.
+//
+// Both shapes, because the converged predicate makes two claims: exactly one
+// event, and that it is this one.
+func TestACloudHookSubscribedToTheWrongEventsIsCorrected(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		events []string
+	}{
+		{"a different event", []string{"comment_created"}},
+		{"its own event and another", []string{"page_created", "comment_created"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			site := newCloudSite(t)
+			sink := newSink()
+			env := map[string]string{"CONFLUENCE_WEBHOOK_TOKEN": "EXAMPLECONFLUENCETOKEN0000"}
+			run(t, site, sink, env)
+
+			hook := confluence.HookName("page_created")
+			if !site.resubscribe(hook, tc.events...) {
+				t.Fatalf("%s was never registered, so there is nothing to edit", hook)
+			}
+			before := site.mutations()
+
+			run(t, site, sink, env)
+			if site.mutations() == before {
+				t.Fatal("a pass over a hook subscribed to the wrong event wrote " +
+					"nothing, so the engine goes on stamping whatever arrives " +
+					"there as a page creation")
+			}
+			if got := site.eventsOf(hook); !slices.Equal(got, []string{"page_created"}) {
+				t.Errorf("%s is subscribed to %v after a pass", hook, got)
+			}
+		})
+	}
+}
+
+// A DISABLED DATA CENTER HOOK IS RE-ENABLED, which is the Cloud half's
+// TestADisabledCloudHookIsReEnabled over the branch that had no such test.
+//
+// Webhook.Enabled is parsed off the wire on every pass, and this branch's
+// converged check reads it — but nothing asserted that. A hook at the right
+// address subscribed to the right events that the administrator had disabled
+// would be stamped as hooked and the integration reported Ready, delivering
+// nothing, and here that is the WHOLE integration: Data Center registers one
+// hook for every event.
+func TestADisabledDataCenterHookIsReEnabled(t *testing.T) {
+	t.Parallel()
+	site := newCloudSite(t)
+	sink := newSink()
+
+	runDataCenter(t, site, sink, "https://engine.example.com")
+	before := site.mutations()
+	site.disableAll()
+
+	runDataCenter(t, site, sink, "https://engine.example.com")
+	if got := site.mutations(); got == before {
+		t.Fatal("a pass over the disabled hook wrote nothing, so it stays " +
+			"disabled and the integration reports ready while no Confluence " +
+			"event reaches the engine at all")
+	}
+	for id, hook := range site.snapshot() {
+		if enabled, _ := hook["enabled"].(bool); !enabled {
+			t.Errorf("hook %s is still disabled after a pass", id)
+		}
+	}
+}
+
+// A DATA CENTER HOOK MISSING ONE OF THIS ENGINE'S EVENTS IS RE-SUBSCRIBED.
+//
+// [confluence.WebhookEvents] is exactly the set the parser routes, so an event
+// this hook is not subscribed to is an event class that silently never
+// arrives — no error, no finding, just a category of work the company stops
+// hearing about. The pass compares the set for that reason and nothing
+// asserted it.
+//
+// EXTRAS ARE STILL LEFT ALONE, which is the other half of the same predicate:
+// an operator who added an event wanted it, and taking it away every pass is
+// the opposite of converging what this engine needs.
+func TestADataCenterHookMissingAnEventIsResubscribed(t *testing.T) {
+	t.Parallel()
+	site := newCloudSite(t)
+	sink := newSink()
+	runDataCenter(t, site, sink, "https://engine.example.com")
+	hook := confluence.HookName("all")
+
+	if !site.resubscribe(hook, "page_created") {
+		t.Fatalf("%s was never registered, so there is nothing to edit", hook)
+	}
+	before := site.mutations()
+
+	runDataCenter(t, site, sink, "https://engine.example.com")
+	if site.mutations() == before {
+		t.Fatal("a pass over a hook subscribed to one event of eight wrote " +
+			"nothing, so seven event classes never arrive and nothing says so")
+	}
+	for _, event := range confluence.WebhookEvents {
+		if !slices.Contains(site.eventsOf(hook), event) {
+			t.Errorf("%s is not subscribed to %s after a pass", hook, event)
+		}
+	}
+
+	// And an operator's own extra event survives the next pass untouched.
+	site.resubscribe(hook, append(slices.Clone(confluence.WebhookEvents), "label_added")...)
+	before = site.mutations()
+	runDataCenter(t, site, sink, "https://engine.example.com")
+	if site.mutations() != before {
+		t.Error("a pass rewrote a subscription that already carried every event " +
+			"this engine needs, taking away one the operator added")
+	}
+}
+
+// AND A VALUE MINTED BY A PASS THAT SUCCEEDED IS FLUSHED TOO.
+//
+// The failure path has its own test above, and it is the rarer half. The
+// ordinary way out of a minting pass is success, and the consequence of not
+// flushing is identical and more common: the sink the engine hands in rebuilds
+// the resolver's snapshot only inside Flush, so the running engine goes on
+// resolving the ${VAR} to nothing, the next pass mints a second value, and
+// every hook the last one registered is now carrying a token the engine will
+// not verify.
+func TestAValueMintedByASuccessfulPassIsFlushed(t *testing.T) {
+	t.Parallel()
+	site := newCloudSite(t)
+	sink := newSink()
+
+	run(t, site, sink, nil)
+
+	if token, ok, _ := sink.Value(context.Background(), "CONFLUENCE_WEBHOOK_TOKEN"); !ok || token == "" {
+		t.Fatal("nothing was minted, so this is not the mint-then-succeed path")
+	}
+	if sink.flushed() == 0 {
+		t.Error("a pass that minted a token and then succeeded left it sealed " +
+			"and unflushed, so the running engine still holds the snapshot from " +
+			"before it and the next pass mints another one")
+	}
+}
+
+// A REFUSED DATA CENTER RE-POINT IS A BLOCKED INGRESS TOO.
+//
+// The create path has its own test above; this is the same claim over the
+// other write this branch makes, and the state it leaves behind is worse. The
+// registration is still there — enabled, signed with a key the engine still
+// holds — pointing at an address that no longer answers, so an administrator
+// looking at the instance sees a healthy-looking hook. That is precisely when
+// the finding has to name the refusal rather than the loop waiting on a fault
+// nobody is told about.
+func TestARefusedDataCenterRepointIsBlockedIngressRatherThanAFault(t *testing.T) {
+	t.Parallel()
+	site := newCloudSite(t)
+	sink := newSink()
+	runDataCenter(t, site, sink, "https://old-tunnel.example.com")
+
+	// The permission is withdrawn between the two passes, and the engine
+	// moves: the pass now has to re-point a hook it may no longer write.
+	site.mu.Lock()
+	site.refuse = "page_created"
+	site.mu.Unlock()
+	res := runDataCenter(t, site, sink, "https://engine.example.com")
+
+	findings := res.Findings()
+	if len(findings) != 1 || findings[0].Kind != integration.FindingIngressBlocked {
+		t.Fatalf("findings = %+v, want one ingress block", findings)
+	}
+	if !strings.Contains(findings[0].Detail, "points at this engine") {
+		t.Errorf("the finding claims nothing is registered, where what is wrong "+
+			"is that the registration still points at the old address: %q",
+			findings[0].Detail)
+	}
+	// AND NOTHING WAS DUPLICATED: the refused update left one registration,
+	// not a second one beside it.
+	if got := len(site.snapshot()); got != 1 {
+		t.Errorf("the instance holds %d registrations after a refused re-point", got)
+	}
+}
+
+// A -RECREATE RUN THAT CANNOT REMOVE THE OLD DATA CENTER HOOK DOES NOT MAKE
+// A SECOND ONE.
+//
+// Recreate is delete-then-create, and the create carries a FRESH signing
+// secret. Falling through to it after a failed delete leaves the instance
+// with two enabled registrations at the same address: the old one signing
+// with a key the engine has just replaced, so half the deliveries fail
+// verification at the edge and nothing at the instance looks wrong. The pass
+// reports the block instead and leaves the working hook alone.
+func TestADataCenterRecreateThatCannotDeleteDoesNotRegisterASecondHook(t *testing.T) {
+	t.Parallel()
+	site := newCloudSite(t)
+	sink := newSink()
+	runDataCenter(t, site, sink, "https://engine.example.com")
+	site.mu.Lock()
+	site.refuseDelete = true
+	site.mu.Unlock()
+
+	res, err := confluence.Reconcile(context.Background(), confluence.Options{
+		Client: dataCenterClient(t, site),
+		Config: &config.Confluence{
+			URL: site.URL, Token: "t",
+			WebhookSecret: "${CONFLUENCE_WEBHOOK_SECRET}",
+		},
+		Value: func(v string) string {
+			if v != "${CONFLUENCE_WEBHOOK_SECRET}" {
+				return v
+			}
+			stored, _, _ := sink.Value(context.Background(), "CONFLUENCE_WEBHOOK_SECRET")
+			return stored
+		},
+		Sink:        sink,
+		WebhookBase: "https://engine.example.com",
+		Recreate:    true,
+	})
+	if err != nil {
+		t.Fatalf("a refused delete failed the whole pass: %v", err)
+	}
+	if got := len(site.snapshot()); got != 1 {
+		t.Fatalf("the instance holds %d registrations, want the one that could "+
+			"not be removed and no second one beside it", got)
+	}
+	findings := res.Findings()
+	if len(findings) != 1 || findings[0].Kind != integration.FindingIngressBlocked {
+		t.Fatalf("findings = %+v, want one ingress block naming the refusal", findings)
+	}
+}
+
+// A FINDING NEVER ENDS IN A DANGLING COLON.
+//
+// Every path inside this package records a reason before it reports a hook as
+// unestablished, so the fallback is about the EXPORTED surface: Result and
+// HookState are both exported and Findings() is what the engine calls on
+// whatever it is handed. A state arriving without a detail rendered
+// "…reach nobody: " — a sentence addressed to an administrator that names
+// nothing to do, which is the one thing this finding kind exists to avoid.
+func TestAnUnhookedEventWithNoDetailStillSaysWhatToDo(t *testing.T) {
+	t.Parallel()
+	res := &confluence.Result{Hooks: []confluence.HookState{
+		{Event: "page_created"},
+		{Event: "all"},
+	}}
+	findings := res.Findings()
+	if len(findings) != 2 {
+		t.Fatalf("findings = %+v, want one per unhooked event", findings)
+	}
+	for _, finding := range findings {
+		detail := strings.TrimSpace(finding.Detail)
+		if detail == "" || strings.HasSuffix(detail, ":") {
+			t.Errorf("%s: the finding ends where the reason should start: %q",
+				finding.Subject, finding.Detail)
+		}
+	}
+}
+
+// TEARDOWN REMOVES THIS ENGINE'S HOOKS AND NOTHING ELSE.
+//
+// Teardown had no test in this package at all, and it is the one function
+// here whose failure mode is destruction rather than drift: it walks every
+// registration the instance holds and deletes. What confines it to this
+// engine's own is the [confluence.HookNamePrefix] check — the same namespace
+// rule the two converge halves follow — and with that check wrong, a
+// disconnect silently removes every webhook the Confluence administrator ever
+// registered, for tools that have nothing to do with Crewlet. Nothing at the
+// instance records what they were.
+//
+// SAFE TO REPEAT is the other half of its doc, and it is what a retried
+// disconnect depends on: a hook already gone is not an error, and a pass that
+// finds none has finished rather than failed.
+func TestTeardownRemovesOnlyThisEnginesHooksAndIsSafeToRepeat(t *testing.T) {
+	t.Parallel()
+	site := newCloudSite(t)
+	sink := newSink()
+	run(t, site, sink, nil)
+	site.seed(map[string]any{
+		"name": "ops-audit", "enabled": true,
+		"url":    "https://ops.example.com/x",
+		"events": []any{"page_updated"},
+	})
+
+	opts := confluence.Options{Client: cloudClient(t, site)}
+	if err := confluence.Teardown(context.Background(), opts); err != nil {
+		t.Fatalf("teardown: %v", err)
+	}
+
+	left := site.snapshot()
+	if len(left) != 1 {
+		t.Fatalf("the instance holds %d hook(s) after a teardown, want only the "+
+			"one this engine never registered: %v", len(left), site.urls())
+	}
+	for _, hook := range left {
+		if hook["name"] != "ops-audit" {
+			t.Errorf("teardown left %v and removed the operator's own hook", hook["name"])
+		}
+	}
+
+	// Repeated, which is what a retried disconnect does.
+	if err := confluence.Teardown(context.Background(), opts); err != nil {
+		t.Errorf("a second teardown over an instance holding none of this "+
+			"engine's hooks failed, so a retried disconnect can never finish: %v", err)
+	}
+}
+
+// A DATA CENTER SECRET THIS PASS MINTED IS ALWAYS SENT, whatever else the
+// hook already matches.
+//
+// Confluence never reads a secret back and a Data Center registration carries
+// no token in its URL — SameAddress deliberately drops the query — so nothing
+// in the converged test could observe that the key had changed. The hook was
+// called ALREADY CORRECT and the new value was never written: the instance
+// went on signing with the old key, the engine verified with the new one, and
+// every delivery was refused by a surface reporting ready. Permanently, since
+// every later pass resolves the same stored value and reaches the same
+// conclusion. The Jira sibling threads the same flag for the same reason.
+func TestADataCenterHookIsRewrittenWhenThisPassMintedTheSecret(t *testing.T) {
+	t.Parallel()
+	site := newCloudSite(t)
+	sink := newSink()
+
+	runDataCenter(t, site, sink, "https://engine.example.com")
+	first := sink.value(t, "CONFLUENCE_WEBHOOK_SECRET")
+	if first == "" {
+		t.Fatal("precondition: the first pass minted nothing")
+	}
+	before := site.mutations()
+
+	// THE VALUE GOES, which is what the engine sees when the variable was
+	// never flushed into its snapshot, when a peer's apply has not caught
+	// up, or when somebody cleared it. The pass mints a replacement.
+	sink.clear("CONFLUENCE_WEBHOOK_SECRET")
+
+	runDataCenter(t, site, sink, "https://engine.example.com")
+	if got := sink.value(t, "CONFLUENCE_WEBHOOK_SECRET"); got == first || got == "" {
+		t.Fatalf("precondition: the second pass did not mint a fresh secret (%q)", got)
+	}
+	if got := site.mutations(); got == before {
+		t.Error("the hook was called converged and the freshly minted key was " +
+			"never sent, so the instance signs with a key the engine no " +
+			"longer holds and every delivery is refused")
+	}
+}
+
+// blindPass runs one reconcile with a RESOLVER THAT SEES NOTHING, which is
+// exactly what the engine looks like between a seal and the apply that
+// rebuilds its `${VAR}` snapshot. The other helpers here resolve through the
+// sink, which hides that window entirely.
+func blindPass(
+	t *testing.T, site *cloudSite, sink provision.TokenSink, cloud bool,
+) *confluence.Result {
+	t.Helper()
+	client := dataCenterClient(t, site)
+	if cloud {
+		client = cloudClient(t, site)
+	}
+	res, err := confluence.Reconcile(context.Background(), confluence.Options{
+		Client: client,
+		Config: &config.Confluence{
+			URL: site.URL, Token: "t",
+			WebhookSecret: "${CONFLUENCE_WEBHOOK_SECRET}",
+			WebhookToken:  "${CONFLUENCE_WEBHOOK_TOKEN}",
+		},
+		Value:       func(string) string { return "" },
+		Sink:        sink,
+		WebhookBase: "https://engine.example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+// A SECOND PASS DOES NOT MINT OVER A VALUE THIS DEPLOYMENT ALREADY SEALED.
+//
+// The resolver answers from a SNAPSHOT taken at apply time, so the variable a
+// previous pass minted into resolves to nothing until something rebuilds it.
+// Every pass in that window used to mint a SECOND value, seal it over the
+// first and re-register the hooks with it — and the engine's own
+// /webhooks/confluence route authenticates with the snapshot, so each
+// rotation moved the instance further from the value the running process
+// holds, on the reconcile loop's timer.
+func TestASecondPassDoesNotMintOverAValueThisDeploymentAlreadySealed(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		cloud bool
+		vari  string
+	}{
+		{"data center", false, "CONFLUENCE_WEBHOOK_SECRET"},
+		{"cloud", true, "CONFLUENCE_WEBHOOK_TOKEN"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			site := newCloudSite(t)
+			sink := newSink()
+
+			blindPass(t, site, sink, tc.cloud)
+			minted := sink.value(t, tc.vari)
+			if minted == "" {
+				t.Fatal("the premise is wrong: the first pass sealed nothing")
+			}
+
+			blindPass(t, site, sink, tc.cloud)
+			if got := sink.value(t, tc.vari); got != minted {
+				t.Errorf("%s was rotated by a pass nobody asked to rotate "+
+					"anything, so the instance now authenticates with a value "+
+					"this deployment does not hold", tc.vari)
+			}
+		})
+	}
+}
+
+// A NODE WITH NO KEYRING REPORTS, IT DOES NOT FAULT.
+//
+// An error here is a fault the loop retries while telling an operator the
+// engine is working on it, which is the one thing that is certainly not
+// happening: no pass will ever seal anything until somebody sets
+// secrets.keys. It is reported against the field that fixes it — and which
+// field that is depends on the deployment, because Cloud carries its whole
+// authentication in the URL while Data Center signs.
+func TestANodeWithNoKeyringReportsTheFieldThatFixesIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		cloud bool
+		field string
+	}{
+		{"data center", false, "integrations.confluence.webhook_secret"},
+		{"cloud", true, "integrations.confluence.webhook_token"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			site := newCloudSite(t)
+			res := blindPass(t, site, provision.ReadOnly(), tc.cloud)
+
+			if got := site.mutations(); got != 0 {
+				t.Errorf("%d hook(s) were registered with nothing to "+
+					"authenticate a delivery with", got)
+			}
+			var found bool
+			for _, f := range res.Findings() {
+				if f.Subject != tc.field {
+					continue
+				}
+				found = true
+				if f.Kind != integration.FindingIngressBlocked {
+					t.Errorf("reported as %s, want ingress_blocked", f.Kind)
+				}
+				if !strings.Contains(f.Detail, "secrets.keys") {
+					t.Errorf("the finding does not name the bootstrap field "+
+						"that fixes it:\n%s", f.Detail)
+				}
+			}
+			if !found {
+				t.Errorf("a pass that could seal nothing reported %v, none of "+
+					"it against %s", res.Findings(), tc.field)
+			}
+		})
 	}
 }

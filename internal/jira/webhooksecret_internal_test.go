@@ -18,7 +18,7 @@ import (
 func TestARefusedWebhookSecretIsNotQuotedBack(t *testing.T) {
 	t.Parallel()
 	const secret = "whsec_aLiteralNobodyShouldEverSee"
-	_, _, _, err := webhookSecret(context.Background(), Options{
+	_, err := webhookSecret(context.Background(), Options{
 		Config: &config.Jira{WebhookSecret: secret},
 		// A literal resolves to itself, which is why the early return
 		// below is only skipped when the operator asked to recreate.

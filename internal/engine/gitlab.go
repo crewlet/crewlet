@@ -88,8 +88,9 @@ func (g *gitlabIdentities) resolve(ctx context.Context, url string, tokens []str
 		username, err := client.Me(ctx)
 		if err != nil {
 			log.WarnContext(ctx, "gitlab_seat_identity_unresolved", "error", err.Error(),
-				"detail", "this seat receives no code-host events until "+
-					"the next apply re-resolves it")
+				"detail", "this seat receives no code-host events until a lookup "+
+					"succeeds; the reconcile loop retries it on this surface's "+
+					"own pass, so nothing has to be applied")
 			return
 		}
 		found[i] = username
@@ -172,22 +173,8 @@ func (e *Engine) startGitLab(ctx context.Context, c *Company, cfg *config.GitLab
 	// code host. That is the honest outcome, because the integration IS
 	// unavailable — the alternative is one that reports itself enabled and
 	// is inert.
-	secret := env.Value(cfg.SigningSecret)
-	if secret == "" {
-		return nil, fmt.Errorf(
-			"engine: gitlab: signing_secret resolved empty (%q) — nothing "+
-				"would verify an inbound delivery, so every webhook this "+
-				"instance sends would be refused; set that variable in the "+
-				"environment or this node's secret store", cfg.SigningSecret)
-	}
-	if !whsec.Valid(secret) {
-		// NAMES ONLY, never the value: this line goes to a log file.
-		return nil, fmt.Errorf(
-			"engine: gitlab: signing_secret (%q) resolved to a value that is "+
-				"not %s followed by standard base64 over a %d-byte key, which "+
-				"is the only shape GitLab signs with — it cannot be the HMAC "+
-				"key for any delivery",
-			cfg.SigningSecret, whsec.Prefix, whsec.KeyBytes)
+	if err := gitlabWirable(cfg, env); err != nil {
+		return nil, err
 	}
 
 	// THE ENGINE CREDENTIAL IS OPTIONAL and its absence is a documented
@@ -212,9 +199,16 @@ func (e *Engine) startGitLab(ctx context.Context, c *Company, cfg *config.GitLab
 		// difference is what the request buys: verifying this one buys
 		// nothing, while resolving those is the entire integration.
 	} else {
-		log.WarnContext(ctx, "gitlab_has_no_engine_token",
+		// NAMING THE FIELD, because the warning is only useful if the
+		// reader can act on it. It said what was lost and not where the
+		// value goes, and the setup form declared no input for it at all
+		// — so an operator was told a credential was missing with nothing
+		// anywhere saying how to supply one.
+		log.WarnContext(ctx, "gitlab_has_no_routing_token",
+			"field", "integrations.gitlab.token",
 			"detail", "thread activity reaches the payload's assignees "+
-				"rather than everyone taking part")
+				"rather than everyone taking part; set a read_api token "+
+				"on the GitLab card to reach everyone taking part")
 	}
 
 	e.notify.gitlab.resolve(ctx, url, gitlabSeatTokens(c, env))
@@ -282,6 +276,50 @@ func (e *Engine) reconcileGitLab(ctx context.Context, c *Company) {
 	log.InfoContext(ctx, "gitlab_reconciled", "company", c.Config.Name)
 }
 
+// gitlabWirable reports whether this revision's code host can be wired at all.
+//
+// ONE IMPLEMENTATION, because there are now two callers and they must never
+// disagree: the boot and apply wiring in [Engine.startGitLab], and the
+// reconcile loop's identity retry in [Engine.rewireGitLab]. The retry was
+// written without it and resolved seat identities on a config the start path
+// refuses — an integration reporting agents wired behind a route that answers
+// 503 to every delivery, which is precisely the state the refusal exists to
+// prevent.
+//
+// THE SIGNING SECRET IS NOT OPTIONAL, and it is checked here rather than left
+// to the first delivery. Config already refuses an enabled GitLab whose
+// signing_secret is missing or is a literal the third-party app could never
+// have produced, so reaching this with an unusable value means a ${VAR} that
+// did not resolve, or resolved to something else. Neither is visible from
+// anywhere: the route answers 503 to every delivery, GitLab's own settings
+// page shows a healthy hook that keeps failing, and no log line anywhere names
+// the variable.
+//
+// It is not a boot refusal: the caller logs gitlab_unavailable and the company
+// runs on without its code host. That is the honest outcome, because the
+// integration IS unavailable — the alternative is one that reports itself
+// enabled and is inert.
+func gitlabWirable(cfg *config.GitLab, env *config.Resolver) error {
+	secret := env.Value(cfg.SigningSecret)
+	if secret == "" {
+		return fmt.Errorf(
+			"engine: gitlab: signing_secret resolved empty (%q) — nothing "+
+				"would verify an inbound delivery, so every webhook this "+
+				"instance sends would be refused; set that variable in the "+
+				"environment or this node's secret store", cfg.SigningSecret)
+	}
+	if !whsec.Valid(secret) {
+		// NAMES ONLY, never the value: this line goes to a log file.
+		return fmt.Errorf(
+			"engine: gitlab: signing_secret (%q) resolved to a value that is "+
+				"not %s followed by standard base64 over a %d-byte key, which "+
+				"is the only shape GitLab signs with — it cannot be the HMAC "+
+				"key for any delivery",
+			cfg.SigningSecret, whsec.Prefix, whsec.KeyBytes)
+	}
+	return nil
+}
+
 // gitlabSeatTokens are the distinct credentials the company's agent seats
 // hold, sorted.
 //
@@ -331,3 +369,21 @@ func gitlabSeatToken(seat *org.Role, env *config.Resolver) string {
 
 // gitlabPrompt is the code host's trigger builder. A value, held by nothing.
 func gitlabPrompt() notify.Prompt { return gitlab.Prompt{} }
+
+// unresolved names the seats holding a code-host credential that resolves to
+// no account. See [jiraIdentities.unresolved].
+func (g *gitlabIdentities) unresolved(c *Company, env *config.Resolver) []string {
+	g.mu.Lock()
+	known := maps.Clone(g.byToken)
+	g.mu.Unlock()
+
+	var out []string
+	for seat := range c.Org.AllRoles() {
+		token := gitlabSeatToken(seat, env)
+		if token != "" && known[token] == "" {
+			out = append(out, seat.Handle())
+		}
+	}
+	slices.Sort(out)
+	return out
+}

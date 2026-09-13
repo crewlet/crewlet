@@ -147,6 +147,37 @@ means "there is no fleet, so this is always mine" — the single-node case.
 An ingress-only node that abstained would therefore run every duty. The
 refusal is silent, because the node is doing exactly what it was told to.
 
+**A `worker:` lease is not always a duty**, and one of them deliberately
+ignores the role. `worker:setup-provision-<kind>` is mutual exclusion around
+provisioning *one integration*, taken by whoever is writing at that surface —
+an operator's pass from the dashboard, a tick of the reconcile loop, a
+disconnect's teardown. That is not company-wide work somebody has to be
+elected for; it is work a node has already been asked to do, at whichever node
+happens to be serving the API. Refusing it on the role does not decline the
+work, it makes the work impossible: on `-roles ingress` — the split that puts
+the dashboard on a node with no worker role — every Connect answered *"another
+pass for this integration is running"* over a surface where nothing was
+running, and every Disconnect *"being provisioned right now; try again in a
+moment"*, permanently. It now gates on the coordination store alone.
+
+**The integration reconcile loop has a third gate**, which the other duties do
+not: it declines while this node's [config posture](../concepts/control-plane.md)
+is `shed` or `stuck`. Every reconciler reads the live company document, so a
+node the fleet has moved past would converge third-party apps to a revision
+that has been replaced. It declines *before* claiming, so its lease lapses and
+a peer holding the current revision takes the loop over, and it logs
+`integration_reconcile_shed` on the way in — the one refusal here that is not
+silent, because a stalled reconcile loop is otherwise indistinguishable from a
+converged company.
+
+That gate is deliberately **not** applied to every duty. A node's roles and its
+posture are decided by subsystems that do not consult each other: a peer
+counted as healthy by the posture rule may be ingress-only and will never claim
+a singleton. Gate them all and an `ingress` + `seats,workers` fleet whose
+worker node fails one apply ends with *no* node running *any* duty — scheduler,
+sweep, sandbox waiter and all — with `/ready` green on the survivor and nothing
+logged anywhere.
+
 ### Common shapes
 
 ```yaml

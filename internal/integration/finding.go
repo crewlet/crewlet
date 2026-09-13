@@ -1,6 +1,9 @@
 package integration
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // FindingKind is one thing a pass observed that is not "fine".
 //
@@ -90,6 +93,28 @@ const (
 	// So it is REPORTED. Somebody has to repoint the monitors and remove the
 	// old definition, and this is the only place they can learn it exists.
 	FindingRegistrationOrphaned FindingKind = "registration_orphaned"
+
+	// FindingCoveragePartial is an integration working exactly as it was
+	// asked to, over less than the whole of what it could reach.
+	//
+	// THE THIRD ADVISORY, and the mildest of the three: the other two are
+	// loose ends somebody may want to tidy, and this one is a DECISION
+	// already taken, reported so nobody has to infer it from silence.
+	// GitHub is the case it was added for — a company whose agents each
+	// carry their own app hears about the repositories those apps are
+	// installed on and nothing else in the organization, which is the
+	// arrangement the setup form recommends.
+	//
+	// IT EXISTS BECAUSE SILENCE WAS THE ONLY ALTERNATIVE. That coverage
+	// was reported two ways before, and both were wrong: as an
+	// ingress_blocked finding naming the organization token, which reads
+	// as Action required over agents that are receiving events perfectly
+	// well and sent an operator to install apps that can never carry the
+	// scope; or as a note the card does not render at all, which tells a
+	// person nothing about what their integration does and does not see.
+	// A working integration whose reach is narrower than a reader would
+	// assume is worth one sentence, and one sentence is what this is.
+	FindingCoveragePartial FindingKind = "coverage_partial"
 )
 
 // severity ranks the kinds from "nothing works" to "everything works, with a
@@ -163,10 +188,16 @@ func (f FindingKind) severity() int {
 		// a problem it hides.
 		return 11
 	case FindingRegistrationOrphaned:
-		// LAST, beneath the other advisory. Both report ready; this one
-		// is the more purely informational of the two, because what it
-		// names is still working.
+		// Beneath the other advisory. Both report ready; this one is the
+		// more purely informational of the two, because what it names is
+		// still working.
 		return 12
+	case FindingCoveragePartial:
+		// LAST OF ALL, because it is the only one naming nothing wrong.
+		// The two above it are loose ends somebody may want to tidy; this
+		// is a decision already taken, reported so a reader does not have
+		// to infer it from silence. Anything else present outranks it.
+		return 13
 	default:
 		// A kind this build does not know, ranked ABOVE the advisory and
 		// below every real problem. A peer on a newer build can write one
@@ -214,6 +245,14 @@ func (f FindingKind) Verdict() (Phase, Actor) {
 		// third-party app — repoint the monitors, then remove the
 		// definition nothing points at any more.
 		return PhaseReady, ActorAdmin
+	case FindingCoveragePartial:
+		// READY, and the OPERATOR's — which is the pairing that makes it
+		// honest. Ready because the integration is doing what it was
+		// asked; the operator's because widening it is a choice in this
+		// company's own configuration, not a grant somebody at the
+		// third-party app has to make. Reported as the admin's it would
+		// have sent a person to GitHub to fix a decision taken here.
+		return PhaseReady, ActorOperator
 	default:
 		// A kind this build does not know is reported as degraded rather
 		// than ready, and pointed at the person who can read the peer's
@@ -280,11 +319,112 @@ type Finding struct {
 	Subject string `json:"subject,omitempty"`
 	// Detail is one sentence naming what is outstanding, addressed to the
 	// actor the kind implies. Empty falls back to [FindingKind.sentence].
+	//
+	// WHAT IS WRONG, AND ONLY THAT. What to do about it is [Remedy] and
+	// which things it is about is [Subjects] — three slots because a reader
+	// wants them in three different moments, and one string cannot be laid
+	// out. Glued together they read as the measured wall this split:
+	// "1 agent(s) have no GitHub App of their own, so nothing they do on
+	// GitHub is theirs: sre-lead. Create one per agent from the Integrations
+	// screen — GitHub offers no API for it, so it is a click there and
+	// nothing else can do it."
 	Detail string `json:"detail,omitempty"`
+	// Remedy is what to do about it — one sentence, imperative, addressed
+	// to the same actor.
+	//
+	// SEPARATE FROM [Detail] SO IT CAN BE LAID OUT. A card renders it as
+	// its own line at a quieter weight, which is what makes the problem
+	// scannable and the instruction findable; concatenated into the
+	// sentence, both are one paragraph and neither is either. It is also
+	// what lets a surface say what is wrong without claiming to know what
+	// to do, which several honestly do not.
+	//
+	// It never repeats the screen the reader is on. "Create one per agent
+	// from the Integrations screen" was rendered ON the Integrations
+	// screen, beside that agent's own Create button.
+	Remedy string `json:"remedy,omitempty"`
 	// ActionURL is where the person named by the actor goes to do it. Only
 	// meaningful for a kind whose actor is a person.
 	ActionURL string `json:"action_url,omitempty"`
+
+	// Subjects is every thing this finding is about, when there are many
+	// and Subject cannot name them all.
+	//
+	// # Why the list is not just written into Detail
+	//
+	// Detail is the CARD'S STATUS LINE, and it is capped at
+	// [MaxDetailLength] — a cap that exists because an oversized status row
+	// is REFUSED by the store rather than truncated, which would stop the
+	// surface recording anything at all. So a finding that listed its
+	// subjects inline became a 500-character wall cut off mid-item.
+	// Measured: 36 Datadog service accounts, the card's one-line status
+	// ending `…@agents.cr…`.
+	//
+	// With this, Detail says the COUNT and the whole list travels here, for
+	// a reader that has room to lay it out. [Listed] is how a finding
+	// builds the pair, so the sentence and the list cannot disagree.
+	//
+	// The sentence used to name three of them inline as well, which put
+	// every short list on screen twice — once as prose inside the sentence
+	// and once as the list itself, a metre apart. One home for the list,
+	// and a reader that only has a string still learns how many.
+	//
+	// EMPTY IS THE ORDINARY CASE. A finding about one thing names it in
+	// Subject and leaves this nil; a reader with nothing to render finds
+	// nothing to render. It is additive on a struct written to the
+	// coordination store, so a peer on an older build reads the Detail it
+	// always read.
+	Subjects []string `json:"subjects,omitempty"`
 }
+
+// Same reports two findings that say the same thing.
+//
+// A METHOD RATHER THAN ==, because [Finding.Subjects] made the struct
+// uncomparable and the equality the suites want is over every field rather
+// than over the slice's identity. One implementation, so a field added here
+// is compared everywhere: the certification suite asserts that two passes
+// over one world produce the same findings, which is the clause a silent
+// per-pass difference would walk through.
+func (f Finding) Same(other Finding) bool {
+	return f.Kind == other.Kind &&
+		f.Subject == other.Subject &&
+		f.Detail == other.Detail &&
+		f.ActionURL == other.ActionURL &&
+		f.Remedy == other.Remedy &&
+		slices.Equal(f.Subjects, other.Subjects)
+}
+
+// SameAll reports two finding lists that say the same things in the same
+// order.
+func SameAll(a, b []Finding) bool { return slices.EqualFunc(a, b, Finding.Same) }
+
+// Count is a quantity and its noun, agreeing.
+//
+// IT EXISTS BECAUSE `%d agent(s)` SHIPPED. Every finding that counts things
+// reached for the parenthetical plural, which reads as machine output in the
+// one place a person is being asked to do something — and "1 agent(s) have"
+// gets the verb wrong as well, which no parenthesis can rescue. English
+// regular plurals are one rule and every noun these findings count follows
+// it, so this is the whole of it; a noun that does not can be spelled by its
+// caller, which is what [Listed] taking a finished lead is for.
+func Count(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
+
+// A finding about many subjects is built from [Count] and [Finding.Subjects]
+// directly, and there is no helper between them.
+//
+// There was: Listed(lead, subjects, tail) spliced three of the subjects into
+// the sentence and appended the remedy to it, returning one string and the
+// list. Both halves of that are now the renderer's — [Finding.Remedy] is its
+// own field and the subjects are laid out rather than read as prose — which
+// left a function whose whole body returned its own arguments, offering a
+// guarantee it no longer made. `Count(len(x), "agent")` beside `Subjects: x`
+// is the same pairing, on adjacent lines, with nothing in between to be
+// wrong about it.
 
 // worstOf is the finding [Classify] promotes, and where it sits.
 //

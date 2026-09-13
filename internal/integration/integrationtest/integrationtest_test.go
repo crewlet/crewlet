@@ -26,27 +26,45 @@ func (c compliant) Reconcile(ctx context.Context) ([]integration.Finding, error)
 	return c.findings, nil
 }
 
+// world builds a reconciler that reports exactly these findings.
+func world(findings ...integration.Finding) func(integrationtest.TB) integration.Reconciler {
+	return func(integrationtest.TB) integration.Reconciler {
+		return compliant{findings: findings}
+	}
+}
+
+// outstanding is a world with something a PERSON owes, which is what the
+// findings clauses need in front of them.
+func outstanding() func(integrationtest.TB) integration.Reconciler {
+	return world(integration.Finding{
+		Kind: integration.FindingGrantShort, Subject: "ceo",
+		Detail: "ceo needs maintainer on the platform group",
+	})
+}
+
 // A reconciler that keeps the contract passes.
 func TestACompliantReconcilerPasses(t *testing.T) {
 	writes := 0
 	integrationtest.Run(t, integrationtest.Reconciler{
-		New:       func(integrationtest.TB) integration.Reconciler { return compliant{writes: &writes} },
-		Mutations: func() int { return writes },
+		Converged:   func(integrationtest.TB) integration.Reconciler { return compliant{writes: &writes} },
+		Outstanding: outstanding(),
+		Mutations:   func() int { return writes },
 	})
 }
 
-// And one carrying findings passes too, so the suite certifies a company with
-// something outstanding rather than only an empty one.
+// And a world carrying several findings passes too, including one nobody has
+// to act on beside one somebody does.
 func TestACompliantReconcilerWithFindingsPasses(t *testing.T) {
 	writes := 0
-	findings := []integration.Finding{
-		{Kind: integration.FindingGrantShort, Subject: "ceo", Detail: "ceo needs maintainer"},
-		{Kind: integration.FindingGrantPending, Subject: "cto"},
-	}
 	integrationtest.Run(t, integrationtest.Reconciler{
-		New: func(integrationtest.TB) integration.Reconciler {
-			return compliant{writes: &writes, findings: findings}
-		},
+		Converged: func(integrationtest.TB) integration.Reconciler { return compliant{writes: &writes} },
+		Outstanding: world(
+			integration.Finding{
+				Kind: integration.FindingGrantShort, Subject: "ceo",
+				Detail: "ceo needs maintainer",
+			},
+			integration.Finding{Kind: integration.FindingGrantPending, Subject: "cto"},
+		),
 		Mutations: func() int { return writes },
 	})
 }
@@ -79,16 +97,18 @@ func violations() []violation {
 			name:   "a kind this build does not converge",
 			clause: "the kind is one this build converges",
 			rec: integrationtest.Reconciler{
-				New:       func(integrationtest.TB) integration.Reconciler { return unknownKind{} },
-				Mutations: func() int { return 0 },
+				Converged:   func(integrationtest.TB) integration.Reconciler { return unknownKind{} },
+				Outstanding: outstanding(),
+				Mutations:   func() int { return 0 },
 			},
 		},
 		{
 			name:   "a kind that moves between passes",
 			clause: "the kind does not change across passes",
 			rec: integrationtest.Reconciler{
-				New:       func(integrationtest.TB) integration.Reconciler { return &drifter{} },
-				Mutations: func() int { return 0 },
+				Converged:   func(integrationtest.TB) integration.Reconciler { return &drifter{} },
+				Outstanding: outstanding(),
+				Mutations:   func() int { return 0 },
 			},
 		},
 		{
@@ -97,8 +117,9 @@ func violations() []violation {
 			rec: func() integrationtest.Reconciler {
 				writes := 0
 				return integrationtest.Reconciler{
-					New:       func(integrationtest.TB) integration.Reconciler { return &writer{writes: &writes} },
-					Mutations: func() int { return writes },
+					Converged:   func(integrationtest.TB) integration.Reconciler { return &writer{writes: &writes} },
+					Outstanding: outstanding(),
+					Mutations:   func() int { return writes },
 				}
 			}(),
 		},
@@ -106,7 +127,34 @@ func violations() []violation {
 			name:   "findings that churn between passes",
 			clause: "two passes over an unchanged world agree",
 			rec: integrationtest.Reconciler{
-				New:       func(integrationtest.TB) integration.Reconciler { return &churner{} },
+				Converged:   func(integrationtest.TB) integration.Reconciler { return &churner{} },
+				Outstanding: outstanding(),
+				Mutations:   func() int { return 0 },
+			},
+		},
+		{
+			// THE ONE THAT MAKES THE THREE BELOW MEAN ANYTHING. A world
+			// that reports nothing is converged, and every clause that
+			// walks a findings list then walks an empty one.
+			name:   "an outstanding world with nothing outstanding",
+			clause: "an outstanding world actually reports something",
+			rec: integrationtest.Reconciler{
+				Converged:   func(integrationtest.TB) integration.Reconciler { return compliant{} },
+				Outstanding: world(),
+				Mutations:   func() int { return 0 },
+			},
+		},
+		{
+			// AND THE OTHER HALF OF IT. Findings alone are not enough:
+			// a world whose only finding is one nobody has to act on
+			// leaves the actionability clause with nothing to check.
+			name:   "an outstanding world nobody has to act on",
+			clause: "an outstanding world actually reports something",
+			rec: integrationtest.Reconciler{
+				Converged: func(integrationtest.TB) integration.Reconciler { return compliant{} },
+				Outstanding: world(
+					integration.Finding{Kind: integration.FindingGrantPending, Subject: "cto"},
+				),
 				Mutations: func() int { return 0 },
 			},
 		},
@@ -114,16 +162,15 @@ func violations() []violation {
 			name:   "a finding kind this build cannot read",
 			clause: "every finding is a kind this build knows",
 			rec: integrationtest.Reconciler{
-				New: func(integrationtest.TB) integration.Reconciler {
-					// Carries a detail, so the only clause it breaks is
-					// the one it is here for: an unknown kind is owed by
-					// the operator, and a detail-less one would trip the
-					// actionability clause as well.
-					return compliant{findings: []integration.Finding{
-						{Kind: integration.FindingKind("pager_rota_stale"), Subject: "ceo",
-							Detail: "read the peer's logs"},
-					}}
-				},
+				Converged: func(integrationtest.TB) integration.Reconciler { return compliant{} },
+				// Carries a detail, so the only clause it breaks is the
+				// one it is here for: an unknown kind is owed by the
+				// operator, and a detail-less one would trip the
+				// actionability clause as well.
+				Outstanding: world(integration.Finding{
+					Kind: integration.FindingKind("pager_rota_stale"), Subject: "ceo",
+					Detail: "read the peer's logs",
+				}),
 				Mutations: func() int { return 0 },
 			},
 		},
@@ -131,20 +178,29 @@ func violations() []violation {
 			name:   "a person's finding with nothing to act on",
 			clause: "a finding a person must act on says what to do",
 			rec: integrationtest.Reconciler{
-				New: func(integrationtest.TB) integration.Reconciler {
-					return compliant{findings: []integration.Finding{
-						{Kind: integration.FindingGrantShort, Subject: "ceo"},
-					}}
-				},
+				Converged: func(integrationtest.TB) integration.Reconciler { return compliant{} },
+				Outstanding: world(integration.Finding{
+					Kind: integration.FindingGrantShort, Subject: "ceo",
+				}),
 				Mutations: func() int { return 0 },
+			},
+		},
+		{
+			name:   "findings that churn over an outstanding world",
+			clause: "two passes over an outstanding world agree",
+			rec: integrationtest.Reconciler{
+				Converged:   func(integrationtest.TB) integration.Reconciler { return compliant{} },
+				Outstanding: func(integrationtest.TB) integration.Reconciler { return &churner{} },
+				Mutations:   func() int { return 0 },
 			},
 		},
 		{
 			name:   "a cancelled pass reported as health",
 			clause: "a cancelled pass reports a fault rather than health",
 			rec: integrationtest.Reconciler{
-				New:       func(integrationtest.TB) integration.Reconciler { return swallower{} },
-				Mutations: func() int { return 0 },
+				Converged:   func(integrationtest.TB) integration.Reconciler { return swallower{} },
+				Outstanding: outstanding(),
+				Mutations:   func() int { return 0 },
 			},
 		},
 	}
@@ -253,12 +309,15 @@ var errStop = errors.New("integrationtest: the case stopped")
 func TestEveryCasePassesACompliantReconciler(t *testing.T) {
 	writes := 0
 	rec := integrationtest.Reconciler{
-		New: func(integrationtest.TB) integration.Reconciler {
-			return compliant{writes: &writes, findings: []integration.Finding{
-				{Kind: integration.FindingGrantShort, Subject: "ceo", Detail: "needs maintainer"},
-			}}
+		// CONVERGED MEANS NO FINDINGS, which is the whole reason the
+		// outstanding world exists beside it: a compliant reconciler that
+		// reported findings over a converged world would be describing a
+		// company with work to do as one with none.
+		Converged: func(integrationtest.TB) integration.Reconciler {
+			return compliant{writes: &writes}
 		},
-		Mutations: func() int { return writes },
+		Outstanding: outstanding(),
+		Mutations:   func() int { return writes },
 	}
 	for _, c := range integrationtest.Cases() {
 		if got := runCase(c, rec); got.failed {

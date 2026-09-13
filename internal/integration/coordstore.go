@@ -78,6 +78,42 @@ func (s *CoordStore) LoadIntegrations(ctx context.Context) ([]State, error) {
 	return out, nil
 }
 
+// LoadIntegration reads one surface's status.
+//
+// Over the plural read rather than a single-key fetch on the coordination
+// contract, and deliberately: the bucket holds at most one key per surface in
+// [Kinds], so the whole of it is smaller than the round trip that fetches it,
+// and a second contract method would be a second thing for every backend and
+// the coordtest suite to keep correct for no measurable gain.
+//
+// An undecodable row answers NOT FOUND rather than raising, exactly as
+// [CoordStore.LoadIntegrations] skips one, and for the same reason: the honest
+// reading of a value this build cannot decode is "there is no status here I can
+// use", and the recovery is the pass that follows overwriting it.
+func (s *CoordStore) LoadIntegration(ctx context.Context, kind Kind) (State, bool, error) {
+	raw, err := s.statuses.IntegrationStatuses(ctx)
+	if err != nil {
+		return State{}, false, fmt.Errorf(
+			"integration: read the %s reconcile status: %w", kind, err)
+	}
+	value, ok := raw[kind.String()]
+	if !ok {
+		return State{}, false, nil
+	}
+	var state State
+	if err := json.Unmarshal(value, &state); err != nil {
+		log.WarnContext(ctx, "integration_status_undecodable",
+			"integration", kind.String(), "error", err,
+			"detail", "this surface is reconciled again and its status rewritten")
+		return State{}, false, nil
+	}
+	// THE KEY IS AUTHORITATIVE, for the reason [CoordStore.LoadIntegrations]
+	// gives: a status written under the wrong key must not rename the row the
+	// caller asked about.
+	state.Kind = kind
+	return state, true, nil
+}
+
 // SaveIntegration records one surface's status.
 func (s *CoordStore) SaveIntegration(ctx context.Context, state State) error {
 	if state.Kind == "" {

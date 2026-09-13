@@ -36,6 +36,18 @@ import (
 // could not be reached the seat is left exactly as it was, because reporting
 // "no installation" on a timeout would tell an operator to redo a click that
 // was never undone.
+//
+// # A cancelled pass is not a failed read
+//
+// That rule is right for a timeout and a 5xx — GitHub was asked and could not
+// say — and it is wrong for a cancellation, which means this pass never asked
+// at all. Left alone under the same arm, a seat that is genuinely fine
+// produced no finding and no error, and this pass could not report a fault if
+// it wanted to: it returned nil unconditionally. So a node draining recorded
+// every seat as ready on its way out, and the next node to hold the duty
+// trusted that for a full settled interval. A pass whose context is done
+// RAISES, and the caller decides — which for the loop means retrying rather
+// than believing.
 
 // SeatApp is one agent's own app, as the company document holds it.
 type SeatApp struct {
@@ -119,7 +131,67 @@ type SeatAppResult struct {
 	Findings []integration.Finding
 }
 
+// SeatsWithNoApp is the one finding for the agent seats that have no app
+// record at all, or nil when every agent has one.
+//
+// # Why these are reported together and the rest are reported one by one
+//
+// [ReconcileSeatApps] walks the seats that HAVE an app and says what is
+// outstanding on each, because each is a different act: install this one,
+// re-create that one. A seat with no app at all is the same act for every one
+// of them — a person creates it from the Integrations screen — so N of those
+// is one sentence, not N findings, and a fifty-agent company that has just
+// connected does not get fifty rows saying the same thing.
+//
+// # And why they are reported at all
+//
+// They were invisible. The engine builds its seat list from the seats
+// carrying an `integrations.github` block, because that block is where an
+// app's id, slug and key are recorded — so a seat that has never had one is
+// absent from the pass's input, the AppID == 0 arm below cannot be reached
+// for it, and no finding is produced. Measured on a live connect: a company
+// with one agent, no app, `phase: ready`, `findings: []`, and a seat row
+// three screens away saying "no app of its own yet, so this agent acts as
+// nobody on GitHub".
+//
+// APPROVAL_REQUIRED, on the same reasoning the arm below gives: the engine
+// can do nothing until a person acts at GitHub, so a card reading "Setting up
+// agents" would wait for an act nobody is performing.
+func SeatsWithNoApp(handles []string) *integration.Finding {
+	if len(handles) == 0 {
+		return nil
+	}
+	seat := handles[0]
+	// THE ONE CASE NAMES ITS AGENT AND THE MANY CASE COUNTS THEM, because
+	// "1 agent(s) have no GitHub App" is wrong in three ways at once: the
+	// parenthesis reads as machine output where a person is being asked to
+	// act, the verb does not agree, and the handle it is about is a metre
+	// further down the card when there is room for it right here.
+	detail := seat + " has no GitHub App of its own, so nothing it does on " +
+		"GitHub is its own"
+	if len(handles) > 1 {
+		detail = integration.Count(len(handles), "agent") +
+			" have no GitHub App of their own, so nothing they do on GitHub " +
+			"is theirs"
+	}
+	return &integration.Finding{
+		Kind:    integration.FindingApprovalRequired,
+		Subject: "agents without an app",
+		Detail:  detail,
+		// NOT "from the Integrations screen", which is the screen this is
+		// rendered on, beside that agent's own Create button.
+		Remedy: "Create one per agent — GitHub offers no API for it, so a " +
+			"person clicking is the only thing that can.",
+		Subjects: handles,
+	}
+}
+
 // ReconcileSeatApps brings every agent's own app in line.
+//
+// The result is returned WITH an error rather than instead of it: the seats
+// already walked are what this pass established, and a caller printing a
+// partial report is better served by them than by nil. The loop discards them
+// and retries, which is what a fault means there.
 func ReconcileSeatApps(ctx context.Context, opts SeatAppOptions) (*SeatAppResult, error) {
 	build := opts.Client
 	if build == nil {
@@ -129,15 +201,29 @@ func ReconcileSeatApps(ctx context.Context, opts SeatAppOptions) (*SeatAppResult
 	}
 	out := &SeatAppResult{Findings: []integration.Finding{}}
 	for _, seat := range opts.Seats {
-		out.reconcileSeat(ctx, opts, seat, build)
+		// CHECKED BEFORE THE SEAT, not only after its read. The two arms
+		// below that conclude before any call — no app, no key — read the
+		// DOCUMENT rather than GitHub, so a pass torn down between seats
+		// would keep walking the roster and answer confidently about a
+		// GitHub it had stopped talking to.
+		if err := interrupted(ctx); err != nil {
+			return out, err
+		}
+		if err := out.reconcileSeat(ctx, opts, seat, build); err != nil {
+			return out, err
+		}
 	}
 	return out, nil
 }
 
+// reconcileSeat reports one seat, and returns an error only for a fault that
+// invalidates the whole pass rather than one seat's own state — which today
+// is exactly one thing: a context that is done. Everything a seat can be
+// wrong about is a finding, because that is what an operator acts on.
 func (r *SeatAppResult) reconcileSeat(
 	ctx context.Context, opts SeatAppOptions, seat SeatApp,
 	build func(int64, string, string) (*AppClient, error),
-) {
+) error {
 	switch {
 	case seat.AppID == 0:
 		// A STEP, NOT A FAULT, and the wording says so: nobody has done
@@ -157,7 +243,7 @@ func (r *SeatAppResult) reconcileSeat(
 			Detail: seat.Handle + " has no GitHub App of its own, so nothing it " +
 				"does on GitHub is its own: create one from the Integrations screen",
 		})
-		return
+		return nil
 
 	case strings.TrimSpace(seat.Key) == "":
 		// THE KEY IS GONE AND CANNOT BE REISSUED. GitHub hands it over
@@ -169,7 +255,7 @@ func (r *SeatAppResult) reconcileSeat(
 			Detail: "the private key for " + seat.Handle + "'s app did not resolve, " +
 				"and GitHub issues it once: delete the app at GitHub and create it again",
 		})
-		return
+		return nil
 	}
 
 	client, err := build(seat.AppID, seat.Key, opts.APIBase)
@@ -179,7 +265,13 @@ func (r *SeatAppResult) reconcileSeat(
 			Subject: seat.Handle,
 			Detail:  "the app key for " + seat.Handle + " could not be read: " + err.Error(),
 		})
-		return
+		// THE ERROR IS THE FINDING'S CONTENT, not the pass's outcome, which
+		// is what nilerr cannot see. A key this engine cannot parse is a
+		// thing one SEAT's operator has to fix, and the report above says
+		// so; returned instead, it would abandon the roster and fail the
+		// whole surface over one seat's malformed credential.
+		//nolint:nilerr // reported as a per-seat finding; see the report above
+		return nil
 	}
 
 	installation, adopted, err := r.installationFor(ctx, opts, seat, client)
@@ -196,12 +288,25 @@ func (r *SeatAppResult) reconcileSeat(
 	if notFound(err) || (err == nil && installation == nil) {
 		if exists, existsErr := client.Exists(ctx); existsErr == nil && !exists {
 			r.forget(ctx, opts, seat)
-			return
+			return nil
 		}
 	}
 
 	var notRecorded *errNotRecorded
 	switch {
+	case ctx.Err() != nil:
+		// FIRST, AND AHEAD OF EVERY OTHER READING OF err, because this one
+		// is not about the seat at all: the pass is being torn down, so
+		// nothing below it is a statement about the operator's world. It
+		// is checked on a SUCCESSFUL read too — the walk is abandoned
+		// either way, and a last seat marked Ready out of a roster that
+		// was never finished is the same false "converged" in miniature.
+		//
+		// [interrupted] says why the CONTEXT is the test rather than the
+		// error: net/http gives a client timeout context.DeadlineExceeded
+		// as well, and a timeout is precisely the case the arm below
+		// exists to leave alone.
+		return interrupted(ctx)
 	case errors.As(err, &notRecorded):
 		// FOUND AND NOT WRITTEN DOWN. The click has been made; what
 		// failed is this engine's own write, so nothing an operator does
@@ -215,13 +320,19 @@ func (r *SeatAppResult) reconcileSeat(
 			Subject: seat.Handle,
 			Detail:  notRecorded.detail(seat.Handle),
 		})
-		return
+		return nil
 	case err != nil && seat.InstallationID != 0:
 		// LEFT ALONE, and only where the document already claims an
 		// installation. See the package note: a failed read is not
 		// evidence that anything was undone, and saying otherwise sends
 		// an operator to redo a click nobody reversed.
-		return
+		//
+		// A CANCELLATION NEVER REACHES HERE — the arm above takes it —
+		// because "GitHub could not say" and "this pass never asked" are
+		// opposite facts that used to share this branch, and the second
+		// one leaving no finding and no error is how a draining node
+		// reported a whole roster as ready.
+		return nil
 	case err != nil, installation == nil:
 		// NOT INSTALLED IS A FACT THE DOCUMENT HOLDS, not one GitHub has
 		// to confirm. A seat with no installation recorded has a click
@@ -235,7 +346,11 @@ func (r *SeatAppResult) reconcileSeat(
 			Detail: seat.Handle + "'s app exists and nothing has installed it, so it " +
 				"sees no repository: install it on " + orgLabel(opts.Org),
 		})
-		return
+		// Same shape as the key branch above: the outstanding click is
+		// reported to the person who can make it, and a read GitHub
+		// refused is not a reason to fail the pass over.
+		//nolint:nilerr // reported as a per-seat finding; see the report above
+		return nil
 	}
 	if adopted {
 		r.Adopted = append(r.Adopted, seat.Handle)
@@ -249,7 +364,7 @@ func (r *SeatAppResult) reconcileSeat(
 			Detail: seat.Handle + "'s installation is suspended, so every token it " +
 				"mints is refused: unsuspend it at GitHub",
 		})
-		return
+		return nil
 	}
 
 	// WHAT IT HOLDS, against what the tier asks for. The manifest asked
@@ -274,9 +389,10 @@ func (r *SeatAppResult) reconcileSeat(
 				"lacks " + strings.Join(short, ", ") + ", so those calls are refused " +
 				"at the call site with nothing naming the tier",
 		})
-		return
+		return nil
 	}
 	r.Ready = append(r.Ready, seat.Handle)
+	return nil
 }
 
 // forget reports an app GitHub no longer has, and clears the record naming it.

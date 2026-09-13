@@ -26,12 +26,25 @@
 // it would certify everything except the thing worth certifying. A third-party app
 // harness that genuinely cannot count writes has to grow the ability rather
 // than be waived: a skip is not a pass.
+//
+// # What counts as a write, and what does not
+//
+// Anything a PERSON WOULD HAVE TO UNDO. That is wider than "a request to the
+// third-party app": a pass that re-seals a seat's credential through the
+// fleet's sealed store on every converged run is writing just as surely, and
+// the harness has to see it.
+//
+// It is also NARROWER than "a non-GET request", and getting that wrong pushes
+// in the dangerous direction. Some vendors model a listing as a POST —
+// Atlassian's workspace discovery is one — so a counter keyed on HTTP method
+// makes the clause impossible to satisfy, and a clause that cannot be
+// satisfied is one somebody eventually weakens. Count by ROUTE, and say in the
+// harness which routes those are and why.
 package integrationtest
 
 import (
 	"context"
 	"errors"
-	"slices"
 	"strings"
 	"testing"
 
@@ -67,36 +80,68 @@ func Cases() []Case {
 		{"the kind does not change across passes", kindIsStable},
 		{"a converged pass writes nothing", convergedPassWritesNothing},
 		{"two passes over an unchanged world agree", passesAgree},
+		{"an outstanding world actually reports something", outstandingWorldReports},
 		{"every finding is a kind this build knows", findingsAreKnown},
 		{"a finding a person must act on says what to do", personFindingsAreActionable},
+		{"two passes over an outstanding world agree", outstandingPassesAgree},
 		{"a cancelled pass reports a fault rather than health", cancelledPassIsAFault},
 	}
 }
 
 // Reconciler is one integration's entry into the suite.
+//
+// TWO WORLDS, and the second one exists because the first cannot certify what
+// half these cases claim to. A converged pass reports NO findings — that is
+// what converged means — so every case that walks the findings list walks an
+// empty one and passes whatever the vendor does. Three of them did, silently,
+// and a reader counting green ticks would have read seven certified clauses
+// where two carried weight.
 type Reconciler struct {
-	// New builds a reconciler against a world that is ALREADY CONVERGED:
-	// every seat has the identity the company asks for, every credential
-	// works, and nothing is outstanding.
+	// Converged builds a reconciler against a world that is ALREADY
+	// CONVERGED: every seat has the identity the company asks for, every
+	// credential works, and nothing is outstanding.
 	//
-	// Converged rather than empty, because the clause that matters most is
-	// about the steady state. A pass over a company that needs work is
-	// allowed to write; a pass over one that does not is the state the
-	// loop spends its life in, and the one where a stray write becomes a
-	// credential rotated every ten minutes for ever.
-	New func(t TB) integration.Reconciler
+	// This is the steady state — the one the loop spends its life in, and
+	// the one where a stray write becomes a credential rotated every ten
+	// minutes for ever.
+	Converged func(t TB) integration.Reconciler
 
-	// Mutations counts every write the third-party app has received since New.
+	// Outstanding builds one against a world where something is genuinely
+	// wrong in a way A PERSON has to act on: a credential the third-party
+	// app refuses, an app nobody installed, a seat with no account, an
+	// address deliveries cannot reach.
 	//
-	// Required. See the package doc.
+	// REQUIRED, for the reason [Reconciler.Mutations] is. A suite that let a
+	// vendor skip this would go on reporting the findings cases green while
+	// certifying nothing about them, which is the exact shape this package
+	// was written to remove and would be the second time it happened here.
+	//
+	// A pass over this world is ALLOWED to write — it has work to do, and
+	// doing it is the point. Nothing counts mutations here.
+	Outstanding func(t TB) integration.Reconciler
+
+	// Mutations counts every write the pass has made since Converged — at
+	// the third-party app, and into this deployment's own sealed store.
+	//
+	// Required, and the package doc says what a write is: anything a person
+	// would have to undo, counted by ROUTE rather than by HTTP method.
+	//
+	// Only ever sampled around a pass over the CONVERGED world, as a delta,
+	// so a harness may share one counter between both.
 	Mutations func() int
 }
 
 // Run drives the suite.
 func Run(t *testing.T, r Reconciler) {
 	t.Helper()
-	if r.New == nil {
-		t.Fatalf("integrationtest: Reconciler.New is required")
+	if r.Converged == nil {
+		t.Fatalf("integrationtest: Reconciler.Converged is required")
+	}
+	if r.Outstanding == nil {
+		t.Fatalf("%s", "integrationtest: Reconciler.Outstanding is required; a "+
+			"converged world reports no findings, so without it every case "+
+			"that walks the findings list passes over an empty one and "+
+			"certifies nothing")
 	}
 	if r.Mutations == nil {
 		t.Fatalf("%s", "integrationtest: Reconciler.Mutations is required; a harness "+
@@ -112,7 +157,7 @@ func Run(t *testing.T, r Reconciler) {
 // The kind is what the loop keys every status on, so one this build does not
 // know is a status nothing will ever render.
 func kindIsValid(t TB, r Reconciler) {
-	kind := r.New(t).Kind()
+	kind := r.Converged(t).Kind()
 	if !kind.Valid() {
 		t.Fatalf("Kind() is %q, which is not in integration.Kinds", kind)
 	}
@@ -121,7 +166,7 @@ func kindIsValid(t TB, r Reconciler) {
 // A kind that moved between passes would leave the previous one's status
 // behind for ever, describing a surface nothing writes to any more.
 func kindIsStable(t TB, r Reconciler) {
-	rec := r.New(t)
+	rec := r.Converged(t)
 	first := rec.Kind()
 	if _, err := rec.Reconcile(context.Background()); err != nil &&
 		!errors.Is(err, integration.ErrNotConfigured) {
@@ -141,7 +186,7 @@ func kindIsStable(t TB, r Reconciler) {
 // is authenticating with, from a loop whose whole promise is that it is safe
 // to leave switched on.
 func convergedPassWritesNothing(t TB, r Reconciler) {
-	rec := r.New(t)
+	rec := r.Converged(t)
 	before := r.Mutations()
 	if _, err := rec.Reconcile(context.Background()); err != nil {
 		t.Fatalf("Reconcile over a converged world: %v", err)
@@ -157,7 +202,7 @@ func convergedPassWritesNothing(t TB, r Reconciler) {
 // phase flap and resets the backoff every time, so an integration that needs
 // nothing is re-read at the shortest interval the schedule has.
 func passesAgree(t TB, r Reconciler) {
-	rec := r.New(t)
+	rec := r.Converged(t)
 	ctx := context.Background()
 
 	first, err := rec.Reconcile(ctx)
@@ -169,7 +214,7 @@ func passesAgree(t TB, r Reconciler) {
 		t.Fatalf("second pass: %v", err)
 	}
 
-	if !slices.Equal(first, second) {
+	if !integration.SameAll(first, second) {
 		t.Fatalf("two passes over one world disagree:\n first: %+v\nsecond: %+v",
 			first, second)
 	}
@@ -186,7 +231,7 @@ func passesAgree(t TB, r Reconciler) {
 // to invent an eighth kind: an unknown one classifies as degraded with a
 // sentence nobody can act on.
 func findingsAreKnown(t TB, r Reconciler) {
-	findings, err := r.New(t).Reconcile(context.Background())
+	findings, err := r.Outstanding(t).Reconcile(context.Background())
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -204,7 +249,7 @@ func findingsAreKnown(t TB, r Reconciler) {
 // exists: it is the sentence that saves somebody reading logs. One with no
 // detail renders as a bare phase name and sends them there anyway.
 func personFindingsAreActionable(t TB, r Reconciler) {
-	findings, err := r.New(t).Reconcile(context.Background())
+	findings, err := r.Outstanding(t).Reconcile(context.Background())
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -220,6 +265,68 @@ func personFindingsAreActionable(t TB, r Reconciler) {
 	}
 }
 
+// THE ANTI-VACUITY CLAUSE, and the reason the two cases after it mean
+// anything.
+//
+// Every case that walks a findings list is satisfied by an empty one. So a
+// harness whose "outstanding" world is quietly converged — a credential that
+// resolves after all, a seat that does have an account, a fixture that
+// short-circuits before the walk that would have noticed — puts three green
+// ticks on a vendor nothing was checked about. That is not hypothetical: it is
+// what this suite did for every vendor before this case existed, and what the
+// suite it replaced did for all seven.
+//
+// So the world has to prove itself first. At least one finding, and at least
+// one a PERSON owes, because the cases below are about what an operator is
+// told and a world whose only finding is "the third-party app is still
+// applying a grant" tells them nothing.
+func outstandingWorldReports(t TB, r Reconciler) {
+	findings, err := r.Outstanding(t).Reconcile(context.Background())
+	if err != nil {
+		t.Fatalf("a pass over the outstanding world: %v", err)
+	}
+	if len(findings) == 0 {
+		t.Fatalf("%s", "the outstanding world reported nothing, so it is "+
+			"converged: every case that walks the findings list then walks an "+
+			"empty one and certifies nothing about this integration")
+	}
+	for _, f := range findings {
+		if _, actor := f.Kind.Verdict(); actor.WaitsOnAPerson() {
+			return
+		}
+	}
+	t.Fatalf("the outstanding world reported %d finding(s) and none is owed by "+
+		"a person, so the case that checks what an operator is told has "+
+		"nothing to check", len(findings))
+}
+
+// A pass whose findings churn makes the reported phase flap and resets the
+// backoff every time — and over the world that HAS findings, which is where
+// churn is actually reachable. The converged twin of this case compares two
+// empty lists, so on its own it cannot see a vendor that returns its seats in
+// map order.
+func outstandingPassesAgree(t TB, r Reconciler) {
+	rec := r.Outstanding(t)
+	ctx := context.Background()
+
+	first, err := rec.Reconcile(ctx)
+	if err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	second, err := rec.Reconcile(ctx)
+	if err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if !integration.SameAll(first, second) {
+		t.Fatalf("two passes over one outstanding world disagree:\n first: %+v\nsecond: %+v",
+			first, second)
+	}
+	if a, b := integration.Classify(first), integration.Classify(second); a != b {
+		t.Fatalf("two passes over one outstanding world classify differently:\n first: %+v\nsecond: %+v",
+			a, b)
+	}
+}
+
 // A cancelled pass has NOT observed the world, so it must raise rather than
 // answer with findings.
 //
@@ -232,7 +339,7 @@ func cancelledPassIsAFault(t TB, r Reconciler) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	findings, err := r.New(t).Reconcile(ctx)
+	findings, err := r.Converged(t).Reconcile(ctx)
 	if err == nil && len(findings) == 0 {
 		t.Fatalf("%s", "a cancelled pass reported a converged integration; the "+
 			"loop reads that as ready and trusts it for a full settled interval")

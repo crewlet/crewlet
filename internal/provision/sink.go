@@ -56,6 +56,33 @@ type TokenSink interface {
 	// can finish by hand.
 	Discard(ctx context.Context) error
 
+	// Forget removes values this run did NOT write, because the accounts
+	// they belonged to have been removed.
+	//
+	// # Why this is separate from Discard
+	//
+	// Discard is a ROLLBACK and is scoped to this run's own writes: it
+	// undoes what a failed provisioning pass did. This is the other
+	// direction — a teardown deleted the accounts, and the credentials
+	// sealed for them are now dead values that read exactly like live ones.
+	// Nothing could express that, so no teardown or decommission path
+	// anywhere deleted a single secret.
+	//
+	// # It is not best effort
+	//
+	// Where Discard reports what it could not remove and carries on —
+	// because the problem it is cleaning up after is already worse — a
+	// failure here must fail the teardown. The block stays, the surface
+	// holds in PhaseDisconnecting, and the next attempt tries again. A
+	// swallowed failure drops the block with the credentials still sealed,
+	// and the retry that would have caught it never runs.
+	//
+	// ONLY WHAT A TEARDOWN NAMED. A caller passes the names off a
+	// [Removed], which holds a seat's OWN credentials and never a
+	// company-level one: an admin token or a webhook secret survives a
+	// disconnect by design and may be shared with another deployment.
+	Forget(ctx context.Context, names ...string) error
+
 	// Flush completes the run. A sink that batches finishes here; a
 	// write-through one has nothing to do and says so.
 	Flush(ctx context.Context) error
@@ -141,8 +168,12 @@ type readOnlySink struct{}
 func (readOnlySink) Mints() bool { return false }
 
 func (readOnlySink) Record(context.Context, string, string) error { return ErrNoSink }
-func (readOnlySink) Discard(context.Context) error                { return nil }
-func (readOnlySink) Flush(context.Context) error                  { return nil }
+
+// Forget implements [TokenSink]: nothing was persisted, so nothing is held.
+func (readOnlySink) Forget(context.Context, ...string) error { return nil }
+
+func (readOnlySink) Discard(context.Context) error { return nil }
+func (readOnlySink) Flush(context.Context) error   { return nil }
 
 func (readOnlySink) Value(context.Context, string) (string, bool, error) {
 	return "", false, ErrNoSink

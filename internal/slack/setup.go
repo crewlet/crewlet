@@ -74,16 +74,24 @@ func Requirements(handle string, seat *config.Role, resolve func(string) (string
 			// followed exactly, and prose runs it into the sentence around
 			// it. The link is the first hop rather than a trailing
 			// afterthought, so the line reads in the order it is walked.
-			// THE PAGE THE TOKEN IS ON, named, which the manifest step
-			// must not cost. Creating the app from a manifest leaves an
-			// operator on Basic Information, and installing it redirects
-			// the browser to this engine's own OAuth landing page, so a
-			// line ending at "Install to Workspace" leaves them two clicks
-			// from a value with nothing saying where.
+			// THE MANIFEST WIZARD'S OWN STEPS, in the order somebody
+			// walking it actually sees them.
+			//
+			// It named `OAuth & Permissions > Install to Workspace`, which
+			// is the FROM-SCRATCH path: an app built by hand has its scopes
+			// added on that page and is installed from it. An app created
+			// from a manifest is installed by the wizard itself — pick a
+			// workspace, Next, Create and Install, Allow — and lands on a
+			// page where the token is under App Credentials. So the one
+			// line on this form described a walk the form's own manifest
+			// does not take, which is worse than no directions: it names
+			// real pages, so somebody follows it and concludes the value is
+			// missing rather than that they are in the wrong place.
 			Help: "Navigate to [api.slack.com/apps](https://api.slack.com/apps) > " +
 				"`Create New App > From an app manifest` and paste this agent's " +
-				"manifest, then `OAuth & Permissions > Install to Workspace` " +
-				"and paste the `Bot User OAuth Token` here.",
+				"manifest, then select your Slack workspace > `Next` > " +
+				"`Create and Install` > `Allow` > `Your app credentials` " +
+				"and copy the `Bot token` value here.",
 			Blocks: integration.FindingIdentityMissing,
 		},
 		{

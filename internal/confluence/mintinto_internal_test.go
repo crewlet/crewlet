@@ -19,7 +19,7 @@ func TestARefusedWebhookTokenIsNotQuotedBack(t *testing.T) {
 	_, _, err := mintInto(context.Background(), Options{
 		Value:    func(v string) string { return v },
 		Recreate: true,
-	}, token, "webhook_token", "the token every delivery carries")
+	}, &Result{}, token, "webhook_token", "the token every delivery carries")
 	if err == nil {
 		t.Fatal("a literal webhook_token was accepted for minting")
 	}

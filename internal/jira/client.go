@@ -232,10 +232,10 @@ func (c *Client) do(ctx context.Context, method, path string, params url.Values,
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		detail, _ := io.ReadAll(io.LimitReader(resp.Body, httpx.RefusalBytes))
 		return &APIError{
 			Method: method, Path: path, Status: resp.StatusCode,
-			Detail: strings.TrimSpace(string(detail)),
+			Detail: httpx.Refusal(resp.Header.Get("Content-Type"), detail),
 		}
 	}
 	if out == nil {

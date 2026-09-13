@@ -1,6 +1,8 @@
 package secrets
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -43,10 +45,45 @@ func TestSealingHidesTheSTRUCTURE(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, leak := range []string{"Acme", "CEO", "ceo", "roles"} {
-		if strings.Contains(string(sealed), leak) {
-			t.Errorf("the sealed document still names %q: %s", leak, sealed)
-		}
+	// THE KEY SET IS THE STRUCTURAL CLAIM, and it is exact: one key, the
+	// envelope's, so not one field name of the document survives as a
+	// field. Everything else is one opaque token.
+	var envelope map[string]string
+	if err := json.Unmarshal(sealed, &envelope); err != nil {
+		t.Fatalf("the sealed document is not an envelope: %v", err)
+	}
+	if len(envelope) != 1 {
+		t.Fatalf("the sealed document has %d keys: %s", len(envelope), sealed)
+	}
+	token, present := envelope[EnvelopeKey]
+	if !present {
+		t.Fatalf("the sealed document is keyed on something else: %s", sealed)
+	}
+
+	// AND NOTHING IS SCANNED FOR A SHORT NEEDLE, in either encoding.
+	//
+	// This used to search `string(sealed)` for "Acme", "CEO", "ceo" and
+	// "roles", which is a coin toss rather than a check: base64 draws from
+	// a 64-symbol alphabet that INCLUDES those characters, so a short ASCII
+	// needle turns up in random ciphertext by luck — about one run in seven
+	// hundred over those four. It did, under `-race` in this tree:
+	// `…AcCEOGNYhF1…`, a "CEO" the cipher put there, reported as a leak of
+	// the document's. Decoding first makes the alphabet 256 symbols wide
+	// and the odds one in a hundred thousand, which is the same defect
+	// wearing a longer fuse — and a test that fails at random teaches a
+	// reader to re-run it, which is the habit that hides a real failure.
+	//
+	// So the two claims left are the two that are exact: the key set above,
+	// which IS "the structure is hidden" — no field name survives as a
+	// field — and the whole plaintext below, 54 bytes of it, which cannot
+	// collide with anything.
+	payload := token[strings.LastIndex(token, ":")+1:]
+	raw, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		t.Fatalf("the envelope payload is not base64: %v", err)
+	}
+	if bytes.Contains(raw, document) {
+		t.Errorf("the sealed document carries its own plaintext: %x", raw)
 	}
 }
 

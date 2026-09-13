@@ -110,6 +110,30 @@ func (s *SecretStoreSink) Discard(ctx context.Context) error {
 	return nil
 }
 
+// Forget implements [TokenSink]: it unsets each name in the sealed store.
+//
+// A NAME THAT IS NOT THERE IS NOT A FAILURE. [secrets.Values.Unset] reports
+// whether a row existed, and a teardown names the END STATE it established —
+// so a retry after a partial deletion finds some names already gone and must
+// read that as success, not as a reason to hold the disconnect open for ever.
+//
+// A real failure IS one, though, and is returned rather than collected: see
+// the contract note on [TokenSink.Forget].
+func (s *SecretStoreSink) Forget(ctx context.Context, names ...string) error {
+	var stuck []string
+	for _, name := range names {
+		if _, err := s.values.Unset(ctx, name); err != nil {
+			stuck = append(stuck, name)
+		}
+	}
+	if len(stuck) > 0 {
+		return fmt.Errorf("provision: these secrets belong to accounts that "+
+			"have been removed and could not be deleted, so they are still "+
+			"sealed and still resolving: %s", strings.Join(stuck, ", "))
+	}
+	return nil
+}
+
 // Flush implements [TokenSink]. Nothing to do: every Record was durable.
 func (s *SecretStoreSink) Flush(context.Context) error { return nil }
 
@@ -227,6 +251,19 @@ func (s *EnvFileSink) Discard(_ context.Context) error {
 		delete(s.values, name)
 	}
 	s.written = nil
+	return s.rewrite()
+}
+
+// Forget implements [TokenSink]: it drops each name and rewrites the file.
+//
+// It does not touch `written`, which is this RUN's own record and belongs to
+// [EnvFileSink.Discard]. A name here was sealed by some earlier run.
+func (s *EnvFileSink) Forget(_ context.Context, names ...string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, name := range names {
+		delete(s.values, name)
+	}
 	return s.rewrite()
 }
 
@@ -382,6 +419,25 @@ func (s *PrintSink) Discard(_ context.Context) error {
 	fmt.Fprintf(s.w, "\n# THE VALUES ABOVE ARE REVOKED and must not be used: %s\n",
 		strings.Join(s.written, ", "))
 	s.written = nil
+	return nil
+}
+
+// Forget implements [TokenSink]: it emits the unset for each name.
+//
+// THE POINT OF THIS SINK is that the operator runs what it prints, so a
+// teardown that stranded credentials prints the gesture that removes them
+// rather than silently doing nothing.
+func (s *PrintSink) Forget(_ context.Context, names ...string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, name := range names {
+		fmt.Fprintf(s.w, "unset %s\n", name)
+	}
+	fmt.Fprintf(s.w, "\n# THE ACCOUNTS THESE BELONGED TO HAVE BEEN REMOVED, "+
+		"so the values are dead: %s\n", strings.Join(names, ", "))
 	return nil
 }
 

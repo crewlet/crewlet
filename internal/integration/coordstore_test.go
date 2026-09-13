@@ -55,7 +55,7 @@ func TestCoordStoreRoundTrip(t *testing.T) {
 		t.Errorf("attempts is %d, want %d", got.Attempts, want.Attempts)
 	case got.LastError != want.LastError:
 		t.Errorf("last error is %q, want %q", got.LastError, want.LastError)
-	case len(got.Findings) != 1 || got.Findings[0] != want.Findings[0]:
+	case len(got.Findings) != 1 || !got.Findings[0].Same(want.Findings[0]):
 		t.Errorf("findings are %+v, want %+v", got.Findings, want.Findings)
 	case !got.LastAttemptAt.Equal(want.LastAttemptAt):
 		t.Errorf("last attempt is %s, want %s", got.LastAttemptAt, want.LastAttemptAt)

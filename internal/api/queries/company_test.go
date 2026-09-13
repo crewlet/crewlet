@@ -1134,6 +1134,31 @@ func TestIntegrationsCarriesWhatTheReconcileLoopFound(t *testing.T) {
 		if len(findings) != 2 {
 			t.Fatalf("carried %d findings, want both", len(findings))
 		}
+		// AND EACH CARRIES ITS OWN VERDICT, which is what stops a reader
+		// keeping a second copy of the closed set.
+		//
+		// These two findings are the discriminating pair: grant_short is a
+		// real problem owed by an admin, grant_excess is an ADVISORY on a
+		// working integration — same subject shape, same wire shape, and
+		// nothing but the kind string to tell them apart until now. The
+		// dashboard guessed, treating any finding naming an agent as that
+		// agent not working, so one spare permission badged a healthy agent
+		// amber underneath a card reading Connected.
+		verdicts := map[string][2]string{}
+		for _, raw := range findings {
+			f, _ := raw.(map[string]any)
+			kind, _ := f["kind"].(string)
+			phase, _ := f["phase"].(string)
+			actor, _ := f["actor"].(string)
+			verdicts[kind] = [2]string{phase, actor}
+		}
+		if got := verdicts["grant_short"]; got != [2]string{"degraded", "admin"} {
+			t.Errorf("grant_short verdict = %v, want degraded/admin", got)
+		}
+		if got := verdicts["grant_excess"]; got != [2]string{"ready", "admin"} {
+			t.Errorf("grant_excess verdict = %v, want ready/admin — an advisory "+
+				"that reads as a fault reports a working agent as broken", got)
+		}
 		// A surface the loop has not reached is absent rather than
 		// asserted, which is not the same as the process being unable to
 		// say: the field is null either way, and only the presence of
@@ -1432,6 +1457,313 @@ func TestEveryIntegrationKindCanBeReported(t *testing.T) {
 		if !seen[string(kind)] {
 			t.Errorf("%s is a surface the reconcile loop reports on, and the "+
 				"integrations answer has no row for it", kind)
+		}
+	}
+}
+
+// THE ORGANIZATION IS NOT AN INBOUND SURFACE, AND ITS ROW MUST NOT PRETEND TO
+// BE ONE.
+//
+// Atlassian is where an agent's ACCOUNT is created; the products that account
+// works in are Jira and Confluence, each with its own webhook and its own
+// parser. Nothing is ever addressed to the organization, so it has no delivery
+// to verify and nothing to route.
+//
+// The row passed the organization API key as the `secret` argument — a
+// PROVISIONING credential where a delivery-verification secret belongs — so it
+// answered `secret_usable: false` (nothing verifies atlassian, because nothing
+// needs to) and `routes: false` (no parser routes it, because nothing
+// arrives). The dashboard drew those as "secret unresolved — every delivery is
+// refused" and "routes nowhere", on an organization whose key had just created
+// every agent's account. Both are null now: "not applicable", which is what
+// the three-valued contract is for and what the screen already hides.
+func TestTheAtlassianOrganizationClaimsNoIngress(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	cfg.Integrations.Atlassian = &config.Atlassian{
+		OrgID: "f1240761-c455-41b5-a7f5-4a64f9c6e729", APIKey: "${ATLASSIAN_API_KEY}",
+	}
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+		// BOTH KNOWN, so a null here is this surface's own answer rather
+		// than a process that could not say: with these nil every row
+		// reports null and the test would pass over the old code too.
+		Routed:     func(context.Context) []string { return []string{"jira"} },
+		Verifiable: func(context.Context) []string { return []string{"jira"} },
+	}, "integrations", nil))
+
+	rows, _ := body["integrations"].([]any)
+	var org map[string]any
+	for _, row := range rows {
+		if entry, _ := row.(map[string]any); entry["key"] == "atlassian" {
+			org = entry
+		}
+	}
+	if org == nil {
+		t.Fatal("the Atlassian organization has no row at all")
+	}
+	for _, field := range []string{"secret_present", "secret_usable", "routes"} {
+		if got := org[field]; got != nil {
+			t.Errorf("atlassian %s = %v, want null: the organization receives no "+
+				"delivery, so it has none to verify and none to route", field, got)
+		}
+	}
+	// AND IT ADVERTISES NO ADDRESS. The row's default was `webhook` at
+	// `/webhooks/<kind>`, so the organization named `/webhooks/atlassian`
+	// — a route webhooks.go does not register — as the address to check a
+	// settings page against.
+	for _, field := range []string{"inbound_kind", "inbound_path"} {
+		if got := org[field]; got != nil {
+			t.Errorf("atlassian %s = %v, want null: nothing is ever addressed "+
+				"to the organization, and no such route is served", field, got)
+		}
+	}
+}
+
+// THE FORGE RELAY ROUTES AS THE PRODUCT IT RELAYS, and the row has to answer
+// for that rather than for its own name.
+//
+// A Cloud event the Forge app relays is republished as `jira` or `confluence`
+// and parsed by that product's parser, so no parser is ever registered under
+// `forge`. Asked about itself the relay answered `routes: false` on every
+// Cloud deployment for ever — and the dashboard groups it under the Atlassian
+// row, so a tenant whose relay was feeding both products correctly carried a
+// permanent "Forge relay — routes nowhere" beside the two rows saying they
+// routed fine.
+func TestTheForgeRelayRoutesAsTheProductItRelays(t *testing.T) {
+	t.Parallel()
+	forgeRow := func(t *testing.T, routed []string) map[string]any {
+		t.Helper()
+		cfg := company(t)
+		cfg.Integrations.ForgeAppID = "ari:cloud:ecosystem::app/a1b2"
+		body := asMap(t, answer(t, queries.Sources{
+			Company: func() *config.Company { return cfg },
+			Routed:  func(context.Context) []string { return routed },
+		}, "integrations", nil))
+		rows, _ := body["integrations"].([]any)
+		for _, row := range rows {
+			if entry, _ := row.(map[string]any); entry["key"] == "forge" {
+				return entry
+			}
+		}
+		t.Fatal("the Forge relay has no row at all")
+		return nil
+	}
+
+	// The relay's own name is in nothing and never will be: this is the
+	// answer the old code gave for every Cloud company.
+	if got := forgeRow(t, []string{"jira", "confluence"})["routes"]; got != true {
+		t.Errorf("forge routes = %v with both products parsed, want true: a "+
+			"relayed event is published as the product it belongs to", got)
+	}
+	// ONE PRODUCT IS ENOUGH, because a relayed event is one or the other and
+	// the finer answer is on those two rows, immediately below this one.
+	if got := forgeRow(t, []string{"confluence"})["routes"]; got != true {
+		t.Errorf("forge routes = %v with Confluence parsed, want true", got)
+	}
+	// AND FALSE IS STILL REACHABLE, which is what stops this being "null
+	// anything awkward": with neither product parsed, a relayed delivery
+	// really does reach nobody.
+	if got := forgeRow(t, []string{"slack"})["routes"]; got != false {
+		t.Errorf("forge routes = %v with neither product parsed, want false", got)
+	}
+}
+
+// AND MATTERMOST STILL ANSWERS, which is the half that makes the rule a rule
+// rather than "null anything with no inbound address".
+//
+// Mattermost has no address either — the engine DIALS OUT — but it then
+// receives everything said in its team, and whether a parser turns that into
+// work for a seat is a real question with a real answer. Kind.Ingress cannot
+// tell the two apart; Kind.Ingests can.
+func TestMattermostStillReportsWhetherItRoutes(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	cfg.Integrations.Mattermost = &config.Mattermost{URL: "https://chat.example.com", Team: "acme"}
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+		Routed:  func(context.Context) []string { return []string{"mattermost"} },
+	}, "integrations", nil))
+
+	rows, _ := body["integrations"].([]any)
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		if entry["key"] != "mattermost" {
+			continue
+		}
+		if got := entry["routes"]; got != true {
+			t.Fatalf("mattermost routes = %v, want true: it ingests over a "+
+				"websocket and a parser routes it", got)
+		}
+		return
+	}
+	t.Fatal("mattermost has no row")
+}
+
+// A ROW FOLLOWS THE BLOCK THAT MAKES A DELIVERY REACH A SEAT.
+//
+// The GitHub row used to be reported on the org block OR on the agents' own
+// apps, so that a company holding nothing but per-agent apps had a row.
+// Neither half of that reading survives contact with what the engine does: an
+// agent's app needs an INSTALLATION to see a repository at all, and the
+// PARSER that turns a delivery into work for a seat is registered only where
+// `integrations.github` is present and enabled — at boot
+// ([Engine.startNotifications]) and on every apply
+// ([Engine.reconcileGitHub]), both on the same condition. Without the block a
+// seat app's delivery is verified at the webhook route and then dropped.
+//
+// So a company with installed apps and no block is not a surface with no row;
+// it is a surface that is off, and a row for it is a row with nothing
+// enabled — which the dashboard draws as Paused, its word for a state an
+// operator chose. That is exactly what a disconnect leaves behind, which is
+// where this was measured: the block went, the sealed per-seat values stayed,
+// and the card sat on a state nobody had asked for.
+func TestARowNeedsTheBlockThatRoutesItRatherThanALeftoverSecret(t *testing.T) {
+	t.Parallel()
+	rowFor := func(t *testing.T, cfg *config.Company, kind string) map[string]any {
+		t.Helper()
+		body := asMap(t, answer(t, queries.Sources{
+			Company: func() *config.Company { return cfg },
+		}, "integrations", nil))
+		rows, _ := body["integrations"].([]any)
+		for _, row := range rows {
+			entry, _ := row.(map[string]any)
+			if entry["key"] == kind {
+				return entry
+			}
+		}
+		return nil
+	}
+	// firstAgent is where a per-seat app is hung, so each case below reads
+	// as the one fact it is about.
+	firstAgent := func(t *testing.T, cfg *config.Company) *config.Role {
+		t.Helper()
+		for role := range cfg.EachRole() {
+			if role.Seat().IsAgent() {
+				return role
+			}
+		}
+		t.Fatal("the fixture has no agent seat")
+		return nil
+	}
+
+	t.Run("github keeps its row while the block enables it", func(t *testing.T) {
+		t.Parallel()
+		// THE CLAUSE THE SEAT COUNTER EXISTS FOR: the org block carries no
+		// webhook secret of its own, so the row's claim to a credential
+		// comes from the agent's app alone.
+		cfg := company(t)
+		cfg.Integrations.GitHub = &config.GitHub{Enabled: true}
+		firstAgent(t, cfg).Integrations.GitHub = &config.RoleGitHub{
+			AppID: 7, AppSlug: "acme-ceo", InstallationID: 9,
+			PrivateKey: "${CEO_PEM}", WebhookSecret: "${CEO_HOOK}",
+		}
+		row := rowFor(t, cfg, "github")
+		if row == nil {
+			t.Fatal("no github row: an installed agent app on an enabled " +
+				"surface is receiving deliveries and is invisible")
+		}
+		if got := row["secret_present"]; got != true {
+			t.Errorf("github secret_present = %v, want true: the agent's own "+
+				"app carries the only signing secret", got)
+		}
+	})
+
+	t.Run("an uninstalled app claims no credential", func(t *testing.T) {
+		t.Parallel()
+		// The app record and both sealed values survive a disconnect —
+		// GitHub has no API to delete an app — and the installation does
+		// not. Counted, the row claimed a surface receiving events over an
+		// app that reaches nothing.
+		cfg := company(t)
+		cfg.Integrations.GitHub = &config.GitHub{Enabled: true}
+		firstAgent(t, cfg).Integrations.GitHub = &config.RoleGitHub{
+			AppID: 7, AppSlug: "acme-ceo",
+			PrivateKey: "${CEO_PEM}", WebhookSecret: "${CEO_HOOK}",
+		}
+		if got := rowFor(t, cfg, "github")["secret_present"]; got != false {
+			t.Errorf("github secret_present = %v, want false: the app is not "+
+				"installed, so it sees no repository and receives nothing", got)
+		}
+	})
+
+	t.Run("github loses its row when the block goes", func(t *testing.T) {
+		t.Parallel()
+		cfg := company(t)
+		cfg.Integrations.GitHub = nil
+		firstAgent(t, cfg).Integrations.GitHub = &config.RoleGitHub{
+			AppID: 7, AppSlug: "acme-ceo", InstallationID: 9,
+			PrivateKey: "${CEO_PEM}", WebhookSecret: "${CEO_HOOK}",
+		}
+		if row := rowFor(t, cfg, "github"); row != nil {
+			t.Errorf("github row = %v with no org block: no parser is "+
+				"registered, so every verified delivery is dropped and the "+
+				"card renders the residue as Paused", row)
+		}
+	})
+
+	t.Run("slack loses its row when the block goes", func(t *testing.T) {
+		t.Parallel()
+		// THE SAME SHAPE, and the one an operator hit. Slack's org block is
+		// the transport marker: dropping it retires the transport and
+		// unregisters the parser, so the seats' apps deliver to nobody.
+		cfg := company(t)
+		cfg.Integrations.Slack = nil
+		firstAgent(t, cfg).Integrations.Slack = &config.RoleSlack{
+			BotToken: "${SLACK_BOT_TOKEN_CEO}", SigningSecret: "${SLACK_SIGNING_SECRET_CEO}",
+		}
+		if row := rowFor(t, cfg, "slack"); row != nil {
+			t.Errorf("slack row = %v after a disconnect dropped the block "+
+				"and left the seats: the card renders it as Paused, which is "+
+				"a word for a state somebody chose", row)
+		}
+	})
+}
+
+// ENABLED: FALSE MEANS AN OPERATOR SWITCHED IT OFF, on every surface.
+//
+// The dashboard draws a tool whose every row reports `enabled: false` as
+// PAUSED, which is a claim about somebody's intent. Two rows could reach that
+// state without anybody intending anything, because they were reported on
+// per-seat secrets as well as on the company block and then took `enabled`
+// from the block alone — so an absent block and a paused one were the same
+// row. A disconnect produces the first one every time.
+//
+// Asserted over EVERY surface rather than over the two that had the defect:
+// what makes it safe to read `enabled: false` as an intent is that no arm
+// anywhere can emit it for any other reason, and the next surface added is
+// the one that would.
+func TestAnEnabledFalseRowIsAlwaysADeliberatePause(t *testing.T) {
+	t.Parallel()
+	// EVERY BLOCK THIS BUILD CAN REPORT, each with whatever makes it
+	// complete, and every seat carrying every per-seat app — which is the
+	// shape a disconnect strands.
+	cfg := company(t)
+	cfg.Integrations.Slack = nil
+	cfg.Integrations.GitHub = nil
+	cfg.Integrations.GitLab = nil
+	cfg.Integrations.Datadog = nil
+	for role := range cfg.EachRole() {
+		if !role.Seat().IsAgent() {
+			continue
+		}
+		role.Integrations.Slack = &config.RoleSlack{
+			BotToken: "${BOT}", SigningSecret: "${SIG}",
+		}
+		role.Integrations.GitHub = &config.RoleGitHub{
+			AppID: 7, AppSlug: "acme-ceo", InstallationID: 9,
+			PrivateKey: "${PEM}", WebhookSecret: "${HOOK}",
+		}
+	}
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+	}, "integrations", nil))
+	rows, _ := body["integrations"].([]any)
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		if entry["enabled"] == false {
+			t.Errorf("%v reports enabled: false with no block to say so, so "+
+				"the dashboard draws residue as Paused", entry["key"])
 		}
 	}
 }

@@ -594,8 +594,51 @@ Either way the sealed credentials are **named, not deleted**, in
 not something a disconnect decides about on its own. `crewlet secrets unset`
 is the deliberate path.
 
+> **"Either way" is newly true.** The list was built only on the `force` path —
+> the ordinary `202` returned no `orphaned_secrets` field at all — and it walked
+> the company-level requirements only, so no seat's own credential was ever
+> named on either path: not the token a pass minted under the name that seat's
+> `mcp_env` points at, not Atlassian's address slot beside it, not Slack's
+> per-seat bot token and signing secret. It is computed once now, before the
+> request splits, which is the only moment it can be: every name is derived from
+> a `${VAR}` in the company document, and both paths end with that block gone.
+> The dashboard shows the list rather than discarding the response and closing.
+
+> **A credential a sibling surface still reads is not on the list.** Jira and
+> Confluence normally share one seat credential — Atlassian issues one API
+> token per account, and the ordinary place for it is the shared
+> `mcp_env.atlassian` block — so disconnecting one product alone used to name a
+> token the other went on resolving. Following that list takes the product that
+> stayed down. A sibling counts as a user unless it is itself disconnecting,
+> which is what makes a whole card work: the dashboard takes the card's
+> surfaces in order, each request records its intent before the next is made,
+> and the union the dialog shows names the shared credential exactly once.
+
+> **GitHub's per-seat App credentials are on the list too**, and they are the
+> ones nobody typed in: the engine converts a manifest and writes what GitHub
+> returns, so an agent's `private_key` and its App's webhook secret exist
+> without an operator having chosen either name. They also survive a disconnect
+> by design — GitHub has no API for deleting an App registration, so the engine
+> uninstalls the App and hands over a link to the page a person deletes it from,
+> and the key stays valid for something that still exists. That makes this list
+> the only place either value is ever mentioned; it named the company-level
+> signing secret alone, so two sealed per-seat credentials stayed in the store
+> with nothing telling the operator they were there.
+
 Refusals: `503 no_status_store` on a node with no coordination, which has
-nowhere to record the intent. Retry against a node that has one, or force it.
+nowhere to record the intent — retry against a node that has one, or force it —
+and `503 surface_busy` when a reconcile tick or an operator's own pass is
+writing at this surface right now. Those two are the same status and opposite
+facts: the first will not change however many times it is asked, and the second
+clears on its own, which is why it carries its own code. The request waits a
+busy surface out for a few seconds first (a tick a moment from finishing is the
+common collision) and then names it; repeating the request is correct, because
+every step of a disconnect is idempotent. It used to answer `internal_error`,
+which a caller can only treat as terminal — the dashboard stopped at the first
+refusal, so a collision on the second of Atlassian's three surfaces left the
+tool half disconnected. A busy surface is now waited out rather than skipped,
+because the order matters: the organization's credential is what removes the
+accounts.
 
 Refusals worth knowing: `409 requirements_outstanding` names the fields still
 missing (a pass writes at the third-party app and must not run against a
@@ -605,9 +648,21 @@ when another pass for the same third-party app is already running. That last
 one is a refusal rather than a queue on purpose: minting twice is not something
 a retry should paper over.
 
-`POST /setup/integrations/{kind}/check` runs the **same pass with neither**,
-which makes it read-only. It is what answers "did what I just fixed at the
-third-party app take" without the engine writing anything.
+`POST /setup/integrations/{kind}/check` runs the **same pass with no sink**,
+which is what makes it read-only: every vendor gates its registration and its
+minting on having somewhere to seal a credential, so a run without one reads
+and reports and writes nothing at the third-party app. It answers "did what I
+just fixed at the third-party app take".
+
+A check **does** get `integrations.public_base_url`, and the `409
+no_public_base_url` refusal above is the writing route's alone. Withholding
+the address from a check made it report the wrong fact: a vendor handed no
+base reads that as *this deployment has no inbound address* and reports
+`ingress_blocked` owed by an admin — and a check records its findings through
+the same fold as everything else, so pressing Check on a healthy company wrote
+"every monitor that fires reaches nobody" into the live status row and flipped
+the card to **Action required** over a value that was already set. Supplying
+the base is not the permission to register; having a sink is.
 
 Both record their outcome on the same fleet integration status the reconcile
 loop writes, through the same fold, so a pass run by hand and a tick that runs
@@ -698,6 +753,29 @@ to set. It names the reference, never a key.
 An unfinished roster does **not** hold the card open: the company block is what
 decides whether deliveries arrive, and a company running apps for three of its
 ten agents chose that.
+
+**A seat is never `satisfied` on an integration the company does not declare.**
+The roster used to answer about the credential alone, so a seat whose `${VAR}`
+resolved read as satisfied over a surface a disconnect had removed from the
+document entirely — with `detail` naming the config path the value sits at,
+which is a fact about YAML rather than a state. It says the seat is waiting for
+the integration to be connected instead.
+
+**Nor is it `satisfied` when the reconcile loop has a finding about it.** What
+the document and the sealed store can establish is that a credential exists
+where the app looks for one — a real fact, and not the one a green row is read
+as. A key deleted at the third-party app leaves the pointer resolving perfectly
+while every call the agent makes is refused. The loop is the only thing that
+has asked the vendor, so a seat named by a finding on that surface's status row
+comes back unsatisfied, carrying the loop's own sentence as its `detail`.
+Advisory findings are skipped on their own verdict — a permission wider
+than the role asked for is a note on a working agent, and reporting it as a
+broken one would contradict the card's own tag.
+
+There is a window this cannot close: between a credential being destroyed at
+the vendor and the loop next looking, nothing anywhere knows. That window is
+`integrations.check_interval_seconds` (600 by default, floor 60), and
+`POST /setup/integrations/{kind}/check` is how to ask immediately.
 
 ### One agent's own GitHub App
 
@@ -1634,8 +1712,9 @@ between them is a silent outage.
 `secret_present` is a claim about the **document**: an operator wrote a secret
 down. It is three-valued because the cases mean opposite things: `null` — this
 surface does not use one (Mattermost authenticates its websocket with the
-bot's own token); `false` — it does, and none is configured, which means the
-webhook route answers `503` to every delivery.
+bot's own token, and Atlassian receives no delivery to verify); `false` — it
+does, and none is configured, which means the webhook route answers `503` to
+every delivery.
 
 `secret_usable` is a claim about what this process **resolved**. A secret lives
 in the config as a `${VAR}`, so `secret_present: true, secret_usable: false` is
@@ -1653,6 +1732,32 @@ secret to resolve.
 
 Only the booleans are ever returned; no secret value leaves the process.
 
+**A row exists for a surface the company's document turns on, and for no
+other.** That sounds like a restatement of "the block is present", and for six
+of the eight it is. Slack and GitHub are the two where a seat carries its own
+app — its own credential, its own inbound path — and both used to be reported
+on those per-seat values *as well as* on the company block, so that a company
+holding nothing but per-agent apps still had a row.
+
+Neither half of that survives contact with what the engine does. The **parser**
+that turns a verified delivery into work for a seat is registered only where
+the company block is present and enabled: drop `integrations.slack` and the
+transport is retired (`slack_retired`); drop or disable `integrations.github`
+and the same happens (`github_retired`). A seat app without it delivers to a
+route that verifies the signature and then has nowhere to send it. So a
+company in that state is not a surface missing a row — it is a surface that is
+**off**, and a row for it is a row with `enabled: false`, which the dashboard
+draws as *Paused*.
+
+That matters because `enabled: false` is the one field on this row that claims
+somebody's **intent**. A disconnect produced the other reading every time: the
+block went, the seats kept their sealed credentials, and the card an operator
+had just disconnected settled on *Paused* — a word for a state nobody had
+chosen — and stayed there. `enabled: false` now means a block that says
+`enabled: false`, on every surface, and a company whose block is gone gets no
+row and a Connect button. What each seat is still holding is on the [setup
+screen's seat roster](#per-seat-setup), which is where a seat is acted on.
+
 `seats` lists the agents carrying their **own** identity on that surface: a
 Slack app, a Mattermost bot, a per-seat project or space, wherever they sit in
 the hierarchy. A seat in a unit is a seat: the list walks the whole tree, not
@@ -1662,6 +1767,33 @@ no unit.
 `routes` is the third of the same family: whether a **verified** delivery
 would wake a seat. The three fail independently, and an operator staring at a
 silent integration needs to know which half broke.
+
+It is `null` for a surface nothing ever arrives from, which is a different
+answer from `false` and the only honest one. **Atlassian** is that surface:
+an organization is where an agent's account is *created*, and the products
+that account then works in — Jira, Confluence — are separate surfaces with
+their own webhooks and their own parsers. Reporting `routes: false` there
+described a real fault ("deliveries are verified and stored and no parser
+turns them into work") about a surface that is not asked the question, beside
+a `secret_usable: false` for a secret it does not have. Both are `null` now,
+and so are `inbound_kind` and `inbound_path` — the row used to name
+`/webhooks/atlassian`, a route this engine does not serve, as the address to
+check a settings page against.
+
+Mattermost is `false` rather than `null` when it does not route: it has no
+inbound *address* because the engine dials out, but everything said in its
+team arrives, so a missing parser there is the outage the field is for.
+
+**A surface is asked about the source its deliveries are published as**, which
+is not always its own name. The **Forge relay** is the case: a Cloud event it
+relays is republished as the product it belongs to — `jira` or `confluence` —
+and parsed by that product's parser, so nothing is ever registered under
+`forge`. Asked about itself the relay answered `false` on every Cloud
+deployment for ever, and because the dashboard groups it under the Atlassian
+row, a tenant whose relay was feeding both products correctly carried a
+permanent *Forge relay — routes nowhere* beside the two rows saying they
+routed fine. It now answers `true` when either product's parser is registered;
+the finer answer is on those two rows, immediately below it.
 
 **Health is deliberately not inferred.** An idle Slack and a 401-ing Slack
 are indistinguishable in the event store, so silence is reported as "no

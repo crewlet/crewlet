@@ -50,25 +50,42 @@ func (e *Engine) workerDuty(name string, ttl time.Duration) schedule.DutyFunc {
 
 // workerHold is [Engine.workerDuty] for a lease that is GIVEN BACK.
 //
-// The same three-way gate and the same reasoning; what differs is the shape of
-// the lease underneath. A singleton is re-claimed every tick and the holder
-// stays the holder, so its TTL is meant to outlive one tick. A hold wraps one
-// piece of work and is released when that work ends, because keeping it after
-// is indistinguishable from an outage to every other caller — see
-// [schedule.HoldNamedDuty].
+// # A hold is NOT a duty, and the difference is the roles gate
+//
+// A duty is company-wide work exactly one node does at a time, so refusing it
+// on `node.roles` is the operator getting what they asked for: they said this
+// node runs no workers, and a node that ran them anyway would be ignoring the
+// config.
+//
+// A hold is mutual exclusion around work THIS NODE HAS ALREADY BEEN ASKED TO
+// DO — provisioning an integration somebody pressed Connect on, or a disconnect
+// they pressed Disconnect on, at whichever node happens to be serving the API.
+// Refusing it does not decline the work; it makes the work impossible while
+// looking exactly like a peer already doing it.
+//
+// It DID refuse, because this shared the gate above, and `-roles ingress` is
+// the documented split that puts the dashboard on a node with no worker role.
+// There, `refuseHold` was handed to [setup.Runner] as a Duty that answers
+// not-held for ever — non-nil, so the "no coordination store" branch never
+// caught it — and every Connect answered 409 "another pass for this integration
+// is running; wait for it rather than minting twice" over a surface where
+// nothing was running, every Recheck the same, and every Disconnect 503 "being
+// provisioned right now; try again in a moment". Permanently, on the only node
+// serving the screen that offers those buttons.
+//
+// So this gates on the coordination store alone. What differs from a duty is
+// also the shape of the lease underneath: a singleton is re-claimed every tick
+// and the holder stays the holder, so its TTL is meant to outlive one tick,
+// while a hold wraps one piece of work and is released when that work ends —
+// keeping it afterwards is indistinguishable from an outage to every other
+// caller. See [schedule.HoldNamedDuty].
 func (e *Engine) workerHold(name string, ttl time.Duration) schedule.HoldFunc {
-	if !e.profile.RunsWorkers() {
-		return refuseHold
-	}
 	if e.backends == nil || e.node == nil {
 		return nil
 	}
 	return schedule.HoldNamedDuty(e.backends.Coord, name,
 		e.node.Owner(), e.node.ID(), ttl)
 }
-
-// refuseHold is [refuseDuty] for a hold: no release, because nothing was held.
-func refuseHold(context.Context) (func(), bool, error) { return nil, false, nil }
 
 // refuseDuty is the answer for a node whose roles exclude worker duties.
 //

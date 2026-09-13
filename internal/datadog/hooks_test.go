@@ -3,6 +3,7 @@ package datadog_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -258,8 +259,8 @@ func TestAReadOnlyPassRegistersNoWebhook(t *testing.T) {
 	if held.creates != 0 {
 		t.Error("a read-only pass registered a webhook at the vendor")
 	}
-	if res.Webhook == nil || res.Webhook.Note == "" {
-		t.Errorf("result = %+v, want a note saying no definition exists yet", res.Webhook)
+	if res.Webhook == nil || res.Webhook.Blocked == nil {
+		t.Errorf("result = %+v, want it to say no definition exists yet", res.Webhook)
 	}
 }
 
@@ -281,8 +282,81 @@ func TestNoPublicBaseRegistersNothing(t *testing.T) {
 	if held.creates != 0 {
 		t.Error("a pass with no public base registered a webhook")
 	}
-	if res.Webhook == nil || !strings.Contains(res.Webhook.Note, "public base URL") {
-		t.Errorf("result = %+v, want a note naming the missing public base", res.Webhook)
+	if res.Webhook == nil || res.Webhook.Blocked == nil ||
+		!strings.Contains(res.Webhook.Blocked.Detail, "public base URL") {
+		t.Errorf("result = %+v, want it to name the missing public base", res.Webhook)
+	}
+}
+
+// AND NOBODY IS TOLD A COMPANY IS COVERED WHEN NOTHING DELIVERS.
+//
+// The missing base was carried as a bare note and [datadog.Result.Findings]
+// read only the failure beside it, so a pass that registered no webhook AT
+// ALL reported nothing: the loop classified Datadog Ready over an inbound
+// path that did not exist, which is the shape this package's own doc calls
+// strictly worse than an integration that is switched off. It is
+// FindingIngressBlocked and its subject is the field to set, because that
+// subject is what a status row offers somebody to type into.
+func TestNoPublicBaseIsReportedRatherThanNoted(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	noSeats(reg)
+	held := &stored{}
+	serveWebhook(reg, held)
+
+	res, err := datadog.Reconcile(context.Background(), hookOptions(t, reg, ""))
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	findings := res.Findings()
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want the unregistered webhook reported", findings)
+	}
+	if findings[0].Kind != integration.FindingIngressBlocked {
+		t.Errorf("kind = %q, want ingress_blocked", findings[0].Kind)
+	}
+	if findings[0].Subject != "integrations.public_base_url" {
+		t.Errorf("subject = %q, want the field an operator has to set",
+			findings[0].Subject)
+	}
+}
+
+// A WEBHOOK TOKEN THAT DID NOT RESOLVE IS A MISSING CREDENTIAL, and it says
+// so in the word the setup form joins on.
+//
+// [setup.Requirement.Blocks] on the `webhook_token` requirement declares that
+// its absence produces credential_missing, and nothing in this package ever
+// produced one — so the field that clears the fault was never offered, and
+// the fault itself was never reported: a definition carrying no token is
+// never registered, and every alert this company raises reaches nobody.
+func TestAnUnresolvedWebhookTokenIsReportedAsAMissingCredential(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	noSeats(reg)
+	held := &stored{}
+	serveWebhook(reg, held)
+
+	opts := hookOptions(t, reg, base)
+	opts.WebhookToken = "   "
+	res, err := datadog.Reconcile(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if held.creates != 0 {
+		t.Error("a definition carrying no token was registered")
+	}
+	findings := res.Findings()
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want the unresolved token reported", findings)
+	}
+	if findings[0].Kind != integration.FindingCredentialMissing {
+		t.Errorf("kind = %q, want credential_missing: that is what the "+
+			"webhook_token requirement declares it produces", findings[0].Kind)
+	}
+	if findings[0].Subject != "integrations.datadog.webhook_token" {
+		t.Errorf("subject = %q, want the field that clears it", findings[0].Subject)
 	}
 }
 
@@ -329,7 +403,7 @@ func TestADisconnectWithdrawsTheWebhookEvenWhenAccountsStay(t *testing.T) {
 		context.Background(), hookOptions(t, reg, base)); err != nil {
 		t.Fatalf("pass: %v", err)
 	}
-	if err := datadog.Teardown(context.Background(), datadog.TeardownOptions{
+	if _, err := datadog.Teardown(context.Background(), datadog.TeardownOptions{
 		Client: reg.client(t), Config: cfgWith(), Creds: pair,
 		RemoveSeats: false, WebhookBase: base,
 	}); err != nil {
@@ -341,7 +415,7 @@ func TestADisconnectWithdrawsTheWebhookEvenWhenAccountsStay(t *testing.T) {
 	// AND IT IS SAFE TO REPEAT. A teardown is re-run after a partial
 	// failure, and refusing the second attempt would leave a disconnect
 	// stuck on work that is already done.
-	if err := datadog.Teardown(context.Background(), datadog.TeardownOptions{
+	if _, err := datadog.Teardown(context.Background(), datadog.TeardownOptions{
 		Client: reg.client(t), Config: cfgWith(), Creds: pair, WebhookBase: base,
 	}); err != nil {
 		t.Fatalf("second teardown: %v", err)
@@ -365,7 +439,7 @@ func TestADisconnectLeavesSomebodyElsesWebhookAlone(t *testing.T) {
 	}}
 	serveWebhook(reg, held)
 
-	err := datadog.Teardown(context.Background(), datadog.TeardownOptions{
+	_, err := datadog.Teardown(context.Background(), datadog.TeardownOptions{
 		Client: reg.client(t), Config: cfgWith(), Creds: pair, WebhookBase: base,
 	})
 	if err == nil {
@@ -392,12 +466,140 @@ func TestADisconnectWithNoPublicBaseWithdrawsNothing(t *testing.T) {
 	held := &stored{hook: &datadog.Webhook{Name: "crewlet", URL: base + "/webhooks/datadog"}}
 	serveWebhook(reg, held)
 
-	if err := datadog.Teardown(context.Background(), datadog.TeardownOptions{
+	if _, err := datadog.Teardown(context.Background(), datadog.TeardownOptions{
 		Client: reg.client(t), Config: cfgWith(), Creds: pair,
 	}); err != nil {
 		t.Fatalf("teardown: %v", err)
 	}
 	if held.hook == nil {
 		t.Error("a webhook was deleted by a node that could not name its own address")
+	}
+}
+
+// A DISCONNECT AND A RECONNECT COMPLETE A CYCLE.
+//
+// Disconnecting disables each account, which is the reversible form deletion
+// is deliberately not: an account that merely stops working keeps the monitors
+// and notebooks it authored, where deleting it makes them lose their author.
+// The cost was that nothing could turn one back on — the pass refused, on the
+// reasoning that undoing a decommission is somebody's decision — so every
+// cycle ended in manual work or left another dead account. About thirty-seven
+// accumulated in one deployment.
+//
+// The teardown records that it is the one disabling the account, in the one
+// place that survives the disconnect: the account itself. The surface's status
+// row is forgotten the moment the disconnect succeeds.
+func TestADisconnectedAccountCanBeConnectedAgain(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+
+	// The instance holds one live account this engine made.
+	account := struct {
+		disabled bool
+		title    string
+	}{}
+	var patches int
+	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, `{"data":[{"id":"u1","attributes":{
+			"email":"crewlet-sre@agents.test.invalid","service_account":true,
+			"disabled":%t,"title":%q}}]}`, account.disabled, account.title)
+	}
+	reg.handle["/api/v2/users/u1"] = func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodDelete:
+			account.disabled = true
+		case http.MethodPatch:
+			patches++
+			var body struct {
+				Data struct{ Attributes map[string]any } `json:"data"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if title, set := body.Data.Attributes["title"].(string); set {
+				account.title = title
+			}
+			if off, set := body.Data.Attributes["disabled"].(bool); set {
+				account.disabled = off
+			}
+		}
+		_, _ = w.Write([]byte(`{"data":{"id":"u1"}}`))
+	}
+	// THE ACCOUNT HOLDS THE KEY THIS ENGINE MINTED FOR IT, which is the
+	// value sealed in the seat's variable.
+	keys := []string{"k1"}
+	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(
+		w http.ResponseWriter, r *http.Request,
+	) {
+		// ONE PATH, TWO ANSWERS, as Datadog gives: a LIST to GET and the
+		// one-and-only value to POST. The fake answered the list to both,
+		// which was invisible while a pass reached only one of them per
+		// run — the seat's work ended at "a value is held" and never
+		// listed. Now that a held value is CHECKED against the account,
+		// the reconnect lists and then mints, and a fake that cannot tell
+		// the two apart fails the decode instead of exercising the repair.
+		if r.Method == http.MethodPost {
+			keys = append(keys, "k-fresh")
+			_, _ = w.Write([]byte(
+				`{"data":{"id":"k-fresh","attributes":{"key":"fresh","name":"crewlet"}}}`))
+			return
+		}
+		rows := make([]string, 0, len(keys))
+		for _, id := range keys {
+			rows = append(rows, fmt.Sprintf(`{"id":%q,"attributes":{"name":"crewlet"}}`, id))
+		}
+		fmt.Fprintf(w, `{"data":[%s]}`, strings.Join(rows, ","))
+	}
+	reg.handle["/api/v2/service_accounts/u1/application_keys/k1"] = func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			keys = nil
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+
+	if _, err := datadog.Teardown(context.Background(), datadog.TeardownOptions{
+		Client: reg.client(t), Config: cfgWith(), Creds: pair,
+		Plan: planWith("sre"), RemoveSeats: true,
+	}); err != nil {
+		t.Fatalf("teardown: %v", err)
+	}
+	if !account.disabled {
+		t.Fatal("the disconnect left the account enabled")
+	}
+	// MARKED BEFORE IT WAS DISABLED, so a run interrupted between the two
+	// leaves a marked live account rather than a disabled unmarked one —
+	// the state nothing can ever undo on its own.
+	if account.title != datadog.DisconnectedTitle {
+		t.Fatalf("title = %q, so nothing records that this engine disabled it", account.title)
+	}
+	// AND THE APPLICATION KEY IS GONE. A live key on a disabled account is
+	// a credential that works again the moment anybody re-enables it —
+	// which this engine now does, so that moment is one button press away
+	// rather than hypothetical. mattermost's teardown states the same rule
+	// about its own bots.
+	if len(keys) != 0 {
+		t.Errorf("the account still holds %v after a disconnect: re-enabling it "+
+			"restores a working credential to a company that disconnected", keys)
+	}
+
+	// AND NOW CONNECTING GETS IT BACK.
+	s := newSink()
+	s.held["SRE_DD_KEY"] = "already-held"
+	res, err := datadog.Reconcile(context.Background(), datadog.Options{
+		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
+		Creds: pair, Sink: s,
+	})
+	if err != nil {
+		t.Fatalf("reconnect: %v", err)
+	}
+	if account.disabled {
+		t.Error("the reconnect left the account disabled, so the cycle still " +
+			"ends in manual work or another dead account")
+	}
+	if account.title != "" {
+		t.Errorf("title = %q after the reconnect: a live account still marked "+
+			"disconnected would be re-enabled again on every pass", account.title)
+	}
+	if len(res.Seats) != 1 || res.Seats[0].Err != nil {
+		t.Fatalf("seat = %+v, want it recovered", res.Seats)
 	}
 }

@@ -23,6 +23,61 @@ import { Icon } from "~/ui/Icon.tsx";
 import { marked } from "~/ui/Problems.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 
+/**
+ * How long one surface is waited out while something else is writing at it.
+ *
+ * A reconcile tick or an operator's own pass holds a surface while it runs,
+ * and the engine answers `surface_busy` — a 503 that says, unlike every other
+ * refusal here, that the request is worth repeating. This dialog used to stop
+ * at the first refusal of any kind, so a collision on the second of
+ * Atlassian's three surfaces left the tool half disconnected with nothing
+ * retrying: measured on a live disconnect, where the same gesture minutes
+ * later completed cleanly.
+ *
+ * Bounded rather than indefinite, because a pass can hold a surface for
+ * minutes and a modal that spun that long would be indistinguishable from one
+ * that had hung. Past the window the operator is told which surface is busy
+ * and what has already been taken away, and pressing Disconnect again resumes
+ * — every step is idempotent.
+ */
+const BUSY_RETRY_MS = 45_000;
+
+/** How long between attempts while a surface is busy. */
+const BUSY_RETRY_EVERY_MS = 3_000;
+
+const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+
+/**
+ * disconnectOne asks for one surface's disconnect, sitting out a busy one.
+ *
+ * Only `surface_busy` is retried. Every other refusal is terminal by
+ * construction — a bad body, a node with no status store, a credential the
+ * engine will not accept — and repeating one of those is a slower way to fail.
+ */
+async function disconnectOne(
+  kind: string,
+  removeSeats: boolean,
+  force: boolean,
+  waiting: (on: string | null) => void,
+): Promise<unknown> {
+  const until = Date.now() + BUSY_RETRY_MS;
+  for (;;) {
+    try {
+      const answer = await rest.del(`/setup/integrations/${kind}`, {
+        remove_seats: removeSeats,
+        force,
+      });
+      waiting(null);
+      return answer;
+    } catch (err) {
+      const busy = err instanceof RestError && err.code === "surface_busy";
+      if (!busy || Date.now() >= until) throw err;
+      waiting(kind);
+      await sleep(BUSY_RETRY_EVERY_MS);
+    }
+  }
+}
+
 export function DisconnectDialog({
   name,
   kinds,
@@ -75,22 +130,80 @@ export function DisconnectDialog({
   const [removeSeats, setRemoveSeats] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(stuck ?? null);
+  /**
+   * The credentials the engine has left in the store, once it has answered.
+   *
+   * NAMED, NOT DELETED, deliberately: one an operator may be sharing with
+   * another deployment is not something a Disconnect button decides about.
+   * The API has always said so and has always returned the list — and this
+   * dialog threw every response away and closed, so nobody ever saw it.
+   */
+  const [orphans, setOrphans] = useState<string[] | null>(null);
+  /**
+   * What the engine is waiting on, while a surface is busy being provisioned.
+   *
+   * Shown instead of the error banner, because it is not one: the disconnect
+   * has not failed, it has not started yet, and the next attempt is already
+   * scheduled.
+   */
+  const [waitingOn, setWaitingOn] = useState<string | null>(null);
+  /**
+   * Whether the engine still OWES a teardown, which decides what the credential
+   * list may tell somebody to do with it.
+   *
+   * The two answers this route gives are not the same event. Forcing drops the
+   * block there and then and answers `removed: true`: nothing else is going to
+   * run, so whatever the app still holds is the operator's now. The ordinary
+   * path answers 202 and `disconnecting: true` — the intent is recorded and the
+   * reconcile loop performs the teardown afterwards, AUTHENTICATING WITH THE
+   * VERY CREDENTIALS this dialog lists.
+   *
+   * Read as completion, the second one put those names under the word
+   * "disconnected" and told an operator to revoke each one. Doing that before
+   * the loop runs leaves the teardown unable to sign in — and it retries, so
+   * the surface sits in Disconnecting with a dead credential while the accounts
+   * it was meant to remove stay live.
+   */
+  const [owed, setOwed] = useState(false);
 
   async function submit(force: boolean) {
     setBusy(true);
     setError(null);
+    setWaitingOn(null);
     try {
       // ONE AT A TIME, in order, and the first refusal stops the rest.
       //
       // The organization goes LAST on Atlassian because the two products are
       // reached with their own credentials and the organization's is what
       // removes the accounts: taking it first would strand whatever the
-      // products still hold.
+      // products still hold. Which is also why a busy surface is RETRIED
+      // rather than skipped: carrying on past it would take the organization
+      // away from a product that still needs it.
+      const left = new Set<string>();
+      // ANY surface, not all of them. A card is several requests, and one
+      // still owing a teardown is enough to make revoking now unsafe: the
+      // names are unioned, so one on the list may be what THAT surface
+      // authenticates with.
+      let stillOwed = false;
       for (const kind of kinds) {
-        await rest.del(`/setup/integrations/${kind}`, { remove_seats: removeSeats, force });
+        const answer = (await disconnectOne(kind, removeSeats, force, setWaitingOn)) as
+          { orphaned_secrets?: string[]; disconnecting?: boolean } | undefined;
+        if (answer?.disconnecting) stillOwed = true;
+        for (const name of answer?.orphaned_secrets ?? []) left.add(name);
       }
+      setWaitingOn(null);
       onDone();
-      onClose();
+      if (left.size === 0) {
+        // NOTHING TO WARN ABOUT. There is no credential to revoke early, so
+        // an owed teardown is the card's business rather than this dialog's.
+        onClose();
+        return;
+      }
+      // HELD OPEN, because closing is what lost the list. The disconnect has
+      // already been asked for — onDone has run — so what is left on screen
+      // is the part the operator still has to do.
+      setOwed(stillOwed);
+      setOrphans([...left].sort());
     } catch (err) {
       // `message` rather than `detail || code`: those two are both empty on
       // a refusal that carried neither, and an empty string is falsy, so the
@@ -98,8 +211,62 @@ export function DisconnectDialog({
       // RestError.message already falls back to the status itself.
       setError(err instanceof RestError ? err.message : String(err));
     } finally {
+      setWaitingOn(null);
       setBusy(false);
     }
+  }
+
+  // WHAT IS LEFT TO DO, once the disconnect has been asked for. The engine
+  // does not delete a company's credentials and never has; this is the half
+  // of that promise nobody could see.
+  if (orphans) {
+    return (
+      <Dialog
+        title={owed ? `Disconnecting ${name}` : `${name} disconnected`}
+        icon="plug"
+        onClose={onClose}
+        width={520}
+        footer={
+          <Button variant="primary" onClick={onClose}>
+            Done
+          </Button>
+        }
+      >
+        <div className="col gap-3">
+          <p className="t-body secondary" style={{ margin: 0 }}>
+            These credentials are still in your secret store. They are named rather than deleted:
+            one you share with another deployment is not something this button decides about.
+          </p>
+          <ul className="col gap-1" style={{ margin: 0, paddingLeft: "1.1rem" }}>
+            {orphans.map((name) => (
+              <li key={name}>
+                <code className="inline">{name}</code>
+              </li>
+            ))}
+          </ul>
+          {/* THE ORDER MATTERS WHILE A TEARDOWN IS STILL OWED, and getting it
+              wrong is not cosmetic: the loop removes the webhooks and the
+              accounts AFTERWARDS, using these very credentials. Revoke one
+              first and the teardown cannot authenticate — and it retries, so
+              the card sits in Disconnecting for ever over accounts that are
+              still live. Told to wait, the operator does the same work in the
+              order that works. */}
+          {owed ? (
+            <p className="t-body secondary" style={{ margin: 0 }}>
+              <strong>Wait until the card stops reporting Disconnecting.</strong> The engine is
+              still removing what {name} holds at the app, and it signs in with these credentials to
+              do it. Once it has finished, revoke each one at the app and remove it with{" "}
+              <code className="inline">crewlet secrets unset &lt;name&gt;</code>.
+            </p>
+          ) : (
+            <p className="t-body secondary" style={{ margin: 0 }}>
+              Revoke each one at the app, then remove it with{" "}
+              <code className="inline">crewlet secrets unset &lt;name&gt;</code>.
+            </p>
+          )}
+        </div>
+      </Dialog>
+    );
   }
 
   return (
@@ -177,6 +344,21 @@ export function DisconnectDialog({
                 </li>
               ))}
             </ul>
+          </div>
+        )}
+
+        {/* NOT AN ERROR, so not the error banner. Something else is writing
+            at this surface — a reconcile tick, or an operator's own pass —
+            and the disconnect has not failed, it has not started yet. This
+            dialog used to stop dead at that refusal, which on a card
+            covering three surfaces left the tool half disconnected. */}
+        {waitingOn && !error && (
+          <div className="banner">
+            <Icon name="clock" size="sm" />
+            <span>
+              {name} is being provisioned right now, so {waitingOn} has to wait its turn. Still
+              trying.
+            </span>
           </div>
         )}
 

@@ -19,7 +19,7 @@
 // integration, they had already drifted on the question that matters most
 // (see [Classify]).
 //
-// # The three things it owns
+// # The four things it owns
 //
 //   - The VOCABULARY a pass reports in: [Phase], [Actor], [Finding] and the
 //     [Report] they fold into. One vocabulary for every surface, because a
@@ -32,18 +32,33 @@
 //     their schedule, not ours.
 //   - The LOOP ([Worker]), a fleet singleton that runs each registered
 //     reconciler when it is due and records what it found.
+//   - The DISCONNECT: [AskTeardown] records that somebody asked for a surface
+//     to be taken away, [Worker.tearDown] drives the vendor's
+//     [Disconnector] until it succeeds, and [ObserveTeardown] folds the
+//     result. It is here rather than beside the reconcile because a
+//     disconnecting row IS a row — the same record, read by the same screen,
+//     with the same rule about what a phase means — and the transition that
+//     was written inline at the API set three of its fields and forgot three.
 //
-// # What it deliberately does not own
+// # What a disconnect is, and what it is NOT
 //
-// TEARDOWN. The control plane this was ported from has a tenant who
+// It is a REQUEST, made once, by a person who pressed a button and answered a
+// question about the accounts. That distinction is the whole of the design and
+// this file used to state it as "teardown is deliberately not owned here",
+// which had stopped being true and read as though an edit could destroy
+// accounts.
+//
+// It cannot. The control plane this was ported from has a tenant who
 // disconnects an integration, and a loop that then removes the identities it
 // provisioned. An engine has no tenant: an operator who deletes the `gitlab:`
 // block from the company document has said what the engine should stop
 // talking to, NOT that fifteen service accounts and everything attributable
-// to them should be destroyed. So a removed block makes this package forget
-// its state and nothing else; decommissioning accounts stays an explicit
-// gesture on the integration's own subcommand, where the operator types the flag
-// and reads what it is about to delete.
+// to them should be destroyed. So a removed block still makes this package
+// forget its state and nothing else — that path runs through
+// [Store.ForgetIntegration] and touches no third-party app. Removing accounts
+// needs [State.RemoveSeats], which only [AskTeardown] sets and only from a
+// question somebody was asked; the integration's own subcommand is the other
+// way, where the operator types the flag and reads what it is about to delete.
 package integration
 
 import "slices"
@@ -87,6 +102,34 @@ const (
 var Kinds = []Kind{
 	KindSlack, KindMattermost, KindJira, KindConfluence,
 	KindGitHub, KindGitLab, KindDatadog, KindAtlassian,
+}
+
+// ConvergeOrder is the order the reconcile loop VISITS surfaces in, which is
+// not the order an operator reads them.
+//
+// ONE REAL DEPENDENCY, and it is the whole reason this is a second slice.
+// Atlassian is where an agent's service account is CREATED; Jira and
+// Confluence are products that account then works in, and each checks for the
+// account with the credential Atlassian minted. Visiting them in reading order
+// puts both products before the pass that creates what they are looking for.
+//
+// Measured, over a reconnect: the tracker checked first, found the seat mapped
+// to the account a disconnect had deleted, and reported `401 Action required —
+// you, at the third-party app` for about thirty-five seconds, until Atlassian's
+// own pass ran and made the new one. Nothing was wrong and nobody had anything
+// to do; the card simply asked the products about an account that was one pass
+// away from existing.
+//
+// It is a separate value rather than a reordering of [Kinds] because the two
+// orders answer different questions and would drift the moment either moved
+// for its own reason. A test pins them to the same SET, so a surface added to
+// one and forgotten in the other is caught rather than silently never
+// converged.
+var ConvergeOrder = []Kind{
+	// THE ACCOUNTS FIRST, then the products that authenticate as them.
+	KindAtlassian, KindJira, KindConfluence,
+	KindSlack, KindMattermost,
+	KindGitHub, KindGitLab, KindDatadog,
 }
 
 // Valid reports whether k is a surface this build knows.
@@ -163,3 +206,21 @@ func (k Kind) Ingress() Ingress {
 		return IngressNone
 	}
 }
+
+// Ingests reports whether anything ever arrives FROM this surface.
+//
+// NOT THE SAME QUESTION AS [Kind.Ingress], which says who keeps the inbound
+// ADDRESS current — and which answers None for two surfaces that could not be
+// more different. Mattermost has no address because the engine DIALS OUT, and
+// then receives everything said in its team; Atlassian has none because
+// nothing is ever addressed to an organization at all. It is where an agent's
+// account is CREATED, and the products that account then works in are Jira and
+// Confluence, each with its own surface, its own webhook and its own parser.
+//
+// The difference shows on the one screen an operator watches. "Deliveries are
+// verified and stored, and no parser turns them into work for a seat" is a
+// real warning about Mattermost and a meaningless one about Atlassian — which
+// reported it while its organization key was busy creating every agent's
+// account, beside a second badge saying the key had not resolved. Both were
+// answers to questions this surface is not asked.
+func (k Kind) Ingests() bool { return k != KindAtlassian }

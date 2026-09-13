@@ -524,8 +524,49 @@ export interface FleetAnswer {
 export interface ReconcileFinding {
   kind: string;
   subject?: string;
+  /**
+   * What is wrong, in one sentence — and only that.
+   *
+   * What to do about it is `remedy` and which things it is about is
+   * `subjects`. Three fields because a reader wants them in three different
+   * moments and one string cannot be laid out: glued, they arrived as one
+   * unbroken paragraph carrying a problem, a name and an instruction, with
+   * the disclosure summary running straight into its last word.
+   */
   detail?: string;
+  /** What to do about it, rendered as its own line at a quieter weight. */
+  remedy?: string;
   action_url?: string;
+  /**
+   * What this finding MEANS, from the engine's own per-kind verdict table
+   * (integration.FindingKind.Verdict) rather than from a second copy of the
+   * closed set kept here.
+   *
+   * Two kinds are advisory — their phase is `ready`: something the engine did
+   * not do and cannot undo, on an integration that is working. A reader that
+   * treats every finding as a fault reports those as broken; one that keeps
+   * its own list of which kinds are advisory reports a kind it has not heard
+   * of as fine, which is worse. Optional because a node older than the field
+   * sends neither — treat an absent phase as "cannot say", never as ready.
+   */
+  phase?: string;
+  actor?: string;
+  /**
+   * Everything this finding is about, when there are many and `subject`
+   * cannot name them all.
+   *
+   * `detail` is the card's status line and the engine caps it, so a finding
+   * that listed its subjects inline arrived as a wall cut off mid-item —
+   * thirty-six Datadog service accounts ending `…@agents.cr…`. The engine
+   * now puts the COUNT in `detail` and the whole list here, so a reader with
+   * room lays them out and one without is still correct.
+   *
+   * It named three of them in the sentence too, which put every short list
+   * on screen twice: once as prose and once as the list, a centimetre apart.
+   *
+   * Absent on the ordinary finding about one thing.
+   */
+  subjects?: string[];
 }
 
 /**
@@ -826,6 +867,22 @@ export interface SetupRequirement {
   secret_name?: string;
   required: boolean;
   /**
+   * Shown and required only when another field holds a given value.
+   *
+   * A FIELD REQUIRED BY AN ANSWER rather than in general. GitHub's
+   * organization token is the pair it exists for: it is the one thing
+   * standing between "every repository in the organization" and that being
+   * true, and a credential the other answer never uses. `required` alone
+   * blocked a connect that needed nothing; optional let a choice be stored
+   * that could not be carried out.
+   *
+   * Evaluated against what the FORM holds, not what is stored: the gating
+   * field is being answered in the same dialog, so the stored value is the
+   * one being replaced. The API checks the same condition against the
+   * submission, so a caller that skips this form is refused too.
+   */
+  required_when?: { field: string; equals: string };
+  /**
    * One of the few fields that ESTABLISH the connection.
    *
    * An ORDER, not a filter: these lead the form, with a rule under them and
@@ -879,7 +936,20 @@ export interface SetupRequirement {
   vendor_url?: string;
   choices?: { value: string; label: string; hint?: string }[];
   format?: string;
-  /** The reconcile finding this input being absent produces. */
+  /**
+   * The reconcile finding this input being absent produces.
+   *
+   * ON THE WIRE AND NOT READ BY THIS SCREEN, deliberately. It is the server's
+   * join — setupapi's own suite checks that every vendor has a credential
+   * field claiming `credential_missing`, so a row asking for a credential
+   * cannot offer every field except the credential — and the dialog used to
+   * narrow to it when a Fix control existed. It does not any more: a card that
+   * needs attention says so in its tag, and the gear opens the same settings
+   * rather than a narrowed copy (see `actionFor` in Integrations.tsx).
+   *
+   * Declared because it is part of the shape the API sends, not because
+   * anything here consumes it.
+   */
   blocks?: string;
   /**
    * What the document holds here right now, for everything that is NOT a

@@ -24,6 +24,33 @@ func (r *Result) Findings() []integration.Finding {
 	}
 	var out []integration.Finding
 
+	// THE PASS COULD NOT OBTAIN A SIGNING SECRET, and this says so as the
+	// operator's work rather than as a fault the engine is retrying — the
+	// same shape [gitlab.Result] and [mattermost.Result] take for the same
+	// node. It was an error, so a deployment with no keyring and no
+	// JIRA_WEBHOOK_SECRET had its Jira pass fault on every tick for ever
+	// while the dashboard reported the engine working on it.
+	//
+	// INGRESS RATHER THAN CREDENTIAL, because a Jira signing secret is not
+	// how this engine authenticates AT Jira — it is what makes a delivery
+	// verifiable when it arrives here, and a route with nothing to verify
+	// with answers 503. It is also what [Requirements] declares:
+	// `webhook_secret` says Blocks: FindingIngressBlocked, and that
+	// declaration is the join the setup screen uses to offer the field
+	// that clears this finding.
+	if r.NoKeyring {
+		out = append(out, integration.Finding{
+			Kind:    integration.FindingIngressBlocked,
+			Subject: "integrations.jira.webhook_secret",
+			Detail: "no webhook was registered because this deployment has no " +
+				"secret to sign deliveries with and this node has no keyring " +
+				"to seal a fresh one into: set secrets.keys in the bootstrap " +
+				"configuration so a pass can mint it, or set the variable " +
+				"integrations.jira.webhook_secret points at and register the " +
+				"hook on the next pass",
+		})
+	}
+
 	// # WHAT IS SAID ABOUT INGRESS, and what is deliberately not
 	//
 	// [Result.Hooked] is the webhook this RUN registered, not the one the
@@ -58,11 +85,39 @@ func (r *Result) Findings() []integration.Finding {
 		if seat.Routes() {
 			continue
 		}
-		// A seat with no account receives NO Jira events at all, which is
-		// the one finding this command exists to surface. It is the
-		// ENGINE's own work only in the sense that a credential is
-		// missing; nothing here can create an Atlassian account, so the
-		// reason carries what a person has to do.
+		// THE ORGANIZATION'S GRANT STILL LANDING IS NOT A BROKEN SEAT.
+		//
+		// Atlassian accepts a grant immediately and applies it over about a
+		// minute, and for that minute Jira answers its own 401 for the
+		// credential this engine has just minted — which is exactly what a
+		// wrong credential looks like. Reported as one, the card said
+		// "Action required, you, at the third-party app" about a seat that
+		// was working a minute later, and said it on EVERY reconnect,
+		// because a reconnect creates a new account. See
+		// [SeatIdentity.Activating] and [atlassian.GrantPropagation].
+		if seat.Activating {
+			out = append(out, integration.Finding{
+				Kind:    integration.FindingGrantPending,
+				Subject: seat.Handle,
+				Detail: fmt.Sprintf(
+					"Atlassian is still giving %s's new account access to Jira, "+
+						"so the instance refuses its credential for about a "+
+						"minute. Nothing has to be done; the next pass checks again",
+					seat.Handle),
+			})
+			continue
+		}
+		// A seat with no usable account receives NO Jira events at all,
+		// which is the one finding this command exists to surface.
+		//
+		// AN ADMIN'S, and that is still right for everything that reaches
+		// here: a credential the instance refuses outside the grant window
+		// is one somebody has to look at, and a seat with no credential on
+		// a company whose Atlassian organization is not provisioning is a
+		// person's to supply. (This used to say "nothing here can create an
+		// Atlassian account", which internal/atlassian has done since the
+		// loop started provisioning — and [integration.ConvergeOrder] runs
+		// it FIRST precisely so it can.)
 		out = append(out, integration.Finding{
 			Kind:    integration.FindingIdentityFailed,
 			Subject: seat.Handle,

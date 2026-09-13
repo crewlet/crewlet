@@ -316,6 +316,12 @@ type Inbound struct {
 	// an honest refusal rather than a 404.
 	AppFlow webhooks.AppCompleter
 
+	// Recheck asks the reconcile loop to look at GitHub immediately, when
+	// a person has just finished installing an agent's app there.
+	//
+	// Nil waits out the cadence. See [webhooks.Options.Recheck].
+	Recheck webhooks.GitHubRechecker
+
 	// Keys verifies Forge invocation tokens. Nil uses Atlassian's
 	// published JWKS.
 	Keys webhooks.KeySource
@@ -340,6 +346,7 @@ func (a *App) mountWebhooks(mux *http.ServeMux, in Inbound, sources queries.Sour
 		Claims:     in.Claims,
 		Keys:       in.Keys,
 		AppFlow:    in.AppFlow,
+		Recheck:    in.Recheck,
 		Events:     sources.Events,
 		Stream:     a.stream,
 		Configured: a.Configured,

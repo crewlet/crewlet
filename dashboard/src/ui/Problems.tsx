@@ -48,6 +48,37 @@ export function split(detail: string): Problem[] {
     });
 }
 
+/**
+ * paths finds every config path a refusal names, wherever it sits in the line.
+ *
+ * NOT [split]'s `path`, WHICH IS ONLY THE HEAD. A problem line sometimes opens
+ * with `some.config.path: ` and sometimes carries the path inside its sentence
+ * — `integrations.datadog.route_to required value missing: …` is the engine's
+ * commonest shape — and the head pattern sees only the first of those. The
+ * renderer never cared, because [marked] picks a path out of the prose either
+ * way; a caller that wants to ACT on one does.
+ *
+ * Shared with the renderer rather than reimplemented beside it, so what a
+ * caller matches on is exactly what the reader sees marked up. The setup
+ * dialog opens the disclosure hiding a field a refusal names, and a second
+ * pattern here would be a field revealed on one screen and hidden on another
+ * for a difference nobody could see.
+ */
+export function paths(detail: string): string[] {
+  const out = new Set<string>();
+  for (const line of detail.split("\n")) {
+    const head = pathHead.exec(line.trim());
+    if (head?.[1]) out.add(head[1]);
+    for (const m of line.matchAll(inlinePath)) out.add(m[0]);
+  }
+  return [...out];
+}
+
+// A config path sitting inside a sentence: three segments or more, so an
+// ordinary abbreviation is not mistaken for one. The same shape [marked]
+// recognises below, kept beside it so the two cannot drift.
+const inlinePath = /\b[a-z][a-z0-9_]*(?:\[\d+\])?(?:\.[a-z0-9_]+(?:\[\d+\])?){2,}\b/g;
+
 // What gets its own face inside a sentence, in the order they are tried.
 //
 // A NAMED LINK AND A BACKTICK COME FIRST, because they are what an author

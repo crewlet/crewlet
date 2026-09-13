@@ -490,3 +490,51 @@ func TestTheFormReportsAChosenTagKey(t *testing.T) {
 	}
 	t.Fatal("no handle_tag requirement")
 }
+
+// THE FALLBACK SEAT OPENS ON "NONE", because it is the only answer this form
+// can honestly suggest.
+//
+// Every other choice here is one of THIS company's seats, and picking one is
+// picking whose phone rings for every alert nobody labelled — a decision about
+// somebody's working life, made by a form, from a roster it has no basis for
+// ranking. "Choose one" left the field an unanswerable question at exactly the
+// moment an operator wanted to be done.
+//
+// And of the two ways to be wrong it is the recoverable one: an alert that
+// wakes nobody is a gap somebody closes later, where an alert waking the wrong
+// agent is work already misrouted.
+func TestTheFallbackSeatOpensOnNobody(t *testing.T) {
+	t.Parallel()
+	var found bool
+	for _, r := range Requirements(nil, nil) {
+		if r.Field != "route_to" {
+			continue
+		}
+		found = true
+		if r.Default != config.DatadogIgnore {
+			t.Errorf("the fallback seat opens on %q, want %q", r.Default,
+				config.DatadogIgnore)
+		}
+		// STILL REQUIRED, because a blank is a question nobody answered
+		// and an alert reaching nobody through one is a silent hole. The
+		// default makes the question answerable, not optional.
+		if !r.Required {
+			t.Error("the fallback seat is optional, so a company can leave the " +
+				"routing floor unanswered and never be told")
+		}
+		// AND THE SUGGESTION IS ONE OF THE CHOICES, or the form opens on a
+		// selection absent from its own list.
+		var offered bool
+		for _, c := range r.Choices {
+			if c.Value == r.Default {
+				offered = true
+			}
+		}
+		if !offered {
+			t.Errorf("the default %q is not among the choices %v", r.Default, r.Choices)
+		}
+	}
+	if !found {
+		t.Fatal("no route_to requirement")
+	}
+}
