@@ -734,7 +734,12 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	importCompany := fs.String("import-company", "",
 		"Tier B config to make the active revision NOW, over whatever the "+
 			"fleet is running; -company only bootstraps an empty store")
-	if err := fs.Parse(args); err != nil {
+	// ASSIGNED, NOT DECLARED: this function's error is NAMED, so that a
+	// deferred recorder can put a boot failure in the log file before the
+	// file closes (see below), and a `:=` here would shadow it — harmless
+	// today because nothing is deferred yet at this point, and exactly the
+	// kind of thing that stops being harmless when a line moves.
+	if err = fs.Parse(args); err != nil {
 		return err
 	}
 	// THE POSITIONAL IS THE TIER A PATH, and a leftover is REFUSED rather
