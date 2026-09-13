@@ -238,12 +238,13 @@ func (n *Node) Start(ctx context.Context) error {
 // mailbox.
 //
 // REGISTERED FIRST. Each seat's mailbox is recorded with the fleet before it is
-// created, because once the seat leaves the company that record is the only
-// thing left that knows the subscription exists: the handle is gone from the
-// org every node derives the name from, and the broker cannot list them. A
-// registration that fails is logged and the mailbox is created anyway, since a
-// seat in the company losing mail is worse than a mailbox the maintenance sweep
-// registers on its next tick.
+// created, because once the seat leaves the company the handle is gone from the
+// org every node derives the name from, and the record is what the retirement
+// of that mailbox runs on. A registration that fails is logged and the mailbox
+// is created anyway, since a seat in the company losing mail is worse than a
+// mailbox the maintenance sweep registers on its next tick, whether the seat is
+// still in the company or, found through the broker's subscription listing,
+// already gone.
 func (n *Node) EnsureMailboxes(ctx context.Context) {
 	created := 0
 	// ONE READ of the seat list for the walk and the line that reports it. Two

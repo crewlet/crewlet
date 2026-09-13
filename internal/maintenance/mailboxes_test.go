@@ -16,6 +16,7 @@ import (
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/maintenance"
+	"github.com/crewlet/crewlet/internal/queue"
 	qmem "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
@@ -79,10 +80,27 @@ type gatedQueue struct {
 
 	deletes atomic.Int32
 
-	mu      sync.Mutex
-	gate    chan struct{}
-	entered chan struct{}
-	failure error
+	mu          sync.Mutex
+	gate        chan struct{}
+	entered     chan struct{}
+	failure     error
+	listFailure error
+}
+
+func (q *gatedQueue) ListSubscriptions(ctx context.Context, topicPattern string) ([]queue.Subscription, error) {
+	q.mu.Lock()
+	failure := q.listFailure
+	q.mu.Unlock()
+	if failure != nil {
+		return nil, failure
+	}
+	return q.Queue.ListSubscriptions(ctx, topicPattern)
+}
+
+func (q *gatedQueue) failListings(err error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.listFailure = err
 }
 
 func (q *gatedQueue) DeleteSubscription(ctx context.Context, topic, group string) (bool, error) {
@@ -967,6 +985,185 @@ func TestASeatInTheRosterWithoutARecordIsRegistered(t *testing.T) {
 	h.mustTick(base)
 	if rec, found := h.record("swe"); !found || !rec.Present() {
 		t.Fatalf("the unregistered seat's record is %+v (found %v), want it registered", rec, found)
+	}
+}
+
+// unregistered creates a seat's mailbox the way a node whose registration
+// failed did, or a build that predates the registry: the subscriptions and a
+// letter, and no record.
+func (h *mailboxHarness) unregistered(handle string, withInbox bool) {
+	h.t.Helper()
+	if withInbox {
+		h.ensure(handle)
+		h.send(handle, "hello "+handle)
+	}
+	if _, err := h.queue.EnsureSubscription(h.t.Context(),
+		topics.AgentControl(handle), topics.AgentControlGroup(handle)); err != nil {
+		h.t.Fatalf("control subscription for %s: %v", handle, err)
+	}
+}
+
+// A MAILBOX THE REGISTRY NEVER HEARD OF, of a seat already gone from the
+// company. Nothing but the broker knows it is there, so without the listing it
+// retains its mail for the life of the deployment. Found, stamped absent on the
+// tick that finds it, kept through the grace period and then retired like any
+// other. A control subscription left on its own (an inbox a failed retirement
+// already deleted) is found the same way.
+func TestAMailboxTheRegistryMissedIsFoundAndRetired(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		withInbox bool
+	}{
+		{"an inbox and its control subscription", true},
+		{"a control subscription on its own", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newMailboxHarness(t, nil)
+			h.seat("ceo")
+			h.unregistered("ghost", tc.withInbox)
+			h.roster.set("ceo")
+
+			if n := h.mustTick(base); n != 0 {
+				t.Fatalf("the tick that found the mailbox retired %d, want it kept through the grace", n)
+			}
+			rec, found := h.record("ghost")
+			if !found || !rec.AbsentSince.Equal(base) || rec.Retiring() {
+				t.Fatalf("the found mailbox's record is %+v (found %v), want it absent since %s",
+					rec, found, base)
+			}
+			if tc.withInbox && h.held("ghost") != 1 {
+				t.Fatalf("finding the mailbox touched its mail: %d letters, want 1", h.held("ghost"))
+			}
+			if n := h.mustTick(base.Add(grace - time.Minute)); n != 0 {
+				t.Fatalf("a found mailbox was retired inside its grace period (%d)", n)
+			}
+
+			if n := h.mustTick(base.Add(grace + time.Minute)); n != 1 {
+				t.Fatalf("the sweep after the grace retired %d mailboxes, want the found one", n)
+			}
+			if h.inboxExists("ghost") || h.controlExists("ghost") {
+				t.Fatal("the found mailbox's subscriptions survived its retirement")
+			}
+			if _, found := h.record("ghost"); found {
+				t.Fatal("the found mailbox's record survived its retirement")
+			}
+			if got := h.held("ceo"); got != 1 {
+				t.Fatalf("the seat in the company lost mail: ceo holds %d letters, want 1", got)
+			}
+		})
+	}
+}
+
+// Only a pair the mailbox grammar produces is a mailbox. A subscription on a
+// seat's inbox subject under some other group is somebody else's consumer, and
+// registering it would send a retirement to delete the seat-named pair while
+// the real consumer went on retaining its mail.
+func TestASubscriptionThatIsNoSeatsMailboxIsNotRegistered(t *testing.T) {
+	h := newMailboxHarness(t, nil)
+	if _, err := h.queue.EnsureSubscription(t.Context(), topics.AgentInbox("ghost"), "audit-tap"); err != nil {
+		t.Fatalf("EnsureSubscription: %v", err)
+	}
+	h.roster.set("ceo")
+	h.mustTick(base)
+	if rec, found := h.record("ghost"); found {
+		t.Fatalf("a subscription that is no seat's mailbox was registered as ghost's: %+v", rec)
+	}
+}
+
+// A seat in the active revision is never stamped absent by the listing, even
+// when the roster's own registration of it failed on this tick: the listing
+// finds its mailbox, and a seat that is in the company is not a removed one.
+func TestTheListingNeverStampsASeatInTheRosterAbsent(t *testing.T) {
+	refusal := errors.New("the registry refused the write")
+	records := &failFirstCreate{MailboxRecords: coordmem.NewFleet(), handle: "swe", err: refusal}
+	h := newMailboxHarness(t, func(o *maintenance.MailboxOptions) { o.Records = records })
+	h.records = nil
+	h.ensure("swe")
+	h.roster.set("swe")
+
+	if _, err := h.tick(h.m, base); !errors.Is(err, refusal) {
+		t.Fatalf("tick = %v, want the refused registration reported", err)
+	}
+	rec, found, err := records.Mailbox(t.Context(), "swe")
+	if err != nil {
+		t.Fatalf("Mailbox: %v", err)
+	}
+	if found && !rec.Present() {
+		t.Fatalf("a seat in the active revision was stamped absent: %+v", rec)
+	}
+}
+
+// A sweep over a registry that already knows every mailbox writes nothing to
+// it. The listing is a backstop for the rare mailbox that escaped the
+// registry; a sweep that re-created every known record would put a store write
+// per seat on every tick to find none.
+func TestASweepWritesNothingForMailboxesItAlreadyKnows(t *testing.T) {
+	counting := &countingCreates{MailboxRecords: coordmem.NewFleet()}
+	h := newMailboxHarness(t, func(o *maintenance.MailboxOptions) { o.Records = counting })
+	h.records = nil
+	h.seat("ceo")
+	h.seat("swe")
+	// One seat still in the company and one removed: a registry that knows
+	// both must not be re-registered from the listing on either side.
+	h.roster.set("ceo")
+	before := counting.creates.Load()
+	h.mustTick(base)
+	if got := counting.creates.Load() - before; got != 0 {
+		t.Fatalf("a sweep over a complete registry issued %d registrations", got)
+	}
+}
+
+// countingCreates counts registrations.
+type countingCreates struct {
+	maintenance.MailboxRecords
+	creates atomic.Int32
+}
+
+func (c *countingCreates) CreateMailbox(ctx context.Context, rec coord.MailboxRecord) (coord.MailboxRecord, bool, error) {
+	c.creates.Add(1)
+	return c.MailboxRecords.CreateMailbox(ctx, rec)
+}
+
+// failFirstCreate refuses the first registration of one handle.
+type failFirstCreate struct {
+	maintenance.MailboxRecords
+	handle string
+	err    error
+	done   atomic.Bool
+}
+
+func (f *failFirstCreate) CreateMailbox(ctx context.Context, rec coord.MailboxRecord) (coord.MailboxRecord, bool, error) {
+	if rec.Handle == f.handle && f.done.CompareAndSwap(false, true) {
+		return coord.MailboxRecord{}, false, f.err
+	}
+	return f.MailboxRecords.CreateMailbox(ctx, rec)
+}
+
+// A broker that cannot list its subscriptions costs only the discovery. The
+// registry's own mailboxes are judged and retired regardless, and the tick
+// reports why nothing unregistered was found.
+func TestAnUnlistableBrokerStillRetiresRegisteredMailboxes(t *testing.T) {
+	h := newMailboxHarness(t, nil)
+	h.removed()
+	h.unregistered("ghost", true)
+	unlistable := errors.New("the broker could not list its consumers")
+	h.queue.failListings(unlistable)
+
+	n, err := h.tick(h.m, base.Add(grace+time.Minute))
+	if !errors.Is(err, unlistable) {
+		t.Fatalf("tick = %v, want the listing's failure reported", err)
+	}
+	if n != 1 || h.inboxExists("swe") {
+		t.Fatalf("the registered removed seat was not retired beside a failed listing (%d retired)", n)
+	}
+	if _, found := h.record("ghost"); found {
+		t.Fatal("an unlistable broker still registered an unrecorded mailbox")
+	}
+
+	h.queue.failListings(nil)
+	h.mustTick(base.Add(grace + time.Hour))
+	if rec, found := h.record("ghost"); !found || rec.AbsentSince.IsZero() {
+		t.Fatalf("once the broker lists again the mailbox is %+v (found %v), want it found and absent", rec, found)
 	}
 }
 

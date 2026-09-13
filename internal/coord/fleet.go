@@ -806,15 +806,18 @@ type Integrations interface {
 // A mailbox is a durable subscription whose name is derived from the seat's
 // handle, so while the seat is in the company nothing needs a record of it:
 // every node can compute the name. The moment the seat LEAVES the company that
-// stops being true. The queue contract can create and delete a subscription
-// but cannot list them, the handle is gone from the org every node derives
-// names from, and the subscription goes on retaining whatever is still
-// addressed to the seat, for ever. A seat later added under the same handle
-// then resumes that backlog under a role definition that never wrote it.
+// stops being true. The handle is gone from the org every node derives names
+// from, and the subscription goes on retaining whatever is still addressed to
+// the seat, for ever. A seat later added under the same handle then resumes
+// that backlog under a role definition that never wrote it.
 //
 // So every node records a handle here BEFORE it creates the subscription, which
 // makes this bucket the fleet's list of mailboxes that may exist, and the
-// maintenance sweep retires the ones whose seat has been gone long enough.
+// maintenance sweep retires the ones whose seat has been gone long enough. The
+// broker can list its subscriptions too, and the sweep uses that to register a
+// mailbox this bucket missed; but only a record can carry the absence stamp,
+// the retirement mark and the version every writer's compare-and-set is taken
+// against, which is why the record exists at all.
 //
 // # Coordination stores the stamps; it does not interpret them
 //

@@ -27,11 +27,21 @@ import (
 // revision for [MailboxRetirementGrace]. The pieces, and why each is shaped
 // the way it is:
 //
-//   - THE REGISTRY. The queue contract cannot list subscriptions and a removed
-//     handle is gone from the org every node derives mailbox names from, so
-//     every node records a handle in the coordination store BEFORE it creates
-//     the subscription ([Mailboxes.Register]). That record is the only place a
-//     removed seat's mailbox is remembered at all.
+//   - THE REGISTRY. Every node records a handle in the coordination store
+//     BEFORE it creates the subscription ([Mailboxes.Register]). The record is
+//     what the protocol below runs on: the absence stamp, the retirement mark
+//     and the compare-and-set every writer takes. The broker can say which
+//     mailboxes exist, but it has nowhere to keep when a seat was first seen
+//     missing or that a retirement is in flight.
+//   - THE BROKER IS THE BACKSTOP. A mailbox can exist with no record: a node
+//     whose registration failed creates the mailbox anyway, and a mailbox of a
+//     seat removed before the registry existed was never registered at all.
+//     Once such a seat is gone its handle is gone from the org, so nothing but
+//     the broker still knows the subscription is there. So every sweep also
+//     LISTS the seat mailboxes the broker holds ([queue.EventQueue]'s
+//     ListSubscriptions) and registers each one of a seat outside the roster
+//     that has no record, stamping its absence at once. From then on it is an
+//     ordinary absent record, retired after the same grace period.
 //   - ABSENCE IS OBSERVED, NOT INFERRED. The sweep stamps a record absent the
 //     first time the active revision lacks its handle, and retires it only
 //     once that stamp is older than the grace period. The stamp is cleared by
@@ -147,10 +157,12 @@ type MailboxRecords interface {
 	DeleteMailbox(ctx context.Context, handle string, version uint64) (bool, error)
 }
 
-// MailboxQueue is the slice of the event queue a retirement calls.
+// MailboxQueue is the slice of the event queue a sweep calls: the listing that
+// finds a mailbox nothing registered, and the two verbs a retirement acts with.
 type MailboxQueue interface {
 	EnsureSubscription(ctx context.Context, topic, group string) (bool, error)
 	DeleteSubscription(ctx context.Context, topic, group string) (bool, error)
+	ListSubscriptions(ctx context.Context, topicPattern string) ([]queue.Subscription, error)
 }
 
 // SeatLeases is the slice of the lease store a retirement claims a seat through.
@@ -172,8 +184,9 @@ type MailboxOptions struct {
 	// Records is the fleet's mailbox registry. Required.
 	Records MailboxRecords
 
-	// Queue deletes a retired seat's subscriptions and restores an inbox a
-	// lost race may have deleted. Required.
+	// Queue lists the seat mailboxes the broker holds, deletes a retired
+	// seat's subscriptions and restores an inbox a lost race may have
+	// deleted. Required.
 	Queue MailboxQueue
 
 	// Leases is the seat lease store a retirement claims a seat in before it
@@ -425,7 +438,68 @@ func (m *Mailboxes) sweep(ctx context.Context, now, cutoff time.Time) (int64, er
 			errs = append(errs, fmt.Errorf("register the mailbox of seat %q: %w", handle, err))
 		}
 	}
+	if err := m.discover(ctx, present, registered, clock, cutoff); err != nil {
+		errs = append(errs, err)
+	}
 	return retired, errors.Join(errs...)
+}
+
+// discover registers the mailboxes the broker holds for seats that are neither
+// in the roster nor in the registry, and stamps each absent.
+//
+// THE LISTING IS READ AFTER THE REGISTRY, and the order is what keeps it from
+// resurrecting a mailbox a peer is retiring. A retirement deletes the
+// subscriptions before the record, so a record this sweep did not see was
+// either never written or already deleted after its subscriptions were; a
+// listing taken later cannot find subscriptions a finished retirement left.
+//
+// A listing that cannot be read discovers nothing this tick, and says why:
+// the registry's own mailboxes were judged above regardless, and a mailbox
+// that escaped the registry has waited this long already.
+func (m *Mailboxes) discover(
+	ctx context.Context, present, registered map[string]bool, clock sweepClock, cutoff time.Time,
+) error {
+	subs, err := m.queue.ListSubscriptions(ctx, topics.AgentInboxPrefix+">")
+	if errors.Is(err, queue.ErrNotLive) {
+		// A node that is shutting down. The duty's next holder lists them.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("the broker's seat mailboxes could not be listed, so a mailbox with no "+
+			"registry record is not found this tick: %w", err)
+	}
+	var handles []string
+	for _, sub := range subs {
+		handle, ok := topics.MailboxHandle(sub.Topic, sub.Group)
+		if !ok || present[handle] || registered[handle] || slices.Contains(handles, handle) {
+			continue
+		}
+		handles = append(handles, handle)
+	}
+	slices.Sort(handles)
+
+	var errs []error
+	for _, handle := range handles {
+		rec, created, err := m.records.CreateMailbox(ctx, coord.MailboxRecord{Handle: handle})
+		if err != nil {
+			errs = append(errs, fmt.Errorf("register the unrecorded mailbox of seat %q: %w", handle, err))
+			continue
+		}
+		if !created {
+			// A node registered it since the registry was read; the next
+			// tick judges that record like any other.
+			continue
+		}
+		log.WarnContext(ctx, "seat_mailbox_discovered", "handle", handle,
+			"detail", "the broker holds a mailbox for a seat that is not in the active revision and "+
+				"had no registry record (a registration that failed, or a seat removed before the "+
+				"registry existed); it is registered now and retired after the grace period like "+
+				"any other removed seat's")
+		if _, err := m.judge(ctx, rec, clock, cutoff); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // keep handles a record whose seat is in the active revision.
