@@ -267,11 +267,17 @@ export function ItemBody({
   // A SUBTREE IS ITS OWN QUESTION. `parent=` turns the root-only subtask mode
   // off, so this is the one read that can see the children of a task — the
   // detail answer carries links and comments but never the tree below it.
+  //
+  // THE SERVER'S OWN PARAMETER NAMES, and only those. `scope` is this
+  // screen's word for a group of statuses and the engine's grammar has no
+  // such key — it REFUSES a parameter it does not read rather than ignoring
+  // one, which is right, and the whole read failed. Every child was then an
+  // empty result indistinguishable from a task with no subtasks, so the
+  // panel never drew at all. Every status is wanted here: a subtask that is
+  // done is a subtask, and hiding it makes a finished tree look empty.
   const children = useQuery(
     "work_items",
-    item
-      ? { container: `project:${item.project}`, parent: item.id, limit: 100, scope: "" }
-      : undefined,
+    item ? { container: `project:${item.project}`, parent: item.id, limit: 100 } : undefined,
     { enabled: Boolean(item), pollMs: 60_000 },
   );
   const subtasks: WorkSummary[] = children.data?.items ?? [];
