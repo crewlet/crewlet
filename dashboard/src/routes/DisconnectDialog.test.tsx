@@ -345,9 +345,7 @@ test("a refusal that is not a race stops and offers the force", async () => {
     }),
   );
 
-  render(
-    <DisconnectDialog name="Jira" kinds={["jira"]} onClose={() => {}} onDone={() => {}} />,
-  );
+  render(<DisconnectDialog name="Jira" kinds={["jira"]} onClose={() => {}} onDone={() => {}} />);
   fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
 
   await waitFor(() => expect(screen.getByText(/no fleet status store/)).toBeTruthy());

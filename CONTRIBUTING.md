@@ -72,6 +72,7 @@ go test ./... -race -count=1                                  # the full suite
 # then, for each of CROSS_TARGETS (linux and darwin x amd64/arm64):
 CGO_ENABLED=0 GOOS=$OS GOARCH=$ARCH go build ./...            # test-cross
 # and the dashboard, whose build output is committed:
+cd dashboard && npm run format:check                          # dashboard-lint
 cd dashboard && npm run build && git diff --exit-code -- ../static/dashboard
 cd dashboard && npm run typecheck && npm test                 # dashboard-test
 ```

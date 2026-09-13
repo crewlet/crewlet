@@ -163,14 +163,8 @@ export function DisconnectDialog({
       // away from a product that still needs it.
       const left = new Set<string>();
       for (const kind of kinds) {
-        const answer = (await disconnectOne(
-          kind,
-          removeSeats,
-          force,
-          setWaitingOn,
-        )) as
-          | { orphaned_secrets?: string[] }
-          | undefined;
+        const answer = (await disconnectOne(kind, removeSeats, force, setWaitingOn)) as
+          { orphaned_secrets?: string[] } | undefined;
         for (const name of answer?.orphaned_secrets ?? []) left.add(name);
       }
       setWaitingOn(null);

@@ -242,6 +242,7 @@ Before committing, ALWAYS run and fix any issues from **`make check`**, which is
 - `go build ./...`
 - `go test ./... -race -count=1` — the full suite, under the detector, as CI runs it
 - a cross-compile of every release target (linux and darwin × amd64 and arm64)
+- the three dashboard gates, because ci.yml's `dashboard` job runs all three and a local pass that skipped one is a pass CI does not give: `npm run format:check` (`dashboard-lint`), the rebuild-and-diff of the committed bundle (`dashboard-check`), and `npm run typecheck && npm test` (`dashboard-test`). `dashboard-lint` was the one `check` did not depend on, and five unformatted files reached a pull request through the gap
 
 The race detector is not a special case for concurrency work: CI runs the WHOLE suite under it, because the engine's concurrency model is real parallelism and every "atomic because it is single-threaded" assumption is a data race until proven otherwise. `-count=1` is the other half — without it a cached PASS from before the change answers for the change. `make test-norace` is the faster loop and is not a gate.
 

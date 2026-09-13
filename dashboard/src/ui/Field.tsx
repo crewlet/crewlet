@@ -265,9 +265,7 @@ export function Field({
             screen a moment ago and is now the one thing standing between the
             answer above it and its working — so the caller that knows it is
             gated asks for the mark. See SetupDialog's `required_when`. */}
-        {required === true && markRequired && (
-          <span className="faint"> (required)</span>
-        )}
+        {required === true && markRequired && <span className="faint"> (required)</span>}
       </label>
       {picker ? (
         <select

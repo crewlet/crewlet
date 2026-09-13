@@ -131,6 +131,11 @@ dashboard-dev: $(UI)/node_modules ## run the dashboard dev server against a loca
 dashboard-test: $(UI)/node_modules ## the dashboard's own suites (ci: dashboard)
 	cd $(UI) && npm run typecheck && npm test
 
+# A GATE, NOT A CONVENIENCE, which is why `check` depends on it. It was a
+# target nothing ran: ci.yml's dashboard job runs `npm run format:check`
+# before anything else and fails the build on it, and a local `make check`
+# that skipped it reported a pass CI would not give. Five files reached a
+# pull request that way, in a red job whose first line was the formatter.
 dashboard-lint: $(UI)/node_modules ## check the dashboard's formatting (ci: dashboard)
 	cd $(UI) && npm run format:check
 
@@ -153,7 +158,7 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard is not what dash
 
 ##@ Gates — `make check` is all of them
 
-check: fmt-check tidy-check signoff-check signoff-test vet lint build test test-cross dashboard-check dashboard-test ## every gate CI runs on a PR
+check: fmt-check tidy-check signoff-check signoff-test vet lint build test test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
 	@echo
 	@echo "All local gates passed. One thing this did NOT cover, because it"
 	@echo "needs a service CI starts for itself:"

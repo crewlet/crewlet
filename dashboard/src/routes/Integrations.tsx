@@ -660,7 +660,11 @@ function FindingSubjects({ of }: { of: ReconcileFinding }) {
       ))}
       {hidden > 0 && (
         <li>
-          <button type="button" className="int-subject int-subject-more" onClick={() => setOpen(true)}>
+          <button
+            type="button"
+            className="int-subject int-subject-more"
+            onClick={() => setOpen(true)}
+          >
             +{hidden} more
           </button>
         </li>

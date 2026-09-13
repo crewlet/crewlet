@@ -111,8 +111,7 @@ test("a finding the engine will not act on links to the app by name", () => {
           {
             kind: "identity_failed",
             subject: "sre",
-            detail:
-              "sre's Datadog service account is disabled and was not disabled by this engine",
+            detail: "sre's Datadog service account is disabled and was not disabled by this engine",
             action_url: "https://app.datadoghq.com/organization-settings/users?filter=disabled",
           },
         ],
@@ -1061,7 +1060,11 @@ test("disconnect takes every configured surface, provisioner last", () => {
   // The catalogue's dependency order reversed. What this asserts is the LAST
   // position; the two products are peers and either order between them takes
   // the same things away.
-  expect(disconnectOrder(atlassian, new Map(), sections)).toEqual(["jira", "confluence", "atlassian"]);
+  expect(disconnectOrder(atlassian, new Map(), sections)).toEqual([
+    "jira",
+    "confluence",
+    "atlassian",
+  ]);
 });
 
 // THE FORGE RELAY IS NOT A SURFACE ANYTHING CAN DISCONNECT, and it used to be
@@ -1856,9 +1859,7 @@ test("an agent no surface reports on is still badged ready", () => {
               configured: true,
               requirements: [],
               can_provision: true,
-              seats: [
-                { handle: "sre-lead", name: "SRE Lead", requirements: [], satisfied: true },
-              ],
+              seats: [{ handle: "sre-lead", name: "SRE Lead", requirements: [], satisfied: true }],
             }),
           ],
         ]),
@@ -1879,10 +1880,7 @@ test("an agent no surface reports on is still badged ready", () => {
 // closed exactly as it does after a real teardown — an operator told the
 // integration was being removed while nothing had been asked of anything.
 test("a configured surface is disconnectable even when the setup listing is unreadable", () => {
-  const rows = rowsOf(
-    { key: "atlassian", configured: true },
-    { key: "jira", configured: true },
-  );
+  const rows = rowsOf({ key: "atlassian", configured: true }, { key: "jira", configured: true });
   expect(disconnectOrder(atlassian, rows, [])).toEqual(["jira", "atlassian"]);
 });
 
@@ -1936,9 +1934,7 @@ test("an advisory finding leaves the agent badged ready", () => {
               configured: true,
               requirements: [],
               can_provision: true,
-              seats: [
-                { handle: "sre-lead", name: "SRE Lead", requirements: [], satisfied: true },
-              ],
+              seats: [{ handle: "sre-lead", name: "SRE Lead", requirements: [], satisfied: true }],
             }),
           ],
         ]),
@@ -1983,9 +1979,7 @@ test("a finding with no verdict still un-readies the agent", () => {
               configured: true,
               requirements: [],
               can_provision: true,
-              seats: [
-                { handle: "sre-lead", name: "SRE Lead", requirements: [], satisfied: true },
-              ],
+              seats: [{ handle: "sre-lead", name: "SRE Lead", requirements: [], satisfied: true }],
             }),
           ],
         ]),
