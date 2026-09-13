@@ -98,6 +98,11 @@ export function MultiPicker({
   }
   const flat = groups.flatMap((g) => g.items);
   const showing = open && !disabled;
+  // What is on screen: the list, or the line saying a search matched nothing.
+  // Open with neither (no options at all, nothing typed) draws nothing, and an
+  // Escape then belongs to the drawer or dialog around the field.
+  const lists = showing && flat.length > 0;
+  const nothingMatches = showing && flat.length === 0 && needle !== "";
 
   function say(text: string) {
     setSaid((was) => ({ text, n: was.n + 1 }));
@@ -122,7 +127,7 @@ export function MultiPicker({
 
   const listbox = useListbox({
     id,
-    open: showing,
+    open: lists || nothingMatches,
     count: flat.length,
     onCommit: (index) => {
       const option = flat[index];
@@ -138,14 +143,6 @@ export function MultiPicker({
       return;
     }
     if (listbox.onKeyDown(e)) return;
-    // Open with nothing to offer ("Nothing matches"): Escape still closes that
-    // first, as it would a list, rather than the dialog around it.
-    if (showing && e.key === "Escape") {
-      e.preventDefault();
-      e.stopPropagation();
-      setOpen(false);
-      return;
-    }
     if (e.key === "Enter" && query.trim() !== "") {
       // A search with nothing highlighted is not a request to save the form.
       e.preventDefault();
@@ -159,7 +156,6 @@ export function MultiPicker({
   }
 
   const describedBy = [help ? helpID : "", error ? errorID : ""].filter(Boolean).join(" ");
-  const lists = showing && flat.length > 0;
   let index = -1;
 
   return (
@@ -187,7 +183,7 @@ export function MultiPicker({
           ))}
         </ul>
       )}
-      <div className="input-suggests">
+      <div className="input-suggests" ref={listbox.anchorRef}>
         <input
           id={inputID}
           className="input"
@@ -214,6 +210,7 @@ export function MultiPicker({
         {lists && (
           <div
             className="input-suggest-list multi-picker-list"
+            ref={listbox.listRef}
             id={listbox.listId}
             role="listbox"
             aria-multiselectable="true"
@@ -256,8 +253,8 @@ export function MultiPicker({
             })}
           </div>
         )}
-        {showing && flat.length === 0 && needle !== "" && (
-          <div className="input-suggest-list">
+        {nothingMatches && (
+          <div className="input-suggest-list" ref={listbox.listRef}>
             <div className="multi-picker-empty">Nothing matches &ldquo;{query.trim()}&rdquo;</div>
           </div>
         )}

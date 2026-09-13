@@ -6,7 +6,8 @@
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
+import { Dialog } from "./Dialog.tsx";
 import { Drawer } from "./Drawer.tsx";
 import { MultiPicker, type PickerOption } from "./MultiPicker.tsx";
 
@@ -147,4 +148,40 @@ test("a search that matches nothing says so, offers no listbox, and Escape still
   fireEvent.keyDown(box(), { key: "Escape" });
   expect(screen.queryByText(/Nothing matches/)).toBeNull();
   expect(closed).toBe(0);
+});
+
+test("a press on the veil with the list open closes the list and leaves the dialog", () => {
+  const closed = vi.fn();
+  const { container } = render(
+    <Dialog title="Edit seat" onClose={closed}>
+      <Manages />
+    </Dialog>,
+  );
+  fireEvent.keyDown(box(), { key: "ArrowDown" });
+  expect(screen.getByRole("listbox")).toBeDefined();
+
+  const veil = container.querySelector(".veil")!;
+  fireEvent.pointerDown(veil);
+  fireEvent.click(veil);
+  expect(screen.queryByRole("listbox")).toBeNull();
+  expect(closed).not.toHaveBeenCalled();
+});
+
+test("with no list on screen, Escape is the drawer's on the first press", () => {
+  let closed = 0;
+  function Empty() {
+    return (
+      <Drawer title="Edit seat" onClose={() => closed++}>
+        <MultiPicker label="Manages" options={[]} value={[]} onChange={() => {}} />
+      </Drawer>
+    );
+  }
+  render(<Empty />);
+  const input = screen.getByRole("combobox", { name: "Manages" });
+  input.focus();
+  // Asked to open, with nothing to offer and nothing typed: nothing is drawn.
+  fireEvent.click(input);
+  expect(screen.queryByRole("listbox")).toBeNull();
+  fireEvent.keyDown(input, { key: "Escape" });
+  expect(closed).toBe(1);
 });

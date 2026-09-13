@@ -338,7 +338,7 @@ export function Field({
           />
         </div>
       ) : (
-        <div className="input-suggests">
+        <div className="input-suggests" ref={listbox.anchorRef}>
           <input
             id={id}
             ref={box}
@@ -391,6 +391,7 @@ export function Field({
           {open && (
             <ul
               className="input-suggest-list"
+              ref={listbox.listRef}
               id={listbox.listId}
               role="listbox"
               aria-label="Secrets"

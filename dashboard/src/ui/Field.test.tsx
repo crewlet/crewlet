@@ -9,6 +9,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { useState } from "react";
+import { Dialog } from "./Dialog.tsx";
 import { Field } from "./Field.tsx";
 
 afterEach(cleanup);
@@ -282,6 +283,30 @@ test("Escape closes the list without clearing the field", () => {
 
   fireEvent.keyDown(input, { key: "Escape" });
   expect(screen.queryByRole("listbox")).toBeNull();
+  expect(input.value).toBe("$GH");
+});
+
+// A PRESS ON THE VEIL CLOSES THE LIST, NOT THE DIALOG.
+//
+// The list is a popup on the layer stack, so the press outside it that an
+// operator makes to dismiss it cannot also throw away the form it sits in.
+test("a press on the dialog's veil with the list open closes only the list", () => {
+  const closed = vi.fn();
+  const { container } = render(
+    <Dialog title="Connect GitHub" onClose={closed}>
+      <Editable />
+    </Dialog>,
+  );
+  const input = screen.getByLabelText("Webhook secret") as HTMLInputElement;
+  fireEvent.change(input, { target: { value: "$GH" } });
+  fireEvent.keyUp(input, { key: "H" });
+  expect(screen.getByRole("listbox")).toBeTruthy();
+
+  const veil = container.querySelector(".veil")!;
+  fireEvent.pointerDown(veil);
+  fireEvent.click(veil);
+  expect(screen.queryByRole("listbox")).toBeNull();
+  expect(closed).not.toHaveBeenCalled();
   expect(input.value).toBe("$GH");
 });
 

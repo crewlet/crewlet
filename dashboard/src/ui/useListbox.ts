@@ -20,7 +20,15 @@
  *   Tab takes it too where the list is a completion (`tabCommits`); a
  *   multi-select leaves Tab to move focus, as every form control does.
  * - ESCAPE CLOSES THE LIST AND NOTHING ELSE. It stops there, so the dialog or
- *   drawer the field sits in stays open; a second Escape reaches it.
+ *   drawer the field sits in stays open; a second Escape reaches it. That
+ *   holds for a list that is showing with nothing in it too ("Nothing
+ *   matches"), and for nothing else: `open` means the reader can see a list,
+ *   so an Escape with none on screen goes straight to the surface around it.
+ * - THE LIST IS A POPUP ON THE LAYER STACK (`usePopup`), so a press outside
+ *   it closes the list before anything beneath it: a press on a dialog's veil
+ *   while the list is open closes the list and leaves the dialog. The
+ *   component attaches `listRef` to the list it draws and `anchorRef` to the
+ *   element around the field, whose presses are not outside.
  * - A PRESS ON AN OPTION IS TAKEN ON `mousedown`, with the default prevented:
  *   the field would otherwise blur first, and a list that closes on blur takes
  *   the row out from under the click that was choosing it.
@@ -30,11 +38,12 @@
  */
 
 import { useState, type KeyboardEvent, type MouseEvent } from "react";
+import { usePopup } from "./useModal.ts";
 
 export interface ListboxOptions {
   /** A stable base for element ids, usually from `useId`. */
   id: string;
-  /** Whether the list is showing. */
+  /** Whether a list is on screen, including one that says nothing matches. */
   open: boolean;
   /** How many options are offered right now. */
   count: number;
@@ -52,6 +61,10 @@ export interface Listbox {
   setActive: (index: number) => void;
   /** The listbox element's id. */
   listId: string;
+  /** The list on screen: what a press outside is measured against. */
+  listRef: (el: HTMLElement | null) => void;
+  /** The element around the field: a press on it is not outside the list. */
+  anchorRef: (el: HTMLElement | null) => void;
   /** The id of the option element at `index`. */
   optionId: (index: number) => string;
   /** The field's keydown handler. Returns whether it handled the key. */
@@ -74,9 +87,17 @@ export function useListbox({
   const [at, setAt] = useState(0);
   const active = count === 0 ? -1 : Math.min(Math.max(at, 0), count - 1);
   const listId = `${id}-listbox`;
+  const popup = usePopup({ open, onDismiss: () => onClose() });
 
   function onKeyDown(e: KeyboardEvent<HTMLElement>): boolean {
-    if (!open || count === 0) return false;
+    if (!open) return false;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
+      return true;
+    }
+    if (count === 0) return false;
     switch (e.key) {
       case "ArrowDown":
         e.preventDefault();
@@ -95,11 +116,6 @@ export function useListbox({
         e.preventDefault();
         onCommit(active);
         return true;
-      case "Escape":
-        e.preventDefault();
-        e.stopPropagation();
-        onClose();
-        return true;
       default:
         return false;
     }
@@ -109,6 +125,8 @@ export function useListbox({
     active,
     setActive: setAt,
     listId,
+    listRef: popup.panelRef,
+    anchorRef: popup.insideRef,
     optionId: (index) => `${listId}-${index}`,
     onKeyDown,
     optionHandlers: (index) => ({
