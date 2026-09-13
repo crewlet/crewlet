@@ -2,15 +2,15 @@
  * Engine health, as a panel rather than a coloured dot.
  *
  * The dot was the only health surface in the product and it could show three
- * colours; everything behind it — whether a company config is even active,
+ * colours; everything behind it (whether a company config is even active,
  * which node this is, what epoch it has applied, how many turns are in flight,
- * whether the event store is durable — was on the wire and reached no screen.
+ * whether the event store is durable) was on the wire and reached no screen.
  *
  * It also read seven fields that exist on NO server type. The 5-second push
  * carries `{status, in_flight, shutting_down}` and nothing else; the rest comes
  * from the `stream` query, which answers the full `api.Health`. Reading one off
- * the other is how an engine with no active configuration — dropping every
- * inbound webhook — came to render identically to a healthy idle one.
+ * the other is how an engine with no active configuration, dropping every
+ * inbound webhook, came to render identically to a healthy idle one.
  *
  * It is a modal on the layer stack (`useModal`), owning its veil the way the
  * shared `Dialog` does. The shell used to wrap it in a veil of its own and
@@ -127,7 +127,7 @@ export function EnginePanel({
                 "Company config",
                 engine?.configured === false ? (
                   <span style={{ color: "var(--critical-ink)" }}>
-                    none active — every inbound webhook is dropped
+                    none active, so every inbound webhook is dropped
                   </span>
                 ) : (
                   "active"

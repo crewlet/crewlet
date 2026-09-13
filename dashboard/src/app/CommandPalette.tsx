@@ -3,7 +3,7 @@
  *
  * Per-screen search boxes would mean one ranking rule per screen and as many
  * places to keep them agreeing; this reaches screens, seats, units, tools, and
- * any event / trace / turn id pasted out of a log — which is the actual way an
+ * any event / trace / turn id pasted out of a log, which is the actual way an
  * operator arrives at a detail page.
  *
  * It is a LAUNCHER, not a settings panel: it closes on every action, including
@@ -79,7 +79,7 @@ function score(text: string, q: string): number {
   const i = t.indexOf(q);
   if (i < 0) return -1;
   // A prefix match beats a match in the middle, and a short field beats a long
-  // one — so typing "pm" finds the seat called PM rather than every seat whose
+  // one, so typing "pm" finds the seat called PM rather than every seat whose
   // backstory mentions a PM.
   return (i === 0 ? 0 : 100 + i) + t.length / 100;
 }
@@ -101,7 +101,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     const out: { hit: Hit; rank: number }[] = [];
     const push = (hit: Hit, rank: number) => out.push({ hit, rank });
 
-    // A pasted id is a destination, not a search term — offer it first and
+    // A pasted id is a destination, not a search term: offer it first and
     // exactly, rather than making the reader guess which screen takes it.
     if (UUIDISH.test(query) || HEXISH.test(query)) {
       push(
@@ -304,7 +304,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
             listbox.setActive(0);
           }}
           onKeyDown={listbox.onKeyDown}
-          placeholder="Search screens, seats, units, tools — or paste an event, trace or turn id"
+          placeholder="Search screens, seats, units and tools, or paste an event, trace or turn id"
           role="combobox"
           aria-label="Search"
           aria-expanded={true}

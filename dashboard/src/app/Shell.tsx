@@ -1,7 +1,7 @@
 /**
  * The application frame.
  *
- * Sidebar, topbar, and ONE scroll container — which is what lets the router
+ * Sidebar, topbar, and ONE scroll container, which is what lets the router
  * restore a scroll position per history entry. A page with three independent
  * scrollers has three positions and no way to name them.
  */
@@ -65,13 +65,13 @@ export function Shell({ children }: { children: ReactNode }) {
 
   const { data: engine } = useQuery("stream", undefined, { pollMs: 15_000 });
 
-  // The socket asks ONCE per refusal — a reconnect backoff must not reopen a
+  // The socket asks ONCE per refusal: a reconnect backoff must not reopen a
   // dialog forever. Everything after that is the banner and the engine panel.
   useEffect(() => {
     socket.onAuthRejected(() => setTokenOpen(true));
   }, [socket]);
 
-  // And from anywhere else that discovers it needs a credential — an
+  // And from anywhere else that discovers it needs a credential: an
   // auth-gated answer on a screen the socket was never refused for.
   useEffect(() => onTokenRequested(() => setTokenOpen(true)), []);
 
@@ -104,7 +104,7 @@ export function Shell({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Close the mobile drawer whenever the route changes — a drawer left open
+  // Close the mobile drawer whenever the route changes: a drawer left open
   // over the screen you just navigated to is the classic mobile-nav bug.
   useEffect(() => setDrawer(false), [route.hash]);
 
@@ -242,8 +242,8 @@ export function Shell({ children }: { children: ReactNode }) {
 
       <main className="main">
         <header className="topbar">
-          {/* The drawer EXISTS only under the layout breakpoint — above it
-              the sidebar is always on screen — so the control that opens it
+          {/* The drawer EXISTS only under the layout breakpoint (above it
+              the sidebar is always on screen), so the control that opens it
               is hidden by the same media query rather than by a second copy
               of the width rule in JavaScript. It used to show at every
               width, and clicking it wide put an unstyled veil into the
@@ -277,7 +277,7 @@ export function Shell({ children }: { children: ReactNode }) {
         </header>
 
         {/* A banner reports; it does not nag. The ONE affordance is for the
-            state that resolves for nobody — a refused token. Every other
+            state that resolves for nobody: a refused token. Every other
             degraded state repairs itself when the engine comes back. */}
         {authRejected ? (
           <div className="degraded critical">
@@ -292,7 +292,7 @@ export function Shell({ children }: { children: ReactNode }) {
           <div className="degraded caution">
             <Icon name="refresh" size="sm" />
             <span>
-              Reconnecting to the engine — showing the last state received, polling meanwhile.
+              Reconnecting to the engine. Showing the last state received, and polling meanwhile.
             </span>
           </div>
         ) : engine?.configured === false ? (

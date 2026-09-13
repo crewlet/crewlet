@@ -17,14 +17,14 @@
   border-right: 1px solid var(--border-subtle);
 }
 
-/* The brand had no vertical padding at all — a two-line lockup inside a fixed
-   52px box, so it sat against the top edge — and its 12px inset put the mark
+/* The brand had no vertical padding at all (a two-line lockup inside a fixed
+   52px box, so it sat against the top edge), and its 12px inset put the mark
    4px left of where every nav label starts.
 
    ONE inset for the whole rail, so the mark, the group labels and the item
    text all start on the same vertical line. It is composed rather than
    repeated: the rail pads by --nav-gutter and each row pads by --nav-row-pad,
-   and the brand adds the two because it has no row of its own — so it follows
+   and the brand adds the two because it has no row of its own, so it follows
    either one when it moves, instead of being a literal somebody has to
    remember to move with it. */
 .brand {
@@ -140,7 +140,7 @@
 }
 
 /* The engine pill: one row that always says the same four things in the same
-   places — reachable, configured, in flight, node. It replaces a coloured dot
+   places: reachable, configured, in flight, node. It replaces a coloured dot
    whose three states were the only health surface in the product while
    everything behind it was on the wire and reached no screen. */
 /* A row in the rail like any other, so it takes the nav's inset rather than a
@@ -227,7 +227,7 @@
 }
 
 /* THE one scroll container. Every screen scrolls here, which is what lets the
-   router restore a position per history entry — a page with three independent
+   router restore a position per history entry: a page with three independent
    scrollers has three positions and no way to name them. */
 .screen {
   flex: 1 1 auto;
@@ -377,8 +377,8 @@
 /* The drawer's veil, and the control that opens it. Both are declared
    OUTSIDE the breakpoint below, for opposite reasons: the veil because a
    position it only takes at one width is a layout participant at every other
-   — it was a plain div inside the shell's grid, so opening the drawer on a
-   desktop handed it the sidebar's column — and the toggle because "hidden"
+   (it was a plain div inside the shell's grid, so opening the drawer on a
+   desktop handed it the sidebar's column), and the toggle because "hidden"
    has to be its default, with the breakpoint revealing it. */
 .drawer-veil {
   position: fixed;
