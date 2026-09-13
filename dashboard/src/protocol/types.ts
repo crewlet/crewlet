@@ -867,6 +867,22 @@ export interface SetupRequirement {
   secret_name?: string;
   required: boolean;
   /**
+   * Shown and required only when another field holds a given value.
+   *
+   * A FIELD REQUIRED BY AN ANSWER rather than in general. GitHub's
+   * organization token is the pair it exists for: it is the one thing
+   * standing between "every repository in the organization" and that being
+   * true, and a credential the other answer never uses. `required` alone
+   * blocked a connect that needed nothing; optional let a choice be stored
+   * that could not be carried out.
+   *
+   * Evaluated against what the FORM holds, not what is stored: the gating
+   * field is being answered in the same dialog, so the stored value is the
+   * one being replaced. The API checks the same condition against the
+   * submission, so a caller that skips this form is refused too.
+   */
+  required_when?: { field: string; equals: string };
+  /**
    * One of the few fields that ESTABLISH the connection.
    *
    * An ORDER, not a filter: these lead the form, with a rule under them and

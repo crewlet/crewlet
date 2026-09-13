@@ -1861,6 +1861,14 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
+	if err := refuseUngated(values, against); err != nil {
+		httpjson.FailWith(w, http.StatusBadRequest, codeInvalidInput, map[string]string{
+			"detail": err.Error(),
+			"hint": "the answer this submission gives needs that field; send " +
+				"it, or choose the answer that does not",
+		})
+		return
+	}
 	if err := refuseEmpty(values, against); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, codeInvalidInput, map[string]string{
 			"detail": err.Error(),

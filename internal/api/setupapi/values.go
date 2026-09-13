@@ -120,6 +120,57 @@ func refuseEmpty(values map[string]string, reqs []setup.Requirement) error {
 	return nil
 }
 
+// refuseUngated refuses a submission that turns a gate on without answering
+// the field it opens.
+//
+// # Against the SUBMITTED values, never the stored ones
+//
+// [setup.Requirement.Needed] answers from the document as it is, which is the
+// right question for a status row and the wrong one here: this request is what
+// changes the answer. A submission choosing GitHub's organization-wide
+// coverage and sending no token would have every gate read the value it is
+// replacing — "not required yet" — and store the choice it cannot carry out,
+// leaving a company one apply later with a demand for a hook and nothing to
+// register it with.
+//
+// So the gating field is read from the submission first and from the document
+// only where the submission is silent about it, which is the state the write
+// will actually leave behind.
+//
+// UNANSWERED, NOT EMPTY. An empty string for a gated secret is already caught
+// by [refuseEmpty] above as a value that would clear a credential; what this
+// adds is the field being absent altogether, which that one never sees.
+func refuseUngated(values map[string]string, reqs []setup.Requirement) error {
+	after := func(field string) string {
+		if v, sent := values[field]; sent {
+			return strings.TrimSpace(v)
+		}
+		for _, r := range reqs {
+			if r.Field == field {
+				return strings.TrimSpace(r.Stored)
+			}
+		}
+		return ""
+	}
+	for _, r := range reqs {
+		if r.RequiredWhen == nil ||
+			after(r.RequiredWhen.Field) != r.RequiredWhen.Equals {
+			continue
+		}
+		// ALREADY HELD IS ANSWERED. A company that supplied the token on
+		// an earlier submission and is re-saving the same choice sends
+		// nothing for it, and demanding it again would make the value
+		// unre-submittable without retyping a credential nobody can read
+		// back.
+		if after(r.Field) != "" || r.Satisfied() {
+			continue
+		}
+		return fmt.Errorf("%s is required by the answer this submission gives "+
+			"for %s, and it is unset", r.Field, r.RequiredWhen.Field)
+	}
+	return nil
+}
+
 // maxSummary bounds a caller's own words in the stored sentence.
 //
 // A short phrase is all this field has ever been: it is rendered inline in the

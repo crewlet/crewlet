@@ -767,3 +767,61 @@ func TestAnInteriorSpaceIsRefusedNamingTheValue(t *testing.T) {
 		t.Errorf("a refused submission wrote %v", rec.events)
 	}
 }
+
+// A GATED REQUIREMENT IS NEEDED EXACTLY WHEN ITS ANSWER IS GIVEN.
+//
+// Neither `Required` alone can say this. GitHub's organization token is the
+// pair it exists for: it is the one thing standing between "every repository
+// in the organization" and that being true, and a credential the other answer
+// never uses. Required, it blocked a connect that needed nothing; optional, it
+// let the API store a choice the engine cannot carry out.
+//
+// THE ASSERTION THAT MATTERS IS THE TRUE ONE. A gate honoured only in the
+// direction where it agrees with `Required` is a gate nothing is checking:
+// this pins the case where the two disagree — `Required: false`, and needed
+// anyway because of the answer beside it.
+func TestAGatedRequirementFollowsTheAnswerItIsGatedOn(t *testing.T) {
+	t.Parallel()
+	const on, off = "true", "false"
+	token := setup.Requirement{
+		Field:        "token",
+		Required:     false,
+		RequiredWhen: &setup.Gate{Field: "coverage", Equals: on},
+	}
+	list := func(answer string) []setup.Requirement {
+		return []setup.Requirement{{Field: "coverage", Stored: answer}, token}
+	}
+
+	if token.Needed(list(on)) != true {
+		t.Error("a field the stored answer demands is not needed, so the API " +
+			"stores a choice it cannot carry out")
+	}
+	if token.Needed(list(off)) != false {
+		t.Error("a field no answer demands is needed, so a company taking the " +
+			"recommendation cannot connect without a credential it never uses")
+	}
+	// AN UNGATED REQUIREMENT IS UNCHANGED, whatever else the list holds.
+	plain := setup.Requirement{Field: "org", Required: true}
+	if !plain.Needed(list(off)) {
+		t.Error("an ungated requirement stopped answering to Required")
+	}
+}
+
+// AND A GATE NAMING A FIELD THAT IS NOT THERE IS SHUT.
+//
+// The alternative reads a vendor's typo as "always required", which turns one
+// package's mistake into every company's blocked connect — and the failure is
+// silent, because a field demanded for no reason looks exactly like a field
+// that is genuinely needed.
+func TestAGateOnAMissingFieldIsShut(t *testing.T) {
+	t.Parallel()
+	r := setup.Requirement{
+		Field:        "token",
+		Required:     true,
+		RequiredWhen: &setup.Gate{Field: "typo", Equals: "true"},
+	}
+	if r.Needed([]setup.Requirement{{Field: "coverage", Stored: "true"}}) {
+		t.Error("a gate on a field nobody declares reads as open, so a typo " +
+			"blocks every connect")
+	}
+}
