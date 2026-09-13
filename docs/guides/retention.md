@@ -157,6 +157,14 @@ disk question, and it is the one you ask when a join has failed.
 node across at least two nodes — and a recipient that fails a verification asks
 the next donor.
 
+**The manifest names the position the file keeps.** The checkpoint commits with
+the rows, so the position inside the copy is the only one that describes it,
+and the donor reads it back out of the copy after the scrub rather than from
+its own live applier — which has moved on by however many records landed while
+the copy was taken. A recipient verifies the two agree and refuses an artefact
+where they do not. A domain nobody has written to yet is at position zero in
+both, and adoptable.
+
 **On a single node the loop does not run at all.** It skips with the published
 reason `sole_node`, because a full copy every day buys an artefact no peer can
 fetch. A solo deployment's recovery artefact is `crewlet backup`.

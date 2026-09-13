@@ -345,9 +345,18 @@ func (a *Adopter) verifyPositions(ctx context.Context, path string, m Manifest) 
 	for name, want := range m.Domains {
 		got, ok := cursors[want.Stream]
 		if !ok {
+			// NO CHECKPOINT ROW IS THE ZERO POSITION, not a missing
+			// one: a domain whose log nobody has written to has
+			// applied nothing, and the donor stamps it at zero for
+			// that reason. A manifest naming anything else for it is
+			// describing a file this is not.
+			if want.Seq == 0 && want.Generation == 0 {
+				continue
+			}
 			return fmt.Errorf("statelog: the artefact's manifest names %s at "+
-				"position %d and the file holds no checkpoint for it at all",
-				name, want.Seq)
+				"generation %d sequence %d and the file holds no checkpoint for "+
+				"it at all — a metadata claim the file does not keep is a corrupt "+
+				"snapshot", name, want.Generation, want.Seq)
 		}
 		if got.Seq != want.Seq || got.Generation != want.Generation {
 			return fmt.Errorf("statelog: the artefact's manifest names %s at "+

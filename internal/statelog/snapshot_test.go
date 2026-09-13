@@ -50,6 +50,10 @@ func newSnapHarness(t *testing.T) *snapHarness {
 		dir:   filepath.Join(dir, "snapshots"),
 		nodes: 3,
 	}
+	// THE FILE HOLDS THE POSITION. The manifest is stamped from the
+	// checkpoint the copy keeps, so the harness seeds one; the health below
+	// is what the GATE reads, and the two are deliberately separate values.
+	h.cursor(4_200)
 	lag := uint64(0)
 	first := uint64(1)
 	floor := uint64(1)
@@ -63,6 +67,23 @@ func newSnapHarness(t *testing.T) *snapHarness {
 	}
 	h.rebuild(24 * time.Hour)
 	return h
+}
+
+// cursor commits the probe domain's checkpoint in the replicated estate, which
+// is what a real applier does with every batch.
+func (h *snapHarness) cursor(seq uint64) {
+	h.t.Helper()
+	if err := h.db.Replicated().Tx(h.t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(h.t.Context(), `
+			INSERT INTO statelog_cursor
+				(stream, generation, seq, stream_created_at, updated_at)
+			VALUES (?, 1, ?, 0, 0)
+			ON CONFLICT (stream) DO UPDATE SET seq = excluded.seq`,
+			probeStream, int64(seq))
+		return err
+	}); err != nil {
+		h.t.Fatalf("commit the checkpoint at %d: %v", seq, err)
+	}
 }
 
 func (h *snapHarness) rebuild(interval time.Duration) {
@@ -108,8 +129,8 @@ func TestASnapshotNamesEveryDomainAndItsManifestIsTheClaim(t *testing.T) {
 	if !ok {
 		t.Fatal("the manifest does not name the domain this build registers")
 	}
-	if got.Seq != h.health.Position.Seq {
-		t.Errorf("the manifest names position %d, want %d", got.Seq, h.health.Position.Seq)
+	if got.Seq != 4_200 || got.Generation != 1 {
+		t.Errorf("the manifest names position %d/%d, want 1/4200", got.Generation, got.Seq)
 	}
 	if want := (probeDomain{}).RecordVersion(); got.RecordVersion != want {
 		t.Errorf("the manifest names record version %d, want %d — a recipient "+
@@ -290,6 +311,7 @@ func TestTheOldSnapshotIsRemovedOnlyAfterTheNewOneIsComplete(t *testing.T) {
 		t.Fatalf("the first take: %v", err)
 	}
 	// A second take at a later position, with the interval out of the way.
+	h.cursor(9_000)
 	h.health.Position.Seq = 9_000
 	h.rebuild(time.Nanosecond)
 	if _, err := h.snap.Take(t.Context()); err != nil {
@@ -326,6 +348,7 @@ func TestAFailedTakeLeavesThePreviousSnapshotWhereItIs(t *testing.T) {
 
 	// A directory where the next manifest has to go, so its rename fails
 	// after the copy and the scrub have both succeeded.
+	h.cursor(9_000)
 	h.health.Position.Seq = 9_000
 	h.rebuild(time.Nanosecond)
 	blocked := filepath.Join(h.dir, "snapshot-9000.json")
@@ -342,6 +365,13 @@ func TestAFailedTakeLeavesThePreviousSnapshotWhereItIs(t *testing.T) {
 		t.Fatal("a take whose manifest could not be published reported success")
 	}
 	after := entryNames(t, h.dir)
+	for _, n := range after {
+		if strings.HasPrefix(n, "snapshot.part") {
+			t.Fatalf("a failed take left %q behind — a part file is debris, and "+
+				"its sidecars would be applied to the next copy written under "+
+				"that name", n)
+		}
+	}
 	for _, want := range before {
 		if !slicesContains(after, want) {
 			t.Fatalf("%s is gone after a failed take — the previous snapshot is "+
@@ -393,4 +423,95 @@ func slicesContains(in []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// THE MANIFEST NAMES THE POSITION THE FILE KEEPS, not the one the node was
+// at when it decided to take a snapshot.
+//
+// A recipient verifies the manifest against the checkpoint inside the copy and
+// refuses one that differs, because a metadata claim the file does not keep is
+// a corrupt snapshot. The checkpoint commits with the rows, so on a node that
+// is applying, the file the copy captures is ahead of any health reading
+// taken before it — by however many records landed in between. Stamped from
+// health, every snapshot taken under write load was refused by the joiner that
+// needed it, and only an idle fleet's snapshots were ever adoptable.
+//
+// The applier's commit between the health read and the copy is staged
+// deterministically: the health the gate reads says 4 200 while the file the
+// copy is taken from already holds 4 207.
+func TestASnapshotNamesThePositionTheFileKeeps(t *testing.T) {
+	t.Parallel()
+	h := newSnapHarness(t)
+	h.cursor(4_207)
+
+	m, err := h.snap.Take(t.Context())
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	copyPath := filepath.Join(h.dir, "snapshot-4207.db")
+	// THE ARTEFACT IS ONE FILE, checked BEFORE this test opens it: the
+	// donor read the copy's checkpoint, which grows a -wal and a lock
+	// beside it, and neither may travel or be digested around.
+	for _, n := range entryNames(t, h.dir) {
+		if strings.Contains(n, ".db-") || strings.HasSuffix(n, ".lock") {
+			t.Fatalf("the snapshot directory holds %q beside the artefact", n)
+		}
+	}
+	digest, err := store.FileDigest(copyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if digest != m.SHA256 {
+		t.Fatal("the manifest's checksum does not cover the bytes on disk")
+	}
+
+	inFile, err := statelog.CursorsInFile(t.Context(), copyPath)
+	if err != nil {
+		t.Fatalf("read the copy's checkpoint the way a recipient does: %v", err)
+	}
+	kept, ok := inFile[probeStream]
+	if !ok {
+		t.Fatalf("the copy holds no checkpoint for %s", probeStream)
+	}
+	named := m.Domains["probe"]
+	if named.Seq != kept.Seq || named.Generation != kept.Generation {
+		t.Fatalf("the manifest names %d/%d and the file keeps %d/%d — a recipient "+
+			"refuses exactly this, so a snapshot taken while the applier commits "+
+			"would be unadoptable", named.Generation, named.Seq,
+			kept.Generation, kept.Seq)
+	}
+	if named.Seq != 4_207 {
+		t.Fatalf("the manifest names %d, want the file's 4207", named.Seq)
+	}
+}
+
+// A DOMAIN THAT HAS APPLIED NOTHING IS AT THE ZERO POSITION, in the manifest
+// and in the file alike.
+//
+// A fleet's newest domain has no checkpoint row until its first record. Its
+// snapshots are still real artefacts — a joiner adopting one is at zero on
+// that domain exactly as a fresh node is — and a manifest that named it as
+// anything else, or a recipient that refused the absent row, would leave every
+// snapshot unadoptable until somebody wrote to that log.
+func TestADomainWithNoCheckpointIsSnapshottedAtZero(t *testing.T) {
+	t.Parallel()
+	h := newSnapHarness(t)
+	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `DELETE FROM statelog_cursor`)
+		return err
+	}); err != nil {
+		t.Fatalf("clear the checkpoint: %v", err)
+	}
+	m, err := h.snap.Take(t.Context())
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	got := m.Domains["probe"]
+	if got.Seq != 0 || got.Generation != 0 {
+		t.Fatalf("the manifest names %d/%d for a domain that applied nothing, "+
+			"want 0/0", got.Generation, got.Seq)
+	}
+	if _, err := os.Stat(filepath.Join(h.dir, "snapshot-0.db")); err != nil {
+		t.Fatalf("the artefact is not named for its position: %v", err)
+	}
 }

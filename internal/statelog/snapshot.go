@@ -315,42 +315,24 @@ func (s *Snapshotter) Take(ctx context.Context) (Manifest, error) {
 		return Manifest{}, err
 	}
 
-	positions := make(map[string]DomainPosition, len(s.deps.Domains))
-	for _, reg := range s.deps.Domains {
-		h := reg.Health()
-		spec := reg.Domain.Stream()
-		pos := DomainPosition{
-			Stream:          spec.Name,
-			Generation:      h.Position.Generation,
-			StreamCreatedAt: reg.StreamCreatedAt,
-			Seq:             h.Position.Seq,
-			RecordVersion:   reg.Domain.RecordVersion(),
-			Replay:          spec.Replay,
-		}
-		if h.FirstSeq != nil {
-			pos.FirstSeqAtTake = *h.FirstSeq
-		}
-		if h.Lag != nil {
-			pos.LastSeqAtTake = h.Position.Seq + *h.Lag
-		}
-		positions[reg.Domain.Name()] = pos
-	}
-
 	taken := s.now().UTC()
-	base := filepath.Join(s.deps.Dir, fmt.Sprintf("snapshot-%d", newestSeq(positions)))
-	copyPath := base + ".db"
-	manifestPath := base + ".json"
-
 	if err := os.MkdirAll(s.deps.Dir, 0o700); err != nil {
 		return Manifest{}, fmt.Errorf("statelog: create %s: %w", s.deps.Dir, err)
 	}
-	// A PART FILE FROM A CRASHED ATTEMPT IS DEBRIS, not data: only this
-	// function writes these names, and the manifest is what makes a pair a
-	// snapshot.
-	_ = os.Remove(copyPath)
-	_ = os.Remove(manifestPath)
+	// THE COPY IS WRITTEN UNDER A PART NAME, because its final name is its
+	// own position and that is not known until the copy exists: the
+	// checkpoint commits with the rows, so the position inside the file is
+	// the only one that describes it, and the applier is committing while
+	// the copy is taken. A PART FILE FROM A CRASHED ATTEMPT IS DEBRIS, not
+	// data, and so are its sidecars — a stale -wal beside a fresh copy is
+	// applied to it on the next open.
+	part := filepath.Join(s.deps.Dir, snapshotPartName)
+	if err := store.RemoveCopy(part); err != nil {
+		return Manifest{}, fmt.Errorf("statelog: clear the previous attempt: %w", err)
+	}
+	discard := func() { _ = store.RemoveCopy(part) }
 
-	info, err := s.deps.DB.Replicated().Backup(ctx, copyPath)
+	info, err := s.deps.DB.Replicated().Backup(ctx, part)
 	if err != nil {
 		return Manifest{}, fmt.Errorf("statelog: copy the replicated estate: %w", err)
 	}
@@ -358,24 +340,47 @@ func (s *Snapshotter) Take(ctx context.Context) (Manifest, error) {
 	// THE DONOR SCRUBS, on a list DERIVED from what every domain declares
 	// about its own tables rather than written out here. A hardcoded list
 	// would silently omit whatever a deployment actually has.
-	scrubbed, err := store.ScrubFile(ctx, copyPath, s.scrubList())
+	scrubbed, err := store.ScrubFile(ctx, part, s.scrubList())
 	if err != nil {
-		_ = os.Remove(copyPath)
+		discard()
+		return Manifest{}, err
+	}
+
+	// THE POSITIONS ARE READ FROM THE COPY, never from the live node.
+	//
+	// A recipient verifies the manifest against the checkpoint the file
+	// keeps and refuses one that differs, because a metadata claim the
+	// file does not keep is a corrupt snapshot. This node's live health
+	// was read before the copy started and the applier committed in
+	// between — so a manifest stamped from health described the file
+	// only on an idle fleet, and every snapshot taken under write load
+	// was refused by the very node that needed it. The same read serves
+	// the backup manifest, for the same reason.
+	positions, err := s.positionsIn(ctx, part)
+	if err != nil {
+		discard()
+		return Manifest{}, err
+	}
+	// AND THE COPY IS MADE SELF-CONTAINED AGAIN before it is measured:
+	// reading it opened it, which grows a -wal and a -shm beside it, and
+	// what is digested and offered is one file.
+	if err := store.QuiesceCopy(ctx, part); err != nil {
+		discard()
 		return Manifest{}, err
 	}
 
 	// THE CHECKSUM COVERS THE SCRUBBED BYTES, which is the second reason
 	// the scrub is the donor's: a checksum taken before it would certify
 	// a file nobody sends.
-	digest, err := store.FileDigest(copyPath)
+	digest, err := store.FileDigest(part)
 	if err != nil {
-		_ = os.Remove(copyPath)
+		discard()
 		return Manifest{}, err
 	}
-	size, err := os.Stat(copyPath)
+	size, err := os.Stat(part)
 	if err != nil {
-		_ = os.Remove(copyPath)
-		return Manifest{}, fmt.Errorf("statelog: measure %s: %w", copyPath, err)
+		discard()
+		return Manifest{}, fmt.Errorf("statelog: measure %s: %w", part, err)
 	}
 
 	m := Manifest{
@@ -388,6 +393,17 @@ func (s *Snapshotter) Take(ctx context.Context) (Manifest, error) {
 		Domains:       positions,
 		Bytes:         size.Size(),
 		SHA256:        digest,
+	}
+	base := filepath.Join(s.deps.Dir, fmt.Sprintf("snapshot-%d", newestSeq(positions)))
+	copyPath := base + ".db"
+	manifestPath := base + ".json"
+	// A pair at this name from an earlier attempt is replaced: only this
+	// function writes these names, and the manifest is what makes a pair a
+	// snapshot.
+	_ = os.Remove(manifestPath)
+	if err := os.Rename(part, copyPath); err != nil {
+		discard()
+		return Manifest{}, fmt.Errorf("statelog: place %s: %w", copyPath, err)
 	}
 	if err := writeManifest(manifestPath, m); err != nil {
 		_ = os.Remove(copyPath)
@@ -403,6 +419,51 @@ func (s *Snapshotter) Take(ctx context.Context) (Manifest, error) {
 		"node", s.deps.NodeID, "path", copyPath, "bytes", m.Bytes,
 		"domains", len(m.Domains), "scrubbed", len(m.Scrubbed))
 	return m, nil
+}
+
+// snapshotPartName is what a copy is called until its position is known.
+//
+// It does not start with `snapshot-`, so the rotation never mistakes it for a
+// finished pair and the newest-manifest walk never finds a manifest beside it.
+const snapshotPartName = "snapshot.part.db"
+
+// positionsIn is every registered domain's position AS THE COPY KEEPS IT.
+//
+// A domain with no checkpoint row in the file is at the ZERO position: it has
+// applied nothing, which is a real state of a domain whose log nobody has
+// written to yet, and the artefact covers it exactly as a node at zero would.
+// The recipient reads an absent row the same way, so a fleet's newest domain
+// does not leave every snapshot unadoptable until its first record.
+func (s *Snapshotter) positionsIn(ctx context.Context, path string) (map[string]DomainPosition, error) {
+	cursors, err := CursorsInFile(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("statelog: read the positions the copy keeps: %w", err)
+	}
+	positions := make(map[string]DomainPosition, len(s.deps.Domains))
+	for _, reg := range s.deps.Domains {
+		h := reg.Health()
+		spec := reg.Domain.Stream()
+		at := cursors[spec.Name]
+		pos := DomainPosition{
+			Stream:          spec.Name,
+			Generation:      at.Generation,
+			StreamCreatedAt: reg.StreamCreatedAt,
+			Seq:             at.Seq,
+			RecordVersion:   reg.Domain.RecordVersion(),
+			Replay:          spec.Replay,
+		}
+		// The stream's own bounds at the take are ADVISORY, for the
+		// operator reading why an offer was refused, and they come
+		// from the live health because the file cannot know them.
+		if h.FirstSeq != nil {
+			pos.FirstSeqAtTake = *h.FirstSeq
+		}
+		if h.Lag != nil {
+			pos.LastSeqAtTake = h.Position.Seq + *h.Lag
+		}
+		positions[reg.Domain.Name()] = pos
+	}
+	return positions, nil
 }
 
 // gate is the five preconditions, in the order that answers cheapest first.
