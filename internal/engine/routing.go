@@ -112,7 +112,17 @@ func (e *Engine) rewireJira(ctx context.Context, c *Company) []string {
 		return nil
 	}
 	e.notify.jira.resolve(ctx, base, jira.DeploymentOf(base), jiraSeatCredentials(c, env))
-	registered := e.notify.jira.register(e.Registry(), c, env)
+	// INTO THE REGISTRY BUILT FOR c, OR NOWHERE. See
+	// [Engine.registryOf]: this pass resolved against c, and an apply
+	// that has since published a newer revision has already registered
+	// what ITS credentials resolve to. Writing into that newer registry
+	// from here would put the previous revision's account back over the
+	// top, and a rotated credential would route to nobody.
+	reg := e.registryOf(c)
+	if reg == nil {
+		return nil
+	}
+	registered := e.notify.jira.register(reg, c, env)
 	unresolved := e.notify.jira.unresolved(c, env)
 	e.logRewired(ctx, integration.KindJira, registered, unresolved)
 	return unresolved
@@ -193,7 +203,17 @@ func (e *Engine) rewireGitLab(ctx context.Context, c *Company) []string {
 		return nil
 	}
 	e.notify.gitlab.resolve(ctx, url, gitlabSeatTokens(c, env))
-	registered := e.notify.gitlab.register(e.Registry(), c, env)
+	// INTO THE REGISTRY BUILT FOR c, OR NOWHERE. See
+	// [Engine.registryOf]: this pass resolved against c, and an apply
+	// that has since published a newer revision has already registered
+	// what ITS credentials resolve to. Writing into that newer registry
+	// from here would put the previous revision's account back over the
+	// top, and a rotated credential would route to nobody.
+	reg := e.registryOf(c)
+	if reg == nil {
+		return nil
+	}
+	registered := e.notify.gitlab.register(reg, c, env)
 	unresolved := e.notify.gitlab.unresolved(c, env)
 	e.logRewired(ctx, integration.KindGitLab, registered, unresolved)
 	return unresolved
@@ -216,7 +236,17 @@ func (e *Engine) rewireGitHub(ctx context.Context, c *Company) []string {
 		return nil
 	}
 	e.notify.github.resolve(ctx, api, web, github.SeatCredentials(c.Org, env.Value))
-	registered := e.notify.github.register(e.Registry(), c, env)
+	// INTO THE REGISTRY BUILT FOR c, OR NOWHERE. See
+	// [Engine.registryOf]: this pass resolved against c, and an apply
+	// that has since published a newer revision has already registered
+	// what ITS credentials resolve to. Writing into that newer registry
+	// from here would put the previous revision's account back over the
+	// top, and a rotated credential would route to nobody.
+	reg := e.registryOf(c)
+	if reg == nil {
+		return nil
+	}
+	registered := e.notify.github.register(reg, c, env)
 	unresolved := e.notify.github.unresolved(c, env)
 	e.logRewired(ctx, integration.KindGitHub, registered, unresolved)
 	return unresolved
