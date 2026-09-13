@@ -50,7 +50,6 @@ func Run(t *testing.T, newStore func(t *testing.T) sandbox.PendingStore) {
 		{"ActiveIncludesResumed", testActiveIncludesResumed},
 		{"AnAnswerFindsTheRunThatAsked", testAnAnswerFindsTheRunThatAsked},
 		{"AnAnswerWithNoConversationMatchesNothing", testAnAnswerWithNoConversationMatchesNothing},
-		{"TheReaperSeesOnlyOldSnapshots", testTheReaperSeesOnlyOldSnapshots},
 		{"ListingsAreStable", testListingsAreStable},
 		{"APauseExpiresExactlyOnce", testAPauseExpiresExactlyOnce},
 		{"OnlyAParkedRunCanExpire", testOnlyAParkedRunCanExpire},
@@ -558,43 +557,6 @@ func testAnAnswerWithNoConversationMatchesNothing(t *testing.T, s sandbox.Pendin
 	}
 	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "swe", ""); ok {
 		t.Error("a message with no conversation matched a parked run")
-	}
-}
-
-func testTheReaperSeesOnlyOldSnapshots(t *testing.T, s sandbox.PendingStore) {
-	// A provider holds a paused box indefinitely and bills for the snapshot,
-	// so nothing else would ever reclaim it. What the reaper must NOT see is
-	// a fresh pause or a run with no box at all.
-	for _, tc := range []struct {
-		id     string
-		paused time.Time
-		hasBox bool
-	}{
-		{"old", base.Add(-2 * time.Hour), true},
-		{"fresh", base.Add(-time.Minute), true},
-		{"boxless", base.Add(-2 * time.Hour), false},
-	} {
-		mustLaunched(t, s, run(tc.id))
-		if tc.hasBox {
-			if err := s.AttachSandbox(t.Context(), tc.id,
-				sandbox.BoxRef{SandboxID: "box-" + tc.id}, sandbox.Fence{}); err != nil {
-				t.Fatalf("attach %s: %v", tc.id, err)
-			}
-		}
-		if err := s.MarkBoxPaused(t.Context(), tc.id, tc.paused); err != nil {
-			t.Fatalf("pause %s: %v", tc.id, err)
-		}
-	}
-	got, err := s.ListPausedBefore(t.Context(), base.Add(-time.Hour))
-	if err != nil {
-		t.Fatalf("list paused: %v", err)
-	}
-	if len(got) != 1 || got[0].TurnID != "old" {
-		var ids []string
-		for _, r := range got {
-			ids = append(ids, r.TurnID)
-		}
-		t.Errorf("reapable = %v, want only the old snapshot with a box", ids)
 	}
 }
 

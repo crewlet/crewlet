@@ -383,10 +383,6 @@ type PendingStore interface {
 	// that asked.
 	FindAwaitingByConversation(ctx context.Context, handle, conversation string) (PendingRun, bool, error)
 
-	// ListPausedBefore returns paused runs whose snapshot is older than the
-	// cutoff, for the reaper.
-	ListPausedBefore(ctx context.Context, cutoff time.Time) ([]PendingRun, error)
-
 	Delete(ctx context.Context, turnID string) error
 }
 

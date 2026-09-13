@@ -366,18 +366,6 @@ func (s *CoordStore) FindAwaitingByConversation(ctx context.Context, handle, con
 	return got[len(got)-1], true, nil
 }
 
-// ListPausedBefore returns the boxes whose pause TTL has expired.
-func (s *CoordStore) ListPausedBefore(ctx context.Context, cutoff time.Time) ([]PendingRun, error) {
-	got, err := s.list(ctx, func(r PendingRun) bool {
-		return r.Paused() && r.HasBox() && r.PausedAt.Before(cutoff)
-	})
-	if err != nil {
-		return nil, err
-	}
-	slices.SortStableFunc(got, func(a, b PendingRun) int { return a.PausedAt.Compare(b.PausedAt) })
-	return got, nil
-}
-
 // Delete removes a run record.
 //
 // Conditional on the version it read, and retried: a terminal delete racing a
