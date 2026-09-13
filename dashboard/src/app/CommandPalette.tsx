@@ -13,6 +13,12 @@
  * trap and the return of focus to whatever opened it behave exactly as they
  * do for every dialog and drawer. It used to close on its own Escape and on a
  * second, window-level one in the shell, and returned focus to nothing.
+ *
+ * THE SHORTCUT THAT OPENED IT CLOSES IT, but only from inside it. The shell
+ * listens on the window and only ever opens search; a chord pressed while
+ * another surface raised over search holds the keyboard (a token dialog a
+ * refused request opened) belongs to that surface, and closing search from
+ * beneath it would change a page the reader cannot see.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -37,6 +43,19 @@ interface Hit {
 /** Is this the shape of an id somebody pasted out of a log? */
 const UUIDISH = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i;
 const HEXISH = /^[0-9a-f]{16,64}$/i;
+
+/**
+ * The chord that opens search from anywhere and closes it from inside.
+ *
+ * Command on Apple platforms and Control elsewhere, and either is accepted on
+ * both, as the hint (`ui/Kbd.tsx`'s `Mod`) promises. One definition because
+ * the shell opens with it and the palette closes with it.
+ */
+export const SEARCH_SHORTCUT = ["Mod", "k"] as const;
+
+export function isSearchShortcut(e: { key: string; metaKey: boolean; ctrlKey: boolean }): boolean {
+  return (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k";
+}
 
 function score(text: string, q: string): number {
   const t = text.toLowerCase();
@@ -247,7 +266,18 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
 
   let flat = -1;
   return (
-    <div className="veil" ref={modal.veilRef} role="presentation">
+    <div
+      className="veil"
+      ref={modal.veilRef}
+      role="presentation"
+      onKeyDown={(e) => {
+        // Handled, so the shell's window listener leaves the press alone
+        // rather than opening search again on the same key.
+        if (!isSearchShortcut(e)) return;
+        e.preventDefault();
+        onClose();
+      }}
+    >
       <ModalPanel className="palette" title="Search" panelRef={modal.panelRef}>
         <input
           className="palette-input"

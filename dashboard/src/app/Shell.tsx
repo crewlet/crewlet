@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { NAV, activeNavKey, titleFor } from "./nav.ts";
 import { href, useRoute } from "./router.tsx";
-import { CommandPalette } from "./CommandPalette.tsx";
+import { CommandPalette, SEARCH_SHORTCUT, isSearchShortcut } from "./CommandPalette.tsx";
 import { EnginePanel } from "./EnginePanel.tsx";
 import { TokenDialog } from "./TokenDialog.tsx";
 import { Icon } from "~/ui/Icon.tsx";
@@ -59,16 +59,21 @@ export function Shell({ children }: { children: ReactNode }) {
   // auth-gated answer on a screen the socket was never refused for.
   useEffect(() => onTokenRequested(() => setTokenOpen(true)), []);
 
-  // The shortcuts that OPEN a surface. Closing one belongs to the layer stack
-  // (`ui/useModal.ts`): an Escape handled here as well closed the palette and
-  // the engine panel along with whatever sat above or beneath them.
+  // The shortcuts that OPEN search, and nothing else. Closing a surface
+  // belongs to the surface and the layer stack (`ui/useModal.ts`): an Escape
+  // handled here as well closed search and the engine panel along with
+  // whatever sat above or beneath them, and a toggle here closed search from
+  // beneath a dialog raised over it. A press a surface already handled (search
+  // closing on its own chord) is left alone.
   useEffect(() => {
     function onKey(e: KeyboardEvent): void {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      if (e.defaultPrevented) return;
+      if (isSearchShortcut(e)) {
         e.preventDefault();
-        setPaletteOpen((v) => !v);
+        setPaletteOpen(true);
+        return;
       }
-      // A bare "/" opens search the way every list-shaped tool does — but not
+      // A bare "/" opens search the way every list-shaped tool does, but not
       // while somebody is typing into a field.
       const el = document.activeElement;
       const typing =
@@ -230,7 +235,7 @@ export function Shell({ children }: { children: ReactNode }) {
           <button className="omni" onClick={() => setPaletteOpen(true)}>
             <Icon name="search" size="sm" />
             <span className="omni-label">Search</span>
-            <Kbd keys={["Mod", "k"]} />
+            <Kbd keys={SEARCH_SHORTCUT} />
           </button>
         </header>
 

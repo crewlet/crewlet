@@ -130,6 +130,31 @@ test("search opened with a shortcut returns focus to what held it, and one Escap
   expect(document.activeElement).toBe(retry);
 });
 
+test("the search shortcut does not close search from beneath a token dialog raised over it", () => {
+  mount(<p>screen</p>);
+  press("k", { ctrlKey: true });
+  const input = screen.getByRole("textbox", { name: "Search" });
+  expect(document.activeElement).toBe(input);
+
+  // A guarded answer asks for a credential while search is open.
+  act(() => requestToken());
+  const token = screen.getByLabelText("Token");
+  expect(document.activeElement).toBe(token);
+
+  // The chord belongs to the surface that holds the keyboard. Closing search
+  // from under the dialog would change a page the reader cannot see, and
+  // hand focus to what opened search, behind the dialog's veil.
+  press("k", { ctrlKey: true });
+  expect(screen.getByRole("dialog", { name: "Search" })).toBeDefined();
+  expect(document.activeElement).toBe(token);
+
+  press("Escape");
+  expect(screen.queryByRole("dialog", { name: "API token" })).toBeNull();
+  expect(document.activeElement).toBe(input);
+  press("k", { ctrlKey: true });
+  expect(screen.queryByRole("dialog", { name: "Search" })).toBeNull();
+});
+
 test("the shortcut hints name the keys the reader's own keyboard prints, in words", () => {
   // Not an Apple platform under the suite, so the command key is Control: a
   // hand-written "⌘K" told everybody else to press a key they do not have.
