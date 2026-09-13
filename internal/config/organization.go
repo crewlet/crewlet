@@ -7,12 +7,13 @@ import (
 // Organization builds the runtime company from this revision: the seats,
 // the hierarchy, and the org-wide facts every seat reads.
 //
-// It NORMALIZES the result — root seats carrying a unit reference move into
+// It NORMALIZES the result: root seats carrying a unit reference move into
 // that unit, leads and channels cascade, unit credentials layer under their
-// members', a lead gains a manages entry for every unmanaged direct member,
-// and a manages entry naming a unit expands to its seats. Doing that at the
-// boundary is why nothing downstream has to know whether a seat was
-// authored inside its unit or moved into it.
+// agent members', a lead gains a manages entry for every direct member no
+// direct member of its unit already manages, and a manages entry naming a
+// unit expands to its seats ([org.Organization.Normalize] has the rules
+// and their order). Doing that at the boundary is why nothing downstream
+// has to know whether a seat was authored inside its unit or moved into it.
 //
 // The returned organization is a fresh tree: the config it came from is
 // untouched, because a stored revision is read again on the next apply and

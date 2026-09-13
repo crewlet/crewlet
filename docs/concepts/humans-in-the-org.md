@@ -238,10 +238,13 @@ Two boundaries to keep in mind:
   API-auth concern — the seat makes agents know you; the token makes
   the engine obey you. Different hats, deliberately separate.
 - **Scope `manages` to the top roles.** A founder managing every unit
-  becomes the default manager and escalation terminus for every
-  otherwise-unmanaged role. Manage the CEO (or the unit leads) and let
-  lead inheritance handle the rest; `availability` sets response
-  expectations.
+  by name lists every seat in those units, and a root seat is walked
+  first when a seat's manager is resolved, so the founder becomes the
+  primary manager and escalation terminus of every one of them, even
+  where a unit lead also auto-manages the seat (see
+  [Unit Lead](organization-model.md#unit-lead)). Manage the CEO (or the
+  unit leads) and let lead inheritance handle the rest; `availability`
+  sets response expectations.
 
 See `examples/nimbus.company.yaml` for a complete working org with a
 founder seat above the agent CEO. That company's only surface is chat, so
