@@ -253,6 +253,39 @@ func TestAWorkerOnlyNodeServesNoHTTPAndSaysSo(t *testing.T) {
 	}
 }
 
+// A node whose roles leave out ingress binds nothing, even with api.port set.
+// The role was validated and advertised to peers while serveAPI read only the
+// port, so a seats-only satellite opened a listener it was placed on a private
+// host to avoid. The port is left free and the node says why.
+func TestANodeWithoutTheIngressRoleBindsNoListener(t *testing.T) {
+	t.Parallel()
+	var logged bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	e := testEngine(t)
+	boot := bootstrapFor(t, 0)
+	boot.API.Host = "127.0.0.1"
+	boot.API.Port = freePort(t)
+	boot.Node.Roles = []string{"seats", "workers"}
+
+	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, log)
+	if err != nil {
+		t.Fatalf("serveAPI: %v", err)
+	}
+	if surface != nil {
+		surface.stop(context.Background(), logging.Get("test"))
+		t.Fatal("a node without the ingress role built an HTTP surface")
+	}
+	if !strings.Contains(logged.String(), "api_not_started") {
+		t.Errorf("the node did not say why it serves no HTTP:\n%s", logged.String())
+	}
+	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(boot.API.Port)))
+	if err != nil {
+		t.Fatalf("api.port is held although the node serves no HTTP: %v", err)
+	}
+	_ = listener.Close()
+}
+
 func TestAnUnbindablePortIsReportedRatherThanIgnored(t *testing.T) {
 	t.Parallel()
 	// A port already in use, or one this process may not have, is a

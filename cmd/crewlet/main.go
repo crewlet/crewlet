@@ -1179,6 +1179,22 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		return nil, fmt.Errorf("api: node identity: %w", err)
 	}
+	// THE INGRESS ROLE DECIDES, not only the port. node.roles was validated,
+	// written onto the presence lease and counted by fleet_role_unmanned,
+	// and nothing consulted it here, so a node told to run only seats still
+	// bound api.port and answered webhooks, the dashboard and the REST
+	// surface: a satellite placed on a private host for exactly that reason
+	// opened a listener, and one config file could not serve both shapes.
+	// The port stays the hard off switch above; this is the role saying the
+	// same thing for a node whose file sets a port for its peers' sake.
+	if profile := boot.Node.Profile(nodeID); !profile.RunsIngress() {
+		log.InfoContext(ctx, "api_not_started", "node", nodeID,
+			"roles", profile.Roles.Names(),
+			"hint", "node.roles does not include ingress, so this node binds no "+
+				"HTTP listener although api.port is set; a peer with the ingress "+
+				"role serves webhooks, the dashboard and the REST API")
+		return nil, nil
+	}
 	// The config surface is the caller's, built before this function so a
 	// node with no HTTP listener still has a config WRITER — see runEngine.
 	// One instance, shared by the REST routes, the socket queries and the

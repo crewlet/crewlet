@@ -105,9 +105,9 @@ anywhere else, so an orchestrator injects both from the environment
 without templating the file. There is a `-roles` flag for the same
 reason; labels have no flag, because `${VAR}` already covers it.
 
-`api.port` can stay set — a node without the `ingress` role does not
-bind it, and logs `embedded_api_not_started` saying why. That means one
-config file works for both shapes.
+`api.port` can stay set: a node without the `ingress` role does not
+bind it, and logs `api_not_started` saying why. That means one config
+file works for both shapes.
 
 ### 2. Pin the role
 
