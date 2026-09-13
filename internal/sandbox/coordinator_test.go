@@ -693,6 +693,47 @@ func TestAFailedCollectStillFreesTheSeat(t *testing.T) {
 	rig.finished("t1")
 }
 
+// A run somebody else ended between the claim and the settle (a new owner's
+// recovery, a retirement) was announced by that party, for the reason it was
+// really lost. The seat is still freed here, and the loss is not announced a
+// second time under a reason it did not end for.
+func TestASettleSomebodyElseEndedIsNotAnnouncedTwice(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Queue: rig.queue, Pending: endedFirst{rig.pending}, Manager: rig.manager, Resume: rig.resumer,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	coordinator.markBusy("swe")
+	rig.runner.Finish(Result{Success: true})
+	rig.runner.CollectErr = errors.New("the box died mid-read")
+
+	payload, ev := rig.completion("t1")
+	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if coordinator.AwaitingSandbox("swe") {
+		t.Fatal("the seat stayed parked on a run that is over")
+	}
+	rig.finished("t1")
+	if failed := rig.failures(); len(failed) != 0 {
+		t.Fatalf("announced %+v for a run somebody else had already ended", failed)
+	}
+}
+
+// endedFirst is a store where another party always ends a run a moment
+// before this caller does.
+type endedFirst struct{ PendingStore }
+
+func (s endedFirst) Finish(ctx context.Context, turnID string, fence Fence) (bool, error) {
+	if _, err := s.PendingStore.Finish(ctx, turnID, fence); err != nil {
+		return false, err
+	}
+	return s.PendingStore.Finish(ctx, turnID, fence)
+}
+
 // ---------------------------------------------------------------------
 // accounting
 // ---------------------------------------------------------------------
@@ -1244,6 +1285,12 @@ func TestEndingARunNeverReachesANewerLeasesBox(t *testing.T) {
 	}
 	if got := rig.get("t1"); got.Owner != "node-c:1" {
 		t.Fatalf("the newer lease's run was disturbed: %+v", got)
+	}
+	// Nor is it announced as lost: the newer owner is continuing it, and a
+	// sandbox_run_failed naming an abandoned tail would tell the board and
+	// the seat a turn died that did not.
+	if failed := rig.failures(); len(failed) != 0 {
+		t.Fatalf("announced %+v for a run a newer lease owns", failed)
 	}
 }
 

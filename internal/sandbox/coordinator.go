@@ -638,10 +638,16 @@ func (c *Coordinator) dispatchResume(ctx context.Context, req ResumeRequest) err
 // identical silence. The first symptom was a wait that
 // never ended. `park` announces a QUESTION; a lost turn cannot be quieter than
 // that.
+//
+// Announced only when this call ended the run. One that a newer lease owns,
+// or that somebody else ended first, is that party's to settle and to explain,
+// and a second announcement would name a reason the run did not end for.
 func (c *Coordinator) settleFailed(ctx context.Context, run PendingRun, reason, detail string) {
-	c.finish(ctx, run, fenceOf(run))
+	ended := c.finish(ctx, run, fenceOf(run))
 	c.clearBusy(run.AgentHandle)
-	c.announceFailure(ctx, run, reason, detail)
+	if ended {
+		c.announceFailure(ctx, run, reason, detail)
+	}
 }
 
 // FailRun settles a run the turn that launched it cannot suspend into.
@@ -719,27 +725,34 @@ func (c *Coordinator) teardown(ctx context.Context, run PendingRun) {
 }
 
 // finish ends a run: its box is reclaimed and then its record deleted.
+// Reports whether the ending is this call's, which is what licenses the caller
+// to announce it: false when a newer lease owns the run or somebody else had
+// already ended it.
 //
 // IN THAT ORDER, for the reason [PendingStore.Finish] gives: a record that
 // outlives its box is reaped by the next recovery pass, while a box that
 // outlives its record is named by nothing. A record that cannot be deleted is
 // logged rather than retried here: it is still an active record of its seat,
-// so the seat's next recovery pass reaps it.
-func (c *Coordinator) finish(ctx context.Context, run PendingRun, fence Fence) {
+// so the seat's next recovery pass reaps it, and the ending still counts as
+// this call's, because the box is reclaimed and the turn is over.
+func (c *Coordinator) finish(ctx context.Context, run PendingRun, fence Fence) bool {
 	if outranked(run, fence) {
 		// A newer lease owns the run; its box is that owner's to reclaim.
 		log.WarnContext(ctx, "sandbox_finish_outranked", "turn_id", run.TurnID,
 			"owner_epoch", run.OwnerEpoch, "epoch", fence.Epoch)
-		return
+		return false
 	}
 	killCtx, cancel := detached(ctx)
 	defer cancel()
 	c.reclaimBox(ctx, killCtx, run)
-	if _, err := c.pending.Finish(killCtx, run.TurnID, fence); err != nil {
+	ended, err := c.pending.Finish(killCtx, run.TurnID, fence)
+	if err != nil {
 		log.WarnContext(ctx, "sandbox_finish_failed", "turn_id", run.TurnID, "error", err.Error(),
 			"detail", "the run's box is reclaimed but its record was not deleted; the seat's "+
 				"next recovery pass reaps it")
+		return true
 	}
+	return ended
 }
 
 // detached is the context a teardown runs under.
@@ -828,8 +841,11 @@ func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epo
 				"turn_id", run.TurnID, "agent", run.AgentHandle,
 				"sandbox_id", run.SandboxID, "status", run.Status)
 			// Fenced on the lease this node just took, so a record a
-			// newer owner has already claimed is left to that owner.
-			c.finish(ctx, run, Fence{Owner: owner, Epoch: epoch})
+			// newer owner has already claimed is left to that owner, and
+			// neither ended nor announced here.
+			if !c.finish(ctx, run, Fence{Owner: owner, Epoch: epoch}) {
+				continue
+			}
 			// Announced like the other ways a run is lost: the seat's new
 			// owner is about to open its mailbox, and a turn that died
 			// with the previous owner has to be visible rather than
