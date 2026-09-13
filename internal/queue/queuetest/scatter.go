@@ -211,7 +211,10 @@ func (s *suite) runScatter(t *testing.T) {
 		if err != nil {
 			t.Fatalf("serve: %v", err)
 		}
-		if err := stop(ctx); err != nil {
+		// ASSIGNED rather than redeclared: a shadowing `:=` here is the
+		// shape govet cannot tell from the bug it is on for, and the
+		// Serve error above has already been read.
+		if err = stop(ctx); err != nil {
 			t.Fatalf("stop serving: %v", err)
 		}
 

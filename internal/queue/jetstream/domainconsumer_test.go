@@ -174,6 +174,14 @@ func itoa(i int) string { return string(rune('0' + i)) }
 //
 // The assertion is the WALL CLOCK, because that is the symptom. A flag saying
 // the watcher exists would go on being true while the block moved elsewhere.
+//
+// AND IT ENDS AS A STOP RATHER THAN AS A FAILURE, which is the second half and
+// is not cosmetic: a cancellation reaches the iterator by two routes at once —
+// the watcher's Drain and the read failing under it — so whichever lands first
+// decides what Next returns, and the losing half must answer the same way. A
+// nil delivery with a nil error is how the change feed above tells a shutdown
+// from a failure, so an error here is an error line on every clean stop of
+// every node.
 func TestAGroupsBlockingReadEndsWithItsContext(t *testing.T) {
 	t.Parallel()
 	q, log := openDomain(t, "CREWLET_GROUP_CANCEL", "crewlet.groupcancel")
@@ -188,11 +196,13 @@ func TestAGroupsBlockingReadEndsWithItsContext(t *testing.T) {
 	// company spends almost all of its time in, and it is the one where
 	// the blocking read never returns on its own.
 	done := make(chan struct{})
+	var readErr error
 	go func() {
 		defer close(done)
 		for {
 			delivery, err := group.Next(ctx)
 			if err != nil || delivery == nil {
+				readErr = err
 				return
 			}
 		}
@@ -204,6 +214,11 @@ func TestAGroupsBlockingReadEndsWithItsContext(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("a group's blocking read outlived its cancelled context, so " +
 			"anything joining it waits for ever")
+	}
+	if readErr != nil {
+		t.Errorf("a cancelled read reported %v, want no error — the caller is "+
+			"shutting down, and a shutdown reported as a failure is an error "+
+			"line on every clean stop", readErr)
 	}
 
 	// AND AN EXPLICIT STOP IS THE SAME STOP, so a caller that does both —

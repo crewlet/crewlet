@@ -99,30 +99,52 @@ func TestNothingPurgesPerSubject(t *testing.T) {
 	t.Parallel()
 	for _, dir := range []string{".", filepath.Join("..", "..", "statelog")} {
 		fset := token.NewFileSet()
-		pkgs, err := parser.ParseDir(fset, dir, nil, 0)
-		if err != nil {
-			t.Fatalf("parse %s: %v", dir, err)
-		}
-		for _, pkg := range pkgs {
-			for path, file := range pkg.Files {
-				ast.Inspect(file, func(n ast.Node) bool {
-					sel, ok := n.(*ast.SelectorExpr)
-					if !ok {
-						return true
-					}
-					switch sel.Sel.Name {
-					case "WithPurgeSubject", "WithPurgeKeep":
-						t.Errorf("%s calls %s — a keep-newest purge is mutually "+
-							"exclusive with purging by sequence, so it must be "+
-							"issued per subject, and it removes the interior "+
-							"sequences the strict replay protocol treats as an "+
-							"invariant", relative(path), sel.Sel.Name)
-					}
+		for path, file := range parseEveryGoFile(t, fset, dir) {
+			ast.Inspect(file, func(n ast.Node) bool {
+				sel, ok := n.(*ast.SelectorExpr)
+				if !ok {
 					return true
-				})
-			}
+				}
+				switch sel.Sel.Name {
+				case "WithPurgeSubject", "WithPurgeKeep":
+					t.Errorf("%s calls %s — a keep-newest purge is mutually "+
+						"exclusive with purging by sequence, so it must be "+
+						"issued per subject, and it removes the interior "+
+						"sequences the strict replay protocol treats as an "+
+						"invariant", relative(path), sel.Sel.Name)
+				}
+				return true
+			})
 		}
 	}
+}
+
+// parseEveryGoFile parses every .go file in dir, keyed by the path a reader
+// would type.
+//
+// Not parser.ParseDir, which Go 1.25 deprecated because it associates files
+// with packages without consulting build tags. A static walk wants EVERY file
+// regardless of tags — a purge hidden behind a //go:build line is still a
+// purge — so the listing is explicit rather than inherited from a helper whose
+// behaviour here was a happy accident.
+func parseEveryGoFile(t *testing.T, fset *token.FileSet, dir string) map[string]*ast.File {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(dir, "*.go"))
+	if err != nil {
+		t.Fatalf("list %s: %v", dir, err)
+	}
+	files := make(map[string]*ast.File, len(paths))
+	for _, path := range paths {
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		files[path] = file
+	}
+	if len(files) == 0 {
+		t.Fatalf("no Go files under %s — the walk would pass by scanning nothing", dir)
+	}
+	return files
 }
 
 // relative renders a path the way a person reading the failure would type it.

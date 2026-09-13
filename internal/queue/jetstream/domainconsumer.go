@@ -355,7 +355,17 @@ func (g *DomainGroup) Next(ctx context.Context) (*DomainDelivery, error) {
 	case errors.Is(err, jetstream.ErrMsgIteratorClosed):
 		return nil, nil
 	case err != nil:
+		// A CANCELLED CALLER IS THE SAME ANSWER AS A CLOSED ITERATOR. The
+		// goroutine this group started turns ctx.Done into a Drain, so a
+		// cancellation reaches the iterator by two routes at once and
+		// whichever lands first decides what Next returns — the tidy
+		// ErrMsgIteratorClosed above, or the underlying read failing
+		// mid-drain. Reporting the second as a failure would make a clean
+		// shutdown log an error on the race's losing half.
 		if ctx.Err() != nil {
+			//nolint:nilerr // Swallowing it IS the contract: a nil delivery
+			// with a nil error means the consumer closed, which is how the
+			// feed above tells a shutdown from a failure.
 			return nil, nil
 		}
 		return nil, fmt.Errorf("jetstream: read %s: %w", g.name, err)

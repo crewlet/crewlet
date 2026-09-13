@@ -1,6 +1,7 @@
 package jetstreamtest
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -64,7 +65,7 @@ func (c *Cluster) Heal(t *testing.T, i int) {
 	c.requireForwarders(t)
 	for _, f := range c.forwarders {
 		if f.from == i || f.to == i {
-			if err := f.start(); err != nil {
+			if err := f.start(t.Context()); err != nil {
 				t.Fatalf("heal %d->%d: %v", f.from, f.to, err)
 			}
 		}
@@ -87,8 +88,25 @@ func (c *Cluster) requireForwarders(t *testing.T) {
 	}
 }
 
+// forwarderDialTimeout bounds the relay's own dial to the peer's real route
+// port.
+//
+// Loopback, so the honest outcomes are microseconds or an immediate refusal
+// from a peer that is not up yet — which is the ordinary case here, since the
+// relays are started BEFORE the members. What the timeout covers is the one
+// shape that neither answers nor refuses: a listener whose accept backlog is
+// full, on a machine already running dozens of embedded brokers. Two seconds
+// is far inside the minute a member waits for its cluster to become current,
+// so a route that loses this dial is retried by NATS and surfaces as a slow
+// cluster rather than as a harness that hung.
+const forwarderDialTimeout = 2 * time.Second
+
 // start opens (or reopens) the listener and serves it.
-func (f *forwarder) start() error {
+//
+// The context is the TEST's: it bounds the listen and every dial the relay
+// makes, so a forwarder cannot outlive the test that built it by holding a
+// connect attempt open past the end of the run.
+func (f *forwarder) start(ctx context.Context) error {
 	f.mu.Lock()
 	if f.listener != nil {
 		f.mu.Unlock()
@@ -97,7 +115,8 @@ func (f *forwarder) start() error {
 	// THE SAME PORT EVERY TIME. The member was started with this address
 	// in its routes and NATS re-dials that address on its own schedule, so
 	// a healed forwarder has to answer where the peer is already looking.
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", f.port))
+	var lc net.ListenConfig
+	ln, err := lc.Listen(ctx, "tcp", fmt.Sprintf("127.0.0.1:%d", f.port))
 	if err != nil {
 		f.mu.Unlock()
 		return err
@@ -107,7 +126,7 @@ func (f *forwarder) start() error {
 	f.live = map[net.Conn]struct{}{}
 	f.mu.Unlock()
 
-	go f.serve(ln)
+	go f.serve(ctx, ln)
 	return nil
 }
 
@@ -127,13 +146,14 @@ func (f *forwarder) stop() {
 }
 
 // serve accepts and proxies until the listener closes.
-func (f *forwarder) serve(ln net.Listener) {
+func (f *forwarder) serve(ctx context.Context, ln net.Listener) {
+	dialer := net.Dialer{Timeout: forwarderDialTimeout}
 	for {
 		in, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		out, err := net.DialTimeout("tcp", f.target, 2*time.Second)
+		out, err := dialer.DialContext(ctx, "tcp", f.target)
 		if err != nil {
 			_ = in.Close()
 			continue

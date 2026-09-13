@@ -154,7 +154,7 @@ func TestThePortProbeSeesAHeldPort(t *testing.T) {
 	}
 	port := held.Addr().(*net.TCPAddr).Port
 
-	if portFree(port) {
+	if portFree(t.Context(), port) {
 		t.Fatalf("the probe reports port %d free while this test holds it — a "+
 			"probe that cannot see a held port is a probe that never fires",
 			port)
@@ -162,7 +162,7 @@ func TestThePortProbeSeesAHeldPort(t *testing.T) {
 	if err := held.Close(); err != nil {
 		t.Fatalf("release the port: %v", err)
 	}
-	if !portFree(port) {
+	if !portFree(t.Context(), port) {
 		t.Fatalf("the probe reports port %d taken after it was released — a "+
 			"probe that never passes would restart every cluster four times",
 			port)

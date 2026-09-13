@@ -130,7 +130,7 @@ const defaultEventRetention = 30 * 24 * time.Hour
 // A stream this process did not create is a stream some other node created,
 // possibly from a different Tier A file. What a boot does about a difference
 // depends entirely on WHICH field differs, and the four answers are not
-// interchangeable — see [specField] and [classifyStreamSpec]. The
+// interchangeable — see [specFieldClass] and [classifyStreamSpec]. The
 // classification is derived by reflection over this struct so that adding a
 // field and forgetting to classify it fails a test rather than silently
 // joining the class whose default it happens to match.
@@ -201,6 +201,12 @@ type streamSpec struct {
 
 // specFieldClass is what a boot does when the running stream's value for a
 // field differs from this node's spec.
+//
+// THE REPLICATION FACTOR IS NOT ONE OF THESE, and its absence is the point: a
+// boot has a fourth answer for durability — see [Queue.observeStream] — but
+// the factor is Tier A's, identical for every stream on the node, so it is not
+// a [streamSpec] field and there is nothing here to classify. A class declared
+// for it would be a value no map entry could ever carry.
 type specFieldClass int
 
 const (
@@ -214,14 +220,6 @@ const (
 	// records into a stream that drops them, replays them at wall-clock
 	// speed, or lets any client delete them.
 	classSafety
-
-	// classDurability is the replication factor. A mismatch refuses
-	// ADMISSION TO NORMAL SERVICE when the observed factor is BELOW the
-	// configured one — an R3-configured node against an R1 stream is
-	// proving one copy while reporting healthy — and is fine when it is
-	// equal or higher, so an R1 development node against an R3 stream
-	// starts normally.
-	classDurability
 
 	// classCapacity is a ceiling. REPORTED and not acted on: it is an
 	// operator's question, the operator has a verb for it, and a boot that

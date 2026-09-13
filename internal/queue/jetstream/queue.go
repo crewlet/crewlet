@@ -552,7 +552,11 @@ func (q *Queue) observeStream(
 			spec.name, len(unsafe), strings.Join(unsafe, "; "))
 	}
 
-	// DURABILITY: below the configured factor refuses; equal or higher is
+	// DURABILITY, which is the one answer with no field class behind it:
+	// the replication factor is Tier A's rather than the spec's, so it is
+	// compared here directly. Below the configured factor REFUSES ADMISSION
+	// TO NORMAL SERVICE — an R3-configured node against an R1 stream is
+	// proving one copy while reporting healthy — and equal or higher is
 	// fine, so an R1 development node against an R3 stream starts.
 	if got.Replicas < want.Replicas {
 		return fmt.Errorf(

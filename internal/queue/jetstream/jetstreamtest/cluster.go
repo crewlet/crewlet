@@ -195,7 +195,7 @@ func startPartitionable(t *testing.T, n int, base js.Config) (*Cluster, error) {
 	// fails and the route is retried, which is the ordinary case NATS
 	// already handles.
 	for _, f := range c.forwarders {
-		if err := f.start(); err != nil {
+		if err := f.start(t.Context()); err != nil {
 			return c, fmt.Errorf("start forwarder %d->%d: %w", f.from, f.to, err)
 		}
 	}
@@ -265,7 +265,7 @@ func (c *Cluster) start(t *testing.T, cfg js.Config, i int) error {
 	// can, short of never letting the port go — but it shortens the window
 	// from seconds to microseconds, and it turns the loss from a
 	// two-minute readiness timeout into an immediate retry.
-	if !portFree(cfg.ClusterPort) {
+	if !portFree(t.Context(), cfg.ClusterPort) {
 		return fmt.Errorf("cluster member %d: route port %d was taken between "+
 			"this harness reserving it and the member starting", i, cfg.ClusterPort)
 	}
@@ -297,8 +297,12 @@ func hostPort(port int) string { return fmt.Sprintf("127.0.0.1:%d", port) }
 // in microseconds instead of two minutes. A clustered member whose route
 // listener cannot bind does not fail fast — it starts, serves clients, never
 // forms a route, and is only reported when its readiness budget expires.
-func portFree(port int) bool {
-	l, err := net.Listen("tcp", hostPort(port))
+func portFree(ctx context.Context, port int) bool {
+	// The same ListenConfig form freePorts uses, and for the same reason:
+	// a probe that outlived the test asking it would be holding a port the
+	// next case is about to reserve.
+	var lc net.ListenConfig
+	l, err := lc.Listen(ctx, "tcp", hostPort(port))
 	if err != nil {
 		return false
 	}

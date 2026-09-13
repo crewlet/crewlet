@@ -68,7 +68,7 @@ func StartRelays(t *testing.T, n int) *Relays {
 	// fails and the route is retried, which is the ordinary case NATS
 	// already handles.
 	for _, f := range c.forwarders {
-		if err := f.start(); err != nil {
+		if err := f.start(t.Context()); err != nil {
 			c.shutdown()
 			t.Fatalf("start forwarder %d->%d: %v", f.from, f.to, err)
 		}
