@@ -265,6 +265,12 @@ func (r *SeatAppResult) reconcileSeat(
 			Subject: seat.Handle,
 			Detail:  "the app key for " + seat.Handle + " could not be read: " + err.Error(),
 		})
+		// THE ERROR IS THE FINDING'S CONTENT, not the pass's outcome, which
+		// is what nilerr cannot see. A key this engine cannot parse is a
+		// thing one SEAT's operator has to fix, and the report above says
+		// so; returned instead, it would abandon the roster and fail the
+		// whole surface over one seat's malformed credential.
+		//nolint:nilerr // reported as a per-seat finding; see the report above
 		return nil
 	}
 
@@ -340,6 +346,10 @@ func (r *SeatAppResult) reconcileSeat(
 			Detail: seat.Handle + "'s app exists and nothing has installed it, so it " +
 				"sees no repository: install it on " + orgLabel(opts.Org),
 		})
+		// Same shape as the key branch above: the outstanding click is
+		// reported to the person who can make it, and a read GitHub
+		// refused is not a reason to fail the pass over.
+		//nolint:nilerr // reported as a per-seat finding; see the report above
 		return nil
 	}
 	if adopted {

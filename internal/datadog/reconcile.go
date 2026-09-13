@@ -505,6 +505,7 @@ func provisionSeat(
 			if key.Name != appKeyName {
 				continue
 			}
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := opts.Client.DeleteAppKey(
 				ctx, opts.Creds, account.ID, key.ID,
 			); err != nil {

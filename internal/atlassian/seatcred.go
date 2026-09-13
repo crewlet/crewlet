@@ -2,6 +2,7 @@ package atlassian
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/org"
@@ -71,8 +72,12 @@ import (
 type Product string
 
 const (
-	// ProductJira and ProductConfluence prefer their own spellings.
-	ProductJira       Product = "jira"
+	// ProductJira prefers Jira's own spellings for the shared credential.
+	ProductJira Product = "jira"
+
+	// ProductConfluence prefers Confluence's own spellings for the same
+	// credential: one account, two products, each reading its own name
+	// first.
 	ProductConfluence Product = "confluence"
 
 	// ProductAny is the provisioner's view: any spelling identifies the
@@ -129,7 +134,13 @@ func (p Product) tokenKeys(shared bool) []string {
 			"JIRA_TOKEN", "CONFLUENCE_TOKEN", authorizationKey,
 		}
 	}
-	keys := append(own, "ATLASSIAN_API_TOKEN", authorizationKey)
+	// CONCAT RATHER THAN APPEND, because `append(own, …)` writes into
+	// own's spare capacity when it has any — so a literal that later grows
+	// a fourth spelling would have this function overwriting the caller's
+	// backing array instead of extending a copy. The slices here are
+	// literals with no spare capacity today, which is exactly the kind of
+	// safety that holds until somebody edits the line above.
+	keys := slices.Concat(own, []string{"ATLASSIAN_API_TOKEN", authorizationKey})
 	if shared {
 		keys = append(keys, sibling...)
 	}

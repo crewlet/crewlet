@@ -642,6 +642,15 @@ func (s *refreshingSink) Flush(ctx context.Context) error {
 	if s.sealed && !s.flushed {
 		s.flushed = true
 		s.engine.refreshSecrets(ctx)
+		// NO CONTEXT ON PURPOSE, and contextcheck is reading the shape
+		// rather than the reason. This ctx is the PASS's: it is bounded by
+		// [setup.PassDeadline] and it is inside the surface lease, and the
+		// re-activation must be neither — it outlives the pass and needs no
+		// lease. [republisher.startNow] runs it on a timer's goroutine with
+		// a background context that [Engine.rebuildForSealedSecrets] bounds
+		// itself. Handing this one over is the defect that made a pass which
+		// used its four minutes spend the lease's last minute here.
+		//nolint:contextcheck // detached by design; see [republisher.request]
 		s.engine.republish.request(s.operator, s.engine.rebuildForSealedSecrets)
 	}
 	return err

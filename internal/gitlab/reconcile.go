@@ -1316,6 +1316,7 @@ func ensureHooks(ctx context.Context, opts Options, group Group, projects []stri
 		return nil, nil, err
 	}
 	if mode == config.ContainerWebhookAuto && tier == TierFree {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		hooked, err := ensureProjectHooks(ctx, opts.Client, projects, name, target, secret)
 		if err != nil {
 			return nil, nil, err
@@ -1332,7 +1333,11 @@ func ensureHooks(ctx context.Context, opts Options, group Group, projects []stri
 	}
 
 	if mode != config.ContainerWebhookNever {
-		err := ensureGroupHook(ctx, opts.Client, group.ID, name, target, secret)
+		// ASSIGNED, NOT REDECLARED. The tier read above is done with its
+		// error, and a fresh `err :=` here would be a second variable the
+		// switch below reads instead of the one this line wrote — the
+		// exact shape govet's shadow check earns its place on.
+		err = ensureGroupHook(ctx, opts.Client, group.ID, name, target, secret)
 		switch {
 		case err == nil:
 			return []string{"group"}, nil, sweepProjectHooks(ctx, opts.Client, projects, name)
@@ -1349,6 +1354,7 @@ func ensureHooks(ctx context.Context, opts Options, group Group, projects []stri
 		// so — an operator who expected one group hook and got four
 		// project hooks should learn it here rather than from the
 		// instance's settings pages.
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		hooked, err := ensureProjectHooks(ctx, opts.Client, projects, name, target, secret)
 		if err != nil {
 			return nil, nil, err

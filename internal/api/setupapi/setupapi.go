@@ -1869,6 +1869,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := refuseEmpty(values, against); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, codeInvalidInput, map[string]string{
 			"detail": err.Error(),

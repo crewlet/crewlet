@@ -198,9 +198,9 @@ func TestASealedSeatTokenReachesTheTrackerWithoutAConfigChange(t *testing.T) {
 	if writer == nil {
 		t.Fatal("the config surface is not the one this test installed")
 	}
-	if writer.operator != "founder@example.com" {
+	if got := writer.lastOperator(); got != "founder@example.com" {
 		t.Errorf("the rebuild was credited to %q, want the operator the pass "+
-			"ran for", writer.operator)
+			"ran for", got)
 	}
 }
 
@@ -351,7 +351,10 @@ type reloadingWriter struct {
 	mu    sync.Mutex
 	calls int
 
-	// operator is who the last re-activation was credited to.
+	// operator is who the last re-activation was credited to. Read through
+	// [reloadingWriter.lastOperator] and never directly: it is written on
+	// a TIMER's goroutine, so a bare field read from the test's own is a
+	// race with no happens-before edge to make it safe.
 	operator string
 
 	// err is what the reload reported. The engine LOGS a failed
@@ -386,6 +389,11 @@ func (w *reloadingWriter) awaitReloads(t *testing.T, n int) {
 }
 
 // lastOperator is who the most recent re-activation was credited to.
+//
+// UNDER THE LOCK, which is the whole reason it exists: the re-activation runs
+// on a timer's goroutine, so a case reading [reloadingWriter.operator]
+// directly races the write with nothing ordering the two. One did, and this
+// accessor sat unused beside it — a guard nobody took.
 func (w *reloadingWriter) lastOperator() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
