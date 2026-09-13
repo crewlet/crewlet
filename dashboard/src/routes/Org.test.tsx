@@ -8,7 +8,7 @@
  * engine's rule.
  */
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { OrgScreen } from "./Org.tsx";
 import { Router } from "~/app/router.tsx";
@@ -192,14 +192,32 @@ describe("with nothing to draw", () => {
 });
 
 describe("the directory", () => {
+  /** The cells of the row for one seat, by column header. */
+  const rowOf = (handle: string): Record<string, HTMLElement> => {
+    const headers = within(screen.getByRole("table"))
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent ?? "");
+    const row = screen.getAllByRole("row").find((r) => r.textContent?.includes(`@${handle}`));
+    if (!row) throw new Error(`no row for ${handle}`);
+    const cells = within(row).getAllByRole("cell");
+    return Object.fromEntries(headers.map((h, i) => [h, cells[i]!]));
+  };
+
   test("reporting lines are the engine's, and an unreported one says so", () => {
     mount("#/org?lens=directory", projection);
-    expect(screen.getAllByRole("link", { name: "VP Engineering" }).length).toBeGreaterThan(0);
+    // Dev A reports to the manager the engine chose, and the CEO manages the
+    // one seat the engine expanded its `manages: [Engineering]` into.
+    const devA = rowOf("dev-a");
+    expect(within(devA["Reports to"]!).getByRole("link", { name: "VP Engineering" })).toBeDefined();
+    expect(rowOf("ceo")["Manages"]!.textContent).toBe("1");
+    expect(within(rowOf("ceo")["Reports to"]!).getByText("Nobody")).toBeDefined();
     cleanup();
 
     const { derived: _omitted, ...older } = projection;
     mount("#/org?lens=directory", older);
-    expect(screen.getAllByText("Not reported").length).toBeGreaterThan(0);
+    // Not "Nobody" and not 0: the engine did not say.
+    expect(rowOf("ceo")["Reports to"]!.textContent).toBe("Not reported");
+    expect(rowOf("ceo")["Manages"]!.textContent).toBe("Not reported");
   });
 });
 
