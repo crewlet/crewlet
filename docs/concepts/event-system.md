@@ -6,9 +6,9 @@ All inter-component communication in Crewlet flows through a persistent event qu
 
 ## Interfaces
 
-One protocol serves all inter-component communication:
+One interface serves all inter-component communication:
 
-- **`EventQueue`** — persistent pub/sub with consumer groups. For fire-and-forget messages: inbound deliveries, the wakes they route to agent inboxes, and everything a turn publishes about itself.
+- **`queue.EventQueue`**: persistent pub/sub with consumer groups. For fire-and-forget messages: inbound deliveries, the wakes they route to agent inboxes, and everything a turn publishes about itself.
 
 **Two implementations** sit behind it — the JetStream client and an in-memory twin — and **nothing above `internal/queue` may branch on which one is running**. Where the broker itself runs is a third question, and it is a *connection* choice inside the first implementation rather than a second code path:
 
@@ -30,10 +30,12 @@ A fleet's shape is a stream choice: clustered embedded members (`stream.cluster.
 # Per-seat, durable. One consumer group per seat, so membership IS ownership:
 # the node that attaches is the node that gets that seat's work.
 crewlet.agent.{handle}.inbox         # Per-agent inbox — all work arrives here
-crewlet.agent.{handle}.control       # Sandbox completions — separate, because a
-                                     #   detached run PAUSES the inbox and a
-                                     #   completion riding it would queue behind
-                                     #   the very pause it exists to lift
+crewlet.agent.{handle}.control       # Sandbox starts and completions. Separate,
+                                     #   because while a run holds the seat
+                                     #   every inbox delivery is parked, and a
+                                     #   completion riding the inbox would be
+                                     #   parked behind the very busy state it
+                                     #   exists to clear
 
 # Fleet-wide work queues — ONE consumer group each, so whichever node wins a
 # delivery is the node that has to route it
@@ -44,7 +46,11 @@ crewlet.notifications.inbound        # Inbound webhooks from external systems.
                                      #   OWN MCP tools inside its turn, and the
                                      #   chat working-indicator is a transport
                                      #   call on the node already running it
-crewlet.events.{type}                # Internal routing (see Routing, below)
+crewlet.events.{type}                # What the engine records about itself:
+                                     #   the event store's listener, the live
+                                     #   projection and reflection's
+                                     #   turn_completed group read it. Nothing
+                                     #   routes work from here (see Routing)
 
 # Control plane. Best-effort nudges: losing one costs a poll interval, never a
 # revision, because the authoritative path polls the activation pointer
@@ -105,11 +111,15 @@ What the engine relies on, and where each behaviour is enforced (`internal/queue
 
 ## Routing
 
-Routing is two-stage: events are first published to internal topics (e.g., `crewlet.events.task_assigned`), where the Engine's subscription handlers determine the target agent and re-publish to that agent's inbox topic. This keeps the event producers decoupled from the routing logic — they emit events without knowing which agent should handle them.
+Work reaches a seat by being **published straight to its inbox subject** by whatever decided the seat should do it. There is no second routing hop through `crewlet.events.*`: that subject space is the record of what happened, not a work queue. Three producers put work on inboxes:
 
-Handlers read the org through a provider on every event (never a captured snapshot), so a hot reload that swaps `engine.org` — including seat-kind flips — re-routes immediately.
+- the **notification service** (`notify.Service`), which consumes `crewlet.notifications.inbound` in one fleet-wide group, resolves each delivery to its recipients, and publishes a wake to each agent seat's inbox;
+- the **scheduler**, which resolves a firing schedule's target seat and publishes `task_assigned` to that inbox (and records `scheduled_task_fired` on `crewlet.events.*`);
+- the **A2A service**, which publishes the `a2a_request` wake to the target's inbox and the `a2a_message` answer to the asker's.
 
-**Routing is an org function, not a process-local one.** Every handler resolves its recipient from the live organization — a role name, or an agent id, to a seat, and a seat to its inbox subject — and never from the local agent pool. Each `crewlet.events.*` topic has ONE fleet-wide consumer group, so whichever node wins a delivery is the node that has to route it; that node usually is not the one running the recipient. This works because agent ids are *derived* rather than assigned: `org.Organization.AgentIDFor` is a `uuid5` over the org name and the seat's handle, so every node computes the same id for the same seat, and `AgentSeatByID` / `AgentSeatByHandle` invert it with no database and no live instance. The inbox subject itself has one definition, `topics.AgentInbox` — a producer and a consumer that disagree about a topic name do not raise, they just stop talking to each other.
+A producer reads the organization from the epoch current when it handles the event (`Engine.Company`), never from a snapshot captured earlier, so an applied revision (including a seat-kind flip) re-routes from the next event on.
+
+**Routing is an org function, not a process-local one.** Every producer resolves its recipient from the organization (a handle, a role name or an agent id to a seat, and a seat to its inbox subject) and never from which seats this node runs. The inbound work queue has ONE fleet-wide consumer group, so whichever node wins a delivery is the node that has to route it; that node usually is not the one running the recipient. This works because agent ids are *derived* rather than assigned: `org.Organization.AgentIDFor` is a `uuid5` over the org name and the seat's handle, so every node computes the same id for the same seat, and `AgentSeatByID` / `AgentSeatByHandle` invert it with no database and no live instance. The inbox subject itself has one definition, `topics.AgentInbox`, because a producer and a consumer that disagree about a topic name do not raise, they just stop talking to each other.
 
 ### A seat's mailbox exists before the seat is running
 
@@ -146,19 +156,19 @@ flowchart TD
     PART --> P2 --> T2
 ```
 
-**`SubscribeBatch`** (the `EventQueue` contract; both implementations) does steps 1–4: after the first message arrives it drains everything immediately available — plus anything arriving within `BatchOptions.LingerSeconds` of the first message — up to `BatchOptions.MaxBatch`, partitions by a caller-supplied key, invokes the handler **once per partition** (sequentially — per-agent serialization is unchanged), and acknowledges a partition's messages only after its handler returns. A failing partition negatively-acknowledges exactly its own messages (normal redelivery / DLQ policy per message) without blocking or replaying other conversations from the same drain. A pause taken *during* collection — `PauseDelivery`, or a hold on this seat's inbox — NAKs the whole drain back rather than flushing it past the pause: the point of pausing a seat's inbox is that no turn starts, and a batch collected a moment earlier would start one.
+**`SubscribeBatch`** (the `EventQueue` contract; both implementations) does steps 1 to 4: after the first message arrives it drains everything immediately available, plus anything arriving within the `queue.BatchOptions` linger window of the first message, up to its batch cap, partitions by a caller-supplied key, invokes the handler **once per partition** (sequentially, so per-agent serialization is unchanged), and acknowledges a partition's messages only after its handler returns. A failing partition negatively-acknowledges exactly its own messages (normal redelivery / DLQ policy per message) without blocking or replaying other conversations from the same drain. A pause taken *during* collection (`PauseDelivery`, or a hold on this seat's inbox) NAKs the whole drain back rather than flushing it past the pause: the point of pausing a seat's inbox is that no turn starts, and a batch collected a moment earlier would start one.
 
 **The ack budget.** Every drained message's ack clock starts at receive, but a partition handler is typically a full multi-minute turn — so dispatching a long tail of partitions sequentially holds later messages delivered-but-unacked for the *sum* of the preceding turns. That clock is real: `ackWait` is 30 minutes, and collection plus one handler run must fit inside it — which is why the linger is capped at 60 s. The number lives once, as `queue.MaxLingerSeconds`: the contract clamps to it on every read so programmatic construction cannot bypass it, and config validation refuses an out-of-range value at load from that same constant, so an operator is told rather than silently cut. A drain whose partitions together outlast the window is not lost, it is **redelivered**: the tail comes back, each redelivery spends one unit of the 25-delivery budget, and the [completion ledger](seat-ownership.md#the-completion-ledger) plus the same-id dedupe are what make that a redelivery rather than a second turn (`TurnTriggerSkipped` is emitted precisely so it is not invisible). What is never substituted is a republish: it would be a *new* message at the stream's tail, and both the ledger's idempotency and the batch layer's aging key on the identity a NAK preserves. Partitions dispatch **oldest conversation first** (by oldest constituent event timestamp): a waiting conversation ages and outranks the hot conversation's fresh arrivals on the next drain, so steady inflow on one issue cannot starve a waiting DM.
 
-**Conversation keys** (`notify.Prompt.ConversationKey`) are derived by pure logic from webhook metadata, via the same per-source `notify.Prompt` classes that own prompt building: Jira keys on the issue (`jira:POC-7`), Confluence on the page, GitHub on `repo#number`. Slack keys on the **whole channel for top-level DM and group-DM messages** (`channel_type` `im`/`mpim`, or a `D`-prefixed channel id when the event variant omits the field — a human firing four rapid top-level DM messages is one conversation; a DM *thread reply* keeps its thread key so the merged trigger never carries the wrong reply target) and on channel + thread root elsewhere (`slack:C9:1718.001` — a top-level channel message keys on its own `ts` so its replies join it, while two unrelated asks in a shared channel never merge). Everything else — `task_assigned`, A2A wakes, notifications without a derivable conversation — keys uniquely on the event id and is **never coalesced**: single-event partitions follow exactly the pre-batching dispatch path.
+**Conversation keys** (`notify.Prompt.ConversationKey`, namespaced by source) are derived by pure logic from webhook metadata, via the same per-source `notify.Prompt` classes that own prompt building: Jira keys on the issue (`jira:POC-7`), Confluence on the page, GitHub on `repo#number`. Slack keys on the **whole channel for top-level DM and group-DM messages** (`channel_type` `im`/`mpim`, or a `D`-prefixed channel id when the event variant omits the field; a human firing four rapid top-level DM messages is one conversation, and a DM *thread reply* keeps its thread key so the merged trigger never carries the wrong reply target) and on channel + thread root elsewhere (`slack:C9:1718.001`: a top-level channel message keys on its own `ts` so its replies join it, while two unrelated asks in a shared channel never merge). Everything else (`task_assigned`, A2A wakes, notifications without a derivable conversation) keys uniquely on the event id and is **never coalesced**: single-event partitions follow exactly the pre-batching dispatch path.
 
 The same key now has a second consumer that outlives the drain. Coalescing merges the messages of one conversation that arrive *together*; [conversation sessions](conversation-sessions.md) carry what the seat did about them into that conversation's **next** turn, and the episode row and the turn's telemetry are stamped with the key so history can be asked for by thread rather than only by agent and time. The `event:{uuid}` fallback above is exactly why those consumers store nothing for a trigger without a real conversation: no later message could ever reproduce that key to read the row back.
 
-**Busy agents queue; parked agents requeue.** A delivery that finds its agent mid-turn does not fail, and nothing has to make it wait: a seat's attachment dispatches one partition at a time from a single goroutine, so the next partition is not fetched until the running one's handler returns, and the per-node concurrency gate holds anything past `node.max_concurrent` in this process rather than handing it back. The handler therefore holds the delivery for a full turn, which is what JetStream's ack window — 30 minutes — is sized for: a wait plus a worst-case turn. A delivery that finds the agent parked on a detached sandbox job (`AWAITING_SANDBOX`, potentially hours) is requeued + acked instead, so nothing is held against the ack window. Before the engine has a turn engine at all (booted with zero LLM providers), the handler pauses the topic first and then requeues. Neither path consumes-and-drops, and neither pushes a healthy event toward the dead-letter topic.
+**Busy agents queue; parked agents requeue.** A delivery that finds its agent mid-turn does not fail, and nothing has to make it wait: a seat's attachment dispatches one partition at a time from a single goroutine, so the next partition is not fetched until the running one's handler returns, and the per-node concurrency gate holds anything past `node.max_concurrent` in this process rather than handing it back. The handler therefore holds the delivery for a full turn, which is what JetStream's ack window (30 minutes) is sized for: a wait plus a worst-case turn. A delivery that finds the seat parked on a detached sandbox job (`sandbox.Coordinator.AwaitingSandbox`, potentially hours) is requeued and acked instead, so nothing is held against the ack window. Before the engine has a turn engine at all (booted with zero LLM providers), the handler pauses the topic first and then requeues. Neither path consumes-and-drops, and neither pushes a healthy event toward the dead-letter topic.
 
 > **Known gap — the park spins, and the pause is one-way.** Two halves of the same missing piece. Nothing takes a pause hold for the sandbox park, so its requeued copies land back on a topic the seat is still consuming and are re-parked immediately: a seat parked on a long run republishes and acks in a loop for the length of the run. Nothing loses work — the same-id dedupe and the completion ledger hold — but the loop is real. And `ResumeTopic` has no caller at all, so the hold the zero-provider path *does* take is never lifted. Both want the same fix and have to land together: a pause at the park, and a release driven by the condition clearing, because a pause without a release leaves a seat deaf until the process restarts.
 
-**Letting go of a subscription — four verbs, not one.** "Unsubscribe" never said *which* kind of letting go it meant, so the contract spells all four out by destructiveness: `Quiesce` stops taking new work while staying attached, `Unquiesce` undoes it, `Detach` closes this process's consumers and leaves the durable subscription (its cursor and its retained mail survive, which is what makes a seat handoff cheap and an unowned seat safe), and `DeleteSubscription` destroys the subscription and the mail it retains. The last one deliberately does not require a local attachment, because decommissioning a role must not depend on which node happened to be running the seat. Creating an inbox subscription is idempotent per agent handle: the node's own start and every config apply both walk the pool, and only the first call per seat creates a consumer.
+**Letting go of a subscription: four verbs, not one.** "Unsubscribe" never said *which* kind of letting go it meant, so the contract spells all four out by destructiveness: `Quiesce` stops taking new work while staying attached, `Unquiesce` undoes it, `Detach` closes this process's consumers and leaves the durable subscription (its cursor and its retained mail survive, which is what makes a seat handoff cheap and an unowned seat safe), and `DeleteSubscription` destroys the subscription and the mail it retains. The last one deliberately does not require a local attachment, because decommissioning a role must not depend on which node happened to be running the seat. Creating an inbox subscription is idempotent per agent handle: the node's own start and every config apply both walk the company's seats (`node.EnsureMailboxes`), and only the first call per seat creates a consumer.
 
 **A removed seat's subscriptions are retired, not kept.** `DeleteSubscription`'s caller is the maintenance duty: once a seat has been absent from the active revision for 24 hours, its coding runs are ended and its inbox and its sandbox control subscription are deleted together with the mail they still hold. The walk that creates inboxes records each seat in the coordination store first, because a removed handle is gone from the org the names are derived from and the retirement's stamps have to live somewhere; each sweep also lists the seat mailboxes the broker holds, so one that escaped that record is still found. See [Seat Ownership § The removed seat](seat-ownership.md#the-removed-seat).
 
@@ -173,7 +183,7 @@ The same key now has a second consumer that outlives the drain. Coalescing merge
 
 With the window at `0`, an idle-agent burst worst-cases at **two** turns (the first message wakes the agent immediately; everything arriving during that turn coalesces into one follow-up turn per conversation) — never N.
 
-**Relation to the rate limiter.** `notification_rate_limit` (NotificationService, default off) *drops* notifications above N/agent/second — it remains purely a safety valve against pathological webhook storms and notification loops. Burst handling is coalescing's job: a coalesced comment is context preserved, a dropped one is context lost.
+**Relation to the rate limiter.** `notification_rate_limit` (the notification service's valve, default off) *drops* notifications above N per seat per second. It remains purely a safety valve against pathological webhook storms and notification loops. Burst handling is coalescing's job: a coalesced comment is context preserved, a dropped one is context lost.
 
 DACI decisions are conducted in **Slack threads** — the driver opens a thread in the team channel with its own Slack MCP tools and all contributions, proposals, and approvals are thread replies; there is no engine-side decision machinery. See [Decision Framework](decision-framework.md) for details.
 
@@ -181,98 +191,96 @@ DACI decisions are conducted in **Slack threads** — the driver opens a thread 
 
 ## Event Types
 
-Grouped by the **category** each one is filed under — the same closed set the
-`GET /events?category=` filter and the dashboard's category chips use. The
-authoritative list, generated from the engine's own map, is
+Grouped by the **category** each one is filed under (`events.Category`), the
+same closed set the `GET /events?category=` filter and the dashboard's category
+chips use, and written as the wire type an event carries in `type`. The
+authoritative list, checked against the engine's own map by a test, is
 [Deployment § What gets stored](../guides/deployment.md#what-gets-stored-and-under-which-category);
 this is the shape of it, with the notes that need a sentence.
 
 ```text
-# lifecycle — the org and its seats coming and going, plus the config
-#             changes an operator goes looking for after the fact
-OrgStarted, OrgStopped
-AgentSpawned, AgentTerminated, AgentReassigned
-RoleUpdated                # role definition changed during a config apply
-ConfigRevisionActivated    # a new revision is the one to serve
-ConfigRevisionApplied      # one node's outcome, and how far it got
+# lifecycle: the config changes an operator goes looking for after the fact
+config_revision_activated  # a new revision is the one to serve
+config_revision_applied    # one node's outcome, and how far it got
 
-# task — work created, assigned and done, including a detached coding run
-#        (the execution of a task) and a schedule firing (which creates one)
-TaskCreated, TaskAssigned, TaskStarted
-TaskCompleted, TaskFailed, TaskDelegated
-SandboxRunStarted, SandboxClarificationRequested, SandboxRunCompleted
-ScheduledTaskFired
+# task: work assigned and done, including a detached coding run (the
+#       execution of a task) and a schedule firing (which assigns one)
+task_assigned              # published to the seat's inbox by the scheduler
+sandbox_run_started, sandbox_clarification_requested
+sandbox_run_completed, sandbox_run_failed
+scheduled_task_fired
 
-# communication
-MessageSent                # agent sent a message to a channel
+# a2a: one ask, one answer, then closed
+a2a_channel_opened, a2a_message_sent, a2a_channel_closed
 
-# a2a — one ask, one answer, then closed
-A2AChannelOpened, A2AMessageSent, A2AMessageDelivered, A2AChannelClosed
-
-# knowledge
-DocumentCreated, DocumentUpdated
-
-# decision — DACI is behavioural guidance on the org's own chat surfaces,
-#            so NOTHING in Crewlet publishes these four. They stay mapped as
-#            the seam an extension that does model decisions writes through,
-#            and they are why the category exists to filter on at all
-DecisionRequested, DecisionResolved
-ContributionRequested, ContributionReceived
-
-# notification — what arrived from outside, and what the engine decided
-ExternalNotification       # inbound from a third-party app webhook or chat socket
-NotificationSkipped        # dropped notification with reason (traceability)
-NotificationsCoalesced     # N same-conversation inbox events merged into one
+# notification: what arrived from outside, and what the engine decided
+external_notification      # inbound from a third-party app webhook or chat socket
+notification_skipped       # dropped notification with reason (traceability)
+notifications_coalesced    # N same-conversation inbox events merged into one
                            # digest trigger (see Inbox Batching above)
-TurnTriggerSkipped         # a redelivery the completion ledger had already
-                           # worked -- emitted precisely so it is not invisible
+turn_trigger_skipped       # a redelivery the completion ledger had already
+                           # worked, emitted precisely so it is not invisible
 
-# learning — the reflection subsystem and the skill lifecycle, grouped so a
-#            dashboard can include or exclude all of it with one toggle
-TurnCompleted, EpisodeWritten, PersistDeciderCompleted
-CounterpartyProfileUpdated, ReflectionCompleted
-SkillSynthesized, SkillRefined, SkillPromoted, SkillUsed
-SkillStaled, SkillArchived, SkillRevived
-PrefetchSummary
-CompactionRequested, CompactionCompleted
+# learning: the reflection subsystem and the skill lifecycle, grouped so a
+#           dashboard can include or exclude all of it with one toggle
+turn_completed, episode_written, persist_decider_completed
+counterparty_profile_updated, reflection_completed
+skill_synthesized, skill_refined, skill_promoted, skill_used
+skill_staled, skill_archived, skill_revived
+prefetch_summary
+compaction_requested, compaction_completed
 
-# system — the engine talking about itself
-AgentTurnCompleted         # full LLM reasoning cycle with tokens/tools
-AgentPhaseStarted, AgentPhaseCompleted
-BudgetExhausted
-TurnGuardBreach            # runtime invariant fired (stall / max_iter /
-                           # depth_cap / unhandled_exception /
-                           # scheduled_timeout). Drives the dashboard `afk`
-                           # state
-LLMUnavailable             # the fallback chain is exhausted. Drives `afk` too
-ProviderFallback           # the chain moved to its next provider. One per
-                           # provider CALL, not per phase — a benched member
-                           # is a hand-off on every round — and addressed to
+# system: the engine talking about itself
+agent_turn_completed       # full LLM reasoning cycle with tokens and tools
+agent_phase_started, agent_phase_completed
+budget_exhausted
+turn.guard_breach          # runtime invariant fired (stall, max_iter,
+                           # depth_cap, scheduled_timeout). Drives the
+                           # dashboard `afk` state
+llm_unavailable            # the fallback chain is exhausted. Drives `afk` too
+provider_fallback          # the chain moved to its next provider. One per
+                           # provider CALL, not per phase (a benched member
+                           # is a hand-off on every round), addressed to
                            # the turn, phase and iteration it happened in.
                            # `to_provider_key` is empty on the last member,
-                           # where the next event is LLMUnavailable
-SubagentBatched, PhaseToolSkillBlocked, SkillTelemetryWriteFailed
-PromptSize                 # one phase's final prompt, measured. A separate row
+                           # where the next event is llm_unavailable
+subagent_batched, phase.tool_skill_blocked, skill_telemetry_write_failed
+prompt.size                # one phase's final prompt, measured. A separate row
                            # rather than a derivation: the prompts themselves
-                           # are on AgentPhaseCompleted, and counting their
+                           # are on agent_phase_completed, and counting their
                            # characters means hauling every phase payload back
 
-# webhook — no event type: the receiver writes the delivery's row itself,
-#           with the provider's exact bytes as the payload
+# webhook: no event type; the receiver writes the delivery's row itself,
+#          with the provider's exact bytes as the payload
 ```
 
-**Three types are published and deliberately never stored**, each for a stated
-reason — `AgentTurnProgress` (a live-only per-round signal whose durable record
-is `AgentPhaseCompleted`), `BudgetReported` (a snapshot of in-memory meters
-that mean nothing outside the run that produced them) and `RawWebhook` (the
-delivery is already a row). The first two still drive the live projection. See
-the exclusions table in the Deployment page above.
+**Categorised, and published by nothing in this build.** The category map also
+files types that no code path publishes, so a filter on them matches no rows:
+`org_started`, `org_stopped`, `agent_spawned`, `agent_terminated`,
+`agent_reassigned` and `role_updated` (lifecycle); `task_created`,
+`task_started`, `task_completed`, `task_failed` and `task_delegated` (task);
+`message_sent` (communication); `a2a_message_delivered` (a2a);
+`document_created` and `document_updated` (knowledge); and the four `decision`
+types, `decision_requested`, `decision_resolved`, `contribution_requested` and
+`contribution_received`. DACI is behavioural guidance on the org's own chat
+surfaces, so the decision types stay mapped as the seam an extension that does
+model decisions writes through, which is why the `decision` category exists to
+filter on at all.
+
+**Excluded from the store**, each for a stated reason: `agent_turn_progress` (a
+live-only per-round signal whose durable record is `agent_phase_completed`),
+`budget_reported` (a snapshot of in-memory meters that mean nothing outside the
+run that produced them; the live projection reads it, but nothing in this
+build publishes it), `raw_webhook` (the delivery is already a row), and the two
+A2A inbox wakes `a2a_request` and `a2a_message` (the ask and the answer are
+already rows as `a2a_channel_opened` and `a2a_message_sent`). See the
+exclusions table in the Deployment page above.
 
 ---
 
 ## Event Schema
 
-Every event carries a common set of fields: a unique ID (UUID), a type string, a UTC timestamp, an optional source identifier, and a free-form payload dict. Specialized event types (e.g., `TaskAssigned`) add their own fields with defaults.
+Every event carries a common set of fields: a unique ID (UUID), a type string, a UTC timestamp, an optional source identifier, and a free-form `payload` map. A registered event type (for example `types.TaskAssigned`) adds its own fields, marshalled flat beside the envelope's.
 
 Events also carry **OpenTelemetry trace context** and self-describing properties:
 
@@ -302,11 +310,11 @@ type Event struct {
 }
 ```
 
-`Payload` is the typed half: each registered event type is a Go type with its
-own fields and its own `Summary()` — "who did what", in a person's words — and
+`Data` is the typed half: each registered event type is a Go type with its
+own fields and its own `Summary()` ("who did what", in a person's words) and
 an `Actor()` (role, then source, then agent id, then `system`). An event type
-this build does not know decodes into the envelope with `Data` nil, and
-re-publishes losslessly.
+this build does not know decodes into the envelope with `Data` nil and its
+fields kept verbatim in `Extra`, and re-publishes losslessly.
 
 Changes are additive-only — new fields get defaults, existing fields are never removed, and an event type this build does not know round-trips through it losslessly rather than being dropped: a rolling upgrade puts unknown types on the wire in both directions. Every backend retains each subscription's undelivered backlog until it is consumed, so a restart resumes cleanly; durable, replayable event history is the [event store](../guides/deployment.md#the-event-store), not the queue. The queue keeps no ledger of everything ever published, and that is the mailbox semantic rather than a gap: on the work-queue streams an acked message is gone at once, and what a subscription retains is what nobody has acked yet. The one stream that keeps history is `CREWLET_EVENTS`, and it keeps it by **age** (`stream.event_retention_hours`, 30 days by default) rather than until someone reads it.
 
@@ -318,12 +326,12 @@ Events carry **OpenTelemetry-compatible trace context** (W3C Trace Context forma
 
 ```mermaid
 flowchart TD
-    W["Slack webhook (trace starts here)"] --> N["NotificationService routes to agent"]
-    N --> E["Executor wraps turn in OTel span"]
-    E --> A["TaskStarted"]
-    E --> B["Tool: send_message"]
-    E --> C["AgentTurnCompleted"]
-    E --> D["TaskCompleted"]
+    W["Slack webhook: the edge opens the root span"] --> N["notification service resolves the seat,<br/>publishes the wake to its inbox"]
+    N --> E["dispatcher restores the trace;<br/>the turn opens agent.turn as its child"]
+    E --> A["agent_phase_started / agent_phase_completed"]
+    E --> B["an MCP tool call that posts the reply"]
+    E --> C["agent_turn_completed"]
+    E --> D["turn_completed"]
 ```
 
 **How it works:**
@@ -386,15 +394,15 @@ The pattern accepts subject wildcards: `*` matches one segment, `>` matches one-
 
 Two communication systems:
 
-### External Channels (Slack, Email)
+### External Channels (Slack, Mattermost)
 
-Org-wide announcements, department coordination, and team discussions happen through external tools (Slack channels, email) via the **Notification Service**. Agents use MCP tools to post and receive messages from Slack, and the notification service routes inbound webhooks to agent inboxes.
+Org-wide announcements, department coordination, and team discussions happen in the company's own chat (Slack or Mattermost channels). Agents post with their own MCP tools, and the **notification service** routes what arrives, a Slack webhook or a Mattermost socket event, to agent inboxes.
 
 - **Org-wide** — announcements (via Slack `#announcements` channel)
 - **Department** — leads-only coordination (via Slack department channel)
 - **Team** — team coordination, DACI decisions (via Slack team channel)
 
-### Ephemeral A2A channels (`crewlet.a2a`)
+### Ephemeral A2A channels (`internal/a2a`)
 
 Private 1:1 conversations between agents, for tight-loop / mechanical sync that should *not* show up on the team's chat or issue tracker. One question, one answer, then the channel closes.
 
@@ -422,7 +430,7 @@ Either way the close publishes `a2a_channel_closed` naming both participants, th
 | Aspect | External Channels (Slack) | A2A channels |
 |---|---|---|
 | **Lifetime** | Permanent (Slack workspace) | Ephemeral (one question and its answer) |
-| **Backend** | Slack API + Notification Service | Agent inbox topics + the coordination store's `channels` slot |
+| **Backend** | The chat vendor's API + the notification service | Agent inbox topics + the coordination store's `channels` slot |
 | **Persistence** | Yes (Slack history) | State yes, content only as events |
 | **Visibility** | The team sees it | Private to the two agents |
 | **Use case** | Broadcasting, team coordination | Tight-loop / mechanical sync |
