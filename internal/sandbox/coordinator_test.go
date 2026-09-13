@@ -416,8 +416,16 @@ func TestANodeThatCannotResumeSaysSoRatherThanSettling(t *testing.T) {
 	if !errors.Is(err, ErrResumeUnavailable) {
 		t.Fatalf("OnCompleted = %v, want ErrResumeUnavailable", err)
 	}
-	if got := rig.get("t1"); got.Status == StatusDone {
-		t.Fatal("the run was settled done by a node that never resumed it")
+	if got := rig.get("t1"); got.Status != StatusRunning {
+		t.Fatalf("status = %q, want the claim reverted to %q: the NAK'd completion comes back "+
+			"to a claim that refuses it, and the suspended conversation is stranded", got.Status, StatusRunning)
+	}
+	// And the completion, redelivered to a node that can resume, wins.
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the redelivery failed: %v", err)
+	}
+	if got := len(rig.resumer.calls()); got != 1 {
+		t.Fatalf("resumed %d times after the redelivery, want 1", got)
 	}
 }
 
