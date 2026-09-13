@@ -533,7 +533,14 @@ func (a *App) answer(ctx context.Context, what string, params map[string]any, op
 		// already answered 400 here, and the two transports disagreeing
 		// about whose fault a request is is exactly what this mapping
 		// exists to prevent.
-		return nil, fmt.Errorf("%w: %s", stream.ErrBadParams, what)
+		//
+		// THE ONLY ONE HERE THAT KEEPS THE ORIGINAL ERROR, because it is
+		// the only one whose message is written FOR the caller: it names
+		// the field that was missing and the values the field accepts,
+		// and [stream] logs exactly that at debug. The others are
+		// deliberately reduced to the query name — a failure's own text
+		// can carry a database path, and none of them has a reader.
+		return nil, fmt.Errorf("%w: %s: %w", stream.ErrBadParams, what, err)
 	case errors.Is(err, queries.ErrUnavailable):
 		return nil, fmt.Errorf("%w: %s", stream.ErrUnavailable, what)
 	default:
