@@ -44,6 +44,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -147,6 +148,11 @@ type Bridge struct {
 
 	mu       sync.RWMutex
 	sessions map[string]*Session
+
+	// mounted records that this process built the bridge's HTTP handler,
+	// which is the only way a box's call reaches a session. See
+	// [Bridge.Mounted] for why [Bridge.Open] refuses without it.
+	mounted atomic.Bool
 }
 
 // Options configure [New].
@@ -224,6 +230,14 @@ func (b *Bridge) Open(s *Session) string {
 	}
 	if b.base == "" {
 		log.Warn("mcp_bridge_no_base_url", "run_id", s.RunID, "seat", s.Handle)
+		return ""
+	}
+	// NO LISTENER, NO SESSION, for the same reason as no base URL: the
+	// endpoint would name this node and nothing here would answer it, so
+	// the box's every tool call fails and the run is rescued as incomplete
+	// with no sign of why.
+	if !b.Mounted() {
+		log.Warn("mcp_bridge_not_mounted", "run_id", s.RunID, "seat", s.Handle)
 		return ""
 	}
 	// THE PREVIOUS SERVER, WHATEVER HELD IT. Captured before attach
@@ -408,13 +422,25 @@ func (b *Bridge) Miss(token string) (runID, reason string) {
 	return runID, reason
 }
 
-// Handler serves the bridge under [PathPrefix].
+// Mounted reports whether this process built the bridge's HTTP handler.
+//
+// A session is reachable only through [Bridge.Handler] on the node that opened
+// it (see [Bridge.session]), so a bridge whose handler no listener took serves
+// nobody: a node with api.port 0 has a base URL and a signer and no socket.
+// Building the handler is the signal rather than a separate call a wiring
+// could forget, because the handler is the one thing a listener cannot serve
+// the bridge without. The caller that builds it binds the listener in the same
+// step or fails the process, so "built" and "served" do not drift apart.
+func (b *Bridge) Mounted() bool { return b != nil && b.mounted.Load() }
+
+// Handler serves the bridge under [PathPrefix], and marks it mounted.
 //
 // The token is read off the path by the mux pattern the caller registers, so
 // this handler takes it as an argument rather than re-parsing the URL: two
 // parses of one path is how a route ends up authenticating a different string
 // from the one it dispatches on.
 func (b *Bridge) Handler() http.Handler {
+	b.mounted.Store(true)
 	// NO IDLE TIMEOUT, deliberately. A session's lifetime is its RUN's —
 	// [Bridge.Close] ends every MCP session the moment the run ends — and
 	// a coding agent legitimately goes quiet for as long as a build or a

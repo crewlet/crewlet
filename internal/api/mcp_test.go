@@ -51,6 +51,9 @@ func TestTheBridgeRouteIsReachableWithoutABearerToken(t *testing.T) {
 func TestTheBridgeRouteAnswersEveryTransportVerb(t *testing.T) {
 	t.Parallel()
 	bridge := mcpbridge.New(mcpbridge.Options{Key: []byte("k"), BaseURL: "http://x"})
+	// The app first: mounting the route is what lets the bridge open a
+	// session at all.
+	a := newApp(t, api.Options{Bridge: bridge})
 	url := bridge.Open(&mcpbridge.Session{
 		RunID: "run-1", Handle: "dev", Role: "Dev",
 		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil),
@@ -59,7 +62,6 @@ func TestTheBridgeRouteAnswersEveryTransportVerb(t *testing.T) {
 		t.Fatal("no endpoint was minted")
 	}
 	token := url[strings.LastIndex(url, "/")+1:]
-	a := newApp(t, api.Options{Bridge: bridge})
 
 	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
 		res := probe(a, method, mcpbridge.PathPrefix+token)

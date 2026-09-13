@@ -29,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
@@ -1107,7 +1108,9 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	return nil
 }
 
-// httpSurface is the API half of a merged node.
+// httpSurface is the HTTP listener a node binds: the whole API on a node with
+// the ingress role, or only its seats' tool bridge on a node without it. The
+// app and the projector are nil in the second shape.
 type httpSurface struct {
 	app       *api.App
 	server    *http.Server
@@ -1130,8 +1133,12 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 	// After the listener, so no socket can be reading the projection while
 	// its feed is torn down, and before the engine drains, so the drain's
 	// own turns are not projected onto a page nobody can reach.
-	s.projector.Stop(shutdown)
-	s.app.Stop()
+	if s.projector != nil {
+		s.projector.Stop(shutdown)
+	}
+	if s.app != nil {
+		s.app.Stop()
+	}
 }
 
 // apiShutdownGrace bounds how long the listener waits for in-flight REQUESTS.
@@ -1143,13 +1150,6 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 // supervisor rather than by a constant here.
 const apiShutdownGrace = 5 * time.Second
 
-// serveAPI binds the HTTP surface, or reports that this node serves none.
-// companySecrets reads the verification material out of the engine's CURRENT
-// epoch, on every request.
-//
-// Not captured once: a config reload replaces the epoch, and a receiver holding
-// the old one would keep rejecting deliveries signed with a rotated secret —
-// a failure that looks exactly like an attack and resolves only on restart.
 // companyConfig is the engine's CURRENT company document, or nil.
 func companyConfig(e *engine.Engine) *config.Company {
 	if company := e.Company(); company != nil {
@@ -1158,8 +1158,15 @@ func companyConfig(e *engine.Engine) *config.Company {
 	return nil
 }
 
+// companySecrets reads the verification material out of the engine's CURRENT
+// epoch, on every request.
+//
+// Not captured once: a config reload replaces the epoch, and a receiver holding
+// the old one would keep rejecting deliveries signed with a rotated secret, a
+// failure that looks exactly like an attack and resolves only on restart.
 func companySecrets(e *engine.Engine) webhooks.Secrets { return e.WebhookSecrets() }
 
+// serveAPI binds the HTTP surface, or reports that this node serves none.
 func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	reconciler *engine.Reconciler, cipher secrets.Cipher,
 	configSurface *configapi.Service, log *slog.Logger,
@@ -1171,7 +1178,8 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// here rather than from a webhook that never arrives.
 		log.WarnContext(ctx, "api_disabled",
 			"hint", "api.port is 0, so this node serves no dashboard, no REST "+
-				"API and no webhook endpoint; every integration is deaf here")
+				"API, no webhook endpoint and no agent-mode tool bridge; every "+
+				"integration is deaf here")
 		return nil, nil
 	}
 
@@ -1187,13 +1195,15 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// opened a listener, and one config file could not serve both shapes.
 	// The port stays the hard off switch above; this is the role saying the
 	// same thing for a node whose file sets a port for its peers' sake.
+	//
+	// Except for the one route that is not ingress's to serve: the tool
+	// bridge. A bridged session is a live tool surface in the process that
+	// opened it, so a seats node running an agent-mode seat is the only node
+	// its box can reach. Gating the bridge on ingress as well took agent mode
+	// away from every node without that role, with the box launching and
+	// every one of its tool calls finding nothing listening.
 	if profile := boot.Node.Profile(nodeID); !profile.RunsIngress() {
-		log.InfoContext(ctx, "api_not_started", "node", nodeID,
-			"roles", profile.Roles.Names(),
-			"hint", "node.roles does not include ingress, so this node binds no "+
-				"HTTP listener although api.port is set; a peer with the ingress "+
-				"role serves webhooks, the dashboard and the REST API")
-		return nil, nil
+		return serveBridgeOnly(ctx, boot, profile, e.Bridge(), nodeID, log)
 	}
 	// The config surface is the caller's, built before this function so a
 	// node with no HTTP listener still has a config WRITER — see runEngine.
@@ -1430,32 +1440,14 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		return nil, err
 	}
 
-	addr := net.JoinHostPort(boot.API.Host, strconv.Itoa(boot.API.Port))
-	// Through a ListenConfig so a shutdown signal arriving while the bind
-	// is in flight aborts it, rather than leaving a listener nobody will
-	// serve from — the bind can block on a DNS lookup for the host.
-	var listenCfg net.ListenConfig
-	listener, err := listenCfg.Listen(ctx, "tcp", addr)
+	server, addr, err := listenAPI(ctx, boot, app, log)
 	if err != nil {
+		projector.Stop(context.WithoutCancel(ctx))
 		app.Stop()
-		return nil, fmt.Errorf("api: bind %s: %w", addr, err)
+		return nil, err
 	}
-	server := &http.Server{
-		Handler: app,
-		// A read that never completes holds a connection open forever,
-		// and the listener is the one surface an unauthenticated client
-		// can reach.
-		ReadHeaderTimeout: apiReadHeaderTimeout,
-		IdleTimeout:       apiIdleTimeout,
-		BaseContext:       func(net.Listener) context.Context { return context.WithoutCancel(ctx) },
-	}
-	go func() {
-		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.ErrorContext(ctx, "api_serve_failed", "error", err)
-		}
-	}()
 
-	log.InfoContext(ctx, "api_listening", "addr", listener.Addr().String(),
+	log.InfoContext(ctx, "api_listening", "addr", addr,
 		"anonymous_read", app.Guard().AnonymousRead(),
 		"tokens", app.Guard().Tokens())
 	if app.Guard().AnonymousRead() && !auth.BindIsLoopback(boot.API.Host) {
@@ -1487,6 +1479,74 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	})
 
 	return &httpSurface{app: app, server: server, projector: projector}, nil
+}
+
+// serveBridgeOnly is serveAPI for a node whose roles leave out ingress: it
+// binds api.port for the node's own tool bridge when there is one to serve,
+// and binds nothing otherwise.
+//
+// The bridge needs a seats node and a bridge URL. A node that runs no seats
+// opens no session, so a listener there would answer every box with 401; and
+// with no CREWLET_MCP_BRIDGE_URL the engine built no bridge at all. Either way
+// the node keeps the posture node.roles asked for, and says why.
+func serveBridgeOnly(ctx context.Context, boot *config.Bootstrap, profile placement.NodeProfile,
+	bridge *mcpbridge.Bridge, nodeID string, log *slog.Logger,
+) (*httpSurface, error) {
+	if !profile.RunsSeats() || bridge == nil {
+		log.InfoContext(ctx, "api_not_started", "node", nodeID,
+			"roles", profile.Roles.Names(),
+			"hint", "node.roles does not include ingress, so this node binds no "+
+				"HTTP listener although api.port is set; a peer with the ingress "+
+				"role serves webhooks, the dashboard and the REST API, and a node "+
+				"running seats binds one only to serve its agent-mode tool bridge "+
+				"("+mcpbridge.BaseURLVar+")")
+		return nil, nil
+	}
+	server, addr, err := listenAPI(ctx, boot, api.BridgeOnly(boot, bridge), log)
+	if err != nil {
+		return nil, err
+	}
+	log.InfoContext(ctx, "api_bridge_listening", "addr", addr, "node", nodeID,
+		"roles", profile.Roles.Names(),
+		"hint", "node.roles does not include ingress, so this listener serves only "+
+			"the agent-mode tool bridge ("+mcpbridge.PathPrefix+"{token}) for the "+
+			"seats this node runs; webhooks, the dashboard and the REST API are a "+
+			"peer's with the ingress role")
+	return &httpSurface{server: server}, nil
+}
+
+// listenAPI binds api.port and serves handler on it, in the background.
+//
+// ONE PATH for both shapes a node's listener takes, so the whole API and the
+// bridge-only surface cannot drift apart on the timeouts that bound an
+// unauthenticated client or on how a bind failure is reported.
+func listenAPI(ctx context.Context, boot *config.Bootstrap, handler http.Handler,
+	log *slog.Logger,
+) (*http.Server, string, error) {
+	addr := net.JoinHostPort(boot.API.Host, strconv.Itoa(boot.API.Port))
+	// Through a ListenConfig so a shutdown signal arriving while the bind
+	// is in flight aborts it, rather than leaving a listener nobody will
+	// serve from: the bind can block on a DNS lookup for the host.
+	var listenCfg net.ListenConfig
+	listener, err := listenCfg.Listen(ctx, "tcp", addr)
+	if err != nil {
+		return nil, "", fmt.Errorf("api: bind %s: %w", addr, err)
+	}
+	server := &http.Server{
+		Handler: handler,
+		// A read that never completes holds a connection open forever,
+		// and the listener is the one surface an unauthenticated client
+		// can reach.
+		ReadHeaderTimeout: apiReadHeaderTimeout,
+		IdleTimeout:       apiIdleTimeout,
+		BaseContext:       func(net.Listener) context.Context { return context.WithoutCancel(ctx) },
+	}
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.ErrorContext(ctx, "api_serve_failed", "error", err)
+		}
+	}()
+	return server, listener.Addr().String(), nil
 }
 
 // apiReadHeaderTimeout bounds how long a client may take to send its request

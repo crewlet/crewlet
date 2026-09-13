@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -286,6 +287,109 @@ func TestANodeWithoutTheIngressRoleBindsNoListener(t *testing.T) {
 	_ = listener.Close()
 }
 
+// A SEATS NODE WITHOUT INGRESS STILL SERVES ITS OWN TOOL BRIDGE, and nothing
+// else. A bridged session lives in the process that opened it, so the box of an
+// agent-mode seat can reach only the node running that seat; gating the bridge
+// on ingress with the rest of the API launched boxes whose every tool call found
+// nothing listening. The listener carries the bridge's own refusal for a bad
+// token, and no dashboard, probe or REST route.
+func TestASeatsNodeWithoutIngressServesOnlyItsToolBridge(t *testing.T) {
+	t.Parallel()
+	var logged bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	port := freePort(t)
+	bridge := mcpbridge.New(mcpbridge.Options{
+		Key: []byte("test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
+	})
+	e := testEngineWithBridge(t, bridge)
+	boot := bootstrapFor(t, port)
+	boot.Node.Roles = []string{"seats"}
+
+	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, log)
+	if err != nil {
+		t.Fatalf("serveAPI: %v", err)
+	}
+	if surface == nil {
+		t.Fatalf("a seats node with a bridge URL bound no listener, so its "+
+			"agent-mode boxes can reach no tools:\n%s", logged.String())
+	}
+	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
+	if surface.app != nil || surface.projector != nil {
+		t.Error("a node without the ingress role built the whole API")
+	}
+	if !bridge.Mounted() {
+		t.Error("the listener did not mount the bridge, so no session can open")
+	}
+	if !strings.Contains(logged.String(), "api_bridge_listening") {
+		t.Errorf("the node did not say what its listener serves:\n%s", logged.String())
+	}
+
+	base := "http://127.0.0.1:" + strconv.Itoa(port)
+	status := func(method, path string) int {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			req, reqErr := http.NewRequestWithContext(t.Context(), method, base+path,
+				strings.NewReader("{}"))
+			if reqErr != nil {
+				t.Fatal(reqErr)
+			}
+			res, doErr := http.DefaultClient.Do(req)
+			if doErr == nil {
+				_ = res.Body.Close()
+				return res.StatusCode
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s %s: %v", method, path, doErr)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	if got := status(http.MethodPost, mcpbridge.PathPrefix+"not-a-token"); got != http.StatusUnauthorized {
+		t.Errorf("POST %snot-a-token = %d, want the bridge's own 401", mcpbridge.PathPrefix, got)
+	}
+	for _, path := range []string{"/health", "/dashboard", "/agents"} {
+		if got := status(http.MethodGet, path); got != http.StatusNotFound {
+			t.Errorf("GET %s = %d on a bridge-only listener, want 404", path, got)
+		}
+	}
+}
+
+// A NODE THAT RUNS NO SEATS BINDS NOTHING FOR A BRIDGE, whatever its
+// environment says. It opens no session, so a listener there could only answer
+// every box with 401, and a workers node placed on a private host would open a
+// port for nothing.
+func TestANodeRunningNoSeatsBindsNoBridgeListener(t *testing.T) {
+	t.Parallel()
+	var logged bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	port := freePort(t)
+	e := testEngineWithBridge(t, mcpbridge.New(mcpbridge.Options{
+		Key: []byte("test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
+	}))
+	boot := bootstrapFor(t, port)
+	boot.Node.Roles = []string{"workers"}
+
+	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, log)
+	if err != nil {
+		t.Fatalf("serveAPI: %v", err)
+	}
+	if surface != nil {
+		surface.stop(context.Background(), logging.Get("test"))
+		t.Fatal("a node that runs no seats bound a listener for a bridge it never uses")
+	}
+	if !strings.Contains(logged.String(), "api_not_started") {
+		t.Errorf("the node did not say why it serves no HTTP:\n%s", logged.String())
+	}
+	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		t.Fatalf("api.port is held although the node serves no HTTP: %v", err)
+	}
+	_ = listener.Close()
+}
+
 func TestAnUnbindablePortIsReportedRatherThanIgnored(t *testing.T) {
 	t.Parallel()
 	// A port already in use, or one this process may not have, is a
@@ -347,12 +451,19 @@ func TestAMergedNodeServesItsOwnHealth(t *testing.T) {
 // testEngine builds a real engine on an embedded stream in a temp directory.
 func testEngine(t *testing.T) *engine.Engine {
 	t.Helper()
+	return testEngineWithBridge(t, nil)
+}
+
+// testEngineWithBridge is testEngine holding the given tool bridge. Nil builds
+// the bridge from the environment, as a node does.
+func testEngineWithBridge(t *testing.T, bridge *mcpbridge.Bridge) *engine.Engine {
+	t.Helper()
 	boot := bootstrapFor(t, 0)
 	company, err := config.ParseCompany([]byte(companyYAML))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	e, err := engine.New(t.Context(), engine.Options{Bootstrap: boot, Company: company})
+	e, err := engine.New(t.Context(), engine.Options{Bootstrap: boot, Company: company, Bridge: bridge})
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}

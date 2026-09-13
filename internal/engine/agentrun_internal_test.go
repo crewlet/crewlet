@@ -368,16 +368,56 @@ func launchReadyEngine(t *testing.T, c *Company) *Engine {
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
+	bridge := mcpbridge.New(mcpbridge.Options{
+		Key: []byte("test-key"), BaseURL: "https://engine.example.com",
+	})
+	// Mounted, as serveAPI mounts it on a node with a listener: a bridge no
+	// listener took opens no session.
+	_ = bridge.Handler()
 	e := &Engine{
 		backends:           &Backends{Queue: q},
 		sandboxCoordinator: coordinator,
 		sandboxPending:     pending,
-		bridge: mcpbridge.New(mcpbridge.Options{
-			Key: []byte("test-key"), BaseURL: "https://engine.example.com",
-		}),
+		bridge:             bridge,
 	}
 	e.epoch.current.Store(c)
 	return e
+}
+
+// A NODE THAT SERVES NO BRIDGE REFUSES AGENT MODE, AND SAYS WHICH SETTING.
+//
+// A base URL on a node that binds no listener (api.port 0) used to mint an
+// endpoint naming this node: the box launched, every tool call it made found
+// nothing listening, and the turn was rescued as incomplete with no sign of
+// why. The refusal names api.port, because the message for an unset base URL
+// would send the operator to a variable that is already set.
+func TestAnAgentModeRunIsRefusedOnANodeThatServesNoBridge(t *testing.T) {
+	t.Parallel()
+	c, seat := splitLoginCompany(t, "api", "codex")
+	e := launchReadyEngine(t, c)
+	e.bridge = mcpbridge.New(mcpbridge.Options{
+		Key: []byte("test-key"), BaseURL: "https://engine.example.com",
+	})
+	launcher := &agentLauncher{
+		engine: e, turn: &turnctx.Turn{ID: "t1", Seat: seat}, seat: seat,
+		codingAgent: "claude-code", placement: sandbox.E2B,
+	}
+	err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
+		Brief: "fix the failing test", Round: 1,
+		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil),
+	})
+	if err == nil {
+		t.Fatal("an agent-mode run launched on a node whose bridge no listener serves")
+	}
+	if !strings.Contains(err.Error(), "api.port") {
+		t.Errorf("the refusal does not name the setting that fixes it: %v", err)
+	}
+	if e.bridge.Live() != 0 {
+		t.Errorf("%d bridge sessions live for a run that was refused", e.bridge.Live())
+	}
+	if _, found, getErr := e.sandboxPending.Get(t.Context(), "t1"); getErr != nil || found {
+		t.Errorf("a run row exists for a launch that was refused (found %v, err %v)", found, getErr)
+	}
 }
 
 // splitLoginCompany is a one-seat epoch whose executor and whose code work

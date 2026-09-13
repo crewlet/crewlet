@@ -308,6 +308,8 @@ func TestClosingTwiceIsSafe(t *testing.T) {
 func TestNoBaseURLMintsNoEndpointAndHoldsNoSession(t *testing.T) {
 	t.Parallel()
 	b := mcpbridge.New(mcpbridge.Options{Key: []byte("k")})
+	// Mounted, so the missing base URL is the only reason to refuse.
+	_ = b.Handler()
 	if url := b.Open(&mcpbridge.Session{
 		RunID: "run-1", Surface: emptySurface(),
 	}); url != "" {
@@ -734,6 +736,8 @@ func literal(v any) string {
 func TestAnIncompleteSessionIsRefusedRatherThanRegistered(t *testing.T) {
 	t.Parallel()
 	b := mcpbridge.New(mcpbridge.Options{Key: []byte("k"), BaseURL: "http://x"})
+	// Mounted, so the incomplete session is the only reason to refuse.
+	_ = b.Handler()
 	for _, tc := range []struct {
 		name    string
 		session *mcpbridge.Session
@@ -750,6 +754,38 @@ func TestAnIncompleteSessionIsRefusedRatherThanRegistered(t *testing.T) {
 	}
 	if b.Live() != 0 {
 		t.Errorf("%d incomplete sessions were registered", b.Live())
+	}
+}
+
+// A BRIDGE NO LISTENER MOUNTED OPENS NO SESSION. Its endpoint would name this
+// node, and a node that built no handler (api.port 0) answers nothing there, so
+// the box would launch with a tool server that refuses every connection. The
+// same bridge opens the same session once a listener has taken its handler,
+// or a bridge that always refused would pass.
+func TestABridgeNoListenerMountedOpensNoSession(t *testing.T) {
+	t.Parallel()
+	b := mcpbridge.New(mcpbridge.Options{Key: []byte("k"), BaseURL: "http://x"})
+	session := &mcpbridge.Session{RunID: "run-1", Handle: "dev", Surface: emptySurface()}
+	if b.Mounted() {
+		t.Fatal("a bridge nothing mounted reports itself mounted")
+	}
+	if url := b.Open(session); url != "" {
+		t.Errorf("endpoint = %q for a bridge no listener serves, want empty", url)
+	}
+	if b.Live() != 0 {
+		t.Errorf("%d sessions live on a bridge no listener serves", b.Live())
+	}
+
+	_ = b.Handler()
+	if !b.Mounted() {
+		t.Fatal("building the handler did not mark the bridge mounted")
+	}
+	if url := b.Open(session); url == "" {
+		t.Error("a mounted bridge refused a complete session")
+	}
+	var unset *mcpbridge.Bridge
+	if unset.Mounted() {
+		t.Error("a nil bridge reports itself mounted")
 	}
 }
 

@@ -225,7 +225,10 @@ the run, and the session is closed the moment the run ends, whatever
 ended it. Set **`CREWLET_MCP_BRIDGE_URL`** to a URL a sandbox can reach;
 without it agent mode is **refused** at launch rather than started — a
 coding agent with none of the seat's tools cannot answer anybody, cannot
-touch a ticket and cannot submit its work.
+touch a ticket and cannot submit its work. The URL has to reach a
+listener, so the node also needs `api.port`: a node that binds none
+(`api.port: 0`) refuses agent mode by naming `api.port`, rather than
+handing a box an endpoint nothing answers.
 
 > **In a fleet, that URL must address the node itself — not a load
 > balancer in front of several, and not a standalone API process.** A

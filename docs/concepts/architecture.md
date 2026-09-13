@@ -107,9 +107,9 @@ the dashboard, running every agent, and performing the company-wide duties.
 
 ```mermaid
 flowchart TB
-    ING["<b>ingress</b> — terminate inbound traffic<br/><i>webhooks · REST · /ws/stream · OTLP · MCP bridge · probes</i>"]
+    ING["<b>ingress</b>: terminate inbound traffic<br/><i>webhooks · REST · /ws/stream · OTLP · probes</i>"]
     ALWAYS["<b>Always on, whatever the roles</b><br/><i>notifications · reconciler · presence ·<br/>reflection · observability edge</i>"]
-    SEATS["<b>seats</b> — run agents<br/><i>mailbox → batching → turn engine</i>"]
+    SEATS["<b>seats</b>: run agents<br/><i>mailbox → batching → turn engine · MCP bridge</i>"]
     WORK["<b>workers</b> — company-wide singletons<br/><i>each on a worker:DUTY lease</i>"]
     STREAM[("<b>Event stream</b><br/><i>embedded NATS JetStream, an embedded<br/>cluster, or an external one</i>")]
     KV[("<b>Coordination KV</b><br/><i>rides the stream's own connection</i>")]
@@ -160,7 +160,7 @@ back what it wrote.
 | `/config` · `/secrets` · `/setup` · `/agents` · `/org` · `/tools` · `/query` · `/backup` · `/budgets/reset` | The REST and config plane. It reads and writes the coordination KV and the store directly. |
 | `/ws/stream` | The dashboard's only data channel: live pushes plus a query channel. The observability edge's projector is what pushes onto it. |
 | `/otlp/{token}/v1/{signal}` | Signed-token trace ingest. |
-| `/mcp/{token}` | Signed-token tool bridge: one running seat's own tool surface, served to a coding agent in a box. Per-run, expires with the run. |
+| `/mcp/{token}` | Signed-token tool bridge: one running seat's own tool surface, served to a coding agent in a box. Per-run, expires with the run. The exception on this list: a session lives in the process that opened it, so this route belongs to the node that runs the seat, and a `seats` node without `ingress` binds its listener for this route alone. |
 | `/health` · `/ready` | The two probes — [section 6](#6-one-node-or-a-fleet) says why they answer different questions. |
 
 **`workers` is five company-wide singletons, each held on its own

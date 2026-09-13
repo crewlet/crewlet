@@ -107,7 +107,12 @@ reason; labels have no flag, because `${VAR}` already covers it.
 
 `api.port` can stay set: a node without the `ingress` role does not
 bind it, and logs `api_not_started` saying why. That means one config
-file works for both shapes.
+file works for both shapes. The one exception is a seat in
+[agent mode](../concepts/subscription-llm-backends.md#the-tool-bridge):
+its box calls the seat's tools back over `/mcp/{token}`, and only the
+node that runs the seat can answer, so a satellite with
+`CREWLET_MCP_BRIDGE_URL` set binds `api.port` for that route alone
+(`api_bridge_listening`) and serves nothing else on it.
 
 ### 2. Pin the role
 
@@ -201,9 +206,11 @@ the dependency surface before choosing a host for it:
   satellite decrypts the company document and the
   [secret store](../concepts/secret-store.md) itself; without the
   keyring it cannot read the config at all.
-- **Nothing inbound.** No port, no ingress rule, no public URL. That is
-  what makes this shape workable in a zone the rest of the fleet is not
-  in.
+- **Nothing inbound**, unless a seat pinned here runs in agent mode. No
+  port, no ingress rule, no public URL. That is what makes this shape
+  workable in a zone the rest of the fleet is not in. An agent-mode seat
+  is the exception: its box must reach this node's `/mcp/{token}`
+  bridge, which is the one route the satellite then serves.
 
 ---
 
