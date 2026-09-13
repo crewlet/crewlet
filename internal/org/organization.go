@@ -424,6 +424,7 @@ func (o *Organization) autoManageByLead(index managesIndex) {
 				continue
 			}
 			lead.Manages = append(lead.Manages, r.Name)
+			lead.AutoManaged = append(lead.AutoManaged, r.Name)
 			byLead[r.Name] = struct{}{}
 		}
 	}

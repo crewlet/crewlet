@@ -444,6 +444,17 @@ type Role struct {
 	// have been added yet, and [Organization.DanglingRefs] reports it.
 	Manages []string `yaml:"manages,omitempty" json:"manages,omitempty"`
 
+	// AutoManaged is the seats [Organization.Normalize] added to Manages
+	// because this seat leads their unit and nobody else in it manages them,
+	// in the order they were added. Every one of them is also in Manages.
+	//
+	// Recorded because nothing else can tell them apart afterwards: once
+	// normalized, an entry the operator wrote and one the lead gained read
+	// identically, and a chart that shows a person which reports they wrote
+	// and which the engine derived needs the difference. Not part of the
+	// wire form: it is derived, and a caller building a Role leaves it empty.
+	AutoManaged []string `yaml:"-" json:"-"`
+
 	BehavioralGuidelines []string `yaml:"behavioral_guidelines,omitempty" json:"behavioral_guidelines,omitempty"`
 
 	// TokenBudget caps this seat's spend; 0 is unlimited.

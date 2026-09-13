@@ -1212,3 +1212,31 @@ func TestTraversalCoversRootAndUnits(t *testing.T) {
 		t.Error("a missing name resolved to something")
 	}
 }
+
+// WHAT AUTO-MANAGEMENT ADDED IS RECORDED, and a second pass records nothing
+// more. Once normalized, an entry the operator wrote and one the lead gained
+// read identically in Manages, and a chart that tells a person which reports
+// they wrote needs the difference.
+func TestAutoManagementRecordsWhatItAdded(t *testing.T) {
+	t.Parallel()
+	o := normalized(&Organization{Name: "T", Units: []*Unit{{
+		Name: "Backend", Lead: "Lead",
+		Roles: []*Role{
+			{Name: "Lead", Manages: []string{"Written"}},
+			{Name: "Written"},
+			{Name: "Derived A"},
+			{Name: "Derived B"},
+		},
+	}}})
+	lead := o.Role("Lead")
+	if want := []string{"Written", "Derived A", "Derived B"}; !slices.Equal(lead.Manages, want) {
+		t.Errorf("Manages = %v, want %v", lead.Manages, want)
+	}
+	if want := []string{"Derived A", "Derived B"}; !slices.Equal(lead.AutoManaged, want) {
+		t.Errorf("AutoManaged = %v, want %v", lead.AutoManaged, want)
+	}
+	o.Normalize()
+	if want := []string{"Derived A", "Derived B"}; !slices.Equal(lead.AutoManaged, want) {
+		t.Errorf("after a second pass AutoManaged = %v, want %v", lead.AutoManaged, want)
+	}
+}

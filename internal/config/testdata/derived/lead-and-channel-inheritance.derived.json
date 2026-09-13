@@ -1,0 +1,156 @@
+{
+  "seats": [
+    {
+      "path": "units[0].roles[0]",
+      "handle": "vp-engineering",
+      "name": "VP Engineering",
+      "kind": "agent",
+      "unit_path": "units[0]",
+      "placed_by_ref": false,
+      "manager": "",
+      "managers": null,
+      "reports": [
+        "backend-developer",
+        "storage-developer"
+      ],
+      "auto_reports": [
+        "backend-developer",
+        "storage-developer"
+      ],
+      "onboarding_chain": [
+        "Engineering"
+      ]
+    },
+    {
+      "path": "units[0].children[0].roles[0]",
+      "handle": "backend-developer",
+      "name": "Backend Developer",
+      "kind": "agent",
+      "unit_path": "units[0].children[0]",
+      "placed_by_ref": false,
+      "manager": "vp-engineering",
+      "managers": [
+        "vp-engineering"
+      ],
+      "reports": null,
+      "auto_reports": null,
+      "onboarding_chain": [
+        "Engineering",
+        "Backend"
+      ]
+    },
+    {
+      "path": "units[0].children[0].children[0].roles[0]",
+      "handle": "storage-developer",
+      "name": "Storage Developer",
+      "kind": "agent",
+      "unit_path": "units[0].children[0].children[0]",
+      "placed_by_ref": false,
+      "manager": "vp-engineering",
+      "managers": [
+        "vp-engineering"
+      ],
+      "reports": null,
+      "auto_reports": null,
+      "onboarding_chain": [
+        "Engineering",
+        "Backend",
+        "Storage"
+      ]
+    },
+    {
+      "path": "units[0].children[1].roles[0]",
+      "handle": "sre",
+      "name": "Site Reliability",
+      "kind": "agent",
+      "unit_path": "units[0].children[1]",
+      "placed_by_ref": false,
+      "manager": "",
+      "managers": null,
+      "reports": null,
+      "auto_reports": null,
+      "onboarding_chain": [
+        "Engineering",
+        "Infrastructure"
+      ]
+    },
+    {
+      "path": "units[0].children[2].roles[0]",
+      "handle": "security-analyst",
+      "name": "Security Analyst",
+      "kind": "agent",
+      "unit_path": "units[0].children[2]",
+      "placed_by_ref": false,
+      "manager": "",
+      "managers": null,
+      "reports": null,
+      "auto_reports": null,
+      "onboarding_chain": [
+        "Engineering",
+        "Security"
+      ]
+    }
+  ],
+  "units": [
+    {
+      "path": "units[0]",
+      "name": "Engineering",
+      "type": "division",
+      "lead": "vp-engineering",
+      "lead_inherited": false,
+      "channel": "#engineering",
+      "channel_inherited": false,
+      "seats": [
+        "vp-engineering"
+      ]
+    },
+    {
+      "path": "units[0].children[0]",
+      "name": "Backend",
+      "type": "team",
+      "lead": "vp-engineering",
+      "lead_inherited": true,
+      "channel": "#engineering",
+      "channel_inherited": true,
+      "seats": [
+        "backend-developer"
+      ]
+    },
+    {
+      "path": "units[0].children[0].children[0]",
+      "name": "Storage",
+      "type": "team",
+      "lead": "vp-engineering",
+      "lead_inherited": true,
+      "channel": "#engineering",
+      "channel_inherited": true,
+      "seats": [
+        "storage-developer"
+      ]
+    },
+    {
+      "path": "units[0].children[1]",
+      "name": "Infrastructure",
+      "type": "team",
+      "lead": "sre",
+      "lead_inherited": false,
+      "channel": "#infra",
+      "channel_inherited": false,
+      "seats": [
+        "sre"
+      ]
+    },
+    {
+      "path": "units[0].children[2]",
+      "name": "Security",
+      "type": "team",
+      "lead": "",
+      "lead_inherited": false,
+      "channel": "#engineering",
+      "channel_inherited": true,
+      "seats": [
+        "security-analyst"
+      ]
+    }
+  ]
+}

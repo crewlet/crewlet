@@ -1,0 +1,21 @@
+# A member that manages its own unit by name shields every member that
+# reference reaches, exactly as if it had listed them one by one, and is
+# never claimed by the lead its reference also reaches.
+name: Acme
+units:
+  - name: Engineering
+    lead: Tech Lead
+    roles:
+      - name: Tech Lead
+      - name: Engineering Manager
+        manages: [Engineering]
+      - name: Developer A
+      - name: Developer B
+  - name: Design
+    lead: Design Lead
+    roles:
+      - name: Design Lead
+      - name: Designer
+        manages: [Illustrator]
+      - name: Illustrator
+      - name: Researcher
