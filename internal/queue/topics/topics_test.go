@@ -44,7 +44,7 @@ func TestAgentSubjectsAreTheDocumentedJoin(t *testing.T) {
 		{"control group", topics.AgentControlGroup("alice"), "agent-alice-control"},
 		{"hyphenated handles pass through unchanged", topics.AgentInbox("qa-lead"), "crewlet.agent.qa-lead.inbox"},
 		{"no case folding", topics.AgentInboxGroup("qa-lead"), "agent-qa-lead"},
-		{"an event subject", topics.Event("task_created"), "crewlet.events.task_created"},
+		{"an event subject", topics.Event("agent_phase_started"), "crewlet.events.agent_phase_started"},
 		// A dead letter is not here: its tail is a digest of the pair
 		// rather than a join, so its shape is pinned by
 		// TestDeadLetterKeepsTheTopicGreppable instead.
@@ -66,7 +66,7 @@ func TestAgentSubjectsAreTheDocumentedJoin(t *testing.T) {
 	if !strings.HasSuffix(topics.AgentControl("alice"), topics.AgentControlSuffix) {
 		t.Errorf("AgentControl does not end with AgentControlSuffix %q", topics.AgentControlSuffix)
 	}
-	if !strings.HasPrefix(topics.Event("task_created"), topics.EventsPrefix) {
+	if !strings.HasPrefix(topics.Event("agent_phase_started"), topics.EventsPrefix) {
 		t.Errorf("Event does not start with EventsPrefix %q", topics.EventsPrefix)
 	}
 	if !strings.HasPrefix(topics.DeadLetter("a", "b"), topics.DeadLetterPrefix) {
@@ -98,17 +98,17 @@ func TestTheWildcardCoversTheDomainItNames(t *testing.T) {
 		subject string
 		want    bool
 	}{
-		{topics.EventsWildcard, topics.Event("task_created"), true},
+		{topics.EventsWildcard, topics.Event("agent_phase_started"), true},
 		{topics.EventsWildcard, topics.NotificationsInbound, false},
 		{topics.EventsWildcard, topics.ConfigRevisionApplied, false},
 		{topics.EventsWildcard, topics.AgentInbox("alice"), false},
 
 		{topics.AgentInboxPrefix + ">", topics.AgentInbox("alice"), true},
 		{topics.AgentInboxPrefix + ">", topics.AgentControl("alice"), true},
-		{topics.AgentInboxPrefix + ">", topics.Event("task_created"), false},
+		{topics.AgentInboxPrefix + ">", topics.Event("agent_phase_started"), false},
 
 		{topics.NotificationsPrefix + ">", topics.NotificationsInbound, true},
-		{topics.NotificationsPrefix + ">", topics.Event("task_created"), false},
+		{topics.NotificationsPrefix + ">", topics.Event("agent_phase_started"), false},
 
 		{topics.ConfigPrefix + ">", topics.ConfigRevisionActivated, true},
 		{topics.ConfigPrefix + ">", topics.ConfigRevisionApplied, true},
@@ -119,7 +119,7 @@ func TestTheWildcardCoversTheDomainItNames(t *testing.T) {
 		// The reason dead letters live outside crewlet.*: the dashboard
 		// streams crewlet.events.>, and a dead-lettered subject inside
 		// that space would resurface poison as live traffic.
-		{topics.EventsWildcard, topics.DeadLetter(topics.Event("task_created"), "grp"), false},
+		{topics.EventsWildcard, topics.DeadLetter(topics.Event("agent_phase_started"), "grp"), false},
 	} {
 		if got := topics.Match(tc.pattern, tc.subject); got != tc.want {
 			t.Errorf("Match(%q, %q) = %v, want %v", tc.pattern, tc.subject, got, tc.want)
@@ -198,7 +198,7 @@ func TestHandleFromInboxIsTheInverseOfAgentInbox(t *testing.T) {
 	for _, tc := range []struct{ name, subject string }{
 		{"the empty string", ""},
 		{"a control subject, not an inbox", topics.AgentControl("alice")},
-		{"an event subject", topics.Event("task_created")},
+		{"an event subject", topics.Event("agent_phase_started")},
 		{"what an unroutable handle produces", "crewlet.agent..inbox"},
 		{"a handle with a dot would be two segments", "crewlet.agent.a.b.inbox"},
 		{"the suffix alone", ".inbox"},
@@ -284,7 +284,7 @@ func TestDeadLetterIsInjectiveOverArbitraryPairs(t *testing.T) {
 		groups = append(groups, topics.AgentInboxGroup(h), topics.AgentControlGroup(h))
 	}
 	subjects = append(subjects,
-		topics.Event("task_created"), topics.Event("task_failed"),
+		topics.Event("agent_phase_started"), topics.Event("agent_turn_completed"),
 		topics.NotificationsInbound,
 		topics.ConfigRevisionActivated, topics.ConfigRevisionApplied,
 	)

@@ -28,16 +28,16 @@ func TestMatch(t *testing.T) {
 		want    bool
 	}{
 		// A pattern with no wildcard is plain equality.
-		{"identical subjects", "crewlet.events.task_created", "crewlet.events.task_created", true},
-		{"a different leaf", "crewlet.events.task_created", "crewlet.events.task_failed", false},
-		{"a different domain", "crewlet.events.task_created", "crewlet.config.task_created", false},
+		{"identical subjects", "crewlet.events.agent_phase_started", "crewlet.events.agent_phase_started", true},
+		{"a different leaf", "crewlet.events.agent_phase_started", "crewlet.events.turn.guard_breach", false},
+		{"a different domain", "crewlet.events.agent_phase_started", "crewlet.config.agent_phase_started", false},
 		{"a single token", "crewlet", "crewlet", true},
 
 		// `*` is exactly one token. The separator is the point: without
 		// the length check at the end, crewlet.events.* would also match
 		// crewlet.events.task.created and a per-domain filter would
 		// silently deepen into a firehose.
-		{"`*` takes exactly one token", "crewlet.events.*", "crewlet.events.task_created", true},
+		{"`*` takes exactly one token", "crewlet.events.*", "crewlet.events.agent_phase_started", true},
 		{"`*` does not cross a separator", "crewlet.events.*", "crewlet.events.task.created", false},
 		{"`*` needs a token to take", "crewlet.events.*", "crewlet.events", false},
 		{"`*` in the middle", "crewlet.agent.*.inbox", "crewlet.agent.alice.inbox", true},
@@ -52,13 +52,13 @@ func TestMatch(t *testing.T) {
 		// not cover crewlet.events itself. A backend provisioning a
 		// stream from a `>` pattern therefore does not cover the bare
 		// domain subject, which is a thing to know rather than assume.
-		{"`>` takes one", "crewlet.events.>", "crewlet.events.task_created", true},
+		{"`>` takes one", "crewlet.events.>", "crewlet.events.agent_phase_started", true},
 		{"`>` takes many", "crewlet.events.>", "crewlet.events.task.created.late", true},
 		{"`>` does not take zero", "crewlet.events.>", "crewlet.events", false},
 		{"`>` still needs the literal head to match", "crewlet.events.>", "crewlet.config.x", false},
 		{"`>` alone takes one", ">", "crewlet", true},
-		{"`>` alone takes many", ">", "crewlet.events.task_created", true},
-		{"`>` after a `*`", "crewlet.*.>", "crewlet.events.task_created", true},
+		{"`>` alone takes many", ">", "crewlet.events.agent_phase_started", true},
+		{"`>` after a `*`", "crewlet.*.>", "crewlet.events.agent_phase_started", true},
 
 		// `>` is a wildcard only as the FINAL token. Elsewhere the
 		// implementation refuses the whole pattern rather than treating
@@ -69,8 +69,8 @@ func TestMatch(t *testing.T) {
 
 		// Token counts. A short pattern does not cover a deeper subject
 		// and a long one does not cover a shallower one.
-		{"pattern shorter than subject", "crewlet.events", "crewlet.events.task_created", false},
-		{"pattern longer than subject", "crewlet.events.task_created", "crewlet.events", false},
+		{"pattern shorter than subject", "crewlet.events", "crewlet.events.agent_phase_started", false},
+		{"pattern longer than subject", "crewlet.events.agent_phase_started", "crewlet.events", false},
 
 		// Wildcards are interpreted on the PATTERN side only. A `*` in
 		// the subject is an ordinary token — which is exactly why the
@@ -79,7 +79,7 @@ func TestMatch(t *testing.T) {
 		// own inbox subject would become a pattern covering its peers.
 		{"a `*` in the subject is literal", "crewlet.agent.alice.inbox", "crewlet.agent.*.inbox", false},
 		{"a `*` pattern does cover a `*` subject", "crewlet.agent.*.inbox", "crewlet.agent.*.inbox", true},
-		{"a `>` in the subject is literal", "crewlet.events.task_created", "crewlet.events.>", false},
+		{"a `>` in the subject is literal", "crewlet.events.agent_phase_started", "crewlet.events.>", false},
 
 		// Empty segments. A subject with one is what an unroutable handle
 		// produces; every backend rejects it before it gets here, so
@@ -113,7 +113,7 @@ func TestMatch(t *testing.T) {
 func TestMatchIsSymmetricOnlyByAccident(t *testing.T) {
 	t.Parallel()
 
-	pattern, subject := topics.EventsWildcard, topics.Event("task_created")
+	pattern, subject := topics.EventsWildcard, topics.Event("agent_phase_started")
 	if !topics.Match(pattern, subject) {
 		t.Fatalf("Match(%q, %q) = false; the rest of this test assumes it holds", pattern, subject)
 	}

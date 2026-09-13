@@ -121,7 +121,7 @@ func TestABackupCapturesBothEstates(t *testing.T) {
 	seedBucket(t, nc, "crewlet_budgets", "org", "12345")
 	db := openStore(t)
 	if err := db.Events().Append(t.Context(), store.EventRecord{
-		ID: "e1", Type: "task_created", Source: "pm", Time: clock, Category: "task",
+		ID: "e1", Type: "agent_phase_started", Source: "pm", Time: clock, Category: "task",
 	}); err != nil {
 		t.Fatalf("seed the store: %v", err)
 	}

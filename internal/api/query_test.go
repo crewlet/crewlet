@@ -34,7 +34,7 @@ func seededApp(t *testing.T, mutate func(*api.Options)) *api.App {
 	base := time.Now().UTC().Add(-time.Hour)
 	for i := range 6 {
 		if err := db.Events().Append(t.Context(), store.EventRecord{
-			ID: "ev" + string(rune('a'+i)), Type: "task_started", Source: "engine",
+			ID: "ev" + string(rune('a'+i)), Type: "agent_phase_started", Source: "engine",
 			Time: base.Add(time.Duration(i) * time.Second), Category: "task",
 			Actor: "Lead", Summary: "did a thing", TraceID: "tr-1",
 			Payload: json.RawMessage(`{"role":"Lead"}`),
@@ -45,7 +45,7 @@ func seededApp(t *testing.T, mutate func(*api.Options)) *api.App {
 
 	state := livestate.New()
 	state.Apply(&livestate.Envelope{
-		ID: "e1", Type: "task_started", Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		ID: "e1", Type: "agent_phase_started", Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		Category: "task", Payload: map[string]any{"role": "Lead", "task_id": "t-1"},
 	})
 

@@ -484,13 +484,13 @@ func (s *suite) runCore(t *testing.T) {
 		// silenced the fleet's routing.
 		q := s.start(ctx, t)
 		held, free := newJournal(), newJournal()
-		subscribe(ctx, t, q, "crewlet.events.task_created", "held-grp", recordingHandler(held))
-		subscribe(ctx, t, q, "crewlet.events.task_created", "free-grp", recordingHandler(free))
+		subscribe(ctx, t, q, "crewlet.events.agent_phase_started", "held-grp", recordingHandler(held))
+		subscribe(ctx, t, q, "crewlet.events.agent_phase_started", "free-grp", recordingHandler(free))
 
-		if err := q.PauseTopic(ctx, "crewlet.events.task_created", "held-grp", "sandbox"); err != nil {
+		if err := q.PauseTopic(ctx, "crewlet.events.agent_phase_started", "held-grp", "sandbox"); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
-		publish(ctx, t, q, "crewlet.events.task_created", newEvent("t"))
+		publish(ctx, t, q, "crewlet.events.agent_phase_started", newEvent("t"))
 
 		free.awaitLabels(t, "the unheld group's copy", "t")
 		held.staysAt(t, 0, "the held group")

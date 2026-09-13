@@ -538,7 +538,7 @@ func TestAsheddingNodeDefersRatherThanNaks(t *testing.T) {
 // and dead-letters it anyway, just later and noisier.
 func TestAnUnreadablePayloadIsNotRetried(t *testing.T) {
 	h := newService(t, nil)
-	ev := events.New(types.MessageSent{Channel: "C1"}, events.NewTrace())
+	ev := events.New(types.OrgStarted{OrgName: "Acme"}, events.NewTrace())
 	ev.Source = "tracker"
 
 	if got := h.svc.Handle(t.Context(), ev); got.Outcome != queue.OutcomeAck {

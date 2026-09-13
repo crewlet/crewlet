@@ -159,7 +159,7 @@ func testAppendIdempotent(t *testing.T, db *store.DB) {
 	log := db.Events()
 	ctx := t.Context()
 	rec := store.EventRecord{
-		ID: "dup", Type: "task_created", Source: "pm", Time: base,
+		ID: "dup", Type: "task_assigned", Source: "pm", Time: base,
 		Category: "task", Summary: "first",
 	}
 	if err := log.Append(ctx, rec); err != nil {
@@ -197,8 +197,8 @@ func testAppendIncomplete(t *testing.T, db *store.DB) {
 		name string
 		rec  store.EventRecord
 	}{
-		{"no id", store.EventRecord{Type: "task_created", Time: base}},
-		{"no timestamp", store.EventRecord{ID: "x", Type: "task_created"}},
+		{"no id", store.EventRecord{Type: "task_assigned", Time: base}},
+		{"no timestamp", store.EventRecord{ID: "x", Type: "task_assigned"}},
 	} {
 		if err := log.Append(ctx, tc.rec); !errors.Is(err, store.ErrIncompleteRecord) {
 			t.Errorf("%s: got %v, want ErrIncompleteRecord", tc.name, err)
@@ -268,7 +268,7 @@ func testIdenticalTimestamps(t *testing.T, db *store.DB) {
 	ctx := t.Context()
 	for _, id := range []string{"a", "b", "c"} {
 		write(t, log, store.EventRecord{
-			ID: id, Type: "task_created", Source: "pm", Time: base,
+			ID: id, Type: "task_assigned", Source: "pm", Time: base,
 			Category: "task", Summary: id,
 		})
 	}
@@ -300,7 +300,7 @@ func testOrderByTime(t *testing.T, db *store.DB) {
 		minute int
 	}{{"late", 5}, {"early", 1}, {"middle", 3}} {
 		write(t, log, store.EventRecord{
-			ID: c.id, Type: "task_created", Source: "pm",
+			ID: c.id, Type: "task_assigned", Source: "pm",
 			Time:     base.Add(time.Duration(c.minute) * time.Minute),
 			Category: "task", Summary: c.id,
 		})
@@ -330,7 +330,7 @@ func testFilters(t *testing.T, db *store.DB) {
 	log := db.Events()
 	ctx := t.Context()
 	write(t, log, store.EventRecord{
-		ID: "t1", Type: "task_created", Source: "pm", Time: base,
+		ID: "t1", Type: "task_assigned", Source: "pm", Time: base,
 		Category: "task", Actor: "alice", TraceID: "tr-1",
 	})
 	write(t, log, store.EventRecord{
@@ -339,7 +339,7 @@ func testFilters(t *testing.T, db *store.DB) {
 		TraceID: "tr-2",
 	})
 	write(t, log, store.EventRecord{
-		ID: "t2", Type: "task_created", Source: "pm",
+		ID: "t2", Type: "task_assigned", Source: "pm",
 		Time: base.Add(2 * time.Minute), Category: "task", Actor: "alice",
 		TraceID: "tr-1",
 	})
@@ -379,18 +379,18 @@ func testRelatedAgent(t *testing.T, db *store.DB) {
 		TraceID: "tr-1",
 	})
 	write(t, log, store.EventRecord{
-		ID: "work", Type: "task_started", Source: "engine",
+		ID: "work", Type: "task_assigned", Source: "engine",
 		Time: base.Add(time.Minute), Category: "task", Actor: "engineer",
 		TraceID: "tr-1",
 	})
 	write(t, log, store.EventRecord{
-		ID: "tagged", Type: "message_sent", Source: "engine",
-		Time: base.Add(2 * time.Minute), Category: "communication",
+		ID: "tagged", Type: "external_notification", Source: "engine",
+		Time: base.Add(2 * time.Minute), Category: "notification",
 		Actor: "someone-else", Tags: map[string]string{"recipient": "engineer"},
 		TraceID: "tr-2",
 	})
 	write(t, log, store.EventRecord{
-		ID: "unrelated", Type: "task_created", Source: "pm",
+		ID: "unrelated", Type: "task_assigned", Source: "pm",
 		Time: base.Add(3 * time.Minute), Category: "task", Actor: "other",
 		TraceID: "tr-9",
 	})
@@ -448,7 +448,7 @@ func testTrace(t *testing.T, db *store.DB) {
 		minute int
 	}{{"third", 3}, {"first", 1}, {"second", 2}} {
 		write(t, log, store.EventRecord{
-			ID: c.id, Type: "task_created", Source: "pm",
+			ID: c.id, Type: "task_assigned", Source: "pm",
 			Time:     base.Add(time.Duration(c.minute) * time.Minute),
 			Category: "task", TraceID: "tr-1",
 		})
@@ -475,7 +475,7 @@ func testTraceCap(t *testing.T, db *store.DB) {
 	for i := range over {
 		write(t, log, store.EventRecord{
 			ID:       "s" + fourDigits(i),
-			Type:     "task_created",
+			Type:     "task_assigned",
 			Source:   "pm",
 			Time:     base.Add(time.Duration(i) * time.Millisecond),
 			Category: "task",
@@ -498,7 +498,7 @@ func testByID(t *testing.T, db *store.DB) {
 	log := db.Events()
 	ctx := t.Context()
 	write(t, log, store.EventRecord{
-		ID: "one", Type: "task_created", Source: "pm", Time: base,
+		ID: "one", Type: "task_assigned", Source: "pm", Time: base,
 		Category: "task", Summary: "the one",
 		Payload: json.RawMessage(`{"id":"one","detail":"kept"}`),
 	})
@@ -541,11 +541,11 @@ func testReadFloor(t *testing.T, db *store.DB) {
 	ctx := t.Context()
 	old := time.Now().UTC().Add(-store.EventHistory - time.Hour)
 	write(t, log, store.EventRecord{
-		ID: "ancient", Type: "task_created", Source: "pm", Time: old,
+		ID: "ancient", Type: "task_assigned", Source: "pm", Time: old,
 		Category: "task", TraceID: "tr-1",
 	})
 	write(t, log, store.EventRecord{
-		ID: "recent", Type: "task_created", Source: "pm",
+		ID: "recent", Type: "task_assigned", Source: "pm",
 		Time: time.Now().UTC().Add(-time.Hour), Category: "task", TraceID: "tr-1",
 	})
 
@@ -574,12 +574,12 @@ func testRetention(t *testing.T, db *store.DB) {
 	log := db.Events()
 	ctx := t.Context()
 	write(t, log, store.EventRecord{
-		ID: "stale", Type: "task_created", Source: "pm",
+		ID: "stale", Type: "task_assigned", Source: "pm",
 		Time:     time.Now().UTC().Add(-store.EventRetention - time.Hour),
 		Category: "task",
 	})
 	write(t, log, store.EventRecord{
-		ID: "keep", Type: "task_created", Source: "pm",
+		ID: "keep", Type: "task_assigned", Source: "pm",
 		Time: time.Now().UTC().Add(-time.Hour), Category: "task",
 	})
 
@@ -616,12 +616,12 @@ func testRetentionBacklog(t *testing.T, db *store.DB) {
 	when := time.Now().UTC().Add(-store.EventRetention - time.Hour)
 	for i := range stale {
 		write(t, log, store.EventRecord{
-			ID: fmt.Sprintf("stale-%04d", i), Type: "task_created", Source: "pm",
+			ID: fmt.Sprintf("stale-%04d", i), Type: "task_assigned", Source: "pm",
 			Time: when.Add(time.Duration(i) * time.Millisecond), Category: "task",
 		})
 	}
 	write(t, log, store.EventRecord{
-		ID: "keep", Type: "task_created", Source: "pm",
+		ID: "keep", Type: "task_assigned", Source: "pm",
 		Time: time.Now().UTC().Add(-time.Hour), Category: "task",
 	})
 
@@ -658,13 +658,13 @@ func testRelatedIndexed(t *testing.T, db *store.DB) {
 	ctx := t.Context()
 	for i := range 200 {
 		write(t, log, store.EventRecord{
-			ID: fmt.Sprintf("noise-%03d", i), Type: "task_created", Source: "pm",
+			ID: fmt.Sprintf("noise-%03d", i), Type: "task_assigned", Source: "pm",
 			Time: base.Add(time.Duration(i) * time.Second), Category: "task",
 			Actor: "somebody-else",
 		})
 	}
 	write(t, log, store.EventRecord{
-		ID: "mine", Type: "task_created", Source: "pm",
+		ID: "mine", Type: "task_assigned", Source: "pm",
 		Time: base.Add(time.Hour), Category: "task",
 		Tags: map[string]string{"recipient": "lead"},
 	})
@@ -730,12 +730,12 @@ func testRelatedSwept(t *testing.T, db *store.DB) {
 	log := db.Events()
 	ctx := t.Context()
 	write(t, log, store.EventRecord{
-		ID: "old", Type: "task_created", Source: "pm",
+		ID: "old", Type: "task_assigned", Source: "pm",
 		Time:     time.Now().UTC().Add(-store.EventRetention - time.Hour),
 		Category: "task", Actor: "lead",
 	})
 	write(t, log, store.EventRecord{
-		ID: "new", Type: "task_created", Source: "pm",
+		ID: "new", Type: "task_assigned", Source: "pm",
 		Time: time.Now().UTC().Add(-time.Hour), Category: "task", Actor: "lead",
 	})
 
@@ -847,7 +847,7 @@ func testBackup(t *testing.T, db *store.DB) {
 	log := db.Events()
 	ctx := t.Context()
 	write(t, log, store.EventRecord{
-		ID: "backed-up", Type: "task_created", Source: "pm",
+		ID: "backed-up", Type: "task_assigned", Source: "pm",
 		Time: base, Category: "task",
 	})
 
@@ -886,7 +886,7 @@ func testBackup(t *testing.T, db *store.DB) {
 // corrupt one — whenever an operator moved only the file they were told to.
 func testBackupSelfContained(t *testing.T, db *store.DB) {
 	write(t, db.Events(), store.EventRecord{
-		ID: "solo", Type: "task_created", Source: "pm", Time: base, Category: "task",
+		ID: "solo", Type: "task_assigned", Source: "pm", Time: base, Category: "task",
 	})
 	dest := filepath.Join(t.TempDir(), "copy.db")
 	if _, err := db.Backup(t.Context(), dest); err != nil {
@@ -937,7 +937,7 @@ func testBackupUnderWrites(t *testing.T, db *store.DB) {
 			// every write in a hot loop commits.
 			_ = log.Append(ctx, store.EventRecord{
 				ID:   fmt.Sprintf("live-%04d", i),
-				Type: "task_created", Source: "pm",
+				Type: "task_assigned", Source: "pm",
 				Time: base.Add(time.Duration(i) * time.Millisecond), Category: "task",
 			})
 		}
@@ -961,7 +961,7 @@ func testBackupUnderWrites(t *testing.T, db *store.DB) {
 	// The original is still writable afterwards: a backup must not leave
 	// the live database wedged behind a lock or a stale transaction.
 	if err := log.Append(ctx, store.EventRecord{
-		ID: "after", Type: "task_created", Source: "pm", Time: base, Category: "task",
+		ID: "after", Type: "task_assigned", Source: "pm", Time: base, Category: "task",
 	}); err != nil {
 		t.Fatalf("the live database is unwritable after a backup: %v", err)
 	}
@@ -978,8 +978,8 @@ func testRecordUntracked(t *testing.T, db *store.DB) {
 	if _, tracked := store.Category("budget_reported"); tracked {
 		t.Fatal("budget_reported must stay out of the store: it describes a dead process's meters")
 	}
-	if cat, tracked := store.Category("task_created"); !tracked || cat != "task" {
-		t.Fatalf("task_created -> %q,%v", cat, tracked)
+	if cat, tracked := store.Category("task_assigned"); !tracked || cat != "task" {
+		t.Fatalf("agent_phase_started -> %q,%v", cat, tracked)
 	}
 	page, err := log.List(t.Context(), store.ListQuery{})
 	if err != nil {
@@ -1056,7 +1056,7 @@ func seed(t *testing.T, log *store.EventLog, n int) {
 	for i := range n {
 		write(t, log, store.EventRecord{
 			ID:       "e" + twoDigits(i),
-			Type:     "task_created",
+			Type:     "task_assigned",
 			Source:   "pm",
 			Time:     base.Add(time.Duration(i) * time.Minute),
 			Category: "task",

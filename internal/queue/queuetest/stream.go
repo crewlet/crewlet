@@ -22,10 +22,10 @@ func (s *suite) runStream(t *testing.T) {
 		streamTo(ctx, t, q, "crewlet.events.>", a)
 		streamTo(ctx, t, q, "crewlet.events.>", b)
 
-		publish(ctx, t, q, "crewlet.events.task_created", newEvent("task_created"))
+		publish(ctx, t, q, "crewlet.events.agent_phase_started", newEvent("agent_phase_started"))
 
-		a.awaitLabels(t, "the first subscriber's copy", "crewlet.events.task_created/task_created")
-		b.awaitLabels(t, "the second subscriber's copy", "crewlet.events.task_created/task_created")
+		a.awaitLabels(t, "the first subscriber's copy", "crewlet.events.agent_phase_started/agent_phase_started")
+		b.awaitLabels(t, "the second subscriber's copy", "crewlet.events.agent_phase_started/agent_phase_started")
 	})
 
 	t.Run("stream_filters_by_topic_pattern", func(t *testing.T) {
@@ -34,11 +34,11 @@ func (s *suite) runStream(t *testing.T) {
 		j := newJournal()
 		streamTo(ctx, t, q, "crewlet.events.>", j)
 
-		publish(ctx, t, q, "crewlet.events.task_created", newEvent("task_created"))
+		publish(ctx, t, q, "crewlet.events.agent_phase_started", newEvent("agent_phase_started"))
 		publish(ctx, t, q, "crewlet.notifications.inbound", newEvent("raw_webhook"))
 
 		j.awaitLabels(t, "only the matching subject",
-			"crewlet.events.task_created/task_created")
+			"crewlet.events.agent_phase_started/agent_phase_started")
 		j.staysAt(t, 1, "a non-matching subject reached a stream subscriber")
 	})
 
@@ -51,7 +51,7 @@ func (s *suite) runStream(t *testing.T) {
 		j := newJournal()
 		streamTo(ctx, t, q, "crewlet.events.*", j)
 
-		publish(ctx, t, q, "crewlet.events.task_created", newEvent("match"))
+		publish(ctx, t, q, "crewlet.events.agent_phase_started", newEvent("match"))
 
 		// The near-miss subjects are published WITHOUT requiring the
 		// publish to succeed. They exist only to be rejected by the
@@ -67,7 +67,7 @@ func (s *suite) runStream(t *testing.T) {
 		tryPublish(ctx, q, "crewlet.events.task.created", newEvent("too_deep"))
 		tryPublish(ctx, q, "crewlet.events", newEvent("too_shallow"))
 
-		j.awaitLabels(t, "the single-segment match", "crewlet.events.task_created/match")
+		j.awaitLabels(t, "the single-segment match", "crewlet.events.agent_phase_started/match")
 		j.staysAt(t, 1, "`*` matched something other than exactly one segment")
 	})
 
@@ -83,13 +83,13 @@ func (s *suite) runStream(t *testing.T) {
 			t.Fatalf("SubscribeStream: %v", err)
 		}
 
-		publish(ctx, t, q, "crewlet.events.task_created", newEvent("task_created"))
-		j.awaitLabels(t, "the pre-unsubscribe event", "crewlet.events.task_created/task_created")
+		publish(ctx, t, q, "crewlet.events.agent_phase_started", newEvent("agent_phase_started"))
+		j.awaitLabels(t, "the pre-unsubscribe event", "crewlet.events.agent_phase_started/agent_phase_started")
 
 		if err := unsubscribe(ctx); err != nil {
 			t.Fatalf("unsubscribe: %v", err)
 		}
-		publish(ctx, t, q, "crewlet.events.task_failed", newEvent("task_failed"))
+		publish(ctx, t, q, "crewlet.events.turn.guard_breach", newEvent("turn.guard_breach"))
 		j.staysAt(t, 1, "an unsubscribed stream kept receiving")
 	})
 
@@ -106,9 +106,9 @@ func (s *suite) runStream(t *testing.T) {
 		// The publish itself must complete, and the healthy subscriber
 		// must still be served: one browser tab closing mid-frame cannot
 		// be allowed to take the publisher down with it.
-		publish(ctx, t, q, "crewlet.events.task_created", newEvent("task_created"))
+		publish(ctx, t, q, "crewlet.events.agent_phase_started", newEvent("agent_phase_started"))
 		healthy.awaitLabels(t, "the healthy subscriber's copy",
-			"crewlet.events.task_created/task_created")
+			"crewlet.events.agent_phase_started/agent_phase_started")
 	})
 
 	t.Run("stream_does_not_consume_from_durable_subscriptions", func(t *testing.T) {
@@ -119,12 +119,12 @@ func (s *suite) runStream(t *testing.T) {
 		q := s.start(ctx, t)
 		stream, durable := newJournal(), newJournal()
 		streamTo(ctx, t, q, "crewlet.events.>", stream)
-		subscribe(ctx, t, q, "crewlet.events.task_created", "grp", recordingHandler(durable))
+		subscribe(ctx, t, q, "crewlet.events.agent_phase_started", "grp", recordingHandler(durable))
 
-		publish(ctx, t, q, "crewlet.events.task_created", newEvent("task_created"))
+		publish(ctx, t, q, "crewlet.events.agent_phase_started", newEvent("agent_phase_started"))
 
-		stream.awaitLabels(t, "the stream copy", "crewlet.events.task_created/task_created")
-		durable.awaitLabels(t, "the durable subscriber's copy", "task_created")
+		stream.awaitLabels(t, "the stream copy", "crewlet.events.agent_phase_started/agent_phase_started")
+		durable.awaitLabels(t, "the durable subscriber's copy", "agent_phase_started")
 	})
 }
 

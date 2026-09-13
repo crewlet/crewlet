@@ -243,7 +243,7 @@ func TestAnIngestedEventReachesTheSocket(t *testing.T) {
 	}
 
 	f.svc.Ingest(livestate.Envelope{
-		ID: "e1", Type: "task_started", Timestamp: "2026-06-14T12:00:00Z",
+		ID: "e1", Type: "agent_phase_started", Timestamp: "2026-06-14T12:00:00Z",
 		Category: "system", Payload: map[string]any{"role": "Lead", "task_id": "t-1"},
 	})
 
@@ -552,7 +552,7 @@ func TestASlowQueryDoesNotStallTheLiveFeed(t *testing.T) {
 
 	write(t, conn, map[string]any{"kind": "query", "id": 1, "what": "events"})
 	f.svc.Ingest(livestate.Envelope{
-		ID: "e1", Type: "task_started", Timestamp: "2026-06-14T12:00:00Z",
+		ID: "e1", Type: "agent_phase_started", Timestamp: "2026-06-14T12:00:00Z",
 		Category: "system", Payload: map[string]any{"role": "Lead", "task_id": "t-1"},
 	})
 	if got := next(t, conn); got["kind"] != stream.KindEvent {
