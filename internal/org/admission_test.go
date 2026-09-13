@@ -171,3 +171,47 @@ func TestAMovedRootSeatIsCountedOnce(t *testing.T) {
 		t.Errorf("a moved root seat was reported: %v", err)
 	}
 }
+
+// A UNIT REFERENCE PLACES ONLY A ROOT SEAT. On a seat declared inside a unit it
+// moves nothing, so one naming a different unit reads as a placement and does
+// nothing, which is refused on admission. A reference that repeats the seat's
+// own unit, and a root seat's reference that placed it, are fine; a root
+// seat's reference naming nothing is a dangling reference, not this rule.
+func TestAUnitReferenceOnANestedSeatMustNameItsUnit(t *testing.T) {
+	t.Parallel()
+	stray := &Role{Name: "Stray", UnitRef: "Product"}
+	o := normalized(&Organization{Name: "T",
+		Roles: []*Role{
+			{Name: "Placed", UnitRef: "Engineering"},
+			{Name: "Lost", UnitRef: "Nowhere"},
+		},
+		Units: []*Unit{
+			{Name: "Engineering", Roles: []*Role{
+				stray,
+				{Name: "Repeats", UnitRef: "Engineering"},
+			}},
+			{Name: "Product"},
+		},
+	})
+
+	got := violations(o.ValidateAdmission(), ErrMisplacedUnitRef)
+	if len(got) != 1 {
+		t.Fatalf("ValidateAdmission() = %v, want exactly the stray seat's reference", o.ValidateAdmission())
+	}
+	var seatErr *SeatError
+	if !errors.As(got[0], &seatErr) || seatErr.Seat != stray || len(seatErr.Field) != 1 || seatErr.Field[0] != "unit" {
+		t.Fatalf("the violation does not name the stray seat's unit field: %#v", got[0])
+	}
+	for _, want := range []string{`"Stray"`, `unit "Engineering"`, "unit: Product"} {
+		if !strings.Contains(got[0].Error(), want) {
+			t.Errorf("the message does not name %s: %v", want, got[0])
+		}
+	}
+	// The seat stays where it was written: the reference never moved it.
+	if o.UnitFor(stray) != o.Unit("Engineering") {
+		t.Error("the nested seat was moved by its reference")
+	}
+	if err := o.Validate(); err != nil {
+		t.Errorf("Validate() = %v, want nil: the rule is an admission rule", err)
+	}
+}

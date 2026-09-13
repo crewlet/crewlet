@@ -65,6 +65,20 @@ var (
 	// An ADMISSION rule, like [ErrDuplicateSeatName].
 	ErrDuplicateUnitName = errors.New("duplicate unit name")
 
+	// ErrMisplacedUnitRef reports a seat declared inside a unit whose `unit:`
+	// reference names a different unit.
+	//
+	// The reference PLACES a seat declared at the root: normalization moves
+	// such a seat into the unit it names. A seat already declared inside a
+	// unit is never moved, so on it the reference reads as a placement and
+	// does nothing, and the seat stays where it was written while its author
+	// believes it sits elsewhere. Repeating the enclosing unit's own name
+	// says nothing wrong and is accepted.
+	//
+	// An ADMISSION rule, like [ErrDuplicateSeatName]: nothing refused the
+	// reference before, and a stored company carrying one runs as it did.
+	ErrMisplacedUnitRef = errors.New("unit reference on a seat inside another unit")
+
 	// ErrHumanSeatField reports a runtime-only field set on a human seat.
 	// Human seats are addressable but never spawned, so an LLM key or a
 	// budget on one is dead config at best and misleading at worst.

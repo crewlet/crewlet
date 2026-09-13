@@ -298,7 +298,7 @@ duplicate unit name "Platform": 2 units carry it (under unit "Engineering"; unde
 
 #### Companies stored before the name rules
 
-Handle uniqueness has always been enforced. Seat name and unit name uniqueness are **admission rules**: they were added after companies existed, and a company that breaks one still runs exactly as it did before. So they are enforced where a document is *submitted* and reported where a stored one is *applied*:
+Handle uniqueness has always been enforced. Seat name and unit name uniqueness are **admission rules**: they were added after companies existed, and a company that breaks one still runs exactly as it did before. The same holds for a [`unit:` reference on a seat declared inside another unit](#a-seats-unit-reference). So they are enforced where a document is *submitted* and reported where a stored one is *applied*:
 
 - **Refused on every write.** `PUT /config`, `PATCH /config`, a per-entity write, a `/setup` submission that changes the document, `crewlet config import`, `crewlet validate` and a company file `crewlet run` imports as a new revision (`-company` into an empty store, `-import-company` over a different company) all refuse a document with a duplicate seat or unit name, including a write to a company whose stored revision already carries one and a write that does not touch the duplicates. The write that corrects them is accepted.
 - **Applied with a warning.** A stored revision carrying a duplicate name (written by an earlier build, or activated by an older peer during a rolling upgrade) is applied by every node, a node boots on it (including one started with `-company` or `-import-company` naming a file that is that revision, or a `-company` file the store's own company outranks), and `POST /config/reload`, a `/setup` credential rotation (which reloads) and a revert to it still work. The vendor commands that act on a company file without storing it (`crewlet gitlab provision`, `crewlet slack provision` and their siblings, `crewlet llm status`) read such a file too. Each node logs `org_admission_warning` once for every violation when it applies the epoch, naming the revision and the entities.
@@ -436,6 +436,12 @@ units:
         lead: "Backend Lead"
         roles: [...]
 ```
+
+#### A seat's `unit` reference
+
+A seat declared at the **root** can name the unit it belongs to with `unit:`, which is how the per-entity configuration API adds a seat to a unit. The engine moves such a seat into that unit before anything else is derived, so it inherits the unit's tool credentials and is auto-managed by the unit's lead exactly as a seat written inside the unit is. A seat moved this way is still reported, and edited, where it was written.
+
+The reference places a root seat and nothing else. A seat declared **inside** a unit is never moved by one, so a `unit:` on it that names a different unit reads as a placement and does nothing: the seat stays where it is written while the document says it belongs elsewhere. A document carrying one is refused at that seat's `unit`; repeating the name of the unit the seat is declared in is accepted. This is an [admission rule](#companies-stored-before-the-name-rules): a stored company that already carries such a reference still runs exactly as it did.
 
 ### Dangling references
 

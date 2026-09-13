@@ -201,7 +201,8 @@ func (c *Company) ValidateRunnable() error {
 
 // ValidateAdmission reports only the ADMISSION rules: the rules a submitted
 // document is refused for and a stored revision is merely warned about.
-// Today they are the org's duplicate seat names and duplicate unit names (see
+// Today they are the org's duplicate seat names, duplicate unit names and a
+// unit reference on a seat declared inside another unit (see
 // [org.Organization.ValidateAdmission]), duplicate sandbox setup step names
 // within one list, and a GitHub App on a human seat.
 func (c *Company) ValidateAdmission() error {

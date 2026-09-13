@@ -617,11 +617,38 @@ func (o *Organization) Validate() error {
 }
 
 // ValidateAdmission reports every ADMISSION rule the company breaks, joined:
-// duplicate seat names and duplicate unit names. See the class note above
+// duplicate seat names, duplicate unit names, and a unit reference on a seat
+// declared inside a different unit. See the class note above
 // [Organization.Validate]. It assumes [Organization.Normalize] has run, so a
 // root seat moved into its unit is counted once, where it now sits.
 func (o *Organization) ValidateAdmission() error {
-	return errors.Join(o.validateSeatNames(), o.validateUnitNames())
+	return errors.Join(o.validateSeatNames(), o.validateUnitNames(), o.validateUnitRefs())
+}
+
+// validateUnitRefs refuses a `unit:` reference on a seat that sits inside a
+// unit the reference does not name. See [ErrMisplacedUnitRef].
+//
+// Read after normalization, which is what makes one comparison enough: a
+// root seat whose reference resolved now sits in the unit it names, so its
+// reference matches, and one whose reference resolved to nothing is still at
+// the root, where [Organization.DanglingRefs] reports it. Every other member
+// carrying a reference that differs from its unit's name was declared there.
+// Compared as the exact string a reference resolves by.
+func (o *Organization) validateUnitRefs() error {
+	var errs []error
+	for u := range o.AllUnits() {
+		for _, r := range u.Roles {
+			if r.UnitRef == "" || r.UnitRef == u.Name {
+				continue
+			}
+			errs = append(errs, &SeatError{Seat: r, Field: []any{"unit"}, Err: fmt.Errorf(
+				"role %q: %w: it is declared in unit %q, and `unit: %s` places only a "+
+					"seat declared at the root, so here it moves nothing. Remove the "+
+					"reference, or declare the seat in unit %q or at the root",
+				r.Name, ErrMisplacedUnitRef, u.Name, r.UnitRef, r.UnitRef)})
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // validateHandles enforces org-wide handle uniqueness.

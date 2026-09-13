@@ -426,3 +426,34 @@ units:
 		t.Errorf("ValidateRunnable() = %v, want nil: the rule is an admission rule", err)
 	}
 }
+
+// A UNIT REFERENCE ON A NESTED SEAT IS REFUSED WHERE IT WAS WRITTEN, on
+// admission only. A stored revision carrying one runs exactly as it did, since
+// the reference never moved anything.
+func TestAUnitReferenceOnANestedSeatIsAnAdmissionRule(t *testing.T) {
+	t.Parallel()
+	const doc = `
+name: Acme
+units:
+  - name: Engineering
+    roles:
+      - name: Dev
+        unit: Product
+  - name: Product
+`
+	if _, err := config.ParseCompany([]byte(doc)); err == nil {
+		t.Fatal("a submitted document with a stray unit reference was accepted")
+	}
+	cfg, err := config.ParseCompanyDocument([]byte(doc))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	problems := config.Problems(cfg.ValidateAdmission())
+	if len(problems) != 1 || problems[0].Path != "units[0].roles[0].unit" ||
+		problems[0].Kind != "conflict" || problems[0].Seat != "dev" {
+		t.Fatalf("admission problems = %+v, want one conflict at units[0].roles[0].unit", problems)
+	}
+	if err := cfg.ValidateRunnable(); err != nil {
+		t.Errorf("ValidateRunnable() = %v, want nil: the rule is an admission rule", err)
+	}
+}

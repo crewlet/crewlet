@@ -165,6 +165,7 @@ var problemKinds = []struct {
 	{"conflict", org.ErrHumanSeatField},
 	{"conflict", org.ErrAgentSeatField},
 	{"conflict", org.ErrUnrunnableSchedule},
+	{"conflict", org.ErrMisplacedUnitRef},
 	// A schedule that cannot be evaluated is malformed rather than
 	// conflicting, and an llm value that is neither a key nor a list is the
 	// wrong shape of YAML.

@@ -52,7 +52,9 @@ type Role struct {
 	// Unit is a home-unit reference for a ROOT-level seat, resolved into
 	// that unit's members before anything else runs. It is what
 	// PUT /config/roles/{handle} writes; a hand-authored config normally nests the
-	// seat under its unit directly.
+	// seat under its unit directly. On a seat nested inside a unit it moves
+	// nothing, and one naming a different unit is refused on admission
+	// (org.ErrMisplacedUnitRef).
 	Unit string `yaml:"unit,omitempty" json:"unit,omitempty" desc:"Home unit for a root-level seat; the seat is moved into it."`
 
 	Goal             string   `yaml:"goal,omitempty" json:"goal,omitempty" desc:"What this seat is for; reaches its prompt."`
