@@ -108,13 +108,25 @@ const (
 	// SkipRecent — the newest local snapshot is younger than the
 	// interval.
 	SkipRecent SkipReason = "recent"
+
+	// SkipFailed — the attempt RAN and errored, which is the one reason
+	// here that is not a declined precondition.
+	//
+	// It belongs in this vocabulary because the register carries exactly
+	// one field for "why can this node not donate", and a node whose copy
+	// fails every interval — a disk that went read-only, a scrub that
+	// could not open the file — would otherwise publish an empty reason
+	// and no position, which reads as a loop that has simply not run yet.
+	// The error itself is logged; what travels to the fleet is that there
+	// was one.
+	SkipFailed SkipReason = "failed"
 )
 
 // SkipReasons are every reason, so an operator surface can enumerate them
 // rather than discovering them one production incident at a time.
 var SkipReasons = []SkipReason{
 	SkipLagging, SkipUnhydrated, SkipSoleNode,
-	SkipInsufficientSpace, SkipDeferred, SkipRecent,
+	SkipInsufficientSpace, SkipDeferred, SkipRecent, SkipFailed,
 }
 
 // Valid reports whether a skip reason off the wire is one this build knows.

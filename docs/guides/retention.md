@@ -171,7 +171,18 @@ answer rather than a silence:
 | `unhydrated` | this node has not established a complete copy of some domain |
 | `deferred` | this node holds a record it cannot decode |
 | `insufficient_space` | not enough disk in `store.snapshot_dir` |
-| `recent` | the newest artefact is younger than `snapshot_interval` |
+| `recent` | the newest artefact is younger than `snapshot_interval` — but see below |
+| `failed` | the copy was attempted and errored; the engine log carries the error |
+
+`recent` is the one reason a healthy node reaches, and it is therefore **not**
+published: a node whose newest artefact is inside the interval is a node that
+can donate, so its row carries the artefact and an empty reason. What the
+column answers is "why can this node not donate", and a skip is only ever the
+answer to that when there is no current artefact behind it.
+
+A node that holds an older artefact and cannot refresh it publishes **both** —
+the position it can still donate from, and the reason it has stopped
+refreshing. A skip never erases what is already on disk.
 
 ### Sizing the snapshot volume
 

@@ -469,8 +469,21 @@ func reportedPositions(rows []coord.NodePositions, domain string) []statelog.Nod
 		}
 		out = append(out, statelog.NodePosition{
 			NodeID: row.NodeID, Generation: at.Generation, Seq: at.Seq,
-			SnapshotSeq: at.SnapshotSeq, HasSnapshot: at.SnapshotSeq > 0,
-			At: row.At,
+			SnapshotSeq: at.SnapshotSeq,
+			// FROM THE INSTANT RATHER THAN THE SEQUENCE. A snapshot
+			// taken while a domain's log was still empty covers it
+			// at position zero, which is a real artefact a joiner
+			// can adopt — and reading "has none" off the sequence
+			// would leave a fleet's newest domain permanently one
+			// donor short of trimming any of the others.
+			HasSnapshot: !at.SnapshotAt.IsZero(),
+			// AND THE GENERATION THAT SEQUENCE BELONGS TO, which is
+			// not this row's own: a position is republished every
+			// ten seconds and a snapshot taken once a day, so after
+			// a reanchor the row sits on the new generation while
+			// its artefact still names the old one.
+			SnapshotGeneration: at.SnapshotGeneration,
+			At:                 row.At,
 		})
 	}
 	return out

@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -153,6 +154,18 @@ type stateLog struct {
 	// ceiling an emergency grant had just raised.
 	ceilings map[string]int64
 
+	// snapshot is what this node's snapshot loop last concluded, carried
+	// from that loop to the position heartbeat.
+	//
+	// TWO LOOPS, ONE ROW, on two cadences that cannot be merged: the
+	// snapshot loop runs on the operator's staleness interval — a day, by
+	// default — and the heartbeat on ten seconds, so what this node holds
+	// has to be handed between them. An atomic pointer rather than a
+	// mutex for [store]'s reason: the heartbeat reads it while the
+	// snapshot loop is mid-copy, and a nil reads honestly as a node whose
+	// loop has not concluded anything yet.
+	snapshot atomic.Pointer[snapshotHeld]
+
 	// run is the context every apply loop runs under, and stop is what
 	// ends them. HELD rather than re-derived, for the reason the native
 	// runtime states: a goroutine started under the CALLER's context is
@@ -160,6 +173,25 @@ type stateLog struct {
 	run  context.Context
 	stop context.CancelFunc
 	done sync.WaitGroup
+}
+
+// snapshotHeld is the artefact this node holds, and why it holds no current
+// one.
+//
+// BOTH HALVES TOGETHER, because a node can have both: a skip does not delete
+// what is already on disk, so a node that could not refresh yesterday's copy
+// still donates it — and the register's readers need to know that it can
+// (the trim's snapshot term) and that it has stopped refreshing (the operator
+// asking why a join failed).
+type snapshotHeld struct {
+	// Manifest is the newest complete artefact on this node's disk, and
+	// Have reports whether there is one at all.
+	Manifest statelog.Manifest
+	Have     bool
+
+	// Skip is why this node holds no CURRENT artefact, empty when its
+	// newest is within the operator's interval.
+	Skip statelog.SkipReason
 }
 
 // startStateLog brings up every domain this node runs.
@@ -1348,7 +1380,8 @@ func (e *Engine) startSnapshots(ctx context.Context, boot *config.Bootstrap, s *
 	}()
 	go func() {
 		defer s.done.Done()
-		e.snapshotLoop(s.run, snapshotter, boot.Stream.TrackerRetention.SnapshotInterval())
+		e.snapshotLoop(s, snapshotter, dir,
+			boot.Stream.TrackerRetention.SnapshotInterval())
 	}()
 }
 
@@ -1377,9 +1410,10 @@ func (e *Engine) startSnapshots(ctx context.Context, boot *config.Bootstrap, s *
 // The retry is deliberately not tight. A skip is a state that clears on its
 // own in seconds to minutes, the gate itself is a few reads, and a node that
 // is genuinely unable to snapshot must not spend its life asking.
-func (e *Engine) snapshotLoop(ctx context.Context, s *statelog.Snapshotter,
-	interval time.Duration) {
+func (e *Engine) snapshotLoop(s *stateLog, snap *statelog.Snapshotter,
+	dir string, interval time.Duration) {
 
+	ctx := s.run
 	// everTook is what decides how LOUD a skip is, and the distinction is
 	// the one an operator actually has: a node that has taken a snapshot
 	// and skips a tick is a node whose fleet has a donor, and a node that
@@ -1389,7 +1423,15 @@ func (e *Engine) snapshotLoop(ctx context.Context, s *statelog.Snapshotter,
 	var everTook bool
 	for {
 		wait := interval
-		switch _, err := s.Take(ctx); {
+		m, err := snap.Take(ctx)
+		// THE REGISTER IS TOLD ON EVERY TICK, taken or skipped, because
+		// that row is the only place the rest of the fleet can see this
+		// node's artefact at all: the trim's snapshot term counts
+		// donors from it, and a node that stopped refreshing is
+		// invisible until somebody needs to adopt.
+		held := heldAfter(m, err, dir)
+		s.snapshot.Store(&held)
+		switch {
 		case err == nil:
 			everTook = true
 		case !isSkip(err):
@@ -1422,6 +1464,81 @@ func (e *Engine) snapshotLoop(ctx context.Context, s *statelog.Snapshotter,
 func isSkip(err error) bool {
 	_, skipped := statelog.Skipped(err)
 	return skipped
+}
+
+// heldAfter is what a snapshot tick concluded this node holds.
+//
+// # Why it reads the directory rather than trusting the tick's own answer
+//
+// A SKIP DOES NOT DELETE WHAT IS ALREADY ON DISK, and one of them is a skip
+// precisely BECAUSE something is: `recent` means the newest artefact is
+// younger than the operator's interval, so a loop that reported "no snapshot"
+// on that tick would erase from the register the very artefact that caused it.
+// The others — `deferred`, `insufficient_space`, `lagging` — leave yesterday's
+// copy in place, and a node holding one is still a donor the trim may count
+// and a joining peer may adopt from. So the skip says why nothing was
+// REFRESHED and the directory says what is HELD, and the row carries both.
+func heldAfter(m statelog.Manifest, err error, dir string) snapshotHeld {
+	if err == nil {
+		return snapshotHeld{Manifest: m, Have: true}
+	}
+	// A HARD FAILURE IS PUBLISHED AS A REASON TOO. The error itself is
+	// logged by the loop; what the fleet needs is that this node is not
+	// refreshing, which an empty skip beside an old position reads as a
+	// loop that simply has not come round yet.
+	held := snapshotHeld{Skip: statelog.SkipFailed}
+	if reason, skipped := statelog.Skipped(err); skipped {
+		held.Skip = reason
+	}
+	if on, found := newestSnapshot(dir); found {
+		held.Manifest, held.Have = on, true
+		if held.Skip == statelog.SkipRecent {
+			// THE ONE SKIP THAT IS NOT AN ANSWER TO "why can this
+			// node not donate": it can, with an artefact inside the
+			// interval the operator asked for. Publishing `recent`
+			// here would put every healthy node in the fleet on the
+			// operator's list of nodes that cannot donate.
+			held.Skip = ""
+		}
+	}
+	return held
+}
+
+// stampSnapshot writes what this node holds onto the row it is about to
+// publish.
+//
+// A FUNCTION OVER VALUES, for the reason [statelog.TrimInputs] gives about the
+// terms it feeds: the whole path from an artefact on one node's disk to a term
+// in another node's trim runs through a live fleet, and the one part of it
+// that can be exercised without one is this.
+func stampSnapshot(row *coord.NodePositions, held *snapshotHeld) {
+	if held == nil {
+		// NOTHING CONCLUDED YET is not the same as nothing held, and
+		// the difference matters for the first seconds of a node's
+		// life: leaving both fields empty says "not known", where a
+		// skip would say "known, and the answer is no".
+		return
+	}
+	row.SnapshotSkip = string(held.Skip)
+	if !held.Have {
+		return
+	}
+	row.SnapshotBytes = held.Manifest.Bytes
+	for name, at := range held.Manifest.Domains {
+		// ONLY A DOMAIN THIS NODE STILL RUNS. An artefact taken by an
+		// older build names domains this one does not register, and a
+		// snapshot position under a domain with no committed position
+		// beside it is a row the trim reads as a node holding that
+		// log back at zero.
+		pos, runs := row.Domains[name]
+		if !runs {
+			continue
+		}
+		pos.SnapshotSeq = at.Seq
+		pos.SnapshotGeneration = at.Generation
+		pos.SnapshotAt = held.Manifest.TakenAt.UTC()
+		row.Domains[name] = pos
+	}
 }
 
 // snapshotSkipRetry is how soon a skipped attempt is retried.
@@ -1506,7 +1623,7 @@ func newestSeqOf(m statelog.Manifest) uint64 {
 //
 // # What reads it, and what an absent row costs
 //
-// The register is not telemetry. Three things read it and each one is wrong
+// The register is not telemetry. Four things read it and each one is wrong
 // without this node's row:
 //
 //   - THE TRIM takes a minimum across every counted node's position to decide
@@ -1522,6 +1639,12 @@ func newestSeqOf(m statelog.Manifest) uint64 {
 //     anybody to donate to. An empty register reads as a fleet of one, so no
 //     node ever takes a snapshot and no node can ever donate one. That is not
 //     a hypothetical: it is what a three-node fleet did before this existed.
+//   - THE TRIM'S SNAPSHOT TERM reads the ARTEFACT each row names, and it is
+//     the one reader whose failure is silent in the opposite direction: it
+//     needs two counted nodes to hold a verified snapshot before it permits
+//     removing anything, so a row that carries a position but no artefact
+//     blocks the trim of every domain for the life of the deployment while
+//     every other surface reports a healthy fleet.
 //
 // # Why it is a heartbeat rather than a write per commit
 //
@@ -1573,6 +1696,11 @@ const PositionHeartbeat = 10 * time.Second
 // "what has every node applied" about all of them at once, and a row per
 // domain would be N writes saying one thing.
 //
+// AND THE SNAPSHOT THIS NODE HOLDS, stamped from what its own snapshot loop
+// last concluded rather than read off the disk here — this runs every ten
+// seconds and the artefact changes once a day, so re-reading a directory per
+// beat would spend an I/O on an answer that did not move.
+//
 // A FAILURE IS LOGGED AND THE LOOP CONTINUES. The row is a recent number
 // rather than a current one by construction, so one missed interval costs
 // nothing a reader can notice — and a node that stopped its heartbeat because
@@ -1619,6 +1747,7 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 		running.progress.observe(row.At, pos.AppliedThrough, behind, held)
 		row.Domains[name] = pos
 	}
+	stampSnapshot(&row, s.snapshot.Load())
 	s.positionGauges(row)
 	s.deferralGauges(row.At)
 	if err := s.fleet.PutPositions(ctx, row); err != nil {

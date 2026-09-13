@@ -513,6 +513,56 @@ func TestAFleetTakesAndOffersSnapshots(t *testing.T) {
 			"half is not running, so a node below the log's floor could never "+
 			"adopt and would come up on the history it has for ever", fleetSize)
 	}
+
+	// AND THE REGISTER SAYS SO, which is the half a file on disk cannot
+	// establish: the trim's snapshot term counts donors from the POSITIONS
+	// REGISTER, never from anybody's directory, and it refuses to remove
+	// anything until two counted nodes hold a verified artefact. A fleet
+	// that takes snapshots and publishes none of them therefore never
+	// trims any domain for the life of the deployment — with the applied
+	// term, the backup term and every operator surface reporting a
+	// perfectly healthy fleet.
+	fleet := c.nodes[0].engine.Backends().Fleet
+	var donors int
+	waitFor(t, "the fleet to publish its snapshots into the position register",
+		func() bool {
+			rows, err := fleet.Positions(t.Context())
+			if err != nil {
+				return false
+			}
+			donors = 0
+			for _, row := range rows {
+				if row.SnapshotBytes == 0 {
+					continue
+				}
+				// EVERY DOMAIN OR NONE, which is the artefact's
+				// own shape: one file covers all of them, so a
+				// row naming some is a row assembled per domain
+				// from something other than a manifest.
+				covered := true
+				for _, at := range row.Domains {
+					if at.SnapshotAt.IsZero() ||
+						at.SnapshotGeneration != at.Generation {
+						covered = false
+					}
+				}
+				if covered {
+					donors++
+				}
+			}
+			return donors >= statelog.SnapshotDonorsRequired
+		}, func() string {
+			rows, err := fleet.Positions(t.Context())
+			if err != nil {
+				return "positions unreadable: " + err.Error()
+			}
+			var out []string
+			for _, row := range rows {
+				out = append(out, fmt.Sprintf("%s bytes=%d skip=%q domains=%v",
+					row.NodeID, row.SnapshotBytes, row.SnapshotSkip, row.Domains))
+			}
+			return strings.Join(out, " | ")
+		})
 }
 
 // dir is member i's snapshot directory.

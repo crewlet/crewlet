@@ -182,9 +182,18 @@ type NodePosition struct {
 	Seq        uint64
 
 	// SnapshotSeq is its newest VERIFIED local snapshot's position, and
-	// false when it holds none.
+	// HasSnapshot is false when it holds none.
 	SnapshotSeq uint64
 	HasSnapshot bool
+
+	// SnapshotGeneration is the generation that snapshot's sequences
+	// belong to, which is a SEPARATE number from the one above: a node
+	// reports its committed position every ten seconds and takes a
+	// snapshot once a day, so an artefact from before a reanchor sits on a
+	// row whose own position is already on the new generation. Comparing
+	// its sequence against this generation's log would count a donor that
+	// names a sequence space that no longer exists.
+	SnapshotGeneration uint32
 
 	// At is when it last reported.
 	At time.Time
@@ -376,17 +385,34 @@ func (in TrimInputs) snapshotFloor() Term {
 				"backup, which the backup term gates"}
 	}
 	var have []uint64
+	var stale int
 	for _, n := range in.Counted {
-		if n.HasSnapshot {
-			have = append(have, n.SnapshotSeq)
+		if !n.HasSnapshot {
+			continue
 		}
+		if n.SnapshotGeneration != in.Generation {
+			// A SNAPSHOT FROM ANOTHER GENERATION IS NOT A DONOR, and
+			// it is not a block either: the node holds an artefact
+			// nobody on this generation can adopt, which is exactly
+			// a node that holds none. Counted, it would license
+			// removing records no adoptable artefact covers.
+			stale++
+			continue
+		}
+		have = append(have, n.SnapshotSeq)
 	}
 	k := min(len(in.Counted), SnapshotDonorsRequired)
 	if len(have) < k {
-		return Term{Name: TermSnapshotFloor, Detail: fmt.Sprintf(
+		detail := fmt.Sprintf(
 			"%d of %d counted node(s) hold a verified snapshot and %d are needed "+
 				"— losing any single donor must still leave a usable artefact",
-			len(have), len(in.Counted), k)}
+			len(have), len(in.Counted), k)
+		if stale > 0 {
+			detail += fmt.Sprintf(", and %d more hold one from an earlier "+
+				"generation, which names a sequence space this log no longer has",
+				stale)
+		}
+		return Term{Name: TermSnapshotFloor, Detail: detail}
 	}
 	sort.Slice(have, func(i, j int) bool { return have[i] > have[j] })
 	kth := have[k-1]

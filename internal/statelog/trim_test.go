@@ -17,9 +17,12 @@ func baseInputs() statelog.TrimInputs {
 		Now:             now,
 		CountedReadable: true,
 		Counted: []statelog.NodePosition{
-			{NodeID: "a", Generation: 1, Seq: 9_000, SnapshotSeq: 7_500, HasSnapshot: true, At: now},
-			{NodeID: "b", Generation: 1, Seq: 8_500, SnapshotSeq: 7_300, HasSnapshot: true, At: now},
-			{NodeID: "c", Generation: 1, Seq: 8_800, SnapshotSeq: 7_400, HasSnapshot: true, At: now},
+			{NodeID: "a", Generation: 1, Seq: 9_000, SnapshotSeq: 7_500,
+				HasSnapshot: true, SnapshotGeneration: 1, At: now},
+			{NodeID: "b", Generation: 1, Seq: 8_500, SnapshotSeq: 7_300,
+				HasSnapshot: true, SnapshotGeneration: 1, At: now},
+			{NodeID: "c", Generation: 1, Seq: 8_800, SnapshotSeq: 7_400,
+				HasSnapshot: true, SnapshotGeneration: 1, At: now},
 		},
 		HoldsReadable:  true,
 		BackupFloor:    7_000,
@@ -247,6 +250,47 @@ func TestTheSnapshotTermSurvivesLosingOneDonor(t *testing.T) {
 	if d := statelog.Trim(solo.Terms()); d.BlockedBy == statelog.TermSnapshotFloor {
 		t.Fatal("a single node is blocked by the snapshot term — its loop does " +
 			"not run, and concluding otherwise deadlocks one node for ever")
+	}
+}
+
+// A SNAPSHOT FROM ANOTHER GENERATION IS NOT A DONOR.
+//
+// A node republishes its position every ten seconds and takes a snapshot once
+// a day, so for most of the day after a reanchor a row sits on the NEW
+// generation carrying an artefact that names the OLD one. Counted, it licenses
+// removing records no adoptable artefact covers — the one direction this gate
+// exists to prevent, and the one a bare sequence could not have detected.
+func TestASnapshotFromAnEarlierGenerationIsNotCounted(t *testing.T) {
+	t.Parallel()
+	in := baseInputs()
+	in.Counted[0].SnapshotGeneration = 0
+	in.Counted[1].SnapshotGeneration = 0
+	in.AgeFloor = 1_000_000
+	in.BackupFloor = 1_000_000
+	in.FeedAckFloor = 1_000_000
+
+	d := statelog.Trim(in.Terms())
+	if !d.Blocked() {
+		t.Fatalf("the trim advanced to %d with one adoptable artefact in the "+
+			"fleet — two are needed, and a snapshot on a dead generation names "+
+			"a sequence space this log no longer has", d.To)
+	}
+	if d.BlockedBy != statelog.TermSnapshotFloor {
+		t.Fatalf("blocked by %q, want %q", d.BlockedBy, statelog.TermSnapshotFloor)
+	}
+	if !strings.Contains(d.Detail, "earlier generation") {
+		t.Errorf("the block reads %q — an operator seeing three nodes with "+
+			"snapshots and a term saying one holds none needs the reason named",
+			d.Detail)
+	}
+
+	// AND IT IS NOT A BLOCK BY ITSELF. Two current artefacts beside a
+	// stale one is a fleet that can recover, and refusing there would make
+	// one node's old file stop the whole company trimming.
+	in.Counted[1].SnapshotGeneration = 1
+	if d := statelog.Trim(in.Terms()); d.Blocked() {
+		t.Fatalf("two current artefacts beside one stale one blocked the trim: "+
+			"%s: %s", d.BlockedBy, d.Detail)
 	}
 }
 
