@@ -87,6 +87,18 @@ func copyMasking(src, dst reflect.Value, secret bool) {
 		copyMasking(src.Elem(), p.Elem(), secret)
 		dst.Set(p)
 	case reflect.Struct:
+		// THE WHOLE VALUE FIRST, then every exported field over it.
+		// Reflection can neither read nor set an unexported field on its
+		// own, so walking the exported fields alone left each one at its
+		// zero value in the copy. That is not cosmetic: a [Toggle] keeps
+		// its state unexported, so every explicit `enabled: false`,
+		// `learning_enabled: false` and `shared: false` read as UNSET on
+		// every config read, and a GET-edit-PUT round trip re-enabled a
+		// disabled schedule without anybody touching it. Copying the
+		// struct carries that state; the walk below then replaces every
+		// exported field with its own deep, masked copy, so nothing a
+		// credential can live in is shared with the original.
+		dst.Set(src)
 		for i := range src.NumField() {
 			field := src.Type().Field(i)
 			if !field.IsExported() {

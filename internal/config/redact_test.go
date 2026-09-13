@@ -3,6 +3,8 @@ package config
 import (
 	"encoding/json"
 	"maps"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -139,6 +141,96 @@ func TestRedactionLeavesEverythingElseAlone(t *testing.T) {
 	}
 	if !reflect.DeepEqual(redacted.Providers.LLMOrder, original.Providers.LLMOrder) {
 		t.Errorf("the provider order changed: %v", redacted.Providers.LLMOrder)
+	}
+}
+
+// A TOGGLE SURVIVES REDACTION, SET TO WHAT THE OPERATOR SET IT TO.
+//
+// A toggle keeps its state unexported, and the redacting copy once walked
+// exported fields only, so every explicit toggle read as unset: a schedule
+// kept in config with `enabled: false` came back from GET /config as a
+// schedule that fires, and sending that document back enabled it. Each value
+// here is the NON-default one, because a toggle that read as unset would
+// otherwise resolve to the same answer and prove nothing.
+func TestRedactionKeepsEveryToggle(t *testing.T) {
+	t.Parallel()
+	original, err := ParseCompany([]byte(`
+name: Acme
+providers:
+  llm:
+    zulu: {type: anthropic, model: claude-sonnet-5, api_keys: ["sk-literal-key"]}
+turn_engine:
+  extension_enabled: false
+mcp_servers:
+  - {name: tracker, command: tracker-mcp, shared: false}
+roles:
+  - name: CEO
+    handle: ceo
+    llm: zulu
+    learning_enabled: false
+    schedules:
+      - {name: standup, cron: "0 9 * * 1-5", task: "Post the standup", enabled: false, catchup: false}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	redacted := original.Redact()
+
+	for name, toggle := range map[string]Toggle{
+		"turn_engine.extension_enabled": redacted.TurnEngine.ExtensionEnabled,
+		"mcp_servers[0].shared":         redacted.MCPServers[0].Shared,
+		"roles[0].learning_enabled":     redacted.Roles[0].LearningEnabled,
+		"roles[0].schedules[0].enabled": redacted.Roles[0].Schedules[0].Enabled,
+		"roles[0].schedules[0].catchup": redacted.Roles[0].Schedules[0].Catchup,
+	} {
+		if !toggle.IsSet() || toggle.Or(true) {
+			t.Errorf("%s read as %+v after redaction, want explicitly false", name, toggle)
+		}
+	}
+}
+
+// A REDACTED DOCUMENT SENT BACK IS THE DOCUMENT THAT WAS STORED.
+//
+// The property every GET-edit-PUT depends on, asserted over the shipped
+// example companies, which set more of the schema than any fixture written
+// for one test: masking and restoring must between them change nothing at
+// all. A field the redacting copy drops, like the toggles above, fails here
+// whichever type it lives on, including a type added after this test.
+func TestARedactedExampleRoundTripsExactly(t *testing.T) {
+	t.Parallel()
+	files, err := filepath.Glob(filepath.Join("..", "..", "examples", "*.company.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) < 2 {
+		t.Fatalf("found %d example companies, want at least 2: %v", len(files), files)
+	}
+	for _, file := range files {
+		t.Run(filepath.Base(file), func(t *testing.T) {
+			t.Parallel()
+			data, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			original, err := ParseCompanyDocument(data)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			want, err := json.Marshal(original)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sentBack := original.Redact()
+			sentBack.RestoreRedacted(original)
+			got, err := json.Marshal(sentBack)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != string(want) {
+				t.Errorf("a redacted document restored against its own revision "+
+					"differs from it:\n got %s\nwant %s", got, want)
+			}
+		})
 	}
 }
 

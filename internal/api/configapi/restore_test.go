@@ -64,3 +64,36 @@ func TestAMovedSeatKeepsItsCredentialThroughAPut(t *testing.T) {
 		t.Errorf("the moved seat's credential was not restored: %s", stored)
 	}
 }
+
+// A DOCUMENT READ AND SENT BACK UNCHANGED KEEPS A DISABLED SCHEDULE DISABLED.
+//
+// The read once dropped every toggle's state, so a schedule kept in config
+// with `enabled: false` was served without the field and the unchanged
+// document sent back stored a schedule that fires. The assertion is on the
+// read as well as the stored result, because the builder edits exactly what
+// the read serves.
+func TestAReadDocumentSentBackKeepsADisabledSchedule(t *testing.T) {
+	t.Parallel()
+	doc := strings.Replace(companyDoc, "    handle: ceo\n    llm: zulu\n",
+		"    handle: ceo\n    llm: zulu\n    schedules:\n"+
+			"      - {name: standup, cron: \"0 9 * * 1-5\", task: Post the standup, enabled: false}\n", 1)
+	s := newSurface(t, nil)
+	s.seed(t, doc, nil)
+
+	read := s.do(t, http.MethodGet, "/config", "", nil)
+	if read.Code != http.StatusOK {
+		t.Fatalf("GET /config = %d: %s", read.Code, read.Body)
+	}
+	if !strings.Contains(read.Body.String(), `"enabled":false`) {
+		t.Fatalf("the read dropped the disabled schedule's toggle: %s", read.Body)
+	}
+
+	res := s.do(t, http.MethodPut, "/config", read.Body.String(),
+		map[string]string{"X-Summary": "send it back"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("PUT = %d, want 201: %s", res.Code, res.Body)
+	}
+	if stored := s.activeDocument(t); !strings.Contains(stored, `"enabled":false`) {
+		t.Errorf("sending the read back enabled the schedule: %s", stored)
+	}
+}
