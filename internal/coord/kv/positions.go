@@ -41,46 +41,29 @@ func (f *FleetStore) PutPositions(ctx context.Context, p coord.NodePositions) er
 // engine deleting records a node still needs, reported by nothing. "I could
 // not read node X" has to be louder than "there is no node X".
 func (f *FleetStore) Positions(ctx context.Context) ([]coord.NodePositions, error) {
-	keys, err := f.positions.ListKeys(ctx)
-	if err != nil {
-		return nil, unavailable("list the log positions", err)
-	}
-	defer func() { _ = keys.Stop() }()
-
 	var out []coord.NodePositions
-	for key := range keys.Keys() {
-		// THE BUCKET HOLDS SEVEN KEY CLASSES — a node's positions, a
-		// trim hold, a backup point, a domain's published floor, a
-		// capacity operation, a node's admission and its maintenance
-		// acknowledgement — so the listing filters, and this filter is the load-bearing half of putting
-		// them together. A hold decoded as a positions row yields an
-		// EMPTY node id and a domains map of zero values, which the trim
-		// reads as a node that has applied nothing: the pin becomes a
-		// permanent floor at zero, from a key nobody thinks of as a
-		// node.
-		segments, ok := coord.DocumentSegments(key)
-		if !ok || len(segments) < 2 || segments[0] != "node" {
-			continue
-		}
-		entry, err := f.positions.Get(ctx, key)
-		switch {
-		case errors.Is(err, jetstream.ErrKeyNotFound):
-			// Removed between the listing and the read, which is an
-			// eviction landing mid-sweep rather than a fault.
-			continue
-		case err != nil:
-			return nil, unavailable("read a node's log positions", err)
-		}
-		var row coord.NodePositions
-		if err := json.Unmarshal(entry.Value(), &row); err != nil {
-			return nil, fmt.Errorf("coord: the positions row at %s does not "+
-				"decode: the trim takes a minimum across these rows, so a row "+
-				"skipped here raises that minimum and deletes records a node "+
-				"still needs: %w", key, err)
-		}
-		out = append(out, row)
-	}
-	return out, ctx.Err()
+	// THE BUCKET HOLDS SEVEN KEY CLASSES — a node's positions, a trim hold,
+	// a backup point, a domain's published floor, a capacity operation, a
+	// node's admission and its maintenance acknowledgement — so the walk
+	// filters, and that filter is the load-bearing half of sharing a bucket:
+	// a hold decoded as a positions row yields an EMPTY node id and a
+	// domains map of zero values, which the trim reads as a node that has
+	// applied nothing, so the pin becomes a permanent floor at zero from a
+	// key nobody thinks of as a node. It is [FleetStore.eachPositionKey]'s
+	// single copy of that filter rather than a fifth hand-written one.
+	err := f.eachPositionKey(ctx, "node", "the log positions",
+		func(key string, value []byte) error {
+			var row coord.NodePositions
+			if err := json.Unmarshal(value, &row); err != nil {
+				return fmt.Errorf("coord: the positions row at %s does not "+
+					"decode: the trim takes a minimum across these rows, so a row "+
+					"skipped here raises that minimum and deletes records a node "+
+					"still needs: %w", key, err)
+			}
+			out = append(out, row)
+			return nil
+		})
+	return out, err
 }
 
 // ForgetPositions removes a node's row.
@@ -127,40 +110,19 @@ func (f *FleetStore) PutHold(ctx context.Context, h coord.TrimHold) error {
 // deletes records the holder is in the middle of copying. "I could not read a
 // hold" has to be louder than "there are no holds".
 func (f *FleetStore) Holds(ctx context.Context) ([]coord.TrimHold, error) {
-	keys, err := f.positions.ListKeys(ctx)
-	if err != nil {
-		return nil, unavailable("list the trim holds", err)
-	}
-	defer func() { _ = keys.Stop() }()
-
 	var out []coord.TrimHold
-	for key := range keys.Keys() {
-		// THE BUCKET HOLDS SEVEN KEY CLASSES, so the listing filters. A
-		// positions row decoded as a hold would answer Validate's
-		// questions with zero values and pin nothing, which is the
-		// quiet version of not reading it at all.
-		segments, ok := coord.DocumentSegments(key)
-		if !ok || len(segments) < 2 || segments[0] != "hold" {
-			continue
-		}
-		entry, err := f.positions.Get(ctx, key)
-		switch {
-		case errors.Is(err, jetstream.ErrKeyNotFound):
-			// Released between the listing and the read, which is the
-			// normal path landing mid-sweep rather than a fault.
-			continue
-		case err != nil:
-			return nil, unavailable("read a trim hold", err)
-		}
-		var hold coord.TrimHold
-		if err := json.Unmarshal(entry.Value(), &hold); err != nil {
-			return nil, fmt.Errorf("coord: the trim hold at %s does not "+
-				"decode: a hold skipped here raises the trim floor and "+
-				"deletes records its holder is copying: %w", key, err)
-		}
-		out = append(out, hold)
-	}
-	return out, ctx.Err()
+	err := f.eachPositionKey(ctx, "hold", "the trim holds",
+		func(key string, value []byte) error {
+			var hold coord.TrimHold
+			if err := json.Unmarshal(value, &hold); err != nil {
+				return fmt.Errorf("coord: the trim hold at %s does not "+
+					"decode: a hold skipped here raises the trim floor and "+
+					"deletes records its holder is copying: %w", key, err)
+			}
+			out = append(out, hold)
+			return nil
+		})
+	return out, err
 }
 
 // ReleaseHold removes one.
@@ -206,42 +168,20 @@ func (f *FleetStore) PutFloor(ctx context.Context, floor coord.TrimFloor) error 
 // trim from, so a row silently dropped renders as a domain whose trim is
 // advancing — the one answer that stops anybody looking.
 func (f *FleetStore) Floors(ctx context.Context) ([]coord.TrimFloor, error) {
-	keys, err := f.positions.ListKeys(ctx)
-	if err != nil {
-		return nil, unavailable("list the trim floors", err)
-	}
-	defer func() { _ = keys.Stop() }()
-
 	var out []coord.TrimFloor
-	for key := range keys.Keys() {
-		// THE BUCKET HOLDS SEVEN KEY CLASSES, so the listing filters —
-		// and this one filters for the same load-bearing reason the
-		// other two do: a positions row decoded as a floor yields an
-		// empty domain and an empty `blocked_by`, which renders as a
-		// healthy trim on a domain nobody named.
-		segments, ok := coord.DocumentSegments(key)
-		if !ok || len(segments) < 2 || segments[0] != "floor" {
-			continue
-		}
-		entry, err := f.positions.Get(ctx, key)
-		switch {
-		case errors.Is(err, jetstream.ErrKeyNotFound):
-			// Removed between the listing and the read, which is a
-			// domain being retired mid-sweep rather than a fault.
-			continue
-		case err != nil:
-			return nil, unavailable("read a domain's trim floor", err)
-		}
-		var floor coord.TrimFloor
-		if err := json.Unmarshal(entry.Value(), &floor); err != nil {
-			return nil, fmt.Errorf("coord: the trim floor at %s does not "+
-				"decode: this row is what every surface reads a blocked trim "+
-				"from, so one skipped here renders as a trim that is "+
-				"advancing: %w", key, err)
-		}
-		out = append(out, floor)
-	}
-	return out, ctx.Err()
+	err := f.eachPositionKey(ctx, "floor", "the trim floors",
+		func(key string, value []byte) error {
+			var floor coord.TrimFloor
+			if err := json.Unmarshal(value, &floor); err != nil {
+				return fmt.Errorf("coord: the trim floor at %s does not "+
+					"decode: this row is what every surface reads a blocked trim "+
+					"from, so one skipped here renders as a trim that is "+
+					"advancing: %w", key, err)
+			}
+			out = append(out, floor)
+			return nil
+		})
+	return out, err
 }
 
 // ForgetFloor removes one domain's row.
@@ -283,35 +223,20 @@ func (f *FleetStore) PutBackupPoint(ctx context.Context, p coord.BackupPoint) er
 // silence — a fleet whose log stopped trimming because a row would not decode
 // must say so, or the operator diagnoses a backup that is running fine.
 func (f *FleetStore) BackupPoints(ctx context.Context) ([]coord.BackupPoint, error) {
-	keys, err := f.positions.ListKeys(ctx)
-	if err != nil {
-		return nil, unavailable("list the backup points", err)
-	}
-	defer func() { _ = keys.Stop() }()
-
 	var out []coord.BackupPoint
-	for key := range keys.Keys() {
-		segments, ok := coord.DocumentSegments(key)
-		if !ok || len(segments) < 2 || segments[0] != "backup" {
-			continue
-		}
-		entry, err := f.positions.Get(ctx, key)
-		switch {
-		case errors.Is(err, jetstream.ErrKeyNotFound):
-			continue
-		case err != nil:
-			return nil, unavailable("read a backup point", err)
-		}
-		var point coord.BackupPoint
-		if err := json.Unmarshal(entry.Value(), &point); err != nil {
-			return nil, fmt.Errorf("coord: the backup point at %s does not "+
-				"decode: the trim's backup term takes the newest of these, so "+
-				"one skipped here blocks the trim against a backup that is "+
-				"running fine: %w", key, err)
-		}
-		out = append(out, point)
-	}
-	return out, ctx.Err()
+	err := f.eachPositionKey(ctx, "backup", "the backup points",
+		func(key string, value []byte) error {
+			var point coord.BackupPoint
+			if err := json.Unmarshal(value, &point); err != nil {
+				return fmt.Errorf("coord: the backup point at %s does not "+
+					"decode: the trim's backup term takes the newest of these, so "+
+					"one skipped here blocks the trim against a backup that is "+
+					"running fine: %w", key, err)
+			}
+			out = append(out, point)
+			return nil
+		})
+	return out, err
 }
 
 // ForgetBackupPoint removes one owner's row.
@@ -564,29 +489,13 @@ func (f *FleetStore) MaintenanceAcks(ctx context.Context) ([]coord.MaintenanceAc
 func (f *FleetStore) eachPositionKey(ctx context.Context, class, what string,
 	fn func(key string, value []byte) error) error {
 
-	keys, err := f.positions.ListKeys(ctx)
-	if err != nil {
-		return unavailable("list "+what, err)
-	}
-	defer func() { _ = keys.Stop() }()
-
-	for key := range keys.Keys() {
-		segments, ok := coord.DocumentSegments(key)
+	return eachEntry(ctx, f.positions, func(kve jetstream.KeyValueEntry) error {
+		segments, ok := coord.DocumentSegments(kve.Key())
 		if !ok || len(segments) < 2 || segments[0] != class {
-			continue
+			return nil
 		}
-		entry, err := f.positions.Get(ctx, key)
-		switch {
-		case errors.Is(err, jetstream.ErrKeyNotFound):
-			continue
-		case err != nil:
-			return unavailable("read "+what, err)
-		}
-		if err := fn(key, entry.Value()); err != nil {
-			return err
-		}
-	}
-	return ctx.Err()
+		return fn(kve.Key(), kve.Value())
+	})
 }
 
 // The two CAS-race classifiers, and why they live beside the positions rather

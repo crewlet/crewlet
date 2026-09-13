@@ -31,6 +31,22 @@ So every call returns `(value, error)`, never a bare bool — and **each contrac
 | Lease renew | **Holds, briefly** | Ambiguity is not loss. The watchdog is what bounds it — see [Seat Ownership](seat-ownership.md). |
 | Budget charge | **Fails closed** — stop the round | Money leaves the building for every token, and a counter that cannot be reached must not un-cap a company. An error is *not* a refusal, though: the caller fails the turn rather than telling an agent it is out of budget. |
 
+**A listing obeys the same rule**, and it is the place it is easiest to lose.
+Reading a whole bucket — the fleet's node statuses, the open channels, every
+node's log position — is one pass that carries each key together with its
+value, and a pass that ends early is `unknown`, never a shorter list. The
+alternative is not hypothetical: a listing that reports what it managed to
+read, with no error, hands every caller "there are no more records" when the
+truth is "the store stopped answering". For the trim's published floor that
+reads as a fleet needing nothing, which deletes records a node is still
+replaying.
+
+It is also why a listing is not a name list followed by a fetch per name. That
+shape costs a round trip per key on top of an ephemeral consumer created and
+destroyed per call — paid continuously, since several of a node's fifteen-second
+duty loops read a bucket on every tick and the state-log write fence reads the
+position register on every first write to a subject.
+
 ---
 
 ## What the fleet shares

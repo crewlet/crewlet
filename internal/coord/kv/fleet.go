@@ -668,28 +668,21 @@ func (f *FleetStore) Cool(ctx context.Context, key string, until time.Time) erro
 
 // Since returns every cooldown that has not yet lapsed.
 func (f *FleetStore) Since(ctx context.Context, now time.Time) (map[string]time.Time, error) {
-	keys, err := f.cooldowns.ListKeys(ctx)
-	if err != nil {
-		return nil, unavailable("list the cooldowns", err)
-	}
 	out := map[string]time.Time{}
-	for key := range keys.Keys() {
-		entry, err := f.cooldowns.Get(ctx, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			continue
-		}
-		if err != nil {
-			return nil, unavailable("read a cooldown", err)
-		}
-		until, err := time.Parse(time.RFC3339Nano, string(entry.Value()))
+	err := eachEntry(ctx, f.cooldowns, func(kve jetstream.KeyValueEntry) error {
+		until, err := time.Parse(time.RFC3339Nano, string(kve.Value()))
 		if err != nil || !until.After(now) {
-			continue
+			return nil
 		}
-		decoded, ok := decodeKey(key)
+		decoded, ok := decodeKey(kve.Key())
 		if !ok {
-			continue
+			return nil
 		}
 		out[decoded] = until
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return out, nil
 }
@@ -858,32 +851,25 @@ func (f *FleetStore) Used(ctx context.Context, scope string) (int, error) {
 
 // Usage returns every counter, org first then seats by scope.
 func (f *FleetStore) Usage(ctx context.Context) ([]coord.Usage, error) {
-	keys, err := f.budgets.ListKeys(ctx)
-	if err != nil {
-		return nil, unavailable("list the budgets", err)
-	}
 	var out []coord.Usage
-	for key := range keys.Keys() {
-		entry, err := f.budgets.Get(ctx, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			continue
-		}
-		if err != nil {
-			return nil, unavailable("read the budget", err)
-		}
+	err := eachEntry(ctx, f.budgets, func(kve jetstream.KeyValueEntry) error {
 		var record budgetRecord
-		if err := json.Unmarshal(entry.Value(), &record); err != nil {
-			return nil, unavailable("decode the budget", err)
+		if err := json.Unmarshal(kve.Value(), &record); err != nil {
+			return unavailable("decode the budget", err)
 		}
-		scope, ok := decodeKey(key)
+		scope, ok := decodeKey(kve.Key())
 		if !ok {
 			// A key this backend did not write. Skipped rather than
 			// guessed at, matching the lease listing: an invented
 			// scope name in the operator's budget view is worse than
 			// a missing one.
-			continue
+			return nil
 		}
 		out = append(out, coord.Usage{Scope: scope, Used: record.Used, UpdatedAt: record.At})
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	coord.SortUsage(out)
 	return out, nil
@@ -891,7 +877,7 @@ func (f *FleetStore) Usage(ctx context.Context) ([]coord.Usage, error) {
 
 // Reset zeroes one scope, or every scope when given "".
 //
-// PURGE, not delete: a tombstone would be returned by a later ListKeys as a
+// PURGE, not delete: a tombstone would be returned by a later listing as a
 // key with no value, so an operator who cleared a counter would still see the
 // scope in `crewlet budgets`.
 func (f *FleetStore) Reset(ctx context.Context, scope string) (int, error) {
@@ -904,12 +890,19 @@ func (f *FleetStore) Reset(ctx context.Context, scope string) (int, error) {
 		}
 		return 1, nil
 	}
-	keys, err := f.budgets.ListKeys(ctx)
-	if err != nil {
-		return 0, unavailable("list the budgets", err)
+	// COLLECTED FIRST, PURGED AFTER. The walk holds a live subscription to
+	// this very bucket, and purging inside it would have the sweep writing
+	// the records its own listing is still delivering. The set is one key
+	// per counted scope, so holding it costs nothing worth the hazard.
+	var keys []string
+	if err := eachEntry(ctx, f.budgets, func(kve jetstream.KeyValueEntry) error {
+		keys = append(keys, kve.Key())
+		return nil
+	}); err != nil {
+		return 0, err
 	}
 	cleared := 0
-	for key := range keys.Keys() {
+	for _, key := range keys {
 		if err := f.budgets.Purge(ctx, key); err != nil {
 			return cleared, unavailable("reset the budget", err)
 		}
@@ -1145,31 +1138,24 @@ func (f *FleetStore) RecordApply(ctx context.Context, status coord.NodeApply) er
 
 // Fleet returns every node's last status, freshest first.
 func (f *FleetStore) Fleet(ctx context.Context) ([]coord.NodeApply, error) {
-	keys, err := f.status.ListKeys(ctx)
-	if err != nil {
-		return nil, unavailable("list the fleet status", err)
-	}
 	var out []coord.NodeApply
-	for key := range keys.Keys() {
-		entry, err := f.status.Get(ctx, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			continue
-		}
-		if err != nil {
-			return nil, unavailable("read a node's apply status", err)
-		}
+	err := eachEntry(ctx, f.status, func(kve jetstream.KeyValueEntry) error {
 		var record applyRecord
-		if err := json.Unmarshal(entry.Value(), &record); err != nil {
-			continue
+		if err := json.Unmarshal(kve.Value(), &record); err != nil {
+			return nil
 		}
-		node, ok := decodeKey(key)
+		node, ok := decodeKey(kve.Key())
 		if !ok {
-			continue
+			return nil
 		}
 		out = append(out, coord.NodeApply{
 			NodeID: node, Epoch: record.Epoch, RevisionID: record.RevisionID,
 			Status: record.Status, Error: record.Error, UpdatedAt: record.UpdatedAt,
 		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	slices.SortFunc(out, func(a, b coord.NodeApply) int {
 		// NEWEST FIRST, so the negated compare; the node id breaks a tie
@@ -1222,31 +1208,23 @@ func (f *FleetStore) Secret(ctx context.Context, name string) (coord.SecretRecor
 
 // SecretValues returns every sealed value.
 func (f *FleetStore) SecretValues(ctx context.Context) ([]coord.SecretRecord, error) {
-	keys, err := f.secrets.ListKeys(ctx)
-	if err != nil {
-		return nil, unavailable("list the secrets", err)
-	}
 	var out []coord.SecretRecord
-	for key := range keys.Keys() {
-		if _, ok := decodeKey(key); !ok {
-			continue
+	// RAISED rather than skipped, for the same reason Secret raises and more
+	// sharply: this listing IS the engine's boot snapshot, so a value
+	// silently dropped here becomes an empty ${VAR} everywhere at once.
+	err := eachEntry(ctx, f.secrets, func(kve jetstream.KeyValueEntry) error {
+		if _, ok := decodeKey(kve.Key()); !ok {
+			return nil
 		}
-		entry, err := f.secrets.Get(ctx, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			continue
-		}
-		if err != nil {
-			// RAISED for the same reason Secret raises, and more sharply:
-			// this listing IS the engine's boot snapshot, so a value
-			// silently dropped here becomes an empty ${VAR} everywhere at
-			// once.
-			return nil, unavailable("read a secret", err)
-		}
-		rec, ok := decodeSecret(entry.Value())
+		rec, ok := decodeSecret(kve.Value())
 		if !ok {
-			return nil, fmt.Errorf("coord/kv: a stored secret is not decodable")
+			return fmt.Errorf("coord/kv: a stored secret is not decodable")
 		}
 		out = append(out, rec)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	slices.SortFunc(out, func(a, b coord.SecretRecord) int { return cmp.Compare(a.Name, b.Name) })
 	return out, nil
@@ -1459,30 +1437,23 @@ func (f *FleetStore) mutateChannel(ctx context.Context, what, id string, apply f
 
 // OpenChannels returns every channel still open, by id.
 func (f *FleetStore) OpenChannels(ctx context.Context) ([]coord.Channel, error) {
-	keys, err := f.channels.ListKeys(ctx)
-	if err != nil {
-		return nil, unavailable("list the channels", err)
-	}
 	var out []coord.Channel
-	for key := range keys.Keys() {
-		id, ok := decodeKey(key)
+	err := eachEntry(ctx, f.channels, func(kve jetstream.KeyValueEntry) error {
+		id, ok := decodeKey(kve.Key())
 		if !ok {
-			continue
+			return nil
 		}
-		entry, err := f.channels.Get(ctx, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			continue
-		}
+		ch, err := decodeChannel(id, kve.Value())
 		if err != nil {
-			return nil, unavailable("read a channel", err)
-		}
-		ch, err := decodeChannel(id, entry.Value())
-		if err != nil {
-			return nil, err
+			return err
 		}
 		if ch.Open() {
 			out = append(out, ch)
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	slices.SortFunc(out, func(a, b coord.Channel) int { return cmp.Compare(a.ID, b.ID) })
 	return out, nil
@@ -1494,34 +1465,38 @@ func (f *FleetStore) OpenChannels(ctx context.Context) ([]coord.Channel, error) 
 // leaves a tombstone revision, and a bucket with no TTL keeps every one of
 // them for the life of the deployment.
 func (f *FleetStore) PurgeChannels(ctx context.Context, cutoff time.Time) (int64, error) {
-	keys, err := f.channels.ListKeys(ctx)
-	if err != nil {
-		return 0, unavailable("list the channels", err)
+	// DECIDED FIRST, PURGED AFTER — the sweep must not write to the bucket
+	// its own listing is still being delivered from. Each candidate carries
+	// the revision it was decided on, so the predicate below is unchanged.
+	type doomed struct {
+		key      string
+		revision uint64
 	}
-	var n int64
-	for key := range keys.Keys() {
-		id, ok := decodeKey(key)
+	var candidates []doomed
+	err := eachEntry(ctx, f.channels, func(kve jetstream.KeyValueEntry) error {
+		id, ok := decodeKey(kve.Key())
 		if !ok {
-			continue
+			return nil
 		}
-		entry, err := f.channels.Get(ctx, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			continue
-		}
+		ch, err := decodeChannel(id, kve.Value())
 		if err != nil {
-			return n, unavailable("read a channel", err)
-		}
-		ch, err := decodeChannel(id, entry.Value())
-		if err != nil {
-			return n, err
+			return err
 		}
 		if ch.Open() || !ch.ClosedAt.Before(cutoff) {
-			continue
+			return nil
 		}
+		candidates = append(candidates, doomed{key: kve.Key(), revision: kve.Revision()})
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	for _, c := range candidates {
 		// Predicated on the revision we read: a channel somebody
 		// re-opened or counted between the read and the delete is not
 		// the one this sweep decided to drop.
-		if err := f.channels.Purge(ctx, key, jetstream.LastRevision(entry.Revision())); err != nil {
+		if err := f.channels.Purge(ctx, c.key, jetstream.LastRevision(c.revision)); err != nil {
 			if errors.Is(err, jetstream.ErrKeyNotFound) || errors.Is(err, jetstream.ErrKeyRevisionMismatch) {
 				continue
 			}
@@ -1585,30 +1560,23 @@ func (f *FleetStore) SandboxRun(ctx context.Context, turnID string) (coord.Recor
 
 // SandboxRuns returns every record, by turn id.
 func (f *FleetStore) SandboxRuns(ctx context.Context) ([]coord.Record, error) {
-	keys, err := f.runs.ListKeys(ctx)
-	if err != nil {
-		return nil, unavailable("list the sandbox runs", err)
-	}
+	// A listing that quietly dropped a run would tell the seat's new owner
+	// there is nothing to recover, which abandons a billed box — the exact
+	// failure this bucket exists to end. eachEntry raises on a short answer
+	// rather than returning one, which is what makes that true.
 	var out []coord.Record
-	for key := range keys.Keys() {
-		turnID, ok := decodeKey(key)
+	err := eachEntry(ctx, f.runs, func(kve jetstream.KeyValueEntry) error {
+		turnID, ok := decodeKey(kve.Key())
 		if !ok {
-			continue
-		}
-		entry, err := f.runs.Get(ctx, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			continue
-		}
-		if err != nil {
-			// RAISED, not skipped. A listing that quietly dropped a run
-			// tells the seat's new owner there is nothing to recover,
-			// which abandons a billed box — the exact failure this
-			// bucket exists to end.
-			return nil, unavailable("read a sandbox run", err)
+			return nil
 		}
 		out = append(out, coord.Record{
-			Key: turnID, Value: entry.Value(), Version: entry.Revision(),
+			Key: turnID, Value: bytes.Clone(kve.Value()), Version: kve.Revision(),
 		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	slices.SortFunc(out, func(a, b coord.Record) int { return cmp.Compare(a.Key, b.Key) })
 	return out, nil
@@ -1668,34 +1636,23 @@ func (f *FleetStore) DeleteSandboxRun(ctx context.Context, turnID string, versio
 
 // IntegrationStatuses returns every recorded status, keyed by surface.
 func (f *FleetStore) IntegrationStatuses(ctx context.Context) (map[string][]byte, error) {
-	keys, err := f.integrations.ListKeys(ctx)
-	if err != nil {
-		return nil, unavailable("list the integration statuses", err)
-	}
 	out := map[string][]byte{}
-	for key := range keys.Keys() {
-		entry, err := f.integrations.Get(ctx, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			// Deleted between the listing and the read, which is the
-			// reconcile loop forgetting a surface whose block has just
-			// left the company document. Skipped rather than raised: it
-			// is the outcome the caller wanted.
-			continue
-		}
-		if err != nil {
-			return nil, unavailable("read an integration status", err)
-		}
-		kind, ok := decodeKey(key)
+	err := eachEntry(ctx, f.integrations, func(kve jetstream.KeyValueEntry) error {
+		kind, ok := decodeKey(kve.Key())
 		if !ok {
 			// A key this backend did not write. Skipped rather than
 			// guessed at, exactly as the fleet listing does: inventing a
 			// surface name would put a row nothing reconciles into an
 			// operator's status page.
-			continue
+			return nil
 		}
 		// COPIED. The entry's buffer belongs to the client and the caller
-		// keeps this past the loop iteration.
-		out[kind] = bytes.Clone(entry.Value())
+		// keeps this past the walk.
+		out[kind] = bytes.Clone(kve.Value())
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return out, nil
 }
