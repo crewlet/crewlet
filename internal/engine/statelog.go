@@ -1431,18 +1431,25 @@ func (e *Engine) snapshotLoop(s *stateLog, snap *statelog.Snapshotter,
 	dir string, interval time.Duration) {
 
 	ctx := s.run
-	// everTook is what decides how LOUD a skip is, and the distinction is
-	// the one an operator actually has: a node that has taken a snapshot
-	// and skips a tick is a node whose fleet has a donor, and a node that
-	// has never taken one is a node the fleet cannot recover from. The
-	// snapshotter reports every skip at info, which is right for the first
-	// case and much too quiet for the second.
-	var everTook bool
-	// AND THE REASON LAST REPORTED, because "much too quiet" was answered
-	// with a line on every tick, which is the other way to be unreadable: a
-	// state that has not changed is not news. A tick that changes nothing
-	// says nothing; the register is still stamped, so the fleet screen and
-	// the trim see every tick whether or not the log does.
+	// WHAT THIS NODE HOLDS is what decides how LOUD a skip is, and the
+	// distinction is the one an operator actually has: a node holding an
+	// artefact that skips a tick is a node whose fleet has a donor, and a
+	// node holding none is a node the fleet cannot recover from.
+	//
+	// It is [snapshotHeld.Have] rather than "did THIS PROCESS take one",
+	// which is the same question only until the first restart. A node that
+	// snapshotted yesterday and was restarted skips for `recent` — its
+	// artefact is inside the interval — and a process-scoped flag is false
+	// at that moment, so every such restart warned that the node had never
+	// taken a snapshot while its own register row was advertising the
+	// artefact a peer could adopt. `Have` is read from the directory, so it
+	// survives the restart the way the artefact does.
+	//
+	// THE REASON LAST REPORTED is the other half: a state that has not
+	// changed is not news, and the loop retries every thirty seconds for as
+	// long as it holds. A tick that changes nothing says nothing; the
+	// register is still stamped, so the fleet screen and the trim see every
+	// tick whether or not the log does.
 	var reported statelog.SkipReason
 	for {
 		wait := interval
@@ -1456,7 +1463,6 @@ func (e *Engine) snapshotLoop(s *stateLog, snap *statelog.Snapshotter,
 		s.snapshot.Store(&held)
 		switch {
 		case err == nil:
-			everTook = true
 			reported = ""
 		case !isSkip(err):
 			// REPEATED DELIBERATELY, unlike a skip: this one RAN and
@@ -1464,17 +1470,15 @@ func (e *Engine) snapshotLoop(s *stateLog, snap *statelog.Snapshotter,
 			// went read-only is a fault an operator should keep seeing
 			// rather than a posture they have already been told about.
 			log.WarnContext(ctx, "statelog_snapshot_failed",
-				"error", err.Error(), "ever_took", everTook,
+				"error", err.Error(), "holds_artefact", held.Have,
 				"detail", "this node's newest artefact is older than the "+
 					"interval, so a peer adopting from it replays further")
 			reported = statelog.SkipFailed
 			wait = min(snapshotSkipRetry, interval)
-		case !everTook:
-			reason, _ := statelog.Skipped(err)
-			emitNoSnapshot(ctx, reportForSkip(reason, reported))
-			reported = reason
-			wait = min(snapshotSkipRetry, interval)
 		default:
+			reason, _ := statelog.Skipped(err)
+			emitNoSnapshot(ctx, reportForSkip(reason, reported, held.Have))
+			reported = remembered(reason, held.Have)
 			wait = min(snapshotSkipRetry, interval)
 		}
 		select {
@@ -1533,8 +1537,13 @@ type noSnapshotReport struct {
 // FIRST term [statelog.Snapshotter] gates on, so a solo node's whole attempt
 // is one read of the positions register, and keeping it at that cadence is
 // what arms the donor within a tick of a second node appearing.
-func reportForSkip(reason, reported statelog.SkipReason) noSnapshotReport {
-	if reason == reported {
+func reportForSkip(reason, reported statelog.SkipReason, holds bool) noSnapshotReport {
+	// A NODE THAT HOLDS AN ARTEFACT SAYS NOTHING, and `holds` is the whole
+	// of that rule rather than a condition at the call site: written as a
+	// branch in the loop, the predicate and the decision were two places
+	// that had to agree about one question, and the pure half could be
+	// called with a reason the loop would never have handed it.
+	if holds || reason == reported {
 		return noSnapshotReport{}
 	}
 	if reason == statelog.SkipSoleNode {
@@ -1557,6 +1566,18 @@ func reportForSkip(reason, reported statelog.SkipReason) noSnapshotReport {
 			"preconditions clear on their own as this node catches up and its " +
 			"peers publish their positions",
 	}
+}
+
+// remembered is what the next tick compares against.
+//
+// A NODE HOLDING AN ARTEFACT REMEMBERS NOTHING, which is what keeps "say it
+// once" true in both directions: should this node later hold none, that is a
+// change worth saying however long ago it last said it.
+func remembered(reason statelog.SkipReason, holds bool) statelog.SkipReason {
+	if holds {
+		return ""
+	}
+	return reason
 }
 
 // emitNoSnapshot writes what [reportForSkip] decided, and nothing for the tick

@@ -370,6 +370,11 @@ appearing means the node's answer moved — and the absence of a repeat does not
 mean it recovered. `crewlet retention snapshots` is what says what each node
 holds right now; the log says when it changed.
 
+It is also about the artefact this node **holds**, not about what this process
+has taken, so a restart is silent: a node that snapshotted yesterday and came
+back up skips for `recent`, still holds a copy a peer can adopt, and has
+nothing to report.
+
 A **single node** is the one case that is not a warning at all. It skips for
 `sole_node` — there is nobody to donate to — and says so once, at info, as
 **`statelog_snapshot_sole_node`**. Nothing is wrong and nothing is pending: a
