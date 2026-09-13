@@ -60,6 +60,7 @@ export function Field({
   choices,
   disabled,
   required,
+  markRequired,
   autoFocus,
   secrets,
   onSecretsNeeded,
@@ -75,6 +76,13 @@ export function Field({
   choices?: FieldChoice[];
   disabled?: boolean;
   required?: boolean;
+  /**
+   * Say "(required)" beside the label, for a field whose requiredness is
+   * NEWS — one that appeared because of an answer above it. Required is the
+   * unmarked default here; marking every required field is noise that
+   * teaches a reader to skip the note.
+   */
+  markRequired?: boolean;
   autoFocus?: boolean;
   /**
    * The sealed entries this company holds, offered when somebody types `$`.
@@ -245,6 +253,21 @@ export function Field({
       <label htmlFor={id}>
         {label}
         {required === false && <span className="faint"> (optional)</span>}
+        {/* AND REQUIRED IS MARKED ONLY WHERE IT IS NEWS.
+            
+            The convention on this form is that required is the default and
+            the exception is marked, which is right: most fields are required,
+            so marking them all is noise that teaches a reader to skip the
+            note entirely.
+            
+            A field that just APPEARED because of an answer is the exception
+            to that. Its requiredness is new information — it was not on
+            screen a moment ago and is now the one thing standing between the
+            answer above it and its working — so the caller that knows it is
+            gated asks for the mark. See SetupDialog's `required_when`. */}
+        {required === true && markRequired && (
+          <span className="faint"> (required)</span>
+        )}
       </label>
       {picker ? (
         <select
@@ -256,7 +279,33 @@ export function Field({
           aria-invalid={error ? true : undefined}
           onChange={(e) => onChange(e.target.value)}
         >
-          <option value="">Choose one</option>
+          {/* NO "CHOOSE ONE" OVER AN ANSWER THAT EXISTS.
+              
+              It was rendered unconditionally, so every dropdown opened with a
+              placeholder above the value it was already showing — a question
+              mark over a field that had been answered, on every integration
+              form. Every choice this product declares carries a default, so
+              the empty option is only ever honest in two cases, and both are
+              handled rather than papered over.
+              
+              NOTHING CHOSEN AT ALL is the first, and there the placeholder is
+              the truth. It should not be reachable — a requirement with
+              choices and no default would be one — and if it ever is, a
+              silent first-option selection is a form answering somebody's
+              question for them. */}
+          {value === "" && <option value="">Choose one</option>}
+          {/* AND A STORED ANSWER THIS LIST DOES NOT OFFER keeps its own
+              option, rather than vanishing into a selection it is not.
+              
+              A form may narrow its choices — GitHub's coverage question now
+              offers two of the three modes its config accepts — and a company
+              already holding the dropped one must not open the dialog to find
+              a different answer selected, then save it. The value is shown as
+              itself, so what is on screen is what is stored until somebody
+              deliberately changes it. */}
+          {value !== "" && !(choices ?? []).some((c) => c.value === value) && (
+            <option value={value}>{value}</option>
+          )}
           {(choices ?? []).map((c) => (
             <option key={c.value} value={c.value}>
               {c.label}

@@ -64,7 +64,14 @@ const tool: SetupToolState = {
       kind: "handle",
       config_path: "integrations.datadog.route_to",
       blocks: "credential_missing",
-      choices: [{ value: "sre-lead", label: "sre-lead" }],
+      // THE DEFAULT THE ENGINE ACTUALLY DECLARES. Every choice field ships
+      // one (TestEveryChoiceOpensOnAnAnswer pins it), so a fixture without
+      // one describes a form this product cannot render.
+      default: "none",
+      choices: [
+        { value: "none", label: "None: dismiss alerts nobody owns" },
+        { value: "sre-lead", label: "sre-lead" },
+      ],
     }),
     req({
       field: "handle_tag",
@@ -454,10 +461,14 @@ test("submitting asks for the mint and sends only what was filled in", async () 
   // The toggle defaults on, because connecting something and leaving it off
   // is not what the button says.
   expect(body.values.enabled).toBe("true");
-  // Nothing was typed into these, so nothing is sent: a field sent back
+  // Nothing was typed into this, so nothing is sent: a field sent back
   // unchanged is a field rewritten for no reason.
-  expect(body.values.route_to).toBeUndefined();
   expect(body.values.handle_tag).toBeUndefined();
+  // A SEEDED DEFAULT IS SENT, THOUGH, and that is the contract rather than an
+  // exception to it: a default is offered on screen, so it is submitted as
+  // what was on screen. Withheld, the form would show an answer and store a
+  // different one — see `seed`.
+  expect(body.values.route_to).toBe("none");
 });
 
 // A LITERAL REFUSAL LANDS ON THE FIELD, not in a banner nobody connects to an
@@ -599,6 +610,11 @@ test("connecting and managing render one identical form", () => {
       required: false,
       present,
       value: present ? "datadoghq.com" : undefined,
+      // AND THE REGION'S OWN DEFAULT, which is what makes the two sides of
+      // this test identical rather than one of them opening on a
+      // placeholder: a connect form seeds the default, a settings form the
+      // stored value, and with no default the first has nothing to show.
+      default: "datadoghq.com",
       choices: [{ value: "datadoghq.com", label: "datadoghq.com" }],
     }),
     req({
@@ -627,7 +643,17 @@ test("connecting and managing render one identical form", () => {
       kind: "handle",
       present,
       value: present ? "sre-lead" : undefined,
-      choices: [{ value: "sre-lead", label: "SRE Lead (sre-lead)" }],
+      // THE DEFAULT THE ENGINE DECLARES. Both picker kinds ship one —
+      // TestEveryChoiceOpensOnAnAnswer pins it across every vendor — and
+      // without it the connect side of this comparison opens on a "Choose
+      // one" the settings side does not have, which is precisely the "the
+      // settings form is a different screen" divergence this test exists to
+      // catch. A fixture with no default describes a form that cannot exist.
+      default: "none",
+      choices: [
+        { value: "none", label: "None: dismiss alerts nobody owns" },
+        { value: "sre-lead", label: "SRE Lead (sre-lead)" },
+      ],
     }),
   ];
 
@@ -2164,4 +2190,114 @@ test("choosing the gated answer reveals its field", () => {
   const revealed = screen.queryByText("Organization token");
   expect(revealed).not.toBeNull();
   expect(revealed?.closest("details")?.open ?? true).toBe(true);
+});
+
+// NO PLACEHOLDER OVER AN ANSWER THAT EXISTS.
+//
+// "Choose one" was rendered unconditionally, so every dropdown on every
+// integration form opened with a question mark above the value it was already
+// showing. Every choice this product declares carries a default, so the empty
+// option is never the truth on a form somebody has opened.
+test("a dropdown holding an answer offers no placeholder", () => {
+  const { container } = render(
+    <SetupDialog
+      sections={[{ name: "Datadog", tool }]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  for (const select of container.querySelectorAll("select")) {
+    expect(select.value).not.toBe("");
+    const empty = [...select.options].filter((o) => o.value === "");
+    expect(empty).toHaveLength(0);
+  }
+});
+
+// AND A STORED ANSWER THE LIST NO LONGER OFFERS KEEPS ITS OWN OPTION.
+//
+// A form may narrow its choices — GitHub's coverage question offers two of
+// the three modes its config accepts — and a company already holding the
+// dropped one must not open the dialog to find a different answer selected,
+// and then save it. Without this the select matches nothing, and dropping the
+// placeholder would silently show the first option instead.
+test("a value the choices do not contain is shown as itself", () => {
+  const narrowed: SetupToolState = {
+    ...tool,
+    key: "github",
+    configured: true,
+    requirements: [
+      {
+        field: "provisioning.org_webhook",
+        label: "Which GitHub activity should reach your agents",
+        kind: "choice",
+        config_path: "x",
+        required: false,
+        present: true,
+        value: "auto",
+        choices: [
+          { value: "false", label: "Repositories where an agent's app is installed" },
+          { value: "true", label: "Every repository in acme, including new ones" },
+        ],
+      },
+    ],
+  };
+  const { container } = render(
+    <SetupDialog
+      sections={[{ name: "GitHub", tool: narrowed }]}
+      title="GitHub"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  const select = container.querySelector("select");
+  expect(select?.value).toBe("auto");
+});
+
+// A GATED FIELD SAYS IT IS REQUIRED, AND SITS UNDER THE ANSWER THAT REVEALED
+// IT.
+//
+// Required is the unmarked default on this form, which is right — most fields
+// are required and marking them all is noise. A field that appeared because
+// of an answer is the exception: its requiredness is news, and it is the one
+// thing standing between that answer and its working.
+test("a revealed field is marked required and follows its question", () => {
+  const coverage: SetupToolState = {
+    ...tool,
+    key: "github",
+    configured: true,
+    requirements: [
+      {
+        field: "provisioning.org_webhook",
+        label: "Which GitHub activity should reach your agents",
+        kind: "choice",
+        config_path: "x",
+        required: false,
+        present: true,
+        value: "false",
+        choices: [
+          { value: "false", label: "Apps" },
+          { value: "true", label: "Every repository" },
+        ],
+      },
+      { ...gated },
+    ],
+  };
+  const { container } = render(
+    <SetupDialog
+      sections={[{ name: "GitHub", tool: coverage }]}
+      title="GitHub"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  fireEvent.change(container.querySelector("select")!, { target: { value: "true" } });
+
+  const labels = [...container.querySelectorAll("label")].map((l) => l.textContent ?? "");
+  const token = labels.findIndex((t) => t.startsWith("Organization token"));
+  const choice = labels.findIndex((t) => t.startsWith("Which GitHub activity"));
+  expect(token).toBeGreaterThan(-1);
+  expect(token).toBeGreaterThan(choice);
+  expect(labels[token]).toContain("(required)");
+  expect(labels[token]).not.toContain("(optional)");
 });
