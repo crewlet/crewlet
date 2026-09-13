@@ -108,43 +108,6 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			Blocks:     integration.FindingIngressBlocked,
 		},
 		{
-			// THE TOKEN THE HOOK CHOICE ABOVE NEEDS, asked for here because
-			// the warning about it named a field the dashboard had no box
-			// for.
-			//
-			// An organization-wide hook needs `admin:org_hook`, which only
-			// a user token carries: an App installation grants nothing of
-			// the sort, so installing every agent's app — the thing the
-			// card spends its time asking for — cannot clear it, and an
-			// operator who did exactly as they were told watched the same
-			// finding sit there. Measured, and reported as the install not
-			// having worked.
-			//
-			// OPTIONAL, because it genuinely is for the default shape: a
-			// company hooking each agent's own app needs none. It blocks
-			// the same finding the warning carries, so the form puts this
-			// field in front of whoever is reading that warning rather
-			// than every connect.
-			Field:      "token",
-			Label:      "Organization token",
-			Kind:       setup.KindSecret,
-			ConfigPath: "integrations.github.token",
-			SecretName: "GITHUB_TOKEN",
-			// NEITHER REQUIRED NOR OPTIONAL: required BY AN ANSWER. It is
-			// the one thing standing between "every repository in the
-			// organization" and that being true, and a credential the
-			// other answer never uses. Stated as Required it blocked a
-			// connect that needed nothing; stated as optional it let the
-			// API store a choice it could not carry out.
-			RequiredWhen: &setup.Gate{
-				Field: "provisioning.org_webhook", Equals: string(config.ContainerWebhookRequire),
-			},
-			Help: "GitHub only lets a user token register an organization-wide " +
-				"hook, and it needs the admin:org_hook scope. No app can carry " +
-				"this, however it is installed.",
-			Blocks: integration.FindingIngressBlocked,
-		},
-		{
 			Field:      "provisioning.org_webhook",
 			Label:      "Which GitHub activity should reach your agents",
 			Kind:       setup.KindChoice,
@@ -181,6 +144,47 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			Default: string(config.ContainerWebhookNever),
 			Help: "Each agent's own app already delivers what happens in the " +
 				"repositories it is installed on.",
+		},
+		{
+			// THE TOKEN THE COVERAGE ANSWER ABOVE NEEDS, and it sits under
+			// that answer rather than above it: a field revealed by a
+			// choice belongs beneath the choice that revealed it, or it
+			// appears somewhere a reader has already scrolled past. Asked
+			// for at all because
+			// the warning about it named a field the dashboard had no box
+			// for.
+			//
+			// An organization-wide hook needs `admin:org_hook`, which only
+			// a user token carries: an App installation grants nothing of
+			// the sort, so installing every agent's app — the thing the
+			// card spends its time asking for — cannot clear it, and an
+			// operator who did exactly as they were told watched the same
+			// finding sit there. Measured, and reported as the install not
+			// having worked.
+			//
+			// OPTIONAL, because it genuinely is for the default shape: a
+			// company hooking each agent's own app needs none. It blocks
+			// the same finding the warning carries, so the form puts this
+			// field in front of whoever is reading that warning rather
+			// than every connect.
+			Field:      "token",
+			Label:      "Organization token",
+			Kind:       setup.KindSecret,
+			ConfigPath: "integrations.github.token",
+			SecretName: "GITHUB_TOKEN",
+			// NEITHER REQUIRED NOR OPTIONAL: required BY AN ANSWER. It is
+			// the one thing standing between "every repository in the
+			// organization" and that being true, and a credential the
+			// other answer never uses. Stated as Required it blocked a
+			// connect that needed nothing; stated as optional it let the
+			// API store a choice it could not carry out.
+			RequiredWhen: &setup.Gate{
+				Field: "provisioning.org_webhook", Equals: string(config.ContainerWebhookRequire),
+			},
+			Help: "GitHub only lets a user token register an organization-wide " +
+				"hook, and it needs the admin:org_hook scope. No app can carry " +
+				"this, however it is installed.",
+			Blocks: integration.FindingIngressBlocked,
 		},
 	}
 

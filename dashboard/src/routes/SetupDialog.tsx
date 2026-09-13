@@ -1211,6 +1211,11 @@ export function SetupDialog({
             // field is required by an ANSWER, so the marker follows the
             // answer rather than a static flag: see [neededField].
             required={neededField(r, answeredIn(section, ownBy.get(sectionKey(section)) ?? []))}
+            // AND SAID OUT LOUD FOR A GATED FIELD, whose requiredness is
+            // news: it was not on screen a moment ago, and it is now the one
+            // thing standing between the answer above it and its working.
+            // Required is the unmarked default everywhere else.
+            markRequired={r.required_when !== undefined}
             error={fieldErrors[key]}
             choices={
               r.kind === "toggle"
