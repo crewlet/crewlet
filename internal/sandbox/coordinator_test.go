@@ -28,18 +28,17 @@ type resumeSpy struct {
 
 func (s *resumeSpy) Resume(ctx context.Context, req ResumeRequest) error {
 	s.mu.Lock()
-	if s.err != nil {
-		err := s.err
-		s.mu.Unlock()
-		return err
+	err, relaunch := s.err, s.relaunch
+	if err == nil {
+		s.requests = append(s.requests, req)
 	}
-	s.requests = append(s.requests, req)
-	relaunch := s.relaunch
 	s.mu.Unlock()
+	// Before the error, as a real turn does: a resumed executor can call
+	// run_sandbox again and break later in the same round.
 	if relaunch != nil {
 		relaunch(ctx, req.Run)
 	}
-	return nil
+	return err
 }
 
 func (s *resumeSpy) calls() []ResumeRequest {
@@ -315,17 +314,36 @@ func TestAFailedResumeUnclaimsSoTheRetryCanWin(t *testing.T) {
 // the phase breaks; only one of the two outcomes also repeats the writes.
 func TestAResumeThatBrokeAfterActingKeepsItsClaim(t *testing.T) {
 	rig := newCoordRig(t)
-	rig.launch("t1")
+	run := rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "done"})
 	rig.resumer.err = fmt.Errorf("%w: the reviewer's provider went away", ErrResumeActed)
+	rig.coordinator.markBusy("swe")
 
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("the completion was NAKed, so it will be redelivered into a "+
 			"conversation whose writes already landed: %v", err)
 	}
-	if got := rig.get("t1"); got.Status == StatusRunning {
-		t.Fatalf("status = %q, want the claim left taken so no retry wins the flip", got.Status)
+	if got, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || (found && got.Status == StatusRunning) {
+		t.Fatalf("Get = %+v, found %v, %v; want the claim left taken so no retry wins the flip", got, found, err)
+	}
+
+	// AND THE LOST TURN IS SETTLED, like every other one. Nothing else will
+	// ever act on it: no completion can claim it again, and recovery runs only
+	// when the seat changes hands. Left claimed and busy, the seat parked
+	// every message it received for as long as this node kept it, and the
+	// paused box and its record stayed for good.
+	if rig.coordinator.AwaitingSandbox("swe") {
+		t.Fatal("the seat stayed parked on a run whose resumed turn is over")
+	}
+	if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != run.SandboxID {
+		t.Fatalf("killed %v, want the lost turn's box %q reclaimed", killed, run.SandboxID)
+	}
+	rig.finished("t1")
+	// The resumed turn published its own failed completion; this is not a
+	// run that never resumed, so it is not announced as one.
+	if failed := rig.failures(); len(failed) != 0 {
+		t.Fatalf("announced %+v for a turn that did resume", failed)
 	}
 
 	// AND THE RETRY DOES NOT WIN. This is the invariant, not the status
@@ -338,6 +356,44 @@ func TestAResumeThatBrokeAfterActingKeepsItsClaim(t *testing.T) {
 	}
 	if got := len(rig.resumer.calls()); got != 0 {
 		t.Fatalf("resumed %d times after abandoning, want none", got)
+	}
+}
+
+// A resumed turn that called run_sandbox again and then broke after acting
+// leaves a relaunched job no turn will ever suspend into: the conversation that
+// would have been written is gone with the turn. So the settle reads the record
+// as it is NOW and reclaims the box the relaunch is running in, rather than
+// reading it as a reuse to leave alone.
+func TestAResumeThatRelaunchedAndThenBrokeReclaimsTheRelaunchedBox(t *testing.T) {
+	rig := newCoordRig(t)
+	run := rig.launch("t1")
+	rig.resumer.relaunch = func(ctx context.Context, r PendingRun) {
+		req := launchReq(r.TurnID)
+		req.ReuseBox = r.SandboxID
+		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
+			t.Errorf("relaunch: %v", err)
+		}
+		// The relaunch's start event reaches the seat before the turn
+		// breaks, so the seat is counted busy on the relaunched job.
+		if err := rig.coordinator.OnStarted(ctx, types.SandboxRunStarted{
+			AgentHandle: r.AgentHandle, TurnID: r.TurnID,
+		}); err != nil {
+			t.Errorf("OnStarted: %v", err)
+		}
+	}
+	rig.resumer.err = fmt.Errorf("%w: the reviewer's provider went away", ErrResumeActed)
+	rig.runner.Finish(Result{Success: true, Text: "first pass"})
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	rig.finished("t1")
+	if killed := rig.provider.KilledIDs(); !slices.Contains(killed, run.SandboxID) {
+		t.Fatalf("killed %v, want the relaunched job's box %q reclaimed", killed, run.SandboxID)
+	}
+	if rig.coordinator.AwaitingSandbox("swe") {
+		t.Fatal("the seat stayed parked on a relaunch nothing will ever resume")
 	}
 }
 

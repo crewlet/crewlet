@@ -42,9 +42,10 @@ var ErrResumeUnavailable = errors.New("sandbox: this node cannot resume the run"
 // path did.
 //
 // A resumer wraps its error in this when, and only when, the turn's own record
-// PROVES an outward write. The coordinator then leaves the claim taken rather
-// than reverting it — which is what stops a retry winning the flip — and
-// settles the delivery. Every other resume failure still reverts and comes
+// PROVES an outward write. The coordinator then never reverts the claim, which
+// is what stops a retry winning the flip: it settles the delivery and the run,
+// reclaiming the box and deleting the record, so no redelivery finds anything
+// to claim. Every other resume failure still reverts and comes
 // back, because the suspended conversation is the expensive thing here and a
 // resume that proved nothing has lost nothing by trying again.
 var ErrResumeActed = errors.New("sandbox: the resumed turn broke after writing outside the engine")
@@ -517,19 +518,34 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		CostUSD: outcome.CostUSD, DeliveredRefs: outcome.DeliveredRefs,
 	}); err != nil {
 		if errors.Is(err, ErrResumeActed) {
-			// THE CLAIM STAYS TAKEN. Reverting it here would hand the
-			// completion back to a retry, and that retry would re-enter
-			// the same suspended conversation and repeat the writes this
-			// turn has already made — which is the one thing a resume
-			// must not do twice. The turn is lost; its writes are not
-			// un-doable, and only one of those two is recoverable by
-			// trying again. The row stays in resumed for the settle path
-			// and the reaper, exactly as a successful resume leaves it.
+			// THE CLAIM IS NEVER GIVEN BACK. Reverting it here would hand
+			// the completion to a retry, and that retry would re-enter the
+			// same suspended conversation and repeat the writes this turn
+			// has already made, which is the one thing a resume must not
+			// do twice. The turn is lost; its writes are not un-doable,
+			// and only one of those two is recoverable by trying again.
+			//
+			// So the run is SETTLED, which keeps that promise for good: a
+			// finished run has no record for a redelivery to claim. Left
+			// claimed instead, it was settled by nothing (recovery runs
+			// only when the seat changes hands), and re-marking the seat
+			// busy parked every message it received for as long as this
+			// node kept it, beside a paused box nobody would collect.
+			//
+			// The seat's busy count is RECOUNTED from the store rather than
+			// re-marked: the resumed turn is over, but it may have called
+			// run_sandbox again before it broke, and that relaunch's start
+			// event counted the seat busy on a job this settle has just
+			// ended. And nothing is announced, because the turn did resume
+			// and has already published its own failed completion.
 			log.ErrorContext(ctx, "sandbox_resume_abandoned_after_acting",
 				"turn_id", run.TurnID, "error", err.Error(),
-				"detail", "the claim is left taken so the completion is not "+
-					"redelivered into a conversation whose writes already landed")
-			c.markBusy(run.AgentHandle)
+				"detail", "the run is settled rather than un-claimed, so the completion is "+
+					"not redelivered into a conversation whose writes already landed")
+			if settle, ok := c.current(ctx, run); ok {
+				c.finish(ctx, settle, fenceOf(run))
+			}
+			c.syncBusy(ctx, run.AgentHandle)
 			return nil
 		}
 		// UN-CLAIM so a retry can win the flip again. Without this the NAK'd
@@ -550,12 +566,11 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		return err
 	}
 
-	latest, found, err := c.pending.Get(ctx, run.TurnID)
-	if err != nil {
-		log.WarnContext(ctx, "sandbox_settle_read_failed", "turn_id", run.TurnID, "error", err.Error())
+	latest, ok := c.current(ctx, run)
+	if !ok {
 		return nil
 	}
-	if found && (latest.Status == StatusRunning || latest.Status == StatusLaunching) {
+	if latest.Status == StatusRunning || latest.Status == StatusLaunching {
 		// The resumed executor called run_sandbox AGAIN: a new detached job
 		// owns the box and the suspending turn re-marked the seat busy.
 		//
@@ -569,14 +584,30 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 			"turn_id", run.TurnID, "status", latest.Status)
 		return nil
 	}
-	// Tear down the box the LATEST row points at: a re-seeded run
-	// provisioned a fresh one, so the claimed row's id is stale.
-	settle := run
-	if found {
-		settle = latest
-	}
-	c.finish(ctx, settle, fenceOf(run))
+	c.finish(ctx, latest, fenceOf(run))
 	return nil
+}
+
+// current is a claimed run as its record stands after the resumed turn
+// returned, false when the record could not be read.
+//
+// The LATEST record, because the box to settle is the one it names now: a
+// re-seeded run provisioned a fresh box, so the claimed snapshot's id is stale,
+// and a resumed executor that called run_sandbox again has a new job in it. A
+// record that is already gone is answered with the snapshot, whose settle then
+// reclaims a box that may still be there and finds nothing to delete. A read
+// that fails settles nothing: the record is still active, so the seat's next
+// recovery reaps it, where acting on the snapshot could kill a relaunched job.
+func (c *Coordinator) current(ctx context.Context, run PendingRun) (PendingRun, bool) {
+	latest, found, err := c.pending.Get(ctx, run.TurnID)
+	if err != nil {
+		log.WarnContext(ctx, "sandbox_settle_read_failed", "turn_id", run.TurnID, "error", err.Error())
+		return PendingRun{}, false
+	}
+	if !found {
+		return run, true
+	}
+	return latest, true
 }
 
 // dispatchResume hands a claimed run to the resumer.
