@@ -426,6 +426,20 @@ later, with no way to tell a typo from a grammar change — so a save runs the
 parameters through the same grammar `list_work_items` uses and refuses what
 does not parse, naming the key.
 
+**A view's parameters are the query grammar's own**, which is what
+`list_work_items` compiles its arguments into rather than what those arguments
+are called. Four are spelled differently: `project` is `container` and takes
+`project:ENG` or `workspace`, `text` is `q`, `label` is `tag`, and `open_only`
+is `status_group=not_started,active`. Everything else is the same word, and a
+custom field is `f.<ref>`. A view may not carry `view`, `cursor` or
+`read_level` at all: those are about the caller's own read — where it resumes
+and how fresh it must be — rather than about the rows.
+
+**A saved view is run by its id**, passed as `view` to `list_work_items` or as
+`?view=` on the REST route. Anything else the caller passes overrides the
+view's own, so a seat can open somebody's board and narrow it without editing
+it.
+
 Views are read at `GET /work/views?container=project:ENG`, and written through
 the operator MCP surface with `save_work_view` — **not** by a seat. A view is
 furniture, and a seat's job is the work rather than the furniture around it.

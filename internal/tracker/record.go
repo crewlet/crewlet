@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"encoding/json"
+	"reflect"
 	"slices"
 	"time"
 )
@@ -348,11 +349,22 @@ type Task struct {
 
 	Archived bool `json:"archived,omitempty"`
 
-	// Merging is true while this task's merge walk is running. See
+	// Merging is true while this task's merge walk is running, and
+	// MergeReparent is what that walk INTENDS to do with the subtree. See
 	// [TaskPatch.Merging].
-	Merging    bool       `json:"merging,omitempty"`
-	ArchivedAt *time.Time `json:"archived_at,omitempty"`
-	ArchivedBy string     `json:"archived_by,omitempty"`
+	//
+	// THE INTENT IS DURABLE BECAUSE THE REPAIR NEEDS IT. The duty that
+	// finishes an abandoned walk cannot otherwise tell a merge that
+	// deliberately left the children where they were from one that
+	// crashed before it moved the first — and re-parenting on the second
+	// guess silently overrides a `move_subtasks: false` somebody typed.
+	// It rides the DOCUMENT rather than a column of its own: nothing
+	// selects on it, and what the duty selects on is `merging`, which
+	// already has its partial index.
+	Merging       bool       `json:"merging,omitempty"`
+	MergeReparent bool       `json:"merge_reparent,omitempty"`
+	ArchivedAt    *time.Time `json:"archived_at,omitempty"`
+	ArchivedBy    string     `json:"archived_by,omitempty"`
 
 	Removed *Tombstone `json:"removed,omitempty"`
 
@@ -586,7 +598,16 @@ type TaskPatch struct {
 	// last append. It is what makes a duplicate visibly MID-MERGE rather
 	// than silently half-merged, and what the duty selects on to finish a
 	// walk whose holder died.
-	Merging *bool `json:"merging,omitempty"`
+	//
+	// MergeReparent rides the same append and says what that walk is for.
+	// TWO FIELDS RATHER THAN ONE RESHAPED VALUE because the record is a
+	// payload two builds share across a rolling upgrade, and evolution
+	// there is additive-only: an older node reading a newer merge mark
+	// ignores the intent and clears the marker, which is what it did
+	// before this existed. The applier clears it whenever the marker goes
+	// down, so the pair cannot drift into "not merging, but re-parenting".
+	Merging       *bool `json:"merging,omitempty"`
+	MergeReparent *bool `json:"merge_reparent,omitempty"`
 
 	// Reassignments is the hand-off counter this write leaves behind,
 	// decided by the WRITER inside its own snapshot — see
@@ -649,6 +670,27 @@ type TaskPatch struct {
 
 	Extra map[string]json.RawMessage `json:"-"`
 }
+
+// Empty reports a patch that would change no field of the item.
+//
+// # Why it is reflection rather than a list of the fields
+//
+// Because the list is what broke. A hand-written conjunction of every pointer
+// on this struct is correct only until somebody adds the next field, and it
+// fails SILENTLY when they do not: the caller sees a successful write, the
+// item is unchanged, and nothing anywhere says a patch was dropped. That is
+// exactly what happened — the version that counted fourteen of these fields
+// missed `Fields` and `RoutingUnit` among others, so `update_work_item` with
+// a custom-field value as its only argument reported success and wrote
+// nothing.
+//
+// Every field here is a pointer, a slice or a map, precisely so that the zero
+// value means "not set" (see the type's own doc), which makes "no field is
+// set" a property of the VALUE rather than of a list somebody maintains. A
+// field added tomorrow is covered the day it is added.
+//
+// It is called once per write, against a broker round trip.
+func (p TaskPatch) Empty() bool { return reflect.ValueOf(p).IsZero() }
 
 // WatchIntent is one person's membership gesture on a task's watcher set.
 //

@@ -1118,6 +1118,11 @@ export interface WorkItemsAnswer {
   /** Capped by construction: an exact total over an unbounded set is the one
    *  query in this grammar that turns a poll into a scan. */
   total_hint: number;
+  /** True when the count STOPPED at the ceiling rather than reaching the end.
+   *  Read this rather than comparing `total_hint` against a threshold of your
+   *  own: that is a second copy of the engine's ceiling, and it is wrong at
+   *  exactly one value — a set of exactly ten thousand is exact. */
+  total_capped?: boolean;
   next_cursor?: string;
   read_level?: ReadLevel;
   log_seq?: number;

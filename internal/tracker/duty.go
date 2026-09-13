@@ -272,9 +272,24 @@ func (d *duty) pendingMerges(ctx context.Context) (bool, error) {
 
 // finishMerges completes a merge whose holder died.
 //
-// IDEMPOTENT BY SELECTION rather than by a marker: a child already carrying
-// the canonical parent is not selected, so a completion writes only what is
-// left and running it twice writes nothing the second time.
+// IT FINISHES THE MERGE rather than tidying its marker. The residue a
+// [Writer.MergeDuplicates] that died leaves is: the mark landed, some of the
+// subtasks moved, and the close — the cancelled status and the marker's own
+// removal — did not. So the repair is the rest of that sequence, in its own
+// order: move what is left, then close. Clearing the marker alone left the
+// duplicate OPEN and half-merged for ever, and on a board that is a live item
+// linked as a duplicate of another live item, which is precisely the state
+// the merge exists to remove.
+//
+// IDEMPOTENT BY SELECTION rather than by a cursor: [Writer.reparentOnto]'s
+// batch asks for the children a task still HAS, so a completion moves only
+// what is left and running it twice moves nothing the second time.
+//
+// AND IT RE-PARENTS ONLY IF THE MERGE SAID TO. `move_subtasks: false` is an
+// explicit instruction to leave a subtree where it is, and a repair cannot
+// tell that from a walk that died before its first child — which is why the
+// mark carries the intent (see [Task.MergeReparent]) rather than the duty
+// guessing at it.
 func (d *duty) finishMerges(ctx context.Context, now, _ time.Time) (int64, error) {
 	var stuck []string
 	if err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
@@ -299,33 +314,76 @@ func (d *duty) finishMerges(ctx context.Context, now, _ time.Time) (int64, error
 
 	var finished int64
 	for _, id := range stuck {
-		task, project, into, err := d.mergeTarget(ctx, id)
+		walk, err := d.abandonedMerge(ctx, id)
 		if err != nil {
 			return finished, err
 		}
-		if into == "" {
-			// MID-MERGE WITH NO TARGET is a marker whose relation never
-			// landed. The honest repair is to clear the marker: the
-			// merge did not happen, and leaving the flag set would make
-			// this tick run for ever against a task nothing is merging.
-			d.deps.Logger.WarnContext(ctx, "tracker_merge_marker_without_target",
-				"task", id)
-		}
+		opID := d.opID("merge", id, now)
 		done := false
-		if _, err := d.deps.Writer.UpdateTask(ctx,
-			d.opID("merge", id, now), task, project, NoIfMatch,
-			TaskPatch{Merging: &done}, ChangeFields, nil); err != nil {
+		if walk.into == "" {
+			// MID-MERGE WITH NO TARGET is a marker whose relation never
+			// landed. The honest repair is to clear the marker and
+			// NOTHING ELSE: the merge did not happen, so cancelling
+			// the task would close an item nobody merged — and leaving
+			// the flag set would make this tick run for ever against a
+			// task nothing is merging.
+			d.deps.Logger.WarnContext(ctx, "tracker_merge_marker_without_target",
+				"task", id, "detail", "the marker is cleared and the task left "+
+					"open; the merge it names never linked anything")
+			if _, err := d.deps.Writer.UpdateTask(ctx, opID, walk.task,
+				walk.project, NoIfMatch, TaskPatch{Merging: &done},
+				ChangeFields, nil); err != nil {
+				return finished, err
+			}
+			finished++
+			continue
+		}
+		var moved int
+		if walk.reparent {
+			if moved, err = d.deps.Writer.reparentOnto(ctx, opID,
+				walk.task, walk.into); err != nil {
+				return finished, err
+			}
+		}
+		// THE CLOSE IS THE SAME APPEND THE SEQUENCE WOULD HAVE MADE —
+		// the cancelled status and the marker together, on the
+		// duplicate's own subject. Split in two it would leave a
+		// cancelled task still marked mid-merge, which this job would
+		// then pick up again on every tick for ever.
+		cancelled := StatusCancelled
+		if _, err := d.deps.Writer.UpdateTask(ctx, stepID(opID, "close"),
+			walk.task, walk.project, NoIfMatch,
+			TaskPatch{Status: &cancelled, Merging: &done},
+			ChangeStatus, nil); err != nil {
 			return finished, err
 		}
 		finished++
-		d.deps.Logger.InfoContext(ctx, "tracker_merge_completed", "task", id)
+		d.deps.Logger.InfoContext(ctx, "tracker_merge_completed",
+			"task", id, "into", walk.into, "subtasks_moved", moved)
 	}
 	return finished, nil
 }
 
-// mergeTarget reads a mid-merge task's own canonical target off its relations.
-func (d *duty) mergeTarget(ctx context.Context, id string) (task, project, into string, err error) {
-	err = d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+// abandonedMerge is a mid-merge task's own account of the walk that stopped:
+// what it was merging into, and what that walk meant to do with its subtasks.
+type abandonedMerge struct {
+	task, project string
+
+	// into is the canonical task, read off the `duplicates` relation the
+	// mark wrote — empty when the mark's relation never landed.
+	into string
+
+	// reparent is the walk's own intent, carried on the task since the
+	// mark. FALSE for a marker written by a build that predates the
+	// field, which is the conservative direction: a subtree left where it
+	// is can be moved afterwards, and one moved against an explicit
+	// `move_subtasks: false` has to be put back by hand.
+	reparent bool
+}
+
+func (d *duty) abandonedMerge(ctx context.Context, id string) (abandonedMerge, error) {
+	var walk abandonedMerge
+	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
 		current, held, err := readTask(ctx, tx, id)
 		switch {
 		case err != nil:
@@ -334,15 +392,16 @@ func (d *duty) mergeTarget(ctx context.Context, id string) (task, project, into 
 			return fmt.Errorf("tracker: task %s is mid-merge and not on this "+
 				"node: %w", id, statelog.ErrUnavailable)
 		}
-		task, project = current.ID, current.Project
+		walk.task, walk.project = current.ID, current.Project
+		walk.reparent = current.MergeReparent
 		for _, relation := range current.Relations {
 			if relation.Kind == RelationDuplicates {
-				into = relation.Other
+				walk.into = relation.Other
 			}
 		}
 		return nil
 	})
-	return task, project, into, err
+	return walk, err
 }
 
 // tellUnblocked publishes the late notice for every dependent that became

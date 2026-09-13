@@ -103,3 +103,39 @@ func itoaSmall(n int) string {
 	}
 	return string(out)
 }
+
+// THE COUNT SAYS WHETHER IT REACHED THE END.
+//
+// The hint stops at a ceiling, and before this the answer carried the stopping
+// value — 10001 — with nothing to say it was a stopping value. Every reader
+// that did not carry its own copy of the ceiling reported it as an exact
+// total, and a model asked "how much open work is there" answered "10001".
+// The one reader that did carry a copy compared with `>=`, so a set of exactly
+// ten thousand — which IS exact — rendered as "10000+".
+func TestTheTotalHintSaysWhenItStoppedCounting(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		counted int
+		want    int
+		capped  bool
+	}{
+		{"an ordinary set", 42, 42, false},
+		{"one below the ceiling", TotalHintCeiling - 1, TotalHintCeiling - 1, false},
+		// THE BOUNDARY, and it is exact on this side: the query counts
+		// one PAST the ceiling, so a result of exactly the ceiling means
+		// the set ended there.
+		{"exactly the ceiling", TotalHintCeiling, TotalHintCeiling, false},
+		// And one more row is the smallest set that is not.
+		{"one past it", TotalHintCeiling + 1, TotalHintCeiling, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, capped := capHint(tc.counted)
+			if got != tc.want || capped != tc.capped {
+				t.Errorf("capHint(%d) = (%d, %v), want (%d, %v)",
+					tc.counted, got, capped, tc.want, tc.capped)
+			}
+		})
+	}
+}

@@ -233,6 +233,47 @@ func readAlias(ctx context.Context, tx *sql.Tx, key string) (string, bool, error
 // stable: a depth is a fact about the tree and an id never changes, while
 // anything ordered by a rank or a title would re-order under an edit somebody
 // made while the walk ran.
+// readChildBatch is one batch of a task's DIRECT children.
+//
+// # Why direct children rather than the subtree
+//
+// Because that is what a merge moves. A grandchild re-parented onto the
+// canonical task is a grandchild whose own parent is somewhere else entirely
+// — the subtree flattened, which is what re-parenting every descendant did,
+// and which no caller ever asked for: `move_subtasks` promises the
+// duplicate's SUBTASKS move, and a subtask's own subtasks travel underneath
+// it.
+//
+// # Why it is a batch, and why the batch is keyed rather than counted
+//
+// A re-run reads only what is LEFT: a moved child is no longer a child, so
+// the tracker duty finishing a walk whose holder died starts from the
+// beginning and sees exactly the remainder. That is what lets one walk serve
+// both callers.
+//
+// Within ONE run the cursor is a KEY rather than that same shrinking
+// selection, and the difference is the whole reason this signature has an
+// `after`. A published record is arbitrated by the broker and applied by this
+// node's own applier some time later, so the read that follows a batch of
+// moves almost always still shows those children under the old parent. A walk
+// that re-read from the start would hand the same batch to itself until the
+// applier caught up — spinning, or, with a guard against that, stopping after
+// sixty-four of two hundred children and leaving the rest to a duty that
+// should never have been needed. An id cursor advances on what was PUBLISHED,
+// which is the fact this walk actually knows.
+func readChildBatch(ctx context.Context, tx *sql.Tx, parent, after string,
+	limit int) ([]Task, error) {
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT document, version, 0 FROM tracker_tasks
+		WHERE parent_id = ? AND id > ? ORDER BY id LIMIT ?`, parent, after, limit)
+	if err != nil {
+		return nil, fmt.Errorf("tracker: read the children of %s: %w", parent, err)
+	}
+	defer rows.Close()
+	return scanSubtree(rows, parent)
+}
+
 func readSubtree(ctx context.Context, tx *sql.Tx, root string) ([]Task, error) {
 	rows, err := tx.QueryContext(ctx, `
 		WITH RECURSIVE descendants(id, depth) AS (
@@ -248,7 +289,11 @@ func readSubtree(ctx context.Context, tx *sql.Tx, root string) ([]Task, error) {
 		return nil, fmt.Errorf("tracker: read the subtree under %s: %w", root, err)
 	}
 	defer rows.Close()
+	return scanSubtree(rows, root)
+}
 
+// scanSubtree decodes a subtree read's rows.
+func scanSubtree(rows *sql.Rows, root string) ([]Task, error) {
 	var subtree []Task
 	for rows.Next() {
 		var body []byte

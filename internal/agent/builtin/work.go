@@ -392,6 +392,53 @@ func unconfiguredText(name string) string {
 		"work tracker. Use the tracker tools your company has configured."
 }
 
+// queryAlias is one argument this surface spells differently from the query
+// grammar it compiles into.
+//
+// # Why the four renames are written down rather than only performed
+//
+// Because a SECOND reader needs them and it is prose: a saved view stores the
+// GRAMMAR's keys — that is what [tracker.ParseQuery] validates and what the
+// expansion reads back — while this tool's arguments are the model's
+// vocabulary. save_work_view told a model the parameters were "list_work_items'
+// own", so a model saving the query it had just run wrote `project`, `text`,
+// `label` and `open_only` into a view, and every one of them was refused as
+// not a query parameter at all.
+//
+// The translation itself stays in [listWorkItems.CallForTurn], where each arm
+// carries the reason for its own rename. What this table is for is the
+// SENTENCE, built from it rather than written beside it, and the test that
+// holds both against what the tool actually sends.
+type queryAlias struct {
+	// Arg is this surface's argument, Key the grammar's parameter.
+	Arg, Key string
+
+	// Shape is what the grammar's value looks like where it is not simply
+	// the argument's own — empty for a plain rename.
+	Shape string
+}
+
+var queryAliases = []queryAlias{
+	{Arg: "project", Key: "container", Shape: "`project:ENG`, or `workspace` for the whole company"},
+	{Arg: "text", Key: "q"},
+	{Arg: "label", Key: "tag"},
+	{Arg: "open_only", Key: "status_group", Shape: "`not_started,active`"},
+}
+
+// AliasSentence names every rename, for a tool description that has to tell a
+// model which vocabulary to write in.
+func AliasSentence() string {
+	parts := make([]string, 0, len(queryAliases))
+	for _, a := range queryAliases {
+		part := fmt.Sprintf("`%s` is `%s`", a.Arg, a.Key)
+		if a.Shape != "" {
+			part += ", as " + a.Shape
+		}
+		parts = append(parts, part)
+	}
+	return strings.Join(parts, "; ")
+}
+
 // ---- list_work_items --------------------------------------------------- //
 
 type listWorkItems struct{ deps WorkDeps }
@@ -438,6 +485,12 @@ func (t *listWorkItems) Parameters() map[string]any {
 					"work, most important first; `blocked` is open work that " +
 					"cannot move; `overdue` is open work past its due date. " +
 					"Any other argument you pass overrides the preset's own.",
+			},
+			"view": map[string]any{
+				"type": "string",
+				"description": "A saved view's `id`, from list_work_views: " +
+					"runs the query somebody arranged. Any other argument " +
+					"you pass overrides the view's own.",
 			},
 			"label": map[string]any{"type": "string", "description": "One label to filter on."},
 			"sprint": map[string]any{
@@ -586,7 +639,7 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		"assignee", "limit", "sprint", "removed",
 		"type", "priority", "due", "updated", "created",
 		"reporter", "watcher", "unit", "goal",
-		"sort", "cursor",
+		"sort", "cursor", "view",
 	} {
 		if v, held := args[key]; held {
 			params[key] = v
@@ -700,6 +753,14 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	}
 	if answer.TotalHint > len(answer.Rows) {
 		result["total"] = answer.TotalHint
+		// AND WHETHER ANYBODY ACTUALLY COUNTED THAT FAR. The count
+		// stops at a ceiling, so a bare `total` at it reads as an exact
+		// number a model will quote back — "there are 10000 open items"
+		// — when what happened is that nobody counted past ten
+		// thousand.
+		if answer.TotalCapped {
+			result["total_is_at_least"] = true
+		}
 	}
 	// THE NEXT PAGE'S CURSOR, which is what makes the `cursor` argument
 	// reachable at all: a caller cannot page without one, and this tool was
@@ -747,7 +808,7 @@ func (t *getWorkItem) Name() string { return GetWorkItemTool }
 func (t *getWorkItem) Description() string {
 	return "Read one work item: its description, status, assignee, labels, " +
 		"links in both directions, the most recent comments and its recent " +
-		"history. Take the `revision` from the result and pass it back as " +
+		"history. Take `task.version` from the result and pass it back as " +
 		"`if_match` on update_work_item to make your edit conditional."
 }
 
@@ -1330,7 +1391,7 @@ func (t *updateWorkItem) Parameters() map[string]any {
 			},
 			"if_match": map[string]any{
 				"type": "integer",
-				"description": "The `revision` from get_work_item. Given, the " +
+				"description": "The `task.version` from get_work_item. Given, the " +
 					"edit is REFUSED if anybody changed the item since you " +
 					"read it. Omitted, your fields are merged onto the " +
 					"current item — which is usually what you want.",
@@ -1495,7 +1556,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// history row — and spending one on a call that changed no field of
 	// this item would put a `fields` commit in the feed that changed no
 	// fields.
-	if !patchIsEmpty(patch) {
+	if !patch.Empty() {
 		got, err := writer.UpdateTask(ctx,
 			opIDFor(actor, "update", before.Task.ID), before.Task.ID,
 			before.Task.Project, ifMatch, patch, kind,
@@ -1543,20 +1604,6 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		}
 	}
 	return jsonResult(answer)
-}
-
-// patchIsEmpty reports a patch that would change no field of the item.
-//
-// BY THE FIELDS THEMSELVES rather than by a flag the caller sets, because the
-// two callers that could set one — the argument parser and the relation
-// composer — each see half the patch, and a flag either of them forgot would
-// be an empty commit nobody could trace back.
-func patchIsEmpty(patch tracker.TaskPatch) bool {
-	return patch.Title == nil && patch.Body == nil && patch.Assignee == nil &&
-		patch.Status == nil && patch.Priority == nil && patch.Tags == nil &&
-		patch.Watch == nil && patch.Watchers == nil && patch.Muted == nil &&
-		patch.Relations == nil && patch.Relate == nil && patch.Comment == nil &&
-		patch.Dependents == nil && patch.Depend == nil
 }
 
 // declareLabels declares the labels a write is about to use that its project

@@ -156,7 +156,13 @@ func TestTheDutyClearsADuplicateRank(t *testing.T) {
 	}
 }
 
-// THE DUTY COMPLETES A MERGE WHOSE HOLDER DIED.
+// A MARKER WHOSE RELATION NEVER LANDED IS CLEARED AND NOTHING ELSE.
+//
+// The mark writes the `duplicates` edge and the marker in ONE append, so a
+// marker with no edge is an append whose relation gesture resolved to nothing.
+// The merge did not happen — so cancelling the task here would close an item
+// nobody merged, and leaving the flag set would run this job against it on
+// every tick for ever.
 func TestTheDutyClearsAnAbandonedMerge(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -197,6 +203,94 @@ func TestTheDutyClearsAnAbandonedMerge(t *testing.T) {
 	if merged != 0 {
 		t.Error("the marker is still set after the duty completed the merge, " +
 			"so the duty runs against it on every tick for ever")
+	}
+	// AND THE TASK IS STILL OPEN. Nothing was merged into anything, so
+	// closing it would be the duty inventing the outcome of a gesture that
+	// never linked two items.
+	if got := r.task(t, "t-1").Task.Status; got == tracker.StatusCancelled {
+		t.Error("the duty cancelled a task whose merge named no target — the " +
+			"marker is all that landed, so there is no merge to complete")
+	}
+}
+
+// THE DUTY FINISHES THE MERGE, rather than tidying away its marker.
+//
+// The residue a holder that died leaves is: the mark landed, some subtasks
+// moved, the close did not. Clearing the marker alone left the duplicate OPEN
+// and half-merged for ever — on a board, a live item linked as a duplicate of
+// another live item, with its subtasks still under it. That is the exact
+// state the merge exists to remove, and the repair reached it and stopped.
+func TestTheDutyFinishesAnAbandonedMergeRatherThanTidyingIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		reparent bool
+		want     string
+	}{
+		// AND IT RE-PARENTS ONLY IF THE MERGE SAID TO. A repair that
+		// guessed would silently override a `move_subtasks: false`
+		// somebody typed, which is the one direction that cannot be
+		// undone by waiting.
+		{"a walk that meant to move the subtasks", true, "keep"},
+		{"a walk that was told to leave them", false, "dup"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRoundTrip(t)
+			for _, id := range []string{"keep", "dup"} {
+				if _, err := r.writer.CreateTask(t.Context(), "op-"+id,
+					newTask(id), nil); err != nil {
+					t.Fatalf("CreateTask %s: %v", id, err)
+				}
+				r.drain()
+			}
+			parent := "dup"
+			kid := newTask("kid")
+			kid.Parent, kid.Depth = &parent, 1
+			if _, err := r.writer.CreateTask(t.Context(), "op-kid", kid, nil); err != nil {
+				t.Fatalf("CreateTask kid: %v", err)
+			}
+			r.drain()
+
+			// EXACTLY THE MARK [tracker.Writer.MergeDuplicates]
+			// publishes, and then nothing — which is a holder that
+			// died between its first append and its last.
+			merging := true
+			if _, err := r.writer.UpdateTask(t.Context(), "op-mark", "dup", "ENG",
+				tracker.NoIfMatch, tracker.TaskPatch{
+					Relate: &tracker.RelationIntent{Add: []tracker.Relation{{
+						Kind: tracker.RelationDuplicates, Other: "keep",
+					}}},
+					Merging: &merging, MergeReparent: &tc.reparent,
+				}, tracker.ChangeRelations, nil); err != nil {
+				t.Fatalf("UpdateTask mark: %v", err)
+			}
+			r.drain()
+
+			swept, err := trackerWorker(t, r).Tick(t.Context())
+			if err != nil {
+				t.Fatalf("Tick: %v", err)
+			}
+			if swept["tracker_abandoned_merges"] == 0 {
+				t.Fatalf("the duty completed no abandoned merge: %v", swept)
+			}
+			r.drain()
+
+			dup := r.task(t, "dup")
+			if dup.Task.Status != tracker.StatusCancelled {
+				t.Errorf("the duplicate is %q after the duty finished its "+
+					"merge — an open item linked as a duplicate of another "+
+					"open item is what the fold exists to remove",
+					dup.Task.Status)
+			}
+			if dup.Task.Merging {
+				t.Error("the marker is still set, so this job runs against " +
+					"the same task on every tick for ever")
+			}
+			if got := parentOf(r.task(t, "kid")); got != tc.want {
+				t.Errorf("the subtask's parent is %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

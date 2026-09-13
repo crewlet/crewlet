@@ -94,8 +94,18 @@ type Answer struct {
 
 	// TotalHint is capped by construction, because an exact count over an
 	// unbounded set is the query that turns a poll into a scan.
-	TotalHint  int    `json:"total_hint"`
-	NextCursor string `json:"next_cursor,omitempty"`
+	//
+	// TotalCapped is what makes the cap VISIBLE, and it is here for
+	// [Answer.GroupsDropped]'s reason: the count stopped at
+	// [TotalHintCeiling], so without a flag beside it every renderer has
+	// to know the ceiling to tell "exactly ten thousand" from "more than
+	// we counted" — and every one that does not reports the cap as an
+	// exact total. The hint is clamped TO the ceiling when it is set, so
+	// a reader that ignores the flag is merely imprecise rather than
+	// wrong about a number nobody counted.
+	TotalHint   int    `json:"total_hint"`
+	TotalCapped bool   `json:"total_capped,omitempty"`
+	NextCursor  string `json:"next_cursor,omitempty"`
 
 	// Totals are the aggregates the query asked for, over the WHOLE
 	// matched set rather than over this page — a number on a header that
@@ -154,10 +164,16 @@ type Answer struct {
 
 // TotalHintCeiling is where the count stops.
 //
-// Ten thousand, and the answer says "10000+" past it rather than counting on:
-// an exact total over an unbounded set is the one query in this grammar that
-// turns a sixty-second poll into a scan, and nobody reading a board needs the
-// difference between eleven thousand and twelve.
+// Ten thousand, and past it the answer reports the ceiling with
+// [Answer.TotalCapped] set rather than counting on: an exact total over an
+// unbounded set is the one query in this grammar that turns a sixty-second
+// poll into a scan, and nobody reading a board needs the difference between
+// eleven thousand and twelve.
+//
+// THE FLAG IS THE CONTRACT, not the number. A reader comparing the hint
+// against this constant is a second copy of the rule, and it is wrong at
+// exactly one value — a set of exactly ten thousand is EXACT and reads as
+// capped.
 const TotalHintCeiling = 10_000
 
 // PageDefault and PageMax bound one page.
@@ -306,11 +322,11 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 			answer.Rows, answer.NextCursor = orderByList(rows, q), cursor
 		}
 
-		hint, err := countHint(ctx, tx, where, args)
+		hint, capped, err := countHint(ctx, tx, where, args)
 		if err != nil {
 			return err
 		}
-		answer.TotalHint = hint
+		answer.TotalHint, answer.TotalCapped = hint, capped
 
 		// THE SAME PREDICATE AND THE SAME TRANSACTION as the rows, so a
 		// total and the page it sits above describe one instant.
@@ -1566,16 +1582,39 @@ func readTasksJoined(ctx context.Context, tx *sql.Tx, extraJoin string,
 	return out, cursor, nil
 }
 
-// countHint counts to the ceiling and stops.
-func countHint(ctx context.Context, tx *sql.Tx, where string, args []any) (int, error) {
+// countHint counts to the ceiling and stops, reporting whether it stopped.
+//
+// IT COUNTS ONE PAST THE CEILING and clamps, which is what makes the second
+// value a fact rather than a guess: a set of exactly [TotalHintCeiling] is
+// EXACT, and one of ceiling+1 is the smallest set that is not — the only way
+// to tell them apart is to look for the extra row.
+func countHint(ctx context.Context, tx *sql.Tx, where string,
+	args []any) (int, bool, error) {
+
 	query := `SELECT COUNT(*) FROM (SELECT 1 FROM tracker_tasks t WHERE ` +
 		where + ` LIMIT ?)`
 	var n int
 	if err := tx.QueryRowContext(ctx, query,
 		append(append([]any{}, args...), TotalHintCeiling+1)...).Scan(&n); err != nil {
-		return 0, fmt.Errorf("tracker: count the answer: %w", err)
+		return 0, false, fmt.Errorf("tracker: count the answer: %w", err)
 	}
-	return n, nil
+	counted, capped := capHint(n)
+	return counted, capped, nil
+}
+
+// capHint clamps a count taken one past the ceiling, and says whether it was
+// clamped.
+//
+// SEPARATE FROM THE QUERY because the boundary is the whole of the rule and
+// exercising it through SQL means seeding ten thousand and one tasks — which
+// is why it was never exercised: the answer reported 10001 as an exact total,
+// and the one renderer that noticed carried its own copy of the ceiling and
+// was wrong at exactly 10000.
+func capHint(counted int) (int, bool) {
+	if counted > TotalHintCeiling {
+		return TotalHintCeiling, true
+	}
+	return counted, false
 }
 
 // readCheckpoint reads this node's own position and applied prefix.

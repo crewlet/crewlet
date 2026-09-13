@@ -463,8 +463,19 @@ func applyPatch(task Task, patch TaskPatch) Task {
 	if patch.Points != nil {
 		task.Points = *patch.Points
 	}
+	if patch.MergeReparent != nil {
+		task.MergeReparent = *patch.MergeReparent
+	}
 	if patch.Merging != nil {
 		task.Merging = *patch.Merging
+		if !task.Merging {
+			// THE INTENT GOES DOWN WITH THE MARKER, whatever this
+			// same patch said about it and in whatever order. It
+			// describes a walk that is running, so "not merging,
+			// but re-parenting" is a state the duty would read as
+			// an instruction with nothing to instruct.
+			task.MergeReparent = false
+		}
 	}
 	if patch.Reassignments != nil {
 		task.Reassignments = *patch.Reassignments

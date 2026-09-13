@@ -174,9 +174,10 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 		// would say "50 items" for every project with more than fifty.
 		// It is a HINT and says so — an exact total over an unbounded set
 		// is the one query in this grammar that turns a poll into a scan.
-		"total_hint": answer.TotalHint,
-		"read_level": answer.Level,
-		"log_seq":    answer.LogSeq,
+		"total_hint":   answer.TotalHint,
+		"total_capped": answer.TotalCapped,
+		"read_level":   answer.Level,
+		"log_seq":      answer.LogSeq,
 		// APPLIED_THROUGH BESIDE LOG_SEQ, never instead of it: a node
 		// applying nothing while its position advances looks identical
 		// to a caught-up one from either number alone, and a screen

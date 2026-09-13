@@ -1138,3 +1138,37 @@ func TestTheParentFilterIsResolvedToAnID(t *testing.T) {
 			"reads as the item having no subtasks", got)
 	}
 }
+
+// A PATCH WHOSE ONLY ARGUMENT IS A CUSTOM FIELD OR A RE-ROUTE IS A WRITE.
+//
+// The emptiness check decides whether the write is issued at all, so a field
+// it does not see is a call that answers `outcome: applied` and changes
+// nothing — the one failure a seat cannot detect, because there is no error
+// to read and no history row to notice is missing. Both of these were in that
+// state: `fields` and `routing_unit` were the two arms of the argument parser
+// the hand-written list of patch fields had never been extended for.
+func TestAFieldsOnlyUpdateIsNotSilentlyDropped(t *testing.T) {
+	t.Parallel()
+	for name, args := range map[string]map[string]any{
+		"a custom field": {"item": "ENG-1", "fields": map[string]any{"severity": "sev2"}},
+		"a re-route":     {"item": "ENG-1", "routing_unit": "ops"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			trk := newFakeTracker()
+			// THE RE-ROUTE IS THE LEAD'S DECISION, so the registry
+			// carries one — otherwise that case would be refused for
+			// a reason unrelated to what it is asserting.
+			reg := projectRegistry(t, trk, leadAlways)
+			got := callWork(t, reg, builtin.UpdateWorkItemTool, args)
+			if got.Failed {
+				t.Fatalf("the update failed: %s", got.Output)
+			}
+			if len(trk.patched) == 0 {
+				t.Fatalf("%s reached no write at all, and the tool answered "+
+					"%q — a seat is told the change landed and the item is "+
+					"unchanged on every node", name, got.Output)
+			}
+		})
+	}
+}

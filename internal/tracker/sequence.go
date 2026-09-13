@@ -980,7 +980,6 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 	defer claim.release(ctx)
 
 	var task Task
-	var children []Task
 	if w.db == nil {
 		return WriteResult{}, fmt.Errorf("tracker: this writer has no store, " +
 			"so it cannot read the children a merge re-parents")
@@ -1005,11 +1004,7 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 			return fmt.Errorf("tracker: task %s is not on this node: %w",
 				into, statelog.ErrUnavailable)
 		}
-		if !reparent {
-			return nil
-		}
-		children, err = readSubtree(ctx, tx, duplicate)
-		return err
+		return nil
 	}); err != nil {
 		return WriteResult{}, err
 	}
@@ -1020,26 +1015,24 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 	// silently drops any relation a colleague added in between. An add is
 	// resolved against the task's own rows inside the decide, which is the
 	// one place a single consistent read of them exists.
+	//
+	// THE MARK CARRIES THE INTENT, because the duty that finishes this
+	// walk if this process dies reads it off the task and has no other
+	// way to know: a merge that declined to move the subtree and one that
+	// crashed before moving its first child leave identical rows.
 	merging := true
 	marked, err := w.UpdateTask(ctx, stepID(opID, "mark"), duplicate, task.Project, NoIfMatch,
 		TaskPatch{Relate: &RelationIntent{Add: []Relation{{
 			Kind: RelationDuplicates, Other: into,
-		}}}, Merging: &merging},
+		}}}, Merging: &merging, MergeReparent: &reparent},
 		ChangeRelations, nil)
 	if err != nil {
 		return WriteResult{}, err
 	}
 
-	for i, child := range children {
-		if child.Parent != nil && *child.Parent == into {
-			continue
-		}
-		if _, err := w.UpdateTask(ctx, stepID(opID, fmt.Sprintf("c%d", i)),
-			child.ID, child.Project, NoIfMatch, TaskPatch{Parent: &into},
-			ChangeReparented, nil); err != nil {
-			return WriteResult{}, fmt.Errorf("tracker: %d of %d children "+
-				"re-parented onto %s; the tracker duty completes the rest: %w",
-				i, len(children), into, err)
+	if reparent {
+		if _, err := w.reparentOnto(ctx, opID, duplicate, into); err != nil {
+			return WriteResult{}, err
 		}
 	}
 
@@ -1052,6 +1045,50 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 	return w.After(marked.Position).UpdateTask(ctx, stepID(opID, "close"),
 		duplicate, task.Project, NoIfMatch,
 		TaskPatch{Status: &cancelled, Merging: &done}, ChangeStatus, notify)
+}
+
+// reparentOnto moves whatever is left of a duplicate's subtasks onto the
+// canonical task, in batches of [WalkBatch].
+//
+// SHARED BY THE SEQUENCE AND THE DUTY, which is what [readChildBatch]'s
+// selection buys: the duty's repair is a RE-RUN of the batch the holder did
+// not reach, not a second algorithm that has to keep agreeing with this one.
+// A merge's children are one of the three walks [WalkBatch] is named for, and
+// the value buys the same two things here as there — a bounded read whatever
+// the subtree's size, and a bounded stretch between the claim's heartbeats.
+//
+// THE STEP ID IS KEYED ON THE CHILD rather than on its position in the walk,
+// because a re-run's batches do not divide the same way: the moved ones are
+// gone from the selection, so an index would give a different child the same
+// operation id and the ledger would answer one move's question with another's
+// row.
+func (w *Writer) reparentOnto(ctx context.Context, opID, duplicate, into string) (int, error) {
+	var moved int
+	var after string
+	for {
+		var batch []Task
+		if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+			var err error
+			batch, err = readChildBatch(ctx, tx, duplicate, after, WalkBatch)
+			return err
+		}); err != nil {
+			return moved, err
+		}
+		if len(batch) == 0 {
+			return moved, nil
+		}
+		for _, child := range batch {
+			after = child.ID
+			if _, err := w.UpdateTask(ctx, stepID(opID, "c/"+child.ID),
+				child.ID, child.Project, NoIfMatch, TaskPatch{Parent: &into},
+				ChangeReparented, nil); err != nil {
+				return moved, fmt.Errorf("tracker: %d subtask(s) re-parented "+
+					"onto %s and %s still has more; the tracker duty completes "+
+					"the rest idempotently: %w", moved, into, duplicate, err)
+			}
+			moved++
+		}
+	}
 }
 
 // StartSprint moves a project's active sprint on. SEQUENCE 18.

@@ -235,7 +235,7 @@ export function Work() {
           <Stat
             label="Shown"
             value={shown.length}
-            sub={totalHint(data?.total_hint ?? 0, shown.length)}
+            sub={totalHint(data?.total_hint ?? 0, shown.length, data?.total_capped)}
           />
           <Stat label="In progress" value={byStatus.in_progress ?? 0} />
           <Stat label="Blocked" value={blocked} icon={blocked ? "alert" : undefined} />
@@ -896,12 +896,17 @@ function Coverage({ answer }: { answer?: CoverageFacts | null }) {
 /** The board's own count against the engine's hint.
  *
  * The hint is CAPPED by construction — an exact total over an unbounded set
- * is the one query in this grammar that turns a poll into a scan — so at the
- * ceiling it says "10000+" rather than a number nobody needs.
+ * is the one query in this grammar that turns a poll into a scan — and the
+ * ANSWER says whether it was, so this reads a flag rather than carrying a
+ * copy of the engine's ceiling.
  */
-function totalHint(hint: number, shown: number): string {
+function totalHint(hint: number, shown: number, capped?: boolean): string {
   if (hint <= 0) return "";
-  if (hint >= 10_000) return "of 10000+ matching";
+  // THE ENGINE SAYS WHETHER IT COUNTED THAT FAR, and the threshold is not
+  // repeated here: comparing the hint against a ceiling of our own was a
+  // second copy of the engine's, wrong at exactly one value — a set of
+  // exactly ten thousand is EXACT and read as "10000+".
+  if (capped) return `of ${hint}+ matching`;
   if (hint <= shown) return `of ${hint} matching`;
   return `of ${hint} matching — page through for the rest`;
 }

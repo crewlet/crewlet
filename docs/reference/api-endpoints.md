@@ -1319,7 +1319,7 @@ container key that fixes it. `subtasks=` is how a tree is filtered: `collapsed` 
 | `work_activity` | `{task, container, kinds, actor, assignee, q, notified, since, from, to, limit, cursor}` | `GET /work/activity`. Every commit writes a history row, so this is an account of what HAPPENED rather than of what was announced — `notified` is how a reader tells the two apart, and `kinds` is what the change WAS whether or not anybody heard about it. The two used to be one: a record's kind was read off its notification, so the same change filed under one word with an audience and another without, and a quiet removal reached the feed as `tombstone` while the filter spells it `removed`. `kinds` accepts the thirty-two change kinds and nothing else. Each record carries BOTH instants: `at` is the authored one a card renders, and `effective_at` is the fleet-agreed one every duration is measured on. `actor` is who made the change; `assignee` is whose work it is, and the two are routinely different people. The `q` gate is on what the query would SCAN, never on which keys were named — `container=workspace&q=` and a five-year `since` both name a key and narrow nothing |
 | `work_my_work` (operator) | `{handle}` | `GET /work/my-work`. Seven lists, each bounded at 20 so no block crowds out another — the whole answer is read as one page. `priorities` is NOT re-sorted: the order is what somebody decided. A finished or removed task is filtered out of it rather than rewritten out, because a read must not write to somebody's own object |
 | `work_person` | `{handle}` | `GET /work/people/{handle}`. `due` is the snoozes whose time has come, REPORTED rather than promoted: putting one back in the unread list is a write, and a read that performed one would change fleet state from a path with no operation id and no record. `priorities_set_by` is who last set the queue when it was not this person, which is how a lead's authority is made visible — every notification this domain carries is task-shaped, so one attached to a person record would render no card and reach nobody |
-| `work_views` | `{container, viewer}` | `GET /work/views`. `container` is the strip's own — `workspace`, `project:ENG`, `unit:engineering`, `person:ana` — and it is REQUIRED, because a strip belongs to exactly one. `viewer` is whose personal views appear and whose pins come first; absent is the shared strip. Every row carries `builtin`, which is what tells the three (five, on a sprinting project) nobody saved from the ones somebody did: a builtin row has no `id`, so there is nothing to rename, protect, rank or pin. `params` is the saved query in `work_items`' own parameter names, so a caller runs a view by handing them straight back |
+| `work_views` | `{container, viewer}` | `GET /work/views`. `container` is the strip's own — `workspace`, `project:ENG`, `unit:engineering`, `person:ana` — and it is REQUIRED, because a strip belongs to exactly one. `viewer` is whose personal views appear and whose pins come first; absent is the shared strip. Every row carries `builtin`, which is what tells the three (five, on a sprinting project) nobody saved from the ones somebody did: a builtin row has no `id`, so there is nothing to rename, protect, rank or pin. `params` is the saved query in `work_items`' own parameter names — this channel's, not the `list_work_items` TOOL's, which renames four of them for a model — so a caller either hands them straight back or, simpler, passes the view's `id` as `view=` and lets the engine expand it |
 
 **Every tracker answer carries how far this node had got, and both halves
 matter.** `read_level` is the level the read was ACTUALLY served at, never the
@@ -1359,7 +1359,7 @@ count, the affected objects and the record version — says rows may be missing,
 rows that should have gone may still be present, and the totals were computed
 over the incomplete set. That is a different fact from staleness, and a client
 that renders `read_level` and swallows `complete` looks confidently right.
-| `pages` | `{container, parent, status, label, watcher, title, skills, onboarding, limit, offset}` | `GET /pages`. `skills` is three-stated on the same terms as `open`: only the tool-skill pages, everything but them, or everything |
+| `pages` | `{container, parent, status, label, watcher, title, skills, onboarding, limit, offset}` | `GET /pages`. `skills` is three-stated: only the tool-skill pages, everything but them, or everything |
 | `page` | `{id}` | `GET /pages/{id}` — id or `CONTAINER/Title` |
 | `containers` | — | `GET /containers`. A separate question from `pages` rather than a facet of it: a browser draws the container list once and the page list on every navigation |
 | `stream` | — | Facts about **this** socket — `{ client_id, dropped, queued, capacity, connected_at, clients }`. The only query with no REST twin, because there is no connection to describe outside one. |
@@ -1563,18 +1563,32 @@ that made them.
 
 ### Paging and filters
 
-Both listings take `limit` (default 50, max 500) and `offset`. Multi-valued
-filters are **comma-separated** — `?status=todo,in_progress` — because the
-socket's query channel carries a JSON object, which cannot express a repeated
-key. A filter only one transport could send is exactly the divergence the
-shared answer function exists to prevent.
+Both listings take `limit` (default 50, max 500). **They page differently, and
+that is not an inconsistency.** The pages listing takes `offset`, because a
+page's order is a title within a container and a reader scrolling it is
+reading a list somebody arranged. The work listing takes an opaque `cursor`
+instead, echoed as `next_cursor` on every answer that has more: a board is
+ordered on values seats are changing while it is read, and an offset over a
+moving set skips rows and repeats rows with nothing to say it did.
 
-Two filters are **three-stated**, and the third state is the one a boolean
+Multi-valued filters are **comma-separated** — `?status=todo,in_progress` —
+because the socket's query channel carries a JSON object, which cannot express
+a repeated key. A filter only one transport could send is exactly the
+divergence the shared answer function exists to prevent.
+
+Openness is **not** a boolean on the work listing. The four status *groups*
+are what every rule in the tracker is written at, so open work is
+`?status_group=not_started,active` — and `show_closed` is the separate
+three-stated question of whether finished work belongs in an answer at all:
+absent or `false` leaves it out, `true` puts it in, and `recent:<dur>` puts in
+only what finished inside that window. A single `open=false` could not express
+the third.
+
+The pages listing's `skills` is **three-stated** for the reason a boolean
 would lose:
 
 | Filter | Absent | `true` | `false` |
 |---|---|---|---|
-| `open` (work) | every item | open work | closed work |
 | `skills` (pages) | every page | only tool-skill pages | everything but them |
 
 An unknown enum value is refused naming the closed set — `?status=finished`

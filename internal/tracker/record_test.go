@@ -2,6 +2,7 @@ package tracker_test
 
 import (
 	"encoding/json"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -459,5 +460,62 @@ func TestARecordFromANewerBuildReEncodesWithItsUnknownFields(t *testing.T) {
 	if string(same) != string(body) {
 		t.Fatalf("a record with nothing unknown in it encoded two different "+
 			"ways:\n%s\n%s", body, same)
+	}
+}
+
+// EVERY FIELD ON THE PATCH MAKES IT NON-EMPTY, one at a time.
+//
+// The emptiness answer decides whether a write happens at all, so a field it
+// does not see is a write the caller is told succeeded and that changed
+// nothing — no error, no warning, no history row, and no way to tell it apart
+// from a write that landed. That is not hypothetical: the hand-written
+// version of this check listed fourteen of the struct's fields, so
+// `update_work_item` given a custom-field value as its only argument reported
+// success and wrote nothing at all.
+//
+// DRIVEN BY REFLECTION over the struct rather than by a list here, for the
+// reason the check itself is: a list in the test drifts exactly as fast as a
+// list in the code, and the field that broke this was the one nobody added to
+// either.
+func TestEveryFieldOfAPatchIsAChange(t *testing.T) {
+	t.Parallel()
+	if !(tracker.TaskPatch{}).Empty() {
+		t.Fatal("a patch with nothing set reports a change — every write would " +
+			"then stamp a version and put a history row in the feed for a call " +
+			"that touched no field")
+	}
+	v := reflect.ValueOf(tracker.TaskPatch{})
+	for i := range v.NumField() {
+		name := v.Type().Field(i).Name
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			patch := reflect.New(v.Type()).Elem()
+			patch.Field(i).Set(nonZero(t, v.Type().Field(i).Type))
+			if patch.Interface().(tracker.TaskPatch).Empty() {
+				t.Errorf("a patch whose only set field is %s reports empty, so "+
+					"the write is skipped and the caller is told it succeeded",
+					name)
+			}
+		})
+	}
+}
+
+// nonZero is a set value of one of the patch's field types. Every field is a
+// pointer, a slice or a map — which is the type's own rule, so that the zero
+// value can mean "not set" — and an allocated one of any of those is not zero.
+func nonZero(t *testing.T, ft reflect.Type) reflect.Value {
+	t.Helper()
+	switch ft.Kind() {
+	case reflect.Pointer:
+		return reflect.New(ft.Elem())
+	case reflect.Slice:
+		return reflect.MakeSlice(ft, 0, 0)
+	case reflect.Map:
+		return reflect.MakeMap(ft)
+	default:
+		t.Fatalf("TaskPatch.%s is a %s — the patch's whole grammar is that a "+
+			"zero value means \"not set\", which a plain value cannot express",
+			ft.Name(), ft.Kind())
+		return reflect.Value{}
 	}
 }

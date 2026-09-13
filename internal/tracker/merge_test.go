@@ -31,6 +31,13 @@ func TestAMergeClosesTheDuplicateAndMovesItsChildren(t *testing.T) {
 		t.Fatalf("CreateTask kid: %v", err)
 	}
 	r.drain()
+	under := "kid"
+	grand := newTask("grandkid")
+	grand.Parent, grand.Depth = &under, 2
+	if _, err := r.writer.CreateTask(t.Context(), "op-grand", grand, nil); err != nil {
+		t.Fatalf("CreateTask grandkid: %v", err)
+	}
+	r.drain()
 
 	if _, err := r.writer.MergeDuplicates(t.Context(), "op-merge", "dup", "keep",
 		true, nil); err != nil {
@@ -56,12 +63,31 @@ func TestAMergeClosesTheDuplicateAndMovesItsChildren(t *testing.T) {
 		t.Fatalf("the child's parent is %q, and the item it was under is "+
 			"closed", got)
 	}
+	// AND ONLY THE SUBTASKS MOVE. A grandchild travels UNDER its own
+	// parent, because that is what `move_subtasks` promises and what a
+	// tree is: re-parenting every descendant onto the survivor flattens
+	// the subtree, which nobody asked for and which no later gesture can
+	// reconstruct.
+	if got := parentOf(r.task(t, "grandkid")); got != "kid" {
+		t.Errorf("the grandchild's parent is %q, want \"kid\" — the merge "+
+			"flattened the subtree onto the survivor rather than moving the "+
+			"subtasks it was asked to move", got)
+	}
 	// AND THE MERGE FLAG IS CLEARED. It is raised by the mark and lowered
 	// by the close, so an item left `merging` is a fold that stopped
 	// halfway — which is exactly what a reader must be able to tell from
 	// one that finished.
 	if dup.Task.Merging {
 		t.Error("the duplicate is still marked merging after the fold closed it")
+	}
+	// AND SO IS THE INTENT IT CARRIED. It describes a walk that is
+	// RUNNING, so "not merging, but re-parenting" is a state the duty
+	// would read as an instruction with nothing to instruct — and the
+	// close names only the marker, so the two go down together or they
+	// drift on the first completed merge.
+	if dup.Task.MergeReparent {
+		t.Error("the finished merge left its re-parent intent standing on the " +
+			"task, which no later marker on that task is the author of")
 	}
 }
 
@@ -80,6 +106,13 @@ func TestAMergeLeavesTheChildrenWhenItIsNotAskedToReparent(t *testing.T) {
 	child.Parent, child.Depth = &parent, 1
 	if _, err := r.writer.CreateTask(t.Context(), "op-kid", child, nil); err != nil {
 		t.Fatalf("CreateTask kid: %v", err)
+	}
+	r.drain()
+	under := "kid"
+	grand := newTask("grandkid")
+	grand.Parent, grand.Depth = &under, 2
+	if _, err := r.writer.CreateTask(t.Context(), "op-grand", grand, nil); err != nil {
+		t.Fatalf("CreateTask grandkid: %v", err)
 	}
 	r.drain()
 
