@@ -468,15 +468,8 @@ This mirrors how a real new hire learns.  A founder doesn't need YAML config for
 
 ## Hot Reload
 
-The org model is loaded once at startup and can be hot-reloaded at runtime via the Engine API:
+The organization is part of the company configuration, so it changes without a restart. Activating a revision (`PUT /config`, `PATCH /config`, a per-entity write, a revert, or `crewlet config import`) moves the fleet's activation pointer, and each node's reconcile tick applies the revision it names. The stages of that apply, and what a refused one leaves behind, are in [Live Propagation](configuration.md#live-propagation).
 
-- **`engine.reassign()`** — move an agent to a different role (optionally with a new manager)
-- **The config apply** — full Tier B hot-reload: spawn new roles, terminate removed roles, swap the agent definition for changed roles, plus diff-and-apply for every other Tier B subsystem (LLM providers, MCP servers, integrations, transports, turn engine, budgets). Driven by each node's reconcile tick once a `PUT /config` moves the activation pointer; see [Configuration concept doc](configuration.md).
+**A running organization is never edited in place.** The apply builds a new `Organization` from the revision, normalizes and validates it, and publishes it as part of a new epoch together with everything else built from the same document. Turns on many goroutines read the published tree at once, so editing it would be a data race with no owner. A turn pins the epoch it starts on and reads only that epoch until it ends, so an organization change reaches a seat at its next turn. A revision whose organization does not validate is refused before its epoch is published, and the node keeps serving the previous one.
 
-Since all agent handlers run in the same Engine process (shared memory), hot reload works by:
-
-1. Updating the shared `Organization` object
-2. Cancelling handlers for removed agents, spawning new ones
-3. Updating `AgentDefinition` in place for modified agents — picked up on next turn
-
-For non-org subsystems (LLM providers, MCP servers, integrations, transports, learning workers), the apply runs per-subsystem diff handlers that rewire the live instances: providers re-instantiated, per-role MCP children restarted, notification transports swapped. A mid-apply failure rolls back to a snapshot of the pre-apply state.
+**Seats follow the new chart.** After the swap the node creates a mailbox for every seat the revision adds, and [seat ownership](seat-ownership.md) converges placement onto the new seat list, releasing a seat the organization no longer has. An agent seat is identified by its handle, and its runtime id is derived from the company name and that handle (`org.DeriveAgentID`). A seat therefore keeps its identity and its memory through a rename or a move for as long as its handle is unchanged. A seat whose handle changes is a different seat, and renaming the company gives every agent seat a new id.
